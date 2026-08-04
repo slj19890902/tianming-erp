@@ -34,14 +34,14 @@
         <strong>请先登录</strong>
         <label>用户名<input id="username" autocomplete="username" required /></label>
         <label>密码<input id="password" type="password" autocomplete="current-password" required /></label>
-        <button class="primary" type="submit">登录</button>
+        <button id="loginButton" class="primary" type="submit">登录</button>
         <div id="loginError" class="error"></div>
       </form>
     </section>
     <section id="app" hidden>
       <section id="taskChooser"></section>
       <section id="taskDetail" hidden>
-        <div class="back-row"><button onclick="showTaskList()">返回待拿货任务</button></div>
+        <div class="back-row"><button id="backToTasksButton" onclick="showTaskList()">返回待拿货任务</button></div>
         <div id="normalAction" class="normal-action"><button id="completePlannedButton" class="primary" onclick="completePlanned()">本单全部按计划拿齐</button><p>正常拿齐只点这一个按钮，不会自动发货。</p></div>
         <div id="readyBanner" class="ready-banner" hidden>已拿齐，可回电脑发货打印</div>
         <div id="locationGroups"></div>
@@ -50,7 +50,7 @@
           <p class="exception-help">只有实际少拿、没货或多拿时才需要操作下面明细。</p>
           <nav id="filters" class="filters" aria-label="拿货状态筛选"></nav>
           <div id="groups"></div>
-          <div class="task-actions"><button class="partial" onclick="submitTask()">提交异常结果</button><button onclick="loadTask()">刷新</button></div>
+          <div class="task-actions"><button id="submitTaskButton" class="partial" onclick="submitTask()">提交异常结果</button><button id="refreshTaskButton" onclick="loadTask()">刷新</button></div>
         </details>
       </section>
       <div id="error" class="error"></div>
@@ -64,29 +64,86 @@
   <script>
     let taskId = new URLSearchParams(location.search).get("task_id");
     let task = null; let activeFilter = "open"; let taskScrollY = 0; let activeMapGroupKey = "";
+    let listGeneration=0, listController=null, detailGeneration=0, detailController=null;
+    const busyItems=new Set(); let taskActionBusy=false; let loginBusy=false;
     const statusOf = item => item.pick_status || "pending";
     const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]));
     const toast = text => { const node=document.getElementById("toast"); node.textContent=text; node.hidden=false; setTimeout(()=>node.hidden=true,2200); };
-    async function request(url, options={}) { const response=await fetch(url,{credentials:"include",...options}); const body=await response.json().catch(()=>({})); if(!response.ok) throw new Error(body.detail || "操作失败"); return body; }
+    function formatErrorDetail(detail) {
+      if(typeof detail==="string") return detail.trim();
+      if(Array.isArray(detail)) return detail.map(formatErrorDetail).filter(Boolean).join("；");
+      if(detail&&typeof detail==="object") {
+        const message=String(detail.message||detail.msg||"").trim();
+        const code=String(detail.code||"").trim();
+        if(message) return code?`${message}（${code}）`:message;
+        if(code) return `操作失败（${code}）`;
+      }
+      return "";
+    }
+    async function request(url, options={}) {
+      let response;
+      try { response=await fetch(url,{credentials:"include",cache:"no-store",...options}); }
+      catch(error) { if(error?.name==="AbortError") throw error; throw new Error("无法连接 ERP 服务，请检查网络后重试"); }
+      const text=await response.text().catch(()=>""); let body={};
+      if(text) { try { body=JSON.parse(text); } catch(_error) { body={}; } }
+      if(!response.ok) {
+        const detail=formatErrorDetail(body.detail);
+        const fallback=response.status===401?"登录已失效，请重新登录":response.status>=500?`服务器内部错误（HTTP ${response.status}），请稍后重试`:`请求失败（HTTP ${response.status}）`;
+        const error=new Error(detail||fallback); error.status=response.status; throw error;
+      }
+      return body;
+    }
     function normalize(body) { const source=body.task || body; return { ...source, items: body.items || source.items || [] }; }
     function filters() { return [["open","未完成",item=>statusOf(item)!=="picked"],["pending","待拿货",item=>statusOf(item)==="pending"],["partial","部分",item=>statusOf(item)==="partial"],["no_stock","没货",item=>statusOf(item)==="no_stock"],["picked","已拿货",item=>statusOf(item)==="picked"],["all","全部",()=>true]]; }
     function setFilter(key) { activeFilter=key; render(); }
     function taskStatusLabel(value) { return ({pushed:"待拿货",driver_confirmed:"可发货打印",exception:"有异常",applied:"可发货打印",dispatched:"已发货"}[value] || value || "待拿货"); }
+    function showLogin() { document.getElementById("loginBox").hidden=false; document.getElementById("app").hidden=true; }
+    function handleAuthError(error) { if(error?.status!==401) return false; showLogin(); return true; }
+    function showTaskLoading() {
+      document.getElementById("taskChooser").hidden=true; document.getElementById("taskDetail").hidden=false;
+      document.getElementById("taskMeta").textContent="正在读取拿货任务…";
+      document.getElementById("locationGroups").innerHTML='<div class="message">正在读取拿货明细和位置…</div>';
+      document.getElementById("groups").innerHTML=""; document.getElementById("error").textContent="";
+    }
+    function showTaskFailure(error) {
+      const message=error?.message||"拿货任务读取失败"; document.getElementById("taskMeta").textContent="拿货任务读取失败";
+      document.getElementById("error").textContent=message;
+      document.getElementById("locationGroups").innerHTML=`<div class="message">${escapeHtml(message)}<div style="margin-top:10px"><button id="taskDetailRetryButton" class="primary">重试</button></div></div>`;
+      document.getElementById("taskDetailRetryButton").addEventListener("click",loadTask);
+    }
     async function loadTaskList() {
+      const generation=++listGeneration; listController?.abort(); const controller=new AbortController(); listController=controller;
       const chooser=document.getElementById("taskChooser"); chooser.hidden=false; chooser.innerHTML='<div class="message">正在读取待拿货任务…</div>'; document.getElementById("error").textContent="";
-      let page=1; let rows=[]; let totalPages=1;
-      do { const body=await request(`/api/delivery-picks?response_mode=summary&include_dispatched=false&page=${page}&page_size=100`); rows=rows.concat(body.items || []); totalPages=Math.max(Number(body.total_pages || 1),1); page+=1; } while(page<=totalPages);
-      const groups=new Map();
-      rows.forEach(row=>{ const customer=row.customer_name || "未指定客户"; if(!groups.has(customer)) groups.set(customer,[]); groups.get(customer).push(row); });
-      document.getElementById("taskMeta").textContent="按客户查看待拿货任务";
-      document.getElementById("taskDetail").hidden=true;
-      chooser.innerHTML=groups.size ? [...groups.entries()].map(([customer,tasks])=>`<section><div class="customer">${escapeHtml(customer)}</div>${tasks.map(row=>`<button class="task-card ${row.has_exception||row.status==="exception"?"exception":""}" onclick="selectTask(${Number(row.id)})"><strong>${escapeHtml(taskStatusLabel(row.status))}</strong><div class="task-number">${escapeHtml(row.delivery_number || `任务 ${row.id}`)}</div></button>`).join("")}</section>`).join("") : '<div class="message">当前没有待拿货任务</div>';
+      try {
+        let page=1; let rows=[]; let totalPages=1;
+        do {
+          const body=await request(`/api/delivery-picks?response_mode=summary&include_dispatched=false&page=${page}&page_size=100`,{signal:controller.signal});
+          if(generation!==listGeneration) return false;
+          rows=rows.concat(body.items||[]); totalPages=Math.max(Number(body.total_pages||1),1); page+=1;
+        } while(page<=totalPages);
+        if(generation!==listGeneration) return false;
+        const groups=new Map(); rows.forEach(row=>{const customer=row.customer_name||"未指定客户";if(!groups.has(customer))groups.set(customer,[]);groups.get(customer).push(row);});
+        document.getElementById("taskMeta").textContent="按客户查看待拿货任务"; document.getElementById("taskDetail").hidden=true;
+        chooser.innerHTML=groups.size?[...groups.entries()].map(([customer,tasks])=>`<section><div class="customer">${escapeHtml(customer)}</div>${tasks.map(row=>`<button class="task-card ${row.has_exception||row.status==="exception"?"exception":""}" onclick="selectTask(${Number(row.id)})"><strong>${escapeHtml(taskStatusLabel(row.status))}</strong><div class="task-number">${escapeHtml(row.delivery_number||`任务 ${row.id}`)}</div></button>`).join("")}</section>`).join(""):'<div class="message">当前没有待拿货任务</div>';
+        return true;
+      } catch(error) {
+        if(error?.name==="AbortError"||generation!==listGeneration) return false; if(handleAuthError(error)) return false;
+        chooser.innerHTML=`<div class="message">${escapeHtml(error.message||"待拿货任务读取失败")}<div style="margin-top:10px"><button id="taskListRetryButton" class="primary">重试</button></div></div>`;
+        document.getElementById("taskListRetryButton").addEventListener("click",loadTaskList); document.getElementById("error").textContent=error.message; return false;
+      } finally { if(generation===listGeneration) listController=null; }
     }
     async function selectTask(id) {
-      taskId=String(id); const url=new URL(location.href); url.searchParams.set("task_id",taskId); history.replaceState(null,"",url);
-      task=normalize(await request(`/api/delivery-picks/${encodeURIComponent(taskId)}`)); document.getElementById("taskChooser").hidden=true; document.getElementById("taskDetail").hidden=false; render();
+      const selectedId=String(id); taskId=selectedId; const url=new URL(location.href); url.searchParams.set("task_id",taskId); history.replaceState(null,"",url);
+      const generation=++detailGeneration; detailController?.abort(); const controller=new AbortController(); detailController=controller; task=null; showTaskLoading();
+      try {
+        const body=await request(`/api/delivery-picks/${encodeURIComponent(selectedId)}`,{signal:controller.signal});
+        if(generation!==detailGeneration||taskId!==selectedId) return false;
+        task=normalize(body); render(); return true;
+      } catch(error) {
+        if(error?.name==="AbortError"||generation!==detailGeneration||taskId!==selectedId) return false; if(handleAuthError(error)) return false; showTaskFailure(error); return false;
+      } finally { if(generation===detailGeneration) detailController=null; }
     }
-    async function showTaskList() { task=null; taskId=null; const url=new URL(location.href); url.searchParams.delete("task_id"); history.replaceState(null,"",url); await loadTaskList(); }
+    async function showTaskList() { if(taskActionBusy||busyItems.size) return; detailGeneration+=1; detailController?.abort(); detailController=null; task=null; taskId=null; const url=new URL(location.href); url.searchParams.delete("task_id"); history.replaceState(null,"",url); await loadTaskList(); }
     function render() {
       if(!task) return;
       document.getElementById("taskMeta").textContent=`${task.delivery_number || "送货单"} · ${taskStatusLabel(task.status)}`;
@@ -94,7 +151,11 @@
       document.getElementById("normalAction").hidden=ready;
       document.getElementById("readyBanner").hidden=!ready;
       const completeButton=document.getElementById("completePlannedButton");
-      completeButton.disabled=task.status!=="pushed" || task.location_plan_complete===false;
+      const editable=["pushed","driver_confirmed","exception"].includes(task.status);
+      completeButton.disabled=taskActionBusy||busyItems.size>0||task.status!=="pushed"||task.location_plan_complete===false;
+      document.getElementById("submitTaskButton").disabled=taskActionBusy||busyItems.size>0||!editable;
+      document.getElementById("refreshTaskButton").disabled=taskActionBusy||busyItems.size>0;
+      document.getElementById("backToTasksButton").disabled=taskActionBusy||busyItems.size>0;
       document.getElementById("locationGroups").innerHTML=(task.location_groups || []).length ? (task.location_groups || []).map(renderLocationGroup).join("") : '<div class="message">当前没有可用的拿货位置计划，请刷新或登记异常。</div>';
       const rows=task.items || []; const defs=filters();
       document.getElementById("filters").innerHTML=defs.map(([key,label,predicate])=>`<button class="${activeFilter===key?"active":""}" onclick="setFilter('${key}')">${rows.filter(predicate).length} ${label}</button>`).join("");
@@ -128,15 +189,32 @@
       return `<section class="pick-components" aria-label="本次随货子件，只读展示"><div class="pick-components-title">本次随货子件（只读，不单独确认）</div>${components.map(component=>{ const quantity=Number(component.planned_delivery_quantity ?? component.quantity ?? 0); const label=[component.product_code || component.component_code || "-",component.product_name || component.component_name || "未命名组件"].join(" / "); return `<div class="pick-component-row"><span class="pick-component-name">${escapeHtml(label)}</span><span class="pick-component-quantity">${quantity}</span></div>`; }).join("")}</section>`;
     }
     function renderItem(item) {
-      const status=statusOf(item); const planned=Number(item.planned_quantity ?? item.delivered_quantity ?? item.quantity ?? 0); const picked=item.picked_quantity ?? item.actual_quantity ?? (status==="picked"?planned:0);
-      return `<article class="card ${escapeHtml(status)}" data-item-id="${item.id}"><div class="name">${escapeHtml(item.product_name || "未命名产品")}</div><div class="spec">规格：${escapeHtml(item.specification || "-")}</div><div class="code">存货编码：${escapeHtml(item.product_code || "-")}</div>${renderPickComponents(item)}<div class="qty-row"><div class="qty-label">计划 ${planned} · 当前拿货</div><input class="picked-qty" type="number" min="0" value="${Number(picked)}" aria-label="实际拿货数量" /></div><div class="actions"><button class="primary" onclick="updateItem(${item.id},'picked')">已拿货</button><button class="partial" onclick="updateItem(${item.id},'partial')">部分拿货</button><button class="no-stock" onclick="updateItem(${item.id},'no_stock')">没货</button></div></article>`;
+      const status=statusOf(item); const id=Number(item.id); const planned=Number(item.planned_quantity ?? item.delivered_quantity ?? item.quantity ?? 0); const picked=item.picked_quantity ?? item.actual_quantity ?? (status==="picked"?planned:0); const disabled=taskActionBusy||busyItems.has(id)||!["pushed","driver_confirmed","exception"].includes(task.status);
+      return `<article class="card ${escapeHtml(status)}" data-item-id="${id}"><div class="name">${escapeHtml(item.product_name||"未命名产品")}</div><div class="spec">规格：${escapeHtml(item.specification||"-")}</div><div class="code">存货编码：${escapeHtml(item.product_code||"-")}</div>${renderPickComponents(item)}<div class="qty-row"><div class="qty-label">计划 ${planned} · 当前拿货</div><input class="picked-qty" type="number" min="0" value="${Number(picked)}" aria-label="实际拿货数量" ${disabled?"disabled":""}/></div><div class="actions"><button class="primary" onclick="updateItem(${id},'picked')" ${disabled?"disabled":""}>已拿货</button><button class="partial" onclick="updateItem(${id},'partial')" ${disabled?"disabled":""}>部分拿货</button><button class="no-stock" onclick="updateItem(${id},'no_stock')" ${disabled?"disabled":""}>没货</button></div></article>`;
     }
-    async function updateItem(itemId,status) { const card=document.querySelector(`[data-item-id="${itemId}"]`); const item=task.items.find(row=>Number(row.id)===Number(itemId)); if(!item||!card) return; const planned=Number(item.planned_quantity ?? item.delivered_quantity ?? item.quantity ?? 0); let qty=Number(card.querySelector(".picked-qty").value); if(status==="picked" && (!Number.isFinite(qty)||qty<=0)) qty=planned; if(status==="no_stock") qty=0; if(status==="partial" && (!Number.isFinite(qty)||qty<=0||qty>=planned)) return toast("部分拿货数量必须大于0且小于计划数量"); if(!Number.isFinite(qty)||qty<0) return toast("请输入有效数量"); try { const body=await request(`/api/delivery-picks/${encodeURIComponent(task.id)}/items/${encodeURIComponent(itemId)}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({pick_status:status,picked_quantity:qty})}); Object.assign(item,body.item || body); if(body.task) task={...task,...body.task,items:task.items}; render(); toast("拿货结果已保存"); } catch(error) { toast(error.message); } }
-    async function completePlanned() { try { const body=await request(`/api/delivery-picks/${encodeURIComponent(task.id)}/complete-planned`,{method:"POST"}); task=normalize(body); render(); toast("本单已按计划拿齐，可发货打印"); } catch(error) { document.getElementById("error").textContent=error.message; toast(error.message); } }
-    async function submitTask() { try { const body=await request(`/api/delivery-picks/${encodeURIComponent(task.id)}/submit`,{method:"POST"}); task=normalize(body); render(); toast("异常结果已提交"); } catch(error) { document.getElementById("error").textContent=error.message; } }
+    async function updateItem(itemId,status) {
+      const id=Number(itemId); if(busyItems.has(id)||taskActionBusy) return; const currentTask=task; const card=document.querySelector(`[data-item-id="${id}"]`); const item=currentTask?.items.find(row=>Number(row.id)===id); if(!item||!card) return;
+      const planned=Number(item.planned_quantity ?? item.delivered_quantity ?? item.quantity ?? 0); let qty=Number(card.querySelector(".picked-qty").value); if(status==="picked"&&(!Number.isFinite(qty)||qty<=0))qty=planned; if(status==="no_stock")qty=0; if(status==="partial"&&(!Number.isFinite(qty)||qty<=0||qty>=planned))return toast("部分拿货数量必须大于0且小于计划数量"); if(!Number.isFinite(qty)||qty<0)return toast("请输入有效数量");
+      busyItems.add(id); render();
+      try { const body=await request(`/api/delivery-picks/${encodeURIComponent(currentTask.id)}/items/${encodeURIComponent(id)}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({pick_status:status,picked_quantity:qty})}); if(task!==currentTask)return; Object.assign(item,body.item||body); if(body.task)task={...task,...body.task,items:task.items}; render(); toast("拿货结果已保存"); }
+      catch(error) { if(!handleAuthError(error))toast(error.message); }
+      finally { busyItems.delete(id); if(task&&Number(task.id)===Number(currentTask.id))render(); }
+    }
+    async function completePlanned() {
+      if(taskActionBusy||busyItems.size) return; const currentTask=task; if(!currentTask)return; taskActionBusy=true; render();
+      try { const body=await request(`/api/delivery-picks/${encodeURIComponent(currentTask.id)}/complete-planned`,{method:"POST"}); if(task!==currentTask)return; task=normalize(body); toast("本单已按计划拿齐，可发货打印"); }
+      catch(error) { if(!handleAuthError(error)){document.getElementById("error").textContent=error.message;toast(error.message);} }
+      finally { taskActionBusy=false; if(task)render(); }
+    }
+    async function submitTask() {
+      if(taskActionBusy||busyItems.size) return; const currentTask=task; if(!currentTask)return; taskActionBusy=true; render();
+      try { const body=await request(`/api/delivery-picks/${encodeURIComponent(currentTask.id)}/submit`,{method:"POST"}); if(task!==currentTask)return; task=normalize(body); toast("异常结果已提交"); }
+      catch(error) { if(!handleAuthError(error))document.getElementById("error").textContent=error.message; }
+      finally { taskActionBusy=false; if(task)render(); }
+    }
     async function loadTask() { try { if(taskId) await selectTask(taskId); else await loadTaskList(); } catch(error) { document.getElementById("error").textContent=error.message; } }
-    async function login(event) { event.preventDefault(); const error=document.getElementById("loginError"); error.textContent=""; try { await request("/api/auth/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:document.getElementById("username").value,password:document.getElementById("password").value,remember_me:false})}); await boot(); } catch(exception) { error.textContent=exception.message; } }
-    async function boot() { try { await request("/api/auth/me"); document.getElementById("loginBox").hidden=true; document.getElementById("app").hidden=false; if(!taskId) await loadTaskList(); else await selectTask(taskId); } catch(error) { if(/401|登录|Unauthorized/i.test(error.message)) { document.getElementById("loginBox").hidden=false; document.getElementById("app").hidden=true; } else { document.getElementById("error").textContent=error.message; document.getElementById("app").hidden=false; } } }
+    async function login(event) { event.preventDefault(); if(loginBusy)return; loginBusy=true; const button=document.getElementById("loginButton"); button.disabled=true; const error=document.getElementById("loginError"); error.textContent=""; try { await request("/api/auth/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:document.getElementById("username").value,password:document.getElementById("password").value,remember_me:false})}); await boot(); } catch(exception) { error.textContent=exception.message; } finally { loginBusy=false; button.disabled=false; } }
+    async function boot() { try { await request("/api/auth/me"); document.getElementById("loginBox").hidden=true; document.getElementById("app").hidden=false; if(!taskId) await loadTaskList(); else await selectTask(taskId); } catch(error) { if(!handleAuthError(error)){document.getElementById("error").textContent=error.message;document.getElementById("app").hidden=false;} } }
     boot();
   </script>
 </body>

@@ -59,9 +59,9 @@ def test_mobile_page_uses_cookie_auth_and_requested_api_paths() -> None:
     assert 'credentials:"include"' in MOBILE
     assert 'request("/api/auth/me")' in MOBILE
     assert 'request("/api/auth/login"' in MOBILE
-    assert "/api/delivery-picks/${encodeURIComponent(taskId)}" in MOBILE
-    assert "/api/delivery-picks/${encodeURIComponent(task.id)}/items/" in MOBILE
-    assert "/items/${encodeURIComponent(itemId)}`" in MOBILE
+    assert "/api/delivery-picks/${encodeURIComponent(selectedId)}" in MOBILE
+    assert "/api/delivery-picks/${encodeURIComponent(currentTask.id)}/items/" in MOBILE
+    assert "/items/${encodeURIComponent(id)}`" in MOBILE
     assert "/submit`" in MOBILE
 
 
@@ -75,7 +75,7 @@ def test_mobile_page_without_task_id_lists_and_selects_pending_tasks() -> None:
     assert "正在读取待拿货任务" in MOBILE
     for marker in ("loadTaskList", "selectTask", "taskChooser", "customer_name"):
         assert marker in MOBILE
-    assert "/api/delivery-picks/${encodeURIComponent(taskId)}" in MOBILE
+    assert "/api/delivery-picks/${encodeURIComponent(selectedId)}" in MOBILE
 
 
 def test_desktop_pick_status_maps_driver_confirmed_to_ready_to_dispatch() -> None:

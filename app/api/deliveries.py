@@ -423,8 +423,8 @@ def _validate_delivery_source_contract(
         if line.product_id in seen_products:
             raise ValueError("同一产品在一张无订单送货单中只能出现一行")
         seen_products.add(line.product_id)
-        if line.unit_price is not None and line.unit_price <= 0:
-            raise ValueError(f"第 {index} 条无订单库存明细单价填写后必须大于零")
+        if line.unit_price is not None and line.unit_price < 0:
+            raise ValueError(f"第 {index} 条无订单库存明细单价不能小于零")
         if not line.allocations:
             raise ValueError(f"第 {index} 条无订单库存明细必须选择库存批次")
         allocated = 0
@@ -3500,16 +3500,23 @@ def _collect_unordered_finished_lines(
                 status_code=409,
                 detail=f"第 {index} 条产品不属于当前客户",
             )
-        unit_price = (
+        submitted_unit_price = (
             Decimal(str(line.unit_price)).quantize(Decimal("0.0001"))
             if line.unit_price is not None
             else None
         )
-        if unit_price is not None and unit_price <= 0:
+        if submitted_unit_price is not None and submitted_unit_price < 0:
             raise HTTPException(
                 status_code=400,
-                detail=f"第 {index} 条无订单库存明细单价填写后必须大于零",
+                detail=f"第 {index} 条无订单库存明细单价不能小于零",
             )
+        # 无订单库存可能在客户临时要货时尚未定价。显式 0 与空值都只代表
+        # “待补价”，不得把 0 冻结成正式成交价或进入财务金额。
+        unit_price = (
+            submitted_unit_price
+            if submitted_unit_price is not None and submitted_unit_price > 0
+            else None
+        )
         allocation_rows: list[dict] = []
         for planned in line.allocations:
             row = db.execute(

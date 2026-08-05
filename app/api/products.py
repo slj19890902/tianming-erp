@@ -805,7 +805,9 @@ def _validate_references(
             raise HTTPException(status_code=400, detail="材质不存在")
         # Editing an existing common box must stay possible when its historical
         # material link is unchanged.  A new link, however, is new business and
-        # may only use a currently active supplier.
+        # may only use a currently active material and supplier.
+        if material_id != historical_material_id and not material.is_active:
+            raise HTTPException(status_code=400, detail="所选材质已停用")
         if (
             material_id != historical_material_id
             and (material.supplier_name or "").strip()
@@ -1643,6 +1645,12 @@ def sync_product_fields(
     )
     if selected_material_id is not None and selected_material is None:
         raise HTTPException(status_code=400, detail="材质不存在")
+    if (
+        selected_material is not None
+        and selected_material_id != product.material_id
+        and not selected_material.is_active
+    ):
+        raise HTTPException(status_code=400, detail="所选材质已停用")
     if (
         selected_material is not None
         and selected_material_id != product.material_id

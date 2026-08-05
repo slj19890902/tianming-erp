@@ -634,6 +634,82 @@ def test_preview_supplier_order_draft_supports_single_regular_pending_item(
         assert session.get(OrderItem, 1).requisition_status == "未报料"
 
 
+def test_a3_supplier_draft_treats_400_sheets_as_two_200_sheet_components(
+    requisition_app,
+) -> None:
+    from app.models.order import OrderItem
+    from app.models.product import Product
+    from app.models.supplier_requisition_order import (
+        SupplierRequisitionOrder,
+        SupplierRequisitionOrderItem,
+    )
+
+    app, session_factory = requisition_app
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        product = session.get(Product, item.product_id)
+        product.box_style = "A3 天地盖"
+        item.quantity = 200
+        item.snapshot_product_name = "A3 订单 200 只"
+        item.snapshot_report_length_mm = 2145
+        item.snapshot_report_width_mm = 1055
+        item.snapshot_base_report_length_mm = 2120
+        item.snapshot_base_report_width_mm = 1035
+        item.snapshot_splice_mode = "single"
+        item.snapshot_pieces_per_box = 1
+        session.commit()
+
+    selection = {
+        "type": "order_item",
+        "order_item_id": 1,
+        "supplier_name": "苏州纸板供应商",
+        "report_length_mm": 2145,
+        "report_width_mm": 1055,
+        "cutting_mode": "一开一",
+    }
+    with TestClient(app) as client:
+        _login(client, "sales")
+        draft = _preview_supplier_order_draft(client, [selection])
+        lines = draft["supplier_groups"][0]["lines"]
+        saved = _save_supplier_order_draft(client, draft)
+
+    assert len(lines) == 2
+    by_component = {
+        line["source_items"][0]["component_type"]: line for line in lines
+    }
+    assert set(by_component) == {"cover", "base"}
+    assert by_component["cover"]["requisition_qty"] == 200
+    assert by_component["cover"]["remaining_requisition_qty"] == 200
+    assert by_component["base"]["requisition_qty"] == 200
+    assert by_component["base"]["remaining_requisition_qty"] == 200
+    assert sum(line["requisition_qty"] for line in lines) == 400
+    assert all(not line.get("quantity_override_acknowledged", False) for line in lines)
+    assert saved.status_code == 201, saved.text
+
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        supplier_order = session.query(SupplierRequisitionOrder).one()
+        supplier_lines = (
+            session.query(SupplierRequisitionOrderItem)
+            .order_by(SupplierRequisitionOrderItem.id)
+            .all()
+        )
+        assert item.quantity == 200
+        assert item.requisition_qty == 400
+        assert item.delivered_quantity == 0
+        assert supplier_order.total_quantity == 400
+        assert supplier_order.requisition_qty == 400
+        assert [row.requisition_qty for row in supplier_lines] == [200, 200]
+        assert [row.source_key for row in supplier_lines] == [
+            "order_item:1:cover",
+            "order_item:1:base",
+        ]
+        assert [row.product_name for row in supplier_lines] == [
+            "A3 订单 200 只-盖",
+            "A3 订单 200 只-底",
+        ]
+
+
 def test_preview_supplier_order_draft_supports_multiple_regular_pending_items(
     requisition_app,
 ) -> None:
@@ -1471,6 +1547,161 @@ def test_supplier_draft_partial_quantity_stays_pending_and_retry_is_idempotent(
         assert session.query(SupplierRequisitionOrder).count() == 2
         assert session.get(OrderItem, 1).requisition_qty == 60
         assert session.get(OrderItem, 1).requisition_status == "已报料"
+
+
+def test_pending_reconciles_effective_legacy_material_requisition_facts(
+    requisition_app,
+) -> None:
+    from app.models.order import OrderItem
+    from app.models.requisition import Requisition, RequisitionItem
+
+    app, session_factory = requisition_app
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        legacy_batch = Requisition(
+            requisition_number="BL-LEGACY-PENDING-001",
+            requisition_date=date(2026, 7, 8),
+            supplier_name="苏州纸板供应商",
+            status="已报料",
+        )
+        session.add(legacy_batch)
+        session.flush()
+        legacy_item = RequisitionItem(
+            requisition_id=legacy_batch.id,
+            order_item_id=item.id,
+            inventory_deducted_qty=0,
+            requisition_qty=100,
+            cardboard_len=Decimal("1000"),
+            cardboard_width=Decimal("800"),
+            pieces_per_box=1,
+            required_piece_qty=100,
+            special_process="一开一",
+            material_snapshot=item.snapshot_material,
+            product_code_snapshot=item.snapshot_product_code,
+            product_name_snapshot=item.snapshot_product_name,
+            specification_snapshot=item.snapshot_spec,
+            status="已入库",
+        )
+        session.add(legacy_item)
+        item.requisition_status = "已报料"
+        item.requisition_qty = 100
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client, "sales")
+        pending_with_effective_fact = client.get("/api/requisition/pending")
+        assert pending_with_effective_fact.status_code == 200
+        assert not [
+            row
+            for row in pending_with_effective_fact.json()["items"]
+            if row.get("item_id") == 1
+        ]
+        duplicate_preview = client.post(
+            "/api/requisition/supplier-orders/preview-from-pending-selection",
+            json={
+                "selections": [
+                    {
+                        "type": "order_item",
+                        "order_item_id": 1,
+                        "supplier_name": "苏州纸板供应商",
+                        "report_length_mm": 1000,
+                        "report_width_mm": 800,
+                        "cutting_mode": "一开一",
+                    }
+                ]
+            },
+        )
+        assert duplicate_preview.status_code == 409
+        assert "BL-LEGACY-PENDING-001" in duplicate_preview.json()["detail"]
+
+        with session_factory() as session:
+            session.get(Requisition, legacy_batch.id).status = "已取消"
+            session.get(RequisitionItem, legacy_item.id).status = "已取消"
+            session.commit()
+
+        pending_after_cancel = client.get("/api/requisition/pending")
+
+    reopened = next(
+        row
+        for row in pending_after_cancel.json()["items"]
+        if row.get("item_id") == 1
+    )
+    assert reopened["already_requisitioned_qty"] == 0
+    assert reopened["remaining_requisition_qty"] == 100
+
+
+def test_pending_hides_fully_reported_legacy_telescoping_lid_components(
+    requisition_app,
+) -> None:
+    from app.models.order import OrderItem
+    from app.models.product import Product
+    from app.models.requisition import Requisition, RequisitionItem
+
+    app, session_factory = requisition_app
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        product = session.get(Product, item.product_id)
+        product.box_style = "A3 天地盖"
+        item.quantity = 30
+        item.snapshot_product_name = "思迈尔天地盖"
+        item.snapshot_report_length_mm = 400
+        item.snapshot_report_width_mm = 300
+        item.snapshot_base_report_length_mm = 375
+        item.snapshot_base_report_width_mm = 275
+        item.requisition_status = "已报料"
+        item.requisition_qty = 60
+        legacy_batch = Requisition(
+            requisition_number="BL-20260708-006",
+            requisition_date=date(2026, 7, 8),
+            supplier_name="苏州纸板供应商",
+            status="已报料",
+        )
+        session.add(legacy_batch)
+        session.flush()
+        session.add_all(
+            [
+                RequisitionItem(
+                    requisition_id=legacy_batch.id,
+                    order_item_id=item.id,
+                    inventory_deducted_qty=0,
+                    requisition_qty=30,
+                    cardboard_len=Decimal("400"),
+                    cardboard_width=Decimal("300"),
+                    pieces_per_box=1,
+                    required_piece_qty=30,
+                    special_process="一开一",
+                    material_snapshot=item.snapshot_material,
+                    product_code_snapshot=item.snapshot_product_code,
+                    product_name_snapshot="思迈尔天地盖-盖",
+                    specification_snapshot=item.snapshot_spec,
+                    status="已入库",
+                ),
+                RequisitionItem(
+                    requisition_id=legacy_batch.id,
+                    order_item_id=item.id,
+                    inventory_deducted_qty=0,
+                    requisition_qty=30,
+                    cardboard_len=Decimal("375"),
+                    cardboard_width=Decimal("275"),
+                    pieces_per_box=1,
+                    required_piece_qty=30,
+                    special_process="一开一",
+                    material_snapshot=item.snapshot_material,
+                    product_code_snapshot=item.snapshot_product_code,
+                    product_name_snapshot="思迈尔天地盖-底",
+                    specification_snapshot=item.snapshot_spec,
+                    status="已入库",
+                ),
+            ]
+        )
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client, "sales")
+        pending = client.get("/api/requisition/pending")
+
+    assert pending.status_code == 200
+    assert not [row for row in pending.json()["items"] if row.get("item_id") == 1]
 
 
 def test_supplier_draft_blocks_swapped_dimensions_and_controls_overage(

@@ -44,6 +44,7 @@ def supplier_app(tmp_path):
     from app.core.database import create_sqlite_engine
     from app.core.security import hash_password
     from app.models import Base
+    from app.models.customer import Customer
     from app.models.material import Material
     from app.models.supplier_paper_code import SupplierPaperCode
     from app.models.user import User
@@ -60,6 +61,11 @@ def supplier_app(tmp_path):
                     role="admin",
                     real_name="供应商管理员",
                     must_change_password=False,
+                ),
+                Customer(
+                    customer_number=9801,
+                    customer_code="INACTIVE-MATERIAL-UAT",
+                    name="停用材质门禁测试客户",
                 ),
                 User(
                     username="supplier-sales",
@@ -107,6 +113,13 @@ def supplier_app(tmp_path):
                     layer_count=3,
                     is_active=True,
                     version=1,
+                ),
+                Material(
+                    code="7RIR6",
+                    supplier_name="森林阳光",
+                    layer_count=5,
+                    is_active=False,
+                    version=2,
                 ),
                 SupplierPaperCode(
                     supplier_name="旧历史供应商",
@@ -162,6 +175,64 @@ def test_enabled_candidates_are_dynamic_and_keep_jiafeng_historical(
         jiafeng = next(item for item in all_rows if item["display_name"] == "佳丰")
         assert jiafeng["standard_name"] == "苏州佳丰"
         assert jiafeng["is_active"] is False
+
+
+def test_inactive_material_is_hidden_by_default_but_remains_auditable(
+    supplier_app: FastAPI,
+) -> None:
+    with TestClient(supplier_app) as client:
+        _login(client, "supplier-admin")
+        active_only = client.get(
+            "/api/master/materials",
+            params={"keyword": "7RIR6"},
+        )
+        assert active_only.status_code == 200
+        assert active_only.json()["total"] == 0
+        assert active_only.json()["items"] == []
+
+        historical = client.get(
+            "/api/master/materials",
+            params={"keyword": "7RIR6", "include_inactive": True},
+        )
+        assert historical.status_code == 200
+        assert historical.json()["total"] == 1
+        row = historical.json()["items"][0]
+        assert row["code"] == "7RIR6"
+        assert row["is_active"] is False
+        assert row["version"] == 2
+
+
+def test_new_common_box_rejects_inactive_material_but_historical_link_is_readable(
+    supplier_app: FastAPI,
+) -> None:
+    from fastapi import HTTPException
+
+    from app.api.products import _validate_references
+    from app.models.customer import Customer
+    from app.models.material import Material
+
+    with supplier_app.state.session_factory() as db:
+        customer_id = db.scalar(
+            select(Customer.id).where(Customer.customer_code == "INACTIVE-MATERIAL-UAT")
+        )
+        material_id = db.scalar(select(Material.id).where(Material.code == "7RIR6"))
+
+        with pytest.raises(HTTPException, match="所选材质已停用"):
+            _validate_references(
+                db,
+                customer_id=customer_id,
+                material_id=material_id,
+                mold_tool_id=None,
+            )
+
+        # 历史常用箱维持原关联时仍可打开和保存其它字段；只禁止新增引用。
+        _validate_references(
+            db,
+            customer_id=customer_id,
+            material_id=material_id,
+            mold_tool_id=None,
+            historical_material_id=material_id,
+        )
 
 
 def test_admin_crud_conflicts_version_status_and_audit(

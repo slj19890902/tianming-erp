@@ -396,6 +396,7 @@ def _raise_material_version_conflict(
 def list_materials(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=100, ge=1, le=200),
+    include_inactive: bool = Query(default=False),
     layer_count: int | None = Query(default=None, ge=1),
     flute_type: str | None = Query(default=None),
     supplier_name: str | None = Query(default=None),
@@ -410,6 +411,8 @@ def list_materials(
     # v0.19.2 下一轮: keyword 关键字搜索（代码/供应商/克重结构/纸种说明/报价），
     #   语义上「先经过 supplier+layer+flute 过滤，再按关键字匹配」。
     filters = []
+    if not include_inactive:
+        filters.append(Material.is_active.is_(True))
     if layer_count is not None:
         filters.append(Material.layer_count == layer_count)
     if flute_type:

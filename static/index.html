@@ -5344,7 +5344,7 @@
                 <div v-for="item in unorderedFinishedPicker.items" :key="unorderedFinishedLotId(item)" class="unordered-finished-picker-row"><div><strong>{{ item.product_code || '-' }} / {{ item.product_name || '-' }}</strong><div class="muted">{{ item.specification || '-' }}</div><div v-if="Number(item.order_pending_quantity || 0) > 0" class="status orange">先加入订单待送 {{ item.order_pending_quantity }}</div></div><div>{{ item.inventory_lot_number || item.lot_number || unorderedFinishedLotId(item) }}<div class="muted">{{ item.location_name || item.warehouse_name || '客户专用库存' }}</div></div><div>{{ unorderedFinishedAvailableQuantity(item) }}</div><div class="toolbar-group"><label><input type="checkbox" :checked="unorderedFinishedSelection(item)._selected" :disabled="isUnorderedFinishedLotInForm(unorderedFinishedLotId(item))" @change="setUnorderedFinishedSelection(item, $event.target.checked)" /> {{ isUnorderedFinishedLotInForm(unorderedFinishedLotId(item)) ? '已在单中' : '选择' }}</label><input class="input" style="width:96px" type="number" min="1" :max="unorderedFinishedAvailableQuantity(item) || undefined" :disabled="!unorderedFinishedSelection(item)._selected" v-model.number="unorderedFinishedSelection(item)._quantity" placeholder="数量" /></div></div>
                 <div v-if="!unorderedFinishedPicker.loading && !unorderedFinishedPicker.items.length" class="empty">当前客户没有可送货的专用无订单成品库存</div>
               </div>
-              <div v-else class="unordered-finished-delivery-list"><div v-if="!deliveryForm.lines.some(line => line.source_type === 'unordered_finished')" class="empty">请选择客户专用无订单成品库存后导入。</div><div v-for="line in deliveryForm.lines.filter(item => item.source_type === 'unordered_finished')" :key="line.key" class="unordered-finished-delivery-row"><div><strong>{{ line.product_code || '-' }} / {{ line.product_name || '-' }}</strong><div class="muted">{{ line.specification || '-' }} · 无订单库存补量</div></div><div><div v-for="allocation in line.allocations" :key="allocation.inventory_lot_id" class="muted">批次 {{ allocation.inventory_lot_id }}：{{ allocation.quantity }}</div></div><div><label>本次数量</label><strong>{{ line.delivered_quantity }}</strong><div class="muted">按所选批次数量自动合计</div></div><div><label>单价（可后补）</label><input class="input" type="number" min="0.0001" step="0.0001" v-model.number="line.unit_price" placeholder="暂不清楚可留空" /><div v-if="line.unit_price === null || line.unit_price === ''" class="muted">不会阻止保存和发货；进入对账前必须补齐</div><div class="toolbar-group" style="margin-top:6px"><input class="input" v-model.trim="line.remarks" placeholder="客户备注（会打印）" /><button class="btn small danger" type="button" @click="removeDeliveryLine(line.key)">删除</button></div></div></div></div>
+              <div v-else class="unordered-finished-delivery-list"><div v-if="!deliveryForm.lines.some(line => line.source_type === 'unordered_finished')" class="empty">请选择客户专用无订单成品库存后导入。</div><div v-for="line in deliveryForm.lines.filter(item => item.source_type === 'unordered_finished')" :key="line.key" class="unordered-finished-delivery-row"><div><strong>{{ line.product_code || '-' }} / {{ line.product_name || '-' }}</strong><div class="muted">{{ line.specification || '-' }} · 无订单库存补量</div></div><div><div v-for="allocation in line.allocations" :key="allocation.inventory_lot_id" class="muted">批次 {{ allocation.inventory_lot_id }}：{{ allocation.quantity }}</div></div><div><label>本次数量</label><strong>{{ line.delivered_quantity }}</strong><div class="muted">按所选批次数量自动合计</div></div><div><label>单价（可后补）</label><input class="input" type="number" min="0" step="0.0001" v-model.number="line.unit_price" placeholder="暂不清楚可留空或填0" /><div v-if="line.unit_price === null || line.unit_price === '' || Number(line.unit_price) === 0" class="muted">0 或留空均按待补价保存，不会阻止保存和发货；进入对账前必须补齐</div><div class="toolbar-group" style="margin-top:6px"><input class="input" v-model.trim="line.remarks" placeholder="客户备注（会打印）" /><button class="btn small danger" type="button" @click="removeDeliveryLine(line.key)">删除</button></div></div></div></div>
               <div v-if="deliveryActiveLines.some(line => deliveryDraftComponents(line).length)" class="delivery-component-plan">
                 <div class="delivery-component-plan-title">
                   <strong>统一计价组合 · 本次实际随货明细</strong>
@@ -7894,7 +7894,7 @@
             }
           },
           async refreshMasterEntity(entity) {
-            if (entity === "customer") await Promise.all([this.loadCustomers(),this.loadCustomerOptions()]);
+            if (entity === "customer") await Promise.all([this.loadCustomers(),this.loadCustomerOptions(true)]);
             else if (entity === "product") await this.loadProducts();
             else if (entity === "material") {
               this.allMaterials = [];
@@ -9101,7 +9101,7 @@
               if (part.skipped || (part.selected_candidates || []).length || part.selected) return;
               const candidates = this.safeSystemInventoryCandidates(line, component);
               if (!candidates.length) return;
-              part.selected_candidates = candidates; part.selected = candidates[0]; part.allocations = []; part.skipped = false; changed = true;
+              part.selected_candidates = candidates; part.selected = candidates[0]; part.allocations = []; part.skipped = false; part._batch_auto_skipped = false; changed = true;
             });
             if (changed) {
               this.invalidatePdfDraftForItem?.(line);
@@ -9436,13 +9436,13 @@
             if (manual && !general && !state.manual_override) return;
             const candidates = manual || general ? [candidate].filter(Boolean) : this.safeSystemInventoryCandidates(line, component);
             if (!candidates.length) { this.showToast("没有可一键确认的安全系统推荐；风险候选需人工核对或选择本次不用库存", true); return; }
-            state.selected_candidates = candidates; state.selected = candidates[0]; state.allocations = []; state.skipped = false;
+            state.selected_candidates = candidates; state.selected = candidates[0]; state.allocations = []; state.skipped = false; state._batch_auto_skipped = false;
             this.invalidatePdfDraftForItem?.(line);
             this.reallocateAllDraftInventory();
           },
           skipOrderLineInventory(line, component) {
             const state = component === "finished" ? line._inventory.finished : line._inventory.semi[component];
-            state.selected = null; state.selected_candidates = []; state.allocations = []; state.skipped = true; state.general_confirmation = false; this.invalidatePdfDraftForItem?.(line); this.reallocateAllDraftInventory();
+            state.selected = null; state.selected_candidates = []; state.allocations = []; state.skipped = true; state._batch_auto_skipped = false; state.general_confirmation = false; this.invalidatePdfDraftForItem?.(line); this.reallocateAllDraftInventory();
           },
           rechooseOrderLineInventory(line, component, customerId) {
             this.invalidatePdfDraftForItem?.(line);
@@ -9450,32 +9450,49 @@
           },
           reallocateDraftInventorySequentially(lines) {
             const usedStockByLot = new Map();
-            const allocate = (part, demand, semi) => {
+            const allocate = (line, part, demand, semi, component) => {
               part.allocations = [];
               [...part.candidates, ...part.manual_candidates].forEach(candidate => { candidate._virtual_requirement_quantity = 0; candidate._virtual_stock_quantity = 0; });
+              if (part._batch_auto_skipped) {
+                const safeCandidates = this.safeSystemInventoryCandidates(line, component);
+                part.selected_candidates = safeCandidates;
+                part.selected = safeCandidates[0] || null;
+                part.skipped = false;
+                part._batch_auto_skipped = false;
+              }
               const selected = part.selected_candidates?.length ? part.selected_candidates : (part.selected ? [part.selected] : []);
+              const automatic = selected.length > 0 && selected.every(
+                candidate => this.isSafeSystemInventoryCandidate?.(component, candidate) === true
+              );
               let remaining = Math.max(Number(demand || 0), 0);
               selected.forEach(candidate => {
                 if (remaining <= 0) return;
                 const yieldFactor = semi ? Math.max(Number(candidate.stock_yield_per_sheet || 1), 1) : 1;
                 const available = Math.max(Number(semi ? candidate.available_stock_quantity : candidate.quantity_available), 0);
-                const usedStock = usedStockByLot.get(candidate.lot_id) || 0;
+                const lotKey = `${semi ? "semi" : "finished"}:${candidate.lot_id}`;
+                const usedStock = usedStockByLot.get(lotKey) || 0;
                 const allocated = Math.min(remaining, Math.max(available - usedStock, 0) * yieldFactor);
                 const stock = Math.ceil(allocated / yieldFactor);
                 candidate._virtual_requirement_quantity = allocated; candidate._virtual_stock_quantity = stock;
                 if (allocated > 0) part.allocations.push({ candidate, requested_qty:allocated, stock_quantity:stock });
-                usedStockByLot.set(candidate.lot_id, usedStock + stock); remaining -= allocated;
+                usedStockByLot.set(lotKey, usedStock + stock); remaining -= allocated;
               });
+              if (remaining > 0 && !part.allocations.length && automatic) {
+                part.selected = null;
+                part.selected_candidates = [];
+                part.skipped = true;
+                part._batch_auto_skipped = true;
+              }
             };
             (lines || []).forEach(line => {
               const state = line._inventory;
               if (!state) return;
-              allocate(state.finished, Number(line.quantity || 0), false);
+              allocate(line, state.finished, Number(line.quantity || 0), false, "finished");
               const finishedQty = state.finished.allocations.reduce((sum, allocation) => sum + allocation.requested_qty, 0);
               this.inventoryComponents(line).forEach(component => {
                 const part = state.semi[component];
                 const demand = Math.max(Number(line.quantity || 0) - finishedQty, 0) * this.inventoryCandidatePayload(line, component).pieces_per_box;
-                allocate(part, demand, true);
+                allocate(line, part, demand, true, component);
               });
             });
           },
@@ -9537,12 +9554,115 @@
               }
             }
           },
+          pdfInventoryDraftSequence() {
+            const retryDraft = this.orderImportBatch?.retryDraft;
+            const drafts = (this.orderImportDrafts || []).filter(draft => (
+              draft?._save_status !== "success"
+              && (draft?._save_status !== "failed" || draft === retryDraft)
+            ));
+            if (!retryDraft || !drafts.includes(retryDraft)) return drafts;
+            return [retryDraft, ...drafts.filter(draft => draft !== retryDraft)];
+          },
           reallocateAllDraftInventory() {
             this.reallocateDraftInventorySequentially(this.orderForm.items);
-            this.orderImportDrafts.forEach(draft => {
-              this.reallocateDraftInventorySequentially(draft.items);
+            const pdfDrafts = this.pdfInventoryDraftSequence();
+            this.reallocateDraftInventorySequentially(
+              pdfDrafts.flatMap(draft => draft.items || [])
+            );
+            (this.orderImportDrafts || []).forEach(draft => {
               this.schedulePdfDraftInventoryAuthority(draft);
             });
+          },
+          importDraftInventoryDecisionSnapshot(line) {
+            const state = line?._inventory;
+            if (!state) return null;
+            const partSnapshot = (part, component) => {
+              if (part?.skipped && !part?._batch_auto_skipped) return { mode:"skipped" };
+              const selected = part?.selected_candidates?.length
+                ? part.selected_candidates
+                : (part?.selected ? [part.selected] : []);
+              if (
+                !selected.length
+                || selected.every(candidate => this.isSafeSystemInventoryCandidate(component, candidate))
+              ) return { mode:"automatic" };
+              return {
+                mode:"exact",
+                lot_ids:selected.map(candidate => Number(candidate.lot_id)),
+                manual_override:!!part.manual_override,
+                general_confirmation:!!part.general_confirmation,
+              };
+            };
+            return {
+              finished:partSnapshot(state.finished, "finished"),
+              semi:Object.fromEntries(
+                this.inventoryComponents(line).map(component => [
+                  component,
+                  partSnapshot(state.semi[component], component),
+                ])
+              ),
+            };
+          },
+          async restoreImportDraftInventoryDecision(line, snapshot, customerId) {
+            if (!snapshot || !line?._inventory) return;
+            const restorePart = async (component, decision) => {
+              if (!decision) return;
+              const part = component === "finished"
+                ? line._inventory.finished
+                : line._inventory.semi[component];
+              if (decision.mode === "skipped") {
+                part.selected = null;
+                part.selected_candidates = [];
+                part.allocations = [];
+                part.skipped = true;
+                part._batch_auto_skipped = false;
+                part.manual_override = false;
+                part.general_confirmation = false;
+                return;
+              }
+              if (decision.mode !== "exact") return;
+              let pool = [...(part.candidates || []), ...(part.manual_candidates || [])];
+              let byLotId = new Map(pool.map(candidate => [Number(candidate.lot_id), candidate]));
+              let missing = decision.lot_ids.filter(lotId => !byLotId.has(Number(lotId)));
+              if (missing.length && component !== "finished") {
+                await this.loadOrderLineManualInventory(line, component, customerId);
+                pool = [...(part.candidates || []), ...(part.manual_candidates || [])];
+                byLotId = new Map(pool.map(candidate => [Number(candidate.lot_id), candidate]));
+                missing = decision.lot_ids.filter(lotId => !byLotId.has(Number(lotId)));
+              }
+              if (missing.length) {
+                throw new Error(`库存批次 ${missing.join("、")} 已变化，系统已刷新，请重新核对本份草稿后再保存。`);
+              }
+              part.selected_candidates = decision.lot_ids.map(lotId => byLotId.get(Number(lotId)));
+              part.selected = part.selected_candidates[0] || null;
+              part.allocations = [];
+              part.skipped = false;
+              part._batch_auto_skipped = false;
+              part.manual_override = !!decision.manual_override;
+              part.general_confirmation = !!decision.general_confirmation;
+            };
+            await restorePart("finished", snapshot.finished);
+            for (const component of this.inventoryComponents(line)) {
+              await restorePart(component, snapshot.semi?.[component]);
+            }
+          },
+          async refreshImportDraftInventoryForSave(draft) {
+            const customerId = Number(draft?.matched_customer_id || 0);
+            const lines = (draft?.items || []).filter(line => (
+              !!line?._inventory
+              && this.inventoryPlanApplies(line)
+              && Number(line?.matched_product_id || line?.product_id || 0) > 0
+            ));
+            if (!lines.length) return;
+            for (const [index, line] of lines.entries()) {
+              const snapshot = this.importDraftInventoryDecisionSnapshot(line);
+              await this.loadOrderLineInventory(line, customerId);
+              try {
+                await this.restoreImportDraftInventoryDecision(line, snapshot, customerId);
+              } catch (error) {
+                throw new Error(`第${index + 1}条${this.errorMessage(error)}`);
+              }
+            }
+            this.reallocateAllDraftInventory();
           },
           buildReservationPlan(line) {
             if (!this.inventoryPlanApplies(line)) return { finished:[], semi:[] };
@@ -10346,7 +10466,11 @@
           // 保存校验：必须选中有效 material_id，不能只输入文字
           validateSelectedMaterial(materialId) {
             const source = this.allMaterials.length ? this.allMaterials : this.materials;
-            return materialId != null && source.some(m => m.id === materialId);
+            return materialId != null && source.some(m => (
+              m.id === materialId
+              && m.is_active !== false
+              && this.isActiveMaterialSupplier(m.supplier_name)
+            ));
           },
           // ===== v0.19.2-B 供应商调价 =====
           priceAdjustFormKey() {
@@ -15968,7 +16092,7 @@
           },
           async deleteCustomer(row) {
             if (!confirm(`确认停用客户“${row.name}”吗？`)) return;
-            try { const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/customers/${row.id}`,row}); if(!result)return; await Promise.all([this.loadCustomers(),this.loadCustomerOptions()]); this.showToast("客户已停用"); }
+            try { const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/customers/${row.id}`,row}); if(!result)return; await Promise.all([this.loadCustomers(),this.loadCustomerOptions(true)]); this.showToast("客户已停用"); }
             catch(error){this.showToast(this.errorMessage(error),true);}
           },
           async toggleCustomerStatus(row) {
@@ -15977,7 +16101,7 @@
             try {
               const result=await this.sendVersionedMasterMutation({method:"put",url:`/api/master/customers/${row.id}/status`,row,body:{is_active:!row.is_active}});
               if(!result)return;
-              await Promise.all([this.loadCustomers(),this.loadCustomerOptions()]);
+              await Promise.all([this.loadCustomers(),this.loadCustomerOptions(true)]);
               this.showToast(`客户已${action}`);
             } catch(error) { this.showToast(this.errorMessage(error), true); }
           },
@@ -16033,7 +16157,7 @@
           },
           async deleteMaterial(row) {
             if (!confirm(`确认停用材质“${row.code}”吗？`)) return;
-            try { const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/materials/${row.id}`,row}); if(!result)return; await this.loadMaterials(); this.showToast("材质已停用"); }
+            try { const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/materials/${row.id}`,row}); if(!result)return; this.allMaterials=[]; await this.loadMaterials(); this.showToast("材质已停用"); }
             catch(error){this.showToast(this.errorMessage(error),true);}
           },
 	          async openOrder() {
@@ -16725,7 +16849,8 @@
               for (const draft of drafts) {
                 try {
                   draft._save_status = "saving";
-                  draft._save_message = "正在保存正式订单…";
+                  draft._save_message = "正在刷新库存并保存正式订单…";
+                  await this.refreshImportDraftInventoryForSave(draft);
                   const inventoryError = (draft.items || []).map((item, index) => {
                     this.refreshPdfPriceConflict(item);
                     const reason = this.inventoryDecisionRequired(item);
@@ -18808,7 +18933,7 @@
               const line = active[index];
               if (line.source_type === "unordered_finished") {
                 if (!Number(line.product_id)) return `第${index + 1}行不是有效的无订单库存产品`;
-                if (line.unit_price !== null && line.unit_price !== "" && (!Number.isFinite(Number(line.unit_price)) || Number(line.unit_price) <= 0)) return `第${index + 1}行单价填写后必须大于零`;
+                if (line.unit_price !== null && line.unit_price !== "" && (!Number.isFinite(Number(line.unit_price)) || Number(line.unit_price) < 0)) return `第${index + 1}行单价不能小于零`;
                 const quantity = Number(line.delivered_quantity);
                 const allocations = line.allocations || [];
                 const allocated = allocations.reduce((sum, allocation) => sum + Number(allocation.quantity || 0), 0);
@@ -19342,7 +19467,7 @@
                 this.attachMasterUpdateMetadata("customer",payload,masterOptions);
                 if (this.customerForm.id) await axios.put(`/api/master/customers/${this.customerForm.id}`, payload);
                 else await axios.post("/api/master/customers", payload);
-                await this.loadCustomers();
+                await Promise.all([this.loadCustomers(), this.loadCustomerOptions(true)]);
               }
               if (this.modal.type === "supplier") {
                 const desiredActive = this.supplierForm.is_active !== false;
@@ -19609,7 +19734,7 @@
                     source_type: "unordered_finished",
                     product_id: Number(line.product_id),
                     delivered_quantity: Number(line.delivered_quantity),
-                    unit_price: line.unit_price === null || line.unit_price === "" ? null : Number(line.unit_price),
+                    unit_price: Number(line.unit_price || 0) > 0 ? Number(line.unit_price) : null,
                     allocations: (line.allocations || []).map(allocation => ({ inventory_lot_id:Number(allocation.inventory_lot_id), quantity:Number(allocation.quantity) })),
                     remarks: line.remarks || null,
                   }) : ({

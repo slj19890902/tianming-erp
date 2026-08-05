@@ -43,10 +43,11 @@ def test_parent_priced_delivery_shows_read_only_component_goods_plan() -> None:
 
 def test_delivery_payload_keeps_component_quantities_server_derived() -> None:
     source = _index_source()
-    start = source.index("const items = (this.deliveryForm.lines || [])")
+    start = source.index("const activeDeliveryLines = (this.deliveryForm.lines || [])")
     end = source.index('if (this.modal.type === "statement")', start)
     save_block = source[start:end]
 
+    assert "const items = activeDeliveryLines.map(" in save_block
     assert "component_deliveries" not in save_block
     assert "component_lines" not in save_block
     assert "order_item_id: Number(line.order_item_id)" in save_block
@@ -60,8 +61,8 @@ def test_delivery_list_counts_and_displays_actual_component_goods() -> None:
 
     assert "deliveryActualGoodsQuantity(row)" in source
     assert "deliverySavedComponentLines(item)" in source
-    assert "套内子件：" in source
-    assert "（不单独计价）" in source
+    assert '<span class="status blue">套内子件</span>' in source
+    assert "component.quantity ?? component.planned_delivery_quantity ?? component.delivered_quantity ?? 0" in source
     assert "parentQuantity + componentQuantity" in source
 
 

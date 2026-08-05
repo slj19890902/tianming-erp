@@ -862,6 +862,7 @@
       .version-history-card { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: #fff; }
       .version-history-meta { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin-bottom: 8px; font-size: 13px; }
       .form-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px 14px; }
+      fieldset.form-grid { min-width: 0; padding: 0; border: 0; }
       .form-grid .wide { grid-column: 1 / -1; }
       .product-edit-grid { display: grid; gap: 10px; }
       .order-item-edit-grid { display: grid; gap: 10px; min-width: 1180px; }
@@ -3602,7 +3603,7 @@
                 <div class="field"><label>状态</label><select class="select" v-model="customerForm.status"><option value="active">启用</option><option value="inactive">停用</option></select></div>
                 <div class="field wide"><label>备注</label><textarea class="textarea" v-model="customerForm.remark"></textarea></div>
               </fieldset>
-              <section v-if="customerForm.id && canManageInvoiceProfiles" class="panel" style="margin:10px 0 0;padding:10px"><div class="toolbar"><strong>开票 / 税务资料</strong><span :class="['status',customerInvoiceProfile.confirmation_status==='confirmed'?'green':'orange']">{{ customerInvoiceProfile.confirmation_status==='confirmed'?'已确认':'待确认' }}</span><button class="btn small" @click="loadCustomerInvoiceProfile(customerForm.id)">刷新</button></div><div v-if="customerInvoiceProfile.error" class="danger-text">{{ customerInvoiceProfile.error }}</div><div class="form-grid" style="margin-top:8px"><div class="field"><label>开票抬头</label><input class="input" v-model.trim="customerInvoiceProfile.invoice_title" /></div><div class="field"><label>税号</label><input class="input" v-model.trim="customerInvoiceProfile.tax_no" /></div><div class="field"><label>开票地址电话</label><input class="input" v-model.trim="customerInvoiceProfile.invoice_address_phone" /></div><div class="field"><label>开户行及账号</label><input class="input" v-model.trim="customerInvoiceProfile.bank_account" /></div><div class="field"><label>默认销方</label><select class="select" v-model.number="customerInvoiceProfile.default_seller_id"><option :value="null">请选择已维护销方</option><option v-for="seller in invoiceSellers.filter(row=>row.is_active!==false)" :key="seller.id" :value="seller.id">{{ seller.seller_name || seller.name }}</option></select></div></div><div class="toolbar-group" style="margin-top:8px"><button class="btn small primary" @click="saveCustomerInvoiceProfile">保存税务资料</button></div><div class="panel" style="margin-top:10px;padding:8px"><strong>客户默认开票项目规则</strong><div class="form-grid" style="margin-top:7px"><div class="field"><label>项目名称</label><input class="input" v-model.trim="customerInvoiceRule.project_name" /></div><div class="field"><label>税收分类编码</label><input class="input" v-model.trim="customerInvoiceRule.tax_category_code" /></div><div class="field"><label>单位</label><input class="input" v-model.trim="customerInvoiceRule.unit" /></div><div class="field"><label>税率</label><input class="input" type="number" min="0" step="0.01" v-model="customerInvoiceRule.tax_rate" /></div><div class="field"><label>确认状态</label><select class="select" v-model="customerInvoiceRule.confirmation_status"><option value="draft">待确认</option><option value="confirmed">已确认</option></select></div></div><button class="btn small primary" style="margin-top:7px" @click="saveCustomerInvoiceRule">保存默认规则</button></div><div class="muted" style="margin-top:5px">普通联系人地址、电话不会自动带入开票资料；必须由财务确认。</div></section>
+              <section v-if="customerForm.id && canManageInvoiceProfiles" class="panel" style="margin:10px 0 0;padding:10px"><div class="toolbar"><strong>开票 / 税务资料</strong><span v-if="customerInvoiceState.profileLoading" class="status blue">税务资料读取中</span><span v-else :class="['status',customerInvoiceProfile.confirmation_status==='confirmed'?'green':'orange']">{{ customerInvoiceProfile.confirmation_status==='confirmed'?'已确认':'待确认' }}</span><button class="btn small" :disabled="customerInvoiceState.profileLoading || customerInvoiceState.profileSaving" @click="loadCustomerInvoiceProfile(customerForm.id)">{{ customerInvoiceState.profileLoading ? '读取中…' : '刷新' }}</button></div><div v-if="customerInvoiceProfile.error" class="notice danger">{{ customerInvoiceProfile.error }} <button class="btn small" type="button" @click="loadCustomerInvoiceProfile(customerForm.id)">重新读取税务资料</button></div><fieldset class="form-grid" style="margin-top:8px" :disabled="customerInvoiceState.profileLoading || customerInvoiceState.profileSaving || !!customerInvoiceProfile.error || Number(customerInvoiceState.profileLoadedCustomerId)!==Number(customerForm.id)"><div class="field"><label>开票抬头</label><input class="input" v-model.trim="customerInvoiceProfile.invoice_title" /></div><div class="field"><label>税号</label><input class="input" v-model.trim="customerInvoiceProfile.tax_no" /></div><div class="field"><label>开票地址电话</label><input class="input" v-model.trim="customerInvoiceProfile.invoice_address_phone" /></div><div class="field"><label>开户行及账号</label><input class="input" v-model.trim="customerInvoiceProfile.bank_account" /></div><div class="field"><label>默认销方</label><select class="select" v-model.number="customerInvoiceProfile.default_seller_id"><option :value="null">请选择已维护销方</option><option v-for="seller in invoiceSellers.filter(row=>row.is_active!==false)" :key="seller.id" :value="seller.id">{{ seller.seller_name || seller.name }}</option></select></div></fieldset><div class="toolbar-group" style="margin-top:8px"><button class="btn small primary" :disabled="customerInvoiceState.profileLoading || customerInvoiceState.profileSaving || !!customerInvoiceProfile.error || Number(customerInvoiceState.profileLoadedCustomerId)!==Number(customerForm.id)" @click="saveCustomerInvoiceProfile">{{ customerInvoiceState.profileSaving ? '税务资料保存中…' : '保存税务资料' }}</button></div><div class="panel" style="margin-top:10px;padding:8px"><div class="toolbar"><strong>客户默认开票项目规则</strong><span v-if="customerInvoiceState.ruleLoading" class="status blue">默认规则读取中</span><button class="btn small" :disabled="customerInvoiceState.ruleLoading || customerInvoiceState.ruleSaving" @click="loadCustomerInvoiceRule(customerForm.id)">{{ customerInvoiceState.ruleLoading ? '读取中…' : '刷新' }}</button></div><div v-if="customerInvoiceRule.error" class="notice danger">{{ customerInvoiceRule.error }} <button class="btn small" type="button" @click="loadCustomerInvoiceRule(customerForm.id)">重新读取默认规则</button></div><fieldset class="form-grid" style="margin-top:7px" :disabled="customerInvoiceState.ruleLoading || customerInvoiceState.ruleSaving || !!customerInvoiceRule.error || Number(customerInvoiceState.ruleLoadedCustomerId)!==Number(customerForm.id)"><div class="field"><label>项目名称</label><input class="input" v-model.trim="customerInvoiceRule.project_name" /></div><div class="field"><label>税收分类编码</label><input class="input" v-model.trim="customerInvoiceRule.tax_category_code" /></div><div class="field"><label>单位</label><input class="input" v-model.trim="customerInvoiceRule.unit" /></div><div class="field"><label>税率</label><input class="input" type="number" min="0" step="0.01" v-model="customerInvoiceRule.tax_rate" /></div><div class="field"><label>确认状态</label><select class="select" v-model="customerInvoiceRule.confirmation_status"><option value="draft">待确认</option><option value="confirmed">已确认</option></select></div></fieldset><button class="btn small primary" style="margin-top:7px" :disabled="customerInvoiceState.ruleLoading || customerInvoiceState.ruleSaving || !!customerInvoiceRule.error || Number(customerInvoiceState.ruleLoadedCustomerId)!==Number(customerForm.id)" @click="saveCustomerInvoiceRule">{{ customerInvoiceState.ruleSaving ? '默认规则保存中…' : '保存默认规则' }}</button></div><div class="muted" style="margin-top:5px">普通联系人地址、电话不会自动带入开票资料；必须由财务确认。</div></section>
               <section class="customer-pricing-preferences">
                 <div class="toolbar" style="margin:0 0 7px"><strong>客户报价偏好</strong><span class="muted">按箱型、层数、楞型和供应商维护已确认材质及含税客户平方价。</span></div>
                 <div v-if="!customerForm.id" class="muted">请先保存客户基本资料，再维护报价偏好。</div>
@@ -6221,6 +6222,7 @@
             invoiceSellers: [], invoiceSellerForm:{id:null,seller_name:"",tax_no:"",address_phone:"",bank_account:"",is_active:true,version:null}, invoiceSellerState:{loading:false,error:"",saving:false,loaded:false},
             customerInvoiceProfile:{invoice_title:"",tax_no:"",invoice_address_phone:"",bank_account:"",default_seller_id:null,confirmation_status:"draft",version:null,error:""},
             customerInvoiceRule:{project_name:"",tax_category_code:"",unit:"",tax_rate:"",confirmation_status:"draft",version:null,error:""},
+            customerInvoiceState:{profileLoading:false,profileSaving:false,profileLoadedCustomerId:null,ruleLoading:false,ruleSaving:false,ruleLoadedCustomerId:null},
             pendingStatements: [], statementCustomers: [], statementDetail: null, statementEditForm: { id: null, statement_month: "" }, backups: [], backupStats: {}, backupCleanupPreview: null, showCleanupPreview: false, backupListLoading: false, backupListError: "", backupAction: "",
             systemUsers: [], systemSection:"basic",
             systemSectionLoaded:{basic:false,print:false,backup:false,pdf:false},
@@ -12327,10 +12329,141 @@
               this.invoiceSellerState.saving = false;
             }
           },
-          async loadCustomerInvoiceProfile(customerId=this.customerForm?.id) { if(!this.canManageInvoiceProfiles||!customerId)return; try { const {data}=await axios.get(`/api/customers/${customerId}/invoice-profile`); this.customerInvoiceProfile={...this.customerInvoiceProfile,...data,error:""}; } catch(error) { this.customerInvoiceProfile.error=`税务资料读取失败：${this.errorMessage(error)}`; } },
-          async saveCustomerInvoiceProfile() { if(!this.canManageInvoiceProfiles||!this.customerForm?.id)return; try { await axios.put(`/api/customers/${this.customerForm.id}/invoice-profile`,{...this.customerInvoiceProfile,expected_version:Number(this.customerInvoiceProfile.version||1)}); await this.loadCustomerInvoiceProfile(); this.showToast("客户税务资料已保存，仍需确认后才能开票"); } catch(error) { this.customerInvoiceProfile.error=`税务资料保存失败：${this.errorMessage(error)}`; } },
-          async loadCustomerInvoiceRule(customerId=this.customerForm?.id) { if(!this.canManageInvoiceProfiles||!customerId)return; try { const {data}=await axios.get(`/api/customers/${customerId}/invoice-item-rules/default`); this.customerInvoiceRule={...this.customerInvoiceRule,...data,error:""}; } catch(error) { this.customerInvoiceRule.error=`默认项目规则读取失败：${this.errorMessage(error)}`; } },
-          async saveCustomerInvoiceRule() { if(!this.canManageInvoiceProfiles||!this.customerForm?.id)return; const form=this.customerInvoiceRule; if(!String(form.project_name||"").trim()||!String(form.tax_category_code||"").trim()||!String(form.unit||"").trim()||form.tax_rate===""||form.tax_rate===null) { this.showToast("项目名称、税收分类编码、单位和税率均为必填",true); return; } try { await axios.put(`/api/customers/${this.customerForm.id}/invoice-item-rules/default`,{project_name:String(form.project_name).trim(),tax_category_code:String(form.tax_category_code).trim(),unit:String(form.unit).trim(),tax_rate:Number(form.tax_rate),confirmation_status:form.confirmation_status,expected_version:Number(form.version||1)}); await this.loadCustomerInvoiceRule(); this.showToast("客户默认开票项目规则已保存"); } catch(error) { form.error=`默认项目规则保存失败：${this.errorMessage(error)}`; } },
+          async loadCustomerInvoiceProfile(customerId=this.customerForm?.id) {
+            const requestedCustomerId = Number(customerId || 0);
+            if (!this.canManageInvoiceProfiles || !requestedCustomerId || Number(this.customerForm?.id) !== requestedCustomerId) return false;
+            const requestKey = "finance:customer-invoice-profile";
+            const controller = this.beginLatestRequest(requestKey);
+            this.customerInvoiceState.profileLoading = true;
+            this.customerInvoiceState.profileLoadedCustomerId = null;
+            this.customerInvoiceProfile.error = "";
+            try {
+              const { data } = await axios.get(`/api/customers/${requestedCustomerId}/invoice-profile`, {signal:controller.signal});
+              if (latestRequestControllers.get(requestKey) !== controller || Number(this.customerForm?.id) !== requestedCustomerId) return false;
+              this.customerInvoiceProfile = {...this.customerInvoiceProfile,...data,error:""};
+              this.customerInvoiceState.profileLoadedCustomerId = requestedCustomerId;
+              return true;
+            } catch (error) {
+              if (!this.isCancelledRequest(error) && latestRequestControllers.get(requestKey) === controller && Number(this.customerForm?.id) === requestedCustomerId) {
+                this.customerInvoiceProfile.error = `税务资料读取失败：${this.errorMessage(error)}`;
+                this.customerInvoiceState.profileLoadedCustomerId = null;
+              }
+              return false;
+            } finally {
+              if (latestRequestControllers.get(requestKey) === controller) {
+                if (Number(this.customerForm?.id) === requestedCustomerId) this.customerInvoiceState.profileLoading = false;
+                this.finishLatestRequest(requestKey, controller);
+              }
+            }
+          },
+          async saveCustomerInvoiceProfile() {
+            if (!this.canManageInvoiceProfiles || this.customerInvoiceState.profileSaving) return false;
+            const customerId = Number(this.customerForm?.id || 0);
+            if (!customerId || Number(this.customerInvoiceState.profileLoadedCustomerId) !== customerId || this.customerInvoiceProfile.error) {
+              this.showToast("请先重新读取当前客户税务资料后再保存", true);
+              return false;
+            }
+            const form = {...this.customerInvoiceProfile};
+            const payload = {
+              invoice_title:String(form.invoice_title || "").trim() || null,
+              tax_no:String(form.tax_no || "").trim() || null,
+              invoice_address_phone:String(form.invoice_address_phone || "").trim() || null,
+              bank_account:String(form.bank_account || "").trim() || null,
+              default_seller_id:form.default_seller_id ? Number(form.default_seller_id) : null,
+              confirmation_status:form.confirmation_status || "draft",
+              expected_version:Number(form.version || 1),
+            };
+            this.customerInvoiceState.profileSaving = true;
+            try {
+              await axios.put(`/api/customers/${customerId}/invoice-profile`, payload);
+              if (Number(this.customerForm?.id) !== customerId) {
+                this.showToast("原客户税务资料已保存；当前已经切换到其他客户");
+                return true;
+              }
+              const refreshed = await this.loadCustomerInvoiceProfile(customerId);
+              if (!refreshed) {
+                this.showToast("客户税务资料已保存，但刷新失败；资料已保存，请重新读取，不要重复提交", true);
+                return true;
+              }
+              this.showToast("客户税务资料已保存，仍需确认后才能开票");
+              return true;
+            } catch (error) {
+              if (Number(this.customerForm?.id) === customerId) this.customerInvoiceProfile.error = `税务资料保存失败：${this.errorMessage(error)}`;
+              else this.showToast(`原客户税务资料保存失败：${this.errorMessage(error)}`, true);
+              return false;
+            } finally {
+              this.customerInvoiceState.profileSaving = false;
+            }
+          },
+          async loadCustomerInvoiceRule(customerId=this.customerForm?.id) {
+            const requestedCustomerId = Number(customerId || 0);
+            if (!this.canManageInvoiceProfiles || !requestedCustomerId || Number(this.customerForm?.id) !== requestedCustomerId) return false;
+            const requestKey = "finance:customer-invoice-rule";
+            const controller = this.beginLatestRequest(requestKey);
+            this.customerInvoiceState.ruleLoading = true;
+            this.customerInvoiceState.ruleLoadedCustomerId = null;
+            this.customerInvoiceRule.error = "";
+            try {
+              const { data } = await axios.get(`/api/customers/${requestedCustomerId}/invoice-item-rules/default`, {signal:controller.signal});
+              if (latestRequestControllers.get(requestKey) !== controller || Number(this.customerForm?.id) !== requestedCustomerId) return false;
+              this.customerInvoiceRule = {...this.customerInvoiceRule,...data,error:""};
+              this.customerInvoiceState.ruleLoadedCustomerId = requestedCustomerId;
+              return true;
+            } catch (error) {
+              if (!this.isCancelledRequest(error) && latestRequestControllers.get(requestKey) === controller && Number(this.customerForm?.id) === requestedCustomerId) {
+                this.customerInvoiceRule.error = `默认项目规则读取失败：${this.errorMessage(error)}`;
+                this.customerInvoiceState.ruleLoadedCustomerId = null;
+              }
+              return false;
+            } finally {
+              if (latestRequestControllers.get(requestKey) === controller) {
+                if (Number(this.customerForm?.id) === requestedCustomerId) this.customerInvoiceState.ruleLoading = false;
+                this.finishLatestRequest(requestKey, controller);
+              }
+            }
+          },
+          async saveCustomerInvoiceRule() {
+            if (!this.canManageInvoiceProfiles || this.customerInvoiceState.ruleSaving) return false;
+            const customerId = Number(this.customerForm?.id || 0);
+            if (!customerId || Number(this.customerInvoiceState.ruleLoadedCustomerId) !== customerId || this.customerInvoiceRule.error) {
+              this.showToast("请先重新读取当前客户默认规则后再保存", true);
+              return false;
+            }
+            const form = {...this.customerInvoiceRule};
+            if (!String(form.project_name || "").trim() || !String(form.tax_category_code || "").trim() || !String(form.unit || "").trim() || form.tax_rate === "" || form.tax_rate === null) {
+              this.showToast("项目名称、税收分类编码、单位和税率均为必填", true);
+              return false;
+            }
+            const payload = {
+              project_name:String(form.project_name).trim(),
+              tax_category_code:String(form.tax_category_code).trim(),
+              unit:String(form.unit).trim(),
+              tax_rate:Number(form.tax_rate),
+              confirmation_status:form.confirmation_status,
+              expected_version:Number(form.version || 1),
+            };
+            this.customerInvoiceState.ruleSaving = true;
+            try {
+              await axios.put(`/api/customers/${customerId}/invoice-item-rules/default`, payload);
+              if (Number(this.customerForm?.id) !== customerId) {
+                this.showToast("原客户默认开票规则已保存；当前已经切换到其他客户");
+                return true;
+              }
+              const refreshed = await this.loadCustomerInvoiceRule(customerId);
+              if (!refreshed) {
+                this.showToast("客户默认开票规则已保存，但刷新失败；资料已保存，请重新读取，不要重复提交", true);
+                return true;
+              }
+              this.showToast("客户默认开票项目规则已保存");
+              return true;
+            } catch (error) {
+              if (Number(this.customerForm?.id) === customerId) this.customerInvoiceRule.error = `默认项目规则保存失败：${this.errorMessage(error)}`;
+              else this.showToast(`原客户默认开票规则保存失败：${this.errorMessage(error)}`, true);
+              return false;
+            } finally {
+              this.customerInvoiceState.ruleSaving = false;
+            }
+          },
           async clearFinanceDashboardFilter() {
             this.financeFilters = { statement_month:this.financeFilters.statement_month || month(), balance_type:"", customer_id:"" };
             this.pages.financeCurrent = 1;
@@ -12962,6 +13095,10 @@
             this.customerForm = next;
             this.customerInvoiceProfile = {invoice_title:"",tax_no:"",invoice_address_phone:"",bank_account:"",default_seller_id:null,confirmation_status:"draft",version:null,error:""};
             this.customerInvoiceRule = {project_name:"",tax_category_code:"",unit:"",tax_rate:"",confirmation_status:"draft",version:null,error:""};
+            this.customerInvoiceState.profileLoading = false;
+            this.customerInvoiceState.profileLoadedCustomerId = null;
+            this.customerInvoiceState.ruleLoading = false;
+            this.customerInvoiceState.ruleLoadedCustomerId = null;
             this.customerQuotePreferenceDraft = this.blankCustomerQuotePreferenceDraft();
             this.loadCustomerQuotePreferences(next.id);
             if (next.id && this.canManageInvoiceProfiles) { this.loadInvoiceSellers(); this.loadCustomerInvoiceProfile(next.id); this.loadCustomerInvoiceRule(next.id); }

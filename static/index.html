@@ -6222,7 +6222,7 @@
             // v0.19.2-B 楞型加价规则
             fluteRules: [], showFluteRuleModal: false, fluteRuleLoading: false, fluteRuleError: "",
             fluteRuleForm: { id: null, supplier_name: "", layer_count: 3, flute_type: "A", price_delta: "0", effective_date: "", remark: "", is_active: true },
-            deliveries: [], pendingDeliveryItems: [], deliveryCustomerCandidates: [], deliveryPickTasks: [], deliveryPickers: [], expandedDeliveryRows: {}, deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false }, deliveryCandidateLoading:false, deliveryCandidateError:"", deliveryCandidateRequestSequence:0, deliveryBatchRequestSequence:0, unorderedFinishedRequestSequence:0, deliveryOperationState:{action:"",deliveryId:null,deliveryNumber:""}, receiptOperationState:{action:"",deliveryId:null,receiptId:null,deliveryNumber:""}, statements: [], invoices: [], moldTools: [],
+            deliveries: [], pendingDeliveryItems: [], deliveryCustomerCandidates: [], deliveryPickTasks: [], deliveryPickers: [], expandedDeliveryRows: {}, deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false, request_token:0 }, deliveryCandidateLoading:false, deliveryCandidateError:"", deliveryCandidateRequestSequence:0, deliveryBatchRequestSequence:0, unorderedFinishedRequestSequence:0, deliveryOperationState:{action:"",deliveryId:null,deliveryNumber:""}, receiptOperationState:{action:"",deliveryId:null,receiptId:null,deliveryNumber:""}, statements: [], invoices: [], moldTools: [],
             invoiceTasks: [], invoiceTaskFilters:{customer_id:"",statement_month:"",status:""}, invoiceTaskState:{loading:false,error:""},
             invoiceTaskDetail:null, invoiceTaskResult:{task_id:null,status:"issued",invoice_number:"",invoice_date:"",failure_reason:"",expected_version:null},
             invoiceTaskOperationState:{detailLoading:false,detailError:"",detailTaskId:null,detailTaskNumber:"",confirmingTaskId:null,resultSaving:false},
@@ -12094,7 +12094,9 @@
             await axios.post(`/api/delivery-picks/${task.id}/apply`);
           },
           async loadDeliveries() {
-            const params = { page: this.pages.deliveries, page_size: this.pageSize };
+            const requestToken = Number(this.deliveryListState.request_token || 0) + 1;
+            this.deliveryListState.request_token = requestToken;
+            const params = { page: Number(this.pages.deliveries || 1), page_size: Number(this.pageSize) };
             Object.entries(this.deliveryListFilters || {}).forEach(([key,value]) => {
               if (value !== "" && value !== null && value !== undefined) params[key] = value;
             });
@@ -12104,14 +12106,20 @@
             this.deliveryListState.error = "";
             try {
               const { data } = await axios.get("/api/deliveries", { params });
+              if (requestToken !== this.deliveryListState.request_token) return false;
               this.deliveries = data.items || [];
               this.deliveriesTotal = Number(data.total || 0);
               this.deliveryListState.loaded = true;
+              return true;
             } catch (error) {
+              if (requestToken !== this.deliveryListState.request_token) return false;
               this.deliveryListState.error = this.errorMessage(error);
+              return false;
             } finally {
-              this.deliveryListState.initialLoading = false;
-              this.deliveryListState.refreshing = false;
+              if (requestToken === this.deliveryListState.request_token) {
+                this.deliveryListState.initialLoading = false;
+                this.deliveryListState.refreshing = false;
+              }
             }
           },
           async loadDeliveryPendingItems() {

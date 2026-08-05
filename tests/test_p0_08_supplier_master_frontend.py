@@ -64,7 +64,8 @@ def test_supplier_master_is_compact_dynamic_and_keeps_history_readable() -> None
     assert "苏州佳丰" not in INDEX
 
     assert 'axios.post("/api/master/suppliers",payload)' in supplier_save
-    assert "expected_version:Number(this.supplierForm.version)" in supplier_save
+    assert "version:Number(this.supplierForm.version || 0) || null" in supplier_save
+    assert "expected_version:supplierTarget.version" in supplier_save
     assert "`/api/master/suppliers/${saved.id}/status`" in supplier_save
     assert 'display_name:String(form.display_name || "").trim() || null' in INDEX
     assert 'business_code:String(form.business_code || "").trim() || null' in INDEX

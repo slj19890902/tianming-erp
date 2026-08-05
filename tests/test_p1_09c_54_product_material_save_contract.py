@@ -34,7 +34,7 @@ def test_product_and_material_save_button_exposes_shared_single_flight_state() -
     footer = INDEX[INDEX.index('<div class="modal-foot">') : INDEX.index('</div>\n        </div>\n      </div>', INDEX.index('<div class="modal-foot">'))]
     assert "masterSavePending" in INDEX
     assert ":disabled=\"loading || masterSavePending ||" in footer
-    assert "['product','material'].includes(modal?.type) && masterSavePending ? '保存中…'" in footer
+    assert "['product','material','supplier'].includes(modal?.type) && masterSavePending ? '保存中…'" in footer
 
 
 def test_product_and_material_save_guard_starts_before_master_preflight() -> None:

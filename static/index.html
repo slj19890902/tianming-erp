@@ -5806,7 +5806,7 @@
             </div>
           </div>
           <div class="modal-foot">
-            <button v-if="!isForcedPassword" class="btn" @click="closeModal">{{ canSaveModal ? "取消" : "关闭" }}</button>
+            <button v-if="!isForcedPassword" class="btn" :disabled="masterSavePending" @click="closeModal">{{ canSaveModal ? "取消" : "关闭" }}</button>
             <template v-if="modal?.type === 'orderPdfImport' && orderImportDrafts.length">
               <button class="btn" :disabled="loading || !confirmableImportDraftCount" @click="toggleConfirmableImportDrafts">{{ confirmedImportDraftCount ? "取消加入批量保存" : "加入批量保存" }}</button>
               <span class="muted">待保存：{{ confirmedImportDraftCount }} 条；已成功：{{ successfulImportDraftCount }} 条；失败：{{ failedImportDraftCount }} 条</span>
@@ -5816,7 +5816,7 @@
               <button class="btn primary" :disabled="loading || pdfTemplateLoading" @click="savePdfTemplate">保存 draft</button>
             </template>
             <button v-if="modal?.type === 'delivery' && deliveryForm.editingId && !deliveryFormIsDirty()" class="btn success" :disabled="loading || !!deliveryForm.pick_task || !!deliveryOperationState.action" @click="createCurrentDeliveryPickTask">{{ deliveryOperationState.action==='pick' && Number(deliveryOperationState.deliveryId)===Number(deliveryForm.editingId) ? '推送中…' : (deliveryForm.pick_task ? '已推送拿货' : '拿货') }}</button>
-            <button v-if="canSaveModal" class="btn primary" :disabled="loading || masterSavePending || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError)) || (modal?.type==='quotationConvert' && !!quotationConvertCreaseMismatch) || (modal?.type==='orderItem' && !!orderItemCreaseMismatch) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && (!!deliveryValidationError || !!deliveryOperationState.action)) || (modal?.type==='receipt' && !!receiptOperationState.action) || (modal?.type==='requisitionHold' && requisitionHoldSaveBlocked)" @click="modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()">{{ ['product','material'].includes(modal?.type) && masterSavePending ? '保存中…' : (modal?.type==='delivery' ? deliveryPrimaryLabel() : (modal?.type==='receipt' ? (receiptOperationState.action==='save' ? '保存中…' : '保存回单') : (['requisition','supplierRequisitionDraft'].includes(modal?.type) ? '确认生成正式采购单' : (modal?.type==='requisitionHold' ? '确认暂缓' : (modal?.type==='stockReplenishment' && stockReplenishmentForm.source_type==='stock_warning' ? '保存报料草稿' : '保存'))))) }}</button>
+            <button v-if="canSaveModal" class="btn primary" :disabled="loading || masterSavePending || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError)) || (modal?.type==='quotationConvert' && !!quotationConvertCreaseMismatch) || (modal?.type==='orderItem' && !!orderItemCreaseMismatch) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && (!!deliveryValidationError || !!deliveryOperationState.action)) || (modal?.type==='receipt' && !!receiptOperationState.action) || (modal?.type==='requisitionHold' && requisitionHoldSaveBlocked)" @click="modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()">{{ ['product','material','supplier'].includes(modal?.type) && masterSavePending ? '保存中…' : (modal?.type==='delivery' ? deliveryPrimaryLabel() : (modal?.type==='receipt' ? (receiptOperationState.action==='save' ? '保存中…' : '保存回单') : (['requisition','supplierRequisitionDraft'].includes(modal?.type) ? '确认生成正式采购单' : (modal?.type==='requisitionHold' ? '确认暂缓' : (modal?.type==='stockReplenishment' && stockReplenishmentForm.source_type==='stock_warning' ? '保存报料草稿' : '保存'))))) }}</button>
           </div>
         </div>
       </div>
@@ -10163,15 +10163,17 @@
               const {data} = includeInactive
                 ? await axios.get("/api/master/suppliers", {params:{include_inactive:true}, signal:controller.signal})
                 : await axios.get("/api/master/suppliers/candidates", {signal:controller.signal});
-              if (latestRequestControllers.get(requestKey) !== controller) return;
+              if (latestRequestControllers.get(requestKey) !== controller) return false;
               this.suppliers = Array.isArray(data) ? data : (data.items || []);
               this.materialSuppliers = this.activeSupplierNames;
+              return true;
             } catch(error) {
               if (!this.isCancelledRequest(error) && latestRequestControllers.get(requestKey) === controller) {
                 this.supplierError = `供应商读取失败：${this.errorMessage(error)}`;
                 this.suppliers = [];
                 this.materialSuppliers = [];
               }
+              return false;
             } finally {
               if (latestRequestControllers.get(requestKey) === controller) {
                 this.supplierLoading = false;
@@ -19439,7 +19441,7 @@
             this.masterPendingSaveOptions = null;
           },
           handleMasterSaveRefreshFailure(entity, error) {
-            const label = entity === "product" ? "常用箱" : "材质";
+            const label = entity === "product" ? "常用箱" : (entity === "supplier" ? "供应商" : "材质");
             if (entity === "product") {
               // 写入已完成，即使列表刷新失败也不应再把表单当作未保存。
               this.productFormSnapshot = null;
@@ -19457,9 +19459,10 @@
           },
           async saveModal() {
             if (this.modal?.type === "receipt") return this.saveReceipt();
-            const masterSaveEntity = ["product","material"].includes(this.modal?.type) ? this.modal.type : null;
+            const masterSaveEntity = ["product","material","supplier"].includes(this.modal?.type) ? this.modal.type : null;
             if (masterSaveEntity && this.masterSavePending) {
-              this.showToast(`${masterSaveEntity === "product" ? "常用箱" : "材质"}正在保存，请勿重复点击`, true);
+              const label = masterSaveEntity === "product" ? "常用箱" : (masterSaveEntity === "supplier" ? "供应商" : "材质");
+              this.showToast(`${label}正在保存，请勿重复点击`, true);
               return false;
             }
             if (masterSaveEntity) this.masterSavePending = true;
@@ -19517,26 +19520,47 @@
                 await Promise.all([this.loadCustomers(), this.loadCustomerOptions(true)]);
               }
               if (this.modal.type === "supplier") {
-                const desiredActive = this.supplierForm.is_active !== false;
+                const supplierTarget = {
+                  id:Number(this.supplierForm.id || 0) || null,
+                  version:Number(this.supplierForm.version || 0) || null,
+                  desiredActive:this.supplierForm.is_active !== false,
+                  wasEditing:!!this.supplierForm.id,
+                };
                 const payload = this.supplierPayload();
                 let saved;
-                if (this.supplierForm.id) {
-                  if (!Number.isInteger(Number(this.supplierForm.version)) || Number(this.supplierForm.version) < 1) throw new Error("供应商版本读取失败，请刷新后重试");
+                if (supplierTarget.id) {
+                  if (!Number.isInteger(supplierTarget.version) || supplierTarget.version < 1) throw new Error("供应商版本读取失败，请刷新后重试");
                   ({data:saved} = await axios.put(
-                    `/api/master/suppliers/${this.supplierForm.id}`,
-                    {...payload, expected_version:Number(this.supplierForm.version)},
+                    `/api/master/suppliers/${supplierTarget.id}`,
+                    {...payload, expected_version:supplierTarget.version},
                   ));
                 } else {
                   ({data:saved} = await axios.post("/api/master/suppliers",payload));
                 }
-                if (saved?.id && (saved.is_active !== false) !== desiredActive) {
-                  ({data:saved} = await axios.put(
-                    `/api/master/suppliers/${saved.id}/status`,
-                    {expected_version:Number(saved.version), is_active:desiredActive},
-                  ));
+                if (saved?.id && (saved.is_active !== false) !== supplierTarget.desiredActive) {
+                  try {
+                    ({data:saved} = await axios.put(
+                      `/api/master/suppliers/${saved.id}/status`,
+                      {expected_version:Number(saved.version), is_active:supplierTarget.desiredActive},
+                    ));
+                  } catch (statusError) {
+                    await this.loadSuppliers(true);
+                    this.closeModal();
+                    this.showToast(
+                      `供应商资料已保存，但状态未生效：${this.errorMessage(statusError)}。请手动刷新后编辑该供应商，不要重复新建。`,
+                      true
+                    );
+                    return false;
+                  }
                 }
-                await this.loadSuppliers(true);
-                successMessage = this.supplierForm.id ? "供应商已更新" : "供应商已新增";
+                const refreshed = await this.loadSuppliers(true);
+                if (!refreshed) {
+                  return this.handleMasterSaveRefreshFailure(
+                    "supplier",
+                    new Error(this.supplierError || "供应商列表刷新失败")
+                  );
+                }
+                successMessage = supplierTarget.wasEditing ? "供应商已更新" : "供应商已新增";
               }
               if (this.modal.type === "product") {
                 const productDirty = this._productFormDirty();

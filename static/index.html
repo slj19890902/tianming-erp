@@ -1775,7 +1775,7 @@
                 <tbody><tr v-for="row in customers" :key="row.id">
                   <td>{{ row.customer_number }}</td><td>{{ row.customer_code }}</td><td>{{ row.name }}</td><td>{{ row.contact_person || "-" }}</td><td>{{ row.phone || "-" }}</td>
                   <td>{{ row.payment_term_days }} 天</td><td>{{ row.delivery_method }}</td><td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td>
-                  <td class="toolbar-group"><button v-if="canViewQuotations" class="btn small primary" @click="openCustomerQuotations(row)">报价</button><button v-if="canViewContracts" class="btn small primary" @click="openCustomerContracts(row)">合同</button><button class="btn small" @click="openCustomer(row)">{{ canEditCustomers ? "查看/编辑" : "查看" }}</button><button class="btn small" @click="openMasterVersionHistory('customer',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateCustomers" :class="['btn','small',row.is_active ? 'danger' : 'success']" @click="toggleCustomerStatus(row)">{{ row.is_active ? "停用" : "启用" }}</button></td>
+                  <td class="toolbar-group"><button v-if="canViewQuotations" class="btn small primary" @click="openCustomerQuotations(row)">报价</button><button v-if="canViewContracts" class="btn small primary" @click="openCustomerContracts(row)">合同</button><button class="btn small" @click="openCustomer(row)">{{ canEditCustomers ? "查看/编辑" : "查看" }}</button><button class="btn small" @click="openMasterVersionHistory('customer',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateCustomers" :class="['btn','small',row.is_active ? 'danger' : 'success']" :disabled="customerLifecycleBusy()" @click="toggleCustomerStatus(row)">{{ customerLifecyclePending('status',row.id) ? '处理中…' : (row.is_active ? "停用" : "启用") }}</button></td>
                 </tr></tbody></table>
               </data-panel>
               <pager :page="pages.customers" :total="customersTotal" :page-size="pageSize" @change="pages.customers=$event; loadCustomers()"></pager>
@@ -6381,7 +6381,7 @@
             selectedProductCustomer: null, productCustomerSearch: "",
             productsLoading: false, productsError: "",
             showProductMoreFilters: false,
-            productTrashOpen: false, productTrashItems: [], productTrashLoading:false, productTrashError:"", productLifecycleAction:{action:"",productId:null},
+            productTrashOpen: false, productTrashItems: [], productTrashLoading:false, productTrashError:"", productLifecycleAction:{action:"",productId:null}, customerLifecycleAction:{action:"",customerId:null},
             filters: { customerKeyword: "", showInactive:false, showInactiveProducts:false, productCustomer: "", productKeyword: "", productCode: "", productName: "", productSpec: "", productMaterial: "", orderCustomer: "", orderKeyword:"", orderNumber:"", orderCustomerPo:"", orderProductCode:"", orderProductName:"", orderSpecification:"", orderDateFrom:"", orderDateTo:"", orderDeliveryDateFrom:"", orderDeliveryDateTo:"", orderScope:"active", orderStage:"", orderStatus:"business", orderView:"customer_po", orderSortBy:"", orderSortDirection:"desc" },
             orderScopeTabs: [
               { label: "进行中", value: "active" },
@@ -16319,20 +16319,59 @@
               ) this.productLifecycleAction = {action:"", productId:null};
             }
           },
+          customerLifecycleBusy() {
+            return Boolean(this.customerLifecycleAction?.action);
+          },
+          customerLifecyclePending(action, customerId=null) {
+            const current = this.customerLifecycleAction || {};
+            if (current.action !== action) return false;
+            if (customerId === null || customerId === undefined) return true;
+            return Number(current.customerId) === Number(customerId);
+          },
+          async runCustomerLifecycleAction({action, customerId=null, confirmMessage, task}) {
+            if (this.customerLifecycleBusy()) return false;
+            if (confirmMessage && !confirm(confirmMessage)) return false;
+            const normalizedCustomerId = customerId === null || customerId === undefined ? null : Number(customerId);
+            this.customerLifecycleAction = {action, customerId:normalizedCustomerId};
+            try {
+              const result = await task();
+              return result !== false;
+            } catch (error) {
+              this.showToast(this.errorMessage(error), true);
+              return false;
+            } finally {
+              if (
+                this.customerLifecycleAction?.action === action
+                && this.customerLifecycleAction?.customerId === normalizedCustomerId
+              ) this.customerLifecycleAction = {action:"", customerId:null};
+            }
+          },
           async deleteCustomer(row) {
-            if (!confirm(`确认停用客户“${row.name}”吗？`)) return;
-            try { const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/customers/${row.id}`,row}); if(!result)return; await Promise.all([this.loadCustomers(),this.loadCustomerOptions(true)]); this.showToast("客户已停用"); }
-            catch(error){this.showToast(this.errorMessage(error),true);}
+            return this.runCustomerLifecycleAction({
+              action:"delete", customerId:row.id,
+              confirmMessage:`确认停用客户“${row.name}”吗？`,
+              task:async() => {
+                const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/customers/${row.id}`,row});
+                if(!result)return false;
+                await Promise.all([this.loadCustomers(),this.loadCustomerOptions(true)]);
+                this.showToast("客户已停用");
+                return true;
+              },
+            });
           },
           async toggleCustomerStatus(row) {
             const action = row.is_active ? "停用" : "启用";
-            if (!confirm(`确认${action}客户“${row.name}”吗？`)) return;
-            try {
-              const result=await this.sendVersionedMasterMutation({method:"put",url:`/api/master/customers/${row.id}/status`,row,body:{is_active:!row.is_active}});
-              if(!result)return;
-              await Promise.all([this.loadCustomers(),this.loadCustomerOptions(true)]);
-              this.showToast(`客户已${action}`);
-            } catch(error) { this.showToast(this.errorMessage(error), true); }
+            return this.runCustomerLifecycleAction({
+              action:"status", customerId:row.id,
+              confirmMessage:`确认${action}客户“${row.name}”吗？`,
+              task:async() => {
+                const result=await this.sendVersionedMasterMutation({method:"put",url:`/api/master/customers/${row.id}/status`,row,body:{is_active:!row.is_active}});
+                if(!result)return false;
+                await Promise.all([this.loadCustomers(),this.loadCustomerOptions(true)]);
+                this.showToast(`客户已${action}`);
+                return true;
+              },
+            });
           },
           async deleteProduct(row) {
             return this.runProductLifecycleAction({

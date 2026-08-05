@@ -39,7 +39,7 @@ def test_product_lifecycle_buttons_have_single_flight_feedback() -> None:
 def test_product_lifecycle_runtime_blocks_duplicates_and_releases(tmp_path: Path) -> None:
     body = _method_body(
         "async runProductLifecycleAction({action, productId=null, confirmMessage, task}) {",
-        "async deleteCustomer(row) {",
+        "customerLifecycleBusy() {",
     )
     script = f"""
 const body={json.dumps(body, ensure_ascii=False)};

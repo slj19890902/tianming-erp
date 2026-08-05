@@ -18180,90 +18180,134 @@
             const lot = event.lot_number ? `批次 ${event.lot_number}` : "";
             return [location,pallet,lot].filter(Boolean).join(" · ") || "-";
           },
-          async openOrderItem(order, item) {
-            this.orderItemOrder = order;
-            this.showOrderItemDanger = false;
-            this.finishedInventoryCandidates = [];
-            this.finishedInventoryCandidatesLoaded = false;
-            this.finishedInventoryReservations = [];
-            const mat = this.allMaterials.find(m => m.id === item.material_id);
-            let product = {};
-            if (item.product_id) {
-              try {
-                product = (await axios.get(`/api/master/products/${item.product_id}`)).data;
-              } catch (error) {
-                this.showToast("常用箱资料读取失败，当前仍可编辑订单已有字段", true);
-              }
-            }
-            this.orderItemForm = {
-              id:item.id, product_id:item.product_id || null, order_number:this.displayOrderNumber(order),
-              customer_name:order.customer_name || "", product_code:item.snapshot_product_code || "",
-              product_name:item.snapshot_product_name || "", material:item.display_material || this.displayMaterialText(item.snapshot_material) || "",
-              specification:item.snapshot_spec || "", production_notes:item.snapshot_production_notes || "",
-              quantity:item.quantity, unit_price:this.money(item.unit_price),
-              requisition_status:item.requisition_status || "未报料",
-              finished_inventory_reserved_qty:Number(item.finished_inventory_reserved_qty || 0),
-              production_required_qty:Number(item.production_required_qty ?? item.quantity),
-              cost_status:item.cost_status || "pending", estimated_cost:item.estimated_cost || null,
-              material_id: item.material_id || null,
-              layer_count: item.layer_count || null,
-              flute_type: item.flute_type || null,
-              box_style:this.normalizeBoxTypeDisplay(product.box_style || item.snapshot_box_style || ""),
-              length_mm:product.length_mm ? Math.round(Number(product.length_mm)) : null,
-              width_mm:product.width_mm ? Math.round(Number(product.width_mm)) : null,
-              height_mm:product.height_mm ? Math.round(Number(product.height_mm)) : null,
-              snapshot_splice_mode:item.snapshot_splice_mode || product.splice_mode || "single",
-              snapshot_pieces_per_box:item.snapshot_pieces_per_box || product.pieces_per_box || 1,
-              snapshot_flap_mm:item.snapshot_flap_mm || product.flap_mm || 30,
-              snapshot_report_length_mm:item.snapshot_report_length_mm || product.report_length_mm || null,
-              snapshot_report_width_mm:item.snapshot_report_width_mm || product.report_width_mm || null,
-              snapshot_crease_type:item.snapshot_crease_type || product.crease_type || null,
-              snapshot_crease_left_mm:item.snapshot_crease_left_mm ?? product.crease_left_mm ?? null,
-              snapshot_crease_middle_mm:item.snapshot_crease_middle_mm ?? product.crease_middle_mm ?? null,
-              snapshot_crease_right_mm:item.snapshot_crease_right_mm ?? product.crease_right_mm ?? null,
-              special_process:this.normalizeCuttingMode(item.special_process || item.cutting_mode || product.default_cutting_mode || "一开一"),
-              snapshot_report_notes:item.snapshot_report_notes || product.report_notes || "",
-              production_process:product.production_process || item.snapshot_production_notes || "",
-              print_content:product.print_content || "无印刷",
-              product_remark:product.remark || "",
-              drawing_file:item.drawing_file || item.product_drawing_file || product.drawings?.[0]?.image_path || null,
-              product_version:product.version || null,
-              sync_product:false,
-              _product_error:"",
-              _material_supplier: mat?.supplier_name || item.snapshot_supplier_name || product.material_supplier_name || "",
-              _material_display: mat ? this.buildMaterialDisplay(mat) : (item.display_material || ""),
-              _report_crease_touched:false,
-              _report_dims_manual:false,
-              _crease_dims_manual:false,
-              _crease_type_manual:false,
-              _recommendation_message:"",
-              _original_box_style:this.normalizeBoxTypeDisplay(product.box_style || item.snapshot_box_style || ""),
-              bom_component_demands: [],
-              _bom_loading:false,
-              _bom_error:"",
-            };
-            this.modal = { type:"orderItem", title:`编辑 ${this.displayOrderNumber(order)} 明细` };
-            await Promise.all([
-              this.loadFinishedInventoryReservations(item.id),
-              this.loadExistingOrderItemBom(this.orderItemForm),
-            ]);
+          cancelOrderItemEditorRequests() {
+            const requestKey = "orders:item-editor";
+            const controller = latestRequestControllers.get(requestKey);
+            controller?.abort();
+            if (latestRequestControllers.get(requestKey) === controller) latestRequestControllers.delete(requestKey);
+            return true;
           },
-          async loadFinishedInventoryCandidates() {
+          async openOrderItem(order, item) {
+            const requestKey = "orders:item-editor";
+            const controller = this.beginLatestRequest(requestKey);
+            const orderSnapshot = JSON.parse(JSON.stringify(order || {}));
+            const itemSnapshot = JSON.parse(JSON.stringify(item || {}));
             try {
-              const {data}=await axios.get("/api/warehouse/finished/candidates",{params:{order_item_id:this.orderItemForm.id}});
+              if (!Number(itemSnapshot.id)) {
+                if (latestRequestControllers.get(requestKey) === controller) this.showToast("订单明细信息不完整，请刷新后重试", true);
+                return false;
+              }
+              let product = {};
+              if (itemSnapshot.product_id) {
+                try {
+                  product = (await axios.get(
+                    `/api/master/products/${itemSnapshot.product_id}`,
+                    { signal:controller.signal },
+                  )).data;
+                } catch (error) {
+                  if (this.isCancelledRequest(error) || latestRequestControllers.get(requestKey) !== controller) return false;
+                  this.showToast("常用箱资料读取失败，当前仍可编辑订单已有字段", true);
+                }
+              }
+              if (latestRequestControllers.get(requestKey) !== controller) return false;
+              this.orderItemOrder = orderSnapshot;
+              this.showOrderItemDanger = false;
+              this.finishedInventoryCandidates = [];
+              this.finishedInventoryCandidatesLoaded = false;
+              this.finishedInventoryReservations = [];
+              const mat = this.allMaterials.find(row => Number(row.id) === Number(itemSnapshot.material_id));
+              const activeForm = {
+                id:itemSnapshot.id, product_id:itemSnapshot.product_id || null, order_number:this.displayOrderNumber(orderSnapshot),
+                customer_name:orderSnapshot.customer_name || "", product_code:itemSnapshot.snapshot_product_code || "",
+                product_name:itemSnapshot.snapshot_product_name || "", material:itemSnapshot.display_material || this.displayMaterialText(itemSnapshot.snapshot_material) || "",
+                specification:itemSnapshot.snapshot_spec || "", production_notes:itemSnapshot.snapshot_production_notes || "",
+                quantity:itemSnapshot.quantity, unit_price:this.money(itemSnapshot.unit_price),
+                requisition_status:itemSnapshot.requisition_status || "未报料",
+                finished_inventory_reserved_qty:Number(itemSnapshot.finished_inventory_reserved_qty || 0),
+                production_required_qty:Number(itemSnapshot.production_required_qty ?? itemSnapshot.quantity),
+                cost_status:itemSnapshot.cost_status || "pending", estimated_cost:itemSnapshot.estimated_cost || null,
+                material_id: itemSnapshot.material_id || null,
+                layer_count: itemSnapshot.layer_count || null,
+                flute_type: itemSnapshot.flute_type || null,
+                box_style:this.normalizeBoxTypeDisplay(product.box_style || itemSnapshot.snapshot_box_style || ""),
+                length_mm:product.length_mm ? Math.round(Number(product.length_mm)) : null,
+                width_mm:product.width_mm ? Math.round(Number(product.width_mm)) : null,
+                height_mm:product.height_mm ? Math.round(Number(product.height_mm)) : null,
+                snapshot_splice_mode:itemSnapshot.snapshot_splice_mode || product.splice_mode || "single",
+                snapshot_pieces_per_box:itemSnapshot.snapshot_pieces_per_box || product.pieces_per_box || 1,
+                snapshot_flap_mm:itemSnapshot.snapshot_flap_mm || product.flap_mm || 30,
+                snapshot_report_length_mm:itemSnapshot.snapshot_report_length_mm || product.report_length_mm || null,
+                snapshot_report_width_mm:itemSnapshot.snapshot_report_width_mm || product.report_width_mm || null,
+                snapshot_crease_type:itemSnapshot.snapshot_crease_type || product.crease_type || null,
+                snapshot_crease_left_mm:itemSnapshot.snapshot_crease_left_mm ?? product.crease_left_mm ?? null,
+                snapshot_crease_middle_mm:itemSnapshot.snapshot_crease_middle_mm ?? product.crease_middle_mm ?? null,
+                snapshot_crease_right_mm:itemSnapshot.snapshot_crease_right_mm ?? product.crease_right_mm ?? null,
+                special_process:this.normalizeCuttingMode(itemSnapshot.special_process || itemSnapshot.cutting_mode || product.default_cutting_mode || "一开一"),
+                snapshot_report_notes:itemSnapshot.snapshot_report_notes || product.report_notes || "",
+                production_process:product.production_process || itemSnapshot.snapshot_production_notes || "",
+                print_content:product.print_content || "无印刷",
+                product_remark:product.remark || "",
+                drawing_file:itemSnapshot.drawing_file || itemSnapshot.product_drawing_file || product.drawings?.[0]?.image_path || null,
+                product_version:product.version || null,
+                sync_product:false,
+                _product_error:"",
+                _material_supplier: mat?.supplier_name || itemSnapshot.snapshot_supplier_name || product.material_supplier_name || "",
+                _material_display: mat ? this.buildMaterialDisplay(mat) : (itemSnapshot.display_material || ""),
+                _report_crease_touched:false,
+                _report_dims_manual:false,
+                _crease_dims_manual:false,
+                _crease_type_manual:false,
+                _recommendation_message:"",
+                _original_box_style:this.normalizeBoxTypeDisplay(product.box_style || itemSnapshot.snapshot_box_style || ""),
+                bom_component_demands: [],
+                _bom_loading:false,
+                _bom_error:"",
+              };
+              this.orderItemForm = activeForm;
+              this.modal = { type:"orderItem", title:`编辑 ${this.displayOrderNumber(orderSnapshot)} 明细` };
+              await Promise.all([
+                this.loadFinishedInventoryReservations(itemSnapshot.id, activeForm),
+                this.loadExistingOrderItemBom(activeForm),
+              ]);
+              if (
+                latestRequestControllers.get(requestKey) !== controller
+                || this.modal?.type !== "orderItem"
+                || this.orderItemForm !== activeForm
+              ) return false;
+              return true;
+            } finally {
+              if (latestRequestControllers.get(requestKey) === controller) this.finishLatestRequest(requestKey, controller);
+            }
+          },
+          async loadFinishedInventoryCandidates(expectedForm=this.orderItemForm) {
+            const itemId = Number(expectedForm?.id || 0);
+            if (!itemId) return false;
+            try {
+              const {data}=await axios.get("/api/warehouse/finished/candidates",{params:{order_item_id:itemId}});
+              if (this.modal?.type !== "orderItem" || this.orderItemForm !== expectedForm || Number(expectedForm.id) !== itemId) return false;
               this.finishedInventoryCandidates=(data.items||[]).map(row=>({
                 ...row,
                 _reserve_qty:Math.min(Number(row.quantity_available||0),Number(data.remaining_requirement||0)),
               }));
               this.finishedInventoryCandidatesLoaded=true;
-            } catch(error) { this.showToast(this.errorMessage(error),true); }
+              return true;
+            } catch(error) {
+              if (this.modal?.type === "orderItem" && this.orderItemForm === expectedForm && Number(expectedForm.id) === itemId) this.showToast(this.errorMessage(error),true);
+              return false;
+            }
           },
-          async loadFinishedInventoryReservations(itemId=this.orderItemForm.id) {
-            if (!itemId) return;
+          async loadFinishedInventoryReservations(itemId=this.orderItemForm.id, expectedForm=this.orderItemForm) {
+            const normalizedItemId = Number(itemId || 0);
+            if (!normalizedItemId) return false;
             try {
-              const {data}=await axios.get("/api/warehouse/reservations",{params:{order_item_id:itemId}});
+              const {data}=await axios.get("/api/warehouse/reservations",{params:{order_item_id:normalizedItemId}});
+              if (this.modal?.type !== "orderItem" || this.orderItemForm !== expectedForm || Number(expectedForm?.id) !== normalizedItemId) return false;
               this.finishedInventoryReservations=data.items||[];
-            } catch(error) { this.showToast(this.errorMessage(error),true); }
+              return true;
+            } catch(error) {
+              if (this.modal?.type === "orderItem" && this.orderItemForm === expectedForm && Number(expectedForm?.id) === normalizedItemId) this.showToast(this.errorMessage(error),true);
+              return false;
+            }
           },
           async refreshOrderItemInventorySummary() {
             if (!this.orderItemOrder?.id) return;
@@ -20122,6 +20166,7 @@
             if (this._productFormDirty()) {
               if (!confirm("表单有未保存的修改，确定要关闭吗？")) return;
             }
+	            if (this.modal?.type === "orderItem") this.cancelOrderItemEditorRequests();
 	            if (this.modal?.type === "product" && this.productEditReturnContext) {
 	              this.returnFromCommonBoxEditor(this.productEditReturnContext.productId, { saved:false });
 	              return;

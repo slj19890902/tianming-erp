@@ -11,7 +11,8 @@ INDEX = (Path(__file__).resolve().parents[1] / "static" / "index.html").read_tex
 def test_customer_update_previews_before_one_confirmation() -> None:
     assert "prepareCustomerChangeConfirmation" in INDEX
     assert "/api/master/customers/${encodeURIComponent(customerId)}/update-preview" in INDEX
-    assert 'else if (masterEntity === "customer") await this.prepareCustomerChangeConfirmation(changes);' in INDEX
+    assert 'else if (masterEntity === "customer") {' in INDEX
+    assert "await this.prepareCustomerChangeConfirmation(changes);" in INDEX
     assert 'entity:"customer"' in INDEX
     assert "confirmationToken:data.confirmation_token || null" in INDEX
     assert "requireAcknowledgement:(Array.isArray(data.warnings) ? data.warnings.length : 0) > 0" in INDEX

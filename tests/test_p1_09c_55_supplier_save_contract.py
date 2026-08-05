@@ -36,8 +36,8 @@ def test_supplier_save_uses_shared_lock_and_disables_both_footer_actions() -> No
     save = _method_body("async saveModal() {", "async dispatchDelivery(row) {")
 
     assert '<button v-if="!isForcedPassword" class="btn" :disabled="masterSavePending"' in footer
-    assert "['product','material','supplier'].includes(modal?.type) && masterSavePending ? '保存中…'" in footer
-    assert 'const masterSaveEntity = ["product","material","supplier"].includes(this.modal?.type)' in save
+    assert "['customer','product','material','supplier'].includes(modal?.type) && masterSavePending ? '保存中…'" in footer
+    assert 'const masterSaveEntity = ["customer","product","material","supplier"].includes(this.modal?.type)' in save
     assert 'masterSaveEntity === "supplier" ? "供应商"' in save
     assert "正在保存，请勿重复点击" in save
 

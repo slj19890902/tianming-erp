@@ -39,7 +39,7 @@ def test_unordered_finished_picker_is_customer_scoped_and_compact() -> None:
 
 def test_unordered_finished_payload_allows_pending_price_and_requires_allocations() -> None:
     save_start = INDEX.index("const activeDeliveryLines =")
-    save_end = INDEX.index('if (this.deliveryForm.editingId)', save_start)
+    save_end = INDEX.index("const savedDelivery = await this.saveCurrentDeliveryDraft", save_start)
     save_block = INDEX[save_start:save_end]
     assert 'source_type: "unordered_finished"' in save_block
     assert "product_id: Number(line.product_id)" in save_block

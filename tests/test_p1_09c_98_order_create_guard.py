@@ -132,7 +132,7 @@ const payload={{customer_id:5,items:[{{client_line_id:"L1"}}]}};
 
 
 def test_save_modal_routes_new_order_outcome_without_losing_existing_errors() -> None:
-    body = _method_body("async saveModal() {", "async dispatchDelivery(row) {")
+    body = _method_body("async saveModal() {", "async dispatchDelivery(row, options = {}) {")
     assert 'if (this.modal?.type === "order" && (this.orderCreateSaveState.saving' in body
     assert "const createdOrder = await this.saveNewOrder(orderPayload);" in body
     assert "if (createdOrder?._in_flight) return false;" in body

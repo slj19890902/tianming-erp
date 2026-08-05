@@ -127,7 +127,7 @@ const responseError=message=>{{const error=new Error(message);error.response={{s
 
 
 def test_save_modal_routes_order_group_results() -> None:
-    body = _method_body("async saveModal() {", "async dispatchDelivery(row) {")
+    body = _method_body("async saveModal() {", "async dispatchDelivery(row, options = {}) {")
     assert 'if (this.modal?.type === "orderEdit" && (this.orderGroupSaveState.saving' in body
     assert "const savedGroup = await this.saveOrderGroup(this.orderEditForm.order_ids, payload);" in body
     assert "if (savedGroup?._in_flight) return false;" in body

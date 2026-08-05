@@ -118,7 +118,7 @@ const makeVm=()=>({{
 
 
 def test_save_modal_routes_order_item_result_without_losing_guards() -> None:
-    body = _method_body("async saveModal() {", "async dispatchDelivery(row) {")
+    body = _method_body("async saveModal() {", "async dispatchDelivery(row, options = {}) {")
     assert 'if (this.modal?.type === "orderItem" && (this.orderItemSaveState.saving' in body
     assert "const orderItemSaved = await this.saveCurrentOrderItem(" in body
     assert "if (orderItemSaved?._in_flight || !orderItemSaved) return false;" in body

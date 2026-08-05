@@ -183,10 +183,12 @@ if (changedSaved.saveCalls !== 1 || changedSaved.dispatchCalls !== 0) throw new 
 
 def test_first_save_keeps_delivery_modal_open_and_sets_editing_id() -> None:
     branch = _delivery_save_branch()
+    helper = _method_body("saveCurrentDeliveryDraft")
 
-    assert "this.deliveryForm.editingId = Number(data.id)" in branch
-    assert "this.deliveryForm.saved_signature = this.deliveryFormSignature()" in branch
-    assert 'type:"delivery"' in branch
+    assert "this.saveCurrentDeliveryDraft(editingId, payload)" in branch
+    assert "this.deliveryForm.editingId = Number(data.id)" in helper
+    assert "this.deliveryForm.saved_signature = this.deliveryFormSignature()" in helper
+    assert 'type:"delivery"' in helper
     assert "return true;" in branch
     assert "closeModal" not in branch
 

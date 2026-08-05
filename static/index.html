@@ -5320,6 +5320,7 @@
               </div>
             </div>
             <div v-else-if="modal.type === 'delivery'">
+              <fieldset :disabled="deliverySaveState.saving" style="border:0;padding:0;margin:0;min-width:0;width:100%">
               <div class="form-grid">
                 <div class="field"><label>客户</label><search-select v-model="deliveryForm.customer_id" :options="deliveryCustomerOptions" label-key="_delivery_label" value-key="id" placeholder="输入客户名称、缩写或拼音首字母" :disabled="!!deliveryForm.editingId || deliveryCandidateLoading" @change="onDeliveryCustomerChange"></search-select><div v-if="!deliveryForm.editingId && deliveryCandidateLoading" class="muted">正在加载可送货客户…</div><div v-else-if="!deliveryForm.editingId && deliveryCandidateError" class="status orange" style="white-space:normal">客户候选加载失败：{{ deliveryCandidateError }} <button class="btn small" type="button" @click="loadDeliveryCustomerOptions">重试</button></div><div v-else-if="!deliveryForm.editingId && !deliveryCustomerOptions.length" class="muted">当前没有待送订单或可送成品库存</div></div>
                 <div class="field"><label>送货日期</label><input class="input" type="date" v-model="deliveryForm.delivery_date" /></div>
@@ -5390,6 +5391,7 @@
                   </div>
                 </div>
               </div>
+              </fieldset>
             </div>
             <div v-else-if="modal.type === 'tianhuaPreimport'">
               <div class="panel" style="margin-bottom:12px">
@@ -5828,7 +5830,7 @@
             </div>
           </div>
           <div class="modal-foot">
-            <button v-if="!isForcedPassword" class="btn" :disabled="masterSavePending || (modal?.type==='stockReplenishment' && stockReplenishmentSaveState.saving) || (modal?.type==='quotationConvert' && quotationConversionState.saving) || (modal?.type==='order' && orderCreateSaveState.saving) || (modal?.type==='orderEdit' && orderGroupSaveState.saving) || (modal?.type==='orderItem' && orderItemSaveState.saving)" @click="closeModal">{{ canSaveModal ? "取消" : "关闭" }}</button>
+            <button v-if="!isForcedPassword" class="btn" :disabled="masterSavePending || (modal?.type==='stockReplenishment' && stockReplenishmentSaveState.saving) || (modal?.type==='quotationConvert' && quotationConversionState.saving) || (modal?.type==='order' && orderCreateSaveState.saving) || (modal?.type==='orderEdit' && orderGroupSaveState.saving) || (modal?.type==='orderItem' && orderItemSaveState.saving) || (modal?.type==='delivery' && deliverySaveState.saving)" @click="closeModal">{{ canSaveModal ? "取消" : "关闭" }}</button>
             <template v-if="modal?.type === 'orderPdfImport' && orderImportDrafts.length">
               <button class="btn" :disabled="loading || !confirmableImportDraftCount" @click="toggleConfirmableImportDrafts">{{ confirmedImportDraftCount ? "取消加入批量保存" : "加入批量保存" }}</button>
               <span class="muted">待保存：{{ confirmedImportDraftCount }} 条；已成功：{{ successfulImportDraftCount }} 条；失败：{{ failedImportDraftCount }} 条</span>
@@ -5837,12 +5839,12 @@
             <template v-if="modal?.type === 'pdfTemplate' && !pdfTemplateFormReadonly">
               <button class="btn primary" :disabled="loading || pdfTemplateLoading" @click="savePdfTemplate">保存 draft</button>
             </template>
-            <button v-if="modal?.type === 'delivery' && deliveryForm.editingId && !deliveryFormIsDirty()" class="btn success" :disabled="loading || !!deliveryForm.pick_task || !!deliveryOperationState.action" @click="createCurrentDeliveryPickTask">{{ deliveryOperationState.action==='pick' && Number(deliveryOperationState.deliveryId)===Number(deliveryForm.editingId) ? '推送中…' : (deliveryForm.pick_task ? '已推送拿货' : '拿货') }}</button>
+            <button v-if="modal?.type === 'delivery' && deliveryForm.editingId && !deliveryFormIsDirty()" class="btn success" :disabled="loading || deliverySaveState.saving || !!deliveryForm.pick_task || !!deliveryOperationState.action" @click="createCurrentDeliveryPickTask">{{ deliveryOperationState.action==='pick' && Number(deliveryOperationState.deliveryId)===Number(deliveryForm.editingId) ? '推送中…' : (deliveryForm.pick_task ? '已推送拿货' : '拿货') }}</button>
             <button v-if="canSaveModal && modal?.type==='quotationConvert'" class="btn primary" :disabled="loading || quotationConversionState.saving || quotationConversionState.committed || quotationConversionState.outcomeUncertain || !!quotationConvertCreaseMismatch" @click="saveModal()">{{ quotationConversionState.saving ? '正在转入…' : (quotationConversionState.committed ? '已转入常用箱' : '保存') }}</button>
             <button v-if="canSaveModal && modal?.type==='order'" class="btn primary" :disabled="loading || orderCreateSaveState.saving || orderCreateSaveState.committed || orderCreateSaveState.outcomeUncertain" @click="saveModal()">{{ orderCreateSaveState.saving ? '正在保存订单…' : (orderCreateSaveState.committed ? '订单已保存' : '保存') }}</button>
             <button v-if="canSaveModal && modal?.type==='orderEdit'" class="btn primary" :disabled="loading || orderGroupSaveState.saving || orderGroupSaveState.committed || orderGroupSaveState.outcomeUncertain" @click="saveModal()">{{ orderGroupSaveState.saving ? '正在保存订单组…' : (orderGroupSaveState.committed ? '订单组已保存' : '保存') }}</button>
             <button v-if="canSaveModal && modal?.type==='orderItem'" class="btn primary" :disabled="loading || orderItemSaveState.saving || orderItemSaveState.committed || orderItemSaveState.outcomeUncertain || !!orderItemCreaseMismatch" @click="saveModal()">{{ orderItemSaveState.saving ? '正在保存明细…' : (orderItemSaveState.committed ? '订单明细已保存' : '保存') }}</button>
-            <button v-if="canSaveModal && !['quotationConvert','order','orderEdit','orderItem'].includes(modal?.type)" class="btn primary" :disabled="loading || masterSavePending || (modal?.type==='supplierRequisitionDraft' && (supplierRequisitionSaveState.saving || supplierRequisitionSaveState.committed)) || (modal?.type==='requisition' && (compositeRequisitionSaveState.saving || compositeRequisitionSaveState.committed)) || (modal?.type==='stockReplenishment' && (stockReplenishmentSaveState.saving || stockReplenishmentSaveState.committed)) || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError)) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && (!!deliveryValidationError || !!deliveryOperationState.action)) || (modal?.type==='receipt' && !!receiptOperationState.action) || (modal?.type==='requisitionHold' && requisitionHoldSaveBlocked)" @click="modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()">{{ ['customer','product','material','supplier'].includes(modal?.type) && masterSavePending ? '保存中…' : (modal?.type==='delivery' ? deliveryPrimaryLabel() : (modal?.type==='receipt' ? (receiptOperationState.action==='save' ? '保存中…' : '保存回单') : (modal?.type==='supplierRequisitionDraft' ? (supplierRequisitionSaveState.saving ? '正在生成采购单…' : (supplierRequisitionSaveState.committed ? '采购单已生成' : '确认生成正式采购单')) : (modal?.type==='requisition' ? (compositeRequisitionSaveState.saving ? '正在生成组合报料…' : (compositeRequisitionSaveState.committed ? '组合报料已生成' : '确认生成正式采购单')) : (modal?.type==='requisitionHold' ? '确认暂缓' : (modal?.type==='stockReplenishment' ? (stockReplenishmentSaveState.saving ? '正在保存补库草稿…' : (stockReplenishmentSaveState.committed ? '补库草稿已保存' : (stockReplenishmentForm.source_type==='stock_warning' ? '保存报料草稿' : '保存补库报料草稿'))) : '保存')))))) }}</button>
+            <button v-if="canSaveModal && !['quotationConvert','order','orderEdit','orderItem'].includes(modal?.type)" class="btn primary" :disabled="loading || masterSavePending || (modal?.type==='supplierRequisitionDraft' && (supplierRequisitionSaveState.saving || supplierRequisitionSaveState.committed)) || (modal?.type==='requisition' && (compositeRequisitionSaveState.saving || compositeRequisitionSaveState.committed)) || (modal?.type==='stockReplenishment' && (stockReplenishmentSaveState.saving || stockReplenishmentSaveState.committed)) || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError)) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && (deliverySaveState.saving || deliverySaveState.outcomeUncertain || !!deliveryValidationError || !!deliveryOperationState.action)) || (modal?.type==='receipt' && !!receiptOperationState.action) || (modal?.type==='requisitionHold' && requisitionHoldSaveBlocked)" @click="modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()">{{ ['customer','product','material','supplier'].includes(modal?.type) && masterSavePending ? '保存中…' : (modal?.type==='delivery' ? (deliverySaveState.saving ? '正在保存草稿…' : deliveryPrimaryLabel()) : (modal?.type==='receipt' ? (receiptOperationState.action==='save' ? '保存中…' : '保存回单') : (modal?.type==='supplierRequisitionDraft' ? (supplierRequisitionSaveState.saving ? '正在生成采购单…' : (supplierRequisitionSaveState.committed ? '采购单已生成' : '确认生成正式采购单')) : (modal?.type==='requisition' ? (compositeRequisitionSaveState.saving ? '正在生成组合报料…' : (compositeRequisitionSaveState.committed ? '组合报料已生成' : '确认生成正式采购单')) : (modal?.type==='requisitionHold' ? '确认暂缓' : (modal?.type==='stockReplenishment' ? (stockReplenishmentSaveState.saving ? '正在保存补库草稿…' : (stockReplenishmentSaveState.committed ? '补库草稿已保存' : (stockReplenishmentForm.source_type==='stock_warning' ? '保存报料草稿' : '保存补库报料草稿'))) : '保存')))))) }}</button>
           </div>
         </div>
       </div>
@@ -6291,7 +6293,7 @@
             // v0.19.2-B 楞型加价规则
             fluteRules: [], showFluteRuleModal: false, fluteRuleLoading: false, fluteRuleError: "", fluteRuleAction:{action:"",ruleId:null},
             fluteRuleForm: { id: null, supplier_name: "", layer_count: 3, flute_type: "A", price_delta: "0", effective_date: "", remark: "", is_active: true },
-            deliveries: [], pendingDeliveryItems: [], deliveryCustomerCandidates: [], deliveryPickTasks: [], deliveryPickers: [], expandedDeliveryRows: {}, deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false, request_token:0 }, deliveryPendingState:{loading:false,error:"",request_token:0}, deliveryCandidateLoading:false, deliveryCandidateError:"", deliveryCandidateRequestSequence:0, deliveryBatchRequestSequence:0, unorderedFinishedRequestSequence:0, deliveryOperationState:{action:"",deliveryId:null,deliveryNumber:""}, receiptOperationState:{action:"",deliveryId:null,receiptId:null,deliveryNumber:""}, statements: [], invoices: [], moldTools: [],
+            deliveries: [], pendingDeliveryItems: [], deliveryCustomerCandidates: [], deliveryPickTasks: [], deliveryPickers: [], expandedDeliveryRows: {}, deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false, request_token:0 }, deliveryPendingState:{loading:false,error:"",request_token:0}, deliveryCandidateLoading:false, deliveryCandidateError:"", deliveryCandidateRequestSequence:0, deliveryBatchRequestSequence:0, unorderedFinishedRequestSequence:0, deliveryOperationState:{action:"",deliveryId:null,deliveryNumber:""}, deliverySaveState:{saving:false,committed:false,outcomeUncertain:false,result:null}, receiptOperationState:{action:"",deliveryId:null,receiptId:null,deliveryNumber:""}, statements: [], invoices: [], moldTools: [],
             invoiceTasks: [], invoiceTaskFilters:{customer_id:"",statement_month:"",status:""}, invoiceTaskState:{loading:false,error:""},
             invoiceTaskDetail:null, invoiceTaskResult:{task_id:null,status:"issued",invoice_number:"",invoice_date:"",failure_reason:"",expected_version:null},
             invoiceTaskOperationState:{detailLoading:false,detailError:"",detailTaskId:null,detailTaskNumber:"",confirmingTaskId:null,resultSaving:false},
@@ -20373,6 +20375,51 @@
             if (dispatched) this.modal = null;
             return dispatched;
           },
+          async saveCurrentDeliveryDraft(editingId, deliveryPayload) {
+            const state = this.deliverySaveState || {};
+            if (state.saving || state.outcomeUncertain) return {_in_flight:true};
+            const targetId = Number(editingId || 0) || null;
+            const payload = JSON.parse(JSON.stringify(deliveryPayload));
+            this.deliverySaveState = {saving:true,committed:false,outcomeUncertain:false,result:null};
+            let data;
+            try {
+              if (targetId) ({data} = await axios.put(`/api/deliveries/${targetId}`, payload));
+              else ({data} = await axios.post("/api/deliveries", payload));
+            } catch (error) {
+              if (!error?.response) {
+                const metadata = {
+                  editing_id:targetId,
+                  customer_id:Number(payload.customer_id || this.deliveryForm.customer_id || 0) || null,
+                  delivery_date:payload.delivery_date || null,
+                };
+                this.deliverySaveState = {saving:false,committed:false,outcomeUncertain:true,result:metadata};
+                if (this.modal?.type === "delivery") this.modal = null;
+                error._deliverySaveOutcomeUncertain = metadata;
+                throw error;
+              }
+              this.deliverySaveState = {saving:false,committed:false,outcomeUncertain:false,result:null};
+              throw error;
+            }
+            this.deliverySaveState = {saving:true,committed:true,outcomeUncertain:false,result:data};
+            this.deliveryForm.editingId = Number(data.id);
+            this.deliveryForm.delivery_number = data.delivery_number || this.deliveryForm.delivery_number || "";
+            this.deliveryForm.pick_task = data.pick_task || this.deliveryForm.pick_task || null;
+            this.deliveryForm.saved_signature = this.deliveryFormSignature();
+            this.modal = {
+              type:"delivery",
+              title:`编辑送货单 ${this.deliveryForm.delivery_number || data.id}`,
+            };
+            if (!targetId) this.pages.deliveries = 1;
+            let refreshFailed = false;
+            try {
+              refreshFailed = (await this.loadDeliveries()) === false;
+            } catch (error) {
+              refreshFailed = true;
+            }
+            const result = {...data,_refresh_failed:refreshFailed};
+            this.deliverySaveState = {saving:false,committed:true,outcomeUncertain:false,result};
+            return result;
+          },
           async printCurrentDeliveryDraft() {
             const deliveryId = Number(this.deliveryForm.editingId || 0);
             if (!deliveryId) {
@@ -20635,6 +20682,7 @@
           },
           async openDelivery(preferredCustomerId = null) {
             if (!Number.isInteger(Number(preferredCustomerId))) preferredCustomerId = null;
+            this.deliverySaveState = {saving:false,committed:false,outcomeUncertain:false,result:null};
             this.deliveryForm = { editingId:null, delivery_number:"", source_mode:"order", source_tab:"order", customer_id:null, delivery_date:today(), vehicle_number:"", lines:[], saved_signature:"", pick_task:null };
             this.deliveryBatchPicker = { visible:false, loading:false, keyword:"", items:[], selected:{}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message:"", error:false };
             this.unorderedFinishedPicker = { visible:false, loading:false, keyword:"", items:[], selected:{}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message:"", error:false };
@@ -20882,6 +20930,10 @@
           },
 	          closeModal() {
 	            if (this.isForcedPassword) return;
+            if (this.modal?.type === "delivery" && this.deliverySaveState?.saving) {
+                this.showToast("送货草稿正在保存，请稍候", true);
+                return;
+              }
               if (this.modal?.type === "orderItem" && this.orderItemSaveState.saving) {
                 this.showToast("订单明细正在保存，请稍候", true);
                 return;
@@ -21147,6 +21199,16 @@
           },
           async saveModal() {
             if (this.modal?.type === "receipt") return this.saveReceipt();
+            const deliveryUsesLocalSaveState = this.modal?.type === "delivery";
+            if (deliveryUsesLocalSaveState && (this.deliverySaveState.saving || this.deliverySaveState.outcomeUncertain)) {
+              this.showToast(
+                this.deliverySaveState.saving
+                  ? "送货草稿正在保存，请勿重复点击"
+                  : "上次送货草稿提交结果暂不确定，请刷新送货列表核对",
+                true,
+              );
+              return false;
+            }
             if (this.modal?.type === "quotationConvert" && (this.quotationConversionState.saving || this.quotationConversionState.committed || this.quotationConversionState.outcomeUncertain)) {
               this.showToast(
                 this.quotationConversionState.saving
@@ -21258,7 +21320,7 @@
                 };
               }
             }
-            this.loading = true;
+            if (!deliveryUsesLocalSaveState) this.loading = true;
             let successMessage = "保存成功";
             try {
               if (this.modal.type === "requisitionHold") {
@@ -21592,23 +21654,21 @@
                     over_delivery_reason: line.over_delivery_reason || null,
                     remarks: line.remarks || null
                   }));
-                let data;
-                if (this.deliveryForm.editingId) {
-                  ({ data } = await axios.put(`/api/deliveries/${this.deliveryForm.editingId}`, { source_mode:sourceMode, delivery_date:this.deliveryForm.delivery_date, vehicle_number:this.deliveryForm.vehicle_number, items }));
-                } else {
-                  ({ data } = await axios.post("/api/deliveries", { source_mode:sourceMode, customer_id:this.deliveryForm.customer_id, delivery_date:this.deliveryForm.delivery_date, vehicle_number:this.deliveryForm.vehicle_number, items }));
-                  this.pages.deliveries = 1;
-                }
-                this.deliveryForm.editingId = Number(data.id);
-                this.deliveryForm.delivery_number = data.delivery_number || this.deliveryForm.delivery_number || "";
-                this.deliveryForm.pick_task = data.pick_task || this.deliveryForm.pick_task || null;
-                this.deliveryForm.saved_signature = this.deliveryFormSignature();
-                this.modal = {
-                  type:"delivery",
-                  title:`编辑送货单 ${this.deliveryForm.delivery_number || data.id}`,
+                const editingId = Number(this.deliveryForm.editingId || 0) || null;
+                const payload = {
+                  source_mode:sourceMode,
+                  delivery_date:this.deliveryForm.delivery_date,
+                  vehicle_number:this.deliveryForm.vehicle_number,
+                  items,
                 };
-                await this.loadDeliveries();
-                this.showToast("送货草稿已保存，可选择拿货或直接发货打印");
+                if (!editingId) payload.customer_id = Number(this.deliveryForm.customer_id);
+                const savedDelivery = await this.saveCurrentDeliveryDraft(editingId, payload);
+                if (savedDelivery?._in_flight) return false;
+                if (savedDelivery?._refresh_failed) {
+                  this.showToast("送货草稿已保存；列表刷新失败，请手动刷新送货列表核对，不要重复提交。", true);
+                } else {
+                  this.showToast("送货草稿已保存，可选择拿货或直接发货打印");
+                }
                 return true;
               }
               if (this.modal.type === "statement") {
@@ -21646,6 +21706,10 @@
               this.closeModal(); this.showToast(successMessage);
               return true;
             } catch (error) {
+              if (error?._deliverySaveOutcomeUncertain) {
+                this.showToast("送货草稿保存请求连接中断，结果暂不确定。原窗口已关闭，请按客户、日期和送货单号刷新核对，不要重复点击原草稿。", true);
+                return false;
+              }
               if (error?._orderItemOutcomeUncertain) {
                 this.showToast("订单明细保存请求连接中断，结果暂不确定。原窗口已关闭，请刷新订单详情和常用箱核对，不要重复点击原草稿。", true);
                 return false;
@@ -21702,7 +21766,7 @@
               this.showToast(message, true);
               return false;
             }
-            finally { this.loading = false; }
+            finally { if (!deliveryUsesLocalSaveState) this.loading = false; }
             } finally {
               if (masterSaveEntity) this.masterSavePending = false;
             }
@@ -21785,6 +21849,7 @@
             }
           },
           async editDelivery(row) {
+            this.deliverySaveState = {saving:false,committed:false,outcomeUncertain:false,result:null};
             const sourceMode = row.source_mode || this.deliverySourceModeFromLines(row.items || []);
             const hasOrderLines = (row.items || []).some(item => item.source_type !== "unordered_finished");
             if (hasOrderLines) {

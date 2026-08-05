@@ -5822,7 +5822,7 @@
               <button class="btn primary" :disabled="loading || pdfTemplateLoading" @click="savePdfTemplate">保存 draft</button>
             </template>
             <button v-if="modal?.type === 'delivery' && deliveryForm.editingId && !deliveryFormIsDirty()" class="btn success" :disabled="loading || !!deliveryForm.pick_task || !!deliveryOperationState.action" @click="createCurrentDeliveryPickTask">{{ deliveryOperationState.action==='pick' && Number(deliveryOperationState.deliveryId)===Number(deliveryForm.editingId) ? '推送中…' : (deliveryForm.pick_task ? '已推送拿货' : '拿货') }}</button>
-            <button v-if="canSaveModal" class="btn primary" :disabled="loading || masterSavePending || (modal?.type==='supplierRequisitionDraft' && (supplierRequisitionSaveState.saving || supplierRequisitionSaveState.committed)) || (modal?.type==='stockReplenishment' && (stockReplenishmentSaveState.saving || stockReplenishmentSaveState.committed)) || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError)) || (modal?.type==='quotationConvert' && !!quotationConvertCreaseMismatch) || (modal?.type==='orderItem' && !!orderItemCreaseMismatch) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && (!!deliveryValidationError || !!deliveryOperationState.action)) || (modal?.type==='receipt' && !!receiptOperationState.action) || (modal?.type==='requisitionHold' && requisitionHoldSaveBlocked)" @click="modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()">{{ ['customer','product','material','supplier'].includes(modal?.type) && masterSavePending ? '保存中…' : (modal?.type==='delivery' ? deliveryPrimaryLabel() : (modal?.type==='receipt' ? (receiptOperationState.action==='save' ? '保存中…' : '保存回单') : (modal?.type==='supplierRequisitionDraft' ? (supplierRequisitionSaveState.saving ? '正在生成采购单…' : (supplierRequisitionSaveState.committed ? '采购单已生成' : '确认生成正式采购单')) : (modal?.type==='requisition' ? '确认生成正式采购单' : (modal?.type==='requisitionHold' ? '确认暂缓' : (modal?.type==='stockReplenishment' ? (stockReplenishmentSaveState.saving ? '正在保存补库草稿…' : (stockReplenishmentSaveState.committed ? '补库草稿已保存' : (stockReplenishmentForm.source_type==='stock_warning' ? '保存报料草稿' : '保存补库报料草稿'))) : '保存')))))) }}</button>
+            <button v-if="canSaveModal" class="btn primary" :disabled="loading || masterSavePending || (modal?.type==='supplierRequisitionDraft' && (supplierRequisitionSaveState.saving || supplierRequisitionSaveState.committed)) || (modal?.type==='requisition' && (compositeRequisitionSaveState.saving || compositeRequisitionSaveState.committed)) || (modal?.type==='stockReplenishment' && (stockReplenishmentSaveState.saving || stockReplenishmentSaveState.committed)) || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError)) || (modal?.type==='quotationConvert' && !!quotationConvertCreaseMismatch) || (modal?.type==='orderItem' && !!orderItemCreaseMismatch) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && (!!deliveryValidationError || !!deliveryOperationState.action)) || (modal?.type==='receipt' && !!receiptOperationState.action) || (modal?.type==='requisitionHold' && requisitionHoldSaveBlocked)" @click="modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()">{{ ['customer','product','material','supplier'].includes(modal?.type) && masterSavePending ? '保存中…' : (modal?.type==='delivery' ? deliveryPrimaryLabel() : (modal?.type==='receipt' ? (receiptOperationState.action==='save' ? '保存中…' : '保存回单') : (modal?.type==='supplierRequisitionDraft' ? (supplierRequisitionSaveState.saving ? '正在生成采购单…' : (supplierRequisitionSaveState.committed ? '采购单已生成' : '确认生成正式采购单')) : (modal?.type==='requisition' ? (compositeRequisitionSaveState.saving ? '正在生成组合报料…' : (compositeRequisitionSaveState.committed ? '组合报料已生成' : '确认生成正式采购单')) : (modal?.type==='requisitionHold' ? '确认暂缓' : (modal?.type==='stockReplenishment' ? (stockReplenishmentSaveState.saving ? '正在保存补库草稿…' : (stockReplenishmentSaveState.committed ? '补库草稿已保存' : (stockReplenishmentForm.source_type==='stock_warning' ? '保存报料草稿' : '保存补库报料草稿'))) : '保存')))))) }}</button>
           </div>
         </div>
       </div>
@@ -6330,6 +6330,7 @@
             supplierOrders: [],
             supplierRequisitionDraft: { supplier_groups: [] }, supplierRequisitionSelections: [],
             supplierRequisitionSaveState:{saving:false, committed:false, uncertain:false, result:null},
+            compositeRequisitionSaveState:{saving:false, committed:false, uncertain:false, result:null},
             stockReplenishmentSaveState:{saving:false, committed:false, uncertain:false, result:null},
             stockReplenishmentVoidState:{orderId:null, documentNumber:"", uncertainIds:{}},
             stockPolicyWarnings: [], stockReplenishmentLocations: [], stockReplenishmentProducts: [], stockReplenishmentCompanions: [],
@@ -18375,6 +18376,59 @@
             }
             return "";
           },
+          async saveCompositeRequisitionDraft() {
+            const state = this.compositeRequisitionSaveState;
+            if (state.saving || state.committed) {
+              this.showToast(
+                state.committed ? "组合报料单已经生成，请勿重复提交" : "正在生成组合报料，请勿重复点击",
+                true,
+              );
+              return state.committed ? state.result : {_in_flight:true};
+            }
+            const requisitionError = this.validateRequisitionForm();
+            if (requisitionError) throw new Error(requisitionError);
+            const payload = {
+              supplier_name:this.requisitionForm.supplier_name,
+              items:this.requisitionForm.items.map(line => this.requisitionBatchLinePayload(line)),
+            };
+            const frozenPayload = JSON.parse(JSON.stringify(payload));
+            state.saving = true;
+            state.uncertain = false;
+            try {
+              let data;
+              try {
+                ({data} = await axios.post("/api/requisition/batches", frozenPayload));
+              } catch (error) {
+                const status = Number(error?.response?.status || 0);
+                if (!error?.response || status >= 500) {
+                  state.uncertain = true;
+                  this.modal = null;
+                  error._compositeRequisitionOutcomeUncertain = true;
+                }
+                throw error;
+              }
+              // 正式组合报料已经写入；刷新或打印失败不能把已完成的业务显示成保存失败。
+              state.committed = true;
+              state.result = data;
+              this.requisitionSelected = {};
+              this.selectedPendingKeys = [];
+              this.selectedBomSnapshotIds = [];
+              if (this.modal?.type === "requisition") this.modal = null;
+              let printFailed = false;
+              try {
+                printFailed = !window.open(`/requisition-print.html?id=${data.id}`, "_blank");
+              } catch (error) {
+                printFailed = true;
+              }
+              const refreshResults = await Promise.allSettled([this.loadRequisition()]);
+              const refreshFailed = refreshResults.some(result =>
+                result.status === "rejected" || result.value === false
+              );
+              return {...data, _refresh_failed:refreshFailed, _print_failed:printFailed};
+            } finally {
+              state.saving = false;
+            }
+          },
           async saveStockReplenishmentDraft() {
             const state = this.stockReplenishmentSaveState;
             if (state.saving || state.committed) {
@@ -18559,6 +18613,7 @@
               line._auto_cover_error = "";
             });
             this.requisitionForm = { supplier_name:suppliers[0], items:lines };
+            this.compositeRequisitionSaveState = {saving:false, committed:false, uncertain:false, result:null};
             this.modal = {type:"requisition", title:"报料明细草稿"};
           },
           recalculateCompositeDraftLine(line) {
@@ -19847,6 +19902,10 @@
           },
 	          closeModal() {
 	            if (this.isForcedPassword) return;
+              if (this.modal?.type === "requisition" && this.compositeRequisitionSaveState.saving) {
+                this.showToast("正在生成组合报料，请稍候", true);
+                return;
+              }
               if (this.modal?.type === "supplierRequisitionDraft" && this.supplierRequisitionSaveState.saving) {
                 this.showToast("正在生成采购单，请稍候", true);
                 return;
@@ -19920,6 +19979,13 @@
           },
           async saveModal() {
             if (this.modal?.type === "receipt") return this.saveReceipt();
+            if (this.modal?.type === "requisition" && (this.compositeRequisitionSaveState.saving || this.compositeRequisitionSaveState.committed)) {
+              this.showToast(
+                this.compositeRequisitionSaveState.committed ? "组合报料单已经生成，请勿重复提交" : "正在生成组合报料，请勿重复点击",
+                true,
+              );
+              return false;
+            }
             if (this.modal?.type === "supplierRequisitionDraft" && (this.supplierRequisitionSaveState.saving || this.supplierRequisitionSaveState.committed)) {
               this.showToast(
                 this.supplierRequisitionSaveState.committed ? "采购单已经生成，请勿重复提交" : "正在生成采购单，请勿重复点击",
@@ -20283,18 +20349,18 @@
                 return true;
               }
               if (this.modal.type === "requisition") {
-                const requisitionError = this.validateRequisitionForm();
-                if (requisitionError) throw new Error(requisitionError);
-                const payload = {
-                  supplier_name:this.requisitionForm.supplier_name,
-                  items:this.requisitionForm.items.map(line => this.requisitionBatchLinePayload(line))
-                };
-                const {data} = await axios.post("/api/requisition/batches", payload);
-                this.requisitionSelected = {};
-                this.selectedPendingKeys = [];
-                this.selectedBomSnapshotIds = [];
-                await this.loadRequisition();
-                window.open(`/requisition-print.html?id=${data.id}`, "_blank");
+                const data = await this.saveCompositeRequisitionDraft();
+                if (data?._in_flight) return false;
+                if (data?._refresh_failed || data?._print_failed) {
+                  const details = [
+                    data._refresh_failed ? "列表刷新失败" : "",
+                    data._print_failed ? "打印页未打开" : "",
+                  ].filter(Boolean).join("、");
+                  this.showToast(`组合报料单已经生成；${details}。请从已报料中打开，不要重复提交。`, true);
+                } else {
+                  this.showToast("组合报料单已生成，打印页已打开");
+                }
+                return true;
               }
               if (this.modal.type === "delivery") {
                 const deliveryError = this.validateDeliveryForm();
@@ -20370,6 +20436,10 @@
               this.closeModal(); this.showToast(successMessage);
               return true;
             } catch (error) {
+              if (error?._compositeRequisitionOutcomeUncertain) {
+                this.showToast("组合报料提交连接中断，结果暂不确定。原草稿已关闭，请刷新“已报料”和“待报料”核对，不要重复点击原草稿。", true);
+                return false;
+              }
               if (error?._supplierRequisitionOutcomeUncertain) {
                 this.showToast("采购单提交连接中断，结果暂不确定。原草稿已关闭，请刷新“已报料”和“待报料”核对，不要重复点击原草稿。", true);
                 return false;

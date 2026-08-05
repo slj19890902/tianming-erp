@@ -17,7 +17,8 @@ def test_composite_requisition_keeps_parent_row_and_selects_snapshots() -> None:
 
 
 def test_composite_requisition_submits_snapshot_id_to_batch_api() -> None:
-    assert 'axios.post("/api/requisition/batches", payload)' in INDEX
+    assert 'axios.post("/api/requisition/batches", frozenPayload)' in INDEX
+    assert "const frozenPayload = JSON.parse(JSON.stringify(payload))" in INDEX
     assert "bom_snapshot_id:line.bom_snapshot_id ? Number(line.bom_snapshot_id) : null" in INDEX
     assert "actual_yield_per_sheet:line.actual_yield_per_sheet ? Number(line.actual_yield_per_sheet) : null" in INDEX
     assert "openCompositeRequisition" in INDEX

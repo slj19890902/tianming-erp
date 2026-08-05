@@ -47,7 +47,7 @@ def test_order_create_ui_has_dedicated_state_button_and_close_guards() -> None:
 
 
 def test_order_create_runtime_blocks_duplicate_and_freezes_payload(tmp_path: Path) -> None:
-    body = _method_body("async saveNewOrder(orderPayload) {", "async saveOrderGroup(orderIds, orderPayload) {")
+    body = _method_body("async saveNewOrder(orderPayload) {", "async saveCurrentOrderItem(orderItemId, orderItemPayload) {")
     script = f"""
 const body={json.dumps(body, ensure_ascii=False)};
 let release,postCount=0,closeCount=0;const calls=[];
@@ -80,7 +80,7 @@ const expect=(value,message)=>{{if(!value)throw new Error(message)}};
 
 
 def test_order_create_refresh_failure_preserves_committed_success(tmp_path: Path) -> None:
-    body = _method_body("async saveNewOrder(orderPayload) {", "async saveOrderGroup(orderIds, orderPayload) {")
+    body = _method_body("async saveNewOrder(orderPayload) {", "async saveCurrentOrderItem(orderItemId, orderItemPayload) {")
     script = f"""
 const body={json.dumps(body, ensure_ascii=False)};
 const axios={{post:async()=>({{data:{{id:9,order_number:"TM-009"}}}})}};
@@ -102,7 +102,7 @@ const vm={{
 
 
 def test_order_create_network_uncertain_closes_but_explicit_failure_retries(tmp_path: Path) -> None:
-    body = _method_body("async saveNewOrder(orderPayload) {", "async saveOrderGroup(orderIds, orderPayload) {")
+    body = _method_body("async saveNewOrder(orderPayload) {", "async saveCurrentOrderItem(orderItemId, orderItemPayload) {")
     script = f"""
 const body={json.dumps(body, ensure_ascii=False)};
 const factory=axios=>new Function("axios","return async function(orderPayload) {{"+body+"}}")(axios);

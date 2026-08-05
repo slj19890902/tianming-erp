@@ -110,7 +110,7 @@ def test_order_item_box_change_only_normalizes_unsupported_fields() -> None:
     assert "form.snapshot_report_length_mm =" not in method
     assert "form.snapshot_report_width_mm =" not in method
     assert "form.sync_product = true;" in method
-    assert "订单编辑修改箱型并同步常用箱" in method
+    assert 'product_change_reason = "订单编辑修改箱型并同步常用箱"' not in method
     assert "productRequiresDimension(orderItemForm.box_style,'height_mm')" in INDEX
 
 

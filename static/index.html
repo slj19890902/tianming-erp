@@ -10443,7 +10443,11 @@
           // 保存校验：必须选中有效 material_id，不能只输入文字
           validateSelectedMaterial(materialId) {
             const source = this.allMaterials.length ? this.allMaterials : this.materials;
-            return materialId != null && source.some(m => m.id === materialId);
+            return materialId != null && source.some(m => (
+              m.id === materialId
+              && m.is_active !== false
+              && this.isActiveMaterialSupplier(m.supplier_name)
+            ));
           },
           // ===== v0.19.2-B 供应商调价 =====
           priceAdjustFormKey() {
@@ -16066,7 +16070,7 @@
           },
           async deleteMaterial(row) {
             if (!confirm(`确认停用材质“${row.code}”吗？`)) return;
-            try { const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/materials/${row.id}`,row}); if(!result)return; await this.loadMaterials(); this.showToast("材质已停用"); }
+            try { const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/materials/${row.id}`,row}); if(!result)return; this.allMaterials=[]; await this.loadMaterials(); this.showToast("材质已停用"); }
             catch(error){this.showToast(this.errorMessage(error),true);}
           },
 	          async openOrder() {

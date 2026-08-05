@@ -123,6 +123,28 @@ def test_new_business_material_candidates_only_use_active_supplier_master() -> N
     assert "filteredMaterialOptions" not in history_display
 
 
+def test_material_deactivation_clears_shared_cache_and_validation_rechecks_status() -> None:
+    deactivate = INDEX.split(
+        "async deleteMaterial(row)",
+        1,
+    )[1].split(
+        "openOrder()",
+        1,
+    )[0]
+    validation = INDEX.split(
+        "validateSelectedMaterial(materialId)",
+        1,
+    )[1].split(
+        "priceAdjustFormKey()",
+        1,
+    )[0]
+
+    assert "this.allMaterials=[]" in deactivate
+    assert "await this.loadMaterials()" in deactivate
+    assert "m.is_active !== false" in validation
+    assert "this.isActiveMaterialSupplier(m.supplier_name)" in validation
+
+
 def test_material_candidate_gate_excludes_inactive_and_unknown_suppliers(
     tmp_path: Path,
 ) -> None:

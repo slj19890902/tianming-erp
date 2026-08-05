@@ -147,8 +147,9 @@ def test_new_order_save_does_not_offer_post_save_common_box_overwrite() -> None:
     assert "async openOrder() {" in INDEX
     assert "if (!this.customerOptions.length) await this.loadCustomerOptions();" in INDEX
     assert "offerSyncCommonBox" not in INDEX
-    assert "await axios.post(\"/api/orders\", orderPayload)" in save
-    assert "await Promise.all([this.loadOrders(), this.loadKpi()])" in save
+    assert "const createdOrder = await this.saveNewOrder(orderPayload);" in save
+    assert 'await axios.post("/api/orders", payload)' in INDEX
+    assert "const results = await Promise.allSettled([this.loadOrders(), this.loadKpi()]);" in INDEX
     assert "是否同步更新到常用箱" not in INDEX
 
 

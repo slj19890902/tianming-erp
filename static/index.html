@@ -4685,11 +4685,11 @@
             <div v-else-if="modal.type === 'orderEdit'">
               <div class="form-grid">
                 <div class="field"><label>客户</label><div><strong>{{ orderEditForm.customer_name || "-" }}</strong></div></div>
-                <div class="field"><label>客户订单号</label><input class="input" v-model.trim="orderEditForm.customer_po" /></div>
+                <div class="field"><label>客户订单号</label><input class="input" :disabled="orderGroupSaveState.saving" v-model.trim="orderEditForm.customer_po" /></div>
                 <div class="field"><label class="sys-num">主系统单号</label><div class="sys-num">{{ orderEditForm.order_number || "-" }}</div></div>
                 <div class="field"><label>下单日期</label><div>{{ orderEditForm.order_date || "-" }}</div></div>
-                <div class="field"><label>交货日期</label><input class="input" type="date" v-model="orderEditForm.delivery_date" /></div>
-                <div class="field wide"><label>备注</label><input class="input" v-model.trim="orderEditForm.remark" /></div>
+                <div class="field"><label>交货日期</label><input class="input" type="date" :disabled="orderGroupSaveState.saving" v-model="orderEditForm.delivery_date" /></div>
+                <div class="field wide"><label>备注</label><input class="input" :disabled="orderGroupSaveState.saving" v-model.trim="orderEditForm.remark" /></div>
               </div>
               <div v-if="canStatusOrders || canDeleteOrders || canRollbackOrders" class="danger-zone">
                 <div class="danger-zone-head" @click="showOrderEditDanger=!showOrderEditDanger">
@@ -4698,11 +4698,11 @@
                 </div>
                 <div v-if="showOrderEditDanger" style="margin-top:10px">
                   <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
-                    <button v-if="canRollbackOrders" class="btn small danger" @click="dangerRollbackOrderGroup()">撤回到未报料</button>
-                    <button v-if="canStatusOrders" class="btn small" @click="dangerChangeOrderGroupStatus('closed')">已结档</button>
-                    <button v-if="canStatusOrders" class="btn small danger" @click="dangerChangeOrderGroupStatus('cancelled')">标记作废</button>
-                    <button v-if="canStatusOrders" class="btn small danger" @click="dangerChangeOrderGroupStatus('dead')">标记死单</button>
-                    <button v-if="canDeleteOrders" class="btn small danger" @click="dangerDeleteOrderGroup()">删除此订单组</button>
+                    <button v-if="canRollbackOrders" class="btn small danger" :disabled="orderGroupSaveState.saving" @click="dangerRollbackOrderGroup()">撤回到未报料</button>
+                    <button v-if="canStatusOrders" class="btn small" :disabled="orderGroupSaveState.saving" @click="dangerChangeOrderGroupStatus('closed')">已结档</button>
+                    <button v-if="canStatusOrders" class="btn small danger" :disabled="orderGroupSaveState.saving" @click="dangerChangeOrderGroupStatus('cancelled')">标记作废</button>
+                    <button v-if="canStatusOrders" class="btn small danger" :disabled="orderGroupSaveState.saving" @click="dangerChangeOrderGroupStatus('dead')">标记死单</button>
+                    <button v-if="canDeleteOrders" class="btn small danger" :disabled="orderGroupSaveState.saving" @click="dangerDeleteOrderGroup()">删除此订单组</button>
                   </div>
                   <div class="muted" style="font-size:11px;margin-top:6px">以上操作会先显示一次影响确认。撤回会删除关联送货/对账/开票/收款记录。</div>
                 </div>
@@ -5827,7 +5827,7 @@
             </div>
           </div>
           <div class="modal-foot">
-            <button v-if="!isForcedPassword" class="btn" :disabled="masterSavePending || (modal?.type==='stockReplenishment' && stockReplenishmentSaveState.saving) || (modal?.type==='quotationConvert' && quotationConversionState.saving) || (modal?.type==='order' && orderCreateSaveState.saving)" @click="closeModal">{{ canSaveModal ? "取消" : "关闭" }}</button>
+            <button v-if="!isForcedPassword" class="btn" :disabled="masterSavePending || (modal?.type==='stockReplenishment' && stockReplenishmentSaveState.saving) || (modal?.type==='quotationConvert' && quotationConversionState.saving) || (modal?.type==='order' && orderCreateSaveState.saving) || (modal?.type==='orderEdit' && orderGroupSaveState.saving)" @click="closeModal">{{ canSaveModal ? "取消" : "关闭" }}</button>
             <template v-if="modal?.type === 'orderPdfImport' && orderImportDrafts.length">
               <button class="btn" :disabled="loading || !confirmableImportDraftCount" @click="toggleConfirmableImportDrafts">{{ confirmedImportDraftCount ? "取消加入批量保存" : "加入批量保存" }}</button>
               <span class="muted">待保存：{{ confirmedImportDraftCount }} 条；已成功：{{ successfulImportDraftCount }} 条；失败：{{ failedImportDraftCount }} 条</span>
@@ -5839,7 +5839,8 @@
             <button v-if="modal?.type === 'delivery' && deliveryForm.editingId && !deliveryFormIsDirty()" class="btn success" :disabled="loading || !!deliveryForm.pick_task || !!deliveryOperationState.action" @click="createCurrentDeliveryPickTask">{{ deliveryOperationState.action==='pick' && Number(deliveryOperationState.deliveryId)===Number(deliveryForm.editingId) ? '推送中…' : (deliveryForm.pick_task ? '已推送拿货' : '拿货') }}</button>
             <button v-if="canSaveModal && modal?.type==='quotationConvert'" class="btn primary" :disabled="loading || quotationConversionState.saving || quotationConversionState.committed || quotationConversionState.outcomeUncertain || !!quotationConvertCreaseMismatch" @click="saveModal()">{{ quotationConversionState.saving ? '正在转入…' : (quotationConversionState.committed ? '已转入常用箱' : '保存') }}</button>
             <button v-if="canSaveModal && modal?.type==='order'" class="btn primary" :disabled="loading || orderCreateSaveState.saving || orderCreateSaveState.committed || orderCreateSaveState.outcomeUncertain" @click="saveModal()">{{ orderCreateSaveState.saving ? '正在保存订单…' : (orderCreateSaveState.committed ? '订单已保存' : '保存') }}</button>
-            <button v-if="canSaveModal && !['quotationConvert','order'].includes(modal?.type)" class="btn primary" :disabled="loading || masterSavePending || (modal?.type==='supplierRequisitionDraft' && (supplierRequisitionSaveState.saving || supplierRequisitionSaveState.committed)) || (modal?.type==='requisition' && (compositeRequisitionSaveState.saving || compositeRequisitionSaveState.committed)) || (modal?.type==='stockReplenishment' && (stockReplenishmentSaveState.saving || stockReplenishmentSaveState.committed)) || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError)) || (modal?.type==='orderItem' && !!orderItemCreaseMismatch) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && (!!deliveryValidationError || !!deliveryOperationState.action)) || (modal?.type==='receipt' && !!receiptOperationState.action) || (modal?.type==='requisitionHold' && requisitionHoldSaveBlocked)" @click="modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()">{{ ['customer','product','material','supplier'].includes(modal?.type) && masterSavePending ? '保存中…' : (modal?.type==='delivery' ? deliveryPrimaryLabel() : (modal?.type==='receipt' ? (receiptOperationState.action==='save' ? '保存中…' : '保存回单') : (modal?.type==='supplierRequisitionDraft' ? (supplierRequisitionSaveState.saving ? '正在生成采购单…' : (supplierRequisitionSaveState.committed ? '采购单已生成' : '确认生成正式采购单')) : (modal?.type==='requisition' ? (compositeRequisitionSaveState.saving ? '正在生成组合报料…' : (compositeRequisitionSaveState.committed ? '组合报料已生成' : '确认生成正式采购单')) : (modal?.type==='requisitionHold' ? '确认暂缓' : (modal?.type==='stockReplenishment' ? (stockReplenishmentSaveState.saving ? '正在保存补库草稿…' : (stockReplenishmentSaveState.committed ? '补库草稿已保存' : (stockReplenishmentForm.source_type==='stock_warning' ? '保存报料草稿' : '保存补库报料草稿'))) : '保存')))))) }}</button>
+            <button v-if="canSaveModal && modal?.type==='orderEdit'" class="btn primary" :disabled="loading || orderGroupSaveState.saving || orderGroupSaveState.committed || orderGroupSaveState.outcomeUncertain" @click="saveModal()">{{ orderGroupSaveState.saving ? '正在保存订单组…' : (orderGroupSaveState.committed ? '订单组已保存' : '保存') }}</button>
+            <button v-if="canSaveModal && !['quotationConvert','order','orderEdit'].includes(modal?.type)" class="btn primary" :disabled="loading || masterSavePending || (modal?.type==='supplierRequisitionDraft' && (supplierRequisitionSaveState.saving || supplierRequisitionSaveState.committed)) || (modal?.type==='requisition' && (compositeRequisitionSaveState.saving || compositeRequisitionSaveState.committed)) || (modal?.type==='stockReplenishment' && (stockReplenishmentSaveState.saving || stockReplenishmentSaveState.committed)) || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError)) || (modal?.type==='orderItem' && !!orderItemCreaseMismatch) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && (!!deliveryValidationError || !!deliveryOperationState.action)) || (modal?.type==='receipt' && !!receiptOperationState.action) || (modal?.type==='requisitionHold' && requisitionHoldSaveBlocked)" @click="modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()">{{ ['customer','product','material','supplier'].includes(modal?.type) && masterSavePending ? '保存中…' : (modal?.type==='delivery' ? deliveryPrimaryLabel() : (modal?.type==='receipt' ? (receiptOperationState.action==='save' ? '保存中…' : '保存回单') : (modal?.type==='supplierRequisitionDraft' ? (supplierRequisitionSaveState.saving ? '正在生成采购单…' : (supplierRequisitionSaveState.committed ? '采购单已生成' : '确认生成正式采购单')) : (modal?.type==='requisition' ? (compositeRequisitionSaveState.saving ? '正在生成组合报料…' : (compositeRequisitionSaveState.committed ? '组合报料已生成' : '确认生成正式采购单')) : (modal?.type==='requisitionHold' ? '确认暂缓' : (modal?.type==='stockReplenishment' ? (stockReplenishmentSaveState.saving ? '正在保存补库草稿…' : (stockReplenishmentSaveState.committed ? '补库草稿已保存' : (stockReplenishmentForm.source_type==='stock_warning' ? '保存报料草稿' : '保存补库报料草稿'))) : '保存')))))) }}</button>
           </div>
         </div>
       </div>
@@ -6484,6 +6485,7 @@
             materialForm: blankMaterial(),
             orderForm: { customer_id: null, customer_po: "", order_date: today(), delivery_date: plusDays(7), requisition_strategy:"normal", remark: "", items: [] },
             orderCreateSaveState:{saving:false,committed:false,outcomeUncertain:false,result:null},
+            orderGroupSaveState:{saving:false,committed:false,outcomeUncertain:false,result:null},
             orderRequisitionPreview: { loading:false, error:"", checked:false, items:[] },
             orderEditForm: { order_ids: [], customer_name: "", customer_po: "", order_number: "", order_date: "", delivery_date: "", remark: "" },
             orderEditGroup: null,
@@ -18013,6 +18015,7 @@
             const detail = await this.ensureOrderGroupDetail(group);
             const first = detail?.orders?.[0];
             if (!first) return;
+            this.orderGroupSaveState = {saving:false,committed:false,outcomeUncertain:false,result:null};
             this.orderEditForm = {
               order_ids: detail.orders.map(row => row.id),
               customer_name: group.customer_name || "",
@@ -20856,6 +20859,10 @@
           },
 	          closeModal() {
 	            if (this.isForcedPassword) return;
+              if (this.modal?.type === "orderEdit" && this.orderGroupSaveState.saving) {
+                this.showToast("订单组正在保存，请稍候", true);
+                return;
+              }
               if (this.modal?.type === "order" && this.orderCreateSaveState.saving) {
                 this.showToast("订单正在保存，请稍候", true);
                 return;
@@ -20984,6 +20991,80 @@
             }
             return {...(data || {}), _refresh_failed:errors.length > 0};
           },
+          async saveOrderGroup(orderIds, orderPayload) {
+            const state = this.orderGroupSaveState || {};
+            if (state.saving || state.committed || state.outcomeUncertain) return {_in_flight:true};
+            const frozenIds = Array.from(new Set(
+              (Array.isArray(orderIds) ? orderIds : [])
+                .map(orderId => Number(orderId))
+                .filter(orderId => Number.isInteger(orderId) && orderId > 0)
+            ));
+            if (!frozenIds.length) throw new Error("订单组没有可保存的正式订单");
+            const payload = JSON.parse(JSON.stringify(orderPayload || {}));
+            this.orderGroupSaveState = {saving:true,committed:false,outcomeUncertain:false,result:null};
+            const results = await Promise.allSettled(
+              frozenIds.map(orderId => axios.put(
+                `/api/orders/${orderId}`,
+                JSON.parse(JSON.stringify(payload)),
+              ))
+            );
+            const succeededIds = [];
+            const failedEntries = [];
+            results.forEach((result, index) => {
+              if (result.status === "fulfilled") succeededIds.push(frozenIds[index]);
+              else failedEntries.push({orderId:frozenIds[index], reason:result.reason});
+            });
+            const unknownEntries = failedEntries.filter(entry => !entry.reason?.response);
+            const resultSummary = {
+              succeeded_ids:succeededIds,
+              failed_ids:failedEntries.map(entry => entry.orderId),
+              unknown_ids:unknownEntries.map(entry => entry.orderId),
+            };
+            if (!failedEntries.length) {
+              this.orderGroupSaveState = {saving:false,committed:true,outcomeUncertain:false,result:resultSummary};
+              this.closeModal();
+              let refreshFailed = false;
+              try {
+                refreshFailed = (await this.loadOrders()) === false;
+              } catch (error) {
+                refreshFailed = true;
+              }
+              if (refreshFailed) {
+                this.showToast("订单组已保存；列表刷新失败，请手动刷新订单列表核对，不要重复提交", true);
+              } else {
+                this.showToast("订单组已保存");
+              }
+              return {succeeded:succeededIds.length, failed:0, _refresh_failed:refreshFailed};
+            }
+            if (succeededIds.length || unknownEntries.length) {
+              const outcomeUncertain = unknownEntries.length > 0;
+              this.orderGroupSaveState = {
+                saving:false,
+                committed:succeededIds.length > 0,
+                outcomeUncertain,
+                result:resultSummary,
+              };
+              this.closeModal();
+              let refreshFailed = false;
+              try {
+                refreshFailed = (await this.loadOrders()) === false;
+              } catch (error) {
+                refreshFailed = true;
+              }
+              const metadata = {
+                succeeded:succeededIds.length,
+                failed:failedEntries.length,
+                unknown:unknownEntries.length,
+                refreshFailed,
+              };
+              const error = new Error(outcomeUncertain ? "订单组提交结果暂不确定" : "订单组部分保存");
+              if (outcomeUncertain) error._orderGroupOutcomeUncertain = metadata;
+              else error._orderGroupPartial = metadata;
+              throw error;
+            }
+            this.orderGroupSaveState = {saving:false,committed:false,outcomeUncertain:false,result:null};
+            throw failedEntries[0]?.reason || new Error("订单组保存失败");
+          },
           async saveModal() {
             if (this.modal?.type === "receipt") return this.saveReceipt();
             if (this.modal?.type === "quotationConvert" && (this.quotationConversionState.saving || this.quotationConversionState.committed || this.quotationConversionState.outcomeUncertain)) {
@@ -21004,6 +21085,17 @@
                   : (this.orderCreateSaveState.committed
                     ? "该订单已经保存，请刷新订单列表核对"
                     : "上次订单提交结果暂不确定，请刷新订单列表核对"),
+                true,
+              );
+              return false;
+            }
+            if (this.modal?.type === "orderEdit" && (this.orderGroupSaveState.saving || this.orderGroupSaveState.committed || this.orderGroupSaveState.outcomeUncertain)) {
+              this.showToast(
+                this.orderGroupSaveState.saving
+                  ? "订单组正在保存，请勿重复点击"
+                  : (this.orderGroupSaveState.committed
+                    ? "该订单组已经保存，请刷新订单列表核对"
+                    : "上次订单组提交结果暂不确定，请刷新订单列表核对"),
                 true,
               );
               return false;
@@ -21259,12 +21351,9 @@
                   delivery_date: this.orderEditForm.delivery_date || null,
                   remark: this.orderEditForm.remark || null,
                 };
-                await Promise.all(
-                  this.orderEditForm.order_ids.map((orderId) =>
-                    axios.put(`/api/orders/${orderId}`, payload)
-                  )
-                );
-                await this.loadOrders();
+                const savedGroup = await this.saveOrderGroup(this.orderEditForm.order_ids, payload);
+                if (savedGroup?._in_flight) return false;
+                return true;
               }
               if (this.modal.type === "orderItem") {
                 const payload = {...this.orderItemForm}; delete payload.id; delete payload.order_number;
@@ -21469,6 +21558,16 @@
               this.closeModal(); this.showToast(successMessage);
               return true;
             } catch (error) {
+              if (error?._orderGroupPartial) {
+                const summary = error._orderGroupPartial;
+                this.showToast(`订单组部分保存：成功 ${summary.succeeded} 张，失败 ${summary.failed} 张。原窗口已关闭，请刷新订单列表后重新打开失败项核对，不要从旧草稿整体重试。`, true);
+                return false;
+              }
+              if (error?._orderGroupOutcomeUncertain) {
+                const summary = error._orderGroupOutcomeUncertain;
+                this.showToast(`订单组提交连接中断：已确认成功 ${summary.succeeded} 张，另有 ${summary.unknown} 张结果暂不确定。原窗口已关闭，请按客户单号刷新核对，不要从旧草稿整体重试。`, true);
+                return false;
+              }
               if (error?._orderCreateOutcomeUncertain) {
                 this.showToast("订单保存请求连接中断，结果暂不确定。原窗口已关闭，请刷新订单列表，按客户单号和明细核对，不要重复点击原草稿。", true);
                 return false;

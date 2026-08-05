@@ -3869,7 +3869,12 @@
                     :options="materialSelectOptions(productForm._material_supplier, productForm.layer_count, productForm.flute_type)"
                     label-key="_label" value-key="id" :allow-empty="true"
                     placeholder="输入代码/供应商/克重/报价搜索"></search-select>
-                  <div v-if="!isWorkshop && productBoardCostText" class="muted" style="font-size:12px;color:#0369a1">纸板成本参考：{{ productBoardCostText }}</div>
+                  <div v-if="!isWorkshop && productBoardCostLoading" class="muted" style="font-size:12px;color:#0369a1">正在计算纸板成本…</div>
+                  <div v-else-if="!isWorkshop && productBoardCostError" style="font-size:12px;color:#dc2626">
+                    {{ productBoardCostError }}
+                    <button class="btn small" type="button" @click="refreshProductBoardCost()">重新计算</button>
+                  </div>
+                  <div v-else-if="!isWorkshop && productBoardCostText" class="muted" style="font-size:12px;color:#0369a1">纸板成本参考：{{ productBoardCostText }}</div>
                 </div>
                 </div>
 
@@ -6316,6 +6321,8 @@
             showPriceHistoryModal: false, priceHistoryLoading: false, priceHistoryError: "", priceHistory: { material_id: null, material_code: "", items: [] },
             productBoardCost: null,
             productBoardCostDetail: null,
+            productBoardCostLoading: false,
+            productBoardCostError: "",
             materialMappingItems: [], materialMappingTotal: 0, materialMappingPage: 1,
             materialMappingFilterConf: '', materialMappingFilterStatus: '',
             materialMappingStats: {},
@@ -7248,16 +7255,16 @@
         },
         watch: {
           // 常用箱纸板成本参考：尺寸/箱型/材质变化时实时重算（不保存）
-          "productForm.material_id"() { this.refreshProductBoardCost(); this.autoApplyProductRecommendations(); },
-          "productForm.box_category"() { this.refreshProductBoardCost(); },
+          "productForm.material_id"() { this.queueProductBoardCost(); this.autoApplyProductRecommendations(); },
+          "productForm.box_category"() { this.queueProductBoardCost(); },
           "productForm.box_style"() { this.autoApplyProductRecommendations(); },
-          "productForm.length_mm"() { this.refreshProductBoardCost(); this.autoApplyProductRecommendations(); },
-          "productForm.width_mm"() { this.refreshProductBoardCost(); this.autoApplyProductRecommendations(); },
-          "productForm.height_mm"() { this.refreshProductBoardCost(); this.autoApplyProductRecommendations(); },
+          "productForm.length_mm"() { this.queueProductBoardCost(); this.autoApplyProductRecommendations(); },
+          "productForm.width_mm"() { this.queueProductBoardCost(); this.autoApplyProductRecommendations(); },
+          "productForm.height_mm"() { this.queueProductBoardCost(); this.autoApplyProductRecommendations(); },
           "productForm.splice_mode"() { this.autoApplyProductRecommendations(); },
           "productForm.flap_mm"() { this.autoApplyProductRecommendations(); },
-          "productForm.layer_count"() { this.refreshProductBoardCost(); },
-          "productForm.flute_type"() { this.refreshProductBoardCost(); },
+          "productForm.layer_count"() { this.queueProductBoardCost(); },
+          "productForm.flute_type"() { this.queueProductBoardCost(); },
           "productForm.crease_type"() { this.autoApplyProductRecommendations(); },
           priceAdjustForm: {
             deep: true,
@@ -10788,31 +10795,115 @@
             });
           },
           // 常用箱纸板成本参考：实时按当前材质平方报价 + 箱型尺寸计算（不保存）
-          async refreshProductBoardCost() {
-            this.productBoardCost = null;
+          productBoardCostRequestSnapshot() {
+            if (this.modal?.type !== "product") return null;
             const f = this.productForm || {};
             const src = this.allMaterials.length ? this.allMaterials : this.materials;
-            const mat = src.find(m => m.id === f.material_id);
-            if (!mat || mat.quote_price == null) return;
-            const cat = f.box_category || "normal";
+            const mat = src.find(row => Number(row.id) === Number(f.material_id));
+            if (!mat || mat.quote_price == null) return null;
+            const category = f.box_category || "normal";
             const body = {
-              box_category: cat,
+              box_category: category,
               board_square_price: Number(mat.quote_price),
               supplier_name: mat.supplier_name || f._material_supplier || null,
               layer_count: f.layer_count || mat.layer_count || null,
               flute_type: f.flute_type || null,
             };
-            if (cat === "normal") {
-              if (!f.length_mm || !f.width_mm || !f.height_mm) return;
-              body.length_mm = Number(f.length_mm); body.width_mm = Number(f.width_mm); body.height_mm = Number(f.height_mm);
-            } else if (cat === "die_cut") {
-              if (!f.length_mm || !f.width_mm) return;
-              body.unfolded_length_mm = Number(f.length_mm); body.unfolded_width_mm = Number(f.width_mm);
-            } else { return; }
+            if (category === "normal") {
+              if (!f.length_mm || !f.width_mm || !f.height_mm) return null;
+              body.length_mm = Number(f.length_mm);
+              body.width_mm = Number(f.width_mm);
+              body.height_mm = Number(f.height_mm);
+            } else if (category === "die_cut") {
+              if (!f.length_mm || !f.width_mm) return null;
+              body.unfolded_length_mm = Number(f.length_mm);
+              body.unfolded_width_mm = Number(f.width_mm);
+            } else {
+              return null;
+            }
+            return {
+              key: JSON.stringify({
+                product_id:Number(f.id || 0),
+                material_id:Number(mat.id),
+                ...body,
+              }),
+              body,
+            };
+          },
+          invalidateProductBoardCost() {
+            const timerKey = "preview:product-board-cost";
+            const timer = searchDebounceTimers.get(timerKey);
+            if (timer) clearTimeout(timer);
+            searchDebounceTimers.delete(timerKey);
+            const requestKey = "materials:board-cost";
+            const controller = latestRequestControllers.get(requestKey);
+            controller?.abort();
+            if (latestRequestControllers.get(requestKey) === controller) latestRequestControllers.delete(requestKey);
+            this.productBoardCost = null;
+            this.productBoardCostDetail = null;
+            this.productBoardCostLoading = false;
+            this.productBoardCostError = "";
+            return true;
+          },
+          queueProductBoardCost() {
+            const timerKey = "preview:product-board-cost";
+            this.invalidateProductBoardCost();
+            const requestSnapshot = this.productBoardCostRequestSnapshot();
+            if (!requestSnapshot) return false;
+            searchDebounceTimers.set(timerKey, setTimeout(() => {
+              searchDebounceTimers.delete(timerKey);
+              if (this.productBoardCostRequestSnapshot()?.key !== requestSnapshot.key) return;
+              this.refreshProductBoardCost();
+            }, 250));
+            return true;
+          },
+          async refreshProductBoardCost() {
+            const timerKey = "preview:product-board-cost";
+            const timer = searchDebounceTimers.get(timerKey);
+            if (timer) clearTimeout(timer);
+            searchDebounceTimers.delete(timerKey);
+            const requestSnapshot = this.productBoardCostRequestSnapshot();
+            if (!requestSnapshot) {
+              this.invalidateProductBoardCost();
+              return false;
+            }
+            const requestKey = "materials:board-cost";
+            const controller = this.beginLatestRequest(requestKey);
+            this.productBoardCost = null;
+            this.productBoardCostDetail = null;
+            this.productBoardCostLoading = true;
+            this.productBoardCostError = "";
             try {
-              const { data } = await axios.post("/api/master/materials/board-cost", body);
-              if (data.supported) { this.productBoardCost = data.board_cost; this.productBoardCostDetail = data; }
-            } catch (e) { this.productBoardCost = null; this.productBoardCostDetail = null; }
+              const { data } = await axios.post(
+                "/api/master/materials/board-cost",
+                requestSnapshot.body,
+                { signal:controller.signal },
+              );
+              if (
+                latestRequestControllers.get(requestKey) !== controller
+                || this.productBoardCostRequestSnapshot()?.key !== requestSnapshot.key
+              ) return false;
+              if (data?.supported) {
+                this.productBoardCost = data.board_cost;
+                this.productBoardCostDetail = data;
+              }
+              return true;
+            } catch (error) {
+              if (
+                this.isCancelledRequest(error)
+                || latestRequestControllers.get(requestKey) !== controller
+                || this.productBoardCostRequestSnapshot()?.key !== requestSnapshot.key
+              ) return false;
+              this.productBoardCost = null;
+              this.productBoardCostDetail = null;
+              this.productBoardCostError = `纸板成本计算失败：${this.errorMessage(error)}`;
+              return false;
+            } finally {
+              if (latestRequestControllers.get(requestKey) === controller) {
+                this.productBoardCostLoading = false;
+                this.finishLatestRequest(requestKey, controller);
+              }
+            }
           },
           // 默认楞型（按当前层数）：三层→A（A瓦需加价，最值得比），五层→AB
           defaultCompareFlute(layer) {
@@ -20158,6 +20249,7 @@
             if (this._productFormDirty()) {
               if (!confirm("表单有未保存的修改，确定要关闭吗？")) return;
             }
+            if (this.modal?.type === "product") this.invalidateProductBoardCost();
 	            if (this.modal?.type === "product" && this.productEditReturnContext) {
 	              this.returnFromCommonBoxEditor(this.productEditReturnContext.productId, { saved:false });
 	              return;

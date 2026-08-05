@@ -4712,6 +4712,7 @@ def list_deliveries(
     customer_ids: list[int] | None = Query(default=None),
     status_filter: str | None = Query(default=None, alias="status"),
     statuses: list[str] | None = Query(default=None),
+    keyword: str | None = Query(default=None, max_length=200),
     delivery_no: str | None = None,
     order_no: str | None = None,
     customer_po: str | None = None,
@@ -4765,6 +4766,63 @@ def list_deliveries(
     delivery_number_filter = _contains(Delivery.delivery_number, delivery_no)
     if delivery_number_filter is not None:
         query = query.where(delivery_number_filter)
+    normalized_keyword = (keyword or "").strip().lower()
+    if normalized_keyword:
+        pattern = f"%{normalized_keyword}%"
+        customer_keyword_match = exists(
+            select(1).where(
+                Customer.id == Delivery.customer_id,
+                or_(
+                    func.lower(Customer.name).like(pattern),
+                    func.lower(Customer.customer_code).like(pattern),
+                ),
+            )
+        )
+        item_keyword_match = exists(
+            select(1)
+            .select_from(DeliveryItem)
+            .outerjoin(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
+            .outerjoin(Order, Order.id == OrderItem.order_id)
+            .outerjoin(
+                Product,
+                Product.id
+                == func.coalesce(DeliveryItem.product_id, OrderItem.product_id),
+            )
+            .where(
+                DeliveryItem.delivery_id == Delivery.id,
+                or_(
+                    func.lower(Order.order_number).like(pattern),
+                    func.lower(Order.customer_po).like(pattern),
+                    func.lower(
+                        func.coalesce(
+                            func.nullif(DeliveryItem.product_code_snapshot, ""),
+                            func.nullif(OrderItem.snapshot_product_code, ""),
+                            Product.product_code,
+                        )
+                    ).like(pattern),
+                    func.lower(
+                        func.coalesce(
+                            func.nullif(DeliveryItem.product_name_snapshot, ""),
+                            func.nullif(OrderItem.snapshot_product_name, ""),
+                            Product.product_name,
+                        )
+                    ).like(pattern),
+                    func.lower(
+                        func.coalesce(
+                            func.nullif(DeliveryItem.specification_snapshot, ""),
+                            OrderItem.snapshot_spec,
+                        )
+                    ).like(pattern),
+                ),
+            )
+        )
+        query = query.where(
+            or_(
+                func.lower(Delivery.delivery_number).like(pattern),
+                customer_keyword_match,
+                item_keyword_match,
+            )
+        )
     if date_from is not None:
         query = query.where(Delivery.delivery_date >= date_from)
     if date_to is not None:

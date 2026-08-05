@@ -1414,6 +1414,25 @@
         border-radius: 10px; background: var(--panel);
       }
       .list-filterbar .input, .list-filterbar .select { min-width: 118px; max-width: 190px; }
+      .delivery-list-filterbar { gap:6px; }
+      .delivery-list-filterbar .delivery-keyword-input {
+        flex:0 0 108px; width:108px; min-width:108px; max-width:108px;
+      }
+      .delivery-list-filterbar .delivery-date-input {
+        flex:0 0 132px; width:132px; min-width:132px; max-width:132px;
+      }
+      .delivery-list-filterbar .delivery-status-select {
+        flex:0 0 124px; width:124px; min-width:124px; max-width:124px;
+      }
+      .delivery-list-filterbar .pager.top {
+        flex:0 0 auto; margin-left:auto; padding:3px 0 3px 6px;
+        border:0; background:transparent;
+      }
+      @media (min-width: 1700px) {
+        .delivery-list-filterbar { flex-wrap:nowrap; }
+        .ui-large .delivery-list-filterbar .btn { padding-left:12px; padding-right:12px; }
+        .ui-large .delivery-list-filterbar .pager .btn.small { padding-left:10px; padding-right:10px; }
+      }
       .workbench-nav {
         display:flex; align-items:center; justify-content:space-between; gap:12px;
         margin:0 0 12px; padding:10px 12px; border:1px solid var(--line);
@@ -2675,21 +2694,15 @@
                 <div v-else class="empty">当前没有待送货客户</div>
               </div>
               <div class="toolbar"><div class="toolbar-group"><button v-if="canDelivery" class="btn primary" @click="openDelivery">新增送货单</button><button v-if="canDelivery" class="btn" @click="openTianhuaPreimport">导入天华预送货</button><button class="btn" @click="openDeliveryRoutePlan">送货路线辅助</button></div><div><button class="btn" @click="loadDeliveries">刷新</button></div></div>
-              <div class="list-filterbar">
-                <search-select v-model="deliveryListFilters.customer_id" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="客户" :allow-empty="true" @change="pages.deliveries=1; loadDeliveries()"></search-select>
-                <input class="input" v-model.trim="deliveryListFilters.delivery_no" placeholder="送货单号" @keyup.enter="pages.deliveries=1; loadDeliveries()" />
-                <input class="input" v-model.trim="deliveryListFilters.order_no" placeholder="订单号" @keyup.enter="pages.deliveries=1; loadDeliveries()" />
-                <input class="input" v-model.trim="deliveryListFilters.customer_po" placeholder="客户单号" @keyup.enter="pages.deliveries=1; loadDeliveries()" />
-                <input class="input" v-model.trim="deliveryListFilters.product_code" placeholder="存货编码" @keyup.enter="pages.deliveries=1; loadDeliveries()" />
-                <input class="input" v-model.trim="deliveryListFilters.product_name" placeholder="产品名称" @keyup.enter="pages.deliveries=1; loadDeliveries()" />
-                <input class="input" v-model.trim="deliveryListFilters.spec" placeholder="规格" @keyup.enter="pages.deliveries=1; loadDeliveries()" />
-                <input class="input" type="date" v-model="deliveryListFilters.date_from" @change="pages.deliveries=1; loadDeliveries()" />
-                <input class="input" type="date" v-model="deliveryListFilters.date_to" @change="pages.deliveries=1; loadDeliveries()" />
-                <select class="select" v-model="deliveryListFilters.status" @change="pages.deliveries=1; loadDeliveries()"><option value="">全部送货状态</option><option value="pending">草稿</option><option value="dispatched">已发货</option><option value="voided">已作废</option></select>
-                <select class="select" v-model="deliveryListFilters.return_status" @change="pages.deliveries=1; loadDeliveries()"><option value="">全部回单状态</option><option value="waiting_receipt">待回单</option><option value="confirmed">回单已确认</option><option value="cancelled">回单已取消</option></select>
+              <div class="list-filterbar delivery-list-filterbar">
+                <input class="input delivery-keyword-input" v-model.trim="deliveryListFilters.keyword" placeholder="搜索送货单" aria-label="搜索送货单" @keyup.enter="pages.deliveries=1; loadDeliveries()" />
+                <input class="input delivery-date-input" type="date" v-model="deliveryListFilters.date_from" aria-label="送货开始日期" @change="pages.deliveries=1; loadDeliveries()" />
+                <input class="input delivery-date-input" type="date" v-model="deliveryListFilters.date_to" aria-label="送货结束日期" @change="pages.deliveries=1; loadDeliveries()" />
+                <select class="select delivery-status-select" v-model="deliveryListFilters.status" @change="pages.deliveries=1; loadDeliveries()"><option value="">全部送货状态</option><option value="pending">草稿</option><option value="dispatched">已发货</option><option value="voided">已作废</option></select>
+                <select class="select delivery-status-select" v-model="deliveryListFilters.return_status" @change="pages.deliveries=1; loadDeliveries()"><option value="">全部回单状态</option><option value="waiting_receipt">待回单</option><option value="confirmed">回单已确认</option><option value="cancelled">回单已取消</option></select>
                 <button class="btn" @click="pages.deliveries=1; loadDeliveries()">查询</button>
                 <button class="btn" @click="resetDeliveryListFilters()">清空</button>
-                <pager :page="pages.deliveries" :total="deliveriesTotal" :page-size="pageSize" :always="true" :compact="true" @change="pages.deliveries=$event; loadDeliveries()"></pager>
+                <pager :page="pages.deliveries" :total="deliveriesTotal" :page-size="pageSize" :always="true" :compact="true" :filter-count="deliveryListFilterCount" @change="pages.deliveries=$event; loadDeliveries()"></pager>
               </div>
               <div v-if="deliveryListState.initialLoading" class="panel delivery-list-panel empty">正在加载送货单</div>
               <div v-else-if="deliveryListState.error && !deliveries.length" class="panel delivery-list-panel empty">送货单加载失败：{{ deliveryListState.error }} <button class="btn small" @click="loadDeliveries">重试</button></div>
@@ -6317,7 +6330,7 @@
             finishedInventoryCandidates: [], finishedInventoryCandidatesLoaded: false,
             finishedInventoryReservations: [],
             customersTotal: 0, productsTotal: 0, ordersTotal: 0, ordersUnfinishedTotal: 0, deliveriesTotal: 0,
-            deliveryListFilters: { customer_id:"", delivery_no:"", order_no:"", customer_po:"", product_code:"", product_name:"", spec:"", date_from:"", date_to:"", status:"", return_status:"" },
+            deliveryListFilters: { customer_id:"", keyword:"", date_from:"", date_to:"", status:"", return_status:"" },
             deliveryDashboardMode: "",
             financeView: "current",
             financeFilters: { statement_month:month(), balance_type:"", customer_id:"" },
@@ -6983,6 +6996,9 @@
               groups.get(customerId).item_count += 1;
             }
             return [...groups.values()].sort((a,b) => a.customer_name.localeCompare(b.customer_name, "zh-CN"));
+          },
+          deliveryListFilterCount() {
+            return Object.values(this.deliveryListFilters || {}).filter(value => value !== "" && value !== null && value !== undefined).length;
           },
           deliveryOptions() { return this.pendingDeliveryItems.filter(row => row.customer_id === Number(this.deliveryForm.customer_id)); },
           deliveryActiveLines() {
@@ -9797,14 +9813,14 @@
             }
             if (key === "pending_delivery" || entry?.type === "待送货") {
               this.deliveryDashboardMode = "pending_customers";
-              this.deliveryListFilters = { customer_id:"", delivery_no:"", order_no:"", customer_po:"", product_code:"", product_name:"", spec:"", date_from:"", date_to:"", status:"", return_status:"" };
+              this.deliveryListFilters = { customer_id:"", keyword:"", date_from:"", date_to:"", status:"", return_status:"" };
               this.invalidatePageCache("deliveries");
               await this.go("deliveries");
               return this.loadDeliveryPendingItems();
             }
             if (key === "pending_receipt" || entry?.type === "待回单") {
               this.deliveryDashboardMode = "";
-              this.deliveryListFilters = { customer_id:filter.customer_id || "", delivery_no:"", order_no:"", customer_po:"", product_code:"", product_name:"", spec:"", date_from:"", date_to:"", status:"dispatched", return_status:"waiting_receipt" };
+              this.deliveryListFilters = { customer_id:filter.customer_id || "", keyword:"", date_from:"", date_to:"", status:"dispatched", return_status:"waiting_receipt" };
               this.pages.deliveries = 1;
               this.invalidatePageCache("deliveries");
               return this.go("deliveries");
@@ -12163,7 +12179,7 @@
             }
           },
           resetDeliveryListFilters() {
-            this.deliveryListFilters = { customer_id:"", delivery_no:"", order_no:"", customer_po:"", product_code:"", product_name:"", spec:"", date_from:"", date_to:"", status:"", return_status:"" };
+            this.deliveryListFilters = { customer_id:"", keyword:"", date_from:"", date_to:"", status:"", return_status:"" };
             this.pages.deliveries = 1;
             this.loadDeliveries();
           },

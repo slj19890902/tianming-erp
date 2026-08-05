@@ -50,7 +50,7 @@ def delivery_filter_app(tmp_path: Path):
             customer_access_mode="selected",
         )
         customers = [
-            Customer(customer_number=1, customer_code="TH", name="天华超净", payment_term_days=30, credit_limit=Decimal("0")),
+            Customer(customer_number=1, customer_code="THCJ", name="天华超净", payment_term_days=30, credit_limit=Decimal("0")),
             Customer(customer_number=2, customer_code="MJ", name="明俊德", payment_term_days=30, credit_limit=Decimal("0")),
         ]
         session.add_all([admin, scoped, *customers])
@@ -84,6 +84,7 @@ def delivery_filter_app(tmp_path: Path):
             Delivery(delivery_number="TH-0001", customer_id=customers[0].id, delivery_date=date(2026, 7, 10), status="dispatched", total_quantity=10, created_at=base),
             Delivery(delivery_number="TH-0002", customer_id=customers[0].id, delivery_date=date(2026, 7, 11), status="pending", total_quantity=10, created_at=base + timedelta(minutes=1)),
             Delivery(delivery_number="MJ-0001", customer_id=customers[1].id, delivery_date=date(2026, 7, 12), status="dispatched", total_quantity=20, created_at=base + timedelta(minutes=2)),
+            Delivery(delivery_number="STOCK-0003", customer_id=customers[0].id, delivery_date=date(2026, 7, 13), status="voided", source_mode="unordered_finished", total_quantity=3, created_at=base + timedelta(minutes=3)),
         ]
         session.add_all(deliveries)
         session.flush()
@@ -92,6 +93,18 @@ def delivery_filter_app(tmp_path: Path):
                 DeliveryItem(delivery_id=deliveries[0].id, order_item_id=items[0].id, delivered_quantity=10),
                 DeliveryItem(delivery_id=deliveries[1].id, order_item_id=items[0].id, delivered_quantity=10),
                 DeliveryItem(delivery_id=deliveries[2].id, order_item_id=items[1].id, delivered_quantity=20),
+                DeliveryItem(
+                    delivery_id=deliveries[3].id,
+                    source_type="unordered_finished",
+                    product_id=products[0].id,
+                    product_code_snapshot="TH-STOCK-X",
+                    product_name_snapshot="库存专用外箱",
+                    specification_snapshot="610×410×310mm",
+                    unit_snapshot="只",
+                    unit_price_snapshot=Decimal("1"),
+                    price_source="product_default",
+                    delivered_quantity=3,
+                ),
                 ReturnReceipt(delivery_id=deliveries[0].id, actual_received_date=date(2026, 7, 11), status="confirmed"),
                 ReturnReceipt(delivery_id=deliveries[2].id, actual_received_date=date(2026, 7, 13), status="cancelled"),
             ]
@@ -182,3 +195,81 @@ def test_customer_scope_applies_before_filters_and_blocks_direct_out_of_scope_re
         assert _numbers(client.get("/api/deliveries", params={"customer_ids": 1})) == ["TH-0002", "TH-0001"]
         forbidden = client.get("/api/deliveries", params={"customer_ids": 2})
         assert forbidden.status_code == 403
+
+
+@pytest.mark.parametrize(
+    ("keyword", "expected"),
+    [
+        ("THCJ", ["TH-0002", "TH-0001"]),
+        ("天华超净", ["TH-0002", "TH-0001"]),
+        ("TH-0001", ["TH-0001"]),
+        ("SO-TH-001", ["TH-0002", "TH-0001"]),
+        ("TH-PO-77", ["TH-0002", "TH-0001"]),
+        ("TH-22000008", ["TH-0002", "TH-0001"]),
+        ("天华外箱", ["TH-0002", "TH-0001"]),
+        ("400×300×200", ["TH-0002", "TH-0001"]),
+    ],
+)
+def test_unified_keyword_searches_all_delivery_identity_fields(
+    delivery_filter_app,
+    keyword: str,
+    expected: list[str],
+) -> None:
+    with TestClient(delivery_filter_app) as client:
+        _login(client, "admin")
+        assert _numbers(
+            client.get("/api/deliveries", params={"keyword": keyword})
+        ) == expected
+
+
+def test_unified_keyword_includes_unordered_snapshots_and_keeps_scope(
+    delivery_filter_app,
+) -> None:
+    with TestClient(delivery_filter_app) as client:
+        _login(client, "admin")
+        for keyword in ("TH-STOCK-X", "库存专用外箱", "610×410"):
+            assert _numbers(
+                client.get(
+                    "/api/deliveries",
+                    params={"keyword": keyword, "status": "voided"},
+                )
+            ) == ["STOCK-0003"]
+
+    with TestClient(delivery_filter_app) as client:
+        _login(client, "scoped")
+        assert _numbers(
+            client.get("/api/deliveries", params={"keyword": "明俊德"})
+        ) == []
+        assert _numbers(
+            client.get("/api/deliveries", params={"keyword": "THCJ"})
+        ) == ["TH-0002", "TH-0001"]
+
+
+def test_unified_keyword_composes_with_status_date_receipt_and_pagination(
+    delivery_filter_app,
+) -> None:
+    with TestClient(delivery_filter_app) as client:
+        _login(client, "admin")
+        filtered = client.get(
+            "/api/deliveries",
+            params={
+                "keyword": "THCJ",
+                "status": "dispatched",
+                "return_status": "confirmed",
+                "date_from": "2026-07-10",
+                "date_to": "2026-07-10",
+            },
+        )
+        assert _numbers(filtered) == ["TH-0001"]
+
+        first = client.get(
+            "/api/deliveries",
+            params={"keyword": "THCJ", "page": 1, "page_size": 1},
+        )
+        second = client.get(
+            "/api/deliveries",
+            params={"keyword": "THCJ", "page": 2, "page_size": 1},
+        )
+        assert _numbers(first) == ["TH-0002"]
+        assert _numbers(second) == ["TH-0001"]
+        assert first.json()["total"] == second.json()["total"] == 2

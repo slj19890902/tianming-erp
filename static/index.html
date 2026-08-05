@@ -1908,9 +1908,9 @@
               </div>
               <div v-if="productTab === 'products'">
                 <div v-if="productTrashOpen" class="panel">
-                  <div class="toolbar"><strong>产品垃圾站（保留 30 天）</strong><div class="toolbar-group"><button class="btn" @click="loadProductTrash()">刷新</button><button class="btn danger" @click="emptyProductTrash()">清空垃圾站</button><button class="btn" @click="productTrashOpen=false">关闭</button></div></div>
+                  <div class="toolbar"><strong>产品垃圾站（保留 30 天）</strong><div class="toolbar-group"><button class="btn" :disabled="productLifecycleBusy()" @click="loadProductTrash()">刷新</button><button class="btn danger" :disabled="productLifecycleBusy() || !productTrashItems.length" @click="emptyProductTrash()">{{ productLifecyclePending('empty') ? '处理中…' : '清空垃圾站' }}</button><button class="btn" :disabled="productLifecycleBusy()" @click="productTrashOpen=false">关闭</button></div></div>
                   <div v-if="!productTrashItems.length" class="empty">垃圾站为空</div>
-                  <div v-else class="table-wrap"><table><thead><tr><th>客户</th><th>存货编码</th><th>原产品名称</th><th>删除时间</th><th>保留期限</th><th>操作</th></tr></thead><tbody><tr v-for="row in productTrashItems" :key="row.id"><td>{{ customerName(row.customer_id) }}</td><td>{{ plainProductText(row.customer_material_code || row.product_code) }}</td><td>{{ plainProductText(row.product_name) }}</td><td>{{ formatDateTime(row.deleted_at) }}</td><td>剩余 {{ Math.ceil(row.trash_days_remaining || 0) }} 天</td><td class="toolbar-group"><button class="btn small success" @click="restoreProduct(row)">恢复</button><button class="btn small danger" @click="purgeProduct(row)">彻底清理</button></td></tr></tbody></table></div>
+                  <div v-else class="table-wrap"><table><thead><tr><th>客户</th><th>存货编码</th><th>原产品名称</th><th>删除时间</th><th>保留期限</th><th>操作</th></tr></thead><tbody><tr v-for="row in productTrashItems" :key="row.id"><td>{{ customerName(row.customer_id) }}</td><td>{{ plainProductText(row.customer_material_code || row.product_code) }}</td><td>{{ plainProductText(row.product_name) }}</td><td>{{ formatDateTime(row.deleted_at) }}</td><td>剩余 {{ Math.ceil(row.trash_days_remaining || 0) }} 天</td><td class="toolbar-group"><button class="btn small success" :disabled="productLifecycleBusy()" @click="restoreProduct(row)">{{ productLifecyclePending('restore',row.id) ? '处理中…' : '恢复' }}</button><button class="btn small danger" :disabled="productLifecycleBusy()" @click="purgeProduct(row)">{{ productLifecyclePending('purge',row.id) ? '处理中…' : '彻底清理' }}</button></td></tr></tbody></table></div>
                 </div>
                 <template v-if="!selectedProductCustomer">
                   <div class="toolbar"><input class="input" style="min-width:360px" placeholder="输入客户名称、编号或缩写" v-model.trim="productCustomerSearch" /><span class="muted">共 {{ filteredProductCustomers.length }} 家客户</span></div>
@@ -1929,7 +1929,7 @@
                   <div v-if="productsLoading" class="panel empty">正在读取该客户的常用箱…</div>
                   <div v-else-if="productsError" class="notice error">{{ productsError }} <button class="btn small" @click="loadProducts()">重试</button></div>
                   <div v-else-if="!products.length" class="panel empty">该客户当前没有符合条件的常用箱</div>
-                  <div v-else class="table-wrap"><table><thead><tr><th>品号</th><th v-if="false">客户料号</th><th>产品名称</th><th>规格</th><th>材质</th><th v-if="!isWorkshop" class="sensitive-price">默认单价</th><th>资料状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td v-if="false">{{ plainProductText(row.customer_material_code) }}</td><td :title="plainProductText(row.product_name)" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td style="white-space:nowrap">{{ spec(row) }}</td><td :class="{muted: productMaterialCell(row).muted}" :title="materialFullStructure(row)" style="white-space:nowrap">{{ productMaterialCell(row).text }}</td><td v-if="!isWorkshop" class="sensitive-price">{{ money(row.sale_unit_price) }}</td><td><span :class="['status',commonBoxReadiness(row).ready ? 'green' : 'orange']" :title="commonBoxReadinessTitle(row)">{{ commonBoxReadiness(row).ready ? '资料已完善' : '待完善' }}</span><div v-if="row.manual_modified" class="muted" style="font-size:11px;margin-top:3px">已人工编辑（版本事实）</div></td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canEditProducts ? "编辑" : "查看" }}</button><button v-if="canRequisition && row.is_active" class="btn small" @click="openProductStockPolicy(row)">库存预警</button><button class="btn small" @click="openMasterVersionHistory('product',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateProducts" :class="['btn','small',row.is_active ? 'danger' : 'success']" @click="toggleProductStatus(row)">{{ row.is_active ? "停用" : "启用" }}</button><button v-if="canDeleteProducts" class="btn small danger" @click="deleteProduct(row)">移入垃圾站</button></td></tr></tbody></table></div>
+                  <div v-else class="table-wrap"><table><thead><tr><th>品号</th><th v-if="false">客户料号</th><th>产品名称</th><th>规格</th><th>材质</th><th v-if="!isWorkshop" class="sensitive-price">默认单价</th><th>资料状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td v-if="false">{{ plainProductText(row.customer_material_code) }}</td><td :title="plainProductText(row.product_name)" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td style="white-space:nowrap">{{ spec(row) }}</td><td :class="{muted: productMaterialCell(row).muted}" :title="materialFullStructure(row)" style="white-space:nowrap">{{ productMaterialCell(row).text }}</td><td v-if="!isWorkshop" class="sensitive-price">{{ money(row.sale_unit_price) }}</td><td><span :class="['status',commonBoxReadiness(row).ready ? 'green' : 'orange']" :title="commonBoxReadinessTitle(row)">{{ commonBoxReadiness(row).ready ? '资料已完善' : '待完善' }}</span><div v-if="row.manual_modified" class="muted" style="font-size:11px;margin-top:3px">已人工编辑（版本事实）</div></td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canEditProducts ? "编辑" : "查看" }}</button><button v-if="canRequisition && row.is_active" class="btn small" @click="openProductStockPolicy(row)">库存预警</button><button class="btn small" @click="openMasterVersionHistory('product',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateProducts" :class="['btn','small',row.is_active ? 'danger' : 'success']" :disabled="productLifecycleBusy()" @click="toggleProductStatus(row)">{{ productLifecyclePending('status',row.id) ? '处理中…' : (row.is_active ? "停用" : "启用") }}</button><button v-if="canDeleteProducts" class="btn small danger" :disabled="productLifecycleBusy()" @click="deleteProduct(row)">{{ productLifecyclePending('delete',row.id) ? '处理中…' : '移入垃圾站' }}</button></td></tr></tbody></table></div>
                 </template>
               </div>
               <pager v-if="productTab === 'products' && selectedProductCustomer" :page="pages.products" :total="productsTotal" :page-size="pageSize" @change="pages.products=$event; loadProducts()"></pager>
@@ -6366,7 +6366,7 @@
             selectedProductCustomer: null, productCustomerSearch: "",
             productsLoading: false, productsError: "",
             showProductMoreFilters: false,
-            productTrashOpen: false, productTrashItems: [],
+            productTrashOpen: false, productTrashItems: [], productLifecycleAction:{action:"",productId:null},
             filters: { customerKeyword: "", showInactive:false, showInactiveProducts:false, productCustomer: "", productKeyword: "", productCode: "", productName: "", productSpec: "", productMaterial: "", orderCustomer: "", orderKeyword:"", orderNumber:"", orderCustomerPo:"", orderProductCode:"", orderProductName:"", orderSpecification:"", orderDateFrom:"", orderDateTo:"", orderDeliveryDateFrom:"", orderDeliveryDateTo:"", orderScope:"active", orderStage:"", orderStatus:"business", orderView:"customer_po", orderSortBy:"", orderSortDirection:"desc" },
             orderScopeTabs: [
               { label: "进行中", value: "active" },
@@ -16252,6 +16252,33 @@
               }
             }
           },
+          productLifecycleBusy() {
+            return Boolean(this.productLifecycleAction?.action);
+          },
+          productLifecyclePending(action, productId=null) {
+            const current = this.productLifecycleAction || {};
+            if (current.action !== action) return false;
+            if (productId === null || productId === undefined) return true;
+            return Number(current.productId) === Number(productId);
+          },
+          async runProductLifecycleAction({action, productId=null, confirmMessage, task}) {
+            if (this.productLifecycleBusy()) return false;
+            if (confirmMessage && !confirm(confirmMessage)) return false;
+            const normalizedProductId = productId === null || productId === undefined ? null : Number(productId);
+            this.productLifecycleAction = {action, productId:normalizedProductId};
+            try {
+              const result = await task();
+              return result !== false;
+            } catch (error) {
+              this.showToast(this.errorMessage(error), true);
+              return false;
+            } finally {
+              if (
+                this.productLifecycleAction?.action === action
+                && this.productLifecycleAction?.productId === normalizedProductId
+              ) this.productLifecycleAction = {action:"", productId:null};
+            }
+          },
           async deleteCustomer(row) {
             if (!confirm(`确认停用客户“${row.name}”吗？`)) return;
             try { const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/customers/${row.id}`,row}); if(!result)return; await Promise.all([this.loadCustomers(),this.loadCustomerOptions(true)]); this.showToast("客户已停用"); }
@@ -16268,9 +16295,17 @@
             } catch(error) { this.showToast(this.errorMessage(error), true); }
           },
           async deleteProduct(row) {
-            if (!confirm(`确认将产品“${row.product_name}”移入垃圾站吗？30天内可恢复。`)) return;
-            try { const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/products/${row.id}`,row}); if(!result)return; await this.loadProducts(); this.showToast("产品已移入垃圾站"); }
-            catch(error){this.showToast(this.errorMessage(error),true);}
+            return this.runProductLifecycleAction({
+              action:"delete", productId:row.id,
+              confirmMessage:`确认将产品“${row.product_name}”移入垃圾站吗？30天内可恢复。`,
+              task:async() => {
+                const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/products/${row.id}`,row});
+                if(!result)return false;
+                await this.loadProducts();
+                this.showToast("产品已移入垃圾站");
+                return true;
+              },
+            });
           },
           async toggleProductTrash() {
             this.productTrashOpen = !this.productTrashOpen;
@@ -16281,41 +16316,57 @@
             this.productTrashItems = data.items;
           },
           async restoreProduct(row) {
-            if (!confirm(`确认恢复“${row.product_name}”吗？`)) return;
-            try {
-              const result=await this.sendVersionedMasterMutation({method:"put",url:`/api/master/products/${row.id}/restore`,row});
-              if(!result)return;
-              await Promise.all([this.loadProductTrash(), this.loadProducts()]);
-              this.showToast("产品已恢复并重新启用");
-            } catch(error) { this.showToast(this.errorMessage(error), true); }
+            return this.runProductLifecycleAction({
+              action:"restore", productId:row.id,
+              confirmMessage:`确认恢复“${row.product_name}”吗？`,
+              task:async() => {
+                const result=await this.sendVersionedMasterMutation({method:"put",url:`/api/master/products/${row.id}/restore`,row});
+                if(!result)return false;
+                await Promise.all([this.loadProductTrash(), this.loadProducts()]);
+                this.showToast("产品已恢复并重新启用");
+                return true;
+              },
+            });
           },
           async purgeProduct(row) {
-            if (!confirm(`确定彻底清理“${row.product_name}”吗？该操作不可撤销。`)) return;
-            try {
-              const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/products/${row.id}/purge`,row});
-              if(!result)return;
-              await this.loadProductTrash();
-              this.showToast("产品已清理");
-            } catch(error) { this.showToast(this.errorMessage(error), true); }
+            return this.runProductLifecycleAction({
+              action:"purge", productId:row.id,
+              confirmMessage:`确定彻底清理“${row.product_name}”吗？该操作不可撤销。`,
+              task:async() => {
+                const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/products/${row.id}/purge`,row});
+                if(!result)return false;
+                await this.loadProductTrash();
+                this.showToast("产品已清理");
+                return true;
+              },
+            });
           },
           async emptyProductTrash() {
-            if (!confirm("确定清空产品垃圾站吗？有历史业务引用的产品将永久归档。")) return;
-            try {
-              const expected_versions=Object.fromEntries((this.productTrashItems||[]).map(row=>[row.id,Number(row.version)]));
-              const { data } = await axios.post("/api/master/products/trash/empty",{expected_versions});
-              await this.loadProductTrash();
-              this.showToast(`已清理 ${data.deleted_count} 条，归档 ${data.archived_count} 条`);
-            } catch(error) { this.showToast(this.errorMessage(error), true); }
+            return this.runProductLifecycleAction({
+              action:"empty", productId:null,
+              confirmMessage:"确定清空产品垃圾站吗？有历史业务引用的产品将永久归档。",
+              task:async() => {
+                const expected_versions=Object.fromEntries((this.productTrashItems||[]).map(row=>[row.id,Number(row.version)]));
+                const { data } = await axios.post("/api/master/products/trash/empty",{expected_versions});
+                await this.loadProductTrash();
+                this.showToast(`已清理 ${data.deleted_count} 条，归档 ${data.archived_count} 条`);
+                return true;
+              },
+            });
           },
           async toggleProductStatus(row) {
             const action = row.is_active ? "停用" : "启用";
-            if (!confirm(`确认${action}纸箱“${row.product_name}”吗？`)) return;
-            try {
-              const result=await this.sendVersionedMasterMutation({method:"put",url:`/api/master/products/${row.id}/status`,row,body:{is_active:!row.is_active}});
-              if(!result)return;
-              await this.loadProducts();
-              this.showToast(`纸箱已${action}`);
-            } catch(error) { this.showToast(this.errorMessage(error), true); }
+            return this.runProductLifecycleAction({
+              action:"status", productId:row.id,
+              confirmMessage:`确认${action}纸箱“${row.product_name}”吗？`,
+              task:async() => {
+                const result=await this.sendVersionedMasterMutation({method:"put",url:`/api/master/products/${row.id}/status`,row,body:{is_active:!row.is_active}});
+                if(!result)return false;
+                await this.loadProducts();
+                this.showToast(`纸箱已${action}`);
+                return true;
+              },
+            });
           },
           async deleteMaterial(row) {
             if (!confirm(`确认停用材质“${row.code}”吗？`)) return;

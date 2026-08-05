@@ -29,7 +29,8 @@ def test_common_box_editor_embeds_product_specific_candidate_and_requisition_his
     assert editor_context.index(candidate_heading) < editor_context.index(history_heading)
     assert "candidate.supplier_name" in editor_context
     assert "history.supplier_name" in editor_context
-    assert 'axios.get(`/api/requisition/products/${requestedId}/material-context`)' in source
+    assert 'axios.get(`/api/requisition/products/${requestedId}/material-context`, {' in source
+    assert "signal:controller.signal" in source
     assert "applyProductMaterialCandidate(candidate)" in source
     assert "formatBeijingDate(candidate.last_used_at)" in source
     assert "dt(candidate.last_used_at)" not in source
@@ -80,5 +81,5 @@ def test_pending_material_candidate_keeps_confirmation_and_auto_sync_reference()
     ) in source
     assert "sync_product: !!row.product_id" in source
     assert "保存后自动同步订单关联的常用箱" in source
-    assert "报料人工修改材质并同步常用箱" in source
+    assert "保存报料材质并同步常用箱" in source
     assert '<span v-if="canViewCosts">参考价：' in source

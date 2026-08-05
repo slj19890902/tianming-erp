@@ -3221,12 +3221,14 @@
                   <span>受保护 <strong>{{ backupStats.protected_count || 0 }}</strong> 个 · 可清理 <strong style="color:#dc2626">{{ backupStats.deletable_count || 0 }}</strong> 个</span>
                 </div>
               </div>
+              <div v-if="backupListError" class="notice danger" style="margin-bottom:10px">{{ backupListError }} <button class="btn small" @click="loadBackups()" :disabled="backupAction || backupListLoading || loading">重新加载</button></div>
               <div class="toolbar">
-                <button class="btn primary" @click="createBackup" :disabled="loading">立即备份</button>
-                <button class="btn" @click="loadBackups">刷新列表</button>
-                <button v-if="(backupStats.deletable_count || 0) > 0" class="btn danger" @click="previewCleanup">一键清理旧备份…</button>
+                <button class="btn primary" @click="createBackup" :disabled="backupAction || backupListLoading || loading">{{ backupAction === 'create' ? '正在备份…' : '立即备份' }}</button>
+                <button class="btn" @click="loadBackups()" :disabled="backupAction || backupListLoading || loading">{{ backupListLoading ? '正在刷新…' : '刷新列表' }}</button>
+                <button v-if="(backupStats.deletable_count || 0) > 0" class="btn danger" @click="previewCleanup" :disabled="backupAction || backupListLoading || loading">{{ backupAction === 'preview' ? '正在检查…' : '一键清理旧备份…' }}</button>
               </div>
-              <data-panel :empty="!backups.length">
+              <div v-if="backupListLoading" class="panel empty">正在读取备份列表…</div>
+              <data-panel v-else :empty="!backups.length">
                 <table><thead><tr><th>文件名</th><th>创建时间（北京时间）</th><th>大小</th><th>状态</th><th>操作</th></tr></thead>
                 <tbody><tr v-for="row in backups" :key="row.filename">
                   <td style="font-size:12px;word-break:break-all">{{ row.filename }}</td>
@@ -3235,14 +3237,14 @@
                   <td><span :class="row.is_protected ? 'status green' : 'status'">{{ row.is_protected ? '已保护' : '可删除' }}</span></td>
                   <td>
                     <button v-if="row.is_protected" class="btn small" disabled title="最新5个备份受保护">已保护</button>
-                    <button v-else class="btn small danger" @click="deleteBackup(row)">删除</button>
+                    <button v-else class="btn small danger" @click="deleteBackup(row)" :disabled="backupAction || backupListLoading || loading">{{ backupAction === 'delete' ? '处理中…' : '删除' }}</button>
                   </td>
                 </tr></tbody></table>
               </data-panel>
               <!-- 清理预览弹层 -->
-              <div v-if="showCleanupPreview" class="modal-mask" @click.self="showCleanupPreview=false">
+              <div v-if="showCleanupPreview" class="modal-mask" @click.self="closeBackupCleanupPreview">
                 <div class="modal" style="max-width:700px">
-                  <div class="modal-head"><strong>清理旧备份 — 预览</strong><button class="btn small" @click="showCleanupPreview=false">关闭</button></div>
+                  <div class="modal-head"><strong>清理旧备份 — 预览</strong><button class="btn small" @click="closeBackupCleanupPreview" :disabled="backupAction || backupListLoading || loading">关闭</button></div>
                   <div class="modal-body">
                     <div v-if="backupCleanupPreview" style="margin-bottom:12px">
                       <div class="status orange" style="display:block;margin-bottom:10px">将删除 {{ backupCleanupPreview.deletable_count }} 个旧备份，释放约 {{ fileSize(backupCleanupPreview.freed_size) }}。以下 {{ backupCleanupPreview.will_keep.length }} 个备份将被保留：</div>
@@ -3255,8 +3257,8 @@
                       </table>
                     </div>
                     <div class="toolbar-group" style="justify-content:flex-end">
-                      <button class="btn" @click="showCleanupPreview=false">取消</button>
-                      <button class="btn danger" @click="confirmCleanup" :disabled="loading">确认删除旧备份</button>
+                      <button class="btn" @click="closeBackupCleanupPreview" :disabled="backupAction || backupListLoading || loading">取消</button>
+                      <button class="btn danger" @click="confirmCleanup" :disabled="backupAction || backupListLoading || loading">{{ backupAction === 'cleanup' ? '正在清理…' : '确认删除旧备份' }}</button>
                     </div>
                   </div>
                 </div>
@@ -6219,7 +6221,7 @@
             invoiceSellers: [], invoiceSellerForm:{id:null,seller_name:"",tax_no:"",address_phone:"",bank_account:"",is_active:true,version:null},
             customerInvoiceProfile:{invoice_title:"",tax_no:"",invoice_address_phone:"",bank_account:"",default_seller_id:null,confirmation_status:"draft",version:null,error:""},
             customerInvoiceRule:{project_name:"",tax_category_code:"",unit:"",tax_rate:"",confirmation_status:"draft",version:null,error:""},
-            pendingStatements: [], statementCustomers: [], statementDetail: null, statementEditForm: { id: null, statement_month: "" }, backups: [], backupStats: {}, backupCleanupPreview: null, showCleanupPreview: false,
+            pendingStatements: [], statementCustomers: [], statementDetail: null, statementEditForm: { id: null, statement_month: "" }, backups: [], backupStats: {}, backupCleanupPreview: null, showCleanupPreview: false, backupListLoading: false, backupListError: "", backupAction: "",
             systemUsers: [], systemSection:"basic",
             systemSectionLoaded:{basic:false,print:false,backup:false,pdf:false},
             systemSectionLoading:{basic:false,print:false,backup:false,pdf:false},
@@ -12426,17 +12428,38 @@
             try { return JSON.stringify(value, null, 2); }
             catch (error) { return "内容无法显示"; }
           },
-          async loadBackups() {
-            const { data } = await axios.get("/api/system/backups");
-            this.backups = data.items || [];
-            this.backupStats = {
-              backup_dir: data.backup_dir,
-              location_type: data.location_type,
-              total_count: data.total_count || 0,
-              total_size: data.total_size || 0,
-              protected_count: data.protected_count || 0,
-              deletable_count: data.deletable_count || 0,
-            };
+          async loadBackups({throwOnError=false} = {}) {
+            const requestKey = "system:backups:list";
+            const controller = this.beginLatestRequest(requestKey);
+            this.backupListLoading = true;
+            this.backupListError = "";
+            try {
+              const { data } = await axios.get("/api/system/backups", {signal:controller.signal});
+              if (latestRequestControllers.get(requestKey) !== controller) return false;
+              this.backups = data.items || [];
+              this.backupStats = {
+                backup_dir: data.backup_dir,
+                location_type: data.location_type,
+                total_count: data.total_count || 0,
+                total_size: data.total_size || 0,
+                protected_count: data.protected_count || 0,
+                deletable_count: data.deletable_count || 0,
+              };
+              return true;
+            } catch (error) {
+              if (!this.isCancelledRequest(error) && latestRequestControllers.get(requestKey) === controller) {
+                this.backups = [];
+                this.backupStats = {};
+                this.backupListError = `备份列表读取失败：${this.errorMessage(error)}`;
+                if (throwOnError) throw error;
+              }
+              return false;
+            } finally {
+              if (latestRequestControllers.get(requestKey) === controller) {
+                this.backupListLoading = false;
+                this.finishLatestRequest(requestKey, controller);
+              }
+            }
           },
           permissionCatalogSeed() {
             const rows = [
@@ -12648,7 +12671,7 @@
                 const {data} = await axios.get("/api/system/delivery-print-settings");
                 this.deliveryPrintSettings = { ...this.deliveryPrintSettings, ...data };
               } else if (section === "backup") {
-                await this.loadBackups();
+                await this.loadBackups({throwOnError:true});
               } else if (section === "pdf") {
                 // PDF 样本统计和高级模板均由各自按钮/展开动作读取。
               }
@@ -19139,43 +19162,75 @@
               this.showToast(validation || this.errorMessage(error), true);
             }
           },
-          async createBackup() {
+          beginBackupAction(action) {
+            if (this.backupAction || this.loading) return false;
+            this.backupAction = action;
             this.loading = true;
-            try { const {data}=await axios.post("/api/system/backups"); await this.loadBackups(); this.showToast(`备份成功：${data.filename}`); }
-            catch (error) { this.showToast(this.errorMessage(error), true); }
-            finally { this.loading=false; }
+            return true;
+          },
+          finishBackupAction(action) {
+            if (this.backupAction !== action) return;
+            this.backupAction = "";
+            this.loading = false;
+          },
+          closeBackupCleanupPreview() {
+            if (this.backupAction || this.backupListLoading || this.loading) return false;
+            this.showCleanupPreview = false;
+            return true;
+          },
+          async createBackup() {
+            if (!this.beginBackupAction("create")) return false;
+            try {
+              const {data}=await axios.post("/api/system/backups");
+              const refreshed = await this.loadBackups();
+              if (refreshed) this.showToast(`备份成功：${data.filename}`);
+              else this.showToast(`备份已创建：${data.filename}，但列表刷新失败，请点“重新加载”；不要重复备份`, true);
+              return true;
+            }
+            catch (error) { this.showToast(this.errorMessage(error), true); return false; }
+            finally { this.finishBackupAction("create"); }
           },
           async deleteBackup(row) {
             if (!confirm(`确认删除备份文件：\n${row.filename}\n此操作不可恢复！`)) return;
-            this.loading = true;
+            if (!this.beginBackupAction("delete")) return false;
+            const filename = String(row.filename || "");
             try {
-              const { data } = await axios.delete(`/api/system/backups/${encodeURIComponent(row.filename)}`);
-              await this.loadBackups();
-              this.showToast(`已删除 ${data.deleted}，释放 ${this.fileSize(data.freed_size)}`);
-            } catch (error) { this.showToast(this.errorMessage(error), true); }
-            finally { this.loading = false; }
+              const { data } = await axios.delete(`/api/system/backups/${encodeURIComponent(filename)}`);
+              const refreshed = await this.loadBackups();
+              const message = `已删除 ${data.deleted}，释放 ${this.fileSize(data.freed_size)}`;
+              this.showToast(refreshed ? message : `${message}；但列表刷新失败，请点“重新加载”，不要重复删除`, !refreshed);
+              return true;
+            } catch (error) { this.showToast(this.errorMessage(error), true); return false; }
+            finally { this.finishBackupAction("delete"); }
           },
           async previewCleanup() {
-            this.loading = true;
+            if (!this.beginBackupAction("preview")) return false;
             try {
               const { data } = await axios.get("/api/system/backups/cleanup-preview");
               this.backupCleanupPreview = data;
               this.showCleanupPreview = true;
-            } catch (error) { this.showToast(this.errorMessage(error), true); }
-            finally { this.loading = false; }
+              return true;
+            } catch (error) { this.showToast(this.errorMessage(error), true); return false; }
+            finally { this.finishBackupAction("preview"); }
           },
           async confirmCleanup() {
+            if (!this.backupCleanupPreview || Number(this.backupCleanupPreview.deletable_count || 0) <= 0) {
+              this.showToast("当前没有可清理的旧备份，请重新预览", true);
+              return false;
+            }
             if (!confirm(`确认删除 ${this.backupCleanupPreview?.deletable_count || 0} 个旧备份？此操作不可恢复！`)) return;
-            this.loading = true;
+            if (!this.beginBackupAction("cleanup")) return false;
             try {
               const { data } = await axios.post("/api/system/backups/cleanup");
               this.showCleanupPreview = false;
-              await this.loadBackups();
+              const refreshed = await this.loadBackups();
               const freed = this.fileSize(data.freed_size || 0);
               const msg = `已清理 ${data.deleted?.length || 0} 个备份，释放 ${freed}`;
-              this.showToast(data.errors?.length ? `${msg}（${data.errors.length} 个失败）` : msg);
-            } catch (error) { this.showToast(this.errorMessage(error), true); }
-            finally { this.loading = false; }
+              const resultMessage = data.errors?.length ? `${msg}（${data.errors.length} 个失败）` : msg;
+              this.showToast(refreshed ? resultMessage : `${resultMessage}；但列表刷新失败，请点“重新加载”，不要重复清理`, !refreshed || !!data.errors?.length);
+              return true;
+            } catch (error) { this.showToast(this.errorMessage(error), true); return false; }
+            finally { this.finishBackupAction("cleanup"); }
           },
           async loadMaterialMapping(page) {
             this.materialMappingPage = page || 1;

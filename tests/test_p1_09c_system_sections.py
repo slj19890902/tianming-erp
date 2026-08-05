@@ -42,7 +42,7 @@ def test_system_sections_load_on_demand_and_reuse_loaded_data() -> None:
     assert 'section === "print"' in section_loader
     assert 'axios.get("/api/system/delivery-print-settings")' in section_loader
     assert 'section === "backup"' in section_loader
-    assert "await this.loadBackups()" in section_loader
+    assert "await this.loadBackups({throwOnError:true})" in section_loader
     assert 'section === "pdf"' in section_loader
     assert "this.systemSectionErrors" in section_loader
     assert "this.systemSectionLoading" in section_loader

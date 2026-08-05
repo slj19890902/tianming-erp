@@ -1786,11 +1786,11 @@
               <div class="toolbar">
                 <div class="toolbar-group">
                   <button class="btn" @click="go('customers')">返回客户管理</button>
-                  <button v-if="canEditQuotations" class="btn primary" @click="newQuotationDraft">新建报价</button>
+                  <button v-if="canEditQuotations" class="btn primary" :disabled="loading || quotationActionBusy()" @click="newQuotationDraft">新建报价</button>
                 </div>
                 <div class="toolbar-group">
-                  <button class="btn" :disabled="loading || !quotationEditable || !quotationDraft.items.length" @click="saveQuotationDraft">保存草稿</button>
-                  <button class="btn success" :disabled="loading || !quotationEditable || !quotationDraft.items.length" @click="generateQuotation">生成报价单</button>
+                  <button class="btn" :disabled="loading || quotationActionBusy() || !quotationEditable || !quotationDraft.items.length" @click="saveQuotationDraft">{{ quotationDraftAction === 'save' ? '保存中…' : '保存草稿' }}</button>
+                  <button class="btn success" :disabled="loading || quotationActionBusy() || !quotationEditable || !quotationDraft.items.length" @click="generateQuotation">{{ quotationDraftAction === 'generate' ? '生成中…' : '生成报价单' }}</button>
                 </div>
               </div>
               <div v-if="quotationCustomer" class="panel" style="margin-bottom:14px">
@@ -1824,10 +1824,10 @@
                 <div class="toolbar" style="margin-top:10px"><button class="btn" :disabled="!quotationEditable" @click="addQuotationLine">增加一行</button><strong>预计报价合计：￥ {{ money(quotationDraftTotal) }}</strong></div>
               </div>
               <div class="panel">
-                <div class="toolbar"><strong>报价历史</strong><button class="btn" @click="loadQuotationHistory">刷新</button></div>
+                <div class="toolbar"><strong>报价历史</strong><button class="btn" :disabled="loading || quotationActionBusy()" @click="loadQuotationHistory">刷新</button></div>
                 <div v-if="!quotationHistory.length" class="empty">该客户还没有报价记录</div>
                 <div v-else class="table-wrap"><table><thead><tr><th>报价单号</th><th>报价日期</th><th>状态</th><th>报价金额</th><th>报价明细</th><th>操作</th></tr></thead><tbody>
-                  <tr v-for="row in quotationHistory" :key="row.id"><td><strong>{{ row.quotation_no }}</strong></td><td>{{ row.quotation_date }}</td><td><status-tag :value="row.status"></status-tag></td><td>￥ {{ money(row.total_amount) }}</td><td><div v-for="item in row.items" :key="item.id">{{ item.product_name }}｜{{ item.box_type }}｜{{ item.material_code || '-' }}<span v-if="item.converted_product_id" class="status green">已转常用箱</span><button v-else-if="row.status==='accepted'" class="btn small" @click="convertQuotationItem(row,item)">转入常用箱</button></div></td><td class="toolbar-group"><button class="btn small" @click="editQuotation(row)">{{ ['draft','quoted'].includes(row.status) ? '查看/编辑' : '查看' }}</button><button class="btn small" @click="printQuotation(row)">打印/PDF</button><button v-if="row.status==='quoted'" class="btn small success" @click="acceptQuotation(row)">客户接受</button><button v-if="!['voided','converted'].includes(row.status)" class="btn small danger" @click="voidQuotation(row)">作废</button></td></tr>
+                  <tr v-for="row in quotationHistory" :key="row.id"><td><strong>{{ row.quotation_no }}</strong></td><td>{{ row.quotation_date }}</td><td><status-tag :value="row.status"></status-tag></td><td>￥ {{ money(row.total_amount) }}</td><td><div v-for="item in row.items" :key="item.id">{{ item.product_name }}｜{{ item.box_type }}｜{{ item.material_code || '-' }}<span v-if="item.converted_product_id" class="status green">已转常用箱</span><button v-else-if="row.status==='accepted'" class="btn small" :disabled="loading || quotationActionBusy()" @click="convertQuotationItem(row,item)">转入常用箱</button></div></td><td class="toolbar-group"><button class="btn small" :disabled="loading || quotationActionBusy()" @click="editQuotation(row)">{{ ['draft','quoted'].includes(row.status) ? '查看/编辑' : '查看' }}</button><button class="btn small" @click="printQuotation(row)">打印/PDF</button><button v-if="row.status==='quoted'" class="btn small success" :disabled="loading || quotationActionBusy()" @click="acceptQuotation(row)">{{ quotationActionPending('accept',row.id) ? '接受中…' : '客户接受' }}</button><button v-if="!['voided','converted'].includes(row.status)" class="btn small danger" :disabled="loading || quotationActionBusy()" @click="voidQuotation(row)">{{ quotationActionPending('void',row.id) ? '作废中…' : '作废' }}</button></td></tr>
                 </tbody></table></div>
               </div>
             </template>
@@ -6232,6 +6232,8 @@
             quotationDraft: { id:null, quotation_date:today(), remarks:"", items:[blankQuotationLine()] },
             quotationConvertForm: {},
             quotationHistory: [],
+            quotationDraftAction:"",
+            quotationAction:{action:"",quotationId:null,quotationNo:""},
             contractCustomer: null,
             contractDraft: blankContractDraft(),
             contractHistory: [],
@@ -14405,36 +14407,45 @@
               }),
             };
           },
-          async persistQuotation(showMessage=true) {
+          async persistQuotation(showMessage=true, refreshHistory=true) {
             if (!this.quotationCustomer?.id) throw new Error("请先选择客户");
             const payload = this.quotationPayload();
             const response = this.quotationDraft.id
               ? await axios.put(`/api/quotations/${this.quotationDraft.id}`, payload)
               : await axios.post("/api/quotations", payload, {params:{customer_id:this.quotationCustomer.id}});
             this.quotationDraft = this.hydrateQuotation(response.data);
-            await this.loadQuotationHistory();
-            if (showMessage) this.showToast(`报价草稿 ${response.data.quotation_no} 已保存`);
+            if (refreshHistory) {
+              if (showMessage) {
+                await this.refreshQuotationHistoryAfterMutation(`报价草稿 ${response.data.quotation_no} 已保存`);
+              } else {
+                await this.loadQuotationHistory();
+              }
+            } else if (showMessage) {
+              this.showToast(`报价草稿 ${response.data.quotation_no} 已保存`);
+            }
             return response.data;
           },
           async saveQuotationDraft() {
-            if (this.loading) return;
+            if (this.loading || this.quotationActionBusy()) return false;
             this.loading = true;
-            try { await this.persistQuotation(true); }
-            catch(error) { this.showToast(this.errorMessage(error),true); }
-            finally { this.loading = false; }
+            this.quotationDraftAction = "save";
+            try { await this.persistQuotation(true); return true; }
+            catch(error) { this.showToast(this.errorMessage(error),true); return false; }
+            finally { this.quotationDraftAction = ""; this.loading = false; }
           },
           async generateQuotation() {
-            if (this.loading) return;
+            if (this.loading || this.quotationActionBusy()) return false;
             this.loading = true;
+            this.quotationDraftAction = "generate";
             try {
-              const saved = await this.persistQuotation(false);
+              const saved = await this.persistQuotation(false, false);
               const {data} = await axios.post(`/api/quotations/${saved.id}/generate`);
               this.quotationDraft = this.hydrateQuotation(data);
-              await this.loadQuotationHistory();
               window.open(`/quotation-print.html?id=${data.id}`,"_blank");
-              this.showToast(`报价单 ${data.quotation_no} 已生成`);
-            } catch(error) { this.showToast(this.errorMessage(error),true); }
-            finally { this.loading = false; }
+              await this.refreshQuotationHistoryAfterMutation(`报价单 ${data.quotation_no} 已生成`);
+              return true;
+            } catch(error) { this.showToast(this.errorMessage(error),true); return false; }
+            finally { this.quotationDraftAction = ""; this.loading = false; }
           },
           editQuotation(row) {
             this.quotationDraft = this.hydrateQuotation(JSON.parse(JSON.stringify(row)));
@@ -14443,26 +14454,87 @@
           printQuotation(row) {
             window.open(`/quotation-print.html?id=${row.id}`,"_blank");
           },
-          async acceptQuotation(row) {
-            if (!confirm(`确认客户已接受报价单 ${row.quotation_no} 吗？`)) return;
+          quotationActionBusy() {
+            return Boolean(this.quotationAction?.action);
+          },
+          quotationActionPending(action, quotationId=null) {
+            if (this.quotationAction?.action !== action) return false;
+            return quotationId === null || Number(this.quotationAction.quotationId) === Number(quotationId);
+          },
+          async runQuotationAction({action, quotationId=null, quotationNo="", confirmMessage, task}) {
+            if (this.loading || this.quotationActionBusy()) return false;
+            if (confirmMessage && !confirm(confirmMessage)) return false;
+            const targetId = quotationId === null ? null : Number(quotationId);
+            this.quotationAction = {action,quotationId:targetId,quotationNo:String(quotationNo || "")};
             try {
-              await axios.post(`/api/quotations/${row.id}/accept`);
+              await task();
+              return true;
+            } catch(error) {
+              this.showToast(this.errorMessage(error),true);
+              return false;
+            } finally {
+              if (this.quotationAction.action === action && Number(this.quotationAction.quotationId) === Number(targetId)) {
+                this.quotationAction = {action:"",quotationId:null,quotationNo:""};
+              }
+            }
+          },
+          async refreshQuotationHistoryAfterMutation(successMessage) {
+            try {
               await this.loadQuotationHistory();
-              this.showToast("已标记为客户接受，可以转入常用箱");
-            } catch(error) { this.showToast(this.errorMessage(error),true); }
+              this.showToast(successMessage);
+              return true;
+            } catch(error) {
+              this.showToast(`${successMessage}；列表刷新失败，请手动刷新核对，不要重复操作：${this.errorMessage(error)}`,true);
+              return false;
+            }
+          },
+          async acceptQuotation(row) {
+            const target = {
+              id:Number(row?.id || 0),
+              quotationNo:String(row?.quotation_no || "").trim() || `#${Number(row?.id || 0)}`,
+            };
+            if (!target.id) {
+              this.showToast("报价单不存在，不能标记客户接受",true);
+              return false;
+            }
+            return this.runQuotationAction({
+              action:"accept",
+              quotationId:target.id,
+              quotationNo:target.quotationNo,
+              confirmMessage:`确认客户已接受报价单 ${target.quotationNo} 吗？`,
+              task:async() => {
+                await axios.post(`/api/quotations/${target.id}/accept`);
+                await this.refreshQuotationHistoryAfterMutation("已标记为客户接受，可以转入常用箱");
+                return true;
+              },
+            });
           },
           async voidQuotation(row) {
-            if (!confirm(`确认作废报价单 ${row.quotation_no} 吗？`)) return;
-            try {
-              await axios.post(`/api/quotations/${row.id}/void`);
-              await this.loadQuotationHistory();
-              this.showToast("报价单已作废");
-            } catch(error) { this.showToast(this.errorMessage(error),true); }
+            const target = {
+              id:Number(row?.id || 0),
+              quotationNo:String(row?.quotation_no || "").trim() || `#${Number(row?.id || 0)}`,
+            };
+            if (!target.id) {
+              this.showToast("报价单不存在，不能作废",true);
+              return false;
+            }
+            return this.runQuotationAction({
+              action:"void",
+              quotationId:target.id,
+              quotationNo:target.quotationNo,
+              confirmMessage:`确认作废报价单 ${target.quotationNo} 吗？`,
+              task:async() => {
+                await axios.post(`/api/quotations/${target.id}/void`);
+                await this.refreshQuotationHistoryAfterMutation("报价单已作废");
+                return true;
+              },
+            });
           },
           async convertQuotationItem(quotation,item) {
+            if (this.loading || this.quotationActionBusy()) return false;
             if (quotation.status !== "accepted") {
               this.showToast("请先将报价标记为客户接受",true);
-              return;
+              return false;
             }
             await this.loadProductBoxTypeRules();
             const material = this._findMaterial(item.material_id);

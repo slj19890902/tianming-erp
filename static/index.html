@@ -2713,6 +2713,7 @@
                         <option value="">未分配</option>
                         <option v-for="picker in deliveryPickers" :key="picker.id" :value="picker.id">{{ picker.name }}</option>
                       </select>
+                      <span v-if="deliveryOperationState.action==='assign' && Number(deliveryOperationState.deliveryId)===Number(row.id) && Number(deliveryOperationState.taskId)===Number(row.pick_task?.id)" class="muted">分配中…</span>
                       <button v-if="row.pick_task" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="openDeliveryPickTask(row)">{{ row.pick_task.assignment_required ? '管理员查看' : '打开手机拿货' }}</button>
                       <button v-if="canDelivery && row.status==='pending'" class="btn small success" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="dispatchDelivery(row)">{{ deliveryOperationState.action==='dispatch' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '发货中…' : (row.pick_task ? '发货打印' : '直接发货打印') }}</button>
                       <button v-if="canDelivery && row.status==='pending'" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="editDelivery(row)">编辑</button>
@@ -12037,17 +12038,54 @@
             }
           },
           async assignDeliveryPickTask(row, pickerUserId) {
+            if (this.deliveryOperationState.action || this.receiptOperationState?.action) return false;
             const task = this.normalizeDeliveryPickTask(row);
-            if (!task?.id) return;
+            const taskId = Number(task?.id || 0);
+            const deliveryId = Number(row?.id || 0);
+            const deliveryNumber = String(row?.delivery_number || `#${deliveryId}`);
+            if (!taskId || !deliveryId) {
+              this.showToast("拿货任务不存在，无法分配送货员", true);
+              return false;
+            }
+            const normalizedPickerId = pickerUserId === "" || pickerUserId === null || pickerUserId === undefined
+              ? null
+              : Number(pickerUserId);
+            if (normalizedPickerId !== null && (!Number.isInteger(normalizedPickerId) || normalizedPickerId <= 0)) {
+              this.showToast("请选择有效的送货拿货员", true);
+              return false;
+            }
+            this.deliveryOperationState = {action:"assign",deliveryId,deliveryNumber,taskId,pickerUserId:normalizedPickerId};
             try {
-              const { data } = await axios.put(`/api/delivery-picks/${task.id}/assignment`, {
-                picker_user_id: pickerUserId ? Number(pickerUserId) : null,
-              });
-              row.pick_task = data;
+              let data;
+              try {
+                ({ data } = await axios.put(`/api/delivery-picks/${taskId}/assignment`, {
+                  picker_user_id: normalizedPickerId,
+                }));
+              } catch (error) {
+                const primaryMessage = this.errorMessage(error);
+                let refreshMessage = "";
+                try {
+                  await this.loadDeliveries();
+                  refreshMessage = this.deliveryListState?.error || "";
+                } catch (refreshError) {
+                  refreshMessage = this.errorMessage(refreshError);
+                }
+                this.showToast(
+                  refreshMessage
+                    ? `${primaryMessage}；同时刷新送货列表失败：${refreshMessage}`
+                    : primaryMessage,
+                  true
+                );
+                return false;
+              }
+              const currentTask = this.normalizeDeliveryPickTask(row);
+              if (Number(row?.id) === deliveryId && Number(currentTask?.id) === taskId) row.pick_task = data;
               this.showToast(data.assigned_to_name ? `已分配给 ${data.assigned_to_name}` : "已取消分配");
-            } catch (error) {
-              this.showToast(this.errorMessage(error), true);
-              await this.loadDeliveries();
+              return true;
+            } finally {
+              if (this.deliveryOperationState.action === "assign" && Number(this.deliveryOperationState.taskId) === taskId) {
+                this.deliveryOperationState = {action:"",deliveryId:null,deliveryNumber:""};
+              }
             }
           },
           async applyDeliveryPickTask(row) {

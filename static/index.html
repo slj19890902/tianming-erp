@@ -5816,7 +5816,7 @@
               <button class="btn primary" :disabled="loading || pdfTemplateLoading" @click="savePdfTemplate">保存 draft</button>
             </template>
             <button v-if="modal?.type === 'delivery' && deliveryForm.editingId && !deliveryFormIsDirty()" class="btn success" :disabled="loading || !!deliveryForm.pick_task || !!deliveryOperationState.action" @click="createCurrentDeliveryPickTask">{{ deliveryOperationState.action==='pick' && Number(deliveryOperationState.deliveryId)===Number(deliveryForm.editingId) ? '推送中…' : (deliveryForm.pick_task ? '已推送拿货' : '拿货') }}</button>
-            <button v-if="canSaveModal" class="btn primary" :disabled="loading || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError)) || (modal?.type==='quotationConvert' && !!quotationConvertCreaseMismatch) || (modal?.type==='orderItem' && !!orderItemCreaseMismatch) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && (!!deliveryValidationError || !!deliveryOperationState.action)) || (modal?.type==='receipt' && !!receiptOperationState.action) || (modal?.type==='requisitionHold' && requisitionHoldSaveBlocked)" @click="modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()">{{ modal?.type==='delivery' ? deliveryPrimaryLabel() : (modal?.type==='receipt' ? (receiptOperationState.action==='save' ? '保存中…' : '保存回单') : (['requisition','supplierRequisitionDraft'].includes(modal?.type) ? '确认生成正式采购单' : (modal?.type==='requisitionHold' ? '确认暂缓' : (modal?.type==='stockReplenishment' && stockReplenishmentForm.source_type==='stock_warning' ? '保存报料草稿' : '保存')))) }}</button>
+            <button v-if="canSaveModal" class="btn primary" :disabled="loading || masterSavePending || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError)) || (modal?.type==='quotationConvert' && !!quotationConvertCreaseMismatch) || (modal?.type==='orderItem' && !!orderItemCreaseMismatch) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && (!!deliveryValidationError || !!deliveryOperationState.action)) || (modal?.type==='receipt' && !!receiptOperationState.action) || (modal?.type==='requisitionHold' && requisitionHoldSaveBlocked)" @click="modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()">{{ ['product','material'].includes(modal?.type) && masterSavePending ? '保存中…' : (modal?.type==='delivery' ? deliveryPrimaryLabel() : (modal?.type==='receipt' ? (receiptOperationState.action==='save' ? '保存中…' : '保存回单') : (['requisition','supplierRequisitionDraft'].includes(modal?.type) ? '确认生成正式采购单' : (modal?.type==='requisitionHold' ? '确认暂缓' : (modal?.type==='stockReplenishment' && stockReplenishmentForm.source_type==='stock_warning' ? '保存报料草稿' : '保存'))))) }}</button>
           </div>
         </div>
       </div>
@@ -6360,6 +6360,7 @@
             masterEditBaseline: { customer:null, product:null, material:null },
             masterChangeConfirm: blankMasterChangeConfirm(),
             masterPendingSaveOptions: null,
+            masterSavePending: false,
             masterVersionConflict: null,
             masterVersionHistory: blankMasterVersionHistory(),
             selectedProductCustomer: null, productCustomerSearch: "",
@@ -19437,8 +19438,32 @@
             this.masterChangeConfirm = blankMasterChangeConfirm();
             this.masterPendingSaveOptions = null;
           },
+          handleMasterSaveRefreshFailure(entity, error) {
+            const label = entity === "product" ? "常用箱" : "材质";
+            if (entity === "product") {
+              // 写入已完成，即使列表刷新失败也不应再把表单当作未保存。
+              this.productFormSnapshot = null;
+              // 从 PDF/订单返回的编辑器保留在当前页，避免把未完成的回填冒充成功。
+              if (!this.productEditReturnContext) this.closeModal();
+            } else {
+              this.closeModal();
+            }
+            const reason = this.errorMessage(error);
+            this.showToast(
+              `${label}已保存，但列表刷新失败${reason ? `：${reason}` : ""}。业务已成功，请勿重复提交，请手动刷新核对。`,
+              true
+            );
+            return true;
+          },
           async saveModal() {
             if (this.modal?.type === "receipt") return this.saveReceipt();
+            const masterSaveEntity = ["product","material"].includes(this.modal?.type) ? this.modal.type : null;
+            if (masterSaveEntity && this.masterSavePending) {
+              this.showToast(`${masterSaveEntity === "product" ? "常用箱" : "材质"}正在保存，请勿重复点击`, true);
+              return false;
+            }
+            if (masterSaveEntity) this.masterSavePending = true;
+            try {
             let masterOptions = this.masterPendingSaveOptions;
             this.masterPendingSaveOptions = null;
             const masterEntity = ["customer","product","material"].includes(this.modal?.type) ? this.modal.type : null;
@@ -19528,7 +19553,11 @@
                   await axios.post(`/api/master/products/${saved.id}/drawings`,form);
                 }
                 if (saved?.id && bomDirty) await this.saveProductBom(saved.id, saved.version ?? null);
-                await this.loadProducts();
+                try {
+                  await this.loadProducts();
+                } catch (refreshError) {
+                  return this.handleMasterSaveRefreshFailure("product", refreshError);
+                }
                 // 产品已成功保存，关闭弹窗时不应再提示“有未保存的修改”。
                 this.productFormSnapshot = null;
                 if (this.productEditReturnContext) {
@@ -19541,7 +19570,11 @@
                 this.attachMasterUpdateMetadata("material",payload,masterOptions);
                 if (this.materialForm.id) await axios.put(`/api/master/materials/${this.materialForm.id}`,payload);
                 else await axios.post("/api/master/materials",payload);
-                await this.loadMaterials();
+                try {
+                  await this.loadMaterials();
+                } catch (refreshError) {
+                  return this.handleMasterSaveRefreshFailure("material", refreshError);
+                }
               }
               if (this.modal.type === "materialCandidate") {
                 const form = this.materialCandidateForm;
@@ -19843,6 +19876,9 @@
               return false;
             }
             finally { this.loading = false; }
+            } finally {
+              if (masterSaveEntity) this.masterSavePending = false;
+            }
           },
           async dispatchDelivery(row) {
             if (this.deliveryOperationState.action || this.receiptOperationState?.action) return false;

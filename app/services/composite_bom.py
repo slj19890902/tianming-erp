@@ -714,7 +714,7 @@ def _snapshot_kwargs(
                 if (component.box_style or "").strip()
                 in {"平卡", "模切内盒", "隔板", "刀卡"}
                 and component.default_cutting_mode
-                in {"一开一", "一开二", "一开三", "一开四", "一开五"}
+                in {"一开一", "一开二", "一开三", "一开四", "一开五", "一开六"}
                 else "一开一"
             ),
         ),

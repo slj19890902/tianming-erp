@@ -5,7 +5,7 @@ from typing import Literal
 
 
 DEFAULT_FLAP_MM = 30
-CUTTING_MODES = ("一开一", "一开二", "一开三", "一开四", "一开五")
+CUTTING_MODES = ("一开一", "一开二", "一开三", "一开四", "一开五", "一开六")
 SPLICE_MODES = ("single", "double")
 
 
@@ -319,7 +319,7 @@ def normalize_box_configuration(
     if rule is not None and not rule.supports_cutting_mode:
         normalized_cutting = "一开一"
     elif normalized_cutting not in CUTTING_MODES:
-        raise BoxTypeRuleError("开料方式仅允许：一开一至一开五")
+        raise BoxTypeRuleError("开料方式仅允许：一开一至一开六")
 
     normalized_crease = str(crease_type or "").strip() or None
     if (

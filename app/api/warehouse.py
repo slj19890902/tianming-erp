@@ -145,6 +145,7 @@ COMPONENT_CUTTING_YIELDS = {
     "一开三": 3,
     "一开四": 4,
     "一开五": 5,
+    "一开六": 6,
 }
 WAREHOUSE_CONSTRUCTION_STATUSES = {
     "not_started",

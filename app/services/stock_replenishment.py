@@ -84,6 +84,7 @@ STOCK_REPLENISHMENT_CUTTING_FACTORS = {
     "一开三": 3,
     "一开四": 4,
     "一开五": 5,
+    "一开六": 6,
 }
 
 

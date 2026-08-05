@@ -47,7 +47,7 @@ class Product(Base):
             name="ck_products_box_category",
         ),
         CheckConstraint(
-            "default_cutting_mode IN ('一开一', '一开二', '一开三', '一开四', '一开五')",
+            "default_cutting_mode IN ('一开一', '一开二', '一开三', '一开四', '一开五', '一开六')",
             name="ck_products_default_cutting_mode",
         ),
         CheckConstraint(

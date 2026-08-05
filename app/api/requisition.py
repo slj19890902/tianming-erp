@@ -207,6 +207,7 @@ CUTTING_MODE_FACTORS = {
     "一开三": 3,
     "一开四": 4,
     "一开五": 5,
+    "一开六": 6,
 }
 DEFAULT_CUTTING_MODE = "一开一"
 CUTTING_MODE_BOX_STYLES = {"平卡", "模切内盒", "隔板", "刀卡"}
@@ -317,7 +318,7 @@ class RequisitionLinePayload(BaseModel):
     def validate_process(cls, value: str) -> str:
         normalized = str(value or "").strip() or DEFAULT_CUTTING_MODE
         if normalized not in CUTTING_MODE_FACTORS:
-            raise ValueError("开料方式仅允许：一开一、一开二、一开三、一开四、一开五")
+            raise ValueError("开料方式仅允许：一开一、一开二、一开三、一开四、一开五、一开六")
         return normalized
 
     @field_validator("component_type")
@@ -458,7 +459,7 @@ class RequisitionEdit(BaseModel):
     def validate_process(cls, value: str) -> str:
         normalized = str(value or "").strip() or DEFAULT_CUTTING_MODE
         if normalized not in CUTTING_MODE_FACTORS:
-            raise ValueError("开料方式仅允许：一开一、一开二、一开三、一开四、一开五")
+            raise ValueError("开料方式仅允许：一开一、一开二、一开三、一开四、一开五、一开六")
         return normalized
 
 
@@ -492,7 +493,7 @@ class MergeGroupCreatePayload(BaseModel):
     def validate_cutting_mode(cls, value: str) -> str:
         normalized = str(value or "").strip() or DEFAULT_CUTTING_MODE
         if normalized not in CUTTING_MODE_FACTORS:
-            raise ValueError("开料方式仅允许：一开一、一开二、一开三、一开四、一开五")
+            raise ValueError("开料方式仅允许：一开一、一开二、一开三、一开四、一开五、一开六")
         return normalized
 
 
@@ -510,7 +511,7 @@ class MergeGroupUpdatePayload(BaseModel):
             return None
         normalized = str(value or "").strip() or DEFAULT_CUTTING_MODE
         if normalized not in CUTTING_MODE_FACTORS:
-            raise ValueError("开料方式仅允许：一开一、一开二、一开三、一开四、一开五")
+            raise ValueError("开料方式仅允许：一开一、一开二、一开三、一开四、一开五、一开六")
         return normalized
 
 
@@ -537,7 +538,7 @@ class PendingSupplierOrderSelection(BaseModel):
     def validate_cutting_mode(cls, value: str) -> str:
         normalized = str(value or "").strip() or DEFAULT_CUTTING_MODE
         if normalized not in CUTTING_MODE_FACTORS:
-            raise ValueError("开料方式仅允许：一开一、一开二、一开三、一开四、一开五")
+            raise ValueError("开料方式仅允许：一开一、一开二、一开三、一开四、一开五、一开六")
         return normalized
 
 
@@ -828,7 +829,7 @@ class PendingSupplierOrderDraftItem(BaseModel):
     def validate_cutting_mode(cls, value: str) -> str:
         normalized = str(value or "").strip() or DEFAULT_CUTTING_MODE
         if normalized not in CUTTING_MODE_FACTORS:
-            raise ValueError("开料方式仅允许：一开一、一开二、一开三、一开四、一开五")
+            raise ValueError("开料方式仅允许：一开一、一开二、一开三、一开四、一开五、一开六")
         return normalized
 
 
@@ -878,7 +879,7 @@ class PendingSupplierOrderDraftLine(BaseModel):
     def validate_cutting_mode(cls, value: str) -> str:
         normalized = str(value or "").strip() or DEFAULT_CUTTING_MODE
         if normalized not in CUTTING_MODE_FACTORS:
-            raise ValueError("开料方式仅允许：一开一、一开二、一开三、一开四、一开五")
+            raise ValueError("开料方式仅允许：一开一、一开二、一开三、一开四、一开五、一开六")
         return normalized
 
 

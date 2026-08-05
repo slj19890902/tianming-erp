@@ -49,7 +49,7 @@ def test_cutting_mode_visibility_and_flat_card_rename_follow_box_style() -> None
 def test_requisition_form_keeps_manual_cutting_mode_override() -> None:
     requisition_table = INDEX_HTML.split('class="requisition-product-cell"', 1)[1]
     assert 'v-model="line.special_process" @change="autoRequisitionQty(line)"' in requisition_table
-    for mode in ("一开一", "一开二", "一开三", "一开四", "一开五"):
+    for mode in ("一开一", "一开二", "一开三", "一开四", "一开五", "一开六"):
         assert f"<option>{mode}</option>" in requisition_table
 
 

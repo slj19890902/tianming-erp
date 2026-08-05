@@ -7,6 +7,7 @@ CUTTING_MODE_FACTORS = {
     "一开三": 3,
     "一开四": 4,
     "一开五": 5,
+    "一开六": 6,
 }
 DEFAULT_CUTTING_MODE = "一开一"
 CUTTING_MODE_BOX_STYLES = {"平卡", "模切内盒", "隔板", "刀卡"}

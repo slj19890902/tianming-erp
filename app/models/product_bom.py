@@ -198,7 +198,7 @@ class SalesOrderItemBomComponent(Base):
         ),
         CheckConstraint(
             "snapshot_component_default_cutting_mode IN "
-            "('一开一','一开二','一开三','一开四','一开五')",
+            "('一开一','一开二','一开三','一开四','一开五','一开六')",
             name="ck_sales_order_item_bom_components_default_cutting_mode",
         ),
         UniqueConstraint(

@@ -2721,7 +2721,7 @@
                       <button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="openReceipt(row)">{{ receiptOperationState.action==='open' && Number(receiptOperationState.deliveryId)===Number(row.id) ? '加载中…' : '编辑回单' }}</button>
                       <button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small danger" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="cancelReceipt(row)">{{ receiptOperationState.action==='cancel' && Number(receiptOperationState.deliveryId)===Number(row.id) ? '取消中…' : '取消回单' }}</button>
                       <button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="openReceipt(row)">{{ receiptOperationState.action==='open' && Number(receiptOperationState.deliveryId)===Number(row.id) ? '加载中…' : '确认回单' }}</button>
-                      <button v-if="row.status==='dispatched'" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="printDelivery(row)">补打</button>
+                      <button v-if="row.status==='dispatched'" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="printDelivery(row)">{{ deliveryOperationState.action==='reprint' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '打开中…' : '补打' }}</button>
                       <button v-if="canDelivery && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small danger" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="cancelDelivery(row)">{{ deliveryOperationState.action==='cancel' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '取消中…' : '取消发货' }}</button>
                     </td>
                   </tr>
@@ -19713,7 +19713,28 @@
               }
             }
           },
-          async printDelivery(row) { return !!(await this.openDeliveryPrintTab(row?.id)); },
+          async printDelivery(row) {
+            if (this.deliveryOperationState.action || this.receiptOperationState?.action) return false;
+            const deliveryId = Number(row?.id || 0);
+            const deliveryNumber = String(row?.delivery_number || `#${deliveryId}`);
+            if (!deliveryId) {
+              this.showToast("送货单不存在，无法补打", true);
+              return false;
+            }
+            this.deliveryOperationState = {action:"reprint",deliveryId,deliveryNumber};
+            try {
+              try {
+                return !!(await this.openDeliveryPrintTab(deliveryId));
+              } catch (error) {
+                this.showToast(`补打 ${deliveryNumber} 打开失败：${this.errorMessage(error)}`, true);
+                return false;
+              }
+            } finally {
+              if (this.deliveryOperationState.action === "reprint" && Number(this.deliveryOperationState.deliveryId) === deliveryId) {
+                this.deliveryOperationState = {action:"",deliveryId:null,deliveryNumber:""};
+              }
+            }
+          },
           async editDelivery(row) {
             const sourceMode = row.source_mode || this.deliverySourceModeFromLines(row.items || []);
             const hasOrderLines = (row.items || []).some(item => item.source_type !== "unordered_finished");

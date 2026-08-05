@@ -114,6 +114,20 @@ def test_version_conflict_errors_include_expected_and_current_versions() -> None
     assert "throw new Error(`" in sync_product
 
 
+def test_customer_mutations_force_refresh_shared_customer_options() -> None:
+    refresh = _method_block("async refreshMasterEntity(entity)", "async reloadOpenMasterDetail(")
+    delete_customer = _method_block("async deleteCustomer(row)", "async deleteProduct(row)")
+    save = _method_block("async saveModal()", "async dispatchDelivery(row)")
+    customer_save = save.split('if (this.modal.type === "customer") {', 1)[1].split(
+        'if (this.modal.type === "supplier") {', 1
+    )[0]
+
+    assert "this.loadCustomerOptions(true)" in refresh
+    assert delete_customer.count("this.loadCustomerOptions(true)") == 2
+    assert "await Promise.all([this.loadCustomers(), this.loadCustomerOptions(true)])" in customer_save
+    assert "await this.loadCustomers();" not in customer_save
+
+
 def test_pdf_order_save_does_not_start_post_save_default_price_sync() -> None:
     save_imports = _method_block("async saveConfirmedImportDrafts()", "openOrderEditor(group)")
 

@@ -7871,7 +7871,7 @@
             }
           },
           async refreshMasterEntity(entity) {
-            if (entity === "customer") await Promise.all([this.loadCustomers(),this.loadCustomerOptions()]);
+            if (entity === "customer") await Promise.all([this.loadCustomers(),this.loadCustomerOptions(true)]);
             else if (entity === "product") await this.loadProducts();
             else if (entity === "material") {
               this.allMaterials = [];
@@ -16005,7 +16005,7 @@
           },
           async deleteCustomer(row) {
             if (!confirm(`确认停用客户“${row.name}”吗？`)) return;
-            try { const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/customers/${row.id}`,row}); if(!result)return; await Promise.all([this.loadCustomers(),this.loadCustomerOptions()]); this.showToast("客户已停用"); }
+            try { const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/customers/${row.id}`,row}); if(!result)return; await Promise.all([this.loadCustomers(),this.loadCustomerOptions(true)]); this.showToast("客户已停用"); }
             catch(error){this.showToast(this.errorMessage(error),true);}
           },
           async toggleCustomerStatus(row) {
@@ -16014,7 +16014,7 @@
             try {
               const result=await this.sendVersionedMasterMutation({method:"put",url:`/api/master/customers/${row.id}/status`,row,body:{is_active:!row.is_active}});
               if(!result)return;
-              await Promise.all([this.loadCustomers(),this.loadCustomerOptions()]);
+              await Promise.all([this.loadCustomers(),this.loadCustomerOptions(true)]);
               this.showToast(`客户已${action}`);
             } catch(error) { this.showToast(this.errorMessage(error), true); }
           },
@@ -19302,7 +19302,7 @@
                 this.attachMasterUpdateMetadata("customer",payload,masterOptions);
                 if (this.customerForm.id) await axios.put(`/api/master/customers/${this.customerForm.id}`, payload);
                 else await axios.post("/api/master/customers", payload);
-                await this.loadCustomers();
+                await Promise.all([this.loadCustomers(), this.loadCustomerOptions(true)]);
               }
               if (this.modal.type === "supplier") {
                 const desiredActive = this.supplierForm.is_active !== false;

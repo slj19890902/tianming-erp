@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.49"
-    assert APP_VERSION_NAME == "ERP 首页白屏缓存兼容修复"
+    assert APP_VERSION == "v0.22.50"
+    assert APP_VERSION_NAME == "天地盖暂缓数量可见与分片报料修复"
     assert APP_BUILD_DATE == "2026-08-05"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -50,15 +50,15 @@ def test_factory_update_reports_current_release_version() -> None:
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
     assert any(
-        "本次更新｜" in item and "内容指纹" in item and "普通刷新" in item
+        "本次更新｜" in item and "盖片" in item and "底片" in item and "总片数" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "addWorkingDays" in item and "空白" in item
+        "本次更新｜" in item and "200 套" in item and "盖 200 片" in item and "底 200 片" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "Ctrl+F5" in item and "完整显示" in item
+        "如何验证｜" in item and "30 套" in item and "共 60 片" in item
         for item in current_release
     )
     assert any(

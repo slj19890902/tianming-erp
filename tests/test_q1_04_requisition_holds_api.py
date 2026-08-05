@@ -650,6 +650,165 @@ def test_hold_moves_item_between_queues_and_execute_post_auto_releases(
         } <= actions
 
 
+def test_a3_hold_shows_cover_base_demand_and_restores_to_reportable_pending(
+    hold_api,
+) -> None:
+    from app.models.order import OrderItem
+    from app.models.product import Product
+
+    app, factory, ids = hold_api
+    with factory() as session:
+        current = session.get(OrderItem, ids["current"])
+        assert current is not None
+        product = session.get(Product, current.product_id)
+        assert product is not None
+        product.box_style = "A3 天地盖"
+        current.quantity = 30
+        current.snapshot_report_length_mm = 2045
+        current.snapshot_report_width_mm = 565
+        current.snapshot_base_report_length_mm = 2020
+        current.snapshot_base_report_width_mm = 540
+        current.snapshot_pieces_per_box = 1
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client)
+        created = client.post(
+            "/api/requisition/holds",
+            json={
+                "items": [
+                    {
+                        "order_item_id": ids["current"],
+                        "release_mode": "expected_date",
+                        "expected_requisition_date": "2026-08-15",
+                    }
+                ]
+            },
+        )
+        assert created.status_code == 201, created.text
+        assert created.json()["success_count"] == 1
+
+        waiting = client.get("/api/requisition/holds")
+        assert waiting.status_code == 200, waiting.text
+        row = waiting.json()["items"][0]
+        assert row["order_quantity"] == 30
+        assert row["order_unit_label"] == "套"
+        assert row["physical_required_piece_qty"] == 60
+        assert row["physical_requisition_qty"] == 60
+        assert row["can_restore_to_pending"] is True
+        by_component = {
+            component["component_type"]: component
+            for component in row["component_requirements"]
+        }
+        assert set(by_component) == {"cover", "base"}
+        assert by_component["cover"] == {
+            "component_type": "cover",
+            "component_label": "盖",
+            "required_piece_qty": 30,
+            "remaining_required_piece_qty": 30,
+            "requisition_qty": 30,
+            "report_length_mm": 2045,
+            "report_width_mm": 565,
+        }
+        assert by_component["base"] == {
+            "component_type": "base",
+            "component_label": "底",
+            "required_piece_qty": 30,
+            "remaining_required_piece_qty": 30,
+            "requisition_qty": 30,
+            "report_length_mm": 2020,
+            "report_width_mm": 540,
+        }
+
+        pending_before = client.get("/api/requisition/pending").json()["items"]
+        assert ids["current"] not in {
+            item["item_id"] for item in pending_before if not item.get("is_merge_group")
+        }
+
+        released = client.post(
+            f"/api/requisition/holds/{row['id']}/release",
+            json={"expected_version": row["version"]},
+        )
+        assert released.status_code == 200, released.text
+        pending_after = client.get("/api/requisition/pending").json()["items"]
+        restored = next(
+            item for item in pending_after if item.get("item_id") == ids["current"]
+        )
+        assert restored["required_piece_qty"] == 60
+        assert restored["requisition_qty"] == 60
+        assert {
+            component["component_type"]
+            for component in restored["component_requirements"]
+        } == {"cover", "base"}
+
+        draft = client.post(
+            "/api/requisition/supplier-orders/preview-from-pending-selection",
+            json={
+                "selections": [
+                    {
+                        "type": "order_item",
+                        "order_item_id": ids["current"],
+                        "supplier_name": "Q1 匿名供应商",
+                    }
+                ]
+            },
+        )
+        assert draft.status_code == 200, draft.text
+        lines = draft.json()["supplier_groups"][0]["lines"]
+        assert len(lines) == 2
+        assert {
+            line["source_items"][0]["component_type"]: line["requisition_qty"]
+            for line in lines
+        } == {"cover": 30, "base": 30}
+
+
+def test_active_orphan_hold_stays_visible_as_anomaly_instead_of_being_hidden(
+    hold_api,
+) -> None:
+    from app.models.requisition import RequisitionHold
+    from app.models.user import User
+
+    app, factory, _ids = hold_api
+    with factory() as session:
+        admin = session.scalar(select(User).where(User.username == "admin"))
+        assert admin is not None
+        session.add(
+            RequisitionHold(
+                order_item_id=None,
+                order_item_id_snapshot=999999,
+                customer_id_snapshot=None,
+                customer_name_snapshot="历史异常客户",
+                order_number_snapshot="Q1-ORPHAN-001",
+                order_item_sequence_snapshot=1,
+                product_code_snapshot="Q1-ORPHAN",
+                product_name_snapshot="历史异常产品",
+                specification_snapshot="历史规格",
+                quantity_snapshot=12,
+                release_mode="expected_date",
+                expected_requisition_date=date(2026, 8, 15),
+                status="active",
+                version=1,
+                created_by=admin.id,
+                updated_by=admin.id,
+            )
+        )
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client)
+        response = client.get("/api/requisition/holds")
+        assert response.status_code == 200, response.text
+        row = next(
+            item
+            for item in response.json()["items"]
+            if item["order_item_id_snapshot"] == 999999
+        )
+        assert row["condition_status"] == "anomaly"
+        assert row["is_anomaly"] is True
+        assert row["can_restore_to_pending"] is False
+        assert "仍保留可见" in row["requirement_warning"]
+
+
 def test_date_hold_manual_release_version_and_batch_partial_failure(hold_api) -> None:
     from app.core.time_contract import beijing_today
     from app.models.audit import OperationLog

@@ -2942,8 +2942,10 @@
                 </template>
               </template>
               <template v-else-if="financeView==='invoice_tasks'">
+                <input ref="invoiceTaskPdfInput" type="file" accept="application/pdf,.pdf" style="display:none" @change="onInvoiceTaskPdfSelected" />
+                <div v-if="invoiceTaskUploadState.error" class="notice danger" style="margin-bottom:10px">原始 PDF 上传失败：{{ invoiceTaskUploadState.error }} <button class="btn small" type="button" :disabled="invoiceTaskUploadState.uploading" @click="retryInvoiceTaskPdf">重新选择</button></div>
                 <div class="panel" style="margin-bottom:10px"><div class="toolbar" style="align-items:flex-end;gap:8px;flex-wrap:wrap"><div class="field" style="width:220px"><label>客户</label><search-select v-model="invoiceTaskFilters.customer_id" :options="customerOptions" label-key="name" value-key="id" placeholder="全部客户" :disabled="invoiceTaskState.loading"></search-select></div><div class="field" style="width:150px"><label>月份</label><input class="input" type="month" v-model="invoiceTaskFilters.statement_month" :disabled="invoiceTaskState.loading" /></div><div class="field" style="width:145px"><label>状态</label><select class="select" v-model="invoiceTaskFilters.status" :disabled="invoiceTaskState.loading"><option value="">全部状态</option><option value="draft">待补资料</option><option value="ready">可导出</option><option value="exported">已导出待登记</option><option value="issued">已开票</option><option value="failed">失败</option></select></div><button class="btn primary" :disabled="invoiceTaskState.loading" @click="loadInvoiceTasks">{{ invoiceTaskState.loading ? '查询中…' : '查询' }}</button><button v-if="canManageInvoiceProfiles" class="btn" @click="openInvoiceSellers">维护销方主体</button></div></div>
-                <div class="panel"><div class="section-title">开票任务（人工登录税局、核对后再正式开具）</div><div v-if="invoiceTaskState.loading" class="empty">正在读取开票任务…</div><div v-else-if="invoiceTaskState.error" class="empty"><div class="notice danger" style="margin-bottom:10px">开票任务读取失败：{{ invoiceTaskState.error }}</div><button class="btn" type="button" @click="loadInvoiceTasks">重新查询</button></div><div v-else-if="!invoiceTasks.length" class="empty">暂无开票任务。先在对账单完成“核对并确认”，再生成任务。</div><div v-else class="table-wrap"><table><thead><tr><th>任务号</th><th>客户 / 月份</th><th>销方</th><th class="sensitive-price">价税合计</th><th>状态</th><th>缺项 / 操作</th></tr></thead><tbody><tr v-for="task in invoiceTasks" :key="task.id"><td><strong>{{ task.task_number }}</strong><div class="muted">v{{ task.version || '-' }}</div></td><td>{{ task.customer_name }}<div class="muted">{{ task.statement_month }}</div></td><td>{{ task.seller_name || '待选择销方' }}</td><td class="sensitive-price">¥ {{ money(task.total_amount) }}</td><td><span :class="['status',task.status==='issued'?'green':task.status==='failed'?'red':'blue']">{{ invoiceTaskStatusText(task.status) }}</span></td><td><div v-if="(task.missing_items||[]).length" class="danger-text">{{ task.missing_items.join('；') }} <button v-if="canManageInvoiceProfiles" class="btn small" @click="openCustomerInvoiceProfile(task.customer_id)">进入客户税务资料</button></div><div v-else class="toolbar-group"><button class="btn small" :disabled="invoiceTaskOperationState.detailLoading && Number(invoiceTaskOperationState.detailTaskId)===Number(task.id)" @click="openInvoiceTask(task)">{{ invoiceTaskOperationState.detailLoading && Number(invoiceTaskOperationState.detailTaskId)===Number(task.id) ? '读取中…' : '预览' }}</button><button v-if="canConfirmInvoiceTask" class="btn small success" :disabled="invoiceTaskOperationState.confirmingTaskId!==null" @click="confirmInvoiceTask(task)">{{ Number(invoiceTaskOperationState.confirmingTaskId)===Number(task.id) ? '确认中…' : '确认任务' }}</button><button v-if="canGenerateInvoiceTask" class="btn small" @click="downloadInvoiceTaxTemplate(task)">下载税局 Excel</button><button v-if="canRegisterInvoiceResult" class="btn small" :disabled="invoiceTaskOperationState.resultSaving" @click="openInvoiceTaskResult(task)">登记成功/失败</button><button v-if="canManageInvoiceAttachment" class="btn small" @click="uploadInvoiceTaskPdf(task)">上传原始 PDF</button></div></td></tr></tbody></table></div></div>
+                <div class="panel"><div class="section-title">开票任务（人工登录税局、核对后再正式开具）</div><div v-if="invoiceTaskState.loading" class="empty">正在读取开票任务…</div><div v-else-if="invoiceTaskState.error" class="empty"><div class="notice danger" style="margin-bottom:10px">开票任务读取失败：{{ invoiceTaskState.error }}</div><button class="btn" type="button" @click="loadInvoiceTasks">重新查询</button></div><div v-else-if="!invoiceTasks.length" class="empty">暂无开票任务。先在对账单完成“核对并确认”，再生成任务。</div><div v-else class="table-wrap"><table><thead><tr><th>任务号</th><th>客户 / 月份</th><th>销方</th><th class="sensitive-price">价税合计</th><th>状态</th><th>缺项 / 操作</th></tr></thead><tbody><tr v-for="task in invoiceTasks" :key="task.id"><td><strong>{{ task.task_number }}</strong><div class="muted">v{{ task.version || '-' }}</div></td><td>{{ task.customer_name }}<div class="muted">{{ task.statement_month }}</div></td><td>{{ task.seller_name || '待选择销方' }}</td><td class="sensitive-price">¥ {{ money(task.total_amount) }}</td><td><span :class="['status',task.status==='issued'?'green':task.status==='failed'?'red':'blue']">{{ invoiceTaskStatusText(task.status) }}</span></td><td><div v-if="(task.missing_items||[]).length" class="danger-text">{{ task.missing_items.join('；') }} <button v-if="canManageInvoiceProfiles" class="btn small" @click="openCustomerInvoiceProfile(task.customer_id)">进入客户税务资料</button></div><div v-else class="toolbar-group"><button class="btn small" :disabled="invoiceTaskOperationState.detailLoading && Number(invoiceTaskOperationState.detailTaskId)===Number(task.id)" @click="openInvoiceTask(task)">{{ invoiceTaskOperationState.detailLoading && Number(invoiceTaskOperationState.detailTaskId)===Number(task.id) ? '读取中…' : '预览' }}</button><button v-if="canConfirmInvoiceTask" class="btn small success" :disabled="invoiceTaskOperationState.confirmingTaskId!==null" @click="confirmInvoiceTask(task)">{{ Number(invoiceTaskOperationState.confirmingTaskId)===Number(task.id) ? '确认中…' : '确认任务' }}</button><button v-if="canGenerateInvoiceTask" class="btn small" @click="downloadInvoiceTaxTemplate(task)">下载税局 Excel</button><button v-if="canRegisterInvoiceResult" class="btn small" :disabled="invoiceTaskOperationState.resultSaving" @click="openInvoiceTaskResult(task)">登记成功/失败</button><button v-if="canManageInvoiceAttachment && task.status==='issued'" class="btn small" :disabled="invoiceTaskUploadState.uploading" @click="uploadInvoiceTaskPdf(task)">{{ invoiceTaskUploadState.uploading && Number(invoiceTaskUploadState.taskId)===Number(task.id) ? '上传中…' : '上传原始 PDF' }}</button></div></td></tr></tbody></table></div></div>
               </template>
               <template v-else>
                 <div class="toolbar"><div><button v-if="canFinance" class="btn primary" @click="openStatement">生成月结对账单</button></div><div><button class="btn" @click="loadFinance">刷新</button></div></div>
@@ -6222,6 +6224,7 @@
             invoiceTasks: [], invoiceTaskFilters:{customer_id:"",statement_month:"",status:""}, invoiceTaskState:{loading:false,error:""},
             invoiceTaskDetail:null, invoiceTaskResult:{task_id:null,status:"issued",invoice_number:"",invoice_date:"",failure_reason:"",expected_version:null},
             invoiceTaskOperationState:{detailLoading:false,detailError:"",detailTaskId:null,detailTaskNumber:"",confirmingTaskId:null,resultSaving:false},
+            invoiceTaskUploadState:{uploading:false,taskId:null,taskNumber:"",error:""},
             invoiceSellers: [], invoiceSellerForm:{id:null,seller_name:"",tax_no:"",address_phone:"",bank_account:"",is_active:true,version:null}, invoiceSellerState:{loading:false,error:"",saving:false,loaded:false},
             customerInvoiceProfile:{invoice_title:"",tax_no:"",invoice_address_phone:"",bank_account:"",default_seller_id:null,confirmation_status:"draft",version:null,error:""},
             customerInvoiceRule:{project_name:"",tax_category_code:"",unit:"",tax_rate:"",confirmation_status:"draft",version:null,error:""},
@@ -12359,7 +12362,72 @@
               }
             }
           },
-          uploadInvoiceTaskPdf(task) { this.showToast(`请在任务 ${task.task_number} 的详情上传原始 PDF；不允许覆盖原件。`,true); },
+          uploadInvoiceTaskPdf(task) {
+            if (!this.canManageInvoiceAttachment) {
+              this.showToast("当前账号没有管理发票附件的权限", true);
+              return false;
+            }
+            if (this.invoiceTaskUploadState.uploading) return false;
+            const taskId = Number(task?.id);
+            if (!taskId) {
+              this.showToast("开票任务无效，不能上传附件", true);
+              return false;
+            }
+            const input = this.$refs?.invoiceTaskPdfInput;
+            if (!input) {
+              this.showToast("文件选择器未就绪，请刷新页面后重试", true);
+              return false;
+            }
+            this.invoiceTaskUploadState.taskId = taskId;
+            this.invoiceTaskUploadState.taskNumber = String(task?.task_number || "");
+            this.invoiceTaskUploadState.error = "";
+            input.value = "";
+            input.click();
+            return true;
+          },
+          retryInvoiceTaskPdf() {
+            const taskId = Number(this.invoiceTaskUploadState.taskId);
+            if (!taskId) return false;
+            return this.uploadInvoiceTaskPdf({id:taskId, task_number:this.invoiceTaskUploadState.taskNumber});
+          },
+          async onInvoiceTaskPdfSelected(event) {
+            const input = event?.target;
+            const file = input?.files?.[0] || null;
+            if (!file) return false;
+            if (this.invoiceTaskUploadState.uploading) return false;
+            const taskId = Number(this.invoiceTaskUploadState.taskId);
+            if (!taskId) {
+              this.invoiceTaskUploadState.error = "请重新选择对应的开票任务";
+              this.showToast(this.invoiceTaskUploadState.error, true);
+              input.value = "";
+              return false;
+            }
+            const filename = String(file.name || "").trim();
+            if (!/\.pdf$/i.test(filename)) {
+              this.invoiceTaskUploadState.error = "仅支持 PDF 文件";
+              this.showToast(this.invoiceTaskUploadState.error, true);
+              input.value = "";
+              return false;
+            }
+            const formData = new FormData();
+            formData.append("file", file, filename);
+            const taskNumber = String(this.invoiceTaskUploadState.taskNumber || "");
+            this.invoiceTaskUploadState.uploading = true;
+            this.invoiceTaskUploadState.error = "";
+            try {
+              await axios.post(`/api/finance/invoice-tasks/${taskId}/attachments/original`, formData);
+              this.showToast(`任务 ${taskNumber || taskId} 的原始 PDF 已安全归档`);
+              await this.loadInvoiceTasks();
+              return true;
+            } catch(error) {
+              this.invoiceTaskUploadState.error = this.errorMessage(error);
+              this.showToast(`原始 PDF 上传失败：${this.invoiceTaskUploadState.error}`, true);
+              return false;
+            } finally {
+              this.invoiceTaskUploadState.uploading = false;
+              if (input) input.value = "";
+            }
+          },
           async openCustomerInvoiceProfile(customerId) { if (!this.canManageInvoiceProfiles) return; const customer=this.customers.find(row=>Number(row.id)===Number(customerId)); if(customer) this.openCustomer(customer); else this.showToast("请先在客户管理中打开该客户的税务资料",true); },
           resetInvoiceSellerForm() {
             this.invoiceSellerForm = {id:null,seller_name:"",tax_no:"",address_phone:"",bank_account:"",is_active:true,version:null};

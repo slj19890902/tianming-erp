@@ -2102,15 +2102,15 @@
               </data-panel>
 
               <!-- 比价弹窗 -->
-              <div v-if="showCompareModal" class="modal-backdrop" @click.self="showCompareModal=false">
+              <div v-if="showCompareModal" class="modal-backdrop" @click.self="closeCompare()">
                 <div class="modal" style="max-width:900px;max-height:80vh;overflow-y:auto">
-                  <div class="modal-header"><h3>材质比价</h3><button class="btn small" @click="showCompareModal=false">关闭</button></div>
+                  <div class="modal-header"><h3>材质比价</h3><button class="btn small" @click="closeCompare()">关闭</button></div>
                   <div style="padding:12px">
                     <div class="toolbar" style="gap:10px;align-items:center;margin-bottom:8px">
                       <span style="font-size:13px">层数：<strong>{{ materialLayerFilter }}层</strong>　供应商：<strong>{{ materialSupplierFilter ? supplierDisplayName(materialSupplierFilter) : '全部' }}</strong></span>
-                      <input class="input" style="width:160px" v-model.trim="compareKeyword" placeholder="输入材质代码" />
-                      <input class="input" style="width:140px" v-model.trim="compareWeight" placeholder="输入克重结构" />
-                      <button class="btn small" @click="loadCompare">查询比价</button>
+                      <input class="input" style="width:160px" v-model.trim="compareKeyword" @input="invalidateCompareResults()" placeholder="输入材质代码" />
+                      <input class="input" style="width:140px" v-model.trim="compareWeight" @input="invalidateCompareResults()" placeholder="输入克重结构" />
+                      <button class="btn small" :disabled="compareLoading" @click="loadCompare">{{ compareLoading ? '查询中…' : '查询比价' }}</button>
                     </div>
                     <p style="color:#666;font-size:12px">同克重多供应商比价；楞型不作为主筛选条件，纸种类别或进口来源不同仅供参考。</p>
                     <div v-if="compareLoading" class="muted" style="text-align:center;padding:20px">加载中…</div>
@@ -10829,34 +10829,76 @@
           defaultCompareFlute(layer) {
             return layer === 5 ? "AB" : "A";
           },
+          compareRequestKey() {
+            return JSON.stringify({
+              supplier_name:this.materialSupplierFilter || null,
+              layer_count:this.materialLayerFilter || null,
+              keyword:String(this.compareKeyword || "").trim().toUpperCase(),
+              weight:String(this.compareWeight || "").trim(),
+            });
+          },
+          invalidateCompareResults() {
+            const requestKey = "materials:compare";
+            const controller = latestRequestControllers.get(requestKey);
+            controller?.abort();
+            if (latestRequestControllers.get(requestKey) === controller) latestRequestControllers.delete(requestKey);
+            this.compareLoading = false;
+            this.compareGroups = [];
+            this.compareError = this.showCompareModal ? "比价条件已变化，请重新查询。" : "";
+          },
+          closeCompare() {
+            this.showCompareModal = false;
+            this.invalidateCompareResults();
+            return true;
+          },
           openCompare() {
+            this.invalidateCompareResults();
             this.compareFlute = "";
             this.compareKeyword = this.materialCodeFilter || "";
             this.compareWeight = this.materialWeightFilter || "";
+            this.compareError = "";
             this.showCompareModal = true;
-            this.loadCompare();
+            return this.loadCompare();
           },
           async loadCompare() {
+            const requestKey = "materials:compare";
+            const controller = this.beginLatestRequest(requestKey);
+            const requestSnapshotKey = this.compareRequestKey();
+            const source = this.allMaterials.length ? this.allMaterials : this.materials;
+            const keyword = String(this.compareKeyword || "").trim().toUpperCase();
+            const matched = keyword ? source.find(row => String(row.code || "").toUpperCase().includes(keyword)) : null;
+            const body = {
+              supplier_name: this.materialSupplierFilter || null,
+              layer_count: this.materialLayerFilter || null,
+              material_id: matched?.id || null,
+              basis_weight_description: matched?.basis_weight_description || this.compareWeight || null,
+              flute_type: null,
+            };
             this.compareLoading = true;
             this.compareError = "";
             try {
-              const source = this.allMaterials.length ? this.allMaterials : this.materials;
-              const keyword = String(this.compareKeyword || "").trim().toUpperCase();
-              const matched = keyword ? source.find(row => String(row.code || "").toUpperCase().includes(keyword)) : null;
-              const body = {
-                supplier_name: this.materialSupplierFilter || null,
-                layer_count: this.materialLayerFilter || null,
-                material_id: matched?.id || null,
-                basis_weight_description: matched?.basis_weight_description || this.compareWeight || null,
-                flute_type: null,
-              };
-              const data = (await axios.post("/api/master/materials/compare", body)).data;
+              const data = (await axios.post(
+                "/api/master/materials/compare",
+                body,
+                {signal:controller.signal},
+              )).data;
+              if (
+                latestRequestControllers.get(requestKey) !== controller
+                || this.compareRequestKey() !== requestSnapshotKey
+              ) return false;
               this.compareGroups = data.groups || [];
-            } catch (e) {
-              this.compareError = (e.response && e.response.data && e.response.data.detail) || "比价加载失败";
-              this.compareGroups = [];
+              return true;
+            } catch (error) {
+              if (!this.isCancelledRequest(error) && latestRequestControllers.get(requestKey) === controller) {
+                this.compareError = this.errorMessage(error) || "比价加载失败";
+                this.compareGroups = [];
+              }
+              return false;
             } finally {
-              this.compareLoading = false;
+              if (latestRequestControllers.get(requestKey) === controller) {
+                this.compareLoading = false;
+                this.finishLatestRequest(requestKey, controller);
+              }
             }
           },
           compareFluteOptions() {

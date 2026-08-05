@@ -2442,7 +2442,7 @@
                 <table><thead><tr><th>主操作</th><th></th><th>旧版系统列</th><th>客户单号</th><th>客户</th><th>下单日期</th><th>交货日期</th><th>明细数</th><th>订单数量</th><th>已送数量</th><th>来料</th><th>状态</th><th v-if="!isWorkshop" class="sensitive-price">金额</th></tr></thead>
                 <tbody v-if="filters.orderView === 'plain'"><template v-for="row in orders" :key="row.id">
                   <tr><td><div class="toolbar-group"><button class="btn small" @click="openOrderDetail(row)">查看详情</button><button v-if="canSales && row.items.length" class="btn primary small" @click="openOrderItem(row,row.items[0])">编辑订单</button></div></td><td><button class="btn small" @click="toggleOrder(row)">{{ expandedOrders[row.id] ? "收起" : "展开" }}</button></td><td><div><strong>{{ displayOrderNumber(row) }}</strong><div v-if="row.is_history_order" class="status blue" style="margin-top:4px">历史订单</div></div></td><td>{{ row.customer_po || "-" }}</td><td>{{ row.customer_name }}</td><td>{{ row.order_date }}</td><td>{{ row.delivery_date || "-" }}</td><td>{{ row.items.length }}</td><td>{{ sum(row.items,'quantity') }}</td><td>{{ row.business_delivery_progress?.delivered_quantity || 0 }}</td><td><status-tag :value="row.items.every(i=>i.material_status==='received') ? 'received' : 'pending'"></status-tag></td><td><div v-if="row.is_history_order" class="status blue">历史归档</div><status-tag v-else :value="orderDisplayStatusKey(row)"></status-tag></td><td v-if="!isWorkshop" class="sensitive-price">¥ {{ money(row.total_amount) }}</td></tr>
-                  <tr v-if="expandedOrders[row.id]" class="order-detail-row"><td :colspan="isWorkshop ? 13 : 14"><div class="order-detail-box"><table><thead><tr><th class="col-order-item-sequence">序号</th><th>存货编码</th><th>名称</th><th>材质</th><th>规格</th><th>数量 / 送货</th><th>状态</th><th>报料状态</th><th v-if="!isWorkshop" class="sensitive-price">单价</th><th class="cost-sensitive">总预估成本</th><th class="cost-sensitive">总预估毛利</th><th>操作</th></tr></thead><tbody><tr v-for="(item,itemIndex) in row.items" :key="item.id"><td class="col-order-item-sequence">{{ item.item_sequence || itemIndex + 1 }}</td><td>{{ plainProductText(item.snapshot_product_code) }}</td><td>{{ plainProductText(item.snapshot_product_name) }}<div v-if="hasBomComponents(item)" class="bom-preview-box"><div class="bom-preview-title">本订单 BOM 明细 / 组件需求（只改本订单）</div><div class="bom-preview-list"><div v-for="component in item.bom_components" :key="component.id || component.component_product_id || component.internal_code" class="bom-preview-item"><div>{{ bomPreviewComponentLabel(component) }}</div><div v-if="canSales" class="toolbar-group" style="margin-top:4px"><input class="input" style="width:110px" type="number" min="1" :value="component._demand_quantity ?? component.effective_required_piece_quantity ?? component.required_piece_quantity" @input="component._demand_quantity=Number($event.target.value)" /><button class="btn small" @click="saveOrderBomComponentDemand(item,component)">保存本订单需求</button></div></div></div></div></td><td style="white-space:normal;word-break:break-all;max-width:130px;font-size:12px">{{ orderItemMaterialText(item, false) }}</td><td>{{ item.snapshot_spec || "-" }}</td><td>{{ item.quantity }}<div v-if="Number(item.business_delivered_quantity || 0) > 0" class="order-delivery-compact">已送 {{ item.business_delivered_quantity }}/{{ item.quantity }}</div></td><td><status-tag :value="itemBusinessStatusKey(item)"></status-tag></td><td><status-tag :value="item.requisition_status"></status-tag></td><td v-if="!isWorkshop" class="sensitive-price">{{ money(item.unit_price) }}</td><td class="cost-sensitive"><strong>{{ item.total_estimated_cost ? money(item.total_estimated_cost) : "-" }}</strong></td><td class="cost-sensitive"><strong>{{ item.total_estimated_gross_profit ? money(item.total_estimated_gross_profit) : "-" }}</strong></td><td class="toolbar-group"><button class="btn small primary" @click="openOrderTrace(row,item)">追溯</button><button v-if="canSales" class="btn small" @click="openOrderItem(row,item)">编辑</button><a v-if="item.drawing_file || item.product_drawing_file" href="#" class="btn small" @click.prevent="previewDrawingFile(item.drawing_file || item.product_drawing_file)" title="查看图纸">图纸</a></td></tr></tbody></table></div></td></tr>
+                  <tr v-if="expandedOrders[row.id]" class="order-detail-row"><td :colspan="isWorkshop ? 13 : 14"><div class="order-detail-box"><table><thead><tr><th class="col-order-item-sequence">序号</th><th>存货编码</th><th>名称</th><th>材质</th><th>规格</th><th>数量 / 送货</th><th>状态</th><th>报料状态</th><th v-if="!isWorkshop" class="sensitive-price">单价</th><th class="cost-sensitive">总预估成本</th><th class="cost-sensitive">总预估毛利</th><th>操作</th></tr></thead><tbody><tr v-for="(item,itemIndex) in row.items" :key="item.id"><td class="col-order-item-sequence">{{ item.item_sequence || itemIndex + 1 }}</td><td>{{ plainProductText(item.snapshot_product_code) }}</td><td>{{ plainProductText(item.snapshot_product_name) }}<div v-if="hasBomComponents(item)" class="bom-preview-box"><div class="bom-preview-title">本订单 BOM 明细 / 组件需求（只改本订单）</div><div v-if="orderBomDemandSaveState.outcomeUncertain && Number(orderBomDemandSaveState.itemId)===Number(item.id)" class="notice warning" style="margin:6px 0">上次组件数量保存结果暂不确定，请点击上方“刷新”核对后再操作。</div><div class="bom-preview-list"><div v-for="component in item.bom_components" :key="component.id || component.component_product_id || component.internal_code" class="bom-preview-item"><div>{{ bomPreviewComponentLabel(component) }}</div><div v-if="canSales" class="toolbar-group" style="margin-top:4px"><input class="input" style="width:110px" type="number" min="1" :disabled="orderBomDemandSaveState.saving || orderBomDemandSaveState.outcomeUncertain" :value="component._demand_quantity ?? component.effective_required_piece_quantity ?? component.required_piece_quantity" @input="component._demand_quantity=Number($event.target.value)" /><button class="btn small" :disabled="orderBomDemandSaveState.saving || orderBomDemandSaveState.outcomeUncertain" @click="saveOrderBomComponentDemand(item,component)">{{ orderBomDemandSaveState.saving && Number(orderBomDemandSaveState.itemId)===Number(item.id) && Number(orderBomDemandSaveState.componentId)===Number(component.id) ? "保存中…" : "保存本订单需求" }}</button></div></div></div></div></td><td style="white-space:normal;word-break:break-all;max-width:130px;font-size:12px">{{ orderItemMaterialText(item, false) }}</td><td>{{ item.snapshot_spec || "-" }}</td><td>{{ item.quantity }}<div v-if="Number(item.business_delivered_quantity || 0) > 0" class="order-delivery-compact">已送 {{ item.business_delivered_quantity }}/{{ item.quantity }}</div></td><td><status-tag :value="itemBusinessStatusKey(item)"></status-tag></td><td><status-tag :value="item.requisition_status"></status-tag></td><td v-if="!isWorkshop" class="sensitive-price">{{ money(item.unit_price) }}</td><td class="cost-sensitive"><strong>{{ item.total_estimated_cost ? money(item.total_estimated_cost) : "-" }}</strong></td><td class="cost-sensitive"><strong>{{ item.total_estimated_gross_profit ? money(item.total_estimated_gross_profit) : "-" }}</strong></td><td class="toolbar-group"><button class="btn small primary" @click="openOrderTrace(row,item)">追溯</button><button v-if="canSales" class="btn small" @click="openOrderItem(row,item)">编辑</button><a v-if="item.drawing_file || item.product_drawing_file" href="#" class="btn small" @click.prevent="previewDrawingFile(item.drawing_file || item.product_drawing_file)" title="查看图纸">图纸</a></td></tr></tbody></table></div></td></tr>
                 </template></tbody>
                 <tbody v-else><template v-for="group in groupedOrderRows" :key="group.key">
                   <tr>
@@ -6490,6 +6490,7 @@
             materialForm: blankMaterial(),
             orderForm: { customer_id: null, customer_po: "", order_date: today(), delivery_date: plusDays(7), requisition_strategy:"normal", remark: "", items: [] },
             orderCreateSaveState:{saving:false,committed:false,outcomeUncertain:false,result:null},
+            orderBomDemandSaveState:{saving:false,outcomeUncertain:false,itemId:null,componentId:null,result:null},
             orderGroupSaveState:{saving:false,committed:false,outcomeUncertain:false,result:null},
             orderRequisitionPreview: { loading:false, error:"", checked:false, items:[] },
             orderEditForm: { order_ids: [], customer_name: "", customer_po: "", order_number: "", order_date: "", delivery_date: "", remark: "" },
@@ -11184,6 +11185,7 @@
               this.orderGroupDetails = {};
               this.orderGroupDetailLoading = {};
               this.orderGroupDetailErrors = {};
+              if (this.orderBomDemandSaveState?.outcomeUncertain) this.resetOrderBomDemandSaveState();
             } catch (error) {
               if (!this.isCancelledRequest(error)) throw error;
             } finally {
@@ -15051,32 +15053,72 @@
             const required = component?.is_required === false ? "可选" : "必需";
             return `${code}｜${name} × ${qty}/套｜本订单需求 ${demand} 个｜${cutting}｜${required}`;
           },
+          resetOrderBomDemandSaveState() {
+            this.orderBomDemandSaveState = {saving:false,outcomeUncertain:false,itemId:null,componentId:null,result:null};
+          },
           async saveOrderBomComponentDemand(item, component) {
+            if (this.orderBomDemandSaveState?.saving || this.orderBomDemandSaveState?.outcomeUncertain) {
+              this.showToast(
+                this.orderBomDemandSaveState.saving
+                  ? "本订单组件数量正在保存，请勿重复点击"
+                  : "上次组件数量保存结果暂不确定，请刷新订单列表核对",
+                true,
+              );
+              return false;
+            }
+            const itemId = Number(item?.id || 0);
+            const componentId = Number(component?.id || 0);
+            if (!itemId || !componentId) {
+              this.showToast("订单组件标识不完整，请刷新订单后重试", true);
+              return false;
+            }
             const current = Number(component?.effective_required_piece_quantity ?? component?.required_piece_quantity ?? 0);
             const target = Number(component?._demand_quantity ?? current);
             if (!Number.isInteger(target) || target <= 0) {
               this.showToast("订单专用组件需求必须是正整数", true);
-              return;
+              return false;
             }
             if (target === current) {
               this.showToast("本订单组件需求没有变化");
-              return;
+              return false;
             }
+            const payload = {
+              required_piece_quantity:target,
+              expected_required_piece_quantity:current,
+              idempotency_key:createIdempotencyKey(),
+            };
+            this.orderBomDemandSaveState = {saving:true,outcomeUncertain:false,itemId,componentId,result:null};
+            let data;
             try {
-              const {data} = await axios.put(
-                `/api/orders/items/${item.id}/bom-components/${component.id}/demand`,
-                {
-                  required_piece_quantity:target,
-                  expected_required_piece_quantity:current,
-                  idempotency_key:createIdempotencyKey()
-                }
-              );
-              item.bom_components = data.components || [];
-              await this.loadRequisition();
-              this.showToast(`已将本订单组件需求改为 ${target} 个，不影响常用箱和其他订单`);
+              ({data} = await axios.put(
+                `/api/orders/items/${itemId}/bom-components/${componentId}/demand`,
+                payload,
+              ));
             } catch (error) {
+              if (!error?.response) {
+                const result = {itemId,componentId,current,target,idempotencyKey:payload.idempotency_key};
+                this.orderBomDemandSaveState = {saving:false,outcomeUncertain:true,itemId,componentId,result};
+                this.showToast("本订单组件数量保存连接中断，结果暂不确定。请刷新订单列表核对，不要重复提交。", true);
+                return false;
+              }
+              this.resetOrderBomDemandSaveState();
               this.showToast(this.errorMessage(error), true);
+              return false;
             }
+            item.bom_components = data.components || [];
+            let refreshFailed = false;
+            try {
+              await this.loadRequisition();
+            } catch (error) {
+              refreshFailed = true;
+            }
+            this.resetOrderBomDemandSaveState();
+            if (refreshFailed) {
+              this.showToast(`本订单组件需求已经保存为 ${target} 个；报料列表刷新失败，请手动刷新核对，不要重复提交。`, true);
+            } else {
+              this.showToast(`已将本订单组件需求改为 ${target} 个，不影响常用箱和其他订单`);
+            }
+            return data;
           },
           async openCommonBoxEditorFromPdf(draftIndex, item) {
             if (this.isImportDraftLocked(this.orderImportDrafts[draftIndex])) return;

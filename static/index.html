@@ -2496,7 +2496,7 @@
                 <div class="toolbar-group">
                   <button :class="['btn',{primary:requisitionTab==='pending'}]" @click="selectRequisitionTab('pending')">待报料 {{ requisitionPending.length }}</button>
                   <button :class="['btn',{primary:requisitionTab==='submitted'}]" @click="selectRequisitionTab('submitted')">已报料/已入库<span v-if="requisitionReportedLoaded"> {{ requisitionReportedTotal }}</span></button>
-                  <button v-if="canRequisition && requisitionTab==='pending'" class="btn success" @click="openSupplierRequisitionDraft()">合并报料</button>
+                  <button v-if="canRequisition && requisitionTab==='pending'" class="btn success" @click="openSupplierRequisitionDraft()" :disabled="supplierRequisitionPreviewLoading">{{ supplierRequisitionPreviewLoading ? "正在生成草稿…" : "合并报料" }}</button>
                 </div>
                 <div class="requisition-page-actions">
                   <button v-if="canRequisition" class="btn warning" :disabled="requisitionTab!=='pending' || !selectedPendingKeys.length" @click="openRequisitionHold()">暂不报料</button>
@@ -6350,7 +6350,7 @@
             requisitionMaterialForm: { item_id:null, supplier_name:"", material_id:null, layer_count:null, flute_type:null, sync_product:false, customer_material_code:"", original_material_confidence:"", candidate_options:[], candidate_loading:false, candidate_error:"", candidate_id:null, source_type:"manual", source_reference:null, selection_reason:"", selection_history:[], history_loading:false, history_error:"" },
             mergeSuggestions: [], mergeSuggestionsLoading: false, mergeSuggestionsError: "", mergeSuggestionsExpanded: {}, mergeSuggestionsDeduction: {}, requisitionMergeExpanded: {}, requisitionComponentExpanded: {},
             supplierOrders: [],
-            supplierRequisitionDraft: { supplier_groups: [] }, supplierRequisitionSelections: [],
+            supplierRequisitionDraft: { supplier_groups: [] }, supplierRequisitionSelections: [], supplierRequisitionPreviewLoading:false,
             stockPolicyWarnings: [], stockReplenishmentLocations: [], stockReplenishmentProducts: [], stockReplenishmentCompanions: [],
             stockReplenishmentForm: { source_type:"customer_request", idempotency_key:null, supplier_name:"", customer_id:null, remark:"", stock_now:false, items:[] },
             lowStockExpandedCustomers: {},
@@ -9891,6 +9891,7 @@
             this.pageCacheUpdatedAt = {};
             for (const controller of latestRequestControllers.values()) controller.abort();
             latestRequestControllers.clear();
+            this.supplierRequisitionPreviewLoading = false;
             for (const timer of searchDebounceTimers.values()) clearTimeout(timer);
             searchDebounceTimers.clear();
           },
@@ -9940,6 +9941,7 @@
               this.showToast("当前账号没有访问该功能的权限", true);
               return;
             }
+            if (page !== "requisition") this.cancelSupplierRequisitionPreview();
             this.activePage = page;
             await this.loadPage(page);
           },
@@ -19074,20 +19076,67 @@
             }
             return data;
           },
+          supplierRequisitionSelectionSignature(selections) {
+            const normalized = (selections || []).map(selection => ({
+              type:String(selection?.type || ""),
+              order_item_id:Number(selection?.order_item_id || 0),
+              merge_group_id:Number(selection?.merge_group_id || 0),
+              supplier_name:String(selection?.supplier_name || "").trim(),
+              report_length_mm:Number(selection?.report_length_mm || 0),
+              report_width_mm:Number(selection?.report_width_mm || 0),
+              cutting_mode:String(selection?.cutting_mode || "一开一"),
+              remark:String(selection?.remark || "").trim(),
+            })).sort((left, right) => {
+              const leftKey = `${left.type}:${left.merge_group_id || left.order_item_id}`;
+              const rightKey = `${right.type}:${right.merge_group_id || right.order_item_id}`;
+              return leftKey.localeCompare(rightKey);
+            });
+            return JSON.stringify(normalized);
+          },
+          cancelSupplierRequisitionPreview() {
+            const requestKey = "requisition:supplier-draft-preview";
+            const controller = latestRequestControllers.get(requestKey);
+            controller?.abort();
+            if (latestRequestControllers.get(requestKey) === controller) latestRequestControllers.delete(requestKey);
+            this.supplierRequisitionPreviewLoading = false;
+          },
           async openSupplierRequisitionDraft(rows = null) {
             if (!this.canRequisition) return;
-            const selectedRows = Array.isArray(rows) ? rows.filter(row => this.isPendingRowSelectable(row)) : this.selectedPendingRows();
+            const usesExplicitRows = Array.isArray(rows);
+            const selectedRows = usesExplicitRows ? rows.filter(row => this.isPendingRowSelectable(row)) : this.selectedPendingRows();
             if (!selectedRows.length) { this.showToast("请先勾选待报料明细", true); return; }
             const compositeRows = selectedRows.filter(row => row.is_composite_bom);
             if (compositeRows.length) {
               if (compositeRows.length !== selectedRows.length) { this.showToast("复合产品组件请与普通商品分开报料", true); return; }
+              this.cancelSupplierRequisitionPreview();
               await this.openCompositeRequisition(compositeRows);
-              return;
+              return true;
             }
-            const selections = selectedRows.map(row => this.pendingSupplierSelectionPayload(row)).filter(item => item.type === "merge_group" ? !!item.merge_group_id : !!item.order_item_id);
+            const selections = JSON.parse(JSON.stringify(
+              selectedRows.map(row => this.pendingSupplierSelectionPayload(row)).filter(item => item.type === "merge_group" ? !!item.merge_group_id : !!item.order_item_id)
+            ));
             if (!selections.length) { this.showToast("已勾选行缺少明细ID，请刷新后重试", true); return; }
+            const requestKey = "requisition:supplier-draft-preview";
+            const selectionSignature = this.supplierRequisitionSelectionSignature(selections);
+            const controller = this.beginLatestRequest(requestKey);
+            this.supplierRequisitionPreviewLoading = true;
             try {
-              const { data } = await axios.post("/api/requisition/supplier-orders/preview-from-pending-selection", { selections });
+              const { data } = await axios.post(
+                "/api/requisition/supplier-orders/preview-from-pending-selection",
+                { selections },
+                {signal:controller.signal},
+              );
+              if (latestRequestControllers.get(requestKey) !== controller || this.activePage !== "requisition") return false;
+              if (!usesExplicitRows) {
+                const currentSelections = this.selectedPendingRows()
+                  .filter(row => this.isPendingRowSelectable(row))
+                  .map(row => this.pendingSupplierSelectionPayload(row))
+                  .filter(item => item.type === "merge_group" ? !!item.merge_group_id : !!item.order_item_id);
+                if (this.supplierRequisitionSelectionSignature(currentSelections) !== selectionSignature) {
+                  this.showToast("待报料选择或参数已变化，请重新点击合并报料", true);
+                  return false;
+                }
+              }
               this.supplierRequisitionSelections = selections;
               this.supplierRequisitionDraft = data;
               this.modal = { type:"supplierRequisitionDraft", title:"生成供应商采购报料单" };
@@ -19095,8 +19144,16 @@
               const semiOptions = this.supplierDraftSemiInventoryOptions();
               if (lateFinishedSources.length) this.showToast(`发现 ${lateFinishedSources.length} 条后来入库的客户专用成品，请先使用成品再报剩余数量`);
               else if (semiOptions.length) this.showToast(`发现 ${semiOptions.length} 条可抵扣半成品库存，请先确认抵扣或选择本次不用库存`);
+              return true;
             } catch (e) {
+              if (this.isCancelledRequest(e) || latestRequestControllers.get(requestKey) !== controller) return false;
               this.showToast('生成报料草稿失败：' + (e.response?.data?.detail || e.message), true);
+              return false;
+            } finally {
+              if (latestRequestControllers.get(requestKey) === controller) {
+                this.finishLatestRequest(requestKey, controller);
+                this.supplierRequisitionPreviewLoading = false;
+              }
             }
           },
           async openCompositeRequisition(rows) {

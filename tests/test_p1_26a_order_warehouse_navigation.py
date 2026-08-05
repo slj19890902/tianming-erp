@@ -66,7 +66,8 @@ def test_requisition_actions_are_separated_and_fixed_in_requested_order() -> Non
     assert ">识别PDF订单<" not in page
     assert '>待报料 {{ requisitionPending.length }}<' in page
     assert ">已报料/已入库<" in page
-    assert '@click="openSupplierRequisitionDraft()">合并报料</button>' in page
+    assert '@click="openSupplierRequisitionDraft()"' in page
+    assert 'supplierRequisitionPreviewLoading ? "正在生成草稿…" : "合并报料"' in page
 
     actions = _page_from(
         page,

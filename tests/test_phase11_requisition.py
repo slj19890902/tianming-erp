@@ -2237,12 +2237,14 @@ def test_supplier_schedule_drives_incoming_priority_and_can_cancel_before_receiv
     requisition_app,
 ) -> None:
     from app.models.audit import OperationLog
+    from app.models.requisition import Requisition, RequisitionItem
 
     app, session_factory = requisition_app
     with TestClient(app) as client:
         _login(client, "admin")
         created = client.post("/api/requisition/batches", json=_batch_payload())
         assert created.status_code == 201, created.text
+        batch_id = created.json()["id"]
         scheduled = client.put(
             "/api/requisition/items/1/supplier-schedule",
             json={
@@ -2266,6 +2268,17 @@ def test_supplier_schedule_drives_incoming_priority_and_can_cancel_before_receiv
     assert cancelled.status_code == 200
     assert cancelled.json()["requisition_status"] == "未报料"
     with session_factory() as session:
+        batch = session.get(Requisition, batch_id)
+        assert batch is not None
+        assert batch.status == "已取消"
+        assert {
+            row.status
+            for row in session.scalars(
+                select(RequisitionItem).where(
+                    RequisitionItem.requisition_id == batch_id
+                )
+            ).all()
+        } == {"已取消"}
         audit = session.scalar(
             select(OperationLog).where(
                 OperationLog.action == "CANCEL_REQUISITION",
@@ -2275,6 +2288,7 @@ def test_supplier_schedule_drives_incoming_priority_and_can_cancel_before_receiv
     assert audit is not None
     assert '"before"' in audit.details and '"after"' in audit.details
     assert '"reason": "取消报料并退回待报料（系统记录）"' in audit.details
+    assert f'"cancelled_requisition_batch_ids": [{batch_id}]' in audit.details
     assert '"requisition_status": "供应商已排单"' in audit.details
     assert '"requisition_status": "未报料"' in audit.details
 

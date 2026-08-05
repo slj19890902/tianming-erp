@@ -8470,6 +8470,17 @@ def cancel_requisition(
         "inventory_deducted_qty": int(item.inventory_deducted_qty or 0),
         "supplier_order_number": item.supplier_order_number,
     }
+    affected_batch_ids = sorted(
+        {
+            int(batch_id)
+            for batch_id in db.scalars(
+                select(RequisitionItem.requisition_id).where(
+                    RequisitionItem.order_item_id == item.id,
+                    RequisitionItem.status == "有效",
+                )
+            ).all()
+        }
+    )
     db.execute(
         update(RequisitionItem)
         .where(
@@ -8489,6 +8500,25 @@ def cancel_requisition(
         )
         .values(active_guard=None)
     )
+    cancelled_batch_ids: list[int] = []
+    for batch_id in affected_batch_ids:
+        active_line_id = db.scalar(
+            select(RequisitionItem.id)
+            .where(
+                RequisitionItem.requisition_id == batch_id,
+                func.lower(RequisitionItem.status).notin_(
+                    INACTIVE_REQUISITION_ITEM_STATUSES
+                ),
+            )
+            .limit(1)
+        )
+        if active_line_id is not None:
+            continue
+        batch = db.get(Requisition, batch_id)
+        if batch is None or batch.status in INACTIVE_REQUISITION_ITEM_STATUSES:
+            continue
+        batch.status = "已取消"
+        cancelled_batch_ids.append(batch_id)
     item.inventory_deducted_qty = 0
     item.requisition_qty = None
     item.requisition_status = "未报料"
@@ -8528,6 +8558,7 @@ def cancel_requisition(
         entity_id=item.id,
         details={
             "reason": reason,
+            "cancelled_requisition_batch_ids": cancelled_batch_ids,
             "before": before_requisition,
             "after": {
                 "requisition_status": item.requisition_status,

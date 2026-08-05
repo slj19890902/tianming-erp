@@ -102,6 +102,9 @@ const vm = {{
   deliveryKitSummary() {{ return ""; }},
   errorMessage(error) {{ return error.message || String(error); }},
   showToast() {{}},
+  selectedDeliveryCustomerCandidate() {{ return null; }},
+  loadDeliveryBatchItems() {{}},
+  loadUnorderedFinishedCandidates() {{}},
 }};
 vm.loadBatch = new AsyncFunction("page", {json.dumps(batch_body, ensure_ascii=False)}).bind(vm);
 vm.loadInventory = new AsyncFunction("page", {json.dumps(unordered_body, ensure_ascii=False)}).bind(vm);

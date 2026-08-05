@@ -193,7 +193,7 @@ def test_finance_settlement_no_longer_prompts_for_account() -> None:
 
 def test_delivery_and_statement_controls_show_undo_and_edit_cancel_actions() -> None:
     assert "取消回单" in INDEX
-    assert "/api/finance/return_receipts/${this.receiptForm.id}/cancel" in INDEX
+    assert "/api/finance/return_receipts/${receiptId}/cancel" in INDEX
     assert "statementCustomerOptions" in INDEX
     assert "/api/finance/statement-customers" in INDEX
     assert "/api/finance/statements/${statementId}/cancel" in INDEX

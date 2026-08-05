@@ -2708,20 +2708,20 @@
                     <td><status-tag :value="row.return_receipt_status === 'cancelled' ? 'receipt_cancelled' : (row.return_receipt_status || 'waiting_receipt')"></status-tag></td>
                     <td><button class="btn small" @click="toggleDeliveryListDetail(row)">{{ expandedDeliveryRows[row.id] ? '收起明细' : `查看明细（${(row.items || []).length}）` }}</button></td>
                     <td class="toolbar-group delivery-list-actions">
-                      <button v-if="canDelivery && row.status==='pending' && !row.pick_task" class="btn small" :disabled="!!deliveryOperationState.action" @click="createDeliveryPickTask(row)">{{ deliveryOperationState.action==='pick' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '推送中…' : '拿货' }}</button>
-                      <select v-if="canDelivery && row.pick_task && row.status==='pending'" class="select" style="max-width:130px" :disabled="!!deliveryOperationState.action" :value="row.pick_task.assigned_to || ''" @change="assignDeliveryPickTask(row,$event.target.value)">
+                      <button v-if="canDelivery && row.status==='pending' && !row.pick_task" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="createDeliveryPickTask(row)">{{ deliveryOperationState.action==='pick' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '推送中…' : '拿货' }}</button>
+                      <select v-if="canDelivery && row.pick_task && row.status==='pending'" class="select" style="max-width:130px" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" :value="row.pick_task.assigned_to || ''" @change="assignDeliveryPickTask(row,$event.target.value)">
                         <option value="">未分配</option>
                         <option v-for="picker in deliveryPickers" :key="picker.id" :value="picker.id">{{ picker.name }}</option>
                       </select>
-                      <button v-if="row.pick_task" class="btn small" :disabled="!!deliveryOperationState.action" @click="openDeliveryPickTask(row)">{{ row.pick_task.assignment_required ? '管理员查看' : '打开手机拿货' }}</button>
-                      <button v-if="canDelivery && row.status==='pending'" class="btn small success" :disabled="!!deliveryOperationState.action" @click="dispatchDelivery(row)">{{ deliveryOperationState.action==='dispatch' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '发货中…' : (row.pick_task ? '发货打印' : '直接发货打印') }}</button>
-                      <button v-if="canDelivery && row.status==='pending'" class="btn small" :disabled="!!deliveryOperationState.action" @click="editDelivery(row)">编辑</button>
-                      <button v-if="canDelivery && row.status==='pending'" class="btn small danger" :disabled="!!deliveryOperationState.action" @click="deleteDelivery(row)">{{ deliveryOperationState.action==='delete' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '删除中…' : '删除' }}</button>
-                      <button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small" :disabled="!!deliveryOperationState.action" @click="openReceipt(row)">编辑回单</button>
-                      <button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small danger" :disabled="!!deliveryOperationState.action" @click="cancelReceipt(row)">取消回单</button>
-                      <button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small" :disabled="!!deliveryOperationState.action" @click="openReceipt(row)">确认回单</button>
-                      <button v-if="row.status==='dispatched'" class="btn small" :disabled="!!deliveryOperationState.action" @click="printDelivery(row)">补打</button>
-                      <button v-if="canDelivery && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small danger" :disabled="!!deliveryOperationState.action" @click="cancelDelivery(row)">{{ deliveryOperationState.action==='cancel' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '取消中…' : '取消发货' }}</button>
+                      <button v-if="row.pick_task" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="openDeliveryPickTask(row)">{{ row.pick_task.assignment_required ? '管理员查看' : '打开手机拿货' }}</button>
+                      <button v-if="canDelivery && row.status==='pending'" class="btn small success" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="dispatchDelivery(row)">{{ deliveryOperationState.action==='dispatch' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '发货中…' : (row.pick_task ? '发货打印' : '直接发货打印') }}</button>
+                      <button v-if="canDelivery && row.status==='pending'" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="editDelivery(row)">编辑</button>
+                      <button v-if="canDelivery && row.status==='pending'" class="btn small danger" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="deleteDelivery(row)">{{ deliveryOperationState.action==='delete' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '删除中…' : '删除' }}</button>
+                      <button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="openReceipt(row)">{{ receiptOperationState.action==='open' && Number(receiptOperationState.deliveryId)===Number(row.id) ? '加载中…' : '编辑回单' }}</button>
+                      <button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small danger" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="cancelReceipt(row)">{{ receiptOperationState.action==='cancel' && Number(receiptOperationState.deliveryId)===Number(row.id) ? '取消中…' : '取消回单' }}</button>
+                      <button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="openReceipt(row)">{{ receiptOperationState.action==='open' && Number(receiptOperationState.deliveryId)===Number(row.id) ? '加载中…' : '确认回单' }}</button>
+                      <button v-if="row.status==='dispatched'" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="printDelivery(row)">补打</button>
+                      <button v-if="canDelivery && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small danger" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="cancelDelivery(row)">{{ deliveryOperationState.action==='cancel' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '取消中…' : '取消发货' }}</button>
                     </td>
                   </tr>
                   <tr v-if="expandedDeliveryRows[row.id]" class="delivery-list-detail-row">
@@ -5791,7 +5791,7 @@
               <button class="btn primary" :disabled="loading || pdfTemplateLoading" @click="savePdfTemplate">保存 draft</button>
             </template>
             <button v-if="modal?.type === 'delivery' && deliveryForm.editingId && !deliveryFormIsDirty()" class="btn success" :disabled="loading || !!deliveryForm.pick_task || !!deliveryOperationState.action" @click="createCurrentDeliveryPickTask">{{ deliveryOperationState.action==='pick' && Number(deliveryOperationState.deliveryId)===Number(deliveryForm.editingId) ? '推送中…' : (deliveryForm.pick_task ? '已推送拿货' : '拿货') }}</button>
-            <button v-if="canSaveModal" class="btn primary" :disabled="loading || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError)) || (modal?.type==='quotationConvert' && !!quotationConvertCreaseMismatch) || (modal?.type==='orderItem' && !!orderItemCreaseMismatch) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && (!!deliveryValidationError || !!deliveryOperationState.action)) || (modal?.type==='requisitionHold' && requisitionHoldSaveBlocked)" @click="modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()">{{ modal?.type==='delivery' ? deliveryPrimaryLabel() : (['requisition','supplierRequisitionDraft'].includes(modal?.type) ? '确认生成正式采购单' : (modal?.type==='requisitionHold' ? '确认暂缓' : (modal?.type==='stockReplenishment' && stockReplenishmentForm.source_type==='stock_warning' ? '保存报料草稿' : '保存'))) }}</button>
+            <button v-if="canSaveModal" class="btn primary" :disabled="loading || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError)) || (modal?.type==='quotationConvert' && !!quotationConvertCreaseMismatch) || (modal?.type==='orderItem' && !!orderItemCreaseMismatch) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && (!!deliveryValidationError || !!deliveryOperationState.action)) || (modal?.type==='receipt' && !!receiptOperationState.action) || (modal?.type==='requisitionHold' && requisitionHoldSaveBlocked)" @click="modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()">{{ modal?.type==='delivery' ? deliveryPrimaryLabel() : (modal?.type==='receipt' ? (receiptOperationState.action==='save' ? '保存中…' : '保存回单') : (['requisition','supplierRequisitionDraft'].includes(modal?.type) ? '确认生成正式采购单' : (modal?.type==='requisitionHold' ? '确认暂缓' : (modal?.type==='stockReplenishment' && stockReplenishmentForm.source_type==='stock_warning' ? '保存报料草稿' : '保存')))) }}</button>
           </div>
         </div>
       </div>
@@ -6221,7 +6221,7 @@
             // v0.19.2-B 楞型加价规则
             fluteRules: [], showFluteRuleModal: false, fluteRuleLoading: false, fluteRuleError: "",
             fluteRuleForm: { id: null, supplier_name: "", layer_count: 3, flute_type: "A", price_delta: "0", effective_date: "", remark: "", is_active: true },
-            deliveries: [], pendingDeliveryItems: [], deliveryCustomerCandidates: [], deliveryPickTasks: [], deliveryPickers: [], expandedDeliveryRows: {}, deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false }, deliveryCandidateLoading:false, deliveryOperationState:{action:"",deliveryId:null,deliveryNumber:""}, statements: [], invoices: [], moldTools: [],
+            deliveries: [], pendingDeliveryItems: [], deliveryCustomerCandidates: [], deliveryPickTasks: [], deliveryPickers: [], expandedDeliveryRows: {}, deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false }, deliveryCandidateLoading:false, deliveryOperationState:{action:"",deliveryId:null,deliveryNumber:""}, receiptOperationState:{action:"",deliveryId:null,receiptId:null,deliveryNumber:""}, statements: [], invoices: [], moldTools: [],
             invoiceTasks: [], invoiceTaskFilters:{customer_id:"",statement_month:"",status:""}, invoiceTaskState:{loading:false,error:""},
             invoiceTaskDetail:null, invoiceTaskResult:{task_id:null,status:"issued",invoice_number:"",invoice_date:"",failure_reason:"",expected_version:null},
             invoiceTaskOperationState:{detailLoading:false,detailError:"",detailTaskId:null,detailTaskNumber:"",confirmingTaskId:null,resultSaving:false},
@@ -12000,7 +12000,7 @@
             }).join("；");
           },
           async createDeliveryPickTask(row) {
-            if (this.deliveryOperationState.action) return null;
+            if (this.deliveryOperationState.action || this.receiptOperationState?.action) return null;
             const deliveryId = Number(row?.id || 0);
             const deliveryNumber = String(row?.delivery_number || `#${deliveryId}`);
             if (!deliveryId) {
@@ -18181,33 +18181,101 @@
             return "";
           },
           async openReceipt(row) {
-            const delivery = (await axios.get(`/api/deliveries/${row.id}`)).data;
-            let receipt = null;
-            if (row.return_receipt_id) receipt = (await axios.get(`/api/finance/return_receipts/${row.return_receipt_id}`)).data;
-            const saved = new Map((receipt?.items || []).map(item => [item.delivery_item_id,item]));
-            if ((delivery.items || []).some(item => item.requires_return_location) || (receipt?.items || []).some(item => item.return_location_id)) {
-              await this.ensureProductionLocations({force:true});
+            if (this.deliveryOperationState.action || this.receiptOperationState.action) return false;
+            const deliveryId = Number(row?.id || 0);
+            const receiptId = Number(row?.return_receipt_id || 0) || null;
+            const deliveryNumber = String(row?.delivery_number || `#${deliveryId}`);
+            if (!deliveryId) {
+              this.showToast("送货单不存在，无法打开回单", true);
+              return false;
             }
-            const emptyFloors = [...new Set((this.productionLocations || []).filter(location => location.is_empty).map(location => this.productionLocationFloorNumber(location)).filter(Boolean))];
-            const defaultFloor = emptyFloors.length === 1 ? emptyFloors[0] : null;
-            this.receiptForm = {
-              id:receipt?.id || null, delivery_id:row.id,
-              actual_received_date:receipt?.actual_received_date || today(), signed_by:receipt?.signed_by || "客户签收",
-              items:delivery.items.map(item => ({
-                delivery_item_id:item.id, product_code:item.product_code, product_name:item.product_name,
-                delivered_quantity:item.delivered_quantity,
-                actual_received_quantity:saved.get(item.id)?.actual_received_quantity ?? item.delivered_quantity,
-                resolution_action:saved.get(item.id)?.resolution_action || "",
-                difference_reason:saved.get(item.id)?.difference_reason || "",
-                source_type:item.source_type || "order",
-                requires_return_location:saved.get(item.id)?.requires_return_location ?? !!item.requires_return_location,
-                return_location_id:saved.get(item.id)?.return_location_id || null,
-                return_floor_number:this.productionLocationFloorNumber(this.productionLocations.find(location => Number(location.id) === Number(saved.get(item.id)?.return_location_id))) || defaultFloor,
-                return_area_code:this.productionLocationAreaCode(this.productionLocations.find(location => Number(location.id) === Number(saved.get(item.id)?.return_location_id))) || ""
+            this.receiptOperationState = {action:"open",deliveryId,receiptId,deliveryNumber};
+            try {
+              const delivery = (await axios.get(`/api/deliveries/${deliveryId}`)).data;
+              let receipt = null;
+              if (receiptId) receipt = (await axios.get(`/api/finance/return_receipts/${receiptId}`)).data;
+              const saved = new Map((receipt?.items || []).map(item => [item.delivery_item_id,item]));
+              if ((delivery.items || []).some(item => item.requires_return_location) || (receipt?.items || []).some(item => item.return_location_id)) {
+                await this.ensureProductionLocations({force:true});
+              }
+              const emptyFloors = [...new Set((this.productionLocations || []).filter(location => location.is_empty).map(location => this.productionLocationFloorNumber(location)).filter(Boolean))];
+              const defaultFloor = emptyFloors.length === 1 ? emptyFloors[0] : null;
+              this.receiptForm = {
+                id:receipt?.id || null, delivery_id:deliveryId,
+                actual_received_date:receipt?.actual_received_date || today(), signed_by:receipt?.signed_by || "客户签收",
+                items:(delivery.items || []).map(item => ({
+                  delivery_item_id:item.id, product_code:item.product_code, product_name:item.product_name,
+                  delivered_quantity:item.delivered_quantity,
+                  actual_received_quantity:saved.get(item.id)?.actual_received_quantity ?? item.delivered_quantity,
+                  resolution_action:saved.get(item.id)?.resolution_action || "",
+                  difference_reason:saved.get(item.id)?.difference_reason || "",
+                  source_type:item.source_type || "order",
+                  requires_return_location:saved.get(item.id)?.requires_return_location ?? !!item.requires_return_location,
+                  return_location_id:saved.get(item.id)?.return_location_id || null,
+                  return_floor_number:this.productionLocationFloorNumber(this.productionLocations.find(location => Number(location.id) === Number(saved.get(item.id)?.return_location_id))) || defaultFloor,
+                  return_area_code:this.productionLocationAreaCode(this.productionLocations.find(location => Number(location.id) === Number(saved.get(item.id)?.return_location_id))) || ""
+                }))
+              };
+              const isConfirmed = receipt?.status === "confirmed";
+              this.modal={type:"receipt",title: isConfirmed ? "编辑送货回单（进入对账后锁定）" : "确认送货回单"};
+              return true;
+            } catch (error) {
+              this.showToast(this.errorMessage(error), true);
+              return false;
+            } finally {
+              if (this.receiptOperationState.action === "open" && Number(this.receiptOperationState.deliveryId) === deliveryId) {
+                this.receiptOperationState = {action:"",deliveryId:null,receiptId:null,deliveryNumber:""};
+              }
+            }
+          },
+          async saveReceipt() {
+            if (this.deliveryOperationState.action || this.receiptOperationState.action) return false;
+            const receiptError = this.validateReceiptForm();
+            if (receiptError) {
+              this.showToast(receiptError, true);
+              return false;
+            }
+            const overReceiptLines = (this.receiptForm.items || []).filter(line => Number(line.actual_received_quantity) > Number(line.delivered_quantity));
+            if (overReceiptLines.length && !confirm("有 " + overReceiptLines.length + " 条实收数量超过发货数量，确认按实际超收数量入账吗？")) return false;
+            const receiptId = Number(this.receiptForm.id || 0) || null;
+            const deliveryId = Number(this.receiptForm.delivery_id || 0);
+            const listed = (this.deliveries || []).find(row => Number(row.id) === deliveryId);
+            const deliveryNumber = String(listed?.delivery_number || `#${deliveryId}`);
+            if (!receiptId && !deliveryId) {
+              this.showToast("送货单不存在，无法保存回单", true);
+              return false;
+            }
+            const payload = {
+              actual_received_date:this.receiptForm.actual_received_date,
+              signed_by:this.receiptForm.signed_by,
+              items:(this.receiptForm.items || []).map(({product_code,product_name,delivered_quantity,source_type,requires_return_location,return_floor_number,return_area_code,...line}) => ({
+                ...line, difference_reason:line.difference_reason || null,
+                return_location_id:line.return_location_id || null
               }))
             };
-            const isConfirmed = receipt?.status === "confirmed";
-            this.modal={type:"receipt",title: isConfirmed ? "编辑送货回单（进入对账后锁定）" : "确认送货回单"};
+            this.receiptOperationState = {action:"save",deliveryId,receiptId,deliveryNumber};
+            try {
+              try {
+                if (receiptId) await axios.put(`/api/finance/return_receipts/${receiptId}`, payload);
+                else await axios.post("/api/finance/return_receipts", {...payload,delivery_id:deliveryId});
+              } catch (error) {
+                this.showToast(this.errorMessage(error), true);
+                return false;
+              }
+              this.closeModal();
+              try {
+                await Promise.all([this.loadDeliveries(), this.loadOrders(), this.loadKpi(), this.loadFinance()]);
+              } catch (error) {
+                this.showToast(`送货单 ${deliveryNumber} 的回单已经保存，但页面刷新失败：${this.errorMessage(error)}。请点刷新，不要重复保存。`, true);
+                return true;
+              }
+              this.showToast("回单保存成功，订单、首页和对账状态已刷新");
+              return true;
+            } finally {
+              if (this.receiptOperationState.action === "save" && Number(this.receiptOperationState.deliveryId) === deliveryId) {
+                this.receiptOperationState = {action:"",deliveryId:null,receiptId:null,deliveryNumber:""};
+              }
+            }
           },
           createDeliveryLine(overrides = {}) {
             return {
@@ -19127,6 +19195,7 @@
             this.masterPendingSaveOptions = null;
           },
           async saveModal() {
+            if (this.modal?.type === "receipt") return this.saveReceipt();
             let masterOptions = this.masterPendingSaveOptions;
             this.masterPendingSaveOptions = null;
             const masterEntity = ["customer","product","material"].includes(this.modal?.type) ? this.modal.type : null;
@@ -19434,23 +19503,6 @@
                 await this.loadRequisition();
                 window.open(`/requisition-print.html?id=${data.id}`, "_blank");
               }
-              if (this.modal.type === "receipt") {
-                const receiptError = this.validateReceiptForm();
-                if (receiptError) throw new Error(receiptError);
-                const overReceiptLines = this.receiptForm.items.filter(line => Number(line.actual_received_quantity) > Number(line.delivered_quantity));
-                if (overReceiptLines.length && !confirm("有 " + overReceiptLines.length + " 条实收数量超过发货数量，确认按实际超收数量入账吗？")) return;
-                const payload = {
-                  actual_received_date:this.receiptForm.actual_received_date,
-                  signed_by:this.receiptForm.signed_by,
-                  items:this.receiptForm.items.map(({product_code,product_name,delivered_quantity,source_type,requires_return_location,return_floor_number,return_area_code,...line}) => ({
-                    ...line, difference_reason:line.difference_reason || null,
-                    return_location_id:line.return_location_id || null
-                  }))
-                };
-                if (this.receiptForm.id) await axios.put(`/api/finance/return_receipts/${this.receiptForm.id}`, payload);
-                else await axios.post("/api/finance/return_receipts", {...payload,delivery_id:this.receiptForm.delivery_id});
-                await this.loadDeliveries();
-              }
               if (this.modal.type === "delivery") {
                 const deliveryError = this.validateDeliveryForm();
                 if (deliveryError) throw new Error(deliveryError);
@@ -19550,7 +19602,7 @@
             finally { this.loading = false; }
           },
           async dispatchDelivery(row) {
-            if (this.deliveryOperationState.action) return false;
+            if (this.deliveryOperationState.action || this.receiptOperationState?.action) return false;
             const deliveryId = Number(row?.id || 0);
             const deliveryNumber = String(row?.delivery_number || `#${deliveryId}`);
             if (!deliveryId) {
@@ -19658,7 +19710,7 @@
             this.modal = { type:"delivery", title:`编辑送货单 ${row.delivery_number}` };
           },
           async deleteDelivery(row) {
-            if (this.deliveryOperationState.action) return false;
+            if (this.deliveryOperationState.action || this.receiptOperationState?.action) return false;
             const deliveryId = Number(row?.id || 0);
             const deliveryNumber = String(row?.delivery_number || `#${deliveryId}`);
             if (!deliveryId) {
@@ -19696,7 +19748,7 @@
             }
           },
           async cancelDelivery(row) {
-            if (this.deliveryOperationState.action) return false;
+            if (this.deliveryOperationState.action || this.receiptOperationState?.action) return false;
             const deliveryId = Number(row?.id || 0);
             const deliveryNumber = String(row?.delivery_number || `#${deliveryId}`);
             if (!deliveryId) {
@@ -19727,16 +19779,37 @@
             }
           },
           async cancelReceipt(row) {
-            const receiptId = row.return_receipt_id || this.receiptForm?.id;
-            if (!receiptId) return;
-            if (!confirm("确定要取消回单吗？取消后该送货单会退回到已发货状态。")) return;
+            if (this.deliveryOperationState.action || this.receiptOperationState.action) return false;
+            const receiptId = Number(row?.return_receipt_id || this.receiptForm?.id || 0);
+            const deliveryId = Number(row?.id || this.receiptForm?.delivery_id || 0);
+            const deliveryNumber = String(row?.delivery_number || `#${deliveryId}`);
+            if (!receiptId) {
+              this.showToast("没有可取消的有效回单", true);
+              return false;
+            }
+            if (!confirm("确定要取消回单吗？取消后该送货单会退回到已发货状态。")) return false;
+            this.receiptOperationState = {action:"cancel",deliveryId,receiptId,deliveryNumber};
             try {
-              this.receiptForm = this.receiptForm?.id === receiptId ? this.receiptForm : (await axios.get(`/api/finance/return_receipts/${receiptId}`)).data;
-              await axios.post(`/api/finance/return_receipts/${this.receiptForm.id}/cancel`);
-              await Promise.all([this.loadDeliveries(), this.loadOrders(), this.loadKpi(), this.loadFinance()]);
-              if (this.modal?.type === "receipt") this.modal = null;
+              try {
+                await axios.post(`/api/finance/return_receipts/${receiptId}/cancel`);
+              } catch (error) {
+                this.showToast(this.errorMessage(error), true);
+                return false;
+              }
+              if (this.modal?.type === "receipt" && Number(this.receiptForm?.id) === receiptId) this.closeModal();
+              try {
+                await Promise.all([this.loadDeliveries(), this.loadOrders(), this.loadKpi(), this.loadFinance()]);
+              } catch (error) {
+                this.showToast(`送货单 ${deliveryNumber} 的回单已经取消，但页面刷新失败：${this.errorMessage(error)}。请点刷新，不要重复取消。`, true);
+                return true;
+              }
               this.showToast("已取消回单，该送货单已退回到已发货状态，可以继续修改或取消发货。");
-            } catch (error) { this.showToast(this.errorMessage(error), true); }
+              return true;
+            } finally {
+              if (this.receiptOperationState.action === "cancel" && Number(this.receiptOperationState.receiptId) === receiptId) {
+                this.receiptOperationState = {action:"",deliveryId:null,receiptId:null,deliveryNumber:""};
+              }
+            }
           },
           exportStatement(row) { window.location.href=`/api/finance/statements/${row.id}/export`; },
           async registerInvoice(row) {

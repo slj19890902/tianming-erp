@@ -36,7 +36,7 @@ def test_delete_and_cancel_buttons_share_delivery_busy_state() -> None:
     assert "deliveryOperationState.action==='cancel'" in delivery
     assert "删除中…" in delivery
     assert "取消中…" in delivery
-    assert delivery.count(":disabled=\"!!deliveryOperationState.action\"") >= 8
+    assert delivery.count(":disabled=\"!!deliveryOperationState.action || !!receiptOperationState.action\"") >= 8
 
 
 def test_delete_and_cancel_are_single_flight_and_freeze_target(tmp_path: Path) -> None:

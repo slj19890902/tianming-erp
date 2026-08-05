@@ -36,9 +36,9 @@ def test_fin001_exposes_minimum_seller_and_customer_invoice_rule_contracts() -> 
     assert "客户默认开票项目规则" in INDEX
     for label in ("项目名称", "税收分类编码", "单位", "税率", "确认状态"):
         assert label in INDEX
-    assert 'axios.get("/api/finance/invoice-sellers")' in methods
-    assert 'axios.post("/api/finance/invoice-sellers",payload)' in methods
-    assert "/api/finance/invoice-sellers/${form.id}" in methods
+    assert 'axios.get("/api/finance/invoice-sellers"' in methods
+    assert 'axios.post("/api/finance/invoice-sellers", payload)' in methods
+    assert "/api/finance/invoice-sellers/${editingId}" in methods
     assert "invoice-item-rules/default" in methods
     assert "canManageInvoiceProfiles" in finance
 

@@ -1444,6 +1444,12 @@
       .workbench-tabs { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
       .workbench-tab { min-height:30px; padding:4px 10px; border:1px solid var(--line-strong); border-radius:999px; background:#fff; color:var(--text-secondary); font-weight:700; }
       .workbench-tab.active { border-color:var(--primary); background:var(--primary); color:#fff; }
+      .workbench-nav-primary .workbench-tabs { order:-1; flex:0 0 auto; }
+      .workbench-nav-primary .workbench-nav-title { flex:1 1 auto; text-align:right; }
+      .order-page-actionbar, .requisition-page-actionbar {
+        display:flex; align-items:center; justify-content:space-between; gap:10px;
+      }
+      .requisition-page-actions { display:flex; align-items:center; justify-content:flex-end; gap:6px; }
       .warehouse-wayfinding { display:flex; align-items:stretch; gap:8px; flex-wrap:wrap; }
       .warehouse-floor-card { min-width:130px; padding:7px 10px; border:1px solid #b8cae2; border-radius:8px; background:#f7fbff; color:#163b66; text-align:left; }
       button.warehouse-floor-card { cursor:pointer; }
@@ -1556,6 +1562,7 @@
       }
       @media(max-width:900px) {
         .workbench-nav { align-items:flex-start; flex-direction:column; }
+        .workbench-nav-primary .workbench-nav-title { text-align:left; }
         .warehouse-shell-frame { height: calc(100vh - 188px); min-height: 520px; }
         .production-location-picker { grid-template-columns: 1fr; }
         .audit-filter-grid, .audit-detail-grid { grid-template-columns: 1fr; }
@@ -1604,7 +1611,7 @@
           <main class="main">
             <div v-if="loading" class="loading-bar"></div>
 
-            <section v-if="currentNavigationGroup" class="workbench-nav" :aria-label="`${currentNavigationGroup.label}工作台`">
+            <section v-if="currentNavigationGroup" :class="['workbench-nav',{'workbench-nav-primary':currentNavigationGroup.key==='workbench'}]" :aria-label="`${currentNavigationGroup.label}工作台`">
               <div class="workbench-nav-title"><strong>{{ currentNavigationGroup.label }}</strong><span>{{ currentNavigationGroup.description }}</span></div>
               <div class="workbench-tabs">
                 <template v-for="page in (currentNavigationGroup ? currentNavigationGroup.pages : [])" :key="page.key">
@@ -2244,13 +2251,12 @@
             <template v-else-if="activePage === 'orders'">
               <div class="order-page-shell">
                 <div class="order-head-card">
-                  <div class="order-head-actions">
-                    <h2 style="margin:0;font-size:20px">订单管理</h2>
+                  <div class="order-page-actionbar">
                     <div class="toolbar-group">
                       <button v-if="canCreateOrders" class="btn primary" @click="openOrder">新建订单</button>
                       <button v-if="canCreateOrders" class="btn" @click="openOrderPdfImport">识别PDF订单</button>
-                      <button class="btn" @click="loadOrders()">刷新</button>
                     </div>
+                    <button class="btn" @click="loadOrders()">刷新</button>
                   </div>
                 </div>
                 <div class="order-filter-card">
@@ -2467,21 +2473,19 @@
                   <h2>智能报料工作台</h2>
                   <p>订单报料、库存抵扣和库存补库统一先生成可核对草稿；实际到料后再确认入账。</p>
                 </div>
-                <div class="toolbar-group">
-                  <button v-if="canCreateOrders" class="btn primary" @click="openOrder">新建订单</button>
-                  <button v-if="canCreateOrders" class="btn" @click="openOrderPdfImport">识别PDF订单</button>
-                </div>
               </div>
-              <div class="toolbar">
+              <div class="toolbar requisition-page-actionbar">
                 <div class="toolbar-group">
                   <button :class="['btn',{primary:requisitionTab==='pending'}]" @click="selectRequisitionTab('pending')">待报料 {{ requisitionPending.length }}</button>
-                  <button :class="['btn',{primary:requisitionTab==='waiting'}]" @click="selectRequisitionTab('waiting')">等候报料 {{ requisitionHoldSummary.total }}<span v-if="requisitionHoldSummary.due_count">（到期 {{ requisitionHoldSummary.due_count }}）</span></button>
                   <button :class="['btn',{primary:requisitionTab==='submitted'}]" @click="selectRequisitionTab('submitted')">已报料/已入库<span v-if="requisitionReportedLoaded"> {{ requisitionReportedTotal }}</span></button>
-                  <button v-if="canRequisition && requisitionTab==='pending'" class="btn warning" :disabled="!selectedPendingKeys.length" @click="openRequisitionHold()">暂不报料</button>
                   <button v-if="canRequisition && requisitionTab==='pending'" class="btn success" @click="openSupplierRequisitionDraft()">合并报料</button>
-                  <button v-if="canRequisition" class="btn primary" @click="openStockReplenishment">手动库存补库<span v-if="stockPolicyWarnings.length">（预警 {{ stockPolicyWarnings.length }}）</span></button>
                 </div>
-                <button class="btn" @click="refreshRequisitionTab">刷新</button>
+                <div class="requisition-page-actions">
+                  <button v-if="canRequisition" class="btn warning" :disabled="requisitionTab!=='pending' || !selectedPendingKeys.length" @click="openRequisitionHold()">暂不报料</button>
+                  <button v-if="canRequisition" class="btn primary" @click="openStockReplenishment">库存补库<span v-if="stockPolicyWarnings.length">（预警 {{ stockPolicyWarnings.length }}）</span></button>
+                  <button :class="['btn',{primary:requisitionTab==='waiting'}]" @click="selectRequisitionTab('waiting')">等候报料 {{ requisitionHoldSummary.total }}<span v-if="requisitionHoldSummary.due_count">（到期 {{ requisitionHoldSummary.due_count }}）</span></button>
+                  <button class="btn" @click="refreshRequisitionTab">刷新</button>
+                </div>
               </div>
               <div v-if="requisitionTab==='pending'" class="supplier-priority-bar">
                 <strong>供应商优先选择</strong>

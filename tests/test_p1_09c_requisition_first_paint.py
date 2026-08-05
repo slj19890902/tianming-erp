@@ -66,11 +66,12 @@ def test_requisition_toolbar_refreshes_only_visible_tab() -> None:
     assert '@click="selectRequisitionTab(\'submitted\')"' in INDEX
 
 
-def test_requisition_page_keeps_order_entry_actions_and_hides_redundant_merge_suggestion() -> None:
+def test_requisition_page_hides_order_entry_actions_and_keeps_merge_workflow() -> None:
     report_page = INDEX.split("activePage === 'requisition'", 1)[1].split(
         "activePage === 'incoming'", 1
     )[0]
 
-    assert '@click="openOrder">新建订单</button>' in report_page
-    assert '@click="openOrderPdfImport">识别PDF订单</button>' in report_page
+    assert '@click="openOrder">新建订单</button>' not in report_page
+    assert '@click="openOrderPdfImport">识别PDF订单</button>' not in report_page
+    assert '@click="openSupplierRequisitionDraft()">合并报料</button>' in report_page
     assert '@click="openMergeSuggestions"' not in report_page

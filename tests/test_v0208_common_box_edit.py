@@ -187,7 +187,7 @@ def test_legacy_common_box_mismatch_only_blocks_report_or_crease_edits() -> None
     assert "三段合计 350mm" in changed_exc.value.detail
 
 
-def test_common_box_processes_remove_double_and_print_type_controls_drawings() -> None:
+def test_common_box_processes_remove_double_and_drawings_are_independent_of_print() -> None:
     source = _source()
 
     for process in ("粘贴", "打钉", "模切", "其他"):
@@ -197,7 +197,10 @@ def test_common_box_processes_remove_double_and_print_type_controls_drawings() -
 
     for print_type in ("无印刷", "单色印刷", "双色印刷", "多色印刷"):
         assert f'<option value="{print_type}">{print_type}</option>' in source
-    assert 'v-if="productForm.print_content !== \'无印刷\'"' in source
+    assert 'v-if="productForm.print_content !== \'无印刷\'"' not in source
+    assert "图片/图纸与印刷情况相互独立" in source
+    assert "无印刷产品也可上传实物图、模切形状或模具核对图" in source
+    assert '@click="previewProductDrawing(row)"' in source
     assert "serializeProductionProcesses" in source
 
 
@@ -370,10 +373,10 @@ def test_common_box_drawing_history_shows_filename_time_latest_and_open_action()
 
     for marker in (
         "drawingDisplayName(drawing)",
-        'index===0 ? "最新" : `历史第 ${',
+        'index===0 ? "最近上传" : `记录 ${',
         "formatDateTime(drawing.uploaded_at)",
         "查看/下载",
-        "暂无图纸版本",
+        "暂无产品图片或图纸",
     ):
         assert marker in source
 

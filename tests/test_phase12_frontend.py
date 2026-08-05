@@ -28,7 +28,7 @@ def test_phase12_customer_and_product_uat_controls_are_present() -> None:
     assert "delivery_method" in INDEX
     assert "信用额度</label>" not in INDEX
     assert "customer-group-title" in INDEX
-    assert "图纸版本历史" in INDEX
+    assert "产品图片/图纸记录" in INDEX
     # v0.19.2 下一轮：产品材质选择器统一为「材质供应商 + 可搜索材质下拉」，
     # 标签由「材质（克重）」改为「材质（代码｜供应商｜克重｜报价）」。
     assert "材质供应商" in INDEX

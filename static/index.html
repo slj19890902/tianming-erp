@@ -1942,7 +1942,7 @@
                   <div v-if="productsLoading" class="panel empty">正在读取该客户的常用箱…</div>
                   <div v-else-if="productsError" class="notice error">{{ productsError }} <button class="btn small" @click="loadProducts()">重试</button></div>
                   <div v-else-if="!products.length" class="panel empty">该客户当前没有符合条件的常用箱</div>
-                  <div v-else class="table-wrap"><table><thead><tr><th>品号</th><th v-if="false">客户料号</th><th>产品名称</th><th>规格</th><th>材质</th><th v-if="!isWorkshop" class="sensitive-price">默认单价</th><th>资料状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td v-if="false">{{ plainProductText(row.customer_material_code) }}</td><td :title="plainProductText(row.product_name)" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td style="white-space:nowrap">{{ spec(row) }}</td><td :class="{muted: productMaterialCell(row).muted}" :title="materialFullStructure(row)" style="white-space:nowrap">{{ productMaterialCell(row).text }}</td><td v-if="!isWorkshop" class="sensitive-price">{{ money(row.sale_unit_price) }}</td><td><span :class="['status',commonBoxReadiness(row).ready ? 'green' : 'orange']" :title="commonBoxReadinessTitle(row)">{{ commonBoxReadiness(row).ready ? '资料已完善' : '待完善' }}</span><div v-if="row.manual_modified" class="muted" style="font-size:11px;margin-top:3px">已人工编辑（版本事实）</div></td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canEditProducts ? "编辑" : "查看" }}</button><button v-if="canRequisition && row.is_active" class="btn small" @click="openProductStockPolicy(row)">库存预警</button><button class="btn small" @click="openMasterVersionHistory('product',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateProducts" :class="['btn','small',row.is_active ? 'danger' : 'success']" :disabled="productLifecycleBusy()" @click="toggleProductStatus(row)">{{ productLifecyclePending('status',row.id) ? '处理中…' : (row.is_active ? "停用" : "启用") }}</button><button v-if="canDeleteProducts" class="btn small danger" :disabled="productLifecycleBusy()" @click="deleteProduct(row)">{{ productLifecyclePending('delete',row.id) ? '处理中…' : '移入垃圾站' }}</button></td></tr></tbody></table></div>
+                  <div v-else class="table-wrap"><table><thead><tr><th>品号</th><th v-if="false">客户料号</th><th>产品名称</th><th>规格</th><th>材质</th><th v-if="!isWorkshop" class="sensitive-price">默认单价</th><th>资料状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td v-if="false">{{ plainProductText(row.customer_material_code) }}</td><td :title="plainProductText(row.product_name)" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td style="white-space:nowrap">{{ spec(row) }}</td><td :class="{muted: productMaterialCell(row).muted}" :title="materialFullStructure(row)" style="white-space:nowrap">{{ productMaterialCell(row).text }}</td><td v-if="!isWorkshop" class="sensitive-price">{{ money(row.sale_unit_price) }}</td><td><span :class="['status',commonBoxReadiness(row).ready ? 'green' : 'orange']" :title="commonBoxReadinessTitle(row)">{{ commonBoxReadiness(row).ready ? '资料已完善' : '待完善' }}</span><div v-if="row.manual_modified" class="muted" style="font-size:11px;margin-top:3px">已人工编辑（版本事实）</div></td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canEditProducts ? "编辑" : "查看" }}</button><button class="btn small" @click="previewProductDrawing(row)">图片/图纸</button><button v-if="canRequisition && row.is_active" class="btn small" @click="openProductStockPolicy(row)">库存预警</button><button class="btn small" @click="openMasterVersionHistory('product',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateProducts" :class="['btn','small',row.is_active ? 'danger' : 'success']" :disabled="productLifecycleBusy()" @click="toggleProductStatus(row)">{{ productLifecyclePending('status',row.id) ? '处理中…' : (row.is_active ? "停用" : "启用") }}</button><button v-if="canDeleteProducts" class="btn small danger" :disabled="productLifecycleBusy()" @click="deleteProduct(row)">{{ productLifecyclePending('delete',row.id) ? '处理中…' : '移入垃圾站' }}</button></td></tr></tbody></table></div>
                 </template>
               </div>
               <pager v-if="productTab === 'products' && selectedProductCustomer" :page="pages.products" :total="productsTotal" :page-size="pageSize" @change="pages.products=$event; loadProducts()"></pager>
@@ -3938,7 +3938,7 @@
                     <label class="process-option"><input type="checkbox" value="其他" v-model="productForm._production_processes" @change="onProductProcessesChanged" />其他</label>
                   </div>
                 </div>
-                <div class="field"><label>印刷内容</label>
+                <div class="field"><label>印刷情况</label>
                   <select class="select" v-model="productForm.print_content">
                     <option value="无印刷">无印刷</option>
                     <option value="单色印刷">单色印刷</option>
@@ -3948,17 +3948,17 @@
                   </select>
                 </div>
                 <div class="field"><label>报料备注</label><input class="input" v-model.trim="productForm.report_notes" placeholder="供应商直发、特殊压线等" /></div>
-                <template v-if="productForm.print_content !== '无印刷'">
-                  <div class="field"><label>上传新版本图纸</label>
+                <div class="product-drawing-independent-section">
+                  <div class="field"><label>上传产品图片/图纸</label>
                     <input class="input" type="file" accept="image/png,image/jpeg,image/webp,application/pdf,.pdf" @change="drawingFile=$event.target.files[0] || null" />
-                    <div class="muted">支持 JPG、PNG、WEBP、PDF，最大 20MB。</div>
+                    <div class="muted">图片/图纸与印刷情况相互独立。无印刷产品也可上传实物图、模切形状或模具核对图；支持 JPG、PNG、WEBP、PDF，最大 20MB。</div>
                   </div>
-                  <div class="field"><label>图纸版本历史</label>
-                    <div v-if="!productForm.id" class="muted">先保存常用箱，图纸会随保存一起上传。</div>
-                    <div v-else-if="!(productForm.drawings || []).length" class="muted">暂无图纸版本</div>
+                  <div class="field"><label>产品图片/图纸记录</label>
+                    <div v-if="!productForm.id" class="muted">先保存常用箱，图片/图纸会随保存一起上传。</div>
+                    <div v-else-if="!(productForm.drawings || []).length" class="muted">暂无产品图片或图纸</div>
                     <div v-else class="drawing-history-list">
                       <div v-for="(drawing,index) in productForm.drawings" :key="drawing.id" class="drawing-history-row">
-                        <span :class="['drawing-version',{current:index===0}]">{{ index===0 ? "最新" : `历史第 ${productForm.drawings.length-index} 版` }}</span>
+                        <span :class="['drawing-version',{current:index===0}]">{{ index===0 ? "最近上传" : `记录 ${productForm.drawings.length-index}` }}</span>
                         <div>
                           <div class="drawing-history-name" :title="drawingDisplayName(drawing)">{{ drawingDisplayName(drawing) }}</div>
                           <div class="muted">{{ formatDateTime(drawing.uploaded_at) }}</div>
@@ -3970,7 +3970,7 @@
                       </div>
                     </div>
                   </div>
-                </template>
+                </div>
               </div>
 
               <div class="product-form-row product-final-row">
@@ -14689,6 +14689,21 @@
               this.finishLatestRequest(requestKey, controller);
             }
           },
+          async previewProductDrawing(row) {
+            const productId = Number(row?.id || 0);
+            if (!productId) return;
+            try {
+              const { data } = await axios.get(`/api/master/products/${productId}`);
+              const drawing = data?.drawings?.[0];
+              if (!drawing?.image_path) {
+                this.showToast("该常用箱还没有产品图片或图纸", true);
+                return;
+              }
+              this.previewDrawingFile(drawing.image_path);
+            } catch (error) {
+              this.showToast(this.errorMessage(error) || "产品图片/图纸读取失败", true);
+            }
+          },
           async loadProductMaterialContext(productId) {
             const requestedId = Number(productId);
             if (!requestedId || Number(this.productForm.id || 0) !== requestedId) return false;
@@ -14909,14 +14924,14 @@
             return fields.some(field => canonical(this.productForm[field]) !== canonical(original[field]));
           },
           async deleteProductDrawing(drawing) {
-            if (!confirm("确定删除该版本图纸吗？")) return;
+            if (!confirm("确定删除这条产品图片/图纸记录吗？")) return;
             try {
               await axios.delete(`/api/master/products/drawings/${drawing.id}`);
               const { data } = await axios.get(`/api/master/products/${this.productForm.id}`);
               this.productForm = this.hydrateProductForm(data);
               this.productFormSnapshot = JSON.stringify(this._productFormSaveFields());
               await this.loadProducts();
-              this.showToast("图纸版本已删除");
+              this.showToast("产品图片/图纸记录已删除");
             } catch(error) { this.showToast(this.errorMessage(error), true); }
           },
           async selectProductCustomer(row) {

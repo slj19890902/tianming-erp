@@ -211,6 +211,40 @@ def test_invalid_pdf_drawing_is_rejected(drawing_app: FastAPI) -> None:
     assert response.json()["detail"] == "图纸文件签名无法识别"
 
 
+def test_no_print_product_can_upload_and_view_reference_image(
+    drawing_app: FastAPI,
+) -> None:
+    payload = {
+        "customer_id": 1,
+        "product_code": "001A",
+        "customer_material_code": "001A",
+        "product_name": "001A outer carton",
+        "material_id": 1,
+        "box_category": "normal",
+        "print_content": "无印刷",
+        "expected_version": 1,
+        "change_reason": "无印刷产品图片独立性测试",
+    }
+    with TestClient(drawing_app) as client:
+        _login(client, "admin")
+        updated = client.put("/api/master/products/1", json=payload)
+        if updated.status_code == 409:
+            payload["confirmation_token"] = updated.json()["detail"][
+                "confirmation_token"
+            ]
+            updated = client.put("/api/master/products/1", json=payload)
+        uploaded = _upload(client, "die-cut-reference.png", "white")
+        detail = client.get("/api/master/products/1")
+        viewed = client.get(uploaded.json()["image_path"])
+
+    assert updated.status_code == 200, updated.text
+    assert uploaded.status_code == 201, uploaded.text
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["print_content"] == "无印刷"
+    assert len(detail.json()["drawings"]) == 1
+    assert viewed.status_code == 200
+
+
 def test_common_box_process_and_print_type_round_trip_without_drawing(
     drawing_app: FastAPI,
 ) -> None:

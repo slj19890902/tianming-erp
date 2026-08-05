@@ -5048,11 +5048,6 @@ def dispatch_delivery(
     dispatched_at = _utc_now()
     try:
         pick_task = _delivery_pick_task(db, delivery_id)
-        if delivery.source_mode == "unordered_finished" and pick_task is not None:
-            raise HTTPException(
-                status_code=409,
-                detail="无订单成品库存送货不进入移动拿货任务，请删除异常任务后重试",
-            )
         if pick_task and pick_task.status == "exception":
             raise HTTPException(
                 status_code=409,
@@ -5176,6 +5171,9 @@ def dispatch_delivery(
                 operator_id=user.id,
                 dispatched_at=dispatched_at,
             )
+            if pick_task is not None:
+                pick_task.status = "dispatched"
+                pick_task.dispatched_at = dispatched_at
             _write_audit(
                 db,
                 user=user,

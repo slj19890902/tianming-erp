@@ -27,13 +27,13 @@ def test_delivery_modal_is_selection_first_without_blank_manual_rows() -> None:
     end = INDEX.index('<div v-else-if="modal.type === \'tianhuaPreimport\'">', start)
     modal = INDEX[start:end]
 
-    assert "选择待送货物" in modal
+    assert "选择待送订单" in modal
     assert "选择客户专用库存" in modal
     assert "新增一行" not in modal
     assert "新增5行" not in modal
     assert "新增 5 行" not in modal
     assert 'v-if="deliveryBatchPicker.loading"' in modal
-    assert "正在加载待送货物" in modal
+    assert "待送订单正在载入" in modal
 
 
 def test_saved_draft_exposes_pick_and_one_step_dispatch_print() -> None:
@@ -45,7 +45,7 @@ def test_saved_draft_exposes_pick_and_one_step_dispatch_print() -> None:
     pick = _method_body("createCurrentDeliveryPickTask")
     dispatch = _method_body("dispatchCurrentDeliveryDraft")
 
-    assert ': "发货打印"' in label
+    assert ': "打印"' in label
     assert "dispatchCurrentDeliveryDraft" in primary
     assert "createDeliveryPickTask" in pick
     assert "dispatchDelivery" not in pick

@@ -688,6 +688,27 @@ def test_unordered_finished_draft_can_push_mobile_pick_without_dispatch(
     assert _stock_snapshot(factory, seed) == before
 
 
+def test_unordered_finished_pick_task_can_later_dispatch(
+    unordered_finished_delivery_app,
+) -> None:
+    app, factory = unordered_finished_delivery_app
+    seed = _seed(app, factory)
+    with TestClient(app) as client:
+        _login(client)
+        delivery = _create_unordered_delivery(client, _unordered_payload(seed))
+        pushed = client.post(f"/api/deliveries/{delivery['id']}/pick-task")
+        dispatched = client.put(f"/api/deliveries/{delivery['id']}/dispatch")
+
+    assert pushed.status_code == 201, pushed.text
+    assert dispatched.status_code == 200, dispatched.text
+    with factory() as db:
+        db.expire_all()
+        saved = db.get(Delivery, delivery["id"])
+        task = db.get(DeliveryPickTask, pushed.json()["id"])
+        assert saved is not None and saved.status == "dispatched"
+        assert task is not None and task.status == "dispatched"
+
+
 def test_unordered_finished_partial_pick_only_resizes_pending_draft(
     unordered_finished_delivery_app,
 ) -> None:

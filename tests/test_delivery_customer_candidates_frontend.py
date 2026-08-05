@@ -83,6 +83,6 @@ def test_delivery_picker_uses_plain_language_and_shows_known_item_count() -> Non
     modal_end = INDEX.index("modal.type === 'tianhuaPreimport'", modal_start)
     modal = INDEX[modal_start:modal_end]
 
-    assert "选择待送货物" in modal
+    assert "选择待送订单" in modal
     assert "deliveryPendingCountForSelectedCustomer()" in modal
-    assert "选择待送订单" not in modal
+    assert "选择待送货物" not in modal

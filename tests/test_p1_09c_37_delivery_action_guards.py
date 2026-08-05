@@ -26,7 +26,7 @@ def test_delivery_pick_and_dispatch_buttons_share_a_visible_busy_state() -> None
     assert "推送中…" in delivery
     assert "发货中…" in delivery
     assert "!!deliveryOperationState.action" in delivery
-    footer_pick = INDEX[INDEX.index('modal?.type === \'delivery\' && deliveryForm.editingId') : INDEX.index('<button v-if="canSaveModal"')]
+    footer_pick = INDEX[INDEX.index('modal?.type === \'delivery\' && deliveryForm.editingId') : INDEX.index('<button v-if="canSaveModal && modal?.type===\'quotationConvert\'"')]
     assert "createCurrentDeliveryPickTask" in footer_pick
     assert "deliveryOperationState" in footer_pick
 
@@ -35,7 +35,7 @@ def test_pick_and_dispatch_are_single_flight_and_freeze_the_delivery(tmp_path: P
     node = shutil.which("node")
     assert node is not None, "Node.js is required for delivery action regression"
     pick_body = _method_body("async createDeliveryPickTask(row) {", "openDeliveryPickTask(row) {")
-    dispatch_body = _method_body("async dispatchDelivery(row) {", "async printDelivery(row) {")
+    dispatch_body = _method_body("async dispatchDelivery(row, options = {}) {", "async printDelivery(row) {")
     script = f"""
 const AsyncFunction = Object.getPrototypeOf(async function(){{}}).constructor;
 const pending = [];
@@ -65,7 +65,7 @@ const vm = {{
   showToast(message, danger=false) {{ messages.push({{message,danger}}); }},
 }};
 vm.createDeliveryPickTask = new AsyncFunction("row", {json.dumps(pick_body, ensure_ascii=False)}).bind(vm);
-vm.dispatchDelivery = new AsyncFunction("row", {json.dumps(dispatch_body, ensure_ascii=False)}).bind(vm);
+vm.dispatchDelivery = new AsyncFunction("row", "options", {json.dumps(dispatch_body, ensure_ascii=False)}).bind(vm);
 
 (async () => {{
   const pickRow = {{id:11,delivery_number:"TH001",pick_task:null}};
@@ -110,7 +110,7 @@ vm.dispatchDelivery = new AsyncFunction("row", {json.dumps(dispatch_body, ensure
 def test_dispatch_success_is_not_reported_as_failure_when_followup_breaks(tmp_path: Path) -> None:
     node = shutil.which("node")
     assert node is not None
-    dispatch_body = _method_body("async dispatchDelivery(row) {", "async printDelivery(row) {")
+    dispatch_body = _method_body("async dispatchDelivery(row, options = {}) {", "async printDelivery(row) {")
     script = f"""
 const AsyncFunction = Object.getPrototypeOf(async function(){{}}).constructor;
 let mode = "printed-fails";
@@ -137,7 +137,7 @@ const vm = {{
   errorMessage(error) {{ return error?.message || String(error); }},
   showToast(message, danger=false) {{ messages.push({{message,danger}}); }},
 }};
-vm.dispatchDelivery = new AsyncFunction("row", {json.dumps(dispatch_body, ensure_ascii=False)}).bind(vm);
+vm.dispatchDelivery = new AsyncFunction("row", "options", {json.dumps(dispatch_body, ensure_ascii=False)}).bind(vm);
 
 (async () => {{
   const printedFailed = await vm.dispatchDelivery({{id:41,delivery_number:"TH041"}});

@@ -148,7 +148,7 @@ def test_delivery_primary_action_has_save_edit_and_direct_dispatch_print_states(
     label_body = _method_body("deliveryPrimaryLabel")
     assert 'return "保存草稿"' in label_body
     assert '"保存修改"' in label_body
-    assert '"发货打印"' in label_body
+    assert '"打印"' in label_body
 
     result = _run_node(
         _vue_harness(
@@ -159,7 +159,8 @@ function context(editingId, savedSignature, currentSignature) {
       deliveryFormSignature() { return currentSignature; },
       deliveryFormHasUnsavedChanges: methods.deliveryFormHasUnsavedChanges,
       deliveryFormIsDirty: methods.deliveryFormIsDirty,
-    saveCalls: 0,
+      hasPendingUnorderedFinishedSelections() { return false; },
+      saveCalls: 0,
     dispatchCalls: 0,
     saveModal() { this.saveCalls += 1; return "saved"; },
     dispatchCurrentDeliveryDraft() { this.dispatchCalls += 1; return "dispatched"; },

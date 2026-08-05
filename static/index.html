@@ -10123,25 +10123,53 @@
             }
           },
           async loadMoldTools() {
-            if (this.isWorkshop) return;
-            const { data } = await axios.get("/api/warehouse/molds", { params:{ limit:500 } });
-            this.moldTools = data.items || [];
+            if (this.isWorkshop) return true;
+            const requestKey = "product:molds";
+            const controller = this.beginLatestRequest(requestKey);
+            try {
+              const { data } = await axios.get("/api/warehouse/molds", {
+                params:{ limit:500 },
+                signal:controller.signal,
+              });
+              if (latestRequestControllers.get(requestKey) !== controller) return false;
+              this.moldTools = data.items || [];
+              return true;
+            } catch (error) {
+              if (this.isCancelledRequest(error)) return false;
+              throw error;
+            } finally {
+              this.finishLatestRequest(requestKey, controller);
+            }
           },
           async ensureProductEditorOptions({force=false} = {}) {
             const needsMaterials = force || !this.allMaterials.length;
             const needsMolds = !this.isWorkshop && (force || !this.moldTools.length);
-            if (!needsMaterials && !needsMolds) return;
+            if (!needsMaterials && !needsMolds) return true;
+            const requestKey = "product:editor-options";
+            const controller = this.beginLatestRequest(requestKey);
             this.productEditorOptionsLoading = true;
             this.productEditorOptionsError = "";
             try {
               const tasks = [];
               if (needsMaterials) tasks.push(this.loadMaterials());
               if (needsMolds) tasks.push(this.loadMoldTools());
-              await Promise.all(tasks);
+              const results = await Promise.all(tasks);
+              if (latestRequestControllers.get(requestKey) !== controller) return false;
+              if (results.some(result => result !== true)) {
+                this.productEditorOptionsError = "材质与模具选择数据读取失败，请重试";
+                return false;
+              }
+              return true;
             } catch (error) {
-              if (!this.isCancelledRequest(error)) this.productEditorOptionsError = "材质与模具选择数据读取失败，请重试";
+              if (!this.isCancelledRequest(error) && latestRequestControllers.get(requestKey) === controller) {
+                this.productEditorOptionsError = "材质与模具选择数据读取失败，请重试";
+              }
+              return false;
             } finally {
-              this.productEditorOptionsLoading = false;
+              if (latestRequestControllers.get(requestKey) === controller) {
+                this.productEditorOptionsLoading = false;
+                this.finishLatestRequest(requestKey, controller);
+              }
             }
           },
           moldToolSelectOptions() {
@@ -14169,18 +14197,38 @@
             this.bomEditor.componentOptions = options.filter(option => String(option.id) !== String(this.productForm.id));
           },
           async loadProductBom(productId) {
+            const requestedId = Number(productId || 0);
+            if (!requestedId || Number(this.productForm.id || 0) !== requestedId) return false;
+            const requestKey = "product:bom";
+            const controller = this.beginLatestRequest(requestKey);
             this.bomEditor.loading = true;
             this.bomEditor.error = "";
             this.bomEditor.notice = "";
             try {
-              const { data } = await axios.get(`/api/master/products/${productId}/bom`);
+              const { data } = await axios.get(`/api/master/products/${requestedId}/bom`, {
+                signal:controller.signal,
+              });
+              if (
+                latestRequestControllers.get(requestKey) !== controller
+                || Number(this.productForm.id || 0) !== requestedId
+              ) return false;
               this.applyBomResponse(data);
+              return true;
             } catch (error) {
+              if (
+                this.isCancelledRequest(error)
+                || latestRequestControllers.get(requestKey) !== controller
+                || Number(this.productForm.id || 0) !== requestedId
+              ) return false;
               if (error?.response?.status === 404) this.bomEditor.notice = "当前产品暂无 BOM 记录，可直接启用并添加内部组件。";
               else this.bomEditor.error = this.errorMessage(error);
               this.productBomSnapshot = JSON.stringify(this._productBomSaveFields());
+              return false;
             } finally {
-              this.bomEditor.loading = false;
+              if (latestRequestControllers.get(requestKey) === controller) {
+                if (Number(this.productForm.id || 0) === requestedId) this.bomEditor.loading = false;
+                this.finishLatestRequest(requestKey, controller);
+              }
             }
           },
           async searchBomProducts(keyword="") {
@@ -14523,31 +14571,64 @@
             }
           },
           async openProduct(row=null) {
-            let detail = row;
-            if (row?.id) detail = (await axios.get(`/api/master/products/${row.id}`)).data;
-            await this.loadProductBoxTypeRules();
-            this.productForm = this.hydrateProductForm(
-              detail || {
-                customer_id: this.selectedProductCustomer?.id || this.activeCustomerOptions[0]?.id || null,
-                drawings: [],
+            const requestKey = "product:editor";
+            const controller = this.beginLatestRequest(requestKey);
+            const requestedId = Number(row?.id || 0) || null;
+            try {
+              let detail = row;
+              if (requestedId) {
+                detail = (await axios.get(`/api/master/products/${requestedId}`, {
+                  signal:controller.signal,
+                })).data;
               }
-            );
-            this.productMaterialContext = { product_id:this.productForm.id || null, candidates:[], requisition_history:[], manual_selection_history:[], loading:false, error:"" };
-            this.drawingFile = null;
-            this.resetBomEditor();
-            // 拍快照用于检测未保存更改
-            this.productFormSnapshot = JSON.stringify(this._productFormSaveFields());
-            this.beginMasterEdit("product",this.productForm);
-            this.modal = { type:"product", title: row ? (this.canEditProducts ? "编辑产品" : "查看产品") : "新增产品" };
-            await this.$nextTick();
-            await this.ensureProductEditorOptions();
-            if (this.productForm.id) {
-              const loaders = [this.loadProductBom(this.productForm.id)];
-              if (this.hasPermission("requisition.view")) loaders.push(this.loadProductMaterialContext(this.productForm.id));
-              else this.productMaterialContext.error = "当前账号无报料历史查看权限";
-              await Promise.all(loaders);
+              if (latestRequestControllers.get(requestKey) !== controller) return false;
+              await this.loadProductBoxTypeRules();
+              if (latestRequestControllers.get(requestKey) !== controller) return false;
+              this.productForm = this.hydrateProductForm(
+                detail || {
+                  customer_id: this.selectedProductCustomer?.id || this.activeCustomerOptions[0]?.id || null,
+                  drawings: [],
+                }
+              );
+              const openedId = Number(this.productForm.id || 0) || null;
+              this.productMaterialContext = { product_id:openedId, candidates:[], requisition_history:[], manual_selection_history:[], loading:false, error:"" };
+              this.drawingFile = null;
+              this.resetBomEditor();
+              // 拍快照用于检测未保存更改
+              this.productFormSnapshot = JSON.stringify(this._productFormSaveFields());
+              this.beginMasterEdit("product",this.productForm);
+              this.modal = { type:"product", title: requestedId ? (this.canEditProducts ? "编辑产品" : "查看产品") : "新增产品" };
+              await this.$nextTick();
+              if (
+                latestRequestControllers.get(requestKey) !== controller
+                || (Number(this.productForm.id || 0) || null) !== openedId
+              ) return false;
+              await this.ensureProductEditorOptions();
+              if (
+                latestRequestControllers.get(requestKey) !== controller
+                || (Number(this.productForm.id || 0) || null) !== openedId
+              ) return false;
+              if (openedId) {
+                const loaders = [this.loadProductBom(openedId)];
+                if (this.hasPermission("requisition.view")) loaders.push(this.loadProductMaterialContext(openedId));
+                else this.productMaterialContext.error = "当前账号无报料历史查看权限";
+                await Promise.all(loaders);
+              }
+              if (
+                latestRequestControllers.get(requestKey) !== controller
+                || (Number(this.productForm.id || 0) || null) !== openedId
+              ) return false;
+              await this.$nextTick();
+              if (latestRequestControllers.get(requestKey) !== controller) return false;
+              this.autoApplyProductRecommendations();
+              return true;
+            } catch (error) {
+              if (this.isCancelledRequest(error) || latestRequestControllers.get(requestKey) !== controller) return false;
+              this.showToast(`常用箱资料读取失败：${this.errorMessage(error)}`, true);
+              return false;
+            } finally {
+              this.finishLatestRequest(requestKey, controller);
             }
-            this.$nextTick(() => this.autoApplyProductRecommendations());
           },
           async loadProductMaterialContext(productId) {
             if (!productId) return;

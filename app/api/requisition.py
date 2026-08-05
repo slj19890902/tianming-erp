@@ -3637,6 +3637,143 @@ def _auto_release_requisition_holds(
     return released_ids
 
 
+def _requisition_hold_requirement_preview(
+    db: Session,
+    hold: RequisitionHold,
+) -> dict:
+    """Return a live, non-blocking demand preview for one waiting row.
+
+    A hold stores an immutable order snapshot, while the quantity to requisition
+    must always be recalculated from current inventory when it is restored.  A
+    broken legacy link must not make the row disappear or make the whole waiting
+    list fail, so preview errors are returned as explicit row-level warnings.
+    """
+
+    fallback = {
+        "live_order_item_exists": False,
+        "can_restore_to_pending": False,
+        "order_quantity": int(hold.quantity_snapshot or 0),
+        "order_unit_label": "只",
+        "physical_required_piece_qty": None,
+        "physical_requisition_qty": None,
+        "component_requirements": [],
+        "quantity_changed_since_hold": False,
+        "quantity_note": None,
+        "requirement_warning": None,
+    }
+    if hold.order_item_id is None:
+        fallback["requirement_warning"] = (
+            "订单明细关联已丢失；暂不报料记录仍保留可见，请联系管理员核对，不能静默隐藏"
+        )
+        return fallback
+
+    item = db.get(OrderItem, hold.order_item_id)
+    if item is None:
+        fallback["requirement_warning"] = (
+            "订单明细已不存在；暂不报料记录仍保留可见，请联系管理员核对，不能静默隐藏"
+        )
+        return fallback
+    product = db.get(Product, item.product_id) if item.product_id else None
+    if product is None:
+        fallback.update(
+            {
+                "live_order_item_exists": True,
+                "order_quantity": int(item.quantity or 0),
+                "requirement_warning": (
+                    "订单产品关联异常；暂不报料记录仍保留可见，请先修复产品资料后恢复待报料"
+                ),
+            }
+        )
+        return fallback
+
+    try:
+        summary = _current_requisition_summary(db, item, product=product)
+    except HTTPException as error:
+        detail = str(error.detail or "当前订单资料无法计算报料数量")
+        fallback.update(
+            {
+                "live_order_item_exists": True,
+                "order_quantity": int(item.quantity or 0),
+                "requirement_warning": (
+                    f"报料数量预览失败：{detail}；记录仍保留可见，请修复资料后恢复待报料"
+                ),
+            }
+        )
+        return fallback
+    except Exception:
+        fallback.update(
+            {
+                "live_order_item_exists": True,
+                "order_quantity": int(item.quantity or 0),
+                "requirement_warning": (
+                    "报料数量预览异常；记录仍保留可见，请刷新或联系管理员核对"
+                ),
+            }
+        )
+        return fallback
+
+    components: list[dict] = []
+    for requirement in summary.get("component_requirements") or [summary]:
+        component_type = str(
+            requirement.get("component_type") or "whole"
+        ).strip().lower()
+        is_base = component_type == "base"
+        length_value = (
+            item.snapshot_base_report_length_mm
+            if is_base
+            else item.snapshot_report_length_mm
+        )
+        width_value = (
+            item.snapshot_base_report_width_mm
+            if is_base
+            else item.snapshot_report_width_mm
+        )
+        components.append(
+            {
+                "component_type": component_type,
+                "component_label": {
+                    "cover": "盖",
+                    "base": "底",
+                    "whole": "整张",
+                }.get(component_type, "组件"),
+                "required_piece_qty": int(
+                    requirement.get("required_piece_qty") or 0
+                ),
+                "remaining_required_piece_qty": int(
+                    requirement.get("remaining_required_piece_qty") or 0
+                ),
+                "requisition_qty": int(requirement.get("requisition_qty") or 0),
+                "report_length_mm": int(length_value) if length_value else None,
+                "report_width_mm": int(width_value) if width_value else None,
+            }
+        )
+
+    component_types = {row["component_type"] for row in components}
+    is_split_box = {"cover", "base"}.issubset(component_types)
+    live_quantity = int(item.quantity or 0)
+    snapshot_quantity = int(hold.quantity_snapshot or 0)
+    quantity_changed = live_quantity != snapshot_quantity
+    return {
+        "live_order_item_exists": True,
+        "can_restore_to_pending": True,
+        "order_quantity": live_quantity,
+        "order_unit_label": "套" if is_split_box else "只",
+        "physical_required_piece_qty": int(
+            summary.get("required_piece_qty") or 0
+        ),
+        "physical_requisition_qty": int(summary.get("requisition_qty") or 0),
+        "component_requirements": components,
+        "quantity_changed_since_hold": quantity_changed,
+        "quantity_note": (
+            f"订单数量已由暂缓时的 {snapshot_quantity} 调整为 {live_quantity}，"
+            "恢复时将按当前数量和库存重算"
+            if quantity_changed
+            else "恢复时将按当前订单数量和库存重算"
+        ),
+        "requirement_warning": None,
+    }
+
+
 def _requisition_hold_dict(
     db: Session,
     hold: RequisitionHold,
@@ -3647,7 +3784,14 @@ def _requisition_hold_dict(
         else None
     )
     created_date = utc_naive_to_beijing_date(hold.created_at)
-    warning = previous_state.get("warning") if previous_state else None
+    previous_warning = previous_state.get("warning") if previous_state else None
+    requirement_preview = _requisition_hold_requirement_preview(db, hold)
+    requirement_warning = requirement_preview.get("requirement_warning")
+    warning = "；".join(
+        str(value).strip()
+        for value in (previous_warning, requirement_warning)
+        if value and str(value).strip()
+    ) or None
     release_ready = (
         (
             hold.release_mode == "expected_date"
@@ -3699,6 +3843,7 @@ def _requisition_hold_dict(
             if (hold.updated_at or hold.created_at) is not None
             else None
         ),
+        **requirement_preview,
     }
 
 
@@ -6190,7 +6335,6 @@ def list_requisition_holds(
     allowed = _allowed_customer_ids(user, db)
     query = select(RequisitionHold).where(
         RequisitionHold.status == _REQUISITION_HOLD_ACTIVE,
-        RequisitionHold.order_item_id.is_not(None),
     )
     if allowed is not None:
         query = query.where(RequisitionHold.customer_id_snapshot.in_(allowed))

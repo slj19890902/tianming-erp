@@ -1238,17 +1238,21 @@
       .requisition-hold-table { width: 100%; min-width: 0; table-layout: fixed; }
       .requisition-hold-table th,
       .requisition-hold-table td { min-width: 0; white-space: normal; word-break: break-word; overflow-wrap: anywhere; vertical-align: middle; }
-      .requisition-hold-table th:nth-child(1) { width: 22%; }
-      .requisition-hold-table th:nth-child(2) { width: 25%; }
-      .requisition-hold-table th:nth-child(3) { width: 27%; }
-      .requisition-hold-table th:nth-child(4) { width: 12%; }
-      .requisition-hold-table th:nth-child(5) { width: 14%; }
+      .requisition-hold-table th:nth-child(1) { width: 18%; }
+      .requisition-hold-table th:nth-child(2) { width: 18%; }
+      .requisition-hold-table th:nth-child(3) { width: 25%; }
+      .requisition-hold-table th:nth-child(4) { width: 20%; }
+      .requisition-hold-table th:nth-child(5) { width: 9%; }
+      .requisition-hold-table th:nth-child(6) { width: 10%; }
       .requisition-hold-two-lines {
         display: -webkit-box; overflow: hidden; text-overflow: ellipsis;
         -webkit-box-orient: vertical; -webkit-line-clamp: 2;
         line-height: 1.45; max-height: 2.9em;
       }
       .requisition-hold-actions { display: flex; flex-wrap: wrap; gap: 5px; }
+      .requisition-hold-demand { display: grid; gap: 3px; font-size: 12px; line-height: 1.45; }
+      .requisition-hold-demand strong { color: #1d4ed8; }
+      .requisition-hold-demand-component { padding: 3px 6px; border-radius: 6px; background: #eff6ff; }
       .requisition-hold-summary { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-size: 12px; }
       .requisition-hold-modal { display: grid; gap: 12px; }
       .requisition-hold-selected-list { display: grid; gap: 6px; max-height: 180px; overflow-y: auto; }
@@ -2539,13 +2543,14 @@
               <data-panel v-if="requisitionTab==='pending'" :empty="!filteredRequisitionPending.length"><table class="requisition-pending-table"><thead><tr><th><input type="checkbox" :checked="allRequisitionSelected" @change="toggleAllRequisition($event.target.checked)" /> 全选</th><th>订单号</th><th>客户</th><th>存货编码 / 产品</th><th>报料尺寸 / 压线</th><th>供应商 / 材质</th><th>订单数量</th><th>成品库存抵扣</th><th>需生产数量</th><th>需求 / 客户备料 / 采购</th><th>交期</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredRequisitionPending" :key="pendingRowKey(row)" :class="{ 'requisition-selected': selectedPendingKeys.includes(pendingRowKey(row)), 'warning-row': row.is_merge_group }"><td><input type="checkbox" :checked="selectedPendingKeys.includes(pendingRowKey(row))" @change="togglePendingRow(row, $event.target.checked)" :disabled="!isPendingRowSelectable(row)" /></td><td><span v-if="row.is_merge_group" class="status blue">合并组</span><br>{{ displayOrderNumber(row) }}<div v-if="row.is_merge_group" class="muted">{{ (row.order_numbers || []).join(' / ') }}</div></td><td>{{ row.customer_name }}</td><td><template v-if="row.is_merge_group"><strong>{{ (row.product_codes || []).join(' / ') }}</strong><br><span class="muted">{{ row.specification }}</span><div><button class="btn small" @click="requisitionMergeExpanded[row.merge_group_id] = !requisitionMergeExpanded[row.merge_group_id]">{{ requisitionMergeExpanded[row.merge_group_id] ? '收起来源' : '展开来源' }}</button></div><div v-if="requisitionMergeExpanded[row.merge_group_id]" class="muted" style="margin-top:4px;white-space:normal"><div v-for="m in row.members" :key="m.item_id">{{ m.order_number }}｜{{ m.product_code }}｜{{ m.product_name }} × {{ m.quantity }}</div></div></template><template v-else><strong>{{ plainProductText(row.product_code) }}</strong><br>{{ plainProductText(row.product_name) }}<br><span class="muted">{{ row.specification }}</span></template></td><td style="font-size:12px;white-space:nowrap"><template v-if="row.is_merge_group"><div class="merge-size-editor"><input class="input merge-size-input" type="number" min="1" v-model.number="row.report_length_mm" /> <span>×</span> <input class="input merge-size-input" type="number" min="1" v-model.number="row.report_width_mm" /></div><select class="select merge-cutter-select" v-model="row.cutting_mode"><option>一开一</option><option>一开二</option><option>一开三</option><option>一开四</option><option>一开五</option></select></template><template v-else>{{ formatReportDims(row) }}<br>{{ formatCrease(row) }}</template><div v-for="warning in row.dimension_warnings || []" :key="warning" class="status orange" style="white-space:normal;margin-top:4px">{{ warning }}</div></td><td><template v-if="row.is_merge_group"><select class="select merge-supplier-select" v-model="row.supplier_name" @focus="ensureRequisitionMaterials()"><option value="">请选择供应商</option><option v-if="row.supplier_name && !materialSupplierSelectOptions.includes(row.supplier_name)" :value="row.supplier_name" disabled>{{ supplierDisplayName(row.supplier_name) }}（历史值）</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ supplierDisplayName(s) }}</option></select><br><span class="muted">{{ row.material_display || "-" }}</span></template><template v-else>{{ supplierDisplayName(row.snapshot_supplier_name || "未设置供应商") }}<br><span class="muted">{{ row.material || "-" }} / {{ row.flute_type || "-" }}</span></template></td><td>{{ row.quantity }}</td><td><strong>{{ row.finished_inventory_reserved_qty || 0 }}</strong><template v-if="row.can_auto_use_late_finished_inventory"><div class="status green" style="display:block;white-space:normal;margin-top:4px">后来可用 {{ row.late_finished_inventory_reservable_qty || 0 }} 个</div><div v-for="location in row.late_finished_inventory_locations || []" :key="location.location_id || location.location_code" class="muted" style="white-space:normal">{{ location.location_code || location.location_name }} {{ location.available_quantity || 0 }}</div></template></td><td><strong>{{ row.production_required_qty }}</strong><div v-if="row.fully_covered_by_finished_inventory" class="status green">成品库存已全额抵扣</div></td><td class="requisition-demand-cell"><div>需求：{{ row.required_piece_qty || 0 }} 个</div><div class="semi-deducted">客户备料已预占：{{ row.semi_finished_reserved_piece_qty || 0 }} 个</div><div class="remaining-demand">仍需生产：{{ row.remaining_required_piece_qty || 0 }} 个</div><div class="purchase-demand">本次只需报：{{ row.requisition_qty || 0 }} 张</div></td><td>{{ row.delivery_date || "-" }}</td><td><template v-if="row.is_merge_group"><input class="input merge-remark-input" v-model.trim="row.remark" placeholder="备注" /><div class="toolbar-group" style="margin-top:6px"><button class="btn small" @click="updateMergeGroup(row)">保存合并组</button></div></template><template v-else><button v-if="row.can_auto_use_late_finished_inventory && canWarehouseReserve" class="btn small success" :disabled="row._late_finished_loading" @click="autoUseLateFinishedInventory(row)">{{ row._late_finished_loading ? '正在预占…' : '使用成品，剩余再报' }}</button><template v-if="!row.can_auto_use_late_finished_inventory"><div v-if="row.can_auto_use_customer_board_preparation && canWarehouseReserve" class="status green" style="display:block;white-space:normal;margin-bottom:6px">可用客户专用纸板备料 {{ row.customer_board_preparation_available_sheet_qty || 0 }} 张</div><button v-if="row.can_auto_use_customer_board_preparation && canWarehouseReserve" class="btn small success" :disabled="row._board_preparation_loading" @click="autoUseCustomerBoardPreparation(row)">{{ row._board_preparation_loading ? '正在预占…' : '使用备料，只报差额' }}</button></template><button class="btn small" @click="openRequisitionMaterialChange(row)">更换供应商/材质</button></template></td></tr></tbody></table></data-panel>
               <data-panel v-if="requisitionTab==='waiting'" :empty="!requisitionHolds.length">
                 <table class="requisition-hold-table">
-                  <thead><tr><th>客户 / 订单</th><th>存货编码 / 产品</th><th>等候条件</th><th>状态</th><th>操作</th></tr></thead>
+                  <thead><tr><th>客户 / 订单</th><th>存货编码 / 产品</th><th>订单 / 当前报料需求</th><th>等候条件</th><th>状态</th><th>操作</th></tr></thead>
                   <tbody><tr v-for="row in requisitionHolds" :key="row.id" :class="{'warning-row':requisitionHoldIsAnomaly(row)}">
                     <td><div class="requisition-hold-two-lines"><strong>{{ row.customer_name || row.customer_name_snapshot || '-' }}</strong><br>{{ row.order_number || row.order_number_snapshot || '-' }} · 序号 {{ row.item_sequence || row.order_item_sequence || row.order_item_sequence_snapshot || '-' }}</div></td>
                     <td><div class="requisition-hold-two-lines"><strong>{{ row.product_code || row.product_code_snapshot || '-' }}</strong><br>{{ row.product_name || row.product_name_snapshot || '-' }}</div></td>
+                    <td><div class="requisition-hold-demand"><strong>{{ requisitionHoldDemandText(row) }}</strong><div v-for="component in row.component_requirements || []" :key="component.component_type" class="requisition-hold-demand-component">{{ requisitionHoldComponentText(component) }}</div><div v-if="row.quantity_note" class="muted">{{ row.quantity_note }}</div><div v-if="row.requirement_warning" class="status red" style="display:block;white-space:normal">{{ row.requirement_warning }}</div></div></td>
                     <td><div class="requisition-hold-two-lines">{{ requisitionHoldConditionText(row) }}<br><span class="muted">{{ row.specification || row.specification_snapshot || '' }}</span></div></td>
                     <td><span :class="['status',requisitionHoldIsAnomaly(row) ? 'red' : requisitionHoldIsDue(row) ? 'orange' : 'blue']">{{ requisitionHoldStatusText(row) }}</span><div class="muted" style="margin-top:4px">已等候 {{ row.waiting_days || 0 }} 天</div></td>
-                    <td><div class="requisition-hold-actions"><button v-if="canRequisition" class="btn small success" :disabled="row._busy" @click="releaseRequisitionHold(row)">恢复待报料</button><button v-if="canRequisition" class="btn small" :disabled="row._busy" @click="openRequisitionHoldEdit(row)">修改</button></div></td>
+                    <td><div class="requisition-hold-actions"><button v-if="canRequisition" class="btn small success" :disabled="row._busy || row.can_restore_to_pending === false" :title="row.can_restore_to_pending === false ? (row.requirement_warning || '订单资料异常，暂不能恢复') : ''" @click="releaseRequisitionHold(row)">恢复待报料</button><button v-if="canRequisition" class="btn small" :disabled="row._busy" @click="openRequisitionHoldEdit(row)">修改</button></div></td>
                   </tr></tbody>
                 </table>
               </data-panel>
@@ -4993,7 +4998,7 @@
               <div class="requisition-hold-selected-list">
                 <div v-for="row in requisitionHoldForm.rows" :key="requisitionHoldFormRowId(row)" class="requisition-hold-selected-row">
                   <div class="requisition-hold-two-lines"><strong>{{ row.customer_name || row.customer_name_snapshot || '-' }}</strong><br>{{ row.order_number || row.order_number_snapshot || displayOrderNumber(row) }} · 序号 {{ row.item_sequence || row.order_item_sequence || row.order_item_sequence_snapshot || '-' }}</div>
-                  <div class="requisition-hold-two-lines"><strong>{{ row.product_code || row.product_code_snapshot || '-' }}</strong> {{ row.product_name || row.product_name_snapshot || '-' }}<br><span class="muted">{{ row.specification || row.specification_snapshot || '-' }} · 数量 {{ row.quantity || row.quantity_snapshot || 0 }}</span></div>
+                  <div><div class="requisition-hold-two-lines"><strong>{{ row.product_code || row.product_code_snapshot || '-' }}</strong> {{ row.product_name || row.product_name_snapshot || '-' }}<br><span class="muted">{{ row.specification || row.specification_snapshot || '-' }}</span></div><div class="requisition-hold-demand" style="margin-top:4px"><strong>{{ requisitionHoldDemandText(row) }}</strong><div v-for="component in row.component_requirements || []" :key="component.component_type" class="muted">{{ requisitionHoldComponentText(component) }}</div></div></div>
                 </div>
               </div>
               <div>
@@ -11039,9 +11044,26 @@
               || ["anomaly","warning","blocked"].includes(String(row?.condition_status || row?.release_status || "").toLowerCase());
           },
           requisitionHoldStatusText(row) {
+            if (row?.requirement_warning) return "资料异常";
             if (this.requisitionHoldIsAnomaly(row)) return "上一批异常";
             if (this.requisitionHoldIsDue(row)) return "已到期";
             return "等候中";
+          },
+          requisitionHoldDemandText(row) {
+            const quantity = Number(row?.order_quantity ?? row?.quantity ?? row?.quantity_snapshot ?? 0);
+            const unit = row?.order_unit_label || ((row?.component_requirements || []).length > 1 ? "套" : "只");
+            const requisitionQty = row?.physical_requisition_qty ?? row?.requisition_qty;
+            if (requisitionQty === null || requisitionQty === undefined) return `订单 ${quantity}${unit}｜当前需求待核对`;
+            return `订单 ${quantity}${unit}｜当前预计需报 ${Number(requisitionQty || 0)}片`;
+          },
+          requisitionHoldComponentText(component) {
+            const componentType = String(component?.component_type || "whole").toLowerCase();
+            const label = component?.component_label || ({cover:"盖",base:"底",whole:"整张"}[componentType] || "组件");
+            const qty = Number(component?.requisition_qty ?? component?.required_piece_qty ?? 0);
+            const length = component?.report_length_mm;
+            const width = component?.report_width_mm;
+            const dimension = length && width ? ` · ${length}×${width}mm` : "";
+            return `${label} ${qty}片${dimension}`;
           },
           requisitionHoldConditionText(row) {
             if (row?.release_mode === "expected_date") return `到 ${row.expected_requisition_date || "-"} 恢复`;

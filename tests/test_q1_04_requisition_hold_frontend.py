@@ -27,15 +27,22 @@ def test_requisition_has_three_clear_tabs_and_batch_hold_entry() -> None:
     assert ">暂不报料</button>" in page
 
 
-def test_waiting_table_is_five_columns_two_lines_and_has_only_two_actions() -> None:
+def test_waiting_table_shows_component_demand_and_has_only_two_actions() -> None:
     waiting = _block(
         "<data-panel v-if=\"requisitionTab==='waiting'\"",
         "<data-panel v-if=\"requisitionTab==='submitted'\"",
     )
     header = re.search(r"<thead><tr>(.*?)</tr></thead>", waiting, flags=re.DOTALL)
     assert header
-    assert header.group(1).count("<th>") == 5
-    for label in ("客户 / 订单", "存货编码 / 产品", "等候条件", "状态", "操作"):
+    assert header.group(1).count("<th>") == 6
+    for label in (
+        "客户 / 订单",
+        "存货编码 / 产品",
+        "订单 / 当前报料需求",
+        "等候条件",
+        "状态",
+        "操作",
+    ):
         assert f"<th>{label}</th>" in header.group(1)
 
     assert 'class="requisition-hold-table"' in waiting
@@ -43,6 +50,10 @@ def test_waiting_table_is_five_columns_two_lines_and_has_only_two_actions() -> N
     assert "恢复待报料" in waiting
     assert ">修改</button>" in waiting
     assert "删除" not in waiting
+    assert "requisitionHoldDemandText(row)" in waiting
+    assert "requisitionHoldComponentText(component)" in waiting
+    assert "row.requirement_warning" in waiting
+    assert "row.can_restore_to_pending === false" in waiting
     assert ".requisition-hold-table { width: 100%; min-width: 0; table-layout: fixed; }" in INDEX
     assert "-webkit-line-clamp: 2" in INDEX
 
@@ -63,6 +74,8 @@ def test_hold_modal_keeps_daily_input_to_one_choice_and_no_reason_field() -> Non
     assert "is_recommended" in modal
     assert "v-model.number=\"requisitionHoldForm.previous_order_item_ids" in modal
     assert "requisitionHoldCandidateDifferences(candidate)" in modal
+    assert "requisitionHoldDemandText(row)" in modal
+    assert "requisitionHoldComponentText(component)" in modal
     assert 'class="requisition-hold-candidate-detail"' in modal
     assert ".requisition-hold-candidate-detail" in INDEX
 

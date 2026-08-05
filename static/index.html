@@ -2167,8 +2167,8 @@
                       <label style="display:flex;align-items:center;gap:6px;margin-top:22px"><input type="checkbox" v-model="fluteRuleForm.is_active" /> 启用</label>
                     </div>
                     <div class="toolbar-group" style="margin-bottom:12px">
-                      <button class="btn primary" @click="saveFluteRule()">{{ fluteRuleForm.id ? '保存修改' : '新增规则' }}</button>
-                      <button v-if="fluteRuleForm.id" class="btn" @click="resetFluteRuleForm()">取消编辑</button>
+                      <button class="btn primary" :disabled="fluteRuleActionBusy()" @click="saveFluteRule()">{{ fluteRuleActionPending('save') ? '保存中…' : (fluteRuleForm.id ? '保存修改' : '新增规则') }}</button>
+                      <button v-if="fluteRuleForm.id" class="btn" :disabled="fluteRuleActionBusy()" @click="resetFluteRuleForm()">取消编辑</button>
                     </div>
                     <div v-if="fluteRuleError" style="color:#dc2626;font-size:13px;margin-bottom:8px">{{ fluteRuleError }}</div>
                     <div v-if="fluteRuleLoading" class="muted" style="text-align:center;padding:14px">加载中…</div>
@@ -2183,8 +2183,8 @@
                           <td style="padding:5px 10px;text-align:center">{{ r.effective_date || '长期' }}</td>
                           <td style="padding:5px 10px;text-align:center"><span :class="['status', r.is_active?'green':'gray']">{{ r.is_active?'启用':'停用' }}</span></td>
                           <td style="padding:5px 10px" class="toolbar-group">
-                            <button class="btn small" @click="editFluteRule(r)">编辑</button>
-                            <button v-if="r.is_active" class="btn small danger" @click="disableFluteRule(r)">停用</button>
+                            <button class="btn small" :disabled="fluteRuleActionBusy()" @click="editFluteRule(r)">编辑</button>
+                            <button v-if="r.is_active" class="btn small danger" :disabled="fluteRuleActionBusy()" @click="disableFluteRule(r)">{{ fluteRuleActionPending('disable',r.id) ? '处理中…' : '停用' }}</button>
                           </td>
                         </tr>
                         <tr v-if="!fluteRules.length"><td colspan="7" class="muted" style="text-align:center;padding:14px">暂无规则</td></tr>
@@ -6267,7 +6267,7 @@
             showCompareModal: false,
             compareGroups: [], compareFlute: "", compareKeyword: "", compareWeight: "", compareLoading: false, compareError: "",
             // v0.19.2-B 楞型加价规则
-            fluteRules: [], showFluteRuleModal: false, fluteRuleLoading: false, fluteRuleError: "",
+            fluteRules: [], showFluteRuleModal: false, fluteRuleLoading: false, fluteRuleError: "", fluteRuleAction:{action:"",ruleId:null},
             fluteRuleForm: { id: null, supplier_name: "", layer_count: 3, flute_type: "A", price_delta: "0", effective_date: "", remark: "", is_active: true },
             deliveries: [], pendingDeliveryItems: [], deliveryCustomerCandidates: [], deliveryPickTasks: [], deliveryPickers: [], expandedDeliveryRows: {}, deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false, request_token:0 }, deliveryPendingState:{loading:false,error:"",request_token:0}, deliveryCandidateLoading:false, deliveryCandidateError:"", deliveryCandidateRequestSequence:0, deliveryBatchRequestSequence:0, unorderedFinishedRequestSequence:0, deliveryOperationState:{action:"",deliveryId:null,deliveryNumber:""}, receiptOperationState:{action:"",deliveryId:null,receiptId:null,deliveryNumber:""}, statements: [], invoices: [], moldTools: [],
             invoiceTasks: [], invoiceTaskFilters:{customer_id:"",statement_month:"",status:""}, invoiceTaskState:{loading:false,error:""},
@@ -10722,17 +10722,28 @@
             this.loadFluteRules();
           },
           async loadFluteRules() {
+            const requestKey = "materials:flute-price-rules";
+            const controller = this.beginLatestRequest(requestKey);
             this.fluteRuleLoading = true;
+            this.fluteRuleError = "";
             try {
               const { data } = await axios.get("/api/master/materials/flute-price-rules", {
                 params: { include_inactive: true },
+                signal:controller.signal,
               });
+              if (latestRequestControllers.get(requestKey) !== controller) return false;
               this.fluteRules = data.rules || data.items || [];
-            } catch (e) {
-              this.fluteRuleError = (e.response && e.response.data && e.response.data.detail) || "规则加载失败";
-              this.fluteRules = [];
+              return true;
+            } catch (error) {
+              if (!this.isCancelledRequest(error) && latestRequestControllers.get(requestKey) === controller) {
+                this.fluteRuleError = this.errorMessage(error) || "规则加载失败";
+              }
+              return false;
             } finally {
-              this.fluteRuleLoading = false;
+              if (latestRequestControllers.get(requestKey) === controller) {
+                this.fluteRuleLoading = false;
+                this.finishLatestRequest(requestKey, controller);
+              }
             }
           },
           editFluteRule(r) {
@@ -10743,42 +10754,87 @@
               remark: r.remark || "", is_active: !!r.is_active,
             };
           },
-          async saveFluteRule() {
+          fluteRuleActionBusy() {
+            return Boolean(this.fluteRuleAction?.action);
+          },
+          fluteRuleActionPending(action, ruleId=null) {
+            const current = this.fluteRuleAction || {};
+            if (current.action !== action) return false;
+            if (ruleId === null || ruleId === undefined) return true;
+            return Number(current.ruleId) === Number(ruleId);
+          },
+          async runFluteRuleAction({action, ruleId=null, task}) {
+            if (this.fluteRuleActionBusy()) return false;
+            const normalizedRuleId = ruleId === null || ruleId === undefined ? null : Number(ruleId);
+            this.fluteRuleAction = {action, ruleId:normalizedRuleId};
             this.fluteRuleError = "";
-            const f = this.fluteRuleForm;
-            if (!f.supplier_name || !f.flute_type) {
-              this.fluteRuleError = "供应商、楞型必填";
-              return;
-            }
-            const body = {
-              supplier_name: f.supplier_name,
-              layer_count: f.layer_count,
-              flute_type: (f.flute_type || "").toUpperCase(),
-              price_delta: f.price_delta,
-              effective_date: f.effective_date || null,
-              remark: f.remark || null,
-              is_active: f.is_active,
-            };
             try {
-              if (f.id) {
-                await axios.patch(`/api/master/materials/flute-price-rules/${f.id}`, body);
-              } else {
-                await axios.post("/api/master/materials/flute-price-rules", body);
-              }
-              this.resetFluteRuleForm();
-              await this.loadFluteRules();
-            } catch (e) {
-              this.fluteRuleError = (e.response && e.response.data && e.response.data.detail) || "保存失败";
+              const result = await task();
+              return result !== false;
+            } catch(error) {
+              this.fluteRuleError = this.errorMessage(error) || "操作失败";
+              return false;
+            } finally {
+              if (
+                this.fluteRuleAction?.action === action
+                && this.fluteRuleAction?.ruleId === normalizedRuleId
+              ) this.fluteRuleAction = {action:"", ruleId:null};
             }
           },
-          async disableFluteRule(r) {
-            if (!confirm(`确认停用「${r.supplier_name} ${r.layer_count}层 ${r.flute_type}」规则？`)) return;
-            try {
-              await axios.post(`/api/master/materials/flute-price-rules/${r.id}/disable`);
-              await this.loadFluteRules();
-            } catch (e) {
-              this.fluteRuleError = (e.response && e.response.data && e.response.data.detail) || "停用失败";
+          async saveFluteRule() {
+            this.fluteRuleError = "";
+            const snapshot = JSON.parse(JSON.stringify(this.fluteRuleForm || {}));
+            const targetId = Number(snapshot.id || 0) || null;
+            if (!snapshot.supplier_name || !snapshot.flute_type) {
+              this.fluteRuleError = "供应商、楞型必填";
+              return false;
             }
+            const body = {
+              supplier_name: snapshot.supplier_name,
+              layer_count: snapshot.layer_count,
+              flute_type: (snapshot.flute_type || "").toUpperCase(),
+              price_delta: snapshot.price_delta,
+              effective_date: snapshot.effective_date || null,
+              remark: snapshot.remark || null,
+              is_active: snapshot.is_active,
+            };
+            return this.runFluteRuleAction({
+              action:"save",
+              ruleId:targetId,
+              task:async() => {
+                if (targetId) await axios.patch(`/api/master/materials/flute-price-rules/${targetId}`, body);
+                else await axios.post("/api/master/materials/flute-price-rules", body);
+                this.resetFluteRuleForm();
+                const refreshed = await this.loadFluteRules();
+                if (!refreshed) {
+                  this.showToast("楞型加价规则已保存，但列表刷新失败；请手动重新加载核对，不要重复操作。",true);
+                  return true;
+                }
+                this.showToast("楞型加价规则已保存");
+                return true;
+              },
+            });
+          },
+          async disableFluteRule(r) {
+            const snapshot = {
+              id:Number(r.id), supplier_name:String(r.supplier_name || ""),
+              layer_count:Number(r.layer_count || 0), flute_type:String(r.flute_type || ""),
+            };
+            if (!confirm(`确认停用「${snapshot.supplier_name} ${snapshot.layer_count}层 ${snapshot.flute_type}」规则？`)) return false;
+            return this.runFluteRuleAction({
+              action:"disable",
+              ruleId:snapshot.id,
+              task:async() => {
+                await axios.post(`/api/master/materials/flute-price-rules/${snapshot.id}/disable`);
+                const refreshed = await this.loadFluteRules();
+                if (!refreshed) {
+                  this.showToast("楞型加价规则已停用，但列表刷新失败；请手动重新加载核对，不要重复操作。",true);
+                  return true;
+                }
+                this.showToast("楞型加价规则已停用");
+                return true;
+              },
+            });
           },
           materialBaseCode(row) {
             // 材质代码列只显示真实代码（如 C4C / D4B / A414B），

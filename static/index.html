@@ -1837,14 +1837,14 @@
               <div class="toolbar">
                 <div class="toolbar-group">
                   <button class="btn" @click="go('customers')">返回客户管理</button>
-                  <button v-if="canEditContracts" class="btn primary" @click="newContractDraft">新建合同</button>
+                  <button v-if="canEditContracts" class="btn primary" :disabled="loading || contractActionBusy()" @click="newContractDraft">新建合同</button>
                 </div>
                 <div class="toolbar-group" v-if="contractCustomer">
-                  <button class="btn" :disabled="loading || !contractEditable" @click="saveContractDraft">保存合同草稿</button>
+                  <button class="btn" :disabled="loading || contractActionBusy() || !contractEditable" @click="saveContractDraft">{{ loading ? '保存中…' : '保存合同草稿' }}</button>
                   <button class="btn" :disabled="!contractDraft.id" @click="printContract(contractDraft)">打印/PDF</button>
-                  <button v-if="contractDraft.id && contractDraft.status === 'draft' && canEditContracts" class="btn success" :disabled="loading" @click="confirmContract(contractDraft)">客户确认合同</button>
-                  <button v-if="contractDraft.status === 'confirmed' && canConvertContracts" class="btn success" :disabled="loading" @click="convertContract(contractDraft)">确认并转订单</button>
-                  <button v-if="contractDraft.id && contractDraft.status === 'draft' && canEditContracts" class="btn danger" :disabled="loading" @click="deleteContract(contractDraft)">删除草稿</button>
+                  <button v-if="contractDraft.id && contractDraft.status === 'draft' && canEditContracts" class="btn success" :disabled="loading || contractActionBusy()" @click="confirmContract(contractDraft)">{{ contractActionPending('confirm',contractDraft.id) ? '确认中…' : '客户确认合同' }}</button>
+                  <button v-if="contractDraft.status === 'confirmed' && canConvertContracts" class="btn success" :disabled="loading || contractActionBusy()" @click="convertContract(contractDraft)">{{ contractActionPending('convert',contractDraft.id) ? '转单中…' : '确认并转订单' }}</button>
+                  <button v-if="contractDraft.id && contractDraft.status === 'draft' && canEditContracts" class="btn danger" :disabled="loading || contractActionBusy()" @click="deleteContract(contractDraft)">{{ contractActionPending('delete',contractDraft.id) ? '删除中…' : '删除草稿' }}</button>
                 </div>
               </div>
               <div v-if="contractCustomer" class="panel contract-panel" style="margin-bottom:14px;overflow:visible">
@@ -1881,14 +1881,14 @@
                 <div class="toolbar" style="margin-top:10px"><button class="btn" :disabled="!contractEditable" @click="addContractLine">增加一行</button><strong>合同总金额：￥ {{ money(contractTotal) }}</strong></div>
               </div>
               <div class="panel">
-                <div class="toolbar"><strong>合同历史</strong><button class="btn" @click="loadContractHistory">刷新</button></div>
+                <div class="toolbar"><strong>合同历史</strong><button class="btn" :disabled="contractActionBusy()" @click="loadContractHistory">刷新</button></div>
                 <div v-if="!contractHistory.length" class="empty">该客户还没有合同记录</div>
                 <div v-else class="table-wrap"><table><thead><tr><th>合同号</th><th>日期</th><th>客户单号/PO</th><th>交期</th><th>状态</th><th>明细</th><th>金额</th><th>操作</th></tr></thead><tbody>
                   <tr v-for="row in contractHistory" :key="row.id">
                     <td><strong>{{ row.contract_no }}</strong></td><td>{{ row.contract_date || '-' }}</td><td>{{ row.customer_po || '-' }}</td><td>{{ row.delivery_date || '-' }}</td>
                     <td><span :class="['status','contract-status',contractStatusTone(row.status)]">{{ contractStatusText(row.status) }}</span></td>
                     <td><div v-for="item in row.items || []" :key="item.id || item.product_id">{{ item.product_code || '-' }}｜{{ item.product_name || '-' }} × {{ item.quantity || 0 }}</div></td><td>￥ {{ money(row.total_amount) }}</td>
-                    <td class="toolbar-group"><button class="btn small" @click="editContract(row)">{{ row.status === 'draft' ? '查看/编辑' : '查看' }}</button><button class="btn small" @click="printContract(row)">打印/PDF</button><button v-if="row.status === 'draft' && canEditContracts" class="btn small success" @click="confirmContract(row)">客户确认</button><button v-if="row.status === 'confirmed' && canConvertContracts" class="btn small success" @click="convertContract(row)">转订单</button><button v-if="row.status === 'draft' && canEditContracts" class="btn small danger" @click="deleteContract(row)">删除</button></td>
+                    <td class="toolbar-group"><button class="btn small" :disabled="loading || contractActionBusy()" @click="editContract(row)">{{ row.status === 'draft' ? '查看/编辑' : '查看' }}</button><button class="btn small" @click="printContract(row)">打印/PDF</button><button v-if="row.status === 'draft' && canEditContracts" class="btn small success" :disabled="loading || contractActionBusy()" @click="confirmContract(row)">{{ contractActionPending('confirm',row.id) ? '确认中…' : '客户确认' }}</button><button v-if="row.status === 'confirmed' && canConvertContracts" class="btn small success" :disabled="loading || contractActionBusy()" @click="convertContract(row)">{{ contractActionPending('convert',row.id) ? '转单中…' : '转订单' }}</button><button v-if="row.status === 'draft' && canEditContracts" class="btn small danger" :disabled="loading || contractActionBusy()" @click="deleteContract(row)">{{ contractActionPending('delete',row.id) ? '删除中…' : '删除' }}</button></td>
                   </tr>
                 </tbody></table></div>
               </div>
@@ -6236,6 +6236,7 @@
             contractDraft: blankContractDraft(),
             contractHistory: [],
             contractProducts: [],
+            contractAction:{action:"",contractId:null},
             materialLayerFilter: 3,
             materialLayerTabs: [
               { value: 3, label: "三层" },
@@ -6797,7 +6798,7 @@
             );
           },
           contractEditable() {
-            return this.canEditContracts && (!this.contractDraft.id || this.contractDraft.status === "draft");
+            return this.canEditContracts && !this.contractActionBusy() && (!this.contractDraft.id || this.contractDraft.status === "draft");
           },
           contractProductOptions() {
             return (this.contractProducts || []).map(product => ({
@@ -14191,32 +14192,96 @@
             if (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") return globalThis.crypto.randomUUID();
             return `contract-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
           },
-          async deleteContract(row) {
-            if (!confirm(`确认删除合同 ${row.contract_no || "草稿"} 吗？`)) return;
+          contractActionBusy() {
+            return Boolean(this.contractAction?.action);
+          },
+          contractActionPending(action, contractId=null) {
+            const current = this.contractAction || {};
+            if (current.action !== action) return false;
+            if (contractId === null || contractId === undefined) return true;
+            return Number(current.contractId) === Number(contractId);
+          },
+          async runContractAction({action, contractId=null, confirmMessage, task}) {
+            if (this.loading || this.contractActionBusy()) return false;
+            if (confirmMessage && !confirm(confirmMessage)) return false;
+            const normalizedContractId = contractId === null || contractId === undefined ? null : Number(contractId);
+            this.contractAction = {action, contractId:normalizedContractId};
             try {
-              await axios.delete(`/api/contracts/${row.id}`, { data:{ confirm_text:"我确认删除合同" } });
-              this.newContractDraft();
+              const result = await task();
+              return result !== false;
+            } catch (error) {
+              this.showToast(this.errorMessage(error), true);
+              return false;
+            } finally {
+              if (
+                this.contractAction?.action === action
+                && this.contractAction?.contractId === normalizedContractId
+              ) this.contractAction = {action:"", contractId:null};
+            }
+          },
+          async refreshContractHistoryAfterMutation(successMessage) {
+            try {
               await this.loadContractHistory();
-              this.showToast("合同草稿已删除");
-            } catch (error) { this.showToast(this.errorMessage(error), true); }
+              this.showToast(successMessage);
+              return true;
+            } catch (error) {
+              this.showToast(
+                `${successMessage}，但合同历史刷新失败：${this.errorMessage(error)}。请手动刷新核对，不要重复操作。`,
+                true,
+              );
+              return false;
+            }
+          },
+          async deleteContract(row) {
+            const target = {
+              id:Number(row.id),
+              contractNo:String(row.contract_no || "草稿"),
+            };
+            return this.runContractAction({
+              action:"delete", contractId:target.id,
+              confirmMessage:`确认删除合同 ${target.contractNo} 吗？`,
+              task:async() => {
+                await axios.delete(`/api/contracts/${target.id}`, { data:{ confirm_text:"我确认删除合同" } });
+                this.newContractDraft();
+                await this.refreshContractHistoryAfterMutation("合同草稿已删除");
+                return true;
+              },
+            });
           },
           async confirmContract(row) {
-            if (!confirm(`确认客户已确认合同 ${row.contract_no || ""} 吗？确认后合同将锁定。`)) return;
-            try {
-              const { data } = await axios.post(`/api/contracts/${row.id}/confirm`, { expected_version:Number(row.version || 1) });
-              this.contractDraft = this.hydrateContract(data);
-              await this.loadContractHistory();
-              this.showToast("合同已确认并锁定");
-            } catch (error) { this.showToast(this.errorMessage(error), true); }
+            const target = {
+              id:Number(row.id),
+              version:Number(row.version || 1),
+              contractNo:String(row.contract_no || ""),
+            };
+            return this.runContractAction({
+              action:"confirm", contractId:target.id,
+              confirmMessage:`确认客户已确认合同 ${target.contractNo} 吗？确认后合同将锁定。`,
+              task:async() => {
+                const { data } = await axios.post(`/api/contracts/${target.id}/confirm`, { expected_version:target.version });
+                this.contractDraft = this.hydrateContract(data);
+                await this.refreshContractHistoryAfterMutation("合同已确认并锁定");
+                return true;
+              },
+            });
           },
           async convertContract(row) {
-            if (!confirm(`确认将合同 ${row.contract_no || ""} 转为订单吗？`)) return;
-            try {
-              const { data } = await axios.post(`/api/contracts/${row.id}/convert-order`, { expected_version:Number(row.version || 1), idempotency_key:this.contractIdempotencyKey() });
-              this.contractDraft = this.hydrateContract(data);
-              await this.loadContractHistory();
-              this.showToast(`合同已转订单 ${data.converted_order_number || data.order_number || ""}`);
-            } catch (error) { this.showToast(this.errorMessage(error), true); }
+            const target = {
+              id:Number(row.id),
+              version:Number(row.version || 1),
+              contractNo:String(row.contract_no || ""),
+              idempotencyKey:this.contractIdempotencyKey(),
+            };
+            return this.runContractAction({
+              action:"convert", contractId:target.id,
+              confirmMessage:`确认将合同 ${target.contractNo} 转为订单吗？`,
+              task:async() => {
+                const { data } = await axios.post(`/api/contracts/${target.id}/convert-order`, { expected_version:target.version, idempotency_key:target.idempotencyKey });
+                this.contractDraft = this.hydrateContract(data);
+                await this.refreshContractHistoryAfterMutation(`合同已转订单 ${data.converted_order_number || data.order_number || ""}`);
+                return true;
+              },
+            });
           },
           printContract(row) {
             if (row?.id) window.open(`/contract-print.html?id=${encodeURIComponent(row.id)}`, "_blank");

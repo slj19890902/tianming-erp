@@ -50,9 +50,9 @@ def test_contract_form_uses_customer_products_and_payload_contract() -> None:
         'axios.get("/api/contracts"',
         'axios.post("/api/contracts"',
         'axios.put(`/api/contracts/${this.contractDraft.id}`',
-        'axios.delete(`/api/contracts/${row.id}`',
+        'axios.delete(`/api/contracts/${target.id}`',
         'confirm_text:"我确认删除合同"',
-        'expected_version:Number(row.version || 1)',
+        'expected_version:target.version',
         'product_id: Number(line.product_id)',
         'contractProductOptions',
         '@search="searchContractProducts"',
@@ -91,7 +91,8 @@ def test_contract_status_actions_are_locked_and_idempotent() -> None:
     assert "contractDraft.status === 'confirmed'" in INDEX
     assert "contractDraft.status === 'draft'" in INDEX and "contractDraft.status === 'confirmed'" in INDEX
     assert 'convert-order' in INDEX
-    assert 'idempotency_key:this.contractIdempotencyKey()' in INDEX
+    assert 'idempotencyKey:this.contractIdempotencyKey()' in INDEX
+    assert 'idempotency_key:target.idempotencyKey' in INDEX
     assert 'typeof globalThis.crypto.randomUUID === "function"' in INDEX
     assert 'contract-${Date.now()}-${Math.random().toString(36)' in INDEX
     assert 'contractStatusText(status)' in INDEX

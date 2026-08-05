@@ -15,9 +15,12 @@ INCOMING = (
 def test_trace_entry_uses_exact_expanded_item() -> None:
     assert '@click="openOrderTrace(row,item)"' in INDEX
     assert (
-        "axios.get(`/api/orders/${order.id}/items/${item.id}/documents`)"
+        "`/api/orders/${orderId}/items/${itemId}/documents`"
         in INDEX
     )
+    assert "const orderId = Number(order?.id || 0)" in INDEX
+    assert "const itemId = Number(item?.id || 0)" in INDEX
+    assert "{signal:controller.signal}" in INDEX
     assert 'openOrderTrace(group.orders[0]' not in INDEX
     assert '@click="openOrderDetail(group.orders[0])"' not in INDEX
 
@@ -38,10 +41,11 @@ def test_trace_stage_detail_uses_exact_source_and_marks_reversed_history() -> No
     assert "查看当前阶段" in INDEX
     assert "阶段详情" in INDEX
     assert (
-        "`/api/orders/${this.orderTrace.order.id}/items/${this.orderTrace.item.id}"
-        "/documents/${sourceType}/${event.source_id}`"
+        "`/api/orders/${orderId}/items/${itemId}"
+        "/documents/${sourceType}/${sourceId}`"
         in INDEX
     )
+    assert "const expectedTrace = this.orderTrace" in INDEX
     assert "该记录已撤销或冲销，仅作为历史查看" in INDEX
 
 

@@ -4881,7 +4881,7 @@
                   <td>{{ traceQuantityText(event) }}</td>
                   <td>{{ traceLocationText(event) }}</td>
                   <td><span :class="['status', event.is_reversal || !event.is_effective ? 'orange' : 'green']">{{ event.status_label }}</span></td>
-                  <td><button class="btn small" type="button" @click="openTraceEventDetail(event)">阶段详情</button></td>
+                  <td><button class="btn small" type="button" :disabled="orderTraceEventDetailLoadingKey === event.key" @click="openTraceEventDetail(event)">{{ orderTraceEventDetailLoadingKey === event.key ? "读取中…" : "阶段详情" }}</button></td>
                 </tr></tbody>
               </table>
               <div v-if="orderTrace.events.length <= 1" class="muted" style="margin-top:10px">该明细目前尚无真实后续单据。</div>
@@ -6355,7 +6355,7 @@
               selected:{}, selection_sequence:0, request_id:0,
             },
             requisitionForm: { supplier_name: "", items: [] },
-            receiptForm: { items: [] }, orderItemForm: {}, orderDetail:null, orderGroupDetail:null, orderTrace:null, orderTraceEventDetail:null, orderTraceReturnContext:null, traceRollbackBusy:false, drawingFile:null,
+            receiptForm: { items: [] }, orderItemForm: {}, orderDetail:null, orderGroupDetail:null, orderTrace:null, orderTraceEventDetail:null, orderTraceEventDetailLoadingKey:"", orderTraceReturnContext:null, traceRollbackBusy:false, drawingFile:null,
             finishedInventoryCandidates: [], finishedInventoryCandidatesLoaded: false,
             finishedInventoryReservations: [],
             customersTotal: 0, productsTotal: 0, ordersTotal: 0, ordersUnfinishedTotal: 0, deliveriesTotal: 0,
@@ -17892,14 +17892,14 @@
           orderGroupExpandedOrders(group) {
             return this.orderGroupDetails[group?.key]?.orders || [];
           },
-          async ensureOrderGroupDetail(group, {force=false}={}) {
+          async ensureOrderGroupDetail(group, {force=false, signal=null}={}) {
             const anchor = group?.orders?.[0], key = group?.key;
             if (!anchor?.id || !group?.customer_id || !key) {
               this.showToast("订单汇总信息不完整，请刷新后重试", true);
               return null;
             }
             if (!force && this.orderGroupDetails[key]) return this.orderGroupDetails[key];
-            if (this.orderGroupDetailLoading[key]) return null;
+            if (this.orderGroupDetailLoading[key] && !signal) return null;
             const generation = this.orderListGeneration;
             this.orderGroupDetailLoading = {...this.orderGroupDetailLoading,[key]:true};
             this.orderGroupDetailErrors = {...this.orderGroupDetailErrors,[key]:""};
@@ -17910,11 +17910,12 @@
             };
             if (String(group.customer_po || "").trim()) params.customer_po = String(group.customer_po).trim();
             try {
-              const { data } = await axios.get("/api/orders/group-detail", { params });
+              const { data } = await axios.get("/api/orders/group-detail", { params, signal });
               if (generation !== this.orderListGeneration) return null;
               this.orderGroupDetails = {...this.orderGroupDetails,[key]:data};
               return data;
             } catch (error) {
+              if (this.isCancelledRequest(error) || signal?.aborted) return null;
               if (generation !== this.orderListGeneration) return null;
               const message = `订单明细加载失败（订单整组详情加载失败）：${this.errorMessage(error)}`;
               this.orderGroupDetailErrors = {...this.orderGroupDetailErrors,[key]:message};
@@ -17933,33 +17934,104 @@
           },
           async retryOrderGroupDetail(group) { await this.ensureOrderGroupDetail(group,{force:true}); },
           toggleOrder(row) { this.expandedOrders[row.id] = !this.expandedOrders[row.id]; },
+          cancelOrderTraceEventDetailRequest() {
+            const requestKey = "orders:trace-event-detail";
+            const controller = latestRequestControllers.get(requestKey);
+            controller?.abort();
+            if (latestRequestControllers.get(requestKey) === controller) latestRequestControllers.delete(requestKey);
+            this.orderTraceEventDetailLoadingKey = "";
+          },
+          cancelOrderTraceChildRequests() {
+            const requestKey = "orders:trace-reload";
+            const controller = latestRequestControllers.get(requestKey);
+            controller?.abort();
+            if (latestRequestControllers.get(requestKey) === controller) latestRequestControllers.delete(requestKey);
+            this.cancelOrderTraceEventDetailRequest();
+          },
+          cancelOrderReadDetailRequests() {
+            const requestKey = "orders:read-detail-modal";
+            const controller = latestRequestControllers.get(requestKey);
+            controller?.abort();
+            if (latestRequestControllers.get(requestKey) === controller) latestRequestControllers.delete(requestKey);
+            this.cancelOrderTraceChildRequests();
+          },
           async openOrderGroupDetail(group) {
-            const data = await this.ensureOrderGroupDetail(group);
-            if (!data) return;
-            this.orderGroupDetail = data;
-            this.modal = {
-              type:"orderGroupDetail",
-              title:`订单详情 · ${data.customer_name} · ${data.customer_po || "未填写客户单号"}`,
-            };
+            const requestKey = "orders:read-detail-modal";
+            this.cancelOrderTraceChildRequests();
+            const controller = this.beginLatestRequest(requestKey);
+            try {
+              const data = await this.ensureOrderGroupDetail(group, {signal:controller.signal});
+              if (!data || latestRequestControllers.get(requestKey) !== controller) return false;
+              this.orderGroupDetail = data;
+              this.modal = {
+                type:"orderGroupDetail",
+                title:`订单详情 · ${data.customer_name} · ${data.customer_po || "未填写客户单号"}`,
+              };
+              return true;
+            } finally {
+              if (latestRequestControllers.get(requestKey) === controller) this.finishLatestRequest(requestKey, controller);
+            }
           },
           async openOrderDetail(row) {
-            const { data } = await axios.get(`/api/orders/${row.id}`);
-            this.orderDetail = data;
-            this.modal = { type:"orderDetail", title:`只读订单详情 ${this.displayOrderNumber(data)}` };
+            const requestKey = "orders:read-detail-modal";
+            const orderId = Number(row?.id || 0);
+            if (!orderId) {
+              this.showToast("订单信息不完整，请刷新后重试", true);
+              return false;
+            }
+            this.cancelOrderTraceChildRequests();
+            const controller = this.beginLatestRequest(requestKey);
+            try {
+              const { data } = await axios.get(`/api/orders/${orderId}`, {signal:controller.signal});
+              if (latestRequestControllers.get(requestKey) !== controller) return false;
+              this.orderDetail = data;
+              this.modal = { type:"orderDetail", title:`只读订单详情 ${this.displayOrderNumber(data)}` };
+              return true;
+            } catch (error) {
+              if (this.isCancelledRequest(error) || latestRequestControllers.get(requestKey) !== controller) return false;
+              this.showToast(`订单详情读取失败：${this.errorMessage(error)}`, true);
+              return false;
+            } finally {
+              if (latestRequestControllers.get(requestKey) === controller) this.finishLatestRequest(requestKey, controller);
+            }
           },
           async openOrderTrace(order, item) {
-            this.orderTraceReturnContext = {
+            const requestKey = "orders:read-detail-modal";
+            const orderId = Number(order?.id || 0);
+            const itemId = Number(item?.id || 0);
+            if (!orderId || !itemId) {
+              this.showToast("订单追溯信息不完整，请刷新后重试", true);
+              return false;
+            }
+            const returnContext = {
               filters:{...this.filters},
               orderPage:this.pages.orders,
               expandedOrders:{...this.expandedOrders},
               scrollY:window.scrollY,
-              orderId:order.id,
-              itemId:item.id,
+              orderId,
+              itemId,
             };
-            const { data } = await axios.get(`/api/orders/${order.id}/items/${item.id}/documents`);
-            this.orderTrace = data;
-            this.orderTraceEventDetail = null;
-            this.modal = { type:"orderTrace", title:`订单追溯 · 序号 ${data.item.item_sequence || "-"}` };
+            this.cancelOrderTraceChildRequests();
+            const controller = this.beginLatestRequest(requestKey);
+            try {
+              const { data } = await axios.get(
+                `/api/orders/${orderId}/items/${itemId}/documents`,
+                {signal:controller.signal},
+              );
+              if (latestRequestControllers.get(requestKey) !== controller) return false;
+              this.orderTraceReturnContext = returnContext;
+              this.orderTrace = data;
+              this.orderTraceEventDetail = null;
+              this.orderTraceEventDetailLoadingKey = "";
+              this.modal = { type:"orderTrace", title:`订单追溯 · 序号 ${data.item.item_sequence || "-"}` };
+              return true;
+            } catch (error) {
+              if (this.isCancelledRequest(error) || latestRequestControllers.get(requestKey) !== controller) return false;
+              this.showToast(`订单追溯读取失败：${this.errorMessage(error)}`, true);
+              return false;
+            } finally {
+              if (latestRequestControllers.get(requestKey) === controller) this.finishLatestRequest(requestKey, controller);
+            }
           },
           traceCurrentEvent() {
             if (!this.orderTrace?.current_event_key) return null;
@@ -17983,10 +18055,35 @@
             return this.traceRollbackKind(event);
           },
           async reloadOrderTrace() {
-            if (!this.orderTrace?.order?.id || !this.orderTrace?.item?.id) return;
-            const {data}=await axios.get(`/api/orders/${this.orderTrace.order.id}/items/${this.orderTrace.item.id}/documents`);
-            this.orderTrace=data;
-            this.orderTraceEventDetail=null;
+            const requestKey = "orders:trace-reload";
+            const expectedTrace = this.orderTrace;
+            const orderId = Number(expectedTrace?.order?.id || 0);
+            const itemId = Number(expectedTrace?.item?.id || 0);
+            if (!orderId || !itemId || this.modal?.type !== "orderTrace") return false;
+            this.cancelOrderTraceEventDetailRequest();
+            const controller = this.beginLatestRequest(requestKey);
+            try {
+              const {data}=await axios.get(
+                `/api/orders/${orderId}/items/${itemId}/documents`,
+                {signal:controller.signal},
+              );
+              if (
+                latestRequestControllers.get(requestKey) !== controller
+                || this.modal?.type !== "orderTrace"
+                || this.orderTrace !== expectedTrace
+                || Number(this.orderTrace?.order?.id) !== orderId
+                || Number(this.orderTrace?.item?.id) !== itemId
+              ) return false;
+              this.orderTrace=data;
+              this.orderTraceEventDetail=null;
+              return true;
+            } catch (error) {
+              if (this.isCancelledRequest(error) || latestRequestControllers.get(requestKey) !== controller) return false;
+              this.showToast(`订单追溯刷新失败：${this.errorMessage(error)}`, true);
+              return false;
+            } finally {
+              if (latestRequestControllers.get(requestKey) === controller) this.finishLatestRequest(requestKey, controller);
+            }
           },
           async rollbackTraceEvent(event) {
             const action=this.traceRollbackAction(event);
@@ -18016,17 +18113,45 @@
             }
           },
           async openTraceEventDetail(event) {
-            if (!this.orderTrace?.order?.id || !this.orderTrace?.item?.id || !event?.source_type || !event?.source_id) return;
+            const requestKey = "orders:trace-event-detail";
+            const expectedTrace = this.orderTrace;
+            const orderId = Number(expectedTrace?.order?.id || 0);
+            const itemId = Number(expectedTrace?.item?.id || 0);
+            const sourceTypeValue = String(event?.source_type || "");
+            const sourceId = Number(event?.source_id || 0);
+            const loadingKey = String(event?.key || `${sourceTypeValue}:${sourceId}`);
+            if (!orderId || !itemId || !sourceTypeValue || !sourceId || this.modal?.type !== "orderTrace") return false;
+            const controller = this.beginLatestRequest(requestKey);
+            this.orderTraceEventDetailLoadingKey = loadingKey;
             try {
-              const sourceType=encodeURIComponent(event.source_type);
-              const { data } = await axios.get(`/api/orders/${this.orderTrace.order.id}/items/${this.orderTrace.item.id}/documents/${sourceType}/${event.source_id}`);
+              const sourceType=encodeURIComponent(sourceTypeValue);
+              const { data } = await axios.get(
+                `/api/orders/${orderId}/items/${itemId}/documents/${sourceType}/${sourceId}`,
+                {signal:controller.signal},
+              );
+              if (
+                latestRequestControllers.get(requestKey) !== controller
+                || this.modal?.type !== "orderTrace"
+                || this.orderTrace !== expectedTrace
+                || Number(this.orderTrace?.order?.id) !== orderId
+                || Number(this.orderTrace?.item?.id) !== itemId
+              ) return false;
               this.orderTraceEventDetail = data;
               this.$nextTick(() => document.getElementById("orderTraceEventDetail")?.scrollIntoView({behavior:"smooth",block:"start"}));
+              return true;
             } catch (error) {
+              if (this.isCancelledRequest(error) || latestRequestControllers.get(requestKey) !== controller) return false;
               this.showToast(`阶段详情读取失败：${this.errorMessage(error)}`, true);
+              return false;
+            } finally {
+              if (latestRequestControllers.get(requestKey) === controller) {
+                this.finishLatestRequest(requestKey, controller);
+                if (this.orderTraceEventDetailLoadingKey === loadingKey) this.orderTraceEventDetailLoadingKey = "";
+              }
             }
           },
           returnFromOrderTrace() {
+            this.cancelOrderReadDetailRequests();
             const context=this.orderTraceReturnContext;
             if (context) {
               this.filters={...this.filters,...context.filters};
@@ -18036,6 +18161,7 @@
             this.modal=null;
             this.orderTrace=null;
             this.orderTraceEventDetail=null;
+            this.orderTraceEventDetailLoadingKey="";
             this.orderTraceReturnContext=null;
             this.$nextTick(() => window.scrollTo(0,context?.scrollY || 0));
           },
@@ -19978,6 +20104,11 @@
               if (this.modal?.type === "orderTrace") {
                 this.returnFromOrderTrace();
                 return;
+              }
+              if (["orderGroupDetail","orderDetail"].includes(this.modal?.type)) {
+                this.cancelOrderReadDetailRequests();
+                this.orderGroupDetail = null;
+                this.orderDetail = null;
               }
             if (this.pdfWarehouseLocator.visible) {
               this.closePdfWarehouseLocator();

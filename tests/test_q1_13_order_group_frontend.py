@@ -57,9 +57,12 @@ def test_group_detail_loads_authoritative_backend_group_and_keeps_drawings() -> 
 
 def test_item_trace_remains_bound_to_exact_order_and_item() -> None:
     assert (
-        "axios.get(`/api/orders/${order.id}/items/${item.id}/documents`)"
+        "`/api/orders/${orderId}/items/${itemId}/documents`"
         in INDEX
     )
+    assert "const orderId = Number(order?.id || 0)" in INDEX
+    assert "const itemId = Number(item?.id || 0)" in INDEX
+    assert "latestRequestControllers.get(requestKey) !== controller" in INDEX
     assert "openOrderTrace(group" not in INDEX
 
 

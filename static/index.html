@@ -3893,7 +3893,7 @@
                       <strong>这款常用箱历史报料材质</strong>
                       <div class="muted" style="font-size:11px;margin-top:2px">只显示该常用箱关联的正式/历史报料事实，不混入同客户其他产品。</div>
                     </div>
-                    <button v-if="productForm.id" type="button" class="btn small" @click="loadProductMaterialContext(productForm.id)">刷新</button>
+                    <button v-if="productForm.id" type="button" class="btn small" :disabled="productMaterialContext.loading" @click="loadProductMaterialContext(productForm.id)">{{ productMaterialContext.loading ? '读取中…' : '刷新' }}</button>
                   </div>
                   <div v-if="!productForm.id" class="muted">新增常用箱尚无历史报料记录。</div>
                   <div v-else-if="productMaterialContext.error" class="notice error">{{ productMaterialContext.error }}</div>
@@ -14234,17 +14234,36 @@
           async searchBomProducts(keyword="") {
             if (!this.productForm.customer_id) {
               this.bomEditor.componentOptions = [];
-              return;
+              return true;
             }
+            const requestedProductId = Number(this.productForm.id || 0) || null;
+            const requestedCustomerId = Number(this.productForm.customer_id || 0);
+            const requestKey = "product:bom-search";
+            const controller = this.beginLatestRequest(requestKey);
             try {
               const { data } = await axios.get("/api/master/products", { params: {
-                customer_id: this.productForm.customer_id, keyword, page_size: 50, include_inactive: false,
-              } });
-              const rows = (data.items || []).filter(row => String(row.id) !== String(this.productForm.id));
+                customer_id: requestedCustomerId, keyword:String(keyword || ""), page_size: 50, include_inactive: false,
+              }, signal:controller.signal });
+              if (
+                latestRequestControllers.get(requestKey) !== controller
+                || (Number(this.productForm.id || 0) || null) !== requestedProductId
+                || Number(this.productForm.customer_id || 0) !== requestedCustomerId
+              ) return false;
+              const rows = (data.items || []).filter(row => String(row.id) !== String(requestedProductId));
               this.bomEditor.componentOptions = rows.map(row => this.bomComponentOption(row));
               this.mergeBomComponentOptions(this.bomEditor.components);
+              return true;
             } catch (error) {
+              if (
+                this.isCancelledRequest(error)
+                || latestRequestControllers.get(requestKey) !== controller
+                || (Number(this.productForm.id || 0) || null) !== requestedProductId
+                || Number(this.productForm.customer_id || 0) !== requestedCustomerId
+              ) return false;
               this.bomEditor.error = this.errorMessage(error);
+              return false;
+            } finally {
+              this.finishLatestRequest(requestKey, controller);
             }
           },
           addBomComponent() {
@@ -14631,8 +14650,10 @@
             }
           },
           async loadProductMaterialContext(productId) {
-            if (!productId) return;
             const requestedId = Number(productId);
+            if (!requestedId || Number(this.productForm.id || 0) !== requestedId) return false;
+            const requestKey = "product:material-context";
+            const controller = this.beginLatestRequest(requestKey);
             this.productMaterialContext = {
               ...this.productMaterialContext,
               product_id: requestedId,
@@ -14640,8 +14661,13 @@
               error: "",
             };
             try {
-              const { data } = await axios.get(`/api/requisition/products/${requestedId}/material-context`);
-              if (Number(this.productForm.id || 0) !== requestedId) return;
+              const { data } = await axios.get(`/api/requisition/products/${requestedId}/material-context`, {
+                signal:controller.signal,
+              });
+              if (
+                latestRequestControllers.get(requestKey) !== controller
+                || Number(this.productForm.id || 0) !== requestedId
+              ) return false;
               this.productMaterialContext = {
                 product_id: requestedId,
                 candidates: data.candidates || data.candidate_summary || [],
@@ -14650,8 +14676,13 @@
                 loading: false,
                 error: "",
               };
+              return true;
             } catch (error) {
-              if (Number(this.productForm.id || 0) !== requestedId) return;
+              if (
+                this.isCancelledRequest(error)
+                || latestRequestControllers.get(requestKey) !== controller
+                || Number(this.productForm.id || 0) !== requestedId
+              ) return false;
               this.productMaterialContext = {
                 product_id: requestedId,
                 candidates: [],
@@ -14660,6 +14691,9 @@
                 loading: false,
                 error: this.errorMessage(error) || "常用箱材质候选与历史加载失败",
               };
+              return false;
+            } finally {
+              this.finishLatestRequest(requestKey, controller);
             }
           },
           applyProductMaterialCandidate(candidate) {

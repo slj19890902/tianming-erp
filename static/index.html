@@ -2576,32 +2576,38 @@
                   <button :class="['btn',{primary:incomingTab==='history'}]" @click="selectIncomingTab('history')">历史入库</button>
                 </div>
                 <div class="toolbar-group">
-                  <button v-if="incomingTab==='pending' && hasPermission('incoming.execute')" class="btn success" :disabled="!incomingSelectedCount()" @click="batchReceiveIncoming">批量确认入库（{{ incomingSelectedCount() }}）</button>
-                  <button class="btn" @click="refreshIncomingTab">刷新</button>
+                  <button v-if="incomingTab==='pending' && hasPermission('incoming.execute')" class="btn success" :disabled="incomingOperationBusy() || !incomingSelectedCount()" @click="batchReceiveIncoming">{{ incomingOperationIs('batch') ? '批量入库中…' : `批量确认入库（${incomingSelectedCount()}）` }}</button>
+                  <button class="btn" :disabled="incomingTabLoading() || incomingOperationBusy()" @click="refreshIncomingTab">{{ incomingTabLoading() ? '刷新中…' : '刷新' }}</button>
                 </div>
               </div>
+              <div v-if="incomingTab==='pending' && incomingPendingState.initialLoading" class="status blue" style="display:block;margin:8px 0">正在读取待入库来料…</div>
+              <div v-if="incomingTab==='pending' && incomingPendingState.refreshing" class="status blue" style="display:block;margin:8px 0">正在刷新待入库，已显示的记录不会被清空。</div>
+              <div v-if="incomingTab==='pending' && incomingPendingState.error" class="status orange" style="display:block;margin:8px 0">待入库读取失败：{{ incomingPendingState.error }} <button class="btn small" @click="loadIncoming({force:true})">重试</button></div>
               <div v-if="incomingTab==='received' && incomingReceivedLoading" class="status blue" style="display:block;margin:8px 0">正在读取今日实收，已显示的记录不会被清空。</div>
               <div v-if="incomingTab==='received' && incomingReceivedError" class="status orange" style="display:block;margin:8px 0">{{ incomingReceivedError }} <button class="btn small" @click="loadIncomingReceived({force:true})">重试</button></div>
               <div v-if="incomingTab==='pending' && incomingLocationsLoading" class="status blue" style="display:block;margin:8px 0">正在读取余量转半成品所需库位…</div>
               <div v-if="incomingTab==='pending' && incomingLocationsError" class="status orange" style="display:block;margin:8px 0">{{ incomingLocationsError }} <button class="btn small" @click="ensureIncomingLocations()">重试</button></div>
-              <data-panel v-if="incomingTab !== 'history'" :empty="!(incomingTab==='pending' ? incomingPending : incomingReceived).length && !(incomingTab==='received' && (incomingReceivedLoading || incomingReceivedError))">
+              <data-panel v-if="incomingTab !== 'history'" :empty="!(incomingTab==='pending' ? incomingPending : incomingReceived).length && !(incomingTab==='pending' && (incomingPendingState.initialLoading || incomingPendingState.error)) && !(incomingTab==='received' && (incomingReceivedLoading || incomingReceivedError))">
                 <table>
-                  <thead><tr><th v-if="incomingTab==='pending' && hasPermission('incoming.execute')"><input type="checkbox" :checked="allIncomingSelected" @change="toggleAllIncoming($event.target.checked)" /> 全选</th><th>纸板报料尺寸</th><th>客户名称</th><th>存货编码</th><th>产品名称</th><th>材质</th><th>计划 / 累计 / 剩余</th><th>本次实收</th><th>差异处理</th><th>报料日期</th><th>PDF图纸</th><th v-if="hasPermission('incoming.execute')">操作</th></tr></thead>
+                  <thead><tr><th v-if="incomingTab==='pending' && hasPermission('incoming.execute')"><input type="checkbox" :checked="allIncomingSelected" :disabled="incomingOperationBusy()" @change="toggleAllIncoming($event.target.checked)" /> 全选</th><th>纸板报料尺寸</th><th>客户名称</th><th>存货编码</th><th>产品名称</th><th>材质</th><th>计划 / 累计 / 剩余</th><th>本次实收</th><th>差异处理</th><th>报料日期</th><th>PDF图纸</th><th v-if="hasPermission('incoming.execute')">操作</th></tr></thead>
                   <tbody><tr v-for="row in (incomingTab==='pending' ? incomingPending : incomingReceived)" :key="row.history_key || row.item_id">
-                    <td v-if="incomingTab==='pending' && hasPermission('incoming.execute')"><input type="checkbox" v-model="incomingSelected[row.item_id]" :disabled="!canReceiveIncoming(row)" /></td>
+                    <td v-if="incomingTab==='pending' && hasPermission('incoming.execute')"><input type="checkbox" v-model="incomingSelected[row.item_id]" :disabled="incomingOperationBusy() || !canReceiveIncoming(row)" /></td>
                     <td><strong>{{ formatBoardSpec(row.cardboard_len,row.cardboard_width) }}</strong></td>
                     <td>{{ row.customer_name }}</td><td>{{ row.product_code || "-" }}</td><td>{{ row.product_name }}</td><td>{{ row.material_display || "-" }}</td>
                     <td><div>计划 {{ row.planned_quantity ?? row.requisition_qty ?? row.quantity }}</div><div>累计 {{ row.cumulative_received_quantity || 0 }}</div><strong>剩余 {{ row.remaining_quantity ?? row.requisition_qty ?? row.quantity }}</strong></td>
-                    <td><input v-if="incomingTab==='pending' && hasPermission('incoming.execute')" class="input compact-input" type="number" min="1" v-model.number="row.incoming_quantity" /><strong v-else>{{ row.incoming_quantity }}</strong></td>
-                    <td style="min-width:210px"><template v-if="incomingTab==='pending'"><div v-if="Number(row.cumulative_received_quantity||0)>0 && Number(row.remaining_quantity||0)>0" class="status orange">已收 {{ row.cumulative_received_quantity }}，等待补 {{ row.remaining_quantity }}</div><select v-if="incomingProjectedVariance(row)<0" class="select" v-model="row.resolution_action" :disabled="!hasPermission('incoming.execute')"><option value="">请选择短收处理</option><option value="await_supplier">继续等待供应商补货</option><option value="accept_short">按当前累计数量结单</option></select><select v-else-if="incomingProjectedVariance(row)>0" class="select" v-model="row.resolution_action" :disabled="!hasPermission('incoming.execute')"><option value="">请选择超收处理</option><option value="all_to_production">全部投入当前生产</option><option value="transfer_to_semi_inventory">超出部分转半成品库存</option></select><span v-else class="status green">本次后累计等于计划</span><select v-if="row.resolution_action==='transfer_to_semi_inventory'" class="select" v-model.number="row.surplus_location_id" :disabled="!hasPermission('incoming.execute')"><option :value="null">请选择半成品库位</option><option v-for="location in incomingSemiLocations()" :key="location.id" :value="location.id">{{ location.location_code }}｜{{ location.location_name }}</option></select></template><template v-else><span :class="['status',row.variance_type==='matched'?'green':'orange']">{{ incomingVarianceLabel(row) }}</span><div v-if="row.resolution_reason" class="muted">{{ row.resolution_reason }}</div></template></td>
+                    <td><input v-if="incomingTab==='pending' && hasPermission('incoming.execute')" class="input compact-input" type="number" min="1" v-model.number="row.incoming_quantity" :disabled="incomingOperationBusy()" /><strong v-else>{{ row.incoming_quantity }}</strong></td>
+                    <td style="min-width:210px"><template v-if="incomingTab==='pending'"><div v-if="Number(row.cumulative_received_quantity||0)>0 && Number(row.remaining_quantity||0)>0" class="status orange">已收 {{ row.cumulative_received_quantity }}，等待补 {{ row.remaining_quantity }}</div><select v-if="incomingProjectedVariance(row)<0" class="select" v-model="row.resolution_action" :disabled="!hasPermission('incoming.execute') || incomingOperationBusy()"><option value="">请选择短收处理</option><option value="await_supplier">继续等待供应商补货</option><option value="accept_short">按当前累计数量结单</option></select><select v-else-if="incomingProjectedVariance(row)>0" class="select" v-model="row.resolution_action" :disabled="!hasPermission('incoming.execute') || incomingOperationBusy()"><option value="">请选择超收处理</option><option value="all_to_production">全部投入当前生产</option><option value="transfer_to_semi_inventory">超出部分转半成品库存</option></select><span v-else class="status green">本次后累计等于计划</span><select v-if="row.resolution_action==='transfer_to_semi_inventory'" class="select" v-model.number="row.surplus_location_id" :disabled="!hasPermission('incoming.execute') || incomingOperationBusy()"><option :value="null">请选择半成品库位</option><option v-for="location in incomingSemiLocations()" :key="location.id" :value="location.id">{{ location.location_code }}｜{{ location.location_name }}</option></select></template><template v-else><span :class="['status',row.variance_type==='matched'?'green':'orange']">{{ incomingVarianceLabel(row) }}</span><div v-if="row.resolution_reason" class="muted">{{ row.resolution_reason }}</div></template></td>
                     <td>{{ row.requisition_date || "-" }}</td>
                     <td><a v-if="row.drawing_is_pdf" class="btn small" :href="row.drawing_path" target="_blank">打开PDF</a><span v-else>-</span></td>
-                    <td v-if="hasPermission('incoming.execute')"><template v-if="incomingTab==='pending'"><button class="btn small success" @click="receiveIncoming(row)">确认实收</button><button v-if="row.pending_receipt_item_id" class="btn small" @click="acceptShortIncoming(row)">不再补货，短收结单</button></template><button v-else-if="canAdmin" class="btn small danger" @click="revertIncoming(row)">撤销收料，回到已报料</button></td>
+                    <td v-if="hasPermission('incoming.execute')"><template v-if="incomingTab==='pending'"><button class="btn small success" :disabled="incomingOperationBusy()" @click="receiveIncoming(row)">{{ incomingOperationIs('receive',row) ? '入库中…' : '确认实收' }}</button><button v-if="row.pending_receipt_item_id" class="btn small" :disabled="incomingOperationBusy()" @click="acceptShortIncoming(row)">{{ incomingOperationIs('accept-short',row) ? '结单中…' : '不再补货，短收结单' }}</button></template><button v-else-if="canAdmin" class="btn small danger" :disabled="incomingOperationBusy()" @click="revertIncoming(row)">{{ incomingOperationIs('revert',row) ? '撤销中…' : '撤销收料，回到已报料' }}</button></td>
                   </tr></tbody>
                 </table>
               </data-panel>
               <div v-else>
                 <div class="status orange" style="display:block;margin:8px 0">历史入库按真实收货记录分页显示。拥有“来料入库操作”权限才可撤销（订单已发货则禁止撤销）。</div>
+                <div v-if="incomingHistoryState.initialLoading" class="status blue" style="display:block;margin:8px 0">正在读取历史入库…</div>
+                <div v-if="incomingHistoryState.refreshing" class="status blue" style="display:block;margin:8px 0">正在刷新历史入库，已显示的记录不会被清空。</div>
+                <div v-if="incomingHistoryState.error" class="status orange" style="display:block;margin:8px 0">历史入库读取失败：{{ incomingHistoryState.error }} <button class="btn small" @click="loadIncomingHistory({force:true})">重试</button></div>
                 <div class="list-filterbar">
                   <search-select v-model="incomingHistoryFilters.customer_id" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="客户" :allow-empty="true" @change="pages.incomingHistory=1; loadIncomingHistory()"></search-select>
                   <input class="input" v-model.trim="incomingHistoryFilters.document_keyword" placeholder="入库/订单单号" @keyup.enter="pages.incomingHistory=1; loadIncomingHistory()" />
@@ -2615,7 +2621,7 @@
                   <button class="btn" @click="resetIncomingHistoryFilters()">清空</button>
                   <pager :page="pages.incomingHistory" :total="incomingHistoryTotal" :page-size="pageSize" :always="true" :compact="true" @change="pages.incomingHistory=$event; loadIncomingHistory()"></pager>
                 </div>
-                <data-panel :empty="!incomingHistory.length">
+                <data-panel :empty="!incomingHistory.length && !incomingHistoryState.initialLoading && !incomingHistoryState.error">
                   <table>
                     <thead><tr><th>入库时间</th><th>订单号</th><th>客户</th><th>存货编码</th><th>产品名称</th><th>材质</th><th>入库数量</th><th>操作</th></tr></thead>
                     <tbody><tr v-for="row in incomingHistory" :key="row.history_key || row.receipt_item_id || row.item_id">
@@ -2627,7 +2633,7 @@
                       <td>{{ row.material_display || "-" }}</td>
                       <td><strong>{{ row.incoming_quantity }}</strong></td>
                       <td>
-                        <button v-if="canAdmin" class="btn small danger" @click="revertIncoming(row)">撤销收料，回到已报料</button>
+                        <button v-if="canAdmin" class="btn small danger" :disabled="incomingOperationBusy()" @click="revertIncoming(row)">{{ incomingOperationIs('revert',row) ? '撤销中…' : '撤销收料，回到已报料' }}</button>
                         <span v-else class="muted">-</span>
                       </td>
                     </tr></tbody>
@@ -6319,6 +6325,9 @@
             requisitionReportedTotal: 0,
             reportedFilters: { customer_id:"", document_number:"", order_number:"", product_code:"", supplier_name:"", status:"", date_from:"", date_to:"" },
             incomingTab: "pending", incomingPending: [], incomingReceived: [], incomingReceivedLoaded: false, incomingReceivedLoading: false, incomingReceivedError: "", incomingHistory: [], incomingHistoryTotal: 0, incomingLocations: [], incomingLocationsLoading: false, incomingLocationsError: "",
+            incomingPendingState: { loaded:false, initialLoading:false, refreshing:false, error:"" },
+            incomingHistoryState: { loaded:false, initialLoading:false, refreshing:false, error:"" },
+            incomingOperationState: { action:"", key:"" }, incomingReceiveAttempts: {}, incomingBatchAttempt: null,
             incomingHistoryFilters: { customer_id:"", document_keyword:"", product_code:"", product_name:"", supplier_name:"", date_from:"", date_to:"", receipt_status:"" },
             productionTab: "pending", productionPending: [], productionHistory: [], productionHistoryTotal: 0, productionLocations: [], productionLocationsLoading: false, productionLocationsError: "", productionSelected: {}, productionBusy: false,
             productionHistoryFilters: { customer_id:"", order_keyword:"", product_code:"", product_name:"", completed_date_from:"", completed_date_to:"", status:"" },
@@ -11944,16 +11953,30 @@
           },
           async loadIncoming() {
             const controller = this.beginLatestRequest("incoming:pending");
+            const firstLoad = !this.incomingPendingState.loaded;
+            this.incomingPendingState.initialLoading = firstLoad;
+            this.incomingPendingState.refreshing = !firstLoad;
+            this.incomingPendingState.error = "";
             try {
               const pending = await axios.get("/api/incoming/pending", {signal:controller.signal});
+              if (latestRequestControllers.get("incoming:pending") !== controller) return false;
               this.incomingPending=(pending.data.items || []).map(row=>({...row,incoming_quantity:Number(row.remaining_quantity ?? row.incoming_quantity ?? row.requisition_qty ?? row.quantity ?? 0),resolution_action:"",resolution_reason:"",surplus_location_id:null}));
               const pendingIds = new Set(this.incomingPending.map(row => row.item_id));
               Object.keys(this.incomingSelected).forEach(itemId => {
                 if (!pendingIds.has(Number(itemId))) delete this.incomingSelected[itemId];
               });
+              this.incomingPendingState.loaded = true;
+              return true;
             } catch (error) {
-              if (!this.isCancelledRequest(error)) throw error;
+              if (!this.isCancelledRequest(error) && latestRequestControllers.get("incoming:pending") === controller) {
+                this.incomingPendingState.error = this.errorMessage(error) || "请稍后重试";
+              }
+              return false;
             } finally {
+              if (latestRequestControllers.get("incoming:pending") === controller) {
+                this.incomingPendingState.initialLoading = false;
+                this.incomingPendingState.refreshing = false;
+              }
               this.finishLatestRequest("incoming:pending", controller);
             }
           },
@@ -11964,10 +11987,13 @@
             this.incomingReceivedError = "";
             try {
               const received = await axios.get("/api/incoming/received", {signal:controller.signal});
+              if (latestRequestControllers.get("incoming:received") !== controller) return false;
               this.incomingReceived=(received.data.items || []).map(row=>({...row,incoming_quantity:Number(row.incoming_quantity || row.requisition_qty || row.quantity || 0)}));
               this.incomingReceivedLoaded = true;
+              return true;
             } catch (error) {
-              if (!this.isCancelledRequest(error)) this.incomingReceivedError = "读取今日实收失败：" + this.errorMessage(error);
+              if (!this.isCancelledRequest(error) && latestRequestControllers.get("incoming:received") === controller) this.incomingReceivedError = "读取今日实收失败：" + this.errorMessage(error);
+              return false;
             } finally {
               if (latestRequestControllers.get("incoming:received") === controller) this.incomingReceivedLoading = false;
               this.finishLatestRequest("incoming:received", controller);
@@ -11980,9 +12006,12 @@
             this.incomingLocationsError = "";
             try {
               const locations = await axios.get("/api/incoming/surplus-locations", {signal:controller.signal});
+              if (latestRequestControllers.get("incoming:surplus-locations") !== controller) return false;
               this.incomingLocations=locations.data.items || [];
+              return true;
             } catch (error) {
-              if (!this.isCancelledRequest(error)) this.incomingLocationsError = "半成品库位读取失败，请重试后再确认余量入库";
+              if (!this.isCancelledRequest(error) && latestRequestControllers.get("incoming:surplus-locations") === controller) this.incomingLocationsError = "半成品库位读取失败，请重试后再确认余量入库";
+              return false;
             } finally {
               if (latestRequestControllers.get("incoming:surplus-locations") === controller) this.incomingLocationsLoading = false;
               this.finishLatestRequest("incoming:surplus-locations", controller);
@@ -12010,7 +12039,60 @@
           async refreshIncomingAfterWrite() {
             const tasks = [this.loadIncoming(), this.loadKpi()];
             if (this.incomingReceivedLoaded) tasks.push(this.loadIncomingReceived({force:true}));
-            await Promise.all(tasks);
+            const results = await Promise.all(tasks);
+            return results[0] !== false && (!this.incomingReceivedLoaded || results[2] !== false);
+          },
+          incomingTabLoading() {
+            if (this.incomingTab === "received") return this.incomingReceivedLoading;
+            if (this.incomingTab === "history") return this.incomingHistoryState.initialLoading || this.incomingHistoryState.refreshing;
+            return this.incomingPendingState.initialLoading || this.incomingPendingState.refreshing;
+          },
+          incomingOperationKey(row) {
+            if (!row) return "batch";
+            if (row.receipt_item_id) return `receipt:${row.receipt_item_id}`;
+            if (row.pending_receipt_item_id) return `receipt:${row.pending_receipt_item_id}`;
+            return `item:${row.item_id}`;
+          },
+          incomingOperationBusy() {
+            return !!this.incomingOperationState.action;
+          },
+          incomingOperationIs(action, row=null) {
+            return this.incomingOperationState.action === action
+              && this.incomingOperationState.key === this.incomingOperationKey(row);
+          },
+          incomingReceiveAttempt(row) {
+            const itemKey = String(row.item_id);
+            const signature = JSON.stringify({
+              incoming_quantity:Number(row.incoming_quantity || 0),
+              cumulative_received_quantity:Number(row.cumulative_received_quantity || 0),
+              planned_quantity:Number(row.planned_quantity ?? row.requisition_qty ?? row.quantity ?? 0),
+              resolution_action:String(row.resolution_action || ""),
+              resolution_reason:String(row.resolution_reason || "").trim(),
+              surplus_location_id:Number(row.surplus_location_id || 0),
+            });
+            const existing = this.incomingReceiveAttempts[itemKey];
+            if (existing?.signature === signature) return existing;
+            const attempt = { signature, idempotency_key:createIdempotencyKey() };
+            this.incomingReceiveAttempts[itemKey] = attempt;
+            return attempt;
+          },
+          incomingBatchAttemptFor(rows) {
+            const signature = JSON.stringify(rows.map(row => ({
+              item_id:String(row.item_id),
+              incoming_quantity:Number(row.incoming_quantity || 0),
+              cumulative_received_quantity:Number(row.cumulative_received_quantity || 0),
+              planned_quantity:Number(row.planned_quantity ?? row.requisition_qty ?? row.quantity ?? 0),
+              resolution_action:String(row.resolution_action || ""),
+              resolution_reason:String(row.resolution_reason || "").trim(),
+              surplus_location_id:Number(row.surplus_location_id || 0),
+            })));
+            if (this.incomingBatchAttempt?.signature === signature) return this.incomingBatchAttempt;
+            this.incomingBatchAttempt = {
+              signature,
+              idempotency_key:createIdempotencyKey(),
+              item_keys:Object.fromEntries(rows.map(row => [String(row.item_id),createIdempotencyKey()])),
+            };
+            return this.incomingBatchAttempt;
           },
           incomingProjectedVariance(row) {
             return Number(row.cumulative_received_quantity || 0) + Number(row.incoming_quantity || 0) - Number(row.planned_quantity ?? row.requisition_qty ?? row.quantity ?? 0);
@@ -12028,7 +12110,7 @@
             if (action === "transfer_to_semi_inventory") return "超收，余量已转半成品库存";
             return type === "short" ? "短收待处理" : type === "over" ? "超收待处理" : "历史入库";
           },
-          incomingPayload(row) {
+          incomingPayload(row, idempotencyKey=null) {
             const variance=this.incomingProjectedVariance(row);
             const action=variance===0 ? null : (row.resolution_action || null);
             if (variance<0 && !["await_supplier","accept_short"].includes(action)) throw new Error("短收时请选择继续等待补货或按当前数量结单");
@@ -12036,7 +12118,7 @@
             if (action==="transfer_to_semi_inventory" && this.incomingLocationsLoading) throw new Error("正在读取半成品库位，请稍候再确认");
             if (action==="transfer_to_semi_inventory" && this.incomingLocationsError) throw new Error(this.incomingLocationsError);
             if (action==="transfer_to_semi_inventory" && !Number(row.surplus_location_id)) throw new Error("余量转半成品库存时必须选择库位");
-            return {item_id:row.item_id,received_quantity:Number(row.incoming_quantity),resolution_action:action,resolution_reason:row.resolution_reason?.trim()||null,surplus_location_id:Number(row.surplus_location_id)||null,idempotency_key:createIdempotencyKey()};
+            return {item_id:row.item_id,received_quantity:Number(row.incoming_quantity),resolution_action:action,resolution_reason:row.resolution_reason?.trim()||null,surplus_location_id:Number(row.surplus_location_id)||null,idempotency_key:idempotencyKey || createIdempotencyKey()};
           },
           canReceiveIncoming(row) {
             return row?.material_status === "pending" && ["已报料", "供应商已排单"].includes(row?.requisition_status);
@@ -12050,70 +12132,115 @@
             });
           },
           async batchReceiveIncoming() {
+            if (this.incomingOperationBusy()) return false;
             const rows = this.incomingPending.filter(row => this.canReceiveIncoming(row) && this.incomingSelected[row.item_id]);
-            if (!rows.length) return;
+            if (!rows.length) return false;
             for (const row of rows) {
               const quantity = Number(row.incoming_quantity);
               if (!Number.isInteger(quantity) || quantity <= 0) {
                 this.showToast(`${row.product_code || row.product_name} 的入库数量必须是大于0的整数`, true);
-                return;
+                return false;
               }
-              try { this.incomingPayload(row); } catch(error) { this.showToast(`${row.product_code || row.product_name}：${error.message}`,true); return; }
+              try { this.incomingPayload(row); } catch(error) { this.showToast(`${row.product_code || row.product_name}：${error.message}`,true); return false; }
             }
-            if (!confirm(`确认将选中的 ${rows.length} 条来料记录入库？`)) return;
+            if (!confirm(`确认将选中的 ${rows.length} 条来料记录入库？`)) return false;
+            const attempt = this.incomingBatchAttemptFor(rows);
+            this.incomingOperationState = {action:"batch",key:"batch"};
             try {
               const { data } = await axios.put("/api/incoming/batch-receive", {
-                idempotency_key:createIdempotencyKey(),
-                items: rows.map(row => this.incomingPayload(row)),
+                idempotency_key:attempt.idempotency_key,
+                items: rows.map(row => this.incomingPayload(row,attempt.item_keys[String(row.item_id)])),
               });
-              this.incomingSelected = {};
-              await this.refreshIncomingAfterWrite();
+              this.incomingBatchAttempt = null;
+              const failedItemIds = new Set((data.results || []).filter(result => !result.success).map(result => String(result.item_id)));
+              const nextSelected = {};
+              rows.forEach(row => { if (failedItemIds.has(String(row.item_id))) nextSelected[row.item_id] = true; });
+              this.incomingSelected = nextSelected;
+              let refreshed = false;
+              try { refreshed = await this.refreshIncomingAfterWrite(); } catch (_) { refreshed = false; }
               if (data.failed) {
                 const reasons = (data.results || []).filter(row => !row.success).slice(0, 3).map(row => `第${row.item_id}条：${row.message}`).join("；");
-                this.showToast(`成功 ${data.succeeded} 条，失败 ${data.failed} 条。${reasons}`, true);
+                this.showToast(`成功 ${data.succeeded} 条，失败 ${data.failed} 条。${reasons}${refreshed ? "" : "；列表刷新失败，请手动刷新，成功项不要重复提交"}`, true);
               } else {
-                this.showToast(`已批量入库 ${data.succeeded} 条来料记录`);
+                this.showToast(refreshed ? `已批量入库 ${data.succeeded} 条来料记录` : `已批量入库 ${data.succeeded} 条；列表刷新失败，请手动刷新，不要重复提交`, !refreshed);
               }
-            } catch(error) { this.showToast(this.errorMessage(error),true); }
+              return true;
+            } catch(error) { this.showToast(this.errorMessage(error),true); return false; }
+            finally {
+              if (this.incomingOperationIs("batch")) this.incomingOperationState = {action:"",key:""};
+            }
           },
           async receiveIncoming(row) {
+            if (this.incomingOperationBusy()) return false;
             const quantity=Number(row.incoming_quantity);
-            if (!Number.isInteger(quantity) || quantity <= 0) { this.showToast("入库数量必须是大于0的整数",true); return; }
-            let payload;
-            try { payload=this.incomingPayload(row); } catch(error) { this.showToast(error.message,true); return; }
-            if (!confirm(`确认入库 ${quantity} 张纸板吗？`)) return;
+            if (!Number.isInteger(quantity) || quantity <= 0) { this.showToast("入库数量必须是大于0的整数",true); return false; }
+            try { this.incomingPayload(row); } catch(error) { this.showToast(error.message,true); return false; }
+            if (!confirm(`确认入库 ${quantity} 张纸板吗？`)) return false;
+            const itemKey = String(row.item_id);
+            const attempt = this.incomingReceiveAttempt(row);
+            const payload = this.incomingPayload(row, attempt.idempotency_key);
+            this.incomingOperationState = {action:"receive",key:this.incomingOperationKey(row)};
             try {
               const {data}=await axios.put(`/api/incoming/receive/${row.item_id}`,payload);
-              await this.refreshIncomingAfterWrite();
-              this.showToast(data.material_status==="pending" ? `已记录实收，仍待补 ${data.remaining_quantity} 张` : "来料入库成功");
-            } catch(error) { this.showToast(this.errorMessage(error),true); }
+              delete this.incomingReceiveAttempts[itemKey];
+              let refreshed = false;
+              try { refreshed = await this.refreshIncomingAfterWrite(); } catch (_) { refreshed = false; }
+              const successMessage = data.material_status==="pending" ? `入库已成功，仍待补 ${data.remaining_quantity} 张` : "入库已成功";
+              this.showToast(refreshed ? successMessage : `${successMessage}；列表刷新失败，请手动刷新，不要重复提交`, !refreshed);
+              return true;
+            } catch(error) { this.showToast(this.errorMessage(error),true); return false; }
+            finally {
+              if (this.incomingOperationIs("receive",row)) this.incomingOperationState = {action:"",key:""};
+            }
           },
           async acceptShortIncoming(row) {
-            if (!row.pending_receipt_item_id) return;
-            if (!confirm("确认供应商不再补货，并按当前累计实收数量完成收货？")) return;
+            if (this.incomingOperationBusy() || !row.pending_receipt_item_id) return false;
+            if (!confirm("确认供应商不再补货，并按当前累计实收数量完成收货？")) return false;
+            this.incomingOperationState = {action:"accept-short",key:this.incomingOperationKey(row)};
             try {
               await axios.put(`/api/incoming/receipt-items/${row.pending_receipt_item_id}/accept-short`,{});
-              await this.refreshIncomingAfterWrite();
-              this.showToast("已按当前实收数量完成短收结单");
-            } catch(error) { this.showToast(this.errorMessage(error),true); }
+              let refreshed = false;
+              try { refreshed = await this.refreshIncomingAfterWrite(); } catch (_) { refreshed = false; }
+              this.showToast(refreshed ? "已按当前实收数量完成短收结单" : "短收结单已成功；列表刷新失败，请手动刷新，不要重复提交", !refreshed);
+              return true;
+            } catch(error) { this.showToast(this.errorMessage(error),true); return false; }
+            finally {
+              if (this.incomingOperationIs("accept-short",row)) this.incomingOperationState = {action:"",key:""};
+            }
           },
           async revertIncoming(row) {
-            if (!confirm("确认撤销本次纸板收料并回到已报料状态吗？系统会自动记录操作人、时间和前后状态。")) return;
+            if (this.incomingOperationBusy()) return false;
+            if (!confirm("确认撤销本次纸板收料并回到已报料状态吗？系统会自动记录操作人、时间和前后状态。")) return false;
+            this.incomingOperationState = {action:"revert",key:this.incomingOperationKey(row)};
             try {
               const url=row.receipt_item_id ? `/api/incoming/receipt-items/${row.receipt_item_id}/revert` : `/api/incoming/revert/${row.item_id}`;
               await axios.put(url,{});
-              if (this.incomingTab === 'history') {
-                await Promise.all([this.loadIncomingHistory(), this.loadKpi()]);
-              } else if (this.incomingTab === 'received') {
-                await Promise.all([this.loadIncomingReceived({force:true}), this.loadKpi()]);
-              } else {
-                await Promise.all([this.loadIncoming(), this.loadKpi()]);
-              }
-              this.showToast("已撤回来料入库");
-            } catch(error) { this.showToast(this.errorMessage(error),true); }
+              let refreshed = false;
+              try {
+                if (this.incomingTab === 'history') {
+                  const results = await Promise.all([this.loadIncomingHistory({force:true}), this.loadKpi()]);
+                  refreshed = results[0] !== false;
+                } else if (this.incomingTab === 'received') {
+                  const results = await Promise.all([this.loadIncomingReceived({force:true}), this.loadKpi()]);
+                  refreshed = results[0] !== false;
+                } else {
+                  const results = await Promise.all([this.loadIncoming({force:true}), this.loadKpi()]);
+                  refreshed = results[0] !== false;
+                }
+              } catch (_) { refreshed = false; }
+              this.showToast(refreshed ? "已撤回来料入库" : "撤销收料已成功；列表刷新失败，请手动刷新，不要重复提交", !refreshed);
+              return true;
+            } catch(error) { this.showToast(this.errorMessage(error),true); return false; }
+            finally {
+              if (this.incomingOperationIs("revert",row)) this.incomingOperationState = {action:"",key:""};
+            }
           },
           async loadIncomingHistory() {
             const controller = this.beginLatestRequest("incoming:history");
+            const firstLoad = !this.incomingHistoryState.loaded;
+            this.incomingHistoryState.initialLoading = firstLoad;
+            this.incomingHistoryState.refreshing = !firstLoad;
+            this.incomingHistoryState.error = "";
             try {
               const params = {
                 page: this.pages.incomingHistory,
@@ -12123,13 +12250,27 @@
                 if (value !== "" && value !== null && value !== undefined) params[key] = value;
               });
               const { data } = await axios.get("/api/incoming/history", { params, signal:controller.signal });
+              if (latestRequestControllers.get("incoming:history") !== controller) return false;
               this.incomingHistory = (data.items || []).map(row => ({
                 ...row,
                 incoming_quantity: Number(row.incoming_quantity || row.requisition_qty || row.quantity || 0)
               }));
               this.incomingHistoryTotal = Number(data.total || 0);
-            } catch (error) { if (!this.isCancelledRequest(error)) this.showToast(this.errorMessage(error), true); }
-            finally { this.finishLatestRequest("incoming:history", controller); }
+              this.incomingHistoryState.loaded = true;
+              return true;
+            } catch (error) {
+              if (!this.isCancelledRequest(error) && latestRequestControllers.get("incoming:history") === controller) {
+                this.incomingHistoryState.error = this.errorMessage(error) || "请稍后重试";
+              }
+              return false;
+            }
+            finally {
+              if (latestRequestControllers.get("incoming:history") === controller) {
+                this.incomingHistoryState.initialLoading = false;
+                this.incomingHistoryState.refreshing = false;
+              }
+              this.finishLatestRequest("incoming:history", controller);
+            }
           },
           resetIncomingHistoryFilters() {
             this.incomingHistoryFilters = { customer_id:"", document_keyword:"", product_code:"", product_name:"", supplier_name:"", date_from:"", date_to:"", receipt_status:"" };

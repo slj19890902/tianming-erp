@@ -469,8 +469,8 @@ def test_pending_incoming_uses_current_confirmed_supplier_group_only(
     pending_card = next(
         card for card in overview.json()["cards"] if card["key"] == "pending_incoming"
     )
-    # 首页按订单明细计数；来料页按盖/底等物理料行展开为 3 行。
-    assert pending_card["count"] == 1
+    # 首页与来料页都按可实际收货的物理来料明细计数；盖、底和普通来料共 3 行。
+    assert pending_card["count"] == 3
     assert old_receive.status_code == 409
     assert receive_cover.status_code == 200, receive_cover.text
     assert {row["item_id"] for row in pending_after_cover.json()["items"]} == {

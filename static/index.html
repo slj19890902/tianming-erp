@@ -2235,25 +2235,32 @@
               </div>
 
               <!-- 材质价格历史弹窗 -->
-              <div v-if="showPriceHistoryModal" class="modal-backdrop" @click.self="showPriceHistoryModal=false">
+              <div v-if="showPriceHistoryModal" class="modal-backdrop" @click.self="closePriceHistory()">
                 <div class="modal" style="max-width:680px;max-height:84vh;overflow-y:auto">
-                  <div class="modal-header"><h3>价格历史 · {{ priceHistory.material_code }}</h3><button class="btn small" @click="showPriceHistoryModal=false">关闭</button></div>
+                  <div class="modal-header"><h3>价格历史 · {{ priceHistory.material_code }}</h3><button class="btn small" @click="closePriceHistory()">关闭</button></div>
                   <div style="padding:12px">
                     <div style="font-size:13px;margin-bottom:8px">供应商 {{ supplierDisplayName(priceHistory.supplier_name) }}｜当前报价 {{ priceHistory.current_price ?? "-" }}</div>
-                    <svg v-if="priceHistoryPoints.length>1" :width="priceHistoryChart.w" :height="priceHistoryChart.h" style="border:1px solid #eee;background:#fafafa">
-                      <polyline :points="priceHistoryPolyline" fill="none" stroke="#2563eb" stroke-width="2" />
-                      <circle v-for="(p,i) in priceHistoryPoints" :key="i" :cx="p.x" :cy="p.y" r="3" fill="#2563eb" />
-                    </svg>
-                    <div v-if="!(priceHistory.items||[]).length" class="muted" style="padding:14px;text-align:center">暂无调价历史</div>
-                    <table v-else style="width:100%;font-size:12px;margin-top:8px"><thead><tr style="background:#f9fafb"><th>日期</th><th>旧报价</th><th>新报价</th><th>幅度</th><th>操作人</th><th>备注</th></tr></thead>
-                      <tbody><tr v-for="h in priceHistory.items" :key="h.id">
-                        <td style="text-align:center">{{ h.effective_date || formatBeijingDate(h.created_at) }}</td>
-                        <td style="text-align:right">{{ h.old_price }}</td>
-                        <td style="text-align:right">{{ h.new_price }}</td>
-                        <td style="text-align:right">{{ h.adjust_percent }}%</td>
-                        <td style="text-align:center">{{ h.operator || "-" }}</td>
-                        <td>{{ h.adjust_reason || "-" }}</td>
-                      </tr></tbody></table>
+                    <div v-if="priceHistoryLoading" class="muted" style="padding:14px;text-align:center">价格历史加载中…</div>
+                    <div v-else-if="priceHistoryError" class="notice" style="margin:8px 0">
+                      <span>{{ priceHistoryError }}</span>
+                      <button class="btn small" type="button" @click="retryPriceHistory()">重新加载</button>
+                    </div>
+                    <template v-else>
+                      <svg v-if="priceHistoryPoints.length>1" :width="priceHistoryChart.w" :height="priceHistoryChart.h" style="border:1px solid #eee;background:#fafafa">
+                        <polyline :points="priceHistoryPolyline" fill="none" stroke="#2563eb" stroke-width="2" />
+                        <circle v-for="(p,i) in priceHistoryPoints" :key="i" :cx="p.x" :cy="p.y" r="3" fill="#2563eb" />
+                      </svg>
+                      <div v-if="!(priceHistory.items||[]).length" class="muted" style="padding:14px;text-align:center">暂无调价历史</div>
+                      <table v-else style="width:100%;font-size:12px;margin-top:8px"><thead><tr style="background:#f9fafb"><th>日期</th><th>旧报价</th><th>新报价</th><th>幅度</th><th>操作人</th><th>备注</th></tr></thead>
+                        <tbody><tr v-for="h in priceHistory.items" :key="h.id">
+                          <td style="text-align:center">{{ h.effective_date || formatBeijingDate(h.created_at) }}</td>
+                          <td style="text-align:right">{{ h.old_price }}</td>
+                          <td style="text-align:right">{{ h.new_price }}</td>
+                          <td style="text-align:right">{{ h.adjust_percent }}%</td>
+                          <td style="text-align:center">{{ h.operator || "-" }}</td>
+                          <td>{{ h.adjust_reason || "-" }}</td>
+                        </tr></tbody></table>
+                    </template>
                   </div>
                 </div>
               </div>
@@ -6306,7 +6313,7 @@
             showPriceAdjustModal: false, priceAdjustLoading: false, priceAdjustAction: "", priceAdjustError: "",
             priceAdjustForm: { supplier_name: "", adjust_percent: "", effective_date: "" },
             priceAdjustPreview: null, priceAdjustPreviewKey: "",
-            showPriceHistoryModal: false, priceHistory: { material_code: "", items: [] },
+            showPriceHistoryModal: false, priceHistoryLoading: false, priceHistoryError: "", priceHistory: { material_id: null, material_code: "", items: [] },
             productBoardCost: null,
             productBoardCostDetail: null,
             materialMappingItems: [], materialMappingTotal: 0, materialMappingPage: 1,
@@ -10708,14 +10715,77 @@
             }
           },
           async openPriceHistory(row) {
-            this.priceHistory = { material_code: row.code, items: [] };
+            const materialSnapshot = {
+              material_id: Number(row?.id ?? row?.material_id),
+              material_code: String(row?.code ?? row?.material_code ?? ""),
+              supplier_name: String(row?.supplier_name ?? ""),
+              current_price: row?.quote_price ?? row?.current_price ?? null,
+            };
+            if (!Number.isInteger(materialSnapshot.material_id) || materialSnapshot.material_id <= 0) {
+              this.showToast("无法读取该材质的价格历史：材质编号无效", true);
+              return false;
+            }
+            const requestKey = "materials:price-history";
+            const controller = this.beginLatestRequest(requestKey);
+            this.priceHistory = { ...materialSnapshot, items: [] };
+            this.priceHistoryLoading = true;
+            this.priceHistoryError = "";
             this.showPriceHistoryModal = true;
             try {
-              const { data } = await axios.get(`/api/master/materials/${row.id}/price-history`);
-              this.priceHistory = data;
-            } catch (e) {
-              this.priceHistory = { material_code: row.code, supplier_name: row.supplier_name, items: [] };
+              const { data } = await axios.get(
+                `/api/master/materials/${materialSnapshot.material_id}/price-history`,
+                { signal:controller.signal },
+              );
+              if (
+                latestRequestControllers.get(requestKey) !== controller
+                || !this.showPriceHistoryModal
+                || Number(this.priceHistory.material_id) !== materialSnapshot.material_id
+              ) return false;
+              this.priceHistory = {
+                ...materialSnapshot,
+                ...(data || {}),
+                material_id: materialSnapshot.material_id,
+                material_code: data?.material_code || materialSnapshot.material_code,
+                supplier_name: data?.supplier_name || materialSnapshot.supplier_name,
+                current_price: data?.current_price ?? materialSnapshot.current_price,
+                items: Array.isArray(data?.items) ? data.items : [],
+              };
+              return true;
+            } catch (error) {
+              if (
+                this.isCancelledRequest(error)
+                || latestRequestControllers.get(requestKey) !== controller
+                || !this.showPriceHistoryModal
+                || Number(this.priceHistory.material_id) !== materialSnapshot.material_id
+              ) return false;
+              this.priceHistoryError = `价格历史加载失败：${this.errorMessage(error)}`;
+              return false;
+            } finally {
+              if (latestRequestControllers.get(requestKey) === controller) {
+                this.priceHistoryLoading = false;
+                this.finishLatestRequest(requestKey, controller);
+              }
             }
+          },
+          closePriceHistory() {
+            const requestKey = "materials:price-history";
+            const controller = latestRequestControllers.get(requestKey);
+            controller?.abort();
+            if (latestRequestControllers.get(requestKey) === controller) latestRequestControllers.delete(requestKey);
+            this.showPriceHistoryModal = false;
+            this.priceHistoryLoading = false;
+            this.priceHistoryError = "";
+            return true;
+          },
+          retryPriceHistory() {
+            const snapshot = this.priceHistory || {};
+            if (!snapshot.material_id) return false;
+            return this.openPriceHistory({
+              id: snapshot.material_id,
+              code: snapshot.material_code,
+              supplier_name: snapshot.supplier_name,
+              quote_price: snapshot.current_price,
+            });
           },
           // 常用箱纸板成本参考：实时按当前材质平方报价 + 箱型尺寸计算（不保存）
           async refreshProductBoardCost() {

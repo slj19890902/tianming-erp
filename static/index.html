@@ -10085,7 +10085,7 @@
           },
           async loadProducts() {
             if (this.activePage === "products" && this.productTab === "products" && !this.selectedProductCustomer) {
-              this.products = []; this.productsTotal = 0; this.productsLoading = false; this.productsError = ""; return;
+              this.products = []; this.productsTotal = 0; this.productsLoading = false; this.productsError = ""; return true;
             }
             const params = {
               keyword: this.filters.productKeyword,
@@ -10100,22 +10100,26 @@
             };
             if (this.selectedProductCustomer) params.customer_id = this.selectedProductCustomer.id;
             else if (this.filters.productCustomer) params.customer_id = this.filters.productCustomer;
-            const controller = this.beginLatestRequest("products:list");
+            const requestKey = "products:list";
+            const controller = this.beginLatestRequest(requestKey);
             this.productsLoading = true;
             this.productsError = "";
             try {
               const { data } = await axios.get("/api/master/products", { params, signal:controller.signal });
-              if (controller.signal.aborted) return;
+              if (latestRequestControllers.get(requestKey) !== controller) return false;
               this.products = data.items; this.productsTotal = data.total;
+              return true;
             } catch (error) {
-              if (!this.isCancelledRequest(error)) {
+              if (this.isCancelledRequest(error)) return false;
+              if (latestRequestControllers.get(requestKey) === controller) {
                 this.products = [];
                 this.productsTotal = 0;
                 this.productsError = this.errorMessage(error) || "常用箱读取失败，请重试";
               }
+              return false;
             } finally {
-              if (latestRequestControllers.get("products:list") === controller) this.productsLoading = false;
-              this.finishLatestRequest("products:list", controller);
+              if (latestRequestControllers.get(requestKey) === controller) this.productsLoading = false;
+              this.finishLatestRequest(requestKey, controller);
             }
           },
           async loadMoldTools() {
@@ -10228,23 +10232,32 @@
             this.resetPaperCodeForm();
           },
           async loadMaterials() {
-            const controller = this.beginLatestRequest("materials:list");
+            const requestKey = "materials:list";
+            const controller = this.beginLatestRequest(requestKey);
             const params = { sort: this.materialSort };
             if (this.materialLayerFilter) params.layer_count = this.materialLayerFilter;
             if (this.materialSupplierFilter) params.supplier_name = this.materialSupplierFilter;
+            const shouldHydrateAll = !this.allMaterials.length;
+            const isUnfilteredCommonView = !params.layer_count && !params.supplier_name && params.sort === "common";
             try {
-              this.materials = await this.fetchAllMaterials(params, controller.signal);
+              const materials = await this.fetchAllMaterials(params, controller.signal);
+              let allMaterials = null;
+              if (shouldHydrateAll) {
+                allMaterials = isUnfilteredCommonView
+                  ? materials.slice()
+                  : await this.fetchAllMaterials({ sort: "common" }, controller.signal);
+              }
+              if (latestRequestControllers.get(requestKey) !== controller) return false;
+              this.materials = materials;
               // 维护全量材质供选择器复用；新业务供应商选项只来自启用供应商主数据。
               this.materialSuppliers = this.activeSupplierNames;
-              if (!this.allMaterials.length) {
-                const isUnfilteredCommonView = !this.materialLayerFilter && !this.materialSupplierFilter && this.materialSort === "common";
-                if (isUnfilteredCommonView) this.allMaterials = this.materials.slice();
-                else this.allMaterials = await this.fetchAllMaterials({ sort: "common" }, controller.signal);
-              }
+              if (allMaterials) this.allMaterials = allMaterials;
+              return true;
             } catch (error) {
-              if (!this.isCancelledRequest(error)) throw error;
+              if (this.isCancelledRequest(error)) return false;
+              throw error;
             } finally {
-              this.finishLatestRequest("materials:list", controller);
+              this.finishLatestRequest(requestKey, controller);
             }
           },
           async openMaterialCandidateMaintenance() {
@@ -19606,7 +19619,8 @@
                 }
                 if (saved?.id && bomDirty) await this.saveProductBom(saved.id, saved.version ?? null);
                 try {
-                  await this.loadProducts();
+                  const refreshed = await this.loadProducts();
+                  if (!refreshed) throw new Error(this.productsError || "常用箱列表刷新未完成");
                 } catch (refreshError) {
                   return this.handleMasterSaveRefreshFailure("product", refreshError);
                 }
@@ -19623,7 +19637,8 @@
                 if (this.materialForm.id) await axios.put(`/api/master/materials/${this.materialForm.id}`,payload);
                 else await axios.post("/api/master/materials",payload);
                 try {
-                  await this.loadMaterials();
+                  const refreshed = await this.loadMaterials();
+                  if (!refreshed) throw new Error("材质列表刷新未完成");
                 } catch (refreshError) {
                   return this.handleMasterSaveRefreshFailure("material", refreshError);
                 }

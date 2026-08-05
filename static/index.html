@@ -2072,7 +2072,7 @@
                   <td>{{ materialWeightStructure(row) }}</td>
                   <td v-if="canViewCosts" class="cost-sensitive">{{ money(row.quote_price) }}</td>
                   <td>{{ row.quote_date || "-" }}</td>
-                  <td class="toolbar-group"><button v-if="canViewCosts" class="btn small" @click="openPriceHistory(row)">价格历史</button><button class="btn small" @click="openMasterVersionHistory('material',row)">版本 {{ row.version || "-" }}</button><button v-if="canAdmin" class="btn small" @click="openMaterial(row)">编辑</button><button v-if="user.role==='admin'" class="btn small danger" @click="deleteMaterial(row)">删除</button></td>
+                  <td class="toolbar-group"><button v-if="canViewCosts" class="btn small" @click="openPriceHistory(row)">价格历史</button><button class="btn small" @click="openMasterVersionHistory('material',row)">版本 {{ row.version || "-" }}</button><button v-if="canAdmin" class="btn small" @click="openMaterial(row)">编辑</button><button v-if="user.role==='admin'" class="btn small danger" :disabled="materialLifecycleBusy()" @click="deleteMaterial(row)">{{ materialLifecyclePending('deactivate',row.id) ? '处理中…' : '停用' }}</button></td>
                 </tr></tbody></table>
               </data-panel>
               <data-panel v-else-if="productTab === 'materialCandidates'" :empty="false">
@@ -6408,7 +6408,7 @@
             selectedProductCustomer: null, productCustomerSearch: "",
             productsLoading: false, productsError: "",
             showProductMoreFilters: false,
-            productTrashOpen: false, productTrashItems: [], productTrashLoading:false, productTrashError:"", productLifecycleAction:{action:"",productId:null}, customerLifecycleAction:{action:"",customerId:null},
+            productTrashOpen: false, productTrashItems: [], productTrashLoading:false, productTrashError:"", productLifecycleAction:{action:"",productId:null}, customerLifecycleAction:{action:"",customerId:null}, materialLifecycleAction:{action:"",materialId:null},
             filters: { customerKeyword: "", showInactive:false, showInactiveProducts:false, productCustomer: "", productKeyword: "", productCode: "", productName: "", productSpec: "", productMaterial: "", orderCustomer: "", orderKeyword:"", orderNumber:"", orderCustomerPo:"", orderProductCode:"", orderProductName:"", orderSpecification:"", orderDateFrom:"", orderDateTo:"", orderDeliveryDateFrom:"", orderDeliveryDateTo:"", orderScope:"active", orderStage:"", orderStatus:"business", orderView:"customer_po", orderSortBy:"", orderSortDirection:"desc" },
             orderScopeTabs: [
               { label: "进行中", value: "active" },
@@ -17029,10 +17029,46 @@
               },
             });
           },
+          materialLifecycleBusy() {
+            return Boolean(this.materialLifecycleAction?.action);
+          },
+          materialLifecyclePending(action, materialId=null) {
+            const current = this.materialLifecycleAction || {};
+            if (current.action !== action) return false;
+            if (materialId === null || materialId === undefined) return true;
+            return Number(current.materialId) === Number(materialId);
+          },
+          async runMaterialLifecycleAction({action, materialId=null, confirmMessage, task}) {
+            if (this.materialLifecycleBusy()) return false;
+            if (confirmMessage && !confirm(confirmMessage)) return false;
+            const normalizedMaterialId = materialId === null || materialId === undefined ? null : Number(materialId);
+            this.materialLifecycleAction = {action, materialId:normalizedMaterialId};
+            try {
+              const result = await task();
+              return result !== false;
+            } catch (error) {
+              this.showToast(this.errorMessage(error), true);
+              return false;
+            } finally {
+              if (
+                this.materialLifecycleAction?.action === action
+                && this.materialLifecycleAction?.materialId === normalizedMaterialId
+              ) this.materialLifecycleAction = {action:"", materialId:null};
+            }
+          },
           async deleteMaterial(row) {
-            if (!confirm(`确认停用材质“${row.code}”吗？`)) return;
-            try { const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/materials/${row.id}`,row}); if(!result)return; this.allMaterials=[]; await this.loadMaterials(); this.showToast("材质已停用"); }
-            catch(error){this.showToast(this.errorMessage(error),true);}
+            return this.runMaterialLifecycleAction({
+              action:"deactivate", materialId:row.id,
+              confirmMessage:`确认停用材质“${row.code}”吗？`,
+              task:async() => {
+                const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/materials/${row.id}`,row});
+                if(!result)return false;
+                this.allMaterials=[];
+                await this.loadMaterials();
+                this.showToast("材质已停用");
+                return true;
+              },
+            });
           },
 	          async openOrder() {
 	            if (!this.customerOptions.length) await this.loadCustomerOptions();

@@ -26,5 +26,6 @@ def test_material_confirmation_has_no_reason_prompt_or_fabricated_reason() -> No
 
 
 def test_material_deactivate_keeps_one_visible_confirmation() -> None:
-    assert 'confirm(`确认停用材质“${row.code}”吗？`)' in INDEX
+    assert 'confirmMessage:`确认停用材质“${row.code}”吗？`' in INDEX
+    assert "if (confirmMessage && !confirm(confirmMessage)) return false" in INDEX
     assert 'method:"delete",url:`/api/master/materials/${row.id}`,row' in INDEX

@@ -2716,12 +2716,12 @@
                       <button v-if="row.pick_task" class="btn small" :disabled="!!deliveryOperationState.action" @click="openDeliveryPickTask(row)">{{ row.pick_task.assignment_required ? '管理员查看' : '打开手机拿货' }}</button>
                       <button v-if="canDelivery && row.status==='pending'" class="btn small success" :disabled="!!deliveryOperationState.action" @click="dispatchDelivery(row)">{{ deliveryOperationState.action==='dispatch' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '发货中…' : (row.pick_task ? '发货打印' : '直接发货打印') }}</button>
                       <button v-if="canDelivery && row.status==='pending'" class="btn small" :disabled="!!deliveryOperationState.action" @click="editDelivery(row)">编辑</button>
-                      <button v-if="canDelivery && row.status==='pending'" class="btn small danger" :disabled="!!deliveryOperationState.action" @click="deleteDelivery(row)">删除</button>
-                      <button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small" @click="openReceipt(row)">编辑回单</button>
-                      <button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small danger" @click="cancelReceipt(row)">取消回单</button>
-                      <button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small" @click="openReceipt(row)">确认回单</button>
-                      <button v-if="row.status==='dispatched'" class="btn small" @click="printDelivery(row)">补打</button>
-                      <button v-if="canDelivery && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small danger" @click="cancelDelivery(row)">取消发货</button>
+                      <button v-if="canDelivery && row.status==='pending'" class="btn small danger" :disabled="!!deliveryOperationState.action" @click="deleteDelivery(row)">{{ deliveryOperationState.action==='delete' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '删除中…' : '删除' }}</button>
+                      <button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small" :disabled="!!deliveryOperationState.action" @click="openReceipt(row)">编辑回单</button>
+                      <button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small danger" :disabled="!!deliveryOperationState.action" @click="cancelReceipt(row)">取消回单</button>
+                      <button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small" :disabled="!!deliveryOperationState.action" @click="openReceipt(row)">确认回单</button>
+                      <button v-if="row.status==='dispatched'" class="btn small" :disabled="!!deliveryOperationState.action" @click="printDelivery(row)">补打</button>
+                      <button v-if="canDelivery && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small danger" :disabled="!!deliveryOperationState.action" @click="cancelDelivery(row)">{{ deliveryOperationState.action==='cancel' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '取消中…' : '取消发货' }}</button>
                     </td>
                   </tr>
                   <tr v-if="expandedDeliveryRows[row.id]" class="delivery-list-detail-row">
@@ -19658,24 +19658,73 @@
             this.modal = { type:"delivery", title:`编辑送货单 ${row.delivery_number}` };
           },
           async deleteDelivery(row) {
-            if (!confirm(`确认移除送货单 ${row.delivery_number} 吗？\n未发生发货的草稿将直接删除；已有发货、回单或库存历史的单据将作废归档，不会再次改变库存或订单已送数量。`)) return;
+            if (this.deliveryOperationState.action) return false;
+            const deliveryId = Number(row?.id || 0);
+            const deliveryNumber = String(row?.delivery_number || `#${deliveryId}`);
+            if (!deliveryId) {
+              this.showToast("送货单不存在，无法删除", true);
+              return false;
+            }
+            if (!confirm(`确认移除送货单 ${deliveryNumber} 吗？\n未发生发货的草稿将直接删除；已有发货、回单或库存历史的单据将作废归档，不会再次改变库存或订单已送数量。`)) return false;
+            this.deliveryOperationState = {action:"delete",deliveryId,deliveryNumber};
             try {
-              const response = await axios.delete(`/api/deliveries/${row.id}`);
-              await Promise.all([this.loadDeliveries(), this.loadKpi()]);
+              let response;
+              try {
+                response = await axios.delete(`/api/deliveries/${deliveryId}`);
+              } catch (error) {
+                this.showToast(this.errorMessage(error), true);
+                return false;
+              }
+              const successMessage = response.data?.voided
+                ? "该送货单已有发货或库存历史，已作废归档；库存流水和审计记录均已保留"
+                : "已删除未发货送货草稿";
+              try {
+                await Promise.all([this.loadDeliveries(), this.loadKpi()]);
+              } catch (error) {
+                const disposition = response.data?.voided ? "已经作废归档" : "已经删除";
+                this.showToast(`送货单 ${deliveryNumber} ${disposition}，但页面刷新失败：${this.errorMessage(error)}。请点刷新，不要重复操作。`, true);
+                return true;
+              }
               this.showToast(
-                response.data?.voided
-                  ? "该送货单已有发货或库存历史，已作废归档；库存流水和审计记录均已保留"
-                  : "已删除未发货送货草稿"
+                successMessage
               );
-            } catch (error) { this.showToast(this.errorMessage(error), true); }
+              return true;
+            } finally {
+              if (this.deliveryOperationState.action === "delete" && Number(this.deliveryOperationState.deliveryId) === deliveryId) {
+                this.deliveryOperationState = {action:"",deliveryId:null,deliveryNumber:""};
+              }
+            }
           },
           async cancelDelivery(row) {
-            if (!confirm(`确认取消发货 ${row.delivery_number} 吗？\n将回滚本单已送数量并恢复订单待送状态。\n若已有回单或已进入对账，系统会拒绝取消。`)) return;
+            if (this.deliveryOperationState.action) return false;
+            const deliveryId = Number(row?.id || 0);
+            const deliveryNumber = String(row?.delivery_number || `#${deliveryId}`);
+            if (!deliveryId) {
+              this.showToast("送货单不存在，无法取消发货", true);
+              return false;
+            }
+            if (!confirm(`确认取消发货 ${deliveryNumber} 吗？\n将回滚本单已送数量并恢复订单待送状态。\n若已有回单或已进入对账，系统会拒绝取消。`)) return false;
+            this.deliveryOperationState = {action:"cancel",deliveryId,deliveryNumber};
             try {
-              await axios.put(`/api/deliveries/${row.id}/cancel`);
-              await Promise.all([this.loadDeliveries(), this.loadOrders(), this.loadKpi()]);
+              try {
+                await axios.put(`/api/deliveries/${deliveryId}/cancel`);
+              } catch (error) {
+                this.showToast(this.errorMessage(error), true);
+                return false;
+              }
+              try {
+                await Promise.all([this.loadDeliveries(), this.loadOrders(), this.loadKpi()]);
+              } catch (error) {
+                this.showToast(`送货单 ${deliveryNumber} 取消发货已经完成，但页面刷新失败：${this.errorMessage(error)}。订单与库存已由系统恢复，请点刷新，不要重复取消。`, true);
+                return true;
+              }
               this.showToast("已取消发货，订单待送数量已恢复");
-            } catch (error) { this.showToast(this.errorMessage(error), true); }
+              return true;
+            } finally {
+              if (this.deliveryOperationState.action === "cancel" && Number(this.deliveryOperationState.deliveryId) === deliveryId) {
+                this.deliveryOperationState = {action:"",deliveryId:null,deliveryNumber:""};
+              }
+            }
           },
           async cancelReceipt(row) {
             const receiptId = row.return_receipt_id || this.receiptForm?.id;

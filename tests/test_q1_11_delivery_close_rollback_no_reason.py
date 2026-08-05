@@ -32,4 +32,4 @@ def test_delivery_cancel_already_uses_one_confirmation_without_reason() -> None:
     assert method.count("confirm(") == 1
     assert "prompt(" not in method
     assert "若已有回单或已进入对账，系统会拒绝取消" in method
-    assert "axios.put(`/api/deliveries/${row.id}/cancel`)" in method
+    assert "axios.put(`/api/deliveries/${deliveryId}/cancel`)" in method

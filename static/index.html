@@ -5276,7 +5276,7 @@
             </div>
             <div v-else-if="modal.type === 'delivery'">
               <div class="form-grid">
-                <div class="field"><label>客户</label><search-select v-model="deliveryForm.customer_id" :options="deliveryCustomerOptions" label-key="_delivery_label" value-key="id" placeholder="输入客户名称、缩写或拼音首字母" :disabled="!!deliveryForm.editingId || deliveryCandidateLoading" @change="onDeliveryCustomerChange"></search-select><div v-if="!deliveryForm.editingId && deliveryCandidateLoading" class="muted">正在加载可送货客户…</div><div v-else-if="!deliveryForm.editingId && !deliveryCustomerOptions.length" class="muted">当前没有待送订单或可送成品库存</div></div>
+                <div class="field"><label>客户</label><search-select v-model="deliveryForm.customer_id" :options="deliveryCustomerOptions" label-key="_delivery_label" value-key="id" placeholder="输入客户名称、缩写或拼音首字母" :disabled="!!deliveryForm.editingId || deliveryCandidateLoading" @change="onDeliveryCustomerChange"></search-select><div v-if="!deliveryForm.editingId && deliveryCandidateLoading" class="muted">正在加载可送货客户…</div><div v-else-if="!deliveryForm.editingId && deliveryCandidateError" class="status orange" style="white-space:normal">客户候选加载失败：{{ deliveryCandidateError }} <button class="btn small" type="button" @click="loadDeliveryCustomerOptions">重试</button></div><div v-else-if="!deliveryForm.editingId && !deliveryCustomerOptions.length" class="muted">当前没有待送订单或可送成品库存</div></div>
                 <div class="field"><label>送货日期</label><input class="input" type="date" v-model="deliveryForm.delivery_date" /></div>
                 <div class="field"><label>车号</label><input class="input" v-model.trim="deliveryForm.vehicle_number" /></div>
               </div>
@@ -5297,7 +5297,7 @@
                 <button class="btn small success" type="button" :disabled="!deliveryForm.customer_id" @click="toggleUnorderedFinishedPicker">选择客户专用库存</button>
                 <span class="muted">订单待送必须先全部加入；无订单库存只补不足数量。</span>
               </div>
-              <div v-if="deliveryForm.source_tab === 'order' && !deliveryCustomerOptions.length" class="status orange" style="margin-bottom:10px">当前没有可送货客户。只有已入库，或已被成品库存全额预占，且仍有未送数量的订单明细才能生成送货单。</div>
+              <div v-if="deliveryForm.source_tab === 'order' && !deliveryCandidateLoading && !deliveryCandidateError && !deliveryCustomerOptions.length" class="status orange" style="margin-bottom:10px">当前没有可送货客户。只有已入库，或已被成品库存全额预占，且仍有未送数量的订单明细才能生成送货单。</div>
               <div v-else-if="!deliveryForm.customer_id" class="status orange" style="margin-bottom:10px">请先选择客户，再选择可送货产品。</div>
               <div v-if="deliveryForm.source_tab === 'order' && deliveryBatchPicker.visible" class="panel" style="margin-bottom:12px">
                 <div class="toolbar delivery-batch-picker-toolbar" style="margin-bottom:8px">
@@ -6222,7 +6222,7 @@
             // v0.19.2-B 楞型加价规则
             fluteRules: [], showFluteRuleModal: false, fluteRuleLoading: false, fluteRuleError: "",
             fluteRuleForm: { id: null, supplier_name: "", layer_count: 3, flute_type: "A", price_delta: "0", effective_date: "", remark: "", is_active: true },
-            deliveries: [], pendingDeliveryItems: [], deliveryCustomerCandidates: [], deliveryPickTasks: [], deliveryPickers: [], expandedDeliveryRows: {}, deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false }, deliveryCandidateLoading:false, deliveryOperationState:{action:"",deliveryId:null,deliveryNumber:""}, receiptOperationState:{action:"",deliveryId:null,receiptId:null,deliveryNumber:""}, statements: [], invoices: [], moldTools: [],
+            deliveries: [], pendingDeliveryItems: [], deliveryCustomerCandidates: [], deliveryPickTasks: [], deliveryPickers: [], expandedDeliveryRows: {}, deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false }, deliveryCandidateLoading:false, deliveryCandidateError:"", deliveryCandidateRequestSequence:0, deliveryBatchRequestSequence:0, unorderedFinishedRequestSequence:0, deliveryOperationState:{action:"",deliveryId:null,deliveryNumber:""}, receiptOperationState:{action:"",deliveryId:null,receiptId:null,deliveryNumber:""}, statements: [], invoices: [], moldTools: [],
             invoiceTasks: [], invoiceTaskFilters:{customer_id:"",statement_month:"",status:""}, invoiceTaskState:{loading:false,error:""},
             invoiceTaskDetail:null, invoiceTaskResult:{task_id:null,status:"issued",invoice_number:"",invoice_date:"",failure_reason:"",expected_version:null},
             invoiceTaskOperationState:{detailLoading:false,detailError:"",detailTaskId:null,detailTaskNumber:"",confirmingTaskId:null,resultSaving:false},
@@ -12125,12 +12125,22 @@
             }
           },
           async loadDeliveryCustomerOptions() {
+            const requestToken = Number(this.deliveryCandidateRequestSequence || 0) + 1;
+            this.deliveryCandidateRequestSequence = requestToken;
             this.deliveryCandidateLoading = true;
+            this.deliveryCandidateError = "";
             try {
               const { data } = await axios.get("/api/deliveries/pending-customer-options");
+              if (requestToken !== this.deliveryCandidateRequestSequence) return false;
               this.deliveryCustomerCandidates = data.items || [];
+              return true;
+            } catch (error) {
+              if (requestToken !== this.deliveryCandidateRequestSequence) return false;
+              this.deliveryCustomerCandidates = [];
+              this.deliveryCandidateError = this.errorMessage(error);
+              return false;
             } finally {
-              this.deliveryCandidateLoading = false;
+              if (requestToken === this.deliveryCandidateRequestSequence) this.deliveryCandidateLoading = false;
             }
           },
           resetDeliveryListFilters() {
@@ -18425,7 +18435,9 @@
               this.showToast("请先选择客户", true);
               return;
             }
-            const requestToken = Number(this.deliveryBatchPicker.request_token || 0) + 1;
+            const customerId = Number(this.deliveryForm.customer_id);
+            const requestToken = Number(this.deliveryBatchRequestSequence || 0) + 1;
+            this.deliveryBatchRequestSequence = requestToken;
             this.deliveryBatchPicker.request_token = requestToken;
             this.deliveryBatchPicker.loading = true;
             this.deliveryBatchPicker.error = false;
@@ -18433,13 +18445,13 @@
             try {
               const { data } = await axios.get("/api/deliveries/pending-items/search", {
                 params: {
-                  customer_id: this.deliveryForm.customer_id,
+                  customer_id: customerId,
                   q: this.deliveryBatchPicker.keyword || undefined,
                   page: Math.max(1, Number(page || 1)),
                   page_size: this.deliveryBatchPicker.page_size,
                 },
               });
-              if (requestToken !== this.deliveryBatchPicker.request_token) return;
+              if (requestToken !== this.deliveryBatchPicker.request_token || requestToken !== this.deliveryBatchRequestSequence || customerId !== Number(this.deliveryForm.customer_id)) return;
               this.deliveryBatchPicker.items = (data.items || []).map(item => {
                 const kitSummary = this.deliveryKitSummary(item);
                 return kitSummary ? {...item, material_display:[item.material_display || item.material, kitSummary].filter(Boolean).join("｜")} : item;
@@ -18451,10 +18463,11 @@
                 ? `共 ${this.deliveryBatchPicker.total} 条待送货明细，已选 ${Object.keys(this.deliveryBatchPicker.selected || {}).length} 条`
                 : "当前客户没有可送货明细";
             } catch (error) {
+              if (requestToken !== this.deliveryBatchPicker.request_token || requestToken !== this.deliveryBatchRequestSequence || customerId !== Number(this.deliveryForm.customer_id)) return;
               this.deliveryBatchPicker.error = true;
               this.deliveryBatchPicker.message = this.errorMessage(error);
             } finally {
-              if (requestToken === this.deliveryBatchPicker.request_token) this.deliveryBatchPicker.loading = false;
+              if (requestToken === this.deliveryBatchRequestSequence && customerId === Number(this.deliveryForm.customer_id)) this.deliveryBatchPicker.loading = false;
             }
           },
           toggleAllDeliveryBatchFiltered(checked) {
@@ -18490,6 +18503,8 @@
           },
           onDeliveryCustomerChange() {
             if (this.deliveryForm.editingId) return;
+            this.deliveryBatchRequestSequence = Number(this.deliveryBatchRequestSequence || 0) + 1;
+            this.unorderedFinishedRequestSequence = Number(this.unorderedFinishedRequestSequence || 0) + 1;
             this.deliveryForm.lines = [];
             this.deliveryForm.source_mode = "order";
             this.deliveryBatchPicker = { visible:false, loading:false, keyword:"", items:[], selected:{}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message:"", error:false };
@@ -18538,30 +18553,33 @@
               this.showToast("请先选择客户", true);
               return;
             }
-            const requestToken = Number(this.unorderedFinishedPicker.request_token || 0) + 1;
+            const customerId = Number(this.deliveryForm.customer_id);
+            const requestToken = Number(this.unorderedFinishedRequestSequence || 0) + 1;
+            this.unorderedFinishedRequestSequence = requestToken;
             this.unorderedFinishedPicker.request_token = requestToken;
             this.unorderedFinishedPicker.loading = true;
             this.unorderedFinishedPicker.error = false;
             try {
               const { data } = await axios.get("/api/deliveries/unordered-finished-candidates", { params: {
-                customer_id: this.deliveryForm.customer_id,
+                customer_id: customerId,
                 q: this.unorderedFinishedPicker.keyword || undefined,
                 page: Math.max(1, Number(page || 1)),
                 page_size: this.unorderedFinishedPicker.page_size,
               } });
-              if (requestToken !== this.unorderedFinishedPicker.request_token) return;
+              if (requestToken !== this.unorderedFinishedPicker.request_token || requestToken !== this.unorderedFinishedRequestSequence || customerId !== Number(this.deliveryForm.customer_id)) return;
               this.unorderedFinishedPicker.items = (data.items || [])
-                .filter(item => !Boolean(item.is_general) && Number(item.owner_customer_id ?? item.customer_id) === Number(this.deliveryForm.customer_id))
+                .filter(item => !Boolean(item.is_general) && Number(item.owner_customer_id ?? item.customer_id) === customerId)
                 .map(item => ({ ...item }));
               this.unorderedFinishedPicker.page = Number(data.page || page || 1);
               this.unorderedFinishedPicker.total = Number(data.total || 0);
               this.unorderedFinishedPicker.total_pages = Math.max(1, Number(data.total_pages || 1));
               this.unorderedFinishedPicker.message = this.unorderedFinishedPicker.items.length ? `共 ${this.unorderedFinishedPicker.total} 个客户专用库存批次` : "当前客户没有可送货的专用无订单成品库存";
             } catch (error) {
+              if (requestToken !== this.unorderedFinishedPicker.request_token || requestToken !== this.unorderedFinishedRequestSequence || customerId !== Number(this.deliveryForm.customer_id)) return;
               this.unorderedFinishedPicker.error = true;
               this.unorderedFinishedPicker.message = this.errorMessage(error);
             } finally {
-              if (requestToken === this.unorderedFinishedPicker.request_token) this.unorderedFinishedPicker.loading = false;
+              if (requestToken === this.unorderedFinishedRequestSequence && customerId === Number(this.deliveryForm.customer_id)) this.unorderedFinishedPicker.loading = false;
             }
           },
           importUnorderedFinishedCandidates() {
@@ -18945,7 +18963,8 @@
             this.unorderedFinishedPicker = { visible:false, loading:false, keyword:"", items:[], selected:{}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message:"", error:false };
             this.deliveryForm.saved_signature = this.deliveryFormSignature();
             this.modal = { type:"delivery", title:"新增送货单" };
-            await this.loadDeliveryCustomerOptions();
+            const candidatesLoaded = await this.loadDeliveryCustomerOptions();
+            if (!candidatesLoaded || this.modal?.type !== "delivery") return;
             const availableCustomerIds = new Set((this.deliveryCustomerOptions || []).map(row => Number(row.id)));
             this.deliveryForm.customer_id = availableCustomerIds.has(Number(preferredCustomerId))
               ? (preferredCustomerId ? Number(preferredCustomerId) : null)

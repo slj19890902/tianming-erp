@@ -2646,15 +2646,18 @@
               <page-head title="生产确认" desc="按实际投入和实际合格产量确认；超过订单需求的合格品必须进入客户专用成品库存。"></page-head>
               <div class="toolbar">
                 <div class="toolbar-group">
-                  <button :class="['btn',{primary:productionTab==='pending'}]" :disabled="productionBusy" @click="productionTab='pending'">待生产 {{ productionPending.length }}</button>
-                  <button :class="['btn',{primary:productionTab==='history'}]" :disabled="productionBusy" @click="productionTab='history'; loadProductionHistory()">完工历史 {{ productionHistoryTotal }}</button>
+                  <button :class="['btn',{primary:productionTab==='pending'}]" :disabled="productionBusy" @click="selectProductionTab('pending')">待生产 {{ productionPending.length }}</button>
+                  <button :class="['btn',{primary:productionTab==='history'}]" :disabled="productionBusy" @click="selectProductionTab('history')">完工历史 {{ productionHistoryTotal }}</button>
                   <button v-if="canProductionExecute && productionTab==='pending'" class="btn success" :disabled="productionBusy || !productionSelectedCount()" @click="batchConfirmProduction">{{ productionBusy ? '处理中…' : `批量确认入库（${productionSelectedCount()}）` }}</button>
                   <span v-else-if="!canProductionExecute && productionTab==='pending'" class="muted">当前为只读查看；确认完工需“订单状态操作”权限。</span>
                 </div>
-                <button class="btn" :disabled="productionBusy" @click="loadProduction">刷新</button>
+                <button class="btn" :disabled="productionBusy || productionTabLoading()" @click="refreshProductionTab">{{ productionTabLoading() ? '刷新中…' : '刷新' }}</button>
               </div>
               <div v-if="productionTab==='pending'" class="status blue" style="display:block;margin:8px 0">直接待送：选择后整批进入一楼待送区。全部入库：选好库位，再点顶部“批量确认入库”。</div>
-              <data-panel v-if="productionTab==='pending'" :empty="!productionPending.length">
+              <div v-if="productionTab==='pending' && productionPendingState.initialLoading" class="status blue" style="display:block;margin:8px 0">正在读取待生产任务…</div>
+              <div v-if="productionTab==='pending' && productionPendingState.refreshing" class="status blue" style="display:block;margin:8px 0">正在刷新待生产任务，已显示的记录不会被清空。</div>
+              <div v-if="productionTab==='pending' && productionPendingState.error" class="status orange" style="display:block;margin:8px 0">待生产读取失败：{{ productionPendingState.error }} <button class="btn small" :disabled="productionBusy" @click="loadProduction">重试</button></div>
+              <data-panel v-if="productionTab==='pending'" :empty="!productionPending.length && !productionPendingState.initialLoading && !productionPendingState.error">
                 <table class="production-table" style="table-layout:fixed;width:100%">
 	                  <thead><tr><th v-if="canProductionExecute" style="width:58px"><input type="checkbox" :checked="allProductionSelected" :disabled="productionBusy" @change="toggleAllProduction($event.target.checked)" /> 全选</th><th style="width:13%">订单 / 客户</th><th style="width:21%">存货编码 / 产品</th><th style="width:16%">数量情况</th><th style="width:19%">本次生产</th><th style="width:11%">订单 / 多出</th><th v-if="canProductionExecute" class="production-destination-column">完工去向</th></tr></thead>
 	                  <tbody><tr v-for="row in productionPending" :key="row.id" :class="{'requisition-selected': productionSelected[row.id]}">
@@ -2662,13 +2665,16 @@
 	                    <td style="white-space:normal"><strong>{{ row.item_order_number || row.order_number || '-' }}</strong><br><span class="muted">{{ row.customer_name || '-' }}</span></td>
 	                    <td style="white-space:normal"><div class="production-product-summary" :title="productionProductTitle(row)"><div class="production-product-line"><span v-if="row.is_component_task" class="status blue">组件</span><strong>{{ row.product_code || '-' }}</strong><span>｜{{ row.product_name || '-' }}</span></div><div class="production-product-meta">{{ row.specification || '-' }}<span v-if="productionBoardPreparationSummary(row)">｜{{ productionBoardPreparationSummary(row) }}</span></div></div></td>
 	                    <td style="white-space:normal"><div class="production-quantity-summary"><div>订单 <strong>{{ row.order_quantity || 0 }}</strong>{{ productionOutputUnit(row) }}｜已到纸板 <strong>{{ row.material_received_quantity || 0 }}</strong>张</div><div>本次做 <strong>{{ row.planned_output_quantity || row.planned_quantity || 0 }}</strong>{{ productionOutputUnit(row) }}<span v-if="productionCuttingModeLabel(row)" class="muted">｜{{ productionCuttingModeLabel(row) }}</span></div></div></td>
-	                    <td style="white-space:normal"><div class="production-input-line"><label class="muted">用纸板</label><input class="input" type="number" min="1" v-model.number="row.actual_input_quantity" @input="syncProductionQuantities(row)" /><span class="production-input-unit">张</span></div><div class="production-input-line"><label class="muted">做成品</label><input class="input" type="number" min="1" v-model.number="row.actual_output_quantity" @input="syncProductionQuantities(row)" /><span class="production-input-unit">{{ productionOutputUnit(row) }}｜损耗 {{ productionDefectiveQuantity(row) }}</span></div></td>
+	                    <td style="white-space:normal"><div class="production-input-line"><label class="muted">用纸板</label><input class="input" type="number" min="1" v-model.number="row.actual_input_quantity" :disabled="productionBusy" @input="syncProductionQuantities(row)" /><span class="production-input-unit">张</span></div><div class="production-input-line"><label class="muted">做成品</label><input class="input" type="number" min="1" v-model.number="row.actual_output_quantity" :disabled="productionBusy" @input="syncProductionQuantities(row)" /><span class="production-input-unit">{{ productionOutputUnit(row) }}｜损耗 {{ productionDefectiveQuantity(row) }}</span></div></td>
 	                    <td style="white-space:normal"><div>用于订单 <strong>{{ productionOrderCoverage(row) }}</strong></div><div :class="productionSurplusQuantity(row)>0?'status orange':'muted'" style="margin-top:4px">多出 {{ productionSurplusQuantity(row) }}</div></td>
 	                    <td v-if="canProductionExecute" class="production-destination-cell" style="white-space:normal"><select class="select" v-model="row.completion_mode" :disabled="productionBusy" @change="ensureProductionMode(row)"><option value="">请选择完工去向</option><option value="direct">订单内直接待送</option><option value="stock" :disabled="!canWarehouseExecute">合格品全部入库</option></select><div v-if="productionNeedsLocation(row)" class="production-location-picker" style="margin-top:4px"><div v-if="productionLocationsLoading" class="muted">正在读取可用库位…</div><div v-else-if="productionLocationsError" class="status orange" style="display:block">{{ productionLocationsError }} <button class="btn small" @click="ensureProductionLocations({force:true})">重试</button></div><template v-else><select class="select" v-model.number="row.location_floor_number" :disabled="productionBusy" @change="onProductionFloorChange(row,'location_floor_number','location_area_code','location_id')"><option :value="null">先选楼层</option><option v-for="floor in productionLocationFloors" :key="floor.number" :value="floor.number">{{ floor.label }}（{{ floor.count }} 个空位）</option></select><select class="select" v-model="row.location_area_code" :disabled="productionBusy || !row.location_floor_number" @change="onProductionAreaChange(row,'location_floor_number','location_area_code','location_id')"><option value="">{{ row.location_floor_number ? '再选区域' : '请先选择楼层' }}</option><option v-for="area in productionAreasForFloor(row.location_floor_number)" :key="area.code" :value="area.code">{{ area.code }}（{{ area.count }} 个空位）</option></select><select class="select" v-model.number="row.location_id" :disabled="productionBusy || !row.location_area_code" @change="onProductionLocationSelection(row)"><option :value="null">{{ row.location_area_code ? '再选库位' : '请先选择区域' }}</option><option v-for="location in productionLocationsForArea(row.location_floor_number,row.location_area_code)" :key="location.id" :value="location.id" :disabled="productionLocationUsedByOther(location.id,row)">{{ location.location_code }}｜{{ location.is_temporary ? '临时' : '固定' }}</option></select></template></div><div v-if="row.completion_mode==='direct'" class="muted" style="margin-top:4px">合格品整批进入一楼待送区</div><div v-else-if="productionSurplusQuantity(row)>0" class="muted" style="margin-top:4px">多出 {{ productionSurplusQuantity(row) }} 个，随整批入库</div><div v-if="row._direct_submitting" class="status blue" style="display:block;margin-top:6px">正在确认…</div><div v-else-if="productionSelected[row.id]" class="status blue" style="display:block;margin-top:6px">已选入库；点顶部“批量确认入库”</div><div v-else-if="row.completion_mode==='stock'" class="status orange" style="display:block;margin-top:6px">请选择入库位置</div></td>
                   </tr></tbody>
                 </table>
               </data-panel>
               <div v-else>
+                <div v-if="productionHistoryState.initialLoading" class="status blue" style="display:block;margin:8px 0">正在读取完工历史…</div>
+                <div v-if="productionHistoryState.refreshing" class="status blue" style="display:block;margin:8px 0">正在刷新完工历史，已显示的记录不会被清空。</div>
+                <div v-if="productionHistoryState.error" class="status orange" style="display:block;margin:8px 0">完工历史读取失败：{{ productionHistoryState.error }} <button class="btn small" :disabled="productionBusy" @click="loadProductionHistory">重试</button></div>
                 <div v-if="productionLocationsLoading" class="muted" style="margin:8px 0">正在读取转库存可用库位…</div>
                 <div v-else-if="productionLocationsError" class="status orange" style="display:block;margin:8px 0">{{ productionLocationsError }} <button class="btn small" @click="ensureProductionLocations({force:true})">重试</button></div>
                 <div class="list-filterbar">
@@ -2683,7 +2689,7 @@
                   <button class="btn" @click="resetProductionHistoryFilters()">清空</button>
                   <pager :page="pages.productionHistory" :total="productionHistoryTotal" :page-size="pageSize" :always="true" :compact="true" @change="pages.productionHistory=$event; loadProductionHistory()"></pager>
                 </div>
-                <data-panel :empty="!productionHistory.length">
+                <data-panel :empty="!productionHistory.length && !productionHistoryState.initialLoading && !productionHistoryState.error">
                   <table class="production-history-table" style="table-layout:fixed;width:100%">
                   <thead><tr><th class="production-history-time">完工时间</th><th style="width:18%">订单 / 客户</th><th style="width:24%">存货编码 / 产品</th><th style="width:13%">数量 / 操作人</th><th style="width:16%">去向 / 库位</th><th class="production-history-actions">操作</th></tr></thead>
                   <tbody><tr v-for="row in productionHistory" :key="row.id">
@@ -6330,8 +6336,9 @@
             incomingOperationState: { action:"", key:"" }, incomingReceiveAttempts: {}, incomingBatchAttempt: null,
             incomingHistoryFilters: { customer_id:"", document_keyword:"", product_code:"", product_name:"", supplier_name:"", date_from:"", date_to:"", receipt_status:"" },
             productionTab: "pending", productionPending: [], productionHistory: [], productionHistoryTotal: 0, productionLocations: [], productionLocationsLoading: false, productionLocationsError: "", productionSelected: {}, productionBusy: false,
+            productionPendingState: { loaded:false, initialLoading:false, refreshing:false, error:"" }, productionHistoryState: { loaded:false, initialLoading:false, refreshing:false, error:"" },
             productionHistoryFilters: { customer_id:"", order_keyword:"", product_code:"", product_name:"", completed_date_from:"", completed_date_to:"", status:"" },
-            productionCompletionAttempts: {}, productionDirectAttempts: {}, productionTransferAttempts: {},
+            productionCompletionAttempts: {}, productionDirectAttempts: {}, productionTransferAttempts: {}, productionSupplementAttempts: {},
             productFormSnapshot: null, productBomSnapshot: null,
             productEditReturnContext: null,
             productMaterialContext: { product_id:null, candidates:[], requisition_history:[], manual_selection_history:[], loading:false, error:"" },
@@ -11432,40 +11439,52 @@
           },
           async loadProduction() {
             const controller = this.beginLatestRequest("production:pending");
-            let pending;
+            const firstLoad = !this.productionPendingState.loaded;
+            this.productionPendingState.initialLoading = firstLoad;
+            this.productionPendingState.refreshing = !firstLoad;
+            this.productionPendingState.error = "";
             try {
-              pending = await axios.get("/api/production/tasks", { params: { status: "pending" }, signal:controller.signal });
+              const pending = await axios.get("/api/production/tasks", { params: { status: "pending" }, signal:controller.signal });
+              if (latestRequestControllers.get("production:pending") !== controller) return false;
+              const locationItems = this.productionLocations || [];
+              const floorNumbers = [...new Set(locationItems.filter(location => location.is_empty).map(location => Number(location.warehouse_floor)).filter(Boolean))];
+              const defaultFloorNumber = floorNumbers.length === 1 ? floorNumbers[0] : null;
+              const previous = new Map(this.productionPending.map(row => [String(row.id), row]));
+              this.productionPending = (pending.data.items || []).map(row => {
+                const old = previous.get(String(row.id));
+                const canReuseOld = old && Number(old.version) === Number(row.version);
+                const sourceOrder = this.orders.find(order => Number(order.id) === Number(row.order_id));
+                const selectedLocation = locationItems.find(location => Number(location.id) === Number(canReuseOld ? old?.location_id : null));
+                return {
+                  ...row,
+                  delivery_date: row.delivery_date || sourceOrder?.delivery_date || null,
+                  completion_mode: canReuseOld ? (old?.completion_mode || "") : "",
+                  location_floor_number: canReuseOld ? (old?.location_floor_number || this.productionLocationFloorNumber(selectedLocation) || defaultFloorNumber) : defaultFloorNumber,
+                  location_area_code: canReuseOld ? (old?.location_area_code || this.productionLocationAreaCode(selectedLocation)) : "",
+                  location_id: canReuseOld ? (old?.location_id || null) : null,
+                  actual_input_quantity: canReuseOld ? (old?.actual_input_quantity || Number(row.available_material_input_quantity || row.material_input_quantity || 0)) : Number(row.available_material_input_quantity || row.material_input_quantity || 0),
+                  actual_output_quantity: canReuseOld ? (old?.actual_output_quantity || Number(row.planned_output_quantity || row.planned_quantity || 0)) : Number(row.planned_output_quantity || row.planned_quantity || 0),
+                  _direct_submitting: false,
+                };
+              });
+              const validIds = new Set(this.productionPending.map(row => String(row.id)));
+              Object.keys(this.productionSelected).forEach(taskId => {
+                if (!validIds.has(taskId)) delete this.productionSelected[taskId];
+              });
+              this.productionPendingState.loaded = true;
+              return true;
             } catch (error) {
-              if (!this.isCancelledRequest(error)) throw error;
-              return;
+              if (!this.isCancelledRequest(error) && latestRequestControllers.get("production:pending") === controller) {
+                this.productionPendingState.error = this.errorMessage(error) || "请稍后重试";
+              }
+              return false;
             } finally {
+              if (latestRequestControllers.get("production:pending") === controller) {
+                this.productionPendingState.initialLoading = false;
+                this.productionPendingState.refreshing = false;
+              }
               this.finishLatestRequest("production:pending", controller);
             }
-            const locationItems = this.productionLocations || [];
-            const floorNumbers = [...new Set(locationItems.filter(location => location.is_empty).map(location => Number(location.warehouse_floor)).filter(Boolean))];
-            const defaultFloorNumber = floorNumbers.length === 1 ? floorNumbers[0] : null;
-            const previous = new Map(this.productionPending.map(row => [String(row.id), row]));
-            this.productionPending = (pending.data.items || []).map(row => {
-              const old = previous.get(String(row.id));
-              const canReuseOld = old && Number(old.version) === Number(row.version);
-              const sourceOrder = this.orders.find(order => Number(order.id) === Number(row.order_id));
-              const selectedLocation = locationItems.find(location => Number(location.id) === Number(canReuseOld ? old?.location_id : null));
-              return {
-                ...row,
-                delivery_date: row.delivery_date || sourceOrder?.delivery_date || null,
-                completion_mode: canReuseOld ? (old?.completion_mode || "") : "",
-                location_floor_number: canReuseOld ? (old?.location_floor_number || this.productionLocationFloorNumber(selectedLocation) || defaultFloorNumber) : defaultFloorNumber,
-                location_area_code: canReuseOld ? (old?.location_area_code || this.productionLocationAreaCode(selectedLocation)) : "",
-                location_id: canReuseOld ? (old?.location_id || null) : null,
-                actual_input_quantity: canReuseOld ? (old?.actual_input_quantity || Number(row.available_material_input_quantity || row.material_input_quantity || 0)) : Number(row.available_material_input_quantity || row.material_input_quantity || 0),
-                actual_output_quantity: canReuseOld ? (old?.actual_output_quantity || Number(row.planned_output_quantity || row.planned_quantity || 0)) : Number(row.planned_output_quantity || row.planned_quantity || 0),
-                _direct_submitting: false,
-              };
-            });
-            const validIds = new Set(this.productionPending.map(row => String(row.id)));
-            Object.keys(this.productionSelected).forEach(taskId => {
-              if (!validIds.has(taskId)) delete this.productionSelected[taskId];
-            });
           },
           async ensureProductionLocations({force=false} = {}) {
             if (this.productionLocationsLoading) return false;
@@ -11475,10 +11494,11 @@
             this.productionLocationsError = "";
             try {
               const { data } = await axios.get("/api/production/temporary-locations", {signal:controller.signal});
+              if (latestRequestControllers.get("production:locations") !== controller) return false;
               this.productionLocations = data.items || [];
               return true;
             } catch (error) {
-              if (!this.isCancelledRequest(error)) this.productionLocationsError = "可用库位读取失败，请重试";
+              if (!this.isCancelledRequest(error) && latestRequestControllers.get("production:locations") === controller) this.productionLocationsError = "可用库位读取失败，请重试";
               return false;
             } finally {
               if (latestRequestControllers.get("production:locations") === controller) this.productionLocationsLoading = false;
@@ -11486,31 +11506,66 @@
             }
           },
           async loadProductionHistory() {
-            const params = {
-              page: this.pages.productionHistory,
-              page_size: this.pageSize,
-            };
-            Object.entries(this.productionHistoryFilters || {}).forEach(([key,value]) => {
-              if (value !== "" && value !== null && value !== undefined) params[key] = value;
-            });
-            const { data } = await axios.get("/api/production/completions", { params });
-            const floorNumbers = [...new Set(this.productionLocations.filter(location => location.is_empty).map(location => Number(location.warehouse_floor)).filter(Boolean))];
-            const defaultFloorNumber = floorNumbers.length === 1 ? floorNumbers[0] : null;
-            this.productionHistory = (data.items || []).map(row => ({
-              ...row,
-              transfer_floor_number: defaultFloorNumber,
-              transfer_area_code: "",
-              transfer_location_id: null,
-            }));
-            this.productionHistoryTotal = Number(data.total || 0);
-            if (this.productionHistory.some(row => row.status !== "reversed" && row.can_transfer_to_stock && this.canWarehouseExecute) && !this.productionLocations.length) {
-              const locationsReady = await this.ensureProductionLocations();
-              if (locationsReady) {
-                const loadedFloors = this.productionLocationFloors;
-                const singleFloor = loadedFloors.length === 1 ? loadedFloors[0].number : null;
-                this.productionHistory.forEach(row => { row.transfer_floor_number = singleFloor; });
+            const controller = this.beginLatestRequest("production:history");
+            const firstLoad = !this.productionHistoryState.loaded;
+            this.productionHistoryState.initialLoading = firstLoad;
+            this.productionHistoryState.refreshing = !firstLoad;
+            this.productionHistoryState.error = "";
+            try {
+              const params = {
+                page: this.pages.productionHistory,
+                page_size: this.pageSize,
+              };
+              Object.entries(this.productionHistoryFilters || {}).forEach(([key,value]) => {
+                if (value !== "" && value !== null && value !== undefined) params[key] = value;
+              });
+              const { data } = await axios.get("/api/production/completions", { params, signal:controller.signal });
+              if (latestRequestControllers.get("production:history") !== controller) return false;
+              const floorNumbers = [...new Set(this.productionLocations.filter(location => location.is_empty).map(location => Number(location.warehouse_floor)).filter(Boolean))];
+              const defaultFloorNumber = floorNumbers.length === 1 ? floorNumbers[0] : null;
+              this.productionHistory = (data.items || []).map(row => ({
+                ...row,
+                transfer_floor_number: defaultFloorNumber,
+                transfer_area_code: "",
+                transfer_location_id: null,
+              }));
+              this.productionHistoryTotal = Number(data.total || 0);
+              this.productionHistoryState.loaded = true;
+              if (this.productionHistory.some(row => row.status !== "reversed" && row.can_transfer_to_stock && this.canWarehouseExecute) && !this.productionLocations.length) {
+                const locationsReady = await this.ensureProductionLocations();
+                if (locationsReady) {
+                  const loadedFloors = this.productionLocationFloors;
+                  const singleFloor = loadedFloors.length === 1 ? loadedFloors[0].number : null;
+                  this.productionHistory.forEach(row => { row.transfer_floor_number = singleFloor; });
+                }
               }
+              return true;
+            } catch (error) {
+              if (!this.isCancelledRequest(error) && latestRequestControllers.get("production:history") === controller) {
+                this.productionHistoryState.error = this.errorMessage(error) || "请稍后重试";
+              }
+              return false;
+            } finally {
+              if (latestRequestControllers.get("production:history") === controller) {
+                this.productionHistoryState.initialLoading = false;
+                this.productionHistoryState.refreshing = false;
+              }
+              this.finishLatestRequest("production:history", controller);
             }
+          },
+          async selectProductionTab(tab) {
+            if (this.productionBusy) return false;
+            this.productionTab = tab;
+            if (tab === "history" && !this.productionHistoryState.loaded) return this.loadProductionHistory();
+            if (tab === "pending" && !this.productionPendingState.loaded) return this.loadProduction();
+            return true;
+          },
+          refreshProductionTab() {
+            return this.productionTab === "history" ? this.loadProductionHistory() : this.loadProduction();
+          },
+          productionTabLoading() {
+            const state = this.productionTab === "history" ? this.productionHistoryState : this.productionPendingState;
+            return state.initialLoading || state.refreshing;
           },
           resetProductionHistoryFilters() {
             this.productionHistoryFilters = { customer_id:"", order_keyword:"", product_code:"", product_name:"", completed_date_from:"", completed_date_to:"", status:"" };
@@ -11671,11 +11726,11 @@
             if (this.productionUsesBatchConfirmation(row)) this.autoSelectProductionRow(row);
           },
           async confirmProductionDirectRow(row) {
-            if (this.productionBusy || row?.completion_mode !== "direct") return;
+            if (this.productionBusy || row?.completion_mode !== "direct") return false;
             if (!this.canConfirmProductionRow(row)) {
               row.completion_mode = "";
               this.showToast("当前完工数量尚未准备好", true);
-              return;
+              return false;
             }
             const items = this.productionCompletionRequestItems([row]);
             const signature = JSON.stringify(items);
@@ -11698,7 +11753,7 @@
               } catch (error) {
                 row.completion_mode = "";
                 this.showToast(`直接待送确认失败：${this.errorMessage(error)}；重试会复用同一幂等键`, true);
-                return;
+                return false;
               }
               delete this.productionDirectAttempts[row.id];
               delete this.productionSelected[row.id];
@@ -11715,8 +11770,9 @@
                 this.showToast("已确认完工，整批已进入一楼待送区，可直接开送货单");
               } catch (error) {
                 this.productionTab = "pending";
-                this.showToast(`直接待送已保存，但页面刷新失败：${this.errorMessage(error)}；请手动刷新`, true);
+                this.showToast(`直接待送已保存，但页面刷新失败：${this.errorMessage(error)}；请手动刷新，成功项不要重复提交`, true);
               }
+              return true;
             } finally {
               row._direct_submitting = false;
               this.productionBusy = false;
@@ -11786,13 +11842,13 @@
             });
           },
           async batchConfirmProduction() {
-            if (this.productionBusy) return;
+            if (this.productionBusy) return false;
             const rows = this.productionPending.filter(row => this.productionUsesBatchConfirmation(row) && this.productionSelected[row.id] && this.canConfirmProductionRow(row));
-            if (!rows.length) { this.showToast("请先选择完工去向并勾选至少一条待生产明细", true); return; }
+            if (!rows.length) { this.showToast("请先选择完工去向并勾选至少一条待生产明细", true); return false; }
             const stockLocationIds = rows.filter(row => this.productionNeedsLocation(row)).map(row => Number(row.location_id));
             if (new Set(stockLocationIds).size !== stockLocationIds.length) {
               this.showToast("同一批入库明细不能选择同一空库位", true);
-              return;
+              return false;
             }
             const groups = new Map();
             rows.forEach(row => {
@@ -11832,29 +11888,40 @@
                   });
                 }
               }
-              await Promise.all([
-                this.loadProduction(),
-                this.loadOrders(),
-                this.loadDeliveries(),
-                this.loadKpi(),
-              ]);
-              if (this.hasPermission("dashboard.view")) await this.loadOverview();
+              let refreshed = true;
+              let refreshMessage = "";
+              try {
+                await Promise.all([
+                  this.loadProduction(),
+                  this.loadOrders(),
+                  this.loadDeliveries(),
+                  this.loadKpi(),
+                ]);
+                if (this.hasPermission("dashboard.view")) await this.loadOverview();
+              } catch (error) {
+                refreshed = false;
+                refreshMessage = this.errorMessage(error);
+              }
               this.productionTab = "pending";
               if (failedGroups.length) {
                 const failedText = failedGroups.map(group => `${group.customer_name} ${group.count} 条：${group.message}`).join("；");
-                this.showToast(`已入库 ${succeededRows.length} 条；失败 ${rows.length - succeededRows.length} 条。${failedText}。失败项已保留，可直接重试`, true);
+                this.showToast(`已入库 ${succeededRows.length} 条；失败 ${rows.length - succeededRows.length} 条。${failedText}。失败项已保留，可直接重试${refreshed ? "" : `；页面刷新失败：${refreshMessage}，成功项不要重复提交`}`, true);
+              } else if (!refreshed) {
+                this.showToast(`已确认入库 ${succeededRows.length} 条；页面刷新失败：${refreshMessage}，请手动刷新，成功项不要重复提交`, true);
               } else {
                 this.showToast(`已确认入库 ${succeededRows.length} 条`);
               }
+              return succeededRows.length > 0;
             } catch (error) {
-              this.showToast(`入库结果刷新失败：${this.errorMessage(error)}；请刷新页面核对`, true);
+              this.showToast(`批量入库处理失败：${this.errorMessage(error)}`, true);
+              return false;
             } finally { this.productionBusy = false; }
           },
           async transferProductionCompletionToStock(row) {
-            if (this.productionBusy) return;
+            if (this.productionBusy) return false;
             const location = this.productionLocation(row?.transfer_location_id);
-            if (!location) { this.showToast("请先选择区域和可用的三楼成品库位", true); return; }
-            if (!confirm(`确认将 ${row.item_order_number || row.order_number || "该完工记录"} 转入 ${location.location_code}？`)) return;
+            if (!location) { this.showToast("请先选择区域和可用的三楼成品库位", true); return false; }
+            if (!confirm(`确认将 ${row.item_order_number || row.order_number || "该完工记录"} 转入 ${location.location_code}？`)) return false;
             const signature = JSON.stringify({completion_id:row.id,location_id:location.id,pallet_id:location.pallet_id || null,pallet_code:location.pallet_code || null});
             const old = this.productionTransferAttempts[row.id];
             if (!old || old.signature !== signature) {
@@ -11863,28 +11930,39 @@
             const idempotencyKey = this.productionTransferAttempts[row.id].idempotency_key;
             this.productionBusy = true;
             try {
-              await axios.post(`/api/production/completions/${row.id}/stock-transfers`, {
-                idempotency_key: idempotencyKey,
-                location_id: Number(location.id),
-                pallet_id: location.pallet_id ? Number(location.pallet_id) : null,
-                pallet_code: location.pallet_code || null,
-              });
+              try {
+                await axios.post(`/api/production/completions/${row.id}/stock-transfers`, {
+                  idempotency_key: idempotencyKey,
+                  location_id: Number(location.id),
+                  pallet_id: location.pallet_id ? Number(location.pallet_id) : null,
+                  pallet_code: location.pallet_code || null,
+                });
+              } catch (error) {
+                this.showToast(`转库存失败：${this.errorMessage(error)}；重试将复用同一幂等键`, true);
+                return false;
+              }
               delete this.productionTransferAttempts[row.id];
-              await Promise.all([this.loadProduction(), this.loadKpi(), this.loadDeliveries()]);
-              if (this.hasPermission("dashboard.view")) await this.loadOverview();
+              let refreshed = true;
+              let refreshMessage = "";
+              try {
+                await Promise.all([this.loadProduction(), this.loadKpi(), this.loadDeliveries()]);
+                if (this.hasPermission("dashboard.view")) await this.loadOverview();
+              } catch (error) {
+                refreshed = false;
+                refreshMessage = this.errorMessage(error);
+              }
               this.productionTab = "history";
-              this.showToast(`已转入成品库存 ${location.location_code}`);
-            } catch (error) {
-              this.showToast(`转库存失败：${this.errorMessage(error)}；重试将复用同一幂等键`, true);
+              this.showToast(refreshed ? `已转入成品库存 ${location.location_code}` : `已转入成品库存 ${location.location_code}；页面刷新失败：${refreshMessage}，请手动刷新，不要重复提交`, !refreshed);
+              return true;
             } finally { this.productionBusy = false; }
           },
           async supplementProductionCompletion(row) {
-            if (this.productionBusy || this.user?.role !== "admin" || !row?.can_supplement) return;
+            if (this.productionBusy || this.user?.role !== "admin" || !row?.can_supplement) return false;
             const availableInput = Number(row.available_material_input_quantity || 0);
             const input = Number(prompt("本次补充实际投入数量", String(availableInput)));
             if (!Number.isInteger(input) || input <= 0 || input > availableInput) {
               this.showToast(`补充投入必须为 1 至 ${availableInput} 的整数`, true);
-              return;
+              return false;
             }
             const theoretical = this.productionTheoreticalOutput({
               ...row,
@@ -11893,36 +11971,53 @@
             const output = Number(prompt(`本次实际合格产量（理论最多 ${theoretical}）`, String(theoretical)));
             if (!Number.isInteger(output) || output <= 0 || output > theoretical) {
               this.showToast(`实际合格产量必须为 1 至 ${theoretical} 的整数`, true);
-              return;
+              return false;
             }
             const locations = this.productionAvailableLocations;
-            if (!locations.length) { this.showToast("当前没有空闲三楼成品库位", true); return; }
+            if (!locations.length) { this.showToast("当前没有空闲三楼成品库位", true); return false; }
             const code = String(prompt(`输入余货库位编码：\n${locations.slice(0,20).map(item=>`${item.location_code}（${item.is_temporary?'临时':'固定'}）`).join("、")}`, locations[0].location_code) || "").trim();
             const location = locations.find(item => String(item.location_code).toUpperCase() === code.toUpperCase());
-            if (!location) { this.showToast("未找到该空闲成品库位", true); return; }
-            if (!confirm(`确认补录：投入 ${input}，合格 ${output}，损耗 ${theoretical-output}，全部进入 ${location.location_code}？`)) return;
+            if (!location) { this.showToast("未找到该空闲成品库位", true); return false; }
+            if (!confirm(`确认补录：投入 ${input}，合格 ${output}，损耗 ${theoretical-output}，全部进入 ${location.location_code}？`)) return false;
+            const signature = JSON.stringify({task_id:Number(row.task_id),expected_version:Number(row.task_version),input,output,location_id:Number(location.id)});
+            const oldAttempt = this.productionSupplementAttempts[row.id];
+            if (!oldAttempt || oldAttempt.signature !== signature) {
+              this.productionSupplementAttempts[row.id] = {signature,idempotency_key:createIdempotencyKey()};
+            }
             this.productionBusy = true;
             try {
-              await axios.post("/api/production/completion-batches", {
-                idempotency_key:createIdempotencyKey(),
-                items:[{
-                  task_id:Number(row.task_id),
-                  expected_version:Number(row.task_version),
-                  disposition:"stock",
-                  completion_type:"supplemental",
-                  material_input_quantity:input,
-                  actual_output_quantity:output,
-                  defective_quantity:theoretical-output,
-                  location_id:Number(location.id),
-                  pallet_id:location.pallet_id ? Number(location.pallet_id) : null,
-                  pallet_code:location.pallet_code || null,
-                  remarks:null,
-                }],
-              });
-              await Promise.all([this.loadProduction(),this.loadDeliveries(),this.loadKpi()]);
-              this.showToast(`已补录 ${output} 个合格品，未改写原生产确认`);
-            } catch(error) {
-              this.showToast(`补充生产确认失败：${this.errorMessage(error)}`, true);
+              try {
+                await axios.post("/api/production/completion-batches", {
+                  idempotency_key:this.productionSupplementAttempts[row.id].idempotency_key,
+                  items:[{
+                    task_id:Number(row.task_id),
+                    expected_version:Number(row.task_version),
+                    disposition:"stock",
+                    completion_type:"supplemental",
+                    material_input_quantity:input,
+                    actual_output_quantity:output,
+                    defective_quantity:theoretical-output,
+                    location_id:Number(location.id),
+                    pallet_id:location.pallet_id ? Number(location.pallet_id) : null,
+                    pallet_code:location.pallet_code || null,
+                    remarks:null,
+                  }],
+                });
+              } catch(error) {
+                this.showToast(`补充生产确认失败：${this.errorMessage(error)}；重试将复用同一幂等键`, true);
+                return false;
+              }
+              delete this.productionSupplementAttempts[row.id];
+              let refreshed = true;
+              let refreshMessage = "";
+              try {
+                await Promise.all([this.loadProduction(),this.loadDeliveries(),this.loadKpi()]);
+              } catch (error) {
+                refreshed = false;
+                refreshMessage = this.errorMessage(error);
+              }
+              this.showToast(refreshed ? `已补录 ${output} 个合格品，未改写原生产确认` : `已补录 ${output} 个合格品；页面刷新失败：${refreshMessage}，请手动刷新，不要重复提交`, !refreshed);
+              return true;
             } finally { this.productionBusy=false; }
           },
           openProductionInventory(row) {
@@ -11937,18 +12032,30 @@
             this.activePage = "warehouse";
           },
           async revertProductionCompletion(row) {
-            if (this.productionBusy || !row?.can_revert || this.user?.role !== "admin") return;
-            if (!confirm(`确认撤销 ${row.item_order_number || row.order_number || "该订单"} 的生产确认吗？\n\n系统会撤回本次生成的临时成品库存或直接完工效果，并把任务退回待生产确认。已经送货、占用或移动的库存不会允许撤销。`)) return;
+            if (this.productionBusy || !row?.can_revert || this.user?.role !== "admin") return false;
+            if (!confirm(`确认撤销 ${row.item_order_number || row.order_number || "该订单"} 的生产确认吗？\n\n系统会撤回本次生成的临时成品库存或直接完工效果，并把任务退回待生产确认。已经送货、占用或移动的库存不会允许撤销。`)) return false;
             this.productionBusy = true;
             try {
-              await axios.post(`/api/production/completions/${row.id}/revert`, {});
+              try {
+                await axios.post(`/api/production/completions/${row.id}/revert`, {});
+              } catch (error) {
+                this.showToast(`撤销生产确认失败：${this.errorMessage(error)}`, true);
+                return false;
+              }
               delete this.productionTransferAttempts[row.id];
-              await Promise.all([this.loadProduction(), this.loadOrders(), this.loadKpi(), this.loadDeliveries()]);
-              if (this.hasPermission("dashboard.view")) await this.loadOverview();
+              delete this.productionSupplementAttempts[row.id];
+              let refreshed = true;
+              let refreshMessage = "";
+              try {
+                await Promise.all([this.loadProduction(), this.loadOrders(), this.loadKpi(), this.loadDeliveries()]);
+                if (this.hasPermission("dashboard.view")) await this.loadOverview();
+              } catch (error) {
+                refreshed = false;
+                refreshMessage = this.errorMessage(error);
+              }
               this.productionTab = "pending";
-              this.showToast("生产确认已撤销，任务已退回待生产确认");
-            } catch (error) {
-              this.showToast(`撤销生产确认失败：${this.errorMessage(error)}`, true);
+              this.showToast(refreshed ? "生产确认已撤销，任务已退回待生产确认" : `生产确认已撤销；页面刷新失败：${refreshMessage}，请手动刷新，不要重复提交`, !refreshed);
+              return true;
             } finally { this.productionBusy = false; }
           },
           async loadIncoming() {

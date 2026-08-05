@@ -10613,8 +10613,35 @@ def void_stock_replenishment_order(
             status_code=409,
             detail="该补库单已经部分或全部实际收货，不能直接撤销报料。",
         )
-    order.status = "voided"
-    order.voided_at = utc_now_naive()
+    order_number = order.order_number
+    voided_at = utc_now_naive()
+    transition = db.execute(
+        update(StockReplenishmentOrder)
+        .where(
+            StockReplenishmentOrder.id == order_id,
+            StockReplenishmentOrder.status == "confirmed",
+        )
+        .values(status="voided", voided_at=voided_at)
+        .execution_options(synchronize_session=False)
+    )
+    if transition.rowcount != 1:
+        db.rollback()
+        current = db.scalar(
+            _replenishment_order_query()
+            .where(StockReplenishmentOrder.id == order_id)
+            .execution_options(populate_existing=True)
+        )
+        if current is None:
+            raise HTTPException(status_code=404, detail="库存补库单不存在。")
+        _require_stock_replenishment_order_access(
+            db, current, user, relationships_loaded=True
+        )
+        if current.status == "voided":
+            return replenishment_order_dict(current)
+        raise HTTPException(
+            status_code=409,
+            detail="该补库单状态已变化，可能已经收货，不能直接撤销报料。",
+        )
     db.add(
         OperationLog(
             user_id=user.id,
@@ -10623,7 +10650,7 @@ def void_stock_replenishment_order(
             details=json.dumps(
                 {
                     "stock_replenishment_order_id": order.id,
-                    "order_number": order.order_number,
+                    "order_number": order_number,
                     "received_quantity": 0,
                     "inventory_created": False,
                 },
@@ -10638,7 +10665,9 @@ def void_stock_replenishment_order(
     )
     db.commit()
     order = db.scalar(
-        _replenishment_order_query().where(StockReplenishmentOrder.id == order_id)
+        _replenishment_order_query()
+        .where(StockReplenishmentOrder.id == order_id)
+        .execution_options(populate_existing=True)
     )
     assert order is not None
     return replenishment_order_dict(order)

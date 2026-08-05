@@ -41,13 +41,14 @@
       .partial-btn { background: var(--orange); }
       .stock-btn { background: var(--red); }
       .message { margin: 40px 18px; padding: 22px; text-align: center; background: white; border-radius: 14px; }
+      .retry { margin-top: 12px; min-height: 40px; padding: 0 18px; color: white; background: var(--green); border: 0; border-radius: 9px; font-size: 15px; font-weight: 700; }
       .empty { padding: 36px 12px; color: var(--muted); text-align: center; }
       .toast { position: fixed; left: 50%; bottom: 20px; z-index: 10; transform: translateX(-50%); padding: 12px 18px; color: white; background: #17211be8; border-radius: 10px; }
     </style>
   </head>
   <body>
     <div id="loading" class="message">正在加载拿货明细...</div>
-    <div id="error" class="message" hidden></div>
+    <div id="error" class="message" hidden><div id="errorText"></div><button id="retry" class="retry" type="button">重新加载</button></div>
     <div id="app" hidden>
       <nav id="stats" class="stats" aria-label="拿货状态筛选"></nav>
       <main id="items"></main>
@@ -57,6 +58,9 @@
       const token = new URLSearchParams(location.search).get("token") || "";
       let data = null;
       let activeFilter = "open";
+      let loadGeneration = 0;
+      let loadController = null;
+      const busyItems = new Set();
       const statusOf = (item) => item.mobile_pick_status || "pending";
       const filters = [
         ["open","未完成",item => statusOf(item) !== "picked"],
@@ -84,12 +88,13 @@
       function render() {
         document.getElementById("stats").innerHTML = filters.map(([key,label]) =>
           `<button type="button" class="stat ${activeFilter===key?"active":""}" data-filter="${key}" aria-pressed="${activeFilter===key}" onclick="setFilter('${key}')"><strong>${filterCount(key)}</strong>${label}</button>`
-        ).join("");
+        ).join("") + '<button type="button" class="stat" onclick="loadData()">刷新</button>';
         const predicate=filters.find(row => row[0] === activeFilter)[2];
         const visibleItems=data.items.filter(predicate);
         document.getElementById("items").innerHTML = visibleItems.length ? visibleItems.map(item => {
           const pickStatus=statusOf(item);
           const qty=item.mobile_picked_qty ?? item.final_delivery_qty ?? item.suggested_qty ?? 0;
+          const disabled=busyItems.has(item.item_id) ? " disabled" : "";
           const locations=(item.finished_inventory_sources || []).map(source => {
             const location=source.location_code && source.location_name && source.location_code !== source.location_name
               ? `${source.location_code}（${source.location_name}）`
@@ -102,20 +107,38 @@
             <div class="spec">规格：${escapeHtml(item.specification || "-")}</div>
             ${locations ? `<div class="locations">${locations}</div>` : ""}
             <div class="pick-row"><label for="qty-${item.item_id}">拿货数量</label><input id="qty-${item.item_id}" class="qty" type="number" min="0" inputmode="numeric" value="${qty}" /></div>
-            <div class="actions"><button class="action picked-btn" onclick="saveItem(${item.item_id},'picked')">已拿货</button><button class="action partial-btn" onclick="saveItem(${item.item_id},'partial')">部分拿货</button><button class="action stock-btn" onclick="saveItem(${item.item_id},'no_stock')">没货</button></div>
+            <div class="actions"><button class="action picked-btn"${disabled} onclick="saveItem(${item.item_id},'picked')">已拿货</button><button class="action partial-btn"${disabled} onclick="saveItem(${item.item_id},'partial')">部分拿货</button><button class="action stock-btn"${disabled} onclick="saveItem(${item.item_id},'no_stock')">没货</button></div>
           </article>`;
         }).join("") : '<div class="empty">当前筛选暂无拿货明细</div>';
       }
       async function request(url, options={}) {
-        const response=await fetch(url,options);
-        const body=await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(body.detail || "操作失败");
+        let response;
+        try {
+          response=await fetch(url,{credentials:"same-origin",...options});
+        } catch (error) {
+          if (error?.name === "AbortError") throw error;
+          throw new Error("无法连接 ERP 服务，请检查网络后重试");
+        }
+        const text=await response.text();
+        let body={};
+        if (text) {
+          try { body=JSON.parse(text); } catch (_error) { body={}; }
+        }
+        if (!response.ok) {
+          const detail=body?.detail;
+          const message=typeof detail === "string"
+            ? detail
+            : (detail && typeof detail.message === "string" ? detail.message : "");
+          throw new Error(message || `操作失败（HTTP ${response.status}）`);
+        }
         return body;
       }
       async function saveItem(id,status) {
+        if (busyItems.has(id)) return;
         const card=document.querySelector(`[data-id="${id}"]`);
         const current=data.items.find(item => item.item_id===id);
-        const target=Number(current.suggested_qty ?? current.final_delivery_qty ?? 0);
+        if (!card || !current) return toast("拿货明细已刷新，请重新选择");
+        const target=Number(current.final_delivery_qty ?? current.suggested_qty ?? 0);
         let qty=Number(card.querySelector(".qty").value);
         if (status === "picked") {
           if (!Number.isFinite(target) || target <= 0) return toast("本单拿货数量无效，请联系电脑端确认");
@@ -127,6 +150,7 @@
           if (!Number.isFinite(qty) || qty <= 0) return toast("部分拿货数量必须大于 0");
           if (qty >= target) return toast("已全部拿齐，请点击“已拿货”");
         }
+        busyItems.add(id);
         card.querySelectorAll("button.action").forEach(button => button.disabled=true);
         try {
           const result=await request(`/api/mobile/tianhua-pick/items/${id}`,{
@@ -135,28 +159,48 @@
             body:JSON.stringify({token,mobile_pick_status:status,mobile_picked_qty:status==="no_stock"?0:qty,mobile_pick_note:current.mobile_pick_note || ""})
           });
           Object.assign(current,result.item);
+          busyItems.delete(id);
           render();
           const messages={picked:"已转入“已拿货”",partial:"已记录部分拿货",no_stock:"已记录没货"};
           toast(messages[result.item.mobile_pick_status] || "拿货状态已保存");
         } catch (error) {
           toast(error.message);
-          card.querySelectorAll("button.action").forEach(button => button.disabled=false);
+          busyItems.delete(id);
+          if (card.isConnected) {
+            card.querySelectorAll("button.action").forEach(button => button.disabled=false);
+          } else {
+            render();
+          }
         }
       }
-      (async () => {
+      async function loadData() {
+        loadController?.abort();
+        const controller=new AbortController();
+        loadController=controller;
+        const generation=++loadGeneration;
+        const loading=document.getElementById("loading");
+        loading.textContent=data ? "正在刷新拿货明细..." : "正在加载拿货明细...";
+        loading.hidden=false;
+        document.getElementById("error").hidden=true;
+        if (!data) document.getElementById("app").hidden=true;
         try {
           if (!token) throw new Error("无权限访问该拿货单");
-          data=await request(`/api/mobile/tianhua-pick?token=${encodeURIComponent(token)}`);
-          document.getElementById("loading").hidden=true;
+          const result=await request(`/api/mobile/tianhua-pick?token=${encodeURIComponent(token)}`,{signal:controller.signal});
+          if (generation !== loadGeneration) return;
+          data=result;
+          loading.hidden=true;
           document.getElementById("app").hidden=false;
           render();
         } catch (error) {
-          document.getElementById("loading").hidden=true;
-          const node=document.getElementById("error");
-          node.textContent=error.message;
-          node.hidden=false;
+          if (error?.name === "AbortError" || generation !== loadGeneration) return;
+          loading.hidden=true;
+          document.getElementById("errorText").textContent=error.message;
+          document.getElementById("retry").hidden=!token;
+          document.getElementById("error").hidden=false;
         }
-      })();
+      }
+      document.getElementById("retry").addEventListener("click",loadData);
+      loadData();
     </script>
   </body>
 </html>

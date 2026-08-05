@@ -15,12 +15,12 @@ WAREHOUSE = (ROOT / "static" / "warehouse.html").read_text(encoding="utf-8")
 def test_n028_permission_management_uses_atomic_backend_contract() -> None:
     assert 'axios.get("/api/auth/users")' in INDEX
     assert 'axios.post("/api/auth/users"' in INDEX
-    assert "/api/auth/users/${encodeURIComponent(userId)}/permission-overrides" in INDEX
-    assert "/api/auth/users/${encodeURIComponent(userId)}/customer-scopes" in INDEX
+    assert "/api/auth/users/${encodeURIComponent(requestedUserId)}/permission-overrides" in INDEX
+    assert "/api/auth/users/${encodeURIComponent(requestedUserId)}/customer-scopes" in INDEX
     assert "/api/auth/users/${encodeURIComponent(userId)}/access" in INDEX
     assert "overrides:this.permissionOverridePayload()" in INDEX
     assert "mode:this.permissionDraft.customer_access_mode" in INDEX
-    assert "customer_ids:this.permissionDraft.customer_ids" in INDEX
+    assert "customer_ids:[...this.permissionDraft.customer_ids]" in INDEX
 
 
 def test_n028_permission_ui_supports_user_selection_checks_and_customer_scope() -> None:
@@ -47,7 +47,8 @@ def test_n028_auth_payload_and_visibility_rules_are_wired() -> None:
     assert "role-no-costs" in INDEX
     assert 'canViewCosts() { return this.hasPermission("cost.view"); }' in INDEX
     assert 'canRequisition() { return this.hasPermission("requisition.execute"); }' in INDEX
-    assert 'if (this.canManagePermissions) items.push({ key: "permissions"' in INDEX
+    assert '{key:"permissions",label:"用户权限"}' in INDEX
+    assert "this.pageAllowed(page.key)" in INDEX
     assert 'roleMenus' in INDEX and 'boss: ["dashboard"' in INDEX
     assert 'system: "system.backup"' in INDEX or 'system:"system.backup"' in INDEX
     assert 'permissions: "users.manage"' in INDEX or 'permissions:"users.manage"' in INDEX
@@ -93,7 +94,7 @@ def test_n028_view_only_operational_pages_hide_write_controls() -> None:
     assert "拥有“来料入库操作”权限才可撤销" in INDEX
     assert 'canFinance() { return this.hasPermission("finance.execute"); }' in INDEX
     assert '<button v-if="canFinance" class="btn primary" @click="openStatement(financeFilters.statement_month)">' in INDEX
-    assert '<button v-if="canFinance" class="btn small" :disabled="Number(statement.pending_invoice_amount)<=0" @click="registerInvoice(statement)">' in INDEX
+    assert '<button v-if="canFinance && statement.confirmation_status!==\'confirmed\'" class="btn small" :disabled="Number(statement.pending_invoice_amount)<=0 || !!financeStatementOperationState.action" @click="registerInvoice(statement)">' in INDEX
     assert '<button v-if="canFinance" class="btn small success"' in INDEX
     assert 'quotations:"quotations.view"' in INDEX
     assert 'if (!this.pageAllowed(page))' in INDEX

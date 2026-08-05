@@ -859,7 +859,7 @@ def test_mobile_mold_lookup_and_print_label_are_local_and_auth_guarded() -> None
     assert "3F-M-R02-L2-D03-P08" in warehouse
     assert "打印标签" in warehouse
     assert "<script src=" not in mobile
-    assert "<script src=" not in label
+    assert "print-recovery.js" in label
 
 
 def test_mold_is_required_only_for_die_cut_products(mold_app) -> None:

@@ -91,12 +91,28 @@
     );
   }
 
+  function addWorkingDays(value, workingDays) {
+    const amount = Number(workingDays);
+    if (!Number.isInteger(amount)) throw new TypeError("working days must be an integer");
+    if (amount < 0) throw new RangeError("working days cannot be negative");
+    let result = formatBusinessDate(value);
+    let added = 0;
+    while (added < amount) {
+      result = addCalendarDays(result, 1);
+      const date = assertDateOnly(result);
+      const weekday = new Date(Date.UTC(date.year, date.month - 1, date.day)).getUTCDay();
+      if (weekday !== 0 && weekday !== 6) added += 1;
+    }
+    return result;
+  }
+
   global.TmTime = Object.freeze({
     BEIJING_TIME_ZONE,
     formatBeijingDateTime,
     formatBeijingDate,
     beijingToday,
     addCalendarDays,
+    addWorkingDays,
     formatBusinessDate,
   });
 })(typeof globalThis === "undefined" ? window : globalThis);

@@ -101,7 +101,7 @@ const context = {
   deliveryForm: { lines: [] },
   deliveryBatchPicker: {
     visible: true,
-    selected: { 101: true },
+    selected: { 101: { order_item_id: 101, order_remaining_quantity: 12, product_code: "P1-15" } },
     items: [{ order_item_id: 101, order_remaining_quantity: 12, product_code: "P1-15" }],
   },
   isDeliveryItemAlreadyInForm() { return false; },
@@ -128,8 +128,8 @@ if (context.deliveryBatchPicker.visible !== false) {
     assert result.returncode == 0, result.stderr
 
 
-def test_delivery_primary_action_has_draft_save_edit_and_print_states() -> None:
-    """The modal's primary action must never imply dispatching a saved draft."""
+def test_delivery_primary_action_has_save_edit_and_direct_dispatch_print_states() -> None:
+    """A clean saved draft uses the existing guarded dispatch-and-print path."""
 
     assert re.search(
         r'@click="modal\?\.type\s*===\s*[\'\"]delivery[\'\"]\s*\?\s*'
@@ -142,13 +142,13 @@ def test_delivery_primary_action_has_draft_save_edit_and_print_states() -> None:
         "deliveryFormIsDirty",
         "deliveryPrimaryLabel",
         "deliveryPrimaryAction",
-        "printCurrentDeliveryDraft",
+        "dispatchCurrentDeliveryDraft",
     ):
         _method_body(name)
     label_body = _method_body("deliveryPrimaryLabel")
     assert 'return "保存草稿"' in label_body
     assert '"保存修改"' in label_body
-    assert '"打印"' in label_body
+    assert '"发货打印"' in label_body
 
     result = _run_node(
         _vue_harness(
@@ -160,9 +160,9 @@ function context(editingId, savedSignature, currentSignature) {
       deliveryFormHasUnsavedChanges: methods.deliveryFormHasUnsavedChanges,
       deliveryFormIsDirty: methods.deliveryFormIsDirty,
     saveCalls: 0,
-    printCalls: 0,
+    dispatchCalls: 0,
     saveModal() { this.saveCalls += 1; return "saved"; },
-    printCurrentDeliveryDraft() { this.printCalls += 1; return "printed"; },
+    dispatchCurrentDeliveryDraft() { this.dispatchCalls += 1; return "dispatched"; },
   };
 }
 const firstSave = context(null, "", "first");
@@ -171,9 +171,9 @@ const changedSaved = context(55, "before", "after");
 methods.deliveryPrimaryAction.call(firstSave);
 methods.deliveryPrimaryAction.call(cleanSaved);
 methods.deliveryPrimaryAction.call(changedSaved);
-if (firstSave.saveCalls !== 1 || firstSave.printCalls !== 0) throw new Error("first action must save draft");
-if (cleanSaved.saveCalls !== 0 || cleanSaved.printCalls !== 1) throw new Error("clean draft must print only");
-if (changedSaved.saveCalls !== 1 || changedSaved.printCalls !== 0) throw new Error("changed draft must save changes");
+if (firstSave.saveCalls !== 1 || firstSave.dispatchCalls !== 0) throw new Error("first action must save draft");
+if (cleanSaved.saveCalls !== 0 || cleanSaved.dispatchCalls !== 1) throw new Error("clean draft must dispatch and print");
+if (changedSaved.saveCalls !== 1 || changedSaved.dispatchCalls !== 0) throw new Error("changed draft must save changes");
 """
         )
     )
@@ -190,13 +190,16 @@ def test_first_save_keeps_delivery_modal_open_and_sets_editing_id() -> None:
     assert "closeModal" not in branch
 
 
-def test_draft_print_opens_only_print_page_without_dispatch_or_print_status_write() -> None:
-    body = _method_body("printCurrentDeliveryDraft")
+def test_saved_modal_exposes_pick_without_dispatch_and_direct_dispatch_print() -> None:
+    pick = _method_body("createCurrentDeliveryPickTask")
+    dispatch = _method_body("dispatchCurrentDeliveryDraft")
 
-    assert "openDeliveryPrintTab" in body
-    assert "/dispatch" not in body
-    assert "/printed" not in body
-    assert "axios." not in body
+    assert "createDeliveryPickTask" in pick
+    assert "dispatchDelivery" not in pick
+    assert "openDeliveryPrintTab" not in pick
+    assert "dispatchDelivery" in dispatch
+    assert "内容已修改，请先保存后再发货打印" in dispatch
+    assert "已推送拿货" in INDEX
 
 
 def test_delivery_print_tab_is_same_origin_isolated_and_reports_popup_blocking() -> None:
@@ -277,6 +280,7 @@ function context() {
   return {
     isForcedPassword: false,
     modal: { type: "delivery" },
+    pdfWarehouseLocator: { visible: false },
     deliveryForm: { editingId: null, saved_signature: "before" },
     deliveryFormSignature() { return "after"; },
     deliveryFormHasUnsavedChanges: methods.deliveryFormHasUnsavedChanges,

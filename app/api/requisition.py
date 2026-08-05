@@ -49,6 +49,7 @@ from app.models.production import ProductionCompletion
 from app.models.product_bom import (
     RequisitionItemBomSource,
     SalesOrderItemBomComponent,
+    SalesOrderItemBomDemandAdjustment,
 )
 from app.models.requisition import Requisition, RequisitionHold, RequisitionItem
 from app.models.supplier_requisition_order import (
@@ -1025,17 +1026,41 @@ def _purchase_qty(required_piece_qty: int, inventory_deducted_qty: int, cutting_
 
 
 class _PendingRequisitionReadContext:
-    """Request-local negative facts for the ordinary pending-requisition path.
+    """Request-local facts for both ordinary and complex pending rows.
 
-    The pending and merge views normally need the complete inventory/BOM
-    calculation.  A row can take the small direct calculation only after this
-    context proves that none of those facts exists for that row.  It is not a
-    cache: every request rebuilds it from the current transaction snapshot.
+    A row can take the small direct calculation only after this context proves
+    that none of the inventory/BOM facts exists for it.  Complex rows reuse the
+    same request snapshot instead of issuing the established helpers once per
+    line.  This is deliberately request-local rather than a cross-request cache.
     """
 
     def __init__(self, db: Session, rows: list[tuple]) -> None:
         item_ids = [item.id for item, *_ in rows]
         self.material_by_id: dict[int, Material] = {}
+        self._bom_snapshots_by_item_id: dict[
+            int, list[SalesOrderItemBomComponent]
+        ] = {}
+        self._bom_effective_by_snapshot_id: dict[int, tuple[int, int]] = {}
+        self._bom_reservations_by_snapshot_id: dict[
+            int, list[tuple[InventoryReservation, OrderItemSemiRequirement | None]]
+        ] = {}
+        self._bom_active_requisition_components: dict[int, set[str]] = {}
+        self._bom_parent_active_requisition_item_ids: set[int] = set()
+        self._bom_batch_supported_item_ids: set[int] = set()
+        self._semi_requirements_by_item_component: dict[
+            tuple[int, str], OrderItemSemiRequirement
+        ] = {}
+        self._semi_reserved_by_item_component: dict[tuple[int, str], int] = {}
+        self._active_semi_reservation_item_ids: set[int] = set()
+        self._posted_completion_item_ids: set[int] = set()
+        self._finished_lots_by_item_id: dict[int, list[InventoryLot]] = {}
+        self._safe_semi_lots_by_item_component: dict[
+            tuple[int, str], list[InventoryLot]
+        ] = {}
+        self._order_by_item_id = {item.id: order for item, order, *_ in rows}
+        self._product_by_item_id = {
+            item.id: product for item, _order, _customer, product in rows
+        }
         self._ordinary_item_ids: set[int] = set()
         if not item_ids:
             return
@@ -1043,6 +1068,11 @@ class _PendingRequisitionReadContext:
         material_ids = {
             int(item.material_id) for item, *_ in rows if item.material_id
         }
+        material_ids.update(
+            int(product.material_id)
+            for _item, _order, _customer, product in rows
+            if product.material_id
+        )
         if material_ids:
             self.material_by_id = {
                 material.id: material
@@ -1051,13 +1081,20 @@ class _PendingRequisitionReadContext:
                 ).all()
             }
 
-        complex_item_ids = set(
-            db.scalars(
-                select(SalesOrderItemBomComponent.sales_order_item_id).where(
-                    SalesOrderItemBomComponent.sales_order_item_id.in_(item_ids)
-                )
-            ).all()
-        )
+        bom_snapshots = db.scalars(
+            select(SalesOrderItemBomComponent)
+            .where(SalesOrderItemBomComponent.sales_order_item_id.in_(item_ids))
+            .order_by(
+                SalesOrderItemBomComponent.sales_order_item_id,
+                SalesOrderItemBomComponent.display_order,
+                SalesOrderItemBomComponent.id,
+            )
+        ).all()
+        for snapshot in bom_snapshots:
+            self._bom_snapshots_by_item_id.setdefault(
+                int(snapshot.sales_order_item_id), []
+            ).append(snapshot)
+        complex_item_ids = set(self._bom_snapshots_by_item_id)
         # Telescoping lid boxes have two independent cover/base requirements.
         # Their aggregate values cannot use the ordinary whole-item formula.
         complex_item_ids.update(
@@ -1069,75 +1106,308 @@ class _PendingRequisitionReadContext:
         )
         # A saved semi requirement or an active reservation may change both
         # the remaining pieces and the safe stock actions shown by the view.
+        semi_requirements = db.scalars(
+            select(OrderItemSemiRequirement).where(
+                OrderItemSemiRequirement.order_item_id.in_(item_ids)
+            )
+        ).all()
+        requirement_by_id = {
+            int(requirement.id): requirement for requirement in semi_requirements
+        }
+        snapshot_ids = [int(snapshot.id) for snapshot in bom_snapshots]
+        requirement_ids = list(requirement_by_id)
+        for requirement in semi_requirements:
+            if requirement.sales_order_item_bom_component_id is None:
+                self._semi_requirements_by_item_component[
+                    (int(requirement.order_item_id), requirement.component_type)
+                ] = requirement
         complex_item_ids.update(
-            db.scalars(
-                select(OrderItemSemiRequirement.order_item_id).where(
-                    OrderItemSemiRequirement.order_item_id.in_(item_ids)
-                )
-            ).all()
+            int(requirement.order_item_id) for requirement in semi_requirements
         )
-        complex_item_ids.update(
-            db.scalars(
-                select(InventoryReservation.order_item_id).where(
-                    InventoryReservation.order_item_id.in_(item_ids),
-                    InventoryReservation.status != "cancelled",
-                    InventoryReservation.reserved_stock_quantity
-                    > InventoryReservation.consumed_stock_quantity
-                    + InventoryReservation.released_stock_quantity,
+
+        reservation_scope = [InventoryReservation.order_item_id.in_(item_ids)]
+        if snapshot_ids:
+            reservation_scope.append(
+                InventoryReservation.sales_order_item_bom_component_id.in_(
+                    snapshot_ids
+                )
+            )
+        if requirement_ids:
+            reservation_scope.append(
+                InventoryReservation.semi_requirement_id.in_(requirement_ids)
+            )
+        reservations = db.scalars(
+            select(InventoryReservation).where(
+                or_(*reservation_scope),
+                InventoryReservation.status != "cancelled",
+            )
+        ).all()
+        for reservation in reservations:
+            order_item_id = int(reservation.order_item_id or 0)
+            if not order_item_id:
+                continue
+            if (
+                int(reservation.reserved_stock_quantity or 0)
+                > int(reservation.consumed_stock_quantity or 0)
+                + int(reservation.released_stock_quantity or 0)
+            ):
+                complex_item_ids.add(order_item_id)
+                if reservation.reservation_type == "semi_order":
+                    self._active_semi_reservation_item_ids.add(order_item_id)
+            requirement = requirement_by_id.get(
+                int(reservation.semi_requirement_id or 0)
+            )
+            if (
+                reservation.reservation_type == "semi_order"
+                and requirement is not None
+            ):
+                key = (order_item_id, requirement.component_type)
+                self._semi_reserved_by_item_component[key] = (
+                    self._semi_reserved_by_item_component.get(key, 0)
+                    + max(
+                        int(reservation.credited_requirement_quantity or 0)
+                        - int(reservation.released_requirement_quantity or 0),
+                        0,
+                    )
+                )
+
+        adjustment_totals: dict[int, tuple[int, int]] = {}
+        if snapshot_ids:
+            adjustment_totals = {
+                int(snapshot_id): (int(delta_sets or 0), int(delta_pieces or 0))
+                for snapshot_id, delta_sets, delta_pieces in db.execute(
+                    select(
+                        SalesOrderItemBomDemandAdjustment.sales_order_item_bom_component_id,
+                        func.coalesce(
+                            func.sum(
+                                SalesOrderItemBomDemandAdjustment.delta_order_set_quantity
+                            ),
+                            0,
+                        ),
+                        func.coalesce(
+                            func.sum(
+                                SalesOrderItemBomDemandAdjustment.delta_required_piece_quantity
+                            ),
+                            0,
+                        ),
+                    )
+                    .where(
+                        SalesOrderItemBomDemandAdjustment.sales_order_item_bom_component_id.in_(
+                            snapshot_ids
+                        )
+                    )
+                    .group_by(
+                        SalesOrderItemBomDemandAdjustment.sales_order_item_bom_component_id
+                    )
+                ).all()
+            }
+            supported_items = set(self._bom_snapshots_by_item_id)
+            for snapshot in bom_snapshots:
+                delta_sets, delta_pieces = adjustment_totals.get(
+                    int(snapshot.id), (0, 0)
+                )
+                try:
+                    require_positive_integer(
+                        snapshot.quantity_per_set,
+                        label="组件每套用量",
+                    )
+                    effective_sets = int(snapshot.order_set_quantity) + delta_sets
+                    required_pieces = (
+                        require_positive_integer(
+                            snapshot.required_piece_quantity,
+                            label="组件需求件数",
+                        )
+                        + delta_pieces
+                    )
+                    if (
+                        effective_sets < 0
+                        or required_pieces <= 0
+                    ):
+                        raise ValueError
+                except (CompositeBOMExecutionError, TypeError, ValueError):
+                    supported_items.discard(int(snapshot.sales_order_item_id))
+                    continue
+                self._bom_effective_by_snapshot_id[int(snapshot.id)] = (
+                    effective_sets,
+                    required_pieces,
+                )
+            self._bom_batch_supported_item_ids = supported_items
+
+            snapshot_by_id = {
+                int(snapshot.id): snapshot for snapshot in bom_snapshots
+            }
+            for reservation in reservations:
+                requirement = requirement_by_id.get(
+                    int(reservation.semi_requirement_id or 0)
+                )
+                snapshot_id = int(
+                    reservation.sales_order_item_bom_component_id
+                    or (
+                        requirement.sales_order_item_bom_component_id
+                        if requirement is not None
+                        else 0
+                    )
+                    or 0
+                )
+                if snapshot_id in snapshot_by_id:
+                    self._bom_reservations_by_snapshot_id.setdefault(
+                        snapshot_id, []
+                    ).append((reservation, requirement))
+
+            for snapshot_id, component_type in db.execute(
+                select(
+                    RequisitionItemBomSource.sales_order_item_bom_component_id,
+                    RequisitionItemBomSource.component_type,
+                )
+                .join(
+                    RequisitionItem,
+                    RequisitionItem.id
+                    == RequisitionItemBomSource.requisition_item_id,
+                )
+                .where(
+                    RequisitionItemBomSource.sales_order_item_bom_component_id.in_(
+                        snapshot_ids
+                    ),
+                    func.lower(RequisitionItem.status).notin_(
+                        INACTIVE_REQUISITION_ITEM_STATUSES
+                    ),
+                )
+            ).all():
+                self._bom_active_requisition_components.setdefault(
+                    int(snapshot_id), set()
+                ).add((component_type or "whole").strip().lower())
+
+            linked_source = (
+                select(RequisitionItemBomSource.id)
+                .where(
+                    RequisitionItemBomSource.requisition_item_id
+                    == RequisitionItem.id
+                )
+                .exists()
+            )
+            self._bom_parent_active_requisition_item_ids = set(
+                int(order_item_id)
+                for order_item_id in db.scalars(
+                    select(RequisitionItem.order_item_id).where(
+                        RequisitionItem.order_item_id.in_(item_ids),
+                        func.lower(RequisitionItem.status).notin_(
+                            INACTIVE_REQUISITION_ITEM_STATUSES
+                        ),
+                        ~linked_source,
+                    )
+                ).all()
+                if order_item_id is not None
+            )
+
+        self._posted_completion_item_ids = set(
+            int(item_id)
+            for item_id in db.scalars(
+                select(ProductionCompletion.order_item_id).where(
+                    ProductionCompletion.order_item_id.in_(item_ids),
+                    ProductionCompletion.status == "posted",
                 )
             ).all()
         )
 
-        # Be deliberately conservative: any available customer-owned finished
-        # or semi-finished lot for this product/customer pair keeps the row on
-        # the established helper path.  That preserves FIFO, exact signature,
-        # and customer-board-preparation rules without reimplementing them.
-        complex_item_ids.update(
-            db.scalars(
-                select(OrderItem.id)
-                .join(Order, Order.id == OrderItem.order_id)
-                .join(
-                    FinishedGoodsInventoryDetail,
-                    and_(
-                        FinishedGoodsInventoryDetail.product_id
-                        == OrderItem.product_id,
-                        FinishedGoodsInventoryDetail.owner_customer_id
-                        == Order.customer_id,
+        customer_ids = {
+            int(order.customer_id) for _item, order, *_ in rows
+        }
+        product_ids = {
+            int(product.id) for _item, _order, _customer, product in rows
+        }
+        finished_lots = db.scalars(
+            select(InventoryLot)
+            .options(
+                selectinload(InventoryLot.finished_detail),
+                selectinload(InventoryLot.location),
+            )
+            .join(
+                FinishedGoodsInventoryDetail,
+                FinishedGoodsInventoryDetail.inventory_lot_id == InventoryLot.id,
+            )
+            .where(
+                InventoryLot.inventory_type == "finished",
+                InventoryLot.status == "active",
+                InventoryLot.quantity_available > 0,
+                FinishedGoodsInventoryDetail.product_id.in_(product_ids),
+                FinishedGoodsInventoryDetail.owner_customer_id.in_(customer_ids),
+                FinishedGoodsInventoryDetail.is_general.is_(False),
+            )
+        ).all()
+        finished_by_key: dict[tuple[int, int, str], list[InventoryLot]] = {}
+        for lot in sorted(finished_lots, key=inventory_fifo_sort_key):
+            detail = lot.finished_detail
+            if detail is None or detail.owner_customer_id is None:
+                continue
+            key = (
+                int(detail.owner_customer_id),
+                int(detail.product_id),
+                (detail.inventory_code_snapshot or "").strip(),
+            )
+            finished_by_key.setdefault(key, []).append(lot)
+
+        semi_lots = db.scalars(
+            select(InventoryLot)
+            .options(
+                selectinload(InventoryLot.semi_finished_detail),
+                selectinload(InventoryLot.location),
+                selectinload(InventoryLot.allowed_products),
+            )
+            .join(
+                SemiFinishedInventoryDetail,
+                SemiFinishedInventoryDetail.inventory_lot_id == InventoryLot.id,
+            )
+            .where(
+                InventoryLot.inventory_type == "semi_finished",
+                InventoryLot.status == "active",
+                InventoryLot.quantity_available > 0,
+                SemiFinishedInventoryDetail.owner_customer_id.in_(customer_ids),
+            )
+        ).all()
+        semi_by_customer_component: dict[
+            tuple[int, str], list[InventoryLot]
+        ] = {}
+        for lot in sorted(semi_lots, key=inventory_fifo_sort_key):
+            detail = lot.semi_finished_detail
+            if detail is None or detail.owner_customer_id is None:
+                continue
+            semi_by_customer_component.setdefault(
+                (int(detail.owner_customer_id), detail.component_type), []
+            ).append(lot)
+
+        for item, order, _customer, product in rows:
+            expected_code = (
+                item.snapshot_product_code or product.product_code or ""
+            ).strip()
+            finished_candidates = finished_by_key.get(
+                (int(order.customer_id), int(product.id), expected_code), []
+            )
+            if (
+                item.requisition_status == "未报料"
+                and item.id not in self._posted_completion_item_ids
+                and finished_candidates
+            ):
+                self._finished_lots_by_item_id[item.id] = finished_candidates
+                complex_item_ids.add(item.id)
+
+            for spec in _semi_component_specs_for_requisition(item, product):
+                component = str(spec["component_type"])
+                safe_lots = self._safe_semi_lots(
+                    item=item,
+                    order=order,
+                    product=product,
+                    component=component,
+                    spec=spec,
+                    candidate_lots=semi_by_customer_component.get(
+                        (int(order.customer_id), component), []
                     ),
                 )
-                .join(
-                    InventoryLot,
-                    InventoryLot.id
-                    == FinishedGoodsInventoryDetail.inventory_lot_id,
-                )
-                .where(
-                    OrderItem.id.in_(item_ids),
-                    InventoryLot.status == "active",
-                    InventoryLot.quantity_available > 0,
-                )
-            ).all()
-        )
-        complex_item_ids.update(
-            db.scalars(
-                select(OrderItem.id)
-                .join(Order, Order.id == OrderItem.order_id)
-                .join(
-                    SemiFinishedInventoryDetail,
-                    SemiFinishedInventoryDetail.owner_customer_id
-                    == Order.customer_id,
-                )
-                .join(
-                    InventoryLot,
-                    InventoryLot.id
-                    == SemiFinishedInventoryDetail.inventory_lot_id,
-                )
-                .where(
-                    OrderItem.id.in_(item_ids),
-                    InventoryLot.status == "active",
-                    InventoryLot.quantity_available > 0,
-                )
-            ).all()
-        )
+                if safe_lots:
+                    self._safe_semi_lots_by_item_component[
+                        (item.id, component)
+                    ] = safe_lots
+                    complex_item_ids.add(item.id)
+
         self._ordinary_item_ids = set(item_ids) - {
             int(item_id) for item_id in complex_item_ids if item_id is not None
         }
@@ -1147,6 +1417,371 @@ class _PendingRequisitionReadContext:
 
     def material_for(self, item: OrderItem) -> Material | None:
         return self.material_by_id.get(int(item.material_id)) if item.material_id else None
+
+    def bom_snapshots_for(
+        self, item: OrderItem
+    ) -> list[SalesOrderItemBomComponent]:
+        return list(self._bom_snapshots_by_item_id.get(item.id, []))
+
+    def _bom_inventory_coverage(
+        self,
+        snapshot: SalesOrderItemBomComponent,
+        component: str,
+    ) -> dict[str, int]:
+        finished = 0
+        semi = 0
+        for reservation, requirement in self._bom_reservations_by_snapshot_id.get(
+            int(snapshot.id), []
+        ):
+            credited = max(
+                int(reservation.credited_requirement_quantity or 0)
+                - int(reservation.released_requirement_quantity or 0),
+                0,
+            )
+            if reservation.reservation_type == "finished_order":
+                physical_pieces = (
+                    _bom_snapshot_physical_pieces_per_component(
+                        snapshot, component
+                    )
+                    if component == "whole"
+                    else 1
+                )
+                finished += credited * physical_pieces
+                continue
+            if reservation.reservation_type != "semi_order":
+                continue
+            requirement_component = (
+                requirement.component_type if requirement is not None else None
+            )
+            if component == "whole":
+                if requirement_component not in {None, "whole"}:
+                    continue
+            elif requirement_component not in {None, "whole", component}:
+                continue
+            semi += credited
+        return {
+            "finished_piece_quantity": finished,
+            "semi_piece_quantity": semi,
+            "total_piece_quantity": finished + semi,
+        }
+
+    def _bom_has_active_requisition(
+        self,
+        snapshot: SalesOrderItemBomComponent,
+        component: str,
+    ) -> bool:
+        accepted = (
+            {component, "whole"}
+            if component in {"cover", "base"}
+            else {"whole"}
+        )
+        return bool(
+            self._bom_active_requisition_components.get(
+                int(snapshot.id), set()
+            )
+            & accepted
+        )
+
+    def bom_pending_component_requirements(
+        self,
+        db: Session,
+        item: OrderItem,
+        *,
+        snapshots: list[SalesOrderItemBomComponent],
+    ) -> list[dict]:
+        if item.id not in self._bom_batch_supported_item_ids:
+            return _bom_pending_component_requirements(
+                db, item, snapshots=snapshots
+            )
+        rows: list[dict] = []
+        for snapshot in snapshots:
+            effective_sets, required_pieces = self._bom_effective_by_snapshot_id[
+                int(snapshot.id)
+            ]
+            for component in _bom_snapshot_component_types(snapshot):
+                requirement = _bom_snapshot_requirements(
+                    db,
+                    snapshot,
+                    component_type=component,
+                    effective_sets_override=effective_sets,
+                    required_piece_quantity_override=required_pieces,
+                    inventory_coverage_override=self._bom_inventory_coverage(
+                        snapshot, component
+                    ),
+                )
+                requirement["source_kind"] = "component"
+                requirement["source_key"] = (
+                    f"component:{snapshot.id}:{component}"
+                )
+                requirement["parent_order_item_id"] = item.id
+                requirement["already_requisitioned"] = (
+                    self._bom_has_active_requisition(snapshot, component)
+                )
+                requirement["can_requisition"] = (
+                    int(requirement["remaining_required_piece_qty"]) > 0
+                    and not requirement["already_requisitioned"]
+                )
+                rows.append(requirement)
+        return rows
+
+    def bom_pending_parent_requirement(
+        self,
+        item: OrderItem,
+        *,
+        finished_reserved_qty: int,
+    ) -> dict:
+        requirements = _current_requisition_requirements(
+            None,
+            item,
+            cutting_mode=item.special_process,
+            pieces_per_box=1,
+            finished_reserved_qty=finished_reserved_qty,
+            semi_reserved_piece_qty=self._semi_reserved_by_item_component.get(
+                (item.id, "whole"), 0
+            ),
+        )
+        already_requisitioned = (
+            item.id in self._bom_parent_active_requisition_item_ids
+        )
+        return {
+            "source_kind": "parent",
+            "source_key": f"parent:{item.id}",
+            "snapshot_id": None,
+            "parent_order_item_id": item.id,
+            "product_code": item.snapshot_product_code,
+            "product_name": item.snapshot_product_name,
+            "specification": item.snapshot_spec,
+            "material": item.snapshot_material,
+            "supplier_name": item.snapshot_supplier_name,
+            "layer_count": item.layer_count,
+            "flute_type": item.flute_type,
+            "report_length_mm": item.snapshot_report_length_mm,
+            "report_width_mm": item.snapshot_report_width_mm,
+            "required_piece_quantity": int(requirements["required_piece_qty"]),
+            "remaining_required_piece_qty": int(
+                requirements["remaining_required_piece_qty"]
+            ),
+            "semi_finished_reserved_piece_qty": int(
+                requirements["semi_finished_reserved_piece_qty"]
+            ),
+            "requisition_qty": int(requirements["requisition_qty"]),
+            "cutting_mode": str(requirements["cutting_mode"]),
+            "cutting_factor": int(requirements["cutting_factor"]),
+            "yield_per_sheet": int(requirements["cutting_factor"]),
+            "already_requisitioned": already_requisitioned,
+            "can_requisition": (
+                int(requirements["remaining_required_piece_qty"]) > 0
+                and not already_requisitioned
+            ),
+        }
+
+    def _regular_semi_requirement(
+        self, item: OrderItem, component: str
+    ) -> OrderItemSemiRequirement | None:
+        return self._semi_requirements_by_item_component.get(
+            (item.id, component)
+        )
+
+    def current_requisition_summary(
+        self,
+        item: OrderItem,
+        *,
+        product: Product,
+        finished_reserved_qty: int,
+        cutting_mode: str | None = None,
+    ) -> dict:
+        return _current_requisition_summary(
+            None,
+            item,
+            product=product,
+            cutting_mode=cutting_mode,
+            finished_reserved_qty=finished_reserved_qty,
+            semi_reserved_by_component={
+                component: self._semi_reserved_by_item_component.get(
+                    (item.id, component), 0
+                )
+                for component in ("whole", "cover", "base")
+            },
+        )
+
+    def late_finished_inventory_preview(
+        self,
+        *,
+        item: OrderItem,
+        requirements: dict,
+    ) -> dict:
+        blocked_reason = (
+            "订单已有半成品或客户专用纸板备料预占"
+            if item.id in self._active_semi_reservation_item_ids
+            else None
+        )
+        candidates = (
+            []
+            if blocked_reason is not None
+            else self._finished_lots_by_item_id.get(item.id, [])
+        )
+        return _late_finished_inventory_preview_from_facts(
+            requirements=requirements,
+            candidates=candidates,
+            blocked_reason=blocked_reason,
+        )
+
+    def customer_board_preparation_summary(
+        self,
+        *,
+        item: OrderItem,
+        product: Product,
+    ) -> dict[str, int | bool]:
+        available_piece_quantity = 0
+        available_sheet_quantity = 0
+        has_option = False
+        for spec in _semi_component_specs_for_requisition(item, product):
+            component = str(spec["component_type"])
+            length = spec.get("board_length_mm")
+            width = spec.get("board_width_mm")
+            material_code = (item.snapshot_material or "").strip()
+            flute_type = (item.flute_type or "").strip().upper()
+            if not (length and width and material_code and flute_type):
+                continue
+            requirement = self._regular_semi_requirement(item, component)
+            stock_yield = (
+                int(requirement.stock_yield_per_sheet or 1)
+                if requirement is not None
+                else _cutting_factor(item.special_process)
+            )
+            current = _current_requisition_requirements(
+                None,
+                item,
+                pieces_per_box=int(spec["pieces_per_box"]),
+                component_type=component,
+                finished_reserved_qty=0,
+                semi_reserved_piece_qty=self._semi_reserved_by_item_component.get(
+                    (item.id, component), 0
+                ),
+            )
+            remaining = int(current["remaining_required_piece_qty"])
+            if remaining <= 0:
+                continue
+            lots = self._safe_semi_lots_by_item_component.get(
+                (item.id, component), []
+            )
+            available = min(
+                remaining,
+                sum(
+                    int(lot.quantity_available or 0)
+                    * int(lot.semi_finished_detail.stock_yield_per_sheet or 1)
+                    for lot in lots
+                    if lot.semi_finished_detail is not None
+                ),
+            )
+            if available <= 0:
+                continue
+            has_option = True
+            available_piece_quantity += available
+            available_sheet_quantity += (
+                available + stock_yield - 1
+            ) // stock_yield
+        return {
+            "available_piece_quantity": available_piece_quantity,
+            "available_sheet_quantity": available_sheet_quantity,
+            "has_option": has_option,
+        }
+
+    def _safe_semi_lots(
+        self,
+        *,
+        item: OrderItem,
+        order: Order,
+        product: Product,
+        component: str,
+        spec: dict,
+        candidate_lots: list[InventoryLot],
+    ) -> list[InventoryLot]:
+        requirement = self._regular_semi_requirement(item, component)
+        expected_length = int(
+            requirement.board_length_mm
+            if requirement is not None
+            else spec.get("board_length_mm") or 0
+        )
+        expected_width = int(
+            requirement.board_width_mm
+            if requirement is not None
+            else spec.get("board_width_mm") or 0
+        )
+        raw_material = (
+            requirement.normalized_material_code
+            if requirement is not None
+            else (item.snapshot_material or "").strip()
+        )
+        if not expected_length or not expected_width or not raw_material:
+            return []
+        try:
+            expected_material = normalize_material_code(raw_material)
+        except WarehouseInventoryError:
+            return []
+        expected_flute = (
+            requirement.flute_type
+            if requirement is not None
+            else (item.flute_type or "").strip().upper()
+        )
+        if not expected_flute:
+            return []
+        expected_pieces = int(
+            requirement.pieces_per_box
+            if requirement is not None
+            else spec.get("pieces_per_box") or 1
+        )
+        expected_yield = int(
+            requirement.stock_yield_per_sheet
+            if requirement is not None
+            else _cutting_factor(item.special_process)
+        )
+        material = (
+            self.material_by_id.get(int(product.material_id))
+            if product.material_id
+            else None
+        )
+        expected_supplier = (
+            item.snapshot_supplier_name
+            or (material.supplier_name if material is not None else None)
+            or ""
+        ).strip()
+        expected_layer_count = int(item.layer_count or product.layer_count or 0)
+        crease_type, crease_left, crease_middle, crease_right = _component_crease(
+            item, component
+        )
+        safe_lots: list[InventoryLot] = []
+        for lot in candidate_lots:
+            detail = lot.semi_finished_detail
+            if detail is None:
+                continue
+            if int(product.id) not in {
+                int(binding.product_id) for binding in lot.allowed_products
+            }:
+                continue
+            if (
+                int(detail.owner_customer_id or 0) != int(order.customer_id)
+                or int(detail.board_length_mm or 0) != expected_length
+                or int(detail.board_width_mm or 0) != expected_width
+                or detail.normalized_material_code != expected_material
+                or detail.flute_type != expected_flute
+                or detail.component_type != component
+                or int(detail.pieces_per_box or 0) != expected_pieces
+                or int(detail.stock_yield_per_sheet or 0) != expected_yield
+            ):
+                continue
+            if not safe_physical_board_facts_match(
+                detail,
+                supplier_name=expected_supplier,
+                layer_count=expected_layer_count,
+                crease_type=crease_type,
+                crease_left_mm=crease_left,
+                crease_middle_mm=crease_middle,
+                crease_right_mm=crease_right,
+            ):
+                continue
+            safe_lots.append(lot)
+        return safe_lots
 
 
 def _ordinary_requisition_requirements(
@@ -1204,23 +1839,35 @@ def _bom_snapshot_requirements(
     component_type: str | None = None,
     cutting_mode: str | None = None,
     actual_yield_per_sheet: int | None = None,
+    effective_sets_override: int | None = None,
+    required_piece_quantity_override: int | None = None,
+    inventory_coverage_override: dict[str, int] | None = None,
 ) -> dict:
     """Return one immutable BOM snapshot physical source requirement."""
     component = _bom_snapshot_component_type(snapshot, component_type)
-    demand = next(
-        (
-            row
-            for row in effective_component_demands(
-                db,
-                snapshot.sales_order_item_id,
-            )
-            if row.snapshot_id == snapshot.id
-        ),
-        None,
+    demand = None
+    if (
+        effective_sets_override is None
+        or required_piece_quantity_override is None
+    ):
+        demand = next(
+            (
+                row
+                for row in effective_component_demands(
+                    db,
+                    snapshot.sales_order_item_id,
+                )
+                if row.snapshot_id == snapshot.id
+            ),
+            None,
+        )
+        if demand is None:
+            raise HTTPException(status_code=409, detail="组件需求快照不存在")
+    effective_sets = int(
+        effective_sets_override
+        if effective_sets_override is not None
+        else demand.effective_sets
     )
-    if demand is None:
-        raise HTTPException(status_code=409, detail="组件需求快照不存在")
-    effective_sets = demand.effective_sets
     try:
         if actual_yield_per_sheet is not None:
             actual_yield_per_sheet = require_positive_integer(
@@ -1271,14 +1918,22 @@ def _bom_snapshot_requirements(
         yield_per_sheet = int(snapshot.mold_max_yield_per_sheet)
     else:
         yield_per_sheet = 1
-    coverage = component_inventory_coverage(
-        db,
-        snapshot.id,
-        component_type=component,
+    coverage = (
+        inventory_coverage_override
+        if inventory_coverage_override is not None
+        else component_inventory_coverage(
+            db,
+            snapshot.id,
+            component_type=component,
+        )
     )
     finished_reserved = coverage["finished_piece_quantity"]
     semi_reserved = coverage["semi_piece_quantity"]
-    component_unit_quantity = int(demand.required_piece_quantity)
+    component_unit_quantity = int(
+        required_piece_quantity_override
+        if required_piece_quantity_override is not None
+        else demand.required_piece_quantity
+    )
     physical_pieces_per_component = (
         _bom_snapshot_physical_pieces_per_component(snapshot, component)
     )
@@ -1479,7 +2134,12 @@ def _bom_pending_component_requirements(
     snapshots: list[SalesOrderItemBomComponent] | None = None,
 ) -> list[dict]:
     rows: list[dict] = []
-    for snapshot in snapshots or _bom_snapshots_for_order_item(db, item.id):
+    resolved_snapshots = (
+        snapshots
+        if snapshots is not None
+        else _bom_snapshots_for_order_item(db, item.id)
+    )
+    for snapshot in resolved_snapshots:
         for component_type in _bom_snapshot_component_types(snapshot):
             requirements = _bom_snapshot_requirements(
                 db,
@@ -1551,13 +2211,14 @@ def _bom_pending_parent_requirement(
 
 
 def _current_requisition_requirements(
-    db: Session,
+    db: Session | None,
     item: OrderItem,
     *,
     cutting_mode: str | None = None,
     pieces_per_box: int | None = None,
     finished_reserved_qty: int | None = None,
     component_type: str | None = None,
+    semi_reserved_piece_qty: int | None = None,
 ) -> dict[str, int | str | bool]:
     """Derive current purchase demand from active finished-stock reservations."""
     resolved_cutting_mode = cutting_mode or item.special_process
@@ -1592,10 +2253,17 @@ def _current_requisition_requirements(
         production_required_qty,
         resolved_pieces_per_box,
     )
-    semi_finished_reserved_piece_qty = active_semi_reserved_piece_qty(
-        db,
-        order_item_id=item.id,
-        component_type=normalized_component,
+    semi_finished_reserved_piece_qty = max(
+        int(
+            semi_reserved_piece_qty
+            if semi_reserved_piece_qty is not None
+            else active_semi_reserved_piece_qty(
+                db,
+                order_item_id=item.id,
+                component_type=normalized_component,
+            )
+        ),
+        0,
     )
     remaining_required_piece_qty = max(
         required_piece_qty - semi_finished_reserved_piece_qty, 0
@@ -1620,13 +2288,18 @@ def _current_requisition_requirements(
 
 
 def _current_requisition_summary(
-    db: Session,
+    db: Session | None,
     item: OrderItem,
     *,
     cutting_mode: str | None = None,
     finished_reserved_qty: int | None = None,
+    product: Product | None = None,
+    semi_reserved_by_component: dict[str, int] | None = None,
 ) -> dict:
-    product = db.get(Product, item.product_id)
+    if product is None:
+        if db is None:
+            raise RuntimeError("缺少报料产品上下文")
+        product = db.get(Product, item.product_id)
     component_types = (
         ["cover", "base"]
         if product is not None
@@ -1642,6 +2315,11 @@ def _current_requisition_summary(
             cutting_mode=cutting_mode,
             finished_reserved_qty=finished_reserved_qty,
             component_type=component_type,
+            semi_reserved_piece_qty=(
+                semi_reserved_by_component.get(component_type, 0)
+                if semi_reserved_by_component is not None
+                else None
+            ),
         )
         for component_type in component_types
     ]
@@ -1908,44 +2586,12 @@ def _safe_late_finished_inventory_candidates(
     return rows
 
 
-def _late_finished_inventory_preview(
-    db: Session,
+def _late_finished_inventory_preview_from_facts(
     *,
-    item: OrderItem,
-    order: Order,
-    product: Product,
+    requirements: dict,
+    candidates: list[InventoryLot],
+    blocked_reason: str | None,
 ) -> dict:
-    """Describe exact late finished stock without mutating inventory."""
-
-    active_semi_reservation = db.scalar(
-        select(InventoryReservation.id)
-        .where(
-            InventoryReservation.order_item_id == item.id,
-            InventoryReservation.reservation_type == "semi_order",
-            InventoryReservation.status != "cancelled",
-            InventoryReservation.reserved_stock_quantity
-            > InventoryReservation.consumed_stock_quantity
-            + InventoryReservation.released_stock_quantity,
-        )
-        .limit(1)
-    )
-    blocked_reason: str | None = None
-    if _bom_pending_component_requirements(db, item):
-        blocked_reason = "组合产品须按父件和组件分别处理库存"
-    elif active_semi_reservation is not None:
-        blocked_reason = "订单已有半成品或客户专用纸板备料预占"
-
-    candidates = (
-        []
-        if blocked_reason is not None
-        else _safe_late_finished_inventory_candidates(
-            db,
-            item=item,
-            order=order,
-            product=product,
-        )
-    )
-    requirements = _current_requisition_summary(db, item)
     remaining_order_quantity = int(requirements["production_required_qty"])
     available_quantity = sum(
         max(int(lot.quantity_available or 0), 0) for lot in candidates
@@ -1996,6 +2642,50 @@ def _late_finished_inventory_preview(
         "locations": list(location_map.values()),
         "lots": lots,
     }
+
+
+def _late_finished_inventory_preview(
+    db: Session,
+    *,
+    item: OrderItem,
+    order: Order,
+    product: Product,
+) -> dict:
+    """Describe exact late finished stock without mutating inventory."""
+
+    active_semi_reservation = db.scalar(
+        select(InventoryReservation.id)
+        .where(
+            InventoryReservation.order_item_id == item.id,
+            InventoryReservation.reservation_type == "semi_order",
+            InventoryReservation.status != "cancelled",
+            InventoryReservation.reserved_stock_quantity
+            > InventoryReservation.consumed_stock_quantity
+            + InventoryReservation.released_stock_quantity,
+        )
+        .limit(1)
+    )
+    blocked_reason: str | None = None
+    if _bom_pending_component_requirements(db, item):
+        blocked_reason = "组合产品须按父件和组件分别处理库存"
+    elif active_semi_reservation is not None:
+        blocked_reason = "订单已有半成品或客户专用纸板备料预占"
+
+    candidates = (
+        []
+        if blocked_reason is not None
+        else _safe_late_finished_inventory_candidates(
+            db,
+            item=item,
+            order=order,
+            product=product,
+        )
+    )
+    return _late_finished_inventory_preview_from_facts(
+        requirements=_current_requisition_summary(db, item),
+        candidates=candidates,
+        blocked_reason=blocked_reason,
+    )
 
 
 def _require_late_finished_inventory_resolved(
@@ -5585,14 +6275,17 @@ def pending_requisitions(
                 }
             )
             continue
-        bom_snapshots = _bom_snapshots_for_order_item(db, item.id)
-        bom_components = _bom_pending_component_requirements(
+        bom_snapshots = read_context.bom_snapshots_for(item)
+        bom_components = read_context.bom_pending_component_requirements(
             db,
             item,
             snapshots=bom_snapshots,
         )
         if bom_components:
-            parent_requirement = _bom_pending_parent_requirement(db, item)
+            parent_requirement = read_context.bom_pending_parent_requirement(
+                item,
+                finished_reserved_qty=reservation_map.get(item.id, 0),
+            )
             suppress_parent_requisition = _is_set_only_a3_surround_bom(
                 bom_snapshots
             )
@@ -5684,9 +6377,9 @@ def pending_requisitions(
                 }
             )
             continue
-        requirements = _current_requisition_summary(
-            db,
+        requirements = read_context.current_requisition_summary(
             item,
+            product=product,
             finished_reserved_qty=reservation_map.get(item.id, 0),
         )
         pieces_per_box = int(requirements["pieces_per_box"])
@@ -5711,16 +6404,12 @@ def pending_requisitions(
         )
         if suggested_len is None or suggested_width is None:
             suggested_len, suggested_width = _suggested_dimensions(product)
-        late_finished_inventory = _late_finished_inventory_preview(
-            db,
+        late_finished_inventory = read_context.late_finished_inventory_preview(
             item=item,
-            order=order,
-            product=product,
+            requirements=requirements,
         )
-        customer_board_preparation = _safe_customer_board_preparation_options(
-            db,
+        customer_board_preparation = read_context.customer_board_preparation_summary(
             item=item,
-            order=order,
             product=product,
         )
         items.append(
@@ -5785,16 +6474,14 @@ def pending_requisitions(
                 "can_auto_use_late_finished_inventory": bool(
                     late_finished_inventory["can_auto_reserve"]
                 ),
-                "customer_board_preparation_available_piece_qty": sum(
-                    int(row["available_piece_quantity"])
-                    for row in customer_board_preparation
+                "customer_board_preparation_available_piece_qty": int(
+                    customer_board_preparation["available_piece_quantity"]
                 ),
-                "customer_board_preparation_available_sheet_qty": sum(
-                    int(row["available_sheet_quantity"])
-                    for row in customer_board_preparation
+                "customer_board_preparation_available_sheet_qty": int(
+                    customer_board_preparation["available_sheet_quantity"]
                 ),
                 "can_auto_use_customer_board_preparation": bool(
-                    customer_board_preparation
+                    customer_board_preparation["has_option"]
                 ),
                 "component_requirements": requirements.get(
                     "component_requirements", []
@@ -9678,9 +10365,9 @@ def merge_suggestions(
                 cutting_mode=DEFAULT_CUTTING_MODE,
             )
             if read_context.is_ordinary(item)
-            else _current_requisition_summary(
-                db,
+            else read_context.current_requisition_summary(
                 item,
+                product=product,
                 cutting_mode=DEFAULT_CUTTING_MODE,
                 finished_reserved_qty=reservation_map.get(item.id, 0),
             )

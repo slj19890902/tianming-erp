@@ -663,8 +663,8 @@
         </div>
         <div class="top-actions">
           <button class="btn" id="topRefresh">刷新</button>
-          <button class="btn" id="topExport">导出 CSV</button>
-          <button class="btn" id="topPrint">打印</button>
+          <button class="btn" id="topExport" disabled>导出 CSV</button>
+          <button class="btn" id="topPrint" disabled>打印</button>
           <a class="btn" href="/" style="text-decoration:none">返回系统</a>
         </div>
       </header>
@@ -731,8 +731,8 @@
                 <button class="btn danger" id="statusBtn" disabled>停用</button>
               </div>
               <div class="toolbar-group">
-                <button class="btn" id="exportBtn">导出当前结果</button>
-                <button class="btn" id="printBtn">打印列表</button>
+                <button class="btn" id="exportBtn" disabled>导出当前结果</button>
+                <button class="btn" id="printBtn" disabled>打印列表</button>
                 <button class="btn" id="refreshBtn">刷新</button>
               </div>
             </div>
@@ -780,9 +780,9 @@
                   <option value="50">50 条/页</option>
                   <option value="100">100 条/页</option>
                 </select>
-                <button class="btn" id="prevPage">上一页</button>
+                <button class="btn" id="prevPage" disabled>上一页</button>
                 <span id="pageNumber">1 / 1</span>
-                <button class="btn" id="nextPage">下一页</button>
+                <button class="btn" id="nextPage" disabled>下一页</button>
               </div>
             </div>
           </section>
@@ -1013,6 +1013,9 @@
         keyword: "",
         status: "",
         loading: false,
+        listReady: false,
+        listController: null,
+        listGeneration: 0,
         detailCustomer: null,
         orderProducts: [],
         selectedProduct: null,
@@ -1055,18 +1058,67 @@
         }, 3000);
       }
 
+      function apiErrorDetail(detail) {
+        if (typeof detail === "string") return detail.trim();
+        if (Array.isArray(detail)) return detail.map(apiErrorDetail).filter(Boolean).join("；");
+        if (!detail || typeof detail !== "object") return "";
+        const message = apiErrorDetail(detail.message ?? detail.detail ?? detail.error ?? detail.msg);
+        const code = String(detail.code || "").trim();
+        return [message, code ? `错误代码 ${code}` : ""].filter(Boolean).join("；");
+      }
+
       async function api(url, options = {}) {
+        const { headers = {}, ...requestOptions } = options;
         const response = await fetch(url, {
-          headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-          ...options,
+          ...requestOptions,
+          headers: { "Content-Type": "application/json", ...headers },
         });
-        const data = await response.json().catch(() => ({}));
+        const raw = await response.text();
+        let data = {};
+        if (raw.trim()) {
+          try { data = JSON.parse(raw); } catch (_error) { data = {}; }
+        }
         if (!response.ok) {
-          const error = new Error(data.detail || data.message || "请求失败");
+          const requestId = String(response.headers?.get?.("x-request-id") || data.request_id || data.requestId || "").trim();
+          const detail = apiErrorDetail(data.detail ?? data);
+          const error = new Error([
+            detail || (response.status >= 500 ? "服务器内部错误" : "请求失败"),
+            `HTTP ${response.status}`,
+            requestId ? `请求编号 ${requestId}` : "",
+          ].filter(Boolean).join("；"));
           error.data = data;
+          error.status = response.status;
+          error.requestId = requestId;
           throw error;
         }
         return data;
+      }
+
+      function setCustomerListControls() {
+        const canOutput = state.listReady && !state.loading && state.items.length > 0;
+        ["topExport", "topPrint", "exportBtn", "printBtn"].forEach((id) => {
+          $(id).disabled = !canOutput;
+        });
+        $("prevPage").disabled = state.loading || state.page <= 1;
+        $("nextPage").disabled = state.loading || state.page >= state.pages;
+      }
+
+      function resetCustomerListView(message = "") {
+        state.items = [];
+        state.selected = null;
+        state.page = 1;
+        state.pages = 1;
+        state.total = 0;
+        state.listReady = false;
+        $("customerRows").innerHTML = "";
+        renderPagination({ page: 1, page_size: state.pageSize, pages: 1, total: 0 });
+        renderSummary({ total: 0, active: 0, inactive: 0, missing_contact: 0, missing_phone: 0 });
+        updateActions();
+        setCustomerListControls();
+        if (message) {
+          $("loadingState").hidden = false;
+          $("loadingState").textContent = message;
+        }
       }
 
       function updateActions() {
@@ -1124,6 +1176,7 @@
         $("prevPage").disabled = state.page <= 1;
         $("nextPage").disabled = state.page >= state.pages;
         $("pageSize").value = String(state.pageSize);
+        setCustomerListControls();
       }
 
       function renderSummary(summary) {
@@ -1135,7 +1188,14 @@
       }
 
       async function loadCustomers(resetSelection = false) {
+        if (state.listController) state.listController.abort();
+        const controller = new AbortController();
+        const generation = Number(state.listGeneration || 0) + 1;
+        state.listController = controller;
+        state.listGeneration = generation;
         state.loading = true;
+        state.listReady = false;
+        setCustomerListControls();
         $("loadingState").hidden = false;
         $("loadingState").textContent = "正在读取客户数据...";
         $("customerRows").innerHTML = "";
@@ -1146,21 +1206,30 @@
             page: String(state.page),
             page_size: String(state.pageSize),
           });
-          const data = await api(`/api/customer-management?${params}`);
+          const data = await api(`/api/customer-management?${params}`, { signal: controller.signal });
+          if (generation !== state.listGeneration || controller.signal.aborted) return;
           state.items = data.items || [];
           if (resetSelection || !state.items.some((item) => item.id === state.selected?.id)) {
             state.selected = null;
           }
+          state.listReady = true;
           renderRows();
           renderPagination(data.pagination);
           renderSummary(data.summary);
           updateActions();
         } catch (error) {
-          $("loadingState").hidden = false;
-          $("loadingState").textContent = `读取失败：${error.message}`;
-          showToast(error.message, true);
+          if (generation !== state.listGeneration || controller.signal.aborted || error?.name === "AbortError") return;
+          const message = error instanceof TypeError
+            ? "无法连接 ERP 服务，请确认服务正常后重试"
+            : (error?.message || "客户数据读取失败");
+          resetCustomerListView(`读取失败：${message}`);
+          showToast(message, true);
         } finally {
-          state.loading = false;
+          if (generation === state.listGeneration) {
+            state.loading = false;
+            state.listController = null;
+            setCustomerListControls();
+          }
         }
       }
 
@@ -1550,8 +1619,8 @@
       }
 
       function exportCsv() {
-        if (!state.items.length) {
-          showToast("当前没有可导出的数据", true);
+        if (!state.listReady || state.loading || !state.items.length) {
+          showToast("当前客户列表尚未读取完成，暂不能导出", true);
           return;
         }
         const headers = ["ID", "客户编号", "客户名称", "联系人", "联系电话", "送货地址", "账期", "税率", "产品数", "历史订单数", "文件数", "状态"];
@@ -1581,6 +1650,14 @@
         URL.revokeObjectURL(url);
       }
 
+      function printCustomerList() {
+        if (!state.listReady || state.loading || !state.items.length) {
+          showToast("当前客户列表尚未读取完成，暂不能打印", true);
+          return;
+        }
+        window.print();
+      }
+
       function bindEvents() {
         ["headAdd", "addBtn"].forEach((id) => $(id).addEventListener("click", () => openForm()));
         $("editBtn").addEventListener("click", () => state.selected && openForm(state.selected));
@@ -1589,7 +1666,7 @@
         $("drawerNewOrder").addEventListener("click", () => openOrderForm());
         ["refreshBtn", "topRefresh"].forEach((id) => $(id).addEventListener("click", () => loadCustomers()));
         ["exportBtn", "topExport"].forEach((id) => $(id).addEventListener("click", exportCsv));
-        ["printBtn", "topPrint"].forEach((id) => $(id).addEventListener("click", () => window.print()));
+        ["printBtn", "topPrint"].forEach((id) => $(id).addEventListener("click", printCustomerList));
         $("searchBtn").addEventListener("click", () => {
           state.keyword = $("keyword").value.trim();
           state.status = $("statusFilter").value;

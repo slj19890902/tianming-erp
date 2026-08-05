@@ -4,6 +4,7 @@ import json
 import re
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Literal
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -422,8 +423,8 @@ def _validate_delivery_source_contract(
         if line.product_id in seen_products:
             raise ValueError("同一产品在一张无订单送货单中只能出现一行")
         seen_products.add(line.product_id)
-        if line.unit_price is None or line.unit_price <= 0:
-            raise ValueError(f"第 {index} 条无订单库存明细必须填写大于零的单价")
+        if line.unit_price is not None and line.unit_price <= 0:
+            raise ValueError(f"第 {index} 条无订单库存明细单价填写后必须大于零")
         if not line.allocations:
             raise ValueError(f"第 {index} 条无订单库存明细必须选择库存批次")
         allocated = 0
@@ -457,9 +458,66 @@ class DeliveryPickAssignmentUpdate(BaseModel):
     picker_user_id: int | None = Field(default=None, gt=0)
 
 
+def _pick_task_read_context(
+    db: Session,
+    items: list[DeliveryPickTaskItem],
+) -> dict:
+    """Preload stable task references and empty-source facts in batches."""
+    delivery_item_ids = {
+        item.delivery_item_id for item in items if item.delivery_item_id is not None
+    }
+    order_item_ids = {
+        item.order_item_id for item in items if item.order_item_id is not None
+    }
+    delivery_items = {
+        row.id: row
+        for row in db.scalars(
+            select(DeliveryItem).where(DeliveryItem.id.in_(delivery_item_ids))
+        ).all()
+    } if delivery_item_ids else {}
+    order_items = {
+        row.id: row
+        for row in db.scalars(
+            select(OrderItem).where(OrderItem.id.in_(order_item_ids))
+        ).all()
+    } if order_item_ids else {}
+    composite_order_item_ids = set(
+        db.scalars(
+            select(SalesOrderItemBomComponent.sales_order_item_id)
+            .where(
+                SalesOrderItemBomComponent.sales_order_item_id.in_(order_item_ids)
+            )
+            .distinct()
+        ).all()
+    ) if order_item_ids else set()
+    inventory_source_order_item_ids = set(
+        db.scalars(
+            select(InventoryReservation.order_item_id)
+            .where(
+                InventoryReservation.order_item_id.in_(order_item_ids),
+                InventoryReservation.status != "cancelled",
+                func.coalesce(
+                    InventoryReservation.credited_requirement_quantity,
+                    0,
+                )
+                > InventoryReservation.released_requirement_quantity,
+            )
+            .distinct()
+        ).all()
+    ) if order_item_ids else set()
+    return {
+        "delivery_items": delivery_items,
+        "order_items": order_items,
+        "composite_order_item_ids": composite_order_item_ids,
+        "inventory_source_order_item_ids": inventory_source_order_item_ids,
+    }
+
+
 def _pick_item_component_lines(
     db: Session,
     item: DeliveryPickTaskItem,
+    *,
+    read_context: dict | None = None,
 ) -> list[dict]:
     """Return read-only parent-priced component goods for one pick row.
 
@@ -469,17 +527,34 @@ def _pick_item_component_lines(
     the existing component inventory gate and allocation facts.
     """
     delivery_item = (
-        db.get(DeliveryItem, item.delivery_item_id)
-        if item.delivery_item_id is not None
-        else None
+        read_context["delivery_items"].get(item.delivery_item_id)
+        if read_context is not None
+        else (
+            db.get(DeliveryItem, item.delivery_item_id)
+            if item.delivery_item_id is not None
+            else None
+        )
     )
     if (
         delivery_item is None
+        or item.order_item_id is None
         or delivery_item.order_item_id != item.order_item_id
     ):
         return []
-    order_item = db.get(OrderItem, item.order_item_id)
-    if order_item is None or not is_composite_order_item(db, order_item.id):
+    order_item = (
+        read_context["order_items"].get(item.order_item_id)
+        if read_context is not None
+        else db.get(OrderItem, item.order_item_id)
+    )
+    is_composite = (
+        order_item is not None
+        and (
+            order_item.id in read_context["composite_order_item_ids"]
+            if read_context is not None
+            else is_composite_order_item(db, order_item.id)
+        )
+    )
+    if order_item is None or not is_composite:
         return []
     return [
         component
@@ -492,6 +567,71 @@ def _pick_item_component_lines(
         )
         if int(component.get("planned_delivery_quantity") or 0) > 0
     ]
+
+
+def _pick_unordered_location_plan(
+    db: Session,
+    *,
+    item: DeliveryPickTaskItem,
+    delivery_item: DeliveryItem,
+) -> tuple[list[dict], bool]:
+    allocations = db.scalars(
+        select(UnorderedFinishedDeliveryAllocation)
+        .where(
+            UnorderedFinishedDeliveryAllocation.delivery_item_id
+            == delivery_item.id,
+            UnorderedFinishedDeliveryAllocation.status == "planned",
+        )
+        .order_by(UnorderedFinishedDeliveryAllocation.id)
+    ).all()
+    lines: list[dict] = []
+    for allocation in allocations:
+        quantity = int(allocation.planned_quantity or 0)
+        if quantity <= 0:
+            continue
+        location = _pick_source_location(
+            db,
+            source={"lot_id": allocation.inventory_lot_id},
+        )
+        lines.append(
+            {
+                "pick_item_id": item.id,
+                "order_item_id": None,
+                "source_type": "finished_inventory",
+                "reservation_id": None,
+                "lot_id": allocation.inventory_lot_id,
+                "lot_number": allocation.lot_number_snapshot,
+                "component_snapshot_id": None,
+                "product_code": item.product_code_snapshot,
+                "product_name": item.product_name_snapshot,
+                "specification": item.specification_snapshot,
+                "pick_quantity": quantity,
+                "requirement_quantity": quantity,
+                "unit": "个",
+                "location_id": location["location_id"],
+                "location_code": allocation.warehouse_location_code_snapshot
+                or location["location_code"],
+                "location_name": location["location_name"],
+                "warehouse_floor": location["warehouse_floor"],
+                "area_code": location["area_code"],
+                "location_sort_order": location["location_sort_order"],
+                "placement_status": location["placement_status"],
+                "pallet_id": location["pallet_id"],
+                "pallet_code": allocation.pallet_code_snapshot
+                or location["pallet_code"],
+                "location_operational": location["location_operational"],
+                "needs_relocation": location["needs_relocation"],
+                "requires_attention": bool(
+                    location["location_id"] is not None
+                    and not location["location_operational"]
+                ),
+            }
+        )
+    complete_quantity = sum(int(line["pick_quantity"]) for line in lines)
+    complete = complete_quantity == int(item.original_quantity or 0) and not any(
+        line["requires_attention"] for line in lines
+    )
+    return lines, complete
 
 
 def _pick_source_location(
@@ -598,11 +738,42 @@ def _pick_item_location_plan(
     *,
     item: DeliveryPickTaskItem,
     component_lines: list[dict],
+    read_context: dict | None = None,
 ) -> tuple[list[dict], bool]:
     """Build a read-only loading plan from current inventory and production facts."""
 
-    order_item = db.get(OrderItem, item.order_item_id)
+    delivery_item = (
+        read_context["delivery_items"].get(item.delivery_item_id)
+        if read_context is not None
+        else (
+            db.get(DeliveryItem, item.delivery_item_id)
+            if item.delivery_item_id is not None
+            else None
+        )
+    )
+    if delivery_item is not None and delivery_item.source_type == "unordered_finished":
+        return _pick_unordered_location_plan(
+            db,
+            item=item,
+            delivery_item=delivery_item,
+        )
+    order_item = (
+        read_context["order_items"].get(item.order_item_id)
+        if read_context is not None
+        else db.get(OrderItem, item.order_item_id)
+    )
     if order_item is None:
+        return [], False
+    composite_hint = (
+        order_item.id in read_context["composite_order_item_ids"]
+        if read_context is not None
+        else None
+    )
+    if (
+        read_context is not None
+        and not composite_hint
+        and order_item.id not in read_context["inventory_source_order_item_ids"]
+    ):
         return [], False
     planned_quantity = max(int(item.original_quantity or 0), 0)
     raw_sources = _inventory_sources_for_order_item(
@@ -611,6 +782,7 @@ def _pick_item_location_plan(
         planned_delivery_quantity=planned_quantity,
         delivery_item_id=item.delivery_item_id,
         dispatched=False,
+        composite_hint=composite_hint,
     )
     if component_lines:
         raw_sources = [
@@ -934,13 +1106,19 @@ def _pick_item_response(
     item: DeliveryPickTaskItem,
     *,
     include_location_plan: bool = True,
+    read_context: dict | None = None,
 ) -> dict:
-    component_lines = _pick_item_component_lines(db, item)
+    component_lines = _pick_item_component_lines(
+        db,
+        item,
+        read_context=read_context,
+    )
     location_lines, location_plan_complete = (
         _pick_item_location_plan(
             db,
             item=item,
             component_lines=component_lines,
+            read_context=read_context,
         )
         if include_location_plan
         else ([], True)
@@ -971,13 +1149,16 @@ def _pick_task_response(
     *,
     include_location_plan: bool = True,
 ) -> dict:
+    task_items = list(task.items)
+    read_context = _pick_task_read_context(db, task_items)
     item_responses = [
         _pick_item_response(
             db,
             item,
             include_location_plan=include_location_plan,
+            read_context=read_context,
         )
-        for item in task.items
+        for item in task_items
     ]
     location_groups = (
         _pick_location_groups(db, item_responses) if include_location_plan else []
@@ -987,7 +1168,7 @@ def _pick_task_response(
             **item_response,
             "customer_name": task.customer.name if task.customer else None,
         }
-        for item, item_response in zip(task.items, item_responses, strict=True)
+        for item, item_response in zip(task_items, item_responses, strict=True)
         if item.status in {"partial", "no_stock"}
         or int(item.picked_quantity) > int(item.original_quantity)
     ]
@@ -1665,8 +1846,13 @@ def _inventory_sources_for_order_item(
     planned_delivery_quantity: int,
     delivery_item_id: int | None = None,
     dispatched: bool = False,
+    composite_hint: bool | None = None,
 ) -> list[dict]:
-    if is_composite_order_item(db, order_item.id):
+    if (
+        composite_hint
+        if composite_hint is not None
+        else is_composite_order_item(db, order_item.id)
+    ):
         return _composite_inventory_sources_for_order_item(
             db,
             order_item=order_item,
@@ -1905,6 +2091,8 @@ def _delivery_pick_task_summary(
     customer_name: str | None,
     delivery_number: str | None,
     items: list[DeliveryPickTaskItem],
+    assigned_user: User | None = None,
+    assignee_preloaded: bool = False,
 ) -> dict:
     """List-view summary; full location planning remains on the detail routes."""
 
@@ -1926,7 +2114,8 @@ def _delivery_pick_task_summary(
         if item.status in {"partial", "no_stock"}
         or int(item.picked_quantity) > int(item.original_quantity)
     ]
-    assigned_user = db.get(User, task.assigned_to) if task.assigned_to else None
+    if not assignee_preloaded and task.assigned_to:
+        assigned_user = db.get(User, task.assigned_to)
     return {
         "id": task.id,
         "delivery_id": task.delivery_id,
@@ -1952,6 +2141,58 @@ def _delivery_pick_task_summary(
         "location_groups": [],
         "location_plan_complete": None,
     }
+
+
+def _delivery_pick_task_list_summaries(
+    db: Session,
+    tasks: list[DeliveryPickTask],
+) -> list[dict]:
+    """Build mobile list summaries with a fixed number of batch queries."""
+    if not tasks:
+        return []
+    task_ids = [task.id for task in tasks]
+    customer_ids = {task.customer_id for task in tasks}
+    delivery_ids = {task.delivery_id for task in tasks}
+    assigned_ids = {task.assigned_to for task in tasks if task.assigned_to is not None}
+    customers = {
+        row.id: row
+        for row in db.scalars(select(Customer).where(Customer.id.in_(customer_ids))).all()
+    }
+    deliveries = {
+        row.id: row
+        for row in db.scalars(select(Delivery).where(Delivery.id.in_(delivery_ids))).all()
+    }
+    assignees = {
+        row.id: row
+        for row in db.scalars(select(User).where(User.id.in_(assigned_ids))).all()
+    } if assigned_ids else {}
+    items_by_task: dict[int, list[DeliveryPickTaskItem]] = {}
+    for item in db.scalars(
+        select(DeliveryPickTaskItem)
+        .where(DeliveryPickTaskItem.task_id.in_(task_ids))
+        .order_by(DeliveryPickTaskItem.task_id, DeliveryPickTaskItem.id)
+    ).all():
+        items_by_task.setdefault(int(item.task_id), []).append(item)
+    return [
+        _delivery_pick_task_summary(
+            db,
+            task,
+            customer_name=(
+                customers[task.customer_id].name
+                if task.customer_id in customers
+                else None
+            ),
+            delivery_number=(
+                deliveries[task.delivery_id].delivery_number
+                if task.delivery_id in deliveries
+                else None
+            ),
+            items=items_by_task.get(task.id, []),
+            assigned_user=assignees.get(task.assigned_to),
+            assignee_preloaded=True,
+        )
+        for task in tasks
+    ]
 
 
 def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
@@ -2560,11 +2801,6 @@ def _build_pick_task(
 ) -> DeliveryPickTask:
     if delivery.status != "pending":
         raise HTTPException(status_code=409, detail="已发货送货单不能创建拿货任务")
-    if delivery.source_mode == "unordered_finished":
-        raise HTTPException(
-            status_code=409,
-            detail="无订单成品库存已指定原批次，本版本不创建移动拿货任务",
-        )
     previous = _delivery_pick_task(db, delivery.id)
     if previous is not None:
         # The normal button is idempotent.  Editing the delivery explicitly
@@ -2581,7 +2817,6 @@ def _build_pick_task(
         select(DeliveryItem)
         .where(
             DeliveryItem.delivery_id == delivery.id,
-            DeliveryItem.source_type == "order",
         )
         .order_by(DeliveryItem.id)
     ).all()
@@ -2600,7 +2835,11 @@ def _build_pick_task(
     db.add(task)
     db.flush()
     for line in lines:
-        order_item = db.get(OrderItem, line.order_item_id)
+        order_item = (
+            db.get(OrderItem, line.order_item_id)
+            if line.order_item_id is not None
+            else None
+        )
         product = db.get(Product, order_item.product_id) if order_item else None
         db.add(
             DeliveryPickTaskItem(
@@ -2610,11 +2849,19 @@ def _build_pick_task(
                 original_quantity=int(line.delivered_quantity),
                 picked_quantity=0,
                 status="pending",
-                product_code_snapshot=product.product_code if product else None,
-                product_name_snapshot=(
-                    order_item.snapshot_product_name if order_item else None
+                product_code_snapshot=(
+                    product.product_code if product else line.product_code_snapshot
                 ),
-                specification_snapshot=(order_item.snapshot_spec if order_item else None),
+                product_name_snapshot=(
+                    order_item.snapshot_product_name
+                    if order_item
+                    else line.product_name_snapshot
+                ),
+                specification_snapshot=(
+                    order_item.snapshot_spec
+                    if order_item
+                    else line.specification_snapshot
+                ),
             )
         )
     db.flush()
@@ -2716,6 +2963,10 @@ def create_or_rebuild_delivery_pick_task(
 @pick_router.get("")
 def list_delivery_pick_tasks(
     status_filter: str | None = Query(default=None, alias="status"),
+    response_mode: Literal["full", "summary"] = Query(default="full"),
+    include_dispatched: bool = Query(default=True),
+    page: int | None = Query(default=None, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
     user: User = Depends(_can_view_pick_tasks),
 ) -> dict:
@@ -2730,12 +2981,30 @@ def list_delivery_pick_tasks(
         if normalized_status not in PICK_TASK_STATUSES:
             raise HTTPException(status_code=400, detail="拿货任务状态筛选值无效")
         query = query.where(DeliveryPickTask.status == normalized_status)
+    if not include_dispatched:
+        query = query.where(DeliveryPickTask.status != "dispatched")
+    total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
+    if page is not None:
+        query = query.offset((page - 1) * page_size).limit(page_size)
     tasks = db.scalars(query).all()
-    return {
-        "items": [
+    items = (
+        _delivery_pick_task_list_summaries(db, tasks)
+        if response_mode == "summary"
+        else [
             _pick_task_response(db, task, include_location_plan=False)
             for task in tasks
         ]
+    )
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size if page is not None else total,
+        "total_pages": (
+            (total + page_size - 1) // page_size
+            if page is not None and total
+            else (1 if total else 0)
+        ),
     }
 
 
@@ -2993,6 +3262,35 @@ def apply_delivery_pick_task(
             if int(item.picked_quantity) <= 0:
                 db.delete(delivery_item)
             else:
+                if delivery_item.source_type == "unordered_finished":
+                    allocations = db.scalars(
+                        select(UnorderedFinishedDeliveryAllocation)
+                        .where(
+                            UnorderedFinishedDeliveryAllocation.delivery_item_id
+                            == delivery_item.id,
+                            UnorderedFinishedDeliveryAllocation.status == "planned",
+                        )
+                        .order_by(UnorderedFinishedDeliveryAllocation.id)
+                    ).all()
+                    planned_total = sum(
+                        int(allocation.planned_quantity or 0)
+                        for allocation in allocations
+                    )
+                    picked_quantity = int(item.picked_quantity)
+                    if picked_quantity > planned_total:
+                        raise HTTPException(
+                            status_code=409,
+                            detail="无订单成品库存拿货数量不能超过草稿已选批次数量",
+                        )
+                    remaining = picked_quantity
+                    for allocation in allocations:
+                        planned = int(allocation.planned_quantity or 0)
+                        if remaining <= 0:
+                            db.delete(allocation)
+                            continue
+                        kept = min(planned, remaining)
+                        allocation.planned_quantity = kept
+                        remaining -= kept
                 delivery_item.delivered_quantity = int(item.picked_quantity)
         db.flush()
         delivery.total_quantity = int(
@@ -3202,13 +3500,15 @@ def _collect_unordered_finished_lines(
                 status_code=409,
                 detail=f"第 {index} 条产品不属于当前客户",
             )
-        unit_price = Decimal(str(line.unit_price or 0)).quantize(
-            Decimal("0.0001")
+        unit_price = (
+            Decimal(str(line.unit_price)).quantize(Decimal("0.0001"))
+            if line.unit_price is not None
+            else None
         )
-        if unit_price <= 0:
+        if unit_price is not None and unit_price <= 0:
             raise HTTPException(
                 status_code=400,
-                detail=f"第 {index} 条无订单库存明细必须填写大于零的单价",
+                detail=f"第 {index} 条无订单库存明细单价填写后必须大于零",
             )
         allocation_rows: list[dict] = []
         for planned in line.allocations:
@@ -3267,13 +3567,17 @@ def _collect_unordered_finished_lines(
                 "line": line,
                 "unit_price": unit_price,
                 "price_source": (
-                    "product_default"
-                    if product.sale_unit_price is not None
-                    and Decimal(str(product.sale_unit_price)).quantize(
-                        Decimal("0.0001")
+                    "pending"
+                    if unit_price is None
+                    else (
+                        "product_default"
+                        if product.sale_unit_price is not None
+                        and Decimal(str(product.sale_unit_price)).quantize(
+                            Decimal("0.0001")
+                        )
+                        == unit_price
+                        else "manual"
                     )
-                    == unit_price
-                    else "manual"
                 ),
                 "allocations": allocation_rows,
             }
@@ -3551,6 +3855,55 @@ def _delivery_customer_candidates_from_pending_items(
             for customer_id, candidate in grouped.items()
             if customer_id in active_customer_ids
         }
+
+    return sorted(
+        grouped.values(),
+        key=lambda row: (row["customer_name"], row["customer_id"]),
+    )
+
+
+def _delivery_customer_candidates_from_summaries(
+    db: Session,
+    *,
+    user: User,
+    pending_summaries: list[dict],
+) -> list[dict]:
+    """Build the delivery customer selector without expanding every order item."""
+
+    grouped: dict[int, dict] = {}
+    for summary in pending_summaries:
+        customer_id = int(summary["customer_id"])
+        grouped[customer_id] = {
+            "customer_id": customer_id,
+            "customer_name": summary["customer_name"],
+            "has_pending_orders": True,
+            "pending_item_count": int(summary.get("item_count") or 0),
+            "pending_quantity": int(summary.get("pending_quantity") or 0),
+            "has_unordered_finished": False,
+            "unordered_lot_count": 0,
+            "unordered_available_quantity": 0,
+        }
+
+    for summary in _unordered_finished_customer_summaries(db, user=user):
+        customer_id = int(summary["customer_id"])
+        candidate = grouped.setdefault(
+            customer_id,
+            {
+                "customer_id": customer_id,
+                "customer_name": summary["customer_name"],
+                "has_pending_orders": False,
+                "pending_item_count": 0,
+                "pending_quantity": 0,
+                "has_unordered_finished": False,
+                "unordered_lot_count": 0,
+                "unordered_available_quantity": 0,
+            },
+        )
+        candidate["has_unordered_finished"] = True
+        candidate["unordered_lot_count"] = int(summary["lot_count"])
+        candidate["unordered_available_quantity"] = int(
+            summary["available_quantity"]
+        )
 
     return sorted(
         grouped.values(),
@@ -4240,6 +4593,23 @@ def pending_delivery_customer_summaries(
     )
 
 
+@router.get("/pending-customer-options")
+def pending_delivery_customer_options(
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    """Return only customers that currently have a real selectable source."""
+
+    summaries = pending_delivery_customer_summaries(db, user=user)
+    return {
+        "items": _delivery_customer_candidates_from_summaries(
+            db,
+            user=user,
+            pending_summaries=summaries,
+        )
+    }
+
+
 @router.get("/pending-items/search")
 def search_pending_delivery_items(
     customer_id: int = Query(gt=0),
@@ -4290,8 +4660,8 @@ def search_pending_delivery_items(
         return {"items": [], "total": 0, "page": page, "page_size": page_size or 20, "total_pages": 1}
     if db.get(Customer, customer_id) is None:
         raise HTTPException(status_code=400, detail="客户不存在")
+    load_all = list_all and page_size is None and limit is None
     effective_limit = page_size or limit or (100 if list_all else 20)
-    query_limit = min(effective_limit * 3, 200)
     registry = build_display_registry(db)
     base_query = _pending_query(
         customer_id=customer_id,
@@ -4301,12 +4671,14 @@ def search_pending_delivery_items(
         general_keyword=general_keyword,
     )
     total = db.scalar(select(func.count()).select_from(base_query.subquery())) or 0
-    offset = 0 if list_all and page_size is None else (page - 1) * effective_limit
-    rows = list(
-        db.execute(
-            base_query.offset(offset).limit(query_limit)
-        )
-    )
+    if load_all:
+        rows = list(db.execute(base_query))
+        effective_limit = max(int(total), 1)
+        page = 1
+    else:
+        query_limit = min(effective_limit * 3, 200)
+        offset = 0 if list_all and page_size is None else (page - 1) * effective_limit
+        rows = list(db.execute(base_query.offset(offset).limit(query_limit)))
     context = _PendingDeliveryReadContext(db, rows)
     items = []
     for row in rows:
@@ -4326,7 +4698,11 @@ def search_pending_delivery_items(
         "total": int(total),
         "page": page,
         "page_size": effective_limit,
-        "total_pages": max((int(total) + effective_limit - 1) // effective_limit, 1),
+        "total_pages": (
+            1
+            if load_all
+            else max((int(total) + effective_limit - 1) // effective_limit, 1)
+        ),
     }
 
 

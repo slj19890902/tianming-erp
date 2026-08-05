@@ -39,8 +39,9 @@
     const $=id=>document.getElementById(id);
     const h=value=>String(value??"").replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[char]);
     let canMove=false,movePreview=null,moveIdempotencyKey=null,moveSource="manual_input";
-    function errorMessage(body,status){if(typeof body.detail==="string"&&body.detail)return body.detail;if(Array.isArray(body.detail)&&body.detail[0]?.msg)return body.detail[0].msg;return `请求失败（HTTP ${status}）`}
-    async function api(url,options={}){const response=await fetch(url,{credentials:"same-origin",headers:{"Content-Type":"application/json",...(options.headers||{})},...options});let body={};try{body=await response.json()}catch{}if(!response.ok){const error=new Error(errorMessage(body,response.status));error.status=response.status;throw error}return body}
+    let searchRequestId=0,movePreviewRequestId=0;
+    function errorMessage(body,status){const detail=body?.detail;if(typeof detail==="string"&&detail.trim())return detail;if(detail&&typeof detail==="object"&&!Array.isArray(detail)){const message=detail.message||detail.detail||detail.msg,code=detail.code;if(typeof message==="string"&&message.trim())return code?`${message}（${code}）`:message}if(Array.isArray(detail)&&detail[0]?.msg)return detail[0].msg;if(typeof body?.message==="string"&&body.message.trim())return body.message;return `请求失败（HTTP ${status}）`}
+    async function api(url,options={}){let response;try{response=await fetch(url,{credentials:"same-origin",headers:{"Content-Type":"application/json",...(options.headers||{})},...options})}catch{const error=new Error("连接 ERP 失败，请检查网络后重试");error.code="NETWORK_ERROR";throw error}let body={};try{body=await response.json()}catch{}if(!response.ok){const error=new Error(errorMessage(body,response.status));error.status=response.status;error.code=body?.detail?.code||body?.code||null;throw error}return body}
     function createIdempotencyKey(){if(globalThis.crypto?.randomUUID)return crypto.randomUUID();if(globalThis.crypto?.getRandomValues){const bytes=new Uint8Array(16);crypto.getRandomValues(bytes);return [...bytes].map(value=>value.toString(16).padStart(2,"0")).join("")}return `${Date.now()}-${Math.random().toString(16).slice(2)}`}
     function loginNext(){const next=location.pathname+location.search;location.href=`/?next=${encodeURIComponent(next)}`}
     function productHtml(row){
@@ -51,10 +52,12 @@
     function render(items){
       $("results").innerHTML=items.map(row=>`<article class="card"><div class="card-head"><div class="name">${h(row.mold_name)}</div><div class="toolbar"><span class="code">模具编号 ${h(row.mold_code)}</span><span class="tag">关联 ${row.product_count} 款</span></div></div><div class="location"><div class="location-code">${h(row.rack_location)}</div><div class="prompt">${h(row.location_guide?.prompt||"")}</div></div><div class="products">${(row.products||[]).map(productHtml).join("")||'<div class="empty">该模具尚未绑定常用箱，请先联系管理员维护。</div>'}<a class="label-link" href="/mold-label.html?mold_id=${row.id}" target="_blank">查看/打印模具标签</a></div></article>`).join("")||'<div class="empty">没有找到模具。请检查编号，或让管理员先维护模具与常用箱绑定。</div>';
     }
+    function setSearchLoading(loading){$("searchButton").disabled=loading;$("searchButton").textContent=loading?"查询中…":"查询"}
+    function invalidateSearch(){searchRequestId+=1;setSearchLoading(false);$("message").innerHTML="";$("results").innerHTML=""}
     async function search(){
-      const keyword=$("keyword").value.trim();if(!keyword){$("message").innerHTML='<div class="error">请输入模具编号、存货编码、客户或产品名称。</div>';return}
-      $("message").innerHTML="";
-      try{const data=await api(`/api/warehouse/molds?q=${encodeURIComponent(keyword)}&limit=50`);render(data.items||[])}catch(error){if(error.status===401){loginNext();return}$("message").innerHTML=`<div class="error">${h(error.message)}</div>`}
+      const requestId=++searchRequestId,keyword=$("keyword").value.trim();if(!keyword){$("results").innerHTML="";$("message").innerHTML='<div class="error">请输入模具编号、存货编码、客户或产品名称。</div>';setSearchLoading(false);return}
+      setSearchLoading(true);$("message").innerHTML='<div class="hint">正在查询模具，请稍候…</div>';$("results").innerHTML="";
+      try{const data=await api(`/api/warehouse/molds?q=${encodeURIComponent(keyword)}&limit=50`);if(requestId!==searchRequestId)return;const items=data.items||[];render(items);$("message").innerHTML=items.length?`<div class="success">找到 ${items.length} 个模具</div>`:""}catch(error){if(requestId!==searchRequestId)return;if(error.status===401){loginNext();return}$("message").innerHTML=`<div class="error">${h(error.message)}</div>`}finally{if(requestId===searchRequestId)setSearchLoading(false)}
     }
     function renderMovePreview(){
       const row=movePreview;if(!row){$("movePreview").innerHTML="";$("confirmButton").disabled=true;return}
@@ -64,11 +67,12 @@
       $("confirmButton").disabled=!canMove||!row.can_confirm;
       if(!canMove)$("moveMessage").innerHTML='<div class="hint">当前账号可预览，但没有仓库操作权限，不能确认移动。</div>';
     }
+    function invalidateMovePreview(){movePreviewRequestId+=1;movePreview=null;moveIdempotencyKey=null;$("previewButton").disabled=false;$("moveMessage").innerHTML="";renderMovePreview()}
     async function previewMove(){
-      const moldCode=$("moveMoldCode").value.trim(),targetLocation=$("moveLocationCode").value.trim();
-      if(!moldCode||!targetLocation){$("moveMessage").innerHTML='<div class="error">请同时输入模具码和 3F-M 位置码。</div>';return}
+      const requestId=++movePreviewRequestId,moldCode=$("moveMoldCode").value.trim(),targetLocation=$("moveLocationCode").value.trim();
+      if(!moldCode||!targetLocation){movePreview=null;moveIdempotencyKey=null;renderMovePreview();$("moveMessage").innerHTML='<div class="error">请同时输入模具码和 3F-M 位置码。</div>';return}
       $("moveMessage").innerHTML="";$("previewButton").disabled=true;$("confirmButton").disabled=true;
-      try{movePreview=await api("/api/warehouse/molds/location-movement/preview",{method:"POST",body:JSON.stringify({mold_code:moldCode,target_location:targetLocation})});moveIdempotencyKey=createIdempotencyKey();renderMovePreview()}catch(error){movePreview=null;moveIdempotencyKey=null;renderMovePreview();if(error.status===401){loginNext();return}$("moveMessage").innerHTML=`<div class="error">${h(error.message)}</div>`}finally{$("previewButton").disabled=false}
+      try{const preview=await api("/api/warehouse/molds/location-movement/preview",{method:"POST",body:JSON.stringify({mold_code:moldCode,target_location:targetLocation})});if(requestId!==movePreviewRequestId)return;movePreview=preview;moveIdempotencyKey=createIdempotencyKey();renderMovePreview()}catch(error){if(requestId!==movePreviewRequestId)return;movePreview=null;moveIdempotencyKey=null;renderMovePreview();if(error.status===401){loginNext();return}$("moveMessage").innerHTML=`<div class="error">${h(error.message)}</div>`}finally{if(requestId===movePreviewRequestId)$("previewButton").disabled=false}
     }
     async function confirmMove(){
       if(!canMove||!movePreview||!moveIdempotencyKey)return;
@@ -80,7 +84,7 @@
       const permissions=auth.permissions||[];canMove=permissions.includes("warehouse.execute");$("warehouseLink").style.display=permissions.includes("warehouse.view")?"inline-block":"none";$("productionLink").style.display=permissions.includes("orders.view")?"inline-block":"none";
       const params=new URLSearchParams(location.search),preset=params.get("mold")||params.get("q")||"",target=params.get("location")||params.get("target")||params.get("to")||"";$("keyword").value=preset;$("moveMoldCode").value=params.get("move_mold")||preset;$("moveLocationCode").value=target;if(target)moveSource="url_parameter";if(preset)await search();if($("moveMoldCode").value&&target)await previewMove()
     }
-    $("searchButton").onclick=search;$("keyword").onkeydown=event=>{if(event.key==="Enter")search()};$("previewButton").onclick=previewMove;$("confirmButton").onclick=confirmMove;$("moveMoldCode").onpaste=$("moveLocationCode").onpaste=()=>{moveSource="scanner_paste"};$("moveMoldCode").oninput=$("moveLocationCode").oninput=()=>{movePreview=null;moveIdempotencyKey=null;renderMovePreview()};$("moveLocationCode").onkeydown=event=>{if(event.key==="Enter")previewMove()};init();
+    $("searchButton").onclick=search;$("keyword").oninput=invalidateSearch;$("keyword").onkeydown=event=>{if(event.key==="Enter")search()};$("previewButton").onclick=previewMove;$("confirmButton").onclick=confirmMove;$("moveMoldCode").onpaste=$("moveLocationCode").onpaste=()=>{moveSource="scanner_paste"};$("moveMoldCode").oninput=$("moveLocationCode").oninput=invalidateMovePreview;$("moveLocationCode").onkeydown=event=>{if(event.key==="Enter")previewMove()};init();
   </script>
 </body>
 </html>

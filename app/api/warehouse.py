@@ -3792,7 +3792,11 @@ def list_locations(
     db: Session = Depends(get_db),
     _user: User = Depends(can_read),
 ) -> dict:
-    query = select(WarehouseLocation).where(_formal_inventory_location_condition())
+    query = (
+        select(WarehouseLocation)
+        .options(selectinload(WarehouseLocation.floor3_layout))
+        .where(_formal_inventory_location_condition())
+    )
     if not include_inactive:
         query = query.where(WarehouseLocation.is_active.is_(True))
     rows = db.scalars(query.order_by(WarehouseLocation.location_code)).all()
@@ -3804,6 +3808,7 @@ def list_location_candidates(
     inventory_type: Literal["finished", "semi_finished"] = "finished",
     empty_only: bool = False,
     pallet_storage_only: bool = False,
+    include_hierarchy: bool = True,
     db: Session = Depends(get_db),
     _user: User = Depends(can_read),
 ) -> dict:
@@ -3819,6 +3824,8 @@ def list_location_candidates(
         pallet_storage_only=pallet_storage_only,
     )
     items = [operational_location_payload(row) for row in rows]
+    if not include_hierarchy:
+        return {"items": items}
     floors: dict[int, dict] = {}
     for item in items:
         floor_number = item["warehouse_floor"]

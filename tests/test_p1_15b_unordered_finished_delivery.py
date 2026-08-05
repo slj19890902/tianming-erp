@@ -32,6 +32,7 @@ from app.models.warehouse_inventory import (
     InventoryMovement,
     InventoryReservation,
     UnorderedFinishedDeliveryReversal,
+    UnorderedFinishedDeliveryAllocation,
     WarehouseLocation,
 )
 from app.core.security import hash_password
@@ -83,7 +84,7 @@ def unordered_finished_delivery_app(tmp_path: Path):
     """Small, isolated application containing delivery, order and inventory facts."""
 
     from app.api.auth import router as auth_router
-    from app.api.deliveries import router as deliveries_router
+    from app.api.deliveries import pick_router, router as deliveries_router
     from app.api.deps import get_db
     from app.api.finance import router as finance_router
     from app.api.orders import router as orders_router
@@ -169,6 +170,7 @@ def unordered_finished_delivery_app(tmp_path: Path):
     app.include_router(orders_router, prefix="/api/orders")
     app.include_router(warehouse_router, prefix="/api/warehouse")
     app.include_router(deliveries_router, prefix="/api/deliveries")
+    app.include_router(pick_router, prefix="/api/delivery-picks")
     app.include_router(finance_router, prefix="/api/finance")
 
     def override_get_db() -> Generator[Session, None, None]:
@@ -578,6 +580,7 @@ def test_delivery_customer_candidates_are_exact_union_of_real_sources(
     with TestClient(app) as client:
         _login(client)
         response = client.get("/api/deliveries/pending_items")
+        lightweight = client.get("/api/deliveries/pending-customer-options")
 
     assert response.status_code == 200, response.text
     body = response.json()
@@ -593,6 +596,134 @@ def test_delivery_customer_candidates_are_exact_union_of_real_sources(
     assert rows[order_customer_id]["has_pending_orders"] is True
     assert rows[order_customer_id]["pending_item_count"] == 1
     assert len(body["customer_candidates"]) == 2
+    assert lightweight.status_code == 200, lightweight.text
+    assert {
+        int(row["customer_id"]): row
+        for row in lightweight.json()["items"]
+    } == rows
+
+
+def test_unordered_finished_draft_can_keep_price_pending_without_stock_write(
+    unordered_finished_delivery_app,
+) -> None:
+    app, factory = unordered_finished_delivery_app
+    seed = _seed(app, factory)
+    lot_id, _version = _add_finished(
+        factory,
+        customer_id=seed.customer_a_id,
+        product_id=seed.no_price_product_id,
+        quantity=6,
+        key="p115b-no-price-draft",
+    )
+    payload = {
+        "customer_id": seed.customer_a_id,
+        "delivery_date": "2026-08-04",
+        "source_mode": "unordered_finished",
+        "items": [
+            {
+                "source_type": "unordered_finished",
+                "product_id": seed.no_price_product_id,
+                "delivered_quantity": 4,
+                "unit_price": None,
+                "allocations": [{"inventory_lot_id": lot_id, "quantity": 4}],
+            }
+        ],
+    }
+    with factory() as db:
+        before = db.get(InventoryLot, lot_id)
+        assert before is not None
+        before_fact = (
+            int(before.quantity_available),
+            int(before.quantity_reserved),
+            int(before.quantity_consumed),
+            int(before.version),
+        )
+
+    with TestClient(app) as client:
+        _login(client)
+        response = client.post("/api/deliveries", json=payload)
+
+    assert response.status_code == 201, response.text
+    line = _delivery_line(response.json())
+    with factory() as db:
+        stored = db.get(DeliveryItem, line["id"])
+        lot = db.get(InventoryLot, lot_id)
+        assert stored is not None and lot is not None
+        assert stored.unit_price_snapshot is None
+        assert stored.price_source == "pending"
+        assert (
+            int(lot.quantity_available),
+            int(lot.quantity_reserved),
+            int(lot.quantity_consumed),
+            int(lot.version),
+        ) == before_fact
+
+
+def test_unordered_finished_draft_can_push_mobile_pick_without_dispatch(
+    unordered_finished_delivery_app,
+) -> None:
+    app, factory = unordered_finished_delivery_app
+    seed = _seed(app, factory)
+    before = _stock_snapshot(factory, seed)
+    with TestClient(app) as client:
+        _login(client)
+        delivery = _create_unordered_delivery(client, _unordered_payload(seed))
+        pushed = client.post(f"/api/deliveries/{delivery['id']}/pick-task")
+        repeated = client.post(f"/api/deliveries/{delivery['id']}/pick-task")
+
+    assert pushed.status_code == 201, pushed.text
+    assert repeated.status_code == 201, repeated.text
+    task = pushed.json()
+    assert repeated.json()["id"] == task["id"]
+    assert len(task["items"]) == 1
+    assert task["items"][0]["order_item_id"] is None
+    assert {
+        row["lot_id"] for row in task["items"][0]["location_lines"]
+    } == {seed.free_first_lot_id, seed.free_second_lot_id}
+    with factory() as db:
+        saved = db.get(Delivery, delivery["id"])
+        assert saved is not None and saved.status == "pending"
+    assert _stock_snapshot(factory, seed) == before
+
+
+def test_unordered_finished_partial_pick_only_resizes_pending_draft(
+    unordered_finished_delivery_app,
+) -> None:
+    app, factory = unordered_finished_delivery_app
+    seed = _seed(app, factory)
+    before = _stock_snapshot(factory, seed)
+    with TestClient(app) as client:
+        _login(client)
+        delivery = _create_unordered_delivery(client, _unordered_payload(seed))
+        task = client.post(f"/api/deliveries/{delivery['id']}/pick-task").json()
+        task_item = task["items"][0]
+        partial = client.put(
+            f"/api/delivery-picks/{task['id']}/items/{task_item['id']}",
+            json={"pick_status": "partial", "picked_quantity": 6},
+        )
+        assert partial.status_code == 200, partial.text
+        submitted = client.post(f"/api/delivery-picks/{task['id']}/submit")
+        assert submitted.status_code == 200, submitted.text
+        applied = client.post(f"/api/delivery-picks/{task['id']}/apply")
+        assert applied.status_code == 200, applied.text
+
+    with factory() as db:
+        stored = db.get(Delivery, delivery["id"])
+        assert stored is not None and stored.status == "pending"
+        line = db.scalar(
+            select(DeliveryItem).where(DeliveryItem.delivery_id == stored.id)
+        )
+        assert line is not None and int(line.delivered_quantity) == 6
+        assert sum(
+            int(row.planned_quantity)
+            for row in db.scalars(
+                select(UnorderedFinishedDeliveryAllocation).where(
+                    UnorderedFinishedDeliveryAllocation.delivery_item_id
+                    == line.id
+                )
+            ).all()
+        ) == 6
+    assert _stock_snapshot(factory, seed) == before
 
 
 def test_draft_is_unordered_only_and_freezes_price_without_order_side_effects(

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.orm import Session, sessionmaker
 
 
@@ -224,6 +224,151 @@ def test_picker_permission_and_snapshot_contract(pick_app) -> None:
             client.post(f"/api/deliveries/{ids['delivery']}/pick-task").status_code
             == 403
         )
+
+
+def test_mobile_summary_list_is_paginated_batched_and_excludes_dispatched(
+    pick_app,
+) -> None:
+    from app.models.delivery import Delivery, DeliveryPickTask, DeliveryPickTaskItem
+    from app.models.user import User
+
+    app, factory, ids, _ = pick_app
+    with TestClient(app) as client:
+        _login(client, "admin")
+        first = _create_task(client, ids["delivery"])
+        with factory() as db:
+            admin = db.scalar(select(User).where(User.username == "admin"))
+            picker = db.scalar(select(User).where(User.username == "delivery_picker"))
+            original_item = db.scalar(
+                select(DeliveryPickTaskItem).where(
+                    DeliveryPickTaskItem.task_id == first["id"]
+                )
+            )
+            assert admin is not None and picker is not None and original_item is not None
+            for index in range(19):
+                delivery = Delivery(
+                    delivery_number=f"TM-PERF-{index:03d}",
+                    customer_id=ids["customer"],
+                    delivery_date=date(2026, 7, 20),
+                    status="pending",
+                    total_quantity=1,
+                    created_by=admin.id,
+                )
+                db.add(delivery)
+                db.flush()
+                task = DeliveryPickTask(
+                    delivery_id=delivery.id,
+                    customer_id=ids["customer"],
+                    status="pushed",
+                    snapshot_version=1,
+                    created_by=admin.id,
+                    assigned_to=picker.id,
+                )
+                db.add(task)
+                db.flush()
+                db.add(
+                    DeliveryPickTaskItem(
+                        task_id=task.id,
+                        delivery_item_id=None,
+                        order_item_id=original_item.order_item_id,
+                        original_quantity=1,
+                        picked_quantity=0,
+                        status="pending",
+                        product_code_snapshot=f"PERF-{index:03d}",
+                        product_name_snapshot="性能测试匿名产品",
+                    )
+                )
+            db.commit()
+
+        statements: list[str] = []
+
+        def record_sql(_conn, _cursor, statement, _params, _context, _many):
+            statements.append(statement.lstrip().lower())
+
+        engine = factory.kw["bind"]
+        event.listen(engine, "before_cursor_execute", record_sql)
+        try:
+            response = client.get(
+                "/api/delivery-picks",
+                params={
+                    "response_mode": "summary",
+                    "include_dispatched": "false",
+                    "page": 1,
+                    "page_size": 10,
+                },
+            )
+        finally:
+            event.remove(engine, "before_cursor_execute", record_sql)
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["total"] == 20
+        assert body["page"] == 1
+        assert body["total_pages"] == 2
+        assert len(body["items"]) == 10
+        assert all(row["items"] == [] for row in body["items"])
+        assert all(row["location_groups"] == [] for row in body["items"])
+        selects = sum(statement.startswith("select") for statement in statements)
+        assert selects <= 9
+
+        with factory() as db:
+            db.query(DeliveryPickTask).update({"status": "dispatched"})
+            db.commit()
+        empty = client.get(
+            "/api/delivery-picks",
+            params={"response_mode": "summary", "include_dispatched": "false"},
+        )
+        assert empty.status_code == 200
+        assert empty.json()["items"] == []
+        assert empty.json()["total"] == 0
+
+
+def test_pick_detail_query_growth_is_bounded_for_rows_without_inventory_sources(
+    pick_app,
+) -> None:
+    from app.models.delivery import DeliveryPickTaskItem
+
+    app, factory, ids, _ = pick_app
+    with TestClient(app) as client:
+        _login(client, "admin")
+        task = _create_task(client, ids["delivery"])
+        engine = factory.kw["bind"]
+
+        def counted_detail() -> tuple[dict, int]:
+            statements: list[str] = []
+
+            def record_sql(_conn, _cursor, statement, _params, _context, _many):
+                statements.append(statement.lstrip().lower())
+
+            event.listen(engine, "before_cursor_execute", record_sql)
+            try:
+                response = client.get(f"/api/delivery-picks/{task['id']}")
+            finally:
+                event.remove(engine, "before_cursor_execute", record_sql)
+            assert response.status_code == 200, response.text
+            return response.json(), sum(
+                statement.startswith("select") for statement in statements
+            )
+
+        small, small_selects = counted_detail()
+        assert len(small["items"]) == 2
+        with factory() as db:
+            for index in range(18):
+                db.add(
+                    DeliveryPickTaskItem(
+                        task_id=task["id"],
+                        delivery_item_id=None,
+                        order_item_id=ids["order_items"][0],
+                        original_quantity=1,
+                        picked_quantity=0,
+                        status="pending",
+                        product_code_snapshot=f"EMPTY-{index:03d}",
+                        product_name_snapshot="无库存来源匿名产品",
+                    )
+                )
+            db.commit()
+        large, large_selects = counted_detail()
+        assert len(large["items"]) == 20
+        assert large_selects <= small_selects + 5
 
 
 def test_p1_21c_picker_only_sees_assigned_task_and_dispatch_can_reassign(pick_app) -> None:

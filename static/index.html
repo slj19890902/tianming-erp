@@ -862,6 +862,7 @@
       .version-history-card { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: #fff; }
       .version-history-meta { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin-bottom: 8px; font-size: 13px; }
       .form-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px 14px; }
+      fieldset.form-grid { min-width: 0; padding: 0; border: 0; }
       .form-grid .wide { grid-column: 1 / -1; }
       .product-edit-grid { display: grid; gap: 10px; }
       .order-item-edit-grid { display: grid; gap: 10px; min-width: 1180px; }
@@ -1895,7 +1896,9 @@
                     <div class="product-breadcrumb"><button class="btn" @click="backToProductCustomers()">返回客户列表</button><span>常用箱与材质 › {{ selectedProductCustomer.name }}</span></div>
                     <div class="muted">共 {{ productsTotal }} 条，当前第 {{ pages.products }} / {{ productTotalPages }} 页</div>
                   </div>
-                  <div v-if="!products.length" class="panel empty">该客户当前没有符合条件的常用箱</div>
+                  <div v-if="productsLoading" class="panel empty">正在读取该客户的常用箱…</div>
+                  <div v-else-if="productsError" class="notice error">{{ productsError }} <button class="btn small" @click="loadProducts()">重试</button></div>
+                  <div v-else-if="!products.length" class="panel empty">该客户当前没有符合条件的常用箱</div>
                   <div v-else class="table-wrap"><table><thead><tr><th>品号</th><th v-if="false">客户料号</th><th>产品名称</th><th>规格</th><th>材质</th><th v-if="!isWorkshop" class="sensitive-price">默认单价</th><th>资料状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td v-if="false">{{ plainProductText(row.customer_material_code) }}</td><td :title="plainProductText(row.product_name)" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td style="white-space:nowrap">{{ spec(row) }}</td><td :class="{muted: productMaterialCell(row).muted}" :title="materialFullStructure(row)" style="white-space:nowrap">{{ productMaterialCell(row).text }}</td><td v-if="!isWorkshop" class="sensitive-price">{{ money(row.sale_unit_price) }}</td><td><span :class="['status',commonBoxReadiness(row).ready ? 'green' : 'orange']" :title="commonBoxReadinessTitle(row)">{{ commonBoxReadiness(row).ready ? '资料已完善' : '待完善' }}</span><div v-if="row.manual_modified" class="muted" style="font-size:11px;margin-top:3px">已人工编辑（版本事实）</div></td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canEditProducts ? "编辑" : "查看" }}</button><button v-if="canRequisition && row.is_active" class="btn small" @click="openProductStockPolicy(row)">库存预警</button><button class="btn small" @click="openMasterVersionHistory('product',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateProducts" :class="['btn','small',row.is_active ? 'danger' : 'success']" @click="toggleProductStatus(row)">{{ row.is_active ? "停用" : "启用" }}</button><button v-if="canDeleteProducts" class="btn small danger" @click="deleteProduct(row)">移入垃圾站</button></td></tr></tbody></table></div>
                 </template>
               </div>
@@ -1907,7 +1910,7 @@
                     <button class="btn primary" @click="openSupplier()">新增供应商</button>
                   </div>
                 </div>
-                <div v-if="supplierError" class="notice danger" style="margin-bottom:8px">{{ supplierError }}</div>
+                <div v-if="supplierError" class="notice danger" style="margin-bottom:8px">{{ supplierError }} <button class="btn small" @click="loadSuppliers(true)" :disabled="supplierLoading">重新加载</button></div>
                 <div v-if="supplierLoading" class="muted" style="padding:18px;text-align:center">供应商正在加载…</div>
                 <div v-else-if="!filteredSuppliers.length" class="empty">暂无符合条件的供应商</div>
                 <div v-else class="table-wrap">
@@ -2312,7 +2315,7 @@
                         </td>
                         <td class="cell-actions">
                           <div class="toolbar-group">
-                            <button class="btn small" @click="toggleOrderGroup(group.key)">{{ expandedOrders[group.key] ? "收起" : "展开" }}</button>
+                            <button class="btn small" :disabled="orderGroupDetailLoading[group.key]" @click="toggleOrderGroup(group)">{{ orderGroupDetailLoading[group.key] ? "加载中" : (expandedOrders[group.key] ? "收起" : "展开") }}</button>
                             <button class="btn small" @click="openOrderGroupDetail(group)">详情</button>
                             <button v-if="canEditOrders" class="btn small primary" @click="openOrderEditor(group)">编辑</button>
                           </div>
@@ -2321,7 +2324,9 @@
                       <tr v-if="expandedOrders[group.key]" class="order-group-detail-row">
                         <td :colspan="isWorkshop ? 8 : 9">
                           <div class="order-group-detail-card">
-                            <table>
+                            <div v-if="orderGroupDetailLoading[group.key]" class="empty">正在加载订单明细…</div>
+                            <div v-else-if="orderGroupDetailErrors[group.key]" class="empty error-text">{{ orderGroupDetailErrors[group.key] }} <button class="btn small" @click="retryOrderGroupDetail(group)">重新加载</button></div>
+                            <table v-else>
                               <thead>
                                 <tr>
                                   <th class="col-order-item-sequence">序号</th>
@@ -2339,7 +2344,7 @@
                                 </tr>
                               </thead>
                               <tbody>
-                                <template v-for="row in group.orders" :key="row.id">
+                                <template v-for="row in orderGroupExpandedOrders(group)" :key="row.id">
                                   <tr v-for="(item,itemIndex) in row.items" :key="item.id">
                                     <td class="col-order-item-sequence">{{ item.item_sequence || itemIndex + 1 }}</td>
                                     <td><span v-for="(part,index) in orderSearchHighlightParts(plainProductText(item.snapshot_product_code))" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span></td>
@@ -2703,20 +2708,20 @@
                     <td><status-tag :value="row.return_receipt_status === 'cancelled' ? 'receipt_cancelled' : (row.return_receipt_status || 'waiting_receipt')"></status-tag></td>
                     <td><button class="btn small" @click="toggleDeliveryListDetail(row)">{{ expandedDeliveryRows[row.id] ? '收起明细' : `查看明细（${(row.items || []).length}）` }}</button></td>
                     <td class="toolbar-group delivery-list-actions">
-                      <button v-if="canDelivery && row.status==='pending' && !row.pick_task" class="btn small" @click="createDeliveryPickTask(row)">拿货</button>
-                      <select v-if="canDelivery && row.pick_task && row.status==='pending'" class="select" style="max-width:130px" :value="row.pick_task.assigned_to || ''" @change="assignDeliveryPickTask(row,$event.target.value)">
+                      <button v-if="canDelivery && row.status==='pending' && !row.pick_task" class="btn small" :disabled="!!deliveryOperationState.action" @click="createDeliveryPickTask(row)">{{ deliveryOperationState.action==='pick' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '推送中…' : '拿货' }}</button>
+                      <select v-if="canDelivery && row.pick_task && row.status==='pending'" class="select" style="max-width:130px" :disabled="!!deliveryOperationState.action" :value="row.pick_task.assigned_to || ''" @change="assignDeliveryPickTask(row,$event.target.value)">
                         <option value="">未分配</option>
                         <option v-for="picker in deliveryPickers" :key="picker.id" :value="picker.id">{{ picker.name }}</option>
                       </select>
-                      <button v-if="row.pick_task" class="btn small" @click="openDeliveryPickTask(row)">{{ row.pick_task.assignment_required ? '管理员查看' : '打开手机拿货' }}</button>
-                      <button v-if="canDelivery && row.status==='pending'" class="btn small success" @click="dispatchDelivery(row)">{{ row.pick_task ? '发货打印' : '直接发货打印' }}</button>
-                      <button v-if="canDelivery && row.status==='pending'" class="btn small" @click="editDelivery(row)">编辑</button>
-                      <button v-if="canDelivery && row.status==='pending'" class="btn small danger" @click="deleteDelivery(row)">删除</button>
-                      <button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small" @click="openReceipt(row)">编辑回单</button>
-                      <button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small danger" @click="cancelReceipt(row)">取消回单</button>
-                      <button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small" @click="openReceipt(row)">确认回单</button>
-                      <button v-if="row.status==='dispatched'" class="btn small" @click="printDelivery(row)">补打</button>
-                      <button v-if="canDelivery && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small danger" @click="cancelDelivery(row)">取消发货</button>
+                      <button v-if="row.pick_task" class="btn small" :disabled="!!deliveryOperationState.action" @click="openDeliveryPickTask(row)">{{ row.pick_task.assignment_required ? '管理员查看' : '打开手机拿货' }}</button>
+                      <button v-if="canDelivery && row.status==='pending'" class="btn small success" :disabled="!!deliveryOperationState.action" @click="dispatchDelivery(row)">{{ deliveryOperationState.action==='dispatch' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '发货中…' : (row.pick_task ? '发货打印' : '直接发货打印') }}</button>
+                      <button v-if="canDelivery && row.status==='pending'" class="btn small" :disabled="!!deliveryOperationState.action" @click="editDelivery(row)">编辑</button>
+                      <button v-if="canDelivery && row.status==='pending'" class="btn small danger" :disabled="!!deliveryOperationState.action" @click="deleteDelivery(row)">{{ deliveryOperationState.action==='delete' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '删除中…' : '删除' }}</button>
+                      <button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small" :disabled="!!deliveryOperationState.action" @click="openReceipt(row)">编辑回单</button>
+                      <button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small danger" :disabled="!!deliveryOperationState.action" @click="cancelReceipt(row)">取消回单</button>
+                      <button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small" :disabled="!!deliveryOperationState.action" @click="openReceipt(row)">确认回单</button>
+                      <button v-if="row.status==='dispatched'" class="btn small" :disabled="!!deliveryOperationState.action" @click="printDelivery(row)">补打</button>
+                      <button v-if="canDelivery && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small danger" :disabled="!!deliveryOperationState.action" @click="cancelDelivery(row)">{{ deliveryOperationState.action==='cancel' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '取消中…' : '取消发货' }}</button>
                     </td>
                   </tr>
                   <tr v-if="expandedDeliveryRows[row.id]" class="delivery-list-detail-row">
@@ -2810,7 +2815,7 @@
                     <tr v-if="financeCurrentExpanded[financeGroupKey(row)]"><td colspan="8" style="padding:8px 12px;background:#f8fafc">
                       <div v-if="!row.statements.length" class="muted">尚未生成对账单，请点击“去对账”。</div>
                       <div v-else class="table-wrap"><table><thead><tr><th>对账单号</th><th class="sensitive-price">应收</th><th class="sensitive-price">待开票</th><th class="sensitive-price">待结款</th><th>状态</th><th>操作</th></tr></thead><tbody>
-                        <tr v-for="statement in row.statements" :key="statement.id"><td><a href="#" @click.prevent="openStatementDetail(statement)">{{ statement.statement_number }}</a></td><td class="sensitive-price">¥ {{ money(statement.total_receivable) }}</td><td class="sensitive-price">¥ {{ money(statement.pending_invoice_amount) }}</td><td class="sensitive-price">¥ {{ money(statement.pending_payment_amount) }}</td><td><status-tag :value="statement.status"></status-tag><div class="muted">{{ financeConfirmationText(statement) }}</div></td><td class="toolbar-group"><button class="btn small" @click="openStatementDetail(statement)">查看</button><button v-if="canFinance" class="btn small" @click="openStatementEdit(statement)">编辑</button><button v-if="canConfirmStatement && statement.confirmation_status!=='confirmed'" class="btn small success" @click="confirmFinanceStatement(statement)">核对并确认</button><button v-if="canGenerateInvoiceTask" class="btn small" :disabled="statement.confirmation_status!=='confirmed'" @click="generateInvoiceTask(statement)">生成开票任务</button><button v-if="canFinance" class="btn small danger" @click="cancelStatement(statement)">取消</button><button class="btn small" @click="exportStatement(statement)">导出 Excel</button><button v-if="canFinance" class="btn small" :disabled="Number(statement.pending_invoice_amount)<=0" @click="registerInvoice(statement)">登记开票</button><button v-if="canFinance" class="btn small success" :disabled="Number(statement.pending_payment_amount)<=0" @click="settle(statement)">收款核销</button></td></tr>
+                        <tr v-for="statement in row.statements" :key="statement.id"><td><a href="#" @click.prevent="openStatementDetail(statement)">{{ statement.statement_number }}</a></td><td class="sensitive-price">¥ {{ money(statement.total_receivable) }}</td><td class="sensitive-price">¥ {{ money(statement.pending_invoice_amount) }}</td><td class="sensitive-price">¥ {{ money(statement.pending_payment_amount) }}</td><td><status-tag :value="statement.status"></status-tag><div class="muted">{{ financeConfirmationText(statement) }}</div></td><td class="toolbar-group"><button class="btn small" @click="openStatementDetail(statement)">查看</button><button v-if="canFinance" class="btn small" :disabled="!!financeStatementOperationState.action" @click="openStatementEdit(statement)">编辑</button><button v-if="canConfirmStatement && statement.confirmation_status!=='confirmed'" class="btn small success" :disabled="!!financeStatementOperationState.action" @click="confirmFinanceStatement(statement)">{{ financeStatementOperationState.action==='confirm' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '确认中…' : '核对并确认' }}</button><button v-if="canGenerateInvoiceTask" class="btn small" :disabled="statement.confirmation_status!=='confirmed' || !!financeStatementOperationState.action" @click="generateInvoiceTask(statement)">{{ financeStatementOperationState.action==='generate' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '生成中…' : '生成开票任务' }}</button><button v-if="canFinance" class="btn small danger" :disabled="!!financeStatementOperationState.action" @click="cancelStatement(statement)">{{ financeStatementOperationState.action==='cancel' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '取消中…' : '取消' }}</button><button class="btn small" @click="exportStatement(statement)">导出 Excel</button><button v-if="canFinance && statement.confirmation_status!=='confirmed'" class="btn small" :disabled="Number(statement.pending_invoice_amount)<=0 || !!financeStatementOperationState.action" @click="registerInvoice(statement)">{{ financeStatementOperationState.action==='register' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '登记中…' : '登记开票' }}</button><button v-if="canFinance" class="btn small success" :disabled="Number(statement.pending_payment_amount)<=0 || !!financeStatementOperationState.action" @click="settle(statement)">{{ financeStatementOperationState.action==='settle' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '核销中…' : '收款核销' }}</button></td></tr>
                       </tbody></table></div>
                     </td></tr>
                   </tbody>
@@ -2937,15 +2942,17 @@
                 </template>
               </template>
               <template v-else-if="financeView==='invoice_tasks'">
-                <div class="panel" style="margin-bottom:10px"><div class="toolbar" style="align-items:flex-end;gap:8px;flex-wrap:wrap"><div class="field" style="width:220px"><label>客户</label><search-select v-model="invoiceTaskFilters.customer_id" :options="customerOptions" label-key="name" value-key="id" placeholder="全部客户"></search-select></div><div class="field" style="width:150px"><label>月份</label><input class="input" type="month" v-model="invoiceTaskFilters.statement_month" /></div><div class="field" style="width:145px"><label>状态</label><select class="select" v-model="invoiceTaskFilters.status"><option value="">全部状态</option><option value="draft">待补资料</option><option value="ready">可导出</option><option value="exported">已导出待登记</option><option value="issued">已开票</option><option value="failed">失败</option></select></div><button class="btn primary" @click="loadInvoiceTasks">查询</button><button v-if="canManageInvoiceProfiles" class="btn" @click="openInvoiceSellers">维护销方主体</button></div></div>
-                <div v-if="invoiceTaskState.error" class="notice danger">{{ invoiceTaskState.error }}</div><div class="panel"><div class="section-title">开票任务（人工登录税局、核对后再正式开具）</div><div v-if="invoiceTaskState.loading" class="empty">正在读取开票任务…</div><div v-else-if="!invoiceTasks.length" class="empty">暂无开票任务。先在对账单完成“核对并确认”，再生成任务。</div><div v-else class="table-wrap"><table><thead><tr><th>任务号</th><th>客户 / 月份</th><th>销方</th><th class="sensitive-price">价税合计</th><th>状态</th><th>缺项 / 操作</th></tr></thead><tbody><tr v-for="task in invoiceTasks" :key="task.id"><td><strong>{{ task.task_number }}</strong><div class="muted">v{{ task.version || '-' }}</div></td><td>{{ task.customer_name }}<div class="muted">{{ task.statement_month }}</div></td><td>{{ task.seller_name || '待选择销方' }}</td><td class="sensitive-price">¥ {{ money(task.total_amount) }}</td><td><span :class="['status',task.status==='issued'?'green':task.status==='failed'?'red':'blue']">{{ invoiceTaskStatusText(task.status) }}</span></td><td><div v-if="(task.missing_items||[]).length" class="danger-text">{{ task.missing_items.join('；') }} <button v-if="canManageInvoiceProfiles" class="btn small" @click="openCustomerInvoiceProfile(task.customer_id)">进入客户税务资料</button></div><div v-else class="toolbar-group"><button class="btn small" @click="openInvoiceTask(task)">预览</button><button v-if="canConfirmInvoiceTask" class="btn small success" @click="confirmInvoiceTask(task)">确认任务</button><button v-if="canGenerateInvoiceTask" class="btn small" @click="downloadInvoiceTaxTemplate(task)">下载税局 Excel</button><button v-if="canRegisterInvoiceResult" class="btn small" @click="openInvoiceTaskResult(task)">登记成功/失败</button><button v-if="canManageInvoiceAttachment" class="btn small" @click="uploadInvoiceTaskPdf(task)">上传原始 PDF</button></div></td></tr></tbody></table></div></div>
+                <input ref="invoiceTaskPdfInput" type="file" accept="application/pdf,.pdf" style="display:none" @change="onInvoiceTaskPdfSelected" />
+                <div v-if="invoiceTaskUploadState.error" class="notice danger" style="margin-bottom:10px">原始 PDF 上传失败：{{ invoiceTaskUploadState.error }} <button class="btn small" type="button" :disabled="invoiceTaskUploadState.uploading" @click="retryInvoiceTaskPdf">重新选择</button></div>
+                <div class="panel" style="margin-bottom:10px"><div class="toolbar" style="align-items:flex-end;gap:8px;flex-wrap:wrap"><div class="field" style="width:220px"><label>客户</label><search-select v-model="invoiceTaskFilters.customer_id" :options="customerOptions" label-key="name" value-key="id" placeholder="全部客户" :disabled="invoiceTaskState.loading"></search-select></div><div class="field" style="width:150px"><label>月份</label><input class="input" type="month" v-model="invoiceTaskFilters.statement_month" :disabled="invoiceTaskState.loading" /></div><div class="field" style="width:145px"><label>状态</label><select class="select" v-model="invoiceTaskFilters.status" :disabled="invoiceTaskState.loading"><option value="">全部状态</option><option value="draft">待补资料</option><option value="ready">可导出</option><option value="exported">已导出待登记</option><option value="issued">已开票</option><option value="failed">失败</option></select></div><button class="btn primary" :disabled="invoiceTaskState.loading" @click="loadInvoiceTasks">{{ invoiceTaskState.loading ? '查询中…' : '查询' }}</button><button v-if="canManageInvoiceProfiles" class="btn" @click="openInvoiceSellers">维护销方主体</button></div></div>
+                <div class="panel"><div class="section-title">开票任务（人工登录税局、核对后再正式开具）</div><div v-if="invoiceTaskState.loading" class="empty">正在读取开票任务…</div><div v-else-if="invoiceTaskState.error" class="empty"><div class="notice danger" style="margin-bottom:10px">开票任务读取失败：{{ invoiceTaskState.error }}</div><button class="btn" type="button" @click="loadInvoiceTasks">重新查询</button></div><div v-else-if="!invoiceTasks.length" class="empty">暂无开票任务。先在对账单完成“核对并确认”，再生成任务。</div><div v-else class="table-wrap"><table><thead><tr><th>任务号</th><th>客户 / 月份</th><th>销方</th><th class="sensitive-price">价税合计</th><th>状态</th><th>缺项 / 操作</th></tr></thead><tbody><tr v-for="task in invoiceTasks" :key="task.id"><td><strong>{{ task.task_number }}</strong><div class="muted">v{{ task.version || '-' }}</div></td><td>{{ task.customer_name }}<div class="muted">{{ task.statement_month }}</div></td><td>{{ task.seller_name || '待选择销方' }}</td><td class="sensitive-price">¥ {{ money(task.total_amount) }}</td><td><span :class="['status',task.status==='issued'?'green':task.status==='failed'?'red':'blue']">{{ invoiceTaskStatusText(task.status) }}</span></td><td><div v-if="(task.missing_items||[]).length" class="danger-text">{{ task.missing_items.join('；') }} <button v-if="canManageInvoiceProfiles" class="btn small" @click="openCustomerInvoiceProfile(task.customer_id)">进入客户税务资料</button></div><div v-else class="toolbar-group"><button class="btn small" :disabled="invoiceTaskOperationState.detailLoading && Number(invoiceTaskOperationState.detailTaskId)===Number(task.id)" @click="openInvoiceTask(task)">{{ invoiceTaskOperationState.detailLoading && Number(invoiceTaskOperationState.detailTaskId)===Number(task.id) ? '读取中…' : '预览' }}</button><button v-if="canConfirmInvoiceTask" class="btn small success" :disabled="invoiceTaskOperationState.confirmingTaskId!==null" @click="confirmInvoiceTask(task)">{{ Number(invoiceTaskOperationState.confirmingTaskId)===Number(task.id) ? '确认中…' : '确认任务' }}</button><button v-if="canGenerateInvoiceTask" class="btn small" @click="downloadInvoiceTaxTemplate(task)">下载税局 Excel</button><button v-if="canRegisterInvoiceResult" class="btn small" :disabled="invoiceTaskOperationState.resultSaving" @click="openInvoiceTaskResult(task)">登记成功/失败</button><button v-if="canManageInvoiceAttachment && task.status==='issued'" class="btn small" :disabled="invoiceTaskUploadState.uploading" @click="uploadInvoiceTaskPdf(task)">{{ invoiceTaskUploadState.uploading && Number(invoiceTaskUploadState.taskId)===Number(task.id) ? '上传中…' : '上传原始 PDF' }}</button></div></td></tr></tbody></table></div></div>
               </template>
               <template v-else>
                 <div class="toolbar"><div><button v-if="canFinance" class="btn primary" @click="openStatement">生成月结对账单</button></div><div><button class="btn" @click="loadFinance">刷新</button></div></div>
                 <div class="panel">
                   <div class="section-title">全部对账单</div>
                   <div class="table-wrap"><table><thead><tr><th>对账单号</th><th>客户</th><th>月份</th><th class="sensitive-price">应收金额</th><th class="sensitive-price">已开票</th><th class="sensitive-price">已收款</th><th>状态</th><th>操作</th></tr></thead>
-                  <tbody><tr v-for="row in statements" :key="row.id"><td><a href="#" @click.prevent="openStatementDetail(row)">{{ row.statement_number }}</a></td><td>{{ row.customer_name }}</td><td>{{ row.statement_month }}</td><td class="sensitive-price">¥ {{ money(row.total_receivable) }}</td><td class="sensitive-price">¥ {{ money(row.invoiced_amount) }}</td><td class="sensitive-price">¥ {{ money(row.settled_amount) }}</td><td><status-tag :value="row.status"></status-tag></td><td class="toolbar-group"><button class="btn small" @click="openStatementDetail(row)">查看</button><button v-if="canFinance" class="btn small" @click="openStatementEdit(row)">编辑</button><button v-if="canFinance" class="btn small danger" @click="cancelStatement(row)">取消</button><button class="btn small" @click="exportStatement(row)">导出 Excel</button><button v-if="canFinance" class="btn small" @click="registerInvoice(row)">登记开票</button><button v-if="canFinance" class="btn small success" :disabled="Number(row.total_receivable)-Number(row.settled_amount)<=0" @click="settle(row)">收款核销</button></td></tr></tbody></table><div v-if="!statements.length" class="empty">暂无对账单</div></div>
+                  <tbody><tr v-for="row in statements" :key="row.id"><td><a href="#" @click.prevent="openStatementDetail(row)">{{ row.statement_number }}</a></td><td>{{ row.customer_name }}</td><td>{{ row.statement_month }}</td><td class="sensitive-price">¥ {{ money(row.total_receivable) }}</td><td class="sensitive-price">¥ {{ money(row.invoiced_amount) }}</td><td class="sensitive-price">¥ {{ money(row.settled_amount) }}</td><td><status-tag :value="row.status"></status-tag></td><td class="toolbar-group"><button class="btn small" @click="openStatementDetail(row)">查看</button><button v-if="canFinance" class="btn small" :disabled="!!financeStatementOperationState.action" @click="openStatementEdit(row)">编辑</button><button v-if="canFinance" class="btn small danger" :disabled="!!financeStatementOperationState.action" @click="cancelStatement(row)">{{ financeStatementOperationState.action==='cancel' && Number(financeStatementOperationState.statementId)===Number(row.id) ? '取消中…' : '取消' }}</button><button class="btn small" @click="exportStatement(row)">导出 Excel</button><button v-if="canFinance && row.confirmation_status!=='confirmed'" class="btn small" :disabled="Number(row.total_receivable)-Number(row.invoiced_amount)<=0 || !!financeStatementOperationState.action" @click="registerInvoice(row)">{{ financeStatementOperationState.action==='register' && Number(financeStatementOperationState.statementId)===Number(row.id) ? '登记中…' : '登记开票' }}</button><button v-if="canFinance" class="btn small success" :disabled="Number(row.total_receivable)-Number(row.settled_amount)<=0 || !!financeStatementOperationState.action" @click="settle(row)">{{ financeStatementOperationState.action==='settle' && Number(financeStatementOperationState.statementId)===Number(row.id) ? '核销中…' : '收款核销' }}</button></td></tr></tbody></table><div v-if="!statements.length" class="empty">暂无对账单</div></div>
                   <pager :page="pages.statements" :total="statementsTotal" :page-size="pageSize" @change="pages.statements=$event; loadFinance()"></pager>
                 </div>
                 <div class="panel" style="margin-top:10px">
@@ -3013,22 +3020,27 @@
               <div class="panel" style="padding:16px 18px">
                 <div class="toolbar-group" style="margin-bottom:14px">
                   <label style="font-weight:700">用户</label>
-                  <select class="select" style="width:280px" v-model.number="selectedPermissionUserId" @change="loadPermissionProfile(selectedPermissionUserId)">
+                  <select class="select" style="width:280px" v-model.number="selectedPermissionUserId" :disabled="permissionUsersLoading || permissionProfileLoading || permissionSaving" @change="loadPermissionProfile(selectedPermissionUserId)">
                     <option :value="null">请选择用户</option>
                     <option v-for="row in permissionUsers" :key="row.id" :value="row.id">{{ row.real_name || row.username }}（{{ row.username }} / {{ roleLabel(row.role) }}）</option>
                   </select>
-                  <button class="btn" @click="loadPermissionUsers">刷新用户</button>
-                  <button class="btn primary" @click="openCreateUserModal">新增用户</button>
+                  <button class="btn" @click="loadPermissionUsers" :disabled="permissionUsersLoading || permissionProfileLoading || permissionSaving">刷新用户</button>
+                  <button class="btn primary" @click="openCreateUserModal" :disabled="permissionUsersLoading || permissionProfileLoading || permissionSaving">新增用户</button>
                 </div>
-                <div v-if="permissionLoading" class="empty">正在加载权限配置…</div>
+                <div v-if="permissionUsersLoading || permissionProfileLoading" class="empty">正在加载权限配置…</div>
+                <div v-else-if="permissionError" class="empty">
+                  <div class="status red" style="display:inline-block;margin-bottom:10px">{{ permissionError }}</div>
+                  <div><button class="btn" @click="loadPermissionProfile(selectedPermissionUserId)" :disabled="!selectedPermissionUserId || permissionSaving">重新读取</button></div>
+                </div>
                 <div v-else-if="!permissionProfile" class="empty">请选择用户后配置权限。</div>
                 <template v-else>
+                  <div v-if="permissionSaveError" class="status red" style="display:block;margin-bottom:12px">{{ permissionSaveError }}</div>
                   <div class="section-title">功能权限</div>
                   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px;margin:12px 0 18px">
                     <div v-for="group in permissionGroups" :key="group.key" class="panel" style="padding:10px;margin:0">
                       <strong>{{ group.label }}</strong>
                       <label v-for="item in group.items" :key="item.code" style="display:flex;align-items:flex-start;gap:8px;padding:9px 0;border-top:1px solid var(--line);font-size:14px">
-                        <input type="checkbox" :checked="!!permissionDraft.permissions[item.code]" :disabled="item.locked" @change="permissionDraft.permissions[item.code] = $event.target.checked" />
+                        <input type="checkbox" :checked="!!permissionDraft.permissions[item.code]" :disabled="item.locked || permissionSaving" @change="permissionDraft.permissions[item.code] = $event.target.checked" />
                         <span><strong>{{ item.name }}</strong><span class="muted" style="display:block;font-size:12px">{{ item.code }} · 默认{{ permissionDefaultAllowed(item) ? '允许' : '禁止' }}</span></span>
                       </label>
                     </div>
@@ -3036,18 +3048,18 @@
                   <div class="section-title">客户范围</div>
                   <div v-if="permissionProfile.customer_scope_locked" class="status blue" style="display:block;margin:12px 0">管理员与老板角色固定可访问全部客户。</div>
                   <div v-if="!permissionProfile.customer_scope_locked" class="toolbar-group" style="padding:12px 0">
-                    <label><input type="radio" value="all" v-model="permissionDraft.customer_access_mode" /> 全部客户</label>
-                    <label><input type="radio" value="selected" v-model="permissionDraft.customer_access_mode" /> 指定客户</label>
+                    <label><input type="radio" value="all" v-model="permissionDraft.customer_access_mode" :disabled="permissionSaving" /> 全部客户</label>
+                    <label><input type="radio" value="selected" v-model="permissionDraft.customer_access_mode" :disabled="permissionSaving" /> 指定客户</label>
                   </div>
                   <div v-if="!permissionProfile.customer_scope_locked && permissionDraft.customer_access_mode === 'selected' && !permissionDraft.customer_ids.length" class="status orange" style="display:block;margin:0 0 10px">当前未选择客户；保存后该账号将看不到任何客户业务数据。</div>
                   <div v-if="!permissionProfile.customer_scope_locked && permissionDraft.customer_access_mode === 'selected'" class="toolbar-group" style="align-items:flex-start;max-height:280px;overflow:auto;padding:10px 0">
                     <label v-for="customer in activeCustomerOptions" :key="customer.id" style="display:flex;align-items:center;gap:7px;min-width:240px;padding:6px 10px;border:1px solid var(--line);border-radius:8px">
-                      <input type="checkbox" :checked="permissionDraft.customer_ids.includes(customer.id)" @change="togglePermissionCustomer(customer.id, $event.target.checked)" />
+                      <input type="checkbox" :checked="permissionDraft.customer_ids.includes(customer.id)" :disabled="permissionSaving" @change="togglePermissionCustomer(customer.id, $event.target.checked)" />
                       <span>{{ customer.customer_number || customer.id }} · {{ customer.name }}</span>
                     </label>
                   </div>
                   <div class="toolbar-group" style="justify-content:flex-end;margin-top:18px">
-                    <button class="btn primary" @click="savePermissionAccess" :disabled="permissionLoading">保存权限与客户范围</button>
+                    <button class="btn primary" @click="savePermissionAccess" :disabled="permissionProfileLoading || permissionSaving || !permissionProfile || Number(permissionProfile.user_id) !== Number(selectedPermissionUserId)">{{ permissionSaving ? '正在保存…' : '保存权限与客户范围' }}</button>
                   </div>
                 </template>
               </div>
@@ -3070,6 +3082,19 @@
 
             <template v-else-if="activePage === 'system'">
               <page-head title="系统设置" desc="管理员可管理账号临时密码及 NAS 数据备份。"></page-head>
+              <div class="toolbar" style="margin-bottom:12px;justify-content:flex-start">
+                <button :class="['btn',systemSection==='basic'?'primary':'']" @click="selectSystemSection('basic')">账号与公司</button>
+                <button :class="['btn',systemSection==='print'?'primary':'']" @click="selectSystemSection('print')">打印设置</button>
+                <button :class="['btn',systemSection==='backup'?'primary':'']" @click="selectSystemSection('backup')">数据备份</button>
+                <button :class="['btn',systemSection==='pdf'?'primary':'']" @click="selectSystemSection('pdf')">PDF 识别管理</button>
+              </div>
+              <div v-if="systemSectionLoading[systemSection]" class="empty">正在读取{{ systemSectionLabel(systemSection) }}…</div>
+              <div v-else-if="systemSectionErrors[systemSection]" class="notice danger">
+                {{ systemSectionErrors[systemSection] }}
+                <button class="btn small" @click="retrySystemSection">重新加载</button>
+              </div>
+
+              <template v-if="systemSection === 'basic' && (systemSectionLoaded.basic || (!systemSectionLoading.basic && !systemSectionErrors.basic))">
               <div class="panel" style="margin-bottom:10px">
                 <div class="section-title">用户与密码</div>
                 <div class="table-wrap"><table><thead><tr><th>用户名</th><th>姓名</th><th>角色</th><th>首次登录改密</th><th>操作</th></tr></thead>
@@ -3137,11 +3162,13 @@
                     </ol>
                   </div>
                 </div>
-                <div v-if="versionMajorGroups.length" style="margin-top:12px">
-                  <button class="btn small" @click="showVersionHistory=!showVersionHistory">
-                    {{ showVersionHistory ? '收起历史版本' : '查看历史版本' }}
+                <div v-if="versionInfo.version" style="margin-top:12px">
+                  <button class="btn small" :disabled="versionHistoryLoading" @click="toggleSystemVersionHistory">
+                    {{ versionHistoryLoading ? '正在读取…' : (showVersionHistory ? '收起历史版本' : '查看历史版本') }}
                   </button>
+                  <span v-if="versionHistoryError" class="danger-text" style="margin-left:8px">{{ versionHistoryError }}</span>
                   <div v-if="showVersionHistory" style="margin-top:8px;display:flex;flex-direction:column;gap:8px">
+                    <div v-if="!versionMajorGroups.length" class="empty">暂无历史版本记录</div>
                     <div v-for="group in versionMajorGroups" :key="group.key" style="border:1px solid #e5e7eb;border-radius:10px;padding:10px 12px;background:#fff">
                       <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
                         <div style="display:flex;flex-wrap:wrap;gap:8px 12px;align-items:baseline">
@@ -3163,7 +3190,9 @@
                   </div>
                 </div>
               </div>
-              <div class="section-title">数据备份</div>
+              </template>
+
+              <template v-if="systemSection === 'print' && (systemSectionLoaded.print || (!systemSectionLoading.print && !systemSectionErrors.print))">
               <div class="section-title" style="margin-top:16px">送货单打印纸张</div>
               <div class="panel" style="margin-bottom:10px;padding:12px 16px">
                 <div style="display:flex;flex-wrap:wrap;gap:12px 18px;align-items:end">
@@ -3183,6 +3212,10 @@
                 </div>
                 <div class="muted" style="font-size:12px;margin-top:8px">该打印档案保存在 ERP 服务器，所有电脑自动读取同一型号和尺寸。默认 EPSON SK820、241 × 139.5mm；宽是两侧针孔之间的横向纸宽，高是相邻横向撕纸线之间的走纸高度，不要交换宽高。为避免新 ERP 再旋转 90°，纸张物理方向沿用实际打印电脑已安装的打印机驱动，与旧 ERP 的正常打印方式一致。</div>
               </div>
+              </template>
+
+              <template v-if="systemSection === 'backup' && (systemSectionLoaded.backup || (!systemSectionLoading.backup && !systemSectionErrors.backup))">
+              <div class="section-title">数据备份</div>
               <div class="panel" style="margin-bottom:10px;padding:12px 16px">
                 <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center;font-size:14px">
                   <span><strong>备份位置：</strong>{{ backupStats.location_type === 'nas' ? 'NAS 网络存储' : '本地磁盘' }}</span>
@@ -3191,12 +3224,14 @@
                   <span>受保护 <strong>{{ backupStats.protected_count || 0 }}</strong> 个 · 可清理 <strong style="color:#dc2626">{{ backupStats.deletable_count || 0 }}</strong> 个</span>
                 </div>
               </div>
+              <div v-if="backupListError" class="notice danger" style="margin-bottom:10px">{{ backupListError }} <button class="btn small" @click="loadBackups()" :disabled="backupAction || backupListLoading || loading">重新加载</button></div>
               <div class="toolbar">
-                <button class="btn primary" @click="createBackup" :disabled="loading">立即备份</button>
-                <button class="btn" @click="loadBackups">刷新列表</button>
-                <button v-if="(backupStats.deletable_count || 0) > 0" class="btn danger" @click="previewCleanup">一键清理旧备份…</button>
+                <button class="btn primary" @click="createBackup" :disabled="backupAction || backupListLoading || loading">{{ backupAction === 'create' ? '正在备份…' : '立即备份' }}</button>
+                <button class="btn" @click="loadBackups()" :disabled="backupAction || backupListLoading || loading">{{ backupListLoading ? '正在刷新…' : '刷新列表' }}</button>
+                <button v-if="(backupStats.deletable_count || 0) > 0" class="btn danger" @click="previewCleanup" :disabled="backupAction || backupListLoading || loading">{{ backupAction === 'preview' ? '正在检查…' : '一键清理旧备份…' }}</button>
               </div>
-              <data-panel :empty="!backups.length">
+              <div v-if="backupListLoading" class="panel empty">正在读取备份列表…</div>
+              <data-panel v-else :empty="!backups.length">
                 <table><thead><tr><th>文件名</th><th>创建时间（北京时间）</th><th>大小</th><th>状态</th><th>操作</th></tr></thead>
                 <tbody><tr v-for="row in backups" :key="row.filename">
                   <td style="font-size:12px;word-break:break-all">{{ row.filename }}</td>
@@ -3205,14 +3240,14 @@
                   <td><span :class="row.is_protected ? 'status green' : 'status'">{{ row.is_protected ? '已保护' : '可删除' }}</span></td>
                   <td>
                     <button v-if="row.is_protected" class="btn small" disabled title="最新5个备份受保护">已保护</button>
-                    <button v-else class="btn small danger" @click="deleteBackup(row)">删除</button>
+                    <button v-else class="btn small danger" @click="deleteBackup(row)" :disabled="backupAction || backupListLoading || loading">{{ backupAction === 'delete' ? '处理中…' : '删除' }}</button>
                   </td>
                 </tr></tbody></table>
               </data-panel>
               <!-- 清理预览弹层 -->
-              <div v-if="showCleanupPreview" class="modal-mask" @click.self="showCleanupPreview=false">
+              <div v-if="showCleanupPreview" class="modal-mask" @click.self="closeBackupCleanupPreview">
                 <div class="modal" style="max-width:700px">
-                  <div class="modal-head"><strong>清理旧备份 — 预览</strong><button class="btn small" @click="showCleanupPreview=false">关闭</button></div>
+                  <div class="modal-head"><strong>清理旧备份 — 预览</strong><button class="btn small" @click="closeBackupCleanupPreview" :disabled="backupAction || backupListLoading || loading">关闭</button></div>
                   <div class="modal-body">
                     <div v-if="backupCleanupPreview" style="margin-bottom:12px">
                       <div class="status orange" style="display:block;margin-bottom:10px">将删除 {{ backupCleanupPreview.deletable_count }} 个旧备份，释放约 {{ fileSize(backupCleanupPreview.freed_size) }}。以下 {{ backupCleanupPreview.will_keep.length }} 个备份将被保留：</div>
@@ -3225,12 +3260,13 @@
                       </table>
                     </div>
                     <div class="toolbar-group" style="justify-content:flex-end">
-                      <button class="btn" @click="showCleanupPreview=false">取消</button>
-                      <button class="btn danger" @click="confirmCleanup" :disabled="loading">确认删除旧备份</button>
+                      <button class="btn" @click="closeBackupCleanupPreview" :disabled="backupAction || backupListLoading || loading">取消</button>
+                      <button class="btn danger" @click="confirmCleanup" :disabled="backupAction || backupListLoading || loading">{{ backupAction === 'cleanup' ? '正在清理…' : '确认删除旧备份' }}</button>
                     </div>
                   </div>
                 </div>
               </div>
+              </template>
 
               <template v-if="false">
               <!-- ── 材质映射审批 ── -->
@@ -3337,6 +3373,7 @@
               </div>
               </template>
 
+              <template v-if="systemSection === 'pdf' && (systemSectionLoaded.pdf || (!systemSectionLoading.pdf && !systemSectionErrors.pdf))">
               <!-- ── PDF 识别训练库 (Phase 18) ── -->
               <div class="section-title" style="margin-top:24px">PDF 订单识别训练库</div>
               <div class="panel" style="margin-bottom:10px;padding:14px 18px">
@@ -3434,7 +3471,7 @@
                 </div>
 
                 <!-- PDF 客户模板生命周期：保留旧能力，但默认折叠给普通操作员 -->
-                <details class="pdf-admin-advanced" style="margin-top:20px">
+                <details class="pdf-admin-advanced" style="margin-top:20px" @toggle="onPdfAdvancedToggle">
                   <summary class="section-title" style="cursor:pointer;list-style-position:inside">管理员高级设置（一般操作无需使用）</summary>
                   <div class="section-title" style="margin-top:12px">客户 PDF 模板生命周期</div>
                   <div class="panel" style="padding:14px 18px">
@@ -3510,6 +3547,7 @@
                   </div>
                 </details>
               </div>
+              </template>
             </template>
           </main>
         </div>
@@ -3545,13 +3583,15 @@
               </template>
             </div>
             <div v-else-if="modal.type === 'invoiceTask'">
-              <div v-if="!invoiceTaskDetail" class="empty">正在读取任务预览…</div>
-              <template v-else><div class="notice"><strong>冻结快照只读：</strong>购方、销方、明细和金额如需变化，必须作废旧任务并基于最新对账版本重新生成。</div><div class="form-grid" style="margin-top:10px"><div class="field"><label>购方</label><div>{{ invoiceTaskDetail.customer_name || '-' }}</div></div><div class="field"><label>销方</label><div>{{ invoiceTaskDetail.seller_name || '-' }}</div></div><div class="field"><label>状态 / 版本</label><div>{{ invoiceTaskStatusText(invoiceTaskDetail.status) }} / v{{ invoiceTaskDetail.version || '-' }}</div></div><div class="field"><label>价税合计</label><div class="sensitive-price">¥ {{ money(invoiceTaskDetail.total_amount) }}</div></div></div><div v-if="(invoiceTaskDetail.missing_items||[]).length" class="notice danger" style="margin-top:10px">缺项：{{ invoiceTaskDetail.missing_items.join('；') }}</div><div v-else class="table-wrap" style="margin-top:10px"><table><thead><tr><th>项目</th><th>税收分类编码</th><th>规格</th><th>数量</th><th class="sensitive-price">金额 / 税率</th></tr></thead><tbody><tr v-for="item in (invoiceTaskDetail.items||[])" :key="item.id || item.sequence"><td>{{ item.project_name || '-' }}</td><td>{{ item.tax_category_code || '-' }}</td><td>{{ item.specification || '-' }}</td><td>{{ item.quantity || '-' }}</td><td class="sensitive-price">¥{{ money(item.amount) }} / {{ item.tax_rate || '-' }}</td></tr></tbody></table></div></template>
+              <div v-if="invoiceTaskOperationState.detailLoading" class="empty">正在读取任务预览…</div>
+              <div v-else-if="invoiceTaskOperationState.detailError" class="empty"><div class="notice danger" style="margin-bottom:10px">任务预览读取失败：{{ invoiceTaskOperationState.detailError }}</div><button class="btn" type="button" @click="retryInvoiceTaskDetail">重新读取</button></div>
+              <template v-else-if="invoiceTaskDetail"><div class="notice"><strong>冻结快照只读：</strong>购方、销方、明细和金额如需变化，必须作废旧任务并基于最新对账版本重新生成。</div><div class="form-grid" style="margin-top:10px"><div class="field"><label>购方</label><div>{{ invoiceTaskDetail.customer_name || '-' }}</div></div><div class="field"><label>销方</label><div>{{ invoiceTaskDetail.seller_name || '-' }}</div></div><div class="field"><label>状态 / 版本</label><div>{{ invoiceTaskStatusText(invoiceTaskDetail.status) }} / v{{ invoiceTaskDetail.version || '-' }}</div></div><div class="field"><label>价税合计</label><div class="sensitive-price">¥ {{ money(invoiceTaskDetail.total_amount) }}</div></div></div><div v-if="(invoiceTaskDetail.missing_items||[]).length" class="notice danger" style="margin-top:10px">缺项：{{ invoiceTaskDetail.missing_items.join('；') }}</div><div v-else class="table-wrap" style="margin-top:10px"><table><thead><tr><th>项目</th><th>税收分类编码</th><th>规格</th><th>数量</th><th class="sensitive-price">金额 / 税率</th></tr></thead><tbody><tr v-for="item in (invoiceTaskDetail.items||[])" :key="item.id || item.sequence"><td>{{ item.project_name || '-' }}</td><td>{{ item.tax_category_code || '-' }}</td><td>{{ item.specification || '-' }}</td><td>{{ item.quantity || '-' }}</td><td class="sensitive-price">¥{{ money(item.amount) }} / {{ item.tax_rate || '-' }}</td></tr></tbody></table></div></template>
+              <div v-else class="empty">暂无可显示的任务详情。</div>
             </div>
             <div v-else-if="modal.type === 'invoiceTaskResult'">
-              <div class="notice">下载 Excel 不等于开票成功；请在税局人工上传、核对并正式开具后，再登记结果。</div><div class="form-grid" style="margin-top:10px"><div class="field"><label>结果</label><select class="select" v-model="invoiceTaskResult.status"><option value="issued">开票成功</option><option value="failed">税局导入/开具失败</option></select></div><div v-if="invoiceTaskResult.status==='issued'" class="field"><label>发票号码</label><input class="input" v-model.trim="invoiceTaskResult.invoice_number" /></div><div v-if="invoiceTaskResult.status==='issued'" class="field"><label>开票日期</label><input class="input" type="date" v-model="invoiceTaskResult.invoice_date" /></div><div v-if="invoiceTaskResult.status==='failed'" class="field wide"><label>失败原因</label><input class="input" v-model.trim="invoiceTaskResult.failure_reason" placeholder="请如实登记税局返回信息" /></div></div><div class="toolbar-group" style="margin-top:12px"><button class="btn primary" @click="saveInvoiceTaskResult">确认登记</button></div>
+              <div class="notice">下载 Excel 不等于开票成功；请在税局人工上传、核对并正式开具后，再登记结果。</div><fieldset :disabled="invoiceTaskOperationState.resultSaving" style="border:0;padding:0;margin:0;min-width:0"><div class="form-grid" style="margin-top:10px"><div class="field"><label>结果</label><select class="select" v-model="invoiceTaskResult.status"><option value="issued">开票成功</option><option value="failed">税局导入/开具失败</option></select></div><div v-if="invoiceTaskResult.status==='issued'" class="field"><label>发票号码</label><input class="input" v-model.trim="invoiceTaskResult.invoice_number" /></div><div v-if="invoiceTaskResult.status==='issued'" class="field"><label>开票日期</label><input class="input" type="date" v-model="invoiceTaskResult.invoice_date" /></div><div v-if="invoiceTaskResult.status==='failed'" class="field wide"><label>失败原因</label><input class="input" v-model.trim="invoiceTaskResult.failure_reason" placeholder="请如实登记税局返回信息" /></div></div></fieldset><div class="toolbar-group" style="margin-top:12px"><button class="btn primary" :disabled="invoiceTaskOperationState.resultSaving" @click="saveInvoiceTaskResult">{{ invoiceTaskOperationState.resultSaving ? '登记中…' : '确认登记' }}</button></div>
             </div>
-            <div v-else-if="modal.type === 'invoiceSellers'"><div class="notice">仅维护两个销方主体的已确认资料；不会自动变更客户默认销方。</div><div class="form-grid" style="margin-top:10px"><div class="field"><label>销方名称</label><input class="input" v-model.trim="invoiceSellerForm.seller_name" /></div><div class="field"><label>纳税人识别号</label><input class="input" v-model.trim="invoiceSellerForm.tax_no" /></div><div class="field"><label>地址电话</label><input class="input" v-model.trim="invoiceSellerForm.address_phone" /></div><div class="field"><label>开户行及账号</label><input class="input" v-model.trim="invoiceSellerForm.bank_account" /></div><div class="field"><label>状态</label><select class="select" v-model="invoiceSellerForm.is_active"><option :value="true">启用</option><option :value="false">停用</option></select></div></div><button class="btn primary" style="margin-top:8px" @click="saveInvoiceSeller">{{ invoiceSellerForm.id?'保存销方':'新增销方' }}</button><div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>销方</th><th>税号</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="seller in invoiceSellers" :key="seller.id"><td>{{ seller.seller_name || seller.name }}</td><td>{{ seller.tax_no || '-' }}</td><td>{{ seller.is_active===false?'停用':'启用' }}</td><td><button class="btn small" @click="editInvoiceSeller(seller)">编辑</button></td></tr></tbody></table></div></div>
+            <div v-else-if="modal.type === 'invoiceSellers'"><div class="notice">仅维护两个销方主体的已确认资料；不会自动变更客户默认销方。</div><div v-if="invoiceSellerState.loading" class="empty">正在读取销方主体…</div><div v-else-if="invoiceSellerState.error" class="empty"><div class="notice danger" style="margin-bottom:10px">销方主体读取失败：{{ invoiceSellerState.error }}</div><button class="btn" type="button" @click="loadInvoiceSellers">重新加载</button></div><template v-else><fieldset :disabled="!invoiceSellerState.loaded || invoiceSellerState.saving" style="border:0;padding:0;margin:0;min-width:0"><div class="form-grid" style="margin-top:10px"><div class="field"><label>销方名称</label><input class="input" v-model.trim="invoiceSellerForm.seller_name" /></div><div class="field"><label>纳税人识别号</label><input class="input" v-model.trim="invoiceSellerForm.tax_no" /></div><div class="field"><label>地址电话</label><input class="input" v-model.trim="invoiceSellerForm.address_phone" /></div><div class="field"><label>开户行及账号</label><input class="input" v-model.trim="invoiceSellerForm.bank_account" /></div><div class="field"><label>状态</label><select class="select" v-model="invoiceSellerForm.is_active"><option :value="true">启用</option><option :value="false">停用</option></select></div></div></fieldset><button class="btn primary" style="margin-top:8px" :disabled="!invoiceSellerState.loaded || invoiceSellerState.saving" @click="saveInvoiceSeller">{{ invoiceSellerState.saving ? '保存中…' : (invoiceSellerForm.id?'保存销方':'新增销方') }}</button><div v-if="!invoiceSellers.length" class="empty">暂无销方主体，可在上方新增。</div><div v-else class="table-wrap" style="margin-top:12px"><table><thead><tr><th>销方</th><th>税号</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="seller in invoiceSellers" :key="seller.id"><td>{{ seller.seller_name || seller.name }}</td><td>{{ seller.tax_no || '-' }}</td><td>{{ seller.is_active===false?'停用':'启用' }}</td><td><button class="btn small" :disabled="invoiceSellerState.saving" @click="editInvoiceSeller(seller)">编辑</button></td></tr></tbody></table></div></template></div>
             <div v-else-if="modal.type === 'customer'">
               <div v-if="customerForm.id && !canEditCustomers" class="notice readonly-hint">当前为只读查看；客户资料控件已禁用。</div>
               <fieldset class="form-grid" :class="'readonly-fieldset'" :disabled="!!customerForm.id && !canEditCustomers">
@@ -3567,7 +3607,7 @@
                 <div class="field"><label>状态</label><select class="select" v-model="customerForm.status"><option value="active">启用</option><option value="inactive">停用</option></select></div>
                 <div class="field wide"><label>备注</label><textarea class="textarea" v-model="customerForm.remark"></textarea></div>
               </fieldset>
-              <section v-if="customerForm.id && canManageInvoiceProfiles" class="panel" style="margin:10px 0 0;padding:10px"><div class="toolbar"><strong>开票 / 税务资料</strong><span :class="['status',customerInvoiceProfile.confirmation_status==='confirmed'?'green':'orange']">{{ customerInvoiceProfile.confirmation_status==='confirmed'?'已确认':'待确认' }}</span><button class="btn small" @click="loadCustomerInvoiceProfile(customerForm.id)">刷新</button></div><div v-if="customerInvoiceProfile.error" class="danger-text">{{ customerInvoiceProfile.error }}</div><div class="form-grid" style="margin-top:8px"><div class="field"><label>开票抬头</label><input class="input" v-model.trim="customerInvoiceProfile.invoice_title" /></div><div class="field"><label>税号</label><input class="input" v-model.trim="customerInvoiceProfile.tax_no" /></div><div class="field"><label>开票地址电话</label><input class="input" v-model.trim="customerInvoiceProfile.invoice_address_phone" /></div><div class="field"><label>开户行及账号</label><input class="input" v-model.trim="customerInvoiceProfile.bank_account" /></div><div class="field"><label>默认销方</label><select class="select" v-model.number="customerInvoiceProfile.default_seller_id"><option :value="null">请选择已维护销方</option><option v-for="seller in invoiceSellers.filter(row=>row.is_active!==false)" :key="seller.id" :value="seller.id">{{ seller.seller_name || seller.name }}</option></select></div></div><div class="toolbar-group" style="margin-top:8px"><button class="btn small primary" @click="saveCustomerInvoiceProfile">保存税务资料</button></div><div class="panel" style="margin-top:10px;padding:8px"><strong>客户默认开票项目规则</strong><div class="form-grid" style="margin-top:7px"><div class="field"><label>项目名称</label><input class="input" v-model.trim="customerInvoiceRule.project_name" /></div><div class="field"><label>税收分类编码</label><input class="input" v-model.trim="customerInvoiceRule.tax_category_code" /></div><div class="field"><label>单位</label><input class="input" v-model.trim="customerInvoiceRule.unit" /></div><div class="field"><label>税率</label><input class="input" type="number" min="0" step="0.01" v-model="customerInvoiceRule.tax_rate" /></div><div class="field"><label>确认状态</label><select class="select" v-model="customerInvoiceRule.confirmation_status"><option value="draft">待确认</option><option value="confirmed">已确认</option></select></div></div><button class="btn small primary" style="margin-top:7px" @click="saveCustomerInvoiceRule">保存默认规则</button></div><div class="muted" style="margin-top:5px">普通联系人地址、电话不会自动带入开票资料；必须由财务确认。</div></section>
+              <section v-if="customerForm.id && canManageInvoiceProfiles" class="panel" style="margin:10px 0 0;padding:10px"><div class="toolbar"><strong>开票 / 税务资料</strong><span v-if="customerInvoiceState.profileLoading" class="status blue">税务资料读取中</span><span v-else :class="['status',customerInvoiceProfile.confirmation_status==='confirmed'?'green':'orange']">{{ customerInvoiceProfile.confirmation_status==='confirmed'?'已确认':'待确认' }}</span><button class="btn small" :disabled="customerInvoiceState.profileLoading || customerInvoiceState.profileSaving" @click="loadCustomerInvoiceProfile(customerForm.id)">{{ customerInvoiceState.profileLoading ? '读取中…' : '刷新' }}</button></div><div v-if="customerInvoiceProfile.error" class="notice danger">{{ customerInvoiceProfile.error }} <button class="btn small" type="button" @click="loadCustomerInvoiceProfile(customerForm.id)">重新读取税务资料</button></div><fieldset class="form-grid" style="margin-top:8px" :disabled="customerInvoiceState.profileLoading || customerInvoiceState.profileSaving || !!customerInvoiceProfile.error || Number(customerInvoiceState.profileLoadedCustomerId)!==Number(customerForm.id)"><div class="field"><label>开票抬头</label><input class="input" v-model.trim="customerInvoiceProfile.invoice_title" /></div><div class="field"><label>税号</label><input class="input" v-model.trim="customerInvoiceProfile.tax_no" /></div><div class="field"><label>开票地址电话</label><input class="input" v-model.trim="customerInvoiceProfile.invoice_address_phone" /></div><div class="field"><label>开户行及账号</label><input class="input" v-model.trim="customerInvoiceProfile.bank_account" /></div><div class="field"><label>默认销方</label><select class="select" v-model.number="customerInvoiceProfile.default_seller_id"><option :value="null">请选择已维护销方</option><option v-for="seller in invoiceSellers.filter(row=>row.is_active!==false)" :key="seller.id" :value="seller.id">{{ seller.seller_name || seller.name }}</option></select></div></fieldset><div class="toolbar-group" style="margin-top:8px"><button class="btn small primary" :disabled="customerInvoiceState.profileLoading || customerInvoiceState.profileSaving || !!customerInvoiceProfile.error || Number(customerInvoiceState.profileLoadedCustomerId)!==Number(customerForm.id)" @click="saveCustomerInvoiceProfile">{{ customerInvoiceState.profileSaving ? '税务资料保存中…' : '保存税务资料' }}</button></div><div class="panel" style="margin-top:10px;padding:8px"><div class="toolbar"><strong>客户默认开票项目规则</strong><span v-if="customerInvoiceState.ruleLoading" class="status blue">默认规则读取中</span><button class="btn small" :disabled="customerInvoiceState.ruleLoading || customerInvoiceState.ruleSaving" @click="loadCustomerInvoiceRule(customerForm.id)">{{ customerInvoiceState.ruleLoading ? '读取中…' : '刷新' }}</button></div><div v-if="customerInvoiceRule.error" class="notice danger">{{ customerInvoiceRule.error }} <button class="btn small" type="button" @click="loadCustomerInvoiceRule(customerForm.id)">重新读取默认规则</button></div><fieldset class="form-grid" style="margin-top:7px" :disabled="customerInvoiceState.ruleLoading || customerInvoiceState.ruleSaving || !!customerInvoiceRule.error || Number(customerInvoiceState.ruleLoadedCustomerId)!==Number(customerForm.id)"><div class="field"><label>项目名称</label><input class="input" v-model.trim="customerInvoiceRule.project_name" /></div><div class="field"><label>税收分类编码</label><input class="input" v-model.trim="customerInvoiceRule.tax_category_code" /></div><div class="field"><label>单位</label><input class="input" v-model.trim="customerInvoiceRule.unit" /></div><div class="field"><label>税率</label><input class="input" type="number" min="0" step="0.01" v-model="customerInvoiceRule.tax_rate" /></div><div class="field"><label>确认状态</label><select class="select" v-model="customerInvoiceRule.confirmation_status"><option value="draft">待确认</option><option value="confirmed">已确认</option></select></div></fieldset><button class="btn small primary" style="margin-top:7px" :disabled="customerInvoiceState.ruleLoading || customerInvoiceState.ruleSaving || !!customerInvoiceRule.error || Number(customerInvoiceState.ruleLoadedCustomerId)!==Number(customerForm.id)" @click="saveCustomerInvoiceRule">{{ customerInvoiceState.ruleSaving ? '默认规则保存中…' : '保存默认规则' }}</button></div><div class="muted" style="margin-top:5px">普通联系人地址、电话不会自动带入开票资料；必须由财务确认。</div></section>
               <section class="customer-pricing-preferences">
                 <div class="toolbar" style="margin:0 0 7px"><strong>客户报价偏好</strong><span class="muted">按箱型、层数、楞型和供应商维护已确认材质及含税客户平方价。</span></div>
                 <div v-if="!customerForm.id" class="muted">请先保存客户基本资料，再维护报价偏好。</div>
@@ -5235,12 +5275,12 @@
             </div>
             <div v-else-if="modal.type === 'delivery'">
               <div class="form-grid">
-                <div class="field"><label>客户</label><select class="select" v-model.number="deliveryForm.customer_id" :disabled="!!deliveryForm.editingId" @change="onDeliveryCustomerChange"><option :value="null">请选择客户</option><option v-for="c in deliveryCustomerOptions" :key="c.id" :value="c.id">{{ c.name }}</option></select><div v-if="!deliveryForm.editingId && !deliveryCandidateLoading && !deliveryCustomerOptions.length" class="muted">当前没有待送货客户</div></div>
+                <div class="field"><label>客户</label><search-select v-model="deliveryForm.customer_id" :options="deliveryCustomerOptions" label-key="_delivery_label" value-key="id" placeholder="输入客户名称、缩写或拼音首字母" :disabled="!!deliveryForm.editingId || deliveryCandidateLoading" @change="onDeliveryCustomerChange"></search-select><div v-if="!deliveryForm.editingId && deliveryCandidateLoading" class="muted">正在加载可送货客户…</div><div v-else-if="!deliveryForm.editingId && !deliveryCustomerOptions.length" class="muted">当前没有待送订单或可送成品库存</div></div>
                 <div class="field"><label>送货日期</label><input class="input" type="date" v-model="deliveryForm.delivery_date" /></div>
                 <div class="field"><label>车号</label><input class="input" v-model.trim="deliveryForm.vehicle_number" /></div>
               </div>
               <div v-if="deliveryForm.editingId" class="status blue" style="margin-bottom:10px">
-                草稿已保存。打印只打开送货单，不会确认发货或扣减库存。
+                草稿已保存。可推送手机拿货，或直接发货并打印。
               </div>
               <div class="toolbar-group" style="margin-bottom:10px">
                 <span class="muted">送货来源</span>
@@ -5249,20 +5289,18 @@
                 <span v-if="deliverySourceModeFromLines(deliveryForm.lines.filter(line => deliveryLineHasInput(line))) === 'mixed'" class="status blue">本单混合两类来源</span>
               </div>
               <div v-if="deliveryForm.source_tab === 'order'" class="toolbar-group" style="margin-bottom:10px">
-                <button class="btn small" type="button" @click="addDeliveryLines(1)">新增一行</button>
-                <button class="btn small" type="button" @click="addDeliveryLines(5)">新增5行</button>
-                <button class="btn small success" type="button" @click="toggleDeliveryBatchPicker()">批量选择待送货</button>
-                <span class="muted">先选客户，导入后直接修改本次送货数量。</span>
+                <button class="btn small success" type="button" @click="toggleDeliveryBatchPicker()">选择待送订单</button>
+                <span class="muted">先选客户，再按页快速载入待送订单。</span>
               </div>
               <div v-else class="toolbar-group" style="margin-bottom:10px">
                 <button class="btn small success" type="button" :disabled="!deliveryForm.customer_id" @click="toggleUnorderedFinishedPicker">选择客户专用库存</button>
                 <span class="muted">订单待送必须先全部加入；无订单库存只补不足数量。</span>
               </div>
-              <div v-if="deliveryForm.source_tab === 'order' && !deliveryCustomers.length" class="status orange" style="margin-bottom:10px">当前没有可送货客户。只有已入库，或已被成品库存全额预占，且仍有未送数量的订单明细才能生成送货单。</div>
+              <div v-if="deliveryForm.source_tab === 'order' && !deliveryCustomerOptions.length" class="status orange" style="margin-bottom:10px">当前没有可送货客户。只有已入库，或已被成品库存全额预占，且仍有未送数量的订单明细才能生成送货单。</div>
               <div v-else-if="!deliveryForm.customer_id" class="status orange" style="margin-bottom:10px">请先选择客户，再选择可送货产品。</div>
               <div v-if="deliveryForm.source_tab === 'order' && deliveryBatchPicker.visible" class="panel" style="margin-bottom:12px">
                 <div class="toolbar delivery-batch-picker-toolbar" style="margin-bottom:8px">
-                  <div class="section-title" style="margin:0">批量选择待送货</div>
+                  <div class="section-title" style="margin:0">选择待送订单</div>
                   <div class="toolbar-group delivery-batch-picker-tools">
                     <input class="input" style="width:260px" v-model.trim="deliveryBatchPicker.keyword" placeholder="搜索存货编码 / 客户单号 / 产品名称" @keyup.enter.prevent="loadDeliveryBatchItems(1)" />
                     <button class="btn small" type="button" @click="loadDeliveryBatchItems(1)">{{ deliveryBatchPicker.loading ? "查询中..." : "查询" }}</button>
@@ -5274,9 +5312,11 @@
                   </div>
                 </div>
                 <div v-if="deliveryBatchPicker.message" :class="deliveryBatchPicker.error ? 'status orange' : 'muted'" style="display:block;margin-bottom:8px">{{ deliveryBatchPicker.message }}</div>
-                <table><thead><tr><th>选择</th><th>存货编码</th><th>产品名称</th><th>规格</th><th>材质</th><th>订单号 / 客户单号</th><th>未送数量</th><th>交期</th></tr></thead><tbody><tr v-for="item in deliveryBatchFilteredItems()" :key="item.order_item_id"><td><span v-if="isDeliveryItemAlreadyInForm(item.order_item_id)" class="muted">已在单中</span><input v-else type="checkbox" :checked="!!deliveryBatchPicker.selected[item.order_item_id]" @change="setDeliveryBatchSelection(item, $event.target.checked)" /></td><td>{{ item.product_code || "-" }}</td><td>{{ item.product_name || "-" }}</td><td>{{ item.specification || "-" }}</td><td>{{ item.material_display || "-" }}</td><td>{{ displayOrderNumber(item) }}<div class="muted">{{ item.customer_po || "-" }}</div><div v-if="inventorySourcesText(item.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(item.inventory_sources) }}</div></td><td>{{ item.remaining_quantity || 0 }}</td><td>{{ item.delivery_date || "-" }}</td></tr></tbody></table>
+                <div v-if="deliveryBatchPicker.loading" class="empty">正在加载待送订单…</div>
+                <table v-else><thead><tr><th>选择</th><th>存货编码</th><th>产品名称</th><th>规格</th><th>材质</th><th>订单号 / 客户单号</th><th>未送数量</th><th>交期</th></tr></thead><tbody><tr v-for="item in deliveryBatchFilteredItems()" :key="item.order_item_id"><td><span v-if="isDeliveryItemAlreadyInForm(item.order_item_id)" class="muted">已在单中</span><input v-else type="checkbox" :checked="!!deliveryBatchPicker.selected[item.order_item_id]" @change="setDeliveryBatchSelection(item, $event.target.checked)" /></td><td>{{ item.product_code || "-" }}</td><td>{{ item.product_name || "-" }}</td><td>{{ item.specification || "-" }}</td><td>{{ item.material_display || "-" }}</td><td>{{ displayOrderNumber(item) }}<div class="muted">{{ item.customer_po || "-" }}</div><div v-if="inventorySourcesText(item.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(item.inventory_sources) }}</div></td><td>{{ item.remaining_quantity || 0 }}</td><td>{{ item.delivery_date || "-" }}</td></tr></tbody></table>
               </div>
-              <table v-else-if="deliveryForm.source_tab === 'order'"><thead><tr><th>搜索存货编码 / 客户单号 / 产品名称</th><th>订单号 / 客户单号</th><th>产品</th><th>订单待送 / 可用成品 / 可超送</th><th>本次送货</th><th>客户备注（会打印）</th><th>操作</th></tr></thead><tbody><tr v-for="line in deliveryForm.lines.filter(item => item.source_type !== 'unordered_finished')" :key="line.key" :class="{'warning-row':line.order_item_id && Number(line.delivered_quantity)>Number(line.order_remaining_quantity)}"><td style="min-width:230px"><input class="input" v-model.trim="line.inventory_code" :disabled="!!deliveryForm.editingId && !!line.order_item_id" placeholder="输入编码、客户单号或产品名称" @keyup.enter.prevent="searchDeliveryLine(line)" /><div class="toolbar-group" style="margin-top:6px"><button class="btn small" type="button" :disabled="!deliveryForm.customer_id || !line.inventory_code || line.search_loading" @click="searchDeliveryLine(line)">{{ line.search_loading ? "查询中..." : "查询" }}</button><button class="btn small" type="button" @click="clearDeliveryLine(line)">清空</button></div><select v-if="line.product_options.length > 1" class="select" style="margin-top:6px" v-model="line.selected_product_key" @change="selectDeliveryProductCandidate(line, line.selected_product_key)"><option value="">请选择具体产品</option><option v-for="option in line.product_options" :key="option.key" :value="option.key">{{ deliveryProductOptionLabel(option) }}</option></select><select v-if="line.candidate_options.length > 1" class="select" style="margin-top:6px" :value="line.order_item_id || ''" @change="selectDeliveryCandidateById(line, $event.target.value)"><option value="">请选择具体订单明细</option><option v-for="candidate in line.candidate_options" :key="candidate.order_item_id" :value="candidate.order_item_id">{{ deliveryDetailOptionLabel(candidate) }}</option></select><div v-if="line.candidate_message" :class="line.candidate_error ? 'danger-text' : 'muted'" style="margin-top:6px">{{ line.candidate_message }}</div></td><td>{{ line.order_number || "-" }}<div class="muted">{{ line.customer_po || "-" }}</div><div v-if="inventorySourcesText(line.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(line.inventory_sources) }}</div></td><td>{{ line.product_code || "-" }} / {{ line.product_name || "-" }}<div class="muted">{{ line.specification || "-" }}</div></td><td><div>订单待送 <strong>{{ line.order_remaining_quantity ?? "-" }}</strong></div><div>可用成品 <strong>{{ line.deliverable_quantity ?? "-" }}</strong></div><div v-if="Number(line.over_delivery_quantity)>0" class="status orange">可超送 {{ line.over_delivery_quantity }}</div></td><td><input class="input" style="width:110px" type="number" min="1" :max="line.deliverable_quantity || undefined" v-model.number="line.delivered_quantity" :disabled="!line.order_item_id" /><div v-if="Number(line.delivered_quantity)>Number(line.order_remaining_quantity)" class="status orange" style="margin-top:4px;white-space:normal">超过订单 {{ Number(line.delivered_quantity)-Number(line.order_remaining_quantity) }}，可直接保存</div></td><td><input class="input" v-model.trim="line.remarks" placeholder="仅填写给客户看的内容" /></td><td><button v-if="deliveryForm.lines.filter(item => item.source_type !== 'unordered_finished').length > 5" class="btn small danger" type="button" @click="removeDeliveryLine(line.key)">删除行</button><span v-else class="muted">保留</span></td></tr></tbody></table>
+              <table v-else-if="deliveryForm.source_tab === 'order' && deliveryForm.lines.some(item => item.source_type !== 'unordered_finished')"><thead><tr><th>存货编码</th><th>订单号 / 客户单号</th><th>产品</th><th>订单待送 / 可用成品 / 可超送</th><th>本次送货</th><th>客户备注（会打印）</th><th>操作</th></tr></thead><tbody><tr v-for="line in deliveryForm.lines.filter(item => item.source_type !== 'unordered_finished')" :key="line.key" :class="{'warning-row':line.order_item_id && Number(line.delivered_quantity)>Number(line.order_remaining_quantity)}"><td>{{ line.inventory_code || line.product_code || '-' }}</td><td>{{ line.order_number || "-" }}<div class="muted">{{ line.customer_po || "-" }}</div><div v-if="inventorySourcesText(line.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(line.inventory_sources) }}</div></td><td>{{ line.product_code || "-" }} / {{ line.product_name || "-" }}<div class="muted">{{ line.specification || "-" }}</div></td><td><div>订单待送 <strong>{{ line.order_remaining_quantity ?? "-" }}</strong></div><div>可用成品 <strong>{{ line.deliverable_quantity ?? "-" }}</strong></div><div v-if="Number(line.over_delivery_quantity)>0" class="status orange">可超送 {{ line.over_delivery_quantity }}</div></td><td><input class="input" style="width:110px" type="number" min="1" :max="line.deliverable_quantity || undefined" v-model.number="line.delivered_quantity" :disabled="!line.order_item_id" /><div v-if="Number(line.delivered_quantity)>Number(line.order_remaining_quantity)" class="status orange" style="margin-top:4px;white-space:normal">超过订单 {{ Number(line.delivered_quantity)-Number(line.order_remaining_quantity) }}，可直接保存</div></td><td><input class="input" v-model.trim="line.remarks" placeholder="仅填写给客户看的内容" /></td><td><button class="btn small danger" type="button" @click="removeDeliveryLine(line.key)">删除</button></td></tr></tbody></table>
+              <div v-else-if="deliveryForm.source_tab === 'order' && deliveryForm.customer_id" class="empty">点击“选择待送订单”，勾选本次要送的产品。</div>
               <div v-else-if="unorderedFinishedPicker.visible" class="panel unordered-finished-picker">
                 <div class="toolbar delivery-batch-picker-toolbar" style="margin:-12px -12px 8px"><div class="section-title" style="margin:0">客户专用无订单成品库存</div><div class="toolbar-group"><input class="input" style="width:220px" v-model.trim="unorderedFinishedPicker.keyword" placeholder="存货编码 / 产品 / 规格" @keyup.enter.prevent="loadUnorderedFinishedCandidates(1)" /><button class="btn small" type="button" @click="loadUnorderedFinishedCandidates(1)">{{ unorderedFinishedPicker.loading ? '查询中...' : '查询' }}</button><span class="muted">第 {{ unorderedFinishedPicker.page }} / {{ unorderedFinishedPicker.total_pages }} 页</span><button class="btn small" type="button" :disabled="unorderedFinishedPicker.page <= 1" @click="loadUnorderedFinishedCandidates(unorderedFinishedPicker.page - 1)">上一页</button><button class="btn small" type="button" :disabled="unorderedFinishedPicker.page >= unorderedFinishedPicker.total_pages" @click="loadUnorderedFinishedCandidates(unorderedFinishedPicker.page + 1)">下一页</button><button class="btn primary small" type="button" @click="importUnorderedFinishedCandidates">导入已选</button></div></div>
                 <div v-if="unorderedFinishedPicker.message" :class="unorderedFinishedPicker.error ? 'status orange' : 'muted'" style="display:block;margin-bottom:8px">{{ unorderedFinishedPicker.message }}</div>
@@ -5284,7 +5324,7 @@
                 <div v-for="item in unorderedFinishedPicker.items" :key="unorderedFinishedLotId(item)" class="unordered-finished-picker-row"><div><strong>{{ item.product_code || '-' }} / {{ item.product_name || '-' }}</strong><div class="muted">{{ item.specification || '-' }}</div><div v-if="Number(item.order_pending_quantity || 0) > 0" class="status orange">先加入订单待送 {{ item.order_pending_quantity }}</div></div><div>{{ item.inventory_lot_number || item.lot_number || unorderedFinishedLotId(item) }}<div class="muted">{{ item.location_name || item.warehouse_name || '客户专用库存' }}</div></div><div>{{ unorderedFinishedAvailableQuantity(item) }}</div><div class="toolbar-group"><label><input type="checkbox" :checked="unorderedFinishedSelection(item)._selected" :disabled="isUnorderedFinishedLotInForm(unorderedFinishedLotId(item))" @change="setUnorderedFinishedSelection(item, $event.target.checked)" /> {{ isUnorderedFinishedLotInForm(unorderedFinishedLotId(item)) ? '已在单中' : '选择' }}</label><input class="input" style="width:96px" type="number" min="1" :max="unorderedFinishedAvailableQuantity(item) || undefined" :disabled="!unorderedFinishedSelection(item)._selected" v-model.number="unorderedFinishedSelection(item)._quantity" placeholder="数量" /></div></div>
                 <div v-if="!unorderedFinishedPicker.loading && !unorderedFinishedPicker.items.length" class="empty">当前客户没有可送货的专用无订单成品库存</div>
               </div>
-              <div v-else class="unordered-finished-delivery-list"><div v-if="!deliveryForm.lines.some(line => line.source_type === 'unordered_finished')" class="empty">请选择客户专用无订单成品库存后导入。</div><div v-for="line in deliveryForm.lines.filter(item => item.source_type === 'unordered_finished')" :key="line.key" class="unordered-finished-delivery-row"><div><strong>{{ line.product_code || '-' }} / {{ line.product_name || '-' }}</strong><div class="muted">{{ line.specification || '-' }} · 无订单库存补量</div></div><div><div v-for="allocation in line.allocations" :key="allocation.inventory_lot_id" class="muted">批次 {{ allocation.inventory_lot_id }}：{{ allocation.quantity }}</div></div><div><label>本次数量</label><input class="input" type="number" min="1" v-model.number="line.delivered_quantity" /></div><div><label>单价</label><input class="input" type="number" min="0" step="0.0001" v-model.number="line.unit_price" placeholder="必须填写单价" /><div v-if="line.unit_price === null || line.unit_price === ''" class="danger-text">无默认单价，请填写单价</div><div class="toolbar-group" style="margin-top:6px"><input class="input" v-model.trim="line.remarks" placeholder="客户备注（会打印）" /><button class="btn small danger" type="button" @click="removeDeliveryLine(line.key)">删除</button></div></div></div></div>
+              <div v-else class="unordered-finished-delivery-list"><div v-if="!deliveryForm.lines.some(line => line.source_type === 'unordered_finished')" class="empty">请选择客户专用无订单成品库存后导入。</div><div v-for="line in deliveryForm.lines.filter(item => item.source_type === 'unordered_finished')" :key="line.key" class="unordered-finished-delivery-row"><div><strong>{{ line.product_code || '-' }} / {{ line.product_name || '-' }}</strong><div class="muted">{{ line.specification || '-' }} · 无订单库存补量</div></div><div><div v-for="allocation in line.allocations" :key="allocation.inventory_lot_id" class="muted">批次 {{ allocation.inventory_lot_id }}：{{ allocation.quantity }}</div></div><div><label>本次数量</label><strong>{{ line.delivered_quantity }}</strong><div class="muted">按所选批次数量自动合计</div></div><div><label>单价（可后补）</label><input class="input" type="number" min="0.0001" step="0.0001" v-model.number="line.unit_price" placeholder="暂不清楚可留空" /><div v-if="line.unit_price === null || line.unit_price === ''" class="muted">不会阻止保存和发货；进入对账前必须补齐</div><div class="toolbar-group" style="margin-top:6px"><input class="input" v-model.trim="line.remarks" placeholder="客户备注（会打印）" /><button class="btn small danger" type="button" @click="removeDeliveryLine(line.key)">删除</button></div></div></div></div>
               <div v-if="deliveryActiveLines.some(line => deliveryDraftComponents(line).length)" class="delivery-component-plan">
                 <div class="delivery-component-plan-title">
                   <strong>统一计价组合 · 本次实际随货明细</strong>
@@ -5750,7 +5790,8 @@
             <template v-if="modal?.type === 'pdfTemplate' && !pdfTemplateFormReadonly">
               <button class="btn primary" :disabled="loading || pdfTemplateLoading" @click="savePdfTemplate">保存 draft</button>
             </template>
-            <button v-if="canSaveModal" class="btn primary" :disabled="loading || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError)) || (modal?.type==='quotationConvert' && !!quotationConvertCreaseMismatch) || (modal?.type==='orderItem' && !!orderItemCreaseMismatch) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && !!deliveryValidationError) || (modal?.type==='requisitionHold' && requisitionHoldSaveBlocked)" @click="modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()">{{ modal?.type==='delivery' ? deliveryPrimaryLabel() : (['requisition','supplierRequisitionDraft'].includes(modal?.type) ? '确认生成正式采购单' : (modal?.type==='requisitionHold' ? '确认暂缓' : (modal?.type==='stockReplenishment' && stockReplenishmentForm.source_type==='stock_warning' ? '保存报料草稿' : '保存'))) }}</button>
+            <button v-if="modal?.type === 'delivery' && deliveryForm.editingId && !deliveryFormIsDirty()" class="btn success" :disabled="loading || !!deliveryForm.pick_task || !!deliveryOperationState.action" @click="createCurrentDeliveryPickTask">{{ deliveryOperationState.action==='pick' && Number(deliveryOperationState.deliveryId)===Number(deliveryForm.editingId) ? '推送中…' : (deliveryForm.pick_task ? '已推送拿货' : '拿货') }}</button>
+            <button v-if="canSaveModal" class="btn primary" :disabled="loading || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError)) || (modal?.type==='quotationConvert' && !!quotationConvertCreaseMismatch) || (modal?.type==='orderItem' && !!orderItemCreaseMismatch) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && (!!deliveryValidationError || !!deliveryOperationState.action)) || (modal?.type==='requisitionHold' && requisitionHoldSaveBlocked)" @click="modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()">{{ modal?.type==='delivery' ? deliveryPrimaryLabel() : (['requisition','supplierRequisitionDraft'].includes(modal?.type) ? '确认生成正式采购单' : (modal?.type==='requisitionHold' ? '确认暂缓' : (modal?.type==='stockReplenishment' && stockReplenishmentForm.source_type==='stock_warning' ? '保存报料草稿' : '保存'))) }}</button>
           </div>
         </div>
       </div>
@@ -5963,18 +6004,7 @@
       const searchDebounceTimers = new Map();
       const today = () => TmTime.beijingToday();
       const plusDays = (days) => TmTime.addCalendarDays(TmTime.beijingToday(), days);
-      const addWorkingDays = (startDate, workingDays=7) => {
-        const match = String(startDate || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
-        if (!match) return "";
-        const result = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
-        let added = 0;
-        while (added < workingDays) {
-          result.setUTCDate(result.getUTCDate() + 1);
-          const weekday = result.getUTCDay();
-          if (weekday !== 0 && weekday !== 6) added += 1;
-        }
-        return result.toISOString().slice(0,10);
-      };
+      const addWorkingDays = (startDate, workingDays=7) => TmTime.addWorkingDays(startDate, workingDays);
       const month = () => today().slice(0, 7);
       const roleMenus = {
         admin: ["dashboard", "customers", "products", "orders", "requisition", "incoming", "production", "warehouse", "deliveries", "finance", "system"],
@@ -6191,16 +6221,24 @@
             // v0.19.2-B 楞型加价规则
             fluteRules: [], showFluteRuleModal: false, fluteRuleLoading: false, fluteRuleError: "",
             fluteRuleForm: { id: null, supplier_name: "", layer_count: 3, flute_type: "A", price_delta: "0", effective_date: "", remark: "", is_active: true },
-            deliveries: [], pendingDeliveryItems: [], deliveryCustomerCandidates: [], deliveryPickTasks: [], deliveryPickers: [], expandedDeliveryRows: {}, deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false }, deliveryCandidateLoading:false, statements: [], invoices: [], moldTools: [],
+            deliveries: [], pendingDeliveryItems: [], deliveryCustomerCandidates: [], deliveryPickTasks: [], deliveryPickers: [], expandedDeliveryRows: {}, deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false }, deliveryCandidateLoading:false, deliveryOperationState:{action:"",deliveryId:null,deliveryNumber:""}, statements: [], invoices: [], moldTools: [],
             invoiceTasks: [], invoiceTaskFilters:{customer_id:"",statement_month:"",status:""}, invoiceTaskState:{loading:false,error:""},
             invoiceTaskDetail:null, invoiceTaskResult:{task_id:null,status:"issued",invoice_number:"",invoice_date:"",failure_reason:"",expected_version:null},
-            invoiceSellers: [], invoiceSellerForm:{id:null,seller_name:"",tax_no:"",address_phone:"",bank_account:"",is_active:true,version:null},
+            invoiceTaskOperationState:{detailLoading:false,detailError:"",detailTaskId:null,detailTaskNumber:"",confirmingTaskId:null,resultSaving:false},
+            invoiceTaskUploadState:{uploading:false,taskId:null,taskNumber:"",error:""},
+            financeStatementOperationState:{action:"",statementId:null},
+            invoiceSellers: [], invoiceSellerForm:{id:null,seller_name:"",tax_no:"",address_phone:"",bank_account:"",is_active:true,version:null}, invoiceSellerState:{loading:false,error:"",saving:false,loaded:false},
             customerInvoiceProfile:{invoice_title:"",tax_no:"",invoice_address_phone:"",bank_account:"",default_seller_id:null,confirmation_status:"draft",version:null,error:""},
             customerInvoiceRule:{project_name:"",tax_category_code:"",unit:"",tax_rate:"",confirmation_status:"draft",version:null,error:""},
-            pendingStatements: [], statementCustomers: [], statementDetail: null, statementEditForm: { id: null, statement_month: "" }, backups: [], backupStats: {}, backupCleanupPreview: null, showCleanupPreview: false,
-            systemUsers: [], expandedOrders: {},
+            customerInvoiceState:{profileLoading:false,profileSaving:false,profileLoadedCustomerId:null,ruleLoading:false,ruleSaving:false,ruleLoadedCustomerId:null},
+            pendingStatements: [], statementCustomers: [], statementDetail: null, statementEditForm: { id: null, statement_month: "" }, backups: [], backupStats: {}, backupCleanupPreview: null, showCleanupPreview: false, backupListLoading: false, backupListError: "", backupAction: "",
+            systemUsers: [], systemSection:"basic",
+            systemSectionLoaded:{basic:false,print:false,backup:false,pdf:false},
+            systemSectionLoading:{basic:false,print:false,backup:false,pdf:false},
+            systemSectionErrors:{basic:"",print:"",backup:"",pdf:""},
+            expandedOrders: {}, orderGroupDetails:{}, orderGroupDetailLoading:{}, orderGroupDetailErrors:{}, orderListGeneration:0,
             permissionUsers: [], permissionProfile: null, permissionDraft: { permissions: {}, customer_access_mode: "all", customer_ids: [] },
-            permissionCatalog: [], permissionLoading: false, selectedPermissionUserId: null,
+            permissionCatalog: [], permissionUsersLoading: false, permissionProfileLoading: false, permissionSaving: false, permissionError: "", permissionSaveError: "", selectedPermissionUserId: null,
             auditLogState: {
               category:"business", items:[], total:0, page:1, page_size:25, pages:0,
               loading:false, error:"", detail:null, detailLoading:false, detailError:"",
@@ -6228,6 +6266,7 @@
             versionInfo: {},
             versionExpandedGroups: {},
             showVersionHistory: false,
+            versionHistoryLoaded: false, versionHistoryLoading: false, versionHistoryError: "",
             // Phase 18/19: PDF 训练库
             pdfTrainingStats: null, pdfTrainingSamples: [], pdfSamplePage: 1,
             pdfTrainingBatches: [],
@@ -6238,7 +6277,7 @@
             pdfOcrStatus: null,
             pdfTrainingTemplates: [], pdfTemplateStatusFilter: "active_draft", pdfTemplateDryRun: null,
             pdfTemplateForm: { id:null, customer_id:null, template_name:"", order_no_pattern:"", date_pattern:"", item_row_pattern:"", customer_name_pattern:"", column_map_json:"", notes:"", status:"draft", version:null },
-            pdfTemplateLoading: false,
+            pdfTemplateLoading: false, pdfTemplatesLoaded: false,
             requisitionTab: "pending", requisitionPending: [], requisitionItems: [], requisitionReportedLoaded: false, requisitionSelected: {}, selectedPendingKeys: [], selectedBomSnapshotIds: [],
             requisitionHolds: [], requisitionHoldsLoaded: false, requisitionHoldsTotal: 0, requisitionHoldSummary: { total:0, due_count:0, anomaly_count:0 },
             requisitionHoldFilters: { customer_id:"", product_code:"", product_name:"", status:"", date_from:"", date_to:"" },
@@ -6299,6 +6338,7 @@
             masterVersionConflict: null,
             masterVersionHistory: blankMasterVersionHistory(),
             selectedProductCustomer: null, productCustomerSearch: "",
+            productsLoading: false, productsError: "",
             showProductMoreFilters: false,
             productTrashOpen: false, productTrashItems: [],
             filters: { customerKeyword: "", showInactive:false, showInactiveProducts:false, productCustomer: "", productKeyword: "", productCode: "", productName: "", productSpec: "", productMaterial: "", orderCustomer: "", orderKeyword:"", orderNumber:"", orderCustomerPo:"", orderProductCode:"", orderProductName:"", orderSpecification:"", orderDateFrom:"", orderDateTo:"", orderDeliveryDateFrom:"", orderDeliveryDateTo:"", orderScope:"active", orderStage:"", orderStatus:"business", orderView:"customer_po", orderSortBy:"", orderSortDirection:"desc" },
@@ -6382,7 +6422,7 @@
             incomingSelected: {},
             mobileEntry: { url:"", qr_data_url:"" },
             orderPdfImport: { file: null, draft: null, matchedCustomerLabel: "" },
-            deliveryForm: { editingId: null, delivery_number: "", source_mode: "order", source_tab: "order", customer_id: null, delivery_date: today(), vehicle_number: "", lines: [], saved_signature: "" },
+            deliveryForm: { editingId: null, delivery_number: "", source_mode: "order", source_tab: "order", customer_id: null, delivery_date: today(), vehicle_number: "", lines: [], saved_signature: "", pick_task: null },
             deliveryRoutePlan: { origin_address:null, customer_count:0, groups:[], disclaimer:"" },
             deliveryBatchPicker: { visible: false, loading: false, keyword: "", items: [], selected: {}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message: "", error: false },
             unorderedFinishedPicker: { visible: false, loading: false, keyword:"", items: [], selected:{}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message: "", error: false },
@@ -6497,7 +6537,8 @@
             );
             if (!keyword) return rows;
             return rows.filter(row => [
-              row.standard_name, row.display_name, row.business_code, row.contact_name, row.phone
+              row.standard_name, row.display_name, row.business_code, row.contact_name, row.phone,
+              ...(row.aliases || []),
             ].some(value => String(value || "").toLowerCase().includes(keyword)));
           },
           // 新业务只允许选择供应商主数据中启用的标准名称。
@@ -6912,12 +6953,19 @@
             return this.customerOptions.filter(row => ids.includes(row.id));
           },
           deliveryCustomerOptions() {
-            const ids = new Set((this.deliveryCustomerCandidates || []).map(row => Number(row.customer_id)));
+            const candidates = new Map((this.deliveryCustomerCandidates || []).map(row => [Number(row.customer_id), row]));
             const editingCustomerId = this.deliveryForm.editingId ? Number(this.deliveryForm.customer_id) : null;
             return this.customerOptions.filter(row => (
-              (row.is_active && ids.has(Number(row.id)))
+              (row.is_active && candidates.has(Number(row.id)))
               || (editingCustomerId && Number(row.id) === editingCustomerId)
-            ));
+            )).map(row => {
+              const candidate = candidates.get(Number(row.id)) || {};
+              const sourceLabels = [];
+              if (candidate.has_pending_orders) sourceLabels.push(`待送订单 ${Number(candidate.pending_item_count || 0)} 款`);
+              if (candidate.has_unordered_finished) sourceLabels.push(`可送库存 ${Number(candidate.unordered_lot_count || 0)} 批`);
+              const customerLabel = row.customer_code ? `${row.customer_code} · ${row.name}` : row.name;
+              return {...row, _delivery_label:[customerLabel, ...sourceLabels].filter(Boolean).join("｜")};
+            });
           },
           pendingDeliveryCustomerGroups() {
             const groups = new Map();
@@ -7021,12 +7069,13 @@
                 });
               }
               const group = groups.get(normalizedKey);
+              const rowItems = row.items || [];
               group.orders.push(row);
-              group.child_count += row.items.length || 1;
-              group.total_quantity += this.sum(row.items, "quantity");
-              group.total_delivered_quantity += this.sum(row.items, "delivered_quantity");
+              group.child_count += Number(row.item_count ?? rowItems.length) || 1;
+              group.total_quantity += Number(row.total_quantity ?? this.sum(rowItems, "quantity"));
+              group.total_delivered_quantity += Number(row.business_delivery_progress?.delivered_quantity ?? this.sum(rowItems, "delivered_quantity"));
               group.total_amount += Number(row.total_amount || 0);
-              group.all_received = group.all_received && row.items.every((item) => item.material_status === "received");
+              group.all_received = group.all_received && Boolean(row.all_material_received ?? rowItems.every((item) => item.material_status === "received"));
               group.hasHistoryOnly = group.hasHistoryOnly && !!row.is_history_order;
               if (!group.latest_delivery_date || String(row.delivery_date || "") > String(group.latest_delivery_date || "")) {
                 group.latest_delivery_date = row.delivery_date || group.latest_delivery_date;
@@ -8003,6 +8052,15 @@
               if (weights) parts.push(weights);
               return { text: parts.join("｜"), muted: false };
             }
+            const snapshotCode = String(row.material_code || "").trim();
+            if (snapshotCode) {
+              const flute = row.flute_type || "";
+              const codeFlute = flute ? `${snapshotCode}/${flute}` : snapshotCode;
+              const weights = this.pureWeights(row.material_weight);
+              const parts = [row.material_supplier_name || "-", codeFlute];
+              if (weights) parts.push(weights);
+              return { text: parts.join("｜"), muted: false };
+            }
             const legacy = String(row.legacy_material_text || "").trim();
             if (legacy) {
               const nums = legacy.match(/\d+(?:\.\d+)?/g);
@@ -8013,7 +8071,13 @@
           // 产品材质完整纸种明细（hover 显示，列表只显示压缩格式）
           materialFullStructure(row) {
             const m = this._findMaterial(row.material_id);
-            if (!m) return "";
+            if (!m) {
+              const code = String(row.material_code || "").trim();
+              if (!code) return "";
+              const flute = row.flute_type || "";
+              const struct = row.material_weight || "";
+              return `${code}${flute ? "/" + flute : ""}　${struct}`.trim();
+            }
             const code = this.materialBaseCode(m);
             const flute = row.flute_type || "";
             const struct = this.materialWeightStructure(m) || "";
@@ -8325,9 +8389,11 @@
               0,
             );
             const remaining = (rows || []).reduce(
-              (total,row) => total + (row?.items || []).reduce(
-                (subtotal,item) => subtotal + Number(item?.business_remaining_quantity || 0),
-                0,
+              (total,row) => total + Number(
+                row?.business_remaining_quantity ?? (row?.items || []).reduce(
+                  (subtotal,item) => subtotal + Number(item?.business_remaining_quantity || 0),
+                  0,
+                ),
               ),
               0,
             );
@@ -9528,7 +9594,14 @@
           },
           loginRedirectPath() {
             const target = new URLSearchParams(window.location.search).get("redirect") || "";
-            return ["/incoming.html", "/warehouse.html"].includes(target) ? target : "";
+            if (["/incoming.html", "/warehouse.html"].includes(target)) return target;
+            if (target === "/mobile/erp.html") {
+              const mobilePage = new URLSearchParams(window.location.search).get("mobile_page") || "";
+              return ["home", "search", "production"].includes(mobilePage)
+                ? `${target}#${mobilePage}`
+                : target;
+            }
+            return "";
           },
           initialPageFromLocation() {
             const pages = new Set(["dashboard","customers","contracts","quotations","products","orders","orders_legacy","requisition","incoming","production","warehouse","deliveries","finance","system"]);
@@ -9754,7 +9827,7 @@
             if (!force && this.pageCacheFresh(page)) return;
             this.loading = true;
             try {
-              if (page === "dashboard") await Promise.all([this.loadOverview(), this.loadKpi()]);
+              if (page === "dashboard") await this.loadOverview();
               if (page === "customers") await this.loadCustomers();
               if (page === "quotations") {
                 await this.loadCustomerOptions(force);
@@ -9776,7 +9849,7 @@
               if (page === "warehouse") this.ensureWarehouseFrame();
               if (page === "finance") await Promise.all([this.loadCustomerOptions(force), this.loadFinance()]);
               if (page === "audit") await this.loadAuditLogs();
-              if (page === "system") await this.loadSystem();
+              if (page === "system") await this.loadSystem({ force });
               if (page === "permissions") await this.loadPermissionUsers();
               this.markPageCache(page);
             } catch (error) { this.showToast(this.errorMessage(error), true); }
@@ -9800,9 +9873,13 @@
             this.overviewError = "";
             this.overview = { cards: [], todos: [], summary: {} };
             try {
-              this.overview = (await axios.get("/api/dashboard/overview")).data || { cards: [], todos: [], summary: {} };
+              const data = (await axios.get("/api/dashboard/overview")).data || { cards: [], todos: [], summary: {} };
+              this.overview = data;
+              if (data.kpi) this.kpi = data.kpi;
+              else await this.loadKpi();
             } catch (error) {
               this.overview = { cards: [], todos: [], summary: {} };
+              this.kpi = {};
               this.overviewError = this.errorMessage(error);
             } finally {
               this.overviewLoading = false;
@@ -9850,7 +9927,7 @@
           },
           async loadProducts() {
             if (this.activePage === "products" && this.productTab === "products" && !this.selectedProductCustomer) {
-              this.products = []; this.productsTotal = 0; return;
+              this.products = []; this.productsTotal = 0; this.productsLoading = false; this.productsError = ""; return;
             }
             const params = {
               keyword: this.filters.productKeyword,
@@ -9860,17 +9937,26 @@
               material: this.filters.productMaterial,
               include_inactive:this.filters.showInactiveProducts,
               page: this.pages.products,
-              page_size: this.pageSize
+              page_size: this.pageSize,
+              response_mode: "summary"
             };
             if (this.selectedProductCustomer) params.customer_id = this.selectedProductCustomer.id;
             else if (this.filters.productCustomer) params.customer_id = this.filters.productCustomer;
             const controller = this.beginLatestRequest("products:list");
+            this.productsLoading = true;
+            this.productsError = "";
             try {
               const { data } = await axios.get("/api/master/products", { params, signal:controller.signal });
+              if (controller.signal.aborted) return;
               this.products = data.items; this.productsTotal = data.total;
             } catch (error) {
-              if (!this.isCancelledRequest(error)) throw error;
+              if (!this.isCancelledRequest(error)) {
+                this.products = [];
+                this.productsTotal = 0;
+                this.productsError = this.errorMessage(error) || "常用箱读取失败，请重试";
+              }
             } finally {
+              if (latestRequestControllers.get("products:list") === controller) this.productsLoading = false;
               this.finishLatestRequest("products:list", controller);
             }
           },
@@ -9920,20 +10006,28 @@
             return all;
           },
           async loadSuppliers(includeInactive = this.canAdmin) {
+            const requestKey = "suppliers:list";
+            const controller = this.beginLatestRequest(requestKey);
             this.supplierLoading = true;
             this.supplierError = "";
             try {
               const {data} = includeInactive
-                ? await axios.get("/api/master/suppliers", {params:{include_inactive:true}})
-                : await axios.get("/api/master/suppliers/candidates");
+                ? await axios.get("/api/master/suppliers", {params:{include_inactive:true}, signal:controller.signal})
+                : await axios.get("/api/master/suppliers/candidates", {signal:controller.signal});
+              if (latestRequestControllers.get(requestKey) !== controller) return;
               this.suppliers = Array.isArray(data) ? data : (data.items || []);
               this.materialSuppliers = this.activeSupplierNames;
             } catch(error) {
-              this.supplierError = this.errorMessage(error);
-              this.suppliers = [];
-              this.materialSuppliers = [];
+              if (!this.isCancelledRequest(error) && latestRequestControllers.get(requestKey) === controller) {
+                this.supplierError = `供应商读取失败：${this.errorMessage(error)}`;
+                this.suppliers = [];
+                this.materialSuppliers = [];
+              }
             } finally {
-              this.supplierLoading = false;
+              if (latestRequestControllers.get(requestKey) === controller) {
+                this.supplierLoading = false;
+                this.finishLatestRequest(requestKey, controller);
+              }
             }
           },
           defaultSupplierName() {
@@ -9983,8 +10077,9 @@
               // 维护全量材质供选择器复用；新业务供应商选项只来自启用供应商主数据。
               this.materialSuppliers = this.activeSupplierNames;
               if (!this.allMaterials.length) {
-                const all = await this.fetchAllMaterials({ sort: "common" }, controller.signal);
-                this.allMaterials = all;
+                const isUnfilteredCommonView = !this.materialLayerFilter && !this.materialSupplierFilter && this.materialSort === "common";
+                if (isUnfilteredCommonView) this.allMaterials = this.materials.slice();
+                else this.allMaterials = await this.fetchAllMaterials({ sort: "common" }, controller.signal);
               }
             } catch (error) {
               if (!this.isCancelledRequest(error)) throw error;
@@ -10472,6 +10567,7 @@
           },
           async loadOrders() {
             const params = { page: this.pages.orders, page_size: this.pageSize };
+            if (this.activePage === "orders") params.detail_level = "summary";
             if (this.filters.orderCustomer) params.customer_id = this.filters.orderCustomer;
             if (this.filters.orderNumber) params.order_number = this.filters.orderNumber;
             if (this.filters.orderCustomerPo) params.customer_po = this.filters.orderCustomerPo;
@@ -10497,6 +10593,11 @@
             try {
               const { data } = await axios.get("/api/orders", { params, signal:controller.signal });
               this.orders = data.items; this.ordersTotal = data.total; this.ordersUnfinishedTotal = data.unfinished_total || 0;
+              this.orderListGeneration += 1;
+              this.expandedOrders = {};
+              this.orderGroupDetails = {};
+              this.orderGroupDetailLoading = {};
+              this.orderGroupDetailErrors = {};
             } catch (error) {
               if (!this.isCancelledRequest(error)) throw error;
             } finally {
@@ -10804,9 +10905,7 @@
             return `等 ${previousNo} 送完`;
           },
           tomorrowDate() {
-            const value = new Date(`${today()}T00:00:00Z`);
-            value.setUTCDate(value.getUTCDate() + 1);
-            return value.toISOString().slice(0, 10);
+            return TmTime.addCalendarDays(today(), 1);
           },
           async openWaitingRequisitionFromDashboard() {
             await this.go("requisition");
@@ -11901,13 +12000,27 @@
             }).join("；");
           },
           async createDeliveryPickTask(row) {
+            if (this.deliveryOperationState.action) return null;
+            const deliveryId = Number(row?.id || 0);
+            const deliveryNumber = String(row?.delivery_number || `#${deliveryId}`);
+            if (!deliveryId) {
+              this.showToast("送货单不存在，无法推送拿货", true);
+              return null;
+            }
+            this.deliveryOperationState = {action:"pick",deliveryId,deliveryNumber};
             this.loading = true;
             try {
-              const { data } = await axios.post(`/api/deliveries/${row.id}/pick-task`);
+              const { data } = await axios.post(`/api/deliveries/${deliveryId}/pick-task`);
               row.pick_task = data.pick_task || data;
               this.showToast(row.pick_task.assignment_required ? "拿货任务已创建，请选择送货员" : `已分配给 ${row.pick_task.assigned_to_name}`);
-            } catch (error) { this.showToast(this.errorMessage(error), true); }
-            finally { this.loading = false; }
+              return row.pick_task;
+            } catch (error) { this.showToast(this.errorMessage(error), true); return null; }
+            finally {
+              this.loading = false;
+              if (this.deliveryOperationState.action === "pick" && Number(this.deliveryOperationState.deliveryId) === deliveryId) {
+                this.deliveryOperationState = {action:"",deliveryId:null,deliveryNumber:""};
+              }
+            }
           },
           openDeliveryPickTask(row) {
             const task = this.normalizeDeliveryPickTask(row);
@@ -11969,6 +12082,15 @@
               const { data } = await axios.get("/api/deliveries/pending_items");
               this.pendingDeliveryItems = data.items || [];
               this.deliveryCustomerCandidates = data.customer_candidates || [];
+            } finally {
+              this.deliveryCandidateLoading = false;
+            }
+          },
+          async loadDeliveryCustomerOptions() {
+            this.deliveryCandidateLoading = true;
+            try {
+              const { data } = await axios.get("/api/deliveries/pending-customer-options");
+              this.deliveryCustomerCandidates = data.items || [];
             } finally {
               this.deliveryCandidateLoading = false;
             }
@@ -12118,24 +12240,488 @@
           },
           financeConfirmationText(statement) { return statement?.confirmation_status === "confirmed" ? `已确认 · v${statement.version || 1}` : `待核对 · v${statement?.version || 1}`; },
           invoiceTaskStatusText(status) { return ({draft:"待补资料",ready:"可导出",exported:"已导出待登记",issued:"已开票",failed:"失败",voided:"已作废"})[status] || "待核对"; },
-          async loadInvoiceTasks() { if (!this.canViewInvoiceTasks) return; this.invoiceTaskState.loading=true; this.invoiceTaskState.error=""; try { const {data}=await axios.get("/api/finance/invoice-tasks",{params:{...this.invoiceTaskFilters}}); this.invoiceTasks=data.items||[]; } catch(error) { this.invoiceTasks=[]; this.invoiceTaskState.error=this.errorMessage(error); } finally { this.invoiceTaskState.loading=false; } },
-          async confirmFinanceStatement(row) { try { await axios.post(`/api/finance/statements/${row.id}/confirm`,{expected_version:Number(row.version||1)}); await this.loadFinance(); this.showToast("对账单已确认，版本已冻结"); } catch(error) { this.showToast(this.errorMessage(error),true); } },
-          async generateInvoiceTask(row) { try { await axios.post(`/api/finance/statements/${row.id}/invoice-tasks`,{expected_version:Number(row.version||1),idempotency_key:createIdempotencyKey()}); this.financeView="invoice_tasks"; await this.loadInvoiceTasks(); } catch(error) { this.showToast(`不能生成开票任务：${this.errorMessage(error)}`,true); } },
-          async openInvoiceTask(task) { this.invoiceTaskDetail=(await axios.get(`/api/finance/invoice-tasks/${task.id}`)).data; this.modal={type:"invoiceTask",title:`开票任务 ${task.task_number}`}; },
-          async confirmInvoiceTask(task) { try { await axios.post(`/api/finance/invoice-tasks/${task.id}/confirm`,{expected_version:Number(task.version||1)}); await this.loadInvoiceTasks(); } catch(error) { this.showToast(this.errorMessage(error),true); } },
+          async loadInvoiceTasks() {
+            if (!this.canViewInvoiceTasks) return;
+            const requestKey = "finance:invoice-tasks";
+            const controller = this.beginLatestRequest(requestKey);
+            const filters = {...this.invoiceTaskFilters};
+            this.invoiceTaskState.loading = true;
+            this.invoiceTaskState.error = "";
+            try {
+              const { data } = await axios.get("/api/finance/invoice-tasks", {
+                params:filters,
+                signal:controller.signal,
+              });
+              if (latestRequestControllers.get(requestKey) !== controller) return;
+              this.invoiceTasks = data.items || [];
+            } catch (error) {
+              if (!this.isCancelledRequest(error) && latestRequestControllers.get(requestKey) === controller) {
+                this.invoiceTasks = [];
+                this.invoiceTaskState.error = this.errorMessage(error);
+              }
+            } finally {
+              if (latestRequestControllers.get(requestKey) === controller) {
+                this.invoiceTaskState.loading = false;
+                this.finishLatestRequest(requestKey, controller);
+              }
+            }
+          },
+          async confirmFinanceStatement(row) {
+            if (this.financeStatementOperationState.action) return false;
+            const statementId = Number(row.id);
+            const expectedVersion = Number(row.version || 1);
+            this.financeStatementOperationState.action = "confirm";
+            this.financeStatementOperationState.statementId = statementId;
+            try {
+              try {
+                await axios.post(`/api/finance/statements/${statementId}/confirm`, {expected_version:expectedVersion});
+              } catch(error) {
+                this.showToast(this.errorMessage(error), true);
+                return false;
+              }
+              this.showToast("对账单已确认，版本已冻结");
+              try {
+                await this.loadFinance();
+              } catch(error) {
+                this.showToast(`对账单已经确认，但页面刷新失败：${this.errorMessage(error)}。请点刷新，不要重复确认。`, true);
+              }
+              return true;
+            } finally {
+              if (this.financeStatementOperationState.action === "confirm" && Number(this.financeStatementOperationState.statementId) === statementId) {
+                this.financeStatementOperationState.action = "";
+                this.financeStatementOperationState.statementId = null;
+              }
+            }
+          },
+          async generateInvoiceTask(row) {
+            if (this.financeStatementOperationState.action) return false;
+            const statementId = Number(row.id);
+            const expectedVersion = Number(row.version || 1);
+            const idempotencyKey = createIdempotencyKey();
+            this.financeStatementOperationState.action = "generate";
+            this.financeStatementOperationState.statementId = statementId;
+            try {
+              try {
+                await axios.post(`/api/finance/statements/${statementId}/invoice-tasks`, {expected_version:expectedVersion,idempotency_key:idempotencyKey});
+              } catch(error) {
+                this.showToast(`不能生成开票任务：${this.errorMessage(error)}`, true);
+                return false;
+              }
+              this.showToast("开票任务已生成，正在打开任务列表");
+              this.financeView = "invoice_tasks";
+              try {
+                await this.loadInvoiceTasks();
+              } catch(error) {
+                this.showToast(`开票任务已经生成，但列表刷新失败：${this.errorMessage(error)}。请点刷新，不要重复生成。`, true);
+              }
+              return true;
+            } finally {
+              if (this.financeStatementOperationState.action === "generate" && Number(this.financeStatementOperationState.statementId) === statementId) {
+                this.financeStatementOperationState.action = "";
+                this.financeStatementOperationState.statementId = null;
+              }
+            }
+          },
+          async openInvoiceTask(task) {
+            const target = {id:Number(task.id), task_number:String(task.task_number || "")};
+            this.invoiceTaskDetail = null;
+            this.invoiceTaskOperationState.detailTaskId = target.id;
+            this.invoiceTaskOperationState.detailTaskNumber = target.task_number;
+            this.invoiceTaskOperationState.detailError = "";
+            this.modal = {type:"invoiceTask", title:`开票任务 ${target.task_number}`};
+            return this.loadInvoiceTaskDetail(target);
+          },
+          async loadInvoiceTaskDetail(target = null) {
+            const selected = target || {
+              id:Number(this.invoiceTaskOperationState.detailTaskId),
+              task_number:String(this.invoiceTaskOperationState.detailTaskNumber || ""),
+            };
+            const taskId = Number(selected?.id);
+            if (!taskId) return false;
+            const taskNumber = String(selected?.task_number || this.invoiceTaskOperationState.detailTaskNumber || "");
+            const requestKey = "finance:invoice-task-detail";
+            const controller = this.beginLatestRequest(requestKey);
+            this.invoiceTaskOperationState.detailTaskId = taskId;
+            this.invoiceTaskOperationState.detailTaskNumber = taskNumber;
+            this.invoiceTaskOperationState.detailLoading = true;
+            this.invoiceTaskOperationState.detailError = "";
+            this.invoiceTaskDetail = null;
+            try {
+              const {data} = await axios.get(`/api/finance/invoice-tasks/${taskId}`, {signal:controller.signal});
+              if (latestRequestControllers.get(requestKey) !== controller) return false;
+              if (this.modal?.type !== "invoiceTask" || Number(this.invoiceTaskOperationState.detailTaskId) !== taskId) return false;
+              this.invoiceTaskDetail = data;
+              return true;
+            } catch(error) {
+              if (
+                !this.isCancelledRequest(error)
+                && latestRequestControllers.get(requestKey) === controller
+                && this.modal?.type === "invoiceTask"
+                && Number(this.invoiceTaskOperationState.detailTaskId) === taskId
+              ) {
+                this.invoiceTaskDetail = null;
+                this.invoiceTaskOperationState.detailError = this.errorMessage(error);
+              }
+              return false;
+            } finally {
+              if (latestRequestControllers.get(requestKey) === controller) {
+                if (this.modal?.type === "invoiceTask" && Number(this.invoiceTaskOperationState.detailTaskId) === taskId) {
+                  this.invoiceTaskOperationState.detailLoading = false;
+                }
+                this.finishLatestRequest(requestKey, controller);
+              }
+            }
+          },
+          async retryInvoiceTaskDetail() {
+            return this.loadInvoiceTaskDetail();
+          },
+          async confirmInvoiceTask(task) {
+            if (this.invoiceTaskOperationState.confirmingTaskId !== null) return false;
+            const taskId = Number(task.id);
+            const expectedVersion = Number(task.version || 1);
+            this.invoiceTaskOperationState.confirmingTaskId = taskId;
+            try {
+              await axios.post(`/api/finance/invoice-tasks/${taskId}/confirm`, {expected_version:expectedVersion});
+              this.showToast("开票任务已确认");
+              await this.loadInvoiceTasks();
+              return true;
+            } catch(error) {
+              this.showToast(this.errorMessage(error), true);
+              return false;
+            } finally {
+              if (Number(this.invoiceTaskOperationState.confirmingTaskId) === taskId) {
+                this.invoiceTaskOperationState.confirmingTaskId = null;
+              }
+            }
+          },
           downloadInvoiceTaxTemplate(task) { window.location.href=`/api/finance/invoice-tasks/${task.id}/tax-template.xlsx`; },
-          openInvoiceTaskResult(task) { this.invoiceTaskResult={task_id:task.id,status:"issued",invoice_number:"",invoice_date:today(),failure_reason:"",expected_version:task.version}; this.modal={type:"invoiceTaskResult",title:`登记开票结果 ${task.task_number}`}; },
-          async saveInvoiceTaskResult() { const form=this.invoiceTaskResult; if(form.status==="issued"&&!String(form.invoice_number||"").trim()) { this.showToast("请填写发票号码",true); return; } if(form.status==="failed"&&!String(form.failure_reason||"").trim()) { this.showToast("请填写失败原因",true); return; } try { await axios.post(`/api/finance/invoice-tasks/${form.task_id}/result`,{status:form.status,invoice_number:form.status==="issued"?form.invoice_number.trim():null,invoice_date:form.status==="issued"?form.invoice_date:null,failure_reason:form.status==="failed"?form.failure_reason.trim():null,expected_version:Number(form.expected_version||1)}); await this.loadInvoiceTasks(); this.closeModal(); this.showToast(form.status==="issued"?"开票成功已登记":"开票失败已登记"); } catch(error) { this.showToast(this.errorMessage(error),true); } },
-          uploadInvoiceTaskPdf(task) { this.showToast(`请在任务 ${task.task_number} 的详情上传原始 PDF；不允许覆盖原件。`,true); },
+          openInvoiceTaskResult(task) {
+            if (this.invoiceTaskOperationState.resultSaving) return false;
+            this.invoiceTaskResult = {task_id:Number(task.id),status:"issued",invoice_number:"",invoice_date:today(),failure_reason:"",expected_version:Number(task.version || 1)};
+            this.modal = {type:"invoiceTaskResult",title:`登记开票结果 ${task.task_number}`};
+            return true;
+          },
+          async saveInvoiceTaskResult() {
+            if (this.invoiceTaskOperationState.resultSaving) return false;
+            const form = this.invoiceTaskResult;
+            const submitted = {
+              task_id:Number(form.task_id),
+              status:String(form.status || ""),
+              invoice_number:String(form.invoice_number || "").trim(),
+              invoice_date:String(form.invoice_date || ""),
+              failure_reason:String(form.failure_reason || "").trim(),
+              expected_version:Number(form.expected_version || 1),
+            };
+            if (submitted.status === "issued" && !submitted.invoice_number) { this.showToast("请填写发票号码",true); return false; }
+            if (submitted.status === "failed" && !submitted.failure_reason) { this.showToast("请填写失败原因",true); return false; }
+            this.invoiceTaskOperationState.resultSaving = true;
+            let succeeded = false;
+            try {
+              await axios.post(`/api/finance/invoice-tasks/${submitted.task_id}/result`, {
+                status:submitted.status,
+                invoice_number:submitted.status === "issued" ? submitted.invoice_number : null,
+                invoice_date:submitted.status === "issued" ? submitted.invoice_date : null,
+                failure_reason:submitted.status === "failed" ? submitted.failure_reason : null,
+                expected_version:submitted.expected_version,
+              });
+              succeeded = true;
+              this.showToast(submitted.status === "issued" ? "开票成功已登记" : "开票失败已登记");
+              await this.loadInvoiceTasks();
+              return true;
+            } catch(error) {
+              this.showToast(this.errorMessage(error), true);
+              return false;
+            } finally {
+              this.invoiceTaskOperationState.resultSaving = false;
+              if (succeeded && this.modal?.type === "invoiceTaskResult" && Number(this.invoiceTaskResult.task_id) === submitted.task_id) {
+                this.closeModal();
+              }
+            }
+          },
+          uploadInvoiceTaskPdf(task) {
+            if (!this.canManageInvoiceAttachment) {
+              this.showToast("当前账号没有管理发票附件的权限", true);
+              return false;
+            }
+            if (this.invoiceTaskUploadState.uploading) return false;
+            const taskId = Number(task?.id);
+            if (!taskId) {
+              this.showToast("开票任务无效，不能上传附件", true);
+              return false;
+            }
+            const input = this.$refs?.invoiceTaskPdfInput;
+            if (!input) {
+              this.showToast("文件选择器未就绪，请刷新页面后重试", true);
+              return false;
+            }
+            this.invoiceTaskUploadState.taskId = taskId;
+            this.invoiceTaskUploadState.taskNumber = String(task?.task_number || "");
+            this.invoiceTaskUploadState.error = "";
+            input.value = "";
+            input.click();
+            return true;
+          },
+          retryInvoiceTaskPdf() {
+            const taskId = Number(this.invoiceTaskUploadState.taskId);
+            if (!taskId) return false;
+            return this.uploadInvoiceTaskPdf({id:taskId, task_number:this.invoiceTaskUploadState.taskNumber});
+          },
+          async onInvoiceTaskPdfSelected(event) {
+            const input = event?.target;
+            const file = input?.files?.[0] || null;
+            if (!file) return false;
+            if (this.invoiceTaskUploadState.uploading) return false;
+            const taskId = Number(this.invoiceTaskUploadState.taskId);
+            if (!taskId) {
+              this.invoiceTaskUploadState.error = "请重新选择对应的开票任务";
+              this.showToast(this.invoiceTaskUploadState.error, true);
+              input.value = "";
+              return false;
+            }
+            const filename = String(file.name || "").trim();
+            if (!/\.pdf$/i.test(filename)) {
+              this.invoiceTaskUploadState.error = "仅支持 PDF 文件";
+              this.showToast(this.invoiceTaskUploadState.error, true);
+              input.value = "";
+              return false;
+            }
+            const formData = new FormData();
+            formData.append("file", file, filename);
+            const taskNumber = String(this.invoiceTaskUploadState.taskNumber || "");
+            this.invoiceTaskUploadState.uploading = true;
+            this.invoiceTaskUploadState.error = "";
+            try {
+              await axios.post(`/api/finance/invoice-tasks/${taskId}/attachments/original`, formData);
+              this.showToast(`任务 ${taskNumber || taskId} 的原始 PDF 已安全归档`);
+              await this.loadInvoiceTasks();
+              return true;
+            } catch(error) {
+              this.invoiceTaskUploadState.error = this.errorMessage(error);
+              this.showToast(`原始 PDF 上传失败：${this.invoiceTaskUploadState.error}`, true);
+              return false;
+            } finally {
+              this.invoiceTaskUploadState.uploading = false;
+              if (input) input.value = "";
+            }
+          },
           async openCustomerInvoiceProfile(customerId) { if (!this.canManageInvoiceProfiles) return; const customer=this.customers.find(row=>Number(row.id)===Number(customerId)); if(customer) this.openCustomer(customer); else this.showToast("请先在客户管理中打开该客户的税务资料",true); },
-          async loadInvoiceSellers() { if (!this.canManageInvoiceProfiles) return; try { const {data}=await axios.get("/api/finance/invoice-sellers"); this.invoiceSellers=data.items||data||[]; } catch(error) { this.showToast(`销方主体读取失败：${this.errorMessage(error)}`,true); } },
-          async openInvoiceSellers() { await this.loadInvoiceSellers(); this.invoiceSellerForm={id:null,seller_name:"",tax_no:"",address_phone:"",bank_account:"",is_active:true,version:null}; this.modal={type:"invoiceSellers",title:"维护销方主体"}; },
-          editInvoiceSeller(seller) { this.invoiceSellerForm={...seller,seller_name:seller.seller_name||seller.name||"",tax_no:seller.tax_no||"",address_phone:seller.address_phone||"",bank_account:seller.bank_account||"",is_active:seller.is_active!==false}; },
-          async saveInvoiceSeller() { const form=this.invoiceSellerForm; if(!String(form.seller_name||"").trim()||!String(form.tax_no||"").trim()) { this.showToast("请填写销方名称和纳税人识别号",true); return; } const payload={seller_name:form.seller_name.trim(),tax_no:form.tax_no.trim(),address_phone:String(form.address_phone||"").trim()||null,bank_account:String(form.bank_account||"").trim()||null,is_active:form.is_active!==false}; try { if(form.id) await axios.put(`/api/finance/invoice-sellers/${form.id}`,{...payload,expected_version:Number(form.version||1)}); else await axios.post("/api/finance/invoice-sellers",payload); await this.loadInvoiceSellers(); this.showToast(form.id?"销方主体已保存":"销方主体已新增"); } catch(error) { this.showToast(this.errorMessage(error),true); } },
-          async loadCustomerInvoiceProfile(customerId=this.customerForm?.id) { if(!this.canManageInvoiceProfiles||!customerId)return; try { const {data}=await axios.get(`/api/customers/${customerId}/invoice-profile`); this.customerInvoiceProfile={...this.customerInvoiceProfile,...data,error:""}; } catch(error) { this.customerInvoiceProfile.error=`税务资料读取失败：${this.errorMessage(error)}`; } },
-          async saveCustomerInvoiceProfile() { if(!this.canManageInvoiceProfiles||!this.customerForm?.id)return; try { await axios.put(`/api/customers/${this.customerForm.id}/invoice-profile`,{...this.customerInvoiceProfile,expected_version:Number(this.customerInvoiceProfile.version||1)}); await this.loadCustomerInvoiceProfile(); this.showToast("客户税务资料已保存，仍需确认后才能开票"); } catch(error) { this.customerInvoiceProfile.error=`税务资料保存失败：${this.errorMessage(error)}`; } },
-          async loadCustomerInvoiceRule(customerId=this.customerForm?.id) { if(!this.canManageInvoiceProfiles||!customerId)return; try { const {data}=await axios.get(`/api/customers/${customerId}/invoice-item-rules/default`); this.customerInvoiceRule={...this.customerInvoiceRule,...data,error:""}; } catch(error) { this.customerInvoiceRule.error=`默认项目规则读取失败：${this.errorMessage(error)}`; } },
-          async saveCustomerInvoiceRule() { if(!this.canManageInvoiceProfiles||!this.customerForm?.id)return; const form=this.customerInvoiceRule; if(!String(form.project_name||"").trim()||!String(form.tax_category_code||"").trim()||!String(form.unit||"").trim()||form.tax_rate===""||form.tax_rate===null) { this.showToast("项目名称、税收分类编码、单位和税率均为必填",true); return; } try { await axios.put(`/api/customers/${this.customerForm.id}/invoice-item-rules/default`,{project_name:String(form.project_name).trim(),tax_category_code:String(form.tax_category_code).trim(),unit:String(form.unit).trim(),tax_rate:Number(form.tax_rate),confirmation_status:form.confirmation_status,expected_version:Number(form.version||1)}); await this.loadCustomerInvoiceRule(); this.showToast("客户默认开票项目规则已保存"); } catch(error) { form.error=`默认项目规则保存失败：${this.errorMessage(error)}`; } },
+          resetInvoiceSellerForm() {
+            this.invoiceSellerForm = {id:null,seller_name:"",tax_no:"",address_phone:"",bank_account:"",is_active:true,version:null};
+          },
+          async loadInvoiceSellers() {
+            if (!this.canManageInvoiceProfiles) return false;
+            const requestKey = "finance:invoice-sellers";
+            const controller = this.beginLatestRequest(requestKey);
+            this.invoiceSellerState.loading = true;
+            this.invoiceSellerState.error = "";
+            this.invoiceSellerState.loaded = false;
+            try {
+              const { data } = await axios.get("/api/finance/invoice-sellers", {signal:controller.signal});
+              if (latestRequestControllers.get(requestKey) !== controller) return false;
+              this.invoiceSellers = data.items || data || [];
+              this.invoiceSellerState.loaded = true;
+              return true;
+            } catch (error) {
+              if (!this.isCancelledRequest(error) && latestRequestControllers.get(requestKey) === controller) {
+                this.invoiceSellers = [];
+                this.invoiceSellerState.error = this.errorMessage(error);
+                this.invoiceSellerState.loaded = false;
+              }
+              return false;
+            } finally {
+              if (latestRequestControllers.get(requestKey) === controller) {
+                this.invoiceSellerState.loading = false;
+                this.finishLatestRequest(requestKey, controller);
+              }
+            }
+          },
+          async openInvoiceSellers() {
+            if (!this.canManageInvoiceProfiles) return;
+            this.resetInvoiceSellerForm();
+            this.modal = {type:"invoiceSellers",title:"维护销方主体"};
+            await this.loadInvoiceSellers();
+          },
+          editInvoiceSeller(seller) {
+            if (!this.invoiceSellerState.loaded || this.invoiceSellerState.saving) return;
+            this.invoiceSellerForm={...seller,seller_name:seller.seller_name||seller.name||"",tax_no:seller.tax_no||"",address_phone:seller.address_phone||"",bank_account:seller.bank_account||"",is_active:seller.is_active!==false};
+          },
+          async saveInvoiceSeller() {
+            if (this.invoiceSellerState.saving) return false;
+            if (!this.invoiceSellerState.loaded || this.invoiceSellerState.error) {
+              this.showToast("请先重新加载销方主体后再保存", true);
+              return false;
+            }
+            const form = {...this.invoiceSellerForm};
+            if (!String(form.seller_name || "").trim() || !String(form.tax_no || "").trim()) {
+              this.showToast("请填写销方名称和纳税人识别号", true);
+              return false;
+            }
+            const editingId = Number(form.id || 0);
+            const payload = {
+              seller_name:String(form.seller_name).trim(),
+              tax_no:String(form.tax_no).trim(),
+              address_phone:String(form.address_phone || "").trim() || null,
+              bank_account:String(form.bank_account || "").trim() || null,
+              is_active:form.is_active !== false,
+            };
+            this.invoiceSellerState.saving = true;
+            try {
+              if (editingId) {
+                await axios.put(`/api/finance/invoice-sellers/${editingId}`, {...payload,expected_version:Number(form.version || 1)});
+              } else {
+                await axios.post("/api/finance/invoice-sellers", payload);
+              }
+              const successLabel = editingId ? "销方主体已保存" : "销方主体已新增";
+              this.resetInvoiceSellerForm();
+              const refreshed = await this.loadInvoiceSellers();
+              if (!refreshed) {
+                this.showToast(`${successLabel}，但列表刷新失败；资料已保存，请点击重新加载，不要重复提交`, true);
+                return true;
+              }
+              this.showToast(successLabel);
+              return true;
+            } catch (error) {
+              this.showToast(this.errorMessage(error), true);
+              return false;
+            } finally {
+              this.invoiceSellerState.saving = false;
+            }
+          },
+          async loadCustomerInvoiceProfile(customerId=this.customerForm?.id) {
+            const requestedCustomerId = Number(customerId || 0);
+            if (!this.canManageInvoiceProfiles || !requestedCustomerId || Number(this.customerForm?.id) !== requestedCustomerId) return false;
+            const requestKey = "finance:customer-invoice-profile";
+            const controller = this.beginLatestRequest(requestKey);
+            this.customerInvoiceState.profileLoading = true;
+            this.customerInvoiceState.profileLoadedCustomerId = null;
+            this.customerInvoiceProfile.error = "";
+            try {
+              const { data } = await axios.get(`/api/customers/${requestedCustomerId}/invoice-profile`, {signal:controller.signal});
+              if (latestRequestControllers.get(requestKey) !== controller || Number(this.customerForm?.id) !== requestedCustomerId) return false;
+              this.customerInvoiceProfile = {...this.customerInvoiceProfile,...data,error:""};
+              this.customerInvoiceState.profileLoadedCustomerId = requestedCustomerId;
+              return true;
+            } catch (error) {
+              if (!this.isCancelledRequest(error) && latestRequestControllers.get(requestKey) === controller && Number(this.customerForm?.id) === requestedCustomerId) {
+                this.customerInvoiceProfile.error = `税务资料读取失败：${this.errorMessage(error)}`;
+                this.customerInvoiceState.profileLoadedCustomerId = null;
+              }
+              return false;
+            } finally {
+              if (latestRequestControllers.get(requestKey) === controller) {
+                if (Number(this.customerForm?.id) === requestedCustomerId) this.customerInvoiceState.profileLoading = false;
+                this.finishLatestRequest(requestKey, controller);
+              }
+            }
+          },
+          async saveCustomerInvoiceProfile() {
+            if (!this.canManageInvoiceProfiles || this.customerInvoiceState.profileSaving) return false;
+            const customerId = Number(this.customerForm?.id || 0);
+            if (!customerId || Number(this.customerInvoiceState.profileLoadedCustomerId) !== customerId || this.customerInvoiceProfile.error) {
+              this.showToast("请先重新读取当前客户税务资料后再保存", true);
+              return false;
+            }
+            const form = {...this.customerInvoiceProfile};
+            const payload = {
+              invoice_title:String(form.invoice_title || "").trim() || null,
+              tax_no:String(form.tax_no || "").trim() || null,
+              invoice_address_phone:String(form.invoice_address_phone || "").trim() || null,
+              bank_account:String(form.bank_account || "").trim() || null,
+              default_seller_id:form.default_seller_id ? Number(form.default_seller_id) : null,
+              confirmation_status:form.confirmation_status || "draft",
+              expected_version:Number(form.version || 1),
+            };
+            this.customerInvoiceState.profileSaving = true;
+            try {
+              await axios.put(`/api/customers/${customerId}/invoice-profile`, payload);
+              if (Number(this.customerForm?.id) !== customerId) {
+                this.showToast("原客户税务资料已保存；当前已经切换到其他客户");
+                return true;
+              }
+              const refreshed = await this.loadCustomerInvoiceProfile(customerId);
+              if (!refreshed) {
+                this.showToast("客户税务资料已保存，但刷新失败；资料已保存，请重新读取，不要重复提交", true);
+                return true;
+              }
+              this.showToast("客户税务资料已保存，仍需确认后才能开票");
+              return true;
+            } catch (error) {
+              if (Number(this.customerForm?.id) === customerId) this.customerInvoiceProfile.error = `税务资料保存失败：${this.errorMessage(error)}`;
+              else this.showToast(`原客户税务资料保存失败：${this.errorMessage(error)}`, true);
+              return false;
+            } finally {
+              this.customerInvoiceState.profileSaving = false;
+            }
+          },
+          async loadCustomerInvoiceRule(customerId=this.customerForm?.id) {
+            const requestedCustomerId = Number(customerId || 0);
+            if (!this.canManageInvoiceProfiles || !requestedCustomerId || Number(this.customerForm?.id) !== requestedCustomerId) return false;
+            const requestKey = "finance:customer-invoice-rule";
+            const controller = this.beginLatestRequest(requestKey);
+            this.customerInvoiceState.ruleLoading = true;
+            this.customerInvoiceState.ruleLoadedCustomerId = null;
+            this.customerInvoiceRule.error = "";
+            try {
+              const { data } = await axios.get(`/api/customers/${requestedCustomerId}/invoice-item-rules/default`, {signal:controller.signal});
+              if (latestRequestControllers.get(requestKey) !== controller || Number(this.customerForm?.id) !== requestedCustomerId) return false;
+              this.customerInvoiceRule = {...this.customerInvoiceRule,...data,error:""};
+              this.customerInvoiceState.ruleLoadedCustomerId = requestedCustomerId;
+              return true;
+            } catch (error) {
+              if (!this.isCancelledRequest(error) && latestRequestControllers.get(requestKey) === controller && Number(this.customerForm?.id) === requestedCustomerId) {
+                this.customerInvoiceRule.error = `默认项目规则读取失败：${this.errorMessage(error)}`;
+                this.customerInvoiceState.ruleLoadedCustomerId = null;
+              }
+              return false;
+            } finally {
+              if (latestRequestControllers.get(requestKey) === controller) {
+                if (Number(this.customerForm?.id) === requestedCustomerId) this.customerInvoiceState.ruleLoading = false;
+                this.finishLatestRequest(requestKey, controller);
+              }
+            }
+          },
+          async saveCustomerInvoiceRule() {
+            if (!this.canManageInvoiceProfiles || this.customerInvoiceState.ruleSaving) return false;
+            const customerId = Number(this.customerForm?.id || 0);
+            if (!customerId || Number(this.customerInvoiceState.ruleLoadedCustomerId) !== customerId || this.customerInvoiceRule.error) {
+              this.showToast("请先重新读取当前客户默认规则后再保存", true);
+              return false;
+            }
+            const form = {...this.customerInvoiceRule};
+            if (!String(form.project_name || "").trim() || !String(form.tax_category_code || "").trim() || !String(form.unit || "").trim() || form.tax_rate === "" || form.tax_rate === null) {
+              this.showToast("项目名称、税收分类编码、单位和税率均为必填", true);
+              return false;
+            }
+            const payload = {
+              project_name:String(form.project_name).trim(),
+              tax_category_code:String(form.tax_category_code).trim(),
+              unit:String(form.unit).trim(),
+              tax_rate:Number(form.tax_rate),
+              confirmation_status:form.confirmation_status,
+              expected_version:Number(form.version || 1),
+            };
+            this.customerInvoiceState.ruleSaving = true;
+            try {
+              await axios.put(`/api/customers/${customerId}/invoice-item-rules/default`, payload);
+              if (Number(this.customerForm?.id) !== customerId) {
+                this.showToast("原客户默认开票规则已保存；当前已经切换到其他客户");
+                return true;
+              }
+              const refreshed = await this.loadCustomerInvoiceRule(customerId);
+              if (!refreshed) {
+                this.showToast("客户默认开票规则已保存，但刷新失败；资料已保存，请重新读取，不要重复提交", true);
+                return true;
+              }
+              this.showToast("客户默认开票项目规则已保存");
+              return true;
+            } catch (error) {
+              if (Number(this.customerForm?.id) === customerId) this.customerInvoiceRule.error = `默认项目规则保存失败：${this.errorMessage(error)}`;
+              else this.showToast(`原客户默认开票规则保存失败：${this.errorMessage(error)}`, true);
+              return false;
+            } finally {
+              this.customerInvoiceState.ruleSaving = false;
+            }
+          },
           async clearFinanceDashboardFilter() {
             this.financeFilters = { statement_month:this.financeFilters.statement_month || month(), balance_type:"", customer_id:"" };
             this.pages.financeCurrent = 1;
@@ -12336,17 +12922,38 @@
             try { return JSON.stringify(value, null, 2); }
             catch (error) { return "内容无法显示"; }
           },
-          async loadBackups() {
-            const { data } = await axios.get("/api/system/backups");
-            this.backups = data.items || [];
-            this.backupStats = {
-              backup_dir: data.backup_dir,
-              location_type: data.location_type,
-              total_count: data.total_count || 0,
-              total_size: data.total_size || 0,
-              protected_count: data.protected_count || 0,
-              deletable_count: data.deletable_count || 0,
-            };
+          async loadBackups({throwOnError=false} = {}) {
+            const requestKey = "system:backups:list";
+            const controller = this.beginLatestRequest(requestKey);
+            this.backupListLoading = true;
+            this.backupListError = "";
+            try {
+              const { data } = await axios.get("/api/system/backups", {signal:controller.signal});
+              if (latestRequestControllers.get(requestKey) !== controller) return false;
+              this.backups = data.items || [];
+              this.backupStats = {
+                backup_dir: data.backup_dir,
+                location_type: data.location_type,
+                total_count: data.total_count || 0,
+                total_size: data.total_size || 0,
+                protected_count: data.protected_count || 0,
+                deletable_count: data.deletable_count || 0,
+              };
+              return true;
+            } catch (error) {
+              if (!this.isCancelledRequest(error) && latestRequestControllers.get(requestKey) === controller) {
+                this.backups = [];
+                this.backupStats = {};
+                this.backupListError = `备份列表读取失败：${this.errorMessage(error)}`;
+                if (throwOnError) throw error;
+              }
+              return false;
+            } finally {
+              if (latestRequestControllers.get(requestKey) === controller) {
+                this.backupListLoading = false;
+                this.finishLatestRequest(requestKey, controller);
+              }
+            }
           },
           permissionCatalogSeed() {
             const rows = [
@@ -12374,26 +12981,63 @@
             return (defaults[role] || []).includes(item.code);
           },
           async loadPermissionUsers() {
-            this.permissionLoading = true;
+            const requestKey = "permissions:users";
+            const controller = this.beginLatestRequest(requestKey);
+            this.permissionUsersLoading = true;
+            this.permissionError = "";
+            this.permissionSaveError = "";
             try {
-              const { data } = await axios.get("/api/auth/users");
+              const { data } = await axios.get("/api/auth/users", { signal:controller.signal });
+              if (latestRequestControllers.get(requestKey) !== controller) return;
               this.permissionUsers = data.items || [];
               this.permissionCatalog = this.permissionCatalogSeed();
               if (this.selectedPermissionUserId && this.permissionUsers.some(row => row.id === this.selectedPermissionUserId)) {
                 await this.loadPermissionProfile(this.selectedPermissionUserId);
+              } else {
+                this.selectedPermissionUserId = null;
+                this.permissionProfile = null;
+                this.permissionDraft = { permissions:{}, customer_access_mode:"all", customer_ids:[] };
               }
-            } catch (error) { this.showToast(this.errorMessage(error), true); }
-            finally { this.permissionLoading = false; }
+            } catch (error) {
+              if (!this.isCancelledRequest(error) && latestRequestControllers.get(requestKey) === controller) {
+                this.permissionProfile = null;
+                this.permissionDraft = { permissions:{}, customer_access_mode:"all", customer_ids:[] };
+                this.permissionError = `用户列表读取失败：${this.errorMessage(error)}`;
+                this.showToast(this.permissionError, true);
+              }
+            } finally {
+              if (latestRequestControllers.get(requestKey) === controller) {
+                this.permissionUsersLoading = false;
+                this.finishLatestRequest(requestKey, controller);
+              }
+            }
           },
           async loadPermissionProfile(userId) {
-            if (!userId) { this.permissionProfile = null; return; }
-            this.permissionLoading = true;
+            const requestKey = "permissions:profile";
+            if (!userId) {
+              latestRequestControllers.get(requestKey)?.abort();
+              latestRequestControllers.delete(requestKey);
+              this.permissionProfile = null;
+              this.permissionDraft = { permissions:{}, customer_access_mode:"all", customer_ids:[] };
+              this.permissionProfileLoading = false;
+              this.permissionError = "";
+              this.permissionSaveError = "";
+              return;
+            }
+            const requestedUserId = Number(userId);
+            const controller = this.beginLatestRequest(requestKey);
+            this.permissionProfileLoading = true;
+            this.permissionError = "";
+            this.permissionSaveError = "";
+            this.permissionProfile = null;
+            this.permissionDraft = { permissions:{}, customer_access_mode:"all", customer_ids:[] };
             try {
               const [overridesResponse, scopeResponse] = await Promise.all([
-                axios.get(`/api/auth/users/${encodeURIComponent(userId)}/permission-overrides`),
-                axios.get(`/api/auth/users/${encodeURIComponent(userId)}/customer-scopes`),
+                axios.get(`/api/auth/users/${encodeURIComponent(requestedUserId)}/permission-overrides`, { signal: controller.signal }),
+                axios.get(`/api/auth/users/${encodeURIComponent(requestedUserId)}/customer-scopes`, { signal: controller.signal }),
               ]);
-              const selected = this.permissionUsers.find(row => row.id === Number(userId)) || {};
+              if (latestRequestControllers.get(requestKey) !== controller || Number(this.selectedPermissionUserId) !== requestedUserId) return;
+              const selected = this.permissionUsers.find(row => row.id === requestedUserId) || {};
               const raw = overridesResponse.data || {};
               const overrides = Object.fromEntries((raw.overrides || []).map(item => [item.permission_code || item.code, item.is_allowed ?? item.allowed]));
               const catalog = (raw.permissions || this.permissionCatalog || this.permissionCatalogSeed()).map(item => ({
@@ -12407,10 +13051,21 @@
               const customerIds = scopeResponse.data?.customer_scope || [];
               const customerScopeLocked = selected.role === "admin" || selected.role === "boss";
               const customerAccessMode = customerScopeLocked ? "all" : (scopeResponse.data?.customer_access_mode || "all");
-              this.permissionProfile = { user_id:Number(userId), username:selected.username, real_name:selected.real_name, role:selected.role, permissions:catalog, customer_ids:customerIds, customer_scope_locked:customerScopeLocked, unrestricted_customer_access:customerAccessMode === "all" };
+              this.permissionProfile = { user_id:requestedUserId, username:selected.username, real_name:selected.real_name, role:selected.role, permissions:catalog, customer_ids:customerIds, customer_scope_locked:customerScopeLocked, unrestricted_customer_access:customerAccessMode === "all" };
               this.permissionDraft = { permissions:Object.fromEntries(catalog.map(item => [item.code, !!item.allowed])), customer_access_mode:customerAccessMode, customer_ids:[...(scopeResponse.data?.customer_scope || [])].map(Number) };
-            } catch (error) { this.permissionProfile = null; this.showToast(this.errorMessage(error), true); }
-            finally { this.permissionLoading = false; }
+            } catch (error) {
+              if (!this.isCancelledRequest(error) && latestRequestControllers.get(requestKey) === controller && Number(this.selectedPermissionUserId) === requestedUserId) {
+                this.permissionProfile = null;
+                this.permissionDraft = { permissions:{}, customer_access_mode:"all", customer_ids:[] };
+                this.permissionError = `权限配置读取失败：${this.errorMessage(error)}`;
+                this.showToast(this.permissionError, true);
+              }
+            } finally {
+              if (latestRequestControllers.get(requestKey) === controller) {
+                this.permissionProfileLoading = false;
+                this.finishLatestRequest(requestKey, controller);
+              }
+            }
           },
           permissionOverridePayload() {
             const overrides = {};
@@ -12423,19 +13078,34 @@
             this.permissionDraft.customer_ids = [...ids].sort((a,b) => a - b);
           },
           async savePermissionAccess() {
-            if (!this.permissionProfile) return;
-            this.permissionLoading = true;
+            if (this.permissionSaving || !this.permissionProfile) return;
+            const userId = Number(this.permissionProfile.user_id);
+            if (Number(this.selectedPermissionUserId) !== userId) {
+              this.permissionProfile = null;
+              this.permissionDraft = { permissions:{}, customer_access_mode:"all", customer_ids:[] };
+              this.permissionError = "当前账号与权限资料不一致，请重新读取后再保存";
+              return;
+            }
+            const payload = {
+              overrides:this.permissionOverridePayload(),
+              mode:this.permissionDraft.customer_access_mode,
+              customer_ids:[...this.permissionDraft.customer_ids],
+            };
+            this.permissionSaving = true;
+            this.permissionError = "";
+            this.permissionSaveError = "";
             try {
-              const userId = this.permissionProfile.user_id;
-              await axios.put(`/api/auth/users/${encodeURIComponent(userId)}/access`, {
-                overrides:this.permissionOverridePayload(),
-                mode:this.permissionDraft.customer_access_mode,
-                customer_ids:this.permissionDraft.customer_ids,
-              });
-              await this.loadPermissionProfile(userId);
-              this.showToast("权限与客户范围已保存");
-            } catch (error) { this.showToast(this.errorMessage(error), true); }
-            finally { this.permissionLoading = false; }
+              await axios.put(`/api/auth/users/${encodeURIComponent(userId)}/access`, payload);
+              if (Number(this.selectedPermissionUserId) === userId) {
+                await this.loadPermissionProfile(userId);
+                if (Number(this.permissionProfile?.user_id) === userId && !this.permissionError) this.showToast("权限与客户范围已保存");
+              }
+            } catch (error) {
+              if (Number(this.selectedPermissionUserId) === userId) {
+                this.permissionSaveError = `权限保存失败：${this.errorMessage(error)}`;
+                this.showToast(this.permissionSaveError, true);
+              }
+            } finally { this.permissionSaving = false; }
           },
           openCreateUserModal() {
             this.createUserForm = { username:"", real_name:"", display_name:"", role:"sales", password:"" };
@@ -12454,21 +13124,84 @@
               this.showToast("用户已创建");
             } catch (error) { this.showToast(this.errorMessage(error), true); }
           },
-          async loadSystem() {
-            const [backups, users, version, changelog, company, deliveryPrintSettings] = await Promise.all([
-              axios.get("/api/system/backups"),
-              axios.get("/api/auth/users"),
-              axios.get("/api/system/version"),
-              axios.get("/api/system/version/changelog"),
-              axios.get("/api/system/company"),
-              axios.get("/api/system/delivery-print-settings"),
-            ]);
-            this.backups = backups.data.items;
-            this.systemUsers = users.data.items;
-            this.versionInfo = { ...version.data, changelog: changelog.data.changelog };
-            this.companyConfig = company.data;
-            this.deliveryPrintSettings = { ...this.deliveryPrintSettings, ...deliveryPrintSettings.data };
-            await this.loadMaterialMapping(1);
+          async loadSystem({force=false}={}) {
+            if (!["basic","print","backup","pdf"].includes(this.systemSection)) this.systemSection = "basic";
+            await this.loadSystemSection(this.systemSection, { force });
+          },
+          async selectSystemSection(section) {
+            if (!["basic","print","backup","pdf"].includes(section)) return;
+            this.systemSection = section;
+            await this.loadSystemSection(section);
+          },
+          systemSectionLabel(section) {
+            return { basic:"账号与公司", print:"打印设置", backup:"数据备份", pdf:"PDF 识别管理" }[section] || "系统设置";
+          },
+          async retrySystemSection() {
+            await this.loadSystemSection(this.systemSection, { force:true });
+          },
+          async loadSystemSection(section, {force=false}={}) {
+            if (!force && this.systemSectionLoaded[section]) return;
+            if (this.systemSectionLoading[section]) return;
+            this.systemSectionLoading = {...this.systemSectionLoading,[section]:true};
+            this.systemSectionErrors = {...this.systemSectionErrors,[section]:""};
+            try {
+              if (section === "basic") {
+                const [users, version, company] = await Promise.all([
+                  axios.get("/api/auth/users"),
+                  axios.get("/api/system/version"),
+                  axios.get("/api/system/company"),
+                ]);
+                const previousVersion = String(this.versionInfo?.version || "");
+                const nextVersion = String(version.data?.version || "");
+                if (previousVersion && nextVersion && previousVersion !== nextVersion) {
+                  this.versionHistoryLoaded = false;
+                  this.showVersionHistory = false;
+                  this.versionExpandedGroups = {};
+                }
+                this.systemUsers = users.data.items || [];
+                this.versionInfo = { ...version.data, changelog:this.versionInfo.changelog || [] };
+                this.companyConfig = company.data || {};
+              } else if (section === "print") {
+                const {data} = await axios.get("/api/system/delivery-print-settings");
+                this.deliveryPrintSettings = { ...this.deliveryPrintSettings, ...data };
+              } else if (section === "backup") {
+                await this.loadBackups({throwOnError:true});
+              } else if (section === "pdf") {
+                // PDF 样本统计和高级模板均由各自按钮/展开动作读取。
+              }
+              this.systemSectionLoaded = {...this.systemSectionLoaded,[section]:true};
+            } catch (error) {
+              const message = `${this.systemSectionLabel(section)}读取失败：${this.errorMessage(error)}`;
+              this.systemSectionErrors = {...this.systemSectionErrors,[section]:message};
+            } finally {
+              this.systemSectionLoading = {...this.systemSectionLoading,[section]:false};
+            }
+          },
+          async loadSystemVersionHistory({force=false}={}) {
+            if (!force && this.versionHistoryLoaded) return true;
+            if (this.versionHistoryLoading) return false;
+            this.versionHistoryLoading = true;
+            this.versionHistoryError = "";
+            try {
+              const {data} = await axios.get("/api/system/version/changelog");
+              this.versionInfo = {...this.versionInfo,changelog:data.changelog || []};
+              this.versionHistoryLoaded = true;
+              return true;
+            } catch (error) {
+              this.versionHistoryError = `历史版本读取失败：${this.errorMessage(error)}`;
+              return false;
+            } finally {
+              this.versionHistoryLoading = false;
+            }
+          },
+          async toggleSystemVersionHistory() {
+            if (this.showVersionHistory) { this.showVersionHistory = false; return; }
+            const loaded = await this.loadSystemVersionHistory();
+            if (loaded) this.showVersionHistory = true;
+          },
+          async onPdfAdvancedToggle(event) {
+            const details = event?.currentTarget;
+            if (!details?.open || this.pdfTemplatesLoaded) return;
             await this.loadPdfTemplates();
           },
           openCompanyModal() {
@@ -12620,6 +13353,10 @@
             this.customerForm = next;
             this.customerInvoiceProfile = {invoice_title:"",tax_no:"",invoice_address_phone:"",bank_account:"",default_seller_id:null,confirmation_status:"draft",version:null,error:""};
             this.customerInvoiceRule = {project_name:"",tax_category_code:"",unit:"",tax_rate:"",confirmation_status:"draft",version:null,error:""};
+            this.customerInvoiceState.profileLoading = false;
+            this.customerInvoiceState.profileLoadedCustomerId = null;
+            this.customerInvoiceState.ruleLoading = false;
+            this.customerInvoiceState.ruleLoadedCustomerId = null;
             this.customerQuotePreferenceDraft = this.blankCustomerQuotePreferenceDraft();
             this.loadCustomerQuotePreferences(next.id);
             if (next.id && this.canManageInvoiceProfiles) { this.loadInvoiceSellers(); this.loadCustomerInvoiceProfile(next.id); this.loadCustomerInvoiceRule(next.id); }
@@ -13778,6 +14515,8 @@
             this.filters.productSpec = "";
             this.filters.productMaterial = "";
             this.pages.products = 1;
+            this.products = [];
+            this.productsTotal = 0;
             await this.loadProducts();
           },
           async selectProductTab(tab) {
@@ -13805,6 +14544,8 @@
             this.filters.productMaterial = "";
             this.products = [];
             this.productsTotal = 0;
+            this.productsLoading = false;
+            this.productsError = "";
           },
           openMaterial(row=null) {
             this.materialForm = row ? {...blankMaterial(),...JSON.parse(JSON.stringify(row))} : blankMaterial();
@@ -15972,11 +16713,12 @@
               }
             } finally { this.loading=false; }
           },
-          openOrderEditor(group) {
-            const first = group?.orders?.[0];
+          async openOrderEditor(group) {
+            const detail = await this.ensureOrderGroupDetail(group);
+            const first = detail?.orders?.[0];
             if (!first) return;
             this.orderEditForm = {
-              order_ids: group.orders.map(row => row.id),
+              order_ids: detail.orders.map(row => row.id),
               customer_name: group.customer_name || "",
               customer_po: group.customer_po || "",
               order_number: first.order_number || "",
@@ -15984,7 +16726,7 @@
               delivery_date: first.delivery_date || "",
               remark: first.remark || "",
             };
-            this.orderEditGroup = group;
+            this.orderEditGroup = {...group,orders:detail.orders};
             this.showOrderEditDanger = false;
             this.modal = { type:"orderEdit", title:`编辑客户订单组 ${group.customer_po || first.order_number}` };
           },
@@ -16578,33 +17320,58 @@
             const {data}=await axios.post("/api/orders/cost-preview", body);
             Object.assign(item,data);
           },
-          toggleOrderGroup(key) { this.expandedOrders[key] = !this.expandedOrders[key]; },
-          toggleOrder(row) { this.expandedOrders[row.id] = !this.expandedOrders[row.id]; },
-          async openOrderGroupDetail(group) {
-            const anchor = group?.orders?.[0];
-            if (!anchor?.id || !group?.customer_id) {
+          orderGroupExpandedOrders(group) {
+            return this.orderGroupDetails[group?.key]?.orders || [];
+          },
+          async ensureOrderGroupDetail(group, {force=false}={}) {
+            const anchor = group?.orders?.[0], key = group?.key;
+            if (!anchor?.id || !group?.customer_id || !key) {
               this.showToast("订单汇总信息不完整，请刷新后重试", true);
-              return;
+              return null;
             }
+            if (!force && this.orderGroupDetails[key]) return this.orderGroupDetails[key];
+            if (this.orderGroupDetailLoading[key]) return null;
+            const generation = this.orderListGeneration;
+            this.orderGroupDetailLoading = {...this.orderGroupDetailLoading,[key]:true};
+            this.orderGroupDetailErrors = {...this.orderGroupDetailErrors,[key]:""};
             const params = {
               customer_id: group.customer_id,
               anchor_order_id: group.orders[0].id,
               scope: this.filters.orderScope || "active",
             };
-            if (String(group.customer_po || "").trim()) {
-              params.customer_po = String(group.customer_po).trim();
-            }
+            if (String(group.customer_po || "").trim()) params.customer_po = String(group.customer_po).trim();
             try {
               const { data } = await axios.get("/api/orders/group-detail", { params });
-              this.orderGroupDetail = data;
-              this.modal = {
-                type:"orderGroupDetail",
-                title:`订单详情 · ${data.customer_name} · ${data.customer_po || "未填写客户单号"}`,
-              };
+              if (generation !== this.orderListGeneration) return null;
+              this.orderGroupDetails = {...this.orderGroupDetails,[key]:data};
+              return data;
             } catch (error) {
-              this.orderGroupDetail = null;
-              this.showToast(`订单整组详情加载失败：${this.errorMessage(error)}`, true);
+              if (generation !== this.orderListGeneration) return null;
+              const message = `订单明细加载失败（订单整组详情加载失败）：${this.errorMessage(error)}`;
+              this.orderGroupDetailErrors = {...this.orderGroupDetailErrors,[key]:message};
+              this.showToast(message, true);
+              return null;
+            } finally {
+              if (generation === this.orderListGeneration) this.orderGroupDetailLoading = {...this.orderGroupDetailLoading,[key]:false};
             }
+          },
+          async toggleOrderGroup(group) {
+            const key = typeof group === "string" ? group : group?.key;if (!key) return;
+            if (this.expandedOrders[key]) { this.expandedOrders = {...this.expandedOrders,[key]:false}; return; }
+            this.expandedOrders = {...this.expandedOrders,[key]:true};
+            if (typeof group === "string") return;
+            await this.ensureOrderGroupDetail(group);
+          },
+          async retryOrderGroupDetail(group) { await this.ensureOrderGroupDetail(group,{force:true}); },
+          toggleOrder(row) { this.expandedOrders[row.id] = !this.expandedOrders[row.id]; },
+          async openOrderGroupDetail(group) {
+            const data = await this.ensureOrderGroupDetail(group);
+            if (!data) return;
+            this.orderGroupDetail = data;
+            this.modal = {
+              type:"orderGroupDetail",
+              title:`订单详情 · ${data.customer_name} · ${data.customer_po || "未填写客户单号"}`,
+            };
           },
           async openOrderDetail(row) {
             const { data } = await axios.get(`/api/orders/${row.id}`);
@@ -17479,7 +18246,7 @@
               ...overrides,
             };
           },
-          resetDeliveryLines(count = 5) {
+          resetDeliveryLines(count = 0) {
             this.deliveryForm.lines = Array.from({ length: count }, () => this.createDeliveryLine());
           },
           addDeliveryLines(count = 1) {
@@ -17490,7 +18257,6 @@
           },
           removeDeliveryLine(lineKey) {
             this.deliveryForm.lines = this.deliveryForm.lines.filter(line => line.key !== lineKey);
-            if (!(this.deliveryForm.lines || []).some(line => line.source_type !== "unordered_finished") && this.deliveryForm.source_tab === "order") this.addDeliveryLines(5);
           },
           clearDeliveryLine(line) {
             Object.assign(line, this.createDeliveryLine({ key: line.key }));
@@ -17557,11 +18323,11 @@
             this.deliveryBatchPicker.request_token = requestToken;
             this.deliveryBatchPicker.loading = true;
             this.deliveryBatchPicker.error = false;
+            this.deliveryBatchPicker.message = "正在载入待送订单，请稍候…";
             try {
               const { data } = await axios.get("/api/deliveries/pending-items/search", {
                 params: {
                   customer_id: this.deliveryForm.customer_id,
-                  list_all: true,
                   q: this.deliveryBatchPicker.keyword || undefined,
                   page: Math.max(1, Number(page || 1)),
                   page_size: this.deliveryBatchPicker.page_size,
@@ -17619,7 +18385,6 @@
           onDeliveryCustomerChange() {
             if (this.deliveryForm.editingId) return;
             this.deliveryForm.lines = [];
-            this.resetDeliveryLines();
             this.deliveryForm.source_mode = "order";
             this.deliveryBatchPicker = { visible:false, loading:false, keyword:"", items:[], selected:{}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message:"", error:false };
             this.unorderedFinishedPicker = { visible:false, loading:false, keyword:"", items:[], selected:{}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message:"", error:false };
@@ -17629,7 +18394,6 @@
             this.deliveryForm.source_tab = sourceMode;
             if (sourceMode === "order") {
               this.unorderedFinishedPicker.visible = false;
-              if (!(this.deliveryForm.lines || []).some(line => line.source_type !== "unordered_finished")) this.addDeliveryLines(5);
             } else {
               this.deliveryBatchPicker.visible = false;
             }
@@ -17706,7 +18470,7 @@
               if (!productId || !lotId) return this.showToast("库存批次缺少产品或批次标识，无法导入", true);
               let line = this.deliveryForm.lines.find(row => Number(row.product_id) === productId && row.source_type === "unordered_finished");
               if (!line) {
-                line = this.createDeliveryLine({ source_type:"unordered_finished", product_id:productId, product_code:item.product_code || "", product_name:item.product_name || "", specification:item.specification || "", unit_price:item.unit_price ?? null, delivered_quantity:0, allocations:[], order_pending_quantity:Number(item.order_pending_quantity || 0) });
+                line = this.createDeliveryLine({ source_type:"unordered_finished", product_id:productId, product_code:item.product_code || "", product_name:item.product_name || "", specification:item.specification || "", unit_price:Number(item.unit_price || 0) > 0 ? Number(item.unit_price) : null, delivered_quantity:0, allocations:[], order_pending_quantity:Number(item.order_pending_quantity || 0) });
                 this.deliveryForm.lines.push(line);
               }
               line.order_pending_quantity = Math.max(Number(line.order_pending_quantity || 0), Number(item.order_pending_quantity || 0));
@@ -17767,13 +18531,46 @@
           },
           deliveryPrimaryLabel() {
             if (!this.deliveryForm.editingId) return "保存草稿";
-            return this.deliveryFormIsDirty() ? "保存修改" : "打印";
+            if (this.deliveryOperationState.action === "dispatch" && Number(this.deliveryOperationState.deliveryId) === Number(this.deliveryForm.editingId)) return "发货中…";
+            return this.deliveryFormIsDirty() ? "保存修改" : "发货打印";
           },
           async deliveryPrimaryAction() {
             if (this.deliveryForm.editingId && !this.deliveryFormIsDirty()) {
-              return this.printCurrentDeliveryDraft();
+              return this.dispatchCurrentDeliveryDraft();
             }
             return this.saveModal();
+          },
+          currentDeliveryDraftRow() {
+            const deliveryId = Number(this.deliveryForm.editingId || 0);
+            const listed = (this.deliveries || []).find(row => Number(row.id) === deliveryId);
+            return listed || {
+              id: deliveryId,
+              delivery_number: this.deliveryForm.delivery_number || `#${deliveryId}`,
+              status: "pending",
+              pick_task: this.deliveryForm.pick_task || null,
+            };
+          },
+          async createCurrentDeliveryPickTask() {
+            if (!this.deliveryForm.editingId || this.deliveryFormIsDirty()) {
+              this.showToast("请先保存送货草稿，再推送拿货", true);
+              return false;
+            }
+            const row = this.currentDeliveryDraftRow();
+            const task = await this.createDeliveryPickTask(row);
+            if (!task) return false;
+            this.deliveryForm.pick_task = task;
+            return true;
+          },
+          async dispatchCurrentDeliveryDraft() {
+            if (!this.deliveryForm.editingId || this.deliveryFormIsDirty()) {
+              this.showToast("内容已修改，请先保存后再发货打印", true);
+              return false;
+            }
+            const row = this.currentDeliveryDraftRow();
+            row.pick_task = this.deliveryForm.pick_task || row.pick_task || null;
+            const dispatched = await this.dispatchDelivery(row);
+            if (dispatched) this.modal = null;
+            return dispatched;
           },
           async printCurrentDeliveryDraft() {
             const deliveryId = Number(this.deliveryForm.editingId || 0);
@@ -17848,7 +18645,7 @@
               const line = active[index];
               if (line.source_type === "unordered_finished") {
                 if (!Number(line.product_id)) return `第${index + 1}行不是有效的无订单库存产品`;
-                if (line.unit_price === null || line.unit_price === "" || !Number.isFinite(Number(line.unit_price)) || Number(line.unit_price) <= 0) return `第${index + 1}行无默认单价，请填写大于零的单价`;
+                if (line.unit_price !== null && line.unit_price !== "" && (!Number.isFinite(Number(line.unit_price)) || Number(line.unit_price) <= 0)) return `第${index + 1}行单价填写后必须大于零`;
                 const quantity = Number(line.delivered_quantity);
                 const allocations = line.allocations || [];
                 const allocated = allocations.reduce((sum, allocation) => sum + Number(allocation.quantity || 0), 0);
@@ -18037,16 +18834,17 @@
           },
           async openDelivery(preferredCustomerId = null) {
             if (!Number.isInteger(Number(preferredCustomerId))) preferredCustomerId = null;
-            await this.loadDeliveryPendingItems();
-            const availableCustomers = this.deliveryCustomerOptions || [];
-            const availableCustomerIds = new Set(availableCustomers.map(row => Number(row.id)));
-            const selectedCustomerId = availableCustomerIds.has(Number(preferredCustomerId)) ? Number(preferredCustomerId) : (availableCustomers[0]?.id || null);
-            this.deliveryForm = { editingId:null, delivery_number:"", source_mode:"order", source_tab:"order", customer_id:selectedCustomerId, delivery_date:today(), vehicle_number:"", lines:[], saved_signature:"" };
+            this.deliveryForm = { editingId:null, delivery_number:"", source_mode:"order", source_tab:"order", customer_id:null, delivery_date:today(), vehicle_number:"", lines:[], saved_signature:"", pick_task:null };
             this.deliveryBatchPicker = { visible:false, loading:false, keyword:"", items:[], selected:{}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message:"", error:false };
             this.unorderedFinishedPicker = { visible:false, loading:false, keyword:"", items:[], selected:{}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message:"", error:false };
-            this.resetDeliveryLines();
             this.deliveryForm.saved_signature = this.deliveryFormSignature();
             this.modal = { type:"delivery", title:"新增送货单" };
+            await this.loadDeliveryCustomerOptions();
+            const availableCustomerIds = new Set((this.deliveryCustomerOptions || []).map(row => Number(row.id)));
+            this.deliveryForm.customer_id = availableCustomerIds.has(Number(preferredCustomerId))
+              ? (preferredCustomerId ? Number(preferredCustomerId) : null)
+              : null;
+            this.deliveryForm.saved_signature = this.deliveryFormSignature();
           },
           async openDeliveryRoutePlan() {
             try {
@@ -18252,19 +19050,40 @@
             this.statementDetail = null;
           },
           async cancelStatement(row) {
-            if (!confirm(`确定取消该对账单吗？取消后相关送货明细可重新生成对账单。`)) return;
+            if (this.financeStatementOperationState.action) return false;
+            if (!confirm(`确定取消该对账单吗？取消后相关送货明细可重新生成对账单。`)) return false;
+            const statementId = Number(row.id);
+            this.financeStatementOperationState.action = "cancel";
+            this.financeStatementOperationState.statementId = statementId;
             try {
-              await axios.post(`/api/finance/statements/${row.id}/cancel`);
-              await this.loadFinance();
-              if (this.statementDetail?.id === row.id) this.statementDetail = null;
+              try {
+                await axios.post(`/api/finance/statements/${statementId}/cancel`);
+              } catch(error) {
+                this.showToast(this.errorMessage(error), true);
+                return false;
+              }
+              if (Number(this.statementDetail?.id) === statementId) this.statementDetail = null;
               if (this.modal?.type === "statementDetail" || this.modal?.type === "statementEdit") this.modal = null;
               this.showToast("对账单已取消，相关送货明细可重新生成");
-            } catch (error) {
-              this.showToast(this.errorMessage(error), true);
+              try {
+                await this.loadFinance();
+              } catch(error) {
+                this.showToast(`对账单已经取消，但页面刷新失败：${this.errorMessage(error)}。请点刷新，不要重复取消。`, true);
+              }
+              return true;
+            } finally {
+              if (this.financeStatementOperationState.action === "cancel" && Number(this.financeStatementOperationState.statementId) === statementId) {
+                this.financeStatementOperationState.action = "";
+                this.financeStatementOperationState.statementId = null;
+              }
             }
           },
 	          closeModal() {
 	            if (this.isForcedPassword) return;
+              if (this.modal?.type === "invoiceTaskResult" && this.invoiceTaskOperationState.resultSaving) {
+                this.showToast("正在登记开票结果，请稍候", true);
+                return;
+              }
               if (this.modal?.type === "orderTrace") {
                 this.returnFromOrderTrace();
                 return;
@@ -18291,6 +19110,11 @@
                 this.auditLogState.detailError = "";
                 this.auditLogState.detailLoading = false;
               }
+	            if (this.modal?.type === "invoiceTask") {
+	              this.invoiceTaskDetail = null;
+	              this.invoiceTaskOperationState.detailLoading = false;
+	              this.invoiceTaskOperationState.detailError = "";
+	            }
 	            this.modal = null;
             this.statementDetail = null;
             this.statementEditForm = { id: null, statement_month: "" };
@@ -18637,7 +19461,7 @@
                     source_type: "unordered_finished",
                     product_id: Number(line.product_id),
                     delivered_quantity: Number(line.delivered_quantity),
-                    unit_price: Number(line.unit_price),
+                    unit_price: line.unit_price === null || line.unit_price === "" ? null : Number(line.unit_price),
                     allocations: (line.allocations || []).map(allocation => ({ inventory_lot_id:Number(allocation.inventory_lot_id), quantity:Number(allocation.quantity) })),
                     remarks: line.remarks || null,
                   }) : ({
@@ -18656,13 +19480,14 @@
                 }
                 this.deliveryForm.editingId = Number(data.id);
                 this.deliveryForm.delivery_number = data.delivery_number || this.deliveryForm.delivery_number || "";
+                this.deliveryForm.pick_task = data.pick_task || this.deliveryForm.pick_task || null;
                 this.deliveryForm.saved_signature = this.deliveryFormSignature();
                 this.modal = {
                   type:"delivery",
                   title:`编辑送货单 ${this.deliveryForm.delivery_number || data.id}`,
                 };
                 await this.loadDeliveries();
-                this.showToast("送货草稿已保存，可以直接打印");
+                this.showToast("送货草稿已保存，可选择拿货或直接发货打印");
                 return true;
               }
               if (this.modal.type === "statement") {
@@ -18725,29 +19550,58 @@
             finally { this.loading = false; }
           },
           async dispatchDelivery(row) {
+            if (this.deliveryOperationState.action) return false;
+            const deliveryId = Number(row?.id || 0);
+            const deliveryNumber = String(row?.delivery_number || `#${deliveryId}`);
+            if (!deliveryId) {
+              this.showToast("送货单不存在，无法发货", true);
+              return false;
+            }
             const task = this.normalizeDeliveryPickTask(row);
+            const frozenTask = task ? {...task} : null;
             if (task?.id && (task.has_exception || task.status === "exception")) {
               const details = this.deliveryPickExceptionText(row);
-              if (!confirm(`司机拿货结果存在异常，请确认以下变化后再发货：\n${details || "存在没货或数量变化"}\n\n确认后系统会先应用司机结果，再继续发货打印。`)) return;
-              try {
-                await this.applyDeliveryPickTask(row);
-                row.pick_task = { ...task, status: "applied", has_exception: false };
-              } catch (error) { this.showToast(this.errorMessage(error), true); return; }
+              if (!confirm(`司机拿货结果存在异常，请确认以下变化后再发货：\n${details || "存在没货或数量变化"}\n\n确认后系统会先应用司机结果，再继续发货打印。`)) return false;
             }
-            if (!confirm(`确认发货并打印 ${row.delivery_number} 吗？`)) return;
-            const printSession = await this.openDeliveryPrintTab(row.id, true);
-            if (!printSession) return;
+            if (!confirm(`确认发货并打印 ${deliveryNumber} 吗？`)) return false;
+            this.deliveryOperationState = {action:"dispatch",deliveryId,deliveryNumber};
+            const frozenRow = {...row,id:deliveryId,delivery_number:deliveryNumber,pick_task:frozenTask};
+            let printSession = null;
+            let dispatchSucceeded = false;
             try {
-              await axios.put(`/api/deliveries/${row.id}/dispatch`);
-              await axios.put(`/api/deliveries/${row.id}/printed`);
+              if (frozenTask?.id && (frozenTask.has_exception || frozenTask.status === "exception")) {
+                await this.applyDeliveryPickTask(frozenRow);
+                row.pick_task = {...frozenTask,status:"applied",has_exception:false};
+              }
+              printSession = await this.openDeliveryPrintTab(deliveryId, true);
+              if (!printSession) return false;
+              await axios.put(`/api/deliveries/${deliveryId}/dispatch`);
+              dispatchSucceeded = true;
               printSession.activate();
-              await Promise.all([this.loadDeliveries(),this.loadOrders(),this.loadKpi()]);
+              try {
+                await axios.put(`/api/deliveries/${deliveryId}/printed`);
+              } catch (error) {
+                this.showToast(`发货已经完成；打印登记失败，可重新打开打印页，不要再次发货：${this.errorMessage(error)}`, true);
+                return true;
+              }
+              try {
+                await Promise.all([this.loadDeliveries(),this.loadOrders(),this.loadKpi()]);
+              } catch (error) {
+                this.showToast(`发货已经完成；列表刷新失败，只需刷新页面，不要再次发货：${this.errorMessage(error)}`, true);
+                return true;
+              }
               this.showToast("发货成功，打印页已打开");
+              return true;
             }
             catch (error) {
               const message = this.errorMessage(error);
-              printSession.abort(message);
+              if (printSession && !dispatchSucceeded) printSession.abort(message);
               this.showToast(message, true);
+              return false;
+            } finally {
+              if (this.deliveryOperationState.action === "dispatch" && Number(this.deliveryOperationState.deliveryId) === deliveryId) {
+                this.deliveryOperationState = {action:"",deliveryId:null,deliveryNumber:""};
+              }
             }
           },
           async printDelivery(row) { return !!(await this.openDeliveryPrintTab(row?.id)); },
@@ -18797,33 +19651,80 @@
                 candidate_error: false,
               });
             });
-            const orderLineCount = lines.filter(line => line.source_type !== "unordered_finished").length;
-            for (let index = orderLineCount; index < 5; index += 1) lines.push(this.createDeliveryLine());
-            this.deliveryForm = { editingId:row.id, delivery_number:row.delivery_number || "", source_mode:sourceMode, source_tab:hasOrderLines ? "order" : "unordered_finished", customer_id:row.customer_id, delivery_date:row.delivery_date, vehicle_number:row.vehicle_number || "", lines, saved_signature:"" };
+            this.deliveryForm = { editingId:row.id, delivery_number:row.delivery_number || "", source_mode:sourceMode, source_tab:hasOrderLines ? "order" : "unordered_finished", customer_id:row.customer_id, delivery_date:row.delivery_date, vehicle_number:row.vehicle_number || "", lines, saved_signature:"", pick_task:row.pick_task || null };
             this.deliveryForm.saved_signature = this.deliveryFormSignature();
             this.deliveryBatchPicker = { visible:false, loading:false, keyword:"", items:[], selected:{}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message:"", error:false };
             this.unorderedFinishedPicker = { visible:false, loading:false, keyword:"", items:[], selected:{}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message:"", error:false };
             this.modal = { type:"delivery", title:`编辑送货单 ${row.delivery_number}` };
           },
           async deleteDelivery(row) {
-            if (!confirm(`确认移除送货单 ${row.delivery_number} 吗？\n未发生发货的草稿将直接删除；已有发货、回单或库存历史的单据将作废归档，不会再次改变库存或订单已送数量。`)) return;
+            if (this.deliveryOperationState.action) return false;
+            const deliveryId = Number(row?.id || 0);
+            const deliveryNumber = String(row?.delivery_number || `#${deliveryId}`);
+            if (!deliveryId) {
+              this.showToast("送货单不存在，无法删除", true);
+              return false;
+            }
+            if (!confirm(`确认移除送货单 ${deliveryNumber} 吗？\n未发生发货的草稿将直接删除；已有发货、回单或库存历史的单据将作废归档，不会再次改变库存或订单已送数量。`)) return false;
+            this.deliveryOperationState = {action:"delete",deliveryId,deliveryNumber};
             try {
-              const response = await axios.delete(`/api/deliveries/${row.id}`);
-              await Promise.all([this.loadDeliveries(), this.loadKpi()]);
+              let response;
+              try {
+                response = await axios.delete(`/api/deliveries/${deliveryId}`);
+              } catch (error) {
+                this.showToast(this.errorMessage(error), true);
+                return false;
+              }
+              const successMessage = response.data?.voided
+                ? "该送货单已有发货或库存历史，已作废归档；库存流水和审计记录均已保留"
+                : "已删除未发货送货草稿";
+              try {
+                await Promise.all([this.loadDeliveries(), this.loadKpi()]);
+              } catch (error) {
+                const disposition = response.data?.voided ? "已经作废归档" : "已经删除";
+                this.showToast(`送货单 ${deliveryNumber} ${disposition}，但页面刷新失败：${this.errorMessage(error)}。请点刷新，不要重复操作。`, true);
+                return true;
+              }
               this.showToast(
-                response.data?.voided
-                  ? "该送货单已有发货或库存历史，已作废归档；库存流水和审计记录均已保留"
-                  : "已删除未发货送货草稿"
+                successMessage
               );
-            } catch (error) { this.showToast(this.errorMessage(error), true); }
+              return true;
+            } finally {
+              if (this.deliveryOperationState.action === "delete" && Number(this.deliveryOperationState.deliveryId) === deliveryId) {
+                this.deliveryOperationState = {action:"",deliveryId:null,deliveryNumber:""};
+              }
+            }
           },
           async cancelDelivery(row) {
-            if (!confirm(`确认取消发货 ${row.delivery_number} 吗？\n将回滚本单已送数量并恢复订单待送状态。\n若已有回单或已进入对账，系统会拒绝取消。`)) return;
+            if (this.deliveryOperationState.action) return false;
+            const deliveryId = Number(row?.id || 0);
+            const deliveryNumber = String(row?.delivery_number || `#${deliveryId}`);
+            if (!deliveryId) {
+              this.showToast("送货单不存在，无法取消发货", true);
+              return false;
+            }
+            if (!confirm(`确认取消发货 ${deliveryNumber} 吗？\n将回滚本单已送数量并恢复订单待送状态。\n若已有回单或已进入对账，系统会拒绝取消。`)) return false;
+            this.deliveryOperationState = {action:"cancel",deliveryId,deliveryNumber};
             try {
-              await axios.put(`/api/deliveries/${row.id}/cancel`);
-              await Promise.all([this.loadDeliveries(), this.loadOrders(), this.loadKpi()]);
+              try {
+                await axios.put(`/api/deliveries/${deliveryId}/cancel`);
+              } catch (error) {
+                this.showToast(this.errorMessage(error), true);
+                return false;
+              }
+              try {
+                await Promise.all([this.loadDeliveries(), this.loadOrders(), this.loadKpi()]);
+              } catch (error) {
+                this.showToast(`送货单 ${deliveryNumber} 取消发货已经完成，但页面刷新失败：${this.errorMessage(error)}。订单与库存已由系统恢复，请点刷新，不要重复取消。`, true);
+                return true;
+              }
               this.showToast("已取消发货，订单待送数量已恢复");
-            } catch (error) { this.showToast(this.errorMessage(error), true); }
+              return true;
+            } finally {
+              if (this.deliveryOperationState.action === "cancel" && Number(this.deliveryOperationState.deliveryId) === deliveryId) {
+                this.deliveryOperationState = {action:"",deliveryId:null,deliveryNumber:""};
+              }
+            }
           },
           async cancelReceipt(row) {
             const receiptId = row.return_receipt_id || this.receiptForm?.id;
@@ -18839,69 +19740,161 @@
           },
           exportStatement(row) { window.location.href=`/api/finance/statements/${row.id}/export`; },
           async registerInvoice(row) {
-            const invoiceNumber = prompt("请输入发票号码");
-            if (!invoiceNumber) return;
-            const remaining = Number(row.total_receivable) - Number(row.invoiced_amount);
-            const amount = prompt("请输入本次开票金额", remaining.toFixed(2));
-            if (amount === null) return;
+            if (this.financeStatementOperationState.action) return false;
+            const invoiceNumber = String(prompt("请输入发票号码") || "").trim();
+            if (!invoiceNumber) return false;
+            const statementId = Number(row.id);
+            const remaining = Number(row.pending_invoice_amount ?? (Number(row.total_receivable) - Number(row.invoiced_amount)));
+            const amountInput = prompt("请输入本次开票金额", remaining.toFixed(2));
+            if (amountInput === null) return false;
+            const amountNumber = Number(amountInput);
+            if (!Number.isFinite(amountNumber) || amountNumber <= 0) {
+              this.showToast("本次开票金额必须大于 0", true);
+              return false;
+            }
+            if (amountNumber > remaining + 0.000001) {
+              this.showToast(`本次开票金额不能超过待开票余额 ${remaining.toFixed(2)}`, true);
+              return false;
+            }
+            const invoiceAmount = amountNumber.toFixed(2);
+            const invoiceDate = today();
+            this.financeStatementOperationState.action = "register";
+            this.financeStatementOperationState.statementId = statementId;
             try {
-              await axios.post("/api/finance/invoices", { statement_id:row.id, invoice_number:invoiceNumber, invoice_date:today(), invoice_amount:amount });
-              await this.loadFinance(); this.showToast("开票登记成功");
-            } catch (error) { this.showToast(this.errorMessage(error), true); }
-          },
-          async settle(row) {
-            const remaining = Number(row.total_receivable) - Number(row.settled_amount);
-            const amount = prompt("请输入本次收款金额", remaining.toFixed(2));
-            if (amount === null) return;
-            try {
-              await axios.put(`/api/finance/statements/${row.id}/settle`, { amount, settlement_date:today() });
-              await Promise.all([this.loadFinance(),this.loadKpi()]); this.showToast("收款核销成功");
-            } catch (error) {
-              const validation = this.normalizeValidationErrors(error, {
-                amount: "本次收款金额",
-                settlement_date: "收款日期",
-                account: "收款账户"
-              });
-              this.showToast(validation || this.errorMessage(error), true);
+              try {
+                await axios.post("/api/finance/invoices", {statement_id:statementId,invoice_number:invoiceNumber,invoice_date:invoiceDate,invoice_amount:invoiceAmount});
+              } catch(error) {
+                this.showToast(this.errorMessage(error), true);
+                return false;
+              }
+              this.showToast("开票登记成功");
+              try {
+                await this.loadFinance();
+              } catch(error) {
+                this.showToast(`发票已经登记，但页面刷新失败：${this.errorMessage(error)}。请点刷新，不要重复登记。`, true);
+              }
+              return true;
+            } finally {
+              if (this.financeStatementOperationState.action === "register" && Number(this.financeStatementOperationState.statementId) === statementId) {
+                this.financeStatementOperationState.action = "";
+                this.financeStatementOperationState.statementId = null;
+              }
             }
           },
-          async createBackup() {
+          async settle(row) {
+            if (this.financeStatementOperationState.action) return false;
+            const statementId = Number(row.id);
+            const remaining = Number(row.pending_payment_amount ?? (Number(row.total_receivable) - Number(row.settled_amount)));
+            const amountInput = prompt("请输入本次收款金额", remaining.toFixed(2));
+            if (amountInput === null) return false;
+            const amountNumber = Number(amountInput);
+            if (!Number.isFinite(amountNumber) || amountNumber <= 0) {
+              this.showToast("本次收款金额必须大于 0", true);
+              return false;
+            }
+            if (amountNumber > remaining + 0.000001) {
+              this.showToast(`本次收款金额不能超过待收余额 ${remaining.toFixed(2)}`, true);
+              return false;
+            }
+            const amount = amountNumber.toFixed(2);
+            const settlementDate = today();
+            this.financeStatementOperationState.action = "settle";
+            this.financeStatementOperationState.statementId = statementId;
+            try {
+              try {
+                await axios.put(`/api/finance/statements/${statementId}/settle`, {amount,settlement_date:settlementDate});
+              } catch(error) {
+                const validation = this.normalizeValidationErrors(error, {
+                  amount: "本次收款金额",
+                  settlement_date: "收款日期",
+                  account: "收款账户"
+                });
+                this.showToast(validation || this.errorMessage(error), true);
+                return false;
+              }
+              this.showToast("收款核销成功");
+              try {
+                await Promise.all([this.loadFinance(), this.loadKpi()]);
+              } catch(error) {
+                this.showToast(`收款已经核销，但页面刷新失败：${this.errorMessage(error)}。请点刷新，不要重复核销。`, true);
+              }
+              return true;
+            } finally {
+              if (this.financeStatementOperationState.action === "settle" && Number(this.financeStatementOperationState.statementId) === statementId) {
+                this.financeStatementOperationState.action = "";
+                this.financeStatementOperationState.statementId = null;
+              }
+            }
+          },
+          beginBackupAction(action) {
+            if (this.backupAction || this.loading) return false;
+            this.backupAction = action;
             this.loading = true;
-            try { const {data}=await axios.post("/api/system/backups"); await this.loadBackups(); this.showToast(`备份成功：${data.filename}`); }
-            catch (error) { this.showToast(this.errorMessage(error), true); }
-            finally { this.loading=false; }
+            return true;
+          },
+          finishBackupAction(action) {
+            if (this.backupAction !== action) return;
+            this.backupAction = "";
+            this.loading = false;
+          },
+          closeBackupCleanupPreview() {
+            if (this.backupAction || this.backupListLoading || this.loading) return false;
+            this.showCleanupPreview = false;
+            return true;
+          },
+          async createBackup() {
+            if (!this.beginBackupAction("create")) return false;
+            try {
+              const {data}=await axios.post("/api/system/backups");
+              const refreshed = await this.loadBackups();
+              if (refreshed) this.showToast(`备份成功：${data.filename}`);
+              else this.showToast(`备份已创建：${data.filename}，但列表刷新失败，请点“重新加载”；不要重复备份`, true);
+              return true;
+            }
+            catch (error) { this.showToast(this.errorMessage(error), true); return false; }
+            finally { this.finishBackupAction("create"); }
           },
           async deleteBackup(row) {
             if (!confirm(`确认删除备份文件：\n${row.filename}\n此操作不可恢复！`)) return;
-            this.loading = true;
+            if (!this.beginBackupAction("delete")) return false;
+            const filename = String(row.filename || "");
             try {
-              const { data } = await axios.delete(`/api/system/backups/${encodeURIComponent(row.filename)}`);
-              await this.loadBackups();
-              this.showToast(`已删除 ${data.deleted}，释放 ${this.fileSize(data.freed_size)}`);
-            } catch (error) { this.showToast(this.errorMessage(error), true); }
-            finally { this.loading = false; }
+              const { data } = await axios.delete(`/api/system/backups/${encodeURIComponent(filename)}`);
+              const refreshed = await this.loadBackups();
+              const message = `已删除 ${data.deleted}，释放 ${this.fileSize(data.freed_size)}`;
+              this.showToast(refreshed ? message : `${message}；但列表刷新失败，请点“重新加载”，不要重复删除`, !refreshed);
+              return true;
+            } catch (error) { this.showToast(this.errorMessage(error), true); return false; }
+            finally { this.finishBackupAction("delete"); }
           },
           async previewCleanup() {
-            this.loading = true;
+            if (!this.beginBackupAction("preview")) return false;
             try {
               const { data } = await axios.get("/api/system/backups/cleanup-preview");
               this.backupCleanupPreview = data;
               this.showCleanupPreview = true;
-            } catch (error) { this.showToast(this.errorMessage(error), true); }
-            finally { this.loading = false; }
+              return true;
+            } catch (error) { this.showToast(this.errorMessage(error), true); return false; }
+            finally { this.finishBackupAction("preview"); }
           },
           async confirmCleanup() {
+            if (!this.backupCleanupPreview || Number(this.backupCleanupPreview.deletable_count || 0) <= 0) {
+              this.showToast("当前没有可清理的旧备份，请重新预览", true);
+              return false;
+            }
             if (!confirm(`确认删除 ${this.backupCleanupPreview?.deletable_count || 0} 个旧备份？此操作不可恢复！`)) return;
-            this.loading = true;
+            if (!this.beginBackupAction("cleanup")) return false;
             try {
               const { data } = await axios.post("/api/system/backups/cleanup");
               this.showCleanupPreview = false;
-              await this.loadBackups();
+              const refreshed = await this.loadBackups();
               const freed = this.fileSize(data.freed_size || 0);
               const msg = `已清理 ${data.deleted?.length || 0} 个备份，释放 ${freed}`;
-              this.showToast(data.errors?.length ? `${msg}（${data.errors.length} 个失败）` : msg);
-            } catch (error) { this.showToast(this.errorMessage(error), true); }
-            finally { this.loading = false; }
+              const resultMessage = data.errors?.length ? `${msg}（${data.errors.length} 个失败）` : msg;
+              this.showToast(refreshed ? resultMessage : `${resultMessage}；但列表刷新失败，请点“重新加载”，不要重复清理`, !refreshed || !!data.errors?.length);
+              return true;
+            } catch (error) { this.showToast(this.errorMessage(error), true); return false; }
+            finally { this.finishBackupAction("cleanup"); }
           },
           async loadMaterialMapping(page) {
             this.materialMappingPage = page || 1;
@@ -19105,9 +20098,12 @@
             try {
               const { data } = await axios.get("/api/pdf-training/templates");
               this.pdfTrainingTemplates = Array.isArray(data) ? data : (data.items || []);
+              this.pdfTemplatesLoaded = true;
+              return true;
             } catch (error) {
-              this.pdfTrainingTemplates = [];
+              if (!this.pdfTemplatesLoaded) this.pdfTrainingTemplates = [];
               this.showToast(`PDF 模板加载失败：${this.errorMessage(error)}`, true);
+              return false;
             } finally {
               this.pdfTemplateLoading = false;
             }

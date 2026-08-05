@@ -1,3 +1,4 @@
+import base64
 from datetime import date
 from decimal import Decimal
 
@@ -54,7 +55,7 @@ def test_mobile_pick_api_syncs_pending_delivery_without_dispatch(tmp_path, monke
         "recognize_tianhua_image",
         lambda _content: [
             service.RecognizedRow(1, "21301877 200", "21301877", 200),
-            service.RecognizedRow(2, "21302001 300", "21302001", 300),
+            service.RecognizedRow(2, "21302001 400", "21302001", 400),
         ],
     )
     monkeypatch.setattr(
@@ -67,11 +68,11 @@ def test_mobile_pick_api_syncs_pending_delivery_without_dispatch(tmp_path, monke
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     with factory() as db:
         user = User(
-            username="sales",
+            username="tianhua-admin",
             password_hash=hash_password("RolePass123!"),
-            role="sales",
-            real_name="业务",
-            display_name="业务",
+            role="admin",
+            real_name="天华测试管理员",
+            display_name="天华测试管理员",
             must_change_password=False,
         )
         customer = Customer(
@@ -134,7 +135,7 @@ def test_mobile_pick_api_syncs_pending_delivery_without_dispatch(tmp_path, monke
             delivered_quantity=0,
             unit_price=Decimal("0"),
             subtotal=Decimal("0"),
-            material_status="pending",
+            material_status="received",
             snapshot_product_name="库存不足产品",
             snapshot_product_code="21302001",
         )
@@ -169,6 +170,7 @@ def test_mobile_pick_api_syncs_pending_delivery_without_dispatch(tmp_path, monke
             idempotency_key="mobile-finished-reserve",
             warning_acknowledged_codes=[],
         )
+        item_with_finished_stock.material_status = "received"
         db.commit()
 
     app = FastAPI()
@@ -184,12 +186,22 @@ def test_mobile_pick_api_syncs_pending_delivery_without_dispatch(tmp_path, monke
     with TestClient(app) as client:
         assert client.post(
             "/api/auth/login",
-            json={"username": "sales", "password": "RolePass123!"},
+            json={"username": "tianhua-admin", "password": "RolePass123!"},
         ).status_code == 200
         uploaded = client.post(
             "/api/deliveries/tianhua-preimport/upload",
-            files={"file": ("pick.png", b"x", "image/png")},
+            files={
+                "file": (
+                    "pick.png",
+                    base64.b64decode(
+                        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwC"
+                        "AAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+                    ),
+                    "image/png",
+                )
+            },
         )
+        assert uploaded.status_code == 201, uploaded.text
         rows = uploaded.json()["items"]
         assert rows[1]["status"] == "stock_shortage"
         draft = client.post(
@@ -211,7 +223,7 @@ def test_mobile_pick_api_syncs_pending_delivery_without_dispatch(tmp_path, monke
                 ]
             },
         )
-        assert draft.status_code == 201
+        assert draft.status_code == 201, (draft.text, rows)
         assert draft.json()["delivery_number"]
         token_response = client.post(
             f"/api/deliveries/tianhua-preimport/{uploaded.json()['batch_id']}/mobile-token"
@@ -251,6 +263,36 @@ def test_mobile_pick_api_syncs_pending_delivery_without_dispatch(tmp_path, monke
         assert expired.status_code == 403
         assert "二维码已过期" in expired.json()["detail"]
         assert invalid.status_code == 403
+
+        before_invalid_qty = shortage["mobile_picked_qty"]
+        too_many = client.put(
+            f"/api/mobile/tianhua-pick/items/{shortage['item_id']}",
+            json={
+                "token": token,
+                "mobile_pick_status": "partial",
+                "mobile_picked_qty": int(shortage["final_delivery_qty"]) + 1,
+                "mobile_pick_note": "越界请求",
+            },
+        )
+        assert too_many.status_code == 409
+        assert "不能超过" in too_many.json()["detail"]
+        zero_pick = client.put(
+            f"/api/mobile/tianhua-pick/items/{shortage['item_id']}",
+            json={
+                "token": token,
+                "mobile_pick_status": "partial",
+                "mobile_picked_qty": 0,
+                "mobile_pick_note": "无效零数量",
+            },
+        )
+        assert zero_pick.status_code == 400
+        after_invalid = client.get(
+            "/api/mobile/tianhua-pick",
+            params={"token": token},
+        ).json()["items"]
+        assert next(
+            item for item in after_invalid if item["item_id"] == shortage["item_id"]
+        )["mobile_picked_qty"] == before_invalid_qty
 
         partial = client.put(
             f"/api/mobile/tianhua-pick/items/{shortage['item_id']}",

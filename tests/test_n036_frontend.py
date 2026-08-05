@@ -14,7 +14,7 @@ MOBILE = (ROOT / "static" / "mobile_delivery_pick.html").read_text(encoding="utf
 def test_desktop_delivery_list_exposes_pick_task_contract_and_actions() -> None:
     for marker in (
         "/api/delivery-picks",
-        "/api/deliveries/${row.id}/pick-task",
+        "/api/deliveries/${deliveryId}/pick-task",
         "/mobile/delivery-pick.html?task_id=",
         "拿货",
         "发货打印",
@@ -26,13 +26,11 @@ def test_desktop_delivery_list_exposes_pick_task_contract_and_actions() -> None:
 
 
 def test_desktop_delivery_row_owns_pick_actions_without_duplicate_panel() -> None:
-    row_match = re.search(
-        r'<tbody>\s*<tr v-for="row in deliveries" :key="row.id".*?</tr>\s*</tbody>',
-        INDEX,
-        re.DOTALL,
-    )
-    assert row_match is not None
-    delivery_row = row_match.group(0)
+    action_position = INDEX.index("createDeliveryPickTask(row)")
+    row_start = INDEX.rfind("<tr", 0, action_position)
+    row_end = INDEX.index("</tr>", action_position)
+    assert row_start >= 0
+    delivery_row = INDEX[row_start:row_end]
     for marker in (
         "createDeliveryPickTask(row)",
         "openDeliveryPickTask(row)",
@@ -48,10 +46,10 @@ def test_desktop_delivery_row_owns_pick_actions_without_duplicate_panel() -> Non
 
 def test_exception_dispatch_applies_pick_result_before_dispatch() -> None:
     exception_confirm_pos = INDEX.index("司机拿货结果存在异常")
-    apply_pos = INDEX.index("await this.applyDeliveryPickTask(row)")
-    final_confirm_pos = INDEX.index("confirm(`确认发货并打印", apply_pos)
-    dispatch_pos = INDEX.index("await axios.put(`/api/deliveries/${row.id}/dispatch`)")
-    assert exception_confirm_pos < apply_pos < final_confirm_pos < dispatch_pos
+    final_confirm_pos = INDEX.index("confirm(`确认发货并打印", exception_confirm_pos)
+    apply_pos = INDEX.index("await this.applyDeliveryPickTask(frozenRow)", final_confirm_pos)
+    dispatch_pos = INDEX.index("await axios.put(`/api/deliveries/${deliveryId}/dispatch`)", apply_pos)
+    assert exception_confirm_pos < final_confirm_pos < apply_pos < dispatch_pos
     assert "task.has_exception" in INDEX
     assert 'task.status === "exception"' in INDEX
     assert "/api/delivery-picks/${task.id}/apply" in INDEX
@@ -61,19 +59,23 @@ def test_mobile_page_uses_cookie_auth_and_requested_api_paths() -> None:
     assert 'credentials:"include"' in MOBILE
     assert 'request("/api/auth/me")' in MOBILE
     assert 'request("/api/auth/login"' in MOBILE
-    assert "/api/delivery-picks/${encodeURIComponent(taskId)}" in MOBILE
-    assert "/api/delivery-picks/${encodeURIComponent(task.id)}/items/" in MOBILE
-    assert "/items/${encodeURIComponent(itemId)}`" in MOBILE
+    assert "/api/delivery-picks/${encodeURIComponent(selectedId)}" in MOBILE
+    assert "/api/delivery-picks/${encodeURIComponent(currentTask.id)}/items/" in MOBILE
+    assert "/items/${encodeURIComponent(id)}`" in MOBILE
     assert "/submit`" in MOBILE
 
 
 def test_mobile_page_without_task_id_lists_and_selects_pending_tasks() -> None:
     assert "let taskId =" in MOBILE
     assert "if(taskId)" in MOBILE and "else await loadTaskList()" in MOBILE
-    assert 'request("/api/delivery-picks"' in MOBILE
+    assert "/api/delivery-picks?" in MOBILE
+    assert "response_mode=summary" in MOBILE
+    assert "include_dispatched=false" in MOBILE
+    assert "page_size=100" in MOBILE
+    assert "正在读取待拿货任务" in MOBILE
     for marker in ("loadTaskList", "selectTask", "taskChooser", "customer_name"):
         assert marker in MOBILE
-    assert "/api/delivery-picks/${encodeURIComponent(taskId)}" in MOBILE
+    assert "/api/delivery-picks/${encodeURIComponent(selectedId)}" in MOBILE
 
 
 def test_desktop_pick_status_maps_driver_confirmed_to_ready_to_dispatch() -> None:

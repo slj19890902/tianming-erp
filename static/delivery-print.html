@@ -35,6 +35,22 @@
       text-align: center;
       text-decoration: none;
     }
+    .toolbar button.secondary { background: #475569; }
+    .toolbar button:disabled {
+      cursor: not-allowed;
+      opacity: .5;
+    }
+    .hidden { display: none !important; }
+    .load-state {
+      max-width: 700px;
+      margin: 30px auto;
+      padding: 18px 24px;
+      border: 1px solid #93c5fd;
+      border-radius: 6px;
+      background: #eff6ff;
+      color: #1e3a8a;
+      text-align: center;
+    }
     .print-guide {
       max-width: 920px;
       margin: -6px auto 14px;
@@ -224,14 +240,16 @@
 </head>
 <body>
   <div class="toolbar no-print">
-    <button id="printButton" type="button">确认打印</button>
+    <button id="printButton" disabled type="button">确认打印</button>
+    <button id="retryButton" class="secondary hidden" type="button">重新读取</button>
     <a href="/" aria-label="返回系统">返回系统</a>
   </div>
   <div class="print-guide no-print" data-field="paperGuide">
     正在读取送货单纸张设置…
   </div>
 
-  <div id="errorBox" class="error" hidden></div>
+  <div id="loadState" class="load-state no-print">正在读取送货单…</div>
+  <div id="errorBox" class="error no-print" hidden></div>
 
   <template id="sheetTemplate">
   <main class="sheet">
@@ -506,35 +524,122 @@
       container.style.visibility = "visible";
     }
 
-    function showError(message) {
-      document.getElementById("errorBox").textContent = message;
-      document.getElementById("errorBox").hidden = false;
-      document.getElementById("sheets").hidden = true;
+    const printButton = document.getElementById("printButton");
+    const retryButton = document.getElementById("retryButton");
+    const loadState = document.getElementById("loadState");
+    const errorBox = document.getElementById("errorBox");
+    const sheets = document.getElementById("sheets");
+    let loadController = null;
+    let loadGeneration = 0;
+
+    function parseErrorDetail(detail) {
+      if (typeof detail === "string") return detail.trim();
+      if (Array.isArray(detail)) {
+        return detail.map((item) => parseErrorDetail(item)).filter(Boolean).join("；");
+      }
+      if (!detail || typeof detail !== "object") return "";
+      const message = parseErrorDetail(
+        detail.message ?? detail.detail ?? detail.error ?? detail.msg,
+      );
+      const code = String(detail.code || "").trim();
+      return [message, code ? `错误代码 ${code}` : ""].filter(Boolean).join("；");
+    }
+
+    function requestIdOf(response, body) {
+      const headerValue = response?.headers?.get?.("x-request-id")
+        || response?.headers?.get?.("x-correlation-id")
+        || "";
+      return String(headerValue || body?.request_id || body?.requestId || "").trim();
+    }
+
+    async function requestDeliveryPrint(id, signal) {
+      const response = await fetch(`/api/deliveries/${id}/print`, {
+        credentials: "same-origin",
+        signal,
+      });
+      const raw = await response.text();
+      let body = null;
+      if (raw.trim()) {
+        try { body = JSON.parse(raw); } catch (_error) { body = null; }
+      }
+      if (response.status === 401) {
+        throw new Error("登录已失效，请返回系统登录后重新打印。HTTP 401");
+      }
+      if (!response.ok) {
+        const detail = parseErrorDetail(body?.detail ?? body?.message ?? body?.error);
+        const requestId = requestIdOf(response, body);
+        const fallback = response.status >= 500
+          ? "服务器内部错误，送货单未能读取。"
+          : "读取送货单失败。";
+        throw new Error([
+          detail || fallback,
+          `HTTP ${response.status}`,
+          requestId ? `请求编号 ${requestId}` : "",
+        ].filter(Boolean).join("；"));
+      }
+      if (!body || typeof body !== "object") {
+        throw new Error("服务器返回了空白或无法识别的送货单内容；HTTP 200");
+      }
+      return body;
+    }
+
+    function showLoading(message = "正在读取送货单…") {
+      printButton.disabled = true;
+      retryButton.classList.add("hidden");
+      retryButton.hidden = true;
+      errorBox.hidden = true;
+      loadState.textContent = message;
+      loadState.hidden = false;
+      sheets.hidden = true;
+    }
+
+    function showError(message, allowRetry = true) {
+      printButton.disabled = true;
+      loadState.hidden = true;
+      errorBox.textContent = message;
+      errorBox.hidden = false;
+      retryButton.hidden = !allowRetry;
+      retryButton.classList.toggle("hidden", !allowRetry);
+      sheets.hidden = true;
+    }
+
+    function showReady() {
+      loadState.hidden = true;
+      errorBox.hidden = true;
+      retryButton.hidden = true;
+      retryButton.classList.add("hidden");
+      sheets.hidden = false;
+      printButton.disabled = false;
     }
 
     async function loadDelivery() {
       const id = new URLSearchParams(window.location.search).get("id");
       if (!id || !/^\d+$/.test(id)) {
-        showError("缺少有效的送货单 ID。");
-        return;
+        showError("送货单链接无效，请返回 ERP 重新打开。", false);
+        return false;
       }
+      if (loadController) loadController.abort();
+      const controller = new AbortController();
+      loadController = controller;
+      const generation = ++loadGeneration;
+      showLoading("正在读取送货单…");
       try {
-        const response = await fetch(`/api/deliveries/${id}/print`, {
-          credentials: "same-origin",
-        });
-        const data = await response.json().catch(() => ({}));
-        if (response.status === 401) {
-          throw new Error("登录已失效，请返回系统登录后重新打印。");
-        }
-        if (!response.ok) {
-          throw new Error(data.detail || "读取送货单失败。");
-        }
+        const data = await requestDeliveryPrint(id, controller.signal);
+        if (generation !== loadGeneration || controller.signal.aborted) return false;
         renderDelivery(data);
+        showReady();
+        return true;
       } catch (error) {
+        if (generation !== loadGeneration || controller.signal.aborted || error?.name === "AbortError") {
+          return false;
+        }
         const message = error instanceof TypeError
-          ? "无法连接 ERP 服务，请确认服务正常后在本打印页重试。"
-          : (error.message || "读取送货单失败。");
-        showError(message);
+          ? "无法连接 ERP 服务，请确认服务正常后点击“重新读取”。"
+          : (error?.message || "读取送货单失败，请点击“重新读取”。");
+        showError(message, true);
+        return false;
+      } finally {
+        if (generation === loadGeneration) loadController = null;
       }
     }
 
@@ -544,7 +649,11 @@
     const printOpenChannel = printOpenToken && typeof BroadcastChannel === "function"
       ? new BroadcastChannel(`erp-delivery-print-${printOpenToken}`)
       : null;
-    const startDeliveryPrint = () => loadPaperSettings().then(loadDelivery);
+    const startDeliveryPrint = async () => {
+      showLoading("正在读取送货单纸张设置…");
+      await loadPaperSettings();
+      return loadDelivery();
+    };
 
     if (printOpenChannel) {
       printOpenChannel.onmessage = (event) => {
@@ -553,14 +662,23 @@
           startDeliveryPrint();
         } else if (event?.data?.type === "abort") {
           printOpenChannel.close();
-          showError(event?.data?.message || "送货单处理失败，未打开打印内容。");
+          loadGeneration += 1;
+          if (loadController) loadController.abort();
+          showError(event?.data?.message || "送货单处理失败，未打开打印内容。", false);
         }
       };
       printOpenChannel.postMessage({ type: "ready" });
     }
 
-    document.getElementById("printButton").addEventListener("click", () => window.print());
-    if (!deferDeliveryLoad) startDeliveryPrint();
+    printButton.addEventListener("click", () => {
+      if (!printButton.disabled) window.print();
+    });
+    retryButton.addEventListener("click", () => loadDelivery());
+    if (deferDeliveryLoad) {
+      showLoading("等待发货确认，完成后自动读取送货单…");
+    } else {
+      startDeliveryPrint();
+    }
   </script>
 </body>
 </html>

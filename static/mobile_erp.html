@@ -130,7 +130,7 @@
     <main>
       <section id="homePage">
         <h1 class="page-title">今天先做什么</h1>
-        <p class="page-help">管理员只读查看当前待办；所有数字仍来自正式 ERP 接口。</p>
+        <p class="page-help">按当前账号权限只读显示待办；所有数字仍来自正式 ERP 接口。</p>
         <div id="homeState" class="card status">正在读取首页…</div>
         <div id="homeCards" class="metric-grid" hidden></div>
       </section>
@@ -167,7 +167,7 @@
     </main>
   </div>
 
-  <nav class="bottom-nav" aria-label="手机主导航">
+  <nav id="bottomNav" class="bottom-nav" aria-label="手机主导航" hidden>
     <div class="bottom-inner">
       <button class="nav-btn active" type="button" data-page="home">首页</button>
       <button class="nav-btn" type="button" data-page="search">查产品</button>
@@ -210,7 +210,13 @@
         productionItems: [],
         productionPeriod: "3d",
         productionController: null,
+        homeController: null,
+        homeGeneration: 0,
+        allowedPages: new Set(),
+        activePage: "",
+        initializing: false,
       };
+      const mobilePages = new Set(["home", "search", "production"]);
       const byId = id => document.getElementById(id);
 
       function node(tag, className, text) {
@@ -221,13 +227,23 @@
       }
 
       async function apiGet(url, options = {}) {
-        const response = await fetch(url, {
-          credentials: "same-origin",
-          headers: { Accept: "application/json" },
-          signal: options.signal,
-        });
+        let response;
+        try {
+          response = await fetch(url, {
+            credentials: "same-origin",
+            headers: { Accept: "application/json" },
+            signal: options.signal,
+          });
+        } catch (error) {
+          if (error && error.name === "AbortError") throw error;
+          throw new Error("无法连接 ERP 服务，请检查网络后重试");
+        }
         if (response.status === 401) {
-          window.location.replace("/?redirect=%2Fmobile%2Ferp.html");
+          const loginParams = new URLSearchParams({
+            redirect: "/mobile/erp.html",
+            mobile_page: state.activePage || safeRequestedPage() || "home",
+          });
+          window.location.replace(`/?${loginParams.toString()}`);
           throw new Error("登录已失效，正在返回登录页");
         }
         const text = await response.text();
@@ -237,12 +253,25 @@
         }
         if (!response.ok) {
           const detail = payload && payload.detail;
-          throw new Error(typeof detail === "string" ? detail : `读取失败（HTTP ${response.status}）`);
+          const message = typeof detail === "string"
+            ? detail
+            : (detail && typeof detail.message === "string" ? detail.message : "");
+          throw new Error(message || `读取失败（HTTP ${response.status}）`);
         }
         return payload;
       }
 
-      function setPage(page) {
+      function safeRequestedPage() {
+        const requested = window.location.hash.replace(/^#/, "").trim();
+        return mobilePages.has(requested) ? requested : "";
+      }
+
+      function setPage(page, { updateLocation = true } = {}) {
+        if (!state.allowedPages.has(page)) {
+          page = document.querySelector(".nav-btn:not([hidden])")?.dataset.page || "";
+        }
+        if (!page || !state.allowedPages.has(page)) return;
+        state.activePage = page;
         const isHome = page === "home";
         const isSearch = page === "search";
         byId("homePage").hidden = !isHome;
@@ -251,6 +280,9 @@
         document.querySelectorAll(".nav-btn").forEach(button => {
           button.classList.toggle("active", button.dataset.page === page);
         });
+        if (updateLocation && window.location.hash !== `#${page}`) {
+          window.history.replaceState(null, "", `#${page}`);
+        }
         if (isSearch) byId("searchInput").focus();
         if (page === "production" && !state.productionItems.length) loadProduction();
       }
@@ -269,15 +301,15 @@
       }
 
       async function loadHome() {
-        const role = state.auth && state.auth.user && state.auth.user.role;
-        if (!(["admin", "boss"].includes(role))) {
-          showStatus("homeState", "当前账号可使用产品查询；管理员总览仅对管理员和老板账号显示。", "empty");
-          return;
-        }
+        state.homeController?.abort();
+        const controller = new AbortController();
+        state.homeController = controller;
+        const generation = ++state.homeGeneration;
         showStatus("homeState", "正在读取首页…", "");
         try {
-          state.dashboard = await apiGet("/api/dashboard/overview");
-          const cards = Array.isArray(state.dashboard.cards) ? state.dashboard.cards.slice(0, 6) : [];
+          state.dashboard = await apiGet("/api/dashboard/overview", { signal: controller.signal });
+          if (generation !== state.homeGeneration) return;
+          const cards = Array.isArray(state.dashboard.cards) ? state.dashboard.cards : [];
           const container = byId("homeCards");
           container.replaceChildren();
           cards.forEach(item => {
@@ -296,6 +328,7 @@
           byId("homeState").hidden = true;
           container.hidden = false;
         } catch (error) {
+          if (error.name === "AbortError" || generation !== state.homeGeneration) return;
           showStatus("homeState", error.message || "首页读取失败", "error", loadHome);
         }
       }
@@ -599,6 +632,9 @@
       }
 
       async function initialize() {
+        if (state.initializing) return;
+        state.initializing = true;
+        byId("bottomNav").hidden = true;
         try {
           state.auth = await apiGet("/api/auth/me");
           const user = state.auth.user || {};
@@ -606,24 +642,30 @@
           const permissions = Array.isArray(state.auth.permissions) ? state.auth.permissions : [];
           const canSearch = permissions.includes("warehouse.view");
           const canProduction = permissions.includes("orders.view") && permissions.includes("incoming.view");
-          const canHome = permissions.includes("dashboard.view") && ["admin", "boss"].includes(user.role);
+          const canHome = permissions.includes("dashboard.view");
           document.querySelector('[data-page="home"]').hidden = !canHome;
           document.querySelector('[data-page="search"]').hidden = !canSearch;
           document.querySelector('[data-page="production"]').hidden = !canProduction;
           const visibleNav = [...document.querySelectorAll(".nav-btn")].filter(button => !button.hidden);
+          state.allowedPages = new Set(visibleNav.map(button => button.dataset.page));
           document.querySelector(".bottom-inner").style.setProperty("--nav-count", visibleNav.length || 1);
           if (!visibleNav.length) {
             document.querySelector("main").replaceChildren(
               node("div", "card status error", "当前账号没有可用的手机只读入口，请联系管理员。")
             );
-            document.querySelector(".bottom-nav").hidden = true;
+            byId("bottomNav").hidden = true;
             return;
           }
-          const firstPage = canHome ? "home" : (canProduction ? "production" : "search");
+          byId("bottomNav").hidden = false;
+          const requestedPage = safeRequestedPage();
+          const firstPage = state.allowedPages.has(requestedPage) ? requestedPage : visibleNav[0].dataset.page;
           setPage(firstPage);
-          if (canHome) await loadHome();
+          if (firstPage === "home") await loadHome();
         } catch (error) {
+          byId("bottomNav").hidden = true;
           showStatus("homeState", error.message || "手机版初始化失败", "error", initialize);
+        } finally {
+          state.initializing = false;
         }
       }
 
@@ -654,6 +696,14 @@
         });
       });
       byId("loadCustom").addEventListener("click", loadProduction);
+      window.addEventListener("hashchange", () => {
+        const requestedPage = safeRequestedPage();
+        if (requestedPage) {
+          setPage(requestedPage);
+        } else if (state.activePage) {
+          window.history.replaceState(null, "", `#${state.activePage}`);
+        }
+      });
       initialize();
     })();
   </script>

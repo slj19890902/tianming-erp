@@ -79,6 +79,23 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows\reset_weekly_home_uat
 
 日常使用可以直接双击 `scripts\windows\reset_weekly_home_uat.bat`；脚本会选择最近一次导入的本周副本，精确停止对应 UAT 进程、重置并重新启动。
 
+## 用同一工厂副本验证后继候选
+
+开发中的候选代码不能修改数据包 manifest 或手工伪造 `runtime.json`。先保留原始导入
+生成的 `runtime.json`，再执行：
+
+```powershell
+python .\scripts\admin\weekly_home_uat.py prepare-candidate `
+  --source-runtime D:\tm-weekly-uat\runs\<package-id>\runtime.json `
+  --uat-root D:\tm-weekly-uat `
+  --project-root <候选worktree>
+```
+
+工具只允许工厂数据包 Git SHA 的后继提交，复用只读收到件建立新的候选工作副本，拒绝
+覆盖已有候选目录，也不会自动运行 Alembic。若输出 `migration_required=true`，只能对输出
+的 `working_database` 完成副本迁移；启动器仍要求实际数据库 revision 与候选代码唯一 head
+完全一致。
+
 重置器只会停止 PID 文件所指向且命令行同时匹配当前 UAT worktree 和端口的 Uvicorn 进程；随后用只读收到件覆盖标准命名的工作副本并重新启动。它不会删除或修改 received 原件。
 
 ## 固定拒绝条件

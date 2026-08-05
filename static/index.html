@@ -4709,6 +4709,7 @@
               </div>
             </div>
             <fieldset v-else-if="modal.type === 'orderItem'" class="order-item-edit-grid" :disabled="orderItemSaveState.saving" style="border:0;padding:0;margin:0;min-width:0">
+              <fieldset :disabled="!!finishedReservationActionState.action" style="border:0;padding:0;margin:0;min-width:0;display:contents">
               <div class="product-form-row order-item-core-row">
                 <div class="field"><label>客户</label><div class="input" style="background:#f5f7fa">{{ orderItemForm.customer_name || "-" }}</div></div>
                 <div class="field"><label>存货编码</label><input class="input" v-model.trim="orderItemForm.product_code" /></div>
@@ -4796,6 +4797,8 @@
               </div>
               <div class="panel" style="margin:10px 0;padding:12px">
                 <div class="section-title">成品库存抵扣</div>
+                <div v-if="finishedReservationActionState.committed" class="notice warning" style="margin:8px 0">库存操作已经完成，但页面刷新失败。请点击“核对库存状态”，不要重复操作。</div>
+                <div v-else-if="finishedReservationActionState.outcomeUncertain" class="notice warning" style="margin:8px 0">上次库存操作结果暂不确定。请点击“核对库存状态”后再继续。</div>
                 <div class="summary" style="margin-bottom:10px">
                   <span>订单数量：<strong>{{ orderItemForm.quantity }}</strong></span>
                   <span>已预占成品库存：<strong>{{ orderItemForm.finished_inventory_reserved_qty || 0 }}</strong></span>
@@ -4803,7 +4806,7 @@
                   <span>需报料数量：<strong>{{ orderItemForm.production_required_qty ?? orderItemForm.quantity }}</strong></span>
                 </div>
                 <div class="toolbar-group">
-                  <button v-if="canSales && orderItemForm.requisition_status==='未报料'" type="button" class="btn small" @click="loadFinishedInventoryCandidates()">查看可用成品库存</button>
+                  <button v-if="canSales && orderItemForm.requisition_status==='未报料'" type="button" class="btn small" :disabled="!!finishedReservationActionState.action" @click="finishedReservationActionBlocked() ? refreshFinishedInventoryState() : loadFinishedInventoryCandidates()">{{ finishedReservationActionBlocked() ? "核对库存状态" : "查看可用成品库存" }}</button>
                   <span v-else-if="orderItemForm.requisition_status!=='未报料'" class="status orange">订单已进入报料，如需抵扣请先取消报料</span>
                 </div>
                 <div v-if="finishedInventoryCandidatesLoaded && !finishedInventoryCandidates.length" class="muted" style="margin-top:8px">暂无可用成品库存</div>
@@ -4811,13 +4814,13 @@
                   <thead><tr><th>批次</th><th>客户归属</th><th>库位</th><th>规格/材质</th><th>可用</th><th>抵扣数量</th><th>操作</th></tr></thead>
                   <tbody><tr v-for="candidate in finishedInventoryCandidates" :key="candidate.lot_id">
                     <td>{{ candidate.lot_number }}</td><td>{{ candidate.is_general ? "通用库存" : candidate.customer_name }}<div v-for="message in candidate.warning_messages" :key="message" class="status orange">{{ message }}</div></td><td>{{ candidate.warehouse_location }}</td><td>{{ candidate.specification }}<br>{{ candidate.material_display }}</td><td>{{ candidate.quantity_available }}</td>
-                    <td><input class="input compact-input" type="number" min="1" :max="Math.min(candidate.quantity_available,finishedInventoryRemainingRequirement)" v-model.number="candidate._reserve_qty" /></td>
-                    <td><button type="button" class="btn small primary" @click="confirmFinishedInventoryReservation(candidate)">人工确认抵扣</button></td>
+                    <td><input class="input compact-input" type="number" min="1" :max="Math.min(candidate.quantity_available,finishedInventoryRemainingRequirement)" :disabled="finishedReservationActionBlocked()" v-model.number="candidate._reserve_qty" /></td>
+                    <td><button type="button" class="btn small primary" :disabled="finishedReservationActionBlocked()" @click="confirmFinishedInventoryReservation(candidate)">{{ finishedReservationActionLabel("reserve",candidate) }}</button></td>
                   </tr></tbody>
                 </table>
                 <table v-if="finishedInventoryReservations.length" style="margin-top:10px">
                   <thead><tr><th>库存批次</th><th>预占数量</th><th>状态</th><th>预占时间</th><th>操作</th></tr></thead>
-                  <tbody><tr v-for="reservation in finishedInventoryReservations" :key="reservation.id"><td>{{ reservation.lot_number }}</td><td>{{ reservation.reserved_stock_quantity }}</td><td>{{ reservation.status }}</td><td>{{ formatDateTime(reservation.reserved_at) }}</td><td><button v-if="reservation.status==='active' && canSales && orderItemForm.requisition_status==='未报料'" type="button" class="btn small danger" @click="releaseFinishedInventoryReservation(reservation)">取消抵扣</button></td></tr></tbody>
+                  <tbody><tr v-for="reservation in finishedInventoryReservations" :key="reservation.id"><td>{{ reservation.lot_number }}</td><td>{{ reservation.reserved_stock_quantity }}</td><td>{{ reservation.status }}</td><td>{{ formatDateTime(reservation.reserved_at) }}</td><td><button v-if="reservation.status==='active' && canSales && orderItemForm.requisition_status==='未报料'" type="button" class="btn small danger" :disabled="finishedReservationActionBlocked()" @click="releaseFinishedInventoryReservation(reservation)">{{ finishedReservationActionLabel("release",reservation) }}</button></td></tr></tbody>
                 </table>
               </div>
               <div v-if="orderItemForm.product_id" class="panel" style="margin-top:10px;padding:10px">
@@ -4836,6 +4839,7 @@
                   <span class="muted" style="font-size:12px">删除后不可恢复，请谨慎操作</span>
                 </div>
               </div>
+              </fieldset>
             </fieldset>
             <div v-else-if="modal.type === 'orderTrace' && orderTrace">
               <div class="form-grid">
@@ -5830,7 +5834,7 @@
             </div>
           </div>
           <div class="modal-foot">
-            <button v-if="!isForcedPassword" class="btn" :disabled="masterSavePending || (modal?.type==='stockReplenishment' && stockReplenishmentSaveState.saving) || (modal?.type==='quotationConvert' && quotationConversionState.saving) || (modal?.type==='order' && orderCreateSaveState.saving) || (modal?.type==='orderEdit' && orderGroupSaveState.saving) || (modal?.type==='orderItem' && orderItemSaveState.saving) || (modal?.type==='delivery' && deliverySaveState.saving)" @click="closeModal">{{ canSaveModal ? "取消" : "关闭" }}</button>
+            <button v-if="!isForcedPassword" class="btn" :disabled="masterSavePending || (modal?.type==='stockReplenishment' && stockReplenishmentSaveState.saving) || (modal?.type==='quotationConvert' && quotationConversionState.saving) || (modal?.type==='order' && orderCreateSaveState.saving) || (modal?.type==='orderEdit' && orderGroupSaveState.saving) || (modal?.type==='orderItem' && orderItemSaveState.saving) || (modal?.type==='orderItem' && finishedReservationActionBlocked()) || (modal?.type==='delivery' && deliverySaveState.saving)" @click="closeModal">{{ canSaveModal ? "取消" : "关闭" }}</button>
             <template v-if="modal?.type === 'orderPdfImport' && orderImportDrafts.length">
               <button class="btn" :disabled="loading || !confirmableImportDraftCount" @click="toggleConfirmableImportDrafts">{{ confirmedImportDraftCount ? "取消加入批量保存" : "加入批量保存" }}</button>
               <span class="muted">待保存：{{ confirmedImportDraftCount }} 条；已成功：{{ successfulImportDraftCount }} 条；失败：{{ failedImportDraftCount }} 条</span>
@@ -5843,7 +5847,7 @@
             <button v-if="canSaveModal && modal?.type==='quotationConvert'" class="btn primary" :disabled="loading || quotationConversionState.saving || quotationConversionState.committed || quotationConversionState.outcomeUncertain || !!quotationConvertCreaseMismatch" @click="saveModal()">{{ quotationConversionState.saving ? '正在转入…' : (quotationConversionState.committed ? '已转入常用箱' : '保存') }}</button>
             <button v-if="canSaveModal && modal?.type==='order'" class="btn primary" :disabled="loading || orderCreateSaveState.saving || orderCreateSaveState.committed || orderCreateSaveState.outcomeUncertain" @click="saveModal()">{{ orderCreateSaveState.saving ? '正在保存订单…' : (orderCreateSaveState.committed ? '订单已保存' : '保存') }}</button>
             <button v-if="canSaveModal && modal?.type==='orderEdit'" class="btn primary" :disabled="loading || orderGroupSaveState.saving || orderGroupSaveState.committed || orderGroupSaveState.outcomeUncertain" @click="saveModal()">{{ orderGroupSaveState.saving ? '正在保存订单组…' : (orderGroupSaveState.committed ? '订单组已保存' : '保存') }}</button>
-            <button v-if="canSaveModal && modal?.type==='orderItem'" class="btn primary" :disabled="loading || orderItemSaveState.saving || orderItemSaveState.committed || orderItemSaveState.outcomeUncertain || !!orderItemCreaseMismatch" @click="saveModal()">{{ orderItemSaveState.saving ? '正在保存明细…' : (orderItemSaveState.committed ? '订单明细已保存' : '保存') }}</button>
+            <button v-if="canSaveModal && modal?.type==='orderItem'" class="btn primary" :disabled="loading || orderItemSaveState.saving || orderItemSaveState.committed || orderItemSaveState.outcomeUncertain || finishedReservationActionBlocked() || !!orderItemCreaseMismatch" @click="saveModal()">{{ orderItemSaveState.saving ? '正在保存明细…' : (orderItemSaveState.committed ? '订单明细已保存' : '保存') }}</button>
             <button v-if="canSaveModal && !['quotationConvert','order','orderEdit','orderItem'].includes(modal?.type)" class="btn primary" :disabled="loading || masterSavePending || (modal?.type==='supplierRequisitionDraft' && (supplierRequisitionSaveState.saving || supplierRequisitionSaveState.committed)) || (modal?.type==='requisition' && (compositeRequisitionSaveState.saving || compositeRequisitionSaveState.committed)) || (modal?.type==='stockReplenishment' && (stockReplenishmentSaveState.saving || stockReplenishmentSaveState.committed)) || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError)) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && (deliverySaveState.saving || deliverySaveState.outcomeUncertain || !!deliveryValidationError || !!deliveryOperationState.action)) || (modal?.type==='receipt' && !!receiptOperationState.action) || (modal?.type==='requisitionHold' && requisitionHoldSaveBlocked)" @click="modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()">{{ ['customer','product','material','supplier'].includes(modal?.type) && masterSavePending ? '保存中…' : (modal?.type==='delivery' ? (deliverySaveState.saving ? '正在保存草稿…' : deliveryPrimaryLabel()) : (modal?.type==='receipt' ? (receiptOperationState.action==='save' ? '保存中…' : '保存回单') : (modal?.type==='supplierRequisitionDraft' ? (supplierRequisitionSaveState.saving ? '正在生成采购单…' : (supplierRequisitionSaveState.committed ? '采购单已生成' : '确认生成正式采购单')) : (modal?.type==='requisition' ? (compositeRequisitionSaveState.saving ? '正在生成组合报料…' : (compositeRequisitionSaveState.committed ? '组合报料已生成' : '确认生成正式采购单')) : (modal?.type==='requisitionHold' ? '确认暂缓' : (modal?.type==='stockReplenishment' ? (stockReplenishmentSaveState.saving ? '正在保存补库草稿…' : (stockReplenishmentSaveState.committed ? '补库草稿已保存' : (stockReplenishmentForm.source_type==='stock_warning' ? '保存报料草稿' : '保存补库报料草稿'))) : '保存')))))) }}</button>
           </div>
         </div>
@@ -6392,6 +6396,7 @@
             orderItemSaveState:{saving:false,committed:false,outcomeUncertain:false,result:null},
             finishedInventoryCandidates: [], finishedInventoryCandidatesLoaded: false,
             finishedInventoryReservations: [],
+            finishedReservationActionState:{action:"",committed:false,outcomeUncertain:false,itemId:null,lotId:null,reservationId:null,result:null},
             customersTotal: 0, productsTotal: 0, ordersTotal: 0, ordersUnfinishedTotal: 0, deliveriesTotal: 0,
             deliveryListFilters: { customer_id:"", keyword:"", date_from:"", date_to:"", status:"", return_status:"" },
             deliveryDashboardMode: "",
@@ -18965,6 +18970,10 @@
             return true;
           },
           async openOrderItem(order, item) {
+            if (this.finishedReservationActionBlocked?.()) {
+              this.showToast("请先核对库存状态，再打开其他订单明细", true);
+              return false;
+            }
             const requestKey = "orders:item-editor";
             const controller = this.beginLatestRequest(requestKey);
             const orderSnapshot = JSON.parse(JSON.stringify(order || {}));
@@ -19087,56 +19096,182 @@
               return false;
             }
           },
-          async refreshOrderItemInventorySummary() {
-            if (!this.orderItemOrder?.id) return;
-            const {data}=await axios.get(`/api/orders/${this.orderItemOrder.id}`);
-            const item=data.items.find(row=>row.id===this.orderItemForm.id);
-            if (item) {
-              this.orderItemForm.finished_inventory_reserved_qty=Number(item.finished_inventory_reserved_qty||0);
-              this.orderItemForm.production_required_qty=Number(item.production_required_qty??item.quantity);
-              this.orderItemForm.requisition_status=item.requisition_status||"未报料";
+          async refreshOrderItemInventorySummary(itemId=this.orderItemForm.id, orderId=this.orderItemOrder?.id, expectedForm=this.orderItemForm) {
+            const normalizedItemId = Number(itemId || 0);
+            const normalizedOrderId = Number(orderId || 0);
+            if (!normalizedItemId || !normalizedOrderId || !expectedForm) return false;
+            try {
+              const {data}=await axios.get(`/api/orders/${normalizedOrderId}`);
+              if (
+                this.modal?.type !== "orderItem"
+                || this.orderItemForm !== expectedForm
+                || Number(expectedForm.id) !== normalizedItemId
+              ) return false;
+              const item=(data.items || []).find(row=>Number(row.id)===normalizedItemId);
+              if (!item) return false;
+              expectedForm.finished_inventory_reserved_qty=Number(item.finished_inventory_reserved_qty||0);
+              expectedForm.production_required_qty=Number(item.production_required_qty??item.quantity);
+              expectedForm.requisition_status=item.requisition_status||"未报料";
+              return true;
+            } catch(error) {
+              if (
+                this.modal?.type === "orderItem"
+                && this.orderItemForm === expectedForm
+                && Number(expectedForm.id) === normalizedItemId
+              ) this.showToast(`订单库存摘要刷新失败：${this.errorMessage(error)}`,true);
+              return false;
             }
           },
-          async confirmFinishedInventoryReservation(candidate) {
-            const quantity=Number(candidate._reserve_qty||0);
-            if (!Number.isInteger(quantity)||quantity<=0) { this.showToast("抵扣数量必须是大于0的整数",true); return; }
-            const general=candidate.warning_codes?.includes("GENERAL_FINISHED_STOCK");
-            if (general&&!confirm("这是通用库存，请确认箱型、尺寸、材质和楞型均适用于当前客户订单。")) return;
-            if (!confirm(`确认用成品库存批次 ${candidate.lot_number} 抵扣 ${quantity} 个订单数量吗？`)) return;
+          finishedReservationActionBlocked() {
+            const state = this.finishedReservationActionState || {};
+            return Boolean(state.action || state.committed || state.outcomeUncertain);
+          },
+          finishedReservationActionLabel(action, row={}) {
+            const state = this.finishedReservationActionState || {};
+            if (action === "reserve" && state.action === "reserve" && Number(state.lotId) === Number(row.lot_id)) return "预占中…";
+            if (action === "release" && state.action === "release" && Number(state.reservationId) === Number(row.id)) return "释放中…";
+            return action === "release" ? "取消抵扣" : "人工确认抵扣";
+          },
+          resetFinishedReservationActionState() {
+            this.finishedReservationActionState={action:"",committed:false,outcomeUncertain:false,itemId:null,lotId:null,reservationId:null,result:null};
+          },
+          async reloadFinishedInventoryState(itemId=this.orderItemForm.id, orderId=this.orderItemOrder?.id, expectedForm=this.orderItemForm) {
+            const normalizedItemId = Number(itemId || 0);
+            const normalizedOrderId = Number(orderId || 0);
+            if (!normalizedItemId || !normalizedOrderId || !expectedForm) return false;
             try {
-              await axios.post("/api/warehouse/finished/reservations",{
-                order_item_id:this.orderItemForm.id,
-                inventory_lot_id:candidate.lot_id,
-                quantity,
-                expected_version:candidate.version,
-                idempotency_key:createIdempotencyKey(),
-                warning_acknowledged_codes:general?["GENERAL_FINISHED_STOCK"]:[],
-              });
-              await Promise.all([
-                this.refreshOrderItemInventorySummary(),
-                this.loadFinishedInventoryReservations(),
-                this.loadFinishedInventoryCandidates(),
+              const [summaryOk,reservationsOk,candidatesOk] = await Promise.all([
+                this.refreshOrderItemInventorySummary(normalizedItemId,normalizedOrderId,expectedForm),
+                this.loadFinishedInventoryReservations(normalizedItemId,expectedForm),
+                this.loadFinishedInventoryCandidates(expectedForm),
                 this.loadOrders(),
                 this.loadRequisition(),
               ]);
+              return summaryOk === true
+                && reservationsOk === true
+                && candidatesOk === true
+                && this.modal?.type === "orderItem"
+                && this.orderItemForm === expectedForm
+                && Number(expectedForm.id) === normalizedItemId;
+            } catch(error) {
+              if (
+                this.modal?.type === "orderItem"
+                && this.orderItemForm === expectedForm
+                && Number(expectedForm.id) === normalizedItemId
+              ) this.showToast(`库存状态刷新失败：${this.errorMessage(error)}`,true);
+              return false;
+            }
+          },
+          async refreshFinishedInventoryState() {
+            const previous = {...(this.finishedReservationActionState || {})};
+            if (previous.action) return false;
+            const itemId = Number(this.orderItemForm?.id || previous.itemId || 0);
+            const orderId = Number(this.orderItemOrder?.id || 0);
+            const expectedForm = this.orderItemForm;
+            if (!itemId || !orderId || !expectedForm) {
+              this.showToast("当前订单明细不完整，无法核对库存状态",true);
+              return false;
+            }
+            this.finishedReservationActionState={...previous,action:"refresh",itemId};
+            const refreshed = await this.reloadFinishedInventoryState(itemId,orderId,expectedForm);
+            if (refreshed) {
+              this.resetFinishedReservationActionState();
+              this.showToast("库存状态已核对，可以继续操作");
+              return true;
+            }
+            this.finishedReservationActionState={...previous,action:"",itemId};
+            this.showToast("库存状态核对失败，请检查网络后重试",true);
+            return false;
+          },
+          async confirmFinishedInventoryReservation(candidate) {
+            if (this.finishedReservationActionBlocked()) {
+              this.showToast("库存操作尚未核对完成，请勿重复提交",true);
+              return false;
+            }
+            const itemId=Number(this.orderItemForm?.id||0);
+            const orderId=Number(this.orderItemOrder?.id||0);
+            const expectedForm=this.orderItemForm;
+            const lotId=Number(candidate?.lot_id||0);
+            const lotNumber=String(candidate?.lot_number||"");
+            const quantity=Number(candidate?._reserve_qty||0);
+            const expectedVersion=Number(candidate?.version||0);
+            const warningCodes=Array.isArray(candidate?.warning_codes) ? [...candidate.warning_codes] : [];
+            if (!itemId || !orderId || !lotId) { this.showToast("订单或库存批次信息不完整，请刷新后重试",true); return false; }
+            if (!Number.isInteger(quantity)||quantity<=0) { this.showToast("抵扣数量必须是大于0的整数",true); return false; }
+            const general=warningCodes.includes("GENERAL_FINISHED_STOCK");
+            if (general&&!confirm("这是通用库存，请确认箱型、尺寸、材质和楞型均适用于当前客户订单。")) return false;
+            if (!confirm(`确认用成品库存批次 ${lotNumber} 抵扣 ${quantity} 个订单数量吗？`)) return false;
+            const payload={
+              order_item_id:itemId,
+              inventory_lot_id:lotId,
+              quantity,
+              expected_version:expectedVersion,
+              idempotency_key:createIdempotencyKey(),
+              warning_acknowledged_codes:general?["GENERAL_FINISHED_STOCK"]:[],
+            };
+            this.finishedReservationActionState={action:"reserve",committed:false,outcomeUncertain:false,itemId,lotId,reservationId:null,result:null};
+            let result=null;
+            try {
+              const response=await axios.post("/api/warehouse/finished/reservations",payload);
+              result=response?.data||{};
+            } catch(error) {
+              if (!error?.response) {
+                this.finishedReservationActionState={action:"",committed:false,outcomeUncertain:true,itemId,lotId,reservationId:null,result:null};
+                this.showToast("成品库存预占结果暂不确定，请点击“核对库存状态”，不要重复操作。",true);
+                return false;
+              }
+              this.resetFinishedReservationActionState();
+              this.showToast(this.errorMessage(error),true);
+              return false;
+            }
+            const refreshed=await this.reloadFinishedInventoryState(itemId,orderId,expectedForm);
+            if (refreshed) {
+              this.resetFinishedReservationActionState();
               this.showToast("成品库存已确认预占");
-            } catch(error) { this.showToast(this.errorMessage(error),true); }
+              return true;
+            }
+            this.finishedReservationActionState={action:"",committed:true,outcomeUncertain:false,itemId,lotId,reservationId:Number(result?.id||0)||null,result};
+            this.showToast("成品库存预占已经完成，但页面刷新失败，请点击“核对库存状态”，不要重复操作。",true);
+            return true;
           },
           async releaseFinishedInventoryReservation(reservation) {
-            if (!confirm(`确认取消批次 ${reservation.lot_number} 的 ${reservation.reserved_stock_quantity} 个库存抵扣吗？\n取消后数量会回到可用库存，系统自动记录操作人和时间。`)) return;
+            if (this.finishedReservationActionBlocked()) {
+              this.showToast("库存操作尚未核对完成，请勿重复提交",true);
+              return false;
+            }
+            const itemId=Number(this.orderItemForm?.id||0);
+            const orderId=Number(this.orderItemOrder?.id||0);
+            const expectedForm=this.orderItemForm;
+            const reservationId=Number(reservation?.id||0);
+            const lotNumber=String(reservation?.lot_number||"");
+            const reservedQuantity=Number(reservation?.reserved_stock_quantity||0);
+            if (!itemId || !orderId || !reservationId) { this.showToast("订单或库存预占信息不完整，请刷新后重试",true); return false; }
+            if (!confirm(`确认取消批次 ${lotNumber} 的 ${reservedQuantity} 个库存抵扣吗？\n取消后数量会回到可用库存，系统自动记录操作人和时间。`)) return false;
+            const payload={idempotency_key:createIdempotencyKey()};
+            this.finishedReservationActionState={action:"release",committed:false,outcomeUncertain:false,itemId,lotId:null,reservationId,result:null};
+            let result=null;
             try {
-              await axios.post(`/api/warehouse/reservations/${reservation.id}/release`,{
-                idempotency_key:createIdempotencyKey(),
-              });
-              await Promise.all([
-                this.refreshOrderItemInventorySummary(),
-                this.loadFinishedInventoryReservations(),
-                this.loadFinishedInventoryCandidates(),
-                this.loadOrders(),
-                this.loadRequisition(),
-              ]);
+              const response=await axios.post(`/api/warehouse/reservations/${reservationId}/release`,payload);
+              result=response?.data||{};
+            } catch(error) {
+              if (!error?.response) {
+                this.finishedReservationActionState={action:"",committed:false,outcomeUncertain:true,itemId,lotId:null,reservationId,result:null};
+                this.showToast("取消库存抵扣的结果暂不确定，请点击“核对库存状态”，不要重复操作。",true);
+                return false;
+              }
+              this.resetFinishedReservationActionState();
+              this.showToast(this.errorMessage(error),true);
+              return false;
+            }
+            const refreshed=await this.reloadFinishedInventoryState(itemId,orderId,expectedForm);
+            if (refreshed) {
+              this.resetFinishedReservationActionState();
               this.showToast("成品库存抵扣已取消");
-            } catch(error) { this.showToast(this.errorMessage(error),true); }
+              return true;
+            }
+            this.finishedReservationActionState={action:"",committed:true,outcomeUncertain:false,itemId,lotId:null,reservationId,result};
+            this.showToast("成品库存抵扣已经取消，但页面刷新失败，请点击“核对库存状态”，不要重复操作。",true);
+            return true;
           },
           async deleteCurrentOrderItem() {
             const order = this.orderItemOrder;
@@ -20972,6 +21107,13 @@
           },
 	          closeModal() {
 	            if (this.isForcedPassword) return;
+              if (this.modal?.type === "orderItem" && this.finishedReservationActionBlocked()) {
+                const message = this.finishedReservationActionState.action
+                  ? "库存操作正在处理，请稍候"
+                  : "请先核对库存状态，再关闭订单明细";
+                this.showToast(message, true);
+                return;
+              }
             if (this.modal?.type === "delivery" && this.deliverySaveState?.saving) {
                 this.showToast("送货草稿正在保存，请稍候", true);
                 return;

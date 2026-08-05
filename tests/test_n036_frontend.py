@@ -14,7 +14,7 @@ MOBILE = (ROOT / "static" / "mobile_delivery_pick.html").read_text(encoding="utf
 def test_desktop_delivery_list_exposes_pick_task_contract_and_actions() -> None:
     for marker in (
         "/api/delivery-picks",
-        "/api/deliveries/${row.id}/pick-task",
+        "/api/deliveries/${deliveryId}/pick-task",
         "/mobile/delivery-pick.html?task_id=",
         "拿货",
         "发货打印",
@@ -46,10 +46,10 @@ def test_desktop_delivery_row_owns_pick_actions_without_duplicate_panel() -> Non
 
 def test_exception_dispatch_applies_pick_result_before_dispatch() -> None:
     exception_confirm_pos = INDEX.index("司机拿货结果存在异常")
-    apply_pos = INDEX.index("await this.applyDeliveryPickTask(row)")
-    final_confirm_pos = INDEX.index("confirm(`确认发货并打印", apply_pos)
-    dispatch_pos = INDEX.index("await axios.put(`/api/deliveries/${row.id}/dispatch`)")
-    assert exception_confirm_pos < apply_pos < final_confirm_pos < dispatch_pos
+    final_confirm_pos = INDEX.index("confirm(`确认发货并打印", exception_confirm_pos)
+    apply_pos = INDEX.index("await this.applyDeliveryPickTask(frozenRow)", final_confirm_pos)
+    dispatch_pos = INDEX.index("await axios.put(`/api/deliveries/${deliveryId}/dispatch`)", apply_pos)
+    assert exception_confirm_pos < final_confirm_pos < apply_pos < dispatch_pos
     assert "task.has_exception" in INDEX
     assert 'task.status === "exception"' in INDEX
     assert "/api/delivery-picks/${task.id}/apply" in INDEX

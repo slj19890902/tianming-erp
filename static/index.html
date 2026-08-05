@@ -2708,15 +2708,15 @@
                     <td><status-tag :value="row.return_receipt_status === 'cancelled' ? 'receipt_cancelled' : (row.return_receipt_status || 'waiting_receipt')"></status-tag></td>
                     <td><button class="btn small" @click="toggleDeliveryListDetail(row)">{{ expandedDeliveryRows[row.id] ? '收起明细' : `查看明细（${(row.items || []).length}）` }}</button></td>
                     <td class="toolbar-group delivery-list-actions">
-                      <button v-if="canDelivery && row.status==='pending' && !row.pick_task" class="btn small" @click="createDeliveryPickTask(row)">拿货</button>
-                      <select v-if="canDelivery && row.pick_task && row.status==='pending'" class="select" style="max-width:130px" :value="row.pick_task.assigned_to || ''" @change="assignDeliveryPickTask(row,$event.target.value)">
+                      <button v-if="canDelivery && row.status==='pending' && !row.pick_task" class="btn small" :disabled="!!deliveryOperationState.action" @click="createDeliveryPickTask(row)">{{ deliveryOperationState.action==='pick' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '推送中…' : '拿货' }}</button>
+                      <select v-if="canDelivery && row.pick_task && row.status==='pending'" class="select" style="max-width:130px" :disabled="!!deliveryOperationState.action" :value="row.pick_task.assigned_to || ''" @change="assignDeliveryPickTask(row,$event.target.value)">
                         <option value="">未分配</option>
                         <option v-for="picker in deliveryPickers" :key="picker.id" :value="picker.id">{{ picker.name }}</option>
                       </select>
-                      <button v-if="row.pick_task" class="btn small" @click="openDeliveryPickTask(row)">{{ row.pick_task.assignment_required ? '管理员查看' : '打开手机拿货' }}</button>
-                      <button v-if="canDelivery && row.status==='pending'" class="btn small success" @click="dispatchDelivery(row)">{{ row.pick_task ? '发货打印' : '直接发货打印' }}</button>
-                      <button v-if="canDelivery && row.status==='pending'" class="btn small" @click="editDelivery(row)">编辑</button>
-                      <button v-if="canDelivery && row.status==='pending'" class="btn small danger" @click="deleteDelivery(row)">删除</button>
+                      <button v-if="row.pick_task" class="btn small" :disabled="!!deliveryOperationState.action" @click="openDeliveryPickTask(row)">{{ row.pick_task.assignment_required ? '管理员查看' : '打开手机拿货' }}</button>
+                      <button v-if="canDelivery && row.status==='pending'" class="btn small success" :disabled="!!deliveryOperationState.action" @click="dispatchDelivery(row)">{{ deliveryOperationState.action==='dispatch' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '发货中…' : (row.pick_task ? '发货打印' : '直接发货打印') }}</button>
+                      <button v-if="canDelivery && row.status==='pending'" class="btn small" :disabled="!!deliveryOperationState.action" @click="editDelivery(row)">编辑</button>
+                      <button v-if="canDelivery && row.status==='pending'" class="btn small danger" :disabled="!!deliveryOperationState.action" @click="deleteDelivery(row)">删除</button>
                       <button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small" @click="openReceipt(row)">编辑回单</button>
                       <button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small danger" @click="cancelReceipt(row)">取消回单</button>
                       <button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small" @click="openReceipt(row)">确认回单</button>
@@ -5790,8 +5790,8 @@
             <template v-if="modal?.type === 'pdfTemplate' && !pdfTemplateFormReadonly">
               <button class="btn primary" :disabled="loading || pdfTemplateLoading" @click="savePdfTemplate">保存 draft</button>
             </template>
-            <button v-if="modal?.type === 'delivery' && deliveryForm.editingId && !deliveryFormIsDirty()" class="btn success" :disabled="loading || !!deliveryForm.pick_task" @click="createCurrentDeliveryPickTask">{{ deliveryForm.pick_task ? '已推送拿货' : '拿货' }}</button>
-            <button v-if="canSaveModal" class="btn primary" :disabled="loading || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError)) || (modal?.type==='quotationConvert' && !!quotationConvertCreaseMismatch) || (modal?.type==='orderItem' && !!orderItemCreaseMismatch) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && !!deliveryValidationError) || (modal?.type==='requisitionHold' && requisitionHoldSaveBlocked)" @click="modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()">{{ modal?.type==='delivery' ? deliveryPrimaryLabel() : (['requisition','supplierRequisitionDraft'].includes(modal?.type) ? '确认生成正式采购单' : (modal?.type==='requisitionHold' ? '确认暂缓' : (modal?.type==='stockReplenishment' && stockReplenishmentForm.source_type==='stock_warning' ? '保存报料草稿' : '保存'))) }}</button>
+            <button v-if="modal?.type === 'delivery' && deliveryForm.editingId && !deliveryFormIsDirty()" class="btn success" :disabled="loading || !!deliveryForm.pick_task || !!deliveryOperationState.action" @click="createCurrentDeliveryPickTask">{{ deliveryOperationState.action==='pick' && Number(deliveryOperationState.deliveryId)===Number(deliveryForm.editingId) ? '推送中…' : (deliveryForm.pick_task ? '已推送拿货' : '拿货') }}</button>
+            <button v-if="canSaveModal" class="btn primary" :disabled="loading || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError)) || (modal?.type==='quotationConvert' && !!quotationConvertCreaseMismatch) || (modal?.type==='orderItem' && !!orderItemCreaseMismatch) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && (!!deliveryValidationError || !!deliveryOperationState.action)) || (modal?.type==='requisitionHold' && requisitionHoldSaveBlocked)" @click="modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()">{{ modal?.type==='delivery' ? deliveryPrimaryLabel() : (['requisition','supplierRequisitionDraft'].includes(modal?.type) ? '确认生成正式采购单' : (modal?.type==='requisitionHold' ? '确认暂缓' : (modal?.type==='stockReplenishment' && stockReplenishmentForm.source_type==='stock_warning' ? '保存报料草稿' : '保存'))) }}</button>
           </div>
         </div>
       </div>
@@ -6221,7 +6221,7 @@
             // v0.19.2-B 楞型加价规则
             fluteRules: [], showFluteRuleModal: false, fluteRuleLoading: false, fluteRuleError: "",
             fluteRuleForm: { id: null, supplier_name: "", layer_count: 3, flute_type: "A", price_delta: "0", effective_date: "", remark: "", is_active: true },
-            deliveries: [], pendingDeliveryItems: [], deliveryCustomerCandidates: [], deliveryPickTasks: [], deliveryPickers: [], expandedDeliveryRows: {}, deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false }, deliveryCandidateLoading:false, statements: [], invoices: [], moldTools: [],
+            deliveries: [], pendingDeliveryItems: [], deliveryCustomerCandidates: [], deliveryPickTasks: [], deliveryPickers: [], expandedDeliveryRows: {}, deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false }, deliveryCandidateLoading:false, deliveryOperationState:{action:"",deliveryId:null,deliveryNumber:""}, statements: [], invoices: [], moldTools: [],
             invoiceTasks: [], invoiceTaskFilters:{customer_id:"",statement_month:"",status:""}, invoiceTaskState:{loading:false,error:""},
             invoiceTaskDetail:null, invoiceTaskResult:{task_id:null,status:"issued",invoice_number:"",invoice_date:"",failure_reason:"",expected_version:null},
             invoiceTaskOperationState:{detailLoading:false,detailError:"",detailTaskId:null,detailTaskNumber:"",confirmingTaskId:null,resultSaving:false},
@@ -12000,14 +12000,27 @@
             }).join("；");
           },
           async createDeliveryPickTask(row) {
+            if (this.deliveryOperationState.action) return null;
+            const deliveryId = Number(row?.id || 0);
+            const deliveryNumber = String(row?.delivery_number || `#${deliveryId}`);
+            if (!deliveryId) {
+              this.showToast("送货单不存在，无法推送拿货", true);
+              return null;
+            }
+            this.deliveryOperationState = {action:"pick",deliveryId,deliveryNumber};
             this.loading = true;
             try {
-              const { data } = await axios.post(`/api/deliveries/${row.id}/pick-task`);
+              const { data } = await axios.post(`/api/deliveries/${deliveryId}/pick-task`);
               row.pick_task = data.pick_task || data;
               this.showToast(row.pick_task.assignment_required ? "拿货任务已创建，请选择送货员" : `已分配给 ${row.pick_task.assigned_to_name}`);
               return row.pick_task;
             } catch (error) { this.showToast(this.errorMessage(error), true); return null; }
-            finally { this.loading = false; }
+            finally {
+              this.loading = false;
+              if (this.deliveryOperationState.action === "pick" && Number(this.deliveryOperationState.deliveryId) === deliveryId) {
+                this.deliveryOperationState = {action:"",deliveryId:null,deliveryNumber:""};
+              }
+            }
           },
           openDeliveryPickTask(row) {
             const task = this.normalizeDeliveryPickTask(row);
@@ -18518,6 +18531,7 @@
           },
           deliveryPrimaryLabel() {
             if (!this.deliveryForm.editingId) return "保存草稿";
+            if (this.deliveryOperationState.action === "dispatch" && Number(this.deliveryOperationState.deliveryId) === Number(this.deliveryForm.editingId)) return "发货中…";
             return this.deliveryFormIsDirty() ? "保存修改" : "发货打印";
           },
           async deliveryPrimaryAction() {
@@ -19536,31 +19550,58 @@
             finally { this.loading = false; }
           },
           async dispatchDelivery(row) {
+            if (this.deliveryOperationState.action) return false;
+            const deliveryId = Number(row?.id || 0);
+            const deliveryNumber = String(row?.delivery_number || `#${deliveryId}`);
+            if (!deliveryId) {
+              this.showToast("送货单不存在，无法发货", true);
+              return false;
+            }
             const task = this.normalizeDeliveryPickTask(row);
+            const frozenTask = task ? {...task} : null;
             if (task?.id && (task.has_exception || task.status === "exception")) {
               const details = this.deliveryPickExceptionText(row);
               if (!confirm(`司机拿货结果存在异常，请确认以下变化后再发货：\n${details || "存在没货或数量变化"}\n\n确认后系统会先应用司机结果，再继续发货打印。`)) return false;
-              try {
-                await this.applyDeliveryPickTask(row);
-                row.pick_task = { ...task, status: "applied", has_exception: false };
-              } catch (error) { this.showToast(this.errorMessage(error), true); return false; }
             }
-            if (!confirm(`确认发货并打印 ${row.delivery_number} 吗？`)) return false;
-            const printSession = await this.openDeliveryPrintTab(row.id, true);
-            if (!printSession) return false;
+            if (!confirm(`确认发货并打印 ${deliveryNumber} 吗？`)) return false;
+            this.deliveryOperationState = {action:"dispatch",deliveryId,deliveryNumber};
+            const frozenRow = {...row,id:deliveryId,delivery_number:deliveryNumber,pick_task:frozenTask};
+            let printSession = null;
+            let dispatchSucceeded = false;
             try {
-              await axios.put(`/api/deliveries/${row.id}/dispatch`);
-              await axios.put(`/api/deliveries/${row.id}/printed`);
+              if (frozenTask?.id && (frozenTask.has_exception || frozenTask.status === "exception")) {
+                await this.applyDeliveryPickTask(frozenRow);
+                row.pick_task = {...frozenTask,status:"applied",has_exception:false};
+              }
+              printSession = await this.openDeliveryPrintTab(deliveryId, true);
+              if (!printSession) return false;
+              await axios.put(`/api/deliveries/${deliveryId}/dispatch`);
+              dispatchSucceeded = true;
               printSession.activate();
-              await Promise.all([this.loadDeliveries(),this.loadOrders(),this.loadKpi()]);
+              try {
+                await axios.put(`/api/deliveries/${deliveryId}/printed`);
+              } catch (error) {
+                this.showToast(`发货已经完成；打印登记失败，可重新打开打印页，不要再次发货：${this.errorMessage(error)}`, true);
+                return true;
+              }
+              try {
+                await Promise.all([this.loadDeliveries(),this.loadOrders(),this.loadKpi()]);
+              } catch (error) {
+                this.showToast(`发货已经完成；列表刷新失败，只需刷新页面，不要再次发货：${this.errorMessage(error)}`, true);
+                return true;
+              }
               this.showToast("发货成功，打印页已打开");
               return true;
             }
             catch (error) {
               const message = this.errorMessage(error);
-              printSession.abort(message);
+              if (printSession && !dispatchSucceeded) printSession.abort(message);
               this.showToast(message, true);
               return false;
+            } finally {
+              if (this.deliveryOperationState.action === "dispatch" && Number(this.deliveryOperationState.deliveryId) === deliveryId) {
+                this.deliveryOperationState = {action:"",deliveryId:null,deliveryNumber:""};
+              }
             }
           },
           async printDelivery(row) { return !!(await this.openDeliveryPrintTab(row?.id)); },

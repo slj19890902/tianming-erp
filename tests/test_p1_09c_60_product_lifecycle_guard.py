@@ -28,7 +28,7 @@ def _run_node(source: str, tmp_path: Path) -> None:
 def test_product_lifecycle_buttons_have_single_flight_feedback() -> None:
     assert 'productLifecycleAction:{action:"",productId:null}' in INDEX
     assert INDEX.count(':disabled="productLifecycleBusy()"') >= 4
-    assert ':disabled="productLifecycleBusy() || !productTrashItems.length"' in INDEX
+    assert ':disabled="productLifecycleBusy() || productTrashLoading || !productTrashItems.length"' in INDEX
     assert "productLifecyclePending('status',row.id) ? '处理中…'" in INDEX
     assert "productLifecyclePending('delete',row.id) ? '处理中…'" in INDEX
     assert "productLifecyclePending('restore',row.id) ? '处理中…'" in INDEX

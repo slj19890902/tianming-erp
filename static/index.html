@@ -1919,8 +1919,10 @@
               </div>
               <div v-if="productTab === 'products'">
                 <div v-if="productTrashOpen" class="panel">
-                  <div class="toolbar"><strong>产品垃圾站（保留 30 天）</strong><div class="toolbar-group"><button class="btn" :disabled="productLifecycleBusy()" @click="loadProductTrash()">刷新</button><button class="btn danger" :disabled="productLifecycleBusy() || !productTrashItems.length" @click="emptyProductTrash()">{{ productLifecyclePending('empty') ? '处理中…' : '清空垃圾站' }}</button><button class="btn" :disabled="productLifecycleBusy()" @click="productTrashOpen=false">关闭</button></div></div>
-                  <div v-if="!productTrashItems.length" class="empty">垃圾站为空</div>
+                  <div class="toolbar"><strong>产品垃圾站（保留 30 天）</strong><div class="toolbar-group"><button class="btn" :disabled="productLifecycleBusy() || productTrashLoading" @click="loadProductTrash()">{{ productTrashLoading ? "读取中…" : "刷新" }}</button><button class="btn danger" :disabled="productLifecycleBusy() || productTrashLoading || !productTrashItems.length" @click="emptyProductTrash()">{{ productLifecyclePending('empty') ? '处理中…' : '清空垃圾站' }}</button><button class="btn" :disabled="productLifecycleBusy()" @click="productTrashOpen=false">关闭</button></div></div>
+                  <div v-if="productTrashLoading" class="empty">正在读取产品垃圾站…</div>
+                  <div v-else-if="productTrashError" class="notice error">{{ productTrashError }} <button class="btn small" :disabled="productLifecycleBusy() || productTrashLoading" @click="loadProductTrash()">重试</button></div>
+                  <div v-else-if="!productTrashItems.length" class="empty">垃圾站为空</div>
                   <div v-else class="table-wrap"><table><thead><tr><th>客户</th><th>存货编码</th><th>原产品名称</th><th>删除时间</th><th>保留期限</th><th>操作</th></tr></thead><tbody><tr v-for="row in productTrashItems" :key="row.id"><td>{{ customerName(row.customer_id) }}</td><td>{{ plainProductText(row.customer_material_code || row.product_code) }}</td><td>{{ plainProductText(row.product_name) }}</td><td>{{ formatDateTime(row.deleted_at) }}</td><td>剩余 {{ Math.ceil(row.trash_days_remaining || 0) }} 天</td><td class="toolbar-group"><button class="btn small success" :disabled="productLifecycleBusy()" @click="restoreProduct(row)">{{ productLifecyclePending('restore',row.id) ? '处理中…' : '恢复' }}</button><button class="btn small danger" :disabled="productLifecycleBusy()" @click="purgeProduct(row)">{{ productLifecyclePending('purge',row.id) ? '处理中…' : '彻底清理' }}</button></td></tr></tbody></table></div>
                 </div>
                 <template v-if="!selectedProductCustomer">
@@ -6379,7 +6381,7 @@
             selectedProductCustomer: null, productCustomerSearch: "",
             productsLoading: false, productsError: "",
             showProductMoreFilters: false,
-            productTrashOpen: false, productTrashItems: [], productLifecycleAction:{action:"",productId:null},
+            productTrashOpen: false, productTrashItems: [], productTrashLoading:false, productTrashError:"", productLifecycleAction:{action:"",productId:null},
             filters: { customerKeyword: "", showInactive:false, showInactiveProducts:false, productCustomer: "", productKeyword: "", productCode: "", productName: "", productSpec: "", productMaterial: "", orderCustomer: "", orderKeyword:"", orderNumber:"", orderCustomerPo:"", orderProductCode:"", orderProductName:"", orderSpecification:"", orderDateFrom:"", orderDateTo:"", orderDeliveryDateFrom:"", orderDeliveryDateTo:"", orderScope:"active", orderStage:"", orderStatus:"business", orderView:"customer_po", orderSortBy:"", orderSortDirection:"desc" },
             orderScopeTabs: [
               { label: "进行中", value: "active" },
@@ -16346,12 +16348,34 @@
             });
           },
           async toggleProductTrash() {
-            this.productTrashOpen = !this.productTrashOpen;
-            if (this.productTrashOpen) await this.loadProductTrash();
+            if (this.productTrashOpen) {
+              this.productTrashOpen = false;
+              return true;
+            }
+            this.productTrashOpen = true;
+            return await this.loadProductTrash();
           },
           async loadProductTrash() {
-            const { data } = await axios.get("/api/master/products/trash", {params:{page_size:200}});
-            this.productTrashItems = data.items;
+            const requestKey = "product:trash";
+            const controller = this.beginLatestRequest(requestKey);
+            this.productTrashLoading = true;
+            this.productTrashError = "";
+            try {
+              const { data } = await axios.get("/api/master/products/trash", {
+                params:{page_size:200},
+                signal:controller.signal,
+              });
+              if (latestRequestControllers.get(requestKey) !== controller) return false;
+              this.productTrashItems = data.items || [];
+              return true;
+            } catch (error) {
+              if (this.isCancelledRequest(error) || latestRequestControllers.get(requestKey) !== controller) return false;
+              this.productTrashError = this.errorMessage(error) || "产品垃圾站读取失败，请重试";
+              return false;
+            } finally {
+              if (latestRequestControllers.get(requestKey) === controller) this.productTrashLoading = false;
+              this.finishLatestRequest(requestKey, controller);
+            }
           },
           async restoreProduct(row) {
             return this.runProductLifecycleAction({

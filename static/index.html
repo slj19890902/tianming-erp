@@ -5812,7 +5812,7 @@
             </div>
           </div>
           <div class="modal-foot">
-            <button v-if="!isForcedPassword" class="btn" :disabled="masterSavePending" @click="closeModal">{{ canSaveModal ? "取消" : "关闭" }}</button>
+            <button v-if="!isForcedPassword" class="btn" :disabled="masterSavePending || (modal?.type==='stockReplenishment' && stockReplenishmentSaveState.saving)" @click="closeModal">{{ canSaveModal ? "取消" : "关闭" }}</button>
             <template v-if="modal?.type === 'orderPdfImport' && orderImportDrafts.length">
               <button class="btn" :disabled="loading || !confirmableImportDraftCount" @click="toggleConfirmableImportDrafts">{{ confirmedImportDraftCount ? "取消加入批量保存" : "加入批量保存" }}</button>
               <span class="muted">待保存：{{ confirmedImportDraftCount }} 条；已成功：{{ successfulImportDraftCount }} 条；失败：{{ failedImportDraftCount }} 条</span>
@@ -5822,7 +5822,7 @@
               <button class="btn primary" :disabled="loading || pdfTemplateLoading" @click="savePdfTemplate">保存 draft</button>
             </template>
             <button v-if="modal?.type === 'delivery' && deliveryForm.editingId && !deliveryFormIsDirty()" class="btn success" :disabled="loading || !!deliveryForm.pick_task || !!deliveryOperationState.action" @click="createCurrentDeliveryPickTask">{{ deliveryOperationState.action==='pick' && Number(deliveryOperationState.deliveryId)===Number(deliveryForm.editingId) ? '推送中…' : (deliveryForm.pick_task ? '已推送拿货' : '拿货') }}</button>
-            <button v-if="canSaveModal" class="btn primary" :disabled="loading || masterSavePending || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError)) || (modal?.type==='quotationConvert' && !!quotationConvertCreaseMismatch) || (modal?.type==='orderItem' && !!orderItemCreaseMismatch) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && (!!deliveryValidationError || !!deliveryOperationState.action)) || (modal?.type==='receipt' && !!receiptOperationState.action) || (modal?.type==='requisitionHold' && requisitionHoldSaveBlocked)" @click="modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()">{{ ['customer','product','material','supplier'].includes(modal?.type) && masterSavePending ? '保存中…' : (modal?.type==='delivery' ? deliveryPrimaryLabel() : (modal?.type==='receipt' ? (receiptOperationState.action==='save' ? '保存中…' : '保存回单') : (['requisition','supplierRequisitionDraft'].includes(modal?.type) ? '确认生成正式采购单' : (modal?.type==='requisitionHold' ? '确认暂缓' : (modal?.type==='stockReplenishment' && stockReplenishmentForm.source_type==='stock_warning' ? '保存报料草稿' : '保存'))))) }}</button>
+            <button v-if="canSaveModal" class="btn primary" :disabled="loading || masterSavePending || (modal?.type==='stockReplenishment' && (stockReplenishmentSaveState.saving || stockReplenishmentSaveState.committed)) || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError)) || (modal?.type==='quotationConvert' && !!quotationConvertCreaseMismatch) || (modal?.type==='orderItem' && !!orderItemCreaseMismatch) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && (!!deliveryValidationError || !!deliveryOperationState.action)) || (modal?.type==='receipt' && !!receiptOperationState.action) || (modal?.type==='requisitionHold' && requisitionHoldSaveBlocked)" @click="modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()">{{ ['customer','product','material','supplier'].includes(modal?.type) && masterSavePending ? '保存中…' : (modal?.type==='delivery' ? deliveryPrimaryLabel() : (modal?.type==='receipt' ? (receiptOperationState.action==='save' ? '保存中…' : '保存回单') : (['requisition','supplierRequisitionDraft'].includes(modal?.type) ? '确认生成正式采购单' : (modal?.type==='requisitionHold' ? '确认暂缓' : (modal?.type==='stockReplenishment' ? (stockReplenishmentSaveState.saving ? '正在保存补库草稿…' : (stockReplenishmentSaveState.committed ? '补库草稿已保存' : (stockReplenishmentForm.source_type==='stock_warning' ? '保存报料草稿' : '保存补库报料草稿'))) : '保存'))))) }}</button>
           </div>
         </div>
       </div>
@@ -6329,6 +6329,7 @@
             mergeSuggestions: [], mergeSuggestionsLoading: false, mergeSuggestionsError: "", mergeSuggestionsExpanded: {}, mergeSuggestionsDeduction: {}, requisitionMergeExpanded: {}, requisitionComponentExpanded: {},
             supplierOrders: [],
             supplierRequisitionDraft: { supplier_groups: [] }, supplierRequisitionSelections: [],
+            stockReplenishmentSaveState:{saving:false, committed:false, uncertain:false, result:null},
             stockReplenishmentVoidState:{orderId:null, documentNumber:"", uncertainIds:{}},
             stockPolicyWarnings: [], stockReplenishmentLocations: [], stockReplenishmentProducts: [], stockReplenishmentCompanions: [],
             stockReplenishmentForm: { source_type:"customer_request", idempotency_key:null, supplier_name:"", customer_id:null, remark:"", stock_now:false, items:[] },
@@ -11227,7 +11228,8 @@
             if (!this.canRequisition) return;
             const warningOnly = !!options.warningOnly;
             const controller = this.beginLatestRequest("requisition:stock-replenishment-bootstrap");
-            this.stockReplenishmentForm = { source_type:warningOnly ? "stock_warning" : "customer_request", idempotency_key:warningOnly ? createIdempotencyKey() : null, supplier_name:"", customer_id:null, remark:"", stock_now:false, items:[] };
+            this.stockReplenishmentSaveState = {saving:false, committed:false, uncertain:false, result:null};
+            this.stockReplenishmentForm = { source_type:warningOnly ? "stock_warning" : "customer_request", idempotency_key:createIdempotencyKey(), supplier_name:"", customer_id:null, remark:"", stock_now:false, items:[] };
             this.stockReplenishmentProducts = [];
             this.stockReplenishmentCompanions = [];
             this.modal = { type:"stockReplenishment", title:warningOnly ? "按库存预警生成报料草稿" : "手动库存补库报料" };
@@ -18368,6 +18370,76 @@
             }
             return "";
           },
+          async saveStockReplenishmentDraft() {
+            const state = this.stockReplenishmentSaveState;
+            if (state.saving || state.committed) {
+              this.showToast(
+                state.committed ? "补库草稿已经保存，请勿重复提交" : "正在保存补库草稿，请勿重复点击",
+                true,
+              );
+              return state.committed ? state.result : {_in_flight:true};
+            }
+            const validation = this.validateStockReplenishmentForm();
+            if (validation) throw new Error(validation);
+            const payload = {
+              source_type:this.stockReplenishmentForm.source_type,
+              idempotency_key:this.stockReplenishmentForm.idempotency_key || null,
+              supplier_name:this.stockReplenishmentForm.supplier_name || null,
+              customer_id:this.stockReplenishmentForm.customer_id || null,
+              remark:this.stockReplenishmentForm.remark || null,
+              stock_now:false,
+              items:this.stockReplenishmentForm.items.map(line => {
+                const item={...line};
+                delete item._key;
+                delete item.crease_text;
+                delete item.material_supplier_name;
+                delete item.suggested_finished_quantity;
+                delete item.theoretical_requisition_quantity;
+                delete item.compatible_product_ids;
+                delete item.compatible_product_codes;
+                delete item.draft_ready;
+                delete item.missing_fields;
+                delete item.cutting_mode;
+                delete item.output_per_sheet;
+                return item;
+              }),
+            };
+            const frozenPayload = JSON.parse(JSON.stringify(payload));
+            state.saving = true;
+            state.uncertain = false;
+            try {
+              let data;
+              try {
+                ({data} = await axios.post("/api/requisition/stock-replenishment/orders", frozenPayload));
+              } catch (error) {
+                const status = Number(error?.response?.status || 0);
+                if (!error?.response || status >= 500) {
+                  state.uncertain = true;
+                  if (this.modal?.type === "stockReplenishment") this.modal = null;
+                  error._stockReplenishmentOutcomeUncertain = true;
+                }
+                throw error;
+              }
+              // 补库报料草稿已经写入；打印和列表刷新失败不能把已完成业务显示成保存失败。
+              state.committed = true;
+              state.result = data;
+              if (this.modal?.type === "stockReplenishment") this.modal = null;
+              let printFailed = false;
+              try {
+                const printable = (await axios.get(`/api/requisition/stock-replenishment/orders/${data.id}/print`)).data;
+                this.openStockReplenishmentPrint(printable);
+              } catch (error) {
+                printFailed = true;
+              }
+              const refreshResults = await Promise.allSettled([this.loadRequisition()]);
+              const refreshFailed = refreshResults.some(result =>
+                result.status === "rejected" || result.value === false
+              );
+              return {...data, _refresh_failed:refreshFailed, _print_failed:printFailed};
+            } finally {
+              state.saving = false;
+            }
+          },
           async saveSupplierRequisitionDraft() {
             const draftError = this.validateSupplierRequisitionDraft();
             if (draftError) throw new Error(draftError);
@@ -19732,6 +19804,10 @@
           },
 	          closeModal() {
 	            if (this.isForcedPassword) return;
+              if (this.modal?.type === "stockReplenishment" && this.stockReplenishmentSaveState.saving) {
+                this.showToast("正在保存补库草稿，请稍候", true);
+                return;
+              }
               if (this.modal?.type === "invoiceTaskResult" && this.invoiceTaskOperationState.resultSaving) {
                 this.showToast("正在登记开票结果，请稍候", true);
                 return;
@@ -19797,6 +19873,13 @@
           },
           async saveModal() {
             if (this.modal?.type === "receipt") return this.saveReceipt();
+            if (this.modal?.type === "stockReplenishment" && (this.stockReplenishmentSaveState.saving || this.stockReplenishmentSaveState.committed)) {
+              this.showToast(
+                this.stockReplenishmentSaveState.committed ? "补库草稿已经保存，请勿重复提交" : "正在保存补库草稿，请勿重复点击",
+                true,
+              );
+              return false;
+            }
             const masterSaveEntity = ["customer","product","material","supplier"].includes(this.modal?.type) ? this.modal.type : null;
             if (masterSaveEntity && this.masterSavePending) {
               const label = masterSaveEntity === "customer" ? "客户" : (masterSaveEntity === "product" ? "常用箱" : (masterSaveEntity === "supplier" ? "供应商" : "材质"));
@@ -20121,26 +20204,18 @@
                 successMessage = "库存预警已保存";
               }
               if (this.modal.type === "stockReplenishment") {
-                const validation = this.validateStockReplenishmentForm();
-                if (validation) throw new Error(validation);
-                const payload = {
-                  source_type:this.stockReplenishmentForm.source_type,
-                  idempotency_key:this.stockReplenishmentForm.idempotency_key || null,
-                  supplier_name:this.stockReplenishmentForm.supplier_name || null,
-                  customer_id:this.stockReplenishmentForm.customer_id || null,
-                  remark:this.stockReplenishmentForm.remark || null,
-                  stock_now:false,
-                  items:this.stockReplenishmentForm.items.map(line => {
-                    const item={...line}; delete item._key; delete item.crease_text; delete item.material_supplier_name; delete item.suggested_finished_quantity; delete item.theoretical_requisition_quantity; delete item.compatible_product_ids; delete item.compatible_product_codes; delete item.draft_ready; delete item.missing_fields; delete item.cutting_mode; delete item.output_per_sheet;
-                    return item;
-                  }),
-                };
-                const {data} = await axios.post("/api/requisition/stock-replenishment/orders",payload);
-                const printable = (await axios.get(`/api/requisition/stock-replenishment/orders/${data.id}/print`)).data;
-                this.openStockReplenishmentPrint(printable);
-                await this.loadRequisition();
-                this.showToast("补库报料草稿已保存；到料确认后进入客户专用纸板备料，不增加成品库存");
-                return;
+                const data = await this.saveStockReplenishmentDraft();
+                if (data?._in_flight) return false;
+                if (data?._refresh_failed || data?._print_failed) {
+                  const details = [
+                    data._refresh_failed ? "已报料列表刷新失败" : "",
+                    data._print_failed ? "打印页未打开" : "",
+                  ].filter(Boolean).join("、");
+                  this.showToast(`补库报料草稿已经保存；${details}。请从“已报料/来料待入库”核对，不要重复提交。`, true);
+                } else {
+                  this.showToast("补库报料草稿已保存；到料确认后进入客户专用纸板备料，不增加成品库存");
+                }
+                return true;
               }
               if (this.modal.type === "supplierRequisitionDraft") {
                 const data = await this.saveSupplierRequisitionDraft();
@@ -20236,6 +20311,10 @@
               this.closeModal(); this.showToast(successMessage);
               return true;
             } catch (error) {
+              if (error?._stockReplenishmentOutcomeUncertain) {
+                this.showToast("补库草稿提交连接中断，结果暂不确定。原草稿已关闭，请刷新“已报料”和“来料待入库”核对，不要重复点击原草稿。", true);
+                return false;
+              }
               if (masterEntity && masterForm?.id && this.handleMaster409(error,masterEntity,{
                 entityId:masterForm.id,
                 expectedVersion:masterOptions?.expected_version ?? this.masterCurrentVersion(masterEntity),

@@ -10283,6 +10283,7 @@ def create_stock_replenishment_order(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
+    idempotent_order_number: str | None = None
     try:
         if payload.source_type == "manual_history":
             raise StockReplenishmentError(
@@ -10302,22 +10303,24 @@ def create_stock_replenishment_order(
                 "新建库存补库到料只能进入客户专用纸板备料，"
                 "不能直接生成成品库存。"
             )
-        stock_warning_order_number: str | None = None
-        if payload.source_type == "stock_warning":
-            if payload.idempotency_key is None:
-                raise StockReplenishmentError(
-                    "库存预警报料草稿缺少防重复标识，请关闭后重新打开再保存。"
-                )
+        if payload.source_type == "stock_warning" and payload.idempotency_key is None:
+            raise StockReplenishmentError(
+                "库存预警报料草稿缺少防重复标识，请关闭后重新打开再保存。"
+            )
+        if payload.idempotency_key:
             key_digest = hashlib.sha256(
                 payload.idempotency_key.encode("utf-8")
             ).hexdigest()[:20].upper()
-            stock_warning_order_number = (
-                f"CBW-{beijing_today():%Y%m%d}-{key_digest}"
+            prefix = (
+                "CBR" if payload.source_type == "customer_request" else "CBW"
+            )
+            idempotent_order_number = (
+                f"{prefix}-{beijing_today():%Y%m%d}-{key_digest}"
             )
             existing_order = db.scalar(
                 _replenishment_order_query().where(
                     StockReplenishmentOrder.order_number
-                    == stock_warning_order_number
+                    == idempotent_order_number
                 )
             )
             if existing_order is not None:
@@ -10442,7 +10445,7 @@ def create_stock_replenishment_order(
             payload_supplier = _require_active_supplier(db, payload_supplier)
         order = StockReplenishmentOrder(
             order_number=(
-                stock_warning_order_number
+                idempotent_order_number
                 or next_replenishment_order_number()
             ),
             supplier_name=derived_supplier
@@ -10468,6 +10471,24 @@ def create_stock_replenishment_order(
         )
         assert order is not None
         return replenishment_order_dict(order)
+    except IntegrityError:
+        db.rollback()
+        if idempotent_order_number is not None:
+            existing_order = db.scalar(
+                _replenishment_order_query().where(
+                    StockReplenishmentOrder.order_number
+                    == idempotent_order_number
+                )
+            )
+            if existing_order is not None:
+                _require_stock_replenishment_order_access(
+                    db,
+                    existing_order,
+                    user,
+                    relationships_loaded=True,
+                )
+                return replenishment_order_dict(existing_order)
+        raise
     except HTTPException:
         db.rollback()
         raise

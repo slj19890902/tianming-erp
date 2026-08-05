@@ -151,7 +151,10 @@ def test_new_order_requisition_strategy_previews_and_requires_line_choices() -> 
     )
     methods = _block("orderRequisitionPreviewCandidateText(candidate)", "validateOrderForm()")
     save_modal = _block('if (this.modal.type === "order")', 'if (this.modal.type === "orderEdit")')
-    order_payload = _block("const orderPayload = {", 'await axios.post("/api/orders", orderPayload)')
+    order_payload = _block(
+        "const orderPayload = {",
+        "const createdOrder = await this.saveNewOrder(orderPayload);",
+    )
 
     assert "报料策略" in order_modal
     assert 'v-model="orderForm.requisition_strategy"' in order_modal

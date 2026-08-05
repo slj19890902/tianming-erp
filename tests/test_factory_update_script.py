@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.51"
-    assert APP_VERSION_NAME == "一开六支持与YKE/KEW常用箱导入"
+    assert APP_VERSION == "v0.22.52"
+    assert APP_VERSION_NAME == "补库到厂选库位与来料界面精简"
     assert APP_BUILD_DATE == "2026-08-05"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -50,16 +50,20 @@ def test_factory_update_reports_current_release_version() -> None:
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
     assert any(
-        "本次更新｜" in item and "一开六" in item and "订单快照" in item
+        "本次更新｜" in item and "手动补库" in item and "实际到厂" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "YKE 100 条" in item and "KEW 31 条" in item
+        "本次更新｜" in item and "长客户名称" in item and "自动换行" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "80012044" in item and "一开六" in item
+        "如何验证｜" in item and "半成品" in item and "共享库位" in item
         for item in current_release
+    )
+    assert any(
+        item.startswith("v0.22.51：") and "YKE 100 条" in item and "KEW 31 条" in item
+        for item in APP_CHANGELOG
     )
     assert any(
         "\u5ba2\u6237" in item

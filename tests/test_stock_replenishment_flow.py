@@ -748,6 +748,91 @@ def _customer_replenishment_payload(quantity: int = 30) -> dict:
     }
 
 
+def test_replenishment_selects_actual_location_only_when_material_arrives(
+    stock_replenishment_app,
+) -> None:
+    app, session_factory = stock_replenishment_app
+    from app.models.incoming_receipt import IncomingReceiptItem
+    from app.models.warehouse_inventory import InventoryLot, InventoryMovement
+
+    payload = _customer_replenishment_payload(quantity=100)
+    payload["items"][0]["location_id"] = None
+
+    with TestClient(app) as client:
+        _login(client)
+        created = client.post(
+            "/api/requisition/stock-replenishment/orders",
+            json=payload,
+        )
+        assert created.status_code == 201, created.text
+        item_id = created.json()["items"][0]["id"]
+
+        pending = client.get("/api/incoming/pending")
+        assert pending.status_code == 200, pending.text
+        row = next(
+            item
+            for item in pending.json()["items"]
+            if item["item_id"] == f"sr{item_id}"
+        )
+        assert row["default_location_id"] is None
+        assert row["target_inventory_type"] == "semi_finished"
+
+        locations = client.get("/api/incoming/replenishment-locations")
+        assert locations.status_code == 200, locations.text
+        assert {item["location_code"] for item in locations.json()["items"]} == {
+            "FG-A01",
+            "SI-A01",
+        }
+
+        missing = client.put(
+            f"/api/incoming/receive/sr{item_id}",
+            json={
+                "received_quantity": 100,
+                "idempotency_key": "replenishment-arrival-location-missing",
+            },
+        )
+        assert missing.status_code == 400, missing.text
+        assert "选择本次入库库位" in missing.json()["detail"]
+
+        wrong_type = client.put(
+            f"/api/incoming/receive/sr{item_id}",
+            json={
+                "received_quantity": 100,
+                "receipt_location_id": 1,
+                "idempotency_key": "replenishment-arrival-location-wrong",
+            },
+        )
+        assert wrong_type.status_code == 400, wrong_type.text
+        assert "类型与本次补库不匹配" in wrong_type.json()["detail"]
+
+        received = client.put(
+            f"/api/incoming/receive/sr{item_id}",
+            json={
+                "received_quantity": 100,
+                "receipt_location_id": 2,
+                "idempotency_key": "replenishment-arrival-location-ok",
+            },
+        )
+        assert received.status_code == 200, received.text
+        repeated = client.put(
+            f"/api/incoming/receive/sr{item_id}",
+            json={
+                "received_quantity": 100,
+                "receipt_location_id": 2,
+                "idempotency_key": "replenishment-arrival-location-ok",
+            },
+        )
+        assert repeated.status_code == 200, repeated.text
+
+    with session_factory() as session:
+        lot = session.scalar(select(InventoryLot))
+        assert lot is not None
+        assert lot.warehouse_location_id == 2
+        assert session.scalar(select(func.count(InventoryLot.id))) == 1
+        assert session.scalar(select(func.count(InventoryMovement.id))) == 1
+        assert session.scalar(select(func.count(IncomingReceiptItem.id))) == 1
+
+
 def test_replenishment_stays_reported_routes_to_incoming_and_voids_only_before_receipt(
     stock_replenishment_app,
 ) -> None:

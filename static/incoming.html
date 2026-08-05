@@ -13,12 +13,14 @@
        这里手写一份最基础的兜底样式，避免出现"只看到裸文字、没有任何 UI"的情况。
        Tailwind 加载完成后会覆盖/补齐这些样式，二者不冲突。 */
     [hidden] { display: none !important; }
+    html, body { max-width: 100%; overflow-x: hidden; }
     body { -webkit-tap-highlight-color: transparent; margin: 0; background: #f1f5f9; color: #0f172a; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
     button { touch-action: manipulation; font: inherit; cursor: pointer; }
     header { position: sticky; top: 0; z-index: 20; background: #0f172a; color: #fff; padding: 12px 16px; border-bottom: 1px solid #334155; }
     header h1 { font-size: 1.25rem; font-weight: 700; margin: 0; }
-    main { max-width: 640px; margin: 0 auto; padding: 12px; padding-bottom: 96px; }
-    .card { border-radius: 12px; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.06); margin-bottom: 10px; padding: 10px; }
+    main { box-sizing: border-box; width: 100%; max-width: 640px; min-width: 0; margin: 0 auto; padding: 12px; padding-bottom: 96px; }
+    .card { min-width: 0; overflow-wrap: anywhere; border-radius: 12px; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.06); margin-bottom: 10px; padding: 10px; }
+    .card select, .card input { box-sizing: border-box; max-width: 100%; min-width: 0; }
     .btn-primary { background: #1d4ed8; color: #fff; border: none; border-radius: 10px; min-height: 44px; padding: 0 16px; font-weight: 700; }
     .btn-danger { background: #b91c1c; color: #fff; border: none; border-radius: 10px; min-height: 44px; padding: 0 16px; font-weight: 700; }
   </style>
@@ -106,6 +108,8 @@
       receivedError: "",
       locationsLoading: false,
       locations: [],
+      receiptLocationsLoading: false,
+      receiptLocations: [],
       user: null,
       permissions: [],
       revertingItemId: null,
@@ -356,13 +360,23 @@
         .filter(row => ["semi_finished", "shared"].includes(row.warehouse_type))
         .map(row => `<option value="${row.id}" ${Number(item.surplus_location_id) === Number(row.id) ? "selected" : ""}>${escapeHtml(row.location_code)}｜${escapeHtml(row.location_name)}</option>`)
         .join("");
+      const allowedReceiptTypes = item.target_inventory_type === "finished"
+        ? ["finished", "shared"]
+        : ["semi_finished", "shared"];
+      const receiptLocations = state.receiptLocations
+        .filter(row => allowedReceiptTypes.includes(row.warehouse_type))
+        .map(row => `<option value="${row.id}" ${Number(item.receipt_location_id) === Number(row.id) ? "selected" : ""}>${escapeHtml(row.location_code)}｜${escapeHtml(row.location_name)}</option>`)
+        .join("");
       const decisionBlock = !isPending ? "" : projected < 0
-        ? `<div class="mt-2 rounded-lg bg-amber-50 p-2"><p class="text-sm font-bold text-amber-900">本次后仍短收 ${Math.abs(projected)} 张</p><select data-resolution="${key}" class="mt-1 w-full rounded-lg border p-2" ${canOperate() && !disabled ? "" : "disabled"}><option value="">请选择短收处理</option><option value="await_supplier" ${item.resolution_action === "await_supplier" ? "selected" : ""}>继续等待供应商补货</option>${isStockReplenishment ? "" : `<option value="accept_short" ${item.resolution_action === "accept_short" ? "selected" : ""}>按当前累计数量结单</option>`}</select></div>`
+        ? `<div class="mt-2 rounded-lg bg-amber-50 p-2"><p class="text-sm font-bold text-amber-900">还差 ${Math.abs(projected)} 张</p><select data-resolution="${key}" class="mt-1 w-full rounded-lg border p-2" ${canOperate() && !disabled ? "" : "disabled"}><option value="">少收怎么处理</option><option value="await_supplier" ${item.resolution_action === "await_supplier" ? "selected" : ""}>继续等补货</option>${isStockReplenishment ? "" : `<option value="accept_short" ${item.resolution_action === "accept_short" ? "selected" : ""}>按已收数结单</option>`}</select></div>`
         : projected > 0
           ? isStockReplenishment
             ? `<div class="mt-2 rounded-lg bg-red-50 p-2 text-sm font-bold text-red-800">补库来料不能超过原报料数量，请核对后另建补库单处理超收</div>`
-            : `<div class="mt-2 rounded-lg bg-amber-50 p-2"><p class="text-sm font-bold text-amber-900">本次后超收 ${projected} 张</p><select data-resolution="${key}" class="mt-1 w-full rounded-lg border p-2" ${canOperate() && !disabled ? "" : "disabled"}><option value="">请选择超收处理</option><option value="all_to_production" ${item.resolution_action === "all_to_production" ? "selected" : ""}>全部投入当前生产</option><option value="transfer_to_semi_inventory" ${item.resolution_action === "transfer_to_semi_inventory" ? "selected" : ""}>超出部分转半成品库存</option></select>${item.resolution_action === "transfer_to_semi_inventory" ? `<select data-surplus-location="${key}" class="mt-1 w-full rounded-lg border p-2" ${canOperate() && !disabled ? "" : "disabled"}><option value="">请选择半成品库位</option>${locations}</select>` : ""}</div>`
-          : `<div class="mt-2 rounded-lg bg-green-50 p-2 text-sm font-bold text-green-800">本次后累计等于计划</div>`;
+            : `<div class="mt-2 rounded-lg bg-amber-50 p-2"><p class="text-sm font-bold text-amber-900">多收 ${projected} 张</p><select data-resolution="${key}" class="mt-1 w-full rounded-lg border p-2" ${canOperate() && !disabled ? "" : "disabled"}><option value="">多收怎么处理</option><option value="all_to_production" ${item.resolution_action === "all_to_production" ? "selected" : ""}>全部用于本单</option><option value="transfer_to_semi_inventory" ${item.resolution_action === "transfer_to_semi_inventory" ? "selected" : ""}>余量存半成品仓</option></select>${item.resolution_action === "transfer_to_semi_inventory" ? `<select data-surplus-location="${key}" class="mt-1 w-full rounded-lg border p-2" ${canOperate() && !disabled ? "" : "disabled"}><option value="">余量放哪个库位</option>${locations}</select>` : ""}</div>`
+          : `<div class="mt-2 rounded-lg bg-green-50 p-2 text-sm font-bold text-green-800">数量刚好</div>`;
+      const receiptLocationBlock = isPending && isStockReplenishment
+        ? `<div class="mt-2 rounded-lg bg-blue-50 p-2"><p class="text-sm font-bold text-blue-900">材料到厂后放哪里</p><select data-receipt-location="${key}" class="mt-1 w-full rounded-lg border p-2" ${canOperate() && !disabled && !state.receiptLocationsLoading ? "" : "disabled"}><option value="">请选择本次入库库位</option>${receiptLocations}</select></div>`
+        : "";
 
       const primaryAction = !canOperate()
         ? `<div class="rounded-lg bg-slate-100 px-4 py-2 text-center text-sm font-semibold text-slate-500">只读查看</div>`
@@ -401,8 +415,9 @@
               <div class="flex items-center">${drawingButton}</div>
             </div>
             <p class="mt-1.5 break-words text-xs text-slate-500">${escapeHtml(item.customer_name)} · ${escapeHtml(item.product_code || "未填写")} · ${escapeHtml(item.product_name)}</p>
-            <p class="mt-1 text-xs text-slate-600">计划 ${planned}｜累计 ${cumulative}｜剩余 ${Math.max(planned-cumulative,0)}</p>
+            <p class="mt-1 text-xs text-slate-600">计划 ${planned}｜已收 ${cumulative}｜待收 ${Math.max(planned-cumulative,0)}</p>
             ${decisionBlock}
+            ${receiptLocationBlock}
             ${primaryAction ? `<div class="mt-1.5">${primaryAction}</div>` : ""}
             <p class="mt-1 text-center text-xs text-slate-400">${expanded ? "点击卡片收起" : "点击卡片查看更多详情"}</p>
             ${expandedSection}
@@ -451,7 +466,8 @@
       try {
         const pending = await api("/api/incoming/pending", {signal: controller.signal});
         if (!isLatestRequest("incoming:pending", controller)) return false;
-        state.pending = pending.items.map(item => ({...item,incoming_quantity:Number(item.remaining_quantity ?? item.incoming_quantity ?? item.requisition_qty ?? item.quantity ?? 0),resolution_action:"",resolution_reason:"",surplus_location_id:null}));
+        state.pending = pending.items.map(item => ({...item,incoming_quantity:Number(item.remaining_quantity ?? item.incoming_quantity ?? item.requisition_qty ?? item.quantity ?? 0),resolution_action:"",resolution_reason:"",receipt_location_id:Number(item.default_location_id)||null,surplus_location_id:null}));
+        if (state.pending.some(item => item.source_type === "stock_replenishment")) ensureReceiptLocations();
         state.expandedIds = new Set();
         render();
         return true;
@@ -513,6 +529,25 @@
       } finally {
         if (requestControllers.get("incoming:surplus-locations") === controller) state.locationsLoading = false;
         finishLatestRequest("incoming:surplus-locations", controller);
+      }
+    }
+
+    async function ensureReceiptLocations() {
+      if (!canOperate() || state.receiptLocations.length || state.receiptLocationsLoading) return;
+      const controller = beginLatestRequest("incoming:replenishment-locations");
+      state.receiptLocationsLoading = true;
+      try {
+        const locations = await api("/api/incoming/replenishment-locations", {signal: controller.signal});
+        state.receiptLocations = locations.items || [];
+        render();
+      } catch (error) {
+        if (error?.name !== "AbortError") showToast("补库入库位读取失败，请重试", true);
+      } finally {
+        if (requestControllers.get("incoming:replenishment-locations") === controller) {
+          state.receiptLocationsLoading = false;
+          render();
+        }
+        finishLatestRequest("incoming:replenishment-locations", controller);
       }
     }
 
@@ -590,6 +625,14 @@
         showToast("余量转半成品库存时必须选择库位", true);
         return;
       }
+      if (item.source_type === "stock_replenishment" && state.receiptLocationsLoading) {
+        showToast("正在读取入库库位，请稍候", true);
+        return;
+      }
+      if (item.source_type === "stock_replenishment" && !Number(item.receipt_location_id)) {
+        showToast("请先选择本次入库库位", true);
+        return;
+      }
       if (!window.confirm(`确认该批 ${quantity} 张纸板已经到厂并完成入库吗？`)) return;
       const operationKey = state.receiveIdempotencyKeys.get(key) || createIdempotencyKey();
       state.receiveIdempotencyKeys.set(key, operationKey);
@@ -602,6 +645,7 @@
             received_quantity: quantity,
             resolution_action: action,
             resolution_reason: String(item.resolution_reason || "").trim() || null,
+            receipt_location_id: Number(item.receipt_location_id) || null,
             surplus_location_id: Number(item.surplus_location_id) || null,
             idempotency_key: operationKey,
           }),
@@ -706,6 +750,7 @@
       const quantityInput = event.target.closest("[data-quantity]");
       const actionSelect = event.target.closest("[data-resolution]");
       const locationSelect = event.target.closest("[data-surplus-location]");
+      const receiptLocationSelect = event.target.closest("[data-receipt-location]");
       if (quantityInput) {
         const item = findItem(quantityInput.dataset.quantity);
         if (item) item.incoming_quantity = Number(quantityInput.value);
@@ -722,6 +767,9 @@
       } else if (locationSelect) {
         const item = findItem(locationSelect.dataset.surplusLocation);
         if (item) item.surplus_location_id = Number(locationSelect.value) || null;
+      } else if (receiptLocationSelect) {
+        const item = findItem(receiptLocationSelect.dataset.receiptLocation);
+        if (item) item.receipt_location_id = Number(receiptLocationSelect.value) || null;
       }
     });
 

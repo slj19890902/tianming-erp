@@ -828,6 +828,7 @@ def receive_replenishment_item(
     quantity: int,
     operator_id: int | None,
     receipt_item_id: int,
+    location_id: int | None = None,
     source_ref_type: str = "stock_replenishment_receipt",
 ) -> InventoryLot:
     """Put one actually received replenishment line into inventory.
@@ -854,10 +855,31 @@ def receive_replenishment_item(
         raise StockReplenishmentError(
             "库存预警到料只能进入客户专用纸板备料，不能直接增加成品库存。"
         )
-    if item.location_id is None:
+    destination_location_id = location_id or item.location_id
+    if destination_location_id is None:
         raise StockReplenishmentError(
-            f"补库明细“{item.product_name_snapshot}”未选择入库库位。"
+            f"请为“{item.product_name_snapshot}”选择本次入库库位。"
         )
+    destination = db.get(WarehouseLocation, destination_location_id)
+    if destination is None or not destination.is_active:
+        raise StockReplenishmentError("所选入库库位不存在或已停用。")
+    if destination.source_version == "V11":
+        raise StockReplenishmentError(
+            "V11 三楼 Phase A 货位不能用于正式库存补库。", 409
+        )
+    allowed_warehouse_types = {
+        "finished": {"finished", "shared"},
+        "semi_finished": {"semi_finished", "shared"},
+    }[item.target_inventory_type]
+    if destination.warehouse_type not in allowed_warehouse_types:
+        raise StockReplenishmentError("所选入库库位类型与本次补库不匹配。")
+    location_issue = operational_location_issue(
+        db,
+        destination,
+        warehouse_types=allowed_warehouse_types,
+    )
+    if location_issue:
+        raise StockReplenishmentError(f"所选入库库位不可使用：{location_issue}", 409)
 
     customer_board_preparation = (
         item.target_inventory_type == "semi_finished"
@@ -865,7 +887,7 @@ def receive_replenishment_item(
         and item.product_id is not None
     )
     common = {
-        "location_id": item.location_id,
+        "location_id": destination_location_id,
         "quantity": quantity,
         "stock_date": beijing_today(),
         "source_type": "replenishment",

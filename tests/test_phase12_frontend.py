@@ -366,8 +366,8 @@ def test_desktop_and_mobile_incoming_layout_support_editable_quantity() -> None:
     assert "incomingPending" in INDEX
     assert "received_quantity:Number(row.incoming_quantity)" in INDEX
     assert "resolution_action" in INDEX
-    assert "继续等待供应商补货" in INDEX
-    assert "超出部分转半成品库存" in INDEX
+    assert "继续等补货" in INDEX
+    assert "余量存半成品仓" in INDEX
     assert "item.customer_name" in INCOMING
     assert "item.product_code" in INCOMING
     assert "item.product_name" in INCOMING
@@ -378,9 +378,16 @@ def test_desktop_and_mobile_incoming_layout_support_editable_quantity() -> None:
     assert "pending_receipt_item_id" in INCOMING
     assert "item.requisition_date" in INCOMING
     assert '/api/incoming/surplus-locations' in INCOMING
+    assert '/api/incoming/replenishment-locations' in INCOMING
+    assert 'data-receipt-location="${key}"' in INCOMING
     assert 'api("/api/warehouse/locations")' not in INCOMING
     assert 'this.hasPermission("incoming.execute")' in INDEX
     assert '"/api/incoming/surplus-locations"' in INDEX
+    assert '"/api/incoming/replenishment-locations"' in INDEX
+    assert "receipt_location_id" in INDEX
+    assert "incoming-table" in INDEX
+    assert "本次后累计等于计划" not in INDEX
+    assert "本次后累计等于计划" not in INCOMING
 
 
 def test_delivery_variance_ui_separates_return_difference_and_authorized_over_delivery() -> None:

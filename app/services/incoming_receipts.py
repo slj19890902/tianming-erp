@@ -874,6 +874,7 @@ def _idempotent_receipt_item(
     received_quantity: int | None,
     resolution_action: str | None,
     resolution_reason: str | None,
+    receipt_location_id: int | None,
     surplus_location_id: int | None,
 ) -> IncomingReceiptItem:
     if len(receipt.items) != 1:
@@ -915,7 +916,22 @@ def _idempotent_receipt_item(
         row.planned_quantity if received_quantity is None else int(received_quantity)
     )
     same_location = True
-    if normalized_action == "transfer_to_semi_inventory":
+    if requested_stock_item_id is not None:
+        source_item = db.get(StockReplenishmentOrderItem, requested_stock_item_id)
+        expected_location_id = receipt_location_id or (
+            source_item.location_id if source_item is not None else None
+        )
+        lot = (
+            db.get(InventoryLot, row.received_inventory_lot_id)
+            if row.received_inventory_lot_id
+            else None
+        )
+        same_location = bool(
+            lot
+            and expected_location_id
+            and lot.warehouse_location_id == expected_location_id
+        )
+    elif normalized_action == "transfer_to_semi_inventory":
         lot = (
             db.get(InventoryLot, row.surplus_inventory_lot_id)
             if row.surplus_inventory_lot_id
@@ -945,6 +961,7 @@ def _receive_stock_replenishment_one(
     received_quantity: int | None,
     resolution_action: str | None,
     resolution_reason: str | None,
+    receipt_location_id: int | None,
     surplus_location_id: int | None,
     idempotency_key: str,
     audit_context: dict[str, object] | None = None,
@@ -1024,6 +1041,7 @@ def _receive_stock_replenishment_one(
             quantity=quantity,
             operator_id=user.id,
             receipt_item_id=receipt_item.id,
+            location_id=receipt_location_id,
         )
     except StockReplenishmentError as error:
         raise IncomingReceiptError(str(error), error.status_code) from error
@@ -1061,6 +1079,7 @@ def _receive_stock_replenishment_one(
             "received_quantity": quantity,
             "cumulative_received_quantity": cumulative,
             "received_inventory_lot_id": lot.id,
+            "receipt_location_id": lot.warehouse_location_id,
         },
     )
     db.flush()
@@ -1077,6 +1096,7 @@ def receive_one(
     resolution_reason: str | None,
     surplus_location_id: int | None,
     idempotency_key: str | None,
+    receipt_location_id: int | None = None,
     audit_context: dict[str, object] | None = None,
 ) -> IncomingReceiptItem:
     key = (idempotency_key or "").strip() or uuid4().hex
@@ -1091,6 +1111,7 @@ def receive_one(
             received_quantity=received_quantity,
             resolution_action=resolution_action,
             resolution_reason=resolution_reason,
+            receipt_location_id=receipt_location_id,
             surplus_location_id=surplus_location_id,
         )
 
@@ -1102,11 +1123,14 @@ def receive_one(
             received_quantity=received_quantity,
             resolution_action=resolution_action,
             resolution_reason=resolution_reason,
+            receipt_location_id=receipt_location_id,
             surplus_location_id=surplus_location_id,
             idempotency_key=key,
             audit_context=audit_context,
         )
 
+    if receipt_location_id is not None:
+        raise IncomingReceiptError("普通订单来料无需选择基础入库库位")
     target = _target(db, item_key)
     quantity = int(
         target.planned_quantity if received_quantity is None else received_quantity

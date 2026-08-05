@@ -2192,15 +2192,6 @@
               </div>
 
               <!-- 供应商统一调价弹窗 -->
-              <!-- 图纸预览 modal -->
-              <div v-if="showDrawingPreview" class="modal-backdrop" @click.self="showDrawingPreview=false">
-                <div class="modal" style="max-width:90vw;max-height:90vh;overflow:auto">
-                  <div class="modal-header"><h3>图纸预览</h3><button class="btn small" @click="showDrawingPreview=false">关闭</button></div>
-                  <div style="text-align:center;padding:12px">
-                    <img :src="drawingPreviewUrl" style="max-width:100%;max-height:75vh;object-fit:contain" />
-                  </div>
-                </div>
-              </div>
               <div v-if="showPriceAdjustModal" class="modal-backdrop" @click.self="showPriceAdjustModal=false">
                 <div class="modal" style="max-width:760px;max-height:84vh;overflow-y:auto">
                   <div class="modal-header"><h3>供应商统一调价</h3><button class="btn small" @click="showPriceAdjustModal=false">关闭</button></div>
@@ -5832,6 +5823,16 @@
             </template>
             <button v-if="modal?.type === 'delivery' && deliveryForm.editingId && !deliveryFormIsDirty()" class="btn success" :disabled="loading || !!deliveryForm.pick_task || !!deliveryOperationState.action" @click="createCurrentDeliveryPickTask">{{ deliveryOperationState.action==='pick' && Number(deliveryOperationState.deliveryId)===Number(deliveryForm.editingId) ? '推送中…' : (deliveryForm.pick_task ? '已推送拿货' : '拿货') }}</button>
             <button v-if="canSaveModal" class="btn primary" :disabled="loading || masterSavePending || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError)) || (modal?.type==='quotationConvert' && !!quotationConvertCreaseMismatch) || (modal?.type==='orderItem' && !!orderItemCreaseMismatch) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && (!!deliveryValidationError || !!deliveryOperationState.action)) || (modal?.type==='receipt' && !!receiptOperationState.action) || (modal?.type==='requisitionHold' && requisitionHoldSaveBlocked)" @click="modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()">{{ ['customer','product','material','supplier'].includes(modal?.type) && masterSavePending ? '保存中…' : (modal?.type==='delivery' ? deliveryPrimaryLabel() : (modal?.type==='receipt' ? (receiptOperationState.action==='save' ? '保存中…' : '保存回单') : (['requisition','supplierRequisitionDraft'].includes(modal?.type) ? '确认生成正式采购单' : (modal?.type==='requisitionHold' ? '确认暂缓' : (modal?.type==='stockReplenishment' && stockReplenishmentForm.source_type==='stock_warning' ? '保存报料草稿' : '保存'))))) }}</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 共用图纸预览必须位于业务页面分支之外；订单、来料等页面也会调用。 -->
+      <div v-if="showDrawingPreview" class="modal-backdrop drawing-preview-backdrop" @click.self="showDrawingPreview=false">
+        <div class="modal" style="max-width:90vw;max-height:90vh;overflow:auto">
+          <div class="modal-header"><h3>图纸预览</h3><button class="btn small" @click="showDrawingPreview=false">关闭</button></div>
+          <div style="text-align:center;padding:12px">
+            <img :src="drawingPreviewUrl" style="max-width:100%;max-height:75vh;object-fit:contain" />
           </div>
         </div>
       </div>

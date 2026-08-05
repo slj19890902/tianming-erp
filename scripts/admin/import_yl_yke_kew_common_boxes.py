@@ -216,7 +216,8 @@ def _target_product_values(
         "crease_left_mm": row.get("crease_left_mm"),
         "crease_middle_mm": row.get("crease_middle_mm"),
         "crease_right_mm": row.get("crease_right_mm"),
-        "report_notes": str(row.get("report_notes") or "").strip() or None,
+        # 原表追踪信息完整保留在冻结清单和导入报告，不写入一线员工使用的报料备注。
+        "report_notes": None,
         "base_report_length_mm": None,
         "base_report_width_mm": None,
         "base_crease_type": None,

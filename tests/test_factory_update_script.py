@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.52"
-    assert APP_VERSION_NAME == "补库到厂选库位与来料界面精简"
+    assert APP_VERSION == "v0.22.54"
+    assert APP_VERSION_NAME == "订单常用箱图纸预览与导入备注清理"
     assert APP_BUILD_DATE == "2026-08-05"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -50,15 +50,15 @@ def test_factory_update_reports_current_release_version() -> None:
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
     assert any(
-        "本次更新｜" in item and "手动补库" in item and "实际到厂" in item
+        "本次更新｜" in item and "新建订单" in item and "图纸" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "长客户名称" in item and "自动换行" in item
+        "本次更新｜" in item and "YKE/KEW" in item and "报料备注" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "半成品" in item and "共享库位" in item
+        "如何验证｜" in item and "导入常用箱" in item and "立即显示" in item
         for item in current_release
     )
     assert any(

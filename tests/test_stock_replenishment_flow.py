@@ -24,8 +24,10 @@ def stock_replenishment_app(tmp_path: Path):
     from app.models.customer import Customer
     from app.models.material import Material
     from app.models.product import Product
+    from app.models.supplier import Supplier, SupplierAlias
     from app.models.user import User
     from app.models.warehouse_inventory import WarehouseLocation
+    from app.services.supplier_master import normalize_supplier_identity
 
     engine = create_sqlite_engine(tmp_path / "stock-replenishment.sqlite3")
     Base.metadata.create_all(engine)
@@ -46,8 +48,23 @@ def stock_replenishment_app(tmp_path: Path):
             payment_term_days=30,
             credit_limit=Decimal("100000"),
         )
-        session.add_all([user, customer])
+        supplier = Supplier(
+            standard_name="苏州佳丰",
+            normalized_name=normalize_supplier_identity("苏州佳丰"),
+            display_name="佳丰",
+            sort_order=10,
+            is_active=True,
+            version=1,
+        )
+        session.add_all([user, customer, supplier])
         session.flush()
+        session.add(
+            SupplierAlias(
+                supplier_id=supplier.id,
+                alias_name="佳丰",
+                normalized_alias=normalize_supplier_identity("佳丰"),
+            )
+        )
         material = Material(
             code="A416D",
             layer_count=5,
@@ -523,7 +540,7 @@ def test_common_box_and_material_master_prefill_traceable_semi_stock(
             "/api/requisition/stock-replenishment/orders",
             json={
                 "source_type": "customer_request",
-                "supplier_name": "错误供应商",
+                "supplier_name": "佳丰",
                 "stock_now": False,
                 "items": [
                     {

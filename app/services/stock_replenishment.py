@@ -12,6 +12,7 @@ from app.core.time_contract import (
     utc_naive_to_api,
     utc_now_naive,
 )
+from app.models.incoming_receipt import IncomingReceiptItem
 from app.models.product import Product
 from app.models.stock_replenishment import (
     InventoryStockPolicy,
@@ -43,6 +44,38 @@ class StockReplenishmentError(ValueError):
     def __init__(self, message: str, status_code: int = 400) -> None:
         super().__init__(message)
         self.status_code = status_code
+
+
+def _lot_primary_replenishment_product_id(
+    db: Session,
+    lot: InventoryLot,
+) -> int | None:
+    """Resolve the product that owns a replenishment board lot.
+
+    New replenishment receipts correctly point inventory lots at the incoming
+    receipt fact.  Follow that fact back to the original replenishment line so
+    the owning product still receives automatic low-stock coverage, while
+    compatible sibling products remain available for manual allocation only.
+    """
+
+    replenishment_item_id: int | None = None
+    if lot.source_ref_type == "stock_replenishment_item":
+        replenishment_item_id = lot.source_ref_id
+    elif (
+        lot.source_ref_type
+        in {"incoming_receipt_item", "stock_replenishment_receipt"}
+        and lot.source_ref_id is not None
+    ):
+        receipt_item = db.get(IncomingReceiptItem, lot.source_ref_id)
+        replenishment_item_id = (
+            receipt_item.stock_replenishment_item_id
+            if receipt_item is not None
+            else None
+        )
+    if replenishment_item_id is None:
+        return None
+    source_item = db.get(StockReplenishmentOrderItem, replenishment_item_id)
+    return source_item.product_id if source_item is not None else None
 
 
 STOCK_REPLENISHMENT_CUTTING_FACTORS = {
@@ -415,18 +448,7 @@ def customer_board_preparation_coverage(
             available_sheets += int(row.available_stock_quantity or 0)
             capacity = int(row.deductible_requirement_quantity or 0)
             available_finished_capacity += capacity
-            primary_product_id = None
-            if (
-                row.lot.source_ref_type == "stock_replenishment_item"
-                and row.lot.source_ref_id is not None
-            ):
-                source_item = db.get(
-                    StockReplenishmentOrderItem,
-                    row.lot.source_ref_id,
-                )
-                primary_product_id = (
-                    source_item.product_id if source_item is not None else None
-                )
+            primary_product_id = _lot_primary_replenishment_product_id(db, row.lot)
             allowed_product_ids = {
                 int(binding.product_id)
                 for binding in row.lot.allowed_products

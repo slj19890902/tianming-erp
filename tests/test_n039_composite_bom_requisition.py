@@ -29,6 +29,7 @@ def composite_requisition_app(tmp_path: Path):
     from app.models.product_bom import ProductBomComponent, SalesOrderItemBomComponent
     from app.models.supplier import Supplier
     from app.models.user import User
+    from app.models.warehouse_inventory import WarehouseLocation
     from app.services.supplier_master import normalize_supplier_identity
 
     engine = create_sqlite_engine(tmp_path / "n039-requisition.sqlite3")
@@ -85,8 +86,28 @@ def composite_requisition_app(tmp_path: Path):
             is_active=True,
             version=1,
         )
+        staging_location = WarehouseLocation(
+            location_code="F1-DISPATCH-01",
+            location_name="一楼待送区",
+            warehouse_type="finished",
+            is_active=True,
+            warehouse_floor=1,
+            area_code="DISPATCH",
+            storage_type="temporary_aisle",
+            placement_status="placed",
+            is_temporary=True,
+            source_version="P1-25C",
+        )
         session.add_all(
-            [admin, customer, parent, component_a, component_b, supplier]
+            [
+                admin,
+                customer,
+                parent,
+                component_a,
+                component_b,
+                supplier,
+                staging_location,
+            ]
         )
         session.flush()
         for display_order, component, per_set in (
@@ -1592,7 +1613,7 @@ def test_t250_order_specific_demand_expands_parent_and_component_with_cutting_mo
             quantity=3000,
             unit_price=Decimal("1"),
             subtotal=Decimal("3000"),
-            material_status="pending",
+            material_status="received",
             requisition_status="已报料",
             snapshot_product_code=parent.product_code,
             snapshot_product_name=parent.product_name,

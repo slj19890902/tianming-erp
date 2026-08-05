@@ -437,6 +437,7 @@ def _direct_completion_rows(db: Session, snapshot_id: int):
             ProductionTask.sales_order_item_bom_component_id == snapshot_id,
             ProductionCompletion.status == "posted",
             ProductionCompletion.initial_disposition == DIRECT_DISPOSITION,
+            ProductionCompletion.inventory_lot_id.is_(None),
             ProductionStockTransfer.id.is_(None),
         )
         .group_by(ProductionCompletion.id)

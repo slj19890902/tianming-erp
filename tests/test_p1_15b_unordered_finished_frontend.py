@@ -43,13 +43,14 @@ def test_unordered_finished_payload_allows_pending_price_and_requires_allocation
     save_block = INDEX[save_start:save_end]
     assert 'source_type: "unordered_finished"' in save_block
     assert "product_id: Number(line.product_id)" in save_block
-    assert 'line.unit_price === null || line.unit_price === "" ? null : Number(line.unit_price)' in save_block
+    assert 'unit_price: Number(line.unit_price || 0) > 0 ? Number(line.unit_price) : null' in save_block
     assert "inventory_lot_id:Number(allocation.inventory_lot_id)" in save_block
     validation_start = INDEX.index("validateDeliveryForm() {")
     validation_end = INDEX.index("groupDeliveryCandidatesByProduct", validation_start)
     validation = INDEX[validation_start:validation_end]
     assert 'line.source_type === "unordered_finished"' in validation
-    assert "单价填写后必须大于零" in validation
+    assert "单价不能小于零" in validation
+    assert "单价填写后必须大于零" not in validation
     assert "无默认单价，请填写大于零的单价" not in validation
     assert "库存批次分配数量一致" in validation
     assert "还有订单待送" in validation

@@ -23,12 +23,13 @@ def test_product_list_is_customer_scoped_and_cancels_stale_requests() -> None:
     products = _block("async loadProducts()", "async loadMoldTools()")
 
     assert "!this.selectedProductCustomer" in products
-    assert 'this.beginLatestRequest("products:list")' in products
+    assert 'const requestKey = "products:list"' in products
+    assert "this.beginLatestRequest(requestKey)" in products
     assert 'response_mode: "summary"' in products
     assert 'axios.get("/api/master/products", { params, signal:controller.signal })' in products
     assert "this.productsLoading = true" in products
     assert "this.productsError = \"\"" in products
-    assert 'this.finishLatestRequest("products:list", controller)' in products
+    assert "this.finishLatestRequest(requestKey, controller)" in products
     assert "async selectProductCustomer(row)" in INDEX
     assert 'v-if="productsLoading"' in INDEX
     assert 'v-else-if="productsError"' in INDEX
@@ -39,11 +40,13 @@ def test_material_list_is_tab_driven_and_cancels_stale_requests() -> None:
     materials = _block("async loadMaterials()", "async openMaterialCandidateMaintenance()")
 
     assert 'if (tab === "materials") await this.loadMaterials();' in tab
-    assert 'this.beginLatestRequest("materials:list")' in materials
+    assert 'const requestKey = "materials:list"' in materials
+    assert "this.beginLatestRequest(requestKey)" in materials
     assert 'this.fetchAllMaterials(params, controller.signal)' in materials
     assert "const isUnfilteredCommonView" in materials
-    assert "this.allMaterials = this.materials.slice()" in materials
-    assert 'this.finishLatestRequest("materials:list", controller)' in materials
+    assert "allMaterials = isUnfilteredCommonView" in materials
+    assert "this.allMaterials = allMaterials" in materials
+    assert "this.finishLatestRequest(requestKey, controller)" in materials
 
 
 def test_product_material_cell_uses_list_snapshot_before_full_material_cache() -> None:

@@ -1919,9 +1919,9 @@
               </div>
               <div v-if="productTab === 'products'">
                 <div v-if="productTrashOpen" class="panel">
-                  <div class="toolbar"><strong>产品垃圾站（保留 30 天）</strong><div class="toolbar-group"><button class="btn" @click="loadProductTrash()">刷新</button><button class="btn danger" @click="emptyProductTrash()">清空垃圾站</button><button class="btn" @click="productTrashOpen=false">关闭</button></div></div>
+                  <div class="toolbar"><strong>产品垃圾站（保留 30 天）</strong><div class="toolbar-group"><button class="btn" :disabled="productLifecycleBusy()" @click="loadProductTrash()">刷新</button><button class="btn danger" :disabled="productLifecycleBusy() || !productTrashItems.length" @click="emptyProductTrash()">{{ productLifecyclePending('empty') ? '处理中…' : '清空垃圾站' }}</button><button class="btn" :disabled="productLifecycleBusy()" @click="productTrashOpen=false">关闭</button></div></div>
                   <div v-if="!productTrashItems.length" class="empty">垃圾站为空</div>
-                  <div v-else class="table-wrap"><table><thead><tr><th>客户</th><th>存货编码</th><th>原产品名称</th><th>删除时间</th><th>保留期限</th><th>操作</th></tr></thead><tbody><tr v-for="row in productTrashItems" :key="row.id"><td>{{ customerName(row.customer_id) }}</td><td>{{ plainProductText(row.customer_material_code || row.product_code) }}</td><td>{{ plainProductText(row.product_name) }}</td><td>{{ formatDateTime(row.deleted_at) }}</td><td>剩余 {{ Math.ceil(row.trash_days_remaining || 0) }} 天</td><td class="toolbar-group"><button class="btn small success" @click="restoreProduct(row)">恢复</button><button class="btn small danger" @click="purgeProduct(row)">彻底清理</button></td></tr></tbody></table></div>
+                  <div v-else class="table-wrap"><table><thead><tr><th>客户</th><th>存货编码</th><th>原产品名称</th><th>删除时间</th><th>保留期限</th><th>操作</th></tr></thead><tbody><tr v-for="row in productTrashItems" :key="row.id"><td>{{ customerName(row.customer_id) }}</td><td>{{ plainProductText(row.customer_material_code || row.product_code) }}</td><td>{{ plainProductText(row.product_name) }}</td><td>{{ formatDateTime(row.deleted_at) }}</td><td>剩余 {{ Math.ceil(row.trash_days_remaining || 0) }} 天</td><td class="toolbar-group"><button class="btn small success" :disabled="productLifecycleBusy()" @click="restoreProduct(row)">{{ productLifecyclePending('restore',row.id) ? '处理中…' : '恢复' }}</button><button class="btn small danger" :disabled="productLifecycleBusy()" @click="purgeProduct(row)">{{ productLifecyclePending('purge',row.id) ? '处理中…' : '彻底清理' }}</button></td></tr></tbody></table></div>
                 </div>
                 <template v-if="!selectedProductCustomer">
                   <div class="toolbar"><input class="input" style="min-width:360px" placeholder="输入客户名称、编号或缩写" v-model.trim="productCustomerSearch" /><span class="muted">共 {{ filteredProductCustomers.length }} 家客户</span></div>
@@ -1940,7 +1940,7 @@
                   <div v-if="productsLoading" class="panel empty">正在读取该客户的常用箱…</div>
                   <div v-else-if="productsError" class="notice error">{{ productsError }} <button class="btn small" @click="loadProducts()">重试</button></div>
                   <div v-else-if="!products.length" class="panel empty">该客户当前没有符合条件的常用箱</div>
-                  <div v-else class="table-wrap"><table><thead><tr><th>品号</th><th v-if="false">客户料号</th><th>产品名称</th><th>规格</th><th>材质</th><th v-if="!isWorkshop" class="sensitive-price">默认单价</th><th>资料状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td v-if="false">{{ plainProductText(row.customer_material_code) }}</td><td :title="plainProductText(row.product_name)" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td style="white-space:nowrap">{{ spec(row) }}</td><td :class="{muted: productMaterialCell(row).muted}" :title="materialFullStructure(row)" style="white-space:nowrap">{{ productMaterialCell(row).text }}</td><td v-if="!isWorkshop" class="sensitive-price">{{ money(row.sale_unit_price) }}</td><td><span :class="['status',commonBoxReadiness(row).ready ? 'green' : 'orange']" :title="commonBoxReadinessTitle(row)">{{ commonBoxReadiness(row).ready ? '资料已完善' : '待完善' }}</span><div v-if="row.manual_modified" class="muted" style="font-size:11px;margin-top:3px">已人工编辑（版本事实）</div></td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canEditProducts ? "编辑" : "查看" }}</button><button v-if="canRequisition && row.is_active" class="btn small" @click="openProductStockPolicy(row)">库存预警</button><button class="btn small" @click="openMasterVersionHistory('product',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateProducts" :class="['btn','small',row.is_active ? 'danger' : 'success']" @click="toggleProductStatus(row)">{{ row.is_active ? "停用" : "启用" }}</button><button v-if="canDeleteProducts" class="btn small danger" @click="deleteProduct(row)">移入垃圾站</button></td></tr></tbody></table></div>
+                  <div v-else class="table-wrap"><table><thead><tr><th>品号</th><th v-if="false">客户料号</th><th>产品名称</th><th>规格</th><th>材质</th><th v-if="!isWorkshop" class="sensitive-price">默认单价</th><th>资料状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td v-if="false">{{ plainProductText(row.customer_material_code) }}</td><td :title="plainProductText(row.product_name)" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td style="white-space:nowrap">{{ spec(row) }}</td><td :class="{muted: productMaterialCell(row).muted}" :title="materialFullStructure(row)" style="white-space:nowrap">{{ productMaterialCell(row).text }}</td><td v-if="!isWorkshop" class="sensitive-price">{{ money(row.sale_unit_price) }}</td><td><span :class="['status',commonBoxReadiness(row).ready ? 'green' : 'orange']" :title="commonBoxReadinessTitle(row)">{{ commonBoxReadiness(row).ready ? '资料已完善' : '待完善' }}</span><div v-if="row.manual_modified" class="muted" style="font-size:11px;margin-top:3px">已人工编辑（版本事实）</div></td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canEditProducts ? "编辑" : "查看" }}</button><button v-if="canRequisition && row.is_active" class="btn small" @click="openProductStockPolicy(row)">库存预警</button><button class="btn small" @click="openMasterVersionHistory('product',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateProducts" :class="['btn','small',row.is_active ? 'danger' : 'success']" :disabled="productLifecycleBusy()" @click="toggleProductStatus(row)">{{ productLifecyclePending('status',row.id) ? '处理中…' : (row.is_active ? "停用" : "启用") }}</button><button v-if="canDeleteProducts" class="btn small danger" :disabled="productLifecycleBusy()" @click="deleteProduct(row)">{{ productLifecyclePending('delete',row.id) ? '处理中…' : '移入垃圾站' }}</button></td></tr></tbody></table></div>
                 </template>
               </div>
               <pager v-if="productTab === 'products' && selectedProductCustomer" :page="pages.products" :total="productsTotal" :page-size="pageSize" @change="pages.products=$event; loadProducts()"></pager>
@@ -3906,7 +3906,7 @@
                       <strong>这款常用箱历史报料材质</strong>
                       <div class="muted" style="font-size:11px;margin-top:2px">只显示该常用箱关联的正式/历史报料事实，不混入同客户其他产品。</div>
                     </div>
-                    <button v-if="productForm.id" type="button" class="btn small" @click="loadProductMaterialContext(productForm.id)">刷新</button>
+                    <button v-if="productForm.id" type="button" class="btn small" :disabled="productMaterialContext.loading" @click="loadProductMaterialContext(productForm.id)">{{ productMaterialContext.loading ? '读取中…' : '刷新' }}</button>
                   </div>
                   <div v-if="!productForm.id" class="muted">新增常用箱尚无历史报料记录。</div>
                   <div v-else-if="productMaterialContext.error" class="notice error">{{ productMaterialContext.error }}</div>
@@ -5819,7 +5819,7 @@
             </div>
           </div>
           <div class="modal-foot">
-            <button v-if="!isForcedPassword" class="btn" @click="closeModal">{{ canSaveModal ? "取消" : "关闭" }}</button>
+            <button v-if="!isForcedPassword" class="btn" :disabled="masterSavePending" @click="closeModal">{{ canSaveModal ? "取消" : "关闭" }}</button>
             <template v-if="modal?.type === 'orderPdfImport' && orderImportDrafts.length">
               <button class="btn" :disabled="loading || !confirmableImportDraftCount" @click="toggleConfirmableImportDrafts">{{ confirmedImportDraftCount ? "取消加入批量保存" : "加入批量保存" }}</button>
               <span class="muted">待保存：{{ confirmedImportDraftCount }} 条；已成功：{{ successfulImportDraftCount }} 条；失败：{{ failedImportDraftCount }} 条</span>
@@ -5829,7 +5829,7 @@
               <button class="btn primary" :disabled="loading || pdfTemplateLoading" @click="savePdfTemplate">保存 draft</button>
             </template>
             <button v-if="modal?.type === 'delivery' && deliveryForm.editingId && !deliveryFormIsDirty()" class="btn success" :disabled="loading || !!deliveryForm.pick_task || !!deliveryOperationState.action" @click="createCurrentDeliveryPickTask">{{ deliveryOperationState.action==='pick' && Number(deliveryOperationState.deliveryId)===Number(deliveryForm.editingId) ? '推送中…' : (deliveryForm.pick_task ? '已推送拿货' : '拿货') }}</button>
-            <button v-if="canSaveModal" class="btn primary" :disabled="loading || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError)) || (modal?.type==='quotationConvert' && !!quotationConvertCreaseMismatch) || (modal?.type==='orderItem' && !!orderItemCreaseMismatch) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && (!!deliveryValidationError || !!deliveryOperationState.action)) || (modal?.type==='receipt' && !!receiptOperationState.action) || (modal?.type==='requisitionHold' && requisitionHoldSaveBlocked)" @click="modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()">{{ modal?.type==='delivery' ? deliveryPrimaryLabel() : (modal?.type==='receipt' ? (receiptOperationState.action==='save' ? '保存中…' : '保存回单') : (['requisition','supplierRequisitionDraft'].includes(modal?.type) ? '确认生成正式采购单' : (modal?.type==='requisitionHold' ? '确认暂缓' : (modal?.type==='stockReplenishment' && stockReplenishmentForm.source_type==='stock_warning' ? '保存报料草稿' : '保存')))) }}</button>
+            <button v-if="canSaveModal" class="btn primary" :disabled="loading || masterSavePending || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError)) || (modal?.type==='quotationConvert' && !!quotationConvertCreaseMismatch) || (modal?.type==='orderItem' && !!orderItemCreaseMismatch) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && (!!deliveryValidationError || !!deliveryOperationState.action)) || (modal?.type==='receipt' && !!receiptOperationState.action) || (modal?.type==='requisitionHold' && requisitionHoldSaveBlocked)" @click="modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()">{{ ['customer','product','material','supplier'].includes(modal?.type) && masterSavePending ? '保存中…' : (modal?.type==='delivery' ? deliveryPrimaryLabel() : (modal?.type==='receipt' ? (receiptOperationState.action==='save' ? '保存中…' : '保存回单') : (['requisition','supplierRequisitionDraft'].includes(modal?.type) ? '确认生成正式采购单' : (modal?.type==='requisitionHold' ? '确认暂缓' : (modal?.type==='stockReplenishment' && stockReplenishmentForm.source_type==='stock_warning' ? '保存报料草稿' : '保存'))))) }}</button>
           </div>
         </div>
       </div>
@@ -6373,12 +6373,13 @@
             masterEditBaseline: { customer:null, product:null, material:null },
             masterChangeConfirm: blankMasterChangeConfirm(),
             masterPendingSaveOptions: null,
+            masterSavePending: false,
             masterVersionConflict: null,
             masterVersionHistory: blankMasterVersionHistory(),
             selectedProductCustomer: null, productCustomerSearch: "",
             productsLoading: false, productsError: "",
             showProductMoreFilters: false,
-            productTrashOpen: false, productTrashItems: [],
+            productTrashOpen: false, productTrashItems: [], productLifecycleAction:{action:"",productId:null},
             filters: { customerKeyword: "", showInactive:false, showInactiveProducts:false, productCustomer: "", productKeyword: "", productCode: "", productName: "", productSpec: "", productMaterial: "", orderCustomer: "", orderKeyword:"", orderNumber:"", orderCustomerPo:"", orderProductCode:"", orderProductName:"", orderSpecification:"", orderDateFrom:"", orderDateTo:"", orderDeliveryDateFrom:"", orderDeliveryDateTo:"", orderScope:"active", orderStage:"", orderStatus:"business", orderView:"customer_po", orderSortBy:"", orderSortDirection:"desc" },
             orderScopeTabs: [
               { label: "进行中", value: "active" },
@@ -10054,8 +10055,9 @@
             }
           },
           async loadCustomers() {
-            if (!this.hasPermission("customers.view")) return;
-            const controller = this.beginLatestRequest("customers:list");
+            if (!this.hasPermission("customers.view")) return false;
+            const requestKey = "customers:list";
+            const controller = this.beginLatestRequest(requestKey);
             try {
               const { data } = await axios.get("/api/master/customers", {
                 params: {
@@ -10064,31 +10066,39 @@
                 },
                 signal: controller.signal,
               });
+              if (latestRequestControllers.get(requestKey) !== controller) return false;
               this.customers = data.items; this.customersTotal = data.total;
+              return true;
             } catch (error) {
-              if (!this.isCancelledRequest(error)) throw error;
+              if (this.isCancelledRequest(error)) return false;
+              throw error;
             } finally {
-              this.finishLatestRequest("customers:list", controller);
+              this.finishLatestRequest(requestKey, controller);
             }
           },
           async loadCustomerOptions(force=false) {
-            if (!this.hasPermission("customers.view")) return;
-            if (!force && this.customerOptions.length) return;
-            const controller = this.beginLatestRequest("customers:options");
+            if (!this.hasPermission("customers.view")) return false;
+            if (!force && this.customerOptions.length) return true;
+            const requestKey = "customers:options";
+            const controller = this.beginLatestRequest(requestKey);
             try {
-              this.customerOptions = (await axios.get("/api/master/customers", {
+              const { data } = await axios.get("/api/master/customers", {
                 params:{ page_size:200, include_inactive:true },
                 signal:controller.signal,
-              })).data.items;
+              });
+              if (latestRequestControllers.get(requestKey) !== controller) return false;
+              this.customerOptions = data.items;
+              return true;
             } catch (error) {
-              if (!this.isCancelledRequest(error)) throw error;
+              if (this.isCancelledRequest(error)) return false;
+              throw error;
             } finally {
-              this.finishLatestRequest("customers:options", controller);
+              this.finishLatestRequest(requestKey, controller);
             }
           },
           async loadProducts() {
             if (this.activePage === "products" && this.productTab === "products" && !this.selectedProductCustomer) {
-              this.products = []; this.productsTotal = 0; this.productsLoading = false; this.productsError = ""; return;
+              this.products = []; this.productsTotal = 0; this.productsLoading = false; this.productsError = ""; return true;
             }
             const params = {
               keyword: this.filters.productKeyword,
@@ -10103,44 +10113,76 @@
             };
             if (this.selectedProductCustomer) params.customer_id = this.selectedProductCustomer.id;
             else if (this.filters.productCustomer) params.customer_id = this.filters.productCustomer;
-            const controller = this.beginLatestRequest("products:list");
+            const requestKey = "products:list";
+            const controller = this.beginLatestRequest(requestKey);
             this.productsLoading = true;
             this.productsError = "";
             try {
               const { data } = await axios.get("/api/master/products", { params, signal:controller.signal });
-              if (controller.signal.aborted) return;
+              if (latestRequestControllers.get(requestKey) !== controller) return false;
               this.products = data.items; this.productsTotal = data.total;
+              return true;
             } catch (error) {
-              if (!this.isCancelledRequest(error)) {
+              if (this.isCancelledRequest(error)) return false;
+              if (latestRequestControllers.get(requestKey) === controller) {
                 this.products = [];
                 this.productsTotal = 0;
                 this.productsError = this.errorMessage(error) || "常用箱读取失败，请重试";
               }
+              return false;
             } finally {
-              if (latestRequestControllers.get("products:list") === controller) this.productsLoading = false;
-              this.finishLatestRequest("products:list", controller);
+              if (latestRequestControllers.get(requestKey) === controller) this.productsLoading = false;
+              this.finishLatestRequest(requestKey, controller);
             }
           },
           async loadMoldTools() {
-            if (this.isWorkshop) return;
-            const { data } = await axios.get("/api/warehouse/molds", { params:{ limit:500 } });
-            this.moldTools = data.items || [];
+            if (this.isWorkshop) return true;
+            const requestKey = "product:molds";
+            const controller = this.beginLatestRequest(requestKey);
+            try {
+              const { data } = await axios.get("/api/warehouse/molds", {
+                params:{ limit:500 },
+                signal:controller.signal,
+              });
+              if (latestRequestControllers.get(requestKey) !== controller) return false;
+              this.moldTools = data.items || [];
+              return true;
+            } catch (error) {
+              if (this.isCancelledRequest(error)) return false;
+              throw error;
+            } finally {
+              this.finishLatestRequest(requestKey, controller);
+            }
           },
           async ensureProductEditorOptions({force=false} = {}) {
             const needsMaterials = force || !this.allMaterials.length;
             const needsMolds = !this.isWorkshop && (force || !this.moldTools.length);
-            if (!needsMaterials && !needsMolds) return;
+            if (!needsMaterials && !needsMolds) return true;
+            const requestKey = "product:editor-options";
+            const controller = this.beginLatestRequest(requestKey);
             this.productEditorOptionsLoading = true;
             this.productEditorOptionsError = "";
             try {
               const tasks = [];
               if (needsMaterials) tasks.push(this.loadMaterials());
               if (needsMolds) tasks.push(this.loadMoldTools());
-              await Promise.all(tasks);
+              const results = await Promise.all(tasks);
+              if (latestRequestControllers.get(requestKey) !== controller) return false;
+              if (results.some(result => result !== true)) {
+                this.productEditorOptionsError = "材质与模具选择数据读取失败，请重试";
+                return false;
+              }
+              return true;
             } catch (error) {
-              if (!this.isCancelledRequest(error)) this.productEditorOptionsError = "材质与模具选择数据读取失败，请重试";
+              if (!this.isCancelledRequest(error) && latestRequestControllers.get(requestKey) === controller) {
+                this.productEditorOptionsError = "材质与模具选择数据读取失败，请重试";
+              }
+              return false;
             } finally {
-              this.productEditorOptionsLoading = false;
+              if (latestRequestControllers.get(requestKey) === controller) {
+                this.productEditorOptionsLoading = false;
+                this.finishLatestRequest(requestKey, controller);
+              }
             }
           },
           moldToolSelectOptions() {
@@ -10175,15 +10217,17 @@
               const {data} = includeInactive
                 ? await axios.get("/api/master/suppliers", {params:{include_inactive:true}, signal:controller.signal})
                 : await axios.get("/api/master/suppliers/candidates", {signal:controller.signal});
-              if (latestRequestControllers.get(requestKey) !== controller) return;
+              if (latestRequestControllers.get(requestKey) !== controller) return false;
               this.suppliers = Array.isArray(data) ? data : (data.items || []);
               this.materialSuppliers = this.activeSupplierNames;
+              return true;
             } catch(error) {
               if (!this.isCancelledRequest(error) && latestRequestControllers.get(requestKey) === controller) {
                 this.supplierError = `供应商读取失败：${this.errorMessage(error)}`;
                 this.suppliers = [];
                 this.materialSuppliers = [];
               }
+              return false;
             } finally {
               if (latestRequestControllers.get(requestKey) === controller) {
                 this.supplierLoading = false;
@@ -10229,23 +10273,32 @@
             this.resetPaperCodeForm();
           },
           async loadMaterials() {
-            const controller = this.beginLatestRequest("materials:list");
+            const requestKey = "materials:list";
+            const controller = this.beginLatestRequest(requestKey);
             const params = { sort: this.materialSort };
             if (this.materialLayerFilter) params.layer_count = this.materialLayerFilter;
             if (this.materialSupplierFilter) params.supplier_name = this.materialSupplierFilter;
+            const shouldHydrateAll = !this.allMaterials.length;
+            const isUnfilteredCommonView = !params.layer_count && !params.supplier_name && params.sort === "common";
             try {
-              this.materials = await this.fetchAllMaterials(params, controller.signal);
+              const materials = await this.fetchAllMaterials(params, controller.signal);
+              let allMaterials = null;
+              if (shouldHydrateAll) {
+                allMaterials = isUnfilteredCommonView
+                  ? materials.slice()
+                  : await this.fetchAllMaterials({ sort: "common" }, controller.signal);
+              }
+              if (latestRequestControllers.get(requestKey) !== controller) return false;
+              this.materials = materials;
               // 维护全量材质供选择器复用；新业务供应商选项只来自启用供应商主数据。
               this.materialSuppliers = this.activeSupplierNames;
-              if (!this.allMaterials.length) {
-                const isUnfilteredCommonView = !this.materialLayerFilter && !this.materialSupplierFilter && this.materialSort === "common";
-                if (isUnfilteredCommonView) this.allMaterials = this.materials.slice();
-                else this.allMaterials = await this.fetchAllMaterials({ sort: "common" }, controller.signal);
-              }
+              if (allMaterials) this.allMaterials = allMaterials;
+              return true;
             } catch (error) {
-              if (!this.isCancelledRequest(error)) throw error;
+              if (this.isCancelledRequest(error)) return false;
+              throw error;
             } finally {
-              this.finishLatestRequest("materials:list", controller);
+              this.finishLatestRequest(requestKey, controller);
             }
           },
           async openMaterialCandidateMaintenance() {
@@ -14182,34 +14235,73 @@
             this.bomEditor.componentOptions = options.filter(option => String(option.id) !== String(this.productForm.id));
           },
           async loadProductBom(productId) {
+            const requestedId = Number(productId || 0);
+            if (!requestedId || Number(this.productForm.id || 0) !== requestedId) return false;
+            const requestKey = "product:bom";
+            const controller = this.beginLatestRequest(requestKey);
             this.bomEditor.loading = true;
             this.bomEditor.error = "";
             this.bomEditor.notice = "";
             try {
-              const { data } = await axios.get(`/api/master/products/${productId}/bom`);
+              const { data } = await axios.get(`/api/master/products/${requestedId}/bom`, {
+                signal:controller.signal,
+              });
+              if (
+                latestRequestControllers.get(requestKey) !== controller
+                || Number(this.productForm.id || 0) !== requestedId
+              ) return false;
               this.applyBomResponse(data);
+              return true;
             } catch (error) {
+              if (
+                this.isCancelledRequest(error)
+                || latestRequestControllers.get(requestKey) !== controller
+                || Number(this.productForm.id || 0) !== requestedId
+              ) return false;
               if (error?.response?.status === 404) this.bomEditor.notice = "当前产品暂无 BOM 记录，可直接启用并添加内部组件。";
               else this.bomEditor.error = this.errorMessage(error);
               this.productBomSnapshot = JSON.stringify(this._productBomSaveFields());
+              return false;
             } finally {
-              this.bomEditor.loading = false;
+              if (latestRequestControllers.get(requestKey) === controller) {
+                if (Number(this.productForm.id || 0) === requestedId) this.bomEditor.loading = false;
+                this.finishLatestRequest(requestKey, controller);
+              }
             }
           },
           async searchBomProducts(keyword="") {
             if (!this.productForm.customer_id) {
               this.bomEditor.componentOptions = [];
-              return;
+              return true;
             }
+            const requestedProductId = Number(this.productForm.id || 0) || null;
+            const requestedCustomerId = Number(this.productForm.customer_id || 0);
+            const requestKey = "product:bom-search";
+            const controller = this.beginLatestRequest(requestKey);
             try {
               const { data } = await axios.get("/api/master/products", { params: {
-                customer_id: this.productForm.customer_id, keyword, page_size: 50, include_inactive: false,
-              } });
-              const rows = (data.items || []).filter(row => String(row.id) !== String(this.productForm.id));
+                customer_id: requestedCustomerId, keyword:String(keyword || ""), page_size: 50, include_inactive: false,
+              }, signal:controller.signal });
+              if (
+                latestRequestControllers.get(requestKey) !== controller
+                || (Number(this.productForm.id || 0) || null) !== requestedProductId
+                || Number(this.productForm.customer_id || 0) !== requestedCustomerId
+              ) return false;
+              const rows = (data.items || []).filter(row => String(row.id) !== String(requestedProductId));
               this.bomEditor.componentOptions = rows.map(row => this.bomComponentOption(row));
               this.mergeBomComponentOptions(this.bomEditor.components);
+              return true;
             } catch (error) {
+              if (
+                this.isCancelledRequest(error)
+                || latestRequestControllers.get(requestKey) !== controller
+                || (Number(this.productForm.id || 0) || null) !== requestedProductId
+                || Number(this.productForm.customer_id || 0) !== requestedCustomerId
+              ) return false;
               this.bomEditor.error = this.errorMessage(error);
+              return false;
+            } finally {
+              this.finishLatestRequest(requestKey, controller);
             }
           },
           addBomComponent() {
@@ -14536,35 +14628,70 @@
             }
           },
           async openProduct(row=null) {
-            let detail = row;
-            if (row?.id) detail = (await axios.get(`/api/master/products/${row.id}`)).data;
-            await this.loadProductBoxTypeRules();
-            this.productForm = this.hydrateProductForm(
-              detail || {
-                customer_id: this.selectedProductCustomer?.id || this.activeCustomerOptions[0]?.id || null,
-                drawings: [],
+            const requestKey = "product:editor";
+            const controller = this.beginLatestRequest(requestKey);
+            const requestedId = Number(row?.id || 0) || null;
+            try {
+              let detail = row;
+              if (requestedId) {
+                detail = (await axios.get(`/api/master/products/${requestedId}`, {
+                  signal:controller.signal,
+                })).data;
               }
-            );
-            this.productMaterialContext = { product_id:this.productForm.id || null, candidates:[], requisition_history:[], manual_selection_history:[], loading:false, error:"" };
-            this.drawingFile = null;
-            this.resetBomEditor();
-            // 拍快照用于检测未保存更改
-            this.productFormSnapshot = JSON.stringify(this._productFormSaveFields());
-            this.beginMasterEdit("product",this.productForm);
-            this.modal = { type:"product", title: row ? (this.canEditProducts ? "编辑产品" : "查看产品") : "新增产品" };
-            await this.$nextTick();
-            await this.ensureProductEditorOptions();
-            if (this.productForm.id) {
-              const loaders = [this.loadProductBom(this.productForm.id)];
-              if (this.hasPermission("requisition.view")) loaders.push(this.loadProductMaterialContext(this.productForm.id));
-              else this.productMaterialContext.error = "当前账号无报料历史查看权限";
-              await Promise.all(loaders);
+              if (latestRequestControllers.get(requestKey) !== controller) return false;
+              await this.loadProductBoxTypeRules();
+              if (latestRequestControllers.get(requestKey) !== controller) return false;
+              this.productForm = this.hydrateProductForm(
+                detail || {
+                  customer_id: this.selectedProductCustomer?.id || this.activeCustomerOptions[0]?.id || null,
+                  drawings: [],
+                }
+              );
+              const openedId = Number(this.productForm.id || 0) || null;
+              this.productMaterialContext = { product_id:openedId, candidates:[], requisition_history:[], manual_selection_history:[], loading:false, error:"" };
+              this.drawingFile = null;
+              this.resetBomEditor();
+              // 拍快照用于检测未保存更改
+              this.productFormSnapshot = JSON.stringify(this._productFormSaveFields());
+              this.beginMasterEdit("product",this.productForm);
+              this.modal = { type:"product", title: requestedId ? (this.canEditProducts ? "编辑产品" : "查看产品") : "新增产品" };
+              await this.$nextTick();
+              if (
+                latestRequestControllers.get(requestKey) !== controller
+                || (Number(this.productForm.id || 0) || null) !== openedId
+              ) return false;
+              await this.ensureProductEditorOptions();
+              if (
+                latestRequestControllers.get(requestKey) !== controller
+                || (Number(this.productForm.id || 0) || null) !== openedId
+              ) return false;
+              if (openedId) {
+                const loaders = [this.loadProductBom(openedId)];
+                if (this.hasPermission("requisition.view")) loaders.push(this.loadProductMaterialContext(openedId));
+                else this.productMaterialContext.error = "当前账号无报料历史查看权限";
+                await Promise.all(loaders);
+              }
+              if (
+                latestRequestControllers.get(requestKey) !== controller
+                || (Number(this.productForm.id || 0) || null) !== openedId
+              ) return false;
+              await this.$nextTick();
+              if (latestRequestControllers.get(requestKey) !== controller) return false;
+              this.autoApplyProductRecommendations();
+              return true;
+            } catch (error) {
+              if (this.isCancelledRequest(error) || latestRequestControllers.get(requestKey) !== controller) return false;
+              this.showToast(`常用箱资料读取失败：${this.errorMessage(error)}`, true);
+              return false;
+            } finally {
+              this.finishLatestRequest(requestKey, controller);
             }
-            this.$nextTick(() => this.autoApplyProductRecommendations());
           },
           async loadProductMaterialContext(productId) {
-            if (!productId) return;
             const requestedId = Number(productId);
+            if (!requestedId || Number(this.productForm.id || 0) !== requestedId) return false;
+            const requestKey = "product:material-context";
+            const controller = this.beginLatestRequest(requestKey);
             this.productMaterialContext = {
               ...this.productMaterialContext,
               product_id: requestedId,
@@ -14572,8 +14699,13 @@
               error: "",
             };
             try {
-              const { data } = await axios.get(`/api/requisition/products/${requestedId}/material-context`);
-              if (Number(this.productForm.id || 0) !== requestedId) return;
+              const { data } = await axios.get(`/api/requisition/products/${requestedId}/material-context`, {
+                signal:controller.signal,
+              });
+              if (
+                latestRequestControllers.get(requestKey) !== controller
+                || Number(this.productForm.id || 0) !== requestedId
+              ) return false;
               this.productMaterialContext = {
                 product_id: requestedId,
                 candidates: data.candidates || data.candidate_summary || [],
@@ -14582,8 +14714,13 @@
                 loading: false,
                 error: "",
               };
+              return true;
             } catch (error) {
-              if (Number(this.productForm.id || 0) !== requestedId) return;
+              if (
+                this.isCancelledRequest(error)
+                || latestRequestControllers.get(requestKey) !== controller
+                || Number(this.productForm.id || 0) !== requestedId
+              ) return false;
               this.productMaterialContext = {
                 product_id: requestedId,
                 candidates: [],
@@ -14592,6 +14729,9 @@
                 loading: false,
                 error: this.errorMessage(error) || "常用箱材质候选与历史加载失败",
               };
+              return false;
+            } finally {
+              this.finishLatestRequest(requestKey, controller);
             }
           },
           applyProductMaterialCandidate(candidate) {
@@ -16150,6 +16290,33 @@
               }
             }
           },
+          productLifecycleBusy() {
+            return Boolean(this.productLifecycleAction?.action);
+          },
+          productLifecyclePending(action, productId=null) {
+            const current = this.productLifecycleAction || {};
+            if (current.action !== action) return false;
+            if (productId === null || productId === undefined) return true;
+            return Number(current.productId) === Number(productId);
+          },
+          async runProductLifecycleAction({action, productId=null, confirmMessage, task}) {
+            if (this.productLifecycleBusy()) return false;
+            if (confirmMessage && !confirm(confirmMessage)) return false;
+            const normalizedProductId = productId === null || productId === undefined ? null : Number(productId);
+            this.productLifecycleAction = {action, productId:normalizedProductId};
+            try {
+              const result = await task();
+              return result !== false;
+            } catch (error) {
+              this.showToast(this.errorMessage(error), true);
+              return false;
+            } finally {
+              if (
+                this.productLifecycleAction?.action === action
+                && this.productLifecycleAction?.productId === normalizedProductId
+              ) this.productLifecycleAction = {action:"", productId:null};
+            }
+          },
           async deleteCustomer(row) {
             if (!confirm(`确认停用客户“${row.name}”吗？`)) return;
             try { const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/customers/${row.id}`,row}); if(!result)return; await Promise.all([this.loadCustomers(),this.loadCustomerOptions(true)]); this.showToast("客户已停用"); }
@@ -16166,9 +16333,17 @@
             } catch(error) { this.showToast(this.errorMessage(error), true); }
           },
           async deleteProduct(row) {
-            if (!confirm(`确认将产品“${row.product_name}”移入垃圾站吗？30天内可恢复。`)) return;
-            try { const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/products/${row.id}`,row}); if(!result)return; await this.loadProducts(); this.showToast("产品已移入垃圾站"); }
-            catch(error){this.showToast(this.errorMessage(error),true);}
+            return this.runProductLifecycleAction({
+              action:"delete", productId:row.id,
+              confirmMessage:`确认将产品“${row.product_name}”移入垃圾站吗？30天内可恢复。`,
+              task:async() => {
+                const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/products/${row.id}`,row});
+                if(!result)return false;
+                await this.loadProducts();
+                this.showToast("产品已移入垃圾站");
+                return true;
+              },
+            });
           },
           async toggleProductTrash() {
             this.productTrashOpen = !this.productTrashOpen;
@@ -16179,41 +16354,57 @@
             this.productTrashItems = data.items;
           },
           async restoreProduct(row) {
-            if (!confirm(`确认恢复“${row.product_name}”吗？`)) return;
-            try {
-              const result=await this.sendVersionedMasterMutation({method:"put",url:`/api/master/products/${row.id}/restore`,row});
-              if(!result)return;
-              await Promise.all([this.loadProductTrash(), this.loadProducts()]);
-              this.showToast("产品已恢复并重新启用");
-            } catch(error) { this.showToast(this.errorMessage(error), true); }
+            return this.runProductLifecycleAction({
+              action:"restore", productId:row.id,
+              confirmMessage:`确认恢复“${row.product_name}”吗？`,
+              task:async() => {
+                const result=await this.sendVersionedMasterMutation({method:"put",url:`/api/master/products/${row.id}/restore`,row});
+                if(!result)return false;
+                await Promise.all([this.loadProductTrash(), this.loadProducts()]);
+                this.showToast("产品已恢复并重新启用");
+                return true;
+              },
+            });
           },
           async purgeProduct(row) {
-            if (!confirm(`确定彻底清理“${row.product_name}”吗？该操作不可撤销。`)) return;
-            try {
-              const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/products/${row.id}/purge`,row});
-              if(!result)return;
-              await this.loadProductTrash();
-              this.showToast("产品已清理");
-            } catch(error) { this.showToast(this.errorMessage(error), true); }
+            return this.runProductLifecycleAction({
+              action:"purge", productId:row.id,
+              confirmMessage:`确定彻底清理“${row.product_name}”吗？该操作不可撤销。`,
+              task:async() => {
+                const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/products/${row.id}/purge`,row});
+                if(!result)return false;
+                await this.loadProductTrash();
+                this.showToast("产品已清理");
+                return true;
+              },
+            });
           },
           async emptyProductTrash() {
-            if (!confirm("确定清空产品垃圾站吗？有历史业务引用的产品将永久归档。")) return;
-            try {
-              const expected_versions=Object.fromEntries((this.productTrashItems||[]).map(row=>[row.id,Number(row.version)]));
-              const { data } = await axios.post("/api/master/products/trash/empty",{expected_versions});
-              await this.loadProductTrash();
-              this.showToast(`已清理 ${data.deleted_count} 条，归档 ${data.archived_count} 条`);
-            } catch(error) { this.showToast(this.errorMessage(error), true); }
+            return this.runProductLifecycleAction({
+              action:"empty", productId:null,
+              confirmMessage:"确定清空产品垃圾站吗？有历史业务引用的产品将永久归档。",
+              task:async() => {
+                const expected_versions=Object.fromEntries((this.productTrashItems||[]).map(row=>[row.id,Number(row.version)]));
+                const { data } = await axios.post("/api/master/products/trash/empty",{expected_versions});
+                await this.loadProductTrash();
+                this.showToast(`已清理 ${data.deleted_count} 条，归档 ${data.archived_count} 条`);
+                return true;
+              },
+            });
           },
           async toggleProductStatus(row) {
             const action = row.is_active ? "停用" : "启用";
-            if (!confirm(`确认${action}纸箱“${row.product_name}”吗？`)) return;
-            try {
-              const result=await this.sendVersionedMasterMutation({method:"put",url:`/api/master/products/${row.id}/status`,row,body:{is_active:!row.is_active}});
-              if(!result)return;
-              await this.loadProducts();
-              this.showToast(`纸箱已${action}`);
-            } catch(error) { this.showToast(this.errorMessage(error), true); }
+            return this.runProductLifecycleAction({
+              action:"status", productId:row.id,
+              confirmMessage:`确认${action}纸箱“${row.product_name}”吗？`,
+              task:async() => {
+                const result=await this.sendVersionedMasterMutation({method:"put",url:`/api/master/products/${row.id}/status`,row,body:{is_active:!row.is_active}});
+                if(!result)return false;
+                await this.loadProducts();
+                this.showToast(`纸箱已${action}`);
+                return true;
+              },
+            });
           },
           async deleteMaterial(row) {
             if (!confirm(`确认停用材质“${row.code}”吗？`)) return;
@@ -19475,8 +19666,33 @@
             this.masterChangeConfirm = blankMasterChangeConfirm();
             this.masterPendingSaveOptions = null;
           },
+          handleMasterSaveRefreshFailure(entity, error) {
+            const label = entity === "customer" ? "客户" : (entity === "product" ? "常用箱" : (entity === "supplier" ? "供应商" : "材质"));
+            if (entity === "product") {
+              // 写入已完成，即使列表刷新失败也不应再把表单当作未保存。
+              this.productFormSnapshot = null;
+              // 从 PDF/订单返回的编辑器保留在当前页，避免把未完成的回填冒充成功。
+              if (!this.productEditReturnContext) this.closeModal();
+            } else {
+              this.closeModal();
+            }
+            const reason = this.errorMessage(error);
+            this.showToast(
+              `${label}已保存，但列表刷新失败${reason ? `：${reason}` : ""}。业务已成功，请勿重复提交，请手动刷新核对。`,
+              true
+            );
+            return true;
+          },
           async saveModal() {
             if (this.modal?.type === "receipt") return this.saveReceipt();
+            const masterSaveEntity = ["customer","product","material","supplier"].includes(this.modal?.type) ? this.modal.type : null;
+            if (masterSaveEntity && this.masterSavePending) {
+              const label = masterSaveEntity === "customer" ? "客户" : (masterSaveEntity === "product" ? "常用箱" : (masterSaveEntity === "supplier" ? "供应商" : "材质"));
+              this.showToast(`${label}正在保存，请勿重复点击`, true);
+              return false;
+            }
+            if (masterSaveEntity) this.masterSavePending = true;
+            try {
             let masterOptions = this.masterPendingSaveOptions;
             this.masterPendingSaveOptions = null;
             const masterEntity = ["customer","product","material"].includes(this.modal?.type) ? this.modal.type : null;
@@ -19523,33 +19739,73 @@
                 return true;
               }
               if (this.modal.type === "customer") {
+                const customerTarget = {
+                  id:Number(this.customerForm.id || 0) || null,
+                  expectedVersion:masterOptions?.expected_version ?? this.masterCurrentVersion("customer"),
+                  wasEditing:!!this.customerForm.id,
+                };
                 const payload = this.buildCustomerWritePayload();
-                this.attachMasterUpdateMetadata("customer",payload,masterOptions);
-                if (this.customerForm.id) await axios.put(`/api/master/customers/${this.customerForm.id}`, payload);
+                this.attachMasterUpdateMetadata("customer",payload,{
+                  ...masterOptions,
+                  expected_version:customerTarget.expectedVersion,
+                });
+                if (customerTarget.id) await axios.put(`/api/master/customers/${encodeURIComponent(customerTarget.id)}`, payload);
                 else await axios.post("/api/master/customers", payload);
-                await Promise.all([this.loadCustomers(), this.loadCustomerOptions(true)]);
+                const refreshResults = await Promise.allSettled([
+                  this.loadCustomers(),
+                  this.loadCustomerOptions(true),
+                ]);
+                const refreshFailure = refreshResults.find(result => result.status === "rejected" || result.value !== true);
+                if (refreshFailure) {
+                  const refreshError = refreshFailure.status === "rejected"
+                    ? refreshFailure.reason
+                    : new Error("客户列表刷新未完成");
+                  return this.handleMasterSaveRefreshFailure("customer", refreshError);
+                }
+                successMessage = customerTarget.wasEditing ? "客户已更新" : "客户已新增";
               }
               if (this.modal.type === "supplier") {
-                const desiredActive = this.supplierForm.is_active !== false;
+                const supplierTarget = {
+                  id:Number(this.supplierForm.id || 0) || null,
+                  version:Number(this.supplierForm.version || 0) || null,
+                  desiredActive:this.supplierForm.is_active !== false,
+                  wasEditing:!!this.supplierForm.id,
+                };
                 const payload = this.supplierPayload();
                 let saved;
-                if (this.supplierForm.id) {
-                  if (!Number.isInteger(Number(this.supplierForm.version)) || Number(this.supplierForm.version) < 1) throw new Error("供应商版本读取失败，请刷新后重试");
+                if (supplierTarget.id) {
+                  if (!Number.isInteger(supplierTarget.version) || supplierTarget.version < 1) throw new Error("供应商版本读取失败，请刷新后重试");
                   ({data:saved} = await axios.put(
-                    `/api/master/suppliers/${this.supplierForm.id}`,
-                    {...payload, expected_version:Number(this.supplierForm.version)},
+                    `/api/master/suppliers/${supplierTarget.id}`,
+                    {...payload, expected_version:supplierTarget.version},
                   ));
                 } else {
                   ({data:saved} = await axios.post("/api/master/suppliers",payload));
                 }
-                if (saved?.id && (saved.is_active !== false) !== desiredActive) {
-                  ({data:saved} = await axios.put(
-                    `/api/master/suppliers/${saved.id}/status`,
-                    {expected_version:Number(saved.version), is_active:desiredActive},
-                  ));
+                if (saved?.id && (saved.is_active !== false) !== supplierTarget.desiredActive) {
+                  try {
+                    ({data:saved} = await axios.put(
+                      `/api/master/suppliers/${saved.id}/status`,
+                      {expected_version:Number(saved.version), is_active:supplierTarget.desiredActive},
+                    ));
+                  } catch (statusError) {
+                    await this.loadSuppliers(true);
+                    this.closeModal();
+                    this.showToast(
+                      `供应商资料已保存，但状态未生效：${this.errorMessage(statusError)}。请手动刷新后编辑该供应商，不要重复新建。`,
+                      true
+                    );
+                    return false;
+                  }
                 }
-                await this.loadSuppliers(true);
-                successMessage = this.supplierForm.id ? "供应商已更新" : "供应商已新增";
+                const refreshed = await this.loadSuppliers(true);
+                if (!refreshed) {
+                  return this.handleMasterSaveRefreshFailure(
+                    "supplier",
+                    new Error(this.supplierError || "供应商列表刷新失败")
+                  );
+                }
+                successMessage = supplierTarget.wasEditing ? "供应商已更新" : "供应商已新增";
               }
               if (this.modal.type === "product") {
                 const productDirty = this._productFormDirty();
@@ -19566,7 +19822,12 @@
                   await axios.post(`/api/master/products/${saved.id}/drawings`,form);
                 }
                 if (saved?.id && bomDirty) await this.saveProductBom(saved.id, saved.version ?? null);
-                await this.loadProducts();
+                try {
+                  const refreshed = await this.loadProducts();
+                  if (!refreshed) throw new Error(this.productsError || "常用箱列表刷新未完成");
+                } catch (refreshError) {
+                  return this.handleMasterSaveRefreshFailure("product", refreshError);
+                }
                 // 产品已成功保存，关闭弹窗时不应再提示“有未保存的修改”。
                 this.productFormSnapshot = null;
                 if (this.productEditReturnContext) {
@@ -19579,7 +19840,12 @@
                 this.attachMasterUpdateMetadata("material",payload,masterOptions);
                 if (this.materialForm.id) await axios.put(`/api/master/materials/${this.materialForm.id}`,payload);
                 else await axios.post("/api/master/materials",payload);
-                await this.loadMaterials();
+                try {
+                  const refreshed = await this.loadMaterials();
+                  if (!refreshed) throw new Error("材质列表刷新未完成");
+                } catch (refreshError) {
+                  return this.handleMasterSaveRefreshFailure("material", refreshError);
+                }
               }
               if (this.modal.type === "materialCandidate") {
                 const form = this.materialCandidateForm;
@@ -19881,6 +20147,9 @@
               return false;
             }
             finally { this.loading = false; }
+            } finally {
+              if (masterSaveEntity) this.masterSavePending = false;
+            }
           },
           async dispatchDelivery(row) {
             if (this.deliveryOperationState.action || this.receiptOperationState?.action) return false;

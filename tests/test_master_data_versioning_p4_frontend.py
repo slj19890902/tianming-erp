@@ -24,8 +24,9 @@ def test_existing_master_save_builds_readable_diff_and_versioned_payload() -> No
     assert 'payload.expected_version = expectedVersion' in INDEX
     assert 'payload.change_reason = options.change_reason' in INDEX
     assert 'payload.confirmation_token = options.confirmation_token' in INDEX
-    for entity in ("customer", "material"):
-        assert f'attachMasterUpdateMetadata("{entity}",payload,masterOptions)' in save
+    assert 'attachMasterUpdateMetadata("customer",payload,{' in save
+    assert "expected_version:customerTarget.expectedVersion" in save
+    assert 'attachMasterUpdateMetadata("material",payload,masterOptions)' in save
     assert "buildProductWritePayload(masterOptions)" in save
     product_payload = _method_block(
         "buildProductWritePayload(options = null)",
@@ -124,7 +125,9 @@ def test_customer_mutations_force_refresh_shared_customer_options() -> None:
 
     assert "this.loadCustomerOptions(true)" in refresh
     assert delete_customer.count("this.loadCustomerOptions(true)") == 2
-    assert "await Promise.all([this.loadCustomers(), this.loadCustomerOptions(true)])" in customer_save
+    assert "const refreshResults = await Promise.allSettled([" in customer_save
+    assert "this.loadCustomers()," in customer_save
+    assert "this.loadCustomerOptions(true)," in customer_save
     assert "await this.loadCustomers();" not in customer_save
 
 

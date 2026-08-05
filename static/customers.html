@@ -1017,6 +1017,10 @@
         listController: null,
         listGeneration: 0,
         detailCustomer: null,
+        detailController: null,
+        detailGeneration: 0,
+        customerSavePending: false,
+        statusPending: false,
         orderProducts: [],
         selectedProduct: null,
       };
@@ -1123,10 +1127,10 @@
 
       function updateActions() {
         const selected = state.selected;
-        $("editBtn").disabled = !selected;
-        $("detailBtn").disabled = !selected;
-        $("statusBtn").disabled = !selected;
-        $("statusBtn").textContent = selected?.status === "inactive" ? "启用" : "停用";
+        $("editBtn").disabled = !selected || state.loading;
+        $("detailBtn").disabled = !selected || state.loading;
+        $("statusBtn").disabled = !selected || state.loading || state.statusPending;
+        $("statusBtn").textContent = state.statusPending ? "处理中…" : (selected?.status === "inactive" ? "启用" : "停用");
       }
 
       function renderRows() {
@@ -1196,6 +1200,7 @@
         state.loading = true;
         state.listReady = false;
         setCustomerListControls();
+        updateActions();
         $("loadingState").hidden = false;
         $("loadingState").textContent = "正在读取客户数据...";
         $("customerRows").innerHTML = "";
@@ -1217,18 +1222,21 @@
           renderPagination(data.pagination);
           renderSummary(data.summary);
           updateActions();
+          return true;
         } catch (error) {
-          if (generation !== state.listGeneration || controller.signal.aborted || error?.name === "AbortError") return;
+          if (generation !== state.listGeneration || controller.signal.aborted || error?.name === "AbortError") return false;
           const message = error instanceof TypeError
             ? "无法连接 ERP 服务，请确认服务正常后重试"
             : (error?.message || "客户数据读取失败");
           resetCustomerListView(`读取失败：${message}`);
           showToast(message, true);
+          return false;
         } finally {
           if (generation === state.listGeneration) {
             state.loading = false;
             state.listController = null;
             setCustomerListControls();
+            updateActions();
           }
         }
       }
@@ -1290,6 +1298,10 @@
       }
 
       async function saveCustomer() {
+        if (state.customerSavePending) {
+          showToast("客户资料正在保存，请勿重复点击", true);
+          return false;
+        }
         const id = Number($("customerId").value || 0);
         const payload = formPayload();
         if (!payload.name) {
@@ -1297,7 +1309,9 @@
           $("customerName").focus();
           return;
         }
+        state.customerSavePending = true;
         $("saveCustomer").disabled = true;
+        $("saveCustomer").textContent = "保存中…";
         try {
           const data = await api(
             id ? `/api/customer-management/${id}` : "/api/customer-management",
@@ -1307,30 +1321,53 @@
             }
           );
           closeForm();
-          await loadCustomers(true);
-          state.selected = data.customer;
-          updateActions();
-          showToast(id ? "客户资料已更新" : "客户已新增");
+          const successMessage = id ? "客户资料已更新" : "客户已新增";
+          const refreshed = await loadCustomers(true);
+          if (refreshed) {
+            state.selected = state.items.find((item) => Number(item.id) === Number(data.customer?.id)) || null;
+            updateActions();
+            showToast(successMessage);
+          } else {
+            showToast(`${successMessage}，但页面刷新失败；业务已成功，请勿重复提交，请手动刷新核对`, true);
+          }
+          return true;
         } catch (error) {
           showToast(error.message, true);
+          return false;
         } finally {
+          state.customerSavePending = false;
           $("saveCustomer").disabled = false;
+          $("saveCustomer").textContent = "保存客户资料";
         }
       }
 
       async function changeStatus() {
-        if (!state.selected) return;
-        const nextStatus = state.selected.status === "inactive" ? "active" : "inactive";
+        if (state.statusPending) {
+          showToast("客户状态正在处理，请勿重复点击", true);
+          return false;
+        }
+        if (!state.selected) return false;
+        const targetCustomer = { id: Number(state.selected.id), name: state.selected.name, status: state.selected.status };
+        const nextStatus = targetCustomer.status === "inactive" ? "active" : "inactive";
         const actionText = nextStatus === "active" ? "启用" : "停用";
-        if (!window.confirm(`确认${actionText}客户“${state.selected.name}”吗？`)) return;
+        if (!window.confirm(`确认${actionText}客户“${targetCustomer.name}”吗？`)) return false;
+        state.statusPending = true;
+        updateActions();
         try {
-          await api(`/api/customer-management/${state.selected.id}/status?status=${nextStatus}`, {
+          await api(`/api/customer-management/${targetCustomer.id}/status?status=${nextStatus}`, {
             method: "POST",
           });
-          await loadCustomers(true);
-          showToast(`客户已${actionText}`);
+          const successMessage = `客户已${actionText}`;
+          const refreshed = await loadCustomers(true);
+          if (refreshed) showToast(successMessage);
+          else showToast(`${successMessage}，但页面刷新失败；业务已成功，请勿重复提交，请手动刷新核对`, true);
+          return true;
         } catch (error) {
           showToast(error.message, true);
+          return false;
+        } finally {
+          state.statusPending = false;
+          updateActions();
         }
       }
 
@@ -1537,13 +1574,19 @@
 
       async function openDetail(id = state.selected?.id) {
         if (!id) return;
+        if (state.detailController) state.detailController.abort();
+        const controller = new AbortController();
+        const generation = Number(state.detailGeneration || 0) + 1;
+        state.detailController = controller;
+        state.detailGeneration = generation;
         $("drawerMask").hidden = false;
         $("drawerNewOrder").hidden = true;
         state.detailCustomer = null;
         $("drawerTitle").textContent = "客户详情";
         $("drawerBody").innerHTML = '<div class="loading">正在读取客户详情...</div>';
         try {
-          const data = await api(`/api/customer-management/${id}`);
+          const data = await api(`/api/customer-management/${id}`, { signal: controller.signal });
+          if (generation !== state.detailGeneration || controller.signal.aborted || $("drawerMask").hidden) return false;
           const customer = data.customer;
           const products = data.products || [];
           state.detailCustomer = customer;
@@ -1607,12 +1650,20 @@
               </div>
             </section>
           `;
+          return true;
         } catch (error) {
-          $("drawerBody").innerHTML = `<div class="empty">读取失败：${escapeHtml(error.message)}</div>`;
+          if (generation !== state.detailGeneration || controller.signal.aborted || error?.name === "AbortError") return false;
+          $("drawerBody").innerHTML = `<div class="empty">读取失败：${escapeHtml(error.message)}<div style="margin-top:10px"><button class="btn" type="button" onclick="openDetail(${Number(id)})">重新读取客户详情</button></div></div>`;
+          return false;
+        } finally {
+          if (generation === state.detailGeneration) state.detailController = null;
         }
       }
 
       function closeDetail() {
+        if (state.detailController) state.detailController.abort();
+        state.detailController = null;
+        state.detailGeneration += 1;
         $("drawerMask").hidden = true;
         state.detailCustomer = null;
         $("drawerNewOrder").hidden = true;

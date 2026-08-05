@@ -603,8 +603,10 @@ def test_delivery_customer_candidates_are_exact_union_of_real_sources(
     } == rows
 
 
+@pytest.mark.parametrize("submitted_price", [None, 0, "0.0000"])
 def test_unordered_finished_draft_can_keep_price_pending_without_stock_write(
     unordered_finished_delivery_app,
+    submitted_price,
 ) -> None:
     app, factory = unordered_finished_delivery_app
     seed = _seed(app, factory)
@@ -624,7 +626,7 @@ def test_unordered_finished_draft_can_keep_price_pending_without_stock_write(
                 "source_type": "unordered_finished",
                 "product_id": seed.no_price_product_id,
                 "delivered_quantity": 4,
-                "unit_price": None,
+                "unit_price": submitted_price,
                 "allocations": [{"inventory_lot_id": lot_id, "quantity": 4}],
             }
         ],

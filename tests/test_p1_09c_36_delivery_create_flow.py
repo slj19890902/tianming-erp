@@ -103,6 +103,9 @@ if (line.unit_price !== null) throw new Error("zero default price must stay pend
 if (line.allocations.length !== 1 || line.allocations[0].inventory_lot_id !== 55 || line.allocations[0].quantity !== 3) throw new Error("lot allocation was not preserved");
 const validation = methods.validateDeliveryForm.call(context);
 if (validation) throw new Error("valid unordered inventory draft was blocked: " + validation);
+line.unit_price = 0;
+const explicitZeroValidation = methods.validateDeliveryForm.call(context);
+if (explicitZeroValidation) throw new Error("explicit zero must remain a saveable pending price: " + explicitZeroValidation);
 if (methods.deliverySourceModeFromLines.call(context, context.deliveryForm.lines) !== "unordered_finished") throw new Error("source mode must remain unordered_finished");
 if (notices.some(([, error]) => error)) throw new Error("valid import must not show an error: " + JSON.stringify(notices));
 """,
@@ -116,6 +119,15 @@ if (notices.some(([, error]) => error)) throw new Error("valid import must not s
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_unordered_zero_price_is_submitted_as_pending() -> None:
+    save = INDEX.split('if (this.modal.type === "delivery") {', 1)[1].split(
+        'if (this.modal.type === "statement") {', 1
+    )[0]
+
+    assert 'unit_price: Number(line.unit_price || 0) > 0 ? Number(line.unit_price) : null' in save
+    assert 'Number(line.unit_price) < 0' in _method_body("validateDeliveryForm")
 
 
 def test_delivery_inline_script_is_valid(tmp_path: Path) -> None:

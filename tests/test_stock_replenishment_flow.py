@@ -3,12 +3,14 @@ from __future__ import annotations
 from collections.abc import Generator
 from datetime import date
 from decimal import Decimal
+import hashlib
 from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 
@@ -717,6 +719,148 @@ def test_replenishment_order_can_save_multiple_lines_before_stocking(
         assert row["source_type"] == "stock_replenishment"
         assert row["incoming_status"] == "待入库"
         assert row["requisition_qty"] == 80
+
+
+def test_manual_replenishment_idempotency_replays_the_same_draft_once(
+    stock_replenishment_app,
+) -> None:
+    app, session_factory = stock_replenishment_app
+    payload = {
+        "source_type": "customer_request",
+        "idempotency_key": "manual-replenishment-same-draft",
+        "supplier_name": "佳丰",
+        "customer_id": 1,
+        "stock_now": False,
+        "items": [
+            {
+                "target_inventory_type": "semi_finished",
+                "product_id": 1,
+                "customer_id": 1,
+                "product_code": "21301010",
+                "product_name": "天华测试外箱",
+                "material_id": 1,
+                "material_code": "A416D",
+                "layer_count": 5,
+                "flute_type": "AB",
+                "report_length_mm": 1865,
+                "report_width_mm": 830,
+                "crease_type": "压线",
+                "crease_left_mm": 335,
+                "crease_middle_mm": 160,
+                "crease_right_mm": 335,
+                "quantity": 30,
+                "location_id": 2,
+            }
+        ],
+    }
+    with TestClient(app) as client:
+        _login(client)
+        first = client.post(
+            "/api/requisition/stock-replenishment/orders", json=payload
+        )
+        replay = client.post(
+            "/api/requisition/stock-replenishment/orders", json=payload
+        )
+
+    assert first.status_code == 201, first.text
+    assert replay.status_code == 201, replay.text
+    assert replay.json()["id"] == first.json()["id"]
+    assert replay.json()["order_number"] == first.json()["order_number"]
+
+    from app.models.stock_replenishment import StockReplenishmentOrder
+
+    with session_factory() as session:
+        assert session.scalar(select(func.count(StockReplenishmentOrder.id))) == 1
+
+
+def test_manual_replenishment_unique_conflict_returns_concurrent_draft(
+    stock_replenishment_app,
+) -> None:
+    from app.api.deps import get_db
+    from app.models.stock_replenishment import StockReplenishmentOrder
+    from app.core.time_contract import beijing_today
+
+    app, session_factory = stock_replenishment_app
+    key = "manual-replenishment-concurrent-draft"
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:20].upper()
+    expected_number = f"CBR-{beijing_today():%Y%m%d}-{digest}"
+    request_session = session_factory()
+    original_flush = request_session.flush
+    injected = False
+
+    def flush_with_concurrent_winner(objects=None):
+        nonlocal injected
+        has_replenishment = any(
+            isinstance(row, StockReplenishmentOrder) for row in request_session.new
+        )
+        if has_replenishment and not injected:
+            injected = True
+            with session_factory() as concurrent:
+                concurrent.add(
+                    StockReplenishmentOrder(
+                        order_number=expected_number,
+                        supplier_name="苏州佳丰",
+                        customer_id=1,
+                        source_type="customer_request",
+                        status="confirmed",
+                        created_by=1,
+                        confirmed_by=1,
+                    )
+                )
+                concurrent.commit()
+            raise IntegrityError(
+                "INSERT stock_replenishment_orders",
+                {},
+                RuntimeError("unique order_number"),
+            )
+        return original_flush(objects)
+
+    request_session.flush = flush_with_concurrent_winner  # type: ignore[method-assign]
+
+    def override_get_db():
+        yield request_session
+
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        with TestClient(app) as client:
+            _login(client)
+            response = client.post(
+                "/api/requisition/stock-replenishment/orders",
+                json={
+                    "source_type": "customer_request",
+                    "idempotency_key": key,
+                    "supplier_name": "佳丰",
+                    "customer_id": 1,
+                    "stock_now": False,
+                    "items": [
+                        {
+                            "target_inventory_type": "semi_finished",
+                            "product_id": 1,
+                            "customer_id": 1,
+                            "material_id": 1,
+                            "material_code": "A416D",
+                            "layer_count": 5,
+                            "flute_type": "AB",
+                            "report_length_mm": 1865,
+                            "report_width_mm": 830,
+                            "crease_type": "压线",
+                            "crease_left_mm": 335,
+                            "crease_middle_mm": 160,
+                            "crease_right_mm": 335,
+                            "quantity": 30,
+                            "location_id": 2,
+                        }
+                    ],
+                },
+            )
+    finally:
+        request_session.close()
+
+    assert injected is True
+    assert response.status_code == 201, response.text
+    assert response.json()["order_number"] == expected_number
+    with session_factory() as session:
+        assert session.scalar(select(func.count(StockReplenishmentOrder.id))) == 1
 
 
 def _customer_replenishment_payload(quantity: int = 30) -> dict:

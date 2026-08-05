@@ -62,8 +62,9 @@ def test_supplier_short_name_is_display_only_and_new_suppliers_remain_dynamic() 
     assert 'if (name.includes("嘉林亿")) return "嘉林亿"' in INDEX
     assert 'if (name.includes("鸣朋")) return "鸣朋"' in INDEX
     assert "return name;" in INDEX
-    assert 'const dynamic = (this.materialSuppliers || []).filter(Boolean)' in INDEX
-    assert 'return ["全部供应商", ...new Set([...standard, ...dynamic])]' in INDEX
+    assert 'return ["全部供应商", ...this.activeSupplierNames]' in INDEX
+    assert "const supplier = (this.suppliers || []).find" in INDEX
+    assert "if (supplier?.display_name) return supplier.display_name;" in INDEX
     assert "supplierDisplayName(item.snapshot_supplier_name)" in INDEX
 
 

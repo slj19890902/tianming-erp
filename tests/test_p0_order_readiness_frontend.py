@@ -21,10 +21,10 @@ def test_common_box_readiness_replaces_manual_edit_as_business_status() -> None:
 
 def test_pdf_default_is_compact_and_technical_match_details_stay_advanced() -> None:
     block = _pdf_block()
-    assert '<th class="pdf-match-sequence-column">序号</th>' in block
-    assert '<th class="pdf-match-code-column">存货编码</th>' in block
+    assert '<th class="pdf-sequence-col">序号</th>' in block
+    assert '<th class="pdf-code-col">存货编码</th>' in block
     assert "存货编码" in block
-    assert "数量与库存" in block
+    assert "订单数量 / 库存" in block
     assert "异常" in block
     assert 'v-if="draft._show_advanced_details"' in block
     candidate_start = block.index('class="order-item-sub-row import-product-candidate-row"')
@@ -34,12 +34,20 @@ def test_pdf_default_is_compact_and_technical_match_details_stay_advanced() -> N
     assert "匹配证据：最高分" in candidate
     assert "pdfDraftColumnCount(draft)" in candidate
     header = block[block.index("<thead>") : block.index("</thead>")]
-    row = block[block.index("<!-- 主行 -->") : block.index("<!-- 操作 -->")]
-    assert header.index("客户单价") < header.index("图纸") < header.index("异常")
-    assert row.index("<!-- 客户单价") < row.index("<!-- 图纸 -->")
+    row_start = block.index("<!-- 主行 -->")
+    row = block[row_start : block.index("</tr>", row_start)]
+    advanced_start = block.index(
+        '<tr v-if="draft._show_advanced_details" class="order-item-sub-row">'
+    )
+    advanced = block[advanced_start : block.index("</tr>", advanced_start)]
+    assert "客户单价" not in header
+    assert "图纸" not in header
+    assert "客户单价" not in row
+    assert "图纸" not in row
+    assert advanced.index("客户单价") < advanced.index("图纸")
     assert "pdfCommonBoxProductName(item)" in row
-    assert "PDF识别材质：" in row
-    assert "仅保留证据" in row
+    assert "pdfOriginalMaterialText(item)" not in row
+    assert "PDF：{{ pdfOriginalMaterialText(item) }}" in advanced
 
 
 def test_pdf_material_is_evidence_only_and_never_blocks_the_draft() -> None:

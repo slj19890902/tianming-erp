@@ -5275,7 +5275,7 @@
             </div>
             <div v-else-if="modal.type === 'delivery'">
               <div class="form-grid">
-                <div class="field"><label>客户</label><search-select v-model="deliveryForm.customer_id" :options="deliveryCustomerOptions" label-key="name" value-key="id" placeholder="输入客户名称或拼音首字母" :disabled="!!deliveryForm.editingId" @change="onDeliveryCustomerChange"></search-select><div v-if="!deliveryForm.editingId && !deliveryCandidateLoading && !deliveryCustomerOptions.length" class="muted">当前没有待送货客户</div></div>
+                <div class="field"><label>客户</label><search-select v-model="deliveryForm.customer_id" :options="deliveryCustomerOptions" label-key="_delivery_label" value-key="id" placeholder="输入客户名称、缩写或拼音首字母" :disabled="!!deliveryForm.editingId || deliveryCandidateLoading" @change="onDeliveryCustomerChange"></search-select><div v-if="!deliveryForm.editingId && deliveryCandidateLoading" class="muted">正在加载可送货客户…</div><div v-else-if="!deliveryForm.editingId && !deliveryCustomerOptions.length" class="muted">当前没有待送订单或可送成品库存</div></div>
                 <div class="field"><label>送货日期</label><input class="input" type="date" v-model="deliveryForm.delivery_date" /></div>
                 <div class="field"><label>车号</label><input class="input" v-model.trim="deliveryForm.vehicle_number" /></div>
               </div>
@@ -5289,8 +5289,8 @@
                 <span v-if="deliverySourceModeFromLines(deliveryForm.lines.filter(line => deliveryLineHasInput(line))) === 'mixed'" class="status blue">本单混合两类来源</span>
               </div>
               <div v-if="deliveryForm.source_tab === 'order'" class="toolbar-group" style="margin-bottom:10px">
-                <button class="btn small success" type="button" @click="toggleDeliveryBatchPicker()">选择待送货物</button>
-                <span class="muted">先选客户，再一次载入该客户全部待送明细。</span>
+                <button class="btn small success" type="button" @click="toggleDeliveryBatchPicker()">选择待送订单</button>
+                <span class="muted">先选客户，再按页快速载入待送订单。</span>
               </div>
               <div v-else class="toolbar-group" style="margin-bottom:10px">
                 <button class="btn small success" type="button" :disabled="!deliveryForm.customer_id" @click="toggleUnorderedFinishedPicker">选择客户专用库存</button>
@@ -5300,7 +5300,7 @@
               <div v-else-if="!deliveryForm.customer_id" class="status orange" style="margin-bottom:10px">请先选择客户，再选择可送货产品。</div>
               <div v-if="deliveryForm.source_tab === 'order' && deliveryBatchPicker.visible" class="panel" style="margin-bottom:12px">
                 <div class="toolbar delivery-batch-picker-toolbar" style="margin-bottom:8px">
-                  <div class="section-title" style="margin:0">选择待送货物</div>
+                  <div class="section-title" style="margin:0">选择待送订单</div>
                   <div class="toolbar-group delivery-batch-picker-tools">
                     <input class="input" style="width:260px" v-model.trim="deliveryBatchPicker.keyword" placeholder="搜索存货编码 / 客户单号 / 产品名称" @keyup.enter.prevent="loadDeliveryBatchItems(1)" />
                     <button class="btn small" type="button" @click="loadDeliveryBatchItems(1)">{{ deliveryBatchPicker.loading ? "查询中..." : "查询" }}</button>
@@ -5312,10 +5312,11 @@
                   </div>
                 </div>
                 <div v-if="deliveryBatchPicker.message" :class="deliveryBatchPicker.error ? 'status orange' : 'muted'" style="display:block;margin-bottom:8px">{{ deliveryBatchPicker.message }}</div>
-                <table><thead><tr><th>选择</th><th>存货编码</th><th>产品名称</th><th>规格</th><th>材质</th><th>订单号 / 客户单号</th><th>未送数量</th><th>交期</th></tr></thead><tbody><tr v-for="item in deliveryBatchFilteredItems()" :key="item.order_item_id"><td><span v-if="isDeliveryItemAlreadyInForm(item.order_item_id)" class="muted">已在单中</span><input v-else type="checkbox" :checked="!!deliveryBatchPicker.selected[item.order_item_id]" @change="setDeliveryBatchSelection(item, $event.target.checked)" /></td><td>{{ item.product_code || "-" }}</td><td>{{ item.product_name || "-" }}</td><td>{{ item.specification || "-" }}</td><td>{{ item.material_display || "-" }}</td><td>{{ displayOrderNumber(item) }}<div class="muted">{{ item.customer_po || "-" }}</div><div v-if="inventorySourcesText(item.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(item.inventory_sources) }}</div></td><td>{{ item.remaining_quantity || 0 }}</td><td>{{ item.delivery_date || "-" }}</td></tr></tbody></table>
+                <div v-if="deliveryBatchPicker.loading" class="empty">正在加载待送订单…</div>
+                <table v-else><thead><tr><th>选择</th><th>存货编码</th><th>产品名称</th><th>规格</th><th>材质</th><th>订单号 / 客户单号</th><th>未送数量</th><th>交期</th></tr></thead><tbody><tr v-for="item in deliveryBatchFilteredItems()" :key="item.order_item_id"><td><span v-if="isDeliveryItemAlreadyInForm(item.order_item_id)" class="muted">已在单中</span><input v-else type="checkbox" :checked="!!deliveryBatchPicker.selected[item.order_item_id]" @change="setDeliveryBatchSelection(item, $event.target.checked)" /></td><td>{{ item.product_code || "-" }}</td><td>{{ item.product_name || "-" }}</td><td>{{ item.specification || "-" }}</td><td>{{ item.material_display || "-" }}</td><td>{{ displayOrderNumber(item) }}<div class="muted">{{ item.customer_po || "-" }}</div><div v-if="inventorySourcesText(item.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(item.inventory_sources) }}</div></td><td>{{ item.remaining_quantity || 0 }}</td><td>{{ item.delivery_date || "-" }}</td></tr></tbody></table>
               </div>
               <table v-else-if="deliveryForm.source_tab === 'order' && deliveryForm.lines.some(item => item.source_type !== 'unordered_finished')"><thead><tr><th>存货编码</th><th>订单号 / 客户单号</th><th>产品</th><th>订单待送 / 可用成品 / 可超送</th><th>本次送货</th><th>客户备注（会打印）</th><th>操作</th></tr></thead><tbody><tr v-for="line in deliveryForm.lines.filter(item => item.source_type !== 'unordered_finished')" :key="line.key" :class="{'warning-row':line.order_item_id && Number(line.delivered_quantity)>Number(line.order_remaining_quantity)}"><td>{{ line.inventory_code || line.product_code || '-' }}</td><td>{{ line.order_number || "-" }}<div class="muted">{{ line.customer_po || "-" }}</div><div v-if="inventorySourcesText(line.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(line.inventory_sources) }}</div></td><td>{{ line.product_code || "-" }} / {{ line.product_name || "-" }}<div class="muted">{{ line.specification || "-" }}</div></td><td><div>订单待送 <strong>{{ line.order_remaining_quantity ?? "-" }}</strong></div><div>可用成品 <strong>{{ line.deliverable_quantity ?? "-" }}</strong></div><div v-if="Number(line.over_delivery_quantity)>0" class="status orange">可超送 {{ line.over_delivery_quantity }}</div></td><td><input class="input" style="width:110px" type="number" min="1" :max="line.deliverable_quantity || undefined" v-model.number="line.delivered_quantity" :disabled="!line.order_item_id" /><div v-if="Number(line.delivered_quantity)>Number(line.order_remaining_quantity)" class="status orange" style="margin-top:4px;white-space:normal">超过订单 {{ Number(line.delivered_quantity)-Number(line.order_remaining_quantity) }}，可直接保存</div></td><td><input class="input" v-model.trim="line.remarks" placeholder="仅填写给客户看的内容" /></td><td><button class="btn small danger" type="button" @click="removeDeliveryLine(line.key)">删除</button></td></tr></tbody></table>
-              <div v-else-if="deliveryForm.source_tab === 'order' && deliveryForm.customer_id" class="empty">点击“选择待送货物”，一次选择本客户要送的产品。</div>
+              <div v-else-if="deliveryForm.source_tab === 'order' && deliveryForm.customer_id" class="empty">点击“选择待送订单”，勾选本次要送的产品。</div>
               <div v-else-if="unorderedFinishedPicker.visible" class="panel unordered-finished-picker">
                 <div class="toolbar delivery-batch-picker-toolbar" style="margin:-12px -12px 8px"><div class="section-title" style="margin:0">客户专用无订单成品库存</div><div class="toolbar-group"><input class="input" style="width:220px" v-model.trim="unorderedFinishedPicker.keyword" placeholder="存货编码 / 产品 / 规格" @keyup.enter.prevent="loadUnorderedFinishedCandidates(1)" /><button class="btn small" type="button" @click="loadUnorderedFinishedCandidates(1)">{{ unorderedFinishedPicker.loading ? '查询中...' : '查询' }}</button><span class="muted">第 {{ unorderedFinishedPicker.page }} / {{ unorderedFinishedPicker.total_pages }} 页</span><button class="btn small" type="button" :disabled="unorderedFinishedPicker.page <= 1" @click="loadUnorderedFinishedCandidates(unorderedFinishedPicker.page - 1)">上一页</button><button class="btn small" type="button" :disabled="unorderedFinishedPicker.page >= unorderedFinishedPicker.total_pages" @click="loadUnorderedFinishedCandidates(unorderedFinishedPicker.page + 1)">下一页</button><button class="btn primary small" type="button" @click="importUnorderedFinishedCandidates">导入已选</button></div></div>
                 <div v-if="unorderedFinishedPicker.message" :class="unorderedFinishedPicker.error ? 'status orange' : 'muted'" style="display:block;margin-bottom:8px">{{ unorderedFinishedPicker.message }}</div>
@@ -6952,12 +6953,19 @@
             return this.customerOptions.filter(row => ids.includes(row.id));
           },
           deliveryCustomerOptions() {
-            const ids = new Set((this.deliveryCustomerCandidates || []).map(row => Number(row.customer_id)));
+            const candidates = new Map((this.deliveryCustomerCandidates || []).map(row => [Number(row.customer_id), row]));
             const editingCustomerId = this.deliveryForm.editingId ? Number(this.deliveryForm.customer_id) : null;
             return this.customerOptions.filter(row => (
-              (row.is_active && ids.has(Number(row.id)))
+              (row.is_active && candidates.has(Number(row.id)))
               || (editingCustomerId && Number(row.id) === editingCustomerId)
-            ));
+            )).map(row => {
+              const candidate = candidates.get(Number(row.id)) || {};
+              const sourceLabels = [];
+              if (candidate.has_pending_orders) sourceLabels.push(`待送订单 ${Number(candidate.pending_item_count || 0)} 款`);
+              if (candidate.has_unordered_finished) sourceLabels.push(`可送库存 ${Number(candidate.unordered_lot_count || 0)} 批`);
+              const customerLabel = row.customer_code ? `${row.customer_code} · ${row.name}` : row.name;
+              return {...row, _delivery_label:[customerLabel, ...sourceLabels].filter(Boolean).join("｜")};
+            });
           },
           pendingDeliveryCustomerGroups() {
             const groups = new Map();
@@ -18302,13 +18310,14 @@
             this.deliveryBatchPicker.request_token = requestToken;
             this.deliveryBatchPicker.loading = true;
             this.deliveryBatchPicker.error = false;
-            this.deliveryBatchPicker.message = "正在载入该客户全部待送明细，请稍候…";
+            this.deliveryBatchPicker.message = "正在载入待送订单，请稍候…";
             try {
               const { data } = await axios.get("/api/deliveries/pending-items/search", {
                 params: {
                   customer_id: this.deliveryForm.customer_id,
-                  list_all: true,
                   q: this.deliveryBatchPicker.keyword || undefined,
+                  page: Math.max(1, Number(page || 1)),
+                  page_size: this.deliveryBatchPicker.page_size,
                 },
               });
               if (requestToken !== this.deliveryBatchPicker.request_token) return;
@@ -18316,7 +18325,7 @@
                 const kitSummary = this.deliveryKitSummary(item);
                 return kitSummary ? {...item, material_display:[item.material_display || item.material, kitSummary].filter(Boolean).join("｜")} : item;
               });
-              this.deliveryBatchPicker.page = 1;
+              this.deliveryBatchPicker.page = Number(data.page || page || 1);
               this.deliveryBatchPicker.total = Number(data.total || 0);
               this.deliveryBatchPicker.total_pages = Math.max(1, Number(data.total_pages || 1));
               this.deliveryBatchPicker.message = this.deliveryBatchPicker.items.length
@@ -18448,7 +18457,7 @@
               if (!productId || !lotId) return this.showToast("库存批次缺少产品或批次标识，无法导入", true);
               let line = this.deliveryForm.lines.find(row => Number(row.product_id) === productId && row.source_type === "unordered_finished");
               if (!line) {
-                line = this.createDeliveryLine({ source_type:"unordered_finished", product_id:productId, product_code:item.product_code || "", product_name:item.product_name || "", specification:item.specification || "", unit_price:item.unit_price ?? null, delivered_quantity:0, allocations:[], order_pending_quantity:Number(item.order_pending_quantity || 0) });
+                line = this.createDeliveryLine({ source_type:"unordered_finished", product_id:productId, product_code:item.product_code || "", product_name:item.product_name || "", specification:item.specification || "", unit_price:Number(item.unit_price || 0) > 0 ? Number(item.unit_price) : null, delivered_quantity:0, allocations:[], order_pending_quantity:Number(item.order_pending_quantity || 0) });
                 this.deliveryForm.lines.push(line);
               }
               line.order_pending_quantity = Math.max(Number(line.order_pending_quantity || 0), Number(item.order_pending_quantity || 0));
@@ -18811,15 +18820,17 @@
           },
           async openDelivery(preferredCustomerId = null) {
             if (!Number.isInteger(Number(preferredCustomerId))) preferredCustomerId = null;
-            await this.loadDeliveryCustomerOptions();
-            const availableCustomers = this.deliveryCustomerOptions || [];
-            const availableCustomerIds = new Set(availableCustomers.map(row => Number(row.id)));
-            const selectedCustomerId = availableCustomerIds.has(Number(preferredCustomerId)) ? Number(preferredCustomerId) : (availableCustomers[0]?.id || null);
-            this.deliveryForm = { editingId:null, delivery_number:"", source_mode:"order", source_tab:"order", customer_id:selectedCustomerId, delivery_date:today(), vehicle_number:"", lines:[], saved_signature:"", pick_task:null };
+            this.deliveryForm = { editingId:null, delivery_number:"", source_mode:"order", source_tab:"order", customer_id:null, delivery_date:today(), vehicle_number:"", lines:[], saved_signature:"", pick_task:null };
             this.deliveryBatchPicker = { visible:false, loading:false, keyword:"", items:[], selected:{}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message:"", error:false };
             this.unorderedFinishedPicker = { visible:false, loading:false, keyword:"", items:[], selected:{}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message:"", error:false };
             this.deliveryForm.saved_signature = this.deliveryFormSignature();
             this.modal = { type:"delivery", title:"新增送货单" };
+            await this.loadDeliveryCustomerOptions();
+            const availableCustomerIds = new Set((this.deliveryCustomerOptions || []).map(row => Number(row.id)));
+            this.deliveryForm.customer_id = availableCustomerIds.has(Number(preferredCustomerId))
+              ? (preferredCustomerId ? Number(preferredCustomerId) : null)
+              : null;
+            this.deliveryForm.saved_signature = this.deliveryFormSignature();
           },
           async openDeliveryRoutePlan() {
             try {

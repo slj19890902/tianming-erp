@@ -55,10 +55,12 @@ def test_unordered_finished_payload_allows_pending_price_and_requires_allocation
     assert "还有订单待送" in validation
 
 
-def test_order_picker_loads_all_once_and_inventory_picker_keeps_server_paging() -> None:
+def test_order_and_inventory_pickers_both_keep_server_paging() -> None:
     assert "setDeliveryBatchSelection(item, checked)" in INDEX
     assert "Object.values(this.deliveryBatchPicker.selected || {})" in INDEX
-    assert "list_all: true" in INDEX
+    assert "list_all: true" not in INDEX
+    assert "page: Math.max(1, Number(page || 1))" in INDEX
+    assert "page_size: this.deliveryBatchPicker.page_size" in INDEX
     assert "requestToken !== this.deliveryBatchPicker.request_token" in INDEX
     assert "unorderedFinishedSelection(item)" in INDEX
     assert "Object.values(this.unorderedFinishedPicker.selected || {})" in INDEX

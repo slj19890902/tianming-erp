@@ -2815,7 +2815,7 @@
                     <tr v-if="financeCurrentExpanded[financeGroupKey(row)]"><td colspan="8" style="padding:8px 12px;background:#f8fafc">
                       <div v-if="!row.statements.length" class="muted">尚未生成对账单，请点击“去对账”。</div>
                       <div v-else class="table-wrap"><table><thead><tr><th>对账单号</th><th class="sensitive-price">应收</th><th class="sensitive-price">待开票</th><th class="sensitive-price">待结款</th><th>状态</th><th>操作</th></tr></thead><tbody>
-                        <tr v-for="statement in row.statements" :key="statement.id"><td><a href="#" @click.prevent="openStatementDetail(statement)">{{ statement.statement_number }}</a></td><td class="sensitive-price">¥ {{ money(statement.total_receivable) }}</td><td class="sensitive-price">¥ {{ money(statement.pending_invoice_amount) }}</td><td class="sensitive-price">¥ {{ money(statement.pending_payment_amount) }}</td><td><status-tag :value="statement.status"></status-tag><div class="muted">{{ financeConfirmationText(statement) }}</div></td><td class="toolbar-group"><button class="btn small" @click="openStatementDetail(statement)">查看</button><button v-if="canFinance" class="btn small" @click="openStatementEdit(statement)">编辑</button><button v-if="canConfirmStatement && statement.confirmation_status!=='confirmed'" class="btn small success" @click="confirmFinanceStatement(statement)">核对并确认</button><button v-if="canGenerateInvoiceTask" class="btn small" :disabled="statement.confirmation_status!=='confirmed'" @click="generateInvoiceTask(statement)">生成开票任务</button><button v-if="canFinance" class="btn small danger" @click="cancelStatement(statement)">取消</button><button class="btn small" @click="exportStatement(statement)">导出 Excel</button><button v-if="canFinance" class="btn small" :disabled="Number(statement.pending_invoice_amount)<=0" @click="registerInvoice(statement)">登记开票</button><button v-if="canFinance" class="btn small success" :disabled="Number(statement.pending_payment_amount)<=0" @click="settle(statement)">收款核销</button></td></tr>
+                        <tr v-for="statement in row.statements" :key="statement.id"><td><a href="#" @click.prevent="openStatementDetail(statement)">{{ statement.statement_number }}</a></td><td class="sensitive-price">¥ {{ money(statement.total_receivable) }}</td><td class="sensitive-price">¥ {{ money(statement.pending_invoice_amount) }}</td><td class="sensitive-price">¥ {{ money(statement.pending_payment_amount) }}</td><td><status-tag :value="statement.status"></status-tag><div class="muted">{{ financeConfirmationText(statement) }}</div></td><td class="toolbar-group"><button class="btn small" @click="openStatementDetail(statement)">查看</button><button v-if="canFinance" class="btn small" :disabled="!!financeStatementOperationState.action" @click="openStatementEdit(statement)">编辑</button><button v-if="canConfirmStatement && statement.confirmation_status!=='confirmed'" class="btn small success" :disabled="!!financeStatementOperationState.action" @click="confirmFinanceStatement(statement)">{{ financeStatementOperationState.action==='confirm' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '确认中…' : '核对并确认' }}</button><button v-if="canGenerateInvoiceTask" class="btn small" :disabled="statement.confirmation_status!=='confirmed' || !!financeStatementOperationState.action" @click="generateInvoiceTask(statement)">{{ financeStatementOperationState.action==='generate' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '生成中…' : '生成开票任务' }}</button><button v-if="canFinance" class="btn small danger" :disabled="!!financeStatementOperationState.action" @click="cancelStatement(statement)">取消</button><button class="btn small" @click="exportStatement(statement)">导出 Excel</button><button v-if="canFinance" class="btn small" :disabled="Number(statement.pending_invoice_amount)<=0 || !!financeStatementOperationState.action" @click="registerInvoice(statement)">登记开票</button><button v-if="canFinance" class="btn small success" :disabled="Number(statement.pending_payment_amount)<=0 || !!financeStatementOperationState.action" @click="settle(statement)">收款核销</button></td></tr>
                       </tbody></table></div>
                     </td></tr>
                   </tbody>
@@ -6225,6 +6225,7 @@
             invoiceTaskDetail:null, invoiceTaskResult:{task_id:null,status:"issued",invoice_number:"",invoice_date:"",failure_reason:"",expected_version:null},
             invoiceTaskOperationState:{detailLoading:false,detailError:"",detailTaskId:null,detailTaskNumber:"",confirmingTaskId:null,resultSaving:false},
             invoiceTaskUploadState:{uploading:false,taskId:null,taskNumber:"",error:""},
+            financeStatementOperationState:{action:"",statementId:null},
             invoiceSellers: [], invoiceSellerForm:{id:null,seller_name:"",tax_no:"",address_phone:"",bank_account:"",is_active:true,version:null}, invoiceSellerState:{loading:false,error:"",saving:false,loaded:false},
             customerInvoiceProfile:{invoice_title:"",tax_no:"",invoice_address_phone:"",bank_account:"",default_seller_id:null,confirmation_status:"draft",version:null,error:""},
             customerInvoiceRule:{project_name:"",tax_category_code:"",unit:"",tax_rate:"",confirmation_status:"draft",version:null,error:""},
@@ -12244,8 +12245,62 @@
               }
             }
           },
-          async confirmFinanceStatement(row) { try { await axios.post(`/api/finance/statements/${row.id}/confirm`,{expected_version:Number(row.version||1)}); await this.loadFinance(); this.showToast("对账单已确认，版本已冻结"); } catch(error) { this.showToast(this.errorMessage(error),true); } },
-          async generateInvoiceTask(row) { try { await axios.post(`/api/finance/statements/${row.id}/invoice-tasks`,{expected_version:Number(row.version||1),idempotency_key:createIdempotencyKey()}); this.financeView="invoice_tasks"; await this.loadInvoiceTasks(); } catch(error) { this.showToast(`不能生成开票任务：${this.errorMessage(error)}`,true); } },
+          async confirmFinanceStatement(row) {
+            if (this.financeStatementOperationState.action) return false;
+            const statementId = Number(row.id);
+            const expectedVersion = Number(row.version || 1);
+            this.financeStatementOperationState.action = "confirm";
+            this.financeStatementOperationState.statementId = statementId;
+            try {
+              try {
+                await axios.post(`/api/finance/statements/${statementId}/confirm`, {expected_version:expectedVersion});
+              } catch(error) {
+                this.showToast(this.errorMessage(error), true);
+                return false;
+              }
+              this.showToast("对账单已确认，版本已冻结");
+              try {
+                await this.loadFinance();
+              } catch(error) {
+                this.showToast(`对账单已经确认，但页面刷新失败：${this.errorMessage(error)}。请点刷新，不要重复确认。`, true);
+              }
+              return true;
+            } finally {
+              if (this.financeStatementOperationState.action === "confirm" && Number(this.financeStatementOperationState.statementId) === statementId) {
+                this.financeStatementOperationState.action = "";
+                this.financeStatementOperationState.statementId = null;
+              }
+            }
+          },
+          async generateInvoiceTask(row) {
+            if (this.financeStatementOperationState.action) return false;
+            const statementId = Number(row.id);
+            const expectedVersion = Number(row.version || 1);
+            const idempotencyKey = createIdempotencyKey();
+            this.financeStatementOperationState.action = "generate";
+            this.financeStatementOperationState.statementId = statementId;
+            try {
+              try {
+                await axios.post(`/api/finance/statements/${statementId}/invoice-tasks`, {expected_version:expectedVersion,idempotency_key:idempotencyKey});
+              } catch(error) {
+                this.showToast(`不能生成开票任务：${this.errorMessage(error)}`, true);
+                return false;
+              }
+              this.showToast("开票任务已生成，正在打开任务列表");
+              this.financeView = "invoice_tasks";
+              try {
+                await this.loadInvoiceTasks();
+              } catch(error) {
+                this.showToast(`开票任务已经生成，但列表刷新失败：${this.errorMessage(error)}。请点刷新，不要重复生成。`, true);
+              }
+              return true;
+            } finally {
+              if (this.financeStatementOperationState.action === "generate" && Number(this.financeStatementOperationState.statementId) === statementId) {
+                this.financeStatementOperationState.action = "";
+                this.financeStatementOperationState.statementId = null;
+              }
+            }
+          },
           async openInvoiceTask(task) {
             const target = {id:Number(task.id), task_number:String(task.task_number || "")};
             this.invoiceTaskDetail = null;

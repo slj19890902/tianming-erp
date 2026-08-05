@@ -54,11 +54,12 @@ def test_fin001_has_fail_closed_task_flow_and_no_tax_bureau_automation() -> None
     assert "登记成功/失败" in finance
     assert "上传原始 PDF" in finance
     assert "开票成功已登记" in INDEX
-    assert 'axios.post(`/api/finance/statements/${row.id}/confirm`' in methods
-    assert 'axios.post(`/api/finance/statements/${row.id}/invoice-tasks`' in methods
+    assert 'axios.post(`/api/finance/statements/${statementId}/confirm`' in methods
+    assert 'axios.post(`/api/finance/statements/${statementId}/invoice-tasks`' in methods
     assert 'axios.get("/api/finance/invoice-tasks"' in methods
     assert "tax-template.xlsx" in methods
-    assert "idempotency_key:createIdempotencyKey()" in methods
+    assert "const idempotencyKey = createIdempotencyKey();" in methods
+    assert "idempotency_key:idempotencyKey" in methods
     assert "税局网页" not in finance
 
 

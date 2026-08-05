@@ -634,6 +634,82 @@ def test_preview_supplier_order_draft_supports_single_regular_pending_item(
         assert session.get(OrderItem, 1).requisition_status == "未报料"
 
 
+def test_a3_supplier_draft_treats_400_sheets_as_two_200_sheet_components(
+    requisition_app,
+) -> None:
+    from app.models.order import OrderItem
+    from app.models.product import Product
+    from app.models.supplier_requisition_order import (
+        SupplierRequisitionOrder,
+        SupplierRequisitionOrderItem,
+    )
+
+    app, session_factory = requisition_app
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        product = session.get(Product, item.product_id)
+        product.box_style = "A3 天地盖"
+        item.quantity = 200
+        item.snapshot_product_name = "A3 订单 200 只"
+        item.snapshot_report_length_mm = 2145
+        item.snapshot_report_width_mm = 1055
+        item.snapshot_base_report_length_mm = 2120
+        item.snapshot_base_report_width_mm = 1035
+        item.snapshot_splice_mode = "single"
+        item.snapshot_pieces_per_box = 1
+        session.commit()
+
+    selection = {
+        "type": "order_item",
+        "order_item_id": 1,
+        "supplier_name": "苏州纸板供应商",
+        "report_length_mm": 2145,
+        "report_width_mm": 1055,
+        "cutting_mode": "一开一",
+    }
+    with TestClient(app) as client:
+        _login(client, "sales")
+        draft = _preview_supplier_order_draft(client, [selection])
+        lines = draft["supplier_groups"][0]["lines"]
+        saved = _save_supplier_order_draft(client, draft)
+
+    assert len(lines) == 2
+    by_component = {
+        line["source_items"][0]["component_type"]: line for line in lines
+    }
+    assert set(by_component) == {"cover", "base"}
+    assert by_component["cover"]["requisition_qty"] == 200
+    assert by_component["cover"]["remaining_requisition_qty"] == 200
+    assert by_component["base"]["requisition_qty"] == 200
+    assert by_component["base"]["remaining_requisition_qty"] == 200
+    assert sum(line["requisition_qty"] for line in lines) == 400
+    assert all(not line.get("quantity_override_acknowledged", False) for line in lines)
+    assert saved.status_code == 201, saved.text
+
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        supplier_order = session.query(SupplierRequisitionOrder).one()
+        supplier_lines = (
+            session.query(SupplierRequisitionOrderItem)
+            .order_by(SupplierRequisitionOrderItem.id)
+            .all()
+        )
+        assert item.quantity == 200
+        assert item.requisition_qty == 400
+        assert item.delivered_quantity == 0
+        assert supplier_order.total_quantity == 400
+        assert supplier_order.requisition_qty == 400
+        assert [row.requisition_qty for row in supplier_lines] == [200, 200]
+        assert [row.source_key for row in supplier_lines] == [
+            "order_item:1:cover",
+            "order_item:1:base",
+        ]
+        assert [row.product_name for row in supplier_lines] == [
+            "A3 订单 200 只-盖",
+            "A3 订单 200 只-底",
+        ]
+
+
 def test_preview_supplier_order_draft_supports_multiple_regular_pending_items(
     requisition_app,
 ) -> None:

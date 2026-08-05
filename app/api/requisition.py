@@ -836,6 +836,7 @@ class PendingSupplierOrderDraftSourceItem(BaseModel):
     source_type: str
     order_item_id: int
     merge_group_id: int | None = None
+    component_type: str | None = None
     source_quantity: int | None = None
     inventory_deducted_qty: int | None = None
     requisition_qty: int | None = None
@@ -846,6 +847,16 @@ class PendingSupplierOrderDraftSourceItem(BaseModel):
         normalized = str(value or "").strip()
         if normalized not in {"order_item", "merge_group_item"}:
             raise ValueError("采购草稿来源类型仅允许 order_item 或 merge_group_item")
+        return normalized
+
+    @field_validator("component_type")
+    @classmethod
+    def validate_component_type(cls, value: str | None) -> str | None:
+        normalized = str(value or "").strip().lower()
+        if not normalized:
+            return None
+        if normalized not in {"whole", "cover", "base"}:
+            raise ValueError("采购草稿组件仅允许 whole、cover 或 base")
         return normalized
 
 
@@ -4151,10 +4162,24 @@ def _active_supplier_order_item_exists(db: Session, order_item_id: int) -> bool:
 def _supplier_requisition_source_key(
     item: OrderItem,
     req_item: RequisitionItem | None = None,
+    component_type: str | None = None,
 ) -> str:
     if req_item is not None:
         return f"requisition_item:{req_item.id}"
+    component = str(component_type or "").strip().lower()
+    if component in {"cover", "base"}:
+        return f"order_item:{item.id}:{component}"
     return f"order_item:{item.id}"
+
+
+def _source_key_matches_order_item(source_key: str | None, item_id: int) -> bool:
+    if not source_key:
+        return True
+    prefix = f"order_item:{item_id}"
+    return source_key == prefix or source_key in {
+        f"{prefix}:cover",
+        f"{prefix}:base",
+    }
 
 
 def _active_supplier_requisition_facts(
@@ -4162,8 +4187,10 @@ def _active_supplier_requisition_facts(
     *,
     item: OrderItem,
     req_item: RequisitionItem | None = None,
+    component_type: str | None = None,
 ) -> dict[str, object]:
-    if req_item is None:
+    component = str(component_type or "whole").strip().lower()
+    if req_item is None and component == "whole":
         return _active_requisition_facts_by_item_ids(db, [item.id]).get(
             item.id,
             {
@@ -4172,7 +4199,11 @@ def _active_supplier_requisition_facts(
                 "orders": [],
             },
         )
-    source_key = _supplier_requisition_source_key(item, req_item)
+    source_key = _supplier_requisition_source_key(
+        item,
+        req_item,
+        component_type=component,
+    )
     rows = db.execute(
         select(SupplierRequisitionOrderItem, SupplierRequisitionOrder, User)
         .join(
@@ -4199,6 +4230,10 @@ def _active_supplier_requisition_facts(
             expected_code = str(req_item.product_code_snapshot or "").strip()
             if expected_code and str(order_line.product_code or "").strip() != expected_code:
                 continue
+        elif component in {"cover", "base"}:
+            expected_suffix = "-盖" if component == "cover" else "-底"
+            if not str(order_line.product_name or "").endswith(expected_suffix):
+                continue
         facts.append(
             {
                 "supplier_order_id": supplier_order.id,
@@ -4219,6 +4254,51 @@ def _active_supplier_requisition_facts(
                 ),
             }
         )
+    if req_item is None and component in {"cover", "base"}:
+        legacy_rows = db.execute(
+            select(RequisitionItem, Requisition, User)
+            .join(Requisition, Requisition.id == RequisitionItem.requisition_id)
+            .outerjoin(User, User.id == Requisition.created_by)
+            .where(
+                RequisitionItem.order_item_id == item.id,
+                func.lower(RequisitionItem.status).notin_(
+                    NON_EFFECTIVE_LEGACY_REQUISITION_STATUSES
+                ),
+                func.lower(Requisition.status).notin_(
+                    NON_EFFECTIVE_LEGACY_REQUISITION_STATUSES
+                ),
+            )
+            .order_by(Requisition.created_at.asc(), Requisition.id.asc())
+        ).all()
+        expected_suffix = "-盖" if component == "cover" else "-底"
+        for legacy_line, requisition, operator in legacy_rows:
+            if not str(legacy_line.product_name_snapshot or "").endswith(
+                expected_suffix
+            ):
+                continue
+            facts.append(
+                {
+                    "supplier_order_id": None,
+                    "supplier_order_number": requisition.requisition_number,
+                    "supplier_name": requisition.supplier_name,
+                    "requisition_qty": int(legacy_line.requisition_qty or 0),
+                    "created_at": (
+                        beijing_naive_to_api(requisition.created_at)
+                        if requisition.created_at is not None
+                        else None
+                    ),
+                    "operator": (
+                        operator.display_name
+                        or operator.real_name
+                        or operator.username
+                        if operator is not None
+                        else None
+                    ),
+                    "source_type": "legacy_material_requisition",
+                    "legacy_requisition_id": requisition.id,
+                    "legacy_requisition_item_id": legacy_line.id,
+                }
+            )
     return {
         "source_key": source_key,
         "quantity": sum(int(row["requisition_qty"]) for row in facts),
@@ -4275,7 +4355,7 @@ def _active_requisition_facts_by_item_ids(
         item_id = int(order_line.order_item_id or 0)
         if item_id not in result:
             continue
-        if order_line.source_key and order_line.source_key != f"order_item:{item_id}":
+        if not _source_key_matches_order_item(order_line.source_key, item_id):
             continue
         fact = {
             "supplier_order_id": supplier_order.id,
@@ -4355,12 +4435,24 @@ def _recommended_supplier_dimensions(
     item: OrderItem,
     product: Product,
     req_item: RequisitionItem | None = None,
+    component_type: str | None = None,
 ) -> tuple[Decimal | None, Decimal | None]:
     if req_item is not None and req_item.cardboard_len and req_item.cardboard_width:
         return Decimal(req_item.cardboard_len), Decimal(req_item.cardboard_width)
+    component = str(component_type or "whole").strip().lower()
+    report_length = (
+        item.snapshot_base_report_length_mm
+        if component == "base"
+        else item.snapshot_report_length_mm
+    )
+    report_width = (
+        item.snapshot_base_report_width_mm
+        if component == "base"
+        else item.snapshot_report_width_mm
+    )
     suggested_len, suggested_width = _purchase_dimensions(
-        item.snapshot_report_length_mm,
-        item.snapshot_report_width_mm,
+        report_length,
+        report_width,
         DEFAULT_CUTTING_MODE,
     )
     if suggested_len is None or suggested_width is None:
@@ -4648,11 +4740,16 @@ def _pending_entry_dict(entry: dict) -> dict:
     order: Order = entry["order"]
     customer: Customer = entry["customer"]
     product: Product = entry["product"]
+    component_type = str(entry.get("component_type") or "whole").strip().lower()
+    component_suffix = (
+        "-盖" if component_type == "cover" else "-底" if component_type == "base" else ""
+    )
     material = db_material = entry.get("material")
     if material is None and order_item.material_id:
         db_material = None
     return {
         "source_type": entry["source_type"],
+        "component_type": component_type,
         "order_item_id": order_item.id,
         "merge_group_id": entry["group"].id if entry.get("group") is not None else None,
         "order_number": display_order_number(order, entry.get("display_registry") or {}),
@@ -4665,7 +4762,7 @@ def _pending_entry_dict(entry: dict) -> dict:
         "product_name": (
             req_item.product_name_snapshot
             if req_item is not None
-            else order_item.snapshot_product_name
+            else f"{order_item.snapshot_product_name}{component_suffix}"
         ),
         "material_display": _format_supplier_material(
             db_material.code if db_material else order_item.snapshot_material,
@@ -4735,6 +4832,11 @@ def _int_value(value, default: int = 0) -> int:
 
 def _purchase_line_spec_from_entry(entry: dict) -> dict:
     order_item: OrderItem = entry["order_item"]
+    component_type = str(entry.get("component_type") or "whole").strip().lower()
+    crease_type, crease_left, crease_middle, crease_right = _component_crease(
+        order_item,
+        component_type,
+    )
     material: Material | None = entry.get("material")
     material_id = order_item.material_id or (material.id if material else None)
     material_code = material.code if material else order_item.snapshot_material
@@ -4754,10 +4856,10 @@ def _purchase_line_spec_from_entry(entry: dict) -> dict:
         "flute_type": flute_type,
         "report_length_mm": _int_value(entry.get("cardboard_len")),
         "report_width_mm": _int_value(entry.get("cardboard_width")),
-        "crease_type": order_item.snapshot_crease_type,
-        "crease_left_mm": order_item.snapshot_crease_left_mm,
-        "crease_middle_mm": order_item.snapshot_crease_middle_mm,
-        "crease_right_mm": order_item.snapshot_crease_right_mm,
+        "crease_type": crease_type,
+        "crease_left_mm": crease_left,
+        "crease_middle_mm": crease_middle,
+        "crease_right_mm": crease_right,
         "cutting_mode": entry.get("cutting_mode") or DEFAULT_CUTTING_MODE,
         "remark": entry.get("remark") or "",
     }
@@ -4926,13 +5028,17 @@ def _pending_selection_preview_groups(
 ) -> dict:
     registry = build_display_registry(db)
     grouped: dict[str, list[dict]] = {}
-    seen_order_item_ids: set[int] = set()
+    seen_source_keys: set[tuple[int, str]] = set()
     seen_group_ids: set[int] = set()
 
     def add_preview(supplier_name: str, entry: dict) -> None:
-        if entry["order_item"].id in seen_order_item_ids:
-            raise HTTPException(status_code=409, detail="同一订单明细不能重复加入报料草稿")
-        seen_order_item_ids.add(entry["order_item"].id)
+        source_key = (
+            int(entry["order_item"].id),
+            str(entry.get("component_type") or "whole").strip().lower(),
+        )
+        if source_key in seen_source_keys:
+            raise HTTPException(status_code=409, detail="同一订单物理材料不能重复加入报料草稿")
+        seen_source_keys.add(source_key)
         entry["display_registry"] = registry
         entry["late_finished_inventory"] = _late_finished_inventory_preview(
             db,
@@ -4983,69 +5089,124 @@ def _pending_selection_preview_groups(
                     status_code=409,
                     detail="该订单明细已由成品库存全额抵扣，无需生成供应商报料单",
                 )
-            if not _requires_supplier_purchase(requirements):
+            material = db.get(Material, item.material_id) if item.material_id else None
+            component_requirements = list(
+                requirements.get("component_requirements") or [requirements]
+            )
+            added_component = False
+            duplicate_facts: list[dict] = []
+            for component_requirements_row in component_requirements:
+                component_type = str(
+                    component_requirements_row.get("component_type") or "whole"
+                ).strip().lower()
+                if not _requires_supplier_purchase(component_requirements_row):
+                    continue
+                active_requisition = _active_supplier_requisition_facts(
+                    db,
+                    item=item,
+                    component_type=component_type,
+                )
+                theoretical_requisition_qty = int(
+                    component_requirements_row["requisition_qty"]
+                )
+                remaining_requisition_qty = max(
+                    theoretical_requisition_qty
+                    - int(active_requisition["quantity"]),
+                    0,
+                )
+                if remaining_requisition_qty <= 0:
+                    duplicate_facts.extend(active_requisition.get("orders") or [])
+                    continue
+                is_base = component_type == "base"
+                component_len = _entry_decimal(
+                    item.snapshot_base_report_length_mm if is_base else cardboard_len,
+                    item.snapshot_base_report_length_mm if is_base else cardboard_len,
+                    "底片报料长" if is_base else "报料长",
+                )
+                component_width = _entry_decimal(
+                    item.snapshot_base_report_width_mm if is_base else cardboard_width,
+                    item.snapshot_base_report_width_mm if is_base else cardboard_width,
+                    "底片报料宽" if is_base else "报料宽",
+                )
+                recommended_len, recommended_width = _recommended_supplier_dimensions(
+                    item,
+                    product,
+                    component_type=component_type,
+                )
+                add_preview(
+                    supplier_name,
+                    {
+                        "source_type": "order_item",
+                        "component_type": component_type,
+                        "group": None,
+                        "req_item": None,
+                        "order_item": item,
+                        "order": order,
+                        "customer": customer,
+                        "product": product,
+                        "material": material,
+                        "cardboard_len": component_len,
+                        "cardboard_width": component_width,
+                        "cutting_mode": cutting_mode,
+                        "remark": (
+                            selection.remark
+                            or (
+                                item.snapshot_base_report_notes
+                                if is_base
+                                else item.snapshot_report_notes
+                            )
+                            or item.requisition_remark
+                            or ""
+                        ).strip()
+                        or None,
+                        "inventory_deducted_qty": int(
+                            component_requirements_row[
+                                "finished_inventory_reserved_qty"
+                            ]
+                        ),
+                        "pieces_per_box": int(
+                            component_requirements_row["pieces_per_box"]
+                        ),
+                        "production_required_qty": int(
+                            component_requirements_row["production_required_qty"]
+                        ),
+                        "required_piece_qty": int(
+                            component_requirements_row["required_piece_qty"]
+                        ),
+                        "semi_finished_reserved_piece_qty": int(
+                            component_requirements_row[
+                                "semi_finished_reserved_piece_qty"
+                            ]
+                        ),
+                        "remaining_required_piece_qty": int(
+                            component_requirements_row[
+                                "remaining_required_piece_qty"
+                            ]
+                        ),
+                        "requisition_qty": remaining_requisition_qty,
+                        "theoretical_requisition_qty": theoretical_requisition_qty,
+                        "already_requisitioned_qty": int(
+                            active_requisition["quantity"]
+                        ),
+                        "remaining_requisition_qty": remaining_requisition_qty,
+                        "existing_supplier_orders": active_requisition["orders"],
+                        "recommended_report_length_mm": recommended_len,
+                        "recommended_report_width_mm": recommended_width,
+                    },
+                )
+                added_component = True
+            if not added_component:
+                if duplicate_facts:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=_duplicate_requisition_detail(
+                            {"orders": duplicate_facts}
+                        ),
+                    )
                 raise HTTPException(
                     status_code=409,
                     detail="该订单明细已由半成品库存全额抵扣，无需生成供应商报料单，请刷新待报料列表。",
                 )
-            pieces_per_box = int(requirements["pieces_per_box"])
-            required_piece_qty = int(requirements["required_piece_qty"])
-            active_requisition = _active_supplier_requisition_facts(
-                db,
-                item=item,
-            )
-            theoretical_requisition_qty = int(requirements["requisition_qty"])
-            remaining_requisition_qty = max(
-                theoretical_requisition_qty
-                - int(active_requisition["quantity"]),
-                0,
-            )
-            if remaining_requisition_qty <= 0:
-                raise HTTPException(
-                    status_code=409,
-                    detail=_duplicate_requisition_detail(active_requisition),
-                )
-            recommended_len, recommended_width = _recommended_supplier_dimensions(
-                item,
-                product,
-            )
-            material = db.get(Material, item.material_id) if item.material_id else None
-            add_preview(
-                supplier_name,
-                {
-                    "source_type": "order_item",
-                    "group": None,
-                    "req_item": None,
-                    "order_item": item,
-                    "order": order,
-                    "customer": customer,
-                    "product": product,
-                    "material": material,
-                    "cardboard_len": cardboard_len,
-                    "cardboard_width": cardboard_width,
-                    "cutting_mode": cutting_mode,
-                    "remark": (selection.remark or item.requisition_remark or "").strip() or None,
-                    "inventory_deducted_qty": inventory_deducted_qty,
-                    "pieces_per_box": pieces_per_box,
-                    "production_required_qty": production_required_qty,
-                    "required_piece_qty": required_piece_qty,
-                    "semi_finished_reserved_piece_qty": int(
-                        requirements["semi_finished_reserved_piece_qty"]
-                    ),
-                    "remaining_required_piece_qty": int(
-                        requirements["remaining_required_piece_qty"]
-                    ),
-                    "requisition_qty": remaining_requisition_qty,
-                    "theoretical_requisition_qty": theoretical_requisition_qty,
-                    "already_requisitioned_qty": int(
-                        active_requisition["quantity"]
-                    ),
-                    "remaining_requisition_qty": remaining_requisition_qty,
-                    "existing_supplier_orders": active_requisition["orders"],
-                    "recommended_report_length_mm": recommended_len,
-                    "recommended_report_width_mm": recommended_width,
-                },
-            )
             continue
 
         if not selection.merge_group_id:
@@ -5063,7 +5224,7 @@ def _pending_selection_preview_groups(
         if not rows:
             raise HTTPException(status_code=400, detail="合并组没有来源明细")
         supplier_name = (selection.supplier_name or group.supplier_name or "").strip()
-        preview_count_before_group = len(seen_order_item_ids)
+        preview_count_before_group = len(seen_source_keys)
         for req_item, order_item, order, customer, product in rows:
             if req_item.status != "merged_pending":
                 raise HTTPException(status_code=409, detail="合并组状态异常，不能生成报料草稿")
@@ -5103,6 +5264,7 @@ def _pending_selection_preview_groups(
                 supplier_name,
                 {
                     "source_type": "merge_group_item",
+                    "component_type": _requisition_item_component(req_item),
                     "group": group,
                     "req_item": req_item,
                     "order_item": order_item,
@@ -5139,7 +5301,7 @@ def _pending_selection_preview_groups(
                     "recommended_report_width_mm": recommended_width,
                 },
             )
-        if len(seen_order_item_ids) == preview_count_before_group:
+        if len(seen_source_keys) == preview_count_before_group:
             raise HTTPException(
                 status_code=409,
                 detail="该合并组来源明细已由库存全额抵扣，无需生成供应商报料单，请刷新待报料列表。",
@@ -5285,7 +5447,7 @@ def _draft_group_entries_by_purchase_lines(
 ) -> tuple[dict[str, list[dict]], list[Requisition]]:
     grouped: dict[str, list[dict]] = {}
     touched_groups_by_id: dict[int, Requisition] = {}
-    seen_order_item_ids: set[int] = set()
+    seen_components_by_item: dict[int, set[str]] = {}
     seen_suppliers: set[str] = set()
 
     for group_payload in payload.supplier_groups:
@@ -5302,9 +5464,6 @@ def _draft_group_entries_by_purchase_lines(
         for draft_line in draft_lines:
             source_refs: list[dict] = []
             for source_payload in draft_line.source_items:
-                if source_payload.order_item_id in seen_order_item_ids:
-                    raise HTTPException(status_code=409, detail="同一订单明细不能重复生成供应商报料单")
-                seen_order_item_ids.add(source_payload.order_item_id)
                 item, order, customer, product = _ensure_pending_order_item_for_supplier_order(
                     db, source_payload.order_item_id
                 )
@@ -5331,6 +5490,30 @@ def _draft_group_entries_by_purchase_lines(
                     if req_item is None or req_item.status != "merged_pending":
                         raise HTTPException(status_code=409, detail="合并组来源明细状态异常")
                     touched_groups_by_id[merge_group.id] = merge_group
+                component_type = (
+                    _requisition_item_component(req_item)
+                    if req_item is not None
+                    else str(source_payload.component_type or "whole").strip().lower()
+                )
+                if (
+                    req_item is None
+                    and component_type == "whole"
+                    and _is_telescoping_lid_box(product.box_style)
+                    and item.snapshot_base_report_length_mm
+                    and item.snapshot_base_report_width_mm
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="天地盖报料草稿缺少盖片/底片身份，请刷新草稿后重试",
+                    )
+                seen_components = seen_components_by_item.setdefault(item.id, set())
+                if component_type in seen_components:
+                    raise HTTPException(status_code=409, detail="同一订单物理材料不能重复生成供应商报料单")
+                if seen_components and (
+                    component_type == "whole" or "whole" in seen_components
+                ):
+                    raise HTTPException(status_code=409, detail="同一订单不能同时按整单和组件报料")
+                seen_components.add(component_type)
                 source_refs.append(
                     {
                         "source_payload": source_payload,
@@ -5340,6 +5523,7 @@ def _draft_group_entries_by_purchase_lines(
                         "product": product,
                         "req_item": req_item,
                         "merge_group": merge_group,
+                        "component_type": component_type,
                     }
                 )
 
@@ -5362,7 +5546,7 @@ def _draft_group_entries_by_purchase_lines(
                         and ref["req_item"].pieces_per_box
                         else _pieces_per_box(ref["item"])
                     ),
-                    component_type=_requisition_item_component(ref["req_item"]),
+                    component_type=ref["component_type"],
                 )
                 for ref in source_refs
             ]
@@ -5371,6 +5555,7 @@ def _draft_group_entries_by_purchase_lines(
                     db,
                     item=ref["item"],
                     req_item=ref["req_item"],
+                    component_type=ref["component_type"],
                 )
                 for ref in source_refs
             ]
@@ -5439,6 +5624,7 @@ def _draft_group_entries_by_purchase_lines(
                     ref["item"],
                     ref["product"],
                     ref["req_item"],
+                    component_type=ref["component_type"],
                 )
                 for ref in source_refs
             ]
@@ -5550,6 +5736,7 @@ def _draft_group_entries_by_purchase_lines(
                 material = db.get(Material, item.material_id) if item.material_id else None
                 entry = {
                     "source_type": source_payload.source_type,
+                    "component_type": ref["component_type"],
                     "group": merge_group,
                     "req_item": req_item,
                     "order_item": item,
@@ -5650,9 +5837,16 @@ def _create_supplier_order_for_pending_entries(
     db.add(order)
     db.flush()
     requisition_date = beijing_today()
+    entries_by_order_item: dict[int, list[dict]] = {}
     for entry in entries:
         order_item: OrderItem = entry["order_item"]
         req_item: RequisitionItem | None = entry["req_item"]
+        component_type = str(entry.get("component_type") or "whole").strip().lower()
+        component_suffix = (
+            "-盖"
+            if component_type == "cover"
+            else "-底" if component_type == "base" else ""
+        )
         db.add(
             SupplierRequisitionOrderItem(
                 supplier_order_id=order.id,
@@ -5674,7 +5868,7 @@ def _create_supplier_order_for_pending_entries(
                 product_name=(
                     req_item.product_name_snapshot
                     if req_item is not None
-                    else order_item.snapshot_product_name
+                    else f"{order_item.snapshot_product_name}{component_suffix}"
                 ),
                 source_key=entry.get("source_key"),
                 report_length_mm=int(entry["cardboard_len"]),
@@ -5689,28 +5883,72 @@ def _create_supplier_order_for_pending_entries(
                 delivery_date=entry["order"].delivery_date,
             )
         )
-        # The legacy free-entry field stays zero.  Real deductions are recorded
-        # by InventoryReservation and copied only to supplier-order snapshots.
-        order_item.inventory_deducted_qty = 0
-        order_item.requisition_status = "已报料"
-        order_item.requisition_qty = int(
-            entry.get("already_requisitioned_qty") or 0
-        ) + int(entry["requisition_qty"] or 0)
-        order_item.special_process = entry["cutting_mode"]
-        order_item.cardboard_len = entry["cardboard_len"]
-        order_item.cardboard_width = entry["cardboard_width"]
-        order_item.requisition_spec = (
-            f"{_plain(entry['cardboard_len'])}×{_plain(entry['cardboard_width'])}"
-        )
-        order_item.requisition_date = requisition_date
-        order_item.supplier_order_number = order.order_number
-        order_item.requisition_remark = entry["remark"]
+        entries_by_order_item.setdefault(order_item.id, []).append(entry)
         if req_item is not None:
             req_item.status = (
                 "supplier_requisition_created"
                 if int(entry.get("remaining_after_requisition_qty") or 0) <= 0
                 else "merged_pending"
             )
+    db.flush()
+    active_by_item = _active_requisition_facts_by_item_ids(
+        db,
+        list(entries_by_order_item),
+    )
+    for order_item_id, item_entries in entries_by_order_item.items():
+        order_item: OrderItem = item_entries[0]["order_item"]
+        first_entry = next(
+            (
+                row
+                for row in item_entries
+                if str(row.get("component_type") or "whole").strip().lower()
+                in {"whole", "cover"}
+            ),
+            item_entries[0],
+        )
+        component_types = {
+            str(row.get("component_type") or "whole").strip().lower()
+            for row in item_entries
+        }
+        # The legacy free-entry field stays zero. Real deductions are recorded
+        # by InventoryReservation and copied only to supplier-order snapshots.
+        order_item.inventory_deducted_qty = 0
+        order_item.requisition_status = "已报料"
+        order_item.requisition_qty = int(
+            active_by_item.get(order_item_id, {}).get("quantity") or 0
+        )
+        order_item.special_process = first_entry["cutting_mode"]
+        order_item.cardboard_len = first_entry["cardboard_len"]
+        order_item.cardboard_width = first_entry["cardboard_width"]
+        if component_types & {"cover", "base"}:
+            order_item.requisition_spec = "；".join(
+                part
+                for part in (
+                    (
+                        f"盖:{_plain(order_item.snapshot_report_length_mm)}×"
+                        f"{_plain(order_item.snapshot_report_width_mm)}"
+                        if order_item.snapshot_report_length_mm
+                        and order_item.snapshot_report_width_mm
+                        else None
+                    ),
+                    (
+                        f"底:{_plain(order_item.snapshot_base_report_length_mm)}×"
+                        f"{_plain(order_item.snapshot_base_report_width_mm)}"
+                        if order_item.snapshot_base_report_length_mm
+                        and order_item.snapshot_base_report_width_mm
+                        else None
+                    ),
+                )
+                if part
+            )
+        else:
+            order_item.requisition_spec = (
+                f"{_plain(first_entry['cardboard_len'])}×"
+                f"{_plain(first_entry['cardboard_width'])}"
+            )
+        order_item.requisition_date = requisition_date
+        order_item.supplier_order_number = order.order_number
+        order_item.requisition_remark = first_entry["remark"]
     return order
 
 

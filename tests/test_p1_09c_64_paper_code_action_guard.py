@@ -103,7 +103,7 @@ const expect=(value,message)=>{{if(!value)throw new Error(message)}};
 
 
 def test_toggle_paper_code_status_freezes_direction_and_uses_shared_guard(tmp_path: Path) -> None:
-    body = _method_body("async togglePaperCodeStatus(row) {", "toggleMaterialComposer() {")
+    body = _method_body("async togglePaperCodeStatus(row) {", "materialComposerInputKey(row=this.materialComposer) {")
     assert "this.runPaperCodeAction({" in body
     assert 'action:"status"' in body
     assert "const desiredActive = !wasActive;" in body

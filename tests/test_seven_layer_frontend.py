@@ -24,7 +24,7 @@ def _source_between(start, end):
 
 def _axios_payload(source, endpoint):
     match = re.search(
-        rf'axios\.post\("{re.escape(endpoint)}",\s*\{{(?P<payload>.*?)\n\s*\}}\);',
+        rf'axios\.post\("{re.escape(endpoint)}",\s*\{{(?P<payload>.*?)\n\s*\}}\s*(?:,\s*\{{.*?\}})?\s*\);',
         source,
         re.S,
     )
@@ -99,12 +99,12 @@ class TestSevenLayerControls:
         preview_payload = _axios_payload(
             preview_method, "/api/master/materials/compose/preview"
         )
-        save_payload = _axios_payload(save_method, "/api/master/materials/compose/save")
         assert "usage_flute_type:usageFluteType || null" in preview_payload
         assert (
-            'usage_flute_type:String(this.materialComposer.usage_flute_type || "")'
+            'usage_flute_type:String(form.usage_flute_type || "")'
             ".toUpperCase() || null"
-        ) in save_payload
+        ) in save_method
+        assert 'axios.post("/api/master/materials/compose/save", payload)' in save_method
         assert 'layerCount === 7 && !["AAA","ABC"].includes(usageFluteType)' in preview_method
 
     def test_common_box_order_and_requisition_have_seven_layer_options(self):
@@ -134,12 +134,18 @@ class TestMaterialDictionaryKeepsFluteOut:
         assert "flute_type" not in block
 
     def test_material_save_drops_flute_field(self):
+        payload_builder = _source_between(
+            "buildMaterialWritePayload() {",
+            "async prepareMaterialChangeConfirmation(changes) {",
+        )
         block = _source_between(
             'if (this.modal.type === "material") {',
             'if (this.modal.type === "orderPdfImport") {',
         )
-        assert "const payload={...this.materialForm}; delete payload.id;" in block
-        assert "delete payload.flute_type;" in block
+        assert "const payload = {...this.materialForm};" in payload_builder
+        assert "delete payload.id;" in payload_builder
+        assert "delete payload.flute_type;" in payload_builder
+        assert "const payload = this.buildMaterialWritePayload();" in block
 
     def test_business_payloads_keep_selected_flute(self):
         assert "payload.flute_type = this.orderItemForm.flute_type || null;" in HTML

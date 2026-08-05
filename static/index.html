@@ -2001,7 +2001,7 @@
                   <div class="toolbar-group">
                     <button v-if="canViewCosts" class="btn" @click="openCompare()">比价</button>
                     <button v-if="canAdmin" class="btn" @click="togglePaperCodePanel">材质规则维护</button>
-                    <button v-if="canAdmin" class="btn success" @click="toggleMaterialComposer">新增/组合材质</button>
+                    <button v-if="canAdmin" class="btn success" :disabled="materialComposerSavePending" @click="toggleMaterialComposer">{{ materialComposerSavePending ? '保存中…' : '新增/组合材质' }}</button>
                   </div>
                 </div>
                 <datalist id="material-composer-suppliers">
@@ -2039,14 +2039,15 @@
                 <div v-if="showMaterialComposer" class="panel" style="margin:10px 0;border-color:#60a5fa">
                   <div class="toolbar"><strong>新增/组合材质</strong><span class="muted">选择供应商并输入3位、5位或7位材质代码，系统自动解析和推算建议价</span></div>
                   <div class="form-grid" style="margin:10px 0">
-                    <div class="field"><label>供应商</label><input class="input" list="material-composer-suppliers" v-model.trim="materialComposer.supplier_name" @input="invalidateMaterialComposer" /></div>
-                    <div class="field"><label>层数</label><select class="select" v-model.number="materialComposer.layer_count" @change="onMaterialComposerLayerChange"><option :value="3">三层</option><option :value="5">五层</option><option :value="7">七层</option></select></div>
-                    <div v-if="materialComposer.layer_count === 7" class="field"><label>使用楞型</label><select class="select" v-model="materialComposer.usage_flute_type" @change="invalidateMaterialComposer"><option value="">请选择楞型</option><option v-for="opt in orderItemFluteOptions(materialComposer.layer_count)" :key="opt" :value="opt">{{ opt }}</option></select></div>
-                    <div class="field"><label>材质代码（可含 + 等符号）</label><input class="input" :maxlength="materialComposer.layer_count" :placeholder="`输入${materialComposer.layer_count}位材质代码`" v-model.trim="materialComposer.material_code" @input="onMaterialComposerCodeInput" /></div>
-                    <div class="field sensitive-price"><label>最终保存平方价</label><input class="input" type="number" min="0" step="0.0001" v-model="materialComposer.quote_price" placeholder="规则无法推算时手工填写" @input="materialComposerPriceSource='manual'" /></div>
-                    <div class="field wide"><label>备注</label><input class="input" v-model.trim="materialComposer.remarks" /></div>
-                    <div class="field"><label>操作</label><div class="toolbar-group"><button class="btn" @click="previewMaterialComposition">解析</button><button class="btn success" :disabled="loading || !materialComposerCanSave" @click="saveMaterialComposition">保存为可用材质</button></div></div>
+                    <div class="field"><label>供应商</label><input class="input" :disabled="materialComposerSavePending" list="material-composer-suppliers" v-model.trim="materialComposer.supplier_name" @input="invalidateMaterialComposer" /></div>
+                    <div class="field"><label>层数</label><select class="select" :disabled="materialComposerSavePending" v-model.number="materialComposer.layer_count" @change="onMaterialComposerLayerChange"><option :value="3">三层</option><option :value="5">五层</option><option :value="7">七层</option></select></div>
+                    <div v-if="materialComposer.layer_count === 7" class="field"><label>使用楞型</label><select class="select" :disabled="materialComposerSavePending" v-model="materialComposer.usage_flute_type" @change="invalidateMaterialComposer"><option value="">请选择楞型</option><option v-for="opt in orderItemFluteOptions(materialComposer.layer_count)" :key="opt" :value="opt">{{ opt }}</option></select></div>
+                    <div class="field"><label>材质代码（可含 + 等符号）</label><input class="input" :disabled="materialComposerSavePending" :maxlength="materialComposer.layer_count" :placeholder="`输入${materialComposer.layer_count}位材质代码`" v-model.trim="materialComposer.material_code" @input="onMaterialComposerCodeInput" /></div>
+                    <div class="field sensitive-price"><label>最终保存平方价</label><input class="input" :disabled="materialComposerSavePending || materialComposerPreviewLoading" type="number" min="0" step="0.0001" v-model="materialComposer.quote_price" placeholder="规则无法推算时手工填写" @input="materialComposerPriceSource='manual'" /></div>
+                    <div class="field wide"><label>备注</label><input class="input" :disabled="materialComposerSavePending" v-model.trim="materialComposer.remarks" /></div>
+                    <div class="field"><label>操作</label><div class="toolbar-group"><button class="btn" :disabled="materialComposerSavePending" @click="previewMaterialComposition">{{ materialComposerPreviewLoading ? '解析中…' : '解析' }}</button><button class="btn success" :disabled="materialComposerSavePending || !materialComposerCanSave" @click="saveMaterialComposition">{{ materialComposerSavePending ? '保存中…' : '保存为可用材质' }}</button></div></div>
                   </div>
+                  <div v-if="materialComposerPreviewLoading" class="notice blue">正在按当前供应商和材质代码解析，请稍候…</div>
                   <div v-if="materialComposerInvalidReason" class="notice danger">{{ materialComposerInvalidReason }}</div>
                   <div v-if="materialComposerPreview">
                     <div :class="['notice',materialComposerPreview.valid?'success':'danger']">{{ materialComposerPreview.message }}</div>
@@ -6261,6 +6262,8 @@
             materialComposerParseKey: "",
             materialComposerInvalidReason: "",
             materialComposerPriceSource: "",
+            materialComposerPreviewLoading: false,
+            materialComposerSavePending: false,
             showCompareModal: false,
             compareGroups: [], compareFlute: "", compareKeyword: "", compareWeight: "", compareLoading: false, compareError: "",
             // v0.19.2-B 楞型加价规则
@@ -15109,8 +15112,32 @@
               },
             });
           },
+          materialComposerInputKey(row=this.materialComposer) {
+            return `${String(row?.supplier_name || "").trim()}|${Number(row?.layer_count || 0)}|${String(row?.material_code || "").trim().toUpperCase()}|${String(row?.usage_flute_type || "").trim().toUpperCase()}`;
+          },
+          cancelMaterialComposerPreview() {
+            const requestKey = "materials:compose-preview";
+            const controller = latestRequestControllers.get(requestKey);
+            controller?.abort();
+            if (latestRequestControllers.get(requestKey) === controller) latestRequestControllers.delete(requestKey);
+            this.materialComposerPreviewLoading = false;
+          },
+          closeMaterialComposer() {
+            this.cancelMaterialComposerPreview();
+            this.showMaterialComposer = false;
+            this.materialComposer = blankMaterialComposer();
+            this.materialComposerPreview = null;
+            this.materialComposerParseKey = "";
+            this.materialComposerInvalidReason = "";
+            this.materialComposerPriceSource = "";
+          },
           toggleMaterialComposer() {
-            this.showMaterialComposer = !this.showMaterialComposer;
+            if (this.materialComposerSavePending) return false;
+            if (this.showMaterialComposer) {
+              this.closeMaterialComposer();
+              return true;
+            }
+            this.showMaterialComposer = true;
             if (this.showMaterialComposer) {
               this.showPaperCodePanel = false;
               this.materialComposer = {
@@ -15122,8 +15149,10 @@
               this.materialComposerInvalidReason = "";
               this.materialComposerPriceSource = "";
             }
+            return true;
           },
           invalidateMaterialComposer() {
+            this.cancelMaterialComposerPreview();
             this.materialComposerPreview = null;
             this.materialComposerParseKey = "";
             this.materialComposerInvalidReason = "当前解析结果已失效，请重新解析";
@@ -15149,28 +15178,41 @@
             const supplier = String(this.materialComposer.supplier_name || "").trim();
             const layerCount = Number(this.materialComposer.layer_count || 0);
             const usageFluteType = String(this.materialComposer.usage_flute_type || "").toUpperCase();
-            if (!supplier || !code) return;
+            if (!supplier || !code) return false;
             if (![3,5,7].includes(layerCount) || code.length !== layerCount) {
               this.materialComposerPreview = null;
               this.materialComposerInvalidReason = `当前选择${layerCount}层，材质代码必须为${layerCount}位`;
               this.showToast(this.materialComposerInvalidReason,true);
-              return;
+              return false;
             }
             if (layerCount === 7 && !["AAA","ABC"].includes(usageFluteType)) {
               this.materialComposerPreview = null;
               this.materialComposerInvalidReason = "七层材质必须人工选择楞型（AAA 或 ABC）";
               this.showToast(this.materialComposerInvalidReason,true);
-              return;
+              return false;
             }
+            const requested = {
+              supplier_name:supplier,
+              layer_count:layerCount,
+              material_code:code,
+              usage_flute_type:usageFluteType,
+            };
+            const requestedInputKey = this.materialComposerInputKey(requested);
+            const requestKey = "materials:compose-preview";
+            const controller = this.beginLatestRequest(requestKey);
+            this.materialComposerPreviewLoading = true;
+            this.materialComposerInvalidReason = "";
             try {
               const {data} = await axios.post("/api/master/materials/compose/preview", {
                 supplier_name:supplier,
                 layer_count:layerCount,
                 material_code:code,
                 usage_flute_type:usageFluteType || null,
-              });
-              this.materialComposer.material_code = code;
-              this.materialComposer.usage_flute_type = usageFluteType;
+              }, {signal:controller.signal});
+              if (
+                latestRequestControllers.get(requestKey) !== controller
+                || this.materialComposerInputKey() !== requestedInputKey
+              ) return false;
               this.materialComposerPreview = data;
               this.materialComposerParseKey = data.parse_key;
               this.materialComposerInvalidReason = data.duplicate_material ? data.message : "";
@@ -15181,37 +15223,70 @@
                 this.materialComposer.quote_price = "";
                 this.materialComposerPriceSource = "";
               }
+              return true;
             } catch(error) {
+              if (
+                this.isCancelledRequest(error)
+                || latestRequestControllers.get(requestKey) !== controller
+                || this.materialComposerInputKey() !== requestedInputKey
+              ) return false;
               this.materialComposerPreview = null;
               this.materialComposerParseKey = "";
               this.materialComposerInvalidReason = this.errorMessage(error);
               this.showToast(this.errorMessage(error),true);
+              return false;
+            } finally {
+              if (latestRequestControllers.get(requestKey) === controller) {
+                this.materialComposerPreviewLoading = false;
+                this.finishLatestRequest(requestKey, controller);
+              }
             }
           },
           async saveMaterialComposition() {
-            if (this.loading) return;
-            this.loading = true;
+            if (this.materialComposerSavePending) return false;
+            if (!this.materialComposerCanSave) {
+              this.showToast("当前输入与最近解析结果不一致，请重新解析后保存",true);
+              return false;
+            }
+            const form = JSON.parse(JSON.stringify(this.materialComposer));
+            const preview = JSON.parse(JSON.stringify(this.materialComposerPreview));
+            const priceSource = String(this.materialComposerPriceSource || "");
+            const payload = {
+              supplier_name:String(form.supplier_name || "").trim(),
+              layer_count:Number(form.layer_count),
+              material_code:String(form.material_code || "").trim().toUpperCase(),
+              usage_flute_type:String(form.usage_flute_type || "").toUpperCase() || null,
+              quote_price:form.quote_price === "" ? null : Number(form.quote_price),
+              parsed_supplier_name:preview.supplier_name,
+              parsed_layer_count:preview.layer_count,
+              parsed_material_code:preview.material_code,
+              price_source:priceSource,
+              remarks:String(form.remarks || "").trim() || null,
+            };
+            this.materialComposerSavePending = true;
             try {
-              if (!this.materialComposerCanSave) throw new Error("当前输入与最近解析结果不一致，请重新解析后保存");
-              const {data} = await axios.post("/api/master/materials/compose/save", {
-                supplier_name:this.materialComposer.supplier_name,
-                layer_count:Number(this.materialComposer.layer_count),
-                material_code:this.materialComposer.material_code,
-                usage_flute_type:String(this.materialComposer.usage_flute_type || "").toUpperCase() || null,
-                quote_price:this.materialComposer.quote_price === "" ? null : Number(this.materialComposer.quote_price),
-                parsed_supplier_name:this.materialComposerPreview.supplier_name,
-                parsed_layer_count:this.materialComposerPreview.layer_count,
-                parsed_material_code:this.materialComposerPreview.material_code,
-                price_source:this.materialComposerPriceSource,
-                remarks:String(this.materialComposer.remarks || "").trim() || null,
-              });
+              const {data} = await axios.post("/api/master/materials/compose/save", payload);
               this.allMaterials = [];
               this.materialSuppliers = [];
-              await this.loadMaterials();
+              let refreshed = false;
+              try {
+                refreshed = await this.loadMaterials();
+              } catch(_refreshError) {
+                refreshed = false;
+              }
+              this.closeMaterialComposer();
+              if (!refreshed) {
+                this.showToast("组合材质已保存，但材质列表刷新失败；请手动刷新核对，不要重复保存。",true);
+                return true;
+              }
               this.showToast(data.message || "组合材质已保存");
-              this.toggleMaterialComposer();
-            } catch(error) { this.showToast(this.errorMessage(error),true); }
-            finally { this.loading = false; }
+              return true;
+            } catch(error) {
+              this.showToast(this.errorMessage(error),true);
+              return false;
+            } finally {
+              this.materialComposerSavePending = false;
+            }
           },
           recommendMaterialCode() {
             const weights=(this.materialForm.basis_weight_description.match(/\d+(?:\.\d+)?/g)||[]).join("-");

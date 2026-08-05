@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -27,9 +29,13 @@ def test_static_pages_use_the_shared_time_contract() -> None:
         STATIC / "requisition-print.html",
         STATIC / "customers.html",
     ]
+    utility = STATIC / "assets/time-utils.js"
+    fingerprint = hashlib.sha256(utility.read_bytes()).hexdigest()[:12]
+    expected_asset_url = f'/static/assets/time-utils.js?v={fingerprint}'
     for page in pages:
         text = page.read_text(encoding="utf-8")
-        assert '/static/assets/time-utils.js' in text, page
+        assert expected_asset_url in text, page
+        assert re.search(r'/static/assets/time-utils\.js(?:["\'])', text) is None, page
         assert 'toISOString().slice(0, 10)' not in text, page
         assert '${value}Z' not in text, page
         assert '${data.created_at}Z' not in text, page

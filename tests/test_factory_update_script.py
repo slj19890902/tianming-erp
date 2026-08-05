@@ -36,9 +36,9 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.48"
-    assert APP_VERSION_NAME == "森林阳光材质代码加号修正"
-    assert APP_BUILD_DATE == "2026-08-04"
+    assert APP_VERSION == "v0.22.49"
+    assert APP_VERSION_NAME == "ERP 首页白屏缓存兼容修复"
+    assert APP_BUILD_DATE == "2026-08-05"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
     assert metadata["external_acceptance_required"] is True
@@ -50,15 +50,15 @@ def test_factory_update_reports_current_release_version() -> None:
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
     assert any(
-        "本次更新｜" in item and "森林阳光" in item and "0" in item and "+" in item
+        "本次更新｜" in item and "内容指纹" in item and "普通刷新" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "8 条" in item and "D+1+D" in item
+        "本次更新｜" in item and "addWorkingDays" in item and "空白" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "D+1+D" in item and "D+1RC" in item
+        "如何验证｜" in item and "Ctrl+F5" in item and "完整显示" in item
         for item in current_release
     )
     assert any(

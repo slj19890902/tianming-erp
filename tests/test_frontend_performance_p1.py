@@ -42,11 +42,12 @@ def _sha256(path: Path) -> str:
 
 def test_index_uses_only_versioned_local_runtime_dependencies() -> None:
     sources = re.findall(r'<script\s+src="([^"]+)"', INDEX)
+    time_utils_hash = _sha256(ROOT / "static" / "assets" / "time-utils.js").lower()[:12]
     assert sources[:4] == [
         "/static/vendor/vue-3.5.40.global.prod.js",
         "/static/vendor/axios-1.18.1.min.js",
         "/static/vendor/pinyin-pro-3.26.0.js",
-        "/static/assets/time-utils.js",
+        f"/static/assets/time-utils.js?v={time_utils_hash}",
     ]
     assert not any(source.startswith(("http://", "https://")) for source in sources)
     for filename, expected_hash in EXPECTED_VENDOR.items():

@@ -2667,7 +2667,9 @@
               <page-head title="送货与回单" desc="支持多订单合并、分批发货、打印及客户实收确认。"></page-head>
               <div v-if="deliveryDashboardMode==='pending_customers'" class="panel" style="margin-bottom:10px">
                 <div class="toolbar"><div><strong>待送货客户 {{ pendingDeliveryCustomerGroups.length }} 户</strong><span class="muted" style="margin-left:8px">与首页同一批送货候选</span></div><button class="btn small" @click="deliveryDashboardMode=''">查看全部送货单</button></div>
-                <div v-if="pendingDeliveryCustomerGroups.length" class="toolbar-group" style="flex-wrap:wrap;margin-top:8px">
+                <div v-if="deliveryPendingState.loading" class="empty">正在加载待送货客户…</div>
+                <div v-else-if="deliveryPendingState.error" class="empty">待送货客户加载失败：{{ deliveryPendingState.error }} <button class="btn small" @click="loadDeliveryPendingItems">重试</button></div>
+                <div v-else-if="pendingDeliveryCustomerGroups.length" class="toolbar-group" style="flex-wrap:wrap;margin-top:8px">
                   <button v-for="group in pendingDeliveryCustomerGroups" :key="group.customer_id" class="btn" @click="openDelivery(group.customer_id)">{{ group.customer_name }}（{{ group.item_count }} 款）</button>
                 </div>
                 <div v-else class="empty">当前没有待送货客户</div>
@@ -6222,7 +6224,7 @@
             // v0.19.2-B 楞型加价规则
             fluteRules: [], showFluteRuleModal: false, fluteRuleLoading: false, fluteRuleError: "",
             fluteRuleForm: { id: null, supplier_name: "", layer_count: 3, flute_type: "A", price_delta: "0", effective_date: "", remark: "", is_active: true },
-            deliveries: [], pendingDeliveryItems: [], deliveryCustomerCandidates: [], deliveryPickTasks: [], deliveryPickers: [], expandedDeliveryRows: {}, deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false, request_token:0 }, deliveryCandidateLoading:false, deliveryCandidateError:"", deliveryCandidateRequestSequence:0, deliveryBatchRequestSequence:0, unorderedFinishedRequestSequence:0, deliveryOperationState:{action:"",deliveryId:null,deliveryNumber:""}, receiptOperationState:{action:"",deliveryId:null,receiptId:null,deliveryNumber:""}, statements: [], invoices: [], moldTools: [],
+            deliveries: [], pendingDeliveryItems: [], deliveryCustomerCandidates: [], deliveryPickTasks: [], deliveryPickers: [], expandedDeliveryRows: {}, deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false, request_token:0 }, deliveryPendingState:{loading:false,error:"",request_token:0}, deliveryCandidateLoading:false, deliveryCandidateError:"", deliveryCandidateRequestSequence:0, deliveryBatchRequestSequence:0, unorderedFinishedRequestSequence:0, deliveryOperationState:{action:"",deliveryId:null,deliveryNumber:""}, receiptOperationState:{action:"",deliveryId:null,receiptId:null,deliveryNumber:""}, statements: [], invoices: [], moldTools: [],
             invoiceTasks: [], invoiceTaskFilters:{customer_id:"",statement_month:"",status:""}, invoiceTaskState:{loading:false,error:""},
             invoiceTaskDetail:null, invoiceTaskResult:{task_id:null,status:"issued",invoice_number:"",invoice_date:"",failure_reason:"",expected_version:null},
             invoiceTaskOperationState:{detailLoading:false,detailError:"",detailTaskId:null,detailTaskNumber:"",confirmingTaskId:null,resultSaving:false},
@@ -12123,13 +12125,22 @@
             }
           },
           async loadDeliveryPendingItems() {
-            this.deliveryCandidateLoading = true;
+            const requestToken = Number(this.deliveryPendingState.request_token || 0) + 1;
+            this.deliveryPendingState.request_token = requestToken;
+            this.deliveryPendingState.loading = true;
+            this.deliveryPendingState.error = "";
             try {
               const { data } = await axios.get("/api/deliveries/pending_items");
+              if (requestToken !== this.deliveryPendingState.request_token) return false;
               this.pendingDeliveryItems = data.items || [];
               this.deliveryCustomerCandidates = data.customer_candidates || [];
+              return true;
+            } catch (error) {
+              if (requestToken !== this.deliveryPendingState.request_token) return false;
+              this.deliveryPendingState.error = this.errorMessage(error);
+              return false;
             } finally {
-              this.deliveryCandidateLoading = false;
+              if (requestToken === this.deliveryPendingState.request_token) this.deliveryPendingState.loading = false;
             }
           },
           async loadDeliveryCustomerOptions() {
@@ -19746,7 +19757,13 @@
           async editDelivery(row) {
             const sourceMode = row.source_mode || this.deliverySourceModeFromLines(row.items || []);
             const hasOrderLines = (row.items || []).some(item => item.source_type !== "unordered_finished");
-            if (hasOrderLines) await this.loadDeliveryPendingItems();
+            if (hasOrderLines) {
+              const pendingLoaded = await this.loadDeliveryPendingItems();
+              if (!pendingLoaded) {
+                this.showToast(`送货明细加载失败：${this.deliveryPendingState.error || "请稍后重试"}`, true);
+                return false;
+              }
+            }
             const lines = (row.items || []).map(it => {
               if (it.source_type === "unordered_finished") {
                 return this.createDeliveryLine({
@@ -19794,6 +19811,7 @@
             this.deliveryBatchPicker = { visible:false, loading:false, keyword:"", items:[], selected:{}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message:"", error:false };
             this.unorderedFinishedPicker = { visible:false, loading:false, keyword:"", items:[], selected:{}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message:"", error:false };
             this.modal = { type:"delivery", title:`编辑送货单 ${row.delivery_number}` };
+            return true;
           },
           async deleteDelivery(row) {
             if (this.deliveryOperationState.action || this.receiptOperationState?.action) return false;

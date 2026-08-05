@@ -5827,7 +5827,7 @@
             </div>
           </div>
           <div class="modal-foot">
-            <button v-if="!isForcedPassword" class="btn" :disabled="masterSavePending || (modal?.type==='stockReplenishment' && stockReplenishmentSaveState.saving)" @click="closeModal">{{ canSaveModal ? "取消" : "关闭" }}</button>
+            <button v-if="!isForcedPassword" class="btn" :disabled="masterSavePending || (modal?.type==='stockReplenishment' && stockReplenishmentSaveState.saving) || (modal?.type==='quotationConvert' && quotationConversionState.saving)" @click="closeModal">{{ canSaveModal ? "取消" : "关闭" }}</button>
             <template v-if="modal?.type === 'orderPdfImport' && orderImportDrafts.length">
               <button class="btn" :disabled="loading || !confirmableImportDraftCount" @click="toggleConfirmableImportDrafts">{{ confirmedImportDraftCount ? "取消加入批量保存" : "加入批量保存" }}</button>
               <span class="muted">待保存：{{ confirmedImportDraftCount }} 条；已成功：{{ successfulImportDraftCount }} 条；失败：{{ failedImportDraftCount }} 条</span>
@@ -5837,7 +5837,8 @@
               <button class="btn primary" :disabled="loading || pdfTemplateLoading" @click="savePdfTemplate">保存 draft</button>
             </template>
             <button v-if="modal?.type === 'delivery' && deliveryForm.editingId && !deliveryFormIsDirty()" class="btn success" :disabled="loading || !!deliveryForm.pick_task || !!deliveryOperationState.action" @click="createCurrentDeliveryPickTask">{{ deliveryOperationState.action==='pick' && Number(deliveryOperationState.deliveryId)===Number(deliveryForm.editingId) ? '推送中…' : (deliveryForm.pick_task ? '已推送拿货' : '拿货') }}</button>
-            <button v-if="canSaveModal" class="btn primary" :disabled="loading || masterSavePending || (modal?.type==='supplierRequisitionDraft' && (supplierRequisitionSaveState.saving || supplierRequisitionSaveState.committed)) || (modal?.type==='requisition' && (compositeRequisitionSaveState.saving || compositeRequisitionSaveState.committed)) || (modal?.type==='stockReplenishment' && (stockReplenishmentSaveState.saving || stockReplenishmentSaveState.committed)) || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError)) || (modal?.type==='quotationConvert' && !!quotationConvertCreaseMismatch) || (modal?.type==='orderItem' && !!orderItemCreaseMismatch) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && (!!deliveryValidationError || !!deliveryOperationState.action)) || (modal?.type==='receipt' && !!receiptOperationState.action) || (modal?.type==='requisitionHold' && requisitionHoldSaveBlocked)" @click="modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()">{{ ['customer','product','material','supplier'].includes(modal?.type) && masterSavePending ? '保存中…' : (modal?.type==='delivery' ? deliveryPrimaryLabel() : (modal?.type==='receipt' ? (receiptOperationState.action==='save' ? '保存中…' : '保存回单') : (modal?.type==='supplierRequisitionDraft' ? (supplierRequisitionSaveState.saving ? '正在生成采购单…' : (supplierRequisitionSaveState.committed ? '采购单已生成' : '确认生成正式采购单')) : (modal?.type==='requisition' ? (compositeRequisitionSaveState.saving ? '正在生成组合报料…' : (compositeRequisitionSaveState.committed ? '组合报料已生成' : '确认生成正式采购单')) : (modal?.type==='requisitionHold' ? '确认暂缓' : (modal?.type==='stockReplenishment' ? (stockReplenishmentSaveState.saving ? '正在保存补库草稿…' : (stockReplenishmentSaveState.committed ? '补库草稿已保存' : (stockReplenishmentForm.source_type==='stock_warning' ? '保存报料草稿' : '保存补库报料草稿'))) : '保存')))))) }}</button>
+            <button v-if="canSaveModal && modal?.type==='quotationConvert'" class="btn primary" :disabled="loading || quotationConversionState.saving || quotationConversionState.committed || quotationConversionState.outcomeUncertain || !!quotationConvertCreaseMismatch" @click="saveModal()">{{ quotationConversionState.saving ? '正在转入…' : (quotationConversionState.committed ? '已转入常用箱' : '保存') }}</button>
+            <button v-if="canSaveModal && modal?.type!=='quotationConvert'" class="btn primary" :disabled="loading || masterSavePending || (modal?.type==='supplierRequisitionDraft' && (supplierRequisitionSaveState.saving || supplierRequisitionSaveState.committed)) || (modal?.type==='requisition' && (compositeRequisitionSaveState.saving || compositeRequisitionSaveState.committed)) || (modal?.type==='stockReplenishment' && (stockReplenishmentSaveState.saving || stockReplenishmentSaveState.committed)) || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError)) || (modal?.type==='orderItem' && !!orderItemCreaseMismatch) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && (!!deliveryValidationError || !!deliveryOperationState.action)) || (modal?.type==='receipt' && !!receiptOperationState.action) || (modal?.type==='requisitionHold' && requisitionHoldSaveBlocked)" @click="modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()">{{ ['customer','product','material','supplier'].includes(modal?.type) && masterSavePending ? '保存中…' : (modal?.type==='delivery' ? deliveryPrimaryLabel() : (modal?.type==='receipt' ? (receiptOperationState.action==='save' ? '保存中…' : '保存回单') : (modal?.type==='supplierRequisitionDraft' ? (supplierRequisitionSaveState.saving ? '正在生成采购单…' : (supplierRequisitionSaveState.committed ? '采购单已生成' : '确认生成正式采购单')) : (modal?.type==='requisition' ? (compositeRequisitionSaveState.saving ? '正在生成组合报料…' : (compositeRequisitionSaveState.committed ? '组合报料已生成' : '确认生成正式采购单')) : (modal?.type==='requisitionHold' ? '确认暂缓' : (modal?.type==='stockReplenishment' ? (stockReplenishmentSaveState.saving ? '正在保存补库草稿…' : (stockReplenishmentSaveState.committed ? '补库草稿已保存' : (stockReplenishmentForm.source_type==='stock_warning' ? '保存报料草稿' : '保存补库报料草稿'))) : '保存')))))) }}</button>
           </div>
         </div>
       </div>
@@ -6234,6 +6235,7 @@
             quotationHistory: [],
             quotationDraftAction:"",
             quotationAction:{action:"",quotationId:null,quotationNo:""},
+            quotationConversionState:{saving:false,committed:false,outcomeUncertain:false,itemId:null,productId:null},
             contractCustomer: null,
             contractDraft: blankContractDraft(),
             contractHistory: [],
@@ -14536,6 +14538,7 @@
               this.showToast("请先将报价标记为客户接受",true);
               return false;
             }
+            this.quotationConversionState = {saving:false,committed:false,outcomeUncertain:false,itemId:Number(item?.id || 0) || null,productId:null};
             await this.loadProductBoxTypeRules();
             const material = this._findMaterial(item.material_id);
             const layerCount = Number(material?.layer_count || 0);
@@ -14659,12 +14662,43 @@
             };
           },
           async saveQuotationConversion() {
-            const payload = this.quotationConvertPayload();
-            await axios.post(
-              `/api/quotations/items/${this.quotationConvertForm.quotation_item_id}/convert-to-product`,
-              payload
-            );
-            await Promise.all([this.loadQuotationHistory(),this.loadProducts()]);
+            const state = this.quotationConversionState || {};
+            if (state.saving || state.committed || state.outcomeUncertain) return {_in_flight:true};
+            const itemId = Number(this.quotationConvertForm?.quotation_item_id || 0);
+            if (!Number.isInteger(itemId) || itemId <= 0) throw new Error("报价明细不存在，不能转入常用箱");
+            const payload = JSON.parse(JSON.stringify(this.quotationConvertPayload()));
+            this.quotationConversionState = {saving:true,committed:false,outcomeUncertain:false,itemId,productId:null};
+            let data;
+            try {
+              ({data} = await axios.post(
+                `/api/quotations/items/${itemId}/convert-to-product`,
+                payload
+              ));
+            } catch(error) {
+              if (!error?.response) {
+                this.quotationConversionState = {saving:false,committed:false,outcomeUncertain:true,itemId,productId:null};
+                this.closeModal();
+                error._quotationConversionOutcomeUncertain = true;
+              } else {
+                this.quotationConversionState = {saving:false,committed:false,outcomeUncertain:false,itemId,productId:null};
+              }
+              throw error;
+            }
+            this.quotationConversionState = {saving:false,committed:true,outcomeUncertain:false,itemId,productId:Number(data?.product_id || 0) || null};
+            this.closeModal();
+            const refreshResults = await Promise.allSettled([
+              this.loadQuotationHistory(),
+              this.loadProducts(),
+            ]);
+            const refreshErrors = refreshResults
+              .filter(result => result.status === "rejected")
+              .map(result => this.errorMessage(result.reason));
+            if (refreshErrors.length) {
+              this.showToast(`常用箱已创建；列表刷新失败，请手动刷新客户报价和常用箱核对，不要重复提交：${refreshErrors.join("；")}`,true);
+            } else {
+              this.showToast("已转入常用箱，可在新建订单时直接选择");
+            }
+            return {...data,_refresh_failed:refreshErrors.length > 0};
           },
           bomComponentInternalCode(component) {
             return component?.internal_code || component?.component_internal_code || "-";
@@ -20819,6 +20853,10 @@
           },
 	          closeModal() {
 	            if (this.isForcedPassword) return;
+              if (this.modal?.type === "quotationConvert" && this.quotationConversionState.saving) {
+                this.showToast("报价明细正在转入常用箱，请稍候", true);
+                return;
+              }
               if (this.modal?.type === "requisition" && this.compositeRequisitionSaveState.saving) {
                 this.showToast("正在生成组合报料，请稍候", true);
                 return;
@@ -20903,6 +20941,17 @@
           },
           async saveModal() {
             if (this.modal?.type === "receipt") return this.saveReceipt();
+            if (this.modal?.type === "quotationConvert" && (this.quotationConversionState.saving || this.quotationConversionState.committed || this.quotationConversionState.outcomeUncertain)) {
+              this.showToast(
+                this.quotationConversionState.saving
+                  ? "报价明细正在转入常用箱，请勿重复点击"
+                  : (this.quotationConversionState.committed
+                    ? "该报价明细已经转入常用箱，请刷新列表核对"
+                    : "上次提交结果暂不确定，请刷新客户报价和常用箱列表核对"),
+                true,
+              );
+              return false;
+            }
             if (this.modal?.type === "requisition" && (this.compositeRequisitionSaveState.saving || this.compositeRequisitionSaveState.committed)) {
               this.showToast(
                 this.compositeRequisitionSaveState.committed ? "组合报料单已经生成，请勿重复提交" : "正在生成组合报料，请勿重复点击",
@@ -21110,8 +21159,9 @@
                 successMessage = form.id ? "客户材质候选已更新" : "客户材质候选已新增";
               }
               if (this.modal.type === "quotationConvert") {
-                await this.saveQuotationConversion();
-                successMessage = "已转入常用箱，可在新建订单时直接选择";
+                const conversion = await this.saveQuotationConversion();
+                if (conversion?._in_flight) return false;
+                return true;
               }
 	              if (this.modal.type === "order") {
 	                const orderError = this.validateOrderForm();
@@ -21360,6 +21410,10 @@
               this.closeModal(); this.showToast(successMessage);
               return true;
             } catch (error) {
+              if (error?._quotationConversionOutcomeUncertain) {
+                this.showToast("转入常用箱的请求连接中断，结果暂不确定。原窗口已关闭，请刷新客户报价和常用箱列表核对，不要重复点击原草稿。", true);
+                return false;
+              }
               if (error?._compositeRequisitionOutcomeUncertain) {
                 this.showToast("组合报料提交连接中断，结果暂不确定。原草稿已关闭，请刷新“已报料”和“待报料”核对，不要重复点击原草稿。", true);
                 return false;

@@ -2195,23 +2195,23 @@
               </div>
 
               <!-- 供应商统一调价弹窗 -->
-              <div v-if="showPriceAdjustModal" class="modal-backdrop" @click.self="showPriceAdjustModal=false">
+              <div v-if="showPriceAdjustModal" class="modal-backdrop" @click.self="closePriceAdjust()">
                 <div class="modal" style="max-width:760px;max-height:84vh;overflow-y:auto">
-                  <div class="modal-header"><h3>供应商统一调价</h3><button class="btn small" @click="showPriceAdjustModal=false">关闭</button></div>
+                  <div class="modal-header"><h3>供应商统一调价</h3><button class="btn small" :disabled="priceAdjustAction === 'apply'" @click="closePriceAdjust()">关闭</button></div>
                   <div style="padding:12px">
                     <div class="form-grid">
                       <div class="field"><label>供应商</label>
-                        <select class="select" v-model="priceAdjustForm.supplier_name">
+                        <select class="select" v-model="priceAdjustForm.supplier_name" :disabled="priceAdjustAction === 'apply'">
                           <option v-for="s in priceAdjustSuppliers" :key="s" :value="s">{{ supplierDisplayName(s) }}</option>
                         </select>
                       </div>
                       <div class="field"><label>调价幅度（如 +5% / -10% / 5 / -3）</label>
-                        <input class="input" v-model.trim="priceAdjustForm.adjust_percent" placeholder="+5% 或 -10% 或 5" /></div>
-                      <div class="field"><label>生效日期</label><input class="input" type="date" v-model="priceAdjustForm.effective_date" /></div>
+                        <input class="input" v-model.trim="priceAdjustForm.adjust_percent" :disabled="priceAdjustAction === 'apply'" placeholder="+5% 或 -10% 或 5" /></div>
+                      <div class="field"><label>生效日期</label><input class="input" type="date" v-model="priceAdjustForm.effective_date" :disabled="priceAdjustAction === 'apply'" /></div>
                     </div>
                     <div class="toolbar-group" style="margin:10px 0">
-                      <button class="btn" :disabled="priceAdjustLoading" @click="previewPriceAdjust()">预览调价</button>
-                      <button class="btn success" :disabled="!priceAdjustPreviewValid || priceAdjustLoading" @click="applyPriceAdjust()">确认应用调价</button>
+                      <button class="btn" :disabled="priceAdjustLoading" @click="previewPriceAdjust()">{{ priceAdjustAction === 'preview' ? '预览中…' : '预览调价' }}</button>
+                      <button class="btn success" :disabled="!priceAdjustPreviewValid || priceAdjustLoading" @click="applyPriceAdjust()">{{ priceAdjustAction === 'apply' ? '应用中…' : '确认应用调价' }}</button>
                     </div>
                     <div v-if="priceAdjustError" style="color:#dc2626;font-size:13px">{{ priceAdjustError }}</div>
                     <div v-if="priceAdjustPreview" style="border:1px solid #e5e7eb;border-radius:6px;padding:10px;margin-top:8px">
@@ -6303,7 +6303,7 @@
             deliveryPrintSettings: { printer_model: "EPSON SK820", orientation_mode: "driver_managed", paper_width_mm: 241, paper_height_mm: 139.5 },
             // v0.19.2-B 供应商调价 + 价格历史
             showDrawingPreview: false, drawingPreviewUrl: "",
-            showPriceAdjustModal: false, priceAdjustLoading: false, priceAdjustError: "",
+            showPriceAdjustModal: false, priceAdjustLoading: false, priceAdjustAction: "", priceAdjustError: "",
             priceAdjustForm: { supplier_name: "", adjust_percent: "", effective_date: "" },
             priceAdjustPreview: null, priceAdjustPreviewKey: "",
             showPriceHistoryModal: false, priceHistory: { material_code: "", items: [] },
@@ -7255,7 +7255,10 @@
           priceAdjustForm: {
             deep: true,
             handler() {
-              if (this.priceAdjustPreview && this.priceAdjustPreviewKey !== this.priceAdjustFormKey()) {
+              if (
+                (this.priceAdjustPreview && this.priceAdjustPreviewKey !== this.priceAdjustFormKey())
+                || (this.priceAdjustLoading && this.priceAdjustAction === "preview")
+              ) {
                 this.invalidatePriceAdjustPreview();
               }
             }
@@ -10564,6 +10567,14 @@
             });
           },
           invalidatePriceAdjustPreview() {
+            const requestKey = "materials:price-adjust-preview";
+            const controller = latestRequestControllers.get(requestKey);
+            controller?.abort();
+            if (latestRequestControllers.get(requestKey) === controller) latestRequestControllers.delete(requestKey);
+            if (this.priceAdjustAction === "preview") {
+              this.priceAdjustLoading = false;
+              this.priceAdjustAction = "";
+            }
             this.priceAdjustPreview = null;
             this.priceAdjustPreviewKey = "";
             if (this.showPriceAdjustModal) this.priceAdjustError = "调价条件已变化，请重新预览。";
@@ -10590,7 +10601,21 @@
             }
             return body;
           },
+          closePriceAdjust() {
+            if (this.priceAdjustAction === "apply") return false;
+            this.showPriceAdjustModal = false;
+            this.invalidatePriceAdjustPreview();
+            this.priceAdjustError = "";
+            return true;
+          },
           openPriceAdjust() {
+            if (this.priceAdjustAction === "apply") return false;
+            const requestKey = "materials:price-adjust-preview";
+            const controller = latestRequestControllers.get(requestKey);
+            controller?.abort();
+            if (latestRequestControllers.get(requestKey) === controller) latestRequestControllers.delete(requestKey);
+            this.priceAdjustLoading = false;
+            this.priceAdjustAction = "";
             this.priceAdjustError = "";
             this.priceAdjustPreview = null;
             this.priceAdjustPreviewKey = "";
@@ -10601,33 +10626,86 @@
             this.showPriceAdjustModal = true;
           },
           async previewPriceAdjust() {
-            this.priceAdjustError = ""; this.priceAdjustPreview = null; this.priceAdjustLoading = true;
+            if (this.priceAdjustAction === "apply") return false;
+            const requestKey = "materials:price-adjust-preview";
+            const controller = this.beginLatestRequest(requestKey);
+            const requestFormKey = this.priceAdjustFormKey();
+            const body = JSON.parse(JSON.stringify(this.priceAdjustRequestBody(false)));
+            this.priceAdjustError = "";
+            this.priceAdjustPreview = null;
+            this.priceAdjustPreviewKey = "";
+            this.priceAdjustLoading = true;
+            this.priceAdjustAction = "preview";
             try {
-              const body = this.priceAdjustRequestBody(false);
-              const { data } = await axios.post("/api/master/materials/price-adjustments/preview", body);
+              const { data } = await axios.post(
+                "/api/master/materials/price-adjustments/preview",
+                body,
+                {signal:controller.signal},
+              );
+              if (
+                latestRequestControllers.get(requestKey) !== controller
+                || this.priceAdjustFormKey() !== requestFormKey
+              ) return false;
               this.priceAdjustPreview = data;
-              this.priceAdjustPreviewKey = this.priceAdjustFormKey();
-            } catch (e) {
-              this.priceAdjustError = e.response?.data?.detail || e.message || "预览失败";
-            } finally { this.priceAdjustLoading = false; }
+              this.priceAdjustPreviewKey = requestFormKey;
+              return true;
+            } catch (error) {
+              if (!this.isCancelledRequest(error) && latestRequestControllers.get(requestKey) === controller) {
+                this.priceAdjustError = this.errorMessage(error) || "预览失败";
+              }
+              return false;
+            } finally {
+              if (latestRequestControllers.get(requestKey) === controller) {
+                this.priceAdjustLoading = false;
+                this.priceAdjustAction = "";
+                this.finishLatestRequest(requestKey, controller);
+              }
+            }
           },
           async applyPriceAdjust() {
+            if (this.priceAdjustLoading || this.priceAdjustAction) return false;
             if (!this.priceAdjustPreviewValid) {
               this.priceAdjustError = "调价条件已变化，请重新预览。";
-              return;
+              return false;
             }
-            if (!confirm(`确认对 ${this.priceAdjustForm.supplier_name} 应用调价 ${this.priceAdjustForm.adjust_percent}？将先备份数据库并写入价格历史。`)) return;
-            this.priceAdjustError = ""; this.priceAdjustLoading = true;
+            const formSnapshot = JSON.parse(JSON.stringify(this.priceAdjustForm || {}));
+            const formKey = this.priceAdjustFormKey();
+            const body = JSON.parse(JSON.stringify(this.priceAdjustRequestBody(true)));
+            if (!confirm(`确认对 ${formSnapshot.supplier_name} 应用调价 ${formSnapshot.adjust_percent}？将先备份数据库并写入价格历史。`)) return false;
+            if (this.priceAdjustFormKey() !== formKey || this.priceAdjustPreviewKey !== formKey) {
+              this.priceAdjustError = "调价条件已变化，请重新预览。";
+              return false;
+            }
+            this.priceAdjustError = "";
+            this.priceAdjustLoading = true;
+            this.priceAdjustAction = "apply";
             try {
-              const body = this.priceAdjustRequestBody(true);
-              const { data } = await axios.post("/api/master/materials/price-adjustments/apply", body);
+              let data;
+              try {
+                ({ data } = await axios.post("/api/master/materials/price-adjustments/apply", body));
+              } catch (error) {
+                this.priceAdjustError = this.errorMessage(error) || "应用调价失败";
+                return false;
+              }
               alert(`调价完成：影响 ${data.affected_count} 条，批次 #${data.batch_id}。`);
               this.showPriceAdjustModal = false;
+              this.priceAdjustPreview = null;
+              this.priceAdjustPreviewKey = "";
               this.allMaterials = []; this.materialSuppliers = [];
-              await this.loadMaterials();
-            } catch (e) {
-              this.priceAdjustError = e.response?.data?.detail || "应用调价失败";
-            } finally { this.priceAdjustLoading = false; }
+              let refreshed = false;
+              try {
+                refreshed = await this.loadMaterials();
+              } catch (error) {
+                refreshed = false;
+              }
+              if (!refreshed) {
+                this.showToast("供应商调价已完成，但材质列表刷新失败；请手动刷新核对，不要重复应用。",true);
+              }
+              return true;
+            } finally {
+              if (this.priceAdjustAction === "apply") this.priceAdjustAction = "";
+              this.priceAdjustLoading = false;
+            }
           },
           async openPriceHistory(row) {
             this.priceHistory = { material_code: row.code, items: [] };

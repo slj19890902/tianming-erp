@@ -63,12 +63,20 @@
     .searchbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-bottom: 10px; }
     .searchbar input { width: 100%; min-height: 46px; padding: 9px 11px; border: 1px solid #aabbb2; border-radius: 10px; background: #fff; }
     .search-btn { min-height: 46px; padding: 8px 14px; border: 0; border-radius: 10px; background: var(--green); color: #fff; font-weight: 900; }
+    .search-options { display: flex; justify-content: flex-end; margin: -2px 0 9px; }
+    .search-options label { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; color: var(--muted); font-size: 12px; }
+    .search-options input { width: 18px; height: 18px; }
     .candidate { display: block; width: 100%; padding: 11px; border: 1px solid var(--line); border-radius: 11px; background: #fff; text-align: left; }
     .candidate + .candidate { margin-top: 8px; }
     .candidate strong, .candidate span { display: block; overflow-wrap: anywhere; }
     .candidate span { margin-top: 4px; color: var(--muted); font-size: 12px; }
+    .candidate-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; margin-top: 8px; }
+    .candidate-summary span { margin: 0; padding: 6px 3px; border-radius: 7px; background: #f3f6f4; color: var(--ink); text-align: center; font-size: 11px; }
+    .candidate-action { margin-top: 8px !important; color: var(--blue) !important; font-weight: 900; }
+    .candidate.zero-stock { border-style: dashed; background: #fafcfb; }
     .result-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
     .result-head .small-btn { flex: 0 0 auto; }
+    .result-actions { display: flex; flex: 0 0 auto; gap: 6px; align-items: center; }
     .stock-card.finished { border-left: 5px solid var(--green); }
     .stock-card.semi { border-left: 5px solid var(--blue); }
     .stock-card.raw { border-left: 5px solid var(--orange); background: #fffaf3; }
@@ -137,10 +145,13 @@
 
       <section id="searchPage" hidden>
         <h1 class="page-title">查产品和库存位置</h1>
-        <p class="page-help">输入存货编码、客户或产品名称；有多个结果时必须自己点选，不会自动选第一款。原料仓尚未建立时不会显示虚假数量。</p>
+        <p class="page-help">先按客户、存货编码、产品名称或规格找到货物，再看真实库存位置；有多个结果时必须自己点选。原料仓尚未建立时不会显示虚假数量。</p>
         <div class="searchbar">
-          <input id="searchInput" maxlength="100" autocomplete="off" placeholder="例如：22000008 或 天华">
+          <input id="searchInput" maxlength="100" autocomplete="off" placeholder="输入客户、存货编码、产品名称或规格">
           <button id="searchButton" class="search-btn" type="button">查找</button>
+        </div>
+        <div id="zeroStockControl" class="search-options" hidden>
+          <label><input id="includeZeroStock" type="checkbox">包含零库存产品</label>
         </div>
         <div id="searchState" class="card status empty">请输入关键词开始查找。</div>
         <div id="candidateList" hidden></div>
@@ -200,6 +211,7 @@
         dashboard: null,
         query: "",
         candidates: [],
+        searchMeta: null,
         selectedProductId: null,
         selectedInventory: null,
         searchTimer: null,
@@ -339,6 +351,7 @@
         if (!query) {
           state.query = "";
           state.candidates = [];
+          state.searchMeta = null;
           byId("candidateList").hidden = true;
           byId("productResult").hidden = true;
           showStatus("searchState", "请输入关键词开始查找。", "empty");
@@ -360,40 +373,60 @@
         byId("productResult").hidden = true;
         showStatus("searchState", "正在查找产品…", "");
         try {
-          const data = await apiGet(`/api/mobile/erp/products?q=${encodeURIComponent(query)}&limit=20`, {
+          const includeZero = byId("includeZeroStock").checked;
+          const data = await apiGet(`/api/mobile/erp/products?q=${encodeURIComponent(query)}&limit=20&include_zero=${includeZero}`, {
             signal: state.searchController.signal,
           });
           if (generation !== state.searchGeneration) return;
           state.candidates = Array.isArray(data.items) ? data.items : [];
-          renderCandidates(data.requires_selection === true);
+          state.searchMeta = data;
+          renderCandidates(data);
         } catch (error) {
           if (error.name === "AbortError" || generation !== state.searchGeneration) return;
           showStatus("searchState", error.message || "产品查找失败", "error", runSearch);
         }
       }
 
-      function renderCandidates(requiresSelection) {
+      function renderCandidates(data) {
         const container = byId("candidateList");
         container.replaceChildren();
         if (!state.candidates.length) {
           container.hidden = true;
-          showStatus("searchState", "没有找到匹配产品，请换一个关键词。", "empty", runSearch);
+          const zeroCount = Number(data.zero_stock_match_count || 0);
+          const message = zeroCount > 0 && data.include_zero !== true
+            ? `找到 ${zeroCount} 款匹配产品，但当前没有在库数量。管理员可勾选“包含零库存产品”查看。`
+            : "没有找到匹配产品，请换一个关键词。";
+          showStatus("searchState", message, "empty", runSearch);
           return;
         }
         const note = node(
           "div",
           "card muted",
-          requiresSelection ? `找到 ${state.candidates.length} 款，请点选正确产品。` : "找到 1 款，请点开查看库存。"
+          data.requires_selection === true ? `找到 ${state.candidates.length} 款，请点选正确产品。` : "找到 1 款，请点开查看库存。"
         );
         container.append(note);
         state.candidates.forEach(product => {
-          const button = node("button", "candidate");
+          const summary = product.inventory_summary || {};
+          const finished = summary.finished || {};
+          const semi = summary.semi_finished || {};
+          const button = node("button", `candidate${summary.has_stock === false ? " zero-stock" : ""}`);
           button.type = "button";
           button.append(
             node("strong", "", product.customer_material_code || product.product_code),
             node("span", "", `${product.customer_name}｜${product.product_name}`),
             node("span", "", product.specification || "未填写规格")
           );
+          const totals = node("div", "candidate-summary");
+          if (summary.has_stock === false) {
+            totals.append(node("span", "", "当前无在库数量"));
+          } else {
+            totals.append(
+              node("span", "", `成品 ${Number(finished.quantity_total || 0)}${finished.unit || "只"}`),
+              node("span", "", `纸板 ${Number(semi.quantity_total || 0)}${semi.unit || "张"}`),
+              node("span", "", `${Number(summary.position_count || 0)} 个位置`)
+            );
+          }
+          button.append(totals, node("span", "candidate-action", "查看位置"));
           button.addEventListener("click", () => loadInventory(product.id));
           container.append(button);
         });
@@ -483,7 +516,15 @@
         const refresh = node("button", "small-btn", "刷新");
         refresh.type = "button";
         refresh.addEventListener("click", () => loadInventory(product.id));
-        headerRow.append(title, refresh);
+        const actions = node("div", "result-actions");
+        if (data.map_url) {
+          const locateAll = node("button", "map-btn", "地图定位全部");
+          locateAll.type = "button";
+          locateAll.addEventListener("click", () => openProductMap(data));
+          actions.append(locateAll);
+        }
+        actions.append(refresh);
+        headerRow.append(title, actions);
         header.append(headerRow, node("p", "muted", `数据时间：${data.as_of || data.last_updated_at || "刚刚"}`));
         result.append(
           header,
@@ -504,6 +545,13 @@
       function openMap(position) {
         byId("mapTitle").textContent = `${position.location_code}｜只读地图`;
         byId("mapFrame").src = position.map_url;
+        byId("mapLayer").hidden = false;
+      }
+
+      function openProductMap(data) {
+        const product = data.product || {};
+        byId("mapTitle").textContent = `${product.customer_material_code || product.product_code || "当前产品"}｜全部位置`;
+        byId("mapFrame").src = data.map_url;
         byId("mapLayer").hidden = false;
       }
 
@@ -645,6 +693,7 @@
           const canHome = permissions.includes("dashboard.view");
           document.querySelector('[data-page="home"]').hidden = !canHome;
           document.querySelector('[data-page="search"]').hidden = !canSearch;
+          byId("zeroStockControl").hidden = !canSearch || user.role !== "admin";
           document.querySelector('[data-page="production"]').hidden = !canProduction;
           const visibleNav = [...document.querySelectorAll(".nav-btn")].filter(button => !button.hidden);
           state.allowedPages = new Set(visibleNav.map(button => button.dataset.page));
@@ -683,6 +732,9 @@
       byId("searchButton").addEventListener("click", () => {
         window.clearTimeout(state.searchTimer);
         runSearch();
+      });
+      byId("includeZeroStock").addEventListener("change", () => {
+        if (byId("searchInput").value.trim()) runSearch();
       });
       byId("closeMap").addEventListener("click", closeMap);
       byId("closeDrawing").addEventListener("click", closeDrawing);

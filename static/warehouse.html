@@ -738,7 +738,7 @@
       $("lotTable").scrollIntoView({behavior:"smooth",block:"start"});
     }
     async function applyWarehouseDeepLink(){
-      const params=new URLSearchParams(location.search),requestedTab=params.get("tab"),requestedLocationView=params.get("location_view"),urlLocationId=Number(params.get("location_id")),lotId=Number(params.get("lot_id")),keyword=String(params.get("keyword")||"").trim();
+      const params=new URLSearchParams(location.search),requestedTab=params.get("tab"),requestedLocationView=params.get("location_view"),urlLocationId=Number(params.get("location_id")),urlCustomerId=Number(params.get("customer_id")),lotId=Number(params.get("lot_id")),keyword=String(params.get("keyword")||"").trim();
       const fromPdfOrder=params.get("source")==="pdf-order";
       if(fromPdfOrder&&!lotId){toast("库存定位链接缺少批次信息，请返回 PDF 订单后重新打开",true);return}
       let lot=null;
@@ -766,7 +766,18 @@
         return;
       }
       if(!requestedTab&&!locationId&&!lotId&&!keyword){await switchTab("locations");return}
-      if(requestedTab==="locations"&&!locationId){await switchTab("locations");return}
+      if(requestedTab==="locations"&&!locationId){
+        await switchTab("locations");
+        if(requestedLocationView==="floor3"&&state.locationView!=="floor3")await switchLocationView("floor3");
+        if(keyword||urlCustomerId){
+          $("floor3KeywordFilter").value=keyword;
+          $("floor3CustomerFilter").value=urlCustomerId?String(urlCustomerId):"";
+          state.floor3.viewMode="overview";state.floor3.selectedAreaCode="";state.floor3.mapPopoverLocationId=null;state.floor3.searchFocusLocationId=null;
+          await loadFloor3Locations(true);
+          toast(keyword?`已在三楼平面图高亮 ${keyword} 的真实位置`:`已按客户筛选三楼真实位置`);
+        }
+        return
+      }
       if(requestedTab==="locations"&&requestedLocationView==="floor3"&&state.locationView!=="floor3")await switchLocationView("floor3");
       if(requestedTab&&["finished","semi_finished"].includes(requestedTab)&&requestedTab!==state.tab)await switchTab(requestedTab);
       if(locationId||lotId||keyword)await locateWarehouseLedger({lot,locationId,keyword});

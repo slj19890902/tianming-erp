@@ -22,7 +22,8 @@ def test_warehouse_daily_navigation_is_map_first() -> None:
     assert '<button class="btn active" data-tab="locations" aria-label="库位管理地图">仓库地图</button>' in tabs
     assert 'tab:"locations"' in WAREHOUSE
     assert 'if(!requestedTab&&!locationId&&!lotId&&!keyword){await switchTab("locations");return}' in WAREHOUSE
-    assert 'if(requestedTab==="locations"&&!locationId){await switchTab("locations");return}' in WAREHOUSE
+    assert 'if(requestedTab==="locations"&&!locationId){' in WAREHOUSE
+    assert 'await switchTab("locations");' in WAREHOUSE
 
 
 def test_row_ledgers_are_admin_advanced_entries_not_daily_tabs() -> None:

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+from decimal import Decimal, InvalidOperation
+import re
 from typing import Literal
+from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from sqlalchemy import String, cast, or_, select
+from sqlalchemy import String, and_, case, cast, exists, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import (
@@ -135,17 +138,223 @@ def _product_specification(product: Product) -> str:
     return "×".join(present) + ("mm" if present else "")
 
 
-def _product_payload(product: Product) -> dict:
-    return {
+def _product_payload(product: Product, *, inventory_summary: dict | None = None) -> dict:
+    payload = {
         "id": product.id,
         "customer_id": product.customer_id,
         "customer_name": product.customer.name,
+        "customer_code": product.customer.customer_code,
         "product_code": product.product_code,
         "customer_material_code": product.customer_material_code,
         "product_name": product.product_name,
         "specification": _product_specification(product),
         "box_style": product.box_style,
     }
+    if inventory_summary is not None:
+        payload["inventory_summary"] = inventory_summary
+    return payload
+
+
+def _dimension_search_condition(keyword: str):
+    normalized = re.sub(r"\s+", "", keyword).removesuffix("mm").removesuffix("MM")
+    parts = re.split(r"[xX×*]", normalized)
+    if len(parts) not in {2, 3} or any(not part for part in parts):
+        return None
+    try:
+        dimensions = [Decimal(part) for part in parts]
+    except InvalidOperation:
+        return None
+    fields = [Product.length_mm, Product.width_mm, Product.height_mm]
+    return and_(*(fields[index] == value for index, value in enumerate(dimensions)))
+
+
+def _product_search_condition(keyword: str):
+    pattern = _escaped_like(keyword)
+    conditions = [
+        Product.product_code.ilike(pattern, escape="\\"),
+        Product.customer_material_code.ilike(pattern, escape="\\"),
+        Product.product_name.ilike(pattern, escape="\\"),
+        Product.box_style.ilike(pattern, escape="\\"),
+        Customer.name.ilike(pattern, escape="\\"),
+        Customer.customer_code.ilike(pattern, escape="\\"),
+        cast(Product.length_mm, String).ilike(pattern, escape="\\"),
+        cast(Product.width_mm, String).ilike(pattern, escape="\\"),
+        cast(Product.height_mm, String).ilike(pattern, escape="\\"),
+    ]
+    dimension_condition = _dimension_search_condition(keyword)
+    if dimension_condition is not None:
+        conditions.append(dimension_condition)
+    return or_(*conditions)
+
+
+def _product_has_stock_condition():
+    finished = exists(
+        select(1)
+        .select_from(InventoryLot)
+        .join(
+            FinishedGoodsInventoryDetail,
+            FinishedGoodsInventoryDetail.inventory_lot_id == InventoryLot.id,
+        )
+        .where(
+            InventoryLot.inventory_type == "finished",
+            InventoryLot.status == "active",
+            or_(
+                InventoryLot.quantity_available > 0,
+                InventoryLot.quantity_reserved > 0,
+            ),
+            FinishedGoodsInventoryDetail.product_id == Product.id,
+            FinishedGoodsInventoryDetail.owner_customer_id == Product.customer_id,
+            FinishedGoodsInventoryDetail.is_general.is_(False),
+            FinishedGoodsInventoryDetail.inventory_code_snapshot
+            == Product.product_code,
+        )
+        .correlate(Product)
+    )
+    semi_finished = exists(
+        select(1)
+        .select_from(InventoryLot)
+        .join(
+            SemiFinishedInventoryDetail,
+            SemiFinishedInventoryDetail.inventory_lot_id == InventoryLot.id,
+        )
+        .join(
+            SemiFinishedLotAllowedProduct,
+            SemiFinishedLotAllowedProduct.inventory_lot_id == InventoryLot.id,
+        )
+        .where(
+            InventoryLot.inventory_type == "semi_finished",
+            InventoryLot.status == "active",
+            or_(
+                InventoryLot.quantity_available > 0,
+                InventoryLot.quantity_reserved > 0,
+            ),
+            SemiFinishedLotAllowedProduct.product_id == Product.id,
+            SemiFinishedInventoryDetail.owner_customer_id == Product.customer_id,
+        )
+        .correlate(Product)
+    )
+    return or_(finished, semi_finished)
+
+
+def _empty_product_inventory_summary() -> dict:
+    return {
+        "has_stock": False,
+        "position_count": 0,
+        "finished": {
+            "unit": "只",
+            "quantity_total": 0,
+            "quantity_available": 0,
+            "quantity_reserved": 0,
+            "quantity_pending_pick": 0,
+        },
+        "semi_finished": {
+            "unit": "张",
+            "quantity_total": 0,
+            "quantity_available": 0,
+            "quantity_reserved": 0,
+            "quantity_pending_pick": 0,
+        },
+    }
+
+
+def _product_inventory_summaries(
+    db: Session,
+    products: list[Product],
+) -> dict[int, dict]:
+    product_ids = [product.id for product in products]
+    summaries = {
+        product.id: _empty_product_inventory_summary() for product in products
+    }
+    if not product_ids:
+        return summaries
+
+    finished_rows = db.execute(
+        select(
+            FinishedGoodsInventoryDetail.product_id,
+            InventoryLot.id,
+            InventoryLot.warehouse_location_id,
+            InventoryLot.quantity_available,
+            InventoryLot.quantity_reserved,
+        )
+        .select_from(InventoryLot)
+        .join(
+            FinishedGoodsInventoryDetail,
+            FinishedGoodsInventoryDetail.inventory_lot_id == InventoryLot.id,
+        )
+        .join(Product, Product.id == FinishedGoodsInventoryDetail.product_id)
+        .where(
+            FinishedGoodsInventoryDetail.product_id.in_(product_ids),
+            FinishedGoodsInventoryDetail.owner_customer_id == Product.customer_id,
+            FinishedGoodsInventoryDetail.is_general.is_(False),
+            FinishedGoodsInventoryDetail.inventory_code_snapshot == Product.product_code,
+            InventoryLot.inventory_type == "finished",
+            InventoryLot.status == "active",
+            or_(
+                InventoryLot.quantity_available > 0,
+                InventoryLot.quantity_reserved > 0,
+            ),
+        )
+    ).all()
+    pending_pick_by_lot = _pending_pick_by_lot(
+        db, [int(row.id) for row in finished_rows]
+    )
+    position_ids: dict[int, set[int]] = {product.id: set() for product in products}
+    for row in finished_rows:
+        summary = summaries[int(row.product_id)]
+        group = summary["finished"]
+        available = int(row.quantity_available or 0)
+        reserved = int(row.quantity_reserved or 0)
+        group["quantity_available"] += available
+        group["quantity_reserved"] += reserved
+        group["quantity_total"] += available + reserved
+        group["quantity_pending_pick"] += pending_pick_by_lot.get(int(row.id), 0)
+        position_ids[int(row.product_id)].add(int(row.warehouse_location_id))
+
+    semi_rows = db.execute(
+        select(
+            SemiFinishedLotAllowedProduct.product_id,
+            InventoryLot.warehouse_location_id,
+            InventoryLot.quantity_available,
+            InventoryLot.quantity_reserved,
+        )
+        .select_from(InventoryLot)
+        .join(
+            SemiFinishedInventoryDetail,
+            SemiFinishedInventoryDetail.inventory_lot_id == InventoryLot.id,
+        )
+        .join(
+            SemiFinishedLotAllowedProduct,
+            SemiFinishedLotAllowedProduct.inventory_lot_id == InventoryLot.id,
+        )
+        .join(Product, Product.id == SemiFinishedLotAllowedProduct.product_id)
+        .where(
+            SemiFinishedLotAllowedProduct.product_id.in_(product_ids),
+            SemiFinishedInventoryDetail.owner_customer_id == Product.customer_id,
+            InventoryLot.inventory_type == "semi_finished",
+            InventoryLot.status == "active",
+            or_(
+                InventoryLot.quantity_available > 0,
+                InventoryLot.quantity_reserved > 0,
+            ),
+        )
+    ).all()
+    for row in semi_rows:
+        summary = summaries[int(row.product_id)]
+        group = summary["semi_finished"]
+        available = int(row.quantity_available or 0)
+        reserved = int(row.quantity_reserved or 0)
+        group["quantity_available"] += available
+        group["quantity_reserved"] += reserved
+        group["quantity_total"] += available + reserved
+        position_ids[int(row.product_id)].add(int(row.warehouse_location_id))
+
+    for product_id, summary in summaries.items():
+        summary["position_count"] = len(position_ids[product_id])
+        summary["has_stock"] = any(
+            summary[group]["quantity_total"] > 0
+            for group in ("finished", "semi_finished")
+        )
+    return summaries
 
 
 def _product_query(db: Session, *, product_id: int | None = None):
@@ -433,6 +642,7 @@ def search_products(
     response: Response,
     q: str = Query(min_length=1, max_length=100),
     limit: int = Query(default=12, ge=1, le=30),
+    include_zero: bool = Query(default=False),
     db: Session = Depends(get_db),
     user: User = Depends(can_read_inventory),
 ) -> dict:
@@ -440,37 +650,70 @@ def search_products(
     keyword = q.strip()
     if not keyword:
         raise HTTPException(status_code=422, detail="请输入存货编码、客户或产品名称")
-    pattern = _escaped_like(keyword)
-    statement = _product_query(db).where(
-        or_(
-            Product.product_code.ilike(pattern, escape="\\"),
-            Product.customer_material_code.ilike(pattern, escape="\\"),
-            Product.product_name.ilike(pattern, escape="\\"),
-            Product.box_style.ilike(pattern, escape="\\"),
-            Customer.name.ilike(pattern, escape="\\"),
-            cast(Product.length_mm, String).ilike(pattern, escape="\\"),
-            cast(Product.width_mm, String).ilike(pattern, escape="\\"),
-            cast(Product.height_mm, String).ilike(pattern, escape="\\"),
-        )
-    )
+    if include_zero and user.role != "admin":
+        raise HTTPException(status_code=403, detail="只有管理员可以查询零库存产品")
+    statement = _product_query(db).where(_product_search_condition(keyword))
     visible_customer_ids = _visible_customer_ids(user, db)
     if visible_customer_ids is not None:
         statement = statement.where(Product.customer_id.in_(visible_customer_ids))
+    matched_product_count = int(
+        db.scalar(
+            select(func.count()).select_from(statement.order_by(None).subquery())
+        )
+        or 0
+    )
+    stocked_statement = statement.where(_product_has_stock_condition())
+    stocked_product_count = int(
+        db.scalar(
+            select(func.count()).select_from(
+                stocked_statement.order_by(None).subquery()
+            )
+        )
+        or 0
+    )
+    result_statement = statement if include_zero else stocked_statement
+    normalized_keyword = keyword.casefold()
+    exact_rank = case(
+        (
+            or_(
+                func.lower(Product.customer_material_code) == normalized_keyword,
+                func.lower(Product.product_code) == normalized_keyword,
+            ),
+            0,
+        ),
+        (func.lower(Customer.customer_code) == normalized_keyword, 1),
+        (func.lower(Product.product_name) == normalized_keyword, 2),
+        else_=3,
+    )
     products = list(
         db.scalars(
-            statement.order_by(
+            result_statement.order_by(
+                exact_rank,
                 Customer.name,
                 Product.customer_material_code,
                 Product.id,
             ).limit(limit)
         ).all()
     )
+    summaries = _product_inventory_summaries(db, products)
     return {
         "query": keyword,
         "count": len(products),
+        "matched_product_count": matched_product_count,
+        "zero_stock_match_count": max(
+            matched_product_count - stocked_product_count, 0
+        ),
+        "include_zero": include_zero,
+        "include_zero_allowed": user.role == "admin",
         "requires_selection": len(products) > 1,
         "auto_selected": False,
-        "items": [_product_payload(product) for product in products],
+        "items": [
+            _product_payload(
+                product,
+                inventory_summary=summaries[product.id],
+            )
+            for product in products
+        ],
         "as_of": datetime.now(_BEIJING).isoformat(timespec="seconds"),
     }
 
@@ -547,24 +790,49 @@ def product_inventory(
     last_updated_at = (
         utc_naive_to_api(max(timestamps)) if timestamps else None
     )
+    finished_group = _inventory_group(
+        finished_lots,
+        unit="只",
+        pending_pick_by_lot=pending_pick,
+    )
+    semi_finished_group = _inventory_group(
+        semi_finished_lots,
+        unit="张",
+    )
+    mapped_positions = [
+        position
+        for position in [
+            *finished_group["positions"],
+            *semi_finished_group["positions"],
+        ]
+        if position["map_status"] == "mapped"
+    ]
+    map_url = None
+    if mapped_positions:
+        map_url = "/warehouse.html?" + urlencode(
+            {
+                "embedded": 1,
+                "readonly": 1,
+                "tab": "locations",
+                "location_view": "floor3",
+                "customer_id": product.customer_id,
+                "keyword": product.customer_material_code or product.product_code,
+                "source": "mobile-product-all",
+            }
+        )
     return {
         "product": _product_payload(product),
         "inventory": {
-            "finished": _inventory_group(
-                finished_lots,
-                unit="只",
-                pending_pick_by_lot=pending_pick,
-            ),
-            "semi_finished": _inventory_group(
-                semi_finished_lots,
-                unit="张",
-            ),
+            "finished": finished_group,
+            "semi_finished": semi_finished_group,
             "raw_material": {
                 "state": "not_configured",
                 "label": "原料仓尚未建立",
                 "message": "当前不显示原料数量，避免把未知数据当成零库存。",
             },
         },
+        "map_url": map_url,
+        "mapped_position_count": len(mapped_positions),
         "last_updated_at": last_updated_at,
         "as_of": datetime.now(_BEIJING).isoformat(timespec="seconds"),
         "read_only": True,

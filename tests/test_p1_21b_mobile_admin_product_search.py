@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 ROOT = Path(__file__).resolve().parents[1]
 MOBILE_HTML = (ROOT / "static" / "mobile_erp.html").read_text(encoding="utf-8")
+WAREHOUSE_HTML = (ROOT / "static" / "warehouse.html").read_text(encoding="utf-8")
 MAIN_SOURCE = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
 
 
@@ -318,7 +319,10 @@ def test_product_search_requires_explicit_selection_and_preserves_units(
     app, ids, _factory = mobile_erp_app
     with TestClient(app) as client:
         _login(client, "mobile-admin")
-        search = client.get("/api/mobile/erp/products", params={"q": "匿名三层"})
+        search = client.get(
+            "/api/mobile/erp/products",
+            params={"q": "匿名三层", "include_zero": "true"},
+        )
         assert search.status_code == 200, search.text
         payload = search.json()
         assert payload["count"] == 2
@@ -350,6 +354,85 @@ def test_product_search_requires_explicit_selection_and_preserves_units(
         assert "quantity_total" not in data["inventory"]["raw_material"]
 
 
+def test_product_search_defaults_to_real_stock_and_returns_authoritative_summary(
+    mobile_erp_app,
+) -> None:
+    app, ids, _factory = mobile_erp_app
+    with TestClient(app) as client:
+        _login(client, "mobile-admin")
+        search = client.get("/api/mobile/erp/products", params={"q": "NMJ"})
+        assert search.status_code == 200, search.text
+        payload = search.json()
+        assert payload["matched_product_count"] == 2
+        assert payload["zero_stock_match_count"] == 1
+        assert [row["id"] for row in payload["items"]] == [ids["product"]]
+        summary = payload["items"][0]["inventory_summary"]
+        assert summary == {
+            "has_stock": True,
+            "position_count": 3,
+            "finished": {
+                "unit": "只",
+                "quantity_total": 14,
+                "quantity_available": 11,
+                "quantity_reserved": 3,
+                "quantity_pending_pick": 3,
+            },
+            "semi_finished": {
+                "unit": "张",
+                "quantity_total": 10,
+                "quantity_available": 8,
+                "quantity_reserved": 2,
+                "quantity_pending_pick": 0,
+            },
+        }
+
+
+def test_admin_can_include_zero_stock_but_scoped_employee_cannot_expand_search(
+    mobile_erp_app,
+) -> None:
+    app, ids, _factory = mobile_erp_app
+    with TestClient(app) as client:
+        _login(client, "mobile-admin")
+        search = client.get(
+            "/api/mobile/erp/products",
+            params={"q": "NMJ", "include_zero": "true"},
+        )
+        assert search.status_code == 200, search.text
+        rows = {row["id"]: row for row in search.json()["items"]}
+        assert set(rows) == {ids["product"], ids["product_two"]}
+        assert rows[ids["product_two"]]["inventory_summary"]["has_stock"] is False
+        assert rows[ids["product_two"]]["inventory_summary"]["position_count"] == 0
+
+    with TestClient(app) as client:
+        _login(client, "mobile-scoped")
+        denied = client.get(
+            "/api/mobile/erp/products",
+            params={"q": "NMJ", "include_zero": "true"},
+        )
+        assert denied.status_code == 403
+
+
+def test_dimension_search_accepts_common_x_separators_without_mutating_product(
+    mobile_erp_app,
+) -> None:
+    app, ids, factory = mobile_erp_app
+    from app.models.product import Product
+
+    with TestClient(app) as client:
+        _login(client, "mobile-admin")
+        for keyword in ("420x310x260", "420X310X260", "420×310×260"):
+            response = client.get("/api/mobile/erp/products", params={"q": keyword})
+            assert response.status_code == 200, response.text
+            assert [row["id"] for row in response.json()["items"]] == [ids["product"]]
+    with factory() as db:
+        product = db.get(Product, ids["product"])
+        assert (product.length_mm, product.width_mm, product.height_mm) == (
+            Decimal("420"),
+            Decimal("310"),
+            Decimal("260"),
+        )
+
+
 def test_inventory_returns_all_real_positions_and_only_real_map_links(
     mobile_erp_app,
 ) -> None:
@@ -372,6 +455,10 @@ def test_inventory_returns_all_real_positions_and_only_real_map_links(
     assert ledger["map_url"] is None
     assert semi["map_status"] == "unplaced"
     assert semi["map_url"] is None
+    assert data["mapped_position_count"] == 1
+    assert "source=mobile-product-all" in data["map_url"]
+    assert f"customer_id={data['product']['customer_id']}" in data["map_url"]
+    assert "keyword=MB001" in data["map_url"]
 
 
 def test_customer_scope_and_warehouse_permission_fail_closed(mobile_erp_app) -> None:
@@ -380,10 +467,7 @@ def test_customer_scope_and_warehouse_permission_fail_closed(mobile_erp_app) -> 
         _login(client, "mobile-scoped")
         visible = client.get("/api/mobile/erp/products", params={"q": "MB"})
         assert visible.status_code == 200
-        assert {row["id"] for row in visible.json()["items"]} == {
-            ids["product"],
-            ids["product_two"],
-        }
+        assert {row["id"] for row in visible.json()["items"]} == {ids["product"]}
         hidden = client.get("/api/mobile/erp/products", params={"q": "OTHER"})
         assert hidden.status_code == 200
         assert hidden.json()["items"] == []
@@ -433,6 +517,11 @@ def test_mobile_page_is_compact_read_only_and_keeps_map_return_state() -> None:
         "原料仓尚未建立",
         "有多个结果时必须自己点选",
         "返回产品",
+        "输入客户、存货编码、产品名称或规格",
+        "包含零库存产品",
+        "查看位置",
+        "当前无在库数量",
+        "地图定位全部",
     ):
         assert text in MOBILE_HTML
     assert "overflow-x: hidden" in MOBILE_HTML
@@ -440,6 +529,11 @@ def test_mobile_page_is_compact_read_only_and_keeps_map_return_state() -> None:
     assert "new AbortController()" in MOBILE_HTML
     assert "generation !== state.searchGeneration" in MOBILE_HTML
     assert "generation !== state.detailGeneration" in MOBILE_HTML
+    assert "include_zero" in MOBILE_HTML
+    assert "product.inventory_summary" in MOBILE_HTML
+    assert "openProductMap(data)" in MOBILE_HTML
+    assert 'urlCustomerId=Number(params.get("customer_id"))' in WAREHOUSE_HTML
+    assert 'await loadFloor3Locations(true)' in WAREHOUSE_HTML
     assert "Search text, candidates and selected product remain in memory" in MOBILE_HTML
     assert "readonly=1" not in MOBILE_HTML  # map URLs come only from the trusted API.
     assert 'method: "POST"' not in MOBILE_HTML

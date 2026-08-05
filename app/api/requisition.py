@@ -219,6 +219,13 @@ INACTIVE_REQUISITION_ITEM_STATUSES = {
     "已作废",
     "已撤回",
 }
+NON_EFFECTIVE_LEGACY_REQUISITION_STATUSES = (
+    INACTIVE_REQUISITION_ITEM_STATUSES
+    | {
+        "merged_pending",
+        "supplier_requisition_created",
+    }
+)
 SPECIAL_PROCESSES = {"无", "大做小", "双拼", "多拼"}
 SUPPLIER_MATERIAL_FLUTES = {"AAA", "ABC", "AB", "E", "BE", "B", "C", "A"}
 
@@ -3466,6 +3473,15 @@ def _active_supplier_requisition_facts(
     item: OrderItem,
     req_item: RequisitionItem | None = None,
 ) -> dict[str, object]:
+    if req_item is None:
+        return _active_requisition_facts_by_item_ids(db, [item.id]).get(
+            item.id,
+            {
+                "source_key": f"order_item:{item.id}",
+                "quantity": 0,
+                "orders": [],
+            },
+        )
     source_key = _supplier_requisition_source_key(item, req_item)
     rows = db.execute(
         select(SupplierRequisitionOrderItem, SupplierRequisitionOrder, User)
@@ -3533,7 +3549,7 @@ def _duplicate_requisition_detail(facts: dict[str, object]) -> str:
     return f"当前采购需求已经报完。已有报料：{summary}。如确需增加，请使用超量报料确认。"
 
 
-def _active_supplier_requisition_facts_by_item_ids(
+def _active_requisition_facts_by_item_ids(
     db: Session,
     item_ids: list[int],
 ) -> dict[int, dict[str, object]]:
@@ -3588,6 +3604,53 @@ def _active_supplier_requisition_facts_by_item_ids(
                 if operator is not None
                 else None
             ),
+        }
+        result[item_id]["quantity"] = int(result[item_id]["quantity"]) + int(
+            fact["requisition_qty"]
+        )
+        item_orders = result[item_id]["orders"]
+        if isinstance(item_orders, list):
+            item_orders.append(fact)
+
+    legacy_rows = db.execute(
+        select(RequisitionItem, Requisition, User)
+        .join(Requisition, Requisition.id == RequisitionItem.requisition_id)
+        .outerjoin(User, User.id == Requisition.created_by)
+        .where(
+            RequisitionItem.order_item_id.in_(clean_ids),
+            func.lower(RequisitionItem.status).notin_(
+                NON_EFFECTIVE_LEGACY_REQUISITION_STATUSES
+            ),
+            func.lower(Requisition.status).notin_(
+                NON_EFFECTIVE_LEGACY_REQUISITION_STATUSES
+            ),
+        )
+        .order_by(Requisition.created_at.asc(), Requisition.id.asc())
+    ).all()
+    for legacy_line, requisition, operator in legacy_rows:
+        item_id = int(legacy_line.order_item_id or 0)
+        if item_id not in result:
+            continue
+        fact = {
+            "supplier_order_id": None,
+            "supplier_order_number": requisition.requisition_number,
+            "supplier_name": requisition.supplier_name,
+            "requisition_qty": int(legacy_line.requisition_qty or 0),
+            "created_at": (
+                beijing_naive_to_api(requisition.created_at)
+                if requisition.created_at is not None
+                else None
+            ),
+            "operator": (
+                operator.display_name
+                or operator.real_name
+                or operator.username
+                if operator is not None
+                else None
+            ),
+            "source_type": "legacy_material_requisition",
+            "legacy_requisition_id": requisition.id,
+            "legacy_requisition_item_id": legacy_line.id,
         }
         result[item_id]["quantity"] = int(result[item_id]["quantity"]) + int(
             fact["requisition_qty"]
@@ -5832,7 +5895,7 @@ def pending_requisitions(
             }
         )
     item_models = {item.id: item for item, *_ in rows}
-    active_requisition_map = _active_supplier_requisition_facts_by_item_ids(
+    active_requisition_map = _active_requisition_facts_by_item_ids(
         db,
         list(item_models),
     )

@@ -63,7 +63,7 @@ def test_saved_replenishment_is_reopenable_from_reported_history() -> None:
     assert 'return "库存补库单"' in INDEX
     assert "去仓库来料入库" in INDEX
     assert "voidReportedReplenishment(row)" in INDEX
-    assert "/stock-replenishment/orders/\"+row.id+\"/void" in INDEX
+    assert "/stock-replenishment/orders/\"+orderId+\"/void" in INDEX
     assert "stockReportedReplenishment(row)" not in INDEX
     assert "/stock-replenishment/orders/\"+row.id+\"/stock" not in INDEX
     assert "this.openStockReplenishmentPrint(data)" in INDEX

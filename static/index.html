@@ -2569,7 +2569,7 @@
                 </table>
               </data-panel>
               <pager v-if="requisitionTab==='waiting'" :page="pages.requisitionHolds" :total="requisitionHoldsTotal" :page-size="pageSize" :always="true" :compact="true" @change="pages.requisitionHolds=$event; loadRequisitionHolds()"></pager>
-              <data-panel v-if="requisitionTab==='submitted'" :empty="!requisitionItems.length"><table class="reported-compact-table"><thead><tr><th>报料单号</th><th>来源</th><th>供应商</th><th>客户 / 订单</th><th>存货编码 / 产品</th><th>明细数</th><th>报料数</th><th>入库状态</th><th>日期</th><th>操作</th></tr></thead><tbody><tr v-for="row in requisitionItems" :key="row.source_type + '-' + row.id" :class="{'row-voided': row.status==='voided' || row.status==='已取消'}"><td><strong>{{ row.document_number }}</strong></td><td><span :class="['status', row.source_type==='supplier_order' ? 'blue' : row.source_type==='stock_replenishment' ? 'orange' : 'green']">{{ reportedSourceLabel(row) }}</span></td><td>{{ supplierDisplayName(row.supplier_name || '-') }}</td><td class="reported-source-cell" :title="fullJoin(row.order_numbers) + '\\n' + fullJoin(row.customer_names)"><div><span v-for="orderNo in compactList(row.order_numbers)" :key="orderNo" class="reported-chip">{{ orderNo }}</span><span v-if="compactMore(row.order_numbers)" class="reported-more">+{{ compactMore(row.order_numbers) }}</span></div><div class="muted"><span v-for="customerName in compactList(row.customer_names)" :key="customerName" class="reported-chip">{{ shortCustomerName(customerName) }}</span><span v-if="compactMore(row.customer_names)" class="reported-more">+{{ compactMore(row.customer_names) }}</span></div></td><td class="reported-code-cell" :title="fullJoin(row.product_codes)"><strong><span v-for="code in compactList(row.product_codes)" :key="code" class="reported-chip">{{ code }}</span><span v-if="compactMore(row.product_codes)" class="reported-more">+{{ compactMore(row.product_codes) }}</span></strong></td><td>{{ row.item_count }}</td><td><strong>{{ row.requisition_qty || 0 }}</strong></td><td>{{ row.incoming_status || '-' }}</td><td style="font-size:12px">{{ formatBeijingDate(row.created_at) }}</td><td><div class="toolbar-group"><button class="btn small" @click="openReportedDocument(row)">打印</button><button v-if="row.source_type==='stock_replenishment' && ['confirmed','partially_stocked'].includes(row.status) && (isWorkshop || canAdmin)" class="btn small success" @click="openIncomingPage()">去仓库来料入库</button><button v-else-if="row.source_type!=='stock_replenishment' && row.incoming_status!=='已作废' && (isWorkshop || canAdmin)" class="btn small" @click="openIncomingPage()">去入库</button><button v-if="row.source_type==='stock_replenishment' && row.can_void && canRequisition" class="btn small danger" @click="voidReportedReplenishment(row)">撤销报料</button><button v-if="row.source_type==='supplier_order' && row.status!=='voided' && canRequisition" class="btn small danger" @click="voidReportedSupplierOrder(row)">作废</button><button v-if="row.source_type==='composite_bom_requisition' && row.can_void && canRequisition" class="btn small danger" @click="voidReportedCompositeRequisition(row)">作废</button></div></td></tr></tbody></table></data-panel>
+              <data-panel v-if="requisitionTab==='submitted'" :empty="!requisitionItems.length"><table class="reported-compact-table"><thead><tr><th>报料单号</th><th>来源</th><th>供应商</th><th>客户 / 订单</th><th>存货编码 / 产品</th><th>明细数</th><th>报料数</th><th>入库状态</th><th>日期</th><th>操作</th></tr></thead><tbody><tr v-for="row in requisitionItems" :key="row.source_type + '-' + row.id" :class="{'row-voided': row.status==='voided' || row.status==='已取消'}"><td><strong>{{ row.document_number }}</strong></td><td><span :class="['status', row.source_type==='supplier_order' ? 'blue' : row.source_type==='stock_replenishment' ? 'orange' : 'green']">{{ reportedSourceLabel(row) }}</span></td><td>{{ supplierDisplayName(row.supplier_name || '-') }}</td><td class="reported-source-cell" :title="fullJoin(row.order_numbers) + '\\n' + fullJoin(row.customer_names)"><div><span v-for="orderNo in compactList(row.order_numbers)" :key="orderNo" class="reported-chip">{{ orderNo }}</span><span v-if="compactMore(row.order_numbers)" class="reported-more">+{{ compactMore(row.order_numbers) }}</span></div><div class="muted"><span v-for="customerName in compactList(row.customer_names)" :key="customerName" class="reported-chip">{{ shortCustomerName(customerName) }}</span><span v-if="compactMore(row.customer_names)" class="reported-more">+{{ compactMore(row.customer_names) }}</span></div></td><td class="reported-code-cell" :title="fullJoin(row.product_codes)"><strong><span v-for="code in compactList(row.product_codes)" :key="code" class="reported-chip">{{ code }}</span><span v-if="compactMore(row.product_codes)" class="reported-more">+{{ compactMore(row.product_codes) }}</span></strong></td><td>{{ row.item_count }}</td><td><strong>{{ row.requisition_qty || 0 }}</strong></td><td>{{ row.incoming_status || '-' }}</td><td style="font-size:12px">{{ formatBeijingDate(row.created_at) }}</td><td><div class="toolbar-group"><button class="btn small" @click="openReportedDocument(row)">打印</button><button v-if="row.source_type==='stock_replenishment' && ['confirmed','partially_stocked'].includes(row.status) && (isWorkshop || canAdmin)" class="btn small success" @click="openIncomingPage()">去仓库来料入库</button><button v-else-if="row.source_type!=='stock_replenishment' && row.incoming_status!=='已作废' && (isWorkshop || canAdmin)" class="btn small" @click="openIncomingPage()">去入库</button><button v-if="row.source_type==='stock_replenishment' && row.can_void && canRequisition" class="btn small danger" :disabled="stockReplenishmentVoidBusy(row) || stockReplenishmentVoidUncertain(row)" @click="voidReportedReplenishment(row)">{{ stockReplenishmentVoidBusy(row) ? '撤销中…' : (stockReplenishmentVoidUncertain(row) ? '请刷新核对' : '撤销报料') }}</button><button v-if="row.source_type==='supplier_order' && row.status!=='voided' && canRequisition" class="btn small danger" @click="voidReportedSupplierOrder(row)">作废</button><button v-if="row.source_type==='composite_bom_requisition' && row.can_void && canRequisition" class="btn small danger" @click="voidReportedCompositeRequisition(row)">作废</button></div></td></tr></tbody></table></data-panel>
               <div v-if="requisitionTab==='submitted'" class="stack" style="margin-top:8px">
                 <details v-for="row in requisitionItems.filter(item => item.source_type==='composite_bom_requisition' && (item.line_items || []).length)" :key="'bom-lines-'+row.id" class="card" style="padding:8px 12px">
                   <summary style="cursor:pointer;font-weight:700">明细｜{{ row.document_number }}</summary>
@@ -6354,6 +6354,7 @@
             supplierRequisitionSaveState:{saving:false, committed:false, uncertain:false, result:null},
             compositeRequisitionSaveState:{saving:false, committed:false, uncertain:false, result:null},
             stockReplenishmentSaveState:{saving:false, committed:false, uncertain:false, result:null},
+            stockReplenishmentVoidState:{orderId:null, documentNumber:"", uncertainIds:{}},
             stockPolicyWarnings: [], stockReplenishmentLocations: [], stockReplenishmentProducts: [], stockReplenishmentCompanions: [],
             stockReplenishmentForm: { source_type:"customer_request", idempotency_key:null, supplier_name:"", customer_id:null, remark:"", stock_now:false, items:[] },
             lowStockExpandedCustomers: {},
@@ -11514,6 +11515,7 @@
               this.requisitionItems = data.items || [];
               this.requisitionReportedTotal = Number(data.total || 0);
               this.requisitionReportedLoaded = true;
+              this.stockReplenishmentVoidState.uncertainIds = {};
             } catch (error) {
               if (!this.isCancelledRequest(error)) throw error;
             } finally {
@@ -15999,13 +16001,67 @@
               window.open(`/requisition-print.html?id=${row.id}`, "_blank");
             }
           },
+          stockReplenishmentVoidBusy(row) {
+            return Number(this.stockReplenishmentVoidState.orderId) === Number(row?.id);
+          },
+          stockReplenishmentVoidUncertain(row) {
+            return !!this.stockReplenishmentVoidState.uncertainIds[Number(row?.id)];
+          },
           async voidReportedReplenishment(row) {
-            if (!confirm("确认撤销尚未收货的补库报料单 "+row.document_number+"？")) return;
+            if (this.stockReplenishmentVoidBusy(row) || this.stockReplenishmentVoidUncertain(row)) return false;
+            const orderId = Number(row.id);
+            const documentNumber = String(row.document_number || `#${orderId}`);
+            if (!orderId) {
+              this.showToast("补库报料单不存在，无法撤销", true);
+              return false;
+            }
+            if (!confirm("确认撤销尚未收货的补库报料单 "+documentNumber+"？")) return false;
+            this.stockReplenishmentVoidState = {
+              ...this.stockReplenishmentVoidState,
+              orderId,
+              documentNumber,
+            };
             try {
-              await axios.put("/api/requisition/stock-replenishment/orders/"+row.id+"/void");
-              await Promise.all([this.loadRequisition(), this.loadReportedDocuments()]);
-              this.showToast("补库报料单已撤销，未增加任何库存");
-            } catch(error) { this.showToast(this.errorMessage(error),true); }
+              let result;
+              try {
+                const response = await axios.put("/api/requisition/stock-replenishment/orders/"+orderId+"/void");
+                result = response.data || {};
+              } catch(error) {
+                const status = Number(error?.response?.status || 0);
+                if (!error?.response || status >= 500) {
+                  this.stockReplenishmentVoidState.uncertainIds = {
+                    ...this.stockReplenishmentVoidState.uncertainIds,
+                    [orderId]: true,
+                  };
+                  this.showToast(`补库报料单 ${documentNumber} 的撤销结果不确定，请刷新“已报料”和“来料待入库”核对，刷新前不要重复撤销`, true);
+                } else {
+                  this.showToast(this.errorMessage(error), true);
+                }
+                return false;
+              }
+              row.status = "voided";
+              row.can_void = false;
+              row.incoming_status = "已作废";
+              const refreshed = await Promise.allSettled([
+                this.loadRequisition(),
+                this.loadReportedDocuments(),
+              ]);
+              const refreshFailed = refreshed.some(item => item.status === "rejected" || item.value === false);
+              if (refreshFailed) {
+                this.showToast(`补库报料单 ${documentNumber} 已经撤销；列表刷新失败，请刷新核对，未增加任何库存`, true);
+              } else {
+                this.showToast("补库报料单已撤销，未增加任何库存");
+              }
+              return {...result, _refresh_failed:refreshFailed};
+            } finally {
+              if (Number(this.stockReplenishmentVoidState.orderId) === orderId) {
+                this.stockReplenishmentVoidState = {
+                  ...this.stockReplenishmentVoidState,
+                  orderId:null,
+                  documentNumber:"",
+                };
+              }
+            }
           },
           async voidReportedCompositeRequisition(row) {
             if (!confirm(`确认作废组合 BOM 报料单 ${row.document_number}？父件和组件将自动回到待报料。`)) return;

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from decimal import Decimal
 import hashlib
 from pathlib import Path
+from threading import Barrier
 
 import pytest
 from fastapi import FastAPI
@@ -1085,8 +1087,19 @@ def test_replenishment_stays_reported_routes_to_incoming_and_voids_only_before_r
         assert all(
             row["item_id"] != f"sr{second_item_id}" for row in after_void_pending
         )
+        blocked_receipt = client.put(
+            f"/api/incoming/receive/sr{second_item_id}",
+            json={
+                "received_quantity": 20,
+                "idempotency_key": "test-replenishment-void-before-receipt",
+            },
+        )
+        assert blocked_receipt.status_code == 409, blocked_receipt.text
+        assert "已作废" in blocked_receipt.json()["detail"]
 
     with session_factory() as session:
+        from app.models.audit import OperationLog
+
         assert session.scalar(select(func.count(InventoryLot.id))) == 1
         assert session.scalar(select(func.count(InventoryMovement.id))) == 1
         assert (
@@ -1106,3 +1119,136 @@ def test_replenishment_stays_reported_routes_to_incoming_and_voids_only_before_r
         assert lot is not None
         assert lot.inventory_type == "semi_finished"
         assert lot.source_ref_type == "stock_replenishment_receipt"
+        assert (
+            session.scalar(
+                select(func.count(OperationLog.id)).where(
+                    OperationLog.action == "VOID_STOCK_REPLENISHMENT"
+                )
+            )
+            == 1
+        )
+
+
+def test_repeated_replenishment_void_is_idempotent_with_one_audit_log(
+    stock_replenishment_app,
+) -> None:
+    app, session_factory = stock_replenishment_app
+    with TestClient(app) as client:
+        _login(client)
+        created = client.post(
+            "/api/requisition/stock-replenishment/orders",
+            json=_customer_replenishment_payload(quantity=20),
+        )
+        assert created.status_code == 201, created.text
+        order = created.json()
+        first = client.put(
+            f"/api/requisition/stock-replenishment/orders/{order['id']}/void"
+        )
+        replay = client.put(
+            f"/api/requisition/stock-replenishment/orders/{order['id']}/void"
+        )
+
+    assert first.status_code == 200, first.text
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["id"] == first.json()["id"]
+    assert replay.json()["status"] == "voided"
+
+    from app.models.audit import OperationLog
+
+    with session_factory() as session:
+        assert (
+            session.scalar(
+                select(func.count(OperationLog.id)).where(
+                    OperationLog.action == "VOID_STOCK_REPLENISHMENT"
+                )
+            )
+            == 1
+        )
+
+
+def test_concurrent_voids_and_receipt_leave_one_legal_final_state(
+    stock_replenishment_app,
+) -> None:
+    app, session_factory = stock_replenishment_app
+    with TestClient(app) as client:
+        _login(client)
+        created = client.post(
+            "/api/requisition/stock-replenishment/orders",
+            json=_customer_replenishment_payload(quantity=20),
+        )
+        assert created.status_code == 201, created.text
+        order = created.json()
+        item_id = order["items"][0]["id"]
+
+    barrier = Barrier(3)
+
+    def void_once() -> tuple[int, dict]:
+        with TestClient(app) as client:
+            _login(client)
+            barrier.wait(timeout=10)
+            response = client.put(
+                f"/api/requisition/stock-replenishment/orders/{order['id']}/void"
+            )
+            return response.status_code, response.json()
+
+    def receive_once() -> tuple[int, dict]:
+        with TestClient(app) as client:
+            _login(client)
+            barrier.wait(timeout=10)
+            response = client.put(
+                f"/api/incoming/receive/sr{item_id}",
+                json={
+                    "received_quantity": 20,
+                    "idempotency_key": "test-replenishment-concurrent-receipt",
+                },
+            )
+            return response.status_code, response.json()
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        first_void = executor.submit(void_once)
+        second_void = executor.submit(void_once)
+        receipt = executor.submit(receive_once)
+        void_results = [first_void.result(timeout=30), second_void.result(timeout=30)]
+        receipt_result = receipt.result(timeout=30)
+
+    from app.models.audit import OperationLog
+    from app.models.incoming_receipt import IncomingReceiptItem
+    from app.models.stock_replenishment import StockReplenishmentOrder
+    from app.models.warehouse_inventory import InventoryLot, InventoryMovement
+
+    with session_factory() as session:
+        stored = session.get(StockReplenishmentOrder, order["id"])
+        assert stored is not None
+        void_log_count = int(
+            session.scalar(
+                select(func.count(OperationLog.id)).where(
+                    OperationLog.action == "VOID_STOCK_REPLENISHMENT",
+                    OperationLog.entity_id == order["id"],
+                )
+            )
+            or 0
+        )
+        receipt_count = int(
+            session.scalar(
+                select(func.count(IncomingReceiptItem.id)).where(
+                    IncomingReceiptItem.stock_replenishment_item_id == item_id
+                )
+            )
+            or 0
+        )
+        lot_count = int(session.scalar(select(func.count(InventoryLot.id))) or 0)
+        movement_count = int(
+            session.scalar(select(func.count(InventoryMovement.id))) or 0
+        )
+
+    if receipt_result[0] == 200:
+        assert [status for status, _payload in void_results] == [409, 409]
+        assert stored.status == "stocked"
+        assert void_log_count == 0
+        assert (receipt_count, lot_count, movement_count) == (1, 1, 1)
+    else:
+        assert receipt_result[0] == 409, receipt_result
+        assert [status for status, _payload in void_results] == [200, 200]
+        assert stored.status == "voided"
+        assert void_log_count == 1
+        assert (receipt_count, lot_count, movement_count) == (0, 0, 0)

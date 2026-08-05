@@ -5,7 +5,7 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.time_contract import (
@@ -83,6 +83,7 @@ def _stock_target(
     item_key: int | str,
     *,
     allow_closed: bool = False,
+    claim_for_receipt: bool = False,
 ) -> tuple[StockReplenishmentOrder, StockReplenishmentOrderItem]:
     item_id = _stock_item_id(item_key)
     if item_id is None:
@@ -105,6 +106,47 @@ def _stock_target(
         )
     if not allow_closed and int(item.stocked_quantity or 0) >= int(item.quantity or 0):
         raise IncomingReceiptError("该补库明细已经全部入库", 409)
+    if claim_for_receipt:
+        claim = db.execute(
+            update(StockReplenishmentOrder)
+            .where(
+                StockReplenishmentOrder.id == order.id,
+                StockReplenishmentOrder.status.in_(
+                    ("confirmed", "partially_stocked")
+                ),
+            )
+            .values(status=StockReplenishmentOrder.status)
+            .execution_options(synchronize_session=False)
+        )
+        if claim.rowcount != 1:
+            db.expire_all()
+            current = db.get(StockReplenishmentOrder, order.id)
+            if current is None:
+                raise IncomingReceiptError("补库来料单不存在", 404)
+            raise IncomingReceiptError(
+                "该补库明细当前不可收货，可能已入库或已作废", 409
+            )
+        # 竞争事务可能刚完成分批收货；锁定状态后必须重新读取最新累计数量。
+        db.expire_all()
+        refreshed = db.execute(
+            select(StockReplenishmentOrderItem, StockReplenishmentOrder)
+            .join(
+                StockReplenishmentOrder,
+                StockReplenishmentOrder.id
+                == StockReplenishmentOrderItem.replenishment_order_id,
+            )
+            .where(StockReplenishmentOrderItem.id == item_id)
+            .execution_options(populate_existing=True)
+        ).one_or_none()
+        if refreshed is None:
+            raise IncomingReceiptError("补库来料明细不存在", 404)
+        item, order = refreshed
+        if order.status not in {"confirmed", "partially_stocked"}:
+            raise IncomingReceiptError(
+                "该补库明细当前不可收货，可能已入库或已作废", 409
+            )
+        if int(item.stocked_quantity or 0) >= int(item.quantity or 0):
+            raise IncomingReceiptError("该补库明细已经全部入库", 409)
     return order, item
 
 
@@ -966,7 +1008,7 @@ def _receive_stock_replenishment_one(
     idempotency_key: str,
     audit_context: dict[str, object] | None = None,
 ) -> IncomingReceiptItem:
-    order, item = _stock_target(db, item_key)
+    order, item = _stock_target(db, item_key, claim_for_receipt=True)
     planned = int(item.quantity or 0)
     before = int(
         db.scalar(

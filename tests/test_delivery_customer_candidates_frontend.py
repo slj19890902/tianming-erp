@@ -63,4 +63,26 @@ def test_batch_picker_uses_fast_server_paging_with_clear_loading_state() -> None
     assert "list_all: true" not in loader
     assert "page: Math.max(1, Number(page || 1))" in loader
     assert "page_size: this.deliveryBatchPicker.page_size" in loader
-    assert "正在载入待送订单，请稍候" in loader
+    assert "正在载入待送货物，请稍候" in loader
+
+
+def test_selecting_customer_prefetches_first_delivery_page_without_duplicate_request() -> None:
+    change = _method_body("onDeliveryCustomerChange")
+    toggle = _method_body("toggleDeliveryBatchPicker")
+    unordered_toggle = _method_body("toggleUnorderedFinishedPicker")
+
+    assert "this.loadDeliveryBatchItems(1)" in change
+    assert "this.loadUnorderedFinishedCandidates(1)" in change
+    assert 'inventoryOnly ? "unordered_finished" : "order"' in change
+    assert "!this.deliveryBatchPicker.loading" in toggle
+    assert "!this.unorderedFinishedPicker.loading" in unordered_toggle
+
+
+def test_delivery_picker_uses_plain_language_and_shows_known_item_count() -> None:
+    modal_start = INDEX.index("modal.type === 'delivery'")
+    modal_end = INDEX.index("modal.type === 'tianhuaPreimport'", modal_start)
+    modal = INDEX[modal_start:modal_end]
+
+    assert "选择待送货物" in modal
+    assert "deliveryPendingCountForSelectedCustomer()" in modal
+    assert "选择待送订单" not in modal

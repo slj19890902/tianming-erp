@@ -1775,7 +1775,7 @@
                 <tbody><tr v-for="row in customers" :key="row.id">
                   <td>{{ row.customer_number }}</td><td>{{ row.customer_code }}</td><td>{{ row.name }}</td><td>{{ row.contact_person || "-" }}</td><td>{{ row.phone || "-" }}</td>
                   <td>{{ row.payment_term_days }} 天</td><td>{{ row.delivery_method }}</td><td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td>
-                  <td class="toolbar-group"><button v-if="canViewQuotations" class="btn small primary" @click="openCustomerQuotations(row)">报价</button><button v-if="canViewContracts" class="btn small primary" @click="openCustomerContracts(row)">合同</button><button class="btn small" @click="openCustomer(row)">{{ canEditCustomers ? "查看/编辑" : "查看" }}</button><button class="btn small" @click="openMasterVersionHistory('customer',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateCustomers" :class="['btn','small',row.is_active ? 'danger' : 'success']" @click="toggleCustomerStatus(row)">{{ row.is_active ? "停用" : "启用" }}</button></td>
+                  <td class="toolbar-group"><button v-if="canViewQuotations" class="btn small primary" @click="openCustomerQuotations(row)">报价</button><button v-if="canViewContracts" class="btn small primary" @click="openCustomerContracts(row)">合同</button><button class="btn small" @click="openCustomer(row)">{{ canEditCustomers ? "查看/编辑" : "查看" }}</button><button class="btn small" @click="openMasterVersionHistory('customer',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateCustomers" :class="['btn','small',row.is_active ? 'danger' : 'success']" :disabled="customerLifecycleBusy()" @click="toggleCustomerStatus(row)">{{ customerLifecyclePending('status',row.id) ? '处理中…' : (row.is_active ? "停用" : "启用") }}</button></td>
                 </tr></tbody></table>
               </data-panel>
               <pager :page="pages.customers" :total="customersTotal" :page-size="pageSize" @change="pages.customers=$event; loadCustomers()"></pager>
@@ -2001,7 +2001,7 @@
                   <div class="toolbar-group">
                     <button v-if="canViewCosts" class="btn" @click="openCompare()">比价</button>
                     <button v-if="canAdmin" class="btn" @click="togglePaperCodePanel">材质规则维护</button>
-                    <button v-if="canAdmin" class="btn success" @click="toggleMaterialComposer">新增/组合材质</button>
+                    <button v-if="canAdmin" class="btn success" :disabled="materialComposerSavePending" @click="toggleMaterialComposer">{{ materialComposerSavePending ? '保存中…' : '新增/组合材质' }}</button>
                   </div>
                 </div>
                 <datalist id="material-composer-suppliers">
@@ -2015,8 +2015,8 @@
                       <button class="btn small" @click="openPriceAdjust()">供应商调价</button>
                       <input class="input" style="width:210px" list="material-composer-suppliers" v-model.trim="paperCodeSupplierFilter" placeholder="按供应商筛选" />
                       <input class="input" style="width:170px" v-model.trim="paperCodeKeyword" placeholder="搜索代码/纸种/等级" @keyup.enter="loadPaperCodes" />
-                      <button class="btn small" @click="loadPaperCodes">查询</button>
-                      <button class="btn small" @click="resetPaperCodeForm">新增代码</button>
+                      <button class="btn small" :disabled="paperCodesLoading || paperCodeActionBusy()" @click="loadPaperCodes">{{ paperCodesLoading ? '查询中…' : '查询' }}</button>
+                      <button class="btn small" :disabled="paperCodeActionBusy()" @click="resetPaperCodeForm">新增代码</button>
                     </div>
                   </div>
                   <div class="notice" style="margin:8px 0">嘉林亿规则：最小修边225mm；最小切宽270mm；最小切长500mm；100米以下接受随机配料并按牌价计价；分纸加价金额待确认，暂不参与自动报价。</div>
@@ -2028,23 +2028,26 @@
                     <div class="field"><label>等级/说明</label><input class="input" v-model.trim="paperCodeForm.paper_grade" /></div>
                     <div class="field"><label>纸张用途</label><select class="select" v-model="paperCodeForm.paper_role"><option value="">通用</option><option>面纸</option><option>芯纸</option><option>中纸</option><option>里纸</option></select></div>
                     <div class="field wide"><label>备注</label><input class="input" v-model.trim="paperCodeForm.remark" /></div>
-                    <div class="field"><label>操作</label><button class="btn primary" :disabled="loading" @click="savePaperCode">{{ paperCodeForm.id ? '保存修改' : '新增代码' }}</button></div>
+                    <div class="field"><label>操作</label><button class="btn primary" :disabled="paperCodeActionBusy()" @click="savePaperCode">{{ paperCodeActionPending('save') ? '保存中…' : (paperCodeForm.id ? '保存修改' : '新增代码') }}</button></div>
                   </div>
+                  <div v-if="paperCodeError" class="notice danger" style="margin:8px 0">{{ paperCodeError }} <button class="btn small" :disabled="paperCodesLoading || paperCodeActionBusy()" @click="loadPaperCodes">重新加载</button></div>
+                  <div v-if="paperCodesLoading" class="muted" style="padding:12px;text-align:center">基础纸种代码正在加载…</div>
                   <div class="table-wrap"><table><thead><tr><th>供应商</th><th>代码</th><th>纸种</th><th>克重</th><th>等级</th><th>用途</th><th>状态</th><th>操作</th></tr></thead><tbody>
-                    <tr v-for="row in paperCodes" :key="row.id"><td>{{ supplierDisplayName(row.supplier_name) }}</td><td><strong>{{ row.code_char }}</strong></td><td>{{ row.paper_name }}</td><td>{{ row.gram_weight }}g</td><td>{{ row.paper_grade || '-' }}</td><td>{{ row.paper_role || '通用' }}</td><td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td><td class="toolbar-group"><button class="btn small" @click="editPaperCode(row)">编辑</button><button :class="['btn','small',row.is_active?'danger':'success']" @click="togglePaperCodeStatus(row)">{{ row.is_active ? '停用' : '启用' }}</button></td></tr>
+                    <tr v-for="row in paperCodes" :key="row.id"><td>{{ supplierDisplayName(row.supplier_name) }}</td><td><strong>{{ row.code_char }}</strong></td><td>{{ row.paper_name }}</td><td>{{ row.gram_weight }}g</td><td>{{ row.paper_grade || '-' }}</td><td>{{ row.paper_role || '通用' }}</td><td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td><td class="toolbar-group"><button class="btn small" :disabled="paperCodeActionBusy()" @click="editPaperCode(row)">编辑</button><button :class="['btn','small',row.is_active?'danger':'success']" :disabled="paperCodeActionBusy()" @click="togglePaperCodeStatus(row)">{{ paperCodeActionPending('status',row.id) ? '处理中…' : (row.is_active ? '停用' : '启用') }}</button></td></tr>
                   </tbody></table><div v-if="!paperCodes.length" class="empty">当前没有基础纸种代码</div></div>
                 </div>
                 <div v-if="showMaterialComposer" class="panel" style="margin:10px 0;border-color:#60a5fa">
                   <div class="toolbar"><strong>新增/组合材质</strong><span class="muted">选择供应商并输入3位、5位或7位材质代码，系统自动解析和推算建议价</span></div>
                   <div class="form-grid" style="margin:10px 0">
-                    <div class="field"><label>供应商</label><input class="input" list="material-composer-suppliers" v-model.trim="materialComposer.supplier_name" @input="invalidateMaterialComposer" /></div>
-                    <div class="field"><label>层数</label><select class="select" v-model.number="materialComposer.layer_count" @change="onMaterialComposerLayerChange"><option :value="3">三层</option><option :value="5">五层</option><option :value="7">七层</option></select></div>
-                    <div v-if="materialComposer.layer_count === 7" class="field"><label>使用楞型</label><select class="select" v-model="materialComposer.usage_flute_type" @change="invalidateMaterialComposer"><option value="">请选择楞型</option><option v-for="opt in orderItemFluteOptions(materialComposer.layer_count)" :key="opt" :value="opt">{{ opt }}</option></select></div>
-                    <div class="field"><label>材质代码（可含 + 等符号）</label><input class="input" :maxlength="materialComposer.layer_count" :placeholder="`输入${materialComposer.layer_count}位材质代码`" v-model.trim="materialComposer.material_code" @input="onMaterialComposerCodeInput" /></div>
-                    <div class="field sensitive-price"><label>最终保存平方价</label><input class="input" type="number" min="0" step="0.0001" v-model="materialComposer.quote_price" placeholder="规则无法推算时手工填写" @input="materialComposerPriceSource='manual'" /></div>
-                    <div class="field wide"><label>备注</label><input class="input" v-model.trim="materialComposer.remarks" /></div>
-                    <div class="field"><label>操作</label><div class="toolbar-group"><button class="btn" @click="previewMaterialComposition">解析</button><button class="btn success" :disabled="loading || !materialComposerCanSave" @click="saveMaterialComposition">保存为可用材质</button></div></div>
+                    <div class="field"><label>供应商</label><input class="input" :disabled="materialComposerSavePending" list="material-composer-suppliers" v-model.trim="materialComposer.supplier_name" @input="invalidateMaterialComposer" /></div>
+                    <div class="field"><label>层数</label><select class="select" :disabled="materialComposerSavePending" v-model.number="materialComposer.layer_count" @change="onMaterialComposerLayerChange"><option :value="3">三层</option><option :value="5">五层</option><option :value="7">七层</option></select></div>
+                    <div v-if="materialComposer.layer_count === 7" class="field"><label>使用楞型</label><select class="select" :disabled="materialComposerSavePending" v-model="materialComposer.usage_flute_type" @change="invalidateMaterialComposer"><option value="">请选择楞型</option><option v-for="opt in orderItemFluteOptions(materialComposer.layer_count)" :key="opt" :value="opt">{{ opt }}</option></select></div>
+                    <div class="field"><label>材质代码（可含 + 等符号）</label><input class="input" :disabled="materialComposerSavePending" :maxlength="materialComposer.layer_count" :placeholder="`输入${materialComposer.layer_count}位材质代码`" v-model.trim="materialComposer.material_code" @input="onMaterialComposerCodeInput" /></div>
+                    <div class="field sensitive-price"><label>最终保存平方价</label><input class="input" :disabled="materialComposerSavePending || materialComposerPreviewLoading" type="number" min="0" step="0.0001" v-model="materialComposer.quote_price" placeholder="规则无法推算时手工填写" @input="materialComposerPriceSource='manual'" /></div>
+                    <div class="field wide"><label>备注</label><input class="input" :disabled="materialComposerSavePending" v-model.trim="materialComposer.remarks" /></div>
+                    <div class="field"><label>操作</label><div class="toolbar-group"><button class="btn" :disabled="materialComposerSavePending" @click="previewMaterialComposition">{{ materialComposerPreviewLoading ? '解析中…' : '解析' }}</button><button class="btn success" :disabled="materialComposerSavePending || !materialComposerCanSave" @click="saveMaterialComposition">{{ materialComposerSavePending ? '保存中…' : '保存为可用材质' }}</button></div></div>
                   </div>
+                  <div v-if="materialComposerPreviewLoading" class="notice blue">正在按当前供应商和材质代码解析，请稍候…</div>
                   <div v-if="materialComposerInvalidReason" class="notice danger">{{ materialComposerInvalidReason }}</div>
                   <div v-if="materialComposerPreview">
                     <div :class="['notice',materialComposerPreview.valid?'success':'danger']">{{ materialComposerPreview.message }}</div>
@@ -2069,7 +2072,7 @@
                   <td>{{ materialWeightStructure(row) }}</td>
                   <td v-if="canViewCosts" class="cost-sensitive">{{ money(row.quote_price) }}</td>
                   <td>{{ row.quote_date || "-" }}</td>
-                  <td class="toolbar-group"><button v-if="canViewCosts" class="btn small" @click="openPriceHistory(row)">价格历史</button><button class="btn small" @click="openMasterVersionHistory('material',row)">版本 {{ row.version || "-" }}</button><button v-if="canAdmin" class="btn small" @click="openMaterial(row)">编辑</button><button v-if="user.role==='admin'" class="btn small danger" @click="deleteMaterial(row)">删除</button></td>
+                  <td class="toolbar-group"><button v-if="canViewCosts" class="btn small" @click="openPriceHistory(row)">价格历史</button><button class="btn small" @click="openMasterVersionHistory('material',row)">版本 {{ row.version || "-" }}</button><button v-if="canAdmin" class="btn small" @click="openMaterial(row)">编辑</button><button v-if="user.role==='admin'" class="btn small danger" :disabled="materialLifecycleBusy()" @click="deleteMaterial(row)">{{ materialLifecyclePending('deactivate',row.id) ? '处理中…' : '停用' }}</button></td>
                 </tr></tbody></table>
               </data-panel>
               <data-panel v-else-if="productTab === 'materialCandidates'" :empty="false">
@@ -2164,8 +2167,8 @@
                       <label style="display:flex;align-items:center;gap:6px;margin-top:22px"><input type="checkbox" v-model="fluteRuleForm.is_active" /> 启用</label>
                     </div>
                     <div class="toolbar-group" style="margin-bottom:12px">
-                      <button class="btn primary" @click="saveFluteRule()">{{ fluteRuleForm.id ? '保存修改' : '新增规则' }}</button>
-                      <button v-if="fluteRuleForm.id" class="btn" @click="resetFluteRuleForm()">取消编辑</button>
+                      <button class="btn primary" :disabled="fluteRuleActionBusy()" @click="saveFluteRule()">{{ fluteRuleActionPending('save') ? '保存中…' : (fluteRuleForm.id ? '保存修改' : '新增规则') }}</button>
+                      <button v-if="fluteRuleForm.id" class="btn" :disabled="fluteRuleActionBusy()" @click="resetFluteRuleForm()">取消编辑</button>
                     </div>
                     <div v-if="fluteRuleError" style="color:#dc2626;font-size:13px;margin-bottom:8px">{{ fluteRuleError }}</div>
                     <div v-if="fluteRuleLoading" class="muted" style="text-align:center;padding:14px">加载中…</div>
@@ -2180,8 +2183,8 @@
                           <td style="padding:5px 10px;text-align:center">{{ r.effective_date || '长期' }}</td>
                           <td style="padding:5px 10px;text-align:center"><span :class="['status', r.is_active?'green':'gray']">{{ r.is_active?'启用':'停用' }}</span></td>
                           <td style="padding:5px 10px" class="toolbar-group">
-                            <button class="btn small" @click="editFluteRule(r)">编辑</button>
-                            <button v-if="r.is_active" class="btn small danger" @click="disableFluteRule(r)">停用</button>
+                            <button class="btn small" :disabled="fluteRuleActionBusy()" @click="editFluteRule(r)">编辑</button>
+                            <button v-if="r.is_active" class="btn small danger" :disabled="fluteRuleActionBusy()" @click="disableFluteRule(r)">{{ fluteRuleActionPending('disable',r.id) ? '处理中…' : '停用' }}</button>
                           </td>
                         </tr>
                         <tr v-if="!fluteRules.length"><td colspan="7" class="muted" style="text-align:center;padding:14px">暂无规则</td></tr>
@@ -5320,8 +5323,8 @@
                 <span v-if="deliverySourceModeFromLines(deliveryForm.lines.filter(line => deliveryLineHasInput(line))) === 'mixed'" class="status blue">本单混合两类来源</span>
               </div>
               <div v-if="deliveryForm.source_tab === 'order'" class="toolbar-group" style="margin-bottom:10px">
-                <button class="btn small success" type="button" @click="toggleDeliveryBatchPicker()">选择待送订单</button>
-                <span class="muted">先选客户，再按页快速载入待送订单。</span>
+                <button class="btn small success" type="button" :disabled="!deliveryForm.customer_id" @click="toggleDeliveryBatchPicker()">选择待送货物<span v-if="deliveryPendingCountForSelectedCustomer()">（{{ deliveryPendingCountForSelectedCustomer() }} 款）</span></button>
+                <span class="muted">选定客户后已开始预载，点击即可选择。</span>
               </div>
               <div v-else class="toolbar-group" style="margin-bottom:10px">
                 <button class="btn small success" type="button" :disabled="!deliveryForm.customer_id" @click="toggleUnorderedFinishedPicker">选择客户专用库存</button>
@@ -5331,7 +5334,7 @@
               <div v-else-if="!deliveryForm.customer_id" class="status orange" style="margin-bottom:10px">请先选择客户，再选择可送货产品。</div>
               <div v-if="deliveryForm.source_tab === 'order' && deliveryBatchPicker.visible" class="panel" style="margin-bottom:12px">
                 <div class="toolbar delivery-batch-picker-toolbar" style="margin-bottom:8px">
-                  <div class="section-title" style="margin:0">选择待送订单</div>
+                  <div class="section-title" style="margin:0">选择待送货物</div>
                   <div class="toolbar-group delivery-batch-picker-tools">
                     <input class="input" style="width:260px" v-model.trim="deliveryBatchPicker.keyword" placeholder="搜索存货编码 / 客户单号 / 产品名称" @keyup.enter.prevent="loadDeliveryBatchItems(1)" />
                     <button class="btn small" type="button" @click="loadDeliveryBatchItems(1)">{{ deliveryBatchPicker.loading ? "查询中..." : "查询" }}</button>
@@ -5343,11 +5346,11 @@
                   </div>
                 </div>
                 <div v-if="deliveryBatchPicker.message" :class="deliveryBatchPicker.error ? 'status orange' : 'muted'" style="display:block;margin-bottom:8px">{{ deliveryBatchPicker.message }}</div>
-                <div v-if="deliveryBatchPicker.loading" class="empty">正在加载待送订单…</div>
+                <div v-if="deliveryBatchPicker.loading" class="empty">正在加载待送货物…</div>
                 <table v-else><thead><tr><th>选择</th><th>存货编码</th><th>产品名称</th><th>规格</th><th>材质</th><th>订单号 / 客户单号</th><th>未送数量</th><th>交期</th></tr></thead><tbody><tr v-for="item in deliveryBatchFilteredItems()" :key="item.order_item_id"><td><span v-if="isDeliveryItemAlreadyInForm(item.order_item_id)" class="muted">已在单中</span><input v-else type="checkbox" :checked="!!deliveryBatchPicker.selected[item.order_item_id]" @change="setDeliveryBatchSelection(item, $event.target.checked)" /></td><td>{{ item.product_code || "-" }}</td><td>{{ item.product_name || "-" }}</td><td>{{ item.specification || "-" }}</td><td>{{ item.material_display || "-" }}</td><td>{{ displayOrderNumber(item) }}<div class="muted">{{ item.customer_po || "-" }}</div><div v-if="inventorySourcesText(item.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(item.inventory_sources) }}</div></td><td>{{ item.remaining_quantity || 0 }}</td><td>{{ item.delivery_date || "-" }}</td></tr></tbody></table>
               </div>
               <table v-else-if="deliveryForm.source_tab === 'order' && deliveryForm.lines.some(item => item.source_type !== 'unordered_finished')"><thead><tr><th>存货编码</th><th>订单号 / 客户单号</th><th>产品</th><th>订单待送 / 可用成品 / 可超送</th><th>本次送货</th><th>客户备注（会打印）</th><th>操作</th></tr></thead><tbody><tr v-for="line in deliveryForm.lines.filter(item => item.source_type !== 'unordered_finished')" :key="line.key" :class="{'warning-row':line.order_item_id && Number(line.delivered_quantity)>Number(line.order_remaining_quantity)}"><td>{{ line.inventory_code || line.product_code || '-' }}</td><td>{{ line.order_number || "-" }}<div class="muted">{{ line.customer_po || "-" }}</div><div v-if="inventorySourcesText(line.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(line.inventory_sources) }}</div></td><td>{{ line.product_code || "-" }} / {{ line.product_name || "-" }}<div class="muted">{{ line.specification || "-" }}</div></td><td><div>订单待送 <strong>{{ line.order_remaining_quantity ?? "-" }}</strong></div><div>可用成品 <strong>{{ line.deliverable_quantity ?? "-" }}</strong></div><div v-if="Number(line.over_delivery_quantity)>0" class="status orange">可超送 {{ line.over_delivery_quantity }}</div></td><td><input class="input" style="width:110px" type="number" min="1" :max="line.deliverable_quantity || undefined" v-model.number="line.delivered_quantity" :disabled="!line.order_item_id" /><div v-if="Number(line.delivered_quantity)>Number(line.order_remaining_quantity)" class="status orange" style="margin-top:4px;white-space:normal">超过订单 {{ Number(line.delivered_quantity)-Number(line.order_remaining_quantity) }}，可直接保存</div></td><td><input class="input" v-model.trim="line.remarks" placeholder="仅填写给客户看的内容" /></td><td><button class="btn small danger" type="button" @click="removeDeliveryLine(line.key)">删除</button></td></tr></tbody></table>
-              <div v-else-if="deliveryForm.source_tab === 'order' && deliveryForm.customer_id" class="empty">点击“选择待送订单”，勾选本次要送的产品。</div>
+              <div v-else-if="deliveryForm.source_tab === 'order' && deliveryForm.customer_id" class="empty">点击“选择待送货物”，勾选本次要送的产品。</div>
               <div v-else-if="unorderedFinishedPicker.visible" class="panel unordered-finished-picker">
                 <div class="toolbar delivery-batch-picker-toolbar" style="margin:-12px -12px 8px"><div class="section-title" style="margin:0">客户专用无订单成品库存</div><div class="toolbar-group"><input class="input" style="width:220px" v-model.trim="unorderedFinishedPicker.keyword" placeholder="存货编码 / 产品 / 规格" @keyup.enter.prevent="loadUnorderedFinishedCandidates(1)" /><button class="btn small" type="button" @click="loadUnorderedFinishedCandidates(1)">{{ unorderedFinishedPicker.loading ? '查询中...' : '查询' }}</button><span class="muted">第 {{ unorderedFinishedPicker.page }} / {{ unorderedFinishedPicker.total_pages }} 页</span><button class="btn small" type="button" :disabled="unorderedFinishedPicker.page <= 1" @click="loadUnorderedFinishedCandidates(unorderedFinishedPicker.page - 1)">上一页</button><button class="btn small" type="button" :disabled="unorderedFinishedPicker.page >= unorderedFinishedPicker.total_pages" @click="loadUnorderedFinishedCandidates(unorderedFinishedPicker.page + 1)">下一页</button><button class="btn primary small" type="button" @click="importUnorderedFinishedCandidates">导入已选</button></div></div>
                 <div v-if="unorderedFinishedPicker.message" :class="unorderedFinishedPicker.error ? 'status orange' : 'muted'" style="display:block;margin-bottom:8px">{{ unorderedFinishedPicker.message }}</div>
@@ -6250,6 +6253,9 @@
             paperCodeSupplierFilter: "",
             paperCodeKeyword: "",
             paperCodes: [],
+            paperCodesLoading: false,
+            paperCodeError: "",
+            paperCodeAction:{action:"",paperCodeId:null},
             paperCodeForm: blankPaperCode(),
             showMaterialComposer: false,
             materialComposer: blankMaterialComposer(),
@@ -6257,10 +6263,12 @@
             materialComposerParseKey: "",
             materialComposerInvalidReason: "",
             materialComposerPriceSource: "",
+            materialComposerPreviewLoading: false,
+            materialComposerSavePending: false,
             showCompareModal: false,
             compareGroups: [], compareFlute: "", compareKeyword: "", compareWeight: "", compareLoading: false, compareError: "",
             // v0.19.2-B 楞型加价规则
-            fluteRules: [], showFluteRuleModal: false, fluteRuleLoading: false, fluteRuleError: "",
+            fluteRules: [], showFluteRuleModal: false, fluteRuleLoading: false, fluteRuleError: "", fluteRuleAction:{action:"",ruleId:null},
             fluteRuleForm: { id: null, supplier_name: "", layer_count: 3, flute_type: "A", price_delta: "0", effective_date: "", remark: "", is_active: true },
             deliveries: [], pendingDeliveryItems: [], deliveryCustomerCandidates: [], deliveryPickTasks: [], deliveryPickers: [], expandedDeliveryRows: {}, deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false, request_token:0 }, deliveryPendingState:{loading:false,error:"",request_token:0}, deliveryCandidateLoading:false, deliveryCandidateError:"", deliveryCandidateRequestSequence:0, deliveryBatchRequestSequence:0, unorderedFinishedRequestSequence:0, deliveryOperationState:{action:"",deliveryId:null,deliveryNumber:""}, receiptOperationState:{action:"",deliveryId:null,receiptId:null,deliveryNumber:""}, statements: [], invoices: [], moldTools: [],
             invoiceTasks: [], invoiceTaskFilters:{customer_id:"",statement_month:"",status:""}, invoiceTaskState:{loading:false,error:""},
@@ -6382,7 +6390,7 @@
             selectedProductCustomer: null, productCustomerSearch: "",
             productsLoading: false, productsError: "",
             showProductMoreFilters: false,
-            productTrashOpen: false, productTrashItems: [], productTrashLoading:false, productTrashError:"", productLifecycleAction:{action:"",productId:null},
+            productTrashOpen: false, productTrashItems: [], productTrashLoading:false, productTrashError:"", productLifecycleAction:{action:"",productId:null}, customerLifecycleAction:{action:"",customerId:null}, materialLifecycleAction:{action:"",materialId:null},
             filters: { customerKeyword: "", showInactive:false, showInactiveProducts:false, productCustomer: "", productKeyword: "", productCode: "", productName: "", productSpec: "", productMaterial: "", orderCustomer: "", orderKeyword:"", orderNumber:"", orderCustomerPo:"", orderProductCode:"", orderProductName:"", orderSpecification:"", orderDateFrom:"", orderDateTo:"", orderDeliveryDateFrom:"", orderDeliveryDateTo:"", orderScope:"active", orderStage:"", orderStatus:"business", orderView:"customer_po", orderSortBy:"", orderSortDirection:"desc" },
             orderScopeTabs: [
               { label: "进行中", value: "active" },
@@ -10715,17 +10723,28 @@
             this.loadFluteRules();
           },
           async loadFluteRules() {
+            const requestKey = "materials:flute-price-rules";
+            const controller = this.beginLatestRequest(requestKey);
             this.fluteRuleLoading = true;
+            this.fluteRuleError = "";
             try {
               const { data } = await axios.get("/api/master/materials/flute-price-rules", {
                 params: { include_inactive: true },
+                signal:controller.signal,
               });
+              if (latestRequestControllers.get(requestKey) !== controller) return false;
               this.fluteRules = data.rules || data.items || [];
-            } catch (e) {
-              this.fluteRuleError = (e.response && e.response.data && e.response.data.detail) || "规则加载失败";
-              this.fluteRules = [];
+              return true;
+            } catch (error) {
+              if (!this.isCancelledRequest(error) && latestRequestControllers.get(requestKey) === controller) {
+                this.fluteRuleError = this.errorMessage(error) || "规则加载失败";
+              }
+              return false;
             } finally {
-              this.fluteRuleLoading = false;
+              if (latestRequestControllers.get(requestKey) === controller) {
+                this.fluteRuleLoading = false;
+                this.finishLatestRequest(requestKey, controller);
+              }
             }
           },
           editFluteRule(r) {
@@ -10736,42 +10755,87 @@
               remark: r.remark || "", is_active: !!r.is_active,
             };
           },
-          async saveFluteRule() {
+          fluteRuleActionBusy() {
+            return Boolean(this.fluteRuleAction?.action);
+          },
+          fluteRuleActionPending(action, ruleId=null) {
+            const current = this.fluteRuleAction || {};
+            if (current.action !== action) return false;
+            if (ruleId === null || ruleId === undefined) return true;
+            return Number(current.ruleId) === Number(ruleId);
+          },
+          async runFluteRuleAction({action, ruleId=null, task}) {
+            if (this.fluteRuleActionBusy()) return false;
+            const normalizedRuleId = ruleId === null || ruleId === undefined ? null : Number(ruleId);
+            this.fluteRuleAction = {action, ruleId:normalizedRuleId};
             this.fluteRuleError = "";
-            const f = this.fluteRuleForm;
-            if (!f.supplier_name || !f.flute_type) {
-              this.fluteRuleError = "供应商、楞型必填";
-              return;
-            }
-            const body = {
-              supplier_name: f.supplier_name,
-              layer_count: f.layer_count,
-              flute_type: (f.flute_type || "").toUpperCase(),
-              price_delta: f.price_delta,
-              effective_date: f.effective_date || null,
-              remark: f.remark || null,
-              is_active: f.is_active,
-            };
             try {
-              if (f.id) {
-                await axios.patch(`/api/master/materials/flute-price-rules/${f.id}`, body);
-              } else {
-                await axios.post("/api/master/materials/flute-price-rules", body);
-              }
-              this.resetFluteRuleForm();
-              await this.loadFluteRules();
-            } catch (e) {
-              this.fluteRuleError = (e.response && e.response.data && e.response.data.detail) || "保存失败";
+              const result = await task();
+              return result !== false;
+            } catch(error) {
+              this.fluteRuleError = this.errorMessage(error) || "操作失败";
+              return false;
+            } finally {
+              if (
+                this.fluteRuleAction?.action === action
+                && this.fluteRuleAction?.ruleId === normalizedRuleId
+              ) this.fluteRuleAction = {action:"", ruleId:null};
             }
           },
-          async disableFluteRule(r) {
-            if (!confirm(`确认停用「${r.supplier_name} ${r.layer_count}层 ${r.flute_type}」规则？`)) return;
-            try {
-              await axios.post(`/api/master/materials/flute-price-rules/${r.id}/disable`);
-              await this.loadFluteRules();
-            } catch (e) {
-              this.fluteRuleError = (e.response && e.response.data && e.response.data.detail) || "停用失败";
+          async saveFluteRule() {
+            this.fluteRuleError = "";
+            const snapshot = JSON.parse(JSON.stringify(this.fluteRuleForm || {}));
+            const targetId = Number(snapshot.id || 0) || null;
+            if (!snapshot.supplier_name || !snapshot.flute_type) {
+              this.fluteRuleError = "供应商、楞型必填";
+              return false;
             }
+            const body = {
+              supplier_name: snapshot.supplier_name,
+              layer_count: snapshot.layer_count,
+              flute_type: (snapshot.flute_type || "").toUpperCase(),
+              price_delta: snapshot.price_delta,
+              effective_date: snapshot.effective_date || null,
+              remark: snapshot.remark || null,
+              is_active: snapshot.is_active,
+            };
+            return this.runFluteRuleAction({
+              action:"save",
+              ruleId:targetId,
+              task:async() => {
+                if (targetId) await axios.patch(`/api/master/materials/flute-price-rules/${targetId}`, body);
+                else await axios.post("/api/master/materials/flute-price-rules", body);
+                this.resetFluteRuleForm();
+                const refreshed = await this.loadFluteRules();
+                if (!refreshed) {
+                  this.showToast("楞型加价规则已保存，但列表刷新失败；请手动重新加载核对，不要重复操作。",true);
+                  return true;
+                }
+                this.showToast("楞型加价规则已保存");
+                return true;
+              },
+            });
+          },
+          async disableFluteRule(r) {
+            const snapshot = {
+              id:Number(r.id), supplier_name:String(r.supplier_name || ""),
+              layer_count:Number(r.layer_count || 0), flute_type:String(r.flute_type || ""),
+            };
+            if (!confirm(`确认停用「${snapshot.supplier_name} ${snapshot.layer_count}层 ${snapshot.flute_type}」规则？`)) return false;
+            return this.runFluteRuleAction({
+              action:"disable",
+              ruleId:snapshot.id,
+              task:async() => {
+                await axios.post(`/api/master/materials/flute-price-rules/${snapshot.id}/disable`);
+                const refreshed = await this.loadFluteRules();
+                if (!refreshed) {
+                  this.showToast("楞型加价规则已停用，但列表刷新失败；请手动重新加载核对，不要重复操作。",true);
+                  return true;
+                }
+                this.showToast("楞型加价规则已停用");
+                return true;
+              },
+            });
           },
           materialBaseCode(row) {
             // 材质代码列只显示真实代码（如 C4C / D4B / A414B），
@@ -14989,11 +15053,29 @@
             }
           },
           async loadPaperCodes() {
+            const requestKey = "materials:paper-codes";
+            const controller = this.beginLatestRequest(requestKey);
             const params = {include_inactive:true};
             if (this.paperCodeSupplierFilter) params.supplier_name = this.paperCodeSupplierFilter;
             if (this.paperCodeKeyword) params.keyword = this.paperCodeKeyword;
-            const {data} = await axios.get("/api/master/materials/paper-codes", {params});
-            this.paperCodes = data.items || [];
+            this.paperCodesLoading = true;
+            this.paperCodeError = "";
+            try {
+              const {data} = await axios.get("/api/master/materials/paper-codes", {params, signal:controller.signal});
+              if (latestRequestControllers.get(requestKey) !== controller) return false;
+              this.paperCodes = data.items || [];
+              return true;
+            } catch(error) {
+              if (!this.isCancelledRequest(error) && latestRequestControllers.get(requestKey) === controller) {
+                this.paperCodeError = `基础纸种代码读取失败：${this.errorMessage(error)}`;
+              }
+              return false;
+            } finally {
+              if (latestRequestControllers.get(requestKey) === controller) {
+                this.paperCodesLoading = false;
+                this.finishLatestRequest(requestKey, controller);
+              }
+            }
           },
           resetPaperCodeForm() {
             this.paperCodeForm = {
@@ -15016,36 +15098,103 @@
               is_active:row.is_active !== false,
             };
           },
-          async savePaperCode() {
-            if (this.loading) return;
-            this.loading = true;
+          paperCodeActionBusy() {
+            return Boolean(this.paperCodeAction?.action);
+          },
+          paperCodeActionPending(action, paperCodeId=null) {
+            const current = this.paperCodeAction || {};
+            if (current.action !== action) return false;
+            if (paperCodeId === null || paperCodeId === undefined) return true;
+            return Number(current.paperCodeId) === Number(paperCodeId);
+          },
+          async runPaperCodeAction({action, paperCodeId=null, task}) {
+            if (this.paperCodeActionBusy()) return false;
+            const normalizedPaperCodeId = paperCodeId === null || paperCodeId === undefined ? null : Number(paperCodeId);
+            this.paperCodeAction = {action, paperCodeId:normalizedPaperCodeId};
             try {
-              const payload = this.paperCodePayload(this.paperCodeForm);
-              if (!payload.supplier_name) throw new Error("请填写供应商");
-              if (Array.from(payload.code_char).length !== 1) throw new Error("基础代码必须是单个可见字符（支持 + 等符号）");
-              if (!payload.paper_name) throw new Error("请填写纸种名称");
-              if (!(payload.gram_weight > 0)) throw new Error("克重必须大于0");
-              if (this.paperCodeForm.id) await axios.put(`/api/master/materials/paper-codes/${this.paperCodeForm.id}`,payload);
-              else await axios.post("/api/master/materials/paper-codes",payload);
-              this.paperCodeSupplierFilter = payload.supplier_name;
-              await this.loadPaperCodes();
-              this.resetPaperCodeForm();
-              this.showToast("基础纸种代码已保存");
-            } catch(error) { this.showToast(this.errorMessage(error),true); }
-            finally { this.loading = false; }
+              const result = await task();
+              return result !== false;
+            } catch(error) {
+              this.showToast(this.errorMessage(error),true);
+              return false;
+            } finally {
+              if (
+                this.paperCodeAction?.action === action
+                && this.paperCodeAction?.paperCodeId === normalizedPaperCodeId
+              ) this.paperCodeAction = {action:"", paperCodeId:null};
+            }
+          },
+          async savePaperCode() {
+            const targetId = Number(this.paperCodeForm.id || 0) || null;
+            const payload = this.paperCodePayload(this.paperCodeForm);
+            return this.runPaperCodeAction({
+              action:"save",
+              paperCodeId:targetId,
+              task:async() => {
+                if (!payload.supplier_name) throw new Error("请填写供应商");
+                if (Array.from(payload.code_char).length !== 1) throw new Error("基础代码必须是单个可见字符（支持 + 等符号）");
+                if (!payload.paper_name) throw new Error("请填写纸种名称");
+                if (!(payload.gram_weight > 0)) throw new Error("克重必须大于0");
+                if (targetId) await axios.put(`/api/master/materials/paper-codes/${targetId}`,payload);
+                else await axios.post("/api/master/materials/paper-codes",payload);
+                this.paperCodeSupplierFilter = payload.supplier_name;
+                const refreshed = await this.loadPaperCodes();
+                this.resetPaperCodeForm();
+                if (!refreshed) {
+                  this.showToast("基础纸种代码已保存，但列表刷新失败；请手动重新加载核对，不要重复保存。",true);
+                  return true;
+                }
+                this.showToast("基础纸种代码已保存");
+                return true;
+              },
+            });
           },
           async togglePaperCodeStatus(row) {
-            try {
-              await axios.put(`/api/master/materials/paper-codes/${row.id}`, {
-                ...this.paperCodePayload(row),
-                is_active:!row.is_active,
-              });
-              await this.loadPaperCodes();
-              this.showToast(row.is_active ? "基础代码已停用" : "基础代码已启用");
-            } catch(error) { this.showToast(this.errorMessage(error),true); }
+            const targetId = Number(row.id);
+            const wasActive = row.is_active !== false;
+            const desiredActive = !wasActive;
+            const payload = {...this.paperCodePayload(row),is_active:desiredActive};
+            return this.runPaperCodeAction({
+              action:"status",
+              paperCodeId:targetId,
+              task:async() => {
+                await axios.put(`/api/master/materials/paper-codes/${targetId}`, payload);
+                const refreshed = await this.loadPaperCodes();
+                if (!refreshed) {
+                  this.showToast("基础代码状态已更新，但列表刷新失败；请手动重新加载核对，不要重复操作。",true);
+                  return true;
+                }
+                this.showToast(wasActive ? "基础代码已停用" : "基础代码已启用");
+                return true;
+              },
+            });
+          },
+          materialComposerInputKey(row=this.materialComposer) {
+            return `${String(row?.supplier_name || "").trim()}|${Number(row?.layer_count || 0)}|${String(row?.material_code || "").trim().toUpperCase()}|${String(row?.usage_flute_type || "").trim().toUpperCase()}`;
+          },
+          cancelMaterialComposerPreview() {
+            const requestKey = "materials:compose-preview";
+            const controller = latestRequestControllers.get(requestKey);
+            controller?.abort();
+            if (latestRequestControllers.get(requestKey) === controller) latestRequestControllers.delete(requestKey);
+            this.materialComposerPreviewLoading = false;
+          },
+          closeMaterialComposer() {
+            this.cancelMaterialComposerPreview();
+            this.showMaterialComposer = false;
+            this.materialComposer = blankMaterialComposer();
+            this.materialComposerPreview = null;
+            this.materialComposerParseKey = "";
+            this.materialComposerInvalidReason = "";
+            this.materialComposerPriceSource = "";
           },
           toggleMaterialComposer() {
-            this.showMaterialComposer = !this.showMaterialComposer;
+            if (this.materialComposerSavePending) return false;
+            if (this.showMaterialComposer) {
+              this.closeMaterialComposer();
+              return true;
+            }
+            this.showMaterialComposer = true;
             if (this.showMaterialComposer) {
               this.showPaperCodePanel = false;
               this.materialComposer = {
@@ -15057,8 +15206,10 @@
               this.materialComposerInvalidReason = "";
               this.materialComposerPriceSource = "";
             }
+            return true;
           },
           invalidateMaterialComposer() {
+            this.cancelMaterialComposerPreview();
             this.materialComposerPreview = null;
             this.materialComposerParseKey = "";
             this.materialComposerInvalidReason = "当前解析结果已失效，请重新解析";
@@ -15084,28 +15235,41 @@
             const supplier = String(this.materialComposer.supplier_name || "").trim();
             const layerCount = Number(this.materialComposer.layer_count || 0);
             const usageFluteType = String(this.materialComposer.usage_flute_type || "").toUpperCase();
-            if (!supplier || !code) return;
+            if (!supplier || !code) return false;
             if (![3,5,7].includes(layerCount) || code.length !== layerCount) {
               this.materialComposerPreview = null;
               this.materialComposerInvalidReason = `当前选择${layerCount}层，材质代码必须为${layerCount}位`;
               this.showToast(this.materialComposerInvalidReason,true);
-              return;
+              return false;
             }
             if (layerCount === 7 && !["AAA","ABC"].includes(usageFluteType)) {
               this.materialComposerPreview = null;
               this.materialComposerInvalidReason = "七层材质必须人工选择楞型（AAA 或 ABC）";
               this.showToast(this.materialComposerInvalidReason,true);
-              return;
+              return false;
             }
+            const requested = {
+              supplier_name:supplier,
+              layer_count:layerCount,
+              material_code:code,
+              usage_flute_type:usageFluteType,
+            };
+            const requestedInputKey = this.materialComposerInputKey(requested);
+            const requestKey = "materials:compose-preview";
+            const controller = this.beginLatestRequest(requestKey);
+            this.materialComposerPreviewLoading = true;
+            this.materialComposerInvalidReason = "";
             try {
               const {data} = await axios.post("/api/master/materials/compose/preview", {
                 supplier_name:supplier,
                 layer_count:layerCount,
                 material_code:code,
                 usage_flute_type:usageFluteType || null,
-              });
-              this.materialComposer.material_code = code;
-              this.materialComposer.usage_flute_type = usageFluteType;
+              }, {signal:controller.signal});
+              if (
+                latestRequestControllers.get(requestKey) !== controller
+                || this.materialComposerInputKey() !== requestedInputKey
+              ) return false;
               this.materialComposerPreview = data;
               this.materialComposerParseKey = data.parse_key;
               this.materialComposerInvalidReason = data.duplicate_material ? data.message : "";
@@ -15116,37 +15280,70 @@
                 this.materialComposer.quote_price = "";
                 this.materialComposerPriceSource = "";
               }
+              return true;
             } catch(error) {
+              if (
+                this.isCancelledRequest(error)
+                || latestRequestControllers.get(requestKey) !== controller
+                || this.materialComposerInputKey() !== requestedInputKey
+              ) return false;
               this.materialComposerPreview = null;
               this.materialComposerParseKey = "";
               this.materialComposerInvalidReason = this.errorMessage(error);
               this.showToast(this.errorMessage(error),true);
+              return false;
+            } finally {
+              if (latestRequestControllers.get(requestKey) === controller) {
+                this.materialComposerPreviewLoading = false;
+                this.finishLatestRequest(requestKey, controller);
+              }
             }
           },
           async saveMaterialComposition() {
-            if (this.loading) return;
-            this.loading = true;
+            if (this.materialComposerSavePending) return false;
+            if (!this.materialComposerCanSave) {
+              this.showToast("当前输入与最近解析结果不一致，请重新解析后保存",true);
+              return false;
+            }
+            const form = JSON.parse(JSON.stringify(this.materialComposer));
+            const preview = JSON.parse(JSON.stringify(this.materialComposerPreview));
+            const priceSource = String(this.materialComposerPriceSource || "");
+            const payload = {
+              supplier_name:String(form.supplier_name || "").trim(),
+              layer_count:Number(form.layer_count),
+              material_code:String(form.material_code || "").trim().toUpperCase(),
+              usage_flute_type:String(form.usage_flute_type || "").toUpperCase() || null,
+              quote_price:form.quote_price === "" ? null : Number(form.quote_price),
+              parsed_supplier_name:preview.supplier_name,
+              parsed_layer_count:preview.layer_count,
+              parsed_material_code:preview.material_code,
+              price_source:priceSource,
+              remarks:String(form.remarks || "").trim() || null,
+            };
+            this.materialComposerSavePending = true;
             try {
-              if (!this.materialComposerCanSave) throw new Error("当前输入与最近解析结果不一致，请重新解析后保存");
-              const {data} = await axios.post("/api/master/materials/compose/save", {
-                supplier_name:this.materialComposer.supplier_name,
-                layer_count:Number(this.materialComposer.layer_count),
-                material_code:this.materialComposer.material_code,
-                usage_flute_type:String(this.materialComposer.usage_flute_type || "").toUpperCase() || null,
-                quote_price:this.materialComposer.quote_price === "" ? null : Number(this.materialComposer.quote_price),
-                parsed_supplier_name:this.materialComposerPreview.supplier_name,
-                parsed_layer_count:this.materialComposerPreview.layer_count,
-                parsed_material_code:this.materialComposerPreview.material_code,
-                price_source:this.materialComposerPriceSource,
-                remarks:String(this.materialComposer.remarks || "").trim() || null,
-              });
+              const {data} = await axios.post("/api/master/materials/compose/save", payload);
               this.allMaterials = [];
               this.materialSuppliers = [];
-              await this.loadMaterials();
+              let refreshed = false;
+              try {
+                refreshed = await this.loadMaterials();
+              } catch(_refreshError) {
+                refreshed = false;
+              }
+              this.closeMaterialComposer();
+              if (!refreshed) {
+                this.showToast("组合材质已保存，但材质列表刷新失败；请手动刷新核对，不要重复保存。",true);
+                return true;
+              }
               this.showToast(data.message || "组合材质已保存");
-              this.toggleMaterialComposer();
-            } catch(error) { this.showToast(this.errorMessage(error),true); }
-            finally { this.loading = false; }
+              return true;
+            } catch(error) {
+              this.showToast(this.errorMessage(error),true);
+              return false;
+            } finally {
+              this.materialComposerSavePending = false;
+            }
           },
           recommendMaterialCode() {
             const weights=(this.materialForm.basis_weight_description.match(/\d+(?:\.\d+)?/g)||[]).join("-");
@@ -16335,20 +16532,59 @@
               ) this.productLifecycleAction = {action:"", productId:null};
             }
           },
+          customerLifecycleBusy() {
+            return Boolean(this.customerLifecycleAction?.action);
+          },
+          customerLifecyclePending(action, customerId=null) {
+            const current = this.customerLifecycleAction || {};
+            if (current.action !== action) return false;
+            if (customerId === null || customerId === undefined) return true;
+            return Number(current.customerId) === Number(customerId);
+          },
+          async runCustomerLifecycleAction({action, customerId=null, confirmMessage, task}) {
+            if (this.customerLifecycleBusy()) return false;
+            if (confirmMessage && !confirm(confirmMessage)) return false;
+            const normalizedCustomerId = customerId === null || customerId === undefined ? null : Number(customerId);
+            this.customerLifecycleAction = {action, customerId:normalizedCustomerId};
+            try {
+              const result = await task();
+              return result !== false;
+            } catch (error) {
+              this.showToast(this.errorMessage(error), true);
+              return false;
+            } finally {
+              if (
+                this.customerLifecycleAction?.action === action
+                && this.customerLifecycleAction?.customerId === normalizedCustomerId
+              ) this.customerLifecycleAction = {action:"", customerId:null};
+            }
+          },
           async deleteCustomer(row) {
-            if (!confirm(`确认停用客户“${row.name}”吗？`)) return;
-            try { const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/customers/${row.id}`,row}); if(!result)return; await Promise.all([this.loadCustomers(),this.loadCustomerOptions(true)]); this.showToast("客户已停用"); }
-            catch(error){this.showToast(this.errorMessage(error),true);}
+            return this.runCustomerLifecycleAction({
+              action:"delete", customerId:row.id,
+              confirmMessage:`确认停用客户“${row.name}”吗？`,
+              task:async() => {
+                const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/customers/${row.id}`,row});
+                if(!result)return false;
+                await Promise.all([this.loadCustomers(),this.loadCustomerOptions(true)]);
+                this.showToast("客户已停用");
+                return true;
+              },
+            });
           },
           async toggleCustomerStatus(row) {
             const action = row.is_active ? "停用" : "启用";
-            if (!confirm(`确认${action}客户“${row.name}”吗？`)) return;
-            try {
-              const result=await this.sendVersionedMasterMutation({method:"put",url:`/api/master/customers/${row.id}/status`,row,body:{is_active:!row.is_active}});
-              if(!result)return;
-              await Promise.all([this.loadCustomers(),this.loadCustomerOptions(true)]);
-              this.showToast(`客户已${action}`);
-            } catch(error) { this.showToast(this.errorMessage(error), true); }
+            return this.runCustomerLifecycleAction({
+              action:"status", customerId:row.id,
+              confirmMessage:`确认${action}客户“${row.name}”吗？`,
+              task:async() => {
+                const result=await this.sendVersionedMasterMutation({method:"put",url:`/api/master/customers/${row.id}/status`,row,body:{is_active:!row.is_active}});
+                if(!result)return false;
+                await Promise.all([this.loadCustomers(),this.loadCustomerOptions(true)]);
+                this.showToast(`客户已${action}`);
+                return true;
+              },
+            });
           },
           async deleteProduct(row) {
             return this.runProductLifecycleAction({
@@ -16446,10 +16682,46 @@
               },
             });
           },
+          materialLifecycleBusy() {
+            return Boolean(this.materialLifecycleAction?.action);
+          },
+          materialLifecyclePending(action, materialId=null) {
+            const current = this.materialLifecycleAction || {};
+            if (current.action !== action) return false;
+            if (materialId === null || materialId === undefined) return true;
+            return Number(current.materialId) === Number(materialId);
+          },
+          async runMaterialLifecycleAction({action, materialId=null, confirmMessage, task}) {
+            if (this.materialLifecycleBusy()) return false;
+            if (confirmMessage && !confirm(confirmMessage)) return false;
+            const normalizedMaterialId = materialId === null || materialId === undefined ? null : Number(materialId);
+            this.materialLifecycleAction = {action, materialId:normalizedMaterialId};
+            try {
+              const result = await task();
+              return result !== false;
+            } catch (error) {
+              this.showToast(this.errorMessage(error), true);
+              return false;
+            } finally {
+              if (
+                this.materialLifecycleAction?.action === action
+                && this.materialLifecycleAction?.materialId === normalizedMaterialId
+              ) this.materialLifecycleAction = {action:"", materialId:null};
+            }
+          },
           async deleteMaterial(row) {
-            if (!confirm(`确认停用材质“${row.code}”吗？`)) return;
-            try { const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/materials/${row.id}`,row}); if(!result)return; this.allMaterials=[]; await this.loadMaterials(); this.showToast("材质已停用"); }
-            catch(error){this.showToast(this.errorMessage(error),true);}
+            return this.runMaterialLifecycleAction({
+              action:"deactivate", materialId:row.id,
+              confirmMessage:`确认停用材质“${row.code}”吗？`,
+              task:async() => {
+                const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/materials/${row.id}`,row});
+                if(!result)return false;
+                this.allMaterials=[];
+                await this.loadMaterials();
+                this.showToast("材质已停用");
+                return true;
+              },
+            });
           },
 	          async openOrder() {
 	            if (!this.customerOptions.length) await this.loadCustomerOptions();
@@ -18875,9 +19147,17 @@
               return;
             }
             this.deliveryBatchPicker.visible = !this.deliveryBatchPicker.visible;
-            if (this.deliveryBatchPicker.visible && !this.deliveryBatchPicker.items.length) {
+            if (this.deliveryBatchPicker.visible && !this.deliveryBatchPicker.items.length && !this.deliveryBatchPicker.loading) {
               await this.loadDeliveryBatchItems();
             }
+          },
+          deliveryPendingCountForSelectedCustomer() {
+            const candidate = this.selectedDeliveryCustomerCandidate();
+            return Math.max(0, Number(candidate?.pending_item_count || 0));
+          },
+          selectedDeliveryCustomerCandidate() {
+            const customerId = Number(this.deliveryForm.customer_id || 0);
+            return (this.deliveryCustomerCandidates || []).find(row => Number(row.customer_id) === customerId) || null;
           },
           setDeliveryBatchSelection(item, checked) {
             const orderItemId = Number(item?.order_item_id || item?.item_id || 0);
@@ -18896,7 +19176,7 @@
             this.deliveryBatchPicker.request_token = requestToken;
             this.deliveryBatchPicker.loading = true;
             this.deliveryBatchPicker.error = false;
-            this.deliveryBatchPicker.message = "正在载入待送订单，请稍候…";
+            this.deliveryBatchPicker.message = "正在载入待送货物，请稍候…";
             try {
               const { data } = await axios.get("/api/deliveries/pending-items/search", {
                 params: {
@@ -18961,9 +19241,17 @@
             this.deliveryBatchRequestSequence = Number(this.deliveryBatchRequestSequence || 0) + 1;
             this.unorderedFinishedRequestSequence = Number(this.unorderedFinishedRequestSequence || 0) + 1;
             this.deliveryForm.lines = [];
-            this.deliveryForm.source_mode = "order";
+            const candidate = this.selectedDeliveryCustomerCandidate();
+            const inventoryOnly = !!candidate && !candidate.has_pending_orders && !!candidate.has_unordered_finished;
+            this.deliveryForm.source_mode = inventoryOnly ? "unordered_finished" : "order";
+            this.deliveryForm.source_tab = inventoryOnly ? "unordered_finished" : "order";
             this.deliveryBatchPicker = { visible:false, loading:false, keyword:"", items:[], selected:{}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message:"", error:false };
             this.unorderedFinishedPicker = { visible:false, loading:false, keyword:"", items:[], selected:{}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message:"", error:false };
+            if (this.deliveryForm.customer_id && this.deliveryForm.source_tab === "order") {
+              this.loadDeliveryBatchItems(1);
+            } else if (this.deliveryForm.customer_id) {
+              this.loadUnorderedFinishedCandidates(1);
+            }
           },
           setDeliverySourceMode(sourceMode) {
             if (!["order", "unordered_finished"].includes(sourceMode)) return;
@@ -18989,7 +19277,7 @@
               return;
             }
             this.unorderedFinishedPicker.visible = !this.unorderedFinishedPicker.visible;
-            if (this.unorderedFinishedPicker.visible) await this.loadUnorderedFinishedCandidates();
+            if (this.unorderedFinishedPicker.visible && !this.unorderedFinishedPicker.items.length && !this.unorderedFinishedPicker.loading) await this.loadUnorderedFinishedCandidates();
           },
           unorderedFinishedSelection(item) {
             const lotId = this.unorderedFinishedLotId(item);

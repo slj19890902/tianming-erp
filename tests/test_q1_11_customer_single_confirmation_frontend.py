@@ -26,7 +26,8 @@ def test_customer_update_confirmation_does_not_request_or_fabricate_reason() -> 
 
 
 def test_customer_status_and_delete_keep_one_visible_confirmation() -> None:
-    assert 'confirm(`确认停用客户“${row.name}”吗？`)' in INDEX
-    assert 'confirm(`确认${action}客户“${row.name}”吗？`)' in INDEX
+    assert 'confirmMessage:`确认停用客户“${row.name}”吗？`' in INDEX
+    assert 'confirmMessage:`确认${action}客户“${row.name}”吗？`' in INDEX
+    assert "if (confirmMessage && !confirm(confirmMessage)) return false" in INDEX
     assert 'url:`/api/master/customers/${row.id}`,row' in INDEX
     assert 'body:{is_active:!row.is_active}' in INDEX

@@ -40,6 +40,7 @@ REHEARSAL_REASON = "老板批准：按原表字段口径和一开六规则重做
 FORMAL_REASON = "老板于2026-08-05明确批准：正式迁移并统一导入YKE/KEW首批131条常用箱"
 VALID_CUTTING_MODES = {"一开一", "一开二", "一开三", "一开四", "一开五", "一开六"}
 EXPECTED_COUNTS = {"YKE": 100, "KEW": 31}
+EXPECTED_CUSTOMER_NUMBERS = {"YKE": 135, "KEW": 136}
 EXPECTED_BOX_COUNTS = {"normal": 20, "die_cut": 111}
 WATCH_TABLES = (
     "customers",
@@ -307,14 +308,24 @@ def _customer_master(payload: dict[str, Any]) -> list[dict[str, Any]]:
     customers = payload.get("scope", {}).get("customers")
     if not isinstance(customers, list) or len(customers) != 2:
         raise RuntimeError("清单客户主档必须恰好是 YKE、KEW")
-    normalized = [
-        {
-            "customer_code": str(row["code"]).strip(),
-            "name": str(row["name"]).strip(),
-            "customer_number": row.get("customer_number"),
-        }
-        for row in customers
-    ]
+    normalized: list[dict[str, Any]] = []
+    for row in customers:
+        customer_code = str(row["code"]).strip()
+        expected_number = EXPECTED_CUSTOMER_NUMBERS.get(customer_code)
+        manifest_number = row.get("customer_number")
+        if expected_number is None:
+            raise RuntimeError(f"清单含计划外客户代码：{customer_code}")
+        if manifest_number not in (None, expected_number):
+            raise RuntimeError(
+                f"客户编号与冻结值不一致：{customer_code}/{manifest_number}"
+            )
+        normalized.append(
+            {
+                "customer_code": customer_code,
+                "name": str(row["name"]).strip(),
+                "customer_number": expected_number,
+            }
+        )
     if {(row["customer_code"], row["name"]) for row in normalized} != {
         ("YKE", "研光"),
         ("KEW", "光洋"),
@@ -345,7 +356,12 @@ def build_plan(
             customer_plan.append({**target, "status": "create", "id": None})
             customer_ids[code] = None
             continue
-        if existing.customer_code != code or existing.name != name or not existing.is_active:
+        if (
+            existing.customer_number != target["customer_number"]
+            or existing.customer_code != code
+            or existing.name != name
+            or not existing.is_active
+        ):
             raise RuntimeError(f"现有客户主档与清单不一致：{code}/{name}")
         customer_plan.append({**target, "status": "already_applied", "id": int(existing.id)})
         customer_ids[code] = int(existing.id)

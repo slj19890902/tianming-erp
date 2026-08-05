@@ -50,7 +50,7 @@ def test_formal_supplier_order_button_has_business_operation_state() -> None:
 def test_formal_supplier_order_save_freezes_payload_and_marks_commit_before_refresh() -> None:
     block = _method_body(
         "async saveSupplierRequisitionDraft() {",
-        "async openSupplierRequisitionDraft(rows = null) {",
+        "supplierRequisitionSelectionSignature(selections) {",
     )
     assert "if (state.saving || state.committed)" in block
     assert "const frozenPayload = JSON.parse(JSON.stringify(payload))" in block
@@ -63,7 +63,7 @@ def test_formal_supplier_order_save_freezes_payload_and_marks_commit_before_refr
 def test_same_draft_is_single_flight_and_committed_result_is_not_reposted(tmp_path: Path) -> None:
     block = _method_body(
         "async saveSupplierRequisitionDraft() {",
-        "async openSupplierRequisitionDraft(rows = null) {",
+        "supplierRequisitionSelectionSignature(selections) {",
     )
     script = f"""
 const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
@@ -104,7 +104,7 @@ def test_successful_post_survives_refresh_failure_and_network_unknown_closes_dra
 ) -> None:
     block = _method_body(
         "async saveSupplierRequisitionDraft() {",
-        "async openSupplierRequisitionDraft(rows = null) {",
+        "supplierRequisitionSelectionSignature(selections) {",
     )
     assert "_supplierRequisitionOutcomeUncertain" in INDEX
     assert "结果暂不确定" in INDEX

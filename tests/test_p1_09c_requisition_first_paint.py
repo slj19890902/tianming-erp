@@ -73,5 +73,6 @@ def test_requisition_page_hides_order_entry_actions_and_keeps_merge_workflow() -
 
     assert '@click="openOrder">新建订单</button>' not in report_page
     assert '@click="openOrderPdfImport">识别PDF订单</button>' not in report_page
-    assert '@click="openSupplierRequisitionDraft()">合并报料</button>' in report_page
+    assert '@click="openSupplierRequisitionDraft()"' in report_page
+    assert 'supplierRequisitionPreviewLoading ? "正在生成草稿…" : "合并报料"' in report_page
     assert '@click="openMergeSuggestions"' not in report_page

@@ -41,7 +41,9 @@ def test_order_form_edits_component_quantities_with_one_order_save() -> None:
 def test_reported_composite_requisition_has_clear_source_and_void_action() -> None:
     assert 'return "组合 BOM 报料单"' in INDEX
     assert "voidReportedCompositeRequisition(row)" in INDEX
-    assert "/api/requisition/batches/${row.id}/void" in INDEX
+    assert "const targetId = Number(row?.id || 0)" in INDEX
+    assert "/api/requisition/batches/${targetId}/void" in INDEX
+    assert "executeRequisitionVoidAction" in INDEX
     assert "父件和组件已回到待报料" in INDEX
 
 

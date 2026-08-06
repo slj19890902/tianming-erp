@@ -2494,22 +2494,26 @@
               </div>
               <div class="toolbar requisition-page-actionbar">
                 <div class="toolbar-group">
-                  <button :class="['btn',{primary:requisitionTab==='pending'}]" :disabled="requisitionInventoryActionBlocked()" @click="selectRequisitionTab('pending')">待报料 {{ requisitionPending.length }}</button>
-                  <button :class="['btn',{primary:requisitionTab==='submitted'}]" :disabled="requisitionInventoryActionBlocked()" @click="selectRequisitionTab('submitted')">已报料/已入库<span v-if="requisitionReportedLoaded"> {{ requisitionReportedTotal }}</span></button>
-                  <button v-if="canRequisition && requisitionTab==='pending'" class="btn success" @click="openSupplierRequisitionDraft()" :disabled="supplierRequisitionPreviewLoading || requisitionInventoryActionBlocked()">{{ supplierRequisitionPreviewLoading ? "正在生成草稿…" : "合并报料" }}</button>
+                  <button :class="['btn',{primary:requisitionTab==='pending'}]" :disabled="requisitionInventoryActionBlocked() || requisitionVoidActionBlocked()" @click="selectRequisitionTab('pending')">待报料 {{ requisitionPending.length }}</button>
+                  <button :class="['btn',{primary:requisitionTab==='submitted'}]" :disabled="requisitionInventoryActionBlocked() || requisitionVoidActionBlocked()" @click="selectRequisitionTab('submitted')">已报料/已入库<span v-if="requisitionReportedLoaded"> {{ requisitionReportedTotal }}</span></button>
+                  <button v-if="canRequisition && requisitionTab==='pending'" class="btn success" @click="openSupplierRequisitionDraft()" :disabled="supplierRequisitionPreviewLoading || requisitionInventoryActionBlocked() || requisitionVoidActionBlocked()">{{ supplierRequisitionPreviewLoading ? "正在生成草稿…" : "合并报料" }}</button>
                 </div>
                 <div class="requisition-page-actions">
-                  <button v-if="canRequisition" class="btn warning" :disabled="requisitionTab!=='pending' || !selectedPendingKeys.length || requisitionInventoryActionBlocked()" @click="openRequisitionHold()">暂不报料</button>
-                  <button v-if="canRequisition" class="btn primary" :disabled="requisitionInventoryActionBlocked()" @click="openStockReplenishment">库存补库<span v-if="stockPolicyWarnings.length">（预警 {{ stockPolicyWarnings.length }}）</span></button>
-                  <button :class="['btn',{primary:requisitionTab==='waiting'}]" :disabled="requisitionInventoryActionBlocked()" @click="selectRequisitionTab('waiting')">等候报料 {{ requisitionHoldSummary.total }}<span v-if="requisitionHoldSummary.due_count">（到期 {{ requisitionHoldSummary.due_count }}）</span></button>
-                  <button class="btn" :disabled="!!requisitionInventoryActionState.action" @click="requisitionInventoryActionBlocked() ? refreshRequisitionInventoryState() : refreshRequisitionTab()">{{ requisitionInventoryActionBlocked() ? '核对待报料库存状态' : '刷新' }}</button>
+                  <button v-if="canRequisition" class="btn warning" :disabled="requisitionTab!=='pending' || !selectedPendingKeys.length || requisitionInventoryActionBlocked() || requisitionVoidActionBlocked()" @click="openRequisitionHold()">暂不报料</button>
+                  <button v-if="canRequisition" class="btn primary" :disabled="requisitionInventoryActionBlocked() || requisitionVoidActionBlocked()" @click="openStockReplenishment">库存补库<span v-if="stockPolicyWarnings.length">（预警 {{ stockPolicyWarnings.length }}）</span></button>
+                  <button :class="['btn',{primary:requisitionTab==='waiting'}]" :disabled="requisitionInventoryActionBlocked() || requisitionVoidActionBlocked()" @click="selectRequisitionTab('waiting')">等候报料 {{ requisitionHoldSummary.total }}<span v-if="requisitionHoldSummary.due_count">（到期 {{ requisitionHoldSummary.due_count }}）</span></button>
+                  <button class="btn" :disabled="!!requisitionInventoryActionState.action || !!requisitionVoidActionState.action" @click="requisitionInventoryActionBlocked() ? refreshRequisitionInventoryState() : (requisitionVoidActionBlocked() ? refreshRequisitionVoidState() : refreshRequisitionTab())">{{ requisitionInventoryActionBlocked() ? '核对待报料库存状态' : (requisitionVoidActionBlocked() ? '核对报料状态' : '刷新') }}</button>
                 </div>
               </div>
               <div v-if="requisitionInventoryActionBlocked()" class="status orange" style="display:flex;align-items:center;gap:8px;white-space:normal;margin:8px 0">
                 <span>{{ requisitionInventoryActionState.action ? requisitionInventoryActionLabel() : (requisitionInventoryActionState.committed ? '库存已经使用，但页面刷新失败，请先核对状态，不要重复操作。' : '上次库存操作结果暂不确定，请先核对状态，不要重复操作。') }}</span>
                 <button class="btn small" type="button" :disabled="!!requisitionInventoryActionState.action" @click="refreshRequisitionInventoryState">核对待报料库存状态</button>
               </div>
-              <fieldset :disabled="requisitionInventoryActionBlocked()" style="border:0;padding:0;margin:0;min-width:0">
+              <div v-if="requisitionVoidActionBlocked()" class="status orange" style="display:flex;align-items:center;gap:8px;white-space:normal;margin:8px 0">
+                <span>{{ requisitionVoidActionState.action ? requisitionVoidActionLabel() : (requisitionVoidActionState.committed ? '报料已经作废或撤销，但页面刷新失败，请先核对状态，不要重复操作。' : '上次报料作废结果暂不确定，请先核对状态，不要重复操作。') }}</span>
+                <button class="btn small" type="button" :disabled="!!requisitionVoidActionState.action" @click="refreshRequisitionVoidState">核对报料状态</button>
+              </div>
+              <fieldset :disabled="requisitionInventoryActionBlocked() || requisitionVoidActionBlocked()" style="border:0;padding:0;margin:0;min-width:0">
               <div v-if="requisitionTab==='pending'" class="supplier-priority-bar">
                 <strong>供应商优先选择</strong>
                 <button :class="['btn','small','supplier-count-button',{active:!requisitionSupplierFilter}]" @click="requisitionSupplierFilter=''">全部供应商（{{ requisitionPending.length }}）</button>
@@ -2546,7 +2550,8 @@
                 <button class="btn" @click="pages.requisitionHolds=1; loadRequisitionHolds()">查询</button>
                 <button class="btn" @click="resetRequisitionHoldFilters()">清空</button>
               </div>
-              <div v-if="requisitionTab==='submitted'" class="list-filterbar">
+              <fieldset v-if="requisitionTab==='submitted'" :disabled="requisitionVoidActionBlocked()" style="border:0;padding:0;margin:0;min-width:0">
+              <div class="list-filterbar">
                 <search-select v-model="reportedFilters.customer_id" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="客户" :allow-empty="true" @change="pages.requisitionReported=1; loadReportedDocuments()"></search-select>
                 <input class="input" v-model.trim="reportedFilters.document_number" placeholder="报料单号" @keyup.enter="pages.requisitionReported=1; loadReportedDocuments()" />
                 <input class="input" v-model.trim="reportedFilters.order_number" placeholder="订单号" @keyup.enter="pages.requisitionReported=1; loadReportedDocuments()" />
@@ -2585,6 +2590,7 @@
                   </table>
                 </details>
               </div>
+              </fieldset>
             </template>
 
             <template v-else-if="activePage === 'incoming'">
@@ -6376,6 +6382,7 @@
             pdfTemplateLoading: false, pdfTemplatesLoaded: false,
             requisitionTab: "pending", requisitionPending: [], requisitionItems: [], requisitionReportedLoaded: false, requisitionSelected: {}, selectedPendingKeys: [], selectedBomSnapshotIds: [],
             requisitionInventoryActionState:{action:"",committed:false,outcomeUncertain:false,context:"",orderItemId:null,bomSnapshotId:null,targetKey:"",result:null},
+            requisitionVoidActionState:{action:"",sourceType:"",targetId:null,targetKey:"",documentNumber:"",committed:false,outcomeUncertain:false,result:null},
             requisitionHolds: [], requisitionHoldsLoaded: false, requisitionHoldsTotal: 0, requisitionHoldSummary: { total:0, due_count:0, anomaly_count:0 },
             requisitionHoldFilters: { customer_id:"", product_code:"", product_name:"", status:"", date_from:"", date_to:"" },
             requisitionHoldForm: { id:null, version:null, rows:[], release_mode:"previous_batch_completed", expected_requisition_date:"", previous_order_item_ids:{}, error:"" },
@@ -11710,6 +11717,99 @@
               return false;
             }
           },
+          requisitionVoidActionBlocked() {
+            const state = this.requisitionVoidActionState || {};
+            return Boolean(state.action || state.committed || state.outcomeUncertain);
+          },
+          requisitionVoidActionLabel() {
+            const state = this.requisitionVoidActionState || {};
+            const target = state.documentNumber ? ` ${state.documentNumber}` : "";
+            if (state.action === "reconcile") return `正在核对报料状态${target}…`;
+            return `正在作废${target}…`;
+          },
+          resetRequisitionVoidActionState() {
+            this.requisitionVoidActionState = {action:"",sourceType:"",targetId:null,targetKey:"",documentNumber:"",committed:false,outcomeUncertain:false,result:null};
+          },
+          async executeRequisitionVoidAction(options) {
+            if (this.requisitionVoidActionBlocked()) {
+              const message = this.requisitionVoidActionState?.action
+                ? this.requisitionVoidActionLabel()
+                : "请先核对报料状态，再继续作废或撤销";
+              this.showToast(message, true);
+              return false;
+            }
+            const state = this.requisitionVoidActionState;
+            Object.assign(state, {
+              action:String(options?.action || "void"),
+              sourceType:String(options?.sourceType || ""),
+              targetId:Number(options?.targetId || 0) || null,
+              targetKey:String(options?.targetKey || ""),
+              documentNumber:String(options?.documentNumber || ""),
+              committed:false,
+              outcomeUncertain:false,
+              result:null,
+            });
+            let response;
+            try {
+              response = await options.submit();
+            } catch (error) {
+              const status = Number(error?.response?.status || 0);
+              state.action = "";
+              if (status >= 400 && status < 500) {
+                this.resetRequisitionVoidActionState();
+                this.showToast((options.errorPrefix || "报料作废失败：") + this.errorMessage(error), true);
+                return false;
+              }
+              state.outcomeUncertain = true;
+              this.showToast("上次报料作废结果暂不确定，请点击“核对报料状态”，不要重复操作。", true);
+              return false;
+            }
+            state.result = response?.data ?? response ?? null;
+            let refreshed = false;
+            try {
+              refreshed = (await options.refresh(response)) !== false;
+            } catch (_error) {
+              refreshed = false;
+            }
+            if (!refreshed) {
+              state.action = "";
+              state.committed = true;
+              this.showToast("报料已经作废或撤销，但页面刷新失败，请点击“核对报料状态”，不要重复操作。", true);
+              return true;
+            }
+            const message = typeof options.successMessage === "function"
+              ? options.successMessage(response)
+              : options.successMessage;
+            this.resetRequisitionVoidActionState();
+            if (message) this.showToast(message);
+            return true;
+          },
+          async refreshRequisitionVoidState() {
+            const state = this.requisitionVoidActionState;
+            if (state.action) {
+              this.showToast(this.requisitionVoidActionLabel(), true);
+              return false;
+            }
+            const previous = {...state};
+            state.action = "reconcile";
+            try {
+              const results = await Promise.all([
+                this.loadRequisition(),
+                this.loadReportedDocuments(),
+                this.loadSupplierOrders(),
+              ]);
+              if (results.some(result => result === false)) {
+                throw new Error("部分报料列表刷新失败");
+              }
+              this.resetRequisitionVoidActionState();
+              this.showToast("报料状态已核对，可以继续操作");
+              return true;
+            } catch (error) {
+              Object.assign(state, previous, {action:""});
+              this.showToast("核对报料状态失败：" + this.errorMessage(error), true);
+              return false;
+            }
+          },
           resetReportedFilters() {
             this.reportedFilters = { customer_id:"", document_number:"", order_number:"", product_code:"", supplier_name:"", status:"", date_from:"", date_to:"" };
             this.pages.requisitionReported = 1;
@@ -16465,29 +16565,47 @@
             }
           },
           async voidReportedCompositeRequisition(row) {
-            if (!confirm(`确认作废组合 BOM 报料单 ${row.document_number}？父件和组件将自动回到待报料。`)) return;
-            try {
-              await axios.put(`/api/requisition/batches/${row.id}/void`, {
+            const targetId = Number(row?.id || 0);
+            const documentNumber = String(row?.document_number || `#${targetId}`);
+            if (!targetId || !confirm(`确认作废组合 BOM 报料单 ${documentNumber}？父件和组件将自动回到待报料。`)) return false;
+            return await this.executeRequisitionVoidAction({
+              action:"void_composite_batch",
+              sourceType:"composite_bom_requisition",
+              targetId,
+              targetKey:`composite-batch:${targetId}`,
+              documentNumber,
+              submit:() => axios.put(`/api/requisition/batches/${targetId}/void`, {
                 reason: "组合 BOM 报料单人工作废",
-              });
-              await Promise.all([this.loadRequisition(), this.loadReportedDocuments()]);
-              this.showToast("组合 BOM 报料单已作废，父件和组件已回到待报料");
-            } catch(error) {
-              this.showToast(this.errorMessage(error), true);
-            }
+              }),
+              refresh:async () => {
+                const results = await Promise.all([this.loadRequisition(), this.loadReportedDocuments()]);
+                return !results.some(result => result === false);
+              },
+              successMessage:"组合 BOM 报料单已作废，父件和组件已回到待报料",
+              errorPrefix:"组合 BOM 报料单作废失败：",
+            });
           },
           async voidReportedCompositeLine(row, line) {
             const label = `${line.component_label || "组件"} ${line.product_code || line.product_name || ""}`.trim();
-            if (!confirm(`确认只撤销 ${label}？同一报料单里的其他明细不受影响。`)) return;
-            try {
-              await axios.put(`/api/requisition/batch-items/${line.id}/void`, {
+            const targetId = Number(line?.id || 0);
+            const documentNumber = String(row?.document_number || `#${targetId}`);
+            if (!targetId || !confirm(`确认只撤销 ${label}？同一报料单里的其他明细不受影响。`)) return false;
+            return await this.executeRequisitionVoidAction({
+              action:"void_composite_line",
+              sourceType:"composite_bom_requisition_item",
+              targetId,
+              targetKey:`composite-line:${targetId}`,
+              documentNumber:`${documentNumber} · ${label}`,
+              submit:() => axios.put(`/api/requisition/batch-items/${targetId}/void`, {
                 reason: `逐条撤销 ${label}`,
-              });
-              await Promise.all([this.loadRequisition(), this.loadReportedDocuments()]);
-              this.showToast(`${label} 已撤销，其他盖/底/围板仍可继续收料`);
-            } catch(error) {
-              this.showToast(this.errorMessage(error), true);
-            }
+              }),
+              refresh:async () => {
+                const results = await Promise.all([this.loadRequisition(), this.loadReportedDocuments()]);
+                return !results.some(result => result === false);
+              },
+              successMessage:`${label} 已撤销，其他盖/底/围板仍可继续收料`,
+              errorPrefix:"组合组件撤销失败：",
+            });
           },
           openSupplierOrderPrint(so) {
             const warnings = so.dimension_warnings || [];
@@ -16512,20 +16630,28 @@
             setTimeout(() => { w.print(); w.close(); }, 300);
           },
           async voidSupplierOrder(so) {
-            if (!this.canAdmin) return;
-            if (!confirm(`确定作废报料单 ${so.order_number}？关联的订单明细将恢复为待报料。`)) return;
-            this.loading = true;
-            try {
-              await axios.put(`/api/requisition/supplier-orders/${so.id}/void`);
-              this.showToast('已作废');
-              await Promise.all([this.loadSupplierOrders(), this.loadRequisition(), this.loadReportedDocuments()]);
-            } catch(e) {
-              this.showToast('作废失败：' + (e.response?.data?.detail || e.message), true);
-            } finally { this.loading = false; }
+            if (!this.canAdmin) return false;
+            const targetId = Number(so?.id || 0);
+            const documentNumber = String(so?.order_number || `#${targetId}`);
+            if (!targetId || !confirm(`确定作废报料单 ${documentNumber}？关联的订单明细将恢复为待报料。`)) return false;
+            return await this.executeRequisitionVoidAction({
+              action:"void_supplier_order",
+              sourceType:"supplier_order",
+              targetId,
+              targetKey:`supplier-order:${targetId}`,
+              documentNumber,
+              submit:() => axios.put(`/api/requisition/supplier-orders/${targetId}/void`),
+              refresh:async () => {
+                const results = await Promise.all([this.loadSupplierOrders(), this.loadRequisition(), this.loadReportedDocuments()]);
+                return !results.some(result => result === false);
+              },
+              successMessage:"供应商报料单已作废，关联明细已恢复到待报料",
+              errorPrefix:"供应商报料单作废失败：",
+            });
           },
           async voidReportedSupplierOrder(row) {
             const so = this.supplierOrders.find(item => item.id === row.id) || { id: row.id, order_number: row.document_number };
-            await this.voidSupplierOrder(so);
+            return await this.voidSupplierOrder(so);
           },
           // ===== 报料/压线格式化 helper =====
           formatReportDims(item) {
@@ -20163,9 +20289,24 @@
             this.closeModal();
           },
           async cancelRequisition(row) {
-            if (!this.canAdmin || !confirm("确认撤销该报料并回到待报料吗？系统会自动记录本次管理员操作。")) return;
-            try { await axios.put(`/api/requisition/items/${row.item_id}/cancel`, {}); await this.loadRequisition(); this.showToast("已退回待报料池"); }
-            catch (error) { this.showToast(this.errorMessage(error), true); }
+            if (!this.canAdmin) return false;
+            const targetId = Number(row?.item_id || 0);
+            const documentNumber = String(row?.document_number || row?.order_number || `明细 #${targetId}`);
+            if (!targetId || !confirm("确认撤销该报料并回到待报料吗？系统会自动记录本次管理员操作。")) return false;
+            return await this.executeRequisitionVoidAction({
+              action:"cancel_requisition_item",
+              sourceType:"requisition_item",
+              targetId,
+              targetKey:`requisition-item:${targetId}`,
+              documentNumber,
+              submit:() => axios.put(`/api/requisition/items/${targetId}/cancel`, {}),
+              refresh:async () => {
+                const results = await Promise.all([this.loadRequisition(), this.loadReportedDocuments()]);
+                return !results.some(result => result === false);
+              },
+              successMessage:"已退回待报料池",
+              errorPrefix:"撤销报料失败：",
+            });
           },
           normalizeReceiptResolution(line) {
             const actual = Number(line.actual_received_quantity);

@@ -21,7 +21,9 @@ def test_cancel_requisition_frontend_has_one_confirmation_and_no_reason() -> Non
     assert method.count("confirm(") == 1
     assert "prompt(" not in method
     assert "{reason}" not in method
-    assert "/api/requisition/items/${row.item_id}/cancel`, {})" in method
+    assert "const targetId = Number(row?.item_id || 0)" in method
+    assert "/api/requisition/items/${targetId}/cancel`, {})" in method
+    assert "executeRequisitionVoidAction" in method
 
 
 def test_trace_requisition_rollback_does_not_fabricate_reason() -> None:

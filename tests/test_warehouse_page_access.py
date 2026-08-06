@@ -47,13 +47,16 @@ print(json.dumps(rows, ensure_ascii=False))
     return json.loads(result.stdout.strip().splitlines()[-1])
 
 
-def test_warehouse_page_route_returns_warehouse_html_not_dashboard() -> None:
-    response = request_pages("/warehouse.html")[0]
-    assert response["status"] == 200
-    assert "仓库库存管理 - 天明ERP" in response["text"]
-    assert 'id="inventorySection"' in response["text"]
-    assert "首页仪表盘" not in response["text"]
-    assert response["content_type"].startswith("text/html")
+def test_warehouse_page_route_returns_new_digital_twin_and_keeps_ledger_separate() -> None:
+    twin, ledger = request_pages("/warehouse.html", "/warehouse-ledger.html")
+    assert twin["status"] == 200
+    assert "天明智慧仓储 - 天明ERP" in twin["text"]
+    assert 'id="warehouse-twin-root"' in twin["text"]
+    assert "/factory-twin-assets/assets/" in twin["text"]
+    assert twin["content_type"].startswith("text/html")
+    assert ledger["status"] == 200
+    assert "仓库库存管理 - 天明ERP" in ledger["text"]
+    assert 'id="inventorySection"' in ledger["text"]
 
 
 def test_homepage_keeps_warehouse_inside_lazy_persistent_erp_shell() -> None:
@@ -61,8 +64,10 @@ def test_homepage_keeps_warehouse_inside_lazy_persistent_erp_shell() -> None:
     assert '{key:"warehouse",label:"仓库地图"}' in INDEX_HTML
     assert '@click="go(page.key)">{{ page.label }}</button>' in INDEX_HTML
     assert 'v-if="warehouseFrameUrl" v-show="activePage === \'warehouse\'"' in INDEX_HTML
-    assert 'warehouseFrameUrl: "", warehouseFrameRevision: 0' in INDEX_HTML
-    assert 'this.warehouseFrameUrl = "/warehouse.html?embedded=1&tab=locations&location_view=floor3"' in INDEX_HTML
+    assert 'warehouseFrameUrl: "", warehouseFrameRevision: 0, warehouseTwinFloor: "3F"' in INDEX_HTML
+    assert 'this.warehouseFrameUrl = "/warehouse.html?embedded=1&floor=3F&view=25d"' in INDEX_HTML
+    assert "默认先看真实三楼地图；切换其它模块不会丢失当前仓库页面。" not in INDEX_HTML
+    assert "warehouse-floor-card" not in INDEX_HTML
     assert 'window.location.href = "/warehouse.html";' not in INDEX_HTML
     assert 'this.warehouseFrameUrl = "";' in INDEX_HTML
     assert '"incoming", "production", "warehouse", "deliveries"' in INDEX_HTML

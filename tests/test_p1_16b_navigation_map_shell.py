@@ -19,16 +19,13 @@ def test_p1_16b_keeps_business_pages_behind_one_order_warehouse_workbench() -> N
     assert "this.pageAllowed(page.key)" in INDEX
 
 
-def test_p1_16b_defaults_to_real_floor_three_map_without_fake_first_floor() -> None:
-    target = "/warehouse.html?embedded=1&tab=locations&location_view=floor3"
+def test_p1_16b_delegates_floor_switching_to_the_embedded_twin_header() -> None:
+    target = "/warehouse.html?embedded=1&floor=3F&view=25d"
     assert target in INDEX
-    assert 'class="warehouse-floor-card future"' in INDEX
-    assert "台账未建立 / 建设中" in INDEX
-    for label in ("一楼", "台账未建立 / 建设中"):
-        assert label in INDEX
-    assert '"locations"' in WAREHOUSE
-    assert 'requestedLocationView=params.get("location_view")' in WAREHOUSE
-    assert 'requestedLocationView==="floor3"' in WAREHOUSE
+    assert "warehouseTwinFloor: \"3F\"" in INDEX
+    assert "默认先看真实三楼地图；切换其它模块不会丢失当前仓库页面。" not in INDEX
+    assert "warehouse-floor-card" not in INDEX
+    assert "厂房楼层导视" not in INDEX
 
 
 def test_p1_16b_preserves_existing_warehouse_state_and_manual_refresh() -> None:

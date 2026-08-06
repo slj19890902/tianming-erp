@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WAREHOUSE = (ROOT / "static" / "warehouse.html").read_text(encoding="utf-8")
 
 
-def test_warehouse_daily_navigation_is_map_first() -> None:
+def test_warehouse_daily_navigation_defaults_to_measured_twin_floor() -> None:
     tabs = WAREHOUSE[
         WAREHOUSE.index('<div class="tabs">') : WAREHOUSE.index(
             '<div id="pageError"'
@@ -19,11 +19,13 @@ def test_warehouse_daily_navigation_is_map_first() -> None:
     assert tabs.index('data-tab="locations"') < tabs.index(
         'data-tab="insights"'
     )
-    assert '<button class="btn active" data-tab="locations" aria-label="库位管理地图">仓库地图</button>' in tabs
+    assert '<button class="btn active" data-tab="locations" aria-label="数字孪生库位管理">数字孪生库位</button>' in tabs
     assert 'tab:"locations"' in WAREHOUSE
     assert 'if(!requestedTab&&!locationId&&!lotId&&!keyword){await switchTab("locations");return}' in WAREHOUSE
     assert 'if(requestedTab==="locations"&&!locationId){' in WAREHOUSE
     assert 'await switchTab("locations");' in WAREHOUSE
+    assert 'locationView:"floor3"' in WAREHOUSE
+    assert 'requestedLocationView==="floor3"' in WAREHOUSE
 
 
 def test_row_ledgers_are_admin_advanced_entries_not_daily_tabs() -> None:

@@ -21,6 +21,7 @@ from app.api.deps import (
     RoleChecker,
     customer_scope_ids,
     get_db,
+    get_current_user,
     has_permission,
     has_unrestricted_customer_access,
     require_customer_access,
@@ -28,16 +29,20 @@ from app.api.deps import (
 from app.core.time_contract import (
     beijing_date_bounds_utc_naive,
     beijing_naive_to_api,
+    beijing_now_naive,
     beijing_today,
     utc_naive_to_api,
 )
+from app.api.master_data_common import audit_master_change, clean_code
 from app.models.user import User
 from app.models.audit import OperationLog
 from app.models.customer import Customer
+from app.models.delivery import Delivery, DeliveryPickTask
 from app.models.mold_tool import MoldLocationMovement, MoldTool
 from app.models.product import Product
 from app.models.product_bom import SalesOrderItemBomComponent
 from app.models.order import Order, OrderItem
+from app.models.production import ProductionTask
 from app.models.warehouse_inventory import (
     FinishedGoodsInventoryDetail,
     Floor3LocationLayout,
@@ -58,6 +63,7 @@ from app.models.warehouse_inventory import (
 from app.services.floor3_locations import (
     Floor3LocationError,
     add_pallet_item,
+    adjust_area_location_count,
     clear_pallet,
     convert_snapshot_to_finished_lot,
     create_pallet,
@@ -68,6 +74,26 @@ from app.services.floor3_locations import (
     update_layout_area,
 )
 from app.services.factory_maps import FactoryMapNotFoundError, load_factory_map
+from app.services.warehouse_twin_layout import (
+    WarehouseTwinLayoutNotFoundError,
+    load_warehouse_twin_floor,
+)
+from app.services.warehouse_twin_layout_editor import (
+    WarehouseTwinLayoutEditConflictError,
+    WarehouseTwinLayoutEditError,
+    WarehouseTwinLayoutEditNotFoundError,
+    create_warehouse_twin_rack,
+    delete_warehouse_twin_rack,
+    update_warehouse_twin_rack,
+    update_warehouse_twin_zone_policy,
+)
+from app.services.warehouse_twin_production import (
+    WarehouseTwinProductionError,
+    build_production_projection,
+    delete_production_projection_mapping,
+    save_production_projection_mapping,
+)
+from app.services.production_workflow import PENDING, list_production_tasks
 from app.services.semi_finished_inventory import (
     SemiFinishedCandidate,
     SemiFinishedLotVersion,
@@ -108,11 +134,18 @@ from app.services.warehouse_inventory import (
     void_semi_finished_lot,
 )
 from app.services.inventory_insights import build_inventory_insights
+from app.services.warehouse_twin_dashboard import (
+    build_inventory_code_search_results,
+    build_warehouse_twin_dashboard,
+    inventory_search_matches,
+)
 from app.services.audit_log import append_audit_event
 from app.services.location_candidates import (
     list_operational_locations,
+    operational_location_issue,
     operational_location_payload,
 )
+from app.services.master_data_versioning import record_versioned_create
 from app.services.mold_location import (
     MoldLocationError,
     MoldLocationMoveResult,
@@ -129,6 +162,7 @@ router = APIRouter()
 admin_only = RoleChecker(["admin"])
 can_read = PermissionChecker("warehouse.view")
 can_operate = PermissionChecker("warehouse.execute")
+can_read_orders = PermissionChecker("orders.view")
 can_reserve = PermissionChecker("warehouse.reserve")
 can_view_reservations = PermissionChecker("warehouse.view")
 VALID_SOURCE_TYPES = {
@@ -155,6 +189,16 @@ WAREHOUSE_CONSTRUCTION_STATUSES = {
     "layout_complete",
     "enabled",
 }
+
+
+def _can_locate_twin(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    if has_permission(current_user, "warehouse.view") or has_permission(
+        current_user, "deliveries.pick"
+    ):
+        return current_user
+    raise HTTPException(status_code=403, detail="权限不足")
 
 
 def _is_a3_bom_snapshot(snapshot: SalesOrderItemBomComponent) -> bool:
@@ -465,6 +509,132 @@ class Floor3PalletMovePayload(BaseModel):
         return value
 
 
+class TwinFinishedInboundPayload(BaseModel):
+    """Admin-confirmed map entry into the existing finished-goods ledger."""
+
+    location_id: int = Field(gt=0)
+    pallet_code: str | None = Field(default=None, max_length=80)
+    customer_id: int = Field(gt=0)
+    product_id: int = Field(gt=0)
+    quantity: int = Field(gt=0)
+    stock_date: date
+    idempotency_key: str = Field(min_length=1, max_length=120)
+    confirmed: Literal[True]
+    remarks: str | None = Field(default=None, max_length=500)
+
+    @field_validator("pallet_code", "remarks")
+    @classmethod
+    def strip_twin_finished_inbound_text(cls, value: str | None) -> str | None:
+        text = (value or "").strip()
+        return text or None
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def strip_twin_finished_inbound_key(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("幂等键不能为空")
+        return text
+
+
+class TwinSemiFinishedInboundPayload(BaseModel):
+    """Admin-confirmed semi-finished stock entry from one chosen map location."""
+
+    location_id: int = Field(gt=0)
+    customer_id: int = Field(gt=0)
+    product_id: int = Field(gt=0)
+    quantity: int = Field(gt=0)
+    stock_date: date
+    idempotency_key: str = Field(min_length=1, max_length=120)
+    confirmed: Literal[True]
+    remarks: str | None = Field(default=None, max_length=500)
+
+    @field_validator("remarks")
+    @classmethod
+    def strip_twin_semi_finished_remarks(cls, value: str | None) -> str | None:
+        text = (value or "").strip()
+        return text or None
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def strip_twin_semi_finished_key(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("幂等键不能为空")
+        return text
+
+
+class TwinStagingPlacementPayload(BaseModel):
+    """Admin-confirmed placement of an existing staging lot into one map location."""
+
+    location_id: int = Field(gt=0)
+    expected_version: int = Field(gt=0)
+    quantity: int = Field(gt=0)
+    idempotency_key: str = Field(min_length=1, max_length=120)
+    confirmed: Literal[True]
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def strip_twin_staging_placement_key(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("幂等键不能为空")
+        return text
+
+
+class TwinTemporaryFinishedInboundPayload(BaseModel):
+    """Explicit temporary product creation and first stock placement by an admin."""
+
+    location_id: int = Field(gt=0)
+    pallet_code: str | None = Field(default=None, max_length=80)
+    customer_id: int = Field(gt=0)
+    inventory_code: str = Field(min_length=1, max_length=150)
+    product_name: str = Field(min_length=1, max_length=250)
+    quantity: int = Field(gt=0)
+    stock_date: date
+    reason: str = Field(min_length=2, max_length=500)
+    idempotency_key: str = Field(min_length=1, max_length=120)
+    confirmed: Literal[True]
+
+    @field_validator("pallet_code")
+    @classmethod
+    def strip_twin_temporary_pallet_code(cls, value: str | None) -> str | None:
+        text = (value or "").strip()
+        return text or None
+
+    @field_validator("inventory_code", "product_name", "reason", "idempotency_key")
+    @classmethod
+    def strip_twin_temporary_inbound_text(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("不能为空")
+        return text
+
+
+class TwinPalletMovePayload(BaseModel):
+    """Admin-confirmed physical pallet move initiated from the 2D map."""
+
+    expected_version: int = Field(gt=0)
+    to_location_id: int = Field(gt=0)
+    idempotency_key: str = Field(min_length=1, max_length=120)
+    confirmed: Literal[True]
+    remarks: str | None = Field(default=None, max_length=500)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def strip_twin_move_key(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("幂等键不能为空")
+        return text
+
+    @field_validator("remarks")
+    @classmethod
+    def strip_twin_move_remarks(cls, value: str | None) -> str | None:
+        text = (value or "").strip()
+        return text or None
+
+
 class Floor3LayoutGeometryPayload(BaseModel):
     left_pct: Decimal = Field(ge=0, le=100, max_digits=7, decimal_places=4)
     top_pct: Decimal = Field(ge=0, le=100, max_digits=7, decimal_places=4)
@@ -502,6 +672,11 @@ class Floor3LayoutAreaSlotPayload(Floor3LayoutGeometryPayload):
 
 class Floor3LayoutAreaPatchPayload(BaseModel):
     slots: list[Floor3LayoutAreaSlotPayload] = Field(min_length=1, max_length=500)
+
+
+class Floor3AreaLocationCountPayload(BaseModel):
+    target_count: int = Field(ge=0, le=500)
+    confirmed: Literal[True]
 
 
 class Floor3LayoutSlotStatePayload(BaseModel):
@@ -689,6 +864,28 @@ class AdjustPayload(VersionPayload):
         if value == 0:
             raise ValueError("调整数量不能为0")
         return value
+
+
+class TwinLotQuantityCorrectionPayload(BaseModel):
+    expected_version: int = Field(gt=0)
+    action: Literal["decrease", "remove"]
+    quantity: int | None = Field(default=None, gt=0)
+    reason: str = Field(min_length=2, max_length=500)
+    idempotency_key: str = Field(min_length=1, max_length=100)
+    confirmed: Literal[True]
+
+    @field_validator("reason", "idempotency_key")
+    @classmethod
+    def strip_twin_correction_text(cls, value: str) -> str:
+        return value.strip()
+
+    @model_validator(mode="after")
+    def validate_twin_correction_quantity(self) -> "TwinLotQuantityCorrectionPayload":
+        if self.action == "decrease" and self.quantity is None:
+            raise ValueError("减少库存必须填写数量")
+        if self.action == "remove" and self.quantity is not None:
+            raise ValueError("移除货物不需要填写数量")
+        return self
 
 
 
@@ -2719,6 +2916,72 @@ def create_floor3_layout_slot(
         raise HTTPException(status_code=409, detail="货位编码或布局已存在") from error
 
 
+@router.post("/floor3/layout/areas/{area_code}/location-count")
+def set_floor3_area_location_count(
+    area_code: str,
+    payload: Floor3AreaLocationCountPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    try:
+        result = adjust_area_location_count(
+            db,
+            area_code=area_code,
+            target_count=payload.target_count,
+            operator_id=user.id,
+        )
+        actions: list[dict] = []
+        for action, rows, description in (
+            ("created", result.created, "按区域目标数量自动创建三楼待布局库位"),
+            ("enabled", result.enabled, "按区域目标数量重新启用三楼空库位"),
+            ("disabled", result.disabled, "按区域目标数量逻辑停用三楼空库位"),
+        ):
+            for location in rows:
+                _floor3_layout_log(
+                    db,
+                    request=request,
+                    user=user,
+                    action="CREATE" if action == "created" else "UPDATE",
+                    location=location,
+                    description=description,
+                    details={
+                        "area_code": result.area_code,
+                        "target_count": result.target_count,
+                        "location_code": location.location_code,
+                        "location_count_action": action,
+                    },
+                )
+                actions.append(
+                    {
+                        "action": action,
+                        "location": _location_dict(location),
+                        "layout": _floor3_layout_dict(location.floor3_layout),
+                    }
+                )
+        db.commit()
+        return {
+            "area_code": result.area_code,
+            "target_count": result.target_count,
+            "active_count": result.active_count,
+            "created_count": len(result.created),
+            "enabled_count": len(result.enabled),
+            "disabled_count": len(result.disabled),
+            "items": actions,
+            "message": (
+                "新增库位已生成待布局草稿，请在二维地图中确认位置并保存。"
+                if result.created
+                else "区域库位数量已按管理员确认结果更新。"
+            ),
+        }
+    except Floor3LocationError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="区域库位编号或布局发生冲突，请刷新后重试") from error
+
+
 @router.patch("/floor3/layout/areas/{area_code}")
 def patch_floor3_layout_area(
     area_code: str,
@@ -3052,15 +3315,15 @@ def get_floor3_location(
 
 @router.get("/floor3/product-candidates")
 def floor3_product_candidates(
-    q: str = Query(min_length=1, max_length=150),
+    q: str = Query(default="", max_length=150),
     customer_id: int | None = Query(default=None, gt=0),
     limit: int = Query(default=30, ge=1, le=100),
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
     keyword = q.strip()
-    if not keyword:
-        raise HTTPException(status_code=400, detail="请输入存货编码、订单号或产品名称")
+    if not keyword and customer_id is None:
+        raise HTTPException(status_code=400, detail="请先选择客户，或输入存货编码、订单号或产品名称")
     if customer_id is not None:
         require_customer_access(customer_id, user, db)
     visible_customer_ids = _visible_customer_ids(user, db)
@@ -3179,6 +3442,869 @@ def floor3_product_candidates(
         "auto_bind_allowed": False,
         "message": "请选择确认的产品；系统不会自动猜测或创建产品。",
     }
+
+
+def _twin_finished_target_location(
+    db: Session,
+    location_id: int,
+    *,
+    require_empty: bool = False,
+) -> WarehouseLocation:
+    location = db.get(WarehouseLocation, location_id)
+    if location is None:
+        raise HTTPException(status_code=404, detail="目标货位不存在")
+    if location.warehouse_floor not in {1, 3}:
+        raise HTTPException(status_code=409, detail="只能选择一楼或三楼地图中的正式货位")
+    issue = operational_location_issue(
+        db,
+        location,
+        warehouse_types={"finished", "shared"},
+    )
+    if issue:
+        raise HTTPException(status_code=409, detail=f"目标货位不可用：{issue}")
+    if require_empty:
+        current_pallet = db.scalar(
+            select(InventoryPallet.id).where(
+                InventoryPallet.location_id == location.id,
+                InventoryPallet.is_current.is_(True),
+            )
+        )
+        if current_pallet is not None:
+            raise HTTPException(status_code=409, detail="目标货位已有实体栈板，请选择空货位")
+    return location
+
+
+def _twin_location_live_lots(db: Session, location_id: int) -> list[InventoryLot]:
+    physical_quantity = (
+        InventoryLot.quantity_available
+        + InventoryLot.quantity_reserved
+        + InventoryLot.quantity_damaged
+    )
+    return list(
+        db.scalars(
+            _lot_query().where(
+                InventoryLot.warehouse_location_id == location_id,
+                InventoryLot.status.in_(("active", "frozen")),
+                physical_quantity > 0,
+            )
+        ).unique().all()
+    )
+
+
+def _twin_assert_finished_merge_compatible(
+    db: Session,
+    *,
+    location_id: int,
+    customer_id: int,
+    product_id: int,
+    current_pallet: InventoryPallet | None,
+) -> None:
+    """An occupied map location may only receive the exact same finished product."""
+
+    if current_pallet is not None:
+        for item in current_pallet.items:
+            if (
+                item.item_type != "finished"
+                or item.customer_id != customer_id
+                or item.product_id != product_id
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="当前库位已有其他客户或其他纸箱，只能选择空位或同客户同存货编码库位",
+                )
+    for lot in _twin_location_live_lots(db, location_id):
+        detail = lot.finished_detail
+        if (
+            lot.inventory_type != "finished"
+            or detail is None
+            or detail.owner_customer_id != customer_id
+            or detail.product_id != product_id
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="当前库位已有其他客户、库存类型或纸箱，只能合并到同产品库位",
+            )
+
+
+def _twin_assert_semi_finished_merge_compatible(
+    db: Session,
+    *,
+    location_id: int,
+    customer_id: int,
+    product_id: int,
+) -> None:
+    """Semi-finished co-location requires the same customer and confirmed product binding."""
+
+    for lot in _twin_location_live_lots(db, location_id):
+        detail = lot.semi_finished_detail
+        if (
+            lot.inventory_type != "semi_finished"
+            or detail is None
+            or detail.owner_customer_id != customer_id
+            or product_id not in set(semi_finished_lot_allowed_product_ids(db, lot.id))
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="当前库位已有不同客户、不同半成品款号或其他库存类型，请改选兼容库位",
+            )
+
+
+@router.get("/twin-operations/location-product-candidates")
+def twin_location_product_candidates(
+    location_id: int = Query(gt=0),
+    q: str = Query(default="", max_length=150),
+    limit: int = Query(default=30, ge=1, le=100),
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    """List existing not-yet-delivered production stock for one chosen location."""
+
+    location = _twin_finished_target_location(db, location_id, require_empty=True)
+    live_quantity = InventoryLot.quantity_available + InventoryLot.quantity_reserved
+    query = (
+        select(
+            InventoryLot,
+            FinishedGoodsInventoryDetail,
+            WarehouseLocation,
+            Customer,
+            Product,
+        )
+        .join(
+            FinishedGoodsInventoryDetail,
+            FinishedGoodsInventoryDetail.inventory_lot_id == InventoryLot.id,
+        )
+        .join(
+            WarehouseLocation,
+            WarehouseLocation.id == InventoryLot.warehouse_location_id,
+        )
+        .outerjoin(Customer, Customer.id == FinishedGoodsInventoryDetail.owner_customer_id)
+        .outerjoin(Product, Product.id == FinishedGoodsInventoryDetail.product_id)
+        .where(
+            WarehouseLocation.location_code == "F1-DISPATCH-01",
+            InventoryLot.inventory_type == "finished",
+            InventoryLot.status == "active",
+            InventoryLot.source_type.in_(("production_completion", "transfer")),
+            InventoryLot.source_ref_type == "production_completion",
+            InventoryLot.source_ref_id.is_not(None),
+            ~InventoryLot.pallet_item.has(),
+            live_quantity > 0,
+        )
+    )
+    visible_customer_ids = _visible_customer_ids(user, db)
+    if visible_customer_ids is not None:
+        query = query.where(
+            FinishedGoodsInventoryDetail.owner_customer_id.in_(visible_customer_ids)
+        )
+    keyword = q.strip()
+    if keyword:
+        pattern = f"%{keyword}%"
+        query = query.where(
+            or_(
+                InventoryLot.lot_number.like(pattern),
+                FinishedGoodsInventoryDetail.inventory_code_snapshot.like(pattern),
+                FinishedGoodsInventoryDetail.product_name_snapshot.like(pattern),
+                FinishedGoodsInventoryDetail.owner_customer_name_snapshot.like(pattern),
+                Customer.name.like(pattern),
+                Product.product_code.like(pattern),
+                Product.customer_material_code.like(pattern),
+                Product.product_name.like(pattern),
+            )
+        )
+    rows = db.execute(
+        query.order_by(InventoryLot.stock_date.desc(), InventoryLot.id.desc()).limit(limit)
+    ).all()
+    items = []
+    for lot, detail, source_location, customer, product in rows:
+        available = int(lot.quantity_available or 0)
+        reserved = int(lot.quantity_reserved or 0)
+        items.append(
+            {
+                "lot_id": lot.id,
+                "lot_number": lot.lot_number,
+                "version": lot.version,
+                "customer_id": detail.owner_customer_id,
+                "customer_name": (
+                    customer.name
+                    if customer is not None
+                    else detail.owner_customer_name_snapshot
+                ),
+                "product_id": detail.product_id,
+                "inventory_code": detail.inventory_code_snapshot,
+                "product_name": detail.product_name_snapshot,
+                "available_quantity": available,
+                "reserved_quantity": reserved,
+                "total_quantity": available + reserved,
+                "unit": lot.unit,
+                "source_location_id": source_location.id,
+                "source_location_code": source_location.location_code,
+                "source_location_name": source_location.location_name,
+                "stock_date": lot.stock_date,
+            }
+        )
+    return {
+        "target_location": {
+            "location_id": location.id,
+            "location_code": location.location_code,
+            "location_name": location.location_name,
+            "area_code": location.area_code,
+        },
+        "items": items,
+        "total": len(items),
+        "message": "从当前空货位选择已完工未送货产品；确认后只移动原库存，不增加数量。",
+    }
+
+
+@router.post("/twin-operations/staging-lots/{lot_id}/place")
+def place_twin_staging_lot(
+    lot_id: int,
+    payload: TwinStagingPlacementPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    """Move an existing floor-one staging lot into the selected empty map location."""
+
+    target = _twin_finished_target_location(db, payload.location_id)
+    source_lot = _require_lot_customer_access(db, lot_id, user)
+    before = _inventory_lot_audit_state(source_lot)
+    customer_id, customer_name = _inventory_lot_audit_customer(source_lot)
+    try:
+        result = transfer_staging_finished_lot(
+            db,
+            lot_id=lot_id,
+            expected_version=payload.expected_version,
+            quantity=payload.quantity,
+            location_id=target.id,
+            operator_id=user.id,
+            idempotency_key=payload.idempotency_key,
+        )
+        pallet_item = result.target_lot.pallet_item
+        if pallet_item is None:
+            raise WarehouseInventoryError("转入批次未能绑定目标实体栈板", 409)
+        pallet = _floor3_get_pallet(db, pallet_item.pallet_id)
+        if not result.replayed:
+            append_audit_event(
+                db,
+                request=request,
+                actor=user,
+                event_category="business",
+                result="success",
+                source="web",
+                module_code="warehouse",
+                action_code="warehouse.twin.staging_lot.place",
+                legacy_action="TWIN_PLACE_STAGING_LOT",
+                resource="InventoryLotTransfer",
+                entity_type="inventory_lot_transfer",
+                entity_id=result.transfer.id,
+                object_ref=f"inventory_lot_transfer:{result.transfer.id}",
+                customer_id=customer_id,
+                customer_name=customer_name,
+                description="数字孪生空货位确认接收一楼待送成品",
+                details={
+                    "source_lot_id": lot_id,
+                    "target_lot_id": result.target_lot.id,
+                    "quantity": payload.quantity,
+                    "source_location_id": result.transfer.source_location_id,
+                    "target_location_id": result.transfer.target_location_id,
+                    "before": before,
+                    "source_after": _inventory_lot_audit_state(result.source_lot),
+                    "target_after": _inventory_lot_audit_state(result.target_lot),
+                    "idempotency_key": payload.idempotency_key,
+                },
+            )
+            _floor3_log(
+                db,
+                request=request,
+                user=user,
+                action="UPDATE",
+                pallet=pallet,
+                description="数字孪生货位主动选择已完工未送产品",
+                details={
+                    "source_lot_id": lot_id,
+                    "target_lot_id": result.target_lot.id,
+                    "quantity": payload.quantity,
+                    "location_id": target.id,
+                    "idempotency_key": payload.idempotency_key,
+                },
+            )
+        db.commit()
+        return {
+            "message": "已将一楼待送产品转入当前货位，库存总数未改变",
+            "idempotent_replay": result.replayed,
+            "transfer": _lot_location_transfer_dict(
+                result.transfer,
+                source_lot=result.source_lot,
+                target_lot=result.target_lot,
+                replayed=result.replayed,
+            ),
+            "pallet": _floor3_pallet_response(db, pallet, user),
+        }
+    except WarehouseInventoryError as error:
+        db.rollback()
+        _handle(error)
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="待送批次、目标货位或请求标识已变化，请刷新后重试",
+        ) from error
+
+
+@router.post("/twin-operations/finished-inbound", status_code=201)
+def create_twin_finished_inbound(
+    payload: TwinFinishedInboundPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    """Create one formal finished lot and its physical pallet from the map."""
+
+    item = Floor3PalletItemPayload(
+        customer_id=payload.customer_id,
+        product_id=payload.product_id,
+        item_type="finished",
+        quantity=Decimal(payload.quantity),
+        unit="boxes",
+        match_status="matched",
+        create_finished_inventory=True,
+        stock_date=payload.stock_date,
+        idempotency_key=payload.idempotency_key,
+        remarks=payload.remarks,
+    )
+    _require_floor3_item_customer_access(db, item, user)
+    existing_movement = db.scalar(
+        select(InventoryMovement).where(
+            InventoryMovement.idempotency_key == payload.idempotency_key,
+            InventoryMovement.movement_type == "manual_in",
+        )
+    )
+    replayed = existing_movement is not None
+    if existing_movement is not None:
+        existing_lot = db.get(InventoryLot, existing_movement.inventory_lot_id)
+        existing_detail = existing_lot.finished_detail if existing_lot is not None else None
+        if (
+            existing_lot is None
+            or existing_detail is None
+            or existing_lot.warehouse_location_id != payload.location_id
+            or existing_detail.owner_customer_id != payload.customer_id
+            or existing_detail.product_id != payload.product_id
+            or int(existing_movement.quantity or 0) != payload.quantity
+        ):
+            raise HTTPException(status_code=409, detail="同一请求标识已用于其他库存补录")
+    try:
+        current_pallet = db.scalar(
+            _floor3_pallet_query().where(
+                InventoryPallet.location_id == payload.location_id,
+                InventoryPallet.is_current.is_(True),
+            )
+        )
+        _twin_assert_finished_merge_compatible(
+            db,
+            location_id=payload.location_id,
+            customer_id=payload.customer_id,
+            product_id=payload.product_id,
+            current_pallet=current_pallet,
+        )
+        if current_pallet is None:
+            row = create_pallet(
+                db,
+                location_id=payload.location_id,
+                pallet_code=payload.pallet_code,
+                items=[item.model_dump()],
+                remarks=payload.remarks,
+                operator_id=user.id,
+            )
+        else:
+            lot = manual_finished_in(
+                db,
+                customer_id=payload.customer_id,
+                product_id=payload.product_id,
+                location_id=payload.location_id,
+                quantity=payload.quantity,
+                stock_date=payload.stock_date,
+                source_type="manual",
+                remarks=payload.remarks,
+                operator_id=user.id,
+                idempotency_key=payload.idempotency_key,
+                pallet_id=current_pallet.id,
+            )
+            row = _floor3_get_pallet(
+                db,
+                lot.pallet_item.pallet_id if lot.pallet_item is not None else current_pallet.id,
+            )
+        if not replayed:
+            _floor3_log(
+                db,
+                request=request,
+                user=user,
+                action="CREATE",
+                pallet=row,
+                description="数字孪生地图确认入成品仓",
+                details={
+                    "location_id": payload.location_id,
+                    "customer_id": payload.customer_id,
+                    "product_id": payload.product_id,
+                    "quantity": payload.quantity,
+                    "stock_date": payload.stock_date,
+                    "idempotency_key": payload.idempotency_key,
+                },
+            )
+        db.commit()
+        return {
+            "message": "已从地图确认补录到当前库位" if current_pallet is not None else "已从地图确认入成品仓",
+            "idempotent_replay": replayed,
+            "pallet": _floor3_pallet_response(db, row, user),
+        }
+    except Floor3LocationError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except WarehouseInventoryError as error:
+        db.rollback()
+        _handle(error)
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="目标货位、栈板或入库幂等键已发生冲突，请刷新后重试",
+        ) from error
+
+
+@router.post("/twin-operations/semi-finished-inbound", status_code=201)
+def create_twin_semi_finished_inbound(
+    payload: TwinSemiFinishedInboundPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    """Create a product-bound semi-finished lot at one map-selected 1F location."""
+
+    require_customer_access(payload.customer_id, user, db)
+    location = db.get(WarehouseLocation, payload.location_id)
+    if location is None:
+        raise HTTPException(status_code=404, detail="目标货位不存在")
+    if location.warehouse_floor != 1:
+        raise HTTPException(status_code=409, detail="半成品请在一楼地图选择已启用的半成品库位")
+    issue = operational_location_issue(
+        db,
+        location,
+        warehouse_types={"semi_finished", "shared"},
+    )
+    if issue:
+        raise HTTPException(status_code=409, detail=f"目标货位不可用：{issue}")
+    product = db.get(Product, payload.product_id)
+    if (
+        product is None
+        or product.deleted_at is not None
+        or not product.is_active
+        or product.customer_id != payload.customer_id
+    ):
+        raise HTTPException(status_code=409, detail="所选常用箱不属于当前客户或已停用")
+
+    material = product.material
+    material_code = str(
+        (material.code if material is not None else None)
+        or product.default_material_code
+        or product.legacy_material_text
+        or ""
+    ).strip()
+    layer_count = product.layer_count or (material.layer_count if material is not None else None)
+    flute_type = str(product.flute_type or "").strip().upper()
+    board_length = product.report_length_mm or product.default_cardboard_length
+    board_width = product.report_width_mm or product.default_cardboard_width
+    if not material_code or not layer_count or not flute_type or not board_length or not board_width:
+        raise HTTPException(
+            status_code=409,
+            detail="该常用箱缺少材质、楞型或报料长宽，不能直接补录半成品",
+        )
+
+    existing_movement = db.scalar(
+        select(InventoryMovement).where(
+            InventoryMovement.idempotency_key == payload.idempotency_key,
+            InventoryMovement.movement_type == "manual_in",
+        )
+    )
+    replayed = existing_movement is not None
+    if existing_movement is not None:
+        existing_lot = db.get(InventoryLot, existing_movement.inventory_lot_id)
+        existing_detail = existing_lot.semi_finished_detail if existing_lot is not None else None
+        if (
+            existing_lot is None
+            or existing_detail is None
+            or existing_lot.warehouse_location_id != payload.location_id
+            or existing_detail.owner_customer_id != payload.customer_id
+            or payload.product_id not in set(semi_finished_lot_allowed_product_ids(db, existing_lot.id))
+            or int(existing_movement.quantity or 0) != payload.quantity
+        ):
+            raise HTTPException(status_code=409, detail="同一请求标识已用于其他半成品补录")
+    try:
+        _twin_assert_semi_finished_merge_compatible(
+            db,
+            location_id=payload.location_id,
+            customer_id=payload.customer_id,
+            product_id=payload.product_id,
+        )
+        crease_text = str(product.crease_type or "").strip()
+        sheet_type = (
+            "creased_sheet"
+            if "压线" in crease_text
+            else "net_sheet"
+            if "净" in crease_text
+            else "raw_board"
+        )
+        lot = manual_semi_finished_in(
+            db,
+            location_id=payload.location_id,
+            quantity=payload.quantity,
+            stock_date=payload.stock_date,
+            source_type="manual",
+            material_code=material_code,
+            material_id=product.material_id,
+            layer_count=int(layer_count),
+            flute_type=flute_type,
+            board_length_mm=int(board_length),
+            board_width_mm=int(board_width),
+            sheet_type=sheet_type,
+            supplier_name=None,
+            customer_id=payload.customer_id,
+            crease_type=product.crease_type,
+            crease_left_mm=product.crease_left_mm,
+            crease_middle_mm=product.crease_middle_mm,
+            crease_right_mm=product.crease_right_mm,
+            cutting_note=product.report_notes,
+            remarks=payload.remarks,
+            operator_id=user.id,
+            idempotency_key=payload.idempotency_key,
+            movement_reason="数字孪生地图半成品差异补录",
+        )
+        lot = replace_semi_finished_lot_allowed_products(
+            db,
+            inventory_lot_id=lot.id,
+            product_ids=[payload.product_id],
+            expected_version=lot.version,
+            operator_id=user.id,
+        )
+        if not replayed:
+            _append_inventory_lot_audit(
+                db,
+                request=request,
+                user=user,
+                action_code="warehouse.twin.semi_finished.manual_in",
+                row=lot,
+                before=None,
+                reason=payload.remarks,
+                idempotency_key=payload.idempotency_key,
+            )
+        db.commit()
+        return {
+            "message": "已从地图确认补录半成品；库存数量与真实位置已保存",
+            "idempotent_replay": replayed,
+            "lot": _lot_dict(lot),
+        }
+    except WarehouseInventoryError as error:
+        db.rollback()
+        _handle(error)
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="目标货位、半成品或请求标识已发生冲突，请刷新后重试",
+        ) from error
+
+
+@router.post("/twin-operations/temporary-finished-inbound", status_code=201)
+def create_twin_temporary_finished_inbound(
+    payload: TwinTemporaryFinishedInboundPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    """Create one explicitly marked temporary product and its first stock lot atomically."""
+
+    target = _twin_finished_target_location(db, payload.location_id)
+    require_customer_access(payload.customer_id, user, db)
+    existing_movement = db.scalar(
+        select(InventoryMovement).where(
+            InventoryMovement.idempotency_key == payload.idempotency_key,
+            InventoryMovement.movement_type == "manual_in",
+        )
+    )
+    if existing_movement is not None:
+        lot = db.get(InventoryLot, existing_movement.inventory_lot_id)
+        detail = lot.finished_detail if lot is not None else None
+        pallet_item = lot.pallet_item if lot is not None else None
+        live_quantity = (
+            int(lot.quantity_available or 0) + int(lot.quantity_reserved or 0)
+            if lot is not None
+            else 0
+        )
+        if (
+            lot is None
+            or detail is None
+            or pallet_item is None
+            or lot.warehouse_location_id != target.id
+            or detail.owner_customer_id != payload.customer_id
+            or (detail.inventory_code_snapshot or "").strip() != payload.inventory_code
+            or live_quantity != payload.quantity
+        ):
+            raise HTTPException(status_code=409, detail="同一请求标识已用于其他临时产品入位")
+        pallet = _floor3_get_pallet(db, pallet_item.pallet_id)
+        return {
+            "message": "该临时产品已完成入位",
+            "idempotent_replay": True,
+            "temporary_product_id": detail.product_id,
+            "pallet": _floor3_pallet_response(db, pallet, user),
+        }
+
+    customer = db.get(Customer, payload.customer_id)
+    if customer is None or not customer.is_active:
+        raise HTTPException(status_code=404, detail="客户不存在或已停用")
+    inventory_code = clean_code(payload.inventory_code)
+    duplicate = db.scalar(
+        select(Product).where(
+            Product.customer_id == customer.id,
+            or_(
+                func.lower(Product.product_code) == inventory_code.casefold(),
+                func.lower(Product.customer_material_code) == inventory_code.casefold(),
+            ),
+        )
+    )
+    if duplicate is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="该客户已有相同存货编码，请返回“ERP 已有产品”选择现有档案",
+        )
+
+    temporary_remark = f"[仓库临时建档] {payload.reason}"
+    product = Product(
+        customer_id=customer.id,
+        product_code=inventory_code,
+        customer_material_code=inventory_code,
+        product_name=payload.product_name.strip(),
+        unit="只",
+        box_category="normal",
+        remark=temporary_remark,
+        is_active=True,
+        manual_modified=True,
+        manual_modified_at=beijing_now_naive(),
+    )
+    try:
+        db.add(product)
+        db.flush()
+        record_versioned_create(
+            db,
+            object_type="product",
+            entity=product,
+            user=user,
+            reason="仓库临时产品建档",
+            source="api.warehouse.twin.temporary_finished_inbound",
+        )
+        audit_master_change(
+            db,
+            user=user,
+            action="CREATE_TEMPORARY",
+            resource="Product",
+            resource_id=product.id,
+            details={
+                "customer_id": customer.id,
+                "product_code": product.product_code,
+                "product_name": product.product_name,
+                "reason": payload.reason,
+                "source": "warehouse_twin_empty_location",
+            },
+        )
+        current_pallet = db.scalar(
+            _floor3_pallet_query().where(
+                InventoryPallet.location_id == target.id,
+                InventoryPallet.is_current.is_(True),
+            )
+        )
+        lot = manual_finished_in(
+            db,
+            customer_id=customer.id,
+            product_id=product.id,
+            location_id=target.id,
+            quantity=payload.quantity,
+            stock_date=payload.stock_date,
+            source_type="manual",
+            remarks=temporary_remark,
+            operator_id=user.id,
+            idempotency_key=payload.idempotency_key,
+            pallet_id=current_pallet.id if current_pallet is not None else None,
+            pallet_code=payload.pallet_code if current_pallet is None else None,
+            require_empty_pallet=current_pallet is None,
+            movement_reason="仓库临时产品盘点入位",
+        )
+        if lot.pallet_item is None:
+            raise WarehouseInventoryError("临时产品库存未能绑定当前货位", 409)
+        pallet = _floor3_get_pallet(db, lot.pallet_item.pallet_id)
+        _floor3_log(
+            db,
+            request=request,
+            user=user,
+            action="CREATE",
+            pallet=pallet,
+            description="数字孪生货位确认临时产品建档并入位",
+            details={
+                "location_id": target.id,
+                "customer_id": customer.id,
+                "product_id": product.id,
+                "inventory_code": inventory_code,
+                "quantity": payload.quantity,
+                "reason": payload.reason,
+                "idempotency_key": payload.idempotency_key,
+            },
+        )
+        db.commit()
+        return {
+            "message": "临时产品已明确建档并放入当前货位",
+            "idempotent_replay": False,
+            "temporary_product_id": product.id,
+            "pallet": _floor3_pallet_response(db, pallet, user),
+        }
+    except Floor3LocationError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except WarehouseInventoryError as error:
+        db.rollback()
+        _handle(error)
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="临时产品编码、目标货位或请求标识已发生冲突，请刷新后重试",
+        ) from error
+
+
+@router.post("/twin-operations/pallets/{pallet_id}/move")
+def move_twin_formal_pallet(
+    pallet_id: int,
+    payload: TwinPalletMovePayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    """Move a formal pallet and all linked lots from the admin-only map UI."""
+
+    current = _floor3_get_pallet(db, pallet_id)
+    _require_floor3_pallet_customer_access(db, current, user)
+    from_location_id = current.location_id
+    try:
+        result = move_pallet(
+            db,
+            pallet_id=pallet_id,
+            expected_version=payload.expected_version,
+            to_location_id=payload.to_location_id,
+            remarks=payload.remarks,
+            operator_id=user.id,
+            idempotency_key=payload.idempotency_key,
+        )
+        if not result.replayed:
+            _floor3_log(
+                db,
+                request=request,
+                user=user,
+                action="UPDATE",
+                pallet=result.pallet,
+                description="数字孪生地图确认正式栈板移位",
+                details={
+                    "from_location_id": from_location_id,
+                    "to_location_id": payload.to_location_id,
+                    "expected_version": payload.expected_version,
+                    "idempotency_key": payload.idempotency_key,
+                },
+            )
+        db.commit()
+        return {
+            "message": "正式栈板已从地图确认移位",
+            "idempotent_replay": result.replayed,
+            "pallet": _floor3_pallet_response(db, result.pallet, user),
+        }
+    except Floor3LocationError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="目标货位已被占用或栈板版本已变化，请刷新后重试",
+        ) from error
+
+
+@router.post("/twin-operations/lots/{lot_id}/quantity-correction")
+def correct_twin_inventory_lot_quantity(
+    lot_id: int,
+    payload: TwinLotQuantityCorrectionPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    lot = db.scalar(_lot_query().where(InventoryLot.id == lot_id))
+    if lot is None:
+        raise HTTPException(status_code=404, detail="库存批次不存在")
+    _require_lot_customer_access(db, lot.id, user)
+    location = lot.location
+    if (
+        location is None
+        or location.warehouse_floor != 3
+        or location.source_version != "V11"
+    ):
+        raise HTTPException(status_code=409, detail="地图库存纠偏只允许三楼已接入库位")
+    if payload.action == "remove":
+        if lot.quantity_reserved > 0:
+            raise HTTPException(status_code=409, detail="该货物仍有预占，必须先释放预占后才能移除")
+        if lot.quantity_damaged > 0:
+            raise HTTPException(status_code=409, detail="该批次仍有报损数量，不能从地图直接移除")
+        if lot.quantity_available <= 0:
+            raise HTTPException(status_code=409, detail="该货物当前没有可移除数量")
+        quantity_delta = -int(lot.quantity_available)
+    else:
+        quantity = int(payload.quantity or 0)
+        if quantity > lot.quantity_available:
+            raise HTTPException(status_code=409, detail="减少数量不能大于当前可用库存")
+        quantity_delta = -quantity
+
+    before = _inventory_lot_audit_state(lot)
+    replayed = _inventory_operation_replayed(db, payload.idempotency_key)
+    try:
+        row = mutate_lot(
+            db,
+            lot_id=lot.id,
+            operation="adjust",
+            expected_version=payload.expected_version,
+            operator_id=user.id,
+            quantity=quantity_delta,
+            reason=payload.reason,
+            idempotency_key=payload.idempotency_key,
+        )
+        if payload.action == "remove" and not replayed:
+            row.status = "closed"
+            db.flush()
+        if not replayed:
+            customer_id, customer_name = _inventory_lot_audit_customer(row)
+            _append_inventory_lot_audit(
+                db,
+                request=request,
+                user=user,
+                action_code=f"warehouse.twin_lot.{payload.action}",
+                row=row,
+                before=before,
+                reason=payload.reason,
+                idempotency_key=payload.idempotency_key,
+                customer_id=customer_id,
+                customer_name=customer_name,
+            )
+        db.commit()
+        return {
+            "message": "货物已受控移除并保留历史流水" if payload.action == "remove" else "库存数量已按管理员确认减少",
+            "idempotent_replay": replayed,
+            "lot": _lot_dict(row),
+        }
+    except WarehouseInventoryError as error:
+        db.rollback()
+        _handle(error)
+    except IntegrityError as error:
+        db.rollback()
+        _handle_integrity(error)
 
 
 @router.post("/pallets", status_code=201)
@@ -3682,6 +4808,848 @@ def get_factory_floor_map(
         return load_factory_map(floor_code)
     except FactoryMapNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@router.get("/twin-layout/floors/{floor_code}")
+def get_warehouse_twin_floor_layout(
+    floor_code: str,
+    _user: User = Depends(_can_locate_twin),
+) -> dict:
+    try:
+        return load_warehouse_twin_floor(floor_code)
+    except WarehouseTwinLayoutNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+class TwinRackLayoutFields(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+    x_mm: float = Field(ge=-10_000_000, le=10_000_000)
+    y_mm: float = Field(ge=-10_000_000, le=10_000_000)
+    width_mm: float = Field(gt=0, le=200_000)
+    depth_mm: float = Field(gt=0, le=200_000)
+    height_mm: float = Field(gt=0, le=100_000)
+    levels: int = Field(ge=1, le=20)
+    level_heights_mm: list[float] = Field(max_length=19)
+    cargo_rows: int = Field(ge=3, le=5)
+    bays: int = Field(default=1, ge=1, le=50)
+    access_side: Literal["north", "south", "east", "west", "both"] = "south"
+    min_aisle_width_mm: float = Field(default=1500, ge=0, le=20_000)
+    rotation_deg: Literal[0, 90, 180, 270] = 0
+    color: str = Field(default="#38bdf8", pattern=r"^#[0-9A-Fa-f]{6}$")
+
+
+class TwinRackLayoutCreatePayload(TwinRackLayoutFields):
+    expected_revision: str = Field(min_length=1, max_length=64)
+    operation_key: str = Field(min_length=8, max_length=120)
+    area_feature_id: str = Field(min_length=1, max_length=80)
+
+
+class TwinRackLayoutUpdatePayload(TwinRackLayoutFields):
+    expected_revision: str = Field(min_length=1, max_length=64)
+    expected_version: int = Field(ge=1)
+    operation_key: str = Field(min_length=8, max_length=120)
+
+
+class TwinZoneStoragePolicyPayload(BaseModel):
+    expected_revision: str = Field(min_length=1, max_length=64)
+    expected_version: int = Field(ge=1)
+    operation_key: str = Field(min_length=8, max_length=120)
+    allowed_inventory_types: list[
+        Literal[
+            "finished",
+            "semi_finished",
+            "raw_material",
+            "mold",
+            "print_plate",
+            "temporary_turnover",
+        ]
+    ] = Field(min_length=1, max_length=6)
+    storage_layout: Literal["rack", "pallet_ground", "mixed"]
+
+
+def _handle_twin_layout_edit_error(error: WarehouseTwinLayoutEditError) -> None:
+    if isinstance(error, WarehouseTwinLayoutEditNotFoundError):
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    if isinstance(error, WarehouseTwinLayoutEditConflictError):
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+def _twin_layout_asset_log(
+    db: Session,
+    *,
+    request: Request,
+    user: User,
+    action: str,
+    entity_type: str,
+    entity_id: str | None,
+    description: str,
+    details: dict,
+) -> None:
+    db.add(
+        OperationLog(
+            user_id=user.id,
+            username=user.username,
+            role=user.role,
+            action=action,
+            resource=f"warehouse/twin-layout/{entity_type}/{entity_id or 'unknown'}",
+            entity_type=entity_type,
+            entity_id=None,
+            description=description,
+            details=json.dumps(details, ensure_ascii=False, default=str),
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    )
+
+
+def _rack_layout_values(payload: TwinRackLayoutFields) -> dict:
+    return payload.model_dump(
+        exclude={"expected_revision", "expected_version", "operation_key", "area_feature_id"}
+    )
+
+
+@router.post("/twin-layout/floors/{floor_code}/racks", status_code=201)
+def create_twin_layout_rack(
+    floor_code: str,
+    payload: TwinRackLayoutCreatePayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    try:
+        mutation = create_warehouse_twin_rack(
+            floor_code,
+            expected_revision=payload.expected_revision,
+            operation_key=payload.operation_key,
+            area_feature_id=payload.area_feature_id,
+            values=_rack_layout_values(payload),
+        )
+    except WarehouseTwinLayoutEditError as error:
+        _handle_twin_layout_edit_error(error)
+    if mutation.applied:
+        _twin_layout_asset_log(
+            db,
+            request=request,
+            user=user,
+            action="TWIN_RACK_CREATE",
+            entity_type="twin_rack_layout",
+            entity_id=str(mutation.value.get("id") or ""),
+            description="二维库位布局新增货架",
+            details={"floor_code": floor_code, "rack": mutation.value, "inventory_changed": False},
+        )
+        db.commit()
+    return {"item": mutation.value, "revision": mutation.floor_revision, "applied": mutation.applied}
+
+
+@router.patch("/twin-layout/floors/{floor_code}/racks/{rack_id}")
+def update_twin_layout_rack(
+    floor_code: str,
+    rack_id: str,
+    payload: TwinRackLayoutUpdatePayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    try:
+        mutation = update_warehouse_twin_rack(
+            floor_code,
+            rack_id,
+            expected_revision=payload.expected_revision,
+            expected_version=payload.expected_version,
+            operation_key=payload.operation_key,
+            values=_rack_layout_values(payload),
+        )
+    except WarehouseTwinLayoutEditError as error:
+        _handle_twin_layout_edit_error(error)
+    if mutation.applied:
+        _twin_layout_asset_log(
+            db,
+            request=request,
+            user=user,
+            action="TWIN_RACK_UPDATE",
+            entity_type="twin_rack_layout",
+            entity_id=rack_id,
+            description="二维库位布局修改货架参数",
+            details={"floor_code": floor_code, "rack": mutation.value, "inventory_changed": False},
+        )
+        db.commit()
+    return {"item": mutation.value, "revision": mutation.floor_revision, "applied": mutation.applied}
+
+
+@router.delete("/twin-layout/floors/{floor_code}/racks/{rack_id}")
+def delete_twin_layout_rack(
+    floor_code: str,
+    rack_id: str,
+    expected_revision: str = Query(min_length=1, max_length=64),
+    expected_version: int = Query(ge=1),
+    operation_key: str = Query(min_length=8, max_length=120),
+    request: Request = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    try:
+        mutation = delete_warehouse_twin_rack(
+            floor_code,
+            rack_id,
+            expected_revision=expected_revision,
+            expected_version=expected_version,
+            operation_key=operation_key,
+        )
+    except WarehouseTwinLayoutEditError as error:
+        _handle_twin_layout_edit_error(error)
+    if mutation.applied:
+        _twin_layout_asset_log(
+            db,
+            request=request,
+            user=user,
+            action="TWIN_RACK_DELETE",
+            entity_type="twin_rack_layout",
+            entity_id=rack_id,
+            description="二维库位布局删除货架并释放为空地",
+            details={"floor_code": floor_code, **mutation.value},
+        )
+        db.commit()
+    return {"item": mutation.value, "revision": mutation.floor_revision, "applied": mutation.applied}
+
+
+@router.patch("/twin-layout/floors/{floor_code}/zones/{feature_id}/storage-policy")
+def update_twin_zone_storage_policy(
+    floor_code: str,
+    feature_id: str,
+    payload: TwinZoneStoragePolicyPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    try:
+        mutation = update_warehouse_twin_zone_policy(
+            floor_code,
+            feature_id,
+            expected_revision=payload.expected_revision,
+            expected_version=payload.expected_version,
+            operation_key=payload.operation_key,
+            allowed_inventory_types=list(payload.allowed_inventory_types),
+            storage_layout=payload.storage_layout,
+        )
+    except WarehouseTwinLayoutEditError as error:
+        _handle_twin_layout_edit_error(error)
+    if mutation.applied:
+        _twin_layout_asset_log(
+            db,
+            request=request,
+            user=user,
+            action="TWIN_ZONE_POLICY_UPDATE",
+            entity_type="twin_zone_policy",
+            entity_id=feature_id,
+            description="二维库位布局修改区域存放策略",
+            details={"floor_code": floor_code, "zone": mutation.value, "inventory_changed": False},
+        )
+        db.commit()
+    return {"item": mutation.value, "revision": mutation.floor_revision, "applied": mutation.applied}
+
+
+class TwinProductionMappingPayload(BaseModel):
+    target_kind: Literal["pallet", "zone"]
+    target_id: str = Field(min_length=1, max_length=80)
+    version: int | None = Field(default=None, ge=1)
+
+
+def _production_task_dates(
+    db: Session,
+    task_ids: list[int],
+) -> dict[int, dict[str, str | None]]:
+    if not task_ids:
+        return {}
+    rows = db.execute(
+        select(
+            ProductionTask.id,
+            ProductionTask.updated_at,
+            ProductionTask.created_at,
+            Order.delivery_date,
+        )
+        .join(OrderItem, OrderItem.id == ProductionTask.order_item_id)
+        .join(Order, Order.id == OrderItem.order_id)
+        .where(ProductionTask.id.in_(task_ids))
+    ).all()
+    return {
+        int(task_id): {
+            "task_updated_at": utc_naive_to_api(updated_at or created_at),
+            "delivery_date": delivery_date.isoformat() if delivery_date else None,
+        }
+        for task_id, updated_at, created_at, delivery_date in rows
+    }
+
+
+def _current_visible_production_tasks(user: User, db: Session) -> list[dict]:
+    return list_production_tasks(
+        db,
+        allowed_customer_ids=_visible_customer_ids(user, db),
+        status=PENDING,
+    )
+
+
+def _visible_production_task_ids(user: User, db: Session) -> set[int] | None:
+    visible_customer_ids = _visible_customer_ids(user, db)
+    if visible_customer_ids is None:
+        return None
+    return set(
+        db.scalars(
+            select(ProductionTask.id)
+            .join(OrderItem, OrderItem.id == ProductionTask.order_item_id)
+            .join(Order, Order.id == OrderItem.order_id)
+            .where(Order.customer_id.in_(visible_customer_ids))
+        ).all()
+    )
+
+
+def _raise_twin_production_error(error: WarehouseTwinProductionError) -> None:
+    raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+
+
+@router.get("/twin-production/layouts/{layout_id}/tasks")
+def get_warehouse_twin_production_tasks(
+    layout_id: str,
+    user: User = Depends(can_read),
+    _orders_user: User = Depends(can_read_orders),
+    db: Session = Depends(get_db),
+) -> dict:
+    try:
+        floor = load_warehouse_twin_floor("1F")
+        if str(floor["layout_id"]) != layout_id:
+            raise HTTPException(status_code=404, detail="一楼数字孪生布局不存在")
+        tasks = _current_visible_production_tasks(user, db)
+        dates = _production_task_dates(db, [int(item["id"]) for item in tasks])
+        payload = build_production_projection(
+            floor=floor, tasks=tasks, task_dates=dates
+        )
+        visible_task_ids = _visible_production_task_ids(user, db)
+        if visible_task_ids is not None:
+            payload["stale_mappings"] = [
+                item
+                for item in payload["stale_mappings"]
+                if int(item["source_task_id"]) in visible_task_ids
+            ]
+        return payload
+    except WarehouseTwinLayoutNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except WarehouseTwinProductionError as error:
+        _raise_twin_production_error(error)
+
+
+@router.put("/twin-production/layouts/{layout_id}/tasks/{source_task_id}")
+def put_warehouse_twin_production_mapping(
+    layout_id: str,
+    source_task_id: int,
+    body: TwinProductionMappingPayload,
+    user: User = Depends(can_operate),
+    _orders_user: User = Depends(can_read_orders),
+    db: Session = Depends(get_db),
+) -> dict:
+    try:
+        floor = load_warehouse_twin_floor("1F")
+        if str(floor["layout_id"]) != layout_id:
+            raise HTTPException(status_code=404, detail="一楼数字孪生布局不存在")
+        current_ids = {
+            int(item["id"]) for item in _current_visible_production_tasks(user, db)
+        }
+        if source_task_id not in current_ids:
+            raise HTTPException(
+                status_code=409,
+                detail="该任务已不在当前账号可见的ERP待生产清单中，请刷新",
+            )
+        return save_production_projection_mapping(
+            floor=floor,
+            source_task_id=source_task_id,
+            target_kind=body.target_kind,
+            target_id=body.target_id,
+            expected_version=body.version,
+        )
+    except WarehouseTwinLayoutNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except WarehouseTwinProductionError as error:
+        _raise_twin_production_error(error)
+
+
+@router.delete(
+    "/twin-production/layouts/{layout_id}/tasks/{source_task_id}",
+    status_code=204,
+)
+def delete_warehouse_twin_production_mapping(
+    layout_id: str,
+    source_task_id: int,
+    version: int = Query(ge=1),
+    user: User = Depends(can_operate),
+    _orders_user: User = Depends(can_read_orders),
+    db: Session = Depends(get_db),
+):
+    try:
+        floor = load_warehouse_twin_floor("1F")
+        if str(floor["layout_id"]) != layout_id:
+            raise HTTPException(status_code=404, detail="一楼数字孪生布局不存在")
+        # Customer scope is evaluated even for unbinding so scoped users cannot
+        # use stale task ids as a side channel.
+        visible_ids = {
+            int(item["id"]) for item in _current_visible_production_tasks(user, db)
+        }
+        if source_task_id not in visible_ids:
+            raise HTTPException(
+                status_code=409,
+                detail="该任务已不在当前账号可见的ERP待生产清单中，请刷新",
+            )
+        delete_production_projection_mapping(
+            layout_id=layout_id,
+            source_task_id=source_task_id,
+            expected_version=version,
+        )
+    except WarehouseTwinLayoutNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except WarehouseTwinProductionError as error:
+        _raise_twin_production_error(error)
+
+
+def _twin_dashboard_source_rows(
+    db: Session,
+    user: User,
+) -> tuple[
+    list[InventoryLot],
+    list[WarehouseLocation],
+    list[InventoryPallet],
+    list[WarehouseFloor],
+    set[int] | None,
+]:
+    visible_customer_ids = _twin_locator_visible_customer_ids(db, user)
+    lot_query = _lot_query()
+    if visible_customer_ids is not None:
+        lot_query = lot_query.where(_visible_lot_condition(visible_customer_ids))
+    lots = list(db.scalars(lot_query.order_by(InventoryLot.id)).unique().all())
+    locations = list(
+        db.scalars(
+            select(WarehouseLocation)
+            .where(_formal_inventory_location_condition())
+            .options(selectinload(WarehouseLocation.floor3_layout))
+            .order_by(WarehouseLocation.sort_order, WarehouseLocation.location_code)
+        ).all()
+    )
+    pallets = list(
+        db.scalars(
+            select(InventoryPallet)
+            .join(WarehouseLocation, WarehouseLocation.id == InventoryPallet.location_id)
+            .where(
+                InventoryPallet.is_current.is_(True),
+                _formal_inventory_location_condition(),
+            )
+            .options(selectinload(InventoryPallet.items))
+            .order_by(InventoryPallet.id)
+        ).unique().all()
+    )
+    floors = list(
+        db.scalars(
+            select(WarehouseFloor)
+            .options(selectinload(WarehouseFloor.areas))
+            .order_by(WarehouseFloor.floor_number)
+        ).unique().all()
+    )
+    return lots, locations, pallets, floors, visible_customer_ids
+
+
+@router.get("/twin-dashboard/overview")
+def get_warehouse_twin_dashboard(
+    days: int = Query(default=30),
+    db: Session = Depends(get_db),
+    user: User = Depends(_can_locate_twin),
+) -> dict:
+    if days not in {7, 30, 90}:
+        raise HTTPException(status_code=422, detail="时间范围仅支持7、30或90天")
+    lots, locations, pallets, floors, visible_customer_ids = (
+        _twin_dashboard_source_rows(db, user)
+    )
+    return build_warehouse_twin_dashboard(
+        db,
+        lots=lots,
+        locations=locations,
+        pallets=pallets,
+        floors=floors,
+        visible_customer_ids=visible_customer_ids,
+        days=days,
+        as_of=beijing_today(),
+    )
+
+
+@router.get("/twin-dashboard/search")
+def search_warehouse_twin_inventory(
+    keyword: str | None = Query(default=None, max_length=150),
+    inventory_code: str | None = Query(default=None, max_length=150),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    effective_keyword = str(keyword or inventory_code or "").strip()
+    if len(effective_keyword) < 2:
+        raise HTTPException(status_code=422, detail="全仓查找至少输入2个字符")
+    query = _lot_query().where(InventoryLot.status.in_(("active", "frozen")))
+    visible_customer_ids = _visible_customer_ids(user, db)
+    if visible_customer_ids is not None:
+        query = query.where(_visible_lot_condition(visible_customer_ids))
+    candidates = list(db.scalars(query.order_by(InventoryLot.id).limit(2500)).unique().all())
+    today = beijing_today()
+    lots = [
+        row for row in candidates
+        if inventory_search_matches(row, effective_keyword, today)
+    ][:500]
+    return build_inventory_code_search_results(
+        lots=lots,
+        keyword=effective_keyword,
+        as_of=today,
+    )
+
+
+def _twin_reference_feature_codes(kind: str, location_text: str | None) -> list[str]:
+    normalized = str(location_text or "").strip().upper()
+    candidates = (
+        ("ZONE-1F-MOLD-001", "ZONE-1F-MOLD-002")
+        if kind == "mold"
+        else ("ZONE-1F-PLATE-001", "ZONE-1F-PLATE-002")
+    )
+    return [code for code in candidates if code in normalized]
+
+
+def _twin_locator_visible_customer_ids(
+    db: Session,
+    user: User,
+) -> set[int] | None:
+    if has_permission(user, "deliveries.pick") and not has_permission(
+        user, "warehouse.view"
+    ):
+        return set(
+            db.scalars(
+                select(DeliveryPickTask.customer_id).where(
+                    DeliveryPickTask.assigned_to == user.id,
+                    DeliveryPickTask.status != "dispatched",
+                )
+            ).all()
+        )
+    return _visible_customer_ids(user, db)
+
+
+def _twin_reference_area_resources(keyword: str) -> list[dict]:
+    needle = keyword.casefold()
+    subtype_labels = {"mold": "模具", "printing_plate": "印刷版 模板"}
+    resources: list[dict] = []
+    for floor_code in ("1F", "3F"):
+        try:
+            floor = load_warehouse_twin_floor(floor_code)
+        except WarehouseTwinLayoutNotFoundError:
+            continue
+        for feature in floor.get("features") or []:
+            subtype = str(feature.get("subtype") or "")
+            if subtype not in subtype_labels:
+                continue
+            searchable = " ".join(
+                str(value or "")
+                for value in (
+                    feature.get("feature_code"),
+                    feature.get("name"),
+                    subtype,
+                    subtype_labels[subtype],
+                )
+            ).casefold()
+            if needle not in searchable:
+                continue
+            feature_code = str(feature.get("feature_code") or "")
+            resources.append(
+                {
+                    "resource_id": f"area:{feature.get('id')}",
+                    "kind": "mold_area" if subtype == "mold" else "printing_plate_area",
+                    "primary_code": feature_code,
+                    "title": feature.get("name") or subtype_labels[subtype],
+                    "subtitle": "已确认功能区域",
+                    "floor_code": floor_code,
+                    "area_code": feature.get("erp_area_code"),
+                    "location_id": None,
+                    "location_code": feature_code,
+                    "pallet_id": None,
+                    "feature_codes": [feature_code],
+                    "map_status": "mapped",
+                    "prompt": f"地图已高亮 {feature.get('name') or feature_code}。",
+                }
+            )
+    return resources
+
+
+def _twin_mold_resources(
+    db: Session,
+    user: User,
+    keyword: str,
+    visible_customer_ids: set[int] | None,
+) -> list[dict]:
+    response = list_mold_tools(
+        q=keyword,
+        include_inactive=False,
+        limit=100,
+        db=db,
+        user=user,
+    )
+    resources: list[dict] = []
+    for mold in response.get("items") or []:
+        visible_products = [
+            item
+            for item in (mold.get("products") or [])
+            if visible_customer_ids is None
+            or item.get("customer_id") in visible_customer_ids
+        ]
+        if visible_customer_ids is not None and not visible_products:
+            continue
+        guide = describe_mold_location(str(mold.get("rack_location") or ""))
+        feature_codes = _twin_reference_feature_codes(
+            "mold", str(mold.get("rack_location") or "")
+        )
+        product_summary = "、".join(
+            str(item.get("product_code") or item.get("product_name") or "")
+            for item in visible_products[:3]
+        )
+        resources.append(
+            {
+                "resource_id": f"mold:{mold.get('id')}",
+                "kind": "mold",
+                "primary_code": mold.get("mold_code"),
+                "title": mold.get("mold_name") or "模具",
+                "subtitle": product_summary or "未关联产品",
+                "floor_code": guide.get("floor") or "TEXT",
+                "area_code": guide.get("area"),
+                "location_id": None,
+                "location_code": mold.get("rack_location"),
+                "pallet_id": None,
+                "feature_codes": feature_codes,
+                "map_status": "mapped" if feature_codes else "text_only",
+                "prompt": guide.get("prompt"),
+            }
+        )
+    return resources
+
+
+def _twin_printing_plate_resources(
+    db: Session,
+    user: User,
+    keyword: str,
+    visible_customer_ids: set[int] | None,
+) -> list[dict]:
+    pattern = f"%{keyword}%"
+    query = (
+        select(Product, Customer)
+        .join(Customer, Customer.id == Product.customer_id)
+        .where(
+            Product.is_active.is_(True),
+            Product.deleted_at.is_(None),
+            Product.die_cut_path.is_not(None),
+            func.trim(Product.die_cut_path) != "",
+            or_(
+                Product.product_code.like(pattern),
+                Product.customer_material_code.like(pattern),
+                Product.product_name.like(pattern),
+                Product.die_cut_path.like(pattern),
+                Customer.name.like(pattern),
+            ),
+        )
+    )
+    if visible_customer_ids is not None:
+        query = query.where(Product.customer_id.in_(visible_customer_ids))
+    rows = db.execute(query.order_by(Customer.name, Product.product_code).limit(100)).all()
+    resources: list[dict] = []
+    for product, customer in rows:
+        feature_codes = _twin_reference_feature_codes(
+            "printing_plate", product.die_cut_path
+        )
+        resources.append(
+            {
+                "resource_id": f"printing-plate:{product.id}",
+                "kind": "printing_plate",
+                "primary_code": product.product_code or product.customer_material_code,
+                "title": product.product_name,
+                "subtitle": customer.name,
+                "floor_code": "1F" if feature_codes else "TEXT",
+                "area_code": None,
+                "location_id": None,
+                "location_code": product.die_cut_path,
+                "pallet_id": None,
+                "feature_codes": feature_codes,
+                "map_status": "mapped" if feature_codes else "text_only",
+                "prompt": (
+                    f"请前往“{product.die_cut_path}”查找印刷版/模板，拿取前核对存货编码。"
+                ),
+            }
+        )
+    return resources
+
+
+def _twin_pick_task_resources(
+    db: Session,
+    user: User,
+    keyword: str,
+    visible_customer_ids: set[int] | None,
+) -> tuple[list[dict], list[dict]]:
+    from app.api.deliveries import _pick_task_response
+
+    query = (
+        select(DeliveryPickTask)
+        .join(Delivery, Delivery.id == DeliveryPickTask.delivery_id)
+        .options(
+            selectinload(DeliveryPickTask.items),
+            selectinload(DeliveryPickTask.customer),
+            selectinload(DeliveryPickTask.delivery),
+        )
+        .where(DeliveryPickTask.status != "dispatched")
+        .order_by(DeliveryPickTask.id.desc())
+        .limit(250)
+    )
+    if visible_customer_ids is not None:
+        query = query.where(DeliveryPickTask.customer_id.in_(visible_customer_ids))
+    if not has_permission(user, "deliveries.execute"):
+        query = query.where(DeliveryPickTask.assigned_to == user.id)
+    needle = keyword.casefold()
+    matched: list[DeliveryPickTask] = []
+    for task in db.scalars(query).unique().all():
+        searchable = " ".join(
+            [
+                str(task.delivery.delivery_number if task.delivery else ""),
+                str(task.customer.name if task.customer else ""),
+                *[
+                    f"{item.product_code_snapshot or ''} {item.product_name_snapshot or ''} {item.specification_snapshot or ''}"
+                    for item in task.items
+                ],
+            ]
+        ).casefold()
+        if needle in searchable:
+            matched.append(task)
+        if len(matched) >= 20:
+            break
+
+    resources: list[dict] = []
+    task_rows: list[dict] = []
+    for task in matched:
+        task_payload = _pick_task_response(db, task)
+        task_rows.append(
+            {
+                "task_id": task_payload["id"],
+                "delivery_number": task_payload["delivery_number"],
+                "customer_name": task_payload["customer_name"],
+                "status": task_payload["status"],
+                "location_plan_complete": task_payload["location_plan_complete"],
+                "location_group_count": len(task_payload["location_groups"]),
+            }
+        )
+        for group in task_payload["location_groups"]:
+            floor_number = group.get("warehouse_floor")
+            floor_code = f"{floor_number}F" if floor_number is not None else "TEXT"
+            map_status = group.get("map_status") or "text_only"
+            resources.append(
+                {
+                    "resource_id": f"pick:{task.id}:{group.get('key')}",
+                    "kind": "delivery_pick",
+                    "primary_code": task_payload["delivery_number"],
+                    "title": group.get("label") or "送货拿货位置",
+                    "subtitle": f"{task_payload['customer_name']} · 建议第 {group.get('recommended_sequence')} 站 · {group.get('total_pick_quantity')} 个",
+                    "floor_code": floor_code,
+                    "area_code": group.get("area_code"),
+                    "location_id": group.get("location_id"),
+                    "location_code": group.get("location_code"),
+                    "pallet_id": group.get("pallet_id"),
+                    "feature_codes": [],
+                    "map_status": map_status,
+                    "prompt": (
+                        f"按建议顺序前往：{group.get('label')}。"
+                        if map_status == "mapped"
+                        else f"{group.get('label')}；该位置当前只能文字指引，请现场核对。"
+                    ),
+                }
+            )
+    return resources, task_rows
+
+
+@router.get("/twin-operations/locate")
+def locate_warehouse_twin_objects(
+    keyword: str = Query(default="", max_length=150),
+    search_type: Literal["all", "finished", "mold", "printing_plate"] = Query(default="all"),
+    customer_id: int | None = Query(default=None, gt=0),
+    db: Session = Depends(get_db),
+    user: User = Depends(_can_locate_twin),
+) -> dict:
+    """Unified read-only locator for inventory, pick tasks, molds and plates."""
+
+    effective_keyword = keyword.strip()
+    if search_type == "finished" and customer_id is not None:
+        require_customer_access(customer_id, user, db)
+    if len(effective_keyword) < 2 and not (
+        search_type == "finished" and customer_id is not None
+    ):
+        raise HTTPException(status_code=422, detail="全仓查找至少输入2个字符")
+    query = _lot_query().where(InventoryLot.status.in_(("active", "frozen")))
+    visible_customer_ids = _twin_locator_visible_customer_ids(db, user)
+    if visible_customer_ids is not None:
+        query = query.where(_visible_lot_condition(visible_customer_ids))
+    if search_type == "finished":
+        query = query.where(InventoryLot.inventory_type == "finished")
+    today = beijing_today()
+    lots = [
+        row
+        for row in db.scalars(query.order_by(InventoryLot.id).limit(2500)).unique().all()
+        if (
+            (customer_id is None or (
+                row.finished_detail is not None
+                and row.finished_detail.owner_customer_id == customer_id
+            ))
+            and (
+                not effective_keyword
+                or inventory_search_matches(row, effective_keyword, today)
+            )
+        )
+    ][:500]
+    if search_type in {"mold", "printing_plate"}:
+        lots = []
+    inventory = build_inventory_code_search_results(
+        lots=lots,
+        keyword=effective_keyword,
+        as_of=today,
+    )
+    pick_resources: list[dict] = []
+    pick_tasks: list[dict] = []
+    if search_type == "all":
+        pick_resources, pick_tasks = _twin_pick_task_resources(
+            db, user, effective_keyword, visible_customer_ids
+        )
+    area_resources = _twin_reference_area_resources(effective_keyword)
+    resources: list[dict] = []
+    if search_type in {"all", "mold"}:
+        resources.extend(
+            row for row in area_resources if row["kind"] == "mold_area"
+        )
+        resources.extend(
+            _twin_mold_resources(db, user, effective_keyword, visible_customer_ids)
+        )
+    if search_type in {"all", "printing_plate"}:
+        resources.extend(
+            row for row in area_resources if row["kind"] == "printing_plate_area"
+        )
+        resources.extend(
+            _twin_printing_plate_resources(
+                db, user, effective_keyword, visible_customer_ids
+            )
+        )
+    if search_type == "all":
+        resources.extend(pick_resources)
+    return {
+        **inventory,
+        "search_type": search_type,
+        "customer_id": customer_id,
+        "result_count": len(inventory["items"]) + len(resources),
+        "inventory_result_count": len(inventory["items"]),
+        "resource_result_count": len(resources),
+        "resources": resources,
+        "pick_tasks": pick_tasks,
+        "notice": (
+            "只显示当前账号有权查看的库存、拿货任务、模具和印刷版位置；"
+            "没有已确认坐标的结果只提供文字指引。"
+        ),
+    }
 
 
 @router.get("/space/floors")

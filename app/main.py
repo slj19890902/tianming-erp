@@ -13,6 +13,7 @@ from fastapi.middleware.httpsredirect import (
 )
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
@@ -370,17 +371,37 @@ def create_app() -> FastAPI:
             methods=["GET"],
             include_in_schema=False,
         )
-    if not any(route.path == "/warehouse.html" for route in application.routes):
-        warehouse_path = (
+    if not any(route.path == "/warehouse-ledger.html" for route in application.routes):
+        warehouse_ledger_path = (
             Path(__file__).resolve().parents[1]
             / "static"
             / "warehouse.html"
         )
         application.add_api_route(
-            "/warehouse.html",
-            lambda: FileResponse(warehouse_path),
+            "/warehouse-ledger.html",
+            lambda: FileResponse(warehouse_ledger_path),
             methods=["GET"],
             include_in_schema=False,
+        )
+    if not any(route.path == "/warehouse.html" for route in application.routes):
+        warehouse_twin_path = (
+            Path(__file__).resolve().parents[1]
+            / "static"
+            / "factory-twin-assets"
+            / "warehouse-twin.html"
+        )
+        application.add_api_route(
+            "/warehouse.html",
+            lambda: FileResponse(warehouse_twin_path),
+            methods=["GET"],
+            include_in_schema=False,
+        )
+    if not any(getattr(route, "path", None) == "/factory-twin-assets" for route in application.routes):
+        factory_twin_assets = Path(__file__).resolve().parents[1] / "static" / "factory-twin-assets"
+        application.mount(
+            "/factory-twin-assets",
+            StaticFiles(directory=factory_twin_assets, check_dir=False),
+            name="factory-twin-assets",
         )
 
     # ``legacy.app`` is a shared application instance.  Its API routes do not

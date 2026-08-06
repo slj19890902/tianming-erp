@@ -1,0 +1,312 @@
+function normalized(value) {
+  return String(value ?? "").trim().toLocaleLowerCase("zh-CN");
+}
+
+function pointInPolygon(x, y, points) {
+  let inside = false;
+  for (let index = 0, previous = points.length - 1; index < points.length; previous = index++) {
+    const [xi, yi] = points[index];
+    const [xj, yj] = points[previous];
+    const crosses = yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi || 1) + xi;
+    if (crosses) inside = !inside;
+  }
+  return inside;
+}
+
+function stableZonePoints(points, count) {
+  if (!count || points.length < 3) return [];
+  const xs = points.map((point) => Number(point[0]));
+  const ys = points.map((point) => Number(point[1]));
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const width = Math.max(1, maxX - minX);
+  const height = Math.max(1, maxY - minY);
+  const marginX = Math.min(600, width * 0.08);
+  const marginY = Math.min(500, height * 0.08);
+  const candidates = [];
+  const seen = new Set();
+  for (let density = 2; density <= 8 && candidates.length < count; density += 1) {
+    const columns = Math.max(1, Math.ceil(Math.sqrt(count * (width / height)) * density));
+    const rows = Math.max(1, Math.ceil((count * density * density) / columns));
+    for (let row = 0; row < rows; row += 1) {
+      for (let column = 0; column < columns; column += 1) {
+        const x = minX + marginX + ((column + 0.5) * Math.max(1, width - marginX * 2)) / columns;
+        const y = minY + marginY + ((row + 0.5) * Math.max(1, height - marginY * 2)) / rows;
+        const key = `${Math.round(x)}:${Math.round(y)}`;
+        if (!seen.has(key) && pointInPolygon(x, y, points)) {
+          seen.add(key);
+          candidates.push([x, y]);
+        }
+      }
+    }
+  }
+  if (!candidates.length) {
+    const centroid = points.reduce((sum, point) => [sum[0] + Number(point[0]), sum[1] + Number(point[1])], [0, 0]);
+    candidates.push([centroid[0] / points.length, centroid[1] / points.length]);
+  }
+  if (candidates.length <= count) return Array.from({ length: count }, (_, index) => candidates[index % candidates.length]);
+  return Array.from({ length: count }, (_, index) => candidates[Math.floor((index * candidates.length) / count)]);
+}
+
+function zoneBounds(points) {
+  const xs = points.map((point) => Number(point[0]));
+  const ys = points.map((point) => Number(point[1]));
+  return {
+    minX: Math.min(...xs),
+    maxX: Math.max(...xs),
+    minY: Math.min(...ys),
+    maxY: Math.max(...ys)
+  };
+}
+
+function mappedLocationPoint(zone, location) {
+  const position = location.map_position;
+  if (!position) return null;
+  const bounds = zoneBounds(zone.points);
+  const width = Math.max(1, bounds.maxX - bounds.minX);
+  const height = Math.max(1, bounds.maxY - bounds.minY);
+  return [
+    bounds.minX + ((Number(position.left_pct) + Number(position.width_pct) / 2) / 100) * width,
+    bounds.maxY - ((Number(position.top_pct) + Number(position.height_pct) / 2) / 100) * height
+  ];
+}
+
+export function locationLayoutGeometry(zone, location, xMm, yMm) {
+  const position = location.map_position;
+  if (!zone?.points?.length || !position || !location.location_id || !Number(position.version)) return null;
+  const bounds = zoneBounds(zone.points);
+  const width = Math.max(1, bounds.maxX - bounds.minX);
+  const height = Math.max(1, bounds.maxY - bounds.minY);
+  const widthPct = Number(position.width_pct);
+  const heightPct = Number(position.height_pct);
+  const left = ((Number(xMm) - bounds.minX) / width) * 100 - widthPct / 2;
+  const top = ((bounds.maxY - Number(yMm)) / height) * 100 - heightPct / 2;
+  const rounded = (value) => Number(value.toFixed(4));
+  return {
+    location_id: Number(location.location_id),
+    expected_version: Number(position.version),
+    left_pct: rounded(Math.max(0, Math.min(100 - widthPct, left))),
+    top_pct: rounded(Math.max(0, Math.min(100 - heightPct, top))),
+    width_pct: rounded(widthPct),
+    height_pct: rounded(heightPct),
+    z_index: Number(position.z_index || 0)
+  };
+}
+
+export function searchHighlightAreaCodes(items, floorCode) {
+  return [...new Set(items
+    .filter((item) => item.floor_code === floorCode)
+    .filter((item) => item.area_code && !["disabled", "unplaced", "unlocated"].includes(item.position_status || ""))
+    .map((item) => String(item.area_code)))]
+    .sort((left, right) => left.localeCompare(right, "zh-CN"));
+}
+
+export function buildMappedLocationPallets(features, locations, floorCode, layoutId = "erp-twin") {
+  const zoneByArea = new Map(
+    features
+      .filter((feature) => feature.feature_kind === "zone" && feature.erp_area_code && feature.points?.length >= 3)
+      .map((feature) => [String(feature.erp_area_code), feature])
+  );
+  const grouped = new Map();
+  for (const location of locations) {
+    if (location.floor_code !== floorCode || !location.area_code) continue;
+    if (["disabled", "unplaced", "unlocated"].includes(location.position_status || "")) continue;
+    if (!zoneByArea.has(String(location.area_code))) continue;
+    const key = String(location.area_code);
+    grouped.set(key, [...(grouped.get(key) || []), location]);
+  }
+  const pallets = [];
+  for (const [areaCode, areaLocations] of [...grouped.entries()].sort(([left], [right]) => left.localeCompare(right, "zh-CN"))) {
+    const zone = zoneByArea.get(areaCode);
+    const ordered = [...areaLocations].sort((left, right) => String(left.location_code).localeCompare(String(right.location_code), "zh-CN", { numeric: true }));
+    const fallbackPositions = stableZonePoints(zone.points, ordered.length);
+    const positions = ordered.map((location, index) => mappedLocationPoint(zone, location) || fallbackPositions[index]);
+    const xs = zone.points.map((point) => Number(point[0]));
+    const ys = zone.points.map((point) => Number(point[1]));
+    const rotation = Math.max(...ys) - Math.min(...ys) > Math.max(...xs) - Math.min(...xs) ? 90 : 0;
+    ordered.forEach((location, index) => {
+      const occupied = location.occupancy_status === "occupied";
+      const actualPalletCode = location.pallet?.pallet_code || null;
+      pallets.push({
+        id: `erp-location-${location.location_id}`,
+        layout_id: layoutId,
+        pallet_code: location.location_code,
+        name: actualPalletCode ? `${location.location_name} · ${actualPalletCode}` : location.location_name,
+        zone_id: zone.id,
+        zone_code: zone.feature_code,
+        x_mm: positions[index][0],
+        y_mm: positions[index][1],
+        z_mm: 0,
+        width_mm: 1200,
+        depth_mm: 1000,
+        height_mm: occupied ? 150 : 110,
+        rotation_deg: rotation,
+        color: occupied ? "#0f766e" : "#a16207",
+        visual_status: occupied ? "waiting" : "empty",
+        status_note: actualPalletCode ? `ERP正式库位 · ${actualPalletCode}` : "ERP正式空库位",
+        is_simulated: true,
+        version: 1,
+        snapped: false
+      });
+    });
+  }
+  return pallets;
+}
+
+function palletBounds(pallet, clearanceMm = 0) {
+  const quarterTurns = Math.round((Number(pallet.rotation_deg || 0) % 180) / 90);
+  const swapAxes = Math.abs(quarterTurns) % 2 === 1;
+  const width = swapAxes ? Number(pallet.depth_mm || 0) : Number(pallet.width_mm || 0);
+  const depth = swapAxes ? Number(pallet.width_mm || 0) : Number(pallet.depth_mm || 0);
+  return {
+    minX: Number(pallet.x_mm) - width / 2 - clearanceMm,
+    maxX: Number(pallet.x_mm) + width / 2 + clearanceMm,
+    minY: Number(pallet.y_mm) - depth / 2 - clearanceMm,
+    maxY: Number(pallet.y_mm) + depth / 2 + clearanceMm
+  };
+}
+
+function segmentBounds(start, end, widthMm) {
+  const x1 = Number(start?.[0]);
+  const y1 = Number(start?.[1]);
+  const x2 = Number(end?.[0]);
+  const y2 = Number(end?.[1]);
+  if (![x1, y1, x2, y2].every(Number.isFinite)) return null;
+  const length = Math.hypot(x2 - x1, y2 - y1);
+  if (length < 1) return null;
+  const halfWidth = Math.max(0, Number(widthMm || 0)) / 2;
+  const normalX = (-(y2 - y1) / length) * halfWidth;
+  const normalY = ((x2 - x1) / length) * halfWidth;
+  const corners = [
+    [x1 + normalX, y1 + normalY],
+    [x1 - normalX, y1 - normalY],
+    [x2 + normalX, y2 + normalY],
+    [x2 - normalX, y2 - normalY]
+  ];
+  return {
+    minX: Math.min(...corners.map((point) => point[0])),
+    maxX: Math.max(...corners.map((point) => point[0])),
+    minY: Math.min(...corners.map((point) => point[1])),
+    maxY: Math.max(...corners.map((point) => point[1]))
+  };
+}
+
+function boundsOverlap(left, right) {
+  return left.minX < right.maxX && left.maxX > right.minX && left.minY < right.maxY && left.maxY > right.minY;
+}
+
+export function findPalletColumnConflicts(pallets, structures = [], features = [], clearanceMm = 0) {
+  const columnBounds = [];
+  for (const structure of structures) {
+    if (structure.kind !== "column") continue;
+    const geometry = structure.geometry || {};
+    if (geometry.type === "circle" && Number.isFinite(Number(geometry.x_mm)) && Number.isFinite(Number(geometry.y_mm)) && Number(geometry.radius_mm) > 0) {
+      const radius = Number(geometry.radius_mm);
+      columnBounds.push({
+        column_id: structure.id,
+        minX: Number(geometry.x_mm) - radius,
+        maxX: Number(geometry.x_mm) + radius,
+        minY: Number(geometry.y_mm) - radius,
+        maxY: Number(geometry.y_mm) + radius
+      });
+    } else if (geometry.type === "polyline" && geometry.points?.length >= 3) {
+      const xs = geometry.points.map((point) => Number(point[0])).filter(Number.isFinite);
+      const ys = geometry.points.map((point) => Number(point[1])).filter(Number.isFinite);
+      if (xs.length && ys.length) columnBounds.push({ column_id: structure.id, minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) });
+    }
+  }
+  for (const feature of features) {
+    if (feature.feature_kind !== "structure" || feature.subtype !== "custom_column") continue;
+    for (let index = 0; index < (feature.points?.length || 0) - 1; index += 1) {
+      const bounds = segmentBounds(feature.points[index], feature.points[index + 1], feature.width_mm);
+      if (bounds) columnBounds.push({ column_id: feature.id, ...bounds });
+    }
+  }
+  const conflicts = [];
+  const seen = new Set();
+  for (const pallet of pallets) {
+    const candidate = palletBounds(pallet, clearanceMm);
+    for (const column of columnBounds) {
+      if (!boundsOverlap(candidate, column)) continue;
+      const key = `${pallet.id}:${column.column_id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      conflicts.push({ pallet_id: pallet.id, column_id: column.column_id });
+    }
+  }
+  return conflicts;
+}
+
+export function expandAreaInventory(locations, floorCode, areaCode) {
+  if (!areaCode) return [];
+  return locations
+    .filter((location) => location.floor_code === floorCode && location.area_code === areaCode)
+    .flatMap((location) => [
+      ...(location.pallet?.items || []).map((item) => ({
+        ...item,
+        location_code: location.location_code,
+        location_name: location.location_name,
+        pallet_code: location.pallet?.pallet_code || null
+      })),
+      ...(location.loose_items || []).map((item) => ({
+        ...item,
+        location_code: location.location_code,
+        location_name: location.location_name,
+        pallet_code: null
+      }))
+    ])
+    .sort((left, right) => {
+      const leftAge = Number.isFinite(left.age_days) ? left.age_days : -1;
+      const rightAge = Number.isFinite(right.age_days) ? right.age_days : -1;
+      if (leftAge !== rightAge) return rightAge - leftAge;
+      return normalized(left.inventory_code || left.lot_number).localeCompare(
+        normalized(right.inventory_code || right.lot_number),
+        "zh-CN"
+      );
+    });
+}
+
+export function filterAreaInventory(items, keyword) {
+  const needle = normalized(keyword);
+  if (!needle) return [...items];
+  return items.filter((item) => normalized([
+    item.inventory_code,
+    item.product_name,
+    item.customer_name,
+    item.lot_number,
+    item.location_code,
+    item.location_name,
+    item.pallet_code
+  ].join(" ")).includes(needle));
+}
+
+export function inventoryAgeLabel(ageDays) {
+  if (!Number.isFinite(ageDays)) return "库龄待确认";
+  if (ageDays <= 0) return "今日入库";
+  return `库龄 ${Math.floor(ageDays)} 天`;
+}
+
+export function inventoryAgeTone(ageDays) {
+  if (!Number.isFinite(ageDays)) return "unknown";
+  if (ageDays > 180) return "critical";
+  if (ageDays > 90) return "warning";
+  return "normal";
+}
+
+export function inventoryUnitLabel(unit) {
+  const value = normalized(unit);
+  const labels = {
+    box: "只",
+    boxes: "只",
+    sheet: "张",
+    sheets: "张",
+    piece: "件",
+    pieces: "件",
+    pcs: "件",
+    set: "套",
+    sets: "套"
+  };
+  return labels[value] || String(unit ?? "");
+}

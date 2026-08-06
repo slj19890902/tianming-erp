@@ -1,0 +1,18 @@
+from pathlib import Path
+
+
+EDITOR_CANVAS = (
+    Path(__file__).resolve().parents[1]
+    / "factory_twin"
+    / "frontend"
+    / "src"
+    / "EditorCanvas.tsx"
+).read_text(encoding="utf-8")
+
+
+def test_floor3_compass_relabels_drawing_north_as_real_east_without_rotating_geometry():
+    assert '["1F","3F"].includes(layout.floor_code.toUpperCase()) ? "E" : "N"' in EDITOR_CANVAS
+    assert '["1F","3F"].includes(layout.floor_code.toUpperCase()) ? "现实东向" : "图纸北向"' in EDITOR_CANVAS
+    assert "const bounds = layout.bounds_mm" in EDITOR_CANVAS
+    assert "new THREE.Vector3(xMm - centerX, elevation, -(yMm - centerY))" in EDITOR_CANVAS
+    assert "drawingToRealPoint" not in EDITOR_CANVAS

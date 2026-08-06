@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
+import math
+import re
 from uuid import uuid4
 
 from sqlalchemy import func, or_, select, update
@@ -44,6 +46,16 @@ class Floor3MoveResult:
     pallet: InventoryPallet
     movement: InventoryLocationMovement
     replayed: bool
+
+
+@dataclass(frozen=True)
+class Floor3AreaLocationCountResult:
+    area_code: str
+    target_count: int
+    active_count: int
+    created: tuple[WarehouseLocation, ...]
+    enabled: tuple[WarehouseLocation, ...]
+    disabled: tuple[WarehouseLocation, ...]
 
 
 
@@ -172,6 +184,13 @@ def _active_pallet_exists(location_id: int):
     )
 
 
+def _active_inventory_exists(location_id: int):
+    return select(InventoryLot.id).where(
+        InventoryLot.warehouse_location_id == location_id,
+        InventoryLot.status.in_(("active", "frozen")),
+    ).exists()
+
+
 def _claim_empty_active_location(
     db: Session,
     location: WarehouseLocation,
@@ -240,6 +259,7 @@ def create_layout_slot(
     height_pct: Decimal,
     z_index: int,
     operator_id: int,
+    placement_status: str = "placed",
 ) -> WarehouseLocation:
     area = area_code.strip().upper()
     code = location_code.strip()
@@ -265,6 +285,8 @@ def create_layout_slot(
         )
         or 0
     ) + 1
+    if placement_status not in {"placed", "unplaced"}:
+        raise Floor3LocationError("库位布局状态无效")
     location = WarehouseLocation(
         location_code=code,
         location_name=location_name.strip(),
@@ -275,7 +297,7 @@ def create_layout_slot(
         sort_order=sort_order,
         is_temporary=anchor.is_temporary,
         source_version="V11",
-        placement_status="placed",
+        placement_status=placement_status,
     )
     location.floor3_layout = Floor3LocationLayout(
         left_pct=left_pct,
@@ -345,6 +367,16 @@ def update_layout_area(
         )
         if result.rowcount != 1:
             raise Floor3LocationError("布局已被其他操作更新，请刷新后重试", status_code=409)
+        db.execute(
+            update(WarehouseLocation)
+            .where(
+                WarehouseLocation.id == slot["location_id"],
+                WarehouseLocation.warehouse_floor == 3,
+                WarehouseLocation.source_version == "V11",
+            )
+            .values(placement_status="placed", updated_at=beijing_now_naive())
+            .execution_options(synchronize_session=False)
+        )
         db.expire(layout)
     db.flush()
     return db.scalars(
@@ -370,7 +402,8 @@ def set_layout_slot_active(
     )
     if not is_active:
         location_state_guard = location_state_guard.where(
-            ~_active_pallet_exists(location_id)
+            ~_active_pallet_exists(location_id),
+            ~_active_inventory_exists(location_id),
         )
 
     layout_result = db.execute(
@@ -401,6 +434,13 @@ def set_layout_slot_active(
             raise Floor3LocationError("布局货位不存在", status_code=404)
         if not is_active and _active_pallet_at(db, location.id) is not None:
             raise Floor3LocationError("货位仍被栈板占用", status_code=409)
+        if not is_active and db.scalar(
+            select(InventoryLot.id).where(
+                InventoryLot.warehouse_location_id == location.id,
+                InventoryLot.status.in_(("active", "frozen")),
+            ).limit(1)
+        ) is not None:
+            raise Floor3LocationError("货位仍有库存或预占，不能减少库位", status_code=409)
         if location.is_active == is_active:
             raise Floor3LocationError("货位已处于该状态", status_code=409)
         raise Floor3LocationError(
@@ -414,7 +454,9 @@ def set_layout_slot_active(
         WarehouseLocation.is_active.is_(not is_active),
     ]
     if not is_active:
-        location_conditions.append(~_active_pallet_exists(location_id))
+        location_conditions.extend(
+            (~_active_pallet_exists(location_id), ~_active_inventory_exists(location_id))
+        )
     location_result = db.execute(
         update(WarehouseLocation)
         .where(*location_conditions)
@@ -432,6 +474,219 @@ def set_layout_slot_active(
     )
     assert location is not None and location.floor3_layout is not None
     return location
+
+
+def _layout_rectangles(rows: list[WarehouseLocation]) -> list[tuple[Decimal, Decimal, Decimal, Decimal]]:
+    rectangles: list[tuple[Decimal, Decimal, Decimal, Decimal]] = []
+    for row in rows:
+        layout = row.floor3_layout
+        if layout is None:
+            continue
+        rectangles.append(
+            (
+                Decimal(layout.left_pct),
+                Decimal(layout.top_pct),
+                Decimal(layout.width_pct),
+                Decimal(layout.height_pct),
+            )
+        )
+    return rectangles
+
+
+def _rectangles_overlap(
+    left: tuple[Decimal, Decimal, Decimal, Decimal],
+    right: tuple[Decimal, Decimal, Decimal, Decimal],
+) -> bool:
+    left_x, left_y, left_w, left_h = left
+    right_x, right_y, right_w, right_h = right
+    return (
+        left_x < right_x + right_w
+        and left_x + left_w > right_x
+        and left_y < right_y + right_h
+        and left_y + left_h > right_y
+    )
+
+
+def _suggested_layout_rectangles(
+    *,
+    target_count: int,
+    needed: int,
+    occupied: list[tuple[Decimal, Decimal, Decimal, Decimal]],
+) -> list[tuple[Decimal, Decimal, Decimal, Decimal]]:
+    if needed <= 0:
+        return []
+    density = max(target_count, needed, 1)
+    columns = max(1, math.ceil(math.sqrt(density * 1.25)))
+    rows = max(1, math.ceil(density / columns))
+    width = Decimal(str(round(min(14.0, 92.0 / columns), 4)))
+    height = Decimal(str(round(min(14.0, 92.0 / rows), 4)))
+    candidates: list[tuple[Decimal, Decimal, Decimal, Decimal]] = []
+    for multiplier in (1, 2, 3):
+        candidate_columns = columns * multiplier
+        candidate_rows = rows * multiplier
+        cell_width = Decimal("96") / Decimal(candidate_columns)
+        cell_height = Decimal("96") / Decimal(candidate_rows)
+        candidate_width = min(width, cell_width * Decimal("0.82"))
+        candidate_height = min(height, cell_height * Decimal("0.82"))
+        for row_index in range(candidate_rows):
+            for column_index in range(candidate_columns):
+                left = Decimal("2") + cell_width * Decimal(column_index) + (cell_width - candidate_width) / 2
+                top = Decimal("2") + cell_height * Decimal(row_index) + (cell_height - candidate_height) / 2
+                candidate = (
+                    left.quantize(Decimal("0.0001")),
+                    top.quantize(Decimal("0.0001")),
+                    candidate_width.quantize(Decimal("0.0001")),
+                    candidate_height.quantize(Decimal("0.0001")),
+                )
+                if any(_rectangles_overlap(candidate, existing) for existing in [*occupied, *candidates]):
+                    continue
+                candidates.append(candidate)
+                if len(candidates) == needed:
+                    return candidates
+    raise Floor3LocationError("区域剩余布局空间不足，请先调整现有库位位置后再增加", status_code=409)
+
+
+def _location_serial(area_code: str, location_code: str) -> int | None:
+    match = re.fullmatch(rf"{re.escape(area_code)}-L(\d+)", location_code, flags=re.IGNORECASE)
+    return int(match.group(1)) if match else None
+
+
+def adjust_area_location_count(
+    db: Session,
+    *,
+    area_code: str,
+    target_count: int,
+    operator_id: int,
+) -> Floor3AreaLocationCountResult:
+    area = area_code.strip().upper()
+    if target_count < 0 or target_count > 500:
+        raise Floor3LocationError("目标库位数必须在 0 到 500 之间")
+    _floor3_area_anchor(db, area)
+    all_rows = list(
+        db.scalars(
+            select(WarehouseLocation)
+            .options(selectinload(WarehouseLocation.floor3_layout))
+            .where(
+                WarehouseLocation.warehouse_floor == 3,
+                WarehouseLocation.source_version == "V11",
+                WarehouseLocation.area_code == area,
+            )
+            .order_by(WarehouseLocation.sort_order, WarehouseLocation.id)
+        ).all()
+    )
+    active_rows = [row for row in all_rows if row.is_active]
+    current_count = len(active_rows)
+    created: list[WarehouseLocation] = []
+    enabled: list[WarehouseLocation] = []
+    disabled: list[WarehouseLocation] = []
+
+    if target_count > current_count:
+        needed = target_count - current_count
+        reusable = [
+            row
+            for row in all_rows
+            if not row.is_active
+            and row.floor3_layout is not None
+            and db.scalar(
+                select(InventoryPallet.id).where(
+                    InventoryPallet.location_id == row.id,
+                    InventoryPallet.is_current.is_(True),
+                ).limit(1)
+            ) is None
+            and db.scalar(
+                select(InventoryLot.id).where(
+                    InventoryLot.warehouse_location_id == row.id,
+                    InventoryLot.status.in_(("active", "frozen")),
+                ).limit(1)
+            ) is None
+        ]
+        for row in reusable[:needed]:
+            enabled.append(
+                set_layout_slot_active(
+                    db,
+                    location_id=row.id,
+                    is_active=True,
+                    expected_version=row.floor3_layout.version,
+                    operator_id=operator_id,
+                )
+            )
+        needed -= len(enabled)
+        if needed > 0:
+            occupied = _layout_rectangles([*active_rows, *enabled])
+            layouts = _suggested_layout_rectangles(
+                target_count=target_count,
+                needed=needed,
+                occupied=occupied,
+            )
+            existing_serials = {
+                value
+                for row in all_rows
+                if (value := _location_serial(area, row.location_code)) is not None
+            }
+            next_serial = max(existing_serials, default=0) + 1
+            for left, top, width, height in layouts:
+                while next_serial in existing_serials:
+                    next_serial += 1
+                code = f"{area}-L{next_serial:03d}"
+                row = create_layout_slot(
+                    db,
+                    area_code=area,
+                    location_code=code,
+                    location_name=f"{area} 区 {next_serial:03d} 号位",
+                    left_pct=left,
+                    top_pct=top,
+                    width_pct=width,
+                    height_pct=height,
+                    z_index=0,
+                    operator_id=operator_id,
+                    placement_status="unplaced",
+                )
+                created.append(row)
+                existing_serials.add(next_serial)
+                next_serial += 1
+    elif target_count < current_count:
+        needed = current_count - target_count
+        removable = []
+        for row in reversed(active_rows):
+            has_pallet = db.scalar(
+                select(InventoryPallet.id).where(
+                    InventoryPallet.location_id == row.id,
+                    InventoryPallet.is_current.is_(True),
+                ).limit(1)
+            ) is not None
+            has_inventory = db.scalar(
+                select(InventoryLot.id).where(
+                    InventoryLot.warehouse_location_id == row.id,
+                    InventoryLot.status.in_(("active", "frozen")),
+                ).limit(1)
+            ) is not None
+            if not has_pallet and not has_inventory and row.floor3_layout is not None:
+                removable.append(row)
+        if len(removable) < needed:
+            raise Floor3LocationError(
+                f"只能减少 {len(removable)} 个空库位；有库存、预占或实体栈板的库位不会被移除",
+                status_code=409,
+            )
+        for row in removable[:needed]:
+            disabled.append(
+                set_layout_slot_active(
+                    db,
+                    location_id=row.id,
+                    is_active=False,
+                    expected_version=row.floor3_layout.version,
+                    operator_id=operator_id,
+                )
+            )
+
+    db.flush()
+    return Floor3AreaLocationCountResult(
+        area_code=area,
+        target_count=target_count,
+        active_count=target_count,
+        created=tuple(created),
+        enabled=tuple(enabled),
+        disabled=tuple(disabled),
+    )
 
 
 def _generated_pallet_code() -> str:

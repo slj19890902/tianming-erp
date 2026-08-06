@@ -1976,6 +1976,241 @@ def test_floor3_layout_admin_operations_do_not_change_inventory_and_non_admin_is
             "location_code": "A1-MAP-02",
         })
         assert forbidden.status_code == 403
+
+
+def test_floor3_area_target_count_auto_codes_pending_layout_and_only_admin(
+    floor3_app,
+) -> None:
+    from app.models.warehouse_inventory import WarehouseLocation
+
+    app, _ids, factory = floor3_app
+    with TestClient(app) as client:
+        _login(client, "floor3-scoped")
+        forbidden = client.post(
+            "/api/warehouse/floor3/layout/areas/A1/location-count",
+            json={"target_count": 4, "confirmed": True},
+        )
+        assert forbidden.status_code == 403
+
+        _login(client, "floor3-admin")
+        missing_confirmation = client.post(
+            "/api/warehouse/floor3/layout/areas/A1/location-count",
+            json={"target_count": 4, "confirmed": False},
+        )
+        assert missing_confirmation.status_code == 422
+        created = client.post(
+            "/api/warehouse/floor3/layout/areas/A1/location-count",
+            json={"target_count": 5, "confirmed": True},
+        )
+        assert created.status_code == 200, created.text
+        body = created.json()
+        assert body["active_count"] == 5
+        assert body["created_count"] == 2
+        assert [item["location"]["location_code"] for item in body["items"]] == [
+            "A1-L003",
+            "A1-L004",
+        ]
+        assert all(item["location"]["placement_status"] == "unplaced" for item in body["items"])
+        first = body["items"][0]
+        saved = client.patch(
+            "/api/warehouse/floor3/layout/areas/A1",
+            json={
+                "slots": [
+                    {
+                        "location_id": first["location"]["id"],
+                        "expected_version": first["layout"]["version"],
+                        "left_pct": first["layout"]["left_pct"],
+                        "top_pct": first["layout"]["top_pct"],
+                        "width_pct": first["layout"]["width_pct"],
+                        "height_pct": first["layout"]["height_pct"],
+                        "z_index": first["layout"]["z_index"],
+                    }
+                ]
+            },
+        )
+        assert saved.status_code == 200, saved.text
+
+        reduced = client.post(
+            "/api/warehouse/floor3/layout/areas/A1/location-count",
+            json={"target_count": 3, "confirmed": True},
+        )
+        assert reduced.status_code == 200, reduced.text
+        assert reduced.json()["disabled_count"] == 2
+        assert reduced.json()["active_count"] == 3
+
+    with factory() as db:
+        rows = db.scalars(
+            select(WarehouseLocation)
+            .where(
+                WarehouseLocation.warehouse_floor == 3,
+                WarehouseLocation.area_code == "A1",
+                WarehouseLocation.source_version == "V11",
+            )
+            .order_by(WarehouseLocation.location_code)
+        ).all()
+        assert sum(1 for row in rows if row.is_active) == 3
+        assert {row.location_code for row in rows} >= {"A1-L003", "A1-L004"}
+        assert next(row for row in rows if row.location_code == "A1-L003").placement_status == "placed"
+
+
+def test_twin_inventory_correction_is_admin_confirmed_versioned_and_audited(
+    floor3_app,
+) -> None:
+    from app.models.warehouse_inventory import InventoryLot, InventoryMovement
+
+    app, ids, factory = floor3_app
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        slot = client.post(
+            "/api/warehouse/floor3/layout/areas/A1/slots",
+            json={
+                "location_code": "A1-CORRECTION-01",
+                "location_name": "A1 现场纠偏位",
+                "left_pct": 70,
+                "top_pct": 70,
+                "width_pct": 8,
+                "height_pct": 8,
+                "z_index": 0,
+            },
+        )
+        assert slot.status_code == 201, slot.text
+        location_id = slot.json()["location"]["id"]
+        inbound = client.post(
+            "/api/warehouse/twin-operations/finished-inbound",
+            json={
+                "location_id": location_id,
+                "customer_id": ids["tianhua"],
+                "product_id": ids["products"][0],
+                "quantity": 100,
+                "stock_date": "2026-08-06",
+                "idempotency_key": "twin-correction-inbound-001",
+                "confirmed": True,
+                "remarks": "现场差异补录测试",
+            },
+        )
+        assert inbound.status_code == 201, inbound.text
+        incompatible_inbound = client.post(
+            "/api/warehouse/twin-operations/finished-inbound",
+            json={
+                "location_id": location_id,
+                "customer_id": ids["tianhua"],
+                "product_id": ids["products"][1],
+                "quantity": 30,
+                "stock_date": "2026-08-06",
+                "idempotency_key": "twin-correction-inbound-002",
+                "confirmed": True,
+                "remarks": "已有栈板现场差异补录",
+            },
+        )
+        assert incompatible_inbound.status_code == 409
+        assert "同客户同存货编码" in incompatible_inbound.json()["detail"]
+        correction_inbound = client.post(
+            "/api/warehouse/twin-operations/finished-inbound",
+            json={
+                "location_id": location_id,
+                "customer_id": ids["tianhua"],
+                "product_id": ids["products"][0],
+                "quantity": 30,
+                "stock_date": "2026-08-06",
+                "idempotency_key": "twin-correction-inbound-003",
+                "confirmed": True,
+                "remarks": "同客户同产品已有栈板差异补录",
+            },
+        )
+        assert correction_inbound.status_code == 201, correction_inbound.text
+        assert len(correction_inbound.json()["pallet"]["items"]) == 2
+        overview = client.get("/api/warehouse/twin-dashboard/overview?days=30")
+        location = next(item for item in overview.json()["locations"] if item["location_id"] == location_id)
+        item = next(item for item in location["pallet"]["items"] if item["inventory_code"] == "21301011")
+        lot_id = item["lot_id"]
+        assert item["version"] == 1
+
+        _login(client, "floor3-scoped")
+        forbidden = client.post(
+            f"/api/warehouse/twin-operations/lots/{lot_id}/quantity-correction",
+            json={
+                "expected_version": 1,
+                "action": "decrease",
+                "quantity": 20,
+                "reason": "现场盘点差异",
+                "idempotency_key": "twin-correction-decrease-001",
+                "confirmed": True,
+            },
+        )
+        assert forbidden.status_code == 403
+
+        _login(client, "floor3-admin")
+        unconfirmed = client.post(
+            f"/api/warehouse/twin-operations/lots/{lot_id}/quantity-correction",
+            json={
+                "expected_version": 1,
+                "action": "decrease",
+                "quantity": 20,
+                "reason": "现场盘点差异",
+                "idempotency_key": "twin-correction-unconfirmed",
+                "confirmed": False,
+            },
+        )
+        assert unconfirmed.status_code == 422
+        decreased = client.post(
+            f"/api/warehouse/twin-operations/lots/{lot_id}/quantity-correction",
+            json={
+                "expected_version": 1,
+                "action": "decrease",
+                "quantity": 20,
+                "reason": "现场盘点少二十只",
+                "idempotency_key": "twin-correction-decrease-001",
+                "confirmed": True,
+            },
+        )
+        assert decreased.status_code == 200, decreased.text
+        assert decreased.json()["lot"]["quantity_available"] == 80
+        assert decreased.json()["lot"]["version"] == 2
+        replay = client.post(
+            f"/api/warehouse/twin-operations/lots/{lot_id}/quantity-correction",
+            json={
+                "expected_version": 1,
+                "action": "decrease",
+                "quantity": 20,
+                "reason": "现场盘点少二十只",
+                "idempotency_key": "twin-correction-decrease-001",
+                "confirmed": True,
+            },
+        )
+        assert replay.status_code == 200, replay.text
+        assert replay.json()["idempotent_replay"] is True
+
+        removed = client.post(
+            f"/api/warehouse/twin-operations/lots/{lot_id}/quantity-correction",
+            json={
+                "expected_version": 2,
+                "action": "remove",
+                "reason": "确认现场已无该货物",
+                "idempotency_key": "twin-correction-remove-001",
+                "confirmed": True,
+            },
+        )
+        assert removed.status_code == 200, removed.text
+        assert removed.json()["lot"]["quantity_available"] == 0
+        assert removed.json()["lot"]["status"] == "closed"
+        overview_after = client.get("/api/warehouse/twin-dashboard/overview?days=30")
+        location_after = next(item for item in overview_after.json()["locations"] if item["location_id"] == location_id)
+        assert len(location_after["pallet"]["items"]) == 1
+    assert location_after["pallet"]["items"][0]["inventory_code"] == "21301011"
+
+    with factory() as db:
+        lot = db.get(InventoryLot, lot_id)
+        assert lot is not None
+        assert lot.quantity_available == 0
+        assert lot.status == "closed"
+        movements = db.scalars(
+            select(InventoryMovement).where(
+                InventoryMovement.inventory_lot_id == lot_id,
+                InventoryMovement.movement_type == "adjust",
+            )
+        ).all()
+        assert len(movements) == 2
+
 def test_floor3_explicit_finished_rows_create_lots_and_keep_snapshot_default(
     floor3_app,
 ) -> None:
@@ -2552,3 +2787,589 @@ def test_floor3_create_finished_idempotency_key_cannot_reuse_other_pallet(
         )
         assert response.status_code == 409
         assert "其它物理栈板" in response.json()["detail"]
+
+
+def test_phase2c9_admin_map_inbound_and_formal_pallet_move_are_idempotent(
+    floor3_app,
+) -> None:
+    app, ids, factory = floor3_app
+    inbound_payload = {
+        "location_id": ids["locations"][0],
+        "pallet_code": "MAP-PALLET-001",
+        "customer_id": ids["tianhua"],
+        "product_id": ids["products"][0],
+        "quantity": 120,
+        "stock_date": "2026-08-06",
+        "idempotency_key": "phase2c9-map-inbound-001",
+        "confirmed": True,
+        "remarks": "地图人工确认入成品仓",
+    }
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        unconfirmed = client.post(
+            "/api/warehouse/twin-operations/finished-inbound",
+            json={**inbound_payload, "confirmed": False},
+        )
+        assert unconfirmed.status_code == 422
+        created = client.post(
+            "/api/warehouse/twin-operations/finished-inbound",
+            json=inbound_payload,
+        )
+        assert created.status_code == 201, created.text
+        pallet = created.json()["pallet"]
+        assert created.json()["idempotent_replay"] is False
+        assert pallet["pallet_code"] == "MAP-PALLET-001"
+        assert pallet["location_id"] == ids["locations"][0]
+        assert pallet["items"][0]["official_inventory"] is True
+
+        replay = client.post(
+            "/api/warehouse/twin-operations/finished-inbound",
+            json=inbound_payload,
+        )
+        assert replay.status_code == 201, replay.text
+        assert replay.json()["idempotent_replay"] is True
+        assert replay.json()["pallet"]["id"] == pallet["id"]
+
+        move_payload = {
+            "expected_version": pallet["version"],
+            "to_location_id": ids["locations"][1],
+            "idempotency_key": "phase2c9-map-move-001",
+            "confirmed": True,
+            "remarks": "地图人工确认移位",
+        }
+        moved = client.post(
+            f"/api/warehouse/twin-operations/pallets/{pallet['id']}/move",
+            json=move_payload,
+        )
+        assert moved.status_code == 200, moved.text
+        assert moved.json()["idempotent_replay"] is False
+        assert moved.json()["pallet"]["location_id"] == ids["locations"][1]
+
+        move_replay = client.post(
+            f"/api/warehouse/twin-operations/pallets/{pallet['id']}/move",
+            json=move_payload,
+        )
+        assert move_replay.status_code == 200, move_replay.text
+        assert move_replay.json()["idempotent_replay"] is True
+
+    with factory() as db:
+        from app.models.warehouse_inventory import (
+            InventoryLocationMovement,
+            InventoryLot,
+            InventoryMovement,
+        )
+
+        assert db.scalar(select(func.count(InventoryLot.id))) == 1
+        assert db.scalar(
+            select(func.count(InventoryMovement.id)).where(
+                InventoryMovement.idempotency_key == "phase2c9-map-inbound-001"
+            )
+        ) == 1
+        assert db.scalar(
+            select(func.count(InventoryLocationMovement.id)).where(
+                InventoryLocationMovement.idempotency_key == "phase2c9-map-move-001"
+            )
+        ) == 1
+
+
+def test_phase2c13_layout_rack_writes_are_admin_only_and_audited(
+    floor3_app,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import json
+
+    from app.models.audit import OperationLog
+    from app.services import warehouse_twin_layout_editor as editor
+
+    app, _ids, factory = floor3_app
+    floor = {
+        "layout_id": "layout-3f",
+        "floor_code": "3F",
+        "features": [
+            {
+                "id": "zone-f1",
+                "feature_code": "ZONE-3F-ERP-F1",
+                "name": "F1",
+                "feature_kind": "zone",
+                "subtype": "rack_storage",
+                "points": [[0, 0], [10000, 0], [10000, 10000], [0, 10000]],
+                "version": 1,
+                "erp_area_code": "F1",
+            }
+        ],
+        "racks": [],
+        "pallets": [],
+    }
+    floor["revision"] = editor._floor_revision(floor)
+    asset = tmp_path / "twin-layout.json"
+    asset.write_text(
+        json.dumps({"schema_version": 1, "generated_at": "old", "floors": {"3F": floor}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(editor, "TWIN_LAYOUT_PATH", asset)
+    body = {
+        "expected_revision": floor["revision"],
+        "operation_key": "api-create-rack-0001",
+        "area_feature_id": "zone-f1",
+        "name": "F1现场货架",
+        "x_mm": 5000,
+        "y_mm": 5000,
+        "width_mm": 2800,
+        "depth_mm": 1100,
+        "height_mm": 2200,
+        "levels": 3,
+        "level_heights_mm": [700, 1450],
+        "cargo_rows": 4,
+        "bays": 1,
+        "access_side": "south",
+        "min_aisle_width_mm": 1500,
+        "rotation_deg": 0,
+        "color": "#38bdf8",
+    }
+    with TestClient(app) as employee:
+        _login(employee, "floor3-scoped")
+        denied = employee.post("/api/warehouse/twin-layout/floors/3F/racks", json=body)
+        assert denied.status_code == 403
+    with TestClient(app) as admin:
+        _login(admin, "floor3-admin")
+        created = admin.post("/api/warehouse/twin-layout/floors/3F/racks", json=body)
+        assert created.status_code == 201, created.text
+        assert created.json()["item"]["area_code"] == "F1"
+        repeated = admin.post("/api/warehouse/twin-layout/floors/3F/racks", json=body)
+        assert repeated.status_code == 201, repeated.text
+        assert repeated.json()["applied"] is False
+    with factory() as db:
+        logs = db.scalars(
+            select(OperationLog).where(OperationLog.action == "TWIN_RACK_CREATE")
+        ).all()
+        assert len(logs) == 1
+        assert "inventory_changed" in logs[0].details
+
+
+def test_phase2c9_non_admin_cannot_call_map_write_endpoints(floor3_app) -> None:
+    app, ids, factory = floor3_app
+    with TestClient(app) as client:
+        _login(client, "floor3-scoped")
+        inbound = client.post(
+            "/api/warehouse/twin-operations/finished-inbound",
+            json={
+                "location_id": ids["locations"][0],
+                "customer_id": ids["tianhua"],
+                "product_id": ids["products"][0],
+                "quantity": 20,
+                "stock_date": "2026-08-06",
+                "idempotency_key": "phase2c9-forbidden-inbound",
+                "confirmed": True,
+            },
+        )
+        assert inbound.status_code == 403
+        move = client.post(
+            "/api/warehouse/twin-operations/pallets/999/move",
+            json={
+                "expected_version": 1,
+                "to_location_id": ids["locations"][1],
+                "idempotency_key": "phase2c9-forbidden-move",
+                "confirmed": True,
+            },
+        )
+        assert move.status_code == 403
+
+    with factory() as db:
+        from app.models.warehouse_inventory import InventoryLot
+
+        assert db.scalar(select(func.count(InventoryLot.id))) == 0
+
+
+def test_phase2c12_empty_location_selects_staging_product_without_adding_stock(
+    floor3_app,
+) -> None:
+    from app.models.warehouse_inventory import InventoryLot, WarehouseLocation
+    from app.services.warehouse_inventory import manual_finished_in
+
+    app, ids, factory = floor3_app
+    with factory() as db:
+        staging = WarehouseLocation(
+            location_code="F1-DISPATCH-01",
+            location_name="一楼待送区",
+            warehouse_type="finished",
+            warehouse_floor=1,
+            area_code="DISPATCH",
+            storage_type="ground",
+            placement_status="placed",
+        )
+        db.add(staging)
+        db.flush()
+        source = manual_finished_in(
+            db,
+            customer_id=ids["tianhua"],
+            product_id=ids["products"][0],
+            location_id=staging.id,
+            quantity=80,
+            stock_date=date(2026, 8, 6),
+            source_type="production_completion",
+            source_ref_type="production_completion",
+            source_ref_id=88001,
+            remarks="生产完工直接待送",
+            operator_id=ids["admin"],
+            idempotency_key="phase2c12-production-completion-001",
+        )
+        source_id = source.id
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        candidates = client.get(
+            "/api/warehouse/twin-operations/location-product-candidates",
+            params={"location_id": ids["rack_location"], "q": "21301011"},
+        )
+        assert candidates.status_code == 200, candidates.text
+        assert candidates.json()["target_location"]["location_id"] == ids["rack_location"]
+        assert candidates.json()["items"][0]["lot_id"] == source_id
+        assert candidates.json()["items"][0]["total_quantity"] == 80
+
+        unconfirmed = client.post(
+            f"/api/warehouse/twin-operations/staging-lots/{source_id}/place",
+            json={
+                "location_id": ids["rack_location"],
+                "expected_version": 1,
+                "quantity": 30,
+                "idempotency_key": "phase2c12-place-staging-001",
+                "confirmed": False,
+            },
+        )
+        assert unconfirmed.status_code == 422
+        placed = client.post(
+            f"/api/warehouse/twin-operations/staging-lots/{source_id}/place",
+            json={
+                "location_id": ids["rack_location"],
+                "expected_version": 1,
+                "quantity": 30,
+                "idempotency_key": "phase2c12-place-staging-001",
+                "confirmed": True,
+            },
+        )
+        assert placed.status_code == 200, placed.text
+        assert placed.json()["idempotent_replay"] is False
+        assert placed.json()["pallet"]["location_id"] == ids["rack_location"]
+
+        replay = client.post(
+            f"/api/warehouse/twin-operations/staging-lots/{source_id}/place",
+            json={
+                "location_id": ids["rack_location"],
+                "expected_version": 1,
+                "quantity": 30,
+                "idempotency_key": "phase2c12-place-staging-001",
+                "confirmed": True,
+            },
+        )
+        assert replay.status_code == 200, replay.text
+        assert replay.json()["idempotent_replay"] is True
+
+    with factory() as db:
+        lots = db.scalars(select(InventoryLot)).all()
+        assert sum(
+            int(row.quantity_available or 0) + int(row.quantity_reserved or 0)
+            for row in lots
+        ) == 80
+        source = db.get(InventoryLot, source_id)
+        assert source is not None
+        assert source.quantity_available == 50
+        target = next(row for row in lots if row.id != source_id)
+        assert target.quantity_available == 30
+        assert target.warehouse_location_id == ids["rack_location"]
+
+
+def test_phase2c12_admin_can_atomically_create_temporary_product_and_stock(
+    floor3_app,
+) -> None:
+    from app.models.audit import OperationLog
+    from app.models.product import Product
+    from app.models.warehouse_inventory import InventoryLot, InventoryMovement
+
+    app, ids, factory = floor3_app
+    payload = {
+        "location_id": ids["rack_location"],
+        "customer_id": ids["tianhua"],
+        "inventory_code": "TEMP-WH-001",
+        "product_name": "历史未建档五层纸箱",
+        "quantity": 45,
+        "stock_date": "2026-08-06",
+        "reason": "首次盘点发现现场实物但ERP尚无产品档案",
+        "idempotency_key": "phase2c12-temporary-inbound-001",
+        "confirmed": True,
+    }
+    with TestClient(app) as client:
+        _login(client, "floor3-scoped")
+        forbidden = client.post(
+            "/api/warehouse/twin-operations/temporary-finished-inbound",
+            json=payload,
+        )
+        assert forbidden.status_code == 403
+
+        _login(client, "floor3-admin")
+        unconfirmed = client.post(
+            "/api/warehouse/twin-operations/temporary-finished-inbound",
+            json={**payload, "confirmed": False},
+        )
+        assert unconfirmed.status_code == 422
+        created = client.post(
+            "/api/warehouse/twin-operations/temporary-finished-inbound",
+            json=payload,
+        )
+        assert created.status_code == 201, created.text
+        assert created.json()["idempotent_replay"] is False
+        product_id = created.json()["temporary_product_id"]
+        assert created.json()["pallet"]["location_id"] == ids["rack_location"]
+
+        replay = client.post(
+            "/api/warehouse/twin-operations/temporary-finished-inbound",
+            json=payload,
+        )
+        assert replay.status_code == 201, replay.text
+        assert replay.json()["idempotent_replay"] is True
+        assert replay.json()["temporary_product_id"] == product_id
+
+    with factory() as db:
+        product = db.get(Product, product_id)
+        assert product is not None
+        assert product.product_code == "TEMP-WH-001"
+        assert product.customer_material_code == "TEMP-WH-001"
+        assert product.manual_modified is True
+        assert product.remark.startswith("[仓库临时建档]")
+        lots = db.scalars(select(InventoryLot)).all()
+        assert len(lots) == 1
+        assert lots[0].quantity_available == 45
+        assert lots[0].finished_detail.product_id == product_id
+        assert db.scalar(
+            select(func.count(InventoryMovement.id)).where(
+                InventoryMovement.idempotency_key == payload["idempotency_key"]
+            )
+        ) == 1
+        assert db.scalar(
+            select(func.count(OperationLog.id)).where(
+                OperationLog.entity_type == "product",
+                OperationLog.entity_id == product_id,
+            )
+        ) >= 1
+
+
+def test_phase2c9_scoped_locator_finds_mold_plate_areas_without_cross_customer_leak(
+    floor3_app,
+) -> None:
+    app, ids, factory = floor3_app
+    with factory() as db:
+        from app.models.mold_tool import MoldTool
+        from app.models.product import Product
+
+        visible_mold = MoldTool(
+            mold_code="MOLD-TH-001",
+            mold_name="天华开槽模具",
+            rack_location="3F-M-R01-L1-D1-P1",
+            is_active=True,
+        )
+        hidden_mold = MoldTool(
+            mold_code="MOLD-OTHER-001",
+            mold_name="其他客户模具",
+            rack_location="3F-M-R02-L1-D1-P1",
+            is_active=True,
+        )
+        db.add_all([visible_mold, hidden_mold])
+        db.flush()
+        visible_product = db.get(Product, ids["products"][0])
+        hidden_product = db.get(Product, ids["other_product"])
+        assert visible_product is not None and hidden_product is not None
+        visible_product.mold_tool_id = visible_mold.id
+        visible_product.die_cut_path = "ZONE-1F-PLATE-001"
+        hidden_product.mold_tool_id = hidden_mold.id
+        hidden_product.die_cut_path = "ZONE-1F-PLATE-002"
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client, "floor3-scoped")
+        mold = client.get(
+            "/api/warehouse/twin-operations/locate",
+            params={"keyword": "模具"},
+        )
+        assert mold.status_code == 200, mold.text
+        mold_resources = mold.json()["resources"]
+        assert any(row["kind"] == "mold_area" for row in mold_resources)
+        assert any(row["primary_code"] == "MOLD-TH-001" for row in mold_resources)
+        assert all(row.get("primary_code") != "MOLD-OTHER-001" for row in mold_resources)
+
+        plate = client.get(
+            "/api/warehouse/twin-operations/locate",
+            params={"keyword": "ZONE-1F-PLATE"},
+        )
+        assert plate.status_code == 200, plate.text
+        plate_resources = [
+            row for row in plate.json()["resources"]
+            if row["kind"] == "printing_plate"
+        ]
+        assert len(plate_resources) == 1
+        assert plate_resources[0]["feature_codes"] == ["ZONE-1F-PLATE-001"]
+
+
+def test_phase2c14_typed_search_keeps_customer_scope_and_separates_resources(
+    floor3_app,
+) -> None:
+    app, ids, _factory = floor3_app
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        inbound = client.post(
+            "/api/warehouse/twin-operations/finished-inbound",
+            json={
+                "location_id": ids["rack_location"],
+                "customer_id": ids["tianhua"],
+                "product_id": ids["products"][0],
+                "quantity": 18,
+                "stock_date": "2026-08-06",
+                "idempotency_key": "phase2c14-search-finished-001",
+                "confirmed": True,
+                "remarks": "分类型查找测试",
+            },
+        )
+        assert inbound.status_code == 201, inbound.text
+
+        _login(client, "floor3-scoped")
+        finished = client.get(
+            "/api/warehouse/twin-operations/locate",
+            params={
+                "search_type": "finished",
+                "customer_id": ids["tianhua"],
+                "keyword": "",
+            },
+        )
+        assert finished.status_code == 200, finished.text
+        assert finished.json()["search_type"] == "finished"
+        assert finished.json()["resources"] == []
+        assert {row["customer_id"] for row in finished.json()["items"]} == {
+            ids["tianhua"]
+        }
+        assert {row["inventory_code"] for row in finished.json()["items"]} == {
+            "21301011"
+        }
+
+        denied = client.get(
+            "/api/warehouse/twin-operations/locate",
+            params={
+                "search_type": "finished",
+                "customer_id": ids["other"],
+                "keyword": "",
+            },
+        )
+        assert denied.status_code == 403
+
+        mold_only = client.get(
+            "/api/warehouse/twin-operations/locate",
+            params={"search_type": "mold", "keyword": "模具"},
+        )
+        assert mold_only.status_code == 200, mold_only.text
+        assert mold_only.json()["items"] == []
+        assert all("mold" in row["kind"] for row in mold_only.json()["resources"])
+
+
+def test_phase2c14_customer_selected_product_candidates_can_list_common_boxes(
+    floor3_app,
+) -> None:
+    app, ids, _factory = floor3_app
+    with TestClient(app) as client:
+        _login(client, "floor3-scoped")
+        response = client.get(
+            "/api/warehouse/floor3/product-candidates",
+            params={"customer_id": ids["tianhua"], "q": "", "limit": 50},
+        )
+        assert response.status_code == 200, response.text
+        assert {row["product_id"] for row in response.json()["items"]} == set(
+            ids["products"]
+        )
+        assert response.json()["auto_bind_allowed"] is False
+
+
+def test_phase2c14_map_semi_finished_inbound_is_admin_only_idempotent_and_compatible(
+    floor3_app,
+) -> None:
+    from app.models.product import Product
+    from app.models.warehouse_inventory import (
+        InventoryLot,
+        SemiFinishedLotAllowedProduct,
+        WarehouseLocation,
+    )
+
+    app, ids, factory = floor3_app
+    with factory() as db:
+        location = WarehouseLocation(
+            location_code="1F-SEMI-MAP-01",
+            location_name="一楼半成品地图位",
+            warehouse_type="semi_finished",
+            warehouse_floor=1,
+            area_code="SEMI",
+            storage_type="ground",
+            sort_order=100,
+        )
+        db.add(location)
+        for product_id in ids["products"][:2]:
+            product = db.get(Product, product_id)
+            assert product is not None
+            product.default_material_code = "K=A"
+            product.layer_count = 3
+            product.flute_type = "B"
+            product.report_length_mm = 800
+            product.report_width_mm = 600
+        db.commit()
+        location_id = location.id
+
+    payload = {
+        "location_id": location_id,
+        "customer_id": ids["tianhua"],
+        "product_id": ids["products"][0],
+        "quantity": 36,
+        "stock_date": "2026-08-06",
+        "idempotency_key": "phase2c14-semi-map-inbound-001",
+        "confirmed": True,
+        "remarks": "一楼地图半成品差异补录",
+    }
+    with TestClient(app) as client:
+        _login(client, "floor3-scoped")
+        forbidden = client.post(
+            "/api/warehouse/twin-operations/semi-finished-inbound", json=payload
+        )
+        assert forbidden.status_code == 403
+
+        _login(client, "floor3-admin")
+        created = client.post(
+            "/api/warehouse/twin-operations/semi-finished-inbound", json=payload
+        )
+        assert created.status_code == 201, created.text
+        assert created.json()["idempotent_replay"] is False
+        replay = client.post(
+            "/api/warehouse/twin-operations/semi-finished-inbound", json=payload
+        )
+        assert replay.status_code == 201, replay.text
+        assert replay.json()["idempotent_replay"] is True
+
+        incompatible = client.post(
+            "/api/warehouse/twin-operations/semi-finished-inbound",
+            json={
+                **payload,
+                "product_id": ids["products"][1],
+                "idempotency_key": "phase2c14-semi-map-inbound-002",
+            },
+        )
+        assert incompatible.status_code == 409
+        assert "不同半成品款号" in incompatible.json()["detail"]
+
+    with factory() as db:
+        lots = db.scalars(
+            select(InventoryLot).where(
+                InventoryLot.warehouse_location_id == location_id
+            )
+        ).all()
+        assert len(lots) == 1
+        assert lots[0].quantity_available == 36
+        assert db.scalar(
+            select(func.count(SemiFinishedLotAllowedProduct.inventory_lot_id)).where(
+                SemiFinishedLotAllowedProduct.inventory_lot_id == lots[0].id,
+                SemiFinishedLotAllowedProduct.product_id == ids["products"][0],
+            )
+        ) == 1

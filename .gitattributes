@@ -1,1 +1,4 @@
 static/vendor/*.js -text
+factory_twin/frontend/*.html text eol=lf
+static/factory-twin-assets/** text eol=lf
+static/factory-twin-assets/assets/*.js -whitespace

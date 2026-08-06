@@ -1,61 +1,66 @@
-# 1F 真实 DXF 货梯区与统一 2.5D 设备设计 QA
+# Phase 2C-3 数字孪生全局视角与去标签视觉验收
 
-- source geometry: `D:\Downloads\#TM_FACTORY_1F_ERP_V4_CONFIRMED_OUTDOOR.dxf`
-- source SHA-256: `226e97de6a9ce51cc8d41486d08d385853623f1f73e726ca903b6a4a80e39836`
-- source visual references: `D:\Downloads\Gemini_Generated_Image_*.png`（老板提供的 9 张机器参考）
-- combined comparison: `C:\Users\Administrator\.codex\visualizations\2026\08\03\019fc691-bab4-77f0-8cd1-a881b5c51006\factory-map-design-qa-comparison.jpg`
-- implementation screenshot: `C:\Users\Administrator\.codex\visualizations\2026\08\03\019fc691-bab4-77f0-8cd1-a881b5c51006\factory-map-1f-rack-priority-uat.png`
-- rack front screenshot: `C:\Users\Administrator\.codex\visualizations\2026\08\03\019fc691-bab4-77f0-8cd1-a881b5c51006\factory-map-rack-front-uat.png`
-- browser: Chrome connector, isolated UAT on port 18084
-- state: 仓库库存管理 -> 库位管理 -> 1F -> 货梯旁一层货架 -> 第 1 层第 1 段
+## Comparison target
 
-## Geometry evidence
+- source visual truth path (1F): `C:\Users\ADMINI~1\AppData\Local\Temp\codex-clipboard-b8e136b3-d97a-4c9b-a478-2500692bffe8.png`
+- source visual truth path (3F): `C:\Users\ADMINI~1\AppData\Local\Temp\codex-clipboard-7d61eea7-c2bc-4aff-bd6b-57b8b54f0fd7.png`
+- implementation URL: `http://localhost:8014/?page=warehouse&phase2c3=1`
+- implementation screenshot path (1F): `D:\纸箱厂erp软件搭建-worktrees\factory-twin-editor-mvp\artifacts\phase2c3\implementation-1f-global.png`
+- implementation screenshot path (3F): `D:\纸箱厂erp软件搭建-worktrees\factory-twin-editor-mvp\artifacts\phase2c3\implementation-3f-global.png`
+- normalized comparison board (1F): `D:\纸箱厂erp软件搭建-worktrees\factory-twin-editor-mvp\artifacts\phase2c3\qa-compare-1f.png`
+- normalized comparison board (3F): `D:\纸箱厂erp软件搭建-worktrees\factory-twin-editor-mvp\artifacts\phase2c3\qa-compare-3f.png`
+- browser viewport: 1920 × 911 CSS px, devicePixelRatio 1; browser screenshot output 1904 × 904 px.
+- source pixels: 1474 × 678 px for both reference images.
+- implementation twin crop: 1593 × 737 px; normalized to 1474 × 678 px beside each source for the comparison boards.
+- state: ERP embedded warehouse page, 1F/3F outer floor cards, 2.5D north-east global fit, operational layers enabled, object labels disabled.
 
-不再使用上一轮的手工猜测覆盖物。新 DXF 的实际实体已固定为：
+## Full-view comparison evidence
 
-- `B9A`：上方货运电梯，停用；
-- `B9B`：下方货运电梯，使用中；
-- `B97`：货梯旁新增的开槽老虎机；
-- `B98`：与开槽老虎机投影重合的一层货架；
-- `B99`：开槽老虎机下方可临时放 2 托的绿色区域。
+Each comparison board places the source on the left and the normalized browser implementation on the right in one image. Both implementation views retain the source's dark navy technical shell, cyan grid, compact layer rail, orthographic 2.5D geometry and fixed right inspector. The 1F factory body fills the central stage without the projected column group outside the production workshop. The 3F warehouse uses the larger global fit shown by the source, with the complete measured warehouse remaining readable.
 
-旧猜测的两部货梯、货架、开槽机、两个单托栈板框和两条通道覆盖物已全部撤销。入口缓冲区①
-恢复为 DXF 原有区域，不再被错误隐藏。
+The implementation intentionally moves floor switching to the existing ERP floor cards above the twin instead of duplicating it inside the embedded command bar. It also intentionally removes all map label bars and projected object text at the user's request. These are current product requirements, not fidelity defects.
 
-## Visual fidelity evidence
+## Focused region comparison evidence
 
-- 9 个透明 WebP 设备资产均从老板提供的参考图生成，保留机器可识别轮廓和主要结构；
-- 所有资产统一为等距 2.5D 技术线稿、深灰轮廓、蓝灰/工业绿主体、少量安全橙点缀和柔和阴影；
-- 新水性印刷机、旧印刷机、分纸机、打包机、两种钉箱机、半自动粘箱机、模切机和开槽老虎机均为独立资产；
-- 大、中、小模切机使用同一机型视觉语言，但由三个 DXF 占地框分别决定显示体量；
-- 11 台设备图片全部成功加载，未出现白底方块或损坏图标。
+No additional pixel crop was required: camera fill, label density, southern column removal and aisle intersections are large, clearly readable surfaces in the full-resolution side-by-side boards. Interaction-focused verification was performed separately in Chrome: a 3F rack click opened `RACK-3F-F4-EAST-SOUTH-001` in the right inspector, and a 1F equipment click opened the locked water-based printing machine with real dimensions and coordinates.
 
-## Layering and interaction evidence
+## Required fidelity surfaces
 
-- 固定机器始终没有 button 角色和点击事件，只记录位置并提示禁止堆放栈板；
-- 绘制优先级为机器 4、货架 5，货架形状和标签始终位于机器之上；
-- `B97` 开槽老虎机透明度为 `0.46`，只作为货架下方定位参考；
-- `B98` 货架可点击，Chrome 实测打开 1 层、横向 4 段的正视定位图；
-- Chrome 实测选择“第 1 层 · 从左第 1 段”正常回显；
-- 临时栈板区为一个真实绿色框，容量 2 托，不拆成两个伪造库位，也不生成正式库位。
+- Fonts and typography: the existing Microsoft YaHei/Segoe UI Chinese UI hierarchy and Consolas technical micro-labels are preserved. Removing object sprites eliminates the small unreadable text cloud while keeping stage, scale, compass and inspector typography intact.
+- Spacing and layout rhythm: the outer ERP floor cards now own floor switching; the embedded command bar reflows to three columns. 1F and 3F use floor-appropriate full-view framing and retain the fixed layer rail, map stage and inspector.
+- Colors and visual tokens: navy panels, cyan grid, teal 1F aisles and amber 3F aisles stay within the source palette. Each floor's aisle network now uses one opaque color and one depth-writing surface so intersections do not darken or stack.
+- Image quality and asset fidelity: the implementation continues to render measured Three.js geometry rather than a raster or placeholder approximation. No new decorative image asset was needed; the requested changes concern camera, visibility and semantic rendering.
+- Copy and content: outer cards now say `一楼 生产车间 · 布局已接入` and `三楼 成品与半成品 · 已接入`. Object details appear only after clicking and remain tied to ERP/layout facts.
 
 ## Comparison history
 
-1. 上一候选：依据截图猜造货梯与通道位置，并隐藏入口缓冲区①。状态：不通过。
-2. 本候选第一次：改用新 DXF 的 `B97` 至 `B9B` 实体，撤销全部猜造覆盖物。状态：几何通过。
-3. 本候选第二次：用 9 个独立透明线稿资产替换 4 个通用图片，并加入货架优先层级与低对比机器定位图。状态：视觉与交互通过。
+### Pass 1 — blocked
 
-## Findings
+- P2: 3F used the editor-scale global frustum and appeared materially smaller than the supplied 3F reference.
+- P2: intersecting aisle segments retained mixed transparent colors, so overlaps looked like stacked strips rather than one connected route.
 
-- 无 P0/P1/P2 视觉、几何或交互问题。
-- P3：Chrome 连接器当前窄视口截图中文字较密；地图在实际桌面宽窗口会按现有响应式布局放大，
-  不影响货架点击和设备识别。
+Fixes made:
 
-## Regression evidence
+- Increased the ERP warehouse frustum divisor while preserving the accepted 1F composition.
+- Unified each floor's aisle color and changed warehouse aisle meshes to one opaque depth-writing elevation.
 
-- 1F 地图显示 11 台设备、2 部货梯、6 个货架、1 个临时栈板区；
-- 货梯旁货架为可点击 button，设备仍不可点击；
-- 1F / 3F 来回切换正常；三楼 396 个启用货位保持不变；
-- 自动测试：`19 passed`；未增加任何库存写入路径。
+### Pass 2 — passed
+
+- Post-fix `qa-compare-3f.png` shows the measured 3F layout occupying the intended global-view proportion.
+- Post-fix `qa-compare-1f.png` shows the factory body without the non-workshop projected column group and without map label bars.
+- No actionable P0, P1 or P2 visual differences remain. The outer white ERP floor-card strip, absence of internal floor buttons and absence of object labels are explicit user-requested changes.
+
+## Primary interactions tested
+
+- Existing ERP floor cards switched iframe URLs between `floor=1F` and `floor=3F`; the active state followed the selected floor.
+- Embedded duplicate `.twin-floor-switch` count was 0.
+- `编号标签` layer control count was 0 and the 2.5D screenshots contained no object label sprites.
+- 1F 2D and 2.5D switched successfully; 2.5D was restored for handoff.
+- 3F rack selection and 1F equipment selection both opened detailed right-inspector cards.
+- Visible React error boundary count was 0 and all tested interactions completed. The connected Chrome surface does not expose a console-event stream; frontend type-check/build and browser interaction checks reported no application error.
+
+## Follow-up polish
+
+- P3: after formal rack-level inventory binding is approved, shelf tags can be introduced only inside the rack elevation view, keeping the global 2.5D view uncluttered.
 
 final result: passed

@@ -128,7 +128,7 @@
       .btn:disabled { cursor: not-allowed; opacity: .45; box-shadow: none; }
 
       /* App shell and persisted display modes */
-      .app-shell { min-height: 100vh; display: grid; grid-template-rows: 60px 1fr; }
+      .app-shell { height: 100vh; min-height: 0; display: grid; grid-template-rows: 60px minmax(0, 1fr); overflow: hidden; }
       body:has(.ui-large) { min-width: 0; }
       .ui-mode-switch {
         display: inline-flex; align-items: center; gap: 4px; padding: 4px;
@@ -244,7 +244,7 @@
       .top-actions > span:first-child { font-weight: 600; color: var(--text); font-size: 13px; }
 
       /* Layout */
-      .layout { display: grid; grid-template-columns: 248px 1fr; min-height: 0; }
+      .layout { display: grid; grid-template-columns: 248px 1fr; min-height: 0; overflow: hidden; }
 
       /* Sidebar */
       .sidebar {
@@ -1523,21 +1523,17 @@
       }
       .requisition-page-actions { display:flex; align-items:center; justify-content:flex-end; gap:6px; }
       .warehouse-wayfinding { display:flex; align-items:stretch; gap:8px; flex-wrap:wrap; }
-      .warehouse-floor-card { min-width:130px; padding:7px 10px; border:1px solid #b8cae2; border-radius:8px; background:#f7fbff; color:#163b66; text-align:left; }
-      button.warehouse-floor-card { cursor:pointer; }
-      .warehouse-floor-card.active { border-color:var(--primary); background:#eaf4ff; box-shadow:inset 3px 0 0 var(--primary); }
-      .warehouse-floor-card.future { border-style:dashed; background:#fafafa; color:var(--muted); }
-      .warehouse-floor-card strong,.warehouse-floor-card small { display:block; }
-      .warehouse-floor-card small { margin-top:2px; font-size:11px; font-weight:500; }
-      .warehouse-shell { min-height: calc(100vh - 116px); }
       .warehouse-shell-head {
         display: flex; align-items: center; justify-content: space-between; gap: 12px;
         margin-bottom: 8px; padding: 8px 12px; border: 1px solid var(--line);
         border-radius: 10px; background: var(--panel);
       }
+      .main.warehouse-main { display:grid; grid-template-rows:auto minmax(0,1fr); gap:12px; overflow:hidden; }
+      .warehouse-main .workbench-nav { margin:0; }
+      .warehouse-shell { height:auto; min-height:0; overflow:hidden; }
       .warehouse-shell-frame {
-        display: block; width: 100%; height: calc(100vh - 174px); min-height: 620px;
-        border: 1px solid var(--line); border-radius: 10px; background: var(--panel);
+        display:block; width:100%; height:100%; min-height:0;
+        border:1px solid var(--line); border-radius:10px; background:var(--panel);
       }
       .production-table th,
       .production-table td { padding:6px 8px; line-height:1.3; vertical-align:middle; }
@@ -1635,7 +1631,7 @@
       @media(max-width:900px) {
         .workbench-nav { align-items:flex-start; flex-direction:column; }
         .workbench-nav-primary .workbench-nav-title { text-align:left; }
-        .warehouse-shell-frame { height: calc(100vh - 188px); min-height: 520px; }
+        .warehouse-shell-frame { min-height: 0; }
         .production-location-picker { grid-template-columns: 1fr; }
         .audit-filter-grid, .audit-detail-grid { grid-template-columns: 1fr; }
       }
@@ -1680,7 +1676,7 @@
               <span v-if="item.count !== undefined" class="status">{{ item.count }}</span>
             </button>
           </aside>
-          <main class="main">
+          <main :class="['main', {'warehouse-main': activePage === 'warehouse'}]">
             <div v-if="loading" class="loading-bar"></div>
 
             <section v-if="currentNavigationGroup" :class="['workbench-nav',{'workbench-nav-primary':currentNavigationGroup.key==='workbench'}]" :aria-label="`${currentNavigationGroup.label}工作台`">
@@ -1693,19 +1689,11 @@
             </section>
 
             <section v-if="warehouseFrameUrl" v-show="activePage === 'warehouse'" class="warehouse-shell">
-              <div class="warehouse-shell-head">
-                <div><strong>仓库地图与库存</strong><span class="muted" style="margin-left:10px">默认先看真实三楼地图；切换其它模块不会丢失当前仓库页面。</span></div>
-                <div class="warehouse-wayfinding" aria-label="厂房楼层导视">
-                  <button class="warehouse-floor-card active" type="button" @click="openWarehouseMap"><strong>三楼</strong><small>成品与半成品 · 已接入</small></button>
-                  <div class="warehouse-floor-card future" aria-label="一楼台账未建立"><strong>一楼</strong><small>台账未建立 / 建设中</small></div>
-                </div>
-                <button class="btn small" type="button" @click="refreshWarehouseFrame">刷新仓库页面</button>
-              </div>
               <iframe
                 :key="warehouseFrameRevision"
                 class="warehouse-shell-frame"
                 :src="warehouseFrameUrl"
-                title="仓库库存管理"
+                title="天明智慧仓储"
               ></iframe>
             </section>
 
@@ -6398,7 +6386,7 @@
           return {
             user: null, loading: false, loginError: "", activePage: "dashboard", uiModeSaving: false, authGeneration: 0,
             pageCacheUpdatedAt: {},
-            warehouseFrameUrl: "", warehouseFrameRevision: 0,
+            warehouseFrameUrl: "", warehouseFrameRevision: 0, warehouseTwinFloor: "3F",
             loginForm: { username: localStorage.getItem("erp_username") || "", password: "", remember_me: true },
             overview: { cards: [], todos: [], summary: {} }, overviewError: "", overviewLoading: false,
             kpi: {}, customers: [], customerOptions: [], orderCustomerOptions: [], products: [], materials: [], orders: [],
@@ -10190,11 +10178,16 @@
             this.showToast("当前账号没有访问该工作台的权限", true);
           },
           async openWarehouseMap() {
+            return this.openWarehouseFloor("3F");
+          },
+          async openWarehouseFloor(floorCode) {
             if (!this.pageAllowed("warehouse")) {
               this.showToast("当前账号没有访问仓库地图的权限", true);
               return;
             }
-            this.ensureWarehouseFrame("/warehouse.html?embedded=1&tab=locations&location_view=floor3");
+            const normalized = String(floorCode || "3F").toUpperCase() === "1F" ? "1F" : "3F";
+            this.warehouseTwinFloor = normalized;
+            this.ensureWarehouseFrame(`/warehouse.html?embedded=1&floor=${normalized}&view=25d`);
             this.activePage = "warehouse";
             await this.loadPage("warehouse");
           },
@@ -10286,8 +10279,16 @@
             return this.loadPage(this.activePage, { force:true });
           },
           ensureWarehouseFrame(target = "") {
-            if (target) this.warehouseFrameUrl = target;
-            else if (!this.warehouseFrameUrl) this.warehouseFrameUrl = "/warehouse.html?embedded=1&tab=locations&location_view=floor3";
+            if (target) {
+              this.warehouseFrameUrl = target;
+              try {
+                const floor = new URL(target, window.location.origin).searchParams.get("floor");
+                if (floor === "1F" || floor === "3F") this.warehouseTwinFloor = floor;
+              } catch (_) {}
+            } else if (!this.warehouseFrameUrl) {
+              this.warehouseFrameUrl = "/warehouse.html?embedded=1&floor=3F&view=25d";
+              this.warehouseTwinFloor = "3F";
+            }
           },
           refreshWarehouseFrame() {
             this.ensureWarehouseFrame();

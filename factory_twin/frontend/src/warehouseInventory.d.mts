@@ -1,0 +1,87 @@
+export interface InventoryProjectionItem {
+  lot_id: number;
+  lot_number?: string;
+  inventory_code?: string;
+  product_name?: string;
+  customer_name?: string;
+  quantity?: number;
+  available_quantity?: number;
+  reserved_quantity?: number;
+  unit?: string;
+  age_days?: number | null;
+}
+
+export interface InventoryProjectionLocation {
+  location_id?: number;
+  location_code: string;
+  location_name: string;
+  floor_code: string;
+  area_code: string | null;
+  occupancy_status?: "occupied" | "empty";
+  position_status?: string;
+  map_position?: {
+    left_pct: number;
+    top_pct: number;
+    width_pct: number;
+    height_pct: number;
+    version?: number;
+    z_index?: number;
+  } | null;
+  pallet: { pallet_code: string; items: InventoryProjectionItem[] } | null;
+  loose_items: InventoryProjectionItem[];
+}
+
+export interface AreaInventoryEntry extends InventoryProjectionItem {
+  location_code: string;
+  location_name: string;
+  pallet_code: string | null;
+}
+
+export function expandAreaInventory(
+  locations: InventoryProjectionLocation[],
+  floorCode: string,
+  areaCode: string | null
+): AreaInventoryEntry[];
+
+export function filterAreaInventory(
+  items: AreaInventoryEntry[],
+  keyword: string
+): AreaInventoryEntry[];
+
+export function inventoryAgeLabel(ageDays?: number | null): string;
+export function inventoryAgeTone(ageDays?: number | null): "unknown" | "critical" | "warning" | "normal";
+export function inventoryUnitLabel(unit?: string | null): string;
+
+export function searchHighlightAreaCodes(
+  items: Array<{ floor_code?: string; area_code?: string | null; position_status?: string }>,
+  floorCode: string
+): string[];
+
+export function buildMappedLocationPallets(
+  features: Array<{ id: string; feature_kind: string; feature_code: string; erp_area_code?: string | null; points: number[][] }>,
+  locations: InventoryProjectionLocation[],
+  floorCode: string,
+  layoutId?: string
+): import("./types").Pallet[];
+
+export function findPalletColumnConflicts(
+  pallets: import("./types").Pallet[],
+  structures?: import("./types").Structure[],
+  features?: import("./types").LayoutFeature[],
+  clearanceMm?: number
+): Array<{ pallet_id: string; column_id: string }>;
+
+export function locationLayoutGeometry(
+  zone: { points: number[][] },
+  location: InventoryProjectionLocation,
+  xMm: number,
+  yMm: number
+): {
+  location_id: number;
+  expected_version: number;
+  left_pct: number;
+  top_pct: number;
+  width_pct: number;
+  height_pct: number;
+  z_index: number;
+} | null;

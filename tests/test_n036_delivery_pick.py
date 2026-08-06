@@ -43,6 +43,7 @@ def pick_app(tmp_path: Path):
     from app.api.auth import router as auth_router
     from app.api.deliveries import pick_router, router as deliveries_router
     from app.api.deps import get_db
+    from app.api.warehouse import router as warehouse_router
     from app.core.database import create_sqlite_engine
     from app.core.security import hash_password
     from app.models import Base
@@ -176,6 +177,7 @@ def pick_app(tmp_path: Path):
     app.include_router(auth_router, prefix="/api/auth")
     app.include_router(deliveries_router, prefix="/api/deliveries")
     app.include_router(pick_router, prefix="/api/delivery-picks")
+    app.include_router(warehouse_router, prefix="/api/warehouse")
 
     def override_db() -> Generator[Session, None, None]:
         with factory() as db:
@@ -369,6 +371,42 @@ def test_pick_detail_query_growth_is_bounded_for_rows_without_inventory_sources(
         large, large_selects = counted_detail()
         assert len(large["items"]) == 20
         assert large_selects <= small_selects + 5
+
+
+def test_phase2c9_map_locator_exposes_assigned_delivery_pick_route(pick_app) -> None:
+    app, _, ids, _ = pick_app
+    with TestClient(app) as client:
+        _login(client, "admin")
+        task = _create_task(client, ids["delivery"])
+        located = client.get(
+            "/api/warehouse/twin-operations/locate",
+            params={"keyword": "TM-20260718-001"},
+        )
+        assert located.status_code == 200, located.text
+        assert located.json()["pick_tasks"] == [
+            {
+                "task_id": task["id"],
+                "delivery_number": "TM-20260718-001",
+                "customer_name": "N036测试客户",
+                "status": "pushed",
+                "location_plan_complete": False,
+                "location_group_count": len(task["location_groups"]),
+            }
+        ]
+        assert located.json()["resources"] == []
+
+        _login(client, "delivery_picker")
+        assigned = client.get(
+            "/api/warehouse/twin-operations/locate",
+            params={"keyword": "TM-20260718-001"},
+        )
+        assert assigned.status_code == 200, assigned.text
+        assert assigned.json()["pick_tasks"][0]["task_id"] == task["id"]
+        overview = client.get("/api/warehouse/twin-dashboard/overview?days=30")
+        assert overview.status_code == 200, overview.text
+        assert overview.json()["scope"]["customer_restricted"] is True
+        layout = client.get("/api/warehouse/twin-layout/floors/3F")
+        assert layout.status_code == 200, layout.text
 
 
 def test_p1_21c_picker_only_sees_assigned_task_and_dispatch_can_reassign(pick_app) -> None:

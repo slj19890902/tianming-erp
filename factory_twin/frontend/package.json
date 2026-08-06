@@ -1,0 +1,25 @@
+{
+  "name": "factory-twin-editor-mvp",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5174",
+    "test": "node --test tests/featureCodes.test.mjs tests/factoryVisuals.test.mjs tests/layoutGeometry.test.mjs tests/operationalView.test.mjs tests/palletSnap.test.mjs tests/rackFront.test.mjs tests/referenceOverlay.test.mjs tests/warehouseInventory.test.mjs",
+    "build": "tsc --noEmit -p tsconfig.app.json && vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 4174"
+  },
+  "dependencies": {
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "three": "^0.179.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.10",
+    "@types/react-dom": "^19.1.7",
+    "@types/three": "^0.179.0",
+    "@vitejs/plugin-react": "4.7.0",
+    "typescript": "5.6.3",
+    "vite": "6.4.3"
+  }
+}

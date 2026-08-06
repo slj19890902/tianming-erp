@@ -3902,20 +3902,31 @@
                   <div v-else-if="productMaterialContext.error" class="notice error">{{ productMaterialContext.error }}</div>
                   <div v-else-if="!productMaterialContext.candidates.length" class="muted">暂无适合这款常用箱的候选材质。</div>
                   <div v-else class="product-material-context-list">
-                    <div v-for="candidate in productMaterialContext.candidates" :key="candidate.candidate_id || candidate.id" class="product-material-candidate-row">
+                    <div v-for="candidate in productMaterialContext.candidates" :key="candidate.candidate_key || candidate.candidate_id || candidate.material_id" class="product-material-candidate-row">
                       <div>
                         <div class="product-material-context-main">
                           {{ candidate.material_code || candidate.actual_material_code || "-" }} / {{ candidate.supplier_name || "未设置供应商" }}
                           <span v-if="candidate.recommended" class="status green" style="margin-left:4px">推荐</span>
+                          <span v-if="(candidate.candidate_source_types || []).includes('formal_requisition_history')" class="status blue" style="margin-left:4px">报料使用过</span>
+                          <span v-if="candidate.selectable === false" class="status orange" style="margin-left:4px">仅追溯</span>
                         </div>
                         <div class="product-material-context-meta">
                           {{ candidate.layer_count || "-" }}层 / {{ candidate.flute_type || productForm.flute_type || "-" }}楞
                           · 正式报料 {{ Number(candidate.history_count || candidate.effective_use_count || 0) }} 次
+                          <template v-if="Number(candidate.selection_history_count || 0) > 0"> · 报料选材 {{ Number(candidate.selection_history_count) }} 次</template>
                           <template v-if="candidate.last_used_at"> · 最近 {{ formatBeijingDate(candidate.last_used_at) }}</template>
+                        </div>
+                        <div class="product-material-context-meta">克重：{{ candidate.basis_weight_description || "未维护" }}<template v-if="candidate.total_basis_weight_gsm != null">（合计 {{ Number(candidate.total_basis_weight_gsm) }}g/㎡）</template></div>
+                        <div v-if="canViewCosts && candidate.effective_price != null" class="product-material-context-meta sensitive-price">
+                          当前有效价，不是历史冻结价：￥{{ squarePrice(candidate.effective_price) }}/㎡
+                          <template v-if="candidate.price_difference_to_lowest != null">
+                            · {{ Number(candidate.price_difference_to_lowest) > 0 ? `比最低 +￥${squarePrice(candidate.price_difference_to_lowest)}/㎡` : "当前最低" }}
+                          </template>
+                          <template v-if="candidate.quote_date"> · 报价日期 {{ candidate.quote_date }}</template>
                         </div>
                         <div v-if="candidate.recommendation_reason" class="product-material-context-meta">{{ candidate.recommendation_reason }}</div>
                       </div>
-                      <button type="button" class="btn small" @click="applyProductMaterialCandidate(candidate)">采用</button>
+                      <button type="button" class="btn small" :disabled="candidate.selectable === false" @click="applyProductMaterialCandidate(candidate)">{{ candidate.selectable === false ? "仅追溯" : "采用" }}</button>
                     </div>
                   </div>
                 </section>
@@ -3923,23 +3934,34 @@
                 <section class="product-material-context-panel">
                   <div class="product-material-context-head">
                     <div>
-                      <strong>这款常用箱历史报料材质</strong>
-                      <div class="muted" style="font-size:11px;margin-top:2px">只显示该常用箱关联的正式/历史报料事实，不混入同客户其他产品。</div>
+                      <strong>这款常用箱的报料材质轨迹</strong>
+                      <div class="muted" style="font-size:11px;margin-top:2px">每笔正式报料独立保留；尚未匹配正式报料单的人工选材单独标识，不混入同客户其他产品。</div>
                     </div>
                     <button v-if="productForm.id" type="button" class="btn small" :disabled="productMaterialContext.loading" @click="loadProductMaterialContext(productForm.id)">{{ productMaterialContext.loading ? '读取中…' : '刷新' }}</button>
                   </div>
                   <div v-if="!productForm.id" class="muted">新增常用箱尚无历史报料记录。</div>
                   <div v-else-if="productMaterialContext.error" class="notice error">{{ productMaterialContext.error }}</div>
-                  <div v-else-if="!productMaterialContext.requisition_history.length" class="muted">暂无历史报料记录。</div>
+                  <div v-else-if="!productMaterialContext.material_history.length" class="muted">暂无报料材质轨迹。</div>
                   <div v-else class="product-material-context-list">
-                    <div v-for="history in productMaterialContext.requisition_history" :key="`${history.source_type || 'history'}-${history.document_id || history.id}-${history.order_item_id || ''}`" class="product-material-history-row">
+                    <div v-for="history in productMaterialContext.material_history" :key="`${history.source_type || 'history'}-${history.document_id || history.id}-${history.document_item_id || history.order_item_id || ''}`" class="product-material-history-row">
                       <div class="product-material-context-meta">{{ history.document_date ? formatBeijingDate(history.document_date) : (history.created_at ? formatBeijingDate(history.created_at) : "-") }}</div>
                       <div>
-                        <div class="product-material-context-main">{{ history.material_code || history.material_snapshot || "历史材质待确认" }} / {{ history.flute_type || "-" }}楞</div>
+                        <div class="product-material-context-main">
+                          {{ history.material_code || history.material_snapshot || "历史材质待确认" }} / {{ history.layer_count || "-" }}层 / {{ history.flute_type || "-" }}楞
+                          <span :class="['status', history.is_formal_requisition === false ? 'orange' : 'green']" style="margin-left:4px">{{ history.is_formal_requisition === false ? "选材轨迹" : "正式报料" }}</span>
+                        </div>
                         <div class="product-material-context-meta">{{ history.supplier_name || "未设置供应商" }} · {{ history.document_no || history.source_reference || "无单号" }}</div>
+                        <div class="product-material-context-meta">克重：{{ history.basis_weight_description || "未冻结且主档未维护" }}<template v-if="history.total_basis_weight_gsm != null">（合计 {{ Number(history.total_basis_weight_gsm) }}g/㎡）</template></div>
+                        <div v-if="canViewCosts && history.current_effective_price != null" class="product-material-context-meta sensitive-price">
+                          当前材质档案价，非报料时冻结价：￥{{ squarePrice(history.current_effective_price) }}/㎡
+                          <template v-if="history.current_price_difference_to_lowest != null">
+                            · {{ Number(history.current_price_difference_to_lowest) > 0 ? `比最低 +￥${squarePrice(history.current_price_difference_to_lowest)}/㎡` : "当前最低" }}
+                          </template>
+                          <template v-if="history.current_quote_date"> · 报价日期 {{ history.current_quote_date }}</template>
+                        </div>
                       </div>
                       <div>
-                        <div class="product-material-history-qty">{{ Number(history.requisition_qty || history.quantity || 0) }} 张</div>
+                        <div class="product-material-history-qty">{{ history.requisition_qty != null || history.quantity != null ? `${Number(history.requisition_qty ?? history.quantity)} 张` : "尚无正式张数" }}</div>
                         <div class="product-material-context-meta">{{ history.document_status || history.status || history.source_label || "历史记录" }}</div>
                       </div>
                     </div>
@@ -6408,7 +6430,7 @@
             productionCompletionAttempts: {}, productionDirectAttempts: {}, productionTransferAttempts: {},
             productFormSnapshot: null, productBomSnapshot: null,
             productEditReturnContext: null,
-            productMaterialContext: { product_id:null, candidates:[], requisition_history:[], manual_selection_history:[], loading:false, error:"" },
+            productMaterialContext: { product_id:null, candidates:[], requisition_history:[], material_history:[], manual_selection_history:[], loading:false, error:"" },
             bomEditor: blankBomEditor(),
             orderProductOptions: {},
             orderCommonBoxPicker: {
@@ -7429,6 +7451,10 @@
             return icons[key] || '';
           },
           money(value) { return Number(value || 0).toFixed(2); },
+          squarePrice(value) {
+            if (value === null || value === undefined || value === "") return "-";
+            return Number(value).toFixed(4);
+          },
           formatBeijingDate(value) { return value ? TmTime.formatBeijingDate(value) : "-"; },
           formatDateTime(value) { return value ? TmTime.formatBeijingDateTime(value) : "-"; },
           fileSize(value) { return `${(Number(value || 0) / 1024 / 1024).toFixed(2)} MB`; },
@@ -15480,7 +15506,7 @@
                 }
               );
               const openedId = Number(this.productForm.id || 0) || null;
-              this.productMaterialContext = { product_id:openedId, candidates:[], requisition_history:[], manual_selection_history:[], loading:false, error:"" };
+              this.productMaterialContext = { product_id:openedId, candidates:[], requisition_history:[], material_history:[], manual_selection_history:[], loading:false, error:"" };
               this.drawingFile = null;
               this.resetBomEditor();
               // 拍快照用于检测未保存更改
@@ -15557,6 +15583,7 @@
                 product_id: requestedId,
                 candidates: data.candidates || data.candidate_summary || [],
                 requisition_history: data.requisition_history || data.history || [],
+                material_history: data.material_history || data.requisition_history || data.history || [],
                 manual_selection_history: data.manual_selection_history || [],
                 loading: false,
                 error: "",
@@ -15572,6 +15599,7 @@
                 product_id: requestedId,
                 candidates: [],
                 requisition_history: [],
+                material_history: [],
                 manual_selection_history: [],
                 loading: false,
                 error: this.errorMessage(error) || "常用箱材质候选与历史加载失败",

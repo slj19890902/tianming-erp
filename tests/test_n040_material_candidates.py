@@ -803,20 +803,265 @@ def test_product_material_context_uses_only_this_product_and_prefers_official_fa
         assert len(payload["manual_selection_history"]) == 1
 
 
+def test_product_material_context_promotes_each_formal_material_and_compares_current_cost(
+    n040_app: tuple[FastAPI, dict[str, int], object],
+) -> None:
+    app, ids, factory = n040_app
+    with factory() as db:
+        from app.models.material import Material
+        from app.models.order import OrderItem
+        from app.models.product import Product
+        from app.models.supplier_requisition_order import (
+            SupplierRequisitionOrder,
+            SupplierRequisitionOrderItem,
+        )
+
+        material_a = db.get(Material, ids["supplier_a_material"])
+        material_b = db.get(Material, ids["supplier_b_material"])
+        product = db.get(Product, ids["product"])
+        first_item = db.get(OrderItem, ids["first_item"])
+        second_item = db.get(OrderItem, ids["second_item"])
+        assert all((material_a, material_b, product, first_item, second_item))
+        material_a.basis_weight_description = "190g/135g/55g"
+        material_a.paper_composition = "A kraft / A flute / A liner"
+        material_a.price_unit = "元/㎡"
+        material_a.quote_date = date(2026, 8, 1)
+        material_b.basis_weight_description = "170g/120g/140g"
+        material_b.paper_composition = "B liner / B flute / B liner"
+        material_b.price_unit = "元/㎡"
+        material_b.quote_date = date(2026, 8, 2)
+        # The same order item was formally requisitioned twice with different
+        # suppliers.  Its mutable order snapshot now reflects the later B
+        # choice, so the earlier A occurrence must fall back to A's material
+        # master instead of being mislabeled with B's weight.
+        product.material_id = material_b.id
+        first_item.material_id = material_b.id
+        first_item.snapshot_material = material_b.code
+        first_item.snapshot_supplier_name = material_b.supplier_name
+        first_item.snapshot_weight = material_b.basis_weight_description
+
+        first_order = SupplierRequisitionOrder(
+            order_number="SRO-N040-FIRST-SUPPLIER",
+            supplier_name=material_a.supplier_name,
+            material_id=material_a.id,
+            layer_count=3,
+            flute_type="B",
+            total_quantity=30,
+            requisition_qty=30,
+            status="confirmed",
+            created_at=datetime(2026, 8, 4, 8, 0),
+        )
+        second_order = SupplierRequisitionOrder(
+            order_number="SRO-N040-SECOND-SUPPLIER",
+            supplier_name=material_b.supplier_name,
+            material_id=material_b.id,
+            layer_count=3,
+            flute_type="B",
+            total_quantity=40,
+            requisition_qty=40,
+            status="confirmed",
+            created_at=datetime(2026, 8, 6, 8, 0),
+        )
+        db.add_all([first_order, second_order])
+        db.flush()
+        db.add_all(
+            [
+                SupplierRequisitionOrderItem(
+                    supplier_order_id=first_order.id,
+                    order_item_id=first_item.id,
+                    product_id=product.id,
+                    material_id=material_a.id,
+                    material_code_snapshot=material_a.code,
+                    supplier_name_snapshot=material_a.supplier_name,
+                    layer_count_snapshot=3,
+                    flute_type_snapshot="B",
+                    order_number=first_item.item_order_number,
+                    quantity=30,
+                    requisition_qty=30,
+                ),
+                SupplierRequisitionOrderItem(
+                    supplier_order_id=second_order.id,
+                    order_item_id=first_item.id,
+                    product_id=product.id,
+                    material_id=material_b.id,
+                    material_code_snapshot=material_b.code,
+                    supplier_name_snapshot=material_b.supplier_name,
+                    layer_count_snapshot=3,
+                    flute_type_snapshot="B",
+                    order_number=first_item.item_order_number,
+                    quantity=40,
+                    requisition_qty=40,
+                ),
+            ]
+        )
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client)
+        response = client.get(
+            f"/api/requisition/products/{ids['product']}/material-context"
+        )
+        assert response.status_code == 200, response.text
+        payload = response.json()
+
+    effective_history = [
+        row for row in payload["requisition_history"] if row["is_effective"]
+    ]
+    assert [row["document_no"] for row in effective_history] == [
+        "SRO-N040-SECOND-SUPPLIER",
+        "SRO-N040-FIRST-SUPPLIER",
+    ]
+    assert len({row["document_item_id"] for row in effective_history}) == 2
+    assert {row["material_code"] for row in effective_history} == {
+        "N040-A-3B",
+        "N040-B-3B",
+    }
+    assert all(row["basis_weight_description"] for row in effective_history)
+    history_by_material = {row["material_code"]: row for row in effective_history}
+    assert history_by_material["N040-A-3B"]["weight_source"] == "current_material_master"
+    assert history_by_material["N040-B-3B"]["weight_source"] == "order_snapshot"
+    assert all(row["current_effective_price"] is not None for row in effective_history)
+    assert all(row["current_price_scope"] == "current_reference" for row in effective_history)
+
+    by_material = {row["material_id"]: row for row in payload["candidates"]}
+    candidate_a = by_material[ids["supplier_a_material"]]
+    candidate_b = by_material[ids["supplier_b_material"]]
+    assert "formal_requisition_history" in candidate_a["candidate_source_types"]
+    assert "formal_requisition_history" in candidate_b["candidate_source_types"]
+    assert candidate_a["history_count"] == 1
+    assert candidate_b["history_count"] == 1
+    assert candidate_a["basis_weight_description"] == "190g/135g/55g"
+    assert candidate_b["basis_weight_description"] == "170g/120g/140g"
+    assert candidate_a["total_basis_weight_gsm"] == 380
+    assert candidate_b["total_basis_weight_gsm"] == 430
+    assert candidate_a["effective_price"] == 1.2
+    assert candidate_b["effective_price"] == 1.3
+    assert candidate_a["price_difference_to_lowest"] == 0
+    assert candidate_b["price_difference_to_lowest"] == pytest.approx(0.1)
+    assert candidate_a["price_scope"] == "current_reference"
+    assert candidate_b["price_scope"] == "current_reference"
+
+
+def test_product_material_context_keeps_unmatched_requisition_selection_in_material_trajectory(
+    n040_app: tuple[FastAPI, dict[str, int], object],
+) -> None:
+    app, ids, factory = n040_app
+    with factory() as db:
+        from app.models.customer_material import CustomerMaterialSelectionHistory
+        from app.models.material import Material
+        from app.models.order import OrderItem
+        from app.models.product import Product
+        from app.models.supplier_requisition_order import (
+            SupplierRequisitionOrder,
+            SupplierRequisitionOrderItem,
+        )
+
+        material_a = db.get(Material, ids["supplier_a_material"])
+        material_b = db.get(Material, ids["supplier_b_material"])
+        product = db.get(Product, ids["product"])
+        item = db.get(OrderItem, ids["first_item"])
+        assert all((material_a, material_b, product, item))
+        material_a.basis_weight_description = "190g/135g/55g"
+        material_a.price_unit = "元/㎡"
+        material_b.basis_weight_description = "235g/155g/185g"
+        material_b.price_unit = "元/㎡"
+        product.material_id = material_b.id
+        item.material_id = material_b.id
+        item.snapshot_material = material_b.code
+        item.snapshot_supplier_name = material_b.supplier_name
+        item.snapshot_weight = material_b.basis_weight_description
+
+        formal = SupplierRequisitionOrder(
+            order_number="SRO-N040-OLD-FORMAL",
+            supplier_name=material_a.supplier_name,
+            material_id=material_a.id,
+            layer_count=3,
+            flute_type="B",
+            total_quantity=50,
+            requisition_qty=50,
+            status="confirmed",
+            created_at=datetime(2026, 8, 4, 8, 0),
+        )
+        db.add(formal)
+        db.flush()
+        db.add_all(
+            [
+                SupplierRequisitionOrderItem(
+                    supplier_order_id=formal.id,
+                    order_item_id=item.id,
+                    product_id=product.id,
+                    material_id=material_a.id,
+                    material_code_snapshot=material_a.code,
+                    supplier_name_snapshot=material_a.supplier_name,
+                    layer_count_snapshot=3,
+                    flute_type_snapshot="B",
+                    order_number=item.item_order_number,
+                    quantity=50,
+                    requisition_qty=50,
+                ),
+                CustomerMaterialSelectionHistory(
+                    customer_id=ids["customer"],
+                    order_item_id=item.id,
+                    product_id=product.id,
+                    original_material_code_snapshot="9CCC9",
+                    normalized_original_material_code_snapshot="9CCC9",
+                    selected_material_id=material_b.id,
+                    selected_material_code_snapshot=material_b.code,
+                    selected_supplier_name_snapshot=material_b.supplier_name,
+                    layer_count_snapshot=3,
+                    flute_type_snapshot="B",
+                    source_type="manual",
+                    source_reference="second supplier selection",
+                    selection_reason="second supplier used for this common box",
+                    sync_product=True,
+                    selected_at=datetime(2026, 8, 6, 9, 0),
+                ),
+            ]
+        )
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client)
+        response = client.get(
+            f"/api/requisition/products/{ids['product']}/material-context"
+        )
+        assert response.status_code == 200, response.text
+        payload = response.json()
+
+    assert [row["material_code"] for row in payload["requisition_history"]] == [
+        "N040-A-3B"
+    ]
+    trajectory = payload["material_history"]
+    assert [row["material_code"] for row in trajectory] == [
+        "N040-B-3B",
+        "N040-A-3B",
+    ]
+    selection = trajectory[0]
+    assert selection["source_type"] == "material_selection"
+    assert selection["is_formal_requisition"] is False
+    assert selection["document_status"] == "报料选材记录（未匹配正式报料单）"
+    assert selection["requisition_qty"] is None
+    assert selection["basis_weight_description"] == "235g/155g/185g"
+    assert selection["total_basis_weight_gsm"] == 575
+    assert selection["current_effective_price"] == 1.3
+
+    candidates = {row["material_id"]: row for row in payload["candidates"]}
+    assert set(candidates) >= {
+        ids["supplier_a_material"],
+        ids["supplier_b_material"],
+    }
+    assert candidates[ids["supplier_a_material"]]["history_count"] == 1
+    assert candidates[ids["supplier_b_material"]]["selection_history_count"] == 1
+    assert "requisition_material_selection" in candidates[
+        ids["supplier_b_material"]
+    ]["candidate_source_types"]
+
+
 def test_product_material_context_enforces_customer_scope_and_hides_cost_fields(
     n040_app: tuple[FastAPI, dict[str, int], object],
 ) -> None:
     app, ids, _factory = n040_app
     with TestClient(app) as client:
-        _login(client)
-        _create_candidate(
-            client,
-            _candidate_payload(
-                ids["customer"],
-                ids["supplier_a_material"],
-                supplier_name="Supplier A",
-            ),
-        )
         _login_scoped(client)
 
         allowed = client.get(
@@ -825,6 +1070,9 @@ def test_product_material_context_enforces_customer_scope_and_hides_cost_fields(
         assert allowed.status_code == 200, allowed.text
         assert "reference_price" not in allowed.text
         assert "price_unit" not in allowed.text
+        assert "effective_price" not in allowed.text
+        assert "price_difference_to_lowest" not in allowed.text
+        assert "current_effective_price" not in allowed.text
 
         denied = client.get(
             f"/api/requisition/products/{ids['other_product']}/material-context"

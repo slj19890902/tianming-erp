@@ -153,6 +153,7 @@ from app.services.customer_material_candidates import (
     normalize_material_candidate_key,
     normalize_supplier_candidate_key,
 )
+from app.services import material_pricing
 from app.services.requisition_quantities import (
     CUTTING_MODE_BOX_STYLES,
     CUTTING_MODE_FACTORS,
@@ -7234,6 +7235,63 @@ def _is_confirmed_supplier_order(order: SupplierRequisitionOrder) -> bool:
     return str(order.status or "").strip().lower() == "confirmed"
 
 
+def _basis_weight_total_gsm(description: str | None) -> float | None:
+    text_value = str(description or "").strip()
+    if not text_value:
+        return None
+    values = re.findall(r"(\d+(?:\.\d+)?)\s*(?:g|克)", text_value, flags=re.I)
+    if not values and re.fullmatch(r"[\d.\s/|｜,，]+", text_value):
+        values = re.findall(r"\d+(?:\.\d+)?", text_value)
+    if not values:
+        return None
+    return float(sum(Decimal(value) for value in values))
+
+
+def _current_material_comparison(
+    db: Session,
+    *,
+    material: Material | None,
+    flute_type: str | None,
+    include_cost: bool,
+) -> dict:
+    """Return current master-data facts without pretending they are requisition snapshots."""
+    if material is None:
+        return {}
+    result = {
+        "basis_weight_description": material.basis_weight_description,
+        "total_basis_weight_gsm": _basis_weight_total_gsm(
+            material.basis_weight_description
+        ),
+        "paper_composition": material.paper_composition,
+        "material_is_active": material.is_active,
+    }
+    if not include_cost:
+        return result
+    base_price = (
+        material.quote_price
+        if material.quote_price is not None
+        else material.rule_base_price
+    )
+    effective = material_pricing.get_effective_material_price(
+        db,
+        material=material,
+        base_price=base_price,
+        flute_type=flute_type,
+    )
+    result.update(
+        {
+            "reference_price": effective["base_price"],
+            "flute_delta": effective["flute_delta"],
+            "effective_price": effective["effective_price"],
+            "price_unit": material.price_unit,
+            "quote_date": material.quote_date,
+            "price_source": material.price_source,
+            "price_scope": "current_reference",
+        }
+    )
+    return result
+
+
 @router.get("/products/{product_id}/material-context")
 def product_material_context(
     product_id: int,
@@ -7244,6 +7302,7 @@ def product_material_context(
     if product is None:
         raise HTTPException(status_code=404, detail="常用箱不存在")
     require_customer_access(product.customer_id, user, db)
+    can_view_costs = has_permission(user, "cost.view")
 
     current_material = (
         db.get(Material, product.material_id)
@@ -7313,6 +7372,7 @@ def product_material_context(
                 else "derived_from_order_item"
             ),
             "document_id": supplier_order.id,
+            "document_item_id": supplier_item.id,
             "document_no": supplier_order.order_number,
             "document_date": supplier_order.created_at,
             "document_status": supplier_order.status,
@@ -7334,6 +7394,54 @@ def product_material_context(
             ),
             "requisition_qty": supplier_item.requisition_qty,
         }
+        comparison = _current_material_comparison(
+            db,
+            material=material,
+            flute_type=row["flute_type"],
+            include_cost=can_view_costs,
+        )
+        snapshot_weight = (
+            order_item.snapshot_weight
+            if order_item is not None
+            and order_item.snapshot_weight
+            and order_item.material_id == material_id
+            else None
+        )
+        row.update(
+            {
+                "basis_weight_description": (
+                    snapshot_weight or comparison.get("basis_weight_description")
+                ),
+                "weight_source": (
+                    "order_snapshot"
+                    if snapshot_weight
+                    else (
+                        "current_material_master"
+                        if comparison.get("basis_weight_description")
+                        else None
+                    )
+                ),
+                "paper_composition": comparison.get("paper_composition"),
+                "total_basis_weight_gsm": (
+                    _basis_weight_total_gsm(snapshot_weight)
+                    if snapshot_weight
+                    else comparison.get("total_basis_weight_gsm")
+                ),
+                "material_is_active": comparison.get("material_is_active"),
+            }
+        )
+        if can_view_costs:
+            row.update(
+                {
+                    "current_reference_price": comparison.get("reference_price"),
+                    "current_flute_delta": comparison.get("flute_delta"),
+                    "current_effective_price": comparison.get("effective_price"),
+                    "current_price_unit": comparison.get("price_unit"),
+                    "current_quote_date": comparison.get("quote_date"),
+                    "current_price_source": comparison.get("price_source"),
+                    "current_price_scope": "current_reference",
+                }
+            )
         official_history.append(row)
         if confirmed:
             key = (
@@ -7347,6 +7455,11 @@ def product_material_context(
                     "count": 0,
                     "last_used_at": None,
                     "last_document_no": None,
+                    "material_id": material_id,
+                    "material_code": material_code,
+                    "supplier_name": supplier_name,
+                    "layer_count": row["layer_count"],
+                    "flute_type": row["flute_type"],
                 },
             )
             stat["count"] += 1
@@ -7356,6 +7469,10 @@ def product_material_context(
             ):
                 stat["last_used_at"] = supplier_order.created_at
                 stat["last_document_no"] = supplier_order.order_number
+                stat["material_code"] = material_code
+                stat["supplier_name"] = supplier_name
+                stat["layer_count"] = row["layer_count"]
+                stat["flute_type"] = row["flute_type"]
 
     legacy_rows = db.execute(
         select(RequisitionItem, Requisition, OrderItem)
@@ -7390,26 +7507,100 @@ def product_material_context(
     for requisition_item, requisition, order_item in legacy_rows:
         if requisition_item.order_item_id in official_order_item_ids:
             continue
-        legacy_history.append(
+        row = {
+            "source_type": "legacy_material_requisition",
+            "source_confidence": "legacy_snapshot",
+            "document_id": requisition.id,
+            "document_item_id": requisition_item.id,
+            "document_no": requisition.requisition_number,
+            "document_date": requisition.requisition_date,
+            "document_status": requisition.status,
+            "is_effective": True,
+            "order_item_id": requisition_item.order_item_id,
+            "item_order_number": order_item.item_order_number,
+            "product_id": product.id,
+            "material_id": order_item.material_id,
+            "material_code": requisition_item.material_snapshot,
+            "supplier_name": requisition.supplier_name,
+            "layer_count": order_item.layer_count,
+            "flute_type": order_item.flute_type,
+            "requisition_qty": requisition_item.requisition_qty,
+        }
+        legacy_history.append(row)
+        material = (
+            db.get(Material, order_item.material_id)
+            if order_item.material_id is not None
+            else None
+        )
+        comparison = _current_material_comparison(
+            db,
+            material=material,
+            flute_type=row["flute_type"],
+            include_cost=can_view_costs,
+        )
+        snapshot_weight = order_item.snapshot_weight or None
+        row.update(
             {
-                "source_type": "legacy_material_requisition",
-                "source_confidence": "legacy_snapshot",
-                "document_id": requisition.id,
-                "document_no": requisition.requisition_number,
-                "document_date": requisition.requisition_date,
-                "document_status": requisition.status,
-                "is_effective": True,
-                "order_item_id": requisition_item.order_item_id,
-                "item_order_number": order_item.item_order_number,
-                "product_id": product.id,
-                "material_id": order_item.material_id,
-                "material_code": requisition_item.material_snapshot,
-                "supplier_name": requisition.supplier_name,
-                "layer_count": order_item.layer_count,
-                "flute_type": order_item.flute_type,
-                "requisition_qty": requisition_item.requisition_qty,
+                "basis_weight_description": (
+                    snapshot_weight or comparison.get("basis_weight_description")
+                ),
+                "weight_source": (
+                    "order_snapshot"
+                    if snapshot_weight
+                    else (
+                        "current_material_master"
+                        if comparison.get("basis_weight_description")
+                        else None
+                    )
+                ),
+                "paper_composition": comparison.get("paper_composition"),
+                "total_basis_weight_gsm": (
+                    _basis_weight_total_gsm(snapshot_weight)
+                    if snapshot_weight
+                    else comparison.get("total_basis_weight_gsm")
+                ),
+                "material_is_active": comparison.get("material_is_active"),
             }
         )
+        if can_view_costs:
+            row.update(
+                {
+                    "current_reference_price": comparison.get("reference_price"),
+                    "current_flute_delta": comparison.get("flute_delta"),
+                    "current_effective_price": comparison.get("effective_price"),
+                    "current_price_unit": comparison.get("price_unit"),
+                    "current_quote_date": comparison.get("quote_date"),
+                    "current_price_source": comparison.get("price_source"),
+                    "current_price_scope": "current_reference",
+                }
+            )
+        material_code = requisition_item.material_snapshot
+        supplier_name = requisition.supplier_name
+        key = (
+            order_item.material_id,
+            normalize_material_candidate_key(material_code),
+            normalize_supplier_candidate_key(supplier_name),
+        )
+        used_at = datetime.combine(requisition.requisition_date, datetime.min.time())
+        stat = official_usage.setdefault(
+            key,
+            {
+                "count": 0,
+                "last_used_at": None,
+                "last_document_no": None,
+                "material_id": order_item.material_id,
+                "material_code": material_code,
+                "supplier_name": supplier_name,
+                "layer_count": order_item.layer_count,
+                "flute_type": order_item.flute_type,
+            },
+        )
+        stat["count"] += 1
+        if stat["last_used_at"] is None or used_at > stat["last_used_at"]:
+            stat["last_used_at"] = used_at
+            stat["last_document_no"] = requisition.requisition_number
+            stat["material_code"] = material_code
+            stat["supplier_name"] = supplier_name
 
     history_rows = db.execute(
         select(CustomerMaterialSelectionHistory, OrderItem)
@@ -7470,8 +7661,71 @@ def product_material_context(
         }
         for history, _order_item in history_rows
     ]
+    manual_usage: dict[tuple[int | None, str, str], dict] = {}
+    for row in manual_history:
+        material_id = row.get("material_id")
+        material = db.get(Material, material_id) if material_id is not None else None
+        comparison = _current_material_comparison(
+            db,
+            material=material,
+            flute_type=row.get("flute_type") or product.flute_type,
+            include_cost=can_view_costs,
+        )
+        row.update(
+            {
+                "basis_weight_description": comparison.get(
+                    "basis_weight_description"
+                ),
+                "weight_source": (
+                    "current_material_master"
+                    if comparison.get("basis_weight_description")
+                    else None
+                ),
+                "paper_composition": comparison.get("paper_composition"),
+                "total_basis_weight_gsm": comparison.get(
+                    "total_basis_weight_gsm"
+                ),
+                "material_is_active": comparison.get("material_is_active"),
+            }
+        )
+        if can_view_costs:
+            row.update(
+                {
+                    "current_reference_price": comparison.get("reference_price"),
+                    "current_flute_delta": comparison.get("flute_delta"),
+                    "current_effective_price": comparison.get("effective_price"),
+                    "current_price_unit": comparison.get("price_unit"),
+                    "current_quote_date": comparison.get("quote_date"),
+                    "current_price_source": comparison.get("price_source"),
+                    "current_price_scope": "current_reference",
+                }
+            )
+        key = (
+            material_id,
+            normalize_material_candidate_key(row.get("material_code")),
+            normalize_supplier_candidate_key(row.get("supplier_name")),
+        )
+        stat = manual_usage.setdefault(
+            key,
+            {
+                "count": 0,
+                "last_used_at": None,
+                "material_id": material_id,
+                "material_code": row.get("material_code"),
+                "supplier_name": row.get("supplier_name"),
+                "layer_count": row.get("layer_count"),
+                "flute_type": row.get("flute_type"),
+            },
+        )
+        stat["count"] += 1
+        if (
+            stat["last_used_at"] is None
+            or row["selected_at"] > stat["last_used_at"]
+        ):
+            stat["last_used_at"] = row["selected_at"]
 
     candidates = []
+    candidates_by_material_id: dict[int, dict] = {}
     if normalized_original:
         configured_candidates = db.scalars(
             select(CustomerMaterialCandidate)
@@ -7514,36 +7768,233 @@ def product_material_context(
                 reasons.append(f"最近单号 {stat['last_document_no']}")
             if not reasons:
                 reasons.append("客户原始材质代码匹配")
-            candidates.append(
-                {
-                    "candidate_id": candidate.id,
-                    "material_id": material.id,
-                    "material_code": material.code,
-                    "supplier_name": supplier_name,
-                    "layer_count": material.layer_count,
-                    "flute_type": product.flute_type,
-                    "manual_priority": candidate.manual_priority,
-                    "effective_use_count": stat["count"],
-                    "history_count": stat["count"],
-                    "last_used_at": stat["last_used_at"],
-                    "last_document_no": stat["last_document_no"],
-                    "recommendation_reasons": reasons,
-                    "recommendation_reason": "；".join(reasons),
-                    "source": candidate.source,
-                    "notes": candidate.notes,
-                }
+            comparison = _current_material_comparison(
+                db,
+                material=material,
+                flute_type=product.flute_type,
+                include_cost=can_view_costs,
             )
-        candidates.sort(
-            key=lambda row: (
-                row["manual_priority"],
-                row["effective_use_count"],
-                row["last_used_at"] or datetime.min,
-                -row["candidate_id"],
-            ),
-            reverse=True,
+            row = {
+                "candidate_id": candidate.id,
+                "candidate_key": f"configured-{candidate.id}",
+                "material_id": material.id,
+                "material_code": material.code,
+                "supplier_name": supplier_name,
+                "layer_count": material.layer_count,
+                "flute_type": product.flute_type,
+                "manual_priority": candidate.manual_priority,
+                "effective_use_count": stat["count"],
+                "history_count": stat["count"],
+                "selection_history_count": 0,
+                "last_used_at": stat["last_used_at"],
+                "last_document_no": stat["last_document_no"],
+                "recommendation_reasons": reasons,
+                "recommendation_reason": "；".join(reasons),
+                "source": candidate.source,
+                "notes": candidate.notes,
+                "candidate_source_types": ["configured"],
+                "selectable": True,
+                **comparison,
+            }
+            if stat["count"] > 0:
+                row["candidate_source_types"].append("formal_requisition_history")
+            candidates.append(row)
+            candidates_by_material_id[material.id] = row
+
+    for stat in official_usage.values():
+        material_id = stat.get("material_id")
+        existing = candidates_by_material_id.get(material_id) if material_id else None
+        if existing is not None:
+            if "formal_requisition_history" not in existing["candidate_source_types"]:
+                existing["candidate_source_types"].append("formal_requisition_history")
+            continue
+        material = db.get(Material, material_id) if material_id is not None else None
+        material_code = (
+            material.code if material is not None else stat.get("material_code")
         )
-        for index, row in enumerate(candidates):
-            row["recommended"] = index == 0
+        supplier_name = (
+            material.supplier_name
+            if material is not None and material.supplier_name
+            else stat.get("supplier_name")
+        )
+        comparison = _current_material_comparison(
+            db,
+            material=material,
+            flute_type=product.flute_type or stat.get("flute_type"),
+            include_cost=can_view_costs,
+        )
+        reasons = [f"有效正式报料 {stat['count']} 次"]
+        if stat.get("last_document_no"):
+            reasons.append(f"最近单号 {stat['last_document_no']}")
+        row = {
+            "candidate_id": None,
+            "candidate_key": (
+                f"history-material-{material_id}"
+                if material_id is not None
+                else "history-snapshot-"
+                f"{normalize_material_candidate_key(material_code)}-"
+                f"{normalize_supplier_candidate_key(supplier_name)}"
+            ),
+            "material_id": material_id,
+            "material_code": material_code,
+            "supplier_name": supplier_name,
+            "layer_count": (
+                material.layer_count if material is not None else stat.get("layer_count")
+            ),
+            "flute_type": product.flute_type or stat.get("flute_type"),
+            "manual_priority": 0,
+            "effective_use_count": stat["count"],
+            "history_count": stat["count"],
+            "selection_history_count": 0,
+            "last_used_at": stat["last_used_at"],
+            "last_document_no": stat["last_document_no"],
+            "recommendation_reasons": reasons,
+            "recommendation_reason": "；".join(reasons),
+            "source": "formal_requisition_history",
+            "notes": None,
+            "candidate_source_types": ["formal_requisition_history"],
+            "selectable": bool(material is not None and material.is_active),
+            **comparison,
+        }
+        candidates.append(row)
+        if material_id is not None:
+            candidates_by_material_id[material_id] = row
+
+    if current_material is not None:
+        existing = candidates_by_material_id.get(current_material.id)
+        if existing is not None:
+            if "current_product_material" not in existing["candidate_source_types"]:
+                existing["candidate_source_types"].append("current_product_material")
+        else:
+            comparison = _current_material_comparison(
+                db,
+                material=current_material,
+                flute_type=product.flute_type,
+                include_cost=can_view_costs,
+            )
+            row = {
+                "candidate_id": None,
+                "candidate_key": f"current-material-{current_material.id}",
+                "material_id": current_material.id,
+                "material_code": current_material.code,
+                "supplier_name": current_material.supplier_name,
+                "layer_count": current_material.layer_count,
+                "flute_type": product.flute_type,
+                "manual_priority": 0,
+                "effective_use_count": 0,
+                "history_count": 0,
+                "selection_history_count": 0,
+                "last_used_at": None,
+                "last_document_no": None,
+                "recommendation_reasons": ["常用箱当前材质"],
+                "recommendation_reason": "常用箱当前材质",
+                "source": "current_product_material",
+                "notes": None,
+                "candidate_source_types": ["current_product_material"],
+                "selectable": current_material.is_active,
+                **comparison,
+            }
+            candidates.append(row)
+            candidates_by_material_id[current_material.id] = row
+
+    for stat in manual_usage.values():
+        material_id = stat.get("material_id")
+        existing = candidates_by_material_id.get(material_id) if material_id else None
+        if existing is not None:
+            if "requisition_material_selection" not in existing["candidate_source_types"]:
+                existing["candidate_source_types"].append(
+                    "requisition_material_selection"
+                )
+            existing["selection_history_count"] = stat["count"]
+            if (
+                existing.get("last_used_at") is None
+                or stat["last_used_at"] > existing["last_used_at"]
+            ):
+                existing["last_used_at"] = stat["last_used_at"]
+            reason = f"报料选材记录 {stat['count']} 次"
+            if reason not in existing["recommendation_reasons"]:
+                existing["recommendation_reasons"].append(reason)
+                existing["recommendation_reason"] = "；".join(
+                    existing["recommendation_reasons"]
+                )
+            continue
+        material = db.get(Material, material_id) if material_id is not None else None
+        material_code = (
+            material.code if material is not None else stat.get("material_code")
+        )
+        supplier_name = (
+            material.supplier_name
+            if material is not None and material.supplier_name
+            else stat.get("supplier_name")
+        )
+        comparison = _current_material_comparison(
+            db,
+            material=material,
+            flute_type=product.flute_type or stat.get("flute_type"),
+            include_cost=can_view_costs,
+        )
+        reasons = [f"报料选材记录 {stat['count']} 次"]
+        row = {
+            "candidate_id": None,
+            "candidate_key": (
+                f"selection-material-{material_id}"
+                if material_id is not None
+                else "selection-snapshot-"
+                f"{normalize_material_candidate_key(material_code)}-"
+                f"{normalize_supplier_candidate_key(supplier_name)}"
+            ),
+            "material_id": material_id,
+            "material_code": material_code,
+            "supplier_name": supplier_name,
+            "layer_count": (
+                material.layer_count if material is not None else stat.get("layer_count")
+            ),
+            "flute_type": product.flute_type or stat.get("flute_type"),
+            "manual_priority": 0,
+            "effective_use_count": 0,
+            "history_count": 0,
+            "selection_history_count": stat["count"],
+            "last_used_at": stat["last_used_at"],
+            "last_document_no": None,
+            "recommendation_reasons": reasons,
+            "recommendation_reason": "；".join(reasons),
+            "source": "requisition_material_selection",
+            "notes": None,
+            "candidate_source_types": ["requisition_material_selection"],
+            "selectable": bool(material is not None and material.is_active),
+            **comparison,
+        }
+        candidates.append(row)
+        if material_id is not None:
+            candidates_by_material_id[material_id] = row
+
+    candidates.sort(
+        key=lambda row: (
+            row["manual_priority"],
+            row["effective_use_count"],
+            row["last_used_at"] or datetime.min,
+            "current_product_material" in row["candidate_source_types"],
+            row.get("effective_price") is not None,
+            -(row.get("material_id") or 0),
+        ),
+        reverse=True,
+    )
+    for index, row in enumerate(candidates):
+        row["recommended"] = index == 0 and row["selectable"]
+    if can_view_costs:
+        effective_prices = [
+            row["effective_price"]
+            for row in candidates
+            if row.get("effective_price") is not None
+        ]
+        lowest_price = min(effective_prices) if effective_prices else None
+        for row in candidates:
+            effective_price = row.get("effective_price")
+            row["price_difference_to_lowest"] = (
+                None
+                if effective_price is None or lowest_price is None
+                else round(effective_price - lowest_price, 4)
+            )
 
     requisition_history = sorted(
         [*official_history, *legacy_history],
@@ -7557,6 +8008,104 @@ def product_material_context(
         ),
         reverse=True,
     )
+    formal_event_signatures = {
+        (
+            row.get("order_item_id"),
+            (
+                f"material:{row['material_id']}"
+                if row.get("material_id") is not None
+                else "snapshot:"
+                f"{normalize_material_candidate_key(row.get('material_code'))}:"
+                f"{normalize_supplier_candidate_key(row.get('supplier_name'))}"
+            ),
+        )
+        for row in requisition_history
+    }
+    selection_events = []
+    for row in manual_history:
+        signature = (
+            row.get("order_item_id"),
+            (
+                f"material:{row['material_id']}"
+                if row.get("material_id") is not None
+                else "snapshot:"
+                f"{normalize_material_candidate_key(row.get('material_code'))}:"
+                f"{normalize_supplier_candidate_key(row.get('supplier_name'))}"
+            ),
+        )
+        if signature in formal_event_signatures:
+            continue
+        event = {
+            "source_type": "material_selection",
+            "source_confidence": "selection_snapshot",
+            "document_id": row["id"],
+            "document_item_id": row["id"],
+            "document_no": row.get("source_reference") or f"选材记录 #{row['id']}",
+            "document_date": row["selected_at"],
+            "document_status": "报料选材记录（未匹配正式报料单）",
+            "is_effective": True,
+            "is_formal_requisition": False,
+            "order_item_id": row.get("order_item_id"),
+            "item_order_number": None,
+            "product_id": product.id,
+            "material_id": row.get("material_id"),
+            "material_code": row.get("material_code"),
+            "supplier_name": row.get("supplier_name"),
+            "layer_count": row.get("layer_count"),
+            "flute_type": row.get("flute_type"),
+            "requisition_qty": None,
+            "basis_weight_description": row.get("basis_weight_description"),
+            "weight_source": row.get("weight_source"),
+            "paper_composition": row.get("paper_composition"),
+            "total_basis_weight_gsm": row.get("total_basis_weight_gsm"),
+            "material_is_active": row.get("material_is_active"),
+            "selection_reason": row.get("selection_reason"),
+            "selected_by_name": row.get("selected_by_name"),
+        }
+        if can_view_costs:
+            event.update(
+                {
+                    "current_reference_price": row.get("current_reference_price"),
+                    "current_flute_delta": row.get("current_flute_delta"),
+                    "current_effective_price": row.get("current_effective_price"),
+                    "current_price_unit": row.get("current_price_unit"),
+                    "current_quote_date": row.get("current_quote_date"),
+                    "current_price_source": row.get("current_price_source"),
+                    "current_price_scope": "current_reference",
+                }
+            )
+        selection_events.append(event)
+    material_history = sorted(
+        [*requisition_history, *selection_events],
+        key=lambda row: (
+            (
+                row["document_date"].isoformat()
+                if row["document_date"] is not None
+                else ""
+            ),
+            row["document_id"],
+        ),
+        reverse=True,
+    )
+    if can_view_costs:
+        effective_history_prices = [
+            row["current_effective_price"]
+            for row in material_history
+            if row.get("is_effective")
+            and row.get("current_effective_price") is not None
+        ]
+        lowest_history_price = (
+            min(effective_history_prices) if effective_history_prices else None
+        )
+        for row in material_history:
+            current_price = row.get("current_effective_price")
+            row["current_price_difference_to_lowest"] = (
+                None
+                if not row.get("is_effective")
+                or current_price is None
+                or lowest_history_price is None
+                else round(current_price - lowest_history_price, 4)
+            )
     for row in requisition_history:
         document_date = row.get("document_date")
         if isinstance(document_date, datetime):
@@ -7565,6 +8114,10 @@ def product_material_context(
             row["document_date"] = (
                 f"{document_date.isoformat()}T00:00:00+08:00"
             )
+    for row in selection_events:
+        document_date = row.get("document_date")
+        if isinstance(document_date, datetime):
+            row["document_date"] = utc_naive_to_api(document_date)
     for row in candidates:
         if isinstance(row.get("last_used_at"), datetime):
             row["last_used_at"] = utc_naive_to_api(row["last_used_at"])
@@ -7589,6 +8142,7 @@ def product_material_context(
         "candidates": candidates,
         "candidate_summary": candidates,
         "requisition_history": requisition_history,
+        "material_history": material_history,
         "manual_selection_history": manual_history,
     }
 

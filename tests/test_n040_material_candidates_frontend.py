@@ -21,9 +21,9 @@ def test_daily_product_toolbar_has_no_global_material_candidate_entry() -> None:
 def test_common_box_editor_embeds_product_specific_candidate_and_requisition_history() -> None:
     source = _source()
     editor_start = source.index('<div class="product-material-workbench">')
-    editor_context = source[editor_start:editor_start + 8000]
+    editor_context = source[editor_start:editor_start + 12000]
     candidate_heading = "这款常用箱的候选材质"
-    history_heading = "这款常用箱历史报料材质"
+    history_heading = "这款常用箱的报料材质轨迹"
     assert candidate_heading in editor_context
     assert history_heading in editor_context
     assert editor_context.index(candidate_heading) < editor_context.index(history_heading)
@@ -35,9 +35,19 @@ def test_common_box_editor_embeds_product_specific_candidate_and_requisition_his
     assert "formatBeijingDate(candidate.last_used_at)" in source
     assert "dt(candidate.last_used_at)" not in source
     assert "只回填当前表单，仍需保存常用箱" in source
+    assert "尚未匹配正式报料单的人工选材单独标识" in source
     assert "不混入同客户其他产品" in source
     assert 'this.hasPermission("requisition.view")' in source
     assert "当前账号无报料历史查看权限" in source
+    assert "candidate.basis_weight_description" in editor_context
+    assert "candidate.total_basis_weight_gsm" in editor_context
+    assert "candidate.effective_price" in editor_context
+    assert "candidate.price_difference_to_lowest" in editor_context
+    assert "当前有效价，不是历史冻结价" in editor_context
+    assert "history.basis_weight_description" in editor_context
+    assert "history.total_basis_weight_gsm" in editor_context
+    assert "history.current_effective_price" in editor_context
+    assert "当前材质档案价，非报料时冻结价" in editor_context
 
 
 def test_common_box_candidate_column_is_narrower_than_history_column() -> None:
@@ -54,10 +64,12 @@ def test_common_box_candidate_keeps_flute_and_history_does_not_mutate_form() -> 
     assert "const currentFlute = this.productForm.flute_type;" in source
     assert "this.productForm.flute_type = currentFlute;" in source
     assert '@click="applyProductMaterialCandidate(candidate)"' in source
-    history_loop = 'v-for="history in productMaterialContext.requisition_history"'
+    history_loop = 'v-for="history in productMaterialContext.material_history"'
     assert history_loop in source
     history_section = source[source.index(history_loop):source.index(history_loop) + 1600]
     assert "productForm.material_id" not in history_section
+    assert "history.document_item_id" in history_section
+    assert "history.is_formal_requisition === false" in history_section
 
 
 def test_common_box_material_context_stacks_on_narrow_screens() -> None:

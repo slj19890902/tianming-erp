@@ -484,11 +484,17 @@ def test_system_batches_do_not_mutate_master_data_outside_version_service(
         call["object_type"] == "material" and call["entity"].code == "A6A"
         for call in create_calls
     )
+    # 同码材质只能在同一供应商内复用；不能把 P4 测试供应商的 B7B
+    # 静默改成嘉林亿材质或绑定给嘉林亿映射。
+    assert not any(
+        call["object_type"] == "material" and call["entity"] is existing_material
+        for call in update_calls
+    )
     assert any(
         call["object_type"] == "material"
-        and call["entity"] is existing_material
-        and call["updates"] == {"layer_count": 3, "flute_type": None}
-        for call in update_calls
+        and call["entity"].code == "B7B"
+        and call["entity"].supplier_name == "嘉林亿"
+        for call in create_calls
     )
     assert {
         call["entity"].id

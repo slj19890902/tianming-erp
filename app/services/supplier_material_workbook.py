@@ -478,12 +478,24 @@ def _resolve_plan(
     }
     current_materials = list(db.scalars(select(Material)).all())
     materials_by_id = {row.id: row for row in current_materials}
-    materials_by_code = {row.code.upper(): row for row in current_materials}
+
+    def material_key(supplier_name: object, code: object) -> tuple[str, str]:
+        return (
+            normalize_supplier_identity(supplier_name),
+            str(code or "").strip().upper(),
+        )
+
+    materials_by_key = {
+        material_key(row.supplier_name, row.code): row
+        for row in current_materials
+    }
 
     def existing_material_for(raw: dict[str, Any]) -> Material | None:
         if raw["system_id"] is not None:
             return materials_by_id.get(raw["system_id"])
-        return materials_by_code.get(raw["code"])
+        return materials_by_key.get(
+            material_key(raw["supplier_name"], raw["code"])
+        )
 
     def historical_supplier_is_unchanged(
         raw: dict[str, Any],
@@ -680,7 +692,7 @@ def _resolve_plan(
         }
 
     material_items: list[dict] = []
-    target_codes: dict[str, int | None] = {}
+    target_material_keys: dict[tuple[str, str], int | None] = {}
     resolved_material_ids: set[int] = set()
 
     for raw in material_rows:
@@ -690,7 +702,9 @@ def _resolve_plan(
         existing = (
             materials_by_id.get(raw["system_id"])
             if raw["system_id"] is not None
-            else materials_by_code.get(raw["code"])
+            else materials_by_key.get(
+                material_key(raw["supplier_name"], raw["code"])
+            )
         )
         if raw["system_id"] is not None and existing is None:
             _append_error(
@@ -708,22 +722,6 @@ def _resolve_plan(
                 message=f"系统材质 ID {existing.id} 在导入计划中被重复引用",
             )
             continue
-        if (
-            raw["system_id"] is None
-            and existing is not None
-            and (existing.supplier_name or "") != raw["supplier_name"]
-        ):
-            _append_error(
-                errors,
-                sheet=MATERIAL_SHEET,
-                row_number=row_number,
-                message=(
-                    f"组合代码 {raw['code']} 已被供应商"
-                    f"“{existing.supplier_name or '未设置'}”使用；"
-                    "当前系统组合代码全局唯一，不能跨供应商重复"
-                ),
-            )
-            continue
         if existing is not None and raw["file_version"] not in {
             None,
             existing.version,
@@ -738,16 +736,16 @@ def _resolve_plan(
                 ),
             )
             continue
-        conflict = materials_by_code.get(raw["code"])
+        target_key = material_key(raw["supplier_name"], raw["code"])
+        conflict = materials_by_key.get(target_key)
         if conflict is not None and (existing is None or conflict.id != existing.id):
             _append_error(
                 errors,
                 sheet=MATERIAL_SHEET,
                 row_number=row_number,
                 message=(
-                    f"组合代码 {raw['code']} 已被供应商"
-                    f"“{conflict.supplier_name or '未设置'}”使用；"
-                    "当前系统组合代码全局唯一，不能跨供应商重复"
+                    f"供应商“{raw['supplier_name']}”已存在组合代码 "
+                    f"{raw['code']}，不能重复"
                 ),
             )
             continue
@@ -765,17 +763,20 @@ def _resolve_plan(
                     ),
                 )
                 continue
-        if raw["code"] in target_codes and target_codes[raw["code"]] != (
+        if target_key in target_material_keys and target_material_keys[target_key] != (
             existing.id if existing else None
         ):
             _append_error(
                 errors,
                 sheet=MATERIAL_SHEET,
                 row_number=row_number,
-                message=f"组合代码 {raw['code']} 在导入计划中冲突",
+                message=(
+                    f"供应商“{raw['supplier_name']}”的组合代码 "
+                    f"{raw['code']} 在导入计划中冲突"
+                ),
             )
             continue
-        target_codes[raw["code"]] = existing.id if existing else None
+        target_material_keys[target_key] = existing.id if existing else None
         if existing is not None:
             resolved_material_ids.add(existing.id)
 
@@ -1039,17 +1040,18 @@ def apply_supplier_material_workbook(
         existing_id = item["existing_id"]
         updates = item["updates"]
         conflict_query = select(Material).where(
-            func.upper(Material.code) == updates["code"].upper()
+            func.upper(Material.code) == updates["code"].upper(),
+            Material.supplier_name == updates["supplier_name"],
         )
         if existing_id is not None:
             conflict_query = conflict_query.where(Material.id != existing_id)
         conflict = db.scalar(conflict_query)
         if conflict is not None:
             raise SupplierMaterialWorkbookError(
-                "SUPPLIER_MATERIAL_GLOBAL_CODE_CONFLICT",
+                "SUPPLIER_MATERIAL_SUPPLIER_CODE_CONFLICT",
                 (
-                    f"组合代码 {updates['code']} 已被供应商"
-                    f"“{conflict.supplier_name or '未设置'}”使用"
+                    f"供应商“{updates['supplier_name']}”已存在组合代码 "
+                    f"{updates['code']}"
                 ),
                 status_code=409,
             )

@@ -13,6 +13,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -27,10 +28,15 @@ class Material(Base):
     __tablename__ = "materials"
     __table_args__ = (
         CheckConstraint("version >= 1", name="ck_materials_version"),
+        UniqueConstraint(
+            "supplier_name",
+            "code",
+            name="uq_materials_supplier_code",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    code: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(100), index=True)
     paper_composition: Mapped[str | None] = mapped_column(String(200), nullable=True)
     layer_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     flute_type: Mapped[str | None] = mapped_column(

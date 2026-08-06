@@ -202,6 +202,87 @@ def test_inactive_material_is_hidden_by_default_but_remains_auditable(
         assert row["version"] == 2
 
 
+def test_same_material_code_is_independent_per_supplier(
+    supplier_app: FastAPI,
+) -> None:
+    with TestClient(supplier_app) as client:
+        _login(client, "supplier-admin")
+        paper_facts = {
+            "昆山鸣朋": {"G": ("鸣朋牛卡", 250), "9": ("鸣朋瓦纸", 170)},
+            "胜源": {"G": ("胜源牛卡", 230), "9": ("胜源瓦纸", 140)},
+        }
+        for supplier_name, codes in paper_facts.items():
+            for code_char, (paper_name, gram_weight) in codes.items():
+                response = client.post(
+                    "/api/master/materials/paper-codes",
+                    json={
+                        "supplier_name": supplier_name,
+                        "code_char": code_char,
+                        "paper_name": paper_name,
+                        "gram_weight": gram_weight,
+                        "is_active": True,
+                    },
+                )
+                assert response.status_code == 201, response.text
+
+        created_rows = []
+        for supplier_name, quote_price in (
+            ("昆山鸣朋", "2.8700"),
+            ("胜源", "2.5100"),
+        ):
+            response = client.post(
+                "/api/master/materials/compose/save",
+                json={
+                    "supplier_name": supplier_name,
+                    "material_code": "G9G",
+                    "layer_count": 3,
+                    "quote_price": quote_price,
+                    "parsed_supplier_name": supplier_name,
+                    "parsed_material_code": "G9G",
+                    "parsed_layer_count": 3,
+                    "price_source": "manual",
+                },
+            )
+            assert response.status_code == 200, response.text
+            created_rows.append(response.json()["material"])
+
+        assert created_rows[0]["id"] != created_rows[1]["id"]
+        assert created_rows[0]["supplier_name"] == "昆山鸣朋"
+        assert created_rows[0]["basis_weight_description"] == "250g/170g/250g"
+        assert created_rows[1]["supplier_name"] == "胜源"
+        assert created_rows[1]["basis_weight_description"] == "230g/140g/230g"
+
+        listed = client.get(
+            "/api/master/materials",
+            params={"keyword": "G9G", "include_inactive": True},
+        )
+        assert listed.status_code == 200
+        assert listed.json()["total"] == 2
+        assert {
+            (row["supplier_name"], row["code"], row["basis_weight_description"])
+            for row in listed.json()["items"]
+        } == {
+            ("昆山鸣朋", "G9G", "250g/170g/250g"),
+            ("胜源", "G9G", "230g/140g/230g"),
+        }
+
+        duplicate = client.post(
+            "/api/master/materials/compose/save",
+            json={
+                "supplier_name": "胜源",
+                "material_code": "G9G",
+                "layer_count": 3,
+                "quote_price": "2.5100",
+                "parsed_supplier_name": "胜源",
+                "parsed_material_code": "G9G",
+                "parsed_layer_count": 3,
+                "price_source": "manual",
+            },
+        )
+        assert duplicate.status_code == 409
+        assert "该供应商下已存在" in duplicate.json()["detail"]
+
+
 def test_new_common_box_rejects_inactive_material_but_historical_link_is_readable(
     supplier_app: FastAPI,
 ) -> None:

@@ -210,6 +210,71 @@ def test_match_import_draft_links_customer_and_products(tmp_path: Path) -> None:
         database_path.unlink(missing_ok=True)
 
 
+def test_pdf_material_candidates_keep_supplier_and_weight_for_same_code(
+    tmp_path: Path,
+) -> None:
+    from app.core.database import create_sqlite_engine
+    from app.models import Base
+    from app.models.customer import Customer
+    from app.models.material import Material
+    from app.services.order_pdf_import import (
+        match_import_draft,
+        parse_purchase_order_text,
+    )
+
+    engine = create_sqlite_engine(tmp_path / "pdf-same-code-materials.sqlite3")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    try:
+        with session_factory() as session:
+            customer = Customer(
+                customer_number=9001,
+                customer_code="PDF-SAME-CODE",
+                name="苏州天华超净科技有限公司",
+                payment_term_days=30,
+                credit_limit=Decimal("100000"),
+            )
+            session.add_all(
+                [
+                    customer,
+                    Material(
+                        code="G9G",
+                        supplier_name="昆山鸣朋",
+                        layer_count=3,
+                        basis_weight_description="250g/170g/250g",
+                    ),
+                    Material(
+                        code="G9G",
+                        supplier_name="胜源",
+                        layer_count=3,
+                        basis_weight_description="230g/140g/230g",
+                    ),
+                ]
+            )
+            session.commit()
+
+            draft = parse_purchase_order_text(
+                SAMPLE_PO_TEXT,
+                source_name="same-code-materials.pdf",
+            )
+            matched = match_import_draft(session, draft, customer.id)
+            candidates = matched["items"][0]["material_candidates"]
+
+            assert {
+                (
+                    row["code"],
+                    row["supplier_name"],
+                    row["basis_weight_description"],
+                )
+                for row in candidates
+            } == {
+                ("G9G", "昆山鸣朋", "250g/170g/250g"),
+                ("G9G", "胜源", "230g/140g/230g"),
+            }
+    finally:
+        engine.dispose()
+
+
 def _match_simair_duplicate_cpn(tmp_path: Path, item: dict) -> tuple[dict, int, int]:
     from app.core.database import create_sqlite_engine
     from app.models import Base

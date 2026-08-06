@@ -232,6 +232,7 @@ class MaterialComposeSavePayload(MaterialComposePreviewPayload):
 WORKSHOP_FIELDS = (
     "id",
     "code",
+    "supplier_name",
     "paper_composition",
     "layer_count",
     "flute_type",
@@ -834,6 +835,8 @@ def _paper_code_dict(row: SupplierPaperCode) -> dict:
 def _dictionary_material_code(value: str | None, layer_count: int) -> str:
     compact = unicodedata.normalize("NFKC", str(value or "")).strip().upper()
     compact = re.sub(r"\s+", "", compact)
+    # 兼容历史代码末尾的楞型/报价适用范围后缀，例如 A416D-AB/EB；
+    # 材质身份仍取所选层数对应的基础组合代码。
     return compact[:layer_count]
 
 
@@ -1142,17 +1145,6 @@ def save_material_composition(
                 f"{payload.material_code}，不能重复保存。楞型请在常用箱中选择。"
             ),
         )
-    conflict = db.scalar(
-        select(Material).where(func.upper(Material.code) == payload.material_code)
-    )
-    if conflict is not None:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"材质代码 {payload.material_code} 已被供应商"
-                f"“{conflict.supplier_name or '未设置'}”使用；当前全局唯一约束下不能重复保存"
-            ),
-        )
     suggested_price = preview.get("current_suggested_price")
     if payload.quote_price is None and suggested_price is None:
         raise HTTPException(
@@ -1222,7 +1214,10 @@ def save_material_composition(
         db.commit()
     except IntegrityError as error:
         db.rollback()
-        raise HTTPException(status_code=409, detail="材质编码重复") from error
+        raise HTTPException(
+            status_code=409,
+            detail=f"该供应商下已存在材质代码 {payload.material_code}，不能重复保存",
+        ) from error
     except Exception:
         db.rollback()
         raise
@@ -1359,7 +1354,10 @@ def create_material(
         db.commit()
     except IntegrityError as error:
         db.rollback()
-        raise HTTPException(status_code=409, detail="材质编码重复") from error
+        raise HTTPException(
+            status_code=409,
+            detail=f"该供应商下已存在材质代码 {data['code']}，不能重复保存",
+        ) from error
     except Exception:
         db.rollback()
         raise
@@ -1457,7 +1455,10 @@ def update_material(
         db.commit()
     except IntegrityError as error:
         db.rollback()
-        raise HTTPException(status_code=409, detail="材质编码重复") from error
+        raise HTTPException(
+            status_code=409,
+            detail=f"该供应商下已存在材质代码 {updates['code']}，不能重复保存",
+        ) from error
     except Exception:
         db.rollback()
         raise

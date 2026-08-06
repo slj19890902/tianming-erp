@@ -2739,7 +2739,12 @@ def rematch_draft_items(db: Session, draft: dict, customer_id: int | None) -> di
         select(Material).where(Material.is_active.is_(True)).order_by(Material.code)
     ).all()
     material_candidates = [
-        {"id": row.id, "code": re.sub(r"^\s*\d+\s+", "", row.code).strip()}
+        {
+            "id": row.id,
+            "code": re.sub(r"^\s*\d+\s+", "", row.code).strip(),
+            "supplier_name": (row.supplier_name or "").strip() or None,
+            "basis_weight_description": row.basis_weight_description,
+        }
         for row in materials
     ]
     matched_items = []

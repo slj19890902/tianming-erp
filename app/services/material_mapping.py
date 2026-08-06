@@ -597,9 +597,21 @@ def preview_high_confidence_material_mapping(
             candidate, (new_code, layer_count) = valid_candidates[0]
             unique_mapping[old_code] = (candidate, new_code, layer_count)
 
+    from app.services.supplier_master import SupplierLookupError, resolve_supplier
+
+    try:
+        target_supplier = resolve_supplier(
+            db,
+            "嘉林亿",
+            require_active=False,
+        ).standard_name
+    except SupplierLookupError:
+        target_supplier = "嘉林亿"
     existing_materials = {
         material.code.strip().upper(): material
-        for material in db.scalars(select(Material)).all()
+        for material in db.scalars(
+            select(Material).where(Material.supplier_name == target_supplier)
+        ).all()
     }
     available_codes = set(existing_materials)
     planned_keys: set[str] = set()
@@ -638,7 +650,7 @@ def preview_high_confidence_material_mapping(
                 "create": {
                     "code": new_code,
                     "layer_count": layer_count,
-                    "supplier_name": "嘉林亿",
+                    "supplier_name": target_supplier,
                     "basis_weight_description": candidate.weight_structure,
                     "quote_price": candidate.new_price,
                 },
@@ -747,9 +759,23 @@ def apply_high_confidence_material_mapping(
     if not unique_mapping:
         return result
 
-    # 预加载 materials 字典
+    from app.services.supplier_master import SupplierLookupError, resolve_supplier
+
+    try:
+        target_supplier = resolve_supplier(
+            db,
+            "嘉林亿",
+            require_active=False,
+        ).standard_name
+    except SupplierLookupError:
+        target_supplier = "嘉林亿"
+
+    # 只预加载目标供应商的 materials 字典；同码的其它供应商不能被复用。
     existing_materials: dict[str, Material] = {
-        m.code.strip().upper(): m for m in db.scalars(select(Material)).all()
+        m.code.strip().upper(): m
+        for m in db.scalars(
+            select(Material).where(Material.supplier_name == target_supplier)
+        ).all()
     }
 
     # 遍历需要更新的产品
@@ -785,7 +811,7 @@ def apply_high_confidence_material_mapping(
             # 创建新材质记录
             mat = Material(
                 code=new_code,
-                supplier_name="嘉林亿",
+                supplier_name=target_supplier,
                 layer_count=layer_count_int,
                 flute_type=None,
                 basis_weight_description=matched_cand.weight_structure,

@@ -32,7 +32,9 @@ def n040_app(tmp_path: Path) -> Generator[tuple[FastAPI, dict[str, int], object]
     from app.models.material import Material
     from app.models.order import Order, OrderItem
     from app.models.product import Product
+    from app.models.supplier import Supplier
     from app.models.user import User
+    from app.services.supplier_master import normalize_supplier_identity
 
     engine = create_sqlite_engine(tmp_path / "n040-material-candidates.sqlite3")
     Base.metadata.create_all(engine)
@@ -60,7 +62,22 @@ def n040_app(tmp_path: Path) -> Generator[tuple[FastAPI, dict[str, int], object]
             customer_code="N040-B",
             name="N040 Customer B",
         )
-        db.add_all([admin, scoped_user, customer, other_customer])
+        suppliers = [
+            Supplier(
+                standard_name=name,
+                normalized_name=normalize_supplier_identity(name),
+                is_active=True,
+                version=1,
+            )
+            for name in (
+                "Original supplier",
+                "Supplier A",
+                "Supplier B",
+                "Supplier C",
+                "Supplier D",
+            )
+        ]
+        db.add_all([admin, scoped_user, customer, other_customer, *suppliers])
         db.flush()
         db.add_all(
             [
@@ -798,8 +815,10 @@ def test_product_material_context_uses_only_this_product_and_prefers_official_fa
         assert candidates[candidate_a]["history_count"] == 1
         assert candidates[candidate_a]["last_document_no"] == "SRO-N040-CONFIRMED"
         assert candidates[candidate_a]["last_used_at"].endswith("Z")
+        assert candidates[candidate_a]["last_requisition_at"].endswith("Z")
         assert candidates[candidate_a]["recommendation_reason"]
         assert candidates[candidate_b]["effective_use_count"] == 0
+        assert candidates[candidate_b]["last_requisition_at"] is None
         assert len(payload["manual_selection_history"]) == 1
 
 
@@ -1051,7 +1070,9 @@ def test_product_material_context_keeps_unmatched_requisition_selection_in_mater
         ids["supplier_b_material"],
     }
     assert candidates[ids["supplier_a_material"]]["history_count"] == 1
+    assert candidates[ids["supplier_a_material"]]["last_requisition_at"].endswith("Z")
     assert candidates[ids["supplier_b_material"]]["selection_history_count"] == 1
+    assert candidates[ids["supplier_b_material"]]["last_requisition_at"] is None
     assert "requisition_material_selection" in candidates[
         ids["supplier_b_material"]
     ]["candidate_source_types"]

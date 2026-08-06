@@ -1018,11 +1018,66 @@
         background: #fff;
         font-size: 12px;
       }
-      .product-material-candidate-row { grid-template-columns: minmax(0, 1fr) auto; }
+      .product-material-candidate-row { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
       .product-material-history-row { grid-template-columns: 88px minmax(0, 1fr) minmax(100px, .75fr); }
       .product-material-context-main { min-width: 0; font-weight: 700; color: #334155; overflow-wrap: anywhere; }
       .product-material-context-meta { min-width: 0; color: var(--muted); overflow-wrap: anywhere; }
       .product-material-history-qty { color: #075985; font-weight: 700; white-space: nowrap; }
+      .product-material-candidate-heading,
+      .product-material-candidate-actions {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+      .product-material-candidate-actions { justify-content: flex-end; }
+      .product-material-detail-button {
+        padding: 0;
+        border: 0;
+        color: #0369a1;
+        background: transparent;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      .product-material-candidate-metrics {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 6px;
+        margin-top: 6px;
+      }
+      .product-material-candidate-metric {
+        min-width: 0;
+        padding: 5px 6px;
+        border-radius: 6px;
+        background: #f1f5f9;
+      }
+      .product-material-candidate-metric span,
+      .product-material-candidate-metric strong { display: block; overflow-wrap: anywhere; }
+      .product-material-candidate-metric span { color: var(--muted); font-size: 10px; }
+      .product-material-candidate-metric strong { margin-top: 2px; color: #0f172a; font-size: 12px; }
+      .product-material-candidate-detail {
+        display: grid;
+        gap: 3px;
+        margin-top: 6px;
+        padding: 7px;
+        border-radius: 7px;
+        background: #f8fafc;
+      }
+      .product-material-comparison-panel { grid-column: 2 / -1; }
+      .product-material-comparison-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 8px;
+      }
+      .product-material-comparison-card {
+        min-width: 0;
+        padding: 9px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        overflow-wrap: anywhere;
+      }
+      .product-material-comparison-card .sensitive-price { margin: 5px 0; color: #b45309; font-weight: 700; }
       .product-print-row {
         grid-template-columns: minmax(310px, 1.25fr) minmax(180px, .7fr) minmax(250px, 1fr) minmax(330px, 1.35fr);
       }
@@ -1190,6 +1245,8 @@
         .product-material-controls { grid-template-columns: 1fr; }
         .product-material-controls { grid-column: auto; }
         .product-material-picker { grid-column: auto; }
+        .product-material-comparison-panel { grid-column: auto; }
+        .product-material-candidate-metrics { grid-template-columns: 1fr; }
         .product-material-history-row { grid-template-columns: 1fr; }
       }
 
@@ -3904,29 +3961,38 @@
                   <div v-else class="product-material-context-list">
                     <div v-for="candidate in productMaterialContext.candidates" :key="candidate.candidate_key || candidate.candidate_id || candidate.material_id" class="product-material-candidate-row">
                       <div>
-                        <div class="product-material-context-main">
-                          {{ candidate.material_code || candidate.actual_material_code || "-" }} / {{ candidate.supplier_name || "未设置供应商" }}
-                          <span v-if="candidate.recommended" class="status green" style="margin-left:4px">推荐</span>
-                          <span v-if="(candidate.candidate_source_types || []).includes('formal_requisition_history')" class="status blue" style="margin-left:4px">报料使用过</span>
-                          <span v-if="candidate.selectable === false" class="status orange" style="margin-left:4px">仅追溯</span>
+                        <div class="product-material-candidate-heading">
+                          <span class="product-material-context-main">{{ candidate.material_code || candidate.actual_material_code || "-" }} / {{ candidate.supplier_name || "未设置供应商" }}</span>
+                          <button type="button" class="product-material-detail-button" :aria-expanded="isProductMaterialCandidateDetailOpen(candidate)" @click="toggleProductMaterialCandidateDetail(candidate)">{{ isProductMaterialCandidateDetailOpen(candidate) ? "收起" : "详情" }}</button>
                         </div>
-                        <div class="product-material-context-meta">
-                          {{ candidate.layer_count || "-" }}层 / {{ candidate.flute_type || productForm.flute_type || "-" }}楞
-                          · 正式报料 {{ Number(candidate.history_count || candidate.effective_use_count || 0) }} 次
-                          <template v-if="Number(candidate.selection_history_count || 0) > 0"> · 报料选材 {{ Number(candidate.selection_history_count) }} 次</template>
-                          <template v-if="candidate.last_used_at"> · 最近 {{ formatBeijingDate(candidate.last_used_at) }}</template>
+                        <div class="product-material-candidate-metrics">
+                          <div class="product-material-candidate-metric">
+                            <span>最近报料</span>
+                            <strong>{{ candidate.last_requisition_at ? formatBeijingDate(candidate.last_requisition_at) : "暂无" }}</strong>
+                          </div>
+                          <div class="product-material-candidate-metric">
+                            <span>报料次数</span>
+                            <strong>{{ Number(candidate.history_count || candidate.effective_use_count || 0) }} 次</strong>
+                          </div>
+                          <div class="product-material-candidate-metric">
+                            <span>单价</span>
+                            <strong v-if="canViewCosts && candidate.effective_price != null" class="sensitive-price">￥{{ squarePrice(candidate.effective_price) }}/㎡</strong>
+                            <strong v-else>{{ canViewCosts ? "暂无报价" : "无价格权限" }}</strong>
+                          </div>
                         </div>
-                        <div class="product-material-context-meta">克重：{{ candidate.basis_weight_description || "未维护" }}<template v-if="candidate.total_basis_weight_gsm != null">（合计 {{ Number(candidate.total_basis_weight_gsm) }}g/㎡）</template></div>
-                        <div v-if="canViewCosts && candidate.effective_price != null" class="product-material-context-meta sensitive-price">
-                          当前有效价，不是历史冻结价：￥{{ squarePrice(candidate.effective_price) }}/㎡
-                          <template v-if="candidate.price_difference_to_lowest != null">
-                            · {{ Number(candidate.price_difference_to_lowest) > 0 ? `比最低 +￥${squarePrice(candidate.price_difference_to_lowest)}/㎡` : "当前最低" }}
-                          </template>
-                          <template v-if="candidate.quote_date"> · 报价日期 {{ candidate.quote_date }}</template>
+                        <div v-if="isProductMaterialCandidateDetailOpen(candidate)" class="product-material-candidate-detail">
+                          <div class="product-material-context-meta">层数 / 楞型：{{ candidate.layer_count || "-" }}层 / {{ candidate.flute_type || productForm.flute_type || "-" }}楞</div>
+                          <div class="product-material-context-meta">克重：{{ candidate.basis_weight_description || "未维护" }}<template v-if="candidate.total_basis_weight_gsm != null">（合计 {{ Number(candidate.total_basis_weight_gsm) }}g/㎡）</template></div>
+                          <div v-if="candidate.paper_composition" class="product-material-context-meta">纸种结构：{{ candidate.paper_composition }}</div>
+                          <div v-if="canViewCosts && candidate.price_difference_to_lowest != null" class="product-material-context-meta sensitive-price">价格对比：{{ Number(candidate.price_difference_to_lowest) > 0 ? `比最低 +￥${squarePrice(candidate.price_difference_to_lowest)}/㎡` : "当前最低" }}</div>
+                          <div v-if="canViewCosts && candidate.quote_date" class="product-material-context-meta">报价日期：{{ candidate.quote_date }}</div>
+                          <div v-if="candidate.selectable === false" class="product-material-context-meta">该材质已停用，仅供历史核对。</div>
                         </div>
-                        <div v-if="candidate.recommendation_reason" class="product-material-context-meta">{{ candidate.recommendation_reason }}</div>
                       </div>
-                      <button type="button" class="btn small" :disabled="candidate.selectable === false" @click="applyProductMaterialCandidate(candidate)">{{ candidate.selectable === false ? "仅追溯" : "采用" }}</button>
+                      <div class="product-material-candidate-actions">
+                        <button type="button" class="btn small" :aria-pressed="isProductMaterialCandidateCompared(candidate)" @click="toggleProductMaterialCandidateComparison(candidate)">{{ isProductMaterialCandidateCompared(candidate) ? "取消对比" : "加入对比" }}</button>
+                        <button type="button" class="btn small" :disabled="candidate.selectable === false" @click="applyProductMaterialCandidate(candidate)">{{ candidate.selectable === false ? "仅追溯" : "采用" }}</button>
+                      </div>
                     </div>
                   </div>
                 </section>
@@ -3964,6 +4030,29 @@
                         <div class="product-material-history-qty">{{ history.requisition_qty != null || history.quantity != null ? `${Number(history.requisition_qty ?? history.quantity)} 张` : "尚无正式张数" }}</div>
                         <div class="product-material-context-meta">{{ history.document_status || history.status || history.source_label || "历史记录" }}</div>
                       </div>
+                    </div>
+                  </div>
+                </section>
+
+                <section v-if="productMaterialComparedCandidates.length" class="product-material-context-panel product-material-comparison-panel">
+                  <div class="product-material-context-head">
+                    <div>
+                      <strong>候选材质对比（{{ productMaterialComparedCandidates.length }}/4）</strong>
+                      <div class="muted" style="font-size:11px;margin-top:2px">价格使用当前有效报价；最终采用哪款仍由人工确认。</div>
+                    </div>
+                    <button type="button" class="btn small" @click="clearProductMaterialCandidateComparison">清空</button>
+                  </div>
+                  <div v-if="productMaterialComparedCandidates.length < 2" class="muted">再选择 1 款即可并排比较价格和克重。</div>
+                  <div v-else class="product-material-comparison-grid">
+                    <div v-for="candidate in productMaterialComparedCandidates" :key="`compare-${productMaterialCandidateKey(candidate)}`" class="product-material-comparison-card">
+                      <div class="product-material-context-main">{{ candidate.material_code || candidate.actual_material_code || "-" }}</div>
+                      <div class="product-material-context-meta">{{ candidate.supplier_name || "未设置供应商" }}</div>
+                      <div v-if="canViewCosts && candidate.effective_price != null" class="sensitive-price">￥{{ squarePrice(candidate.effective_price) }}/㎡</div>
+                      <div v-else class="product-material-context-meta">{{ canViewCosts ? "暂无报价" : "无价格权限" }}</div>
+                      <div class="product-material-context-meta">总克重：{{ candidate.total_basis_weight_gsm != null ? `${Number(candidate.total_basis_weight_gsm)}g/㎡` : "未维护" }}</div>
+                      <div class="product-material-context-meta">克重结构：{{ candidate.basis_weight_description || "未维护" }}</div>
+                      <div v-if="candidate.paper_composition" class="product-material-context-meta">纸种：{{ candidate.paper_composition }}</div>
+                      <div v-if="canViewCosts && candidate.price_difference_to_lowest != null" class="product-material-context-meta">{{ Number(candidate.price_difference_to_lowest) > 0 ? `比最低 +￥${squarePrice(candidate.price_difference_to_lowest)}/㎡` : "当前最低" }}</div>
                     </div>
                   </div>
                 </section>
@@ -6431,6 +6520,7 @@
             productFormSnapshot: null, productBomSnapshot: null,
             productEditReturnContext: null,
             productMaterialContext: { product_id:null, candidates:[], requisition_history:[], material_history:[], manual_selection_history:[], loading:false, error:"" },
+            productMaterialCandidateDetailKeys: [], productMaterialCompareKeys: [],
             bomEditor: blankBomEditor(),
             orderProductOptions: {},
             orderCommonBoxPicker: {
@@ -6712,6 +6802,12 @@
                 : `平方价 ¥${eff.toFixed(2)}/㎡，`;
             }
             return `${price}纸板成本 ¥${Number(c).toFixed(2)}（展开面积 × 最终材质平方价）`;
+          },
+          productMaterialComparedCandidates() {
+            const selected = new Set(this.productMaterialCompareKeys || []);
+            return (this.productMaterialContext.candidates || [])
+              .filter(candidate => selected.has(this.productMaterialCandidateKey(candidate)))
+              .slice(0, 4);
           },
           // 价格历史折线图坐标
           priceHistoryChart() { return { w: 600, h: 180, pad: 30 }; },
@@ -15507,6 +15603,8 @@
               );
               const openedId = Number(this.productForm.id || 0) || null;
               this.productMaterialContext = { product_id:openedId, candidates:[], requisition_history:[], material_history:[], manual_selection_history:[], loading:false, error:"" };
+              this.productMaterialCandidateDetailKeys = [];
+              this.productMaterialCompareKeys = [];
               this.drawingFile = null;
               this.resetBomEditor();
               // 拍快照用于检测未保存更改
@@ -15588,6 +15686,9 @@
                 loading: false,
                 error: "",
               };
+              const availableKeys = new Set(this.productMaterialContext.candidates.map(candidate => this.productMaterialCandidateKey(candidate)));
+              this.productMaterialCandidateDetailKeys = this.productMaterialCandidateDetailKeys.filter(key => availableKeys.has(key));
+              this.productMaterialCompareKeys = this.productMaterialCompareKeys.filter(key => availableKeys.has(key));
               return true;
             } catch (error) {
               if (
@@ -15604,10 +15705,44 @@
                 loading: false,
                 error: this.errorMessage(error) || "常用箱材质候选与历史加载失败",
               };
+              this.productMaterialCandidateDetailKeys = [];
+              this.productMaterialCompareKeys = [];
               return false;
             } finally {
               this.finishLatestRequest(requestKey, controller);
             }
+          },
+          productMaterialCandidateKey(candidate) {
+            return String(candidate?.candidate_key || candidate?.candidate_id || candidate?.material_id || candidate?.actual_material_id || "");
+          },
+          isProductMaterialCandidateDetailOpen(candidate) {
+            return this.productMaterialCandidateDetailKeys.includes(this.productMaterialCandidateKey(candidate));
+          },
+          toggleProductMaterialCandidateDetail(candidate) {
+            const key = this.productMaterialCandidateKey(candidate);
+            if (!key) return;
+            this.productMaterialCandidateDetailKeys = this.productMaterialCandidateDetailKeys.includes(key)
+              ? this.productMaterialCandidateDetailKeys.filter(item => item !== key)
+              : [...this.productMaterialCandidateDetailKeys, key];
+          },
+          isProductMaterialCandidateCompared(candidate) {
+            return this.productMaterialCompareKeys.includes(this.productMaterialCandidateKey(candidate));
+          },
+          toggleProductMaterialCandidateComparison(candidate) {
+            const key = this.productMaterialCandidateKey(candidate);
+            if (!key) return;
+            if (this.productMaterialCompareKeys.includes(key)) {
+              this.productMaterialCompareKeys = this.productMaterialCompareKeys.filter(item => item !== key);
+              return;
+            }
+            if (this.productMaterialCompareKeys.length >= 4) {
+              this.showToast("一次最多对比 4 款候选材质", true);
+              return;
+            }
+            this.productMaterialCompareKeys = [...this.productMaterialCompareKeys, key];
+          },
+          clearProductMaterialCandidateComparison() {
+            this.productMaterialCompareKeys = [];
           },
           applyProductMaterialCandidate(candidate) {
             const materialId = candidate?.material_id || candidate?.actual_material_id;

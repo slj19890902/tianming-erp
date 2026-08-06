@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.55"
-    assert APP_VERSION_NAME == "常用箱多供应商报料材质轨迹与比价"
+    assert APP_VERSION == "v0.22.56"
+    assert APP_VERSION_NAME == "候选材质精简与多款比价"
     assert APP_BUILD_DATE == "2026-08-06"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -50,15 +50,19 @@ def test_factory_update_reports_current_release_version() -> None:
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
     assert any(
-        "本次更新｜" in item and "材质候选" in item and "正式报料材质" in item
+        "本次更新｜" in item and "候选材质主卡" in item and "最近正式报料" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "材质轨迹" in item and "总克重" in item
+        "本次更新｜" in item and "二至四款" in item and "总克重" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "3D30515" in item and "D828L" in item
+        "如何验证｜" in item and "3D30515" in item and "最近报料" in item
+        for item in current_release
+    )
+    assert any(
+        "如何验证｜" in item and "D828L" in item and "N719K" in item
         for item in current_release
     )
     assert any(

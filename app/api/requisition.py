@@ -7786,6 +7786,7 @@ def product_material_context(
                 "effective_use_count": stat["count"],
                 "history_count": stat["count"],
                 "selection_history_count": 0,
+                "last_requisition_at": stat["last_used_at"],
                 "last_used_at": stat["last_used_at"],
                 "last_document_no": stat["last_document_no"],
                 "recommendation_reasons": reasons,
@@ -7846,6 +7847,7 @@ def product_material_context(
             "effective_use_count": stat["count"],
             "history_count": stat["count"],
             "selection_history_count": 0,
+            "last_requisition_at": stat["last_used_at"],
             "last_used_at": stat["last_used_at"],
             "last_document_no": stat["last_document_no"],
             "recommendation_reasons": reasons,
@@ -7884,6 +7886,7 @@ def product_material_context(
                 "effective_use_count": 0,
                 "history_count": 0,
                 "selection_history_count": 0,
+                "last_requisition_at": None,
                 "last_used_at": None,
                 "last_document_no": None,
                 "recommendation_reasons": ["常用箱当前材质"],
@@ -7954,6 +7957,7 @@ def product_material_context(
             "effective_use_count": 0,
             "history_count": 0,
             "selection_history_count": stat["count"],
+            "last_requisition_at": None,
             "last_used_at": stat["last_used_at"],
             "last_document_no": None,
             "recommendation_reasons": reasons,
@@ -8121,6 +8125,10 @@ def product_material_context(
     for row in candidates:
         if isinstance(row.get("last_used_at"), datetime):
             row["last_used_at"] = utc_naive_to_api(row["last_used_at"])
+        if isinstance(row.get("last_requisition_at"), datetime):
+            row["last_requisition_at"] = utc_naive_to_api(
+                row["last_requisition_at"]
+            )
     for row in manual_history:
         if isinstance(row.get("selected_at"), datetime):
             row["selected_at"] = utc_naive_to_api(row["selected_at"])

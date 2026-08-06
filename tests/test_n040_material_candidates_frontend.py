@@ -32,7 +32,7 @@ def test_common_box_editor_embeds_product_specific_candidate_and_requisition_his
     assert 'axios.get(`/api/requisition/products/${requestedId}/material-context`, {' in source
     assert "signal:controller.signal" in source
     assert "applyProductMaterialCandidate(candidate)" in source
-    assert "formatBeijingDate(candidate.last_used_at)" in source
+    assert "formatBeijingDate(candidate.last_requisition_at)" in source
     assert "dt(candidate.last_used_at)" not in source
     assert "只回填当前表单，仍需保存常用箱" in source
     assert "尚未匹配正式报料单的人工选材单独标识" in source
@@ -43,7 +43,17 @@ def test_common_box_editor_embeds_product_specific_candidate_and_requisition_his
     assert "candidate.total_basis_weight_gsm" in editor_context
     assert "candidate.effective_price" in editor_context
     assert "candidate.price_difference_to_lowest" in editor_context
-    assert "当前有效价，不是历史冻结价" in editor_context
+    assert "最近报料" in editor_context
+    assert "报料次数" in editor_context
+    assert "product-material-candidate-metrics" in editor_context
+    assert "toggleProductMaterialCandidateDetail(candidate)" in editor_context
+    assert "toggleProductMaterialCandidateComparison(candidate)" in editor_context
+    assert "候选材质对比" in editor_context
+    assert "一次最多对比 4 款候选材质" in source
+    candidate_section = editor_context[editor_context.index(candidate_heading):editor_context.index(history_heading)]
+    assert "报料选材" not in candidate_section
+    assert "candidate.recommendation_reason" not in candidate_section
+    assert "candidate.last_document_no" not in candidate_section
     assert "history.basis_weight_description" in editor_context
     assert "history.total_basis_weight_gsm" in editor_context
     assert "history.current_effective_price" in editor_context

@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.57"
-    assert APP_VERSION_NAME == "供应商同码材质独立维护"
+    assert APP_VERSION == "v0.22.58"
+    assert APP_VERSION_NAME == "待报料页签明细显示修复"
     assert APP_BUILD_DATE == "2026-08-06"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -50,19 +50,19 @@ def test_factory_update_reports_current_release_version() -> None:
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
     assert any(
-        "本次更新｜" in item and "鸣朋已有 G9G" in item and "胜源" in item
+        "本次更新｜" in item and "待报料明细" in item and "页签条件隐藏" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "同一供应商内" in item and "独立材质 ID" in item
+        "本次更新｜" in item and "三个明细表" in item and "同级区域" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "胜源下新增 G9G" in item and "保存成功" in item
+        "如何验证｜" in item and "15 条明细" in item and "昆山鸣朋 10 条" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "鸣朋和胜源" in item and "各自独立" in item
+        "如何验证｜" in item and "来回切换三个页签" in item and "v0.22.58" in item
         for item in current_release
     )
     assert any(

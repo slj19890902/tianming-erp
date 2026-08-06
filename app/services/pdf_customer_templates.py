@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.models.customer import Customer
 from app.models.pdf_training import PdfOrderCustomerTemplate, PdfOrderTrainingSample
-from app.services.order_pdf_import import file_sha256
+from app.services.order_pdf_import import file_sha256, match_import_draft
 from app.services.pdf_parse_pipeline import parse_pdf_bytes
 from app.services.pdf_scoring import (
     parsed_item_value,
@@ -249,6 +249,37 @@ def read_and_verify_sample_pdf(sample: PdfOrderTrainingSample) -> bytes:
     return content
 
 
+def _uses_legacy_ordinal_line_numbers(truth: dict, parsed: dict) -> bool:
+    """Recognize labels saved by the old UI that rewrote source rows to 1..N.
+
+    The compatibility applies only when every product code still matches in
+    order and the parsed source line numbers are unique.  New labels preserve
+    the real PDF line number and therefore do not need this alias.
+    """
+
+    truth_items = truth.get("items") or []
+    parsed_items = parsed.get("items") or []
+    if not truth_items or len(truth_items) != len(parsed_items):
+        return False
+    try:
+        truth_lines = [int(item.get("line_no")) for item in truth_items]
+        parsed_lines = [int(item.get("line_no")) for item in parsed_items]
+    except (TypeError, ValueError):
+        return False
+    return (
+        truth_lines == list(range(1, len(truth_items) + 1))
+        and parsed_lines != truth_lines
+        and len(set(parsed_lines)) == len(parsed_lines)
+        and all(
+            values_match(
+                truth_item.get("product_code"),
+                parsed_item_value(parsed_item, "product_code"),
+            )
+            for truth_item, parsed_item in zip(truth_items, parsed_items, strict=True)
+        )
+    )
+
+
 def _strict_gold_matches(truth: dict, parsed: dict) -> dict[str, bool]:
     checks: dict[str, bool] = {
         field: values_match(
@@ -258,14 +289,62 @@ def _strict_gold_matches(truth: dict, parsed: dict) -> dict[str, bool]:
     }
     truth_items = truth.get("items") or []
     parsed_items = parsed.get("items") or []
+    legacy_ordinal_lines = _uses_legacy_ordinal_line_numbers(truth, parsed)
     checks["items.count"] = len(truth_items) == len(parsed_items)
     for index, truth_item in enumerate(truth_items):
         parsed_item = parsed_items[index] if index < len(parsed_items) else {}
-        for field in GOLD_STRICT_ITEM_FIELDS:
+        for field in GOLD_CRITICAL_ITEM_FIELDS:
+            if field == "line_no" and legacy_ordinal_lines:
+                checks[f"items[{index}].{field}"] = True
+                continue
+            checks[f"items[{index}].{field}"] = values_match(
+                truth_item.get(field), parsed_item_value(parsed_item, field)
+            )
+        for field in GOLD_ADDITIONAL_STRICT_ITEM_FIELDS:
+            if _missing(truth_item.get(field)):
+                continue
             checks[f"items[{index}].{field}"] = values_match(
                 truth_item.get(field), parsed_item_value(parsed_item, field)
             )
     return checks
+
+
+def _activation_input_fingerprint(
+    candidate: PdfOrderCustomerTemplate,
+    samples: list[PdfOrderTrainingSample],
+) -> str:
+    payload = {
+        "template": {
+            "id": candidate.id,
+            "customer_id": candidate.customer_id,
+            "version": candidate.version,
+            "status": candidate.status,
+            "order_no_pattern": candidate.order_no_pattern,
+            "date_pattern": candidate.date_pattern,
+            "item_row_pattern": candidate.item_row_pattern,
+            "customer_name_pattern": candidate.customer_name_pattern,
+            "column_map_json": candidate.column_map_json,
+        },
+        "samples": [
+            {
+                "id": sample.id,
+                "file_sha256": sample.file_sha256,
+                "ground_truth_sha256": hashlib.sha256(
+                    (sample.ground_truth_json or "").encode("utf-8")
+                ).hexdigest(),
+                "gold_review_status": sample.gold_review_status,
+            }
+            for sample in samples
+        ],
+    }
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def activation_dry_run(
@@ -282,6 +361,8 @@ def activation_dry_run(
         "template_id": candidate.id,
         "customer_id": candidate.customer_id,
         "template_version": candidate.version,
+        "parser_output_layer": "order_preview_matched",
+        "input_fingerprint": None,
         "sample_count": 0,
         "sample_results": [],
         "average_score": None,
@@ -308,6 +389,7 @@ def activation_dry_run(
         rules = load_candidate_pdf_template_rules(db, candidate)
 
     evidence["sample_count"] = len(samples)
+    evidence["input_fingerprint"] = _activation_input_fingerprint(candidate, samples)
     if len(samples) < 3:
         evidence["reasons"].append("至少需要 3 份同客户已批准金样本")
 
@@ -319,13 +401,18 @@ def activation_dry_run(
             "ok": False,
             "reasons": [],
             "strict_checks": {},
+            "legacy_ordinal_line_numbers": False,
             "score": None,
         }
         try:
             truth = parse_and_validate_gold_ground_truth(sample.ground_truth_json)
             content = read_and_verify_sample_pdf(sample)
             outcome = parse_pdf_bytes(content, sample.file_name, rules)
-            parsed = outcome.draft
+            parsed = match_import_draft(
+                db,
+                outcome.draft,
+                customer_id=candidate.customer_id,
+            )
             route = parsed.get("customer_route") or {}
             if not (
                 route.get("status") == "locked"
@@ -347,6 +434,9 @@ def activation_dry_run(
                 sample_evidence["reasons"].append("样本评分低于 0.90")
             strict_checks = _strict_gold_matches(truth, parsed)
             sample_evidence["strict_checks"] = strict_checks
+            sample_evidence["legacy_ordinal_line_numbers"] = (
+                _uses_legacy_ordinal_line_numbers(truth, parsed)
+            )
             failed_checks = [name for name, passed in strict_checks.items() if not passed]
             if failed_checks:
                 sample_evidence["reasons"].append(

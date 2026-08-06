@@ -3641,8 +3641,8 @@
                               <button v-if="row.status !== 'draft' || !canAdmin" class="btn small" :disabled="pdfTemplateLoading" @click="openPdfTemplateEditor(row)">查看</button>
                               <button v-if="canAdmin && row.status === 'draft'" class="btn small" :disabled="pdfTemplateLoading" @click="openPdfTemplateEditor(row)">编辑</button>
                               <button v-if="canAdmin && ['draft','active','retired'].includes(row.status)" class="btn small" :disabled="pdfTemplateLoading" @click="clonePdfTemplate(row)">clone draft</button>
-                              <button v-if="canAdmin && row.status === 'draft'" class="btn small" :disabled="pdfTemplateLoading" @click="runPdfTemplateDryRun(row)">只读验证</button>
-                              <button v-if="canAdmin && row.status === 'draft'" class="btn small success" :disabled="pdfTemplateLoading || !pdfTemplateCanActivate(row)" :title="pdfTemplateActivationHint(row)" @click="activatePdfTemplate(row)">激活</button>
+                              <button v-if="canAdmin && row.status === 'draft'" class="btn small" :disabled="pdfTemplateLoading" @click="runPdfTemplateDryRun(row)">回放金样本</button>
+                              <button v-if="canAdmin && row.status === 'draft'" class="btn small success" :disabled="pdfTemplateLoading || !pdfTemplateCanActivate(row)" :title="pdfTemplateActivationHint(row)" @click="activatePdfTemplate(row)">一键启用</button>
                               <button v-if="canAdmin && row.status === 'active'" class="btn small danger" :disabled="pdfTemplateLoading" @click="retirePdfTemplate(row)">退役</button>
                               <button v-if="canAdmin && row.status === 'draft'" class="btn small danger" :disabled="pdfTemplateLoading" @click="deletePdfTemplate(row)">删除</button>
                             </div>
@@ -4294,8 +4294,8 @@
                     <div class="field wide"><label>改进说明</label><input class="input" v-model.trim="draft._correction_form.notes" placeholder="请用中文说明本次修正内容" /></div>
                   </div>
                   <div style="overflow-x:auto">
-                    <table class="data-table" style="font-size:12px;min-width:1040px">
-                      <thead><tr><th>行号</th><th>存货编码</th><th>产品名称</th><th>规格</th><th>数量</th><th>单位</th><th>单价</th><th>金额</th><th>操作</th></tr></thead>
+                    <table class="data-table" style="font-size:12px;min-width:1160px">
+                      <thead><tr><th>行号</th><th>存货编码</th><th>产品名称</th><th>规格</th><th>数量</th><th>单位</th><th>单价</th><th>金额</th><th>交期</th><th>操作</th></tr></thead>
                       <tbody>
                         <tr v-for="(item,index) in draft._correction_form.items" :key="`pdf-correction-${index}`">
                           <td><input class="input" type="number" min="1" v-model.number="item.line_no" style="width:66px" /></td>
@@ -4306,9 +4306,10 @@
                           <td><input class="input" v-model.trim="item.unit" placeholder="单位" style="width:80px" /></td>
                           <td><input class="input" type="number" step="0.0001" v-model="item.unit_price" placeholder="单价" style="width:100px" /></td>
                           <td><input class="input" type="number" step="0.0001" v-model="item.amount" placeholder="金额" style="width:100px" /></td>
+                          <td><input class="input" v-model.trim="item.delivery_date" placeholder="如 2026-08-13" style="width:120px" /></td>
                           <td><button class="btn small danger" type="button" @click="removePdfCorrectionItem(draft,index)">删除</button></td>
                         </tr>
-                        <tr v-if="!draft._correction_form.items.length"><td colspan="9" class="muted" style="text-align:center">当前没有明细行，请新增或取消。</td></tr>
+                        <tr v-if="!draft._correction_form.items.length"><td colspan="10" class="muted" style="text-align:center">当前没有明细行，请新增或取消。</td></tr>
                       </tbody>
                     </table>
                   </div>
@@ -5746,6 +5747,33 @@
                     <button class="btn small danger" :disabled="loading" @click="reviewPdfSample('rejected')">拒绝</button>
                   </div>
                 </div>
+                <div v-if="pdfSampleDetail.gold_review_status === 'approved'" class="field wide" style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:10px">
+                  <label>持续学习闭环</label>
+                  <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:5px">
+                    <span class="status green">1 提交改进</span>
+                    <span>→</span><span class="status green">2 金样本</span>
+                    <span>→</span><span :class="['status', pdfSampleDetail.learning_draft ? 'green' : 'orange']">3 规则草稿</span>
+                    <span>→</span><span :class="['status', pdfSampleDetail.learning_replay ? (pdfSampleDetail.learning_replay.can_activate ? 'green' : 'orange') : 'orange']">4 回放</span>
+                    <span>→</span><span :class="['status', pdfSampleDetail.learning_draft?.status === 'active' ? 'green' : 'gray']">5 人工启用</span>
+                  </div>
+                  <div style="margin-top:8px;font-size:12px">
+                    <div>{{ pdfSampleDetail.learning_message || '等待生成规则草稿。' }}</div>
+                    <div v-if="pdfSampleDetail.learning_draft" class="muted" style="margin-top:4px">
+                      草稿 #{{ pdfSampleDetail.learning_draft.id }} · v{{ pdfSampleDetail.learning_draft.version }} ·
+                      已纳入 {{ pdfSampleDetail.learning_draft.sample_count || 0 }} 份同客户金样本
+                    </div>
+                    <div v-if="pdfSampleDetail.learning_replay" style="margin-top:4px">
+                      回放：{{ pdfSampleDetail.learning_replay.sample_count || 0 }} 份；平均评分：{{ pdfSampleDetail.learning_replay.average_score == null ? '-' : (pdfSampleDetail.learning_replay.average_score * 100).toFixed(1) + '%' }}
+                      <span :style="{color:pdfSampleDetail.learning_replay.can_activate?'#15803d':'#b45309',fontWeight:700}">{{ pdfSampleDetail.learning_replay.can_activate ? '，已通过' : '，未通过' }}</span>
+                    </div>
+                    <div v-if="pdfSampleDetail.learning_replay?.reasons?.length" style="color:#92400e;margin-top:4px">{{ pdfSampleDetail.learning_replay.reasons.join('；') }}</div>
+                  </div>
+                  <div v-if="canAdmin" class="toolbar-group" style="margin-top:8px;flex-wrap:wrap">
+                    <button class="btn small" :disabled="loading" @click="runPdfSampleLearningLoop">生成/刷新规则草稿并回放</button>
+                    <button v-if="pdfSampleDetail.learning_draft?.status === 'draft'" class="btn small success" :disabled="loading || !pdfSampleDetail.learning_replay?.can_activate" @click="activatePdfSampleLearningDraft">一键启用</button>
+                  </div>
+                  <div class="muted" style="margin-top:6px;font-size:11px">规则只改变 PDF 识别草稿；不会自动创建、保存或覆盖正式订单。</div>
+                </div>
                 <div class="field"><label>评分</label>
                   <div v-if="pdfSampleDetail.score!=null" :style="{color:pdfSampleDetail.score>=0.9?'#16a34a':pdfSampleDetail.score>=0.7?'#d97706':'#dc2626',fontWeight:700,fontSize:'18px'}">
                     {{ (pdfSampleDetail.score*100).toFixed(1) }}%
@@ -5919,7 +5947,7 @@
                     </div>
                   </div>
                   <div style="overflow-x:auto">
-                    <table class="data-table" style="font-size:12px;min-width:980px">
+                    <table class="data-table" style="font-size:12px;min-width:1100px">
                       <thead>
                         <tr>
                           <th>行号</th>
@@ -5930,6 +5958,7 @@
                           <th>单位</th>
                           <th>单价</th>
                           <th>金额</th>
+                          <th>交期</th>
                           <th>操作</th>
                         </tr>
                       </thead>
@@ -5943,12 +5972,13 @@
                           <td style="width:90px"><input class="input" v-model.trim="item.unit" placeholder="单位" /></td>
                           <td style="width:110px"><input class="input" type="number" step="0.0001" v-model="item.unit_price" placeholder="单价" /></td>
                           <td style="width:110px"><input class="input" type="number" step="0.0001" v-model="item.amount" placeholder="金额" /></td>
+                          <td style="min-width:120px"><input class="input" v-model.trim="item.delivery_date" placeholder="如 2026-08-13" /></td>
                           <td style="width:90px">
                             <button class="btn small danger" type="button" @click="removePdfGroundTruthItem(index)">删除</button>
                           </td>
                         </tr>
                         <tr v-if="!pdfGroundTruthForm.items.length">
-                          <td colspan="9" class="muted" style="text-align:center">当前没有明细行，可先从解析结果生成草稿，或手工新增明细行。</td>
+                          <td colspan="10" class="muted" style="text-align:center">当前没有明细行，可先从解析结果生成草稿，或手工新增明细行。</td>
                         </tr>
                       </tbody>
                     </table>
@@ -17964,6 +17994,7 @@
               unit: String(item?.unit || "").trim(),
               unit_price: unitPrice,
               amount,
+              delivery_date: String(item?.delivery_date || "").trim(),
             };
           },
           pdfCorrectionFormFromDraft(draft) {
@@ -18023,6 +18054,7 @@
                 unit: String(item.unit || "").trim(),
                 unit_price: item.unit_price === "" || item.unit_price === null || item.unit_price === undefined ? null : Number(item.unit_price),
                 amount: item.amount === "" || item.amount === null || item.amount === undefined ? null : Number(item.amount),
+                delivery_date: String(item.delivery_date || "").trim(),
               })),
             };
             const form = new FormData();
@@ -23151,12 +23183,12 @@
             if (!template?.id) return;
             this.pdfTemplateLoading = true;
             try {
-              const { data } = await axios.post(`/api/pdf-training/templates/${template.id}/activation-dry-run`);
+              const { data } = await axios.post(`/api/pdf-training/templates/${template.id}/replay`);
               this.pdfTemplateDryRun = data;
-              this.showToast(data.can_activate ? "只读验证通过，可以激活" : "只读验证未通过，当前不可激活", !data.can_activate);
+              this.showToast(data.can_activate ? "金样本回放通过，可以一键启用" : "金样本回放未通过，当前不可启用", !data.can_activate);
             } catch (error) {
               this.pdfTemplateDryRun = null;
-              this.showToast(`只读验证失败：${this.pdfTemplateErrorMessage(error)}`, true);
+              this.showToast(`金样本回放失败：${this.pdfTemplateErrorMessage(error)}`, true);
             } finally {
               this.pdfTemplateLoading = false;
             }
@@ -23168,11 +23200,11 @@
           },
           pdfTemplateActivationHint(template) {
             if (template?.status !== "draft") return "只有 draft 模板可以激活";
-            if (this.pdfTemplateDryRun?.template_id !== template.id) return "请先完成只读验证（dry-run）";
+            if (this.pdfTemplateDryRun?.template_id !== template.id) return "请先回放同客户金样本";
             if (!this.pdfTemplateDryRun?.can_activate) {
               return `不可激活：${(this.pdfTemplateDryRun?.reasons || []).join("；") || "验证未通过"}`;
             }
-            return "验证已通过，可填写原因后激活";
+            return "回放已通过，可以一键启用";
           },
           pdfTemplateStrictCheckText(result) {
             const checks = result?.strict_checks || {};
@@ -23332,10 +23364,50 @@
                 note: note.trim() || null,
               });
               this.pdfSampleDetail = data;
+              this.loadPdfGroundTruthFormFromSample(data);
               await this.loadPdfTrainingSamples(this.pdfSamplePage);
-              this.showToast(status === "approved" ? "样本已批准为金样本" : "样本已拒绝为金样本");
+              this.showToast(status === "approved" ? (data.learning_message || "样本已批准为金样本并完成规则回放") : "样本已拒绝为金样本");
             } catch (error) {
               this.showToast(`金样本复核失败：${this.errorMessage(error)}`, true);
+            } finally {
+              this.loading = false;
+            }
+          },
+          async runPdfSampleLearningLoop() {
+            if (!this.canAdmin || !this.pdfSampleDetail) return;
+            const safeSampleId = this.normalizePdfSampleId(this.pdfSampleDetail);
+            if (!safeSampleId) return;
+            this.loading = true;
+            try {
+              const { data } = await axios.post(`/api/pdf-training/samples/${safeSampleId}/learning-loop`);
+              this.pdfSampleDetail = data;
+              this.loadPdfGroundTruthFormFromSample(data);
+              this.showToast(data.learning_replay?.can_activate ? "规则草稿已生成，金样本回放通过" : (data.learning_message || "规则草稿已生成，但回放尚未通过"), !data.learning_replay?.can_activate);
+            } catch (error) {
+              this.showToast(`持续学习失败：${this.pdfTemplateErrorMessage(error)}`, true);
+            } finally {
+              this.loading = false;
+            }
+          },
+          async activatePdfSampleLearningDraft() {
+            if (!this.canAdmin || !this.pdfSampleDetail?.learning_draft) return;
+            const draft = this.pdfSampleDetail.learning_draft;
+            if (!this.pdfSampleDetail.learning_replay?.can_activate) {
+              this.showToast("金样本回放尚未通过，不能启用", true);
+              return;
+            }
+            if (!window.confirm(`确认一键启用规则草稿 #${draft.id} v${draft.version}？同客户旧规则会自动退役，但不会自动保存正式订单。`)) return;
+            this.loading = true;
+            try {
+              await axios.post(`/api/pdf-training/templates/${draft.id}/activate`, {});
+              const safeSampleId = this.normalizePdfSampleId(this.pdfSampleDetail);
+              const { data } = await axios.get(`/api/pdf-training/samples/${safeSampleId}`);
+              this.pdfSampleDetail = data;
+              this.loadPdfGroundTruthFormFromSample(data);
+              this.showToast("规则已启用；以后识别会使用新规则，正式订单仍需人工确认保存");
+              await this.loadPdfTemplates();
+            } catch (error) {
+              this.showToast(`一键启用失败：${this.pdfTemplateErrorMessage(error)}`, true);
             } finally {
               this.loading = false;
             }
@@ -23381,6 +23453,7 @@
               unit: String(source.unit || "").trim(),
               unit_price: toNullableNumberText(source.unit_price),
               amount: toNullableNumberText(source.amount),
+              delivery_date: String(source.delivery_date || "").trim(),
             };
           },
           applyPdfGroundTruthObject(payload) {
@@ -23437,7 +23510,7 @@
           },
           buildPdfGroundTruthJsonFromForm() {
             const items = this.pdfGroundTruthForm.items.map((item, index) => ({
-              line_no: index + 1,
+              line_no: Number.parseInt(item.line_no, 10) || index + 1,
               product_code: String(item.product_code || "").trim(),
               product_name: String(item.product_name || "").trim(),
               spec: String(item.spec || "").trim(),
@@ -23445,6 +23518,7 @@
               unit: String(item.unit || "").trim(),
               unit_price: this.normalizePdfGroundTruthNumber(item.unit_price, `第${index + 1}行单价`),
               amount: this.normalizePdfGroundTruthNumber(item.amount, `第${index + 1}行金额`),
+              delivery_date: String(item.delivery_date || "").trim(),
             }));
             return {
               customer_name: String(this.pdfGroundTruthForm.customer_name || "").trim(),

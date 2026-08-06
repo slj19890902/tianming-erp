@@ -946,6 +946,54 @@ def _join_record_lines(lines: list[str]) -> str:
     return " ".join(parts)
 
 
+def _repair_tianhua_wrapped_quantity_lines(lines: list[str]) -> tuple[list[str], bool]:
+    """Join a Tianhua quantity whose final digits wrapped onto the next line.
+
+    Some PDF generators place a value such as ``1,500.00000`` in a narrow
+    quantity cell.  The text layer then exposes it as ``个 1,500.0000`` plus a
+    standalone ``0`` at the beginning of the price line.  Without this
+    layout-aware repair the generic tail regex treats ``1,500.0000`` as the
+    unit and the wrapped ``0`` as the quantity.
+
+    The next line must contain a standalone integer fragment followed by a
+    decimal unit price, amount and delivery date.  This deliberately excludes
+    ordinary line breaks where the next line starts directly with a price such
+    as ``0.660000``.
+    """
+
+    repaired = list(lines)
+    changed = False
+    index = 0
+    while index + 1 < len(repaired):
+        current = repaired[index]
+        following = repaired[index + 1]
+        quantity_tail = re.search(
+            r"(?:^|\s)(?:个(?:\s*[（(]\s*无\s*小数\s*[）)])?|Pcs|PCS)\s+"
+            r"(?P<quantity>\d[\d,]*(?:\.\d+)?)$",
+            current,
+            re.IGNORECASE,
+        )
+        price_line = re.match(
+            r"^(?P<fragment>\d+)\s+"
+            r"(?P<unit_price>\d+\.\d+)\s+"
+            r"(?P<amount>[\d,]+(?:\.\d+)?)\s+"
+            r"(?P<delivery_date>20\d{2}[./]\d{2}[./]\d{2})$",
+            following,
+        )
+        if quantity_tail and price_line:
+            repaired[index] = current + price_line.group("fragment")
+            repaired[index + 1] = " ".join(
+                (
+                    price_line.group("unit_price"),
+                    price_line.group("amount"),
+                    price_line.group("delivery_date"),
+                )
+            )
+            changed = True
+        index += 1
+    return repaired, changed
+
+
 def _split_records(lines: list[str]) -> tuple[list[list[str]], bool, bool]:
     """
     拆分明细行。
@@ -1602,7 +1650,15 @@ def _parse_tianhua_record_tail(record_lines: list[str]) -> dict | None:
 
 
 def _parse_tianhua_record(record_lines: list[str], has_extra_columns: bool = False) -> dict | None:
-    return _parse_record(record_lines, has_extra_columns=has_extra_columns) or _parse_tianhua_record_tail(record_lines)
+    repaired_lines, quantity_wrap_repaired = _repair_tianhua_wrapped_quantity_lines(record_lines)
+    item = _parse_record(
+        repaired_lines,
+        has_extra_columns=has_extra_columns,
+    ) or _parse_tianhua_record_tail(repaired_lines)
+    if item is not None and quantity_wrap_repaired:
+        item["raw_lines"] = record_lines
+        item["layout_repairs"] = ["tianhua_wrapped_quantity"]
+    return item
 
 
 # ---------------------------------------------------------------------------

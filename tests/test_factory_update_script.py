@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.58"
-    assert APP_VERSION_NAME == "待报料页签明细显示修复"
+    assert APP_VERSION == "v0.22.59"
+    assert APP_VERSION_NAME == "天华PDF换行识别与金样本学习闭环"
     assert APP_BUILD_DATE == "2026-08-06"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -50,20 +50,30 @@ def test_factory_update_reports_current_release_version() -> None:
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
     assert any(
-        "本次更新｜" in item and "待报料明细" in item and "页签条件隐藏" in item
+        "本次更新｜" in item and "1,500.0000" in item and "数量 0" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "三个明细表" in item and "同级区域" in item
+        "本次更新｜" in item and "自动生成非生效规则草稿" in item and "订单预览" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "15 条明细" in item and "昆山鸣朋 10 条" in item
+        "如何验证｜" in item and "PO2026080148.pdf" in item and "合计 3006" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "来回切换三个页签" in item and "v0.22.58" in item
+        "如何验证｜" in item and "至少 3 份" in item and "一键启用" in item
         for item in current_release
+    )
+    assert any(
+        item.startswith("v0.22.58：") and "待报料" in item and "页签条件隐藏" in item
+        for item in APP_CHANGELOG
+    )
+    assert any(
+        item.startswith("v0.22.58：如何验证｜")
+        and "15 条" in item
+        and "昆山鸣朋 10 条" in item
+        for item in APP_CHANGELOG
     )
     assert any(
         item.startswith("v0.22.51：") and "YKE 100 条" in item and "KEW 31 条" in item

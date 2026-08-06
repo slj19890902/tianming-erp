@@ -66,7 +66,7 @@ def test_n016_template_operation_matrix_uses_one_confirmation_without_reason() -
     assert "确认激活模板" in INDEX
     assert "确认退役 active 模板" in INDEX
     assert "/clone-draft" in INDEX
-    assert "/activation-dry-run" in INDEX
+    assert "/replay" in INDEX
     assert "/activate" in INDEX
     assert "/retire" in INDEX
     assert "axios.delete(`/api/pdf-training/templates/${template.id}`)" in INDEX
@@ -85,8 +85,22 @@ def test_n016_dry_run_renders_sample_scores_errors_average_and_activation_gate()
     assert "可激活" in INDEX
     assert "不可激活原因" in INDEX
     assert "pdfTemplateCanActivate(row)" in INDEX
-    assert "只读验证（dry-run）" in INDEX
+    assert "回放同客户金样本" in INDEX
     assert "pdfTemplateErrorMessage" in INDEX
+
+
+def test_gold_learning_loop_and_ground_truth_source_fields_are_connected() -> None:
+    assert "持续学习闭环" in INDEX
+    assert "生成/刷新规则草稿并回放" in INDEX
+    assert "一键启用" in INDEX
+    assert "/learning-loop" in INDEX
+    assert "learning_replay?.can_activate" in INDEX
+    assert "不会自动创建、保存或覆盖正式订单" in INDEX
+    build = INDEX.split("buildPdfGroundTruthJsonFromForm()", 1)[1].split(
+        "pdfGroundTruthPreviewText()", 1
+    )[0]
+    assert "Number.parseInt(item.line_no, 10) || index + 1" in build
+    assert "delivery_date: String(item.delivery_date || \"\").trim()" in build
 
 
 def test_n016_inline_javascript_is_syntactically_valid(tmp_path: Path) -> None:

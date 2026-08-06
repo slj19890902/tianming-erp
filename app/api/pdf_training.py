@@ -56,6 +56,7 @@ from app.services.order_pdf_import import (
     TEMPLATE_ITEM_FIELDS,
     TEMPLATE_PATTERN_MAX_LENGTH,
     file_sha256,
+    match_import_draft,
     template_pattern_safety_error,
 )
 from app.services.pdf_customer_templates import (
@@ -74,6 +75,9 @@ from app.services.secure_uploads import (
 )
 
 router = APIRouter()
+
+LEARNING_DRAFT_KIND = "approved_gold_rule_draft"
+LEARNING_GENERATOR_VERSION = 1
 
 require_pdf_training_view = PermissionChecker("pdf_training.view")
 require_pdf_training_manage = PermissionChecker("pdf_training.manage")
@@ -143,13 +147,19 @@ def _parse_pdf_sample_content(
     db: Session,
     content: bytes,
     source_name: str,
+    customer_id: int | None = None,
 ) -> dict:
     template_rules = load_active_pdf_template_rules(db)
     try:
         outcome = parse_pdf_bytes(content, source_name, template_rules)
         extracted_text = outcome.extracted_text
         ocr_text_raw = outcome.ocr_text_raw
-        parser_result_json = json.dumps(outcome.draft, ensure_ascii=False, default=str)
+        draft = (
+            match_import_draft(db, outcome.draft, customer_id=customer_id)
+            if customer_id is not None
+            else outcome.draft
+        )
+        parser_result_json = json.dumps(draft, ensure_ascii=False, default=str)
         parse_method = outcome.parse_method
         text_quality = outcome.text_quality
     except PdfParsePipelineError as error:
@@ -166,6 +176,29 @@ def _parse_pdf_sample_content(
         "parse_method": parse_method,
         "text_quality": text_quality,
     }
+
+
+def _refresh_stored_sample_parse(
+    db: Session,
+    sample: PdfOrderTrainingSample,
+    content: bytes | None = None,
+) -> None:
+    source = content if content is not None else read_and_verify_sample_pdf(sample)
+    parse_payload = _parse_pdf_sample_content(
+        db,
+        source,
+        sample.file_name or "sample.pdf",
+        customer_id=sample.customer_id,
+    )
+    sample.extracted_text = parse_payload["extracted_text"]
+    sample.ocr_text_raw = parse_payload["ocr_text_raw"]
+    sample.parser_result_json = parse_payload["parser_result_json"]
+    sample.parse_method = parse_payload["parse_method"]
+    sample.score = (
+        score_sample(sample.parser_result_json, sample.ground_truth_json).overall_score
+        if sample.ground_truth_json
+        else None
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -256,6 +289,9 @@ class SampleDetail(SampleSummary):
     ocr_text_raw: str | None
     notes: str | None
     gold_review_note: str | None
+    learning_draft: dict | None = None
+    learning_replay: dict | None = None
+    learning_message: str | None = None
 
 
 class GroundTruthPayload(BaseModel):
@@ -357,6 +393,7 @@ def _apply_ground_truth(
         sample.gold_reviewed_at = None
         sample.gold_reviewed_by = None
         sample.gold_review_note = None
+        _invalidate_learning_replay(db, sample.customer_id, user)
 
     score_result = score_sample(sample.parser_result_json, sample.ground_truth_json)
     sample.score = score_result.overall_score
@@ -624,7 +661,12 @@ async def upload_sample(
             detail=f"该 PDF 已上传（样本 ID={existing.id}，文件 SHA256 重复）",
         )
 
-    parse_payload = _parse_pdf_sample_content(db, content, upload.original_filename)
+    parse_payload = _parse_pdf_sample_content(
+        db,
+        content,
+        upload.original_filename,
+        customer_id=customer_id,
+    )
     extracted_text = parse_payload["extracted_text"]
     ocr_text_raw = parse_payload["ocr_text_raw"]
     parser_result_json = parse_payload["parser_result_json"]
@@ -713,7 +755,12 @@ async def submit_correction_sample(
             sample.customer_id = customer_id
             customer_changed = True
     else:
-        parse_payload = _parse_pdf_sample_content(db, content, upload.original_filename)
+        parse_payload = _parse_pdf_sample_content(
+            db,
+            content,
+            upload.original_filename,
+            customer_id=customer_id,
+        )
         sample = PdfOrderTrainingSample(
             customer_id=customer_id,
             file_name=upload.original_filename,
@@ -727,6 +774,18 @@ async def submit_correction_sample(
         db.add(sample)
         db.flush()
 
+    if not created:
+        parse_payload = _parse_pdf_sample_content(
+            db,
+            content,
+            upload.original_filename,
+            customer_id=sample.customer_id,
+        )
+        sample.parser_result_json = parse_payload["parser_result_json"]
+        sample.extracted_text = parse_payload["extracted_text"]
+        sample.ocr_text_raw = parse_payload["ocr_text_raw"]
+        sample.parse_method = parse_payload["parse_method"]
+
     file_changed = _ensure_sample_pdf(sample, content, upload.original_filename)
     labeled = _apply_ground_truth(
         db,
@@ -738,7 +797,7 @@ async def submit_correction_sample(
     if created or customer_changed or file_changed or labeled:
         db.commit()
         db.refresh(sample)
-    return sample
+    return _attach_sample_learning_state(db, sample)
 
 
 @router.get("/samples/detail/{sample_id}", response_model=SampleDetail)
@@ -748,7 +807,7 @@ def get_sample_legacy_detail(
     _user: User = Depends(require_pdf_training_view),
 ):
     sample, _ = _get_sample_or_404(db, sample_id)
-    return sample
+    return _attach_sample_learning_state(db, sample)
 
 
 @router.get("/samples/{sample_id}", response_model=SampleDetail)
@@ -758,7 +817,7 @@ def get_sample(
     _user: User = Depends(require_pdf_training_view),
 ):
     sample, _ = _get_sample_or_404(db, sample_id)
-    return sample
+    return _attach_sample_learning_state(db, sample)
 
 
 @router.put("/samples/{sample_id}/ground-truth", response_model=SampleDetail)
@@ -774,7 +833,7 @@ def set_ground_truth(
     if changed:
         db.commit()
         db.refresh(sample)
-    return sample
+    return _attach_sample_learning_state(db, sample)
 
 
 @router.post("/samples/{sample_id}/gold-review", response_model=SampleDetail)
@@ -787,10 +846,16 @@ def review_gold_sample(
     """Approve/reject a sample for activation evidence, fail-closed on approval."""
     sample, safe_sample_id = _get_sample_or_404(db, sample_id)
     if payload.status == "approved":
+        if sample.customer_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="批准金样本前必须绑定客户，才能生成同客户规则草稿并回放。",
+            )
         try:
             parse_and_validate_gold_ground_truth(sample.ground_truth_json)
-            read_and_verify_sample_pdf(sample)
-        except ValueError as exc:
+            content = read_and_verify_sample_pdf(sample)
+            _refresh_stored_sample_parse(db, sample, content)
+        except (ValueError, OSError) as exc:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"不能批准金样本: {exc}",
@@ -801,23 +866,59 @@ def review_gold_sample(
         or sample.gold_review_note != payload.note
         or sample.parse_status != "reviewed"
     )
-    if not changed:
-        return sample
-
-    sample.gold_review_status = payload.status
-    sample.gold_reviewed_at = _now()
-    sample.gold_reviewed_by = user.username
-    sample.gold_review_note = payload.note
-    sample.parse_status = "reviewed"
-    _log(
-        db,
-        user,
-        "pdf_training.sample.gold_review",
-        f"金样本复核 {safe_sample_id}: {payload.status}",
-    )
+    if changed:
+        sample.gold_review_status = payload.status
+        sample.gold_reviewed_at = _now()
+        sample.gold_reviewed_by = user.username
+        sample.gold_review_note = payload.note
+        sample.parse_status = "reviewed"
+        _log(
+            db,
+            user,
+            "pdf_training.sample.gold_review",
+            f"金样本复核 {safe_sample_id}: {payload.status}",
+        )
+    if payload.status == "approved":
+        db.flush()
+        learning_draft = _ensure_learning_draft(db, sample, user)
+        _persist_template_replay(db, learning_draft, user)
+    elif sample.customer_id is not None:
+        _invalidate_learning_replay(db, sample.customer_id, user)
     db.commit()
     db.refresh(sample)
-    return sample
+    return _attach_sample_learning_state(db, sample)
+
+
+@router.post("/samples/{sample_id}/learning-loop", response_model=SampleDetail)
+def run_sample_learning_loop(
+    sample_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_pdf_training_manage),
+):
+    """Idempotently create/refresh a rule draft and persist its gold replay."""
+    sample, _ = _get_sample_or_404(db, sample_id)
+    if sample.gold_review_status != "approved" or sample.parse_status != "reviewed":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="只有已批准的金样本才能生成规则草稿并回放。",
+        )
+    if sample.customer_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="金样本未绑定客户，不能生成同客户规则草稿。",
+        )
+    try:
+        _refresh_stored_sample_parse(db, sample)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"原始 PDF 校验失败，不能刷新学习闭环：{exc}",
+        ) from exc
+    draft = _ensure_learning_draft(db, sample, user)
+    _persist_template_replay(db, draft, user)
+    db.commit()
+    db.refresh(sample)
+    return _attach_sample_learning_state(db, sample)
 
 
 @router.post("/samples/{sample_id}/score", response_model=ScoreOut)
@@ -879,20 +980,12 @@ def reparse_sample(
             detail=f"样本原始 PDF 校验失败，拒绝重新解析：{exc}",
         ) from exc
 
-    parse_payload = _parse_pdf_sample_content(db, content, sample.file_name or "sample.pdf")
-    sample.extracted_text = parse_payload["extracted_text"]
-    sample.ocr_text_raw = parse_payload["ocr_text_raw"]
-    sample.parser_result_json = parse_payload["parser_result_json"]
-    sample.parse_method = parse_payload["parse_method"]
-    sample.score = (
-        score_sample(sample.parser_result_json, sample.ground_truth_json).overall_score
-        if sample.ground_truth_json
-        else None
-    )
+    _refresh_stored_sample_parse(db, sample, content)
+    _invalidate_learning_replay(db, sample.customer_id, user)
     _log(db, user, "pdf_training.sample.reparse", f"重新解析样本 {safe_sample_id}: {sample.file_name}")
     db.commit()
     db.refresh(sample)
-    return sample
+    return _attach_sample_learning_state(db, sample)
 
 
 @router.delete("/samples/{sample_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -902,6 +995,7 @@ def delete_sample(
     user: User = Depends(require_pdf_training_manage),
 ):
     sample, safe_sample_id = _get_sample_or_404(db, sample_id)
+    _invalidate_learning_replay(db, sample.customer_id, user)
     _log(db, user, "pdf_training.sample.delete", f"删除样本 {safe_sample_id}: {sample.file_name}")
     db.delete(sample)
     db.commit()
@@ -1017,6 +1111,294 @@ def _commit_template_change(db: Session, detail: str) -> None:
         ) from exc
 
 
+def _json_object(raw: str | None) -> dict:
+    try:
+        value = json.loads(raw or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _learning_metadata(template: PdfOrderCustomerTemplate) -> dict | None:
+    metadata = _json_object(template.column_map_json).get("learning")
+    if not isinstance(metadata, dict) or metadata.get("kind") != LEARNING_DRAFT_KIND:
+        return None
+    return metadata
+
+
+def _approved_gold_samples(db: Session, customer_id: int) -> list[PdfOrderTrainingSample]:
+    return db.execute(
+        select(PdfOrderTrainingSample)
+        .where(
+            PdfOrderTrainingSample.customer_id == customer_id,
+            PdfOrderTrainingSample.parse_status == "reviewed",
+            PdfOrderTrainingSample.gold_review_status == "approved",
+        )
+        .order_by(PdfOrderTrainingSample.id)
+    ).scalars().all()
+
+
+def _gold_learning_signature(samples: list[PdfOrderTrainingSample]) -> list[dict]:
+    return [
+        {
+            "sample_id": sample.id,
+            "file_sha256": sample.file_sha256,
+            "ground_truth_sha256": file_sha256(
+                (sample.ground_truth_json or "").encode("utf-8")
+            ),
+        }
+        for sample in samples
+    ]
+
+
+def _learning_correction_fields(samples: list[PdfOrderTrainingSample]) -> list[str]:
+    fields: set[str] = set()
+    for sample in samples:
+        if not sample.ground_truth_json:
+            continue
+        fields.update(
+            str(row["field_path"])
+            for row in correction_candidates(
+                sample.parser_result_json,
+                sample.ground_truth_json,
+            )
+            if row.get("field_path")
+        )
+    return sorted(fields)
+
+
+def _learning_template_summary(template: PdfOrderCustomerTemplate) -> dict:
+    metadata = _learning_metadata(template) or {}
+    return {
+        "id": template.id,
+        "customer_id": template.customer_id,
+        "template_name": template.template_name,
+        "version": template.version,
+        "status": template.status,
+        "supersedes_template_id": template.supersedes_template_id,
+        "sample_ids": metadata.get("sample_ids") or [],
+        "sample_count": len(metadata.get("sample_ids") or []),
+        "correction_fields": metadata.get("correction_fields") or [],
+        "generated_at": metadata.get("generated_at"),
+    }
+
+
+def _find_learning_templates(
+    db: Session,
+    customer_id: int,
+    *,
+    statuses: tuple[str, ...] = ("draft", "active"),
+) -> list[PdfOrderCustomerTemplate]:
+    rows = db.execute(
+        select(PdfOrderCustomerTemplate)
+        .where(
+            PdfOrderCustomerTemplate.customer_id == customer_id,
+            PdfOrderCustomerTemplate.status.in_(statuses),
+        )
+        .order_by(
+            PdfOrderCustomerTemplate.version.desc(),
+            PdfOrderCustomerTemplate.id.desc(),
+        )
+    ).scalars().all()
+    return [row for row in rows if _learning_metadata(row) is not None]
+
+
+def _invalidate_learning_replay(
+    db: Session,
+    customer_id: int | None,
+    user: User,
+) -> None:
+    if customer_id is None:
+        return
+    invalidated: list[int] = []
+    for template in _find_learning_templates(db, customer_id, statuses=("draft",)):
+        if template.evidence_json is None:
+            continue
+        template.evidence_json = None
+        template.updated_at = _now()
+        template.updated_by = user.username
+        invalidated.append(template.id)
+    if invalidated:
+        _log(
+            db,
+            user,
+            "pdf_training.template.invalidate",
+            f"金样本变化，规则草稿回放失效: {invalidated}",
+        )
+
+
+def _ensure_learning_draft(
+    db: Session,
+    source_sample: PdfOrderTrainingSample,
+    user: User,
+) -> PdfOrderCustomerTemplate:
+    customer_id = source_sample.customer_id
+    if customer_id is None:
+        raise HTTPException(status_code=422, detail="样本未绑定客户，不能生成规则草稿。")
+    customer = db.get(Customer, customer_id)
+    if customer is None:
+        raise HTTPException(status_code=422, detail="样本绑定的客户不存在，不能生成规则草稿。")
+
+    approved_samples = _approved_gold_samples(db, customer_id)
+    signatures = _gold_learning_signature(approved_samples)
+    sample_ids = [row["sample_id"] for row in signatures]
+    correction_fields = _learning_correction_fields(approved_samples)
+    active = db.execute(
+        select(PdfOrderCustomerTemplate)
+        .where(
+            PdfOrderCustomerTemplate.customer_id == customer_id,
+            PdfOrderCustomerTemplate.status == "active",
+        )
+        .order_by(PdfOrderCustomerTemplate.version.desc())
+    ).scalars().first()
+
+    active_metadata = _learning_metadata(active) if active is not None else None
+    if active_metadata and active_metadata.get("gold_signatures") == signatures:
+        return active
+
+    drafts = _find_learning_templates(db, customer_id, statuses=("draft",))
+    draft = next(
+        (
+            row for row in drafts
+            if row.supersedes_template_id == (active.id if active is not None else None)
+        ),
+        None,
+    )
+    source_template_id = active.id if active is not None else None
+    metadata = {
+        "kind": LEARNING_DRAFT_KIND,
+        "generator_version": LEARNING_GENERATOR_VERSION,
+        "source_template_id": source_template_id,
+        "sample_ids": sample_ids,
+        "gold_signatures": signatures,
+        "correction_fields": correction_fields,
+        "parser_output_layer": "order_preview_matched",
+    }
+
+    if draft is None:
+        configuration = _json_object(active.column_map_json) if active is not None else {
+            "customer_name": customer.name,
+            "aliases": [customer.name],
+        }
+        metadata["generated_at"] = _now().isoformat(timespec="seconds") + "Z"
+        metadata["generated_by"] = user.username
+        configuration["learning"] = metadata
+        version = _template_next_version(db, customer_id)
+        draft = PdfOrderCustomerTemplate(
+            customer_id=customer_id,
+            template_name=f"自动学习草稿-{customer.name}-v{version}"[:200],
+            order_no_pattern=active.order_no_pattern if active is not None else None,
+            date_pattern=active.date_pattern if active is not None else None,
+            item_row_pattern=active.item_row_pattern if active is not None else None,
+            customer_name_pattern=(
+                active.customer_name_pattern if active is not None else re.escape(customer.name)
+            ),
+            column_map_json=json.dumps(configuration, ensure_ascii=False, sort_keys=True),
+            notes="由已批准金样本自动生成；必须回放通过并由人工一键启用。",
+            created_by=user.username,
+            is_active=False,
+            status="draft",
+            version=version,
+            supersedes_template_id=source_template_id,
+        )
+        db.add(draft)
+        db.flush()
+        _log(
+            db,
+            user,
+            "pdf_training.template.auto_draft",
+            f"金样本 {source_sample.id} 生成规则草稿 {draft.id}",
+        )
+        return draft
+
+    configuration = _json_object(draft.column_map_json)
+    previous = configuration.get("learning") if isinstance(configuration.get("learning"), dict) else {}
+    comparable_previous = {
+        key: previous.get(key)
+        for key in (
+            "kind", "generator_version", "source_template_id", "sample_ids",
+            "gold_signatures", "correction_fields", "parser_output_layer",
+        )
+    }
+    if comparable_previous != metadata:
+        metadata["generated_at"] = _now().isoformat(timespec="seconds") + "Z"
+        metadata["generated_by"] = user.username
+        configuration["learning"] = metadata
+        draft.column_map_json = json.dumps(configuration, ensure_ascii=False, sort_keys=True)
+        draft.evidence_json = None
+        draft.updated_at = _now()
+        draft.updated_by = user.username
+        _log(
+            db,
+            user,
+            "pdf_training.template.auto_refresh",
+            f"金样本集合刷新规则草稿 {draft.id}: {sample_ids}",
+        )
+    return draft
+
+
+def _persist_template_replay(
+    db: Session,
+    template: PdfOrderCustomerTemplate,
+    user: User,
+) -> dict:
+    if template.status != "draft":
+        return _json_object(template.evidence_json)
+    evidence = activation_dry_run(db, template)
+    evidence["replayed_at"] = _now().isoformat(timespec="seconds") + "Z"
+    evidence["replayed_by"] = user.username
+    template.evidence_json = json.dumps(evidence, ensure_ascii=False, sort_keys=True)
+    template.updated_at = _now()
+    template.updated_by = user.username
+    _log(
+        db,
+        user,
+        "pdf_training.template.replay",
+        f"回放规则草稿 {template.id}: can_activate={evidence.get('can_activate')}",
+    )
+    return evidence
+
+
+def _attach_sample_learning_state(
+    db: Session,
+    sample: PdfOrderTrainingSample,
+) -> PdfOrderTrainingSample:
+    learning_template = None
+    if sample.customer_id is not None:
+        for candidate in _find_learning_templates(db, sample.customer_id):
+            metadata = _learning_metadata(candidate) or {}
+            if sample.id in (metadata.get("sample_ids") or []):
+                learning_template = candidate
+                break
+    learning_draft = (
+        _learning_template_summary(learning_template)
+        if learning_template is not None
+        else None
+    )
+    learning_replay = (
+        _json_object(learning_template.evidence_json)
+        if learning_template is not None and learning_template.evidence_json
+        else None
+    )
+    if sample.customer_id is None:
+        message = "请先绑定客户，再批准为金样本。"
+    elif sample.gold_review_status != "approved":
+        message = "提交改进后请先完成金样本复核。"
+    elif learning_template is None:
+        message = "金样本已批准，可生成规则草稿并回放。"
+    elif learning_template.status == "active":
+        message = "该金样本对应的规则版本已启用。"
+    elif learning_replay and learning_replay.get("can_activate"):
+        message = "金样本回放已通过，可以一键启用。"
+    else:
+        reasons = (learning_replay or {}).get("reasons") or []
+        message = "规则草稿已生成；" + ("；".join(reasons) if reasons else "请执行金样本回放。")
+    setattr(sample, "learning_draft", learning_draft)
+    setattr(sample, "learning_replay", learning_replay)
+    setattr(sample, "learning_message", message)
+    return sample
+
+
 @router.get("/templates", response_model=list[TemplateOut])
 def list_templates(
     customer_id: int | None = Query(None),
@@ -1092,6 +1474,7 @@ def update_template(
         return tmpl
     for attr in editable:
         setattr(tmpl, attr, getattr(payload, attr))
+    tmpl.evidence_json = None
     tmpl.updated_at = _now()
     tmpl.updated_by = user.username
     tmpl.is_active = False
@@ -1138,6 +1521,19 @@ def template_activation_dry_run(
     _user: User = Depends(require_pdf_training_manage),
 ):
     return activation_dry_run(db, _get_template_or_404(db, template_id))
+
+
+@router.post("/templates/{template_id}/replay")
+def replay_template_gold_samples(
+    template_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_pdf_training_manage),
+):
+    template = _get_template_or_404(db, template_id)
+    _require_draft(template, "回放金样本")
+    evidence = _persist_template_replay(db, template, user)
+    db.commit()
+    return evidence
 
 
 @router.post("/templates/{template_id}/activate", response_model=TemplateOut)

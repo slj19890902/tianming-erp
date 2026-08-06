@@ -68,7 +68,9 @@ def test_pending_bom_component_can_auto_cover_matching_inventory_without_extra_f
     block = _method_block("async autoCoverBomComponent(row, source)", "toggleCompositeRowComponents(row, checked) {")
     assert "axios.post(`/api/warehouse/finished/bom-components/${snapshotId}/auto-cover`" in block
     assert "order_item_id: orderItemId" in block
-    assert "idempotency_key: createIdempotencyKey()" in block
+    assert "const idempotencyKey = createIdempotencyKey()" in block
+    assert "idempotency_key:idempotencyKey" in block
+    assert "executeRequisitionInventoryAction" in block
     assert "await this.loadRequisition()" in block
     assert "confirm(" not in block
 
@@ -100,7 +102,9 @@ def test_composite_draft_can_apply_matching_inventory_and_recalculate() -> None:
     assert "semi_finished_reserved_piece_qty" in block
     assert "remaining_required_piece_qty" in block
     assert "this.recalculateCompositeDraftLine(line)" in block
-    assert "idempotency_key:createIdempotencyKey()" in block
+    assert "const idempotencyKey = createIdempotencyKey()" in block
+    assert "idempotency_key:idempotencyKey" in block
+    assert "executeRequisitionInventoryAction" in block
     assert "confirm(" not in block
 
 

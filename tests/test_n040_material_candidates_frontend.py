@@ -71,8 +71,8 @@ def test_common_box_candidate_column_is_narrower_than_history_column() -> None:
 
 def test_common_box_candidate_keeps_flute_and_history_does_not_mutate_form() -> None:
     source = _source()
-    assert "const currentFlute = this.productForm.flute_type;" in source
-    assert "this.productForm.flute_type = currentFlute;" in source
+    assert "const currentFlute = formSnapshot.flute_type;" in source
+    assert "if (currentFlute) this.productForm.flute_type = currentFlute;" in source
     assert '@click="applyProductMaterialCandidate(candidate)"' in source
     history_loop = 'v-for="history in productMaterialContext.material_history"'
     assert history_loop in source

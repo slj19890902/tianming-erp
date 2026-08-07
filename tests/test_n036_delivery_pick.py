@@ -207,12 +207,17 @@ def test_picker_permission_and_snapshot_contract(pick_app) -> None:
         _login(client, "admin")
         task = _create_task(client, ids["delivery"])
         assert task["delivery_number"] == "TM-20260718-001"
+        assert task["planned_delivery_date"] == "2026-07-18"
         assert task["customer_name"] == "N036测试客户"
+        assert task["print_version"].startswith(
+            f'{task["snapshot_version"]}-'
+        )
         assert task["assigned_to_name"] == "delivery_picker"
         assert [row["planned_quantity"] for row in task["items"]] == [100, 50]
         repeated = _create_task(client, ids["delivery"])
         assert repeated["id"] == task["id"]
         assert repeated["snapshot_version"] == task["snapshot_version"]
+        assert repeated["print_version"] == task["print_version"]
 
         _login(client, "sales")
         assert client.get("/api/delivery-picks").status_code == 403
@@ -322,6 +327,27 @@ def test_mobile_summary_list_is_paginated_batched_and_excludes_dispatched(
         assert empty.status_code == 200
         assert empty.json()["items"] == []
         assert empty.json()["total"] == 0
+
+
+def test_pick_print_version_changes_after_a_pick_result_is_recorded(pick_app) -> None:
+    app, _, ids, _ = pick_app
+    with TestClient(app) as client:
+        _login(client, "admin")
+        task = _create_task(client, ids["delivery"])
+        original_version = task["print_version"]
+
+        _login(client, "delivery_picker")
+        first_item = task["items"][0]
+        updated = client.put(
+            f'/api/delivery-picks/{task["id"]}/items/{first_item["id"]}',
+            json={"pick_status": "partial", "picked_quantity": 80},
+        )
+
+        assert updated.status_code == 200, updated.text
+        assert updated.json()["task"]["print_version"] != original_version
+        reread = client.get(f'/api/delivery-picks/{task["id"]}')
+        assert reread.status_code == 200, reread.text
+        assert reread.json()["print_version"] == updated.json()["task"]["print_version"]
 
 
 def test_pick_detail_query_growth_is_bounded_for_rows_without_inventory_sources(

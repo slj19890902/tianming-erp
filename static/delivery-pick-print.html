@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>A4 预拿货单</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; color: #111827; background: #e5e7eb; font-family: "Microsoft YaHei", "SimSun", sans-serif; }
+    .toolbar { display: flex; justify-content: center; gap: 10px; padding: 14px; }
+    button, a.action { border: 0; border-radius: 6px; padding: 10px 18px; color: white; background: #166534; font-size: 15px; text-decoration: none; cursor: pointer; }
+    button.secondary, a.secondary { background: #475569; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .state { max-width: 760px; margin: 28px auto; padding: 18px; border: 1px solid #93c5fd; border-radius: 8px; color: #1e3a8a; background: #eff6ff; text-align: center; }
+    .pages { width: 210mm; margin: 0 auto; }
+    .page { position: relative; display: flex; flex-direction: column; width: 210mm; min-height: 296mm; margin: 0 auto 18px; padding: 10mm 10mm 9mm; background: white; box-shadow: 0 2px 12px #0002; page-break-after: always; }
+    .page:last-child { page-break-after: auto; }
+    h1 { margin: 0 0 3mm; text-align: center; font-size: 23px; letter-spacing: 5px; }
+    .meta { display: grid; grid-template-columns: 1.3fr 1fr; gap: 1.5mm 7mm; margin-bottom: 3mm; font-size: 12px; line-height: 1.4; }
+    .meta strong { display: inline-block; min-width: 76px; }
+    .page-number { position: absolute; top: 10mm; right: 10mm; font-size: 12px; font-weight: 700; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 11px; }
+    th, td { border: 1px solid #111827; padding: 2.2mm 1.2mm; vertical-align: middle; text-align: center; overflow-wrap: anywhere; line-height: 1.25; }
+    th { background: #f3f4f6; font-weight: 700; }
+    .seq { width: 7%; } .code { width: 16%; } .product { width: 24%; text-align: left; } .location { width: 20%; text-align: left; }
+    .planned, .actual, .difference { width: 11%; }
+    .product-name { font-weight: 700; }
+    .spec, .subtotal { margin-top: 1mm; color: #4b5563; font-size: 10px; }
+    .subtotal { color: #111827; font-weight: 700; }
+    .route { font-weight: 700; }
+    .muted { color: #6b7280; }
+    .write-line { display: block; min-height: 5mm; border-bottom: 1px solid #111827; }
+    .footer { margin-top: auto; padding-top: 4mm; font-size: 12px; }
+    .summary { display: flex; justify-content: space-between; gap: 10mm; margin-bottom: 5mm; }
+    .signatures { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10mm; }
+    .signature { min-height: 8mm; border-bottom: 1px solid #111827; }
+    .notice { margin-top: 4mm; color: #4b5563; font-size: 10px; }
+    [hidden] { display: none !important; }
+    @page { size: A4 portrait; margin: 0; }
+    @media print {
+      body { background: white; }
+      .toolbar, .state { display: none !important; }
+      .pages { width: auto; margin: 0; }
+      .page { width: 210mm; min-height: 296mm; margin: 0; box-shadow: none; break-after: page; }
+      .page:last-child { break-after: auto; }
+      tr { break-inside: avoid; page-break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <nav class="toolbar">
+    <button id="printButton" disabled>打印 A4 拿货单</button>
+    <a id="differenceButton" class="action secondary" href="#" hidden>回录差异</a>
+    <button class="secondary" onclick="window.close()">关闭</button>
+  </nav>
+  <div id="state" class="state">正在读取拿货任务和位置……</div>
+  <main id="pages" class="pages" hidden></main>
+  <script>
+    const ROWS_PER_PAGE = 18;
+    const taskId = new URLSearchParams(location.search).get("task_id");
+    const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]));
+    const displayDateTime = value => {
+      const date = value ? new Date(value) : new Date();
+      if (Number.isNaN(date.getTime())) return "-";
+      return new Intl.DateTimeFormat("zh-CN", { timeZone:"Asia/Shanghai", year:"numeric", month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit", hour12:false }).format(date).replaceAll("/", "-");
+    };
+    async function request(url) {
+      let response;
+      try { response = await fetch(url, { credentials:"include", cache:"no-store" }); }
+      catch (_error) { throw new Error("无法连接 ERP 服务，请检查网络后重试"); }
+      const text = await response.text().catch(() => "");
+      let body = {};
+      if (text) { try { body = JSON.parse(text); } catch (_error) { body = {}; } }
+      if (!response.ok) {
+        const detail = typeof body.detail === "string" ? body.detail : body.detail?.message;
+        throw new Error(detail || (response.status === 401 ? "登录已失效，请返回 ERP 登录后重新打开" : `读取失败（HTTP ${response.status}）`));
+      }
+      return body;
+    }
+    function buildRows(task) {
+      const totals = new Map();
+      const rows = [];
+      (task.location_groups || []).forEach(group => {
+        [...(group.lines || [])].sort((left, right) => String(left.product_code || "").localeCompare(String(right.product_code || ""), "zh-CN")).forEach(line => {
+          const itemKey = String(line.pick_item_id ?? `${line.product_code || ""}|${line.product_name || ""}`);
+          totals.set(itemKey, (totals.get(itemKey) || 0) + Number(line.pick_quantity || 0));
+          rows.push({
+            itemKey,
+            routeSequence: Number(group.recommended_sequence || 0),
+            productCode: line.product_code || "-",
+            productName: line.product_name || "未命名产品",
+            specification: line.specification || "-",
+            location: group.label || line.location_code || "位置待核对",
+            pallet: line.pallet_code || group.pallet_code || "",
+            quantity: Number(line.pick_quantity || 0),
+            unit: line.unit || "个",
+          });
+        });
+      });
+      const firstSeen = new Set();
+      return rows.map((row, index) => {
+        row.sequence = index + 1;
+        row.productTotal = firstSeen.has(row.itemKey) ? null : totals.get(row.itemKey);
+        firstSeen.add(row.itemKey);
+        return row;
+      });
+    }
+    function rowHtml(row) {
+      return `<tr>
+        <td>${row.sequence}</td>
+        <td>${escapeHtml(row.productCode)}</td>
+        <td class="product"><div class="product-name">${escapeHtml(row.productName)}</div><div class="spec">${escapeHtml(row.specification)}</div>${row.productTotal === null ? "" : `<div class="subtotal">本品合计 ${row.productTotal} ${escapeHtml(row.unit)}</div>`}</td>
+        <td class="location"><div class="route">第 ${row.routeSequence || "-"} 站</div><div>${escapeHtml(row.location)}</div>${row.pallet ? `<div class="muted">栈板 ${escapeHtml(row.pallet)}</div>` : ""}</td>
+        <td>${row.quantity} ${escapeHtml(row.unit)}</td>
+        <td><span class="write-line"></span></td>
+        <td><span class="write-line"></span></td>
+      </tr>`;
+    }
+    function pageHtml(task, user, rows, pageIndex, pageCount) {
+      const start = pageIndex * ROWS_PER_PAGE;
+      const pageRows = rows.slice(start, start + ROWS_PER_PAGE);
+      const totalQuantity = rows.reduce((sum, row) => sum + row.quantity, 0);
+      const printUser = user.display_name || user.real_name || user.username || "-";
+      const summaryText = pageIndex === pageCount - 1
+        ? `整单共 ${rows.length} 个位置行，计划 ${totalQuantity}（各行单位为准）`
+        : `本页 ${pageRows.length} 个位置行，整单合计见末页`;
+      return `<section class="page">
+        <div class="page-number">第 ${pageIndex + 1}/${pageCount} 页</div>
+        <h1>A4 预拿货单</h1>
+        <div class="meta">
+          <div><strong>客户：</strong>${escapeHtml(task.customer_name || "-")}</div>
+          <div><strong>拿货单号：</strong>NH-${escapeHtml(task.id)}</div>
+          <div><strong>关联送货单：</strong>${escapeHtml(task.delivery_number || "-")}</div>
+          <div><strong>计划送货：</strong>${escapeHtml(task.planned_delivery_date || "-")}</div>
+          <div><strong>打印版本：</strong>${escapeHtml(task.print_version || task.snapshot_version || "-")}</div>
+          <div><strong>打印人/时间：</strong>${escapeHtml(printUser)} / ${escapeHtml(displayDateTime())}</div>
+        </div>
+        <table>
+          <thead><tr><th class="seq">序号</th><th class="code">存货编码</th><th class="product">产品名称 / 规格</th><th class="location">位置</th><th class="planned">计划拿货</th><th class="actual">实际拿货</th><th class="difference">差异</th></tr></thead>
+          <tbody>${pageRows.map(rowHtml).join("")}</tbody>
+        </table>
+        <footer class="footer">
+          <div class="summary"><span>${summaryText}</span><span>异常行数：________</span></div>
+          <div class="signatures"><div>拿货人：<div class="signature"></div></div><div>复核人：<div class="signature"></div></div><div>异常处理：<div class="signature"></div></div></div>
+          <div class="notice">纸面填写不改库存、不发货。数量一致可在 ERP 一键按计划完成；只有少拿、没货或位置不符时回录差异。</div>
+        </footer>
+      </section>`;
+    }
+    async function boot() {
+      const state = document.getElementById("state");
+      if (!taskId || !/^\d+$/.test(taskId)) { state.textContent = "缺少有效拿货任务编号"; return; }
+      try {
+        const [user, task] = await Promise.all([request("/api/auth/me"), request(`/api/delivery-picks/${encodeURIComponent(taskId)}`)]);
+        const rows = buildRows(task);
+        if (!rows.length) throw new Error("当前任务没有可打印的拿货位置，请先核对库存分配");
+        const pageCount = Math.max(Math.ceil(rows.length / ROWS_PER_PAGE), 1);
+        document.getElementById("pages").innerHTML = Array.from({length:pageCount}, (_unused, index) => pageHtml(task, user, rows, index, pageCount)).join("");
+        document.getElementById("pages").hidden = false;
+        state.hidden = true;
+        const differenceButton = document.getElementById("differenceButton");
+        differenceButton.href = `/mobile/delivery-pick.html?task_id=${encodeURIComponent(task.id)}&print_version=${encodeURIComponent(task.print_version)}`;
+        differenceButton.hidden = false;
+        document.getElementById("printButton").disabled = false;
+      } catch (error) { state.textContent = error.message || "拿货单读取失败"; }
+    }
+    document.getElementById("printButton").addEventListener("click", () => window.print());
+    boot();
+  </script>
+</body>
+</html>

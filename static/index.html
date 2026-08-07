@@ -2906,6 +2906,7 @@
                       </select>
                       <span v-if="deliveryOperationState.action==='assign' && Number(deliveryOperationState.deliveryId)===Number(row.id) && Number(deliveryOperationState.taskId)===Number(row.pick_task?.id)" class="muted">分配中…</span>
                       <button v-if="row.pick_task" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="openDeliveryPickTask(row)">{{ row.pick_task.assignment_required ? '管理员查看' : '打开手机拿货' }}</button>
+                      <button v-if="row.pick_task" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="openDeliveryPickPrint(row)">打印拿货单</button>
                       <button v-if="canDelivery && row.status==='pending'" class="btn small success" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="dispatchDelivery(row)">{{ deliveryOperationState.action==='dispatch' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '发货中…' : (row.pick_task ? '发货打印' : '直接发货打印') }}</button>
                       <button v-if="canDelivery && row.status==='pending'" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="editDelivery(row)">编辑</button>
                       <button v-if="canDelivery && row.status==='pending'" class="btn small danger" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="deleteDelivery(row)">{{ deliveryOperationState.action==='delete' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '删除中…' : '删除' }}</button>
@@ -13197,6 +13198,11 @@
             const task = this.normalizeDeliveryPickTask(row);
             if (!task?.id) return this.showToast("当前送货单尚未创建拿货任务", true);
             window.open(`/mobile/delivery-pick.html?task_id=${encodeURIComponent(task.id)}`, "_blank");
+          },
+          openDeliveryPickPrint(row) {
+            const task = this.normalizeDeliveryPickTask(row);
+            if (!task?.id) return this.showToast("当前送货单尚未创建拿货任务", true);
+            window.open(`/static/delivery-pick-print.html?task_id=${encodeURIComponent(task.id)}`, "_blank", "noopener");
           },
           async loadDeliveryPickers() {
             if (!this.canDelivery) return;

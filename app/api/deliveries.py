@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from datetime import date, datetime
@@ -1163,6 +1164,47 @@ def _pick_task_response(
     location_groups = (
         _pick_location_groups(db, item_responses) if include_location_plan else []
     )
+    print_version_payload = {
+        "task_id": task.id,
+        "snapshot_version": task.snapshot_version,
+        "items": [
+            {
+                "id": item.get("id"),
+                "planned_quantity": item.get("planned_quantity"),
+                "picked_quantity": item.get("picked_quantity"),
+                "pick_status": item.get("pick_status"),
+                "product_code": item.get("product_code"),
+            }
+            for item in item_responses
+        ],
+        "location_groups": [
+            {
+                "key": group.get("key"),
+                "sequence": group.get("recommended_sequence"),
+                "location_id": group.get("location_id"),
+                "location_code": group.get("location_code"),
+                "lines": [
+                    {
+                        "pick_item_id": line.get("pick_item_id"),
+                        "source_type": line.get("source_type"),
+                        "location_id": line.get("location_id"),
+                        "pallet_id": line.get("pallet_id"),
+                        "pick_quantity": line.get("pick_quantity"),
+                    }
+                    for line in group.get("lines") or []
+                ],
+            }
+            for group in location_groups
+        ],
+    }
+    print_version_digest = hashlib.sha256(
+        json.dumps(
+            print_version_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()[:10]
     exception_items = [
         {
             **item_response,
@@ -1179,10 +1221,16 @@ def _pick_task_response(
         "customer_id": task.customer_id,
         "customer_name": task.customer.name if task.customer else None,
         "delivery_number": task.delivery.delivery_number if task.delivery else None,
+        "planned_delivery_date": (
+            task.delivery.delivery_date.isoformat()
+            if task.delivery and task.delivery.delivery_date
+            else None
+        ),
         "status": task.status,
         "has_exception": bool(exception_items) or task.status == "exception",
         "exceptions": exception_items,
         "snapshot_version": task.snapshot_version,
+        "print_version": f"{task.snapshot_version}-{print_version_digest}",
         "assigned_to": task.assigned_to,
         "assigned_to_name": (
             assigned_user.display_name or assigned_user.real_name or assigned_user.username

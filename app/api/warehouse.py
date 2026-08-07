@@ -6215,6 +6215,66 @@ def _lan_ip() -> str:
         connection.close()
 
 
+def _mold_label_dict(
+    row: MoldTool,
+    request: Request,
+    allowed_customer_ids: set[int] | None,
+    lan_ip: str | None = None,
+) -> dict:
+    port = request.url.port or 8000
+    lookup_url = (
+        f"http://{lan_ip or _lan_ip()}:{port}/mobile/mold-lookup"
+        f"?mold={quote(row.mold_code, safe='')}"
+    )
+    image = qrcode.make(lookup_url)
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return {
+        **_mold_tool_dict(row, allowed_customer_ids),
+        "lookup_url": lookup_url,
+        "qr_data_url": (
+            "data:image/png;base64,"
+            + base64.b64encode(buffer.getvalue()).decode("ascii")
+        ),
+    }
+
+
+@router.get("/molds/labels")
+def get_mold_labels(
+    request: Request,
+    mold_ids: str = Query(min_length=1, max_length=1200),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    raw_ids = [part.strip() for part in mold_ids.split(",") if part.strip()]
+    if not raw_ids or any(not part.isdigit() or int(part) <= 0 for part in raw_ids):
+        raise HTTPException(status_code=422, detail="模具批量标签参数无效")
+    ordered_ids = list(dict.fromkeys(int(part) for part in raw_ids))
+    if len(ordered_ids) > 100:
+        raise HTTPException(status_code=422, detail="一次最多打印 100 件模具")
+    rows = db.scalars(
+        select(MoldTool)
+        .options(selectinload(MoldTool.products).selectinload(Product.customer))
+        .where(MoldTool.id.in_(ordered_ids))
+    ).unique().all()
+    rows_by_id = {row.id: row for row in rows}
+    missing_ids = [mold_id for mold_id in ordered_ids if mold_id not in rows_by_id]
+    if missing_ids:
+        raise HTTPException(status_code=404, detail="所选模具已变化，请返回列表重新选择")
+    allowed_customer_ids = _mold_customer_scope(user, db)
+    ordered_rows = [rows_by_id[mold_id] for mold_id in ordered_ids]
+    for row in ordered_rows:
+        _require_mold_customer_scope(row, allowed_customer_ids)
+    lan_ip = _lan_ip()
+    return {
+        "items": [
+            _mold_label_dict(row, request, allowed_customer_ids, lan_ip)
+            for row in ordered_rows
+        ],
+        "count": len(ordered_rows),
+    }
+
+
 @router.get("/molds/{mold_id}/label")
 def get_mold_label(
     mold_id: int,
@@ -6231,22 +6291,7 @@ def get_mold_label(
         raise HTTPException(status_code=404, detail="模具不存在")
     allowed_customer_ids = _mold_customer_scope(user, db)
     _require_mold_customer_scope(row, allowed_customer_ids)
-    port = request.url.port or 8000
-    lookup_url = (
-        f"http://{_lan_ip()}:{port}/mobile/mold-lookup"
-        f"?mold={quote(row.mold_code, safe='')}"
-    )
-    image = qrcode.make(lookup_url)
-    buffer = BytesIO()
-    image.save(buffer, format="PNG")
-    return {
-        **_mold_tool_dict(row, allowed_customer_ids),
-        "lookup_url": lookup_url,
-        "qr_data_url": (
-            "data:image/png;base64,"
-            + base64.b64encode(buffer.getvalue()).decode("ascii")
-        ),
-    }
+    return _mold_label_dict(row, request, allowed_customer_ids)
 
 
 @router.post("/molds", status_code=201)

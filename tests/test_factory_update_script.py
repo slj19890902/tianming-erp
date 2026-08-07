@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.63"
-    assert APP_VERSION_NAME == "混合客户样品一键分拣"
+    assert APP_VERSION == "v0.22.66"
+    assert APP_VERSION_NAME == "模具批量标签"
     assert APP_BUILD_DATE == "2026-08-07"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -50,19 +50,19 @@ def test_factory_update_reports_current_release_version() -> None:
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
     assert any(
-        "本次更新｜" in item and "混合样品整理" in item and "自动分组" in item
+        "本次更新｜" in item and "模具台账" in item and "整批 90×60 标签" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "SHA-256" in item and "来源审计" in item
+        "本次更新｜" in item and "模具编号" in item and "货架位置" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "卷4/卷5" in item and "YP174、YP201" in item
+        "如何验证｜" in item and "每件份数" in item and "连续出现两张" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "重复导入" in item and "v0.22.63" in item
+        "如何验证｜" in item and "模具档案" in item and "v0.22.66" in item
         for item in current_release
     )
     assert any(

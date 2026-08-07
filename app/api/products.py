@@ -115,12 +115,41 @@ def _box_style_uses_default_cutting_mode(box_style: str | None) -> bool:
     return box_type_supports_cutting_mode(box_style)
 
 
-def _production_process_uses_mold(value: str | None) -> bool:
-    return "模切" in {
+def _production_process_tokens(value: str | None) -> set[str]:
+    return {
         item.strip()
-        for item in re.split(r"[,，、]", str(value or ""))
+        for item in re.split(r"[,，、;；]", str(value or ""))
         if item.strip()
     }
+
+
+_GLUE_PROCESS_TOKENS = {"粘合", "粘贴", "粘箱", "糊箱"}
+
+
+def _production_process_uses_mold(value: str | None) -> bool:
+    return "模切" in _production_process_tokens(value)
+
+
+def _secondary_gluing_error(
+    *,
+    production_process: str | None,
+    box_style: str | None,
+    box_category: str | None,
+) -> str | None:
+    process_tokens = _production_process_tokens(production_process)
+    if "二次粘合" not in process_tokens:
+        return None
+    if (
+        box_category != "die_cut"
+        or (box_style or "").strip() != "模切内盒"
+        or "模切" not in process_tokens
+        or not process_tokens.intersection(_GLUE_PROCESS_TOKENS)
+    ):
+        return (
+            "二次粘合只允许用于模切内盒，箱类别必须为模切，"
+            "且生产工艺必须同时包含模切和粘合"
+        )
+    return None
 
 
 def _normalize_product_mold_binding(payload: ProductPayload) -> None:
@@ -311,6 +340,25 @@ class ProductPayload(BaseModel):
         self.pieces_per_box = configuration["pieces_per_box"]
         self.flap_mm = configuration["flap_mm"]
         self.default_cutting_mode = configuration["default_cutting_mode"]
+        process_tokens = _production_process_tokens(self.production_process)
+        if "印刷" in process_tokens:
+            if (self.print_content or "").strip() in {
+                "",
+                "无印刷",
+                "无",
+                "否",
+                "不印刷",
+            }:
+                self.print_content = "单色印刷"
+            if not (self.printing_colors or "").strip():
+                self.printing_colors = "黑色"
+        secondary_gluing_error = _secondary_gluing_error(
+            production_process=self.production_process,
+            box_style=self.box_style,
+            box_category=self.box_category,
+        )
+        if secondary_gluing_error:
+            raise ValueError(secondary_gluing_error)
         return self
 
 
@@ -1693,6 +1741,16 @@ def sync_product_fields(
         raise HTTPException(status_code=400, detail=flute_error)
     if selected_material is not None and flute_fields.intersection(fields):
         fields["layer_count"] = prospective_layer
+    if {"production_process", "box_style"}.intersection(fields):
+        secondary_gluing_error = _secondary_gluing_error(
+            production_process=fields.get(
+                "production_process", product.production_process
+            ),
+            box_style=fields.get("box_style", product.box_style),
+            box_category=product.box_category,
+        )
+        if secondary_gluing_error:
+            raise HTTPException(status_code=400, detail=secondary_gluing_error)
     if "production_process" in fields or "mold_tool_id" in fields:
         prospective_process = fields.get(
             "production_process", product.production_process

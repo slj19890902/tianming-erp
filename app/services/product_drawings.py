@@ -24,6 +24,18 @@ class SavedDrawing:
     thumbnail_path: str
 
 
+def validate_product_drawing_upload(upload: ValidatedUpload) -> None:
+    """Fully decode images during preflight; PDFs were signature-checked upstream."""
+
+    if upload.content_type == PDF_CONTENT_TYPE:
+        return
+    try:
+        image = Image.open(BytesIO(upload.content))
+        image.load()
+    except (UnidentifiedImageError, OSError) as error:
+        raise DrawingValidationError("图纸文件无法识别") from error
+
+
 def save_product_drawing_files(
     *,
     product_id: int,
@@ -36,6 +48,7 @@ def save_product_drawing_files(
             image_path=saved.reference,
             thumbnail_path=saved.reference,
         )
+    validate_product_drawing_upload(upload)
     try:
         image = Image.open(BytesIO(upload.content))
         image.load()

@@ -8134,6 +8134,7 @@ def product_material_context(
             row["selected_at"] = utc_naive_to_api(row["selected_at"])
     return {
         "product_id": product.id,
+        "product_version": product.version,
         "customer_id": product.customer_id,
         "original_material_code": original_code or None,
         "current_material": {

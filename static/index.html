@@ -4071,7 +4071,9 @@
                       </div>
                       <div class="product-material-candidate-actions">
                         <button type="button" class="btn small" :aria-pressed="isProductMaterialCandidateCompared(candidate)" @click="toggleProductMaterialCandidateComparison(candidate)">{{ isProductMaterialCandidateCompared(candidate) ? "取消对比" : "加入对比" }}</button>
-                        <button type="button" class="btn small" :disabled="candidate.selectable === false" @click="applyProductMaterialCandidate(candidate)">{{ candidate.selectable === false ? "仅追溯" : "采用" }}</button>
+                        <button type="button" class="btn small"
+                          :disabled="candidate.selectable === false || productMaterialAdoption.loading"
+                          @click="applyProductMaterialCandidate(candidate)">{{ candidate.selectable === false ? "仅追溯" : (productMaterialAdoption.loading && productMaterialAdoption.candidate_key === productMaterialCandidateKey(candidate) ? "核对中…" : "采用") }}</button>
                       </div>
                     </div>
                   </div>
@@ -6631,6 +6633,7 @@
             productEditReturnContext: null,
             productMaterialContext: { product_id:null, candidates:[], requisition_history:[], material_history:[], manual_selection_history:[], loading:false, error:"" },
             productMaterialCandidateDetailKeys: [], productMaterialCompareKeys: [],
+            productMaterialAdoption: { product_id:null, candidate_key:"", loading:false },
             bomEditor: blankBomEditor(),
             orderProductOptions: {},
             orderCommonBoxPicker: {
@@ -10804,7 +10807,7 @@
               if (supplierName && supplierName !== "全部供应商" && supplierName !== "") {
                 if (supplierName === "其他供应商") {
                   if (this.activeSupplierNames.includes(m.supplier_name)) return false;
-                } else if (!(m.supplier_name || "").includes(supplierName)) {
+                } else if (!this.materialMatchesSupplier(m, supplierName)) {
                   return false;
                 }
               }
@@ -15870,17 +15873,142 @@
             this.productMaterialCompareKeys = [];
           },
           applyProductMaterialCandidate(candidate) {
-            const materialId = candidate?.material_id || candidate?.actual_material_id;
-            if (!materialId) {
-              this.showToast("该候选缺少可用材质主数据", true);
-              return;
+            return this.adoptProductMaterialCandidate(candidate);
+          },
+          async adoptProductMaterialCandidate(candidate) {
+            const productId = Number(this.productForm.id || 0);
+            const materialId = Number(candidate?.material_id || candidate?.actual_material_id || 0);
+            const candidateKey = this.productMaterialCandidateKey(candidate);
+            if (!productId || !materialId || !candidateKey) {
+              this.showToast("该候选缺少可用材质主数据，请刷新后重试", true);
+              return false;
             }
-            const currentFlute = this.productForm.flute_type;
-            this.productForm.material_id = Number(materialId);
-            this.productForm._material_supplier = candidate.supplier_name || this.productForm._material_supplier;
-            if (!this.productForm.layer_count && candidate.layer_count) this.productForm.layer_count = Number(candidate.layer_count);
-            this.productForm.flute_type = currentFlute;
-            this.showToast("候选材质已回填，请核对后保存常用箱");
+            if (candidate?.selectable === false) {
+              this.showToast("该候选已停用，仅供历史核对", true);
+              return false;
+            }
+
+            const requestKey = "product:material-adoption";
+            const controller = this.beginLatestRequest(requestKey);
+            const formSnapshot = {
+              id: productId,
+              version: Number(this.productForm.version || 0),
+              material_id: Number(this.productForm.material_id || 0) || null,
+              supplier_name: String(this.productForm._material_supplier || ""),
+              layer_count: Number(this.productForm.layer_count || 0) || null,
+              flute_type: String(this.productForm.flute_type || ""),
+            };
+            this.productMaterialAdoption = { product_id:productId, candidate_key:candidateKey, loading:true };
+            try {
+              // 采用前重新读取当前候选与材质主档，不能依赖已打开页面里的旧快照。
+              const [contextResponse, materialResponse, supplierResponse] = await Promise.all([
+                axios.get(`/api/requisition/products/${productId}/material-context`, { signal:controller.signal }),
+                axios.get(`/api/master/materials/${materialId}`, { signal:controller.signal }),
+                axios.get("/api/master/suppliers/candidates", { signal:controller.signal }),
+              ]);
+              if (
+                latestRequestControllers.get(requestKey) !== controller
+                || Number(this.productForm.id || 0) !== productId
+              ) return false;
+
+              const currentFormSnapshot = {
+                id: Number(this.productForm.id || 0),
+                version: Number(this.productForm.version || 0),
+                material_id: Number(this.productForm.material_id || 0) || null,
+                supplier_name: String(this.productForm._material_supplier || ""),
+                layer_count: Number(this.productForm.layer_count || 0) || null,
+                flute_type: String(this.productForm.flute_type || ""),
+              };
+              if (JSON.stringify(currentFormSnapshot) !== JSON.stringify(formSnapshot)) {
+                this.showToast("常用箱表单已变化，请重新点击采用", true);
+                return false;
+              }
+
+              const freshContext = contextResponse.data || {};
+              if (Number(freshContext.product_version || 0) !== formSnapshot.version) {
+                this.showToast("常用箱资料已更新，请关闭后重新打开再采用", true);
+                return false;
+              }
+              const freshCandidate = (freshContext.candidates || freshContext.candidate_summary || []).find(row =>
+                this.productMaterialCandidateKey(row) === candidateKey
+                && Number(row.material_id || row.actual_material_id || 0) === materialId
+              );
+              if (!freshCandidate || freshCandidate.selectable === false) {
+                this.showToast("该候选已失效或停用，请刷新候选材质", true);
+                return false;
+              }
+
+              const material = materialResponse.data || {};
+              const materialSupplier = String(material.supplier_name || "").trim();
+              const candidateSupplier = String(freshCandidate.supplier_name || "").trim();
+              const materialLayer = Number(material.layer_count || 0) || null;
+              const candidateLayer = Number(freshCandidate.layer_count || 0) || materialLayer;
+              const candidateFlute = String(freshCandidate.flute_type || "").trim();
+              if (
+                Number(material.id || 0) !== materialId
+                || material.is_active === false
+                || !materialSupplier
+                || materialSupplier !== candidateSupplier
+                || String(material.code || "").trim() !== String(freshCandidate.material_code || freshCandidate.actual_material_code || "").trim()
+                || (materialLayer && candidateLayer && materialLayer !== candidateLayer)
+              ) {
+                this.showToast("候选材质与当前材质主档不一致，请刷新后重试", true);
+                return false;
+              }
+
+              const supplierRows = Array.isArray(supplierResponse.data)
+                ? supplierResponse.data
+                : (supplierResponse.data?.items || []);
+              const activeSupplier = supplierRows.find(row =>
+                row?.is_active !== false
+                && (
+                  String(row.standard_name || "").trim() === materialSupplier
+                  || (row.aliases || []).some(alias => String(alias || "").trim() === materialSupplier)
+                )
+              );
+              if (!activeSupplier) {
+                this.showToast("候选材质所属供应商已停用，请刷新后重试", true);
+                return false;
+              }
+              const supplierName = String(activeSupplier.standard_name || "").trim();
+              const currentLayer = formSnapshot.layer_count;
+              const currentFlute = formSnapshot.flute_type;
+              if (currentLayer && candidateLayer && currentLayer !== candidateLayer) {
+                this.showToast(`当前已确认 ${currentLayer} 层，候选材质为 ${candidateLayer} 层，不能自动覆盖`, true);
+                return false;
+              }
+              if (currentFlute && candidateFlute && currentFlute !== candidateFlute) {
+                this.showToast(`当前已确认 ${currentFlute} 楞，候选材质为 ${candidateFlute} 楞，不能自动覆盖`, true);
+                return false;
+              }
+
+              // 所有门禁通过后一次性更新选择器数据与表单；此前任何失败都不会改动表单。
+              const mergeMaterial = rows => [
+                ...(rows || []).filter(row => Number(row?.id || 0) !== materialId),
+                material,
+              ];
+              this.suppliers = supplierRows;
+              this.allMaterials = mergeMaterial(this.allMaterials);
+              this.materials = mergeMaterial(this.materials);
+              Object.assign(this.productForm, {
+                _material_supplier: supplierName,
+                material_id: materialId,
+                layer_count: currentLayer || candidateLayer || materialLayer,
+                flute_type: currentFlute || candidateFlute || null,
+              });
+              if (currentFlute) this.productForm.flute_type = currentFlute;
+              this.showToast("供应商和材质已完整回填，请核对后保存常用箱");
+              return true;
+            } catch (error) {
+              if (this.isCancelledRequest(error) || latestRequestControllers.get(requestKey) !== controller) return false;
+              this.showToast(`候选材质核对失败：${this.errorMessage(error)}`, true);
+              return false;
+            } finally {
+              if (latestRequestControllers.get(requestKey) === controller) {
+                this.productMaterialAdoption = { product_id:null, candidate_key:"", loading:false };
+                this.finishLatestRequest(requestKey, controller);
+              }
+            }
           },
           normalizeProductDimensions(form) {
             [

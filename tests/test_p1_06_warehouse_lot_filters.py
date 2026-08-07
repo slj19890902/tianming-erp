@@ -136,3 +136,72 @@ def test_lot_customer_scope_prevents_filter_based_disclosure(warehouse_filter_ap
         assert len(visible) == 3
         forbidden = client.get("/api/warehouse/lots", params={"customer_ids": 2})
         assert forbidden.status_code == 403
+
+
+def test_finished_goods_label_is_read_only_version_bound_and_customer_scoped(
+    warehouse_filter_app,
+) -> None:
+    with TestClient(warehouse_filter_app) as client:
+        _login(client, "admin")
+        finished_rows = _lots(
+            client.get("/api/warehouse/lots", params={"inventory_type": "finished"})
+        )
+        active = next(row for row in finished_rows if row["status"] == "active")
+        frozen = next(row for row in finished_rows if row["status"] == "frozen")
+        semi_b = next(
+            row
+            for row in _lots(
+                client.get(
+                    "/api/warehouse/lots",
+                    params={"inventory_type": "semi_finished"},
+                )
+            )
+            if row["detail"]["owner_customer_name"] == "明俊德"
+        )
+
+        label = client.get(
+            f'/api/warehouse/lots/{active["id"]}/label',
+            params={"expected_version": active["version"]},
+        )
+        assert label.status_code == 200, label.text
+        body = label.json()
+        assert body["label_version"] == active["version"]
+        assert body["label_status"] == "成品"
+        assert body["physical_quantity"] == 10
+        assert body["detail"]["owner_customer_name"] == "天华超净"
+        assert body["detail"]["inventory_code"] == "TH-22000008"
+        assert body["location"]["location_code"] == "F1-L01"
+        assert body["qr_data_url"].startswith("data:image/png;base64,")
+        assert f'version={active["version"]}' in body["lookup_url"]
+
+        repeated = client.get(
+            f'/api/warehouse/lots/{active["id"]}/label',
+            params={"expected_version": active["version"]},
+        )
+        assert repeated.status_code == 200
+        assert repeated.json()["version"] == active["version"]
+        stale = client.get(
+            f'/api/warehouse/lots/{active["id"]}/label',
+            params={"expected_version": active["version"] + 1},
+        )
+        assert stale.status_code == 409
+        assert "旧标签已失效" in stale.json()["detail"]
+
+        frozen_label = client.get(
+            f'/api/warehouse/lots/{frozen["id"]}/label',
+            params={"expected_version": frozen["version"]},
+        )
+        assert frozen_label.status_code == 200
+        assert frozen_label.json()["label_status"] == "异常待确认"
+
+        _login(client, "scoped")
+        visible = client.get(
+            f'/api/warehouse/lots/{active["id"]}/label',
+            params={"expected_version": active["version"]},
+        )
+        assert visible.status_code == 200
+        forbidden = client.get(
+            f'/api/warehouse/lots/{semi_b["id"]}/label',
+            params={"expected_version": semi_b["version"]},
+        )
+        assert forbidden.status_code == 403

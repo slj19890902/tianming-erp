@@ -1504,20 +1504,25 @@
       }catch(err){toast(err.message,true)}
     }
     function actionButtons(row){
-      if(!canOperate())return "";
+      const physical=Number(row.quantity_available||0)+Number(row.quantity_reserved||0);
+      const label=row.inventory_type==="finished"&&row.status!=="closed"&&physical>0?`<button class="btn" onclick="openFinishedGoodsLabel(${row.id},${row.version})">打印标签</button>`:"";
+      if(!canOperate())return label;
       if(row.inventory_type==="finished"){
-        if(row.status!=="active")return "";
+        if(row.status!=="active")return label;
         const staging=row.location?.location_code==="F1-DISPATCH-01"&&(Number(row.quantity_available||0)+Number(row.quantity_reserved||0)>0)?`<button class="btn primary" onclick="openStagingTransfer(${row.id})">转入库位</button>`:"";
         if(state.user.role!=="admin")return staging;
         const edit=`<button class="btn primary" onclick="openLotEditor(${row.id})">编辑</button>`;
         const general=!row.detail.is_general?`<button class="btn" onclick="operate(${row.id},'transfer-to-general',${row.version})">转通用</button>`:"";
-        return staging+edit+general;
+        return label+staging+edit+general;
       }
       const adjust=row.status==="active"?`<button class="btn" onclick="operate(${row.id},'adjust',${row.version})">调整</button>`:"";
       const freeze=row.status==="active"?`<button class="btn" onclick="operate(${row.id},'freeze',${row.version})">冻结</button>`:row.status==="frozen"?`<button class="btn" onclick="operate(${row.id},'unfreeze',${row.version})">解冻</button>`:"";
       const normal=row.status==="active"?`${adjust}<button class="btn danger" onclick="operate(${row.id},'damage',${row.version})">报损</button><button class="btn danger" onclick="operate(${row.id},'scrap',${row.version})">报废</button>`:"";
       const editor=state.user.role==="admin"&&row.status!=="closed"?`<button class="btn primary" onclick="openSemiLotEditor(${row.id})">编辑批次</button>`:"";
       return editor+freeze+normal;
+    }
+    function openFinishedGoodsLabel(lotId,version){
+      window.open(`/static/finished-goods-label.html?lot_id=${encodeURIComponent(lotId)}&version=${encodeURIComponent(version)}`,"_blank","noopener");
     }
     function renderSemiLotEditor(){
       const row=state.semiLotEdit;if(!row)return;const detail=row.detail||{},owned=Boolean(detail.owner_customer_id);

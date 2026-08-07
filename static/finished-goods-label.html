@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>成品货物标签</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; color: #111827; background: #e5e7eb; font-family: "Microsoft YaHei", "SimSun", sans-serif; }
+    .toolbar { display: flex; justify-content: center; gap: 10px; padding: 14px; }
+    button, a.action { border: 0; border-radius: 6px; padding: 10px 20px; color: white; background: #166534; font-size: 15px; text-decoration: none; cursor: pointer; }
+    button.secondary, a.secondary { background: #475569; } button:disabled { opacity: .5; }
+    .state { max-width: 720px; margin: 28px auto; padding: 18px; border: 1px solid #93c5fd; border-radius: 8px; color: #1e3a8a; background: #eff6ff; text-align: center; }
+    .state.error { border-color: #fca5a5; color: #991b1b; background: #fff1f2; }
+    .sheet { position: relative; display: grid; grid-template-rows: auto auto 1fr auto; width: 190mm; min-height: 267mm; margin: 0 auto 18px; padding: 12mm; background: white; box-shadow: 0 2px 12px #0002; }
+    .head { display: flex; justify-content: space-between; gap: 12mm; align-items: flex-start; border-bottom: 2px solid #111827; padding-bottom: 5mm; }
+    .title { margin: 0; font-size: 28px; letter-spacing: 3px; }
+    .status { padding: 3mm 6mm; border: 2px solid #166534; border-radius: 99px; color: #166534; font-size: 20px; font-weight: 900; }
+    .status.warning { border-color: #b91c1c; color: #b91c1c; }
+    .location { margin: 8mm 0 5mm; padding: 6mm; border: 3px solid #1d4ed8; border-radius: 5mm; color: #1e3a8a; text-align: center; }
+    .location-label { font-size: 15px; font-weight: 700; }
+    .location-code { margin-top: 2mm; font-size: 42px; font-weight: 900; line-height: 1.1; overflow-wrap: anywhere; }
+    .location-name { margin-top: 2mm; font-size: 22px; font-weight: 700; }
+    .content { display: grid; grid-template-columns: minmax(0, 1fr) 45mm; gap: 8mm; align-items: start; }
+    .customer { margin-bottom: 4mm; font-size: 25px; font-weight: 900; }
+    .product-code { font-size: 34px; font-weight: 900; line-height: 1.15; overflow-wrap: anywhere; }
+    .product-name { margin-top: 3mm; font-size: 23px; font-weight: 700; }
+    .specification { margin-top: 2mm; color: #374151; font-size: 19px; }
+    .quantity { display: flex; align-items: baseline; gap: 3mm; margin-top: 7mm; padding: 5mm 0; border-top: 2px solid #111827; border-bottom: 2px solid #111827; }
+    .quantity span { font-size: 18px; font-weight: 700; }
+    .quantity strong { color: #b91c1c; font-size: 54px; line-height: 1; }
+    .balances { margin-top: 2mm; color: #4b5563; font-size: 14px; }
+    .qr { text-align: center; }
+    .qr img { width: 42mm; height: 42mm; image-rendering: pixelated; }
+    .qr p { margin: 2mm 0 0; font-size: 12px; }
+    .meta { display: grid; grid-template-columns: 1fr 1fr; gap: 2mm 8mm; margin-top: 7mm; padding-top: 4mm; border-top: 1px solid #6b7280; font-size: 14px; }
+    .meta strong { display: inline-block; min-width: 24mm; }
+    .notice { grid-column: 1 / -1; margin-top: 3mm; color: #6b7280; font-size: 12px; text-align: center; }
+    [hidden] { display: none !important; }
+    @page { size: A4 portrait; margin: 10mm; }
+    @media print {
+      body { background: white; }
+      .toolbar, .state { display: none !important; }
+      .sheet { width: 190mm; min-height: 267mm; margin: 0; box-shadow: none; page-break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <nav class="toolbar"><button id="printButton" disabled>打印成品标签</button><a id="mapButton" class="action secondary" href="#" hidden>查看仓库位置</a><button class="secondary" onclick="window.close()">关闭</button></nav>
+  <div id="state" class="state">正在核对当前库存和标签版本……</div>
+  <main id="sheet" class="sheet" hidden></main>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const lotId = params.get("lot_id");
+    const expectedVersion = params.get("version");
+    const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]));
+    const formatDateTime = value => {
+      const date = value ? new Date(value) : new Date();
+      return Number.isNaN(date.getTime()) ? "-" : new Intl.DateTimeFormat("zh-CN", {timeZone:"Asia/Shanghai",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false}).format(date).replaceAll("/", "-");
+    };
+    async function request(url) {
+      let response;
+      try { response = await fetch(url, {credentials:"include", cache:"no-store"}); }
+      catch (_error) { throw new Error("无法连接 ERP 服务，请检查网络后重试"); }
+      const text = await response.text().catch(() => ""); let body = {};
+      if (text) { try { body = JSON.parse(text); } catch (_error) { body = {}; } }
+      if (!response.ok) {
+        const detail = typeof body.detail === "string" ? body.detail : body.detail?.message;
+        throw new Error(detail || (response.status === 401 ? "登录已失效，请返回 ERP 登录后重新打开" : `读取失败（HTTP ${response.status}）`));
+      }
+      return body;
+    }
+    function render(row, user) {
+      const detail = row.detail || {}, location = row.location || {}, source = row.source_reference || {};
+      const dims = [detail.length_mm, detail.width_mm, detail.height_mm].filter(value => value != null);
+      const specification = dims.length ? `${dims.join(" × ")} mm` : "规格未登记";
+      const sourceText = `${source.label || "库存来源"}${source.id ? ` #${source.id}` : ""}`;
+      const printUser = user.display_name || user.real_name || user.username || "-";
+      const warning = row.label_status === "异常待确认";
+      document.getElementById("sheet").innerHTML = `
+        <section class="head"><h1 class="title">成品货物标签</h1><span class="status ${warning ? "warning" : ""}">${escapeHtml(row.label_status)}</span></section>
+        <section class="location"><div class="location-label">当前物理位置</div><div class="location-code">${escapeHtml(location.location_code || "位置待确认")}</div><div class="location-name">${escapeHtml(location.location_name || "")}</div></section>
+        <section class="content"><div><div class="customer">${escapeHtml(detail.is_general ? "通用库存" : (detail.owner_customer_name || "客户待确认"))}</div><div class="product-code">${escapeHtml(detail.inventory_code || "存货编码待确认")}</div><div class="product-name">${escapeHtml(detail.product_name || "产品名称待确认")}</div><div class="specification">${escapeHtml(specification)}</div><div class="quantity"><span>当前实物</span><strong>${Number(row.physical_quantity || 0)}</strong><span>个</span></div><div class="balances">其中可用 ${Number(row.quantity_available || 0)} 个，已预占 ${Number(row.quantity_reserved || 0)} 个</div></div><div class="qr"><img src="${escapeHtml(row.qr_data_url)}" alt="扫码查看当前库存位置" /><p>扫码核对当前位置和标签版本</p></div></section>
+        <footer class="meta"><div><strong>库存批次：</strong>${escapeHtml(row.lot_number)}</div><div><strong>完工/来源：</strong>${escapeHtml(sourceText)}</div><div><strong>标签版本：</strong>${escapeHtml(row.label_version)}</div><div><strong>打印人/时间：</strong>${escapeHtml(printUser)} / ${escapeHtml(formatDateTime())}</div><div class="notice">标签打印和补打不入库、不移库、不扣库存。数量或位置变化后，请重新打印并撤下旧标签。</div></footer>`;
+      document.getElementById("sheet").hidden = false;
+      const mapButton = document.getElementById("mapButton");
+      mapButton.href = `/warehouse.html?tab=locations&location_id=${encodeURIComponent(location.id)}&lot_id=${encodeURIComponent(row.id)}`;
+      mapButton.hidden = false;
+    }
+    async function boot() {
+      const state = document.getElementById("state");
+      if (!/^\d+$/.test(lotId || "") || !/^\d+$/.test(expectedVersion || "")) { state.textContent = "缺少有效库存批次或标签版本"; state.classList.add("error"); return; }
+      try {
+        const [user, row] = await Promise.all([request("/api/auth/me"), request(`/api/warehouse/lots/${encodeURIComponent(lotId)}/label?expected_version=${encodeURIComponent(expectedVersion)}`)]);
+        render(row, user); state.hidden = true; document.getElementById("printButton").disabled = false;
+      } catch (error) { state.textContent = error.message || "标签读取失败"; state.classList.add("error"); }
+    }
+    document.getElementById("printButton").addEventListener("click", () => window.print());
+    boot();
+  </script>
+</body>
+</html>

@@ -7046,6 +7046,75 @@ def get_lot(
     return result
 
 
+@router.get("/lots/{lot_id}/label")
+def get_finished_goods_label(
+    lot_id: int,
+    request: Request,
+    expected_version: int = Query(gt=0),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    """Return a read-only, version-bound finished-goods label projection."""
+
+    row = _require_lot_customer_access(db, lot_id, user)
+    if row.inventory_type != "finished" or row.finished_detail is None:
+        raise HTTPException(status_code=409, detail="只有正式成品库存可以打印货物标签")
+    if int(row.version) != expected_version:
+        raise HTTPException(
+            status_code=409,
+            detail="旧标签已失效：库存数量或位置已经变化，请从当前库存重新打印",
+        )
+    physical_quantity = int(row.quantity_available or 0) + int(
+        row.quantity_reserved or 0
+    )
+    if row.status == "closed" or physical_quantity <= 0:
+        raise HTTPException(status_code=409, detail="当前批次已无在库实物，不能打印货物标签")
+    location = row.location
+    if row.status == "frozen":
+        label_status = "异常待确认"
+    elif (
+        location.storage_type == "staging"
+        or location.location_code == "F1-DISPATCH-01"
+    ):
+        label_status = "待送"
+    elif location.storage_type == "sample":
+        label_status = "样品"
+    else:
+        label_status = "成品"
+    source_labels = {
+        "production_completion": "生产完工",
+        "production_surplus": "生产余货",
+        "manual": "手工入库",
+        "stocktake": "盘点入库",
+        "transfer": "移库转入",
+        "delivery_return": "送货退回",
+    }
+    port = request.url.port or 8000
+    lookup_url = (
+        f"http://{_lan_ip()}:{port}/static/finished-goods-label.html"
+        f"?lot_id={row.id}&version={row.version}&view=validate"
+    )
+    image = qrcode.make(lookup_url)
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return {
+        **_lot_dict(row),
+        "label_version": row.version,
+        "label_status": label_status,
+        "physical_quantity": physical_quantity,
+        "source_reference": {
+            "type": row.source_ref_type or row.source_type,
+            "id": row.source_ref_id,
+            "label": source_labels.get(row.source_type, "库存来源"),
+        },
+        "lookup_url": lookup_url,
+        "qr_data_url": (
+            "data:image/png;base64,"
+            + base64.b64encode(buffer.getvalue()).decode("ascii")
+        ),
+    }
+
+
 @router.get("/movements")
 def list_movements(
     lot_number: str | None = None,

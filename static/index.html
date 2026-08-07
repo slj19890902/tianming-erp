@@ -2657,7 +2657,7 @@
               <div v-if="incomingTab==='pending' && incomingLocationsError" class="status orange" style="display:block;margin:8px 0">{{ incomingLocationsError }} <button class="btn small" @click="ensureIncomingLocations()">重试</button></div>
               <data-panel v-if="incomingTab !== 'history'" :empty="!(incomingTab==='pending' ? incomingPending : incomingReceived).length && !(incomingTab==='received' && (incomingReceivedLoading || incomingReceivedError))">
                 <table class="incoming-table">
-                  <thead><tr><th v-if="incomingTab==='pending' && hasPermission('incoming.execute')"><input type="checkbox" :checked="allIncomingSelected" @change="toggleAllIncoming($event.target.checked)" /> 全选</th><th>报料尺寸</th><th>客户</th><th>存货编码</th><th>产品</th><th>材质</th><th>计划 / 已收 / 待收</th><th>本次收料</th><th class="incoming-decision-cell">收料结果 / 入库位</th><th>报料日期</th><th>图纸</th><th v-if="hasPermission('incoming.execute')">操作</th></tr></thead>
+                  <thead><tr><th v-if="incomingTab==='pending' && hasPermission('incoming.execute')"><input type="checkbox" :checked="allIncomingSelected" @change="toggleAllIncoming($event.target.checked)" /> 全选</th><th>报料尺寸</th><th>客户</th><th>存货编码</th><th>产品</th><th>材质</th><th>计划 / 已收 / 待收</th><th>本次收料</th><th class="incoming-decision-cell">收料结果 / 入库位</th><th>报料日期</th><th>图纸</th><th>生产卡</th><th v-if="hasPermission('incoming.execute')">操作</th></tr></thead>
                   <tbody><tr v-for="row in (incomingTab==='pending' ? incomingPending : incomingReceived)" :key="row.history_key || row.item_id">
                     <td v-if="incomingTab==='pending' && hasPermission('incoming.execute')"><input type="checkbox" v-model="incomingSelected[row.item_id]" :disabled="!canReceiveIncoming(row)" /></td>
                     <td><strong>{{ formatBoardSpec(row.cardboard_len,row.cardboard_width) }}</strong></td>
@@ -2667,6 +2667,7 @@
                     <td class="incoming-decision-cell"><template v-if="incomingTab==='pending'"><div v-if="Number(row.cumulative_received_quantity||0)>0 && Number(row.remaining_quantity||0)>0" class="status orange">已收 {{ row.cumulative_received_quantity }}，待补 {{ row.remaining_quantity }}</div><select v-if="incomingProjectedVariance(row)<0" class="select" v-model="row.resolution_action" :disabled="!hasPermission('incoming.execute')"><option value="">少收怎么处理</option><option value="await_supplier">继续等补货</option><option v-if="row.source_type!=='stock_replenishment'" value="accept_short">按已收数结单</option></select><select v-else-if="incomingProjectedVariance(row)>0" class="select" v-model="row.resolution_action" :disabled="!hasPermission('incoming.execute')"><option value="">多收怎么处理</option><option value="all_to_production">全部用于本单</option><option value="transfer_to_semi_inventory">余量存半成品仓</option></select><span v-else class="status green">数量刚好</span><select v-if="row.resolution_action==='transfer_to_semi_inventory'" class="select" v-model.number="row.surplus_location_id" :disabled="!hasPermission('incoming.execute')"><option :value="null">余量放哪个库位</option><option v-for="location in incomingSemiLocations()" :key="location.id" :value="location.id">{{ location.location_code }}｜{{ location.location_name }}</option></select><div v-if="row.source_type==='stock_replenishment'" class="incoming-location-picker"><span class="muted">到厂后入库位</span><select class="select" v-model.number="row.receipt_location_id" :disabled="!hasPermission('incoming.execute') || incomingReceiptLocationsLoading"><option :value="null">请选择本次入库库位</option><option v-for="location in incomingReceiptLocationsFor(row)" :key="location.id" :value="location.id">{{ location.location_code }}｜{{ location.location_name }}</option></select></div></template><template v-else><span :class="['status',row.variance_type==='matched'?'green':'orange']">{{ incomingVarianceLabel(row) }}</span><div v-if="row.resolution_reason" class="muted">{{ row.resolution_reason }}</div></template></td>
                     <td>{{ row.requisition_date || "-" }}</td>
                     <td><a v-if="row.drawing_is_pdf" class="btn small" :href="row.drawing_path" target="_blank">打开PDF</a><span v-else>-</span></td>
+                    <td><button v-if="incomingTab==='received' && row.receipt_item_id && row.receipt_status==='posted' && row.order_item_id" class="btn small primary" @click="openIncomingProductionCard(row)">打印生产卡</button><span v-else class="muted">-</span></td>
                     <td v-if="hasPermission('incoming.execute')"><template v-if="incomingTab==='pending'"><button class="btn small success" @click="receiveIncoming(row)">确认实收</button><button v-if="row.pending_receipt_item_id" class="btn small" @click="acceptShortIncoming(row)">不再补货，短收结单</button></template><button v-else-if="canAdmin" class="btn small danger" @click="revertIncoming(row)">撤销收料，回到已报料</button></td>
                   </tr></tbody>
                 </table>
@@ -2698,8 +2699,9 @@
                       <td>{{ row.material_display || "-" }}</td>
                       <td><strong>{{ row.incoming_quantity }}</strong></td>
                       <td>
+                        <button v-if="row.receipt_item_id && row.receipt_status==='posted' && row.order_item_id" class="btn small primary" @click="openIncomingProductionCard(row)">打印生产卡</button>
                         <button v-if="canAdmin" class="btn small danger" @click="revertIncoming(row)">撤销收料，回到已报料</button>
-                        <span v-else class="muted">-</span>
+                        <span v-if="!(row.receipt_item_id && row.receipt_status==='posted' && row.order_item_id) && !canAdmin" class="muted">-</span>
                       </td>
                     </tr></tbody>
                   </table>
@@ -12979,6 +12981,42 @@
               }
               this.showToast("已撤回来料入库");
             } catch(error) { this.showToast(this.errorMessage(error),true); }
+          },
+          async openIncomingProductionCard(row) {
+            const receiptItemId = Number(row?.receipt_item_id || 0);
+            if (!receiptItemId || row?.receipt_status !== "posted" || !row?.order_item_id) {
+              this.showToast("只有有效的订单实收记录才能打印生产卡", true);
+              return false;
+            }
+            if (typeof BroadcastChannel !== "function") {
+              this.showToast("当前浏览器不支持安全打开生产卡，请升级浏览器后重试", true);
+              return false;
+            }
+            const token = globalThis.crypto?.randomUUID?.()
+              || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+            const channel = new BroadcastChannel(`erp-incoming-production-card-${token}`);
+            const ready = new Promise(resolve => {
+              let settled = false;
+              const finish = value => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timeoutId);
+                resolve(value);
+              };
+              const timeoutId = setTimeout(() => finish(false), 2500);
+              channel.onmessage = event => {
+                if (event?.data?.type === "ready") finish(true);
+              };
+            });
+            const path = `/incoming-production-card.html?id=${encodeURIComponent(receiptItemId)}&open_token=${encodeURIComponent(token)}`;
+            window.open(path, "_blank", "noopener");
+            if (!(await ready)) {
+              channel.close();
+              this.showToast("浏览器阻止了生产卡页面，请允许打开新页面后重试", true);
+              return false;
+            }
+            channel.close();
+            return true;
           },
           async loadIncomingHistory() {
             const controller = this.beginLatestRequest("incoming:history");

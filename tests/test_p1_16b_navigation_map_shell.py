@@ -20,7 +20,7 @@ def test_p1_16b_keeps_business_pages_behind_one_order_warehouse_workbench() -> N
 
 
 def test_p1_16b_delegates_floor_switching_to_the_embedded_twin_header() -> None:
-    target = "/warehouse.html?embedded=1&floor=3F&view=25d"
+    target = "/warehouse.html?embedded=1&floor=3F&view=2d"
     assert target in INDEX
     assert "warehouseTwinFloor: \"3F\"" in INDEX
     assert "默认先看真实三楼地图；切换其它模块不会丢失当前仓库页面。" not in INDEX

@@ -8,7 +8,8 @@ import {
   buildPalletVisual,
   buildRackVisual,
   createGroundArrow,
-  createHatchTexture
+  createHatchTexture,
+  palletMarkerSpec
 } from "./industrialScene";
 import { snapPalletPosition } from "./palletSnap.mjs";
 import { palletStatusInfo } from "./palletStatus";
@@ -25,12 +26,15 @@ import type {
   CameraPreset,
   LayerVisibility,
   Layout,
+  Pallet,
   ProductionTaskProjection,
   ReferenceOverlayConfig,
   SelectedEntity,
   Structure,
   ViewMode
 } from "./types";
+
+const WAREHOUSE_PICK_LAYER = 31;
 
 interface Props {
   layout: Layout;
@@ -82,7 +86,9 @@ interface CanvasRuntime {
   entityNodes: Map<string, THREE.Object3D>;
   selectionHighlight: THREE.Group;
   searchHighlight: THREE.Group;
+  resultHighlight: THREE.Group;
   focusFrame: number | null;
+  requestRender: () => void;
   viewMode: ViewMode;
   layoutId: string;
 }
@@ -137,6 +143,20 @@ function syncEntityHighlights(runtime: CanvasRuntime, selected: SelectedEntity, 
     const focusedObject = runtime.entityNodes.get(focusedKey!);
     if (focusedObject) addEntityHighlight(runtime.searchHighlight, focusedObject, 0xff2d8b, 160);
   }
+  runtime.requestRender();
+}
+
+function syncResultHighlights(runtime: CanvasRuntime, featureIds: string[], palletIds: string[]) {
+  clearHighlightGroup(runtime.resultHighlight);
+  for (const id of featureIds) {
+    const object = runtime.entityNodes.get(`feature:${id}`);
+    if (object) addEntityHighlight(runtime.resultHighlight, object, 0xf59e0b, 120);
+  }
+  for (const id of palletIds) {
+    const object = runtime.entityNodes.get(`pallet:${id}`);
+    if (object) addEntityHighlight(runtime.resultHighlight, object, 0xf59e0b, 100);
+  }
+  runtime.requestRender();
 }
 
 function animateFocus(runtime: CanvasRuntime, focusTarget: CanvasFocusTarget) {
@@ -166,6 +186,7 @@ function animateFocus(runtime: CanvasRuntime, focusTarget: CanvasFocusTarget) {
     runtime.camera.zoom = THREE.MathUtils.lerp(startZoom, endZoom, eased);
     runtime.camera.updateProjectionMatrix();
     runtime.controls.update();
+    runtime.requestRender();
     runtime.focusFrame = progress < 1 ? requestAnimationFrame(step) : null;
   };
   runtime.focusFrame = requestAnimationFrame(step);
@@ -226,10 +247,99 @@ function textSprite(
 function entityNode(object: THREE.Object3D | null): THREE.Object3D | null {
   let current = object;
   while (current) {
+    if (current.userData.entityRoot instanceof THREE.Object3D) return current.userData.entityRoot;
     if (current.userData.entityKind && current.userData.entityId) return current;
     current = current.parent;
   }
   return null;
+}
+
+function warehousePickProxy(group: THREE.Group) {
+  group.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(group);
+  if (box.isEmpty()) return null;
+  const size = box.getSize(new THREE.Vector3());
+  const center = group.worldToLocal(box.getCenter(new THREE.Vector3()));
+  const proxy = new THREE.Mesh(
+    new THREE.BoxGeometry(Math.max(size.x, 160), Math.max(size.y, 180), Math.max(size.z, 160)),
+    new THREE.MeshBasicMaterial({
+      transparent: true,
+      opacity: 0.001,
+      depthWrite: false,
+      colorWrite: false
+    })
+  );
+  proxy.position.copy(center);
+  proxy.layers.set(WAREHOUSE_PICK_LAYER);
+  proxy.userData.entityRoot = group;
+  group.add(proxy);
+  return proxy;
+}
+
+function warehousePalletPickProxy(pallet: Pallet, viewMode: ViewMode, violated: boolean) {
+  const spec = palletMarkerSpec(pallet, viewMode, violated);
+  const proxy = new THREE.Mesh(
+    new THREE.BoxGeometry(spec.width, spec.pickHeight, spec.depth),
+    new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, colorWrite: false })
+  );
+  proxy.position.y = spec.pickHeight / 2;
+  proxy.layers.set(WAREHOUSE_PICK_LAYER);
+  proxy.userData.pickProxy = true;
+  return proxy;
+}
+
+type WarehousePalletInstance = {
+  pallet: Pallet;
+  position: THREE.Vector3;
+  rotationY: number;
+  violated: boolean;
+};
+
+function addWarehousePalletInstances(scene: THREE.Scene, entries: WarehousePalletInstance[], viewMode: ViewMode) {
+  if (!entries.length) return;
+  const base = new THREE.InstancedMesh(
+    new THREE.BoxGeometry(1, 1, 1),
+    new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.84 }),
+    entries.length
+  );
+  const load = new THREE.InstancedMesh(
+    new THREE.BoxGeometry(1, 1, 1),
+    new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.76 }),
+    entries.length
+  );
+  const matrix = new THREE.Matrix4();
+  const quaternion = new THREE.Quaternion();
+  const scale = new THREE.Vector3();
+  const center = new THREE.Vector3();
+  const axisY = new THREE.Vector3(0, 1, 0);
+
+  entries.forEach(({ pallet, position, rotationY, violated }, index) => {
+    const spec = palletMarkerSpec(pallet, viewMode, violated);
+    quaternion.setFromAxisAngle(axisY, rotationY);
+    center.set(position.x, spec.baseY, position.z);
+    scale.set(spec.width, spec.baseHeight, spec.depth);
+    matrix.compose(center, quaternion, scale);
+    base.setMatrixAt(index, matrix);
+    base.setColorAt(index, new THREE.Color(spec.baseColor));
+
+    center.set(position.x, spec.loadY, position.z);
+    scale.set(spec.loadWidth, spec.loadHeight, spec.loadDepth);
+    matrix.compose(center, quaternion, scale);
+    load.setMatrixAt(index, matrix);
+    load.setColorAt(index, new THREE.Color(spec.loadColor));
+  });
+
+  base.instanceMatrix.needsUpdate = true;
+  load.instanceMatrix.needsUpdate = true;
+  if (base.instanceColor) base.instanceColor.needsUpdate = true;
+  if (load.instanceColor) load.instanceColor.needsUpdate = true;
+  base.computeBoundingBox();
+  base.computeBoundingSphere();
+  load.computeBoundingBox();
+  load.computeBoundingSphere();
+  base.userData.warehouseBatch = "pallet-base";
+  load.userData.warehouseBatch = "pallet-load";
+  scene.add(base, load);
 }
 
 export function EditorCanvas({
@@ -331,8 +441,8 @@ export function EditorCanvas({
     }
     camera.lookAt(0, 0, 0);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: !warehouseTheme });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, warehouseTheme ? 1.5 : 2));
+    const renderer = new THREE.WebGLRenderer({ antialias: !warehouseTheme, preserveDrawingBuffer: !warehouseTheme });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, warehouseTheme ? 1 : 2));
     renderer.setSize(width, height);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.shadowMap.enabled = viewMode === "25d" && !warehouseTheme;
@@ -345,6 +455,17 @@ export function EditorCanvas({
     controls.screenSpacePanning = true;
     controls.maxZoom = 12;
     controls.minZoom = 0.25;
+    let disposed = false;
+    let renderFrame: number | null = null;
+    const requestRender = () => {
+      if (disposed || renderFrame !== null) return;
+      renderFrame = requestAnimationFrame(() => {
+        renderFrame = null;
+        const controlsChanged = controls.update();
+        renderer.render(scene, camera);
+        if (controlsChanged) requestRender();
+      });
+    };
     if (viewMode === "2d") {
       controls.mouseButtons.LEFT = THREE.MOUSE.PAN;
       controls.mouseButtons.MIDDLE = THREE.MOUSE.PAN;
@@ -365,7 +486,7 @@ export function EditorCanvas({
     scene.add(new THREE.HemisphereLight(warehouseTheme ? 0xffffff : 0xffffff, warehouseTheme ? 0xd6dfe4 : 0x94a3b8, warehouseTheme ? 1.45 : 1.55));
     const directional = new THREE.DirectionalLight(0xffffff, warehouseTheme ? 1.5 : 1.65);
     directional.position.set(span, span * 1.5, span);
-    directional.castShadow = viewMode === "25d";
+    directional.castShadow = viewMode === "25d" && !warehouseTheme;
     directional.shadow.mapSize.set(1024, 1024);
     scene.add(directional);
     const floor = new THREE.Mesh(
@@ -442,8 +563,6 @@ export function EditorCanvas({
     const violationIds = new Set(
       layout.violations.flatMap((item) => [item.entity_id, item.related_id || ""])
     );
-    const highlightedFeatures = new Set(highlightFeatureIds);
-    const highlightedPallets = new Set(highlightedPalletIds);
     const interactive: THREE.Object3D[] = [];
     const hiddenSourceHandles = new Set(
       layout.features
@@ -560,15 +679,9 @@ export function EditorCanvas({
       if (!visible || feature.points.length < 2) continue;
       const protectedAnchor = feature.status === "confirmed" && ["custom_column", "freight_elevator"].includes(feature.subtype);
       const violated = violationIds.has(feature.id);
-      const selectedFeature = selectedRef.current?.kind === "feature" && selectedRef.current.id === feature.id;
-      const highlightedFeature = highlightedFeatures.has(feature.id);
       const color = violated
         ? "#dc2626"
-        : selectedFeature
-          ? (warehouseTheme ? "#5eead4" : "#2563eb")
-          : highlightedFeature
-            ? "#f59e0b"
-          : feature.feature_kind === "aisle"
+        : feature.feature_kind === "aisle"
             ? warehouseAisleColor(layout.floor_code, visualTheme, feature.color)
             : feature.color;
       const group = new THREE.Group();
@@ -675,7 +788,7 @@ export function EditorCanvas({
                 color: 0xffffff,
                 map: hatchTexture,
                 transparent: true,
-                opacity: highlightedFeature ? 0.78 : feature.feature_kind === "no_go" ? 0.72 : 0.5,
+                opacity: feature.feature_kind === "no_go" ? 0.72 : 0.5,
                 side: THREE.DoubleSide
               })
         );
@@ -689,15 +802,10 @@ export function EditorCanvas({
           new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.95 })
         );
         group.add(boundary);
-        if (highlightedFeature) {
-          const highlightBoundary = new THREE.LineLoop(
-            new THREE.BufferGeometry().setFromPoints(feature.points.map(([x, y]) => worldPoint(x, y, 76))),
-            new THREE.LineBasicMaterial({ color: 0xf59e0b, transparent: true, opacity: 1 })
-          );
-          group.add(highlightBoundary);
-        }
       }
-      if (operationalEntitySelectable(visualTheme, "feature", feature.feature_kind)) interactive.push(group);
+      if (operationalEntitySelectable(visualTheme, "feature", feature.feature_kind)) {
+        interactive.push(warehouseTheme ? warehousePickProxy(group) || group : group);
+      }
       scene.add(group);
       if (layers.labels) {
         const average = feature.points.reduce((sum, point) => [sum[0] + point[0], sum[1] + point[1]], [0, 0]);
@@ -718,12 +826,11 @@ export function EditorCanvas({
     if (layers.equipment) {
       for (const placement of layout.placements) {
         const template = assets.find((item) => item.id === placement.template_id);
-        const isSelected = selectedRef.current?.kind === "equipment" && selectedRef.current.id === placement.id;
         const violated = violationIds.has(placement.id);
         const group = new THREE.Group();
         group.userData = { entityKind: "equipment", entityId: placement.id, draggable: !readOnly && !palletEditingOnly && !placement.is_locked };
         if (template?.render_type === "png" && template.image_url) {
-          const texture = textureLoader.load(template.image_url);
+          const texture = textureLoader.load(template.image_url, requestRender);
           texture.colorSpace = THREE.SRGBColorSpace;
           const mesh = new THREE.Mesh(
             new THREE.PlaneGeometry(placement.width_mm, placement.depth_mm),
@@ -740,11 +847,15 @@ export function EditorCanvas({
             violated ? "#dc2626" : warehouseTheme ? "#0f766e" : template?.color || "#2563eb"
           ));
         }
-        addGroupOutlines(group, violated ? 0xdc2626 : isSelected ? (warehouseTheme ? 0x5eead4 : 0x1d4ed8) : placement.is_locked ? 0x166534 : warehouseTheme ? 0x38bdf8 : 0x0f172a);
+        if (!warehouseTheme || violated) {
+          addGroupOutlines(group, violated ? 0xdc2626 : placement.is_locked ? 0x166534 : 0x0f172a);
+        }
         const position = worldPoint(placement.x_mm, placement.y_mm);
         group.position.set(position.x, 0, position.z);
         group.rotation.y = THREE.MathUtils.degToRad(-placement.rotation_deg);
-        if (operationalEntitySelectable(visualTheme, "equipment")) interactive.push(group);
+        if (operationalEntitySelectable(visualTheme, "equipment")) {
+          interactive.push(warehouseTheme ? warehousePickProxy(group) || group : group);
+        }
         scene.add(group);
         if (layers.labels) {
           const label = textSprite(placement.name, violated ? "#dc2626" : warehouseTheme ? "#5eead4" : placement.is_locked ? "#166534" : "#1d4ed8", 2200, 400, warehouseTheme);
@@ -756,16 +867,19 @@ export function EditorCanvas({
 
     if (layers.racks) {
       for (const rack of layout.racks) {
-        const isSelected = selectedRef.current?.kind === "rack" && selectedRef.current.id === rack.id;
         const violated = violationIds.has(rack.id);
         const group = new THREE.Group();
         group.userData = { entityKind: "rack", entityId: rack.id, draggable: !readOnly && (!palletEditingOnly || rackEditingEnabled) && !rack.is_locked };
         group.add(buildRackVisual(rack, viewMode, violated, !readOnly, warehouseTheme));
-        addGroupOutlines(group, violated ? 0xdc2626 : isSelected ? (warehouseTheme ? 0x5eead4 : 0x1d4ed8) : rack.is_locked ? 0x166534 : warehouseTheme ? 0x38bdf8 : 0x4c1d95);
+        if (!warehouseTheme || violated) {
+          addGroupOutlines(group, violated ? 0xdc2626 : rack.is_locked ? 0x166534 : 0x4c1d95);
+        }
         const position = worldPoint(rack.x_mm, rack.y_mm);
         group.position.set(position.x, 0, position.z);
         group.rotation.y = THREE.MathUtils.degToRad(-rack.rotation_deg);
-        if (operationalEntitySelectable(visualTheme, "rack")) interactive.push(group);
+        if (operationalEntitySelectable(visualTheme, "rack")) {
+          interactive.push(warehouseTheme ? warehousePickProxy(group) || group : group);
+        }
         scene.add(group);
         if (layers.labels) {
           const label = textSprite(rack.rack_code, violated ? "#dc2626" : warehouseTheme ? "#5eead4" : "#4c1d95", 1700, 320, warehouseTheme);
@@ -776,10 +890,9 @@ export function EditorCanvas({
     }
 
     if (layers.pallets) {
+      const warehousePalletInstances: WarehousePalletInstance[] = [];
       for (const pallet of layout.pallets) {
-        const isSelected = selectedRef.current?.kind === "pallet" && selectedRef.current.id === pallet.id;
         const violated = violationIds.has(pallet.id);
-        const highlightedPallet = highlightedPallets.has(pallet.id);
         const palletState = palletStatusInfo(pallet.visual_status);
         const group = new THREE.Group();
         group.userData = {
@@ -787,25 +900,24 @@ export function EditorCanvas({
           entityId: pallet.id,
           draggable: !readOnly && (!palletEditingOnly || pallet.id.startsWith("erp-location-"))
         };
-        group.add(buildPalletVisual(pallet, viewMode, violated));
-        addGroupOutlines(
-          group,
-          violated ? 0xdc2626 : isSelected ? 0x0891b2 : highlightedPallet ? 0xf59e0b : new THREE.Color(palletState.color).getHex()
-        );
-        if (highlightedPallet) {
-          const halo = new THREE.Mesh(
-            new THREE.RingGeometry(Math.max(pallet.width_mm, pallet.depth_mm) * 0.64, Math.max(pallet.width_mm, pallet.depth_mm) * 0.82, 28),
-            new THREE.MeshBasicMaterial({ color: 0xf59e0b, transparent: true, opacity: 0.9, side: THREE.DoubleSide })
-          );
-          halo.rotation.x = -Math.PI / 2;
-          halo.position.y = 72;
-          group.add(halo);
+        if (warehouseTheme) {
+          group.add(warehousePalletPickProxy(pallet, viewMode, violated));
+        } else {
+          group.add(buildPalletVisual(pallet, viewMode, violated));
+        }
+        if (!warehouseTheme || violated) {
+          addGroupOutlines(group, violated ? 0xdc2626 : new THREE.Color(palletState.color).getHex());
         }
         const position = worldPoint(pallet.x_mm, pallet.y_mm);
         group.position.set(position.x, 0, position.z);
         group.rotation.y = THREE.MathUtils.degToRad(-pallet.rotation_deg);
-        if (allowPalletSelection || palletEditingOnly || operationalEntitySelectable(visualTheme, "pallet")) interactive.push(group);
+        if (allowPalletSelection || palletEditingOnly || operationalEntitySelectable(visualTheme, "pallet")) {
+          interactive.push(warehouseTheme ? group.children[0] : group);
+        }
         scene.add(group);
+        if (warehouseTheme) {
+          warehousePalletInstances.push({ pallet, position, rotationY: group.rotation.y, violated });
+        }
         if (layers.labels) {
           const label = textSprite(
             `${pallet.pallet_code} · ${palletState.label} · ${pallet.zone_code}`,
@@ -819,6 +931,7 @@ export function EditorCanvas({
           scene.add(label);
         }
       }
+      if (warehouseTheme) addWarehousePalletInstances(scene, warehousePalletInstances, viewMode);
     }
 
     if (layers.production && productionProjections.length) {
@@ -931,6 +1044,7 @@ export function EditorCanvas({
     }
 
     const raycaster = new THREE.Raycaster();
+    raycaster.layers.set(warehouseTheme ? WAREHOUSE_PICK_LAYER : 0);
     raycaster.params.Line.threshold = 180;
     const pointer = new THREE.Vector2();
     const ground = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
@@ -944,6 +1058,7 @@ export function EditorCanvas({
           (child.material as THREE.Material).dispose();
         }
       }
+      requestRender();
     };
     const showSnapGuides = (guides: { axis: "x" | "y"; value: number }[]) => {
       clearSnapGuides();
@@ -959,6 +1074,7 @@ export function EditorCanvas({
         line.renderOrder = 60;
         snapGuideGroup.add(line);
       }
+      requestRender();
     };
     let dragging: {
       kind: "equipment" | "rack" | "pallet" | "feature";
@@ -984,7 +1100,7 @@ export function EditorCanvas({
       startY: number;
       moved: boolean;
     } | null = null;
-    const setPointer = (event: PointerEvent | DragEvent) => {
+    const setPointer = (event: { clientX: number; clientY: number }) => {
       const rect = renderer.domElement.getBoundingClientRect();
       pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
       pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
@@ -1007,7 +1123,7 @@ export function EditorCanvas({
         };
         return;
       }
-      const root = entityNode(raycaster.intersectObjects(interactive, true)[0]?.object || null);
+      const root = entityNode(raycaster.intersectObjects(interactive, !warehouseTheme)[0]?.object || null);
       if (!root) {
         pendingCanvasAction = {
           kind: "clear-selection",
@@ -1051,7 +1167,7 @@ export function EditorCanvas({
         renderer.domElement.setPointerCapture(event.pointerId);
       }
     };
-    const onPointerMove = (event: PointerEvent) => {
+    const processPointerMove = (event: { clientX: number; clientY: number }) => {
       if (pendingCanvasAction && Math.hypot(event.clientX - pendingCanvasAction.startX, event.clientY - pendingCanvasAction.startY) > 4) {
         pendingCanvasAction.moved = true;
       }
@@ -1090,9 +1206,29 @@ export function EditorCanvas({
         } else {
           dragging.object.position.copy(proposed);
         }
+        requestRender();
       }
     };
+    let pointerMoveFrame: number | null = null;
+    let latestPointerMove: { clientX: number; clientY: number } | null = null;
+    const onPointerMove = (event: PointerEvent) => {
+      latestPointerMove = { clientX: event.clientX, clientY: event.clientY };
+      if (pointerMoveFrame !== null) return;
+      pointerMoveFrame = requestAnimationFrame(() => {
+        pointerMoveFrame = null;
+        const latest = latestPointerMove;
+        latestPointerMove = null;
+        if (latest) processPointerMove(latest);
+      });
+    };
+    const flushPointerMove = (event: PointerEvent) => {
+      if (pointerMoveFrame !== null) cancelAnimationFrame(pointerMoveFrame);
+      pointerMoveFrame = null;
+      latestPointerMove = null;
+      processPointerMove(event);
+    };
     const onPointerUp = (event: PointerEvent) => {
+      flushPointerMove(event);
       if (pendingCanvasAction && pendingCanvasAction.pointerId === event.pointerId) {
         const currentAction = pendingCanvasAction;
         pendingCanvasAction = null;
@@ -1124,6 +1260,7 @@ export function EditorCanvas({
       if (renderer.domElement.hasPointerCapture(event.pointerId)) renderer.domElement.releasePointerCapture(event.pointerId);
       if (!current.moved) {
         current.object.position.copy(current.startPosition);
+        requestRender();
         return;
       }
       // Selecting on pointer-down rebuilt the React/Three scene and erased the
@@ -1142,6 +1279,9 @@ export function EditorCanvas({
       else handlersRef.current.onMovePallet(current.id, xMm, yMm);
     };
     const onPointerCancel = (event: PointerEvent) => {
+      if (pointerMoveFrame !== null) cancelAnimationFrame(pointerMoveFrame);
+      pointerMoveFrame = null;
+      latestPointerMove = null;
       pendingCanvasAction = null;
       pendingSelection = null;
       if (!dragging) return;
@@ -1149,6 +1289,7 @@ export function EditorCanvas({
       clearSnapGuides();
       dragging = null;
       controls.enabled = true;
+      requestRender();
       if (renderer.domElement.hasPointerCapture(event.pointerId)) renderer.domElement.releasePointerCapture(event.pointerId);
     };
     const onDragOver = (event: DragEvent) => event.preventDefault();
@@ -1182,7 +1323,8 @@ export function EditorCanvas({
     });
     const selectionHighlight = new THREE.Group();
     const searchHighlight = new THREE.Group();
-    scene.add(selectionHighlight, searchHighlight);
+    const resultHighlight = new THREE.Group();
+    scene.add(selectionHighlight, searchHighlight, resultHighlight);
     const runtime: CanvasRuntime = {
       scene,
       camera,
@@ -1190,12 +1332,15 @@ export function EditorCanvas({
       entityNodes,
       selectionHighlight,
       searchHighlight,
+      resultHighlight,
       focusFrame: null,
+      requestRender,
       viewMode,
       layoutId: layout.id
     };
     runtimeRef.current = runtime;
     syncEntityHighlights(runtime, selectedRef.current, focusTargetRef.current);
+    syncResultHighlights(runtime, highlightFeatureIds, highlightedPalletIds);
     if (focusTargetRef.current) {
       const nextFocusKey = `${focusTargetRef.current.token}:${layout.id}:${viewMode}`;
       if (lastFocusKeyRef.current !== nextFocusKey && animateFocus(runtime, focusTargetRef.current)) {
@@ -1210,17 +1355,14 @@ export function EditorCanvas({
       };
       updateOverlay();
     };
-    controls.addEventListener("change", saveCameraState);
+    const onControlsChange = () => {
+      saveCameraState();
+      requestRender();
+    };
+    controls.addEventListener("change", onControlsChange);
     saveCameraState();
     updateOverlay();
-
-    let frame = 0;
-    const animate = () => {
-      controls.update();
-      renderer.render(scene, camera);
-      frame = requestAnimationFrame(animate);
-    };
-    animate();
+    requestRender();
     const resizeObserver = new ResizeObserver(() => {
       const nextWidth = Math.max(container.clientWidth, 400);
       const nextHeight = Math.max(container.clientHeight, 420);
@@ -1229,10 +1371,13 @@ export function EditorCanvas({
       camera.updateProjectionMatrix();
       renderer.setSize(nextWidth, nextHeight);
       updateOverlay();
+      requestRender();
     });
     resizeObserver.observe(container);
     return () => {
-      cancelAnimationFrame(frame);
+      disposed = true;
+      if (renderFrame !== null) cancelAnimationFrame(renderFrame);
+      if (pointerMoveFrame !== null) cancelAnimationFrame(pointerMoveFrame);
       resizeObserver.disconnect();
       renderer.domElement.removeEventListener("pointerdown", onPointerDown);
       renderer.domElement.removeEventListener("pointermove", onPointerMove);
@@ -1242,10 +1387,11 @@ export function EditorCanvas({
         renderer.domElement.removeEventListener("dragover", onDragOver);
         renderer.domElement.removeEventListener("drop", onDrop);
       }
-      controls.removeEventListener("change", saveCameraState);
+      controls.removeEventListener("change", onControlsChange);
       if (runtime.focusFrame !== null) cancelAnimationFrame(runtime.focusFrame);
       clearHighlightGroup(selectionHighlight);
       clearHighlightGroup(searchHighlight);
+      clearHighlightGroup(resultHighlight);
       if (runtimeRef.current === runtime) runtimeRef.current = null;
       controls.dispose();
       scene.traverse((object) => {
@@ -1260,7 +1406,7 @@ export function EditorCanvas({
       });
       renderer.dispose();
     };
-  }, [layout, assets, viewMode, cameraPreset, viewResetToken, layers, referenceLayout, referenceOverlay, productionProjections, highlightFeatureIds, highlightedPalletIds, palletEditingOnly, rackEditingEnabled, allowPalletSelection, palletSnapEnabled, palletSnapThresholdMm, drawMode, drawPoints, measureMode, measurePoints, readOnly, visualTheme]);
+  }, [layout, assets, viewMode, cameraPreset, viewResetToken, layers, referenceLayout, referenceOverlay, productionProjections, palletEditingOnly, rackEditingEnabled, allowPalletSelection, palletSnapEnabled, palletSnapThresholdMm, drawMode, drawPoints, measureMode, measurePoints, readOnly, visualTheme]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;
@@ -1272,6 +1418,12 @@ export function EditorCanvas({
       lastFocusKeyRef.current = nextFocusKey;
     }
   }, [selected, focusTarget]);
+
+  useEffect(() => {
+    const runtime = runtimeRef.current;
+    if (!runtime) return;
+    syncResultHighlights(runtime, highlightFeatureIds, highlightedPalletIds);
+  }, [highlightFeatureIds, highlightedPalletIds]);
 
   return <div className={`editor-canvas ${visualTheme === "warehouse" ? "warehouse-theme" : ""} ${drawMode || measureMode ? "drawing" : ""}`} ref={containerRef}>
     <div className="canvas-mount" ref={canvasMountRef} />

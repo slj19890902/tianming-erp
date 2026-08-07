@@ -10187,7 +10187,7 @@
             }
             const normalized = String(floorCode || "3F").toUpperCase() === "1F" ? "1F" : "3F";
             this.warehouseTwinFloor = normalized;
-            this.ensureWarehouseFrame(`/warehouse.html?embedded=1&floor=${normalized}&view=25d`);
+            this.ensureWarehouseFrame(`/warehouse.html?embedded=1&floor=${normalized}&view=2d`);
             this.activePage = "warehouse";
             await this.loadPage("warehouse");
           },
@@ -10286,7 +10286,7 @@
                 if (floor === "1F" || floor === "3F") this.warehouseTwinFloor = floor;
               } catch (_) {}
             } else if (!this.warehouseFrameUrl) {
-              this.warehouseFrameUrl = "/warehouse.html?embedded=1&floor=3F&view=25d";
+              this.warehouseFrameUrl = "/warehouse.html?embedded=1&floor=3F&view=2d";
               this.warehouseTwinFloor = "3F";
             }
           },

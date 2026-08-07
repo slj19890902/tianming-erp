@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.60"
-    assert APP_VERSION_NAME == "天明数字孪生智慧仓储正式作业层"
+    assert APP_VERSION == "v0.22.61"
+    assert APP_VERSION_NAME == "天明智慧仓储低性能电脑流畅模式"
     assert APP_BUILD_DATE == "2026-08-07"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -50,19 +50,19 @@ def test_factory_update_reports_current_release_version() -> None:
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
     assert any(
-        "本次更新｜" in item and "一楼生产车间" in item and "2.5D" in item
+        "本次更新｜" in item and "默认进入二维平面" in item and "轻量批量绘制" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "全仓查找" in item and "同步高亮" in item
+        "本次更新｜" in item and "搜索命中" in item and "不再重建整套场景" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "三楼实测图" in item and "缩放和平移" in item
+        "如何验证｜" in item and "三楼二维实测图" in item and "多个库位" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "管理员" in item and "普通账号" in item
+        "如何验证｜" in item and "管理员" in item and "v0.22.61" in item
         for item in current_release
     )
     assert any(

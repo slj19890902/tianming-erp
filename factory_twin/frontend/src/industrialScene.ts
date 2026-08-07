@@ -298,3 +298,43 @@ export function buildPalletVisual(pallet: Pallet, viewMode: ViewMode, violated: 
   }
   return group;
 }
+
+export function palletMarkerSpec(pallet: Pallet, viewMode: ViewMode, violated: boolean) {
+  const width = Math.max(pallet.width_mm, 400);
+  const depth = Math.max(pallet.depth_mm, 400);
+  const state = palletStatusInfo(pallet.visual_status);
+  const statusColor = violated ? "#dc2626" : state.color;
+  const baseColor = violated ? "#991b1b" : pallet.color || "#9a6a3a";
+  const baseHeight = viewMode === "2d" ? 32 : 80;
+  const loadHeight = viewMode === "2d" ? 26 : pallet.visual_status === "empty" ? 70 : 420;
+  const loadY = viewMode === "2d" ? 66 : pallet.visual_status === "empty" ? 105 : 290;
+
+  return {
+    width,
+    depth,
+    baseColor,
+    baseHeight,
+    baseY: viewMode === "2d" ? 30 : 40,
+    loadColor: statusColor,
+    loadHeight,
+    loadY,
+    loadWidth: width * 0.88,
+    loadDepth: depth * 0.84,
+    pickHeight: Math.max(baseHeight + 20, loadY + loadHeight / 2) * 2
+  };
+}
+
+export function buildPalletMarkerVisual(pallet: Pallet, viewMode: ViewMode, violated: boolean) {
+  const group = new THREE.Group();
+  const spec = palletMarkerSpec(pallet, viewMode, violated);
+
+  addBox(group, [spec.width, spec.baseHeight, spec.depth], [0, spec.baseY, 0], spec.baseColor, 0.84);
+  addBox(
+    group,
+    [spec.loadWidth, spec.loadHeight, spec.loadDepth],
+    [0, spec.loadY, 0],
+    spec.loadColor,
+    pallet.visual_status === "empty" ? 0.26 : pallet.is_simulated ? 0.64 : 0.82
+  );
+  return group;
+}

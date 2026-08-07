@@ -65,7 +65,7 @@ def test_homepage_keeps_warehouse_inside_lazy_persistent_erp_shell() -> None:
     assert '@click="go(page.key)">{{ page.label }}</button>' in INDEX_HTML
     assert 'v-if="warehouseFrameUrl" v-show="activePage === \'warehouse\'"' in INDEX_HTML
     assert 'warehouseFrameUrl: "", warehouseFrameRevision: 0, warehouseTwinFloor: "3F"' in INDEX_HTML
-    assert 'this.warehouseFrameUrl = "/warehouse.html?embedded=1&floor=3F&view=25d"' in INDEX_HTML
+    assert 'this.warehouseFrameUrl = "/warehouse.html?embedded=1&floor=3F&view=2d"' in INDEX_HTML
     assert "默认先看真实三楼地图；切换其它模块不会丢失当前仓库页面。" not in INDEX_HTML
     assert "warehouse-floor-card" not in INDEX_HTML
     assert 'window.location.href = "/warehouse.html";' not in INDEX_HTML

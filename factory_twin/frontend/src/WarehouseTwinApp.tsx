@@ -529,7 +529,7 @@ export function WarehouseTwinApp() {
   const query = useMemo(() => new URLSearchParams(window.location.search), []);
   const embedded = query.get("embedded") === "1";
   const [floorCode, setFloorCode] = useState(query.get("floor")?.toUpperCase() === "1F" ? "1F" : "3F");
-  const [viewMode, setViewMode] = useState<ViewMode>(query.get("view") === "2d" ? "2d" : "25d");
+  const [viewMode, setViewMode] = useState<ViewMode>(query.get("view") === "25d" ? "25d" : "2d");
   const [cameraPreset, setCameraPreset] = useState<CameraPreset>("fit");
   const [viewResetToken, setViewResetToken] = useState(0);
   const [layout, setLayout] = useState<Layout | null>(null);
@@ -1893,7 +1893,7 @@ export function WarehouseTwinApp() {
       </div>}
       <button type="button" className="twin-reset" onClick={() => { setCameraPreset("fit"); setViewResetToken((value) => value + 1); }}>全图复位</button>
       <button type="button" className={`twin-warehouse-search-toggle ${searchPanelOpen || searchResponse ? "active" : ""}`} aria-expanded={searchPanelOpen} onClick={() => setSearchPanelOpen((value) => !value)}>全仓查找{searchResponse ? ` ${searchType === "finished" ? searchProductGroups.length : searchResponse.resource_result_count}` : ""}</button>
-      {viewMode === "2d" ? <button type="button" className={`twin-location-edit-toggle ${locationEditMode ? "active" : ""}`} disabled={!canEditLocations} title={!canEditLocations ? "仅管理员可以修改库位布局" : "二维编辑：货架、区域与真实库位布局"} onClick={() => { const next = !locationEditMode; setLocationEditMode(next); setAreaPolicyEditMode(false); setLocationEditMessage(next ? "布局编辑已开启：点货架编辑结构，点区域配置存放策略。" : ""); setSwapSourceLocationId(null); if (!next) { setRackDrafts({}); setZonePolicyDrafts({}); } }}>库位布局</button> : <span className="twin-view-note">2.5D 标签查看</span>}
+      {viewMode === "2d" ? <button type="button" className={`twin-location-edit-toggle ${locationEditMode ? "active" : ""}`} disabled={!canEditLocations} title={!canEditLocations ? "仅管理员可以修改库位布局" : "二维编辑：货架、区域与真实库位布局"} onClick={() => { const next = !locationEditMode; setLocationEditMode(next); setAreaPolicyEditMode(false); setLocationEditMessage(next ? "布局编辑已开启：点货架编辑结构，点区域配置存放策略。" : ""); setSwapSourceLocationId(null); if (!next) { setRackDrafts({}); setZonePolicyDrafts({}); } }}>库位布局</button> : <span className="twin-view-note">2.5D 流畅查看 · 详情见右侧</span>}
       {locationEditMode && <button type="button" className={`twin-area-policy-toggle ${areaPolicyEditMode ? "active" : ""}`} onClick={() => { setAreaPolicyEditMode((value) => !value); setLocationEditMessage("请选择一个区域，设置允许存放类型与货架/栈板地堆形式。"); }}>区域设置</button>}
       {locationEditMode && floorCode === "3F" && <><button type="button" className="twin-save-location-layout" disabled={locationEditBusy || !Object.keys(locationDrafts).length} onClick={saveLocationDrafts}>保存库位位置 {Object.keys(locationDrafts).length || ""}</button><button type="button" className="twin-cancel-location-layout" disabled={locationEditBusy || !Object.keys(locationDrafts).length} onClick={() => { setLocationDrafts({}); setSwapSourceLocationId(null); setLocationEditMessage("已取消未保存的库位位置草稿。"); }}>取消位置草稿</button></>}
       <div className="twin-toolbar-spacer" />

@@ -6,6 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = (ROOT / "factory_twin" / "frontend" / "src" / "WarehouseTwinApp.tsx").read_text(encoding="utf-8")
 CANVAS = (ROOT / "factory_twin" / "frontend" / "src" / "EditorCanvas.tsx").read_text(encoding="utf-8")
+INDUSTRIAL = (ROOT / "factory_twin" / "frontend" / "src" / "industrialScene.ts").read_text(encoding="utf-8")
 BUILT = (ROOT / "static" / "factory-twin-assets" / "warehouse-twin.html").read_text(encoding="utf-8")
 TWIN_CSS = (ROOT / "factory_twin" / "frontend" / "src" / "warehouseTwin.css").read_text(encoding="utf-8")
 ERP_INDEX = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
@@ -54,6 +55,28 @@ def test_operational_twin_declutters_labels_and_keeps_details_in_the_inspector()
     assert 'if (layers.labels) {' in CANVAS
     assert "warehouseFrustumDivisor(layout.floor_code, visualTheme)" in CANVAS
     assert "aisleSurfaceStyle(visualTheme)" in CANVAS
+
+
+def test_phase2c15_uses_low_cost_warehouse_rendering_on_factory_computers() -> None:
+    assert 'query.get("view") === "25d" ? "25d" : "2d"' in SOURCE
+    assert 'view=2d' in ERP_INDEX
+    assert "new THREE.WebGLRenderer({ antialias: !warehouseTheme" in CANVAS
+    assert "warehouseTheme ? 1 : 2" in CANVAS
+    assert "addWarehousePalletInstances(scene, warehousePalletInstances, viewMode)" in CANVAS
+    assert "new THREE.InstancedMesh" in CANVAS
+    assert "export function palletMarkerSpec" in INDUSTRIAL
+    assert "proxy.layers.set(WAREHOUSE_PICK_LAYER)" in CANVAS
+    assert "raycaster.layers.set(warehouseTheme ? WAREHOUSE_PICK_LAYER : 0)" in CANVAS
+    assert "warehousePickProxy(group)" in CANVAS
+    assert "intersectObjects(interactive, !warehouseTheme)" in CANVAS
+    assert "let pointerMoveFrame: number | null = null" in CANVAS
+    assert "latestPointerMove" in CANVAS
+    assert "const requestRender = () =>" in CANVAS
+    assert "requestAnimationFrame(animate)" not in CANVAS
+    assert "syncResultHighlights(runtime, highlightFeatureIds, highlightedPalletIds)" in CANVAS
+    canvas_effect_dependencies = CANVAS.split("}, [layout, assets, viewMode, cameraPreset, viewResetToken, layers", 1)[1].split("]);", 1)[0]
+    assert "highlightFeatureIds" not in canvas_effect_dependencies
+    assert "highlightedPalletIds" not in canvas_effect_dependencies
 
 
 def test_operational_twin_uses_tianming_erp_compact_shell() -> None:
@@ -148,7 +171,7 @@ def test_phase2c14_uses_typed_map_search_and_customer_first_difference_entry() -
 def test_phase2c8_keeps_location_layout_editing_in_2d_and_25d_read_only() -> None:
     assert "库位布局" in SOURCE
     assert "二维编辑" in SOURCE
-    assert "2.5D 标签查看" in SOURCE
+    assert "2.5D 流畅查看 · 详情见右侧" in SOURCE
     assert "locationLayoutGeometry(" in SOURCE
     assert "/api/warehouse/floor3/layout/areas/${areaCode}" in SOURCE
     assert "/api/warehouse/floor3/layout/areas/${selectedAreaCode}/location-count" in SOURCE

@@ -45,3 +45,6 @@ def test_mixed_sample_import_is_global_and_removes_csv_bat_steps() -> None:
     assert '"/api/master/products/mixed-import/apply"' in INDEX
     assert 'form.append("overrides",JSON.stringify(state.overrides || {}))' in INDEX
     assert "确认录入三家客户" in INDEX
+    assert "这些客户都通用" in INDEX
+    assert "toggleMixedSampleCandidate(item,candidate,$event.target.checked)" in INDEX
+    assert "sameCustomerKeys" in INDEX

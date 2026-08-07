@@ -663,6 +663,35 @@ def select_reference_candidate(
     return None, candidates
 
 
+def select_reference_candidates(
+    records: list[dict[str, Any]],
+    registration: dict[str, Any],
+    *,
+    override_keys: str | list[str] | tuple[str, ...] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str | None]:
+    """Resolve one sample to at most one candidate per customer."""
+
+    candidates = collapse_reference_candidates(
+        reference_candidates(
+            records,
+            sample_code=registration["product_code"],
+            customer_hint=registration.get("customer_hint"),
+        )
+    )
+    if override_keys is None:
+        return ([candidates[0]] if len(candidates) == 1 else []), candidates, None
+    raw_keys = [override_keys] if isinstance(override_keys, str) else list(override_keys)
+    selected_keys = list(dict.fromkeys(key for key in raw_keys if key))
+    by_key = {candidate["key"]: candidate for candidate in candidates}
+    if not selected_keys or any(key not in by_key for key in selected_keys):
+        return [], candidates, "所选基础资料已变化，请重新选择"
+    selected = [by_key[key] for key in selected_keys]
+    customer_codes = [candidate["customer_code"] for candidate in selected]
+    if len(customer_codes) != len(set(customer_codes)):
+        return [], candidates, "同一客户只能选择一款基础资料"
+    return selected, candidates, None
+
+
 def merge_registration(target: dict[str, Any], incoming: dict[str, Any]) -> str | None:
     for field in (
         "product_code", "customer_hint", "flute_type", "forming_method",

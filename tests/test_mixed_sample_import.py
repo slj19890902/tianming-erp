@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+import json
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -212,6 +213,63 @@ def test_mixed_preview_requires_explicit_customer_then_applies_atomically(
         assert products[0].report_length_mm == 1000
         assert products[0].production_process == "开槽、印刷、打钉"
         assert db.scalar(select(ProductDrawing).where(ProductDrawing.product_id == products[0].id)) is not None
+
+
+def test_mixed_preview_can_apply_one_sample_to_two_customers_with_shared_photo(
+    mixed_sample_app: FastAPI,
+) -> None:
+    from app.models.customer import Customer
+    from app.models.product import Product
+    from app.models.product_drawing import ProductDrawing
+
+    with TestClient(mixed_sample_app) as client:
+        _login(client)
+        first = client.post(
+            "/api/master/products/mixed-import/preview",
+            data={"overrides": "{}"},
+            files=[
+                ("reference_file", ("三客户基础资料.xlsx", _reference_workbook(), EXCEL_MIME)),
+                ("files", ("现场登记.xlsx", _registration_workbook(), EXCEL_MIME)),
+                ("drawings", ("YP001_1.jpg", _jpeg_bytes(), "image/jpeg")),
+            ],
+        )
+        candidates = first.json()["unresolved"][0]["candidates"]
+        selected = [
+            candidate["key"]
+            for candidate in candidates
+            if candidate["customer_code"] in {"YKE", "KEW"}
+        ]
+        second = client.post(
+            "/api/master/products/mixed-import/preview",
+            data={"overrides": json.dumps({"YP001": selected})},
+            files=[
+                ("reference_file", ("三客户基础资料.xlsx", _reference_workbook(), EXCEL_MIME)),
+                ("files", ("现场登记.xlsx", _registration_workbook(), EXCEL_MIME)),
+                ("drawings", ("YP001_1.jpg", _jpeg_bytes(), "image/jpeg")),
+            ],
+        )
+        payload = second.json()
+        assert second.status_code == 200, second.text
+        assert payload["valid"] is True, payload
+        assert payload["summary"]["resolved_samples"] == 2
+        assert {group["customer_code"] for group in payload["groups"]} == {"YKE", "KEW"}
+        applied = client.post(
+            "/api/master/products/mixed-import/apply",
+            json={"preview_token": payload["preview_token"]},
+        )
+        assert applied.status_code == 200, applied.text
+
+    with mixed_sample_app.state.session_factory() as db:
+        products = db.scalars(select(Product).order_by(Product.id)).all()
+        assert len(products) == 2
+        assert {
+            db.get(Customer, product.customer_id).customer_code for product in products
+        } == {"YKE", "KEW"}
+        drawings = db.scalars(select(ProductDrawing).order_by(ProductDrawing.id)).all()
+        assert len(drawings) == 2
+        assert {drawing.product_id for drawing in drawings} == {
+            product.id for product in products
+        }
 
 
 def test_legacy_embedded_rows_with_invalid_old_choices_are_still_read() -> None:

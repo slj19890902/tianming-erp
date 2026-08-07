@@ -80,7 +80,7 @@ from app.services.mixed_sample_import import (
     process_from_registration,
     read_mixed_reference_workbook,
     read_mixed_sample_workbook,
-    select_reference_candidate,
+    select_reference_candidates,
     store_mixed_preview,
 )
 from app.services.secure_uploads import (
@@ -836,7 +836,15 @@ async def preview_mixed_sample_import(
     except json.JSONDecodeError as error:
         raise HTTPException(status_code=400, detail="待确认客户选择格式错误") from error
     if not isinstance(parsed_overrides, dict) or any(
-        not isinstance(key, str) or not isinstance(value, str)
+        not isinstance(key, str)
+        or not (
+            isinstance(value, str)
+            or (
+                isinstance(value, list)
+                and len(value) <= 20
+                and all(isinstance(candidate_key, str) for candidate_key in value)
+            )
+        )
         for key, value in parsed_overrides.items()
     ):
         raise HTTPException(status_code=400, detail="待确认客户选择格式错误")
@@ -1012,18 +1020,18 @@ async def preview_mixed_sample_import(
     resolved: list[tuple[dict, dict, Customer]] = []
     customer_cache: dict[str, Customer | None] = {}
     for registration in registrations.values():
-        override_key = parsed_overrides.get(str(registration["sample_id"]))
-        reference, candidates = select_reference_candidate(
+        override_keys = parsed_overrides.get(str(registration["sample_id"]))
+        references, candidates, selection_error = select_reference_candidates(
             reference_records,
             registration,
-            override_key=override_key,
+            override_keys=override_keys,
         )
-        if reference is None:
+        if not references:
             unresolved.append(
                 {
                     "sample_id": registration["sample_id"],
                     "product_code": registration["product_code"],
-                    "reason": (
+                    "reason": selection_error or (
                         "基础资料中找不到该型号"
                         if not candidates
                         else "该型号对应多个客户或多款资料，请明确选择"
@@ -1032,21 +1040,22 @@ async def preview_mixed_sample_import(
                 }
             )
             continue
-        customer_code = reference["customer_code"]
-        if customer_code not in customer_cache:
-            customer_cache[customer_code] = _mixed_customer_by_code(db, customer_code)
-        customer = customer_cache[customer_code]
-        if customer is None:
-            errors.append(
-                {
-                    "sheet": "客户主档",
-                    "row_number": registration["row_number"],
-                    "message": f"ERP 中不存在客户代码 {customer_code}",
-                }
-            )
-            continue
-        require_customer_access(customer.id, current_user=user, db=db)
-        resolved.append((registration, reference, customer))
+        for reference in references:
+            customer_code = reference["customer_code"]
+            if customer_code not in customer_cache:
+                customer_cache[customer_code] = _mixed_customer_by_code(db, customer_code)
+            customer = customer_cache[customer_code]
+            if customer is None:
+                errors.append(
+                    {
+                        "sheet": "客户主档",
+                        "row_number": registration["row_number"],
+                        "message": f"ERP 中不存在客户代码 {customer_code}",
+                    }
+                )
+                continue
+            require_customer_access(customer.id, current_user=user, db=db)
+            resolved.append((registration, reference, customer))
 
     product_items: list[dict] = []
     seen_products: set[tuple[int, str]] = set()
@@ -1074,6 +1083,9 @@ async def preview_mixed_sample_import(
             plan["customer_id"] = customer.id
             plan["customer_code"] = reference["customer_code"]
             plan["reference_key"] = reference["key"]
+            plan["import_item_key"] = (
+                f"{customer.id}:{registration['row_number']}:{reference['key']}"
+            )
             if reference.get("product_name_was_blank"):
                 plan["missing_fields"] = (
                     *plan["missing_fields"],
@@ -1104,12 +1116,14 @@ async def preview_mixed_sample_import(
         for filename, image in zip(names, images, strict=True):
             key = filename.casefold()
             if key in required_names:
-                _append_error(
-                    errors,
-                    sheet=MIXED_PRODUCT_SHEET,
-                    row_number=item["row_number"],
-                    message=f"照片文件名在本批次重复：{filename}",
-                )
+                existing_content = required_names[key][1]
+                if sha256(existing_content).digest() != sha256(image.content).digest():
+                    _append_error(
+                        errors,
+                        sheet=MIXED_PRODUCT_SHEET,
+                        row_number=item["row_number"],
+                        message=f"同名照片内容不一致：{filename}",
+                    )
                 continue
             required_names[key] = (filename, image.content, item["row_number"])
 
@@ -2123,7 +2137,7 @@ def apply_mixed_sample_import(
 
     saved_paths: list[tuple[str, str]] = []
     try:
-        products_by_row: dict[int, Product] = {}
+        products_by_item: dict[str, Product] = {}
         for item in preview.product_items:
             product_payload = ProductPayload.model_validate(dict(item["payload"]))
             if item["action"] == "新增":
@@ -2149,13 +2163,13 @@ def apply_mixed_sample_import(
                     user=user,
                     allow_unregistered_sample_mold=True,
                 )
-            products_by_row[item["row_number"]] = product
+            products_by_item[item["import_item_key"]] = product
 
         drawing_count = 0
         skipped_drawing_count = 0
         drawing_evidence: list[dict] = []
         for item in preview.product_items:
-            product = products_by_row[item["row_number"]]
+            product = products_by_item[item["import_item_key"]]
             existing_hashes = _existing_drawing_source_hashes(db, product.id)
             for filename in item["drawing_filenames"]:
                 token = preview.drawing_tokens[filename]

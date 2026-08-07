@@ -1996,10 +1996,13 @@
                     <div v-if="mixedSampleImport.preview.unresolved?.length" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:8px;margin-top:10px">
                       <div v-for="item in mixedSampleImport.preview.unresolved" :key="item.sample_id" class="panel" style="padding:8px;margin:0">
                         <strong>{{ item.sample_id }}｜{{ item.product_code }}</strong><div class="muted">{{ item.reason }}</div>
-                        <select v-if="item.candidates?.length" class="input" style="width:100%;margin-top:6px" v-model="mixedSampleImport.overrides[item.sample_id]">
-                          <option value="">请选择正确客户/资料</option>
-                          <option v-for="candidate in item.candidates" :key="candidate.key" :value="candidate.key">{{ candidate.customer_code }}｜{{ candidate.product_name }}｜图号 {{ candidate.drawing_number || '-' }}｜{{ candidate.dimensions }}｜报料 {{ candidate.report_size }}</option>
-                        </select>
+                        <div v-if="item.candidates?.length" style="display:grid;gap:6px;margin-top:6px">
+                          <label v-for="candidate in item.candidates" :key="candidate.key" class="panel" style="display:flex;gap:8px;align-items:flex-start;padding:7px;margin:0;cursor:pointer">
+                            <input type="checkbox" :checked="mixedSampleCandidateSelected(item.sample_id,candidate.key)" @change="toggleMixedSampleCandidate(item,candidate,$event.target.checked)" />
+                            <span><strong>{{ candidate.customer_code }}</strong>｜{{ candidate.product_name }}｜图号 {{ candidate.drawing_number || '-' }}｜{{ candidate.dimensions }}｜报料 {{ candidate.report_size }}</span>
+                          </label>
+                          <button v-if="mixedSampleCanSelectAllCustomers(item)" class="btn small" @click="selectMixedSampleAllCustomers(item)">这些客户都通用</button>
+                        </div>
                         <div v-else class="muted" style="margin-top:6px">请在样品 Excel 修正手写型号，或先补入三客户基础资料后重新预检。</div>
                       </div>
                     </div>
@@ -16085,6 +16088,44 @@
             this.mixedSampleImport.drawings = Array.from(input?.files || []);
             this.mixedSampleImport.preview = null;
             if (input) input.value = "";
+          },
+          mixedSampleOverrideKeys(sampleId) {
+            const value = this.mixedSampleImport.overrides?.[sampleId];
+            if (Array.isArray(value)) return value;
+            return value ? [value] : [];
+          },
+          mixedSampleCandidateSelected(sampleId,candidateKey) {
+            return this.mixedSampleOverrideKeys(sampleId).includes(candidateKey);
+          },
+          mixedSampleCanSelectAllCustomers(item) {
+            const counts = new Map();
+            (item?.candidates || []).forEach(candidate=>{
+              counts.set(candidate.customer_code,(counts.get(candidate.customer_code) || 0) + 1);
+            });
+            return counts.size > 1 && [...counts.values()].every(count=>count===1);
+          },
+          toggleMixedSampleCandidate(item,candidate,checked) {
+            const sampleId = item.sample_id;
+            let keys = this.mixedSampleOverrideKeys(sampleId).filter(key=>key!==candidate.key);
+            if (checked) {
+              const sameCustomerKeys = new Set(
+                (item.candidates || [])
+                  .filter(row=>row.customer_code===candidate.customer_code)
+                  .map(row=>row.key),
+              );
+              keys = keys.filter(key=>!sameCustomerKeys.has(key));
+              keys.push(candidate.key);
+            }
+            this.mixedSampleImport.overrides[sampleId] = keys;
+          },
+          selectMixedSampleAllCustomers(item) {
+            const firstByCustomer = new Map();
+            (item?.candidates || []).forEach(candidate=>{
+              if (!firstByCustomer.has(candidate.customer_code)) {
+                firstByCustomer.set(candidate.customer_code,candidate.key);
+              }
+            });
+            this.mixedSampleImport.overrides[item.sample_id] = [...firstByCustomer.values()];
           },
           async downloadMixedSampleTemplate() {
             if (this.mixedSampleImport.loading) return;

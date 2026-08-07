@@ -33,3 +33,15 @@ def test_preview_is_card_based_and_apply_is_one_click() -> None:
     assert '@click="applyProductWorkbookImport">确认录入</button>' in INDEX
     assert "grid-template-columns:repeat(auto-fit,minmax(260px,1fr))" in INDEX
     assert "确认原因" not in INDEX[INDEX.index("样品 Excel 多卷导入") : INDEX.index("正在读取该客户的常用箱")]
+
+
+def test_mixed_sample_import_is_global_and_removes_csv_bat_steps() -> None:
+    assert "混合样品整理" in INDEX
+    assert "YL / YKE / KEW 混合样品一键整理" in INDEX
+    assert "无需先选客户" in INDEX
+    assert "不再制作 CSV，也不用运行 BAT" in INDEX
+    assert '"/api/master/products/mixed-import-template.xlsx"' in INDEX
+    assert '"/api/master/products/mixed-import/preview"' in INDEX
+    assert '"/api/master/products/mixed-import/apply"' in INDEX
+    assert 'form.append("overrides",JSON.stringify(state.overrides || {}))' in INDEX
+    assert "确认录入三家客户" in INDEX

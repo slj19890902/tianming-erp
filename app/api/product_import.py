@@ -52,6 +52,7 @@ from app.services.product_drawings import (
     validate_product_drawing_upload,
 )
 from app.services.product_import_workbook import (
+    EmbeddedProductDrawing,
     GLUE_PROCESS_TOKENS,
     MOLD_SHEET,
     NAIL_PROCESS_TOKENS,
@@ -66,6 +67,21 @@ from app.services.product_import_workbook import (
     read_product_import_workbook,
     single_photo_requirement_confirmed,
     store_preview,
+)
+from app.services.mixed_sample_import import (
+    MIXED_PRODUCT_SHEET,
+    MixedSampleImportPreview,
+    build_mixed_sample_workbook,
+    candidate_view,
+    consume_mixed_preview,
+    get_mixed_preview,
+    merge_registration,
+    normalize_sample_code,
+    process_from_registration,
+    read_mixed_reference_workbook,
+    read_mixed_sample_workbook,
+    select_reference_candidate,
+    store_mixed_preview,
 )
 from app.services.secure_uploads import (
     DRAWING_POLICY,
@@ -226,7 +242,7 @@ def _base_product_payload(customer_id: int, row: dict) -> dict:
         "product_name": row["product_name"],
         "material_id": None,
         "mold_tool_id": None,
-        "legacy_material_text": None,
+        "legacy_material_text": row.get("legacy_material_text"),
         "length_mm": row["length_mm"],
         "width_mm": row["width_mm"],
         "height_mm": row["height_mm"],
@@ -263,7 +279,7 @@ def _base_product_payload(customer_id: int, row: dict) -> dict:
         "base_report_notes": None,
         "splice_mode": "single",
         "pieces_per_box": None,
-        "default_cutting_mode": "一开一",
+        "default_cutting_mode": row.get("default_cutting_mode") or "一开一",
         "flap_mm": 30,
         "combination_mode": "parent_priced_set",
     }
@@ -314,6 +330,8 @@ def _overlay_import_fields(data: dict, row: dict) -> dict:
         "is_active",
         "report_length_mm",
         "report_width_mm",
+        "legacy_material_text",
+        "default_cutting_mode",
     ):
         value = imported[field_name]
         if field_name == "is_active" and row.get("action") == "自动":
@@ -383,6 +401,7 @@ def _validated_plan(
     customer_id: int,
     row: dict,
     new_mold_codes: set[str],
+    allow_unregistered_sample_mold: bool = False,
 ) -> dict:
     product: Product | None = None
     requested_action = row["action"]
@@ -474,7 +493,8 @@ def _validated_plan(
         # The new mold receives a real ID during apply.  Use a positive
         # placeholder so the same die-cut binding rule is checked at preview.
         payload.mold_tool_id = 1
-    _normalize_product_mold_binding(payload)
+    if not allow_unregistered_sample_mold:
+        _normalize_product_mold_binding(payload)
     if mold_code and payload.mold_tool_id is None:
         raise ValueError("填写模具编号时，生产工艺必须包含“模切”")
     _validate_references(
@@ -498,6 +518,12 @@ def _validated_plan(
     if normalized_row["mold_code"] in new_mold_codes:
         payload_data["mold_tool_id"] = None
     missing_fields = _completion_missing_fields(payload, material=material)
+    if (
+        allow_unregistered_sample_mold
+        and payload.box_category == "die_cut"
+        and payload.mold_tool_id is None
+    ):
+        missing_fields = (*missing_fields, "生产模具")
     changed_fields = (
         tuple(sorted(_changed_import_updates(product, payload_data)))
         if product is not None
@@ -648,6 +674,112 @@ def _merge_mold_row(target: dict, incoming: dict) -> str | None:
     return None
 
 
+def _mixed_customer_by_code(db: Session, code: str) -> Customer | None:
+    return db.scalar(
+        select(Customer)
+        .where(func.upper(func.trim(Customer.customer_code)) == code.upper())
+        .limit(1)
+    )
+
+
+def _mixed_layer_count(flute_type: str | None) -> int | None:
+    if flute_type in {"A", "B", "E"}:
+        return 3
+    if flute_type in {"AB", "BE"}:
+        return 5
+    if flute_type in {"AAA", "ABC"}:
+        return 7
+    return None
+
+
+def _mixed_registration_row(
+    *,
+    item_number: int,
+    registration: dict,
+    reference: dict,
+    customer_id: int,
+) -> tuple[dict, list[str]]:
+    (
+        box_category,
+        box_style,
+        _joining_method,
+        printed,
+        managed_tokens,
+        unresolved,
+    ) = process_from_registration(registration, reference)
+    reference_code = normalize_sample_code(reference["product_code"])
+    handwritten_code = normalize_sample_code(registration["product_code"])
+    product_code = (
+        handwritten_code
+        if handwritten_code.startswith(reference_code) and handwritten_code != reference_code
+        else reference_code
+    )
+    flute_type = registration.get("flute_type") or reference.get("flute_type")
+    layer_count = _mixed_layer_count(flute_type) or reference.get("layer_count")
+    colors = str(registration.get("printing_colors") or "").strip()
+    if printed and (not colors or colors == "无"):
+        colors = "黑色"
+    if not printed:
+        colors = ""
+    production_process = "、".join(managed_tokens) or None
+    row = {
+        "row_number": item_number,
+        "action": "自动",
+        "system_id": None,
+        "version": None,
+        "sample_id": registration["sample_id"],
+        "product_code": product_code,
+        "customer_material_code": product_code,
+        "product_name": reference["product_name"],
+        "box_category": box_category,
+        "box_style": box_style,
+        "length_mm": reference.get("length_mm"),
+        "width_mm": reference.get("width_mm"),
+        "height_mm": reference.get("height_mm"),
+        "material_code": None,
+        "legacy_material_text": reference.get("legacy_material_text"),
+        "layer_count": layer_count,
+        "flute_type": flute_type,
+        "flute_was_blank": flute_type is None,
+        "unit": "只",
+        "sale_unit_price": reference.get("sale_unit_price"),
+        "report_length_mm": reference.get("report_length_mm"),
+        "report_width_mm": reference.get("report_width_mm"),
+        "crease_type": reference.get("crease_type"),
+        "crease_left_mm": reference.get("crease_left_mm"),
+        "crease_middle_mm": reference.get("crease_middle_mm"),
+        "crease_right_mm": reference.get("crease_right_mm"),
+        "production_process": production_process,
+        "managed_process_tokens": managed_tokens,
+        "is_printed": printed,
+        "print_content": "单色印刷" if printed else "无印刷",
+        "printing_colors": colors or None,
+        "mold_code": None,
+        "drawing_filenames": tuple(registration.get("drawing_filenames") or ()),
+        "report_notes": None,
+        "remark": None,
+        "is_active": True,
+        "default_cutting_mode": reference.get("default_cutting_mode") or "一开一",
+        "_embedded_drawings": tuple(registration.get("_embedded_drawings") or ()),
+        "_source_rows": list(registration.get("_source_rows") or ()),
+        "_mixed_customer_id": customer_id,
+        "_mixed_customer_code": reference["customer_code"],
+        "_reference_key": reference["key"],
+    }
+    return row, unresolved
+
+
+def _mixed_photo_prefix(filename: str) -> str:
+    stem = filename.rsplit(".", 1)[0]
+    return normalize_sample_code(stem)
+
+
+def _mixed_filename_matches(value: str, prefix: str) -> bool:
+    if value == prefix:
+        return True
+    return any(value.startswith(f"{prefix}{separator}") for separator in ("_", "-", "（", "("))
+
+
 @router.get("/import-template.xlsx")
 def download_product_import_template(
     customer_id: int,
@@ -667,6 +799,432 @@ def download_product_import_template(
             "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"
         },
     )
+
+
+@router.get("/mixed-import-template.xlsx")
+def download_mixed_sample_import_template(
+    _user: User = Depends(admin_only),
+) -> Response:
+    content = build_mixed_sample_workbook()
+    filename = "混合客户样品现场登记与图片导入模板.xlsx"
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"
+        },
+    )
+
+
+@router.post("/mixed-import/preview")
+async def preview_mixed_sample_import(
+    reference_file: UploadFile = File(...),
+    files: list[UploadFile] = File(default=[]),
+    drawings: list[UploadFile] = File(default=[]),
+    overrides: str = Form("{}"),
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    if not files:
+        raise HTTPException(status_code=400, detail="请至少选择一份样品 Excel")
+    if len(files) > 20:
+        raise HTTPException(status_code=400, detail="一次最多上传20份样品 Excel")
+    if len(drawings) > 400:
+        raise HTTPException(status_code=400, detail="一次最多上传400张样品照片")
+    try:
+        parsed_overrides = json.loads(overrides or "{}")
+    except json.JSONDecodeError as error:
+        raise HTTPException(status_code=400, detail="待确认客户选择格式错误") from error
+    if not isinstance(parsed_overrides, dict) or any(
+        not isinstance(key, str) or not isinstance(value, str)
+        for key, value in parsed_overrides.items()
+    ):
+        raise HTTPException(status_code=400, detail="待确认客户选择格式错误")
+
+    errors: list[dict] = []
+    try:
+        reference_upload = await read_validated_upload(reference_file, EXCEL_POLICY)
+        reference_records, reference_errors = read_mixed_reference_workbook(
+            reference_upload.content
+        )
+        errors.extend(reference_errors)
+    except (UploadValidationError, ProductImportWorkbookError) as error:
+        message = error.message if isinstance(error, ProductImportWorkbookError) else str(error)
+        return {
+            "valid": False,
+            "errors": [{"sheet": "三客户基础资料", "row_number": 1, "message": message}],
+            "unresolved": [],
+            "summary": {"workbooks": 0, "samples": 0, "drawings": 0},
+        }
+
+    registrations: dict[str, dict] = {}
+    source_files: list[dict] = []
+    total_excel_bytes = 0
+    for upload in files:
+        filename = (upload.filename or "样品Excel").strip() or "样品Excel"
+        try:
+            workbook_upload = await read_validated_upload(upload, EXCEL_POLICY)
+            total_excel_bytes += workbook_upload.size
+            if total_excel_bytes > 160 * 1024 * 1024:
+                raise UploadValidationError("本批次样品 Excel 合计不能超过160MB")
+            rows, workbook_errors = read_mixed_sample_workbook(workbook_upload.content)
+        except (UploadValidationError, ProductImportWorkbookError) as error:
+            message = error.message if isinstance(error, ProductImportWorkbookError) else str(error)
+            errors.append({"sheet": filename, "row_number": 1, "message": message})
+            continue
+        source_files.append(
+            {"filename": filename, "sha256": workbook_upload.sha256, "size": workbook_upload.size}
+        )
+        for workbook_error in workbook_errors:
+            errors.append(
+                {
+                    **workbook_error,
+                    "sheet": f"{filename} / {workbook_error['sheet']}",
+                }
+            )
+        for row in rows:
+            incoming = dict(row)
+            incoming["_source_rows"] = [
+                {"file": filename, "row_number": row["row_number"]}
+            ]
+            key = str(row["sample_id"]).casefold()
+            existing = registrations.get(key)
+            if existing is None:
+                registrations[key] = incoming
+                continue
+            merge_error = merge_registration(existing, incoming)
+            existing.setdefault("_source_rows", []).append(
+                {"file": filename, "row_number": row["row_number"]}
+            )
+            if merge_error:
+                errors.append(
+                    {
+                        "sheet": filename,
+                        "row_number": row["row_number"],
+                        "message": merge_error,
+                    }
+                )
+
+    external_uploads: dict[str, ValidatedUpload] = {}
+    total_drawing_bytes = 0
+    for upload in drawings:
+        filename = (upload.filename or "").strip()
+        try:
+            validated = await read_validated_upload(upload, DRAWING_POLICY)
+            total_drawing_bytes += validated.size
+            if total_drawing_bytes > 500 * 1024 * 1024:
+                raise UploadValidationError("本批次照片合计不能超过500MB")
+        except UploadValidationError as error:
+            errors.append({"sheet": "照片", "row_number": 1, "message": str(error)})
+            continue
+        key = filename.casefold()
+        if not filename:
+            errors.append({"sheet": "照片", "row_number": 1, "message": "存在空照片文件名"})
+        elif key in external_uploads:
+            errors.append({"sheet": "照片", "row_number": 1, "message": f"照片文件名重复：{filename}"})
+        else:
+            external_uploads[key] = validated
+
+    product_code_counts: dict[str, int] = {}
+    for registration in registrations.values():
+        code = normalize_sample_code(registration["product_code"])
+        product_code_counts[code] = product_code_counts.get(code, 0) + 1
+    used_external: set[str] = set()
+    for registration in registrations.values():
+        names = list(registration.get("drawing_filenames") or ())
+        images = list(registration.get("_embedded_drawings") or ())
+        embedded_count = len(images)
+        if not embedded_count and names:
+            matched_names: list[str] = []
+            matched_images: list[EmbeddedProductDrawing] = []
+            for position, filename in enumerate(names, start=1):
+                validated = external_uploads.get(filename.casefold())
+                if validated is None:
+                    errors.append(
+                        {
+                            "sheet": MIXED_PRODUCT_SHEET,
+                            "row_number": registration["row_number"],
+                            "message": f"没有同时选择照片：{filename}",
+                        }
+                    )
+                    continue
+                matched_names.append(validated.original_filename)
+                matched_images.append(
+                    EmbeddedProductDrawing(
+                        row_number=registration["row_number"],
+                        column_number=10,
+                        column_offset=position,
+                        content=validated.content,
+                    )
+                )
+                used_external.add(filename.casefold())
+            names, images = matched_names, matched_images
+
+        sample_prefix = normalize_sample_code(registration["sample_id"])
+        code_prefix = normalize_sample_code(registration["product_code"])
+        for key, validated in external_uploads.items():
+            if key in used_external:
+                continue
+            file_prefix = _mixed_photo_prefix(validated.original_filename)
+            if _mixed_filename_matches(file_prefix, sample_prefix) or (
+                product_code_counts.get(code_prefix) == 1
+                and _mixed_filename_matches(file_prefix, code_prefix)
+            ):
+                names.append(validated.original_filename)
+                images.append(
+                    EmbeddedProductDrawing(
+                        row_number=registration["row_number"],
+                        column_number=10,
+                        column_offset=len(images) + 1,
+                        content=validated.content,
+                    )
+                )
+                used_external.add(key)
+        registration["drawing_filenames"] = tuple(names)
+        registration["_embedded_drawings"] = tuple(images)
+        if not images:
+            errors.append(
+                {
+                    "sheet": MIXED_PRODUCT_SHEET,
+                    "row_number": registration["row_number"],
+                    "message": f"{registration['sample_id']} 没有匹配到照片；请把照片命名为“样品号_序号.jpg”",
+                }
+            )
+        elif len(images) > 4:
+            errors.append(
+                {
+                    "sheet": MIXED_PRODUCT_SHEET,
+                    "row_number": registration["row_number"],
+                    "message": f"{registration['sample_id']} 一次最多导入4张照片",
+                }
+            )
+    for key, validated in external_uploads.items():
+        if key not in used_external:
+            errors.append(
+                {
+                    "sheet": "照片",
+                    "row_number": 1,
+                    "message": f"照片未匹配任何样品：{validated.original_filename}",
+                }
+            )
+
+    unresolved: list[dict] = []
+    resolved: list[tuple[dict, dict, Customer]] = []
+    customer_cache: dict[str, Customer | None] = {}
+    for registration in registrations.values():
+        override_key = parsed_overrides.get(str(registration["sample_id"]))
+        reference, candidates = select_reference_candidate(
+            reference_records,
+            registration,
+            override_key=override_key,
+        )
+        if reference is None:
+            unresolved.append(
+                {
+                    "sample_id": registration["sample_id"],
+                    "product_code": registration["product_code"],
+                    "reason": (
+                        "基础资料中找不到该型号"
+                        if not candidates
+                        else "该型号对应多个客户或多款资料，请明确选择"
+                    ),
+                    "candidates": [candidate_view(candidate) for candidate in candidates],
+                }
+            )
+            continue
+        customer_code = reference["customer_code"]
+        if customer_code not in customer_cache:
+            customer_cache[customer_code] = _mixed_customer_by_code(db, customer_code)
+        customer = customer_cache[customer_code]
+        if customer is None:
+            errors.append(
+                {
+                    "sheet": "客户主档",
+                    "row_number": registration["row_number"],
+                    "message": f"ERP 中不存在客户代码 {customer_code}",
+                }
+            )
+            continue
+        require_customer_access(customer.id, current_user=user, db=db)
+        resolved.append((registration, reference, customer))
+
+    product_items: list[dict] = []
+    seen_products: set[tuple[int, str]] = set()
+    for item_number, (registration, reference, customer) in enumerate(resolved, start=1):
+        try:
+            row, unresolved_fields = _mixed_registration_row(
+                item_number=item_number,
+                registration=registration,
+                reference=reference,
+                customer_id=customer.id,
+            )
+            if unresolved_fields:
+                raise ValueError(f"请在现场表确认：{'、'.join(unresolved_fields)}")
+            product_key = (customer.id, clean_code(row["product_code"]).casefold())
+            if product_key in seen_products:
+                raise ValueError("同一客户的同一存货编码在本批次对应多个样品")
+            seen_products.add(product_key)
+            plan = _validated_plan(
+                db,
+                customer_id=customer.id,
+                row=row,
+                new_mold_codes=set(),
+                allow_unregistered_sample_mold=True,
+            )
+            plan["customer_id"] = customer.id
+            plan["customer_code"] = reference["customer_code"]
+            plan["reference_key"] = reference["key"]
+            if reference.get("product_name_was_blank"):
+                plan["missing_fields"] = (
+                    *plan["missing_fields"],
+                    "产品名称（基础资料原空）",
+                )
+                plan["completion_status"] = "待完善"
+            product_items.append(plan)
+        except (ValueError, ValidationError, HTTPException) as error:
+            _append_error(
+                errors,
+                sheet=MIXED_PRODUCT_SHEET,
+                row_number=registration["row_number"],
+                message=f"{registration['sample_id']}：{_error_message(error)}",
+            )
+
+    required_names: dict[str, tuple[str, bytes, int]] = {}
+    for item in product_items:
+        names = tuple(item.get("drawing_filenames") or ())
+        images = tuple(item.get("_embedded_drawings") or ())
+        if len(names) != len(images):
+            _append_error(
+                errors,
+                sheet=MIXED_PRODUCT_SHEET,
+                row_number=item["row_number"],
+                message="图片文件名与图片数量不一致",
+            )
+            continue
+        for filename, image in zip(names, images, strict=True):
+            key = filename.casefold()
+            if key in required_names:
+                _append_error(
+                    errors,
+                    sheet=MIXED_PRODUCT_SHEET,
+                    row_number=item["row_number"],
+                    message=f"照片文件名在本批次重复：{filename}",
+                )
+                continue
+            required_names[key] = (filename, image.content, item["row_number"])
+
+    summary = {
+        "workbooks": len(source_files),
+        "samples": len(registrations),
+        "resolved_samples": len(product_items),
+        "unresolved_samples": len(unresolved),
+        "create_products": sum(item["action"] == "新增" for item in product_items),
+        "update_products": sum(item["action"] == "更新" for item in product_items),
+        "drawing_only_products": sum(item["action"] == "补图" for item in product_items),
+        "drawings": sum(
+            len(registration.get("_embedded_drawings") or ())
+            for registration in registrations.values()
+        ),
+        "resolved_drawings": len(required_names),
+        "needs_completion": sum(bool(item["missing_fields"]) for item in product_items),
+    }
+    groups = [
+        {
+            "customer_code": code,
+            "customer_name": customer_cache[code].name if customer_cache.get(code) else code,
+            "count": sum(item["customer_code"] == code for item in product_items),
+            "create_products": sum(item["customer_code"] == code and item["action"] == "新增" for item in product_items),
+            "update_products": sum(item["customer_code"] == code and item["action"] == "更新" for item in product_items),
+            "drawing_only_products": sum(item["customer_code"] == code and item["action"] == "补图" for item in product_items),
+        }
+        for code in ("YL", "YKE", "KEW")
+        if any(item["customer_code"] == code for item in product_items)
+    ]
+    if errors or unresolved:
+        return {
+            "valid": False,
+            "errors": errors,
+            "unresolved": unresolved,
+            "summary": summary,
+            "groups": groups,
+        }
+
+    drawing_tokens: dict[str, str] = {}
+    try:
+        for _key, (filename, content, _row_number) in required_names.items():
+            extension = filename.rsplit(".", 1)[-1].casefold()
+            content_type = {
+                "jpg": "image/jpeg",
+                "jpeg": "image/jpeg",
+                "png": "image/png",
+                "webp": "image/webp",
+                "pdf": "application/pdf",
+            }.get(extension, "application/octet-stream")
+            validated = validate_upload_bytes(
+                content=content,
+                filename=filename,
+                content_type=content_type,
+                policy=DRAWING_POLICY,
+            )
+            validate_product_drawing_upload(validated)
+            drawing_tokens[filename] = create_temporary_token(validated, owner_id=user.id)
+    except (UploadValidationError, DrawingValidationError) as error:
+        for token in drawing_tokens.values():
+            try:
+                discard_temporary_token(token, owner_id=user.id)
+            except Exception:
+                pass
+        return {
+            "valid": False,
+            "errors": [{"sheet": "照片", "row_number": 1, "message": str(error)}],
+            "unresolved": [],
+            "summary": summary,
+            "groups": groups,
+        }
+
+    source_digest = sha256()
+    source_digest.update(reference_upload.sha256.encode("ascii"))
+    for item in sorted(source_files, key=lambda row: (row["filename"], row["sha256"])):
+        source_digest.update(f"{item['filename']}:{item['sha256']}\n".encode("utf-8"))
+    for item in sorted(external_uploads.values(), key=lambda row: (row.original_filename, row.sha256)):
+        source_digest.update(f"{item.original_filename}:{item.sha256}\n".encode("utf-8"))
+    customer_ids = tuple(sorted({item["customer_id"] for item in product_items}))
+    preview = MixedSampleImportPreview(
+        actor=f"id:{user.id}",
+        owner_id=user.id,
+        expires_at=time.monotonic() + 10 * 60,
+        customer_ids=customer_ids,
+        source_sha256=source_digest.hexdigest(),
+        reference_sha256=reference_upload.sha256,
+        source_files=tuple(source_files),
+        product_items=tuple(product_items),
+        drawing_tokens=drawing_tokens,
+        summary=summary,
+    )
+    token = store_mixed_preview(preview)
+    return {
+        "valid": True,
+        "preview_token": token,
+        "errors": [],
+        "unresolved": [],
+        "summary": summary,
+        "groups": groups,
+        "items": [
+            {
+                "customer_code": item["customer_code"],
+                "row_number": item["row_number"],
+                "action": item["action"],
+                "sample_id": item["sample_id"],
+                "product_code": item["payload"]["product_code"],
+                "product_name": item["payload"]["product_name"],
+                "missing_fields": list(item["missing_fields"]),
+                "changed_fields": list(item["changed_fields"]),
+                "source_rows": list(item["source_rows"]),
+            }
+            for item in product_items
+        ],
+        "expires_in_seconds": 600,
+    }
 
 
 @router.post("/import/preview")
@@ -1203,13 +1761,67 @@ def _revalidate_preview(db: Session, preview: ProductImportPreview) -> None:
         temporary_token_file(token, owner_id=preview.owner_id)
 
 
+def _revalidate_mixed_preview(
+    db: Session,
+    preview: MixedSampleImportPreview,
+) -> None:
+    for item in preview.product_items:
+        customer_id = int(item["customer_id"])
+        payload = item["payload"]
+        product: Product | None = None
+        if item["action"] in {"更新", "补图"}:
+            product = db.get(Product, item["system_id"])
+            if (
+                product is None
+                or product.customer_id != customer_id
+                or product.version != item["expected_version"]
+            ):
+                raise ProductImportWorkbookError(
+                    "MIXED_SAMPLE_IMPORT_CONFLICT",
+                    f"{item['customer_code']} / {payload['product_code']} 已变化，请重新预检",
+                    status_code=409,
+                )
+        conflict = _product_conflict(
+            db,
+            customer_id=customer_id,
+            product_code=payload["product_code"],
+            customer_material_code=payload["customer_material_code"],
+            exclude_id=product.id if product is not None else None,
+        )
+        if conflict is not None:
+            raise ProductImportWorkbookError(
+                "MIXED_SAMPLE_IMPORT_CONFLICT",
+                f"{item['customer_code']} / {payload['product_code']} 编码已被占用，请重新预检",
+                status_code=409,
+            )
+        if item["material_id"] is not None:
+            material = db.get(Material, item["material_id"])
+            if (
+                material is None
+                or (
+                    not material.is_active
+                    and item["material_id"] != item.get("historical_material_id")
+                )
+                or material.version != item["material_version"]
+            ):
+                raise ProductImportWorkbookError(
+                    "MIXED_SAMPLE_IMPORT_CONFLICT",
+                    f"{item['customer_code']} / {payload['product_code']} 的材质已变化，请重新预检",
+                    status_code=409,
+                )
+    for token in preview.drawing_tokens.values():
+        temporary_token_file(token, owner_id=preview.owner_id)
+
+
 def _create_product(
     db: Session,
     *,
     payload: ProductPayload,
     user: User,
+    allow_unregistered_sample_mold: bool = False,
 ) -> Product:
-    _normalize_product_mold_binding(payload)
+    if not allow_unregistered_sample_mold:
+        _normalize_product_mold_binding(payload)
     _validate_references(
         db,
         customer_id=payload.customer_id,
@@ -1255,8 +1867,10 @@ def _update_product(
     payload: ProductPayload,
     expected_version: int,
     user: User,
+    allow_unregistered_sample_mold: bool = False,
 ) -> Product:
-    _normalize_product_mold_binding(payload)
+    if not allow_unregistered_sample_mold:
+        _normalize_product_mold_binding(payload)
     _validate_references(
         db,
         customer_id=payload.customer_id,
@@ -1489,5 +2103,185 @@ def apply_product_import(
         "message": (
             "常用箱、模具和图片已按整批事务导入"
             + (f"；已跳过 {skipped_drawing_count} 张重复图片" if skipped_drawing_count else "")
+        ),
+    }
+
+
+@router.post("/mixed-import/apply")
+def apply_mixed_sample_import(
+    payload: ProductImportApplyPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    try:
+        preview = get_mixed_preview(payload.preview_token, user)
+        for customer_id in preview.customer_ids:
+            require_customer_access(customer_id, current_user=user, db=db)
+        _revalidate_mixed_preview(db, preview)
+    except ProductImportWorkbookError as error:
+        raise _workbook_error(error) from error
+
+    saved_paths: list[tuple[str, str]] = []
+    try:
+        products_by_row: dict[int, Product] = {}
+        for item in preview.product_items:
+            product_payload = ProductPayload.model_validate(dict(item["payload"]))
+            if item["action"] == "新增":
+                product = _create_product(
+                    db,
+                    payload=product_payload,
+                    user=user,
+                    allow_unregistered_sample_mold=True,
+                )
+            else:
+                product = db.get(Product, item["system_id"])
+                if product is None:
+                    raise ProductImportWorkbookError(
+                        "MIXED_SAMPLE_IMPORT_CONFLICT",
+                        "更新目标已不存在，请重新预检",
+                        status_code=409,
+                    )
+                product = _update_product(
+                    db,
+                    product=product,
+                    payload=product_payload,
+                    expected_version=item["expected_version"],
+                    user=user,
+                    allow_unregistered_sample_mold=True,
+                )
+            products_by_row[item["row_number"]] = product
+
+        drawing_count = 0
+        skipped_drawing_count = 0
+        drawing_evidence: list[dict] = []
+        for item in preview.product_items:
+            product = products_by_row[item["row_number"]]
+            existing_hashes = _existing_drawing_source_hashes(db, product.id)
+            for filename in item["drawing_filenames"]:
+                token = preview.drawing_tokens[filename]
+                stored = temporary_token_file(token, owner_id=preview.owner_id)
+                if stored.sha256.lower() in existing_hashes:
+                    drawing_evidence.append(
+                        {
+                            "filename": filename,
+                            "sha256": stored.sha256,
+                            "product_id": product.id,
+                            "customer_id": item["customer_id"],
+                            "status": "already_exists",
+                        }
+                    )
+                    skipped_drawing_count += 1
+                    continue
+                saved = save_product_drawing_files(
+                    product_id=product.id,
+                    upload=_staged_upload(stored),
+                )
+                saved_paths.append((saved.image_path, saved.thumbnail_path))
+                drawing = ProductDrawing(
+                    product_id=product.id,
+                    image_path=saved.image_path,
+                    thumbnail_path=saved.thumbnail_path,
+                    uploaded_by=user.id,
+                )
+                db.add(drawing)
+                db.flush()
+                audit_master_change(
+                    db,
+                    user=user,
+                    action="UPLOAD_DRAWING",
+                    resource="Product",
+                    resource_id=product.id,
+                    details={
+                        "drawing_id": drawing.id,
+                        "original_filename": filename,
+                        "source": "mixed_sample_workbook_import",
+                        "sha256": stored.sha256,
+                        "reference_sha256": preview.reference_sha256,
+                    },
+                )
+                drawing_evidence.append(
+                    {
+                        "filename": filename,
+                        "sha256": stored.sha256,
+                        "product_id": product.id,
+                        "customer_id": item["customer_id"],
+                        "status": "created",
+                    }
+                )
+                existing_hashes.add(stored.sha256.lower())
+                drawing_count += 1
+
+        for customer_id in preview.customer_ids:
+            customer_items = [
+                item for item in preview.product_items
+                if item["customer_id"] == customer_id
+            ]
+            audit_master_change(
+                db,
+                user=user,
+                action="BATCH_IMPORT",
+                resource="MixedSampleImport",
+                resource_id=customer_id,
+                details={
+                    "customer_id": customer_id,
+                    "source_xlsx_sha256": preview.source_sha256,
+                    "reference_xlsx_sha256": preview.reference_sha256,
+                    "source_files": list(preview.source_files),
+                    "summary": {
+                        "products": len(customer_items),
+                        "created": sum(item["action"] == "新增" for item in customer_items),
+                        "updated": sum(item["action"] == "更新" for item in customer_items),
+                        "drawing_only": sum(item["action"] == "补图" for item in customer_items),
+                    },
+                    "drawing_files": [
+                        item for item in drawing_evidence
+                        if item["customer_id"] == customer_id
+                    ],
+                },
+            )
+        db.commit()
+    except ProductImportWorkbookError as error:
+        db.rollback()
+        for image_path, thumbnail_path in saved_paths:
+            remove_drawing_files(image_path, thumbnail_path)
+        raise _workbook_error(error) from error
+    except HTTPException:
+        db.rollback()
+        for image_path, thumbnail_path in saved_paths:
+            remove_drawing_files(image_path, thumbnail_path)
+        raise
+    except IntegrityError as error:
+        db.rollback()
+        for image_path, thumbnail_path in saved_paths:
+            remove_drawing_files(image_path, thumbnail_path)
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "MIXED_SAMPLE_IMPORT_CONFLICT",
+                "message": "混合样品导入时出现编码冲突，三家客户均未写入，请重新预检",
+            },
+        ) from error
+    except Exception:
+        db.rollback()
+        for image_path, thumbnail_path in saved_paths:
+            remove_drawing_files(image_path, thumbnail_path)
+        raise
+
+    for token in preview.drawing_tokens.values():
+        try:
+            discard_temporary_token(token, owner_id=preview.owner_id)
+        except Exception:
+            pass
+    consume_mixed_preview(payload.preview_token, keep_files=True)
+    return {
+        "ok": True,
+        "summary": {
+            **preview.summary,
+            "drawings": drawing_count,
+            "skipped_drawings": skipped_drawing_count,
+        },
+        "message": (
+            "YL、YKE、KEW 混合样品已按客户分组并整批录入"
+            + (f"；已跳过 {skipped_drawing_count} 张重复照片" if skipped_drawing_count else "")
         ),
     }

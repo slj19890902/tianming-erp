@@ -189,7 +189,12 @@ def _product_xlsx_ratio_too_high(*, compressed: int, uncompressed: int) -> bool:
     return uncompressed / compressed > MAX_XLSX_COMPRESSION_RATIO
 
 
-def _inspect_product_xlsx_xml(name: str, payload: bytes) -> None:
+def _inspect_product_xlsx_xml(
+    name: str,
+    payload: bytes,
+    *,
+    allow_formulas: bool = False,
+) -> None:
     lowered = payload.lower()
     if b"<!doctype" in lowered or b"<!entity" in lowered:
         raise UploadValidationError("XLSX XML 包含 DTD 或实体声明")
@@ -206,6 +211,7 @@ def _inspect_product_xlsx_xml(name: str, payload: bytes) -> None:
         name.startswith("xl/worksheets/")
         and name.endswith(".xml")
         and _FORMULA_XML_PATTERN.search(payload)
+        and not allow_formulas
     ):
         raise UploadValidationError("XLSX 包含公式")
     if name == "[content_types].xml" and (
@@ -255,7 +261,12 @@ def _inspect_product_xlsx_xml(name: str, payload: bytes) -> None:
                 raise UploadValidationError("XLSX 图形层只允许引用内嵌 JPG/PNG 图片")
 
 
-def _preflight_product_xlsx_container(content: bytes) -> None:
+def _preflight_product_xlsx_container(
+    content: bytes,
+    *,
+    allow_formulas: bool = False,
+    allow_reference_annotations: bool = False,
+) -> None:
     """Validate the product workbook without weakening the shared XLSX gate.
 
     This workflow deliberately permits only worksheet picture drawings backed
@@ -331,19 +342,36 @@ def _preflight_product_xlsx_container(content: bytes) -> None:
                 if is_media and not _MEDIA_MEMBER_PATTERN.fullmatch(name):
                     raise UploadValidationError("XLSX 内嵌图只允许 JPG/JPEG/PNG")
                 if name.startswith("xl/drawings/") and not (
-                    is_drawing or is_drawing_rels
+                    is_drawing
+                    or is_drawing_rels
+                    or (
+                        allow_reference_annotations
+                        and re.fullmatch(r"xl/drawings/vmldrawing[0-9]*\.vml", name)
+                    )
                 ):
                     raise UploadValidationError("XLSX 包含不允许的图形层成员")
+                is_reference_annotation = allow_reference_annotations and (
+                    bool(re.fullmatch(r"xl/comments[0-9]*\.xml", name))
+                    or name.startswith("xl/persons/")
+                    or bool(re.fullmatch(r"xl/drawings/vmldrawing[0-9]*\.vml", name))
+                )
                 if (
                     "vbaproject" in name
                     or name.endswith(".bin")
-                    or name.startswith(_UNSAFE_PRODUCT_XLSX_PREFIXES)
+                    or (
+                        name.startswith(_UNSAFE_PRODUCT_XLSX_PREFIXES)
+                        and not is_reference_annotation
+                    )
                 ):
                     raise UploadValidationError(
                         "XLSX 不允许宏、ActiveX、图表、OLE、对象或外链资源"
                     )
                 if name.endswith((".xml", ".rels")):
-                    _inspect_product_xlsx_xml(name, archive.read(info))
+                    _inspect_product_xlsx_xml(
+                        name,
+                        archive.read(info),
+                        allow_formulas=allow_formulas,
+                    )
     except UploadValidationError:
         raise
     except (OSError, RuntimeError, zipfile.BadZipFile, zipfile.LargeZipFile) as error:

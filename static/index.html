@@ -1950,6 +1950,7 @@
                   <button v-if="canDeleteProducts && productTab === 'products'" class="btn" @click="toggleProductTrash()">产品垃圾站</button>
                   <button v-if="canAdmin && productTab === 'products' && selectedProductCustomer" class="btn" :disabled="productWorkbookImport.loading" @click="downloadProductWorkbookTemplate">下载样品 Excel</button>
                   <button v-if="canAdmin && productTab === 'products' && selectedProductCustomer" class="btn primary" :disabled="productWorkbookImport.loading" @click="productWorkbookImport.visible=!productWorkbookImport.visible">样品 Excel 导入</button>
+                  <button v-if="canAdmin && productTab === 'products'" class="btn primary" :disabled="mixedSampleImport.loading" @click="mixedSampleImport.visible=!mixedSampleImport.visible">混合样品整理</button>
                 </div>
                 <div v-if="productTab === 'products' && selectedProductCustomer" class="toolbar-group">
                   <input class="input" style="min-width:180px" placeholder="存货编码 / 款号" v-model.trim="filters.productCode" @input="queuePageSearch('products')" @keyup.enter="pages.products=1; loadProducts()" />
@@ -1965,6 +1966,54 @@
                 </div>
               </div>
               <div v-if="productTab === 'products'">
+                <div v-if="mixedSampleImport.visible" class="panel" style="margin-bottom:10px;border-color:#8b5cf6">
+                  <div class="toolbar">
+                    <div><strong>YL / YKE / KEW 混合样品一键整理</strong><div class="muted">无需先选客户。选择三客户基础资料、样品 Excel 和照片，ERP 自动按客户分组；预检不写数据，确认后一次保存。</div></div>
+                    <button class="btn small" :disabled="mixedSampleImport.loading" @click="resetMixedSampleImport(false)">关闭</button>
+                  </div>
+                  <div class="toolbar" style="align-items:flex-start;flex-wrap:wrap;margin-top:8px">
+                    <button class="btn" :disabled="mixedSampleImport.loading" @click="downloadMixedSampleTemplate">下载简化现场模板</button>
+                    <label class="btn" style="cursor:pointer"><input type="file" accept=".xlsx" style="display:none" @change="selectMixedReferenceFile" />{{ mixedSampleImport.referenceFile ? `基础资料：${mixedSampleImport.referenceFile.name}` : '选择三客户基础资料' }}</label>
+                    <label class="btn" style="cursor:pointer"><input type="file" accept=".xlsx" multiple style="display:none" @change="selectMixedSampleFiles" />{{ mixedSampleImport.files.length ? `样品 Excel ${mixedSampleImport.files.length} 份` : '选择样品 Excel / 旧分卷' }}</label>
+                    <label class="btn" style="cursor:pointer"><input type="file" accept=".jpg,.jpeg,.png,.webp,.pdf" multiple style="display:none" @change="selectMixedSampleDrawings" />{{ mixedSampleImport.drawings.length ? `照片 ${mixedSampleImport.drawings.length} 张` : '选择照片（可不选）' }}</label>
+                    <button class="btn primary" :disabled="mixedSampleImport.loading || !mixedSampleImport.referenceFile || !mixedSampleImport.files.length" @click="previewMixedSampleImport">{{ mixedSampleImport.loading ? '正在整理…' : '自动分拣并预检' }}</button>
+                  </div>
+                  <div class="muted" style="margin-top:8px">新照片改名为“样品号_序号.jpg”即可自动匹配；旧分卷里的内嵌图片会直接读取，不再制作 CSV，也不用运行 BAT。</div>
+                  <div v-if="mixedSampleImport.preview" :class="['notice',mixedSampleImport.preview.valid ? 'success' : 'danger']" style="margin-top:10px">
+                    <div class="toolbar">
+                      <strong>{{ mixedSampleImport.preview.valid ? '三客户分拣预检通过' : '仍有待确认项，ERP 没有写入数据' }}</strong>
+                      <div class="toolbar-group">
+                        <button v-if="mixedSampleImport.preview.unresolved?.length" class="btn small" :disabled="mixedSampleImport.loading" @click="previewMixedSampleImport">按当前选择重新预检</button>
+                        <button v-if="mixedSampleImport.preview.valid" class="btn small success" :disabled="mixedSampleImport.loading" @click="applyMixedSampleImport">确认录入三家客户</button>
+                      </div>
+                    </div>
+                    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:6px">
+                      <span>样品 {{ mixedSampleImport.preview.summary?.samples || 0 }} 件</span><span>已分拣 {{ mixedSampleImport.preview.summary?.resolved_samples || 0 }} 件</span><span>待确认 {{ mixedSampleImport.preview.summary?.unresolved_samples || 0 }} 件</span><span>图片 {{ mixedSampleImport.preview.summary?.drawings || 0 }} 张</span><span>新增 {{ mixedSampleImport.preview.summary?.create_products || 0 }} 款</span><span>更新 {{ mixedSampleImport.preview.summary?.update_products || 0 }} 款</span><span>只补图 {{ mixedSampleImport.preview.summary?.drawing_only_products || 0 }} 款</span>
+                    </div>
+                    <div v-if="mixedSampleImport.preview.groups?.length" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+                      <span v-for="group in mixedSampleImport.preview.groups" :key="group.customer_code" class="status green"><strong>{{ group.customer_code }}</strong> {{ group.customer_name }}：{{ group.count }} 款（新增 {{ group.create_products }} / 更新 {{ group.update_products }} / 补图 {{ group.drawing_only_products }}）</span>
+                    </div>
+                    <div v-if="mixedSampleImport.preview.unresolved?.length" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:8px;margin-top:10px">
+                      <div v-for="item in mixedSampleImport.preview.unresolved" :key="item.sample_id" class="panel" style="padding:8px;margin:0">
+                        <strong>{{ item.sample_id }}｜{{ item.product_code }}</strong><div class="muted">{{ item.reason }}</div>
+                        <select v-if="item.candidates?.length" class="input" style="width:100%;margin-top:6px" v-model="mixedSampleImport.overrides[item.sample_id]">
+                          <option value="">请选择正确客户/资料</option>
+                          <option v-for="candidate in item.candidates" :key="candidate.key" :value="candidate.key">{{ candidate.customer_code }}｜{{ candidate.product_name }}｜图号 {{ candidate.drawing_number || '-' }}｜{{ candidate.dimensions }}｜报料 {{ candidate.report_size }}</option>
+                        </select>
+                        <div v-else class="muted" style="margin-top:6px">请在样品 Excel 修正手写型号，或先补入三客户基础资料后重新预检。</div>
+                      </div>
+                    </div>
+                    <div v-if="mixedSampleImport.preview.items?.length" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:6px;margin-top:8px">
+                      <div v-for="item in mixedSampleImport.preview.items.slice(0,160)" :key="`${item.customer_code}-${item.product_code}-${item.row_number}`" class="panel" style="padding:8px;margin:0">
+                        <div class="toolbar"><strong>{{ item.customer_code }}｜{{ item.product_code }}｜{{ item.product_name }}</strong><span :class="['status',item.action==='新增' ? 'green' : 'orange']">{{ item.action }}</span></div>
+                        <div v-if="item.missing_fields?.length" class="muted">待完善：{{ item.missing_fields.join('、') }}</div>
+                      </div>
+                    </div>
+                    <div v-if="mixedSampleImport.preview.errors?.length" style="display:grid;gap:5px;margin-top:8px">
+                      <div v-for="(error,index) in mixedSampleImport.preview.errors.slice(0,160)" :key="`${error.sheet}-${error.row_number}-${index}`">{{ error.sheet }} 第 {{ error.row_number }} 行：{{ error.message }}</div>
+                    </div>
+                  </div>
+                </div>
                 <div v-if="productTrashOpen" class="panel">
                   <div class="toolbar"><strong>产品垃圾站（保留 30 天）</strong><div class="toolbar-group"><button class="btn" :disabled="productLifecycleBusy() || productTrashLoading" @click="loadProductTrash()">{{ productTrashLoading ? "读取中…" : "刷新" }}</button><button class="btn danger" :disabled="productLifecycleBusy() || productTrashLoading || !productTrashItems.length" @click="emptyProductTrash()">{{ productLifecyclePending('empty') ? '处理中…' : '清空垃圾站' }}</button><button class="btn" :disabled="productLifecycleBusy()" @click="productTrashOpen=false">关闭</button></div></div>
                   <div v-if="productTrashLoading" class="empty">正在读取产品垃圾站…</div>
@@ -6623,6 +6672,7 @@
             masterVersionHistory: blankMasterVersionHistory(),
             selectedProductCustomer: null, productCustomerSearch: "",
             productWorkbookImport: { visible:false, loading:false, files:[], drawings:[], preview:null },
+            mixedSampleImport: { visible:false, loading:false, referenceFile:null, files:[], drawings:[], overrides:{}, preview:null },
             productsLoading: false, productsError: "",
             showProductMoreFilters: false,
             productTrashOpen: false, productTrashItems: [], productTrashLoading:false, productTrashError:"", productLifecycleAction:{action:"",productId:null}, customerLifecycleAction:{action:"",customerId:null}, materialLifecycleAction:{action:"",materialId:null},
@@ -16006,6 +16056,103 @@
             const detail = error?.response?.data?.detail;
             if (detail && typeof detail === "object" && detail.message) return detail.message;
             return this.errorMessage(error);
+          },
+          resetMixedSampleImport(visible=false) {
+            this.mixedSampleImport = { visible, loading:false, referenceFile:null, files:[], drawings:[], overrides:{}, preview:null };
+          },
+          selectMixedReferenceFile(event) {
+            const input = event?.target;
+            this.mixedSampleImport.referenceFile = input?.files?.[0] || null;
+            this.mixedSampleImport.preview = null;
+            this.mixedSampleImport.overrides = {};
+            if (input) input.value = "";
+          },
+          selectMixedSampleFiles(event) {
+            const input = event?.target;
+            const seen = new Set();
+            this.mixedSampleImport.files = Array.from(input?.files || []).filter(file => {
+              const key = `${file.name}|${file.size}|${file.lastModified}`;
+              if (seen.has(key)) return false;
+              seen.add(key);
+              return true;
+            });
+            this.mixedSampleImport.preview = null;
+            this.mixedSampleImport.overrides = {};
+            if (input) input.value = "";
+          },
+          selectMixedSampleDrawings(event) {
+            const input = event?.target;
+            this.mixedSampleImport.drawings = Array.from(input?.files || []);
+            this.mixedSampleImport.preview = null;
+            if (input) input.value = "";
+          },
+          async downloadMixedSampleTemplate() {
+            if (this.mixedSampleImport.loading) return;
+            this.mixedSampleImport.loading = true;
+            try {
+              const response = await axios.get(
+                "/api/master/products/mixed-import-template.xlsx",
+                {responseType:"blob"},
+              );
+              const blob = response.data instanceof Blob
+                ? response.data
+                : new Blob([response.data],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+              const url = URL.createObjectURL(blob);
+              const anchor = document.createElement("a");
+              anchor.href = url;
+              anchor.download = "混合客户样品现场登记与图片导入模板.xlsx";
+              document.body.appendChild(anchor);
+              anchor.click();
+              anchor.remove();
+              setTimeout(() => URL.revokeObjectURL(url),1000);
+              this.showToast("已下载简化模板；只填型号和目测工艺，照片按样品号改名即可");
+            } catch(error) {
+              this.showToast(this.productWorkbookImportError(error),true);
+            } finally {
+              this.mixedSampleImport.loading = false;
+            }
+          },
+          async previewMixedSampleImport() {
+            const state = this.mixedSampleImport;
+            if (state.loading || !state.referenceFile || !state.files.length) return;
+            state.loading = true;
+            try {
+              const form = new FormData();
+              form.append("reference_file",state.referenceFile);
+              state.files.forEach(file=>form.append("files",file));
+              state.drawings.forEach(file=>form.append("drawings",file));
+              form.append("overrides",JSON.stringify(state.overrides || {}));
+              const {data} = await axios.post("/api/master/products/mixed-import/preview",form);
+              state.preview = data;
+              this.showToast(
+                data.valid
+                  ? "混合样品已按客户分拣，请核对后一次确认录入"
+                  : `发现 ${data.unresolved?.length || 0} 项待确认、${data.errors?.length || 0} 项错误，ERP 尚未写入数据`,
+                !data.valid,
+              );
+            } catch(error) {
+              this.showToast(this.productWorkbookImportError(error),true);
+            } finally {
+              state.loading = false;
+            }
+          },
+          async applyMixedSampleImport() {
+            const state = this.mixedSampleImport;
+            if (state.loading || !state.preview?.valid || !state.preview?.preview_token) return;
+            state.loading = true;
+            try {
+              const {data} = await axios.post(
+                "/api/master/products/mixed-import/apply",
+                {preview_token:state.preview.preview_token},
+              );
+              if (this.selectedProductCustomer) await this.loadProducts();
+              this.resetMixedSampleImport(false);
+              this.showToast(data.message || "混合样品已按客户录入常用箱");
+            } catch(error) {
+              this.showToast(this.productWorkbookImportError(error),true);
+            } finally {
+              state.loading = false;
+            }
           },
           resetProductWorkbookImport(visible=false) {
             this.productWorkbookImport = { visible, loading:false, files:[], drawings:[], preview:null };

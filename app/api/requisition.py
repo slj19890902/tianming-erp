@@ -13267,6 +13267,96 @@ def list_supplier_orders(
     }
 
 
+@router.get("/reported-customer-options")
+def list_reported_customer_options(
+    keyword: str | None = None,
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_read),
+) -> list[dict]:
+    """Return only customers that already occur on a reported document."""
+    customer_ids = {
+        int(value)
+        for value in db.scalars(
+            select(Order.customer_id)
+            .join(OrderItem, OrderItem.order_id == Order.id)
+            .join(
+                SupplierRequisitionOrderItem,
+                SupplierRequisitionOrderItem.order_item_id == OrderItem.id,
+            )
+            .distinct()
+        ).all()
+        if value is not None
+    }
+    customer_ids.update(
+        int(value)
+        for value in db.scalars(
+            select(StockReplenishmentOrder.customer_id)
+            .where(StockReplenishmentOrder.customer_id.is_not(None))
+            .distinct()
+        ).all()
+        if value is not None
+    )
+    customer_ids.update(
+        int(value)
+        for value in db.scalars(
+            select(StockReplenishmentOrderItem.customer_id)
+            .where(StockReplenishmentOrderItem.customer_id.is_not(None))
+            .distinct()
+        ).all()
+        if value is not None
+    )
+    customer_ids.update(
+        int(value)
+        for value in db.scalars(
+            select(Order.customer_id)
+            .join(OrderItem, OrderItem.order_id == Order.id)
+            .join(RequisitionItem, RequisitionItem.order_item_id == OrderItem.id)
+            .join(Requisition, Requisition.id == RequisitionItem.requisition_id)
+            .where(
+                Requisition.status.notin_(
+                    ["merged_pending", "supplier_requisition_created"]
+                )
+            )
+            .distinct()
+        ).all()
+        if value is not None
+    )
+    allowed = _allowed_customer_ids(_user, db)
+    if allowed is not None:
+        customer_ids.intersection_update(allowed)
+    if not customer_ids:
+        return []
+    customer_query = select(Customer).where(Customer.id.in_(customer_ids))
+    normalized_keyword = (keyword or "").strip()
+    if normalized_keyword:
+        escaped_keyword = (
+            normalized_keyword.replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
+        )
+        pattern = f"%{escaped_keyword}%"
+        customer_query = customer_query.where(
+            or_(
+                Customer.name.ilike(pattern, escape="\\"),
+                Customer.customer_code.ilike(pattern, escape="\\"),
+            )
+        )
+    rows = db.scalars(
+        customer_query.order_by(Customer.name.asc(), Customer.id.asc()).limit(200)
+    ).all()
+    return [
+        {
+            "id": row.id,
+            "name": row.name,
+            "customer_code": row.customer_code,
+            "label": (
+                f"{row.customer_code}｜{row.name}" if row.customer_code else row.name
+            ),
+        }
+        for row in rows
+    ]
+
+
 @router.get("/reported-documents")
 def list_reported_documents(
     customer_id: int | None = None,
@@ -13274,6 +13364,15 @@ def list_reported_documents(
     document_number: str | None = None,
     order_number: str | None = None,
     product_code: str | None = None,
+    product_name: str | None = None,
+    material_code: str | None = None,
+    flute_type: str | None = None,
+    report_length_mm: int | None = Query(default=None, ge=1),
+    report_width_mm: int | None = Query(default=None, ge=1),
+    report_length_min: int | None = Query(default=None, ge=1),
+    report_length_max: int | None = Query(default=None, ge=1),
+    report_width_min: int | None = Query(default=None, ge=1),
+    report_width_max: int | None = Query(default=None, ge=1),
     supplier_name: str | None = None,
     status_filter: str | None = Query(default=None, alias="status"),
     source_type: str | None = None,
@@ -13290,6 +13389,18 @@ def list_reported_documents(
     Callers that opt into ``page`` or ``page_size`` receive one stable page only
     after all source-specific customer-scope checks and summary filters run.
     """
+    # Preserve the long-standing direct-call test contract.  FastAPI normally
+    # resolves Query defaults before entry; direct Python callers receive the
+    # Param objects themselves and should be treated as if the values were absent.
+    status_filter = status_filter if isinstance(status_filter, str) else None
+    report_length_mm = report_length_mm if isinstance(report_length_mm, int) else None
+    report_width_mm = report_width_mm if isinstance(report_width_mm, int) else None
+    report_length_min = report_length_min if isinstance(report_length_min, int) else None
+    report_length_max = report_length_max if isinstance(report_length_max, int) else None
+    report_width_min = report_width_min if isinstance(report_width_min, int) else None
+    report_width_max = report_width_max if isinstance(report_width_max, int) else None
+    page = page if isinstance(page, int) else None
+    page_size = page_size if isinstance(page_size, int) else None
     user = _user
     if customer_id is not None:
         require_customer_access(customer_id, user, db)
@@ -13307,9 +13418,22 @@ def list_reported_documents(
         "document_number": (document_number or "").strip().casefold(),
         "order_number": (order_number or "").strip().casefold(),
         "product_code": (product_code or "").strip().casefold(),
+        "product_name": (product_name or "").strip().casefold(),
+        "material_code": (material_code or "").strip().casefold(),
+        "flute_type": (flute_type or "").strip().casefold(),
         "supplier_name": (supplier_name or "").strip().casefold(),
         "status": (status_filter or "").strip(),
     }
+    if (
+        report_length_min is not None
+        and report_length_max is not None
+        and report_length_min > report_length_max
+    ) or (
+        report_width_min is not None
+        and report_width_max is not None
+        and report_width_min > report_width_max
+    ):
+        raise HTTPException(status_code=422, detail="尺寸最小值不能大于最大值")
     registry = build_display_registry(db)
     documents: list[dict] = []
     supplier_order_query = select(SupplierRequisitionOrder).options(
@@ -13322,10 +13446,12 @@ def list_reported_documents(
         )
     ).all()
     supplier_customer_ids: dict[int, set[int]] = {}
-    supplier_order_ids = [order.id for order in supplier_orders]
+    supplier_item_customer_ids: dict[int, int] = {}
+    supplier_order_ids = [order.id for order in supplier_orders if order.items]
     if supplier_order_ids:
-        for supplier_order_id, linked_customer_id in db.execute(
+        for supplier_item_id, supplier_order_id, linked_customer_id in db.execute(
             select(
+                SupplierRequisitionOrderItem.id,
                 SupplierRequisitionOrderItem.supplier_order_id,
                 Order.customer_id,
             )
@@ -13343,10 +13469,47 @@ def list_reported_documents(
             supplier_customer_ids.setdefault(supplier_order_id, set()).add(
                 linked_customer_id
             )
+            supplier_item_customer_ids[supplier_item_id] = linked_customer_id
+    material_ids = {
+        int(material_id)
+        for order in supplier_orders
+        for material_id in [order.material_id, *[item.material_id for item in order.items]]
+        if material_id is not None
+    }
+    material_codes = {
+        material.id: material.code
+        for material in db.scalars(select(Material).where(Material.id.in_(material_ids))).all()
+    } if material_ids else {}
     for order in supplier_orders:
         order_numbers = _unique_text([item.order_number for item in order.items])
         product_codes = _unique_text([item.product_code for item in order.items])
         customer_names = _unique_text([item.customer_name for item in order.items])
+        crease_display = (
+            f"{order.crease_left_mm}+{order.crease_middle_mm}+{order.crease_right_mm}"
+            if order.crease_type == "压线" and order.crease_middle_mm is not None
+            else order.crease_type or "-"
+        )
+        line_items = [
+            {
+                "id": item.id,
+                "stable_id": f"supplier_order:{order.id}:{item.id}",
+                "customer_id": supplier_item_customer_ids.get(item.id),
+                "customer_name": item.customer_name,
+                "order_number": item.order_number,
+                "product_code": item.product_code,
+                "product_name": item.product_name,
+                "report_length_mm": item.report_length_mm or order.report_length_mm,
+                "report_width_mm": item.report_width_mm or order.report_width_mm,
+                "crease_display": crease_display,
+                "material_code": item.material_code_snapshot
+                or material_codes.get(item.material_id or order.material_id),
+                "flute_type": item.flute_type_snapshot or order.flute_type,
+                "requisition_qty": int(item.requisition_qty or 0),
+                "unit": "张",
+                "status": order.status,
+            }
+            for item in order.items
+        ]
         documents.append(
             {
                 "source_type": "supplier_order",
@@ -13362,6 +13525,7 @@ def list_reported_documents(
                 "customer_names": customer_names,
                 "requisition_qty": order.requisition_qty,
                 "pdf_url": f"/api/requisition/supplier-orders/{order.id}/pdf",
+                "line_items": line_items,
                 "_customer_ids": supplier_customer_ids.get(order.id, set()),
             }
         )
@@ -13390,6 +13554,40 @@ def list_reported_documents(
             "stocked": "已入库",
             "voided": "已作废",
         }.get(order.status, order.status)
+        line_items = []
+        for item in order.items:
+            item_customer_id = _stock_replenishment_item_customer_id(
+                db, item, relationships_loaded=True
+            )
+            item_customer = item.customer or order.customer
+            crease_display = (
+                f"{item.crease_left_mm}+{item.crease_middle_mm}+{item.crease_right_mm}"
+                if item.crease_type == "压线" and item.crease_middle_mm is not None
+                else item.crease_type or "-"
+            )
+            line_items.append(
+                {
+                    "id": item.id,
+                    "stable_id": f"stock_replenishment:{order.id}:{item.id}",
+                    "customer_id": item_customer_id,
+                    "customer_name": item_customer.name if item_customer else None,
+                    "order_number": None,
+                    "product_code": item.product_code_snapshot,
+                    "product_name": item.product_name_snapshot,
+                    "report_length_mm": item.report_length_mm,
+                    "report_width_mm": item.report_width_mm,
+                    "crease_display": crease_display,
+                    "material_code": item.material_code_snapshot,
+                    "flute_type": item.flute_type,
+                    "requisition_qty": int(item.quantity or 0),
+                    "received_qty": int(item.stocked_quantity or 0),
+                    "remaining_qty": max(
+                        int(item.quantity or 0) - int(item.stocked_quantity or 0), 0
+                    ),
+                    "unit": "张",
+                    "status": order.status,
+                }
+            )
         documents.append(
             {
                 "source_type": "stock_replenishment",
@@ -13405,6 +13603,7 @@ def list_reported_documents(
                 "customer_names": customer_names,
                 "requisition_qty": sum(item.quantity for item in order.items),
                 "pdf_url": f"/api/requisition/stock-replenishment/orders/{order.id}/print",
+                "line_items": line_items,
                 "can_void": (
                     order.status == "confirmed"
                     and all(int(item.stocked_quantity or 0) == 0 for item in order.items)
@@ -13481,6 +13680,12 @@ def list_reported_documents(
             .where(OrderItem.id.in_(legacy_order_item_ids))
         ).all()
     } if legacy_order_item_ids else {}
+    legacy_order_items = {
+        item.id: item
+        for item in db.scalars(
+            select(OrderItem).where(OrderItem.id.in_(legacy_order_item_ids))
+        ).all()
+    } if legacy_order_item_ids else {}
     for batch in legacy_batches:
         order_numbers: list[str | None] = []
         product_codes: list[str | None] = []
@@ -13502,41 +13707,63 @@ def list_reported_documents(
             for item in batch.items
         )
         line_items = []
-        if is_composite_bom:
-            for item in batch.items:
-                source = bom_sources_by_requisition_item_id.get(item.id)
-                if source is None:
-                    continue
+        for item in batch.items:
+            source = bom_sources_by_requisition_item_id.get(item.id)
+            component_label = None
+            source_key = None
+            if source is not None:
                 component_label = {
                     "cover": "盖",
                     "base": "底",
                     "whole": "整片",
                 }.get(source.component_type, "组件")
-                line_items.append(
-                    {
-                        "id": item.id,
-                        "source_key": (
-                            "component:"
-                            f"{source.sales_order_item_bom_component_id}:"
-                            f"{source.component_type}"
-                        ),
-                        "component_type": source.component_type,
-                        "component_label": component_label,
-                        "product_code": item.product_code_snapshot,
-                        "product_name": item.product_name_snapshot,
-                        "requisition_qty": int(item.requisition_qty or 0),
-                        "required_piece_qty": int(
-                            item.required_piece_qty or 0
-                        ),
-                        "status": item.status,
-                        "can_void": (
-                            batch.status == "已报料"
-                            and item.status == "有效"
-                            and item.id
-                            not in received_requisition_item_ids
-                        ),
-                    }
+                source_key = (
+                    "component:"
+                    f"{source.sales_order_item_bom_component_id}:"
+                    f"{source.component_type}"
                 )
+            order_row = legacy_order_rows.get(item.order_item_id)
+            order_item = legacy_order_items.get(item.order_item_id)
+            order = order_row[0] if order_row else None
+            customer = order_row[1] if order_row else None
+            crease_type = order_item.snapshot_crease_type if order_item else None
+            crease_middle = order_item.snapshot_crease_middle_mm if order_item else None
+            crease_display = (
+                f"{order_item.snapshot_crease_left_mm}+{crease_middle}+{order_item.snapshot_crease_right_mm}"
+                if crease_type == "压线" and crease_middle is not None
+                else crease_type or "-"
+            )
+            line_items.append(
+                {
+                    "id": item.id,
+                    "stable_id": f"legacy_requisition:{batch.id}:{item.id}",
+                    "source_key": source_key,
+                    "component_type": source.component_type if source else None,
+                    "component_label": component_label,
+                    "customer_id": customer.id if customer else None,
+                    "customer_name": customer.name if customer else None,
+                    "order_number": display_order_number(order, registry) if order else None,
+                    "product_code": item.product_code_snapshot,
+                    "product_name": item.product_name_snapshot,
+                    "report_length_mm": int(item.cardboard_len),
+                    "report_width_mm": int(item.cardboard_width),
+                    "crease_display": crease_display,
+                    "material_code": item.material_snapshot,
+                    "flute_type": order_item.flute_type if order_item else None,
+                    "requisition_qty": int(item.requisition_qty or 0),
+                    "required_piece_qty": int(item.required_piece_qty or 0),
+                    "received_qty": None,
+                    "remaining_qty": None,
+                    "unit": "张",
+                    "status": "已收料" if item.id in received_requisition_item_ids else item.status,
+                    "can_void": (
+                        is_composite_bom
+                        and batch.status == "已报料"
+                        and item.status == "有效"
+                        and item.id not in received_requisition_item_ids
+                    ),
+                }
+            )
         can_void = (
             is_composite_bom
             and batch.status == "已报料"
@@ -13574,10 +13801,110 @@ def list_reported_documents(
             }
         )
 
-    def matches_filters(document: dict) -> bool:
-        customer_ids = document.get("_customer_ids", set())
-        if customer_id is not None and customer_id not in customer_ids:
+    def _text_contains(value: object, needle: str) -> bool:
+        return needle in str(value or "").casefold()
+
+    def _dimension_matches(
+        value: object,
+        exact: int | None,
+        minimum: int | None,
+        maximum: int | None,
+    ) -> bool:
+        if exact is None and minimum is None and maximum is None:
+            return True
+        try:
+            numeric_value = int(value)
+        except (TypeError, ValueError):
             return False
+        if exact is not None and numeric_value != exact:
+            return False
+        if minimum is not None and numeric_value < minimum:
+            return False
+        if maximum is not None and numeric_value > maximum:
+            return False
+        return True
+
+    def _line_match_fields(line: dict, *, include_keyword: bool) -> list[str] | None:
+        matched_fields: list[str] = []
+        if customer_id is not None:
+            if line.get("customer_id") != customer_id:
+                return None
+            matched_fields.append("customer_id")
+        for field_name in (
+            "order_number",
+            "product_code",
+            "product_name",
+            "material_code",
+            "flute_type",
+        ):
+            needle = normalized_filters[field_name]
+            if needle:
+                if not _text_contains(line.get(field_name), needle):
+                    return None
+                matched_fields.append(field_name)
+        if not _dimension_matches(
+            line.get("report_length_mm"),
+            report_length_mm,
+            report_length_min,
+            report_length_max,
+        ):
+            return None
+        if any(value is not None for value in (report_length_mm, report_length_min, report_length_max)):
+            matched_fields.append("report_length_mm")
+        if not _dimension_matches(
+            line.get("report_width_mm"),
+            report_width_mm,
+            report_width_min,
+            report_width_max,
+        ):
+            return None
+        if any(value is not None for value in (report_width_mm, report_width_min, report_width_max)):
+            matched_fields.append("report_width_mm")
+        if include_keyword and normalized_filters["keyword"]:
+            keyword_fields = [
+                "customer_name",
+                "order_number",
+                "product_code",
+                "product_name",
+                "material_code",
+                "flute_type",
+            ]
+            keyword_matches = [
+                field_name
+                for field_name in keyword_fields
+                if _text_contains(line.get(field_name), normalized_filters["keyword"])
+            ]
+            if not keyword_matches:
+                return None
+            matched_fields.extend(keyword_matches)
+        return list(dict.fromkeys(matched_fields))
+
+    has_line_filters = bool(
+        customer_id is not None
+        or any(
+            normalized_filters[field_name]
+            for field_name in (
+                "order_number",
+                "product_code",
+                "product_name",
+                "material_code",
+                "flute_type",
+            )
+        )
+        or any(
+            value is not None
+            for value in (
+                report_length_mm,
+                report_width_mm,
+                report_length_min,
+                report_length_max,
+                report_width_min,
+                report_width_max,
+            )
+        )
+    )
+
+    def matches_filters(document: dict) -> bool:
         if source_type and document["source_type"] != source_type:
             return False
         if normalized_filters["status"] and document["status"] != normalized_filters["status"]:
@@ -13589,32 +13916,10 @@ def list_reported_documents(
         if date_to is not None and (created_date is None or created_date > date_to):
             return False
 
-        searchable_values = [
-            document.get("document_number"),
-            document.get("supplier_name"),
-            *document.get("order_numbers", []),
-            *document.get("product_codes", []),
-            *document.get("customer_names", []),
-        ]
-        searchable_text = "\n".join(
-            str(value or "").casefold() for value in searchable_values
-        )
-        if normalized_filters["keyword"] and normalized_filters["keyword"] not in searchable_text:
-            return False
         if (
             normalized_filters["document_number"]
             and normalized_filters["document_number"]
             not in str(document.get("document_number") or "").casefold()
-        ):
-            return False
-        if normalized_filters["order_number"] and not any(
-            normalized_filters["order_number"] in str(value or "").casefold()
-            for value in document.get("order_numbers", [])
-        ):
-            return False
-        if normalized_filters["product_code"] and not any(
-            normalized_filters["product_code"] in str(value or "").casefold()
-            for value in document.get("product_codes", [])
         ):
             return False
         if (
@@ -13623,6 +13928,35 @@ def list_reported_documents(
             not in str(document.get("supplier_name") or "").casefold()
         ):
             return False
+        header_keyword_match = bool(
+            normalized_filters["keyword"]
+            and any(
+                _text_contains(value, normalized_filters["keyword"])
+                for value in (
+                    document.get("document_number"),
+                    document.get("supplier_name"),
+                )
+            )
+        )
+        matching_lines: list[dict] = []
+        for line in document.get("line_items", []):
+            match_fields = _line_match_fields(
+                line,
+                include_keyword=bool(normalized_filters["keyword"] and not header_keyword_match),
+            )
+            if match_fields is None:
+                line["matched"] = False
+                line["matched_fields"] = []
+                continue
+            line["matched"] = True
+            line["matched_fields"] = match_fields
+            matching_lines.append(line)
+        if has_line_filters and not matching_lines:
+            return False
+        if normalized_filters["keyword"] and not header_keyword_match and not matching_lines:
+            return False
+        document["matched_line_count"] = len(matching_lines)
+        document["header_keyword_matched"] = header_keyword_match
         return True
 
     documents = [document for document in documents if matches_filters(document)]
@@ -13634,6 +13968,9 @@ def list_reported_documents(
         reverse=True,
     )
     total = len(documents)
+    matched_line_count = sum(
+        int(document.get("matched_line_count") or 0) for document in documents
+    )
     use_pagination = page is not None or page_size is not None
     effective_page = page or 1
     effective_page_size = page_size or 50
@@ -13642,6 +13979,7 @@ def list_reported_documents(
         documents = documents[start : start + effective_page_size]
     return {
         "total": total,
+        "matched_line_count": matched_line_count,
         "page": effective_page,
         "page_size": effective_page_size if use_pagination else total,
         "items": [

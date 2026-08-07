@@ -1569,7 +1569,8 @@ def test_reported_composite_lines_are_collapsed_and_individually_voidable() -> N
     source = (
         Path(__file__).resolve().parents[1] / "static/index.html"
     ).read_text(encoding="utf-8")
-    assert "<details v-for=\"row in requisitionItems.filter(" in source
+    assert "reportedExpanded[row.source_type + '-' + row.id]" in source
+    assert "v-for=\"line in row.line_items || []\"" in source
     assert "line_items" in source
     assert "撤销本条" in source
     assert "const targetId = Number(line?.id || 0)" in source

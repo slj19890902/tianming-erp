@@ -139,6 +139,10 @@ def reported_documents_app(tmp_path: Path):
                     customer_name=customer.name,
                     quantity=10,
                     requisition_qty=10,
+                    report_length_mm=500 if suffix == "A" else 300,
+                    report_width_mm=300 if suffix == "A" else 500,
+                    material_code_snapshot="A+B" if suffix == "A" else "K=K",
+                    flute_type_snapshot="B" if suffix == "A" else "BC",
                 )
             )
 
@@ -163,9 +167,33 @@ def reported_documents_app(tmp_path: Path):
                     stock_yield_per_sheet=1,
                     quantity=10,
                     stocked_quantity=0,
+                    report_length_mm=500 if suffix == "A" else 300,
+                    report_width_mm=300 if suffix == "A" else 500,
+                    material_code_snapshot="A+B" if suffix == "A" else "K=K",
+                    flute_type="B" if suffix == "A" else "BC",
                     created_at=created_at + timedelta(minutes=2),
                 )
             )
+            if suffix == "A":
+                db.add(
+                    StockReplenishmentOrderItem(
+                        replenishment_order_id=replenishment.id,
+                        target_inventory_type="semi_finished",
+                        product_id=product.id,
+                        customer_id=customer.id,
+                        product_code_snapshot="P106-A-ALT",
+                        product_name_snapshot="P106 产品 A 备用",
+                        pieces_per_box=1,
+                        stock_yield_per_sheet=1,
+                        quantity=6,
+                        stocked_quantity=0,
+                        report_length_mm=700,
+                        report_width_mm=400,
+                        material_code_snapshot="C+D",
+                        flute_type="E",
+                        created_at=created_at + timedelta(minutes=2),
+                    )
+                )
 
             legacy = Requisition(
                 requisition_number=f"REQ-P106-{suffix}",
@@ -181,8 +209,8 @@ def reported_documents_app(tmp_path: Path):
                     requisition_id=legacy.id,
                     order_item_id=item.id,
                     requisition_qty=10,
-                    cardboard_len=Decimal("500"),
-                    cardboard_width=Decimal("300"),
+                    cardboard_len=Decimal("500" if suffix == "A" else "300"),
+                    cardboard_width=Decimal("300" if suffix == "A" else "500"),
                     product_code_snapshot=product.product_code,
                     product_name_snapshot=product.product_name,
                 )
@@ -264,3 +292,87 @@ def test_reported_document_filters_apply_after_customer_scope(
     assert supplier.json()["total"] == 1
     assert supplier.json()["items"][0]["document_number"] == "REQ-P106-A"
     assert blocked.status_code == 403
+
+
+def test_reported_document_dimensions_never_swap_or_cross_sibling_lines(
+    reported_documents_app,
+) -> None:
+    with TestClient(reported_documents_app) as client:
+        _login(client, "admin", "AdminPass123!")
+        exact = client.get(
+            "/api/requisition/reported-documents",
+            params={"report_length_mm": 500, "report_width_mm": 300},
+        )
+        swapped = client.get(
+            "/api/requisition/reported-documents",
+            params={"report_length_mm": 300, "report_width_mm": 500},
+        )
+        cross_sibling = client.get(
+            "/api/requisition/reported-documents",
+            params={
+                "source_type": "stock_replenishment",
+                "report_length_mm": 500,
+                "report_width_mm": 400,
+            },
+        )
+
+    assert exact.status_code == swapped.status_code == cross_sibling.status_code == 200
+    assert {row["document_number"] for row in exact.json()["items"]} == {
+        "SRO-P106-A",
+        "SR-P106-A",
+        "REQ-P106-A",
+    }
+    assert {row["document_number"] for row in swapped.json()["items"]} == {
+        "SRO-P106-B",
+        "SR-P106-B",
+        "REQ-P106-B",
+    }
+    assert cross_sibling.json()["total"] == 0
+
+
+def test_reported_document_plus_material_and_grouped_match_metadata(
+    reported_documents_app,
+) -> None:
+    with TestClient(reported_documents_app) as client:
+        _login(client, "admin", "AdminPass123!")
+        material = client.get(
+            "/api/requisition/reported-documents",
+            params={"material_code": "A+B"},
+        )
+        grouped = client.get(
+            "/api/requisition/reported-documents",
+            params={
+                "source_type": "stock_replenishment",
+                "product_code": "P106-A-ALT",
+            },
+        )
+
+    assert material.status_code == grouped.status_code == 200
+    assert {row["document_number"] for row in material.json()["items"]} == {
+        "SRO-P106-A",
+        "SR-P106-A",
+    }
+    assert grouped.json()["total"] == 1
+    document = grouped.json()["items"][0]
+    assert document["document_number"] == "SR-P106-A"
+    assert len(document["line_items"]) == 2
+    assert document["matched_line_count"] == 1
+    assert grouped.json()["matched_line_count"] == 1
+    matched = [line for line in document["line_items"] if line["matched"]]
+    assert matched[0]["product_code"] == "P106-A-ALT"
+    assert matched[0]["matched_fields"] == ["product_code"]
+
+
+def test_reported_customer_options_only_include_visible_reported_customers(
+    reported_documents_app,
+) -> None:
+    with TestClient(reported_documents_app) as client:
+        _login(client, "sales-a", "SalesPass123!")
+        options = client.get("/api/requisition/reported-customer-options")
+        searched = client.get(
+            "/api/requisition/reported-customer-options", params={"keyword": "P106-A"}
+        )
+
+    assert options.status_code == searched.status_code == 200
+    assert [row["customer_code"] for row in options.json()] == ["P106-A"]
+    assert searched.json()[0]["label"] == "P106-A｜P106 客户 A"

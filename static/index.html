@@ -1793,6 +1793,21 @@
               </div>
             </section>
 
+            <section v-if="productionNextStepGuide.visible && activePage === 'production'" class="order-next-step-guide production-next-step-guide" aria-live="polite">
+              <div class="order-next-step-copy">
+                <strong>{{ productionNextStepGuideTitle }}</strong>
+                <span v-if="productionNextStepGuide.mode === 'direct'">已进入一楼待送区，下一步按客户开送货单。</span>
+                <span v-else-if="productionNextStepGuide.mode === 'component'">继续完成同订单其他组件，整套齐后再开送货单。</span>
+                <span v-else>已放入 {{ productionNextStepGuide.locations || '所选成品库位' }}，留在成品仓等待后续送货。</span>
+              </div>
+              <div class="order-next-step-actions">
+                <button v-if="productionNextStepGuide.mode === 'direct' && canDelivery && pageAllowed('deliveries')" type="button" class="btn primary" @click="goToDeliveryFromProductionGuide">下一步：开送货单</button>
+                <span v-else-if="productionNextStepGuide.mode === 'direct'" class="muted">请交给有送货权限的账号开送货单</span>
+                <button type="button" class="btn" @click="continueProductionFromGuide">继续生产</button>
+                <button type="button" class="btn" @click="dismissProductionNextStepGuide">关闭</button>
+              </div>
+            </section>
+
             <section v-if="warehouseFrameUrl" v-show="activePage === 'warehouse'" class="warehouse-shell">
               <iframe
                 :key="warehouseFrameRevision"
@@ -6609,6 +6624,7 @@
             orderNextStepGuide: {visible:false, orderNo:"", count:0, source:""},
             requisitionNextStepGuide: {visible:false, documentNo:"", count:0, source:""},
             incomingNextStepGuide: {visible:false, count:0, pendingBalance:false},
+            productionNextStepGuide: {visible:false, mode:"", count:0, locations:""},
             pageCacheUpdatedAt: {},
             warehouseFrameUrl: "", warehouseFrameRevision: 0, warehouseTwinFloor: "3F",
             loginForm: { username: localStorage.getItem("erp_username") || "", password: "", remember_me: true },
@@ -6934,6 +6950,13 @@
           incomingNextStepGuideTitle() {
             const count = Number(this.incomingNextStepGuide?.count || 0);
             return count > 1 ? `${count} 条订单来料已实收` : "订单来料已实收";
+          },
+          productionNextStepGuideTitle() {
+            const mode = String(this.productionNextStepGuide?.mode || "");
+            const count = Number(this.productionNextStepGuide?.count || 0);
+            if (mode === "direct") return "成品已进入待送货";
+            if (mode === "component") return "组件生产已完成";
+            return count > 1 ? `${count} 条成品已入库` : "成品已入库";
           },
           currentReleaseDetails() {
             const currentVersion = String(this.versionInfo?.version || "").trim();
@@ -10547,6 +10570,35 @@
             await this.go("production");
             return true;
           },
+          showProductionNextStepGuide({mode="direct",count=1,locations=""}={}) {
+            this.productionNextStepGuide = {
+              visible:true,
+              mode:String(mode || "direct"),
+              count:Math.max(1,Number(count || 1)),
+              locations:String(locations || "").trim(),
+            };
+          },
+          dismissProductionNextStepGuide() {
+            this.productionNextStepGuide = {visible:false,mode:"",count:0,locations:""};
+          },
+          continueProductionFromGuide() {
+            this.dismissProductionNextStepGuide();
+            this.productionTab = "pending";
+          },
+          async goToDeliveryFromProductionGuide() {
+            if (!this.canDelivery || !this.pageAllowed("deliveries")) {
+              this.showToast("当前账号没有送货操作权限", true);
+              return false;
+            }
+            this.dismissProductionNextStepGuide();
+            this.deliveryDashboardMode = "pending_customers";
+            this.deliveryListFilters = {customer_id:"",keyword:"",date_from:"",date_to:"",status:"",return_status:""};
+            this.pages.deliveries = 1;
+            this.invalidatePageCache("deliveries");
+            await this.go("deliveries");
+            await this.loadDeliveryPendingItems();
+            return true;
+          },
           isMenuActive(menuKey) {
             const group = this.navigationGroups.find(item => item.key === menuKey);
             return group ? group.pages.some(page => page.key === this.activePage) : this.activePage === menuKey;
@@ -12956,6 +13008,10 @@
                 this.showToast(`直接待送确认失败：${this.errorMessage(error)}；重试会复用同一幂等键`, true);
                 return;
               }
+              this.showProductionNextStepGuide({
+                mode:row.is_component_task ? "component" : "direct",
+                count:1,
+              });
               delete this.productionDirectAttempts[row.id];
               delete this.productionSelected[row.id];
               this.productionTab = "pending";
@@ -13087,6 +13143,16 @@
                     message:this.errorMessage(error),
                   });
                 }
+              }
+              if (succeededRows.length) {
+                const locationCodes = [...new Set(succeededRows.map(row =>
+                  this.productionLocation(row.location_id)?.location_code || ""
+                ).filter(Boolean))];
+                this.showProductionNextStepGuide({
+                  mode:"stock",
+                  count:succeededRows.length,
+                  locations:locationCodes.join("、"),
+                });
               }
               await Promise.all([
                 this.loadProduction(),

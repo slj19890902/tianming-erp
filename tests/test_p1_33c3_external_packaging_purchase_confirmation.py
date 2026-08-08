@@ -460,3 +460,86 @@ def test_frontend_has_one_click_supplier_split_confirmation() -> None:
     assert "external-packaging-purchase/confirm" in source
     assert "不会自动收货或增加库存" in source
     assert "selectedExternalPurchaseCandidate" in source
+
+
+def test_external_purchase_print_is_cost_protected_read_only_and_uses_frozen_facts(
+    purchase_app: FastAPI,
+) -> None:
+    order_id = purchase_app.state.fixture["order_id"]
+    with TestClient(purchase_app) as client:
+        _login(client, "purchase-admin")
+        preview = client.get(
+            f"/api/orders/{order_id}/external-packaging-purchase"
+        ).json()
+        confirmed = client.post(
+            f"/api/orders/{order_id}/external-packaging-purchase/confirm",
+            json=_confirmation_payload(preview, "purchase-print"),
+        ).json()["confirmation"]
+        purchase_id = confirmed["purchase_orders"][0]["id"]
+
+        with purchase_app.state.session_factory() as db:
+            before = {
+                table: db.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar_one()
+                for table in (
+                    "external_packaging_purchase_orders",
+                    "external_packaging_purchase_items",
+                    "supplier_requisition_orders",
+                    "material_requisitions",
+                    "finished_goods_inventory_details",
+                    "inventory_movements",
+                )
+            }
+
+        response = client.get(
+            f"/api/external-packaging-purchases/{purchase_id}/print"
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["id"] == purchase_id
+        assert data["purchase_number"].startswith("EP-20260809-")
+        assert data["supplier"]["name"] in {"供应商甲", "供应商乙"}
+        assert data["source"] == {
+            "order_id": order_id,
+            "order_number": "TM20260809001",
+            "customer_po": "PO-UAT-PURCHASE",
+            "customer_name": "匿名采购客户",
+            "order_date": "2026-08-09",
+            "delivery_date": None,
+        }
+        assert data["items"]
+        assert all(row["unit_price"] for row in data["items"])
+        assert all(row["purchase_quantity"] for row in data["items"])
+        assert all(row["price_evidence_reference"].startswith("UAT-") for row in data["items"])
+        assert "未计入采购单合计" in data["terms_note"]
+
+        reread = client.get(
+            f"/api/orders/{order_id}/external-packaging-purchase"
+        ).json()
+        assert reread["confirmation"]["purchase_orders"] == confirmed["purchase_orders"]
+        assert reread["status"] == "confirmed"
+        assert all(row["id"] for row in reread["confirmation"]["purchase_orders"])
+
+    with purchase_app.state.session_factory() as db:
+        after = {
+            table: db.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar_one()
+            for table in before
+        }
+    assert after == before
+
+
+def test_external_purchase_print_rejects_non_admin_and_missing_purchase(
+    purchase_app: FastAPI,
+) -> None:
+    with TestClient(purchase_app) as client:
+        _login(client, "purchase-sales")
+        assert client.get(
+            "/api/external-packaging-purchases/1/print"
+        ).status_code == 403
+        _login(client, "purchase-boss")
+        assert client.get(
+            "/api/external-packaging-purchases/1/print"
+        ).status_code == 403
+        _login(client, "purchase-admin")
+        missing = client.get("/api/external-packaging-purchases/999999/print")
+        assert missing.status_code == 404
+        assert "采购单不存在" in missing.text

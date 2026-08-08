@@ -5635,7 +5635,10 @@
                 <div class="toolbar" style="margin-bottom:0">
                   <div>
                     <strong>{{ orderDetail.external_packaging_purchase_summary?.status==='confirmed' ? '外购包装已确认采购' : '下一步：外购包装待确认' }}</strong>
-                    <div v-if="orderDetail.external_packaging_purchase_summary?.status==='confirmed'" class="status green" style="margin-top:4px">{{ orderDetail.external_packaging_purchase_summary.purchase_numbers.join('、') }}</div>
+                    <div v-if="orderDetail.external_packaging_purchase_summary?.status==='confirmed'" class="status green" style="margin-top:4px">
+                      <template v-if="canAdmin && canViewCosts && orderDetail.external_packaging_purchase_summary.purchase_orders?.length"><a v-for="purchase in orderDetail.external_packaging_purchase_summary.purchase_orders" :key="purchase.id" class="btn small" style="margin-right:5px" :href="`/external-purchase-print.html?id=${purchase.id}`" target="_blank" rel="noopener">{{ purchase.purchase_number }} · 打印</a></template>
+                      <span v-else>{{ orderDetail.external_packaging_purchase_summary.purchase_numbers.join('、') }}</span>
+                    </div>
                     <div v-else class="muted" style="margin-top:3px">下单时的用量建议已冻结；不会自动选供应商或生成采购单，管理员确认后才按供应商拆单。</div>
                   </div>
                   <button v-if="canAdmin && canViewCosts" class="btn primary" @click="openExternalPurchase(orderDetail)">{{ orderDetail.external_packaging_purchase_summary?.status==='confirmed' ? '查看采购确认' : '核对并确认采购' }}</button>
@@ -5662,7 +5665,7 @@
               <template v-else-if="externalPurchase.status === 'confirmed' && externalPurchase.confirmation">
                 <div class="notice success">已确认采购；这里只查看冻结结果，不会自动收货或增加库存。</div>
                 <div v-for="purchase in externalPurchase.confirmation.purchase_orders" :key="purchase.id" class="external-purchase-confirmed">
-                  <div class="toolbar" style="margin-bottom:6px"><strong>{{ purchase.purchase_number }}｜{{ purchase.supplier_name }}</strong><span class="external-purchase-amount">合计 {{ purchase.currency }} {{ money(purchase.total_amount) }}</span></div>
+                  <div class="toolbar" style="margin-bottom:6px"><strong>{{ purchase.purchase_number }}｜{{ purchase.supplier_name }}</strong><div class="toolbar-group"><span class="external-purchase-amount">合计 {{ purchase.currency }} {{ money(purchase.total_amount) }}</span><a class="btn small" :href="`/external-purchase-print.html?id=${purchase.id}`" target="_blank" rel="noopener">打印采购单</a></div></div>
                   <table><thead><tr><th>用途 / 产品</th><th>数量</th><th>单价</th><th>货品金额</th><th>税额</th></tr></thead><tbody>
                     <tr v-for="item in purchase.items" :key="item.id"><td><strong>{{ item.purpose }}</strong><br>{{ item.supplier_product_code }}｜{{ item.product_name }}<br><span class="muted">{{ item.specification_summary }}</span></td><td>{{ item.purchase_quantity }} {{ item.purchase_unit }}</td><td>{{ item.currency }} {{ item.unit_price }}</td><td>{{ item.line_amount }}</td><td>{{ item.tax_amount }}</td></tr>
                   </tbody></table>

@@ -279,6 +279,21 @@ def create_app() -> FastAPI:
             methods=["GET"],
             include_in_schema=False,
         )
+    if not any(
+        route.path == "/external-purchase-print.html"
+        for route in application.routes
+    ):
+        external_purchase_print_path = (
+            Path(__file__).resolve().parents[1]
+            / "static"
+            / "external-purchase-print.html"
+        )
+        application.add_api_route(
+            "/external-purchase-print.html",
+            lambda: FileResponse(external_purchase_print_path),
+            methods=["GET"],
+            include_in_schema=False,
+        )
     if not any(route.path == "/quotation-print.html" for route in application.routes):
         quotation_print_path = (
             Path(__file__).resolve().parents[1]

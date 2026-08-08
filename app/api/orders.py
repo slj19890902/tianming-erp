@@ -155,6 +155,7 @@ from app.services.order_external_packaging import (
     freeze_order_item_external_components,
     get_order_item_external_components_by_item_ids,
 )
+from app.services.external_packaging_purchase import get_external_purchase_summary
 from app.services.composite_bom_workflow import (
     CompositeBomWorkflowError,
     append_component_demand_adjustment,
@@ -1708,6 +1709,14 @@ def _order_response(
             if db is not None
             else {}
         )
+    has_external_requirements = any(
+        external_components_by_item_id.get(item.id) for item in order.items
+    )
+    external_purchase_summary = (
+        get_external_purchase_summary(db, int(order.id))
+        if db is not None and has_external_requirements
+        else None
+    )
     if business_projection is None and db is not None:
         business_projection = build_order_business_statuses(
             db,
@@ -1743,6 +1752,7 @@ def _order_response(
         "payment_status": order.payment_status,
         "total_amount": order.total_amount,
         "remark": sanitize_user_text(order.remark),
+        "external_packaging_purchase_summary": external_purchase_summary,
         "items": [],
     }
     for item in order.items:

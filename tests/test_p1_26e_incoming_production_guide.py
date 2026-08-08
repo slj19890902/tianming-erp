@@ -1,0 +1,122 @@
+from __future__ import annotations
+
+import re
+import shutil
+import subprocess
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+INDEX_PATH = ROOT / "static" / "index.html"
+INDEX = INDEX_PATH.read_text(encoding="utf-8")
+
+
+def _block(start_marker: str, end_marker: str) -> str:
+    start = INDEX.index(start_marker)
+    return INDEX[start : INDEX.index(end_marker, start)]
+
+
+def test_incoming_success_guide_is_short_permission_scoped_and_truthful() -> None:
+    guide = _block(
+        '<section v-if="incomingNextStepGuide.visible',
+        '<section v-if="warehouseFrameUrl"',
+    )
+    assert "纸板已实收，下一步去生产确认。" in guide
+    assert "已收纸板可先生产，未到齐的继续留在待入库。" in guide
+    assert "下一步：去生产" in guide
+    assert "继续收料" in guide
+    assert "canProductionExecute && pageAllowed('production')" in guide
+    assert "请交给有生产确认权限的账号继续" in guide
+    assert "自动生产" not in guide
+
+
+def test_single_receipt_guides_only_order_linked_success() -> None:
+    receive = _block("async receiveIncoming(row)", "async acceptShortIncoming(row)")
+    write = 'const {data}=await axios.put(`/api/incoming/receive/${row.item_id}`,payload);'
+    guide = "this.showIncomingNextStepGuide({"
+
+    assert write in receive
+    assert receive.index(write) < receive.index(guide) < receive.index("await this.refreshIncomingAfterWrite();")
+    assert 'if (row.source_type !== "stock_replenishment")' in receive
+    assert 'pendingBalance:data.material_status === "pending"' in receive
+
+
+def test_batch_receipt_counts_only_successful_order_rows() -> None:
+    batch = _block("async batchReceiveIncoming()", "async receiveIncoming(row)")
+
+    assert "const successfulResults = (data.results || []).filter(result => result.success);" in batch
+    assert "successfulItemIds.has(String(row.item_id))" in batch
+    assert 'row.source_type !== "stock_replenishment"' in batch
+    assert "count:successfulOrderRows.length" in batch
+    assert 'result.item?.material_status === "pending"' in batch
+    assert batch.index("this.showIncomingNextStepGuide({") < batch.index("await this.refreshIncomingAfterWrite();")
+
+
+def test_non_receipt_paths_do_not_claim_new_incoming_success() -> None:
+    accept_short = _block("async acceptShortIncoming(row)", "async revertIncoming(row)")
+    revert = _block("async revertIncoming(row)", "async loadIncomingHistory()")
+    payload = _block("incomingPayload(row)", "canReceiveIncoming(row)")
+
+    assert "showIncomingNextStepGuide" not in accept_short
+    assert "showIncomingNextStepGuide" not in revert
+    assert "showIncomingNextStepGuide" not in payload
+
+
+def test_production_guide_action_only_opens_existing_pending_production_page(tmp_path: Path) -> None:
+    node = shutil.which("node")
+    assert node, "Node.js is required for frontend behavior validation"
+
+    scripts = [
+        source
+        for source in re.findall(r"<script(?:\s[^>]*)?>(.*?)</script>", INDEX, re.DOTALL)
+        if source.strip()
+    ]
+    assert len(scripts) == 1
+    script_path = tmp_path / "p1-26e-index.js"
+    script_path.write_text(scripts[0], encoding="utf-8")
+    harness_path = tmp_path / "p1-26e-harness.js"
+    harness_path.write_text(
+        r'''
+const fs = require("fs");
+const vm = require("vm");
+const source = fs.readFileSync(process.argv[2], "utf8");
+const sandbox = {
+  axios:{defaults:{},interceptors:{response:{use(){}}}},
+  Vue:{createApp(definition){sandbox.definition=definition;return {component(){return this},mount(){return this}}}},
+  localStorage:{getItem(){return ""},setItem(){},removeItem(){}},
+  window:{},console,URLSearchParams,setTimeout,clearTimeout,
+};
+vm.createContext(sandbox);
+vm.runInContext(source,sandbox);
+const methods = sandbox.definition.methods;
+const calls = [];
+const context = {
+  ...methods,
+  canProductionExecute:true,
+  productionTab:"history",
+  incomingNextStepGuide:{visible:true,count:2,pendingBalance:true},
+  pageAllowed(page){return page === "production";},
+  invalidatePageCache(page){calls.push(`invalidate:${page}`);},
+  async go(page){calls.push(`go:${page}`);},
+  showToast(message,isError){calls.push(`toast:${message}:${!!isError}`);},
+};
+(async () => {
+  const result = await methods.goToProductionFromIncomingGuide.call(context);
+  if (!result) throw new Error("Authorized guide did not navigate");
+  if (context.productionTab !== "pending") throw new Error("Guide did not select pending production");
+  if (context.incomingNextStepGuide.visible) throw new Error("Guide did not close after navigation");
+  if (calls.join("|") !== "invalidate:production|go:production") throw new Error(calls.join("|"));
+  const body = methods.goToProductionFromIncomingGuide.toString();
+  if (/axios\.|\/api\//.test(body)) throw new Error("Guide action must not write production or inventory data");
+})().catch(error => { console.error(error); process.exitCode=1; });
+''',
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [node, str(harness_path), str(script_path)],
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr

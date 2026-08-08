@@ -1835,6 +1835,20 @@
               </div>
             </section>
 
+            <section v-if="incomingNextStepGuide.visible && activePage === 'incoming'" class="order-next-step-guide incoming-next-step-guide" aria-live="polite">
+              <div class="order-next-step-copy">
+                <strong>{{ incomingNextStepGuideTitle }}</strong>
+                <span v-if="incomingNextStepGuide.pendingBalance">已收纸板可先生产，未到齐的继续留在待入库。</span>
+                <span v-else>纸板已实收，下一步去生产确认。</span>
+              </div>
+              <div class="order-next-step-actions">
+                <button v-if="canProductionExecute && pageAllowed('production')" type="button" class="btn primary" @click="goToProductionFromIncomingGuide">下一步：去生产</button>
+                <span v-else class="muted">请交给有生产确认权限的账号继续</span>
+                <button type="button" class="btn" @click="continueIncomingFromGuide">继续收料</button>
+                <button type="button" class="btn" @click="dismissIncomingNextStepGuide">关闭</button>
+              </div>
+            </section>
+
             <section v-if="warehouseFrameUrl" v-show="activePage === 'warehouse'" class="warehouse-shell">
               <iframe
                 :key="warehouseFrameRevision"
@@ -6701,6 +6715,7 @@
             user: null, loading: false, loginError: "", activePage: "dashboard", uiModeSaving: false, authGeneration: 0,
             orderNextStepGuide: {visible:false, orderNo:"", count:0, source:""},
             requisitionNextStepGuide: {visible:false, documentNo:"", count:0, source:""},
+            incomingNextStepGuide: {visible:false, count:0, pendingBalance:false},
             pageCacheUpdatedAt: {},
             warehouseFrameUrl: "", warehouseFrameRevision: 0, warehouseTwinFloor: "3F",
             loginForm: { username: localStorage.getItem("erp_username") || "", password: "", remember_me: true },
@@ -7026,6 +7041,10 @@
             if (source === "stock_replenishment") return documentNo ? `补库报料 ${documentNo} 已生成` : "补库报料已生成";
             if (count > 1) return `${count} 张报料单已生成`;
             return documentNo ? `报料单 ${documentNo} 已生成` : "报料单已生成";
+          },
+          incomingNextStepGuideTitle() {
+            const count = Number(this.incomingNextStepGuide?.count || 0);
+            return count > 1 ? `${count} 条订单来料已实收` : "订单来料已实收";
           },
           currentReleaseDetails() {
             const currentVersion = String(this.versionInfo?.version || "").trim();
@@ -10685,6 +10704,31 @@
             await this.go("incoming");
             return true;
           },
+          showIncomingNextStepGuide({count=1,pendingBalance=false}={}) {
+            this.incomingNextStepGuide = {
+              visible:true,
+              count:Math.max(1,Number(count || 1)),
+              pendingBalance:!!pendingBalance,
+            };
+          },
+          dismissIncomingNextStepGuide() {
+            this.incomingNextStepGuide = {visible:false,count:0,pendingBalance:false};
+          },
+          continueIncomingFromGuide() {
+            this.dismissIncomingNextStepGuide();
+            this.incomingTab = "pending";
+          },
+          async goToProductionFromIncomingGuide() {
+            if (!this.canProductionExecute || !this.pageAllowed("production")) {
+              this.showToast("当前账号没有生产确认权限", true);
+              return false;
+            }
+            this.dismissIncomingNextStepGuide();
+            this.productionTab = "pending";
+            this.invalidatePageCache("production");
+            await this.go("production");
+            return true;
+          },
           isMenuActive(menuKey) {
             const group = this.navigationGroups.find(item => item.key === menuKey);
             return group ? group.pages.some(page => page.key === this.activePage) : this.activePage === menuKey;
@@ -13583,6 +13627,21 @@
                 idempotency_key:createIdempotencyKey(),
                 items: rows.map(row => this.incomingPayload(row)),
               });
+              const successfulResults = (data.results || []).filter(result => result.success);
+              const successfulItemIds = new Set(successfulResults.map(result => String(result.item_id)));
+              const successfulOrderRows = rows.filter(row =>
+                successfulItemIds.has(String(row.item_id)) && row.source_type !== "stock_replenishment"
+              );
+              if (successfulOrderRows.length) {
+                this.showIncomingNextStepGuide({
+                  count:successfulOrderRows.length,
+                  pendingBalance:successfulResults.some(result =>
+                    successfulItemIds.has(String(result.item_id))
+                    && result.item?.material_status === "pending"
+                    && successfulOrderRows.some(row => String(row.item_id) === String(result.item_id))
+                  ),
+                });
+              }
               this.incomingSelected = {};
               await this.refreshIncomingAfterWrite();
               if (data.failed) {
@@ -13601,6 +13660,12 @@
             if (!confirm(`确认入库 ${quantity} 张纸板吗？`)) return;
             try {
               const {data}=await axios.put(`/api/incoming/receive/${row.item_id}`,payload);
+              if (row.source_type !== "stock_replenishment") {
+                this.showIncomingNextStepGuide({
+                  count:1,
+                  pendingBalance:data.material_status === "pending",
+                });
+              }
               await this.refreshIncomingAfterWrite();
               this.showToast(data.material_status==="pending" ? `已记录实收，仍待补 ${data.remaining_quantity} 张` : "来料入库成功");
             } catch(error) { this.showToast(this.errorMessage(error),true); }

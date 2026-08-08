@@ -4832,6 +4832,7 @@ class TwinRackLayoutFields(BaseModel):
     levels: int = Field(ge=1, le=20)
     level_heights_mm: list[float] = Field(max_length=19)
     cargo_rows: int = Field(ge=3, le=5)
+    level_cell_counts: list[int] | None = Field(default=None, max_length=20)
     bays: int = Field(default=1, ge=1, le=50)
     access_side: Literal["north", "south", "east", "west", "both"] = "south"
     min_aisle_width_mm: float = Field(default=1500, ge=0, le=20_000)
@@ -4906,7 +4907,8 @@ def _twin_layout_asset_log(
 
 def _rack_layout_values(payload: TwinRackLayoutFields) -> dict:
     return payload.model_dump(
-        exclude={"expected_revision", "expected_version", "operation_key", "area_feature_id"}
+        exclude={"expected_revision", "expected_version", "operation_key", "area_feature_id"},
+        exclude_none=True,
     )
 
 

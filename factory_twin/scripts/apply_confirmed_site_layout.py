@@ -198,6 +198,13 @@ def build_layout(payload: dict[str, Any], *, edited_at: str) -> dict[str, Any]:
         raise ValueError(f"unexpected D2 rack set: {sorted(actual_d2)}")
     for rack in d2_racks:
         measured = (2000, 2000) if rack["rack_code"] == D2_SPECIAL_CODE else (1800, 1100)
+        current_cell_counts = rack.get("level_cell_counts")
+        if not (
+            isinstance(current_cell_counts, list)
+            and len(current_cell_counts) == 3
+            and all(isinstance(value, int) and 0 <= value <= 50 for value in current_cell_counts)
+        ):
+            current_cell_counts = [0, 0, 0]
         desired_fields = dict(
             name=(
                 "D2方形三层货架（现场实测）"
@@ -216,7 +223,10 @@ def build_layout(payload: dict[str, Any], *, edited_at: str) -> dict[str, Any]:
             area_code="D2",
             measurement_status="measured_outer_dimensions",
             shelf_height_status="equal_visual_draft_pending_measurement",
-            cell_plan_status="pending_admin_configuration",
+            level_cell_counts=current_cell_counts,
+            cell_plan_status=(
+                "configured" if any(current_cell_counts) else "pending_admin_configuration"
+            ),
             level_usage=["下层：栈板", "上层：小型手工模切成品", "上层：小型手工模切成品"],
             formal_location_mapping=False,
         )

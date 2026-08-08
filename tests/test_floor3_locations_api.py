@@ -2921,6 +2921,7 @@ def test_phase2c13_layout_rack_writes_are_admin_only_and_audited(
         "levels": 3,
         "level_heights_mm": [700, 1450],
         "cargo_rows": 4,
+        "level_cell_counts": [0, 2, 6],
         "bays": 1,
         "access_side": "south",
         "min_aisle_width_mm": 1500,
@@ -2936,6 +2937,8 @@ def test_phase2c13_layout_rack_writes_are_admin_only_and_audited(
         created = admin.post("/api/warehouse/twin-layout/floors/3F/racks", json=body)
         assert created.status_code == 201, created.text
         assert created.json()["item"]["area_code"] == "F1"
+        assert created.json()["item"]["level_cell_counts"] == [0, 2, 6]
+        assert created.json()["item"]["cell_plan_status"] == "configured"
         repeated = admin.post("/api/warehouse/twin-layout/floors/3F/racks", json=body)
         assert repeated.status_code == 201, repeated.text
         assert repeated.json()["applied"] is False

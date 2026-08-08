@@ -74,6 +74,8 @@ export interface Rack {
   levels: number;
   level_heights_mm: number[];
   cargo_rows: number;
+  level_cell_counts?: number[];
+  cell_plan_status?: "pending_admin_configuration" | "configured";
   bays: number;
   access_side: "north" | "south" | "east" | "west" | "both";
   min_aisle_width_mm: number;

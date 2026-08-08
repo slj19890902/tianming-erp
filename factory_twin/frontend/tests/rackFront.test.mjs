@@ -19,3 +19,15 @@ test("cargo columns stay within the manually allowed 3 to 5 rows", () => {
   assert.equal(buildRackFrontSlots({ levels: 1, cargo_rows: 1 })[0].slots.length, 3);
   assert.equal(buildRackFrontSlots({ levels: 1, cargo_rows: 9 })[0].slots.length, 5);
 });
+
+test("each rack level can keep its own cell count including unpartitioned zero", () => {
+  const tiers = buildRackFrontSlots({
+    rack_code: "RACK-3F-D2-001",
+    levels: 3,
+    cargo_rows: 4,
+    level_cell_counts: [0, 2, 7],
+    height_mm: 2600,
+    level_heights_mm: [867, 1733]
+  });
+  assert.deepEqual(tiers.map((tier) => tier.slots.length), [7, 2, 0]);
+});

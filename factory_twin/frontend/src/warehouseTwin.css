@@ -387,6 +387,8 @@ body.warehouse-twin-page {
 .twin-elevation-level { flex: 1; min-height: 0; display: grid; grid-template-rows: 20px minmax(0, 1fr); border-bottom: 7px solid #a7622e; }
 .twin-elevation-level > span { color: #7ba8b4; font-size: 9px; }
 .twin-elevation-level > div { min-height: 0; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 6px; align-items: end; }
+.twin-elevation-level > div.unpartitioned { grid-auto-flow: row; grid-template-columns: minmax(0, 1fr); }
+.twin-elevation-level .twin-unpartitioned-cell { min-height: 62%; color: #86a7ae; border-color: #3a6570; background: #0b27314d; font-size: 10px; }
 .twin-elevation-level i { min-height: 45%; display: grid; place-items: center; border: 1px dashed #285d68; color: #466d78; background: #0a273240; font-size: 8px; font-style: normal; }
 .twin-width-ruler { grid-column: 2; display: grid; place-items: center; border-top: 1px solid #5eead477; color: #8ddbd5; font: 700 10px Consolas, monospace; }
 .twin-rack-content aside { padding: 16px; border: 1px solid #28606d; background: #071925e8; }
@@ -975,8 +977,10 @@ body.warehouse-twin-page {
 .twin-zone-policy-editor select { min-width: 0; min-height: 32px; padding: 5px 7px; border: 1px solid #b8cccf; border-radius: 3px; color: #173b49; background: #fff; font-size: 10px; }
 .twin-rack-coordinate-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
 .twin-rack-dimension-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
-.twin-rack-level-editor { padding: 7px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; border: 1px solid #d4e2e0; background: #fff; }
+.twin-rack-level-editor { padding: 7px; display: grid; gap: 6px; border: 1px solid #d4e2e0; background: #fff; }
 .twin-rack-level-editor > b { grid-column: 1 / -1; color: #355461; font-size: 9px; }
+.twin-rack-level-editor > small { color: #60747d; font-size: 8px; line-height: 1.4; }
+.twin-rack-level-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
 .twin-layout-editor-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
 .twin-layout-editor-actions button,
 .twin-area-layout-summary button,

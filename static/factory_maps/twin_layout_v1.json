@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-08T07:26:44.448219+00:00",
+  "generated_at": "2026-08-08T07:56:51.800359+00:00",
   "source": "factory_twin_candidate_read_only_export",
   "inventory_source": "ERP inventory_lots remains authoritative; layout pallets are isolated visual targets only",
   "floors": {
@@ -4229,8 +4229,8 @@
       "source_updated_at": "2026-08-06T04:05:34+00:00",
       "erp_area_codes": [],
       "pallets_inventory_linked": false,
-      "revision": "a52a1b09953b1a5c",
-      "layout_edited_at": "2026-08-08T07:26:44.448219+00:00",
+      "revision": "4ea4140e8139cea1",
+      "layout_edited_at": "2026-08-08T07:56:51.800359+00:00",
       "site_layout_receipt": "P1-16D-2-20260808"
     },
     "3F": {
@@ -9496,6 +9496,11 @@
             1733
           ],
           "cargo_rows": 4,
+          "level_cell_counts": [
+            0,
+            0,
+            0
+          ],
           "bays": 1,
           "access_side": "east",
           "min_aisle_width_mm": 1500.0,
@@ -9533,6 +9538,11 @@
             1733
           ],
           "cargo_rows": 4,
+          "level_cell_counts": [
+            0,
+            0,
+            0
+          ],
           "bays": 1,
           "access_side": "east",
           "min_aisle_width_mm": 1500.0,
@@ -9570,6 +9580,11 @@
             1733
           ],
           "cargo_rows": 4,
+          "level_cell_counts": [
+            0,
+            0,
+            0
+          ],
           "bays": 1,
           "access_side": "north",
           "min_aisle_width_mm": 1500.0,
@@ -9607,6 +9622,11 @@
             1733
           ],
           "cargo_rows": 4,
+          "level_cell_counts": [
+            0,
+            0,
+            0
+          ],
           "bays": 1,
           "access_side": "west",
           "min_aisle_width_mm": 1500.0,
@@ -9644,6 +9664,11 @@
             1733
           ],
           "cargo_rows": 4,
+          "level_cell_counts": [
+            0,
+            0,
+            0
+          ],
           "bays": 1,
           "access_side": "west",
           "min_aisle_width_mm": 1500.0,
@@ -10060,8 +10085,8 @@
         "F4"
       ],
       "pallets_inventory_linked": false,
-      "layout_edited_at": "2026-08-08T07:26:44.448219+00:00",
-      "revision": "c3df07fd2cfe8233",
+      "layout_edited_at": "2026-08-08T07:56:51.800359+00:00",
+      "revision": "1555039bb1b9e3a2",
       "site_layout_receipt": "P1-16D-2-20260808"
     }
   },

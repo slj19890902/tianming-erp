@@ -26,6 +26,26 @@ def test_confirmed_site_layout_corrects_d2_without_moving_existing_racks() -> No
     assert all((rack["width_mm"], rack["depth_mm"], rack["height_mm"], rack["levels"]) == (1800, 1100, 2600, 3) for rack in standard)
     assert all(rack["formal_location_mapping"] is False for rack in after.values())
     assert all(rack["cell_plan_status"] == "pending_admin_configuration" for rack in after.values())
+    assert all(rack["level_cell_counts"] == [0, 0, 0] for rack in after.values())
+
+
+def test_confirmed_site_layout_preserves_operator_level_cell_plan() -> None:
+    source = _source()
+    rack = next(
+        item
+        for item in source["floors"]["3F"]["racks"]
+        if item["rack_code"] == "RACK-3F-D2-SPECIAL-001"
+    )
+    rack["level_cell_counts"] = [1, 3, 5]
+    rack["cell_plan_status"] = "configured"
+    result = build_layout(source, edited_at="2026-08-08T00:00:00+00:00")
+    updated = next(
+        item
+        for item in result["floors"]["3F"]["racks"]
+        if item["rack_code"] == "RACK-3F-D2-SPECIAL-001"
+    )
+    assert updated["level_cell_counts"] == [1, 3, 5]
+    assert updated["cell_plan_status"] == "configured"
 
 
 def test_confirmed_site_layout_adds_confirmed_mold_numbering_without_inventory_locations() -> None:

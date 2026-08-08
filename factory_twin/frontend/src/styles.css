@@ -255,6 +255,7 @@ button { cursor: pointer; }
 .rack-tier-meta strong { color: #e2e8f0; font-size: 12px; }.rack-tier-meta small { color: #7dd3fc; font: 700 9px Consolas, monospace; }
 .rack-beam { position: absolute; z-index: 2; left: 8px; right: 8px; bottom: 0; height: 13px; border: 1px solid #7c2d12; background: linear-gradient(180deg, #fb923c 0 24%, #ea580c 25% 63%, #9a3412 64%); box-shadow: 0 5px 8px #0008; }
 .rack-cargo-row { min-width: 0; display: grid; align-items: end; gap: 7px; }
+.rack-tier-unpartitioned { min-height: 64px; display: grid; place-items: center; border: 1px dashed #4b6670; color: #78919a; background: #0c283340; font-size: 12px; }
 .rack-cargo { position: relative; min-width: 0; height: 68px; padding: 8px 4px 5px; display: grid; align-content: end; gap: 1px; overflow: hidden; border: 1px solid #9a5f28; border-radius: 2px 2px 4px 4px; color: #3b2412; background: linear-gradient(135deg, #e8bd7d 0%, #b7793f 68%, #8d542b 100%); box-shadow: inset 3px 0 #f8d49d55, inset -4px 0 #63381d33, 3px 4px 7px #0008; transform-origin: bottom; transition: .18s ease; }
 .rack-cargo::before { content: ""; position: absolute; left: 48%; top: 0; bottom: 0; width: 7%; background: #f3dfb044; }
 .rack-cargo:hover, .rack-cargo.selected { z-index: 5; border-color: #5eead4; outline: 2px solid #5eead499; filter: brightness(1.08); transform: translateY(-5px) scale(1.025); box-shadow: 0 0 0 3px #2dd4bf22, 4px 8px 12px #0009; }

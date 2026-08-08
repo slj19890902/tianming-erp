@@ -1822,6 +1822,19 @@
               </div>
             </section>
 
+            <section v-if="requisitionNextStepGuide.visible && activePage === 'requisition'" class="order-next-step-guide requisition-next-step-guide" aria-live="polite">
+              <div class="order-next-step-copy">
+                <strong>{{ requisitionNextStepGuideTitle }}</strong>
+                <span>材料到厂后，再去来料入库确认实收。</span>
+              </div>
+              <div class="order-next-step-actions">
+                <button v-if="hasPermission('incoming.execute') && pageAllowed('incoming')" type="button" class="btn primary" @click="goToIncomingFromRequisitionGuide">材料到厂后：去来料入库</button>
+                <span v-else class="muted">材料到厂后，请交给有来料入库权限的账号确认实收</span>
+                <button type="button" class="btn" @click="continueRequisitionFromGuide">继续报料</button>
+                <button type="button" class="btn" @click="dismissRequisitionNextStepGuide">关闭</button>
+              </div>
+            </section>
+
             <section v-if="warehouseFrameUrl" v-show="activePage === 'warehouse'" class="warehouse-shell">
               <iframe
                 :key="warehouseFrameRevision"
@@ -6687,6 +6700,7 @@
           return {
             user: null, loading: false, loginError: "", activePage: "dashboard", uiModeSaving: false, authGeneration: 0,
             orderNextStepGuide: {visible:false, orderNo:"", count:0, source:""},
+            requisitionNextStepGuide: {visible:false, documentNo:"", count:0, source:""},
             pageCacheUpdatedAt: {},
             warehouseFrameUrl: "", warehouseFrameRevision: 0, warehouseTwinFloor: "3F",
             loginForm: { username: localStorage.getItem("erp_username") || "", password: "", remember_me: true },
@@ -7004,6 +7018,14 @@
             const orderNo = String(this.orderNextStepGuide?.orderNo || "").trim();
             if (count > 1) return `${count} 张订单已保存`;
             return orderNo ? `订单 ${orderNo} 已保存` : "订单已保存";
+          },
+          requisitionNextStepGuideTitle() {
+            const count = Number(this.requisitionNextStepGuide?.count || 0);
+            const documentNo = String(this.requisitionNextStepGuide?.documentNo || "").trim();
+            const source = String(this.requisitionNextStepGuide?.source || "");
+            if (source === "stock_replenishment") return documentNo ? `补库报料 ${documentNo} 已生成` : "补库报料已生成";
+            if (count > 1) return `${count} 张报料单已生成`;
+            return documentNo ? `报料单 ${documentNo} 已生成` : "报料单已生成";
           },
           currentReleaseDetails() {
             const currentVersion = String(this.versionInfo?.version || "").trim();
@@ -10635,6 +10657,32 @@
             this.requisitionTab = "pending";
             this.invalidatePageCache("requisition");
             await this.go("requisition");
+            return true;
+          },
+          showRequisitionNextStepGuide({documentNo="",count=1,source="supplier"}={}) {
+            this.requisitionNextStepGuide = {
+              visible:true,
+              documentNo:String(documentNo || "").trim(),
+              count:Math.max(1,Number(count || 1)),
+              source:String(source || "supplier"),
+            };
+          },
+          dismissRequisitionNextStepGuide() {
+            this.requisitionNextStepGuide = {visible:false,documentNo:"",count:0,source:""};
+          },
+          continueRequisitionFromGuide() {
+            this.dismissRequisitionNextStepGuide();
+            this.requisitionTab = "pending";
+          },
+          async goToIncomingFromRequisitionGuide() {
+            if (!this.hasPermission("incoming.execute") || !this.pageAllowed("incoming")) {
+              this.showToast("当前账号没有来料入库操作权限", true);
+              return false;
+            }
+            this.dismissRequisitionNextStepGuide();
+            this.incomingTab = "pending";
+            this.invalidatePageCache("incoming");
+            await this.go("incoming");
             return true;
           },
           isMenuActive(menuKey) {
@@ -23365,6 +23413,11 @@
               if (this.modal.type === "stockReplenishment") {
                 const data = await this.saveStockReplenishmentDraft();
                 if (data?._in_flight) return false;
+                this.showRequisitionNextStepGuide({
+                  documentNo:data?.document_number || data?.order_number || "",
+                  count:1,
+                  source:"stock_replenishment",
+                });
                 if (data?._refresh_failed || data?._print_failed) {
                   const details = [
                     data._refresh_failed ? "已报料列表刷新失败" : "",
@@ -23380,6 +23433,12 @@
                 const data = await this.saveSupplierRequisitionDraft();
                 if (data?._in_flight) return false;
                 const names = (data.created_orders || []).map(row => row.supplier_name).filter(Boolean);
+                const firstCreatedOrder = (data.created_orders || [])[0] || {};
+                this.showRequisitionNextStepGuide({
+                  documentNo:firstCreatedOrder.document_number || firstCreatedOrder.order_number || firstCreatedOrder.supplier_order_number || "",
+                  count:Math.max(1,(data.created_orders || []).length),
+                  source:"supplier",
+                });
                 if (data?._refresh_failed) {
                   this.showToast(`已生成 ${names.length || 0} 张供应商报料单${names.length ? "：" + names.join("、") : ""}；列表刷新失败，请点刷新核对，不要重复提交。`, true);
                 } else {
@@ -23390,6 +23449,11 @@
               if (this.modal.type === "requisition") {
                 const data = await this.saveCompositeRequisitionDraft();
                 if (data?._in_flight) return false;
+                this.showRequisitionNextStepGuide({
+                  documentNo:data?.document_number || data?.requisition_number || "",
+                  count:1,
+                  source:"composite",
+                });
                 if (data?._refresh_failed || data?._print_failed) {
                   const details = [
                     data._refresh_failed ? "列表刷新失败" : "",

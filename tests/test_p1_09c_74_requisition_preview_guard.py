@@ -61,7 +61,7 @@ def test_merge_button_has_single_flight_loading_feedback() -> None:
     end = INDEX.index("</button>", click) + len("</button>")
     button = INDEX[start:end]
 
-    assert ':disabled="supplierRequisitionPreviewLoading"' in button
+    assert ':disabled="supplierRequisitionPreviewLoading ||' in button
     assert "正在生成草稿…" in button
     assert "合并报料" in button
 

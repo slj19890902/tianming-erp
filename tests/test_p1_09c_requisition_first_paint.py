@@ -67,8 +67,8 @@ def test_requisition_toolbar_refreshes_only_visible_tab() -> None:
 
 
 def test_requisition_page_hides_order_entry_actions_and_keeps_merge_workflow() -> None:
-    report_page = INDEX.split("activePage === 'requisition'", 1)[1].split(
-        "activePage === 'incoming'", 1
+    report_page = INDEX.split("<template v-else-if=\"activePage === 'requisition'\">", 1)[1].split(
+        "<template v-else-if=\"activePage === 'incoming'\">", 1
     )[0]
 
     assert '@click="openOrder">新建订单</button>' not in report_page

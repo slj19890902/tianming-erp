@@ -32,6 +32,50 @@ MOLD_LOCATION_SOURCES = frozenset(
     {"manual_input", "scanner_paste", "url_parameter", "api"}
 )
 
+# Owner-confirmed 2026-08-08 left-to-right physical numbering.  These rules
+# only constrain mold location codes; they do not create warehouse inventory
+# locations or affect inventory quantities.
+ONE_FLOOR_MOLD_RACKS = (
+    {
+        "rack": 1,
+        "rack_code": "R01",
+        "name": "左架（模具002）",
+        "zone_code": "ZONE-1F-MOLD-002",
+        "levels": ({"level": 2, "kind": "flat"}, {"level": 3, "kind": "flat"}),
+    },
+    {
+        "rack": 2,
+        "rack_code": "R02",
+        "name": "中架（模具002）",
+        "zone_code": "ZONE-1F-MOLD-002",
+        "levels": ({"level": 2, "kind": "flat"},),
+    },
+    {
+        "rack": 3,
+        "rack_code": "R03",
+        "name": "右架（模具001）",
+        "zone_code": "ZONE-1F-MOLD-001",
+        "levels": (
+            {"level": 1, "kind": "vertical"},
+            {"level": 2, "kind": "flat"},
+            {"level": 3, "kind": "flat"},
+        ),
+    },
+    {
+        "rack": 4,
+        "rack_code": "R04",
+        "name": "靠墙特大模具区",
+        "zone_code": "ZONE-1F-MOLD-R04",
+        "levels": ({"level": 1, "kind": "vertical"},),
+    },
+)
+_ONE_FLOOR_RACKS_BY_NUMBER = {item["rack"]: item for item in ONE_FLOOR_MOLD_RACKS}
+_ONE_FLOOR_ALLOWED_LEVELS = {
+    (rack["rack"], level["level"]): level["kind"]
+    for rack in ONE_FLOOR_MOLD_RACKS
+    for level in rack["levels"]
+}
+
 
 class MoldLocationError(ValueError):
     def __init__(self, message: str, *, status_code: int = 400) -> None:
@@ -71,6 +115,28 @@ def _floor_text(value: str) -> str:
     return f"{chinese.get(floor, floor)}楼模具区"
 
 
+def one_floor_mold_location_options() -> list[dict]:
+    """Return a JSON-safe copy of the confirmed 1F mold rack rules."""
+
+    return [
+        {
+            "rack": rack["rack"],
+            "rack_code": rack["rack_code"],
+            "name": rack["name"],
+            "zone_code": rack["zone_code"],
+            "levels": [dict(level) for level in rack["levels"]],
+        }
+        for rack in ONE_FLOOR_MOLD_RACKS
+    ]
+
+
+def _rack_prompt(floor: str, rack: int) -> str:
+    if floor == "1F" and rack in _ONE_FLOOR_RACKS_BY_NUMBER:
+        item = _ONE_FLOOR_RACKS_BY_NUMBER[rack]
+        return f"{item['rack_code']} {item['name']}"
+    return f"第{rack}号货架"
+
+
 def describe_mold_location(value: str) -> dict:
     """Turn a stable rack code into a prompt a workshop worker can follow."""
 
@@ -79,8 +145,9 @@ def describe_mold_location(value: str) -> dict:
     flat = _CANONICAL_FLAT_PATTERN.fullmatch(normalized)
     if flat:
         parts = flat.groupdict()
+        rack = _number(parts["rack"])
         prompt = (
-            f"前往{_floor_text(parts['floor'])}，第{_number(parts['rack'])}号货架，"
+            f"前往{_floor_text(parts['floor'])}，{_rack_prompt(parts['floor'].upper(), rack)}，"
             f"第{_number(parts['level'])}层、第{_number(parts['row'])}排，"
             f"从左到右第{_number(parts['position'])}块。"
             "拿取前请核对模具编号和存货编码。"
@@ -90,7 +157,7 @@ def describe_mold_location(value: str) -> dict:
             "location_code": normalized,
             "floor": parts["floor"].upper(),
             "area": "M",
-            "rack": _number(parts["rack"]),
+            "rack": rack,
             "level": _number(parts["level"]),
             "row": _number(parts["row"]),
             "position": _number(parts["position"]),
@@ -99,9 +166,10 @@ def describe_mold_location(value: str) -> dict:
     vertical = _CANONICAL_VERTICAL_PATTERN.fullmatch(normalized)
     if vertical:
         parts = vertical.groupdict()
+        rack = _number(parts["rack"])
         level_text = "底层（第1层）" if _number(parts["level"]) == 1 else f"第{_number(parts['level'])}层"
         prompt = (
-            f"前往{_floor_text(parts['floor'])}，第{_number(parts['rack'])}号货架，"
+            f"前往{_floor_text(parts['floor'])}，{_rack_prompt(parts['floor'].upper(), rack)}，"
             f"{level_text}竖放区，从左到右第{_number(parts['position'])}块。"
             "大模具较重，请按现场要求两人搬运；拿取前核对模具编号和存货编码。"
         )
@@ -110,7 +178,7 @@ def describe_mold_location(value: str) -> dict:
             "location_code": normalized,
             "floor": parts["floor"].upper(),
             "area": "M",
-            "rack": _number(parts["rack"]),
+            "rack": rack,
             "level": _number(parts["level"]),
             "row": None,
             "position": _number(parts["position"]),
@@ -167,12 +235,12 @@ def describe_mold_location(value: str) -> dict:
 
 
 def normalize_mold_location_code(value: str) -> str:
-    """Accept only canonical, physically addressable 3F-M location codes."""
+    """Accept only canonical, physically addressable confirmed mold positions."""
 
     guide = describe_mold_location(value)
-    if guide["kind"] not in {"flat", "vertical"} or guide["floor"] != "3F":
+    if guide["kind"] not in {"flat", "vertical"} or guide["floor"] not in {"1F", "3F"}:
         raise MoldLocationError(
-            "目标位置必须是合法的 3F-M 平放或竖放位置码，旧自由文本不能用于移动确认",
+            "目标位置必须是合法的 1F-M 或 3F-M 平放/竖放位置码，旧自由文本不能用于移动确认",
             status_code=422,
         )
     numeric_fields = ("rack", "level", "position")
@@ -180,9 +248,27 @@ def normalize_mold_location_code(value: str) -> str:
         numeric_fields += ("row",)
     if any(int(guide[field] or 0) <= 0 for field in numeric_fields):
         raise MoldLocationError(
-            "3F-M 位置码中的货架、层、排和位置编号必须大于 0",
+            "模具位置码中的货架、层、排和位置编号必须大于 0",
             status_code=422,
         )
+    if guide["floor"] == "1F":
+        expected_kind = _ONE_FLOOR_ALLOWED_LEVELS.get((guide["rack"], guide["level"]))
+        if expected_kind is None:
+            raise MoldLocationError(
+                "该一楼层位不是可用模板位：R01/R02 机器底层及未确认层位禁止使用",
+                status_code=422,
+            )
+        if guide["kind"] != expected_kind:
+            readable = "竖放位 V-P" if expected_kind == "vertical" else "平放位 D01-P"
+            raise MoldLocationError(
+                f"该一楼层位必须使用{readable}格式",
+                status_code=422,
+            )
+        if guide["kind"] == "flat" and guide["row"] != 1:
+            raise MoldLocationError(
+                "一楼模板架当前只确认单排 D01，其他排位尚未实测，禁止使用",
+                status_code=422,
+            )
     return str(guide["location_code"])
 
 

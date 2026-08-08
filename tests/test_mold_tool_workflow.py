@@ -378,6 +378,78 @@ def test_mold_location_prompt_is_immediately_readable(
     assert "核对模具编号和存货编码" in result["prompt"]
 
 
+@pytest.mark.parametrize(
+    "location",
+    [
+        "1F-M-R01-L2-D01-P01",
+        "1F-M-R01-L3-D01-P02",
+        "1F-M-R02-L2-D01-P03",
+        "1F-M-R03-L1-V-P04",
+        "1F-M-R03-L2-D01-P05",
+        "1F-M-R03-L3-D01-P06",
+        "1F-M-R04-L1-V-P07",
+    ],
+)
+def test_confirmed_one_floor_mold_locations_are_accepted(location: str) -> None:
+    from app.services.mold_location import (
+        describe_mold_location,
+        normalize_mold_location_code,
+    )
+
+    normalized = normalize_mold_location_code(location.lower())
+    guide = describe_mold_location(normalized)
+    assert normalized == location
+    assert "一楼模具区" in guide["prompt"]
+    assert f"R{guide['rack']:02d}" in guide["prompt"]
+    assert f"从左到右第{guide['position']}块" in guide["prompt"]
+
+
+@pytest.mark.parametrize(
+    "location",
+    [
+        "1F-M-R01-L1-D01-P01",
+        "1F-M-R01-L1-V-P01",
+        "1F-M-R02-L1-D01-P01",
+        "1F-M-R02-L3-D01-P01",
+        "1F-M-R03-L1-D01-P01",
+        "1F-M-R04-L1-D01-P01",
+        "1F-M-R04-L2-V-P01",
+        "1F-M-R01-L2-D02-P01",
+        "1F-M-R05-L1-V-P01",
+    ],
+)
+def test_unconfirmed_one_floor_mold_locations_fail_closed(location: str) -> None:
+    from app.services.mold_location import MoldLocationError, normalize_mold_location_code
+
+    with pytest.raises(MoldLocationError):
+        normalize_mold_location_code(location)
+
+
+def test_one_floor_mold_location_options_are_read_only_and_employee_friendly(
+    mold_app,
+) -> None:
+    app, _factory = mold_app
+    with TestClient(app) as client:
+        _login(client, "sales")
+        response = client.get("/api/warehouse/molds/location-options")
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["position_order"] == "left_to_right"
+        assert [rack["rack_code"] for rack in data["racks"]] == [
+            "R01",
+            "R02",
+            "R03",
+            "R04",
+        ]
+        assert data["racks"][0]["levels"] == [
+            {"level": 2, "kind": "flat"},
+            {"level": 3, "kind": "flat"},
+        ]
+        assert data["racks"][3]["levels"] == [
+            {"level": 1, "kind": "vertical"}
+        ]
+
+
 def test_order_response_exposes_current_mold_location_to_workshop(mold_app) -> None:
     app, factory = mold_app
     from app.models.mold_tool import MoldTool
@@ -462,10 +534,13 @@ def test_mold_frontend_connects_location_common_box_and_order_display() -> None:
 
 
 @pytest.mark.parametrize(
-    ("target_location", "expected_kind"),
+    ("target_location", "expected_kind", "expected_floor"),
     [
-        ("3f-m-r02-l2-d03-p08", "flat"),
-        ("3F-M-R01-L1-V-P12", "vertical"),
+        ("3f-m-r02-l2-d03-p08", "flat", "3F"),
+        ("3F-M-R01-L1-V-P12", "vertical", "3F"),
+        ("1f-m-r01-l2-d01-p01", "flat", "1F"),
+        ("1F-M-R03-L1-V-P04", "vertical", "1F"),
+        ("1F-M-R04-L1-V-P07", "vertical", "1F"),
     ],
 )
 def test_double_code_move_is_versioned_idempotent_and_does_not_touch_business_data(
@@ -473,6 +548,7 @@ def test_double_code_move_is_versioned_idempotent_and_does_not_touch_business_da
     monkeypatch,
     target_location: str,
     expected_kind: str,
+    expected_floor: str,
 ) -> None:
     app, factory = mold_app
     from app.api import warehouse
@@ -543,14 +619,14 @@ def test_double_code_move_is_versioned_idempotent_and_does_not_touch_business_da
         assert preview.status_code == 200, preview.text
         preview_data = preview.json()
         assert preview_data["target_guide"]["kind"] == expected_kind
-        assert preview_data["target_location"].startswith("3F-M-")
+        assert preview_data["target_location"].startswith(f"{expected_floor}-M-")
         assert preview_data["expected_version"] == 1
         assert preview_data["can_confirm"] is True
 
         confirmation = {
             **payload,
             "expected_version": preview_data["expected_version"],
-            "idempotency_key": f"n022-move-{expected_kind}-0001",
+            "idempotency_key": f"p116d2-{expected_floor}-{expected_kind}-{target_location[-3:]}",
             "source": "scanner_paste",
             "note": "专项测试移动",
         }
@@ -577,7 +653,7 @@ def test_double_code_move_is_versioned_idempotent_and_does_not_touch_business_da
 
         stale = client.post(
             "/api/warehouse/molds/location-movement/confirm",
-            json={**confirmation, "idempotency_key": f"stale-{expected_kind}-0002"},
+            json={**confirmation, "idempotency_key": f"stale-{expected_floor}-{expected_kind}-0002"},
         )
         assert stale.status_code == 409
 
@@ -807,6 +883,11 @@ def test_mobile_mold_page_keeps_lookup_and_adds_double_code_confirmation() -> No
         "moveLocationCode",
         "/api/warehouse/molds/location-movement/preview",
         "/api/warehouse/molds/location-movement/confirm",
+        "/api/warehouse/molds/location-options",
+        "oneFloorRack",
+        "oneFloorLevel",
+        "oneFloorPosition",
+        "1F-M-${rack.rack_code}-L${level}-${suffix}",
         "warehouse.execute",
         "idempotency_key",
         "/mold-label.html?mold_id=",

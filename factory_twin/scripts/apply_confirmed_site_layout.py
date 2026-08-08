@@ -18,7 +18,7 @@ from typing import Any
 from uuid import UUID, uuid5
 
 
-RECEIPT_CODE = "P1-16D-1-20260808"
+RECEIPT_CODE = "P1-16D-2-20260808"
 D2_STANDARD_CODES = {
     "RACK-3F-D2-EAST-NORTH-001",
     "RACK-3F-D2-EAST-SOUTH-001",
@@ -28,6 +28,15 @@ D2_STANDARD_CODES = {
 D2_SPECIAL_CODE = "RACK-3F-D2-SPECIAL-001"
 MOLD_ZONE_CODES = {"ZONE-1F-MOLD-001", "ZONE-1F-MOLD-002"}
 PLATE_ZONE_CODE = "ZONE-1F-PLATE-002"
+MOLD_RACK_CODE_ALIASES = {
+    "RACK-1F-MOLD-002-LEFT-001": "RACK-1F-MOLD-R01-001",
+    "RACK-1F-MOLD-002-MIDDLE-001": "RACK-1F-MOLD-R02-001",
+    "RACK-1F-MOLD-001-RIGHT-001": "RACK-1F-MOLD-R03-001",
+}
+MOLD_WALL_CODE_ALIASES = {
+    "PENDING-1F-MOLD-OVERSIZE-SOUTH-001": "MOLD-1F-R04-L1-SOUTH-001",
+    "PENDING-1F-MOLD-OVERSIZE-WEST-001": "MOLD-1F-R04-L1-WEST-001",
+}
 
 
 def _floor(payload: dict[str, Any], floor_code: str) -> dict[str, Any]:
@@ -68,8 +77,9 @@ def _visual_rack(
     area_feature: dict[str, Any],
     level_usage: list[str],
     measurement_status: str,
+    mold_rack_code: str | None = None,
 ) -> dict[str, Any]:
-    return {
+    result = {
         "id": _stable_id(layout_id, code),
         "layout_id": layout_id,
         "rack_code": code,
@@ -100,9 +110,12 @@ def _visual_rack(
         "level_usage": level_usage,
         "formal_location_mapping": False,
     }
+    if mold_rack_code is not None:
+        result["mold_rack_code"] = mold_rack_code
+    return result
 
 
-def _pending_wall_feature(
+def _mold_wall_feature(
     *, layout_id: str, code: str, name: str, points: list[list[float]]
 ) -> dict[str, Any]:
     return {
@@ -111,7 +124,7 @@ def _pending_wall_feature(
         "feature_code": code,
         "name": name,
         "feature_kind": "structure",
-        "subtype": "pending_mold_wall_storage",
+        "subtype": "mold_wall_storage",
         "points": points,
         "width_mm": 450,
         "direction": None,
@@ -122,13 +135,32 @@ def _pending_wall_feature(
         "color": "#f97316",
         "area_mm2": 0,
         "source": "manual",
-        "status": "candidate",
-        "is_locked": False,
+        "status": "confirmed",
+        "is_locked": True,
         "version": 1,
         "erp_area_code": None,
         "formal_location_mapping": False,
-        "site_note": "特别大的模板靠墙暂放；待归区，不属于模具001或002",
+        "mold_location_family": "1F-M-R04-L1-V",
+        "position_order": "left_to_right",
+        "position_mapping_status": "dynamic_on_first_binding",
+        "site_note": "R04-L1 靠墙特大模具位；P01 起按现场从左到右编号，不属于成品库存库位",
     }
+
+
+def _rename_code_aliases(
+    items: list[dict[str, Any]], aliases: dict[str, str], code_key: str
+) -> None:
+    """Rename an earlier visual candidate in place without duplicating it."""
+
+    existing_codes = {str(item.get(code_key) or "") for item in items}
+    for item in items:
+        old_code = str(item.get(code_key) or "")
+        new_code = aliases.get(old_code)
+        if not new_code or new_code in existing_codes:
+            continue
+        item[code_key] = new_code
+        existing_codes.discard(old_code)
+        existing_codes.add(new_code)
 
 
 def _upsert_by_code(items: list[dict[str, Any]], desired: dict[str, Any], code_key: str) -> None:
@@ -140,7 +172,10 @@ def _upsert_by_code(items: list[dict[str, Any]], desired: dict[str, Any], code_k
             if field in current:
                 desired[field] = current[field]
         desired["id"] = current.get("id") or desired["id"]
-        desired["version"] = current.get("version", 0) + (current != desired)
+        current_version = int(current.get("version") or 0)
+        desired["version"] = current_version
+        changed = current != desired
+        desired["version"] = current_version + int(changed)
         items[index] = desired
         return
     items.append(desired)
@@ -195,30 +230,34 @@ def build_layout(payload: dict[str, Any], *, edited_at: str) -> dict[str, Any]:
     plate002 = floor1_features[PLATE_ZONE_CODE]
     layout_id = floor1["layout_id"]
     racks = floor1.setdefault("racks", [])
+    _rename_code_aliases(racks, MOLD_RACK_CODE_ALIASES, "rack_code")
     desired_racks = [
         _visual_rack(
-            layout_id=layout_id, code="RACK-1F-MOLD-002-LEFT-001", name="模具002左架（小模切机上方）",
+            layout_id=layout_id, code="RACK-1F-MOLD-R01-001", name="R01 左架（模具002，小模切机上方）",
             x_mm=-3353.6663575916955, y_mm=-13441.557022516077,
             width_mm=2200, depth_mm=1370, height_mm=3500, levels=3,
             level_heights_mm=[1300, 2400], rotation_deg=90, area_feature=mold002,
             level_usage=["底层：小模切机（不可入库）", "第二层：模板", "第三层：模板"],
             measurement_status="footprint_visual_candidate_pending_measurement",
+            mold_rack_code="R01",
         ),
         _visual_rack(
-            layout_id=layout_id, code="RACK-1F-MOLD-002-MIDDLE-001", name="模具002中架（中模切机上方）",
+            layout_id=layout_id, code="RACK-1F-MOLD-R02-001", name="R02 中架（模具002，中模切机上方）",
             x_mm=-3274.2148167867363, y_mm=-16871.523706308042,
             width_mm=3200, depth_mm=1370, height_mm=3500, levels=2,
             level_heights_mm=[1500], rotation_deg=90, area_feature=mold002,
             level_usage=["底层：中模切机（不可入库）", "第二层：模板"],
             measurement_status="footprint_visual_candidate_pending_measurement",
+            mold_rack_code="R02",
         ),
         _visual_rack(
-            layout_id=layout_id, code="RACK-1F-MOLD-001-RIGHT-001", name="模具001右侧三层架",
+            layout_id=layout_id, code="RACK-1F-MOLD-R03-001", name="R03 右架（模具001）",
             x_mm=-3480, y_mm=-20825,
             width_mm=4000, depth_mm=1400, height_mm=3500, levels=3,
             level_heights_mm=[1200, 2400], rotation_deg=90, area_feature=mold001,
             level_usage=["第一层：大模板", "第二层：模板", "第三层：模板"],
             measurement_status="footprint_visual_candidate_pending_measurement",
+            mold_rack_code="R03",
         ),
         _visual_rack(
             layout_id=layout_id, code="RACK-1F-PLATE-002-001", name="挂板002两层整体架（现场实测）",
@@ -231,22 +270,23 @@ def build_layout(payload: dict[str, Any], *, edited_at: str) -> dict[str, Any]:
     for rack in desired_racks:
         _upsert_by_code(racks, rack, "rack_code")
 
-    pending_features = [
-        _pending_wall_feature(
+    wall_features = [
+        _mold_wall_feature(
             layout_id=layout_id,
-            code="PENDING-1F-MOLD-OVERSIZE-SOUTH-001",
-            name="南墙特大模板暂放（待归区）",
+            code="MOLD-1F-R04-L1-SOUTH-001",
+            name="R04-L1 南墙特大模具位",
             points=[[-4180, -23100], [-2780, -23100]],
         ),
-        _pending_wall_feature(
+        _mold_wall_feature(
             layout_id=layout_id,
-            code="PENDING-1F-MOLD-OVERSIZE-WEST-001",
-            name="西墙特大模板暂放（待归区）",
+            code="MOLD-1F-R04-L1-WEST-001",
+            name="R04-L1 西墙特大模具位",
             points=[[-4430, -22850], [-4430, -18800]],
         ),
     ]
     features = floor1.setdefault("features", [])
-    for feature in pending_features:
+    _rename_code_aliases(features, MOLD_WALL_CODE_ALIASES, "feature_code")
+    for feature in wall_features:
         _upsert_by_code(features, feature, "feature_code")
 
     for floor in (floor1, floor3):
@@ -271,8 +311,8 @@ def summarize(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
         "receipt": RECEIPT_CODE,
         "one_floor_racks_before": len(floor1_before.get("racks") or []),
         "one_floor_racks_after": len(floor1_after.get("racks") or []),
-        "pending_wall_markers": sum(
-            item.get("subtype") == "pending_mold_wall_storage"
+        "wall_mold_markers": sum(
+            item.get("subtype") == "mold_wall_storage"
             for item in floor1_after.get("features") or []
         ),
         "d2_racks": sum(

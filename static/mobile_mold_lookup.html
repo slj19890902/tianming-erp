@@ -11,7 +11,7 @@
     main{max-width:760px;margin:0 auto;padding:12px}.hint,.error,.success,.empty{border-radius:10px;padding:12px;margin-bottom:10px}.hint{background:#eff6ff;color:#1e3a8a}.error{background:#fee2e2;color:#991b1b}.success{background:#dcfce7;color:#166534}.empty{background:#fff;color:var(--muted);text-align:center}
     .card{background:#fff;border:1px solid var(--line);border-radius:12px;margin-bottom:12px;overflow:hidden}.card-head{padding:12px 14px;border-bottom:1px solid var(--line)}.code{font-size:13px;color:var(--muted);font-weight:400}.name{font-size:20px;font-weight:800}.location{margin:12px 14px;border:2px solid #f2c66d;background:#fff7dc;border-radius:10px;padding:12px;color:#713f12}.location-code{font-size:22px;font-weight:900;color:var(--orange);letter-spacing:.5px}.prompt{font-weight:700;margin-top:5px}
     .products{padding:0 14px 12px}.product{border-top:1px dashed var(--line);padding:10px 0}.product:first-child{border-top:0}.product-name{font-weight:800;font-size:17px}.product-code{font-size:13px;color:var(--muted)}.meta{font-size:14px;margin-top:3px}.direction{margin-top:5px;background:#fff3cd;color:#7c4a03;border-radius:6px;padding:6px 8px}.toolbar{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:8px}.tag{font-size:12px;border-radius:99px;padding:2px 8px;background:#e8efff;color:#1d4ed8}.label-link{font-size:13px;color:var(--blue);text-decoration:none}
-    .move-panel{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px}.move-panel h2{font-size:18px;margin:0 0 5px}.muted{color:var(--muted);font-size:13px}.move-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.field label{display:block;font-size:13px;font-weight:700;margin-bottom:4px}.field input{width:100%;border:1px solid #b8c5d8;border-radius:9px;padding:11px;font-size:16px}.move-actions{display:flex;gap:8px;margin-top:10px}.move-actions button{flex:1;border:0;border-radius:9px;padding:11px;font-size:16px;font-weight:800;color:#fff;background:var(--blue)}.move-actions .confirm{background:var(--green)}.move-actions button:disabled{background:#94a3b8}.preview{margin-top:12px;border:1px solid var(--line);border-radius:10px;padding:11px}.preview-line{display:grid;grid-template-columns:90px 1fr;gap:8px;margin:5px 0}.preview-code{font-weight:900;word-break:break-all}.conflict{color:#991b1b;font-weight:700}@media(max-width:520px){.move-grid{grid-template-columns:1fr}.preview-line{grid-template-columns:76px 1fr}}
+    .move-panel{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px}.move-panel h2{font-size:18px;margin:0 0 5px}.muted{color:var(--muted);font-size:13px}.move-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.field label{display:block;font-size:13px;font-weight:700;margin-bottom:4px}.field input,.field select{width:100%;border:1px solid #b8c5d8;border-radius:9px;padding:11px;font-size:16px;background:#fff}.one-floor-builder{margin-top:10px;border:1px solid #bfdbfe;background:#eff6ff;border-radius:10px;padding:10px}.one-floor-grid{display:grid;grid-template-columns:1.4fr 1fr 1fr;gap:8px}.builder-hint{margin-top:6px;color:#1e3a8a;font-size:13px;font-weight:700}.move-actions{display:flex;gap:8px;margin-top:10px}.move-actions button{flex:1;border:0;border-radius:9px;padding:11px;font-size:16px;font-weight:800;color:#fff;background:var(--blue)}.move-actions .confirm{background:var(--green)}.move-actions button:disabled{background:#94a3b8}.preview{margin-top:12px;border:1px solid var(--line);border-radius:10px;padding:11px}.preview-line{display:grid;grid-template-columns:90px 1fr;gap:8px;margin:5px 0}.preview-code{font-weight:900;word-break:break-all}.conflict{color:#991b1b;font-weight:700}@media(max-width:520px){.move-grid,.one-floor-grid{grid-template-columns:1fr}.preview-line{grid-template-columns:76px 1fr}}
   </style>
 </head>
 <body>
@@ -25,7 +25,16 @@
       <div class="muted">扫描结果可直接粘贴，也可手动输入。先预览当前与目标位置，再确认移动。</div>
       <div class="move-grid">
         <div class="field"><label for="moveMoldCode">模具码</label><input id="moveMoldCode" autocomplete="off" placeholder="例如 MJ-A1-001"></div>
-        <div class="field"><label for="moveLocationCode">3F-M 位置码</label><input id="moveLocationCode" autocomplete="off" autocapitalize="characters" placeholder="例如 3F-M-R02-L2-D03-P08"></div>
+        <div class="field"><label for="moveLocationCode">模具位置码（1F / 3F）</label><input id="moveLocationCode" autocomplete="off" autocapitalize="characters" placeholder="例如 1F-M-R01-L2-D01-P01"></div>
+      </div>
+      <div class="one-floor-builder">
+        <div class="muted">一楼位置快捷选择（位置号按现场从左到右）</div>
+        <div class="one-floor-grid">
+          <div class="field"><label for="oneFloorRack">货架</label><select id="oneFloorRack"></select></div>
+          <div class="field"><label for="oneFloorLevel">层位</label><select id="oneFloorLevel"></select></div>
+          <div class="field"><label for="oneFloorPosition">从左第几位</label><input id="oneFloorPosition" type="number" min="1" step="1" value="1"></div>
+        </div>
+        <div id="oneFloorBuilderHint" class="builder-hint">正在读取一楼模具位置…</div>
       </div>
       <div class="field" style="margin-top:10px"><label for="moveNote">备注（可选）</label><input id="moveNote" maxlength="500" placeholder="例如 现场整理后归位"></div>
       <div class="move-actions"><button id="previewButton" type="button">预览移动</button><button id="confirmButton" class="confirm" type="button" disabled>确认移动</button></div>
@@ -38,11 +47,25 @@
   <script>
     const $=id=>document.getElementById(id);
     const h=value=>String(value??"").replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[char]);
-    let canMove=false,movePreview=null,moveIdempotencyKey=null,moveSource="manual_input";
+    let canMove=false,movePreview=null,moveIdempotencyKey=null,moveSource="manual_input",oneFloorLocationOptions=[];
     let searchRequestId=0,movePreviewRequestId=0;
     function errorMessage(body,status){const detail=body?.detail;if(typeof detail==="string"&&detail.trim())return detail;if(detail&&typeof detail==="object"&&!Array.isArray(detail)){const message=detail.message||detail.detail||detail.msg,code=detail.code;if(typeof message==="string"&&message.trim())return code?`${message}（${code}）`:message}if(Array.isArray(detail)&&detail[0]?.msg)return detail[0].msg;if(typeof body?.message==="string"&&body.message.trim())return body.message;return `请求失败（HTTP ${status}）`}
     async function api(url,options={}){let response;try{response=await fetch(url,{credentials:"same-origin",headers:{"Content-Type":"application/json",...(options.headers||{})},...options})}catch{const error=new Error("连接 ERP 失败，请检查网络后重试");error.code="NETWORK_ERROR";throw error}let body={};try{body=await response.json()}catch{}if(!response.ok){const error=new Error(errorMessage(body,response.status));error.status=response.status;error.code=body?.detail?.code||body?.code||null;throw error}return body}
     function createIdempotencyKey(){if(globalThis.crypto?.randomUUID)return crypto.randomUUID();if(globalThis.crypto?.getRandomValues){const bytes=new Uint8Array(16);crypto.getRandomValues(bytes);return [...bytes].map(value=>value.toString(16).padStart(2,"0")).join("")}return `${Date.now()}-${Math.random().toString(16).slice(2)}`}
+    function positionCode(value){return String(Math.max(1,Number.parseInt(value,10)||1)).padStart(2,"0")}
+    function selectedOneFloorRack(){return oneFloorLocationOptions.find(row=>row.rack_code===$("oneFloorRack").value)||null}
+    function buildOneFloorLocation(){
+      const rack=selectedOneFloorRack(),level=Number.parseInt($("oneFloorLevel").value,10),position=positionCode($("oneFloorPosition").value);if(!rack||!level)return;
+      const rule=(rack.levels||[]).find(row=>Number(row.level)===level);if(!rule)return;
+      const suffix=rule.kind==="vertical"?`V-P${position}`:`D01-P${position}`,code=`1F-M-${rack.rack_code}-L${level}-${suffix}`;
+      $("moveLocationCode").value=code;moveSource="manual_input";invalidateMovePreview();$("oneFloorBuilderHint").textContent=`已选择：${rack.rack_code} ${rack.name} · 第${level}层 · 从左第${Number(position)}位`;
+    }
+    function renderOneFloorLevels(){
+      const rack=selectedOneFloorRack(),levels=rack?.levels||[];$("oneFloorLevel").innerHTML=levels.map(row=>`<option value="${row.level}">第 ${row.level} 层 · ${row.kind==="vertical"?"竖放":"平放"}</option>`).join("");buildOneFloorLocation();
+    }
+    async function loadOneFloorLocationOptions(){
+      try{const data=await api("/api/warehouse/molds/location-options");oneFloorLocationOptions=data.racks||[];$("oneFloorRack").innerHTML=oneFloorLocationOptions.map(row=>`<option value="${h(row.rack_code)}">${h(row.rack_code)} · ${h(row.name)}</option>`).join("");renderOneFloorLevels()}catch(error){$("oneFloorBuilderHint").textContent=`一楼快捷位置读取失败：${error.message}`}
+    }
     function loginNext(){const next=location.pathname+location.search;location.href=`/?next=${encodeURIComponent(next)}`}
     function productHtml(row){
       const report=row.report_specification?`报料尺寸 ${h(row.report_specification)} mm`:"";
@@ -70,7 +93,7 @@
     function invalidateMovePreview(){movePreviewRequestId+=1;movePreview=null;moveIdempotencyKey=null;$("previewButton").disabled=false;$("moveMessage").innerHTML="";renderMovePreview()}
     async function previewMove(){
       const requestId=++movePreviewRequestId,moldCode=$("moveMoldCode").value.trim(),targetLocation=$("moveLocationCode").value.trim();
-      if(!moldCode||!targetLocation){movePreview=null;moveIdempotencyKey=null;renderMovePreview();$("moveMessage").innerHTML='<div class="error">请同时输入模具码和 3F-M 位置码。</div>';return}
+      if(!moldCode||!targetLocation){movePreview=null;moveIdempotencyKey=null;renderMovePreview();$("moveMessage").innerHTML='<div class="error">请同时输入模具码和位置码。</div>';return}
       $("moveMessage").innerHTML="";$("previewButton").disabled=true;$("confirmButton").disabled=true;
       try{const preview=await api("/api/warehouse/molds/location-movement/preview",{method:"POST",body:JSON.stringify({mold_code:moldCode,target_location:targetLocation})});if(requestId!==movePreviewRequestId)return;movePreview=preview;moveIdempotencyKey=createIdempotencyKey();renderMovePreview()}catch(error){if(requestId!==movePreviewRequestId)return;movePreview=null;moveIdempotencyKey=null;renderMovePreview();if(error.status===401){loginNext();return}$("moveMessage").innerHTML=`<div class="error">${h(error.message)}</div>`}finally{if(requestId===movePreviewRequestId)$("previewButton").disabled=false}
     }
@@ -82,9 +105,10 @@
     async function init(){
       let auth;try{auth=await api("/api/auth/me")}catch(error){if(error.status===401){loginNext();return}$("message").innerHTML=`<div class="error">${h(error.message)}</div>`;return}
       const permissions=auth.permissions||[];canMove=permissions.includes("warehouse.execute");$("warehouseLink").style.display=permissions.includes("warehouse.view")?"inline-block":"none";$("productionLink").style.display=permissions.includes("orders.view")?"inline-block":"none";
+      await loadOneFloorLocationOptions();
       const params=new URLSearchParams(location.search),preset=params.get("mold")||params.get("q")||"",target=params.get("location")||params.get("target")||params.get("to")||"";$("keyword").value=preset;$("moveMoldCode").value=params.get("move_mold")||preset;$("moveLocationCode").value=target;if(target)moveSource="url_parameter";if(preset)await search();if($("moveMoldCode").value&&target)await previewMove()
     }
-    $("searchButton").onclick=search;$("keyword").oninput=invalidateSearch;$("keyword").onkeydown=event=>{if(event.key==="Enter")search()};$("previewButton").onclick=previewMove;$("confirmButton").onclick=confirmMove;$("moveMoldCode").onpaste=$("moveLocationCode").onpaste=()=>{moveSource="scanner_paste"};$("moveMoldCode").oninput=$("moveLocationCode").oninput=invalidateMovePreview;$("moveLocationCode").onkeydown=event=>{if(event.key==="Enter")previewMove()};init();
+    $("searchButton").onclick=search;$("keyword").oninput=invalidateSearch;$("keyword").onkeydown=event=>{if(event.key==="Enter")search()};$("previewButton").onclick=previewMove;$("confirmButton").onclick=confirmMove;$("moveMoldCode").onpaste=$("moveLocationCode").onpaste=()=>{moveSource="scanner_paste"};$("moveMoldCode").oninput=$("moveLocationCode").oninput=invalidateMovePreview;$("moveLocationCode").onkeydown=event=>{if(event.key==="Enter")previewMove()};$("oneFloorRack").onchange=renderOneFloorLevels;$("oneFloorLevel").onchange=$("oneFloorPosition").oninput=buildOneFloorLocation;init();
   </script>
 </body>
 </html>

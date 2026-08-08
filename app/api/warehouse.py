@@ -152,6 +152,7 @@ from app.services.mold_location import (
     MoldLocationPreview,
     confirm_mold_location_move,
     describe_mold_location,
+    one_floor_mold_location_options,
     preview_mold_location_move,
 )
 
@@ -6115,6 +6116,18 @@ def _mold_location_move_response(
         ),
         "idempotent_replay": result.replayed,
         "no_change": result.no_change,
+    }
+
+
+@router.get("/molds/location-options")
+def get_mold_location_options(
+    _user: User = Depends(can_read),
+) -> dict:
+    return {
+        "floor_code": "1F",
+        "position_order": "left_to_right",
+        "position_numbers_are_dynamic": True,
+        "racks": one_floor_mold_location_options(),
     }
 
 

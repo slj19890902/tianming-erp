@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Generator
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 import json
 from pathlib import Path
@@ -1082,7 +1082,7 @@ def test_price_adjust_preview_versions_and_stale_apply_rejected(
     with writer_app.state.session_factory() as session:
         assert session.get(Material, first["id"]).quote_price == Decimal("1.00")
         assert session.get(Material, second["id"]).quote_price == Decimal("2.00")
-        assert session.scalar(select(func.count()).select_from(MaterialPriceHistory)) == 0
+        assert session.scalar(select(func.count()).select_from(MaterialPriceHistory)) == 2
         assert session.scalar(
             select(func.count()).select_from(MaterialPriceAdjustmentBatch)
         ) == 0
@@ -1136,7 +1136,9 @@ def test_price_adjust_success_versions_every_material_in_one_transaction(
         assert rows[first["id"]].quote_price == Decimal("1.05")
         assert rows[second["id"]].quote_price == Decimal("2.10")
         assert {row.version for row in rows.values()} == {2}
-        history = session.scalars(select(MaterialPriceHistory)).all()
+        history = session.scalars(
+            select(MaterialPriceHistory).where(MaterialPriceHistory.batch_id.is_not(None))
+        ).all()
         assert len(history) == 2
         assert {row.adjust_reason for row in history} == {None}
         assert {row.operator for row in history} == {"p4-writer-admin"}
@@ -1221,7 +1223,7 @@ def test_price_adjust_failure_rolls_back_all_material_versions_and_history(
         assert rows[first["id"]].quote_price == Decimal("1.00")
         assert rows[second["id"]].quote_price == Decimal("2.00")
         assert {row.version for row in rows.values()} == {1}
-        assert session.scalar(select(func.count()).select_from(MaterialPriceHistory)) == 0
+        assert session.scalar(select(func.count()).select_from(MaterialPriceHistory)) == 2
         assert session.scalar(
             select(func.count()).select_from(MaterialPriceAdjustmentBatch)
         ) == 0
@@ -1234,6 +1236,303 @@ def test_price_adjust_failure_rolls_back_all_material_versions_and_history(
             )
         )
         assert version_rows == 2
+
+
+def test_material_price_history_records_initial_and_single_edit_contract(
+    writer_app: FastAPI,
+) -> None:
+    from app.models.material_price_history import MaterialPriceHistory
+
+    def save_update(
+        client: TestClient,
+        material_id: int,
+        *,
+        expected_version: int,
+        quote_price: str,
+        quote_date: str,
+        remarks: str | None = None,
+    ):
+        payload = {
+            **_material_payload(
+                "LIF",
+                code="+",
+                supplier_name="P4供应商LIF",
+                quote_price=quote_price,
+                quote_date=quote_date,
+                price_unit="元/平方米",
+                remarks=remarks,
+            ),
+            "expected_version": expected_version,
+            "change_reason": "供应商报价复核",
+        }
+        preview = client.post(
+            f"/api/master/materials/{material_id}/update-preview",
+            json=payload,
+        )
+        assert preview.status_code == 200, preview.text
+        token = preview.json().get("confirmation_token")
+        if token:
+            payload["confirmation_token"] = token
+        return client.put(f"/api/master/materials/{material_id}", json=payload)
+
+    with TestClient(writer_app) as client:
+        material = _create_material(
+            client,
+            "LIF",
+            code="+",
+            supplier_name="P4供应商LIF",
+            quote_price="5.00",
+            quote_date="2026-08-01",
+            price_unit="元/平方米",
+        )
+        first_read = client.get(
+            f"/api/master/materials/{material['id']}/price-history",
+            params={"supplier_name": "P4供应商LIF"},
+        )
+        wrong_supplier = client.get(
+            f"/api/master/materials/{material['id']}/price-history",
+            params={"supplier_name": "P4供应商A1"},
+        )
+        raised = save_update(
+            client,
+            material["id"],
+            expected_version=1,
+            quote_price="5.20",
+            quote_date="2026-08-02",
+        )
+        lowered = save_update(
+            client,
+            material["id"],
+            expected_version=2,
+            quote_price="4.90",
+            quote_date="2026-08-03",
+        )
+        non_price = save_update(
+            client,
+            material["id"],
+            expected_version=3,
+            quote_price="4.90",
+            quote_date="2026-08-03",
+            remarks="只改备注，不生成调价节点",
+        )
+        stale = client.put(
+            f"/api/master/materials/{material['id']}",
+            json={
+                **_material_payload(
+                    "LIF",
+                    code="+",
+                    supplier_name="P4供应商LIF",
+                    quote_price="6.00",
+                    quote_date="2026-08-04",
+                    price_unit="元/平方米",
+                ),
+                "expected_version": 3,
+                "change_reason": "过期页面不得追加历史",
+            },
+        )
+        history = client.get(
+            f"/api/master/materials/{material['id']}/price-history"
+        )
+        page = client.get(
+            f"/api/master/materials/{material['id']}/price-history?offset=0&limit=1"
+        )
+        filtered = client.get(
+            f"/api/master/materials/{material['id']}/price-history"
+            "?date_from=2026-08-02&date_to=2026-08-03"
+        )
+
+    assert first_read.status_code == 200, first_read.text
+    assert first_read.json()["material_code"] == "+"
+    assert first_read.json()["history_incomplete"] is False
+    assert first_read.json()["items"][0]["old_price"] is None
+    assert first_read.json()["items"][0]["new_price"] == 5.0
+    assert wrong_supplier.status_code == 404
+    assert raised.status_code == 200, raised.text
+    assert lowered.status_code == 200, lowered.text
+    assert non_price.status_code == 200, non_price.text
+    assert stale.status_code == 409, stale.text
+    assert stale.json()["detail"]["code"] == "MASTER_VERSION_CONFLICT"
+    assert history.status_code == 200, history.text
+    assert history.json()["total"] == 3
+    assert history.json()["current_price"] == 4.9
+    assert [item["new_price"] for item in history.json()["items"]] == [
+        5.0,
+        5.2,
+        4.9,
+    ]
+    assert history.json()["items"][1]["change_amount"] == pytest.approx(0.2)
+    assert history.json()["items"][1]["change_percent"] == pytest.approx(4.0)
+    assert history.json()["items"][2]["change_percent"] == pytest.approx(
+        -5.7692
+    )
+    assert page.status_code == 200
+    assert page.json()["total"] == 3
+    assert page.json()["has_more"] is True
+    assert len(page.json()["items"]) == 1
+    assert filtered.status_code == 200
+    assert filtered.json()["total"] == 2
+    with writer_app.state.session_factory() as session:
+        rows = session.scalars(
+            select(MaterialPriceHistory).where(
+                MaterialPriceHistory.material_id == material["id"]
+            )
+        ).all()
+        assert len(rows) == 3
+
+
+def test_material_price_history_marks_legacy_gap_future_and_unknown_time(
+    writer_app: FastAPI,
+) -> None:
+    from app.models.material import Material
+    from app.models.material_price_history import MaterialPriceHistory
+
+    with writer_app.state.session_factory() as session:
+        legacy = Material(
+            code="LEG",
+            layer_count=3,
+            supplier_name="P4供应商A1",
+            quote_price=Decimal("2.00"),
+            price_unit="元/平方米",
+            is_active=True,
+        )
+        session.add(legacy)
+        session.commit()
+        legacy_id = legacy.id
+
+    with TestClient(writer_app) as client:
+        empty_history = client.get(
+            f"/api/master/materials/{legacy_id}/price-history"
+        )
+
+    assert empty_history.status_code == 200, empty_history.text
+    assert empty_history.json()["history_incomplete"] is True
+    assert "不会补造" in empty_history.json()["history_notice"]
+    assert empty_history.json()["items"] == []
+
+    with writer_app.state.session_factory() as session:
+        session.add_all(
+            [
+                MaterialPriceHistory(
+                    material_id=legacy_id,
+                    supplier_name="P4供应商A1",
+                    material_code="LEG",
+                    old_price=Decimal("1.80"),
+                    new_price=Decimal("2.00"),
+                    effective_date=date(2099, 1, 1),
+                    operator="history-fixture",
+                ),
+                MaterialPriceHistory(
+                    material_id=legacy_id,
+                    supplier_name="P4供应商A1",
+                    material_code="LEG",
+                    old_price=Decimal("2.00"),
+                    new_price=Decimal("2.10"),
+                    effective_date=None,
+                    operator="history-fixture",
+                ),
+            ]
+        )
+        session.commit()
+
+    with TestClient(writer_app) as client:
+        history = client.get(f"/api/master/materials/{legacy_id}/price-history")
+
+    assert history.status_code == 200, history.text
+    assert history.json()["history_incomplete"] is True
+    assert [item["effective_status"] for item in history.json()["items"]] == [
+        "pending",
+        "time_unknown",
+    ]
+    with TestClient(writer_app) as client:
+        invalid_range = client.get(
+            f"/api/master/materials/{legacy_id}/price-history"
+            "?date_from=2026-08-03&date_to=2026-08-02"
+        )
+    assert invalid_range.status_code == 400
+
+
+def test_material_price_history_records_date_and_unit_only_changes(
+    writer_app: FastAPI,
+) -> None:
+    with TestClient(writer_app) as client:
+        material = _create_material(
+            client,
+            "A1",
+            quote_price="3.00",
+            quote_date="2026-08-01",
+            price_unit="元/平方米",
+        )
+        date_payload = {
+            **_material_payload(
+                "A1",
+                quote_price="3.00",
+                quote_date="2026-08-02",
+                price_unit="元/平方米",
+            ),
+            "expected_version": 1,
+        }
+        date_saved = client.put(
+            f"/api/master/materials/{material['id']}",
+            json=date_payload,
+        )
+        unit_payload = {
+            **_material_payload(
+                "A1",
+                quote_price="3.00",
+                quote_date="2026-08-02",
+                price_unit="元/张",
+            ),
+            "expected_version": 2,
+        }
+        unit_saved = client.put(
+            f"/api/master/materials/{material['id']}",
+            json=unit_payload,
+        )
+        history = client.get(
+            f"/api/master/materials/{material['id']}/price-history"
+        )
+
+    assert date_saved.status_code == 200, date_saved.text
+    assert unit_saved.status_code == 200, unit_saved.text
+    assert history.status_code == 200, history.text
+    assert history.json()["total"] == 3
+    assert history.json()["items"][1]["change_percent"] == 0.0
+    assert "报价日期" in history.json()["items"][1]["adjust_reason"]
+    assert "计价单位" in history.json()["items"][2]["adjust_reason"]
+    assert history.json()["current_price_unit"] == "元/张"
+
+
+def test_material_price_history_requires_cost_permission(writer_app: FastAPI) -> None:
+    from app.api.deps import get_current_user
+    from app.models.user import User
+
+    with TestClient(writer_app) as client:
+        material = _create_material(
+            client,
+            "A1",
+            quote_price="1.00",
+        )
+
+    def override_sales_user() -> User:
+        user = User(
+            id=987654,
+            username="price-history-sales",
+            password_hash="not-used",
+            role="sales",
+            is_active=True,
+            must_change_password=False,
+            customer_access_mode="all",
+        )
+        user.permission_overrides = []
+        return user
+
+    writer_app.dependency_overrides[get_current_user] = override_sales_user
+    with TestClient(writer_app) as client:
+        denied = client.get(
+            f"/api/master/materials/{material['id']}/price-history"
+        )
+
+    assert denied.status_code == 403
 
 
 def test_material_soft_deactivation_and_reactivation_leave_version_and_audit_trails(

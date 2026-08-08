@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import PermissionChecker, RoleChecker, get_db
 from app.api.master_data_common import audit_master_change
+from app.models.customer import Customer
 from app.models.supplier import (
     ExternalPackagingProduct,
     Supplier,
@@ -100,6 +101,7 @@ class ExternalPackagingProductPayload(BaseModel):
     supplier_product_code: str = Field(min_length=1, max_length=100)
     product_name: str = Field(min_length=1, max_length=200)
     purchase_unit: str = Field(min_length=1, max_length=20)
+    customer_scope_id: int | None = Field(default=None, gt=0)
     specification: dict[str, Any] = Field(default_factory=dict)
     drawing_sample_version: str | None = Field(default=None, max_length=100)
     lead_time_days: int | None = Field(default=None, ge=0, le=3650)
@@ -657,6 +659,7 @@ def _clean_external_product_payload(
         "normalized_supplier_product_code": normalized_code,
         "product_name": str(payload.product_name or "").strip(),
         "purchase_unit": unit,
+        "customer_scope_id": payload.customer_scope_id,
         "specification_summary": summary,
         "specification_json": json.dumps(specification, ensure_ascii=False, sort_keys=True),
         "drawing_sample_version": str(payload.drawing_sample_version or "").strip() or None,
@@ -678,6 +681,10 @@ def _packaging_product_snapshot(row: ExternalPackagingProduct) -> dict[str, Any]
         "supplier_product_code": row.supplier_product_code,
         "product_name": row.product_name,
         "purchase_unit": row.purchase_unit,
+        "customer_scope_id": row.customer_scope_id,
+        "customer_scope_name": (
+            row.customer_scope.name if row.customer_scope is not None else None
+        ),
         "specification_summary": row.specification_summary,
         "specification": specification,
         "drawing_sample_version": row.drawing_sample_version,
@@ -692,7 +699,9 @@ def _packaging_product_or_404(
     db: Session, supplier_id: int, product_id: int
 ) -> ExternalPackagingProduct:
     row = db.scalar(
-        select(ExternalPackagingProduct).where(
+        select(ExternalPackagingProduct).options(
+            selectinload(ExternalPackagingProduct.customer_scope)
+        ).where(
             ExternalPackagingProduct.id == product_id,
             ExternalPackagingProduct.supplier_id == supplier_id,
         )
@@ -700,6 +709,20 @@ def _packaging_product_or_404(
     if row is None:
         raise HTTPException(status_code=404, detail="外购包装产品不存在")
     return row
+
+
+def _require_customer_scope(
+    db: Session, customer_scope_id: int | None
+) -> None:
+    if customer_scope_id is None:
+        return
+    customer = db.get(Customer, customer_scope_id)
+    if (
+        customer is None
+        or getattr(customer, "status", "active") != "active"
+        or not getattr(customer, "is_active", True)
+    ):
+        raise HTTPException(status_code=422, detail="客户专用范围必须选择有效客户")
 
 
 def _require_active_supplier_category(supplier: Supplier, category: str) -> None:
@@ -722,7 +745,9 @@ def list_packaging_products(
     _user: User = Depends(admin_only),
 ) -> dict:
     supplier = _supplier_or_404(db, supplier_id)
-    statement = select(ExternalPackagingProduct).where(
+    statement = select(ExternalPackagingProduct).options(
+        selectinload(ExternalPackagingProduct.customer_scope)
+    ).where(
         ExternalPackagingProduct.supplier_id == supplier.id
     )
     if not include_inactive:
@@ -759,6 +784,7 @@ def create_packaging_product(
     if not supplier.is_active:
         raise HTTPException(status_code=409, detail="供应商已停用，不能新增外购产品")
     values = _clean_external_product_payload(payload)
+    _require_customer_scope(db, values["customer_scope_id"])
     _require_active_supplier_category(supplier, values["category_code"])
     row = ExternalPackagingProduct(
         supplier_id=supplier.id, **values, is_active=True, version=1
@@ -792,6 +818,7 @@ def update_packaging_product(
     if row.version != payload.expected_version:
         raise HTTPException(status_code=409, detail="外购产品资料已更新，请刷新后再保存")
     values = _clean_external_product_payload(payload)
+    _require_customer_scope(db, values["customer_scope_id"])
     _require_active_supplier_category(supplier, values["category_code"])
     before = _packaging_product_snapshot(row)
     try:

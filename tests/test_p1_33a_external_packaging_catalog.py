@@ -365,6 +365,6 @@ def test_supplier_catalog_frontend_has_category_and_catalog_workflow() -> None:
         "coated_board",
         "printed_folding_carton",
         "epe_cushion",
-        "本阶段不录价格",
+        "先选通用或客户专用范围",
     ):
         assert needle in source

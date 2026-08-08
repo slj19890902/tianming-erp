@@ -4087,20 +4087,21 @@
               <div v-if="supplierPackagingError" class="notice danger">{{ supplierPackagingError }}</div>
               <div v-if="supplierPackagingLoading" class="empty">正在读取外购产品…</div>
               <div v-else-if="!supplierPackagingProducts.length" class="empty">暂无外购包装产品</div>
-              <div v-else class="table-wrap"><table class="compact-table"><thead><tr><th>类别</th><th>供应商产品代码</th><th>产品名称</th><th>规格</th><th>采购单位</th><th>交期</th><th>状态</th><th>操作</th></tr></thead><tbody>
+              <div v-else class="table-wrap"><table class="compact-table"><thead><tr><th>类别</th><th>供应商产品代码</th><th>产品名称</th><th>规格</th><th>适用客户</th><th>采购单位</th><th>交期</th><th>状态</th><th>操作</th></tr></thead><tbody>
                 <tr v-for="row in supplierPackagingProducts" :key="row.id">
-                  <td>{{ supplierCategoryLabel(row.category_code) }}</td><td><strong>{{ row.supplier_product_code }}</strong></td><td>{{ row.product_name }}</td><td>{{ row.specification_summary }}</td><td>{{ row.purchase_unit }}</td><td>{{ row.lead_time_days == null ? '-' : row.lead_time_days+'天' }}</td><td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td>
+                  <td>{{ supplierCategoryLabel(row.category_code) }}</td><td><strong>{{ row.supplier_product_code }}</strong></td><td>{{ row.product_name }}</td><td>{{ row.specification_summary }}</td><td>{{ row.customer_scope_name || '通用' }}</td><td>{{ row.purchase_unit }}</td><td>{{ row.lead_time_days == null ? '-' : row.lead_time_days+'天' }}</td><td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td>
                   <td class="toolbar-group"><button class="btn small" @click="openSupplierPackagingProduct(row)">编辑</button><button v-if="canViewCosts" class="btn small" @click="openSupplierPackagingPrices(row)">采购报价</button><button :class="['btn','small',row.is_active ? 'danger' : 'success']" @click="toggleSupplierPackagingProduct(row)">{{ row.is_active ? '停用' : '启用' }}</button></td>
                 </tr>
               </tbody></table></div>
             </div>
             <div v-else-if="modal.type === 'supplierPackagingProduct'">
-              <div class="notice" style="margin-bottom:10px">只记录供应商原生产品与采购单位；本阶段不录价格，也不会自动写入订单或常用箱。</div>
+              <div class="notice" style="margin-bottom:10px">先选通用或客户专用范围。客户专用产品只能绑定同一客户的常用箱。</div>
               <div class="form-grid">
                 <div class="field"><label>产品类别（必填）</label><select class="select" v-model="supplierPackagingForm.category_code"><option value="">请选择</option><option v-for="option in activeExternalPackagingCategoryOptions" :key="option.value" :value="option.value">{{ option.label }}</option></select></div>
                 <div class="field"><label>供应商产品代码（必填）</label><input class="input" v-model.trim="supplierPackagingForm.supplier_product_code" /></div>
                 <div class="field wide"><label>产品名称（必填）</label><input class="input" v-model.trim="supplierPackagingForm.product_name" /></div>
                 <div class="field"><label>采购单位（必填）</label><select class="select" v-model="supplierPackagingForm.purchase_unit"><option value="">请选择</option><option v-for="unit in externalPackagingUnits" :key="unit" :value="unit">{{ unit }}</option></select></div>
+                <div class="field"><label>适用客户</label><search-select v-model="supplierPackagingForm.customer_scope_id" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="通用（所有客户）" :allow-empty="true"></search-select></div>
                 <div class="field"><label>常规交期（天）</label><input class="input" type="number" min="0" step="1" v-model.number="supplierPackagingForm.lead_time_days" /></div>
                 <div class="field"><label>图纸/样品版本</label><input class="input" v-model.trim="supplierPackagingForm.drawing_sample_version" /></div>
               </div>
@@ -4569,6 +4570,51 @@
                         <div class="field"><label>单据显示方式</label><select class="select" v-model="component.display_mode"><option value="internal_only">仅内部</option><option value="show_on_delivery">显示在送货单</option><option value="show_on_all_docs">显示在全部内部单据</option></select></div>
                         <label class="remember-line"><input type="checkbox" v-model="component.is_required" /> 必需组件</label>
                         <div class="field wide"><label>组件备注</label><textarea class="textarea" rows="1" v-model.trim="component.remark" placeholder="内部生产/领料备注"></textarea></div>
+                      </div>
+                    </div>
+                  </div>
+                </template>
+              </fieldset>
+              <fieldset v-if="canAdmin" class="bom-editor-panel" :disabled="externalComponentEditor.loading || externalComponentEditor.saving">
+                <div class="bom-editor-heading">
+                  <div>
+                    <h4>外购包装组件</h4>
+                    <p class="bom-editor-note">维护纸护角、EPE、彩印内盒等外购件。这里只保存常用箱模板，不会自动下单、选最低价或改内部 BOM。</p>
+                  </div>
+                  <span class="status blue">版本 {{ externalComponentEditor.version || 0 }}</span>
+                </div>
+                <div v-if="!productForm.id" class="status blue" style="display:block;white-space:normal">请先保存常用箱，再维护外购组件。</div>
+                <div v-else-if="externalComponentEditor.loading" class="muted">正在读取外购组件…</div>
+                <template v-else>
+                  <div v-if="externalComponentEditor.error" class="notice danger">{{ externalComponentEditor.error }}</div>
+                  <div class="toolbar-group" style="margin:8px 0">
+                    <button type="button" class="btn small" @click="addExternalComponent">添加外购组件</button>
+                    <button type="button" class="btn small primary" :disabled="externalComponentEditor.saving" @click="saveExternalComponents">{{ externalComponentEditor.saving ? '保存中…' : '保存外购组件' }}</button>
+                    <span class="muted">同一组件可选多家同规格供应商，但必须明确一个默认候选。</span>
+                  </div>
+                  <div v-if="!externalComponentEditor.components.length" class="muted">当前常用箱没有外购组件。</div>
+                  <div v-for="(component,index) in externalComponentEditor.components" :key="component._key || component.id || index" class="bom-component-card" style="margin-bottom:10px">
+                    <div class="bom-component-card-head"><strong>外购组件 {{ index + 1 }}</strong><span v-if="component.category_code" class="status gray">{{ supplierCategoryLabel(component.category_code) }}｜{{ component.specification_summary }}</span><button type="button" class="btn small danger" @click="removeExternalComponent(index)">移除</button></div>
+                    <div class="bom-component-fields">
+                      <div class="field"><label>用途</label><input class="input" v-model.trim="component.purpose" placeholder="如：四角防护" /></div>
+                      <div class="field"><label>每只/每套用量</label><input class="input" type="number" min="0.000001" step="0.000001" v-model="component.quantity_per_finished_unit" /></div>
+                      <div class="field"><label>用量单位</label><select class="select" v-model="component.consumption_unit"><option v-for="unit in externalPackagingUnits" :key="unit" :value="unit">{{ unit }}</option></select></div>
+                      <div class="field"><label>建议损耗率</label><input class="input" type="number" min="0" max="1" step="0.001" v-model="component.waste_rate" placeholder="0.02 表示 2%" /></div>
+                      <label class="remember-line"><input type="checkbox" v-model="component.is_required" /> 必需</label>
+                      <div class="field"><label>每采购单位可用数量</label><input class="input" type="number" min="0.000001" step="0.000001" v-model="component.units_per_purchase_unit" placeholder="单位不同时填写" /></div>
+                      <div class="field wide"><label>换算依据</label><input class="input" v-model.trim="component.conversion_basis" placeholder="如：1箱=100件（供应商装箱单）" /></div>
+                      <div class="field wide"><label>备注</label><input class="input" v-model.trim="component.remarks" /></div>
+                    </div>
+                    <div class="panel" style="margin-top:8px;padding:8px">
+                      <div class="toolbar-group">
+                        <select class="select" style="max-width:560px" v-model.number="component._candidate_to_add"><option :value="null">选择供应商产品</option><option v-for="option in externalCandidateOptions(component)" :key="option.id" :value="option.id">{{ option.supplier_name }}｜{{ option.supplier_product_code }}｜{{ option.product_name }}｜{{ option.specification_summary }}｜{{ option.customer_scope_name || '通用' }}</option></select>
+                        <button type="button" class="btn small" :disabled="!component._candidate_to_add" @click="addExternalCandidate(component)">加入候选</button>
+                      </div>
+                      <div v-if="!component.candidates.length" class="muted" style="margin-top:6px">至少选择一个供应商产品。</div>
+                      <div v-for="candidate in component.candidates" :key="candidate.external_product_id" class="toolbar" style="margin-top:6px;padding:6px;background:#f7f9fc;border-radius:6px">
+                        <label class="remember-line"><input type="radio" :name="`external-default-${component._key || component.id}`" :checked="candidate.is_default" @change="setExternalDefaultCandidate(component,candidate.external_product_id)" /> 默认</label>
+                        <div style="flex:1"><strong>{{ candidate.supplier_name }}｜{{ candidate.supplier_product_code }}</strong><div class="muted">{{ candidate.product_name }}｜{{ candidate.purchase_unit }}<span v-if="candidate.currently_available===false" class="status orange" style="margin-left:6px">已停用，仅保留历史</span></div></div>
+                        <button type="button" class="btn small danger" @click="removeExternalCandidate(component,candidate.external_product_id)">移除</button>
                       </div>
                     </div>
                   </div>
@@ -6692,7 +6738,7 @@
       });
       const blankSupplierPackagingProduct = () => ({
         id:null, version:null, category_code:"", supplier_product_code:"", product_name:"",
-        purchase_unit:"", specification:{}, drawing_sample_version:"", lead_time_days:null,
+        purchase_unit:"", customer_scope_id:null, specification:{}, drawing_sample_version:"", lead_time_days:null,
         remarks:"", is_active:true,
       });
       const blankSupplierPrice = (unit="") => ({
@@ -6736,6 +6782,13 @@
         quantity_per_set: 1, is_die_cut: false, mold_tool_id: null,
         mold_max_yield_per_sheet: null, spare_sheet_quantity: 0,
         display_mode: "internal_only", is_required: true, remark: "",
+      });
+      let externalComponentKeyCounter = 0;
+      const blankExternalComponent = () => ({
+        _key:++externalComponentKeyCounter, id:null, purpose:"", quantity_per_finished_unit:1,
+        waste_rate:0, consumption_unit:"件", units_per_purchase_unit:"",
+        conversion_basis:"", is_required:true, remarks:"", category_code:"",
+        specification_summary:"", specification:{}, candidates:[], _candidate_to_add:null,
       });
       const blankBomEditor = () => ({
         enabled: false, expected_version: null, components: [], componentOptions: [],
@@ -6890,6 +6943,7 @@
             supplierPackagingError:"",
             supplierPackagingSaving:false,
             supplierPackagingForm:blankSupplierPackagingProduct(),
+            externalComponentEditor:{product_id:null,version:0,components:[],catalog:[],loading:false,saving:false,error:""},
             supplierPriceLoading:false,
             supplierPriceSaving:false,
             supplierPriceProduct:null,
@@ -11330,12 +11384,13 @@
               this.supplierPackagingLoading = false;
             }
           },
-          openSupplierPackagingProduct(row=null) {
+          async openSupplierPackagingProduct(row=null) {
             if (!this.canAdmin) return;
             if (!this.activeExternalPackagingCategoryOptions.length) {
               this.showToast("请先编辑供应商并启用至少一个外购包装类别",true);
               return;
             }
+            if (!this.customerOptions.length) await this.loadCustomerOptions();
             this.supplierPackagingForm = row ? {
               ...blankSupplierPackagingProduct(),
               ...JSON.parse(JSON.stringify(row)),
@@ -11361,6 +11416,7 @@
               supplier_product_code:String(form.supplier_product_code).trim(),
               product_name:String(form.product_name).trim(),
               purchase_unit:form.purchase_unit,
+              customer_scope_id:Number(form.customer_scope_id) || null,
               specification:{...(form.specification || {})},
               drawing_sample_version:String(form.drawing_sample_version || "").trim() || null,
               lead_time_days:form.lead_time_days === "" || form.lead_time_days == null ? null : Number(form.lead_time_days),
@@ -16768,6 +16824,135 @@
               this.quickStockPolicyForm.target_quantity = Math.max(warning, 1);
             }
           },
+          resetExternalComponentEditor(productId=null) {
+            this.externalComponentEditor = {product_id:Number(productId)||null,version:0,components:[],catalog:[],loading:false,saving:false,error:""};
+          },
+          externalSpecificationKey(specification) {
+            const normalize = value => {
+              if (Array.isArray(value)) return value.map(normalize);
+              if (value && typeof value === "object") return Object.keys(value).sort().reduce((result,key)=>{ result[key]=normalize(value[key]); return result; },{});
+              return value;
+            };
+            return JSON.stringify(normalize(specification || {}));
+          },
+          async loadExternalComponents(productId) {
+            const requestedId = Number(productId || 0);
+            if (!this.canAdmin || !requestedId) return false;
+            this.externalComponentEditor = {...this.externalComponentEditor,product_id:requestedId,loading:true,error:""};
+            try {
+              const [setResponse,catalogResponse] = await Promise.all([
+                axios.get(`/api/master/products/${requestedId}/external-components`),
+                axios.get(`/api/master/products/${requestedId}/external-component-candidates`),
+              ]);
+              if (Number(this.productForm.id || 0) !== requestedId) return false;
+              const data = setResponse.data || {};
+              const components = (data.components || []).map(component=>({
+                ...blankExternalComponent(), ...JSON.parse(JSON.stringify(component)),
+                quantity_per_finished_unit:String(component.quantity_per_finished_unit ?? 1),
+                waste_rate:String(component.waste_rate ?? 0),
+                units_per_purchase_unit:component.units_per_purchase_unit ?? "",
+                candidates:(component.candidates || []).map(candidate=>({...candidate})),
+                _candidate_to_add:null,
+              }));
+              this.externalComponentEditor = {product_id:requestedId,version:Number(data.version || 0),components,catalog:catalogResponse.data?.items || [],loading:false,saving:false,error:""};
+              return true;
+            } catch (error) {
+              if (Number(this.productForm.id || 0) !== requestedId) return false;
+              this.externalComponentEditor = {...this.externalComponentEditor,loading:false,error:this.errorMessage(error) || "外购组件读取失败"};
+              return false;
+            }
+          },
+          addExternalComponent() {
+            this.externalComponentEditor.components.push(blankExternalComponent());
+          },
+          removeExternalComponent(index) {
+            this.externalComponentEditor.components.splice(index,1);
+          },
+          externalCandidateOptions(component) {
+            const selected = new Set((component.candidates || []).map(item=>Number(item.external_product_id)));
+            const catalog = this.externalComponentEditor.catalog || [];
+            if (!(component.candidates || []).length) return catalog.filter(item=>!selected.has(Number(item.id)));
+            const category = component.category_code;
+            const specKey = this.externalSpecificationKey(component.specification);
+            const purchaseUnit = component.candidates[0]?.purchase_unit;
+            return catalog.filter(item=>
+              !selected.has(Number(item.id))
+              && item.category_code === category
+              && this.externalSpecificationKey(item.specification) === specKey
+              && item.purchase_unit === purchaseUnit
+            );
+          },
+          addExternalCandidate(component) {
+            const id = Number(component._candidate_to_add || 0);
+            const row = (this.externalComponentEditor.catalog || []).find(item=>Number(item.id)===id);
+            if (!row) return;
+            if (!(component.candidates || []).length) {
+              component.category_code = row.category_code;
+              component.specification = JSON.parse(JSON.stringify(row.specification || {}));
+              component.specification_summary = row.specification_summary;
+              component.consumption_unit = row.purchase_unit;
+            }
+            component.candidates.push({external_product_id:row.id,is_default:component.candidates.length===0,supplier_id:row.supplier_id,supplier_name:row.supplier_name,supplier_product_code:row.supplier_product_code,product_name:row.product_name,purchase_unit:row.purchase_unit,customer_scope_id:row.customer_scope_id,currently_available:true});
+            component._candidate_to_add = null;
+          },
+          setExternalDefaultCandidate(component,externalProductId) {
+            (component.candidates || []).forEach(candidate=>{ candidate.is_default = Number(candidate.external_product_id)===Number(externalProductId); });
+          },
+          removeExternalCandidate(component,externalProductId) {
+            const removedDefault = (component.candidates || []).find(item=>Number(item.external_product_id)===Number(externalProductId))?.is_default;
+            component.candidates = (component.candidates || []).filter(item=>Number(item.external_product_id)!==Number(externalProductId));
+            if (removedDefault && component.candidates.length) component.candidates[0].is_default = true;
+            if (!component.candidates.length) {
+              component.category_code = "";
+              component.specification = {};
+              component.specification_summary = "";
+            }
+          },
+          externalComponentPayload() {
+            return {
+              expected_version:Number(this.externalComponentEditor.version || 0),
+              components:(this.externalComponentEditor.components || []).map((component,index)=>{
+                const label = `外购组件${index+1}`;
+                if (!String(component.purpose || "").trim()) throw new Error(`${label}请填写用途`);
+                if (!(Number(component.quantity_per_finished_unit)>0)) throw new Error(`${label}每只/每套用量必须大于0`);
+                const waste = Number(component.waste_rate || 0);
+                if (!(waste>=0 && waste<=1)) throw new Error(`${label}损耗率必须在0到1之间`);
+                if (!(component.candidates || []).length) throw new Error(`${label}至少选择一个供应商产品`);
+                if ((component.candidates || []).filter(item=>item.is_default).length!==1) throw new Error(`${label}必须选择一个默认候选`);
+                const purchaseUnit = component.candidates[0]?.purchase_unit;
+                if (purchaseUnit !== component.consumption_unit && (!(Number(component.units_per_purchase_unit)>0) || !String(component.conversion_basis || "").trim())) throw new Error(`${label}用量单位与采购单位不同时必须填写换算数量和依据`);
+                return {
+                  purpose:String(component.purpose).trim(),
+                  quantity_per_finished_unit:String(component.quantity_per_finished_unit),
+                  waste_rate:String(waste),
+                  consumption_unit:component.consumption_unit,
+                  units_per_purchase_unit:Number(component.units_per_purchase_unit)>0 ? String(component.units_per_purchase_unit) : null,
+                  conversion_basis:String(component.conversion_basis || "").trim() || null,
+                  is_required:component.is_required !== false,
+                  remarks:String(component.remarks || "").trim() || null,
+                  candidates:component.candidates.map(candidate=>({external_product_id:Number(candidate.external_product_id),is_default:!!candidate.is_default})),
+                };
+              }),
+            };
+          },
+          async saveExternalComponents() {
+            const productId = Number(this.productForm.id || 0);
+            if (!productId || this.externalComponentEditor.saving) return false;
+            this.externalComponentEditor.saving = true;
+            try {
+              const payload = this.externalComponentPayload();
+              const {data} = await axios.put(`/api/master/products/${productId}/external-components`,payload);
+              this.externalComponentEditor.version = Number(data.version || 0);
+              await this.loadExternalComponents(productId);
+              this.showToast("外购组件已保存；不会自动生成采购单");
+              return true;
+            } catch (error) {
+              this.showToast(this.errorMessage(error),true);
+              return false;
+            } finally {
+              this.externalComponentEditor.saving = false;
+            }
+          },
           async openProduct(row=null) {
             const requestKey = "product:editor";
             const controller = this.beginLatestRequest(requestKey);
@@ -16794,6 +16979,7 @@
               this.productMaterialCompareKeys = [];
               this.drawingFile = null;
               this.resetBomEditor();
+              this.resetExternalComponentEditor(openedId);
               // 拍快照用于检测未保存更改
               this.productFormSnapshot = JSON.stringify(this._productFormSaveFields());
               this.beginMasterEdit("product",this.productForm);
@@ -16810,6 +16996,7 @@
               ) return false;
               if (openedId) {
                 const loaders = [this.loadProductBom(openedId)];
+                if (this.canAdmin) loaders.push(this.loadExternalComponents(openedId));
                 if (this.hasPermission("requisition.view")) loaders.push(this.loadProductMaterialContext(openedId));
                 else this.productMaterialContext.error = "当前账号无报料历史查看权限";
                 await Promise.all(loaders);

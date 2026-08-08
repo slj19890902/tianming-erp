@@ -16,7 +16,10 @@ def _method_block(start: str, end: str) -> str:
 
 
 def test_existing_master_save_builds_readable_diff_and_versioned_payload() -> None:
-    save = _method_block("async saveModal()", "async dispatchDelivery(row)")
+    save = _method_block(
+        "async saveModal()",
+        "async dispatchDelivery(row, options = {})",
+    )
 
     assert "masterLocalChanges(masterEntity)" in save
     assert "openMasterChangeConfirmation(masterEntity,changes)" in save
@@ -40,7 +43,10 @@ def test_existing_product_save_previews_and_submits_without_shared_confirmation_
         "async prepareProductOneClickSave()",
         "attachMasterUpdateMetadata(entity, payload",
     )
-    save = _method_block("async saveModal()", "async dispatchDelivery(row)")
+    save = _method_block(
+        "async saveModal()",
+        "async dispatchDelivery(row, options = {})",
+    )
 
     assert "update-preview" in preflight
     assert "masterChangeConfirm" not in preflight
@@ -118,7 +124,10 @@ def test_version_conflict_errors_include_expected_and_current_versions() -> None
 def test_customer_mutations_force_refresh_shared_customer_options() -> None:
     refresh = _method_block("async refreshMasterEntity(entity)", "async reloadOpenMasterDetail(")
     delete_customer = _method_block("async deleteCustomer(row)", "async deleteProduct(row)")
-    save = _method_block("async saveModal()", "async dispatchDelivery(row)")
+    save = _method_block(
+        "async saveModal()",
+        "async dispatchDelivery(row, options = {})",
+    )
     customer_save = save.split('if (this.modal.type === "customer") {', 1)[1].split(
         'if (this.modal.type === "supplier") {', 1
     )[0]
@@ -142,7 +151,10 @@ def test_pdf_order_save_does_not_start_post_save_default_price_sync() -> None:
 
 
 def test_new_order_save_does_not_offer_post_save_common_box_overwrite() -> None:
-    save = _method_block("async saveModal()", "async dispatchDelivery(row)")
+    save = _method_block(
+        "async saveModal()",
+        "async dispatchDelivery(row, options = {})",
+    )
 
     assert "async openOrder() {" in INDEX
     assert "if (!this.customerOptions.length) await this.loadCustomerOptions();" in INDEX

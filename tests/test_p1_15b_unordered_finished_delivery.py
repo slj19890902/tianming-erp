@@ -839,6 +839,97 @@ def test_dispatch_consumes_exact_selected_lots_and_never_mutates_order(
         ) == 0
 
 
+def test_unordered_full_dispatch_releases_and_cancel_restores_pallet(
+    unordered_finished_delivery_app,
+) -> None:
+    from app.models.warehouse_inventory import (
+        InventoryLocationMovement,
+        InventoryPallet,
+        InventoryPalletItem,
+    )
+
+    app, factory = unordered_finished_delivery_app
+    seed = _seed(app, factory)
+    with factory() as db:
+        location = WarehouseLocation(
+            location_code="P115B-PALLET-01",
+            location_name="P1-15B 实体栈板位",
+            warehouse_type="finished",
+            is_active=True,
+        )
+        pallet = InventoryPallet(
+            pallet_code="P115B-PALLET-FULL",
+            location=location,
+            status="active",
+            is_current=True,
+            needs_relocation=False,
+            created_by=1,
+            updated_by=1,
+        )
+        db.add_all([location, pallet])
+        db.flush()
+        for lot_id in (seed.free_first_lot_id, seed.free_second_lot_id):
+            lot = db.get(InventoryLot, lot_id)
+            assert lot is not None and lot.finished_detail is not None
+            lot.warehouse_location_id = location.id
+            db.add(
+                InventoryPalletItem(
+                    pallet_id=pallet.id,
+                    inventory_lot_id=lot.id,
+                    customer_id=seed.customer_a_id,
+                    product_id=seed.priced_product_id,
+                    inventory_code=lot.finished_detail.inventory_code_snapshot,
+                    customer_name_snapshot="P1-15B 客户甲",
+                    product_name=lot.finished_detail.product_name_snapshot,
+                    item_type="finished",
+                    quantity=lot.quantity_available,
+                    unit="boxes",
+                    match_status="matched",
+                    created_by=1,
+                )
+            )
+        db.add(
+            InventoryLocationMovement(
+                pallet_id=pallet.id,
+                from_location_id=None,
+                to_location_id=location.id,
+                movement_type="create",
+                operator_id=1,
+            )
+        )
+        db.commit()
+        pallet_id = int(pallet.id)
+        location_id = int(location.id)
+
+    payload = _unordered_payload(seed, quantity=20)
+    payload["lines"][0]["allocations"] = [
+        {"inventory_lot_id": seed.free_first_lot_id, "quantity": 12},
+        {"inventory_lot_id": seed.free_second_lot_id, "quantity": 8},
+    ]
+    with TestClient(app) as client:
+        _login(client)
+        delivery = _create_unordered_delivery(client, payload)
+        dispatched = client.put(f"/api/deliveries/{delivery['id']}/dispatch")
+        assert dispatched.status_code == 200, dispatched.text
+        with factory() as db:
+            pallet = db.get(InventoryPallet, pallet_id)
+            assert pallet is not None
+            assert pallet.is_current is False
+            assert pallet.location_id is None
+        cancelled = client.put(f"/api/deliveries/{delivery['id']}/cancel")
+        assert cancelled.status_code == 200, cancelled.text
+
+    with factory() as db:
+        pallet = db.get(InventoryPallet, pallet_id)
+        first = db.get(InventoryLot, seed.free_first_lot_id)
+        second = db.get(InventoryLot, seed.free_second_lot_id)
+        assert pallet is not None
+        assert pallet.is_current is True
+        assert pallet.location_id == location_id
+        assert first is not None and int(first.quantity_available) == 12
+        assert second is not None and int(second.quantity_available) == 8
+
+
 def test_dispatch_competition_or_insufficient_stock_rolls_back_completely(
     unordered_finished_delivery_app,
 ) -> None:

@@ -3164,6 +3164,7 @@ def test_phase2c9_scoped_locator_finds_mold_plate_areas_without_cross_customer_l
     app, ids, factory = floor3_app
     with factory() as db:
         from app.models.mold_tool import MoldTool
+        from app.models.printing_plate import PrintingPlate
         from app.models.product import Product
 
         visible_mold = MoldTool(
@@ -3184,9 +3185,25 @@ def test_phase2c9_scoped_locator_finds_mold_plate_areas_without_cross_customer_l
         hidden_product = db.get(Product, ids["other_product"])
         assert visible_product is not None and hidden_product is not None
         visible_product.mold_tool_id = visible_mold.id
-        visible_product.die_cut_path = "ZONE-1F-PLATE-001"
         hidden_product.mold_tool_id = hidden_mold.id
-        hidden_product.die_cut_path = "ZONE-1F-PLATE-002"
+        db.add_all(
+            [
+                PrintingPlate(
+                    plate_code="PL000001",
+                    customer_id=ids["tianhua"],
+                    plate_name="天华红色挂板",
+                    color_name="红色",
+                    rack_location="1F-PL-R01-L1-P01",
+                ),
+                PrintingPlate(
+                    plate_code="PL000002",
+                    customer_id=ids["other"],
+                    plate_name="其他客户蓝色挂板",
+                    color_name="蓝色",
+                    rack_location="1F-PL-R01-L1-P02",
+                ),
+            ]
+        )
         db.commit()
 
     with TestClient(app) as client:
@@ -3203,7 +3220,7 @@ def test_phase2c9_scoped_locator_finds_mold_plate_areas_without_cross_customer_l
 
         plate = client.get(
             "/api/warehouse/twin-operations/locate",
-            params={"keyword": "ZONE-1F-PLATE"},
+            params={"keyword": "PL000"},
         )
         assert plate.status_code == 200, plate.text
         plate_resources = [
@@ -3211,7 +3228,8 @@ def test_phase2c9_scoped_locator_finds_mold_plate_areas_without_cross_customer_l
             if row["kind"] == "printing_plate"
         ]
         assert len(plate_resources) == 1
-        assert plate_resources[0]["feature_codes"] == ["ZONE-1F-PLATE-001"]
+        assert plate_resources[0]["primary_code"] == "PL000001"
+        assert plate_resources[0]["feature_codes"] == ["ZONE-1F-PLATE-002"]
 
 
 def test_phase2c14_typed_search_keeps_customer_scope_and_separates_resources(

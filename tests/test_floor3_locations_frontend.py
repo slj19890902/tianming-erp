@@ -14,7 +14,7 @@ def test_location_management_is_single_entry_with_floor3_and_ledger_views() -> N
     assert 'data-location-view="ledger"' in WAREHOUSE_HTML
     assert 'data-location-view="ledger" type="button">全部库位台账' in WAREHOUSE_HTML
     assert 'async function switchLocationView(view)' in WAREHOUSE_HTML
-    assert 'function canManageLocations(){return state.user?.role==="admin"}' in WAREHOUSE_HTML
+    assert 'function canManageLocations(){return !state.readOnly&&state.user?.role==="admin"}' in WAREHOUSE_HTML
     assert 'if(view==="ledger"&&!canManageLocations())' in WAREHOUSE_HTML
     assert 'if(tab==="locations"){\n        state.locationView="floor3"' in WAREHOUSE_HTML
     assert 'state.tab==="locations"&&state.locationView==="floor3"' in WAREHOUSE_HTML
@@ -41,7 +41,7 @@ def test_new_floor3_slot_refreshes_area_and_global_overview() -> None:
     refresh = WAREHOUSE_HTML.split("async function refreshFloor3LocationData(){", 1)[1].split(
         "async function loadFloor3MoveLocations", 1
     )[0]
-    assert "state.floor3.mapLocations=overview.items||[]" in refresh
+    assert "state.floor3.mapLocations=state.readOnly?(overview.items||[]).filter(row=>row.layout):(overview.items||[])" in refresh
     assert "renderFloor3Plan()" in refresh
     assert "await loadFloor3Locations(true)" in refresh
     loader = WAREHOUSE_HTML.split("async function loadFloor3Locations(throwOnError=false){", 1)[1].split(
@@ -62,14 +62,15 @@ def test_floor3_api_contract_paths_and_payloads_are_wired() -> None:
         "/api/warehouse/pallets/${palletId}/relocation-flag",
     ):
         assert path in WAREHOUSE_HTML
-    assert "location_id:Number(state.floor3.selectedLocationId)" in WAREHOUSE_HTML
+    assert "const locationId=Number(state.floor3.selectedLocationId)" in WAREHOUSE_HTML
+    assert "location_id:locationId" in WAREHOUSE_HTML
     assert "pallet_code:" in WAREHOUSE_HTML
     assert "items})" in WAREHOUSE_HTML
     assert 'body:JSON.stringify({expected_version:expectedVersion,item})' in WAREHOUSE_HTML
     assert "function floor3ExpectedVersion(palletId)" in WAREHOUSE_HTML
     assert "expected_version:expectedVersion" in WAREHOUSE_HTML
     assert "to_location_id:Number(targetId)" in WAREHOUSE_HTML
-    assert "expected_version:expectedVersion,remarks" in WAREHOUSE_HTML
+    assert "expected_version:expectedVersion,to_location_id:Number(targetId),remarks" in WAREHOUSE_HTML
     assert "confirmed:true" in WAREHOUSE_HTML
     assert "idempotency_key:createIdempotencyKey()" in WAREHOUSE_HTML
     assert "needs_relocation:Boolean(needsRelocation)" in WAREHOUSE_HTML
@@ -127,7 +128,7 @@ def test_floor3_is_mobile_card_layout_and_has_unlimited_rows() -> None:
     assert "floor3-location-grid" in WAREHOUSE_HTML
     assert "@media(max-width:560px)" in WAREHOUSE_HTML
     assert "floor3-toolbar>*{width:100%!important" in WAREHOUSE_HTML
-    assert "添加同栈板产品（至少可加到5行）" in WAREHOUSE_HTML
+    assert "增加一行产品" in WAREHOUSE_HTML
     assert "function addFloor3BindRow()" in WAREHOUSE_HTML
     assert "state.floor3.bindRows.push" in WAREHOUSE_HTML
     bind_add = WAREHOUSE_HTML.split("function addFloor3BindRow()", 1)[1].split(
@@ -384,7 +385,7 @@ def test_floor3_map_selection_and_search_stay_in_sync() -> None:
     assert '$("floor3AreaFilter").value=state.floor3.selectedAreaCode' in selection
     assert '$("floor3KeywordFilter").value=""' in selection
     assert '$("floor3OccupancyFilter").value=""' in selection
-    assert '$("floor3AreaFilter").onchange=event=>selectFloor3Area(event.target.value)' in WAREHOUSE_HTML
+    assert '$("floor3AreaFilter").onchange=event=>selectTwinOperationalArea(event.target.value)' in WAREHOUSE_HTML
     assert "function floor3MatchedAreas()" in WAREHOUSE_HTML
     assert 'searching&&matched.has(code)?"matched":""' in WAREHOUSE_HTML
     assert "function setFloor3PlanZoom(value,anchor=null)" in WAREHOUSE_HTML
@@ -588,7 +589,7 @@ def test_floor3_area_focus_and_admin_layout_edit_are_separate_modes() -> None:
     assert '$("floor3FilterPanel").classList.remove("hidden")' in WAREHOUSE_HTML
     assert '$("floor3Workspace").classList.toggle("hidden",!hasWorkspace)' in WAREHOUSE_HTML
     assert '$("floor3AreaLayoutEditToggle").classList.toggle("hidden",!areaFocus||!floor3CanEditLayout()||state.floor3.selectedAreaCode==="F")' in WAREHOUSE_HTML
-    assert "function floor3CanEditLayout(){return state.user?.role===\"admin\"}" in WAREHOUSE_HTML
+    assert "function floor3CanEditLayout(){return !state.readOnly&&state.user?.role===\"admin\"}" in WAREHOUSE_HTML
     assert "function floor3StartLayoutDrag" in WAREHOUSE_HTML
     assert "function floor3SetAreaBackdrop(areaCode)" in WAREHOUSE_HTML
     assert "target.dataset.areaCode=zone.id" in WAREHOUSE_HTML
@@ -684,7 +685,7 @@ def test_floor3_move_targets_are_loaded_independently_from_browse_filters() -> N
     assert "state.floor3.locations.filter(row=>Number(row.id)!==Number(currentId)" not in WAREHOUSE_HTML
 
 
-def test_finished_in_is_one_step_and_refreshes_inventory_and_floor3_map() -> None:
+def test_finished_in_is_one_step_and_refreshes_inventory_once() -> None:
     assert '<button id="openInForm" class="btn primary operate-only">入成品仓</button>' in WAREHOUSE_HTML
     assert 'tab==="finished"?"入成品仓":"入半成品仓"' in WAREHOUSE_HTML
     assert "入成品仓（一步完成）" in WAREHOUSE_HTML
@@ -697,8 +698,9 @@ def test_finished_in_is_one_step_and_refreshes_inventory_and_floor3_map() -> Non
         "async function saveSemi", 1
     )[0]
     assert "/api/warehouse/finished/manual-in" in save_block
-    assert "await loadLots();await loadFloor3Locations()" in save_block
-    assert "已入成品仓并绑定" in save_block
+    assert 'runWarehouseMutation("manual-finished"' in save_block
+    assert 'if(await loadLots()===false)throw new Error("库存列表刷新失败")' in save_block
+    assert '"成品入库成功"' in save_block
     assert "三楼已绑定" in WAREHOUSE_HTML
     assert "正式成品库存" in WAREHOUSE_HTML
     assert "现场盘点快照" in WAREHOUSE_HTML
@@ -768,7 +770,7 @@ def test_inventory_lot_actions_stay_on_one_compact_row() -> None:
     actions = WAREHOUSE_HTML.split("function actionButtons(row){", 1)[1].split(
         "async function openProductAssignments", 1
     )[0]
-    finished_return = actions.index("return staging+edit+general;")
+    finished_return = actions.index("return label+staging+edit+general;")
     assert '>转入库位</button>' in actions[:finished_return]
     assert 'onclick="openLotEditor(${row.id})">编辑</button>' in actions[:finished_return]
     assert actions.index(">转通用</button>") < finished_return
@@ -825,7 +827,7 @@ def test_finished_lot_editor_requires_explicit_edit_and_keeps_stock_age_derived(
     assert 'state.user.role!=="admin"' in actions
     assert 'onclick="openLotEditor(${row.id})">编辑</button>' in actions
     assert '!row.detail.is_general' in actions
-    assert actions.index("return staging+edit+general;") < actions.index(">调整</button>")
+    assert actions.index("return label+staging+edit+general;") < actions.index(">调整</button>")
 
 
 def test_finished_lot_editor_scopes_product_match_and_saves_transaction_payload() -> None:
@@ -864,7 +866,8 @@ def test_finished_lot_editor_scopes_product_match_and_saves_transaction_payload(
     assert "客户专用库存必须选择客户" in save
     assert "请选择与客户匹配的存货编码" in save
     assert "可用数量必须是大于或等于 0 的整数" in save
-    assert "await loadLots();await loadFloor3Locations()" in save
+    assert 'if(await loadLots()===false)throw new Error("库存列表刷新失败")' in save
+    assert 'if(state.tab==="locations")await loadFloor3Locations(true)' in save
     assert "event.preventDefault();if(state.lotEdit.saving)return" in save
     assert "state.lotEdit.saving=true" in save
     assert '$("lotEditSave").disabled=true' in save
@@ -1039,11 +1042,11 @@ def test_floor3_structured_ground_and_temporary_cells_support_pallet_drag() -> N
     assert "await openFloor3Location(targetId)" in refresh
 
 
-def test_semi_finished_location_dropdown_prioritizes_sf_temp_and_explains_empty_state() -> None:
+def test_semi_finished_location_dropdown_uses_active_placed_locations_and_explains_empty_state() -> None:
     loader = WAREHOUSE_HTML.split("async function loadLocations(includeInactive=false){", 1)[1].split(
         "async function loadCustomers", 1
     )[0]
-    assert 'String(a.location_code).toUpperCase()==="SF-TEMP"' in loader
+    assert 'const semiLocations=active.filter(x=>x.placement_status!=="unplaced"&&["semi_finished","shared"].includes(x.warehouse_type))' in loader
     assert '$("siLocation").disabled=!semiLocations.length' in loader
     assert 'id="siLocationHint"' in WAREHOUSE_HTML
     assert "暂无半成品库位，请先完成 SF-TEMP 迁移或新增半成品库位" in WAREHOUSE_HTML

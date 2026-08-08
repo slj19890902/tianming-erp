@@ -1253,7 +1253,7 @@ def test_direct_void_ids_enforce_permission_and_customer_scope(
         "p1-13c-scoped": [
             (403, "无客户访问权限"),
             (403, "无客户访问权限"),
-            (403, "无客户访问权限"),
+            (403, "权限不足"),
         ],
     }
     with factory() as db:

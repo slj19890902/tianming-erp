@@ -1578,7 +1578,21 @@ def clear_pallet(
     expected_version: int,
     remarks: str | None,
     operator_id: int | None,
+    idempotency_key: str | None = None,
 ) -> InventoryPallet:
+    existing = (
+        _movement_by_idempotency_key(db, idempotency_key)
+        if idempotency_key
+        else None
+    )
+    if existing is not None:
+        if (
+            existing.movement_type != "clear"
+            or existing.pallet_id != pallet_id
+            or existing.pallet_version_before != expected_version
+        ):
+            raise Floor3LocationError("幂等键已用于不同的栈板清空业务", status_code=409)
+        return _pallet(db, pallet_id, refresh=True)
     row = _pallet(db, pallet_id)
     if not row.is_current or row.location_id is None:
         raise Floor3LocationError("栈板已经清空", status_code=409)
@@ -1594,13 +1608,15 @@ def clear_pallet(
             "该栈板仍有关联的正式成品库存，请先完成出库或库存调整",
             status_code=409,
         )
+    version_before = row.version
     _claim_pallet_version(db, row, expected_version=expected_version)
     from_location_id = row.location_id
+    now = beijing_now_naive()
     row.location_id = None
     row.status = "closed"
     row.is_current = False
     row.needs_relocation = False
-    row.closed_at = beijing_now_naive()
+    row.closed_at = now
     row.updated_by = operator_id
     db.add(
         InventoryLocationMovement(
@@ -1609,8 +1625,12 @@ def clear_pallet(
             to_location_id=None,
             movement_type="clear",
             operator_id=operator_id,
-            moved_at=beijing_now_naive(),
+            moved_at=now,
             remarks=_trim(remarks),
+            idempotency_key=idempotency_key,
+            confirmed_at=now if idempotency_key else None,
+            pallet_version_before=version_before,
+            pallet_version_after=row.version,
         )
     )
     db.flush()

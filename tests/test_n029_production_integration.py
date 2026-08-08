@@ -455,14 +455,33 @@ def _prepare_103_finished_stock(factory, ids) -> int:
         return lot.id
 
 
+def _bind_finished_lot_to_test_pallet(factory, lot_id: int) -> int:
+    from app.models.warehouse_inventory import InventoryLot
+    from app.services.floor3_locations import bind_finished_lot_to_floor3_pallet
+
+    with factory() as db:
+        lot = db.get(InventoryLot, lot_id)
+        assert lot is not None
+        pallet = bind_finished_lot_to_floor3_pallet(
+            db,
+            lot=lot,
+            operator_id=1,
+            pallet_code=f"N029-PALLET-{lot_id}",
+            require_empty_pallet=True,
+        )
+        db.commit()
+        return int(pallet.id)
+
+
 def test_delivery_100_finishes_order_and_keeps_three_customer_surplus(
     n029_delivery_app,
 ) -> None:
     from app.models.order import OrderItem
-    from app.models.warehouse_inventory import InventoryLot
+    from app.models.warehouse_inventory import InventoryLot, InventoryPallet
 
     app, factory, ids = n029_delivery_app
     lot_id = _prepare_103_finished_stock(factory, ids)
+    pallet_id = _bind_finished_lot_to_test_pallet(factory, lot_id)
     with TestClient(app) as client:
         _login(client)
         pending = client.get("/api/deliveries/pending_items")
@@ -493,11 +512,60 @@ def test_delivery_100_finishes_order_and_keeps_three_customer_surplus(
     with factory() as db:
         item = db.get(OrderItem, ids["task_completed"])
         lot = db.get(InventoryLot, lot_id)
+        pallet = db.get(InventoryPallet, pallet_id)
         assert item.quantity == 100
         assert item.delivered_quantity == 100
         assert lot.quantity_consumed == 100
         assert lot.quantity_available == 3
         assert lot.quantity_reserved == 0
+        assert pallet is not None
+        assert pallet.is_current is True
+        assert pallet.location_id == ids["temporary_location"]
+
+
+def test_delivery_does_not_release_pallet_with_damaged_goods(
+    n029_delivery_app,
+) -> None:
+    from app.models.warehouse_inventory import InventoryLot, InventoryPallet
+
+    app, factory, ids = n029_delivery_app
+    lot_id = _prepare_103_finished_stock(factory, ids)
+    pallet_id = _bind_finished_lot_to_test_pallet(factory, lot_id)
+    with factory() as db:
+        lot = db.get(InventoryLot, lot_id)
+        assert lot is not None
+        lot.quantity_available = 2
+        lot.quantity_damaged = 1
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client)
+        created = client.post(
+            "/api/deliveries",
+            json={
+                "customer_id": ids["customer"],
+                "items": [
+                    {
+                        "order_item_id": ids["task_completed"],
+                        "delivered_quantity": 102,
+                    }
+                ],
+            },
+        )
+        assert created.status_code == 201, created.text
+        dispatched = client.put(f"/api/deliveries/{created.json()['id']}/dispatch")
+        assert dispatched.status_code == 200, dispatched.text
+
+    with factory() as db:
+        lot = db.get(InventoryLot, lot_id)
+        pallet = db.get(InventoryPallet, pallet_id)
+        assert lot is not None
+        assert lot.quantity_available == 0
+        assert lot.quantity_reserved == 0
+        assert lot.quantity_damaged == 1
+        assert pallet is not None
+        assert pallet.is_current is True
+        assert pallet.location_id == ids["temporary_location"]
 
 
 def test_authorized_over_delivery_103_consumes_stock_and_records_three(
@@ -505,10 +573,16 @@ def test_authorized_over_delivery_103_consumes_stock_and_records_three(
 ) -> None:
     from app.models.delivery import DeliveryItem
     from app.models.order import OrderItem
-    from app.models.warehouse_inventory import InventoryLot, InventoryReservation
+    from app.models.warehouse_inventory import (
+        InventoryLocationMovement,
+        InventoryLot,
+        InventoryPallet,
+        InventoryReservation,
+    )
 
     app, factory, ids = n029_delivery_app
     lot_id = _prepare_103_finished_stock(factory, ids)
+    pallet_id = _bind_finished_lot_to_test_pallet(factory, lot_id)
     with TestClient(app) as client:
         _login(client)
         created = client.post(
@@ -532,6 +606,7 @@ def test_authorized_over_delivery_103_consumes_stock_and_records_three(
     with factory() as db:
         item = db.get(OrderItem, ids["task_completed"])
         lot = db.get(InventoryLot, lot_id)
+        pallet = db.get(InventoryPallet, pallet_id)
         line = db.scalar(
             select(DeliveryItem).where(
                 DeliveryItem.order_item_id == ids["task_completed"]
@@ -552,6 +627,132 @@ def test_authorized_over_delivery_103_consumes_stock_and_records_three(
         assert lot.quantity_available == 0
         assert lot.quantity_reserved == 0
         assert surplus_reservation.consumed_stock_quantity == 3
+        assert pallet is not None
+        assert pallet.is_current is False
+        assert pallet.location_id is None
+        release = db.scalar(
+            select(InventoryLocationMovement).where(
+                InventoryLocationMovement.pallet_id == pallet_id,
+                InventoryLocationMovement.idempotency_key
+                == f"delivery-{line.delivery_id}-auto-release-pallet-{pallet_id}",
+            )
+        )
+        assert release is not None
+        assert release.movement_type == "clear"
+        assert release.from_location_id == ids["temporary_location"]
+
+
+def test_cancel_full_delivery_restores_auto_released_pallet(
+    n029_delivery_app,
+) -> None:
+    from app.models.delivery import Delivery
+    from app.models.warehouse_inventory import (
+        InventoryLocationMovement,
+        InventoryLot,
+        InventoryPallet,
+    )
+
+    app, factory, ids = n029_delivery_app
+    lot_id = _prepare_103_finished_stock(factory, ids)
+    pallet_id = _bind_finished_lot_to_test_pallet(factory, lot_id)
+    with TestClient(app) as client:
+        _login(client)
+        created = client.post(
+            "/api/deliveries",
+            json={
+                "customer_id": ids["customer"],
+                "items": [
+                    {
+                        "order_item_id": ids["task_completed"],
+                        "delivered_quantity": 103,
+                    }
+                ],
+            },
+        )
+        assert created.status_code == 201, created.text
+        delivery_id = int(created.json()["id"])
+        assert client.put(f"/api/deliveries/{delivery_id}/dispatch").status_code == 200
+        cancelled = client.put(f"/api/deliveries/{delivery_id}/cancel")
+        assert cancelled.status_code == 200, cancelled.text
+
+    with factory() as db:
+        delivery = db.get(Delivery, delivery_id)
+        lot = db.get(InventoryLot, lot_id)
+        pallet = db.get(InventoryPallet, pallet_id)
+        assert delivery is not None and delivery.status == "pending"
+        assert lot is not None
+        assert lot.quantity_available + lot.quantity_reserved == 103
+        assert lot.quantity_consumed == 0
+        assert pallet is not None
+        assert pallet.is_current is True
+        assert pallet.location_id == ids["temporary_location"]
+        restored = db.scalar(
+            select(InventoryLocationMovement).where(
+                InventoryLocationMovement.idempotency_key
+                == f"delivery-{delivery_id}-auto-release-pallet-{pallet_id}:restore"
+            )
+        )
+        assert restored is not None
+        assert restored.movement_type == "move"
+
+
+def test_cancel_full_delivery_fails_closed_when_original_location_is_reused(
+    n029_delivery_app,
+) -> None:
+    from app.models.delivery import Delivery
+    from app.models.warehouse_inventory import InventoryLot, InventoryPallet
+
+    app, factory, ids = n029_delivery_app
+    lot_id = _prepare_103_finished_stock(factory, ids)
+    pallet_id = _bind_finished_lot_to_test_pallet(factory, lot_id)
+    with TestClient(app) as client:
+        _login(client)
+        created = client.post(
+            "/api/deliveries",
+            json={
+                "customer_id": ids["customer"],
+                "items": [
+                    {
+                        "order_item_id": ids["task_completed"],
+                        "delivered_quantity": 103,
+                    }
+                ],
+            },
+        )
+        assert created.status_code == 201, created.text
+        delivery_id = int(created.json()["id"])
+        assert client.put(f"/api/deliveries/{delivery_id}/dispatch").status_code == 200
+        with factory() as db:
+            db.add(
+                InventoryPallet(
+                    pallet_code="N029-REUSED-LOCATION",
+                    location_id=ids["temporary_location"],
+                    status="active",
+                    is_current=True,
+                    needs_relocation=True,
+                    created_by=1,
+                    updated_by=1,
+                )
+            )
+            db.commit()
+        cancelled = client.put(f"/api/deliveries/{delivery_id}/cancel")
+        assert cancelled.status_code == 409, cancelled.text
+        assert "原库位已被其他栈板占用" in cancelled.json()["detail"]
+
+    with factory() as db:
+        delivery = db.get(Delivery, delivery_id)
+        lot = db.get(InventoryLot, lot_id)
+        pallet = db.get(InventoryPallet, pallet_id)
+        assert delivery is not None and delivery.status == "dispatched"
+        assert lot is not None
+        assert (lot.quantity_available, lot.quantity_reserved, lot.quantity_consumed) == (
+            0,
+            0,
+            103,
+        )
+        assert pallet is not None
+        assert pallet.is_current is False
+        assert pallet.location_id is None
 
 
 def test_over_delivery_flows_through_receipt_statement_export_and_invoice(

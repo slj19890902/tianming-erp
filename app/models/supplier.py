@@ -87,6 +87,18 @@ class Supplier(Base):
         passive_deletes=True,
         order_by="SupplierAlias.id",
     )
+    supply_categories: Mapped[list["SupplierSupplyCategory"]] = relationship(
+        back_populates="supplier",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="SupplierSupplyCategory.id",
+    )
+    packaging_products: Mapped[list["ExternalPackagingProduct"]] = relationship(
+        back_populates="supplier",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="ExternalPackagingProduct.id",
+    )
 
 
 class SupplierAlias(Base):
@@ -113,3 +125,97 @@ class SupplierAlias(Base):
     )
 
     supplier: Mapped[Supplier] = relationship(back_populates="aliases")
+
+
+class SupplierSupplyCategory(Base):
+    __tablename__ = "supplier_supply_categories"
+    __table_args__ = (
+        UniqueConstraint(
+            "supplier_id",
+            "category_code",
+            name="uq_supplier_supply_categories_supplier_category",
+        ),
+        CheckConstraint(
+            "category_code IN ('corrugated_board','paper_corner_guard','coated_board','printed_folding_carton','epe_cushion','other_packaging')",
+            name="ck_supplier_supply_categories_code",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    supplier_id: Mapped[int] = mapped_column(
+        ForeignKey("supplier_master_records.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    category_code: Mapped[str] = mapped_column(String(50), nullable=False)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default="1",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=func.current_timestamp(),
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+        onupdate=func.current_timestamp(),
+    )
+
+    supplier: Mapped[Supplier] = relationship(back_populates="supply_categories")
+
+
+class ExternalPackagingProduct(Base):
+    __tablename__ = "external_packaging_products"
+    __table_args__ = (
+        UniqueConstraint(
+            "supplier_id",
+            "normalized_supplier_product_code",
+            name="uq_external_packaging_products_supplier_code",
+        ),
+        CheckConstraint("version >= 1", name="ck_external_packaging_products_version"),
+        CheckConstraint(
+            "lead_time_days IS NULL OR lead_time_days >= 0",
+            name="ck_external_packaging_products_lead_time",
+        ),
+        CheckConstraint(
+            "category_code IN ('paper_corner_guard','coated_board','printed_folding_carton','epe_cushion','other_packaging')",
+            name="ck_external_packaging_products_category",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    supplier_id: Mapped[int] = mapped_column(
+        ForeignKey("supplier_master_records.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    category_code: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    supplier_product_code: Mapped[str] = mapped_column(String(100), nullable=False)
+    normalized_supplier_product_code: Mapped[str] = mapped_column(
+        String(100), nullable=False
+    )
+    product_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    purchase_unit: Mapped[str] = mapped_column(String(20), nullable=False)
+    specification_summary: Mapped[str] = mapped_column(String(500), nullable=False)
+    specification_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    drawing_sample_version: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    lead_time_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="1", index=True
+    )
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.current_timestamp()
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True, onupdate=func.current_timestamp()
+    )
+
+    supplier: Mapped[Supplier] = relationship(back_populates="packaging_products")

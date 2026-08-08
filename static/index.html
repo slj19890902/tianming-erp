@@ -1630,6 +1630,23 @@
       .order-next-step-actions { display:flex; align-items:center; justify-content:flex-end; gap:6px; flex:0 0 auto; }
       .ui-large .business-flow-step { min-height:38px; font-size:14px; }
       .ui-large .order-next-step-copy span { font-size:15px; }
+      .delivery-flow-guide {
+        display:grid; gap:6px; margin:0 0 10px; padding:8px 10px;
+        border:1px solid #bfdbfe; border-radius:10px; background:#f7fbff;
+      }
+      .delivery-flow-steps { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:5px; min-width:0; }
+      .delivery-flow-step {
+        min-width:0; padding:5px 4px; border:1px solid var(--line-strong); border-radius:8px;
+        background:#fff; color:var(--muted); font-size:12px; font-weight:700;
+        text-align:center; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+      }
+      .delivery-flow-step.done { border-color:#86efac; background:#f0fdf4; color:#166534; }
+      .delivery-flow-step.current { border-color:var(--primary); background:var(--primary); color:#fff; box-shadow:0 3px 10px rgba(25,118,210,.18); }
+      .delivery-flow-message { min-width:0; color:var(--text-secondary); font-size:13px; line-height:1.35; overflow-wrap:anywhere; }
+      .delivery-guide-target { outline:2px solid #60a5fa; outline-offset:2px; border-radius:8px; }
+      .delivery-guide-review-target { box-shadow:0 0 0 2px #93c5fd inset; border-radius:8px; }
+      .ui-large .delivery-flow-step { min-height:36px; font-size:14px; }
+      .ui-large .delivery-flow-message { font-size:15px; }
       .order-page-actionbar, .requisition-page-actionbar {
         display:flex; align-items:center; justify-content:space-between; gap:10px;
       }
@@ -1746,6 +1763,8 @@
         .business-flow-guide { grid-template-columns:1fr; gap:6px; }
         .business-flow-steps { grid-template-columns:repeat(3,minmax(0,1fr)); }
         .order-next-step-guide { align-items:flex-start; flex-direction:column; }
+        .delivery-flow-steps { gap:3px; }
+        .delivery-flow-step { padding-left:2px; padding-right:2px; font-size:11px; }
         .warehouse-shell-frame { min-height: 0; }
         .production-location-picker { grid-template-columns: 1fr; }
         .audit-filter-grid, .audit-detail-grid { grid-template-columns: 1fr; }
@@ -3095,11 +3114,11 @@
             <template v-else-if="activePage === 'deliveries'">
               <page-head title="送货与回单" desc="支持多订单合并、分批发货、打印及客户实收确认。"></page-head>
               <div v-if="deliveryDashboardMode==='pending_customers'" class="panel" style="margin-bottom:10px">
-                <div class="toolbar"><div><strong>待送货客户 {{ pendingDeliveryCustomerGroups.length }} 户</strong><span class="muted" style="margin-left:8px">与首页同一批送货候选</span></div><button class="btn small" @click="deliveryDashboardMode=''">查看全部送货单</button></div>
+                <div class="toolbar"><div><strong>下一步：选客户开送货单</strong><span class="muted" style="margin-left:8px">点客户后直接进入送货明细</span></div><button class="btn small" @click="deliveryDashboardMode=''">查看全部送货单</button></div>
                 <div v-if="deliveryPendingState.loading" class="empty">正在加载待送货客户…</div>
                 <div v-else-if="deliveryPendingState.error" class="empty">待送货客户加载失败：{{ deliveryPendingState.error }} <button class="btn small" @click="loadDeliveryPendingItems">重试</button></div>
                 <div v-else-if="pendingDeliveryCustomerGroups.length" class="toolbar-group" style="flex-wrap:wrap;margin-top:8px">
-                  <button v-for="group in pendingDeliveryCustomerGroups" :key="group.customer_id" class="btn" @click="openDelivery(group.customer_id)">{{ group.customer_name }}（{{ group.item_count }} 款）</button>
+                  <button v-for="group in pendingDeliveryCustomerGroups" :key="group.customer_id" class="btn primary" @click="openDelivery(group.customer_id)">{{ group.customer_name }}（{{ group.item_count }} 款）</button>
                 </div>
                 <div v-else class="empty">当前没有待送货客户</div>
               </div>
@@ -5986,8 +6005,14 @@
             </div>
             <div v-else-if="modal.type === 'delivery'">
               <fieldset :disabled="deliverySaveState.saving" style="border:0;padding:0;margin:0;min-width:0;width:100%">
+              <div class="delivery-flow-guide" aria-label="送货单操作顺序" aria-live="polite">
+                <div class="delivery-flow-steps">
+                  <span v-for="(step,index) in deliveryGuideSteps" :key="step.key" :class="['delivery-flow-step',{done:index < deliveryGuideStepIndex,current:index === deliveryGuideStepIndex}]" :aria-current="index === deliveryGuideStepIndex ? 'step' : null">{{ index + 1 }}. {{ step.label }}</span>
+                </div>
+                <div class="delivery-flow-message">{{ deliveryGuideMessage }}</div>
+              </div>
               <div class="form-grid">
-                <div class="field"><label>客户</label><search-select v-model="deliveryForm.customer_id" :options="deliveryCustomerOptions" label-key="_delivery_label" value-key="id" placeholder="输入客户名称、缩写或拼音首字母" :disabled="!!deliveryForm.editingId || deliveryCandidateLoading" @change="onDeliveryCustomerChange"></search-select><div v-if="!deliveryForm.editingId && deliveryCandidateLoading" class="muted">正在加载可送货客户…</div><div v-else-if="!deliveryForm.editingId && deliveryCandidateError" class="status orange" style="white-space:normal">客户候选加载失败：{{ deliveryCandidateError }} <button class="btn small" type="button" @click="loadDeliveryCustomerOptions">重试</button></div><div v-else-if="!deliveryForm.editingId && !deliveryCustomerOptions.length" class="muted">当前没有待送订单或可送成品库存</div></div>
+                <div :class="['field',{'delivery-guide-target':deliveryGuideStage === 'customer'}]"><label>客户</label><search-select v-model="deliveryForm.customer_id" :options="deliveryCustomerOptions" label-key="_delivery_label" value-key="id" placeholder="输入客户名称、缩写或拼音首字母" :disabled="!!deliveryForm.editingId || deliveryCandidateLoading" @change="onDeliveryCustomerChange"></search-select><div v-if="!deliveryForm.editingId && deliveryCandidateLoading" class="muted">正在加载可送货客户…</div><div v-else-if="!deliveryForm.editingId && deliveryCandidateError" class="status orange" style="white-space:normal">客户候选加载失败：{{ deliveryCandidateError }} <button class="btn small" type="button" @click="loadDeliveryCustomerOptions">重试</button></div><div v-else-if="!deliveryForm.editingId && !deliveryCustomerOptions.length" class="muted">当前没有待送订单或可送成品库存</div></div>
                 <div class="field"><label>送货日期</label><input class="input" type="date" v-model="deliveryForm.delivery_date" /></div>
                 <div class="field"><label>车号</label><input class="input" v-model.trim="deliveryForm.vehicle_number" /></div>
               </div>
@@ -6001,12 +6026,12 @@
                 <span v-if="deliverySourceModeFromLines(deliveryForm.lines.filter(line => deliveryLineHasInput(line))) === 'mixed'" class="status blue">本单混合两类来源</span>
               </div>
               <div v-if="deliveryForm.source_tab === 'order'" class="toolbar-group" style="margin-bottom:10px">
-                <button class="btn small success" type="button" :disabled="!deliveryForm.customer_id" @click="toggleDeliveryBatchPicker()">选择待送订单<span v-if="deliveryPendingCountForSelectedCustomer()">（{{ deliveryPendingCountForSelectedCustomer() }} 款）</span></button>
+                <button :class="['btn','small','success',{'delivery-guide-target':deliveryGuideStage === 'items'}]" type="button" :disabled="!deliveryForm.customer_id" @click="toggleDeliveryBatchPicker()">选择待送订单<span v-if="deliveryPendingCountForSelectedCustomer()">（{{ deliveryPendingCountForSelectedCustomer() }} 款）</span></button>
                 <span v-if="deliveryBatchPicker.loading" class="muted">待送订单正在载入…</span>
                 <span v-else class="muted">选定客户后已预载，点击即可选择。</span>
               </div>
               <div v-else class="toolbar-group" style="margin-bottom:10px">
-                <button class="btn small success" type="button" :disabled="!deliveryForm.customer_id" @click="toggleUnorderedFinishedPicker">选择客户专用库存</button>
+                <button :class="['btn','small','success',{'delivery-guide-target':deliveryGuideStage === 'items'}]" type="button" :disabled="!deliveryForm.customer_id" @click="toggleUnorderedFinishedPicker">选择客户专用库存</button>
                 <span class="muted">订单待送必须先全部加入；无订单库存只补不足数量。</span>
               </div>
               <div v-if="deliveryForm.source_tab === 'order' && !deliveryCandidateLoading && !deliveryCandidateError && !deliveryCustomerOptions.length" class="status orange" style="margin-bottom:10px">当前没有可送货客户。只有已入库，或已被成品库存全额预占，且仍有未送数量的订单明细才能生成送货单。</div>
@@ -6028,7 +6053,7 @@
                 <div v-if="deliveryBatchPicker.loading" class="empty">待送订单正在载入…</div>
                 <table v-else><thead><tr><th>选择</th><th>存货编码</th><th>产品名称</th><th>规格</th><th>材质</th><th>订单号 / 客户单号</th><th>未送数量</th><th>交期</th></tr></thead><tbody><tr v-for="item in deliveryBatchFilteredItems()" :key="item.order_item_id"><td><span v-if="isDeliveryItemAlreadyInForm(item.order_item_id)" class="muted">已在单中</span><input v-else type="checkbox" :checked="!!deliveryBatchPicker.selected[item.order_item_id]" @change="setDeliveryBatchSelection(item, $event.target.checked)" /></td><td>{{ item.product_code || "-" }}</td><td>{{ item.product_name || "-" }}</td><td>{{ item.specification || "-" }}</td><td>{{ item.material_display || "-" }}</td><td>{{ displayOrderNumber(item) }}<div class="muted">{{ item.customer_po || "-" }}</div><div v-if="inventorySourcesText(item.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(item.inventory_sources) }}</div></td><td>{{ item.remaining_quantity || 0 }}</td><td>{{ item.delivery_date || "-" }}</td></tr></tbody></table>
               </div>
-              <table v-else-if="deliveryForm.source_tab === 'order' && deliveryForm.lines.some(item => item.source_type !== 'unordered_finished')"><thead><tr><th>存货编码</th><th>订单号 / 客户单号</th><th>产品</th><th>订单待送 / 可用成品 / 可超送</th><th>本次送货</th><th>客户备注（会打印）</th><th>操作</th></tr></thead><tbody><tr v-for="line in deliveryForm.lines.filter(item => item.source_type !== 'unordered_finished')" :key="line.key" :class="{'warning-row':line.order_item_id && Number(line.delivered_quantity)>Number(line.order_remaining_quantity)}"><td>{{ line.inventory_code || line.product_code || '-' }}</td><td>{{ line.order_number || "-" }}<div class="muted">{{ line.customer_po || "-" }}</div><div v-if="inventorySourcesText(line.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(line.inventory_sources) }}</div></td><td>{{ line.product_code || "-" }} / {{ line.product_name || "-" }}<div class="muted">{{ line.specification || "-" }}</div></td><td><div>订单待送 <strong>{{ line.order_remaining_quantity ?? "-" }}</strong></div><div>可用成品 <strong>{{ line.deliverable_quantity ?? "-" }}</strong></div><div v-if="Number(line.over_delivery_quantity)>0" class="status orange">可超送 {{ line.over_delivery_quantity }}</div></td><td><input class="input" style="width:110px" type="number" min="1" :max="line.deliverable_quantity || undefined" v-model.number="line.delivered_quantity" :disabled="!line.order_item_id" /><div v-if="Number(line.delivered_quantity)>Number(line.order_remaining_quantity)" class="status orange" style="margin-top:4px;white-space:normal">超过订单 {{ Number(line.delivered_quantity)-Number(line.order_remaining_quantity) }}，可直接保存</div></td><td><input class="input" v-model.trim="line.remarks" placeholder="仅填写给客户看的内容" /></td><td><button class="btn small danger" type="button" @click="removeDeliveryLine(line.key)">删除</button></td></tr></tbody></table>
+              <table v-else-if="deliveryForm.source_tab === 'order' && deliveryForm.lines.some(item => item.source_type !== 'unordered_finished')" :class="{'delivery-guide-review-target':deliveryGuideStage === 'review'}"><thead><tr><th>存货编码</th><th>订单号 / 客户单号</th><th>产品</th><th>订单待送 / 可用成品 / 可超送</th><th>本次送货</th><th>客户备注（会打印）</th><th>操作</th></tr></thead><tbody><tr v-for="line in deliveryForm.lines.filter(item => item.source_type !== 'unordered_finished')" :key="line.key" :class="{'warning-row':line.order_item_id && Number(line.delivered_quantity)>Number(line.order_remaining_quantity)}"><td>{{ line.inventory_code || line.product_code || '-' }}</td><td>{{ line.order_number || "-" }}<div class="muted">{{ line.customer_po || "-" }}</div><div v-if="inventorySourcesText(line.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(line.inventory_sources) }}</div></td><td>{{ line.product_code || "-" }} / {{ line.product_name || "-" }}<div class="muted">{{ line.specification || "-" }}</div></td><td><div>订单待送 <strong>{{ line.order_remaining_quantity ?? "-" }}</strong></div><div>可用成品 <strong>{{ line.deliverable_quantity ?? "-" }}</strong></div><div v-if="Number(line.over_delivery_quantity)>0" class="status orange">可超送 {{ line.over_delivery_quantity }}</div></td><td><input class="input" style="width:110px" type="number" min="1" :max="line.deliverable_quantity || undefined" v-model.number="line.delivered_quantity" :disabled="!line.order_item_id" /><div v-if="Number(line.delivered_quantity)>Number(line.order_remaining_quantity)" class="status orange" style="margin-top:4px;white-space:normal">超过订单 {{ Number(line.delivered_quantity)-Number(line.order_remaining_quantity) }}，可直接保存</div></td><td><input class="input" v-model.trim="line.remarks" placeholder="仅填写给客户看的内容" /></td><td><button class="btn small danger" type="button" @click="removeDeliveryLine(line.key)">删除</button></td></tr></tbody></table>
               <div v-else-if="deliveryForm.source_tab === 'order' && deliveryForm.customer_id" class="empty">点击“选择待送订单”，勾选本次要送的产品。</div>
               <div v-else-if="unorderedFinishedPicker.visible" class="panel unordered-finished-picker">
                 <div class="toolbar delivery-batch-picker-toolbar" style="margin:-12px -12px 8px"><div class="section-title" style="margin:0">客户专用无订单成品库存</div><div class="toolbar-group"><input class="input" style="width:220px" v-model.trim="unorderedFinishedPicker.keyword" placeholder="存货编码 / 产品 / 规格" @keyup.enter.prevent="loadUnorderedFinishedCandidates(1)" /><button class="btn small" type="button" @click="loadUnorderedFinishedCandidates(1)">{{ unorderedFinishedPicker.loading ? '查询中...' : '查询' }}</button><span class="muted">第 {{ unorderedFinishedPicker.page }} / {{ unorderedFinishedPicker.total_pages }} 页</span><button class="btn small" type="button" :disabled="unorderedFinishedPicker.page <= 1" @click="loadUnorderedFinishedCandidates(unorderedFinishedPicker.page - 1)">上一页</button><button class="btn small" type="button" :disabled="unorderedFinishedPicker.page >= unorderedFinishedPicker.total_pages" @click="loadUnorderedFinishedCandidates(unorderedFinishedPicker.page + 1)">下一页</button><button class="btn primary small" type="button" @click="importUnorderedFinishedCandidates">导入已选</button></div></div>
@@ -6538,7 +6563,7 @@
             <button v-if="canSaveModal && modal?.type==='order'" class="btn primary" :disabled="loading || orderCreateSaveState.saving || orderCreateSaveState.committed || orderCreateSaveState.outcomeUncertain" @click="saveModal()">{{ orderCreateSaveState.saving ? '正在保存订单…' : (orderCreateSaveState.committed ? '订单已保存' : '保存') }}</button>
             <button v-if="canSaveModal && modal?.type==='orderEdit'" class="btn primary" :disabled="loading || orderGroupSaveState.saving || orderGroupSaveState.committed || orderGroupSaveState.outcomeUncertain" @click="saveModal()">{{ orderGroupSaveState.saving ? '正在保存订单组…' : (orderGroupSaveState.committed ? '订单组已保存' : '保存') }}</button>
             <button v-if="canSaveModal && modal?.type==='orderItem'" class="btn primary" :disabled="loading || orderItemSaveState.saving || orderItemSaveState.committed || orderItemSaveState.outcomeUncertain || finishedReservationActionBlocked() || !!orderItemCreaseMismatch" @click="saveModal()">{{ orderItemSaveState.saving ? '正在保存明细…' : (orderItemSaveState.committed ? '订单明细已保存' : '保存') }}</button>
-            <button v-if="canSaveModal && !['quotationConvert','order','orderEdit','orderItem'].includes(modal?.type)" class="btn primary" :disabled="loading || masterSavePending || (['supplierRequisitionDraft','requisition'].includes(modal?.type) && requisitionInventoryActionBlocked()) || (modal?.type==='supplierRequisitionDraft' && (supplierRequisitionSaveState.saving || supplierRequisitionSaveState.committed)) || (modal?.type==='requisition' && (compositeRequisitionSaveState.saving || compositeRequisitionSaveState.committed)) || (modal?.type==='stockReplenishment' && (stockReplenishmentSaveState.saving || stockReplenishmentSaveState.committed)) || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError || !!productPrintingPlateError)) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && (deliverySaveState.saving || deliverySaveState.outcomeUncertain || !!deliveryValidationError || !!deliveryOperationState.action)) || (modal?.type==='receipt' && !!receiptOperationState.action) || (modal?.type==='requisitionHold' && requisitionHoldSaveBlocked)" @click="modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()">{{ ['customer','product','material','supplier'].includes(modal?.type) && masterSavePending ? '保存中…' : (modal?.type==='delivery' ? (deliverySaveState.saving ? '正在保存草稿…' : deliveryPrimaryLabel()) : (modal?.type==='receipt' ? (receiptOperationState.action==='save' ? '保存中…' : '保存回单') : (modal?.type==='supplierRequisitionDraft' ? (supplierRequisitionSaveState.saving ? '正在生成采购单…' : (supplierRequisitionSaveState.committed ? '采购单已生成' : '确认生成正式采购单')) : (modal?.type==='requisition' ? (compositeRequisitionSaveState.saving ? '正在生成组合报料…' : (compositeRequisitionSaveState.committed ? '组合报料已生成' : '确认生成正式采购单')) : (modal?.type==='requisitionHold' ? '确认暂缓' : (modal?.type==='stockReplenishment' ? (stockReplenishmentSaveState.saving ? '正在保存补库草稿…' : (stockReplenishmentSaveState.committed ? '补库草稿已保存' : (stockReplenishmentForm.source_type==='stock_warning' ? '保存报料草稿' : '保存补库报料草稿'))) : '保存')))))) }}</button>
+            <button v-if="canSaveModal && !['quotationConvert','order','orderEdit','orderItem'].includes(modal?.type)" class="btn primary" :class="{'delivery-guide-target':modal?.type==='delivery' && ['review','save','print'].includes(deliveryGuideStage)}" :disabled="loading || masterSavePending || (['supplierRequisitionDraft','requisition'].includes(modal?.type) && requisitionInventoryActionBlocked()) || (modal?.type==='supplierRequisitionDraft' && (supplierRequisitionSaveState.saving || supplierRequisitionSaveState.committed)) || (modal?.type==='requisition' && (compositeRequisitionSaveState.saving || compositeRequisitionSaveState.committed)) || (modal?.type==='stockReplenishment' && (stockReplenishmentSaveState.saving || stockReplenishmentSaveState.committed)) || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError || !!productPrintingPlateError)) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && (deliverySaveState.saving || deliverySaveState.outcomeUncertain || !!deliveryValidationError || !!deliveryOperationState.action)) || (modal?.type==='receipt' && !!receiptOperationState.action) || (modal?.type==='requisitionHold' && requisitionHoldSaveBlocked)" @click="modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()">{{ ['customer','product','material','supplier'].includes(modal?.type) && masterSavePending ? '保存中…' : (modal?.type==='delivery' ? (deliverySaveState.saving ? '正在保存草稿…' : deliveryPrimaryLabel()) : (modal?.type==='receipt' ? (receiptOperationState.action==='save' ? '保存中…' : '保存回单') : (modal?.type==='supplierRequisitionDraft' ? (supplierRequisitionSaveState.saving ? '正在生成采购单…' : (supplierRequisitionSaveState.committed ? '采购单已生成' : '确认生成正式采购单')) : (modal?.type==='requisition' ? (compositeRequisitionSaveState.saving ? '正在生成组合报料…' : (compositeRequisitionSaveState.committed ? '组合报料已生成' : '确认生成正式采购单')) : (modal?.type==='requisitionHold' ? '确认暂缓' : (modal?.type==='stockReplenishment' ? (stockReplenishmentSaveState.saving ? '正在保存补库草稿…' : (stockReplenishmentSaveState.committed ? '补库草稿已保存' : (stockReplenishmentForm.source_type==='stock_warning' ? '保存报料草稿' : '保存补库报料草稿'))) : '保存')))))) }}</button>
           </div>
         </div>
       </div>
@@ -7313,6 +7338,48 @@
             if (mode === "direct") return "成品已进入待送货";
             if (mode === "component") return "组件生产已完成";
             return count > 1 ? `${count} 条成品已入库` : "成品已入库";
+          },
+          deliveryGuideStage() {
+            if (this.modal?.type !== "delivery") return "";
+            if (!Number(this.deliveryForm.customer_id || 0)) return "customer";
+            const activeLines = (this.deliveryForm.lines || []).filter(line => this.deliveryLineHasInput(line));
+            if (!activeLines.length) return "items";
+            if (this.deliverySaveState.saving || this.deliverySaveState.outcomeUncertain) return "save";
+            if (!this.deliveryForm.editingId) return "review";
+            if (this.deliveryFormIsDirty()) return "save";
+            return "print";
+          },
+          deliveryGuideStepIndex() {
+            return ({customer:0,items:1,review:2,save:3,print:4})[this.deliveryGuideStage] ?? -1;
+          },
+          deliveryGuideSteps() {
+            return [
+              {key:"customer",label:"选客户"},
+              {key:"items",label:"选待送货"},
+              {key:"review",label:"核对数量"},
+              {key:"save",label:"保存"},
+              {key:"print",label:"打印发货"},
+            ];
+          },
+          deliveryGuideMessage() {
+            const stage = this.deliveryGuideStage;
+            if (stage === "customer") return "先选客户，可输入名称、缩写或拼音首字母。";
+            if (stage === "items") return this.deliveryForm.source_tab === "unordered_finished"
+              ? "点“选择客户专用库存”，勾选这次要送的货。"
+              : "点“选择待送订单”，勾选这次要送的产品。";
+            if (stage === "review") return this.deliveryValidationError
+              ? `先处理：${this.deliveryValidationError}`
+              : "核对本次送货数量，没问题后点右下角“保存草稿”。";
+            if (stage === "save") {
+              if (this.deliverySaveState.outcomeUncertain) return "保存结果不确定，请先核对送货列表，不要重复提交。";
+              if (this.deliverySaveState.saving) return "正在保存，请不要重复点击。";
+              if (this.deliveryValidationError) return `先处理：${this.deliveryValidationError}`;
+              return "内容有修改，点右下角“保存修改”。";
+            }
+            if (stage === "print") return this.deliveryForm.pick_task
+              ? "已推送拿货；拿齐后点右下角“打印”完成发货。"
+              : "草稿已保存；可选“拿货”，也可直接点右下角“打印”完成发货。";
+            return "按顺序完成本张送货单。";
           },
           currentReleaseDetails() {
             const currentVersion = String(this.versionInfo?.version || "").trim();

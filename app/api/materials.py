@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import PermissionChecker, RoleChecker, get_db, has_permission
 from app.api.master_data_common import audit_master_change, clean_code
-from app.core.time_contract import utc_naive_to_api
+from app.core.time_contract import beijing_today, utc_naive_to_api
 from app.models.material import Material
 from app.models.master_data_object_version import MasterDataObjectVersion
 from app.models.material_price_history import (
@@ -365,6 +365,73 @@ def _changed_updates(material: Material, updates: dict) -> dict:
         for key, value in updates.items()
         if getattr(material, key) != value
     }
+
+
+_PRICE_HISTORY_FIELDS = frozenset({"quote_price", "quote_date", "price_unit"})
+
+
+def _price_decimal(value: object) -> Decimal | None:
+    if value is None:
+        return None
+    return Decimal(value)
+
+
+def _price_adjust_percent(
+    old_price: Decimal | None,
+    new_price: Decimal | None,
+) -> Decimal | None:
+    if old_price is None or new_price is None or old_price == 0:
+        return None
+    return ((new_price - old_price) / old_price * Decimal("100")).quantize(
+        Decimal("0.0001")
+    )
+
+
+def _price_history_reason(
+    reason: str | None,
+    *,
+    old_unit: str | None,
+    new_unit: str | None,
+    old_date: date | None,
+    new_date: date | None,
+) -> str | None:
+    details: list[str] = []
+    if old_unit != new_unit:
+        details.append(f"计价单位：{old_unit or '未填写'} → {new_unit or '未填写'}")
+    if old_date != new_date:
+        details.append(
+            f"报价日期：{old_date.isoformat() if old_date else '未填写'} → "
+            f"{new_date.isoformat() if new_date else '未填写'}"
+        )
+    parts = [str(reason).strip()] if reason and str(reason).strip() else []
+    parts.extend(details)
+    return "；".join(parts) or None
+
+
+def _append_material_price_history(
+    db: Session,
+    *,
+    material: Material,
+    old_price: Decimal | None,
+    new_price: Decimal | None,
+    effective_date: date | None,
+    reason: str | None,
+    operator: str | None,
+) -> None:
+    db.add(
+        MaterialPriceHistory(
+            material_id=material.id,
+            supplier_name=material.supplier_name,
+            material_code=material.code,
+            old_price=old_price,
+            new_price=new_price,
+            adjust_percent=_price_adjust_percent(old_price, new_price),
+            effective_date=effective_date,
+            adjust_reason=reason,
+            operator=operator,
+            batch_id=None,
+        )
+    )
 
 
 def _has_version_history(db: Session, material_id: int) -> bool:
@@ -1276,36 +1343,286 @@ def get_material(
 @router.get("/{material_id}/price-history")
 def get_material_price_history(
     material_id: int,
+    supplier_name: str | None = Query(default=None, max_length=200),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=200, ge=1, le=500),
+    effective_status: Literal["effective", "pending", "time_unknown"] | None = Query(
+        default=None
+    ),
+    order: Literal["asc", "desc"] = Query(default="asc"),
     db: Session = Depends(get_db),
     user: User = Depends(can_cost),
 ) -> dict:
+    if date_from is not None and date_to is not None and date_from > date_to:
+        raise HTTPException(status_code=400, detail="开始日期不能晚于结束日期")
     material = _material_or_404(db, material_id)
+    if supplier_name is not None and normalize_supplier_identity(
+        supplier_name
+    ) != normalize_supplier_identity(material.supplier_name):
+        raise HTTPException(status_code=404, detail="所选供应商下未找到该材质")
+    base_filters = [MaterialPriceHistory.material_id == material_id]
+    total_all = int(
+        db.scalar(
+            select(func.count())
+            .select_from(MaterialPriceHistory)
+            .where(*base_filters)
+        )
+        or 0
+    )
+    today = beijing_today()
+    first_row = db.scalar(
+        select(MaterialPriceHistory)
+        .where(*base_filters)
+        .order_by(MaterialPriceHistory.created_at.asc(), MaterialPriceHistory.id.asc())
+        .limit(1)
+    )
+    current_effective_row = db.scalar(
+        select(MaterialPriceHistory)
+        .where(
+            *base_filters,
+            MaterialPriceHistory.effective_date.is_not(None),
+            MaterialPriceHistory.effective_date <= today,
+        )
+        .order_by(
+            MaterialPriceHistory.effective_date.desc(),
+            MaterialPriceHistory.created_at.desc(),
+            MaterialPriceHistory.id.desc(),
+        )
+        .limit(1)
+    )
+    latest_unknown_row = db.scalar(
+        select(MaterialPriceHistory)
+        .where(
+            *base_filters,
+            MaterialPriceHistory.effective_date.is_(None),
+        )
+        .order_by(MaterialPriceHistory.created_at.desc(), MaterialPriceHistory.id.desc())
+        .limit(1)
+    )
+    next_pending_row = db.scalar(
+        select(MaterialPriceHistory)
+        .where(
+            *base_filters,
+            MaterialPriceHistory.effective_date > today,
+        )
+        .order_by(
+            MaterialPriceHistory.effective_date.asc(),
+            MaterialPriceHistory.created_at.asc(),
+            MaterialPriceHistory.id.asc(),
+        )
+        .limit(1)
+    )
+    filters = list(base_filters)
+    if date_from is not None:
+        filters.append(MaterialPriceHistory.effective_date >= date_from)
+    if date_to is not None:
+        filters.append(MaterialPriceHistory.effective_date <= date_to)
+    if effective_status == "effective":
+        filters.extend(
+            [
+                MaterialPriceHistory.effective_date.is_not(None),
+                MaterialPriceHistory.effective_date <= today,
+            ]
+        )
+    elif effective_status == "pending":
+        filters.append(MaterialPriceHistory.effective_date > today)
+    elif effective_status == "time_unknown":
+        filters.append(MaterialPriceHistory.effective_date.is_(None))
+    total = int(
+        db.scalar(
+            select(func.count())
+            .select_from(MaterialPriceHistory)
+            .where(*filters)
+        )
+        or 0
+    )
+    if order == "desc":
+        history_order = (
+            MaterialPriceHistory.created_at.desc(),
+            MaterialPriceHistory.id.desc(),
+        )
+    else:
+        history_order = (
+            MaterialPriceHistory.created_at.asc(),
+            MaterialPriceHistory.id.asc(),
+        )
     rows = list(
         db.scalars(
             select(MaterialPriceHistory)
-            .where(MaterialPriceHistory.material_id == material_id)
-            .order_by(MaterialPriceHistory.created_at.asc())
+            .where(*filters)
+            .order_by(*history_order)
+            .offset(offset)
+            .limit(limit)
         ).all()
     )
+    history_incomplete = material.quote_price is not None and (
+        total_all == 0 or (first_row is not None and first_row.old_price is not None)
+    )
+    if current_effective_row is not None:
+        current_effective_price = _price_decimal(current_effective_row.new_price)
+    elif latest_unknown_row is not None:
+        current_effective_price = _price_decimal(material.quote_price)
+    elif next_pending_row is not None:
+        current_effective_price = _price_decimal(next_pending_row.old_price)
+    else:
+        current_effective_price = _price_decimal(material.quote_price)
+    effective_rows = list(
+        db.scalars(
+            select(MaterialPriceHistory)
+            .where(
+                *base_filters,
+                MaterialPriceHistory.effective_date.is_not(None),
+                MaterialPriceHistory.effective_date <= today,
+            )
+            .order_by(
+                MaterialPriceHistory.effective_date.desc(),
+                MaterialPriceHistory.created_at.desc(),
+                MaterialPriceHistory.id.desc(),
+            )
+            .limit(2)
+        ).all()
+    )
+    previous_effective_price = (
+        _price_decimal(effective_rows[1].new_price)
+        if len(effective_rows) > 1
+        else (
+            _price_decimal(effective_rows[0].old_price)
+            if effective_rows and effective_rows[0].old_price is not None
+            else None
+        )
+    )
+    current_change_amount = (
+        current_effective_price - previous_effective_price
+        if current_effective_price is not None and previous_effective_price is not None
+        else None
+    )
+    current_change_percent = _price_adjust_percent(
+        previous_effective_price,
+        current_effective_price,
+    )
+    pending_count = int(
+        db.scalar(
+            select(func.count())
+            .select_from(MaterialPriceHistory)
+            .where(
+                *base_filters,
+                MaterialPriceHistory.effective_date > today,
+            )
+        )
+        or 0
+    )
+    unit_change_detected = bool(
+        db.scalar(
+            select(MaterialPriceHistory.id)
+            .where(
+                *base_filters,
+                MaterialPriceHistory.adjust_reason.contains("计价单位："),
+            )
+            .limit(1)
+        )
+    )
+
+    def history_item(history: MaterialPriceHistory) -> dict:
+        old_price = _price_decimal(history.old_price)
+        new_price = _price_decimal(history.new_price)
+        change_amount = (
+            new_price - old_price
+            if old_price is not None and new_price is not None
+            else None
+        )
+        change_percent = (
+            _price_decimal(history.adjust_percent)
+            if history.adjust_percent is not None
+            else _price_adjust_percent(old_price, new_price)
+        )
+        if history.effective_date is None:
+            effective_status = "time_unknown"
+        elif history.effective_date > today:
+            effective_status = "pending"
+        else:
+            effective_status = "effective"
+        return {
+            "id": history.id,
+            "old_price": float(old_price) if old_price is not None else None,
+            "new_price": float(new_price) if new_price is not None else None,
+            "change_amount": float(change_amount) if change_amount is not None else None,
+            "change_percent": float(change_percent) if change_percent is not None else None,
+            "adjust_percent": float(change_percent) if change_percent is not None else None,
+            "effective_date": (
+                history.effective_date.isoformat() if history.effective_date else None
+            ),
+            "effective_status": effective_status,
+            "adjust_reason": history.adjust_reason,
+            "operator": history.operator,
+            "batch_id": history.batch_id,
+            "created_at": utc_naive_to_api(history.created_at),
+        }
+
     return {
         "material_id": material_id,
         "material_code": material.code,
         "supplier_name": material.supplier_name,
-        "current_price": float(material.quote_price) if material.quote_price is not None else None,
-        "items": [
-            {
-                "id": h.id,
-                "old_price": float(h.old_price) if h.old_price is not None else None,
-                "new_price": float(h.new_price) if h.new_price is not None else None,
-                "adjust_percent": float(h.adjust_percent) if h.adjust_percent is not None else None,
-                "effective_date": h.effective_date.isoformat() if h.effective_date else None,
-                "adjust_reason": h.adjust_reason,
-                "operator": h.operator,
-                "batch_id": h.batch_id,
-                "created_at": utc_naive_to_api(h.created_at),
-            }
-            for h in rows
-        ],
+        "current_price": (
+            float(current_effective_price)
+            if current_effective_price is not None
+            else None
+        ),
+        "latest_recorded_price": (
+            float(material.quote_price) if material.quote_price is not None else None
+        ),
+        "next_pending_price": (
+            float(next_pending_row.new_price)
+            if next_pending_row is not None and next_pending_row.new_price is not None
+            else None
+        ),
+        "next_pending_effective_date": (
+            next_pending_row.effective_date.isoformat()
+            if next_pending_row is not None and next_pending_row.effective_date is not None
+            else None
+        ),
+        "previous_effective_price": (
+            float(previous_effective_price)
+            if previous_effective_price is not None
+            else None
+        ),
+        "current_change_amount": (
+            float(current_change_amount) if current_change_amount is not None else None
+        ),
+        "current_change_percent": (
+            float(current_change_percent)
+            if current_change_percent is not None
+            else None
+        ),
+        "latest_effective_date": (
+            current_effective_row.effective_date.isoformat()
+            if current_effective_row is not None
+            and current_effective_row.effective_date is not None
+            else None
+        ),
+        "pending_count": pending_count,
+        "chart_compatible": not unit_change_detected,
+        "chart_notice": (
+            "历史中存在计价单位变化；没有可信换算时不把不同单位画在同一纵轴。"
+            if unit_change_detected
+            else None
+        ),
+        "current_price_unit": material.price_unit,
+        "material_active": material.is_active,
+        "history_incomplete": history_incomplete,
+        "history_notice": (
+            "该材质已有当前报价，但旧版本未保存完整起点；系统不会补造历史价格。"
+            if history_incomplete
+            else None
+        ),
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "effective_status": effective_status,
+        "order": order,
+        "has_more": offset + len(rows) < total,
+        "items": [history_item(history) for history in rows],
     }
 
 
@@ -1335,6 +1652,17 @@ def create_material(
     try:
         db.add(material)
         db.flush()
+        initial_price = _price_decimal(material.quote_price)
+        if initial_price is not None and initial_price > 0:
+            _append_material_price_history(
+                db,
+                material=material,
+                old_price=None,
+                new_price=initial_price,
+                effective_date=material.quote_date,
+                reason="新增材质初始报价",
+                operator=user.username,
+            )
         record_versioned_create(
             db,
             object_type="material",
@@ -1431,6 +1759,10 @@ def update_material(
     updates = _material_write_data(payload)
     updates["supplier_name"] = supplier_name
     changed = _changed_updates(material, updates)
+    old_price = _price_decimal(material.quote_price)
+    old_quote_date = material.quote_date
+    old_price_unit = material.price_unit
+    price_contract_changed = bool(_PRICE_HISTORY_FIELDS.intersection(changed))
     try:
         apply_versioned_update(
             db,
@@ -1443,6 +1775,23 @@ def update_material(
             source="api.materials.update",
             confirmation_token=payload.confirmation_token,
         )
+        if price_contract_changed:
+            new_price = _price_decimal(material.quote_price)
+            _append_material_price_history(
+                db,
+                material=material,
+                old_price=old_price,
+                new_price=new_price,
+                effective_date=material.quote_date,
+                reason=_price_history_reason(
+                    payload.change_reason,
+                    old_unit=old_price_unit,
+                    new_unit=material.price_unit,
+                    old_date=old_quote_date,
+                    new_date=material.quote_date,
+                ),
+                operator=user.username,
+            )
         if changed:
             audit_master_change(
                 db,

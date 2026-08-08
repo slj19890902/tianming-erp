@@ -4,6 +4,7 @@ from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 from threading import Barrier
 
 import pytest
@@ -3373,3 +3374,83 @@ def test_phase2c14_map_semi_finished_inbound_is_admin_only_idempotent_and_compat
                 SemiFinishedLotAllowedProduct.product_id == ids["products"][0],
             )
         ) == 1
+
+
+def test_p1_34b1_location_labels_are_mapped_read_only_and_fail_closed(
+    floor3_app,
+    monkeypatch,
+) -> None:
+    from app.api import warehouse as warehouse_api
+    from app.models.warehouse_inventory import Floor3LocationLayout
+
+    app, ids, factory = floor3_app
+    mapped_id = ids["locations"][0]
+    temporary_id = ids["locations"][2]
+    unmapped_id = ids["locations"][1]
+    with factory() as db:
+        db.add(
+            Floor3LocationLayout(
+                location_id=mapped_id,
+                left_pct=Decimal("10"),
+                top_pct=Decimal("20"),
+                width_pct=Decimal("4"),
+                height_pct=Decimal("5"),
+                version=3,
+                source_type="manual",
+            )
+        )
+        db.commit()
+    monkeypatch.setattr(warehouse_api, "_lan_ip", lambda: "192.168.3.80")
+
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        single = client.get(f"/api/warehouse/locations/{mapped_id}/label")
+        assert single.status_code == 200, single.text
+        assert single.json()["location_code"] == "A1-L01"
+        assert single.json()["display_path"] == "三楼 · A1区 · A1-L01"
+        assert single.json()["layout_version"] == 3
+        assert single.json()["lookup_url"].endswith(
+            f"/warehouse.html?tab=locations&location_id={mapped_id}"
+        )
+        assert single.json()["qr_data_url"].startswith("data:image/png;base64,")
+
+        batch = client.get(
+            "/api/warehouse/locations/labels",
+            params={"location_ids": f"{mapped_id},{mapped_id}"},
+        )
+        assert batch.status_code == 200, batch.text
+        assert batch.json()["count"] == 1
+        assert [row["id"] for row in batch.json()["items"]] == [mapped_id]
+
+        for blocked_id in (temporary_id, unmapped_id):
+            blocked = client.get(
+                f"/api/warehouse/locations/{blocked_id}/label"
+            )
+            assert blocked.status_code == 409, blocked.text
+            assert "已发布到三楼平面图" in blocked.json()["detail"]
+
+    with factory() as db:
+        layout = db.scalar(
+            select(Floor3LocationLayout).where(
+                Floor3LocationLayout.location_id == mapped_id
+            )
+        )
+        assert layout is not None
+        assert layout.version == 3
+
+
+def test_p1_34b1_location_label_frontend_is_batchable_and_read_only() -> None:
+    root = Path(__file__).resolve().parents[1]
+    page = (root / "static" / "location-label.html").read_text(encoding="utf-8")
+    warehouse = (root / "static" / "warehouse.html").read_text(encoding="utf-8")
+
+    assert "90 × 60 mm" in page
+    assert "/api/warehouse/locations/labels?location_ids=" in page
+    assert "/api/warehouse/locations/${id}/label" in page
+    assert "扫码后仍须登录" in page
+    assert "客户、库存数量或价格" in page
+    assert "window.print()" in page
+    assert 'id="locationLabelSelectAll"' in warehouse
+    assert 'id="locationBatchPrint"' in warehouse
+    assert "locationLabelEligible" in warehouse
+    assert "/location-label.html?location_id=" in warehouse

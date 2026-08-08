@@ -1011,6 +1011,116 @@ def test_partial_receipt_is_visible_in_today_history_while_waiting(
     assert fact["resolution_action"] == "await_supplier"
 
 
+def test_posted_receipt_production_card_is_read_only_and_uses_frozen_process(
+    incoming_api_app,
+) -> None:
+    from app.models.audit import OperationLog
+    from app.models.incoming_receipt import IncomingReceiptItem
+    from app.models.order import OrderItem
+    from app.models.production import ProductionCompletion
+    from app.models.warehouse_inventory import InventoryLot
+
+    app, session_factory = incoming_api_app
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        item.requisition_qty = 100
+        item.snapshot_product_code = "KH-001"
+        item.snapshot_production_notes = "先印刷，再开槽，开槽后模切，最后粘箱"
+        item.cardboard_len = Decimal("1000")
+        item.cardboard_width = Decimal("800")
+        item.flute_type = "BC"
+        item.special_process = "一开二"
+        item.snapshot_crease_type = "净料"
+        item.snapshot_crease_left_mm = 260
+        item.snapshot_crease_middle_mm = 350
+        item.snapshot_crease_right_mm = 260
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client, "workshop")
+        received = client.put(
+            "/api/incoming/receive/1",
+            json={"received_quantity": 20, "resolution_action": "await_supplier"},
+        )
+        assert received.status_code == 200, received.text
+        receipt_item_id = received.json()["receipt_item_id"]
+        with session_factory() as session:
+            before = {
+                "receipt_items": session.scalar(select(func.count(IncomingReceiptItem.id))),
+                "completions": session.scalar(select(func.count(ProductionCompletion.id))),
+                "lots": session.scalar(select(func.count(InventoryLot.id))),
+                "logs": session.scalar(select(func.count(OperationLog.id))),
+            }
+        card = client.get(
+            f"/api/incoming/receipt-items/{receipt_item_id}/production-card"
+        )
+        repeated = client.get(
+            f"/api/incoming/receipt-items/{receipt_item_id}/production-card"
+        )
+
+    assert card.status_code == 200, card.text
+    assert repeated.status_code == 200, repeated.text
+    payload = card.json()
+    assert payload["receipt_item_id"] == receipt_item_id
+    assert payload["customer_name"] == "苏州思迈尔包装有限公司"
+    assert payload["product_code"] == "KH-001"
+    assert payload["received_sheet_quantity"] == 20
+    assert payload["output_factor"] == 2
+    assert payload["production_capacity_quantity"] == 40
+    assert payload["board_length_mm"] == 1000
+    assert payload["board_width_mm"] == 800
+    assert payload["process_steps"] == ["印刷", "开槽", "模切", "粘箱"]
+    assert payload["production_notes"] == "先印刷，再开槽，开槽后模切，最后粘箱"
+    assert "unit_price" not in payload
+    assert "cost" not in card.text.lower()
+    assert repeated.json()["card_number"] == payload["card_number"]
+    with session_factory() as session:
+        after = {
+            "receipt_items": session.scalar(select(func.count(IncomingReceiptItem.id))),
+            "completions": session.scalar(select(func.count(ProductionCompletion.id))),
+            "lots": session.scalar(select(func.count(InventoryLot.id))),
+            "logs": session.scalar(select(func.count(OperationLog.id))),
+        }
+    assert after == before
+
+
+def test_reversed_or_unauthorized_receipt_cannot_open_production_card(
+    incoming_api_app,
+) -> None:
+    from app.models.order import OrderItem
+
+    app, session_factory = incoming_api_app
+    with session_factory() as session:
+        session.get(OrderItem, 1).requisition_qty = 100
+        session.commit()
+    with TestClient(app) as client:
+        _login(client, "workshop")
+        received = client.put(
+            "/api/incoming/receive/1",
+            json={"received_quantity": 100, "idempotency_key": "card-revert"},
+        )
+        receipt_item_id = received.json()["receipt_item_id"]
+        client.post("/api/auth/logout")
+        _login(client, "finance")
+        denied = client.get(
+            f"/api/incoming/receipt-items/{receipt_item_id}/production-card"
+        )
+        client.post("/api/auth/logout")
+        _login(client, "admin")
+        reverted = client.put(
+            f"/api/incoming/receipt-items/{receipt_item_id}/revert",
+            json={},
+        )
+        invalid = client.get(
+            f"/api/incoming/receipt-items/{receipt_item_id}/production-card"
+        )
+
+    assert denied.status_code == 403
+    assert reverted.status_code == 200, reverted.text
+    assert invalid.status_code == 409
+    assert "已撤销" in invalid.text
+
+
 def test_new_receipt_revert_restores_pending_without_changing_plan(
     incoming_api_app,
 ) -> None:

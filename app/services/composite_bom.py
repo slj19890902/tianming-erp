@@ -862,6 +862,9 @@ def _snapshot_response(row: Any, *, fallback_position: int) -> dict[str, Any]:
         "snapshot_spec": snapshot_spec,
         "snapshot_component_material": snapshot_material,
         "snapshot_material": snapshot_material,
+        "snapshot_component_material_id": _mapped_value(
+            row, "snapshot_component_material_id"
+        ),
         "snapshot_component_report_length_mm": _mapped_value(
             row, "snapshot_component_report_length_mm"
         ),

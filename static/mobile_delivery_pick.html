@@ -62,7 +62,9 @@
   </section>
   <div id="toast" class="toast" hidden></div>
   <script>
-    let taskId = new URLSearchParams(location.search).get("task_id");
+    const initialParams = new URLSearchParams(location.search);
+    let taskId = initialParams.get("task_id");
+    const expectedPrintVersion = initialParams.get("print_version");
     let task = null; let activeFilter = "open"; let taskScrollY = 0; let activeMapGroupKey = "";
     let listGeneration=0, listController=null, detailGeneration=0, detailController=null;
     const busyItems=new Set(); let taskActionBusy=false; let loginBusy=false;
@@ -138,7 +140,13 @@
       try {
         const body=await request(`/api/delivery-picks/${encodeURIComponent(selectedId)}`,{signal:controller.signal});
         if(generation!==detailGeneration||taskId!==selectedId) return false;
-        task=normalize(body); render(); return true;
+        task=normalize(body);
+        if(expectedPrintVersion && task.print_version !== expectedPrintVersion) {
+          task=null;
+          showTaskFailure(new Error("纸质拿货单版本已过期，请返回 ERP 重新打印后再回录差异"));
+          return false;
+        }
+        render(); return true;
       } catch(error) {
         if(error?.name==="AbortError"||generation!==detailGeneration||taskId!==selectedId) return false; if(handleAuthError(error)) return false; showTaskFailure(error); return false;
       } finally { if(generation===detailGeneration) detailController=null; }

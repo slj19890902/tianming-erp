@@ -849,6 +849,44 @@
         background: #fafafa; border-radius: 16px 16px 0 0;
       }
       .modal-header h3 { margin: 0; font-size: 16px; }
+      .price-history-modal {
+        width: min(1120px, 96vw); max-height: 90vh; overflow: hidden;
+      }
+      .price-history-body { max-height: calc(90vh - 58px); overflow-y: auto; padding: 14px 16px 18px; }
+      .price-history-heading { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px 16px; }
+      .price-history-summary { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:8px; margin:10px 0; }
+      .price-history-metric { min-width:0; padding:9px 10px; border:1px solid var(--line); border-radius:9px; background:#f8fafc; }
+      .price-history-metric-label { color:var(--muted); font-size:12px; }
+      .price-history-metric-value { margin-top:3px; font-size:17px; font-weight:700; overflow-wrap:anywhere; }
+      .price-history-filters { display:flex; flex-wrap:wrap; align-items:end; gap:8px 12px; margin:10px 0; }
+      .price-history-filters .field { min-width:150px; margin:0; }
+      .price-history-chart-card { padding:10px; border:1px solid var(--line); border-radius:10px; background:#fff; }
+      .price-history-chart { display:block; width:100%; height:auto; max-height:250px; }
+      .price-history-chart-grid { stroke:#e5e7eb; stroke-width:1; }
+      .price-history-step-effective { fill:none; stroke:#2563eb; stroke-width:3; stroke-linejoin:round; }
+      .price-history-step-pending { fill:none; stroke:#d97706; stroke-width:3; stroke-dasharray:7 5; stroke-linejoin:round; }
+      .price-history-point { cursor:pointer; stroke:#fff; stroke-width:2; }
+      .price-history-point.effective { fill:#2563eb; }
+      .price-history-point.pending { fill:#d97706; }
+      .price-history-axis-label { fill:#667085; font-size:12px; }
+      .price-history-table-wrap { max-height:290px; overflow-y:auto; overflow-x:hidden; margin-top:10px; border:1px solid var(--line); border-radius:10px; }
+      .price-history-table { width:100%; table-layout:fixed; font-size:12px; }
+      .price-history-table th { position:sticky; top:0; z-index:1; background:#f8fafc; }
+      .price-history-table th, .price-history-table td { padding:7px 6px; line-height:1.35; overflow-wrap:anywhere; }
+      .price-history-table .selected td { background:#eff6ff; }
+      .price-history-status { display:inline-flex; padding:2px 7px; border-radius:999px; font-weight:600; white-space:nowrap; }
+      .price-history-status.effective { color:#166534; background:#dcfce7; }
+      .price-history-status.pending { color:#92400e; background:#fef3c7; }
+      .price-history-status.time_unknown { color:#475467; background:#f2f4f7; }
+      .price-history-pager { display:flex; align-items:center; justify-content:flex-end; gap:8px; margin-top:10px; }
+      .ui-large .price-history-modal { width:min(1280px,97vw); }
+      .ui-large .price-history-table th, .ui-large .price-history-table td { min-height:0; padding:8px 6px; font-size:15px; line-height:1.35; }
+      .ui-large .price-history-metric-label { font-size:14px; }
+      .ui-large .price-history-metric-value { font-size:19px; }
+      @media (max-width: 900px) {
+        .price-history-summary { grid-template-columns:repeat(2,minmax(0,1fr)); }
+        .price-history-modal { width:98vw; }
+      }
       .master-change-backdrop { z-index: 90; }
       .version-history-backdrop { z-index: 80; }
       .readonly-fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
@@ -1272,6 +1310,9 @@
       .role-workshop .sensitive-price { display: none !important; }
       .cost-sensitive { font-variant-numeric: tabular-nums; }
       .role-no-costs .cost-sensitive { display: none !important; }
+      .material-cost-compact { margin-top:5px; padding:5px 7px; border-radius:6px; background:#f0f9ff; color:#075985; font-size:11px; line-height:1.45; }
+      .material-cost-compact summary { cursor:pointer; color:#0369a1; }
+      .material-cost-compact .missing { color:#b45309; white-space:normal; }
       .role-boss .role-sensitive-cost { font-variant-numeric: tabular-nums; }
 
       /* Search-select dropdown */
@@ -2375,30 +2416,70 @@
 
               <!-- 材质价格历史弹窗 -->
               <div v-if="showPriceHistoryModal" class="modal-backdrop" @click.self="closePriceHistory()">
-                <div class="modal" style="max-width:680px;max-height:84vh;overflow-y:auto">
+                <div class="modal price-history-modal">
                   <div class="modal-header"><h3>价格历史 · {{ priceHistory.material_code }}</h3><button class="btn small" @click="closePriceHistory()">关闭</button></div>
-                  <div style="padding:12px">
-                    <div style="font-size:13px;margin-bottom:8px">供应商 {{ supplierDisplayName(priceHistory.supplier_name) }}｜当前报价 {{ priceHistory.current_price ?? "-" }}</div>
+                  <div class="price-history-body">
+                    <div class="price-history-heading">
+                      <div><strong>{{ supplierDisplayName(priceHistory.supplier_name) }}</strong><span class="muted">｜按稳定材质编号 {{ priceHistory.material_id || "-" }} 查询</span></div>
+                      <span v-if="priceHistory.pending_count" class="price-history-status pending">待生效 {{ priceHistory.pending_count }} 条</span>
+                    </div>
                     <div v-if="priceHistoryLoading" class="muted" style="padding:14px;text-align:center">价格历史加载中…</div>
                     <div v-else-if="priceHistoryError" class="notice" style="margin:8px 0">
                       <span>{{ priceHistoryError }}</span>
                       <button class="btn small" type="button" @click="retryPriceHistory()">重新加载</button>
                     </div>
                     <template v-else>
-                      <svg v-if="priceHistoryPoints.length>1" :width="priceHistoryChart.w" :height="priceHistoryChart.h" style="border:1px solid #eee;background:#fafafa">
-                        <polyline :points="priceHistoryPolyline" fill="none" stroke="#2563eb" stroke-width="2" />
-                        <circle v-for="(p,i) in priceHistoryPoints" :key="i" :cx="p.x" :cy="p.y" r="3" fill="#2563eb" />
-                      </svg>
-                      <div v-if="!(priceHistory.items||[]).length" class="muted" style="padding:14px;text-align:center">暂无调价历史</div>
-                      <table v-else style="width:100%;font-size:12px;margin-top:8px"><thead><tr style="background:#f9fafb"><th>日期</th><th>旧报价</th><th>新报价</th><th>幅度</th><th>操作人</th><th>备注</th></tr></thead>
-                        <tbody><tr v-for="h in priceHistory.items" :key="h.id">
-                          <td style="text-align:center">{{ h.effective_date || formatBeijingDate(h.created_at) }}</td>
-                          <td style="text-align:right">{{ h.old_price }}</td>
-                          <td style="text-align:right">{{ h.new_price }}</td>
-                          <td style="text-align:right">{{ h.adjust_percent }}%</td>
-                          <td style="text-align:center">{{ h.operator || "-" }}</td>
-                          <td>{{ h.adjust_reason || "-" }}</td>
-                        </tr></tbody></table>
+                      <div v-if="priceHistory.history_notice" class="notice" style="margin:8px 0">{{ priceHistory.history_notice }}</div>
+                      <div v-if="priceHistory.chart_notice" class="notice" style="margin:8px 0">{{ priceHistory.chart_notice }}</div>
+
+                      <div class="price-history-summary">
+                        <div class="price-history-metric"><div class="price-history-metric-label">当前有效价</div><div class="price-history-metric-value">{{ priceHistoryMoney(priceHistory.current_price) }}<small> {{ priceHistory.current_price_unit || "" }}</small></div></div>
+                        <div class="price-history-metric"><div class="price-history-metric-label">上次有效价</div><div class="price-history-metric-value">{{ priceHistoryMoney(priceHistory.previous_effective_price) }}</div></div>
+                        <div class="price-history-metric"><div class="price-history-metric-label">最近涨跌</div><div class="price-history-metric-value" :style="priceHistoryChangeStyle(priceHistory.current_change_amount)">{{ priceHistoryChangeText(priceHistory.current_change_amount, priceHistory.current_change_percent) }}</div></div>
+                        <div class="price-history-metric"><div class="price-history-metric-label">最近生效</div><div class="price-history-metric-value">{{ priceHistory.latest_effective_date || "暂无" }}</div></div>
+                        <div class="price-history-metric"><div class="price-history-metric-label">下个待生效价</div><div class="price-history-metric-value">{{ priceHistoryMoney(priceHistory.next_pending_price) }}<small v-if="priceHistory.next_pending_effective_date"> · {{ priceHistory.next_pending_effective_date }}</small></div></div>
+                      </div>
+
+                      <div class="price-history-filters">
+                        <div class="field"><label>时间范围</label><select class="select" v-model="priceHistoryFilter.range" @change="reloadPriceHistoryFilters()"><option value="12m">最近12个月</option><option value="all">全部历史</option></select></div>
+                        <div class="field"><label>状态</label><select class="select" v-model="priceHistoryFilter.status" @change="reloadPriceHistoryFilters()"><option value="all">全部状态</option><option value="effective">已生效</option><option value="pending">待生效</option><option value="time_unknown">时间未知</option></select></div>
+                        <button class="btn small" type="button" @click="reloadPriceHistoryFilters()">刷新</button>
+                        <span class="muted">共 {{ priceHistory.total || 0 }} 条；图表与当前页明细一致</span>
+                      </div>
+
+                      <div v-if="priceHistoryChartPoints.length && priceHistory.chart_compatible !== false" class="price-history-chart-card">
+                        <svg class="price-history-chart" :viewBox="`0 0 ${priceHistoryChart.w} ${priceHistoryChart.h}`" role="img" aria-label="供应商材质报价阶梯走势">
+                          <g v-for="tick in priceHistoryYAxisTicks" :key="`y-${tick.y}`"><line class="price-history-chart-grid" :x1="priceHistoryChart.left" :x2="priceHistoryChart.w-priceHistoryChart.right" :y1="tick.y" :y2="tick.y"/><text class="price-history-axis-label" x="4" :y="tick.y+4">{{ tick.label }}</text></g>
+                          <path v-if="priceHistoryEffectiveStepPath" class="price-history-step-effective" :d="priceHistoryEffectiveStepPath"/>
+                          <path v-if="priceHistoryPendingStepPath" class="price-history-step-pending" :d="priceHistoryPendingStepPath"/>
+                          <g v-for="point in priceHistoryChartPoints" :key="point.id" @click="selectPriceHistoryNode(point.id)">
+                            <circle :class="['price-history-point',point.status]" :cx="point.x" :cy="point.y" :r="priceHistorySelectedId===point.id ? 7 : 5"/>
+                            <title>{{ priceHistoryPointTitle(point) }}</title>
+                          </g>
+                          <text v-for="label in priceHistoryXAxisLabels" :key="`x-${label.x}-${label.text}`" class="price-history-axis-label" :x="label.x" :y="priceHistoryChart.h-7" text-anchor="middle">{{ label.text }}</text>
+                        </svg>
+                        <div class="muted" style="font-size:12px;margin-top:4px">蓝色为已生效，橙色虚线为待生效；点击节点可定位下方明细。阶梯线不使用平滑插值。</div>
+                      </div>
+                      <div v-else-if="(priceHistory.items||[]).length && priceHistory.chart_compatible !== false" class="muted" style="padding:12px;text-align:center">当前筛选只有时间未知记录，不绘制猜测日期的走势。</div>
+
+                      <div v-if="!(priceHistory.items||[]).length" class="muted" style="padding:14px;text-align:center">当前筛选范围暂无价格历史</div>
+                      <div v-else class="price-history-table-wrap">
+                        <table class="price-history-table">
+                          <colgroup><col style="width:12%"><col style="width:15%"><col style="width:10%"><col style="width:10%"><col style="width:13%"><col style="width:10%"><col style="width:12%"><col style="width:18%"></colgroup>
+                          <thead><tr><th>生效日期</th><th>记录时间</th><th>旧价</th><th>新价</th><th>涨跌</th><th>状态</th><th>账号</th><th>说明</th></tr></thead>
+                          <tbody><tr v-for="h in priceHistory.items" :key="h.id" :data-price-history-id="h.id" :class="{selected:priceHistorySelectedId===h.id}" @click="selectPriceHistoryNode(h.id)">
+                            <td>{{ h.effective_date || "时间未知" }}</td>
+                            <td>{{ formatDateTime(h.created_at) }}</td>
+                            <td style="text-align:right">{{ priceHistoryMoney(h.old_price) }}</td>
+                            <td style="text-align:right"><strong>{{ priceHistoryMoney(h.new_price) }}</strong></td>
+                            <td style="text-align:right" :style="priceHistoryChangeStyle(h.change_amount)">{{ priceHistoryChangeText(h.change_amount,h.change_percent) }}</td>
+                            <td><span :class="['price-history-status',h.effective_status]">{{ priceHistoryStatusLabel(h.effective_status) }}</span></td>
+                            <td>{{ h.operator || "-" }}</td>
+                            <td>{{ h.adjust_reason || "-" }}</td>
+                          </tr></tbody>
+                        </table>
+                      </div>
+                      <div v-if="priceHistoryPages>1" class="price-history-pager"><button class="btn small" :disabled="priceHistoryPage<=1" @click="loadPriceHistoryPage(priceHistoryPage-1)">上一页</button><span>第 {{ priceHistoryPage }} / {{ priceHistoryPages }} 页</span><button class="btn small" :disabled="priceHistoryPage>=priceHistoryPages" @click="loadPriceHistoryPage(priceHistoryPage+1)">下一页</button></div>
                     </template>
                   </div>
                 </div>
@@ -2751,7 +2832,7 @@
               <div v-if="incomingTab==='pending' && incomingLocationsError" class="status orange" style="display:block;margin:8px 0">{{ incomingLocationsError }} <button class="btn small" @click="ensureIncomingLocations()">重试</button></div>
               <data-panel v-if="incomingTab !== 'history'" :empty="!(incomingTab==='pending' ? incomingPending : incomingReceived).length && !(incomingTab==='received' && (incomingReceivedLoading || incomingReceivedError))">
                 <table class="incoming-table">
-                  <thead><tr><th v-if="incomingTab==='pending' && hasPermission('incoming.execute')"><input type="checkbox" :checked="allIncomingSelected" @change="toggleAllIncoming($event.target.checked)" /> 全选</th><th>报料尺寸</th><th>客户</th><th>存货编码</th><th>产品</th><th>材质</th><th>计划 / 已收 / 待收</th><th>本次收料</th><th class="incoming-decision-cell">收料结果 / 入库位</th><th>报料日期</th><th>图纸</th><th v-if="hasPermission('incoming.execute')">操作</th></tr></thead>
+                  <thead><tr><th v-if="incomingTab==='pending' && hasPermission('incoming.execute')"><input type="checkbox" :checked="allIncomingSelected" @change="toggleAllIncoming($event.target.checked)" /> 全选</th><th>报料尺寸</th><th>客户</th><th>存货编码</th><th>产品</th><th>材质</th><th>计划 / 已收 / 待收</th><th>本次收料</th><th class="incoming-decision-cell">收料结果 / 入库位</th><th>报料日期</th><th>图纸</th><th>生产卡</th><th v-if="hasPermission('incoming.execute')">操作</th></tr></thead>
                   <tbody><tr v-for="row in (incomingTab==='pending' ? incomingPending : incomingReceived)" :key="row.history_key || row.item_id">
                     <td v-if="incomingTab==='pending' && hasPermission('incoming.execute')"><input type="checkbox" v-model="incomingSelected[row.item_id]" :disabled="!canReceiveIncoming(row)" /></td>
                     <td><strong>{{ formatBoardSpec(row.cardboard_len,row.cardboard_width) }}</strong></td>
@@ -2761,6 +2842,7 @@
                     <td class="incoming-decision-cell"><template v-if="incomingTab==='pending'"><div v-if="Number(row.cumulative_received_quantity||0)>0 && Number(row.remaining_quantity||0)>0" class="status orange">已收 {{ row.cumulative_received_quantity }}，待补 {{ row.remaining_quantity }}</div><select v-if="incomingProjectedVariance(row)<0" class="select" v-model="row.resolution_action" :disabled="!hasPermission('incoming.execute')"><option value="">少收怎么处理</option><option value="await_supplier">继续等补货</option><option v-if="row.source_type!=='stock_replenishment'" value="accept_short">按已收数结单</option></select><select v-else-if="incomingProjectedVariance(row)>0" class="select" v-model="row.resolution_action" :disabled="!hasPermission('incoming.execute')"><option value="">多收怎么处理</option><option value="all_to_production">全部用于本单</option><option value="transfer_to_semi_inventory">余量存半成品仓</option></select><span v-else class="status green">数量刚好</span><select v-if="row.resolution_action==='transfer_to_semi_inventory'" class="select" v-model.number="row.surplus_location_id" :disabled="!hasPermission('incoming.execute')"><option :value="null">余量放哪个库位</option><option v-for="location in incomingSemiLocations()" :key="location.id" :value="location.id">{{ location.location_code }}｜{{ location.location_name }}</option></select><div v-if="row.source_type==='stock_replenishment'" class="incoming-location-picker"><span class="muted">到厂后入库位</span><select class="select" v-model.number="row.receipt_location_id" :disabled="!hasPermission('incoming.execute') || incomingReceiptLocationsLoading"><option :value="null">请选择本次入库库位</option><option v-for="location in incomingReceiptLocationsFor(row)" :key="location.id" :value="location.id">{{ location.location_code }}｜{{ location.location_name }}</option></select></div></template><template v-else><span :class="['status',row.variance_type==='matched'?'green':'orange']">{{ incomingVarianceLabel(row) }}</span><div v-if="row.resolution_reason" class="muted">{{ row.resolution_reason }}</div></template></td>
                     <td>{{ row.requisition_date || "-" }}</td>
                     <td><a v-if="row.drawing_is_pdf" class="btn small" :href="row.drawing_path" target="_blank">打开PDF</a><span v-else>-</span></td>
+                    <td><button v-if="incomingTab==='received' && row.receipt_item_id && row.receipt_status==='posted' && row.order_item_id" class="btn small primary" @click="openIncomingProductionCard(row)">打印生产卡</button><span v-else class="muted">-</span></td>
                     <td v-if="hasPermission('incoming.execute')"><template v-if="incomingTab==='pending'"><button class="btn small success" @click="receiveIncoming(row)">确认实收</button><button v-if="row.pending_receipt_item_id" class="btn small" @click="acceptShortIncoming(row)">不再补货，短收结单</button></template><button v-else-if="canAdmin" class="btn small danger" @click="revertIncoming(row)">撤销收料，回到已报料</button></td>
                   </tr></tbody>
                 </table>
@@ -2792,8 +2874,9 @@
                       <td>{{ row.material_display || "-" }}</td>
                       <td><strong>{{ row.incoming_quantity }}</strong></td>
                       <td>
+                        <button v-if="row.receipt_item_id && row.receipt_status==='posted' && row.order_item_id" class="btn small primary" @click="openIncomingProductionCard(row)">打印生产卡</button>
                         <button v-if="canAdmin" class="btn small danger" @click="revertIncoming(row)">撤销收料，回到已报料</button>
-                        <span v-else class="muted">-</span>
+                        <span v-if="!(row.receipt_item_id && row.receipt_status==='posted' && row.order_item_id) && !canAdmin" class="muted">-</span>
                       </td>
                     </tr></tbody>
                   </table>
@@ -2904,6 +2987,7 @@
                       </select>
                       <span v-if="deliveryOperationState.action==='assign' && Number(deliveryOperationState.deliveryId)===Number(row.id) && Number(deliveryOperationState.taskId)===Number(row.pick_task?.id)" class="muted">分配中…</span>
                       <button v-if="row.pick_task" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="openDeliveryPickTask(row)">{{ row.pick_task.assignment_required ? '管理员查看' : '打开手机拿货' }}</button>
+                      <button v-if="row.pick_task" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="openDeliveryPickPrint(row)">打印拿货单</button>
                       <button v-if="canDelivery && row.status==='pending'" class="btn small success" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="dispatchDelivery(row)">{{ deliveryOperationState.action==='dispatch' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '发货中…' : (row.pick_task ? '发货打印' : '直接发货打印') }}</button>
                       <button v-if="canDelivery && row.status==='pending'" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="editDelivery(row)">编辑</button>
                       <button v-if="canDelivery && row.status==='pending'" class="btn small danger" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="deleteDelivery(row)">{{ deliveryOperationState.action==='delete' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '删除中…' : '删除' }}</button>
@@ -5200,7 +5284,7 @@
               <tbody><tr v-for="item in orderDetail.items" :key="item.id">
                 <td class="sys-num" style="font-size:12px">{{ item.item_order_number || "-" }}<div style="margin-top:4px"><status-tag :value="itemBusinessStatusKey(item)"></status-tag></div><div v-if="item.requisition_hold?.status === 'active'" class="status orange" style="margin-top:4px">{{ item.requisition_hold.label || '等候中' }}</div><div v-if="Number(item.business_delivered_quantity || 0) > 0" class="order-delivery-compact">已送 {{ item.business_delivered_quantity }}/{{ item.quantity }}</div></td>
                 <td>{{ item.snapshot_product_code }}</td>
-                <td :title="item.snapshot_product_name" style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:normal">{{ item.snapshot_product_name }}<div v-if="item.combination_role==='priced_component'" class="status blue" style="margin-top:3px">{{ combinationGroupLabel(item) }}</div><div v-if="hasBomComponents(item)" class="bom-preview-box"><div class="bom-preview-title">内部 BOM 预览（客户订单仍为一个父产品 / 套）</div><div class="bom-preview-list"><div v-for="component in item.bom_components" :key="component.id || component.component_product_id || component.internal_code" class="bom-preview-item">{{ bomPreviewComponentLabel(component) }}</div></div></div></td>
+                <td :title="item.snapshot_product_name" style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:normal">{{ item.snapshot_product_name }}<div v-if="item.combination_role==='priced_component'" class="status blue" style="margin-top:3px">{{ combinationGroupLabel(item) }}</div><div v-if="hasBomComponents(item)" class="bom-preview-box"><div class="bom-preview-title">内部 BOM 预览（客户订单仍为一个父产品 / 套）</div><div class="bom-preview-list"><div v-for="component in item.bom_components" :key="component.id || component.component_product_id || component.internal_code" class="bom-preview-item">{{ bomPreviewComponentLabel(component) }}</div></div></div><div v-if="canViewCosts" class="material-cost-compact cost-sensitive"><strong>{{ orderMaterialCostSummary(item) }}</strong><details><summary>查看材料成本依据</summary><div v-for="(component,index) in item.material_cost_components || []" :key="`${item.id}-cost-${index}`">{{ orderMaterialCostComponentText(component) }}</div><div v-for="missing in item.material_cost_missing_items || []" :key="missing" class="missing">待补：{{ missing }}</div><div class="muted">未计生产损耗和加工费；历史订单为当前规则估算。</div></details></div></td>
                 <td>{{ item.snapshot_spec || "-" }}</td>
                 <td style="white-space:normal;word-break:break-all;font-size:12px;max-width:160px">{{ orderItemMaterialText(item) }}</td>
                 <td>{{ item.snapshot_production_notes || "-" }}<div v-if="item.mold_location" class="status blue" style="margin-top:4px;white-space:normal">模具：{{ moldLocationText(item) }}</div></td>
@@ -6579,6 +6663,8 @@
             priceAdjustForm: { supplier_name: "", adjust_percent: "", effective_date: "" },
             priceAdjustPreview: null, priceAdjustPreviewKey: "",
             showPriceHistoryModal: false, priceHistoryLoading: false, priceHistoryError: "", priceHistory: { material_id: null, material_code: "", items: [] },
+            priceHistoryFilter: { range: "12m", status: "all" },
+            priceHistoryPage: 1, priceHistoryPageSize: 50, priceHistorySelectedId: null,
             productBoardCost: null,
             productBoardCostDetail: null,
             productBoardCostLoading: false,
@@ -6921,22 +7007,80 @@
               .filter(candidate => selected.has(this.productMaterialCandidateKey(candidate)))
               .slice(0, 4);
           },
-          // 价格历史折线图坐标
-          priceHistoryChart() { return { w: 600, h: 180, pad: 30 }; },
-          priceHistoryPoints() {
-            const items = this.priceHistory.items || [];
-            const vals = items.map(h => h.new_price).filter(v => v != null);
-            if (vals.length < 2) return [];
-            const { w, h, pad } = this.priceHistoryChart;
-            const min = Math.min(...vals), max = Math.max(...vals);
-            const span = (max - min) || 1;
-            return vals.map((v, i) => ({
-              x: pad + (w - 2 * pad) * (vals.length === 1 ? 0 : i / (vals.length - 1)),
-              y: h - pad - (h - 2 * pad) * ((v - min) / span)
+          // 价格历史使用阶梯线；横轴按可信生效日期，缺日期的旧记录只留在明细中。
+          priceHistoryChart() { return { w: 900, h: 240, left: 58, right: 24, top: 18, bottom: 34 }; },
+          priceHistoryPages() {
+            return Math.max(1, Math.ceil(Number(this.priceHistory.total || 0) / Number(this.priceHistoryPageSize || 50)));
+          },
+          priceHistoryChartPoints() {
+            const source = (this.priceHistory.items || [])
+              .filter(item => item.effective_date && item.new_price != null && ["effective","pending"].includes(item.effective_status))
+              .slice()
+              .sort((left,right) => String(left.effective_date).localeCompare(String(right.effective_date)) || String(left.created_at || "").localeCompare(String(right.created_at || "")) || Number(left.id)-Number(right.id));
+            if (!source.length) return [];
+            const prices = source.map(item => Number(item.new_price));
+            const dates = source.map(item => Date.parse(`${item.effective_date}T00:00:00+08:00`));
+            const rawMinPrice = Math.min(...prices), rawMaxPrice = Math.max(...prices);
+            const pricePadding = rawMaxPrice === rawMinPrice ? Math.max(Math.abs(rawMaxPrice)*0.05,0.05) : (rawMaxPrice-rawMinPrice)*0.12;
+            const minPrice = rawMinPrice-pricePadding, maxPrice = rawMaxPrice+pricePadding;
+            const priceSpan = maxPrice-minPrice;
+            const minDate = Math.min(...dates), maxDate = Math.max(...dates);
+            const dateSpan = maxDate - minDate || 1;
+            const chart = this.priceHistoryChart;
+            const width = chart.w - chart.left - chart.right;
+            const height = chart.h - chart.top - chart.bottom;
+            const sameDateTotals = source.reduce((result,item) => {
+              result[item.effective_date] = (result[item.effective_date] || 0) + 1;
+              return result;
+            },{});
+            const sameDateRanks = {};
+            return source.map((item,index) => {
+              const date = dates[index];
+              const baseX = minDate === maxDate ? chart.left + width / 2 : chart.left + width * ((date-minDate)/dateSpan);
+              const rank = sameDateRanks[item.effective_date] || 0;
+              sameDateRanks[item.effective_date] = rank + 1;
+              const duplicateOffset = (rank - (sameDateTotals[item.effective_date]-1)/2) * 8;
+              return {
+                ...item,
+                price: prices[index],
+                status: item.effective_status,
+                x: Math.max(chart.left,Math.min(chart.w-chart.right,baseX+duplicateOffset)),
+                y: chart.top + height * (1-(prices[index]-minPrice)/priceSpan),
+              };
+            });
+          },
+          priceHistoryEffectiveStepPath() {
+            const points = this.priceHistoryChartPoints.filter(point => point.status === "effective");
+            if (!points.length) return "";
+            return points.slice(1).reduce((path,point,index) => `${path} H ${point.x} V ${point.y}`,`M ${points[0].x} ${points[0].y}`);
+          },
+          priceHistoryPendingStepPath() {
+            const all = this.priceHistoryChartPoints;
+            const pending = all.filter(point => point.status === "pending");
+            if (!pending.length) return "";
+            const effective = all.filter(point => point.status === "effective");
+            const points = effective.length ? [effective[effective.length-1],...pending] : pending;
+            return points.slice(1).reduce((path,point) => `${path} H ${point.x} V ${point.y}`,`M ${points[0].x} ${points[0].y}`);
+          },
+          priceHistoryYAxisTicks() {
+            const values = this.priceHistoryChartPoints.map(point => point.price);
+            if (!values.length) return [];
+            const rawMin = Math.min(...values), rawMax = Math.max(...values);
+            const padding = rawMax === rawMin ? Math.max(Math.abs(rawMax)*0.05,0.05) : (rawMax-rawMin)*0.12;
+            const min = rawMin-padding, max = rawMax+padding;
+            const span = max-min;
+            const chart = this.priceHistoryChart;
+            const height = chart.h-chart.top-chart.bottom;
+            return [0,0.5,1].map(ratio => ({
+              y: chart.top+height*ratio,
+              label: (max-span*ratio).toFixed(2),
             }));
           },
-          priceHistoryPolyline() {
-            return this.priceHistoryPoints.map(p => `${p.x},${p.y}`).join(" ");
+          priceHistoryXAxisLabels() {
+            const points = this.priceHistoryChartPoints;
+            if (!points.length) return [];
+            const indexes = points.length === 1 ? [0] : points.length === 2 ? [0,1] : [0,Math.floor((points.length-1)/2),points.length-1];
+            return [...new Set(indexes)].map(index => ({x:points[index].x,text:String(points[index].effective_date).slice(5)}));
           },
           // 天华专项字段明细：从 pdfSampleDetail 的 parser_result_json 中提取 items
           pdfDetailItems() {
@@ -8335,6 +8479,19 @@
             if (includeWeight && weight) parts.push(weight);
             if (supplier) parts.push(supplier);
             return parts.join("｜");
+          },
+          orderMaterialCostSummary(item) {
+            if (item?.estimated_material_total_cost != null) {
+              return `材料总成本 ¥${this.money(item.estimated_material_total_cost)}`;
+            }
+            return item?.material_cost_status_label || "材料成本待完善";
+          },
+          orderMaterialCostComponentText(component) {
+            const dims = `${component?.report_length_mm || "-"}×${component?.report_width_mm || "-"}`;
+            const sheets = component?.purchase_sheet_quantity ?? "-";
+            const price = component?.effective_square_price ?? "-";
+            const total = component?.estimated_material_cost ?? "-";
+            return `${component?.label || "用料"}：${dims}mm，${sheets}张，¥${price}/㎡，小计¥${this.money(total)}`;
           },
 	          // 新建订单表单中「材质+楞型」列的压缩显示（来自常用箱时）
 	          orderItemCompressedMaterial(item) {
@@ -11053,6 +11210,56 @@
               this.priceAdjustLoading = false;
             }
           },
+          reloadPriceHistoryFilters() {
+            const snapshot = this.priceHistory || {};
+            if (!snapshot.material_id || this.priceHistoryLoading) return false;
+            this.priceHistoryPage = 1;
+            return this.openPriceHistory({
+              id:snapshot.material_id,
+              code:snapshot.material_code,
+              supplier_name:snapshot.supplier_name,
+              quote_price:snapshot.latest_recorded_price ?? snapshot.current_price,
+            });
+          },
+          loadPriceHistoryPage(page) {
+            const target = Math.max(1,Math.min(Number(page)||1,this.priceHistoryPages));
+            if (target === this.priceHistoryPage || this.priceHistoryLoading) return false;
+            const snapshot = this.priceHistory || {};
+            this.priceHistoryPage = target;
+            return this.openPriceHistory({
+              id:snapshot.material_id,
+              code:snapshot.material_code,
+              supplier_name:snapshot.supplier_name,
+              quote_price:snapshot.latest_recorded_price ?? snapshot.current_price,
+            });
+          },
+          selectPriceHistoryNode(historyId) {
+            this.priceHistorySelectedId = Number(historyId);
+            this.$nextTick(() => {
+              document.querySelector(`[data-price-history-id="${Number(historyId)}"]`)?.scrollIntoView({block:"nearest"});
+            });
+          },
+          priceHistoryMoney(value) {
+            return value == null || !Number.isFinite(Number(value)) ? "-" : `¥${Number(value).toFixed(4).replace(/0+$/,"").replace(/\.$/,"")}`;
+          },
+          priceHistoryChangeText(amount,percent) {
+            if (amount == null || !Number.isFinite(Number(amount))) return "暂无可比较";
+            const delta = Number(amount);
+            const arrow = delta > 0 ? "↑" : delta < 0 ? "↓" : "→";
+            const signed = delta > 0 ? `+${delta.toFixed(4)}` : delta.toFixed(4);
+            const pct = percent == null || !Number.isFinite(Number(percent)) ? "" : `（${Number(percent)>0?"+":""}${Number(percent).toFixed(2)}%）`;
+            return `${arrow} ${signed.replace(/0+$/,"").replace(/\.$/,"")}${pct}`;
+          },
+          priceHistoryChangeStyle(amount) {
+            const value = Number(amount);
+            return {color:value>0?"#b42318":value<0?"#067647":"#475467"};
+          },
+          priceHistoryStatusLabel(status) {
+            return ({effective:"已生效",pending:"待生效",time_unknown:"时间未知"})[status] || "未知";
+          },
+          priceHistoryPointTitle(point) {
+            return `${point.effective_date}｜${this.priceHistoryMoney(point.new_price)}｜${this.priceHistoryStatusLabel(point.status)}｜记录 ${this.formatDateTime(point.created_at)}`;
+          },
           async openPriceHistory(row) {
             const materialSnapshot = {
               material_id: Number(row?.id ?? row?.material_id),
@@ -11064,6 +11271,27 @@
               this.showToast("无法读取该材质的价格历史：材质编号无效", true);
               return false;
             }
+            const sameMaterial = Number(this.priceHistory?.material_id) === materialSnapshot.material_id;
+            if (!sameMaterial) {
+              this.priceHistoryFilter = { range:"12m", status:"all" };
+              this.priceHistoryPage = 1;
+              this.priceHistorySelectedId = null;
+            }
+            const filter = this.priceHistoryFilter || { range:"12m", status:"all" };
+            const pageSize = Math.max(1,Number(this.priceHistoryPageSize || 50));
+            const page = Math.max(1,Number(this.priceHistoryPage || 1));
+            const params = {
+              supplier_name:materialSnapshot.supplier_name || undefined,
+              offset:(page-1)*pageSize,
+              limit:pageSize,
+              order:"desc",
+              effective_status:filter.status && filter.status !== "all" ? filter.status : undefined,
+            };
+            if (filter.range === "12m" && filter.status !== "time_unknown") {
+              const since = new Date();
+              since.setFullYear(since.getFullYear()-1);
+              params.date_from = `${since.getFullYear()}-${String(since.getMonth()+1).padStart(2,"0")}-${String(since.getDate()).padStart(2,"0")}`;
+            }
             const requestKey = "materials:price-history";
             const controller = this.beginLatestRequest(requestKey);
             this.priceHistory = { ...materialSnapshot, items: [] };
@@ -11073,7 +11301,7 @@
             try {
               const { data } = await axios.get(
                 `/api/master/materials/${materialSnapshot.material_id}/price-history`,
-                { signal:controller.signal },
+                { signal:controller.signal, params },
               );
               if (
                 latestRequestControllers.get(requestKey) !== controller
@@ -11089,6 +11317,8 @@
                 current_price: data?.current_price ?? materialSnapshot.current_price,
                 items: Array.isArray(data?.items) ? data.items : [],
               };
+              this.priceHistoryPage = page;
+              this.priceHistorySelectedId = null;
               return true;
             } catch (error) {
               if (
@@ -11114,6 +11344,7 @@
             this.showPriceHistoryModal = false;
             this.priceHistoryLoading = false;
             this.priceHistoryError = "";
+            this.priceHistorySelectedId = null;
             return true;
           },
           retryPriceHistory() {
@@ -11123,7 +11354,7 @@
               id: snapshot.material_id,
               code: snapshot.material_code,
               supplier_name: snapshot.supplier_name,
-              quote_price: snapshot.current_price,
+              quote_price: snapshot.latest_recorded_price ?? snapshot.current_price,
             });
           },
           // 常用箱纸板成本参考：实时按当前材质平方报价 + 箱型尺寸计算（不保存）
@@ -13076,6 +13307,42 @@
               this.showToast("已撤回来料入库");
             } catch(error) { this.showToast(this.errorMessage(error),true); }
           },
+          async openIncomingProductionCard(row) {
+            const receiptItemId = Number(row?.receipt_item_id || 0);
+            if (!receiptItemId || row?.receipt_status !== "posted" || !row?.order_item_id) {
+              this.showToast("只有有效的订单实收记录才能打印生产卡", true);
+              return false;
+            }
+            if (typeof BroadcastChannel !== "function") {
+              this.showToast("当前浏览器不支持安全打开生产卡，请升级浏览器后重试", true);
+              return false;
+            }
+            const token = globalThis.crypto?.randomUUID?.()
+              || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+            const channel = new BroadcastChannel(`erp-incoming-production-card-${token}`);
+            const ready = new Promise(resolve => {
+              let settled = false;
+              const finish = value => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timeoutId);
+                resolve(value);
+              };
+              const timeoutId = setTimeout(() => finish(false), 2500);
+              channel.onmessage = event => {
+                if (event?.data?.type === "ready") finish(true);
+              };
+            });
+            const path = `/incoming-production-card.html?id=${encodeURIComponent(receiptItemId)}&open_token=${encodeURIComponent(token)}`;
+            window.open(path, "_blank", "noopener");
+            if (!(await ready)) {
+              channel.close();
+              this.showToast("浏览器阻止了生产卡页面，请允许打开新页面后重试", true);
+              return false;
+            }
+            channel.close();
+            return true;
+          },
           async loadIncomingHistory() {
             const controller = this.beginLatestRequest("incoming:history");
             try {
@@ -13159,6 +13426,11 @@
             const task = this.normalizeDeliveryPickTask(row);
             if (!task?.id) return this.showToast("当前送货单尚未创建拿货任务", true);
             window.open(`/mobile/delivery-pick.html?task_id=${encodeURIComponent(task.id)}`, "_blank");
+          },
+          openDeliveryPickPrint(row) {
+            const task = this.normalizeDeliveryPickTask(row);
+            if (!task?.id) return this.showToast("当前送货单尚未创建拿货任务", true);
+            window.open(`/static/delivery-pick-print.html?task_id=${encodeURIComponent(task.id)}`, "_blank", "noopener");
           },
           async loadDeliveryPickers() {
             if (!this.canDelivery) return;

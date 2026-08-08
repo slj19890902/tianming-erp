@@ -262,6 +262,25 @@ def test_scoped_account_only_reads_allowed_mold_products_and_labels(mold_app) ->
         assert denied_label.status_code == 403, denied_label.text
         assert denied_label.json()["detail"] == "无客户访问权限"
 
+        allowed_batch = scoped_client.get(
+            "/api/warehouse/molds/labels",
+            params={"mold_ids": f"{shared_mold_id},{allowed_mold_id}"},
+        )
+        assert allowed_batch.status_code == 200, allowed_batch.text
+        assert [row["id"] for row in allowed_batch.json()["items"]] == [
+            shared_mold_id,
+            allowed_mold_id,
+        ]
+        assert [
+            product["product_code"]
+            for product in allowed_batch.json()["items"][0]["products"]
+        ] == ["SHARED-ALLOW"]
+        denied_batch = scoped_client.get(
+            "/api/warehouse/molds/labels",
+            params={"mold_ids": f"{allowed_mold_id},{denied_mold_id}"},
+        )
+        assert denied_batch.status_code == 403, denied_batch.text
+
 
 def test_workshop_can_query_but_cannot_modify_mold(mold_app) -> None:
     app, factory = mold_app
@@ -903,3 +922,89 @@ def test_mold_is_required_only_for_die_cut_products(mold_app) -> None:
         assert ordinary.status_code == 201, ordinary.text
         assert ordinary.json()["mold_tool_id"] is None
         assert ordinary.json()["mold_tool"] is None
+
+
+def test_batch_mold_labels_preserve_selection_order_and_are_read_only(
+    mold_app,
+    monkeypatch,
+) -> None:
+    from sqlalchemy import func, select
+
+    from app.api import warehouse as warehouse_api
+    from app.models.mold_tool import MoldTool
+
+    app, factory = mold_app
+    monkeypatch.setattr(warehouse_api, "_lan_ip", lambda: "192.168.3.80")
+    with TestClient(app) as client:
+        _login(client, "admin")
+        created = []
+        for index in range(1, 4):
+            response = client.post(
+                "/api/warehouse/molds",
+                json={
+                    "mold_code": f"BATCH-{index:03d}",
+                    "mold_name": f"批量标签模具 {index}",
+                    "rack_location": f"3F-M-R01-L1-P{index:02d}",
+                },
+            )
+            assert response.status_code == 201, response.text
+            created.append(response.json())
+
+        before = _protected_business_state(factory)
+        response = client.get(
+            "/api/warehouse/molds/labels",
+            params={
+                "mold_ids": (
+                    f"{created[2]['id']},{created[0]['id']},{created[2]['id']}"
+                )
+            },
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["count"] == 2
+        assert [item["id"] for item in body["items"]] == [
+            created[2]["id"],
+            created[0]["id"],
+        ]
+        assert all(item["qr_data_url"].startswith("data:image/png;base64,") for item in body["items"])
+        assert _protected_business_state(factory) == before
+        with factory() as db:
+            assert db.scalar(select(func.count()).select_from(MoldTool)) == 3
+
+
+def test_batch_mold_labels_fail_closed_for_changed_or_oversized_selection(
+    mold_app,
+) -> None:
+    app, _factory = mold_app
+    with TestClient(app) as client:
+        _login(client, "admin")
+        missing = client.get(
+            "/api/warehouse/molds/labels",
+            params={"mold_ids": "999999"},
+        )
+        assert missing.status_code == 404
+        assert "重新选择" in missing.json()["detail"]
+
+        oversized = client.get(
+            "/api/warehouse/molds/labels",
+            params={"mold_ids": ",".join(str(value) for value in range(1, 102))},
+        )
+        assert oversized.status_code == 422
+        assert "最多打印 100 件" in oversized.json()["detail"]
+
+
+def test_batch_mold_label_frontend_has_selection_sort_and_copy_controls() -> None:
+    root = Path(__file__).resolve().parents[1]
+    warehouse = (root / "static" / "warehouse.html").read_text(encoding="utf-8")
+    label = (root / "static" / "mold-label.html").read_text(encoding="utf-8")
+
+    assert 'id="moldSelectAll"' in warehouse
+    assert 'id="moldBatchPrint"' in warehouse
+    assert "openMoldBatchLabels" in warehouse
+    assert "/mold-label.html?mold_ids=" in warehouse
+    assert 'id="batchSort"' in label
+    assert 'id="copyCount"' in label
+    assert 'value="location"' in label
+    assert "一次最多打印 100 件模具" in Path(
+        root / "app" / "api" / "warehouse.py"
+    ).read_text(encoding="utf-8")

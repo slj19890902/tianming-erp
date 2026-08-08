@@ -5772,6 +5772,102 @@ def list_locations(
     return {"items": [_location_dict(row) for row in rows]}
 
 
+def _require_printable_location_label(row: WarehouseLocation) -> None:
+    if (
+        not row.is_active
+        or (row.placement_status or "placed") != "placed"
+        or row.is_temporary
+        or row.storage_type == "temporary_aisle"
+        or _location_map_status(row) != "floor3_mapped"
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="仅已发布到三楼平面图的正式位置可以打印位置标签",
+        )
+
+
+def _location_label_dict(
+    row: WarehouseLocation,
+    request: Request,
+    lan_ip: str | None = None,
+) -> dict:
+    _require_printable_location_label(row)
+    floor_number = int(row.warehouse_floor or 0)
+    floor_text = {1: "一楼", 2: "二楼", 3: "三楼", 4: "四楼"}.get(
+        floor_number,
+        f"{floor_number}楼" if floor_number else "楼层待确认",
+    )
+    area_text = f"{row.area_code}区" if row.area_code else "区域待确认"
+    port = request.url.port or 8000
+    lookup_url = (
+        f"http://{lan_ip or _lan_ip()}:{port}/warehouse.html"
+        f"?tab=locations&location_id={row.id}"
+    )
+    image = qrcode.make(lookup_url)
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return {
+        **_location_dict(row),
+        "floor_text": floor_text,
+        "area_text": area_text,
+        "display_path": f"{floor_text} · {area_text} · {row.location_name}",
+        "layout_version": row.floor3_layout.version if row.floor3_layout else None,
+        "lookup_url": lookup_url,
+        "qr_data_url": (
+            "data:image/png;base64,"
+            + base64.b64encode(buffer.getvalue()).decode("ascii")
+        ),
+    }
+
+
+@router.get("/locations/labels")
+def get_location_labels(
+    request: Request,
+    location_ids: str = Query(min_length=1, max_length=1200),
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_read),
+) -> dict:
+    raw_ids = [part.strip() for part in location_ids.split(",") if part.strip()]
+    if not raw_ids or any(not part.isdigit() or int(part) <= 0 for part in raw_ids):
+        raise HTTPException(status_code=422, detail="位置批量标签参数无效")
+    ordered_ids = list(dict.fromkeys(int(part) for part in raw_ids))
+    if len(ordered_ids) > 100:
+        raise HTTPException(status_code=422, detail="一次最多打印 100 个位置")
+    rows = db.scalars(
+        select(WarehouseLocation)
+        .options(selectinload(WarehouseLocation.floor3_layout))
+        .where(WarehouseLocation.id.in_(ordered_ids))
+    ).all()
+    rows_by_id = {row.id: row for row in rows}
+    if any(location_id not in rows_by_id for location_id in ordered_ids):
+        raise HTTPException(status_code=404, detail="所选位置已变化，请返回台账重新选择")
+    ordered_rows = [rows_by_id[location_id] for location_id in ordered_ids]
+    for row in ordered_rows:
+        _require_printable_location_label(row)
+    lan_ip = _lan_ip()
+    return {
+        "items": [_location_label_dict(row, request, lan_ip) for row in ordered_rows],
+        "count": len(ordered_rows),
+    }
+
+
+@router.get("/locations/{location_id}/label")
+def get_location_label(
+    location_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_read),
+) -> dict:
+    row = db.scalar(
+        select(WarehouseLocation)
+        .options(selectinload(WarehouseLocation.floor3_layout))
+        .where(WarehouseLocation.id == location_id)
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="位置不存在")
+    return _location_label_dict(row, request)
+
+
 @router.get("/location-candidates")
 def list_location_candidates(
     inventory_type: Literal["finished", "semi_finished"] = "finished",
@@ -6215,6 +6311,66 @@ def _lan_ip() -> str:
         connection.close()
 
 
+def _mold_label_dict(
+    row: MoldTool,
+    request: Request,
+    allowed_customer_ids: set[int] | None,
+    lan_ip: str | None = None,
+) -> dict:
+    port = request.url.port or 8000
+    lookup_url = (
+        f"http://{lan_ip or _lan_ip()}:{port}/mobile/mold-lookup"
+        f"?mold={quote(row.mold_code, safe='')}"
+    )
+    image = qrcode.make(lookup_url)
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return {
+        **_mold_tool_dict(row, allowed_customer_ids),
+        "lookup_url": lookup_url,
+        "qr_data_url": (
+            "data:image/png;base64,"
+            + base64.b64encode(buffer.getvalue()).decode("ascii")
+        ),
+    }
+
+
+@router.get("/molds/labels")
+def get_mold_labels(
+    request: Request,
+    mold_ids: str = Query(min_length=1, max_length=1200),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    raw_ids = [part.strip() for part in mold_ids.split(",") if part.strip()]
+    if not raw_ids or any(not part.isdigit() or int(part) <= 0 for part in raw_ids):
+        raise HTTPException(status_code=422, detail="模具批量标签参数无效")
+    ordered_ids = list(dict.fromkeys(int(part) for part in raw_ids))
+    if len(ordered_ids) > 100:
+        raise HTTPException(status_code=422, detail="一次最多打印 100 件模具")
+    rows = db.scalars(
+        select(MoldTool)
+        .options(selectinload(MoldTool.products).selectinload(Product.customer))
+        .where(MoldTool.id.in_(ordered_ids))
+    ).unique().all()
+    rows_by_id = {row.id: row for row in rows}
+    missing_ids = [mold_id for mold_id in ordered_ids if mold_id not in rows_by_id]
+    if missing_ids:
+        raise HTTPException(status_code=404, detail="所选模具已变化，请返回列表重新选择")
+    allowed_customer_ids = _mold_customer_scope(user, db)
+    ordered_rows = [rows_by_id[mold_id] for mold_id in ordered_ids]
+    for row in ordered_rows:
+        _require_mold_customer_scope(row, allowed_customer_ids)
+    lan_ip = _lan_ip()
+    return {
+        "items": [
+            _mold_label_dict(row, request, allowed_customer_ids, lan_ip)
+            for row in ordered_rows
+        ],
+        "count": len(ordered_rows),
+    }
+
+
 @router.get("/molds/{mold_id}/label")
 def get_mold_label(
     mold_id: int,
@@ -6231,22 +6387,7 @@ def get_mold_label(
         raise HTTPException(status_code=404, detail="模具不存在")
     allowed_customer_ids = _mold_customer_scope(user, db)
     _require_mold_customer_scope(row, allowed_customer_ids)
-    port = request.url.port or 8000
-    lookup_url = (
-        f"http://{_lan_ip()}:{port}/mobile/mold-lookup"
-        f"?mold={quote(row.mold_code, safe='')}"
-    )
-    image = qrcode.make(lookup_url)
-    buffer = BytesIO()
-    image.save(buffer, format="PNG")
-    return {
-        **_mold_tool_dict(row, allowed_customer_ids),
-        "lookup_url": lookup_url,
-        "qr_data_url": (
-            "data:image/png;base64,"
-            + base64.b64encode(buffer.getvalue()).decode("ascii")
-        ),
-    }
+    return _mold_label_dict(row, request, allowed_customer_ids)
 
 
 @router.post("/molds", status_code=201)
@@ -7044,6 +7185,75 @@ def get_lot(
         ).all()
     ]
     return result
+
+
+@router.get("/lots/{lot_id}/label")
+def get_finished_goods_label(
+    lot_id: int,
+    request: Request,
+    expected_version: int = Query(gt=0),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    """Return a read-only, version-bound finished-goods label projection."""
+
+    row = _require_lot_customer_access(db, lot_id, user)
+    if row.inventory_type != "finished" or row.finished_detail is None:
+        raise HTTPException(status_code=409, detail="只有正式成品库存可以打印货物标签")
+    if int(row.version) != expected_version:
+        raise HTTPException(
+            status_code=409,
+            detail="旧标签已失效：库存数量或位置已经变化，请从当前库存重新打印",
+        )
+    physical_quantity = int(row.quantity_available or 0) + int(
+        row.quantity_reserved or 0
+    )
+    if row.status == "closed" or physical_quantity <= 0:
+        raise HTTPException(status_code=409, detail="当前批次已无在库实物，不能打印货物标签")
+    location = row.location
+    if row.status == "frozen":
+        label_status = "异常待确认"
+    elif (
+        location.storage_type == "staging"
+        or location.location_code == "F1-DISPATCH-01"
+    ):
+        label_status = "待送"
+    elif location.storage_type == "sample":
+        label_status = "样品"
+    else:
+        label_status = "成品"
+    source_labels = {
+        "production_completion": "生产完工",
+        "production_surplus": "生产余货",
+        "manual": "手工入库",
+        "stocktake": "盘点入库",
+        "transfer": "移库转入",
+        "delivery_return": "送货退回",
+    }
+    port = request.url.port or 8000
+    lookup_url = (
+        f"http://{_lan_ip()}:{port}/static/finished-goods-label.html"
+        f"?lot_id={row.id}&version={row.version}&view=validate"
+    )
+    image = qrcode.make(lookup_url)
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return {
+        **_lot_dict(row),
+        "label_version": row.version,
+        "label_status": label_status,
+        "physical_quantity": physical_quantity,
+        "source_reference": {
+            "type": row.source_ref_type or row.source_type,
+            "id": row.source_ref_id,
+            "label": source_labels.get(row.source_type, "库存来源"),
+        },
+        "lookup_url": lookup_url,
+        "qr_data_url": (
+            "data:image/png;base64,"
+            + base64.b64encode(buffer.getvalue()).decode("ascii")
+        ),
+    }
 
 
 @router.get("/movements")

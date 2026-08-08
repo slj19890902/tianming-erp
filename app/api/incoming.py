@@ -37,6 +37,7 @@ from app.models.product_bom import (
     RequisitionItemBomSource,
     SalesOrderItemBomComponent,
 )
+from app.models.production import ProductionTask
 from app.models.requisition import Requisition, RequisitionItem
 from app.models.stock_replenishment import (
     StockReplenishmentOrder,
@@ -62,6 +63,7 @@ from app.services.incoming_receipts import (
 )
 from app.services.production_workflow import (
     ProductionWorkflowError,
+    cutting_output_factor,
     has_production_completion_facts,
     lock_order_rows_for_production_transition,
     refresh_order_production_status,
@@ -1760,6 +1762,229 @@ def _incoming_row_response(row: dict) -> dict:
             response["material_received_at"]
         )
     return response
+
+
+def _production_card_steps(notes: str | None) -> list[str]:
+    """Return only process steps explicitly present in the frozen order notes."""
+
+    text = str(notes or "").strip()
+    if not text:
+        return []
+    markers = (
+        ("无印刷", "无印刷"),
+        ("不印刷", "无印刷"),
+        ("印刷", "印刷"),
+        ("压线", "压线"),
+        ("开槽", "开槽"),
+        ("模切", "模切"),
+        ("清料", "清料"),
+        ("打钉", "钉箱"),
+        ("钉箱", "钉箱"),
+        ("粘贴", "粘箱"),
+        ("粘箱", "粘箱"),
+        ("衬板", "衬板"),
+        ("隔板", "隔板"),
+        ("刀卡", "刀卡"),
+    )
+    hits: list[tuple[int, str]] = []
+    for token, label in markers:
+        start = text.find(token)
+        if start >= 0:
+            hits.append((start, label))
+    hits.sort(key=lambda row: row[0])
+    steps: list[str] = []
+    for _position, label in hits:
+        if label == "印刷" and "无印刷" in steps:
+            continue
+        if label not in steps:
+            steps.append(label)
+    return steps
+
+
+@router.get("/receipt-items/{receipt_item_id}/production-card")
+def incoming_production_card(
+    receipt_item_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    """Build a read-only physical-board card from one posted receipt fact."""
+
+    rows = _receipt_fact_rows(
+        db,
+        user=user,
+        received_since=datetime(2000, 1, 1),
+        include_reversed=True,
+    )
+    row = next(
+        (
+            candidate
+            for candidate in rows
+            if int(candidate.get("receipt_item_id") or 0) == receipt_item_id
+        ),
+        None,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="来料实收记录不存在或无权查看")
+    if row.get("receipt_status") != "posted":
+        raise HTTPException(status_code=409, detail="该来料实收已撤销，不能打印生产随料卡")
+    if not row.get("order_item_id"):
+        raise HTTPException(
+            status_code=409,
+            detail="该来料属于库存补库，没有对应生产任务，不能打印生产随料卡",
+        )
+
+    order_item = db.get(OrderItem, int(row["order_item_id"]))
+    if order_item is None:
+        raise HTTPException(status_code=404, detail="关联订单明细不存在")
+    product = db.get(Product, order_item.product_id)
+    fact = db.get(IncomingReceiptItem, receipt_item_id)
+    if fact is None:
+        raise HTTPException(status_code=404, detail="来料实收记录不存在")
+
+    bom_component_id = None
+    source = None
+    if fact.requisition_item_id is not None:
+        source = db.scalar(
+            select(RequisitionItemBomSource)
+            .where(
+                RequisitionItemBomSource.requisition_item_id
+                == fact.requisition_item_id,
+                RequisitionItemBomSource.active_guard == 1,
+            )
+            .order_by(RequisitionItemBomSource.id.asc())
+        )
+        bom_component_id = (
+            source.sales_order_item_bom_component_id if source is not None else None
+        )
+    task_query = select(ProductionTask).where(
+        ProductionTask.order_item_id == order_item.id
+    )
+    if bom_component_id is None:
+        task_query = task_query.where(
+            ProductionTask.sales_order_item_bom_component_id.is_(None)
+        )
+    else:
+        task_query = task_query.where(
+            ProductionTask.sales_order_item_bom_component_id == bom_component_id
+        )
+    task = db.scalar(task_query.order_by(ProductionTask.id.asc()))
+
+    component_snapshot = (
+        source.sales_order_item_bom_component if source is not None else None
+    )
+    frozen_process = (
+        component_snapshot.snapshot_component_production_process
+        if component_snapshot is not None
+        else order_item.snapshot_production_notes
+    )
+    frozen_notes_parts = [str(frozen_process or "").strip()]
+    if component_snapshot is not None:
+        frozen_notes_parts.extend(
+            [
+                str(component_snapshot.snapshot_component_report_notes or "").strip(),
+                str(component_snapshot.remark or "").strip(),
+                str(source.direction_note or "").strip(),
+            ]
+        )
+    frozen_notes = "；".join(dict.fromkeys(part for part in frozen_notes_parts if part))
+    process_steps = _production_card_steps(frozen_process)
+    output_factor = max(
+        int(task.output_factor if task is not None else 0)
+        or cutting_output_factor(row.get("special_process")),
+        1,
+    )
+    supplier_order = (
+        db.get(SupplierRequisitionOrder, fact.supplier_order_id)
+        if fact.supplier_order_id is not None
+        else None
+    )
+    receipt_number = str(row.get("receipt_number") or "").strip()
+    return {
+        "card_type": "incoming_production_material_card",
+        "card_version": 1,
+        "card_number": f"SC-{receipt_number}-{receipt_item_id}",
+        "receipt_item_id": receipt_item_id,
+        "receipt_number": receipt_number,
+        "receipt_status": "posted",
+        "production_task_id": task.id if task is not None else None,
+        "production_task_version": task.version if task is not None else 1,
+        "requisition_number": (
+            supplier_order.order_number
+            if supplier_order is not None
+            else row.get("supplier_order_number")
+        ),
+        "requisition_item_id": fact.supplier_order_item_id
+        or fact.requisition_item_id,
+        "order_number": row.get("display_order_number") or row.get("order_number"),
+        "customer_po": row.get("customer_po"),
+        "customer_name": row.get("customer_name"),
+        "product_code": row.get("product_code"),
+        "product_name": row.get("product_name"),
+        "specification": row.get("specification"),
+        "component_type": row.get("component_type") or "single",
+        "delivery_date": row.get("delivery_date"),
+        "received_at": utc_naive_to_api(fact.receipt.received_at),
+        "received_sheet_quantity": int(fact.received_quantity),
+        "output_factor": output_factor,
+        "production_capacity_quantity": int(fact.received_quantity) * output_factor,
+        "production_unit": product.unit if product is not None else "只",
+        "cutting_mode": row.get("special_process") or "一开一",
+        "board_length_mm": (
+            int(row["cardboard_len"]) if row.get("cardboard_len") is not None else None
+        ),
+        "board_width_mm": (
+            int(row["cardboard_width"])
+            if row.get("cardboard_width") is not None
+            else None
+        ),
+        "layer_count": (
+            component_snapshot.snapshot_component_layer_count
+            if component_snapshot is not None
+            else order_item.layer_count
+        ),
+        "flute_type": (
+            component_snapshot.snapshot_component_flute_type
+            if component_snapshot is not None
+            else row.get("flute_type")
+        ),
+        "crease_type": (
+            component_snapshot.snapshot_component_crease_type
+            if component_snapshot is not None
+            else row.get("snapshot_crease_type")
+        ),
+        "crease_left_mm": (
+            component_snapshot.snapshot_component_crease_left_mm
+            if component_snapshot is not None
+            else row.get("snapshot_crease_left_mm")
+        ),
+        "crease_middle_mm": (
+            component_snapshot.snapshot_component_crease_middle_mm
+            if component_snapshot is not None
+            else row.get("snapshot_crease_middle_mm")
+        ),
+        "crease_right_mm": (
+            component_snapshot.snapshot_component_crease_right_mm
+            if component_snapshot is not None
+            else row.get("snapshot_crease_right_mm")
+        ),
+        "mold_tool_code": (
+            component_snapshot.snapshot_mold_tool_code
+            if component_snapshot is not None
+            else None
+        ),
+        "mold_tool_name": (
+            component_snapshot.snapshot_mold_tool_name
+            if component_snapshot is not None
+            else None
+        ),
+        "production_notes": frozen_notes or None,
+        "process_steps": process_steps,
+        "process_status": "confirmed" if process_steps else "needs_confirmation",
+        "drawing_path": row.get("drawing_path"),
+        "drawing_is_pdf": bool(row.get("drawing_is_pdf")),
+        "printed_by": user.real_name or user.display_name or user.username,
+        "generated_at": utc_naive_to_api(_utc_now()),
+    }
 
 
 @router.get("/surplus-locations")

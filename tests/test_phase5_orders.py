@@ -3539,6 +3539,8 @@ def test_n028_sales_order_response_omits_internal_cost_fields(order_api_app) -> 
         assert created.status_code == 201, created.text
         admin_item = created.json()["items"][0]
         assert "unit_estimated_cost" in admin_item
+        assert "material_cost_status" in admin_item
+        assert "material_cost_components" in admin_item
         client.post("/api/auth/logout")
 
         _login(client, "sales")
@@ -3553,4 +3555,10 @@ def test_n028_sales_order_response_omits_internal_cost_fields(order_api_app) -> 
         "unit_estimated_gross_profit",
         "total_estimated_cost",
         "total_estimated_gross_profit",
+        "material_cost_status",
+        "material_cost_status_label",
+        "material_cost_components",
+        "material_cost_missing_items",
+        "estimated_material_unit_cost",
+        "estimated_material_total_cost",
     }.isdisjoint(sales_item)

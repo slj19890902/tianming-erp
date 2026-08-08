@@ -2063,7 +2063,7 @@
                       </div>
                     </div>
                     <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:6px">
-                      <span>样品 {{ mixedSampleImport.preview.summary?.samples || 0 }} 件</span><span>已分拣 {{ mixedSampleImport.preview.summary?.resolved_samples || 0 }} 件</span><span>待确认 {{ mixedSampleImport.preview.summary?.unresolved_samples || 0 }} 件</span><span>图片 {{ mixedSampleImport.preview.summary?.drawings || 0 }} 张</span><span>新增 {{ mixedSampleImport.preview.summary?.create_products || 0 }} 款</span><span>更新 {{ mixedSampleImport.preview.summary?.update_products || 0 }} 款</span><span>只补图 {{ mixedSampleImport.preview.summary?.drawing_only_products || 0 }} 款</span>
+                      <span>样品 {{ mixedSampleImport.preview.summary?.samples || 0 }} 件</span><span>已分拣 {{ mixedSampleImport.preview.summary?.resolved_samples || 0 }} 件</span><span>目标常用箱 {{ mixedSampleImport.preview.summary?.resolved_products || 0 }} 款</span><span>待确认 {{ mixedSampleImport.preview.summary?.unresolved_samples || 0 }} 件</span><span>图片 {{ mixedSampleImport.preview.summary?.drawings || 0 }} 张</span><span>新增 {{ mixedSampleImport.preview.summary?.create_products || 0 }} 款</span><span>更新 {{ mixedSampleImport.preview.summary?.update_products || 0 }} 款</span><span>只补图 {{ mixedSampleImport.preview.summary?.drawing_only_products || 0 }} 款</span>
                     </div>
                     <div v-if="mixedSampleImport.preview.groups?.length" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
                       <span v-for="group in mixedSampleImport.preview.groups" :key="group.customer_code" class="status green"><strong>{{ group.customer_code }}</strong> {{ group.customer_name }}：{{ group.count }} 款（新增 {{ group.create_products }} / 更新 {{ group.update_products }} / 补图 {{ group.drawing_only_products }}）</span>
@@ -2071,10 +2071,16 @@
                     <div v-if="mixedSampleImport.preview.unresolved?.length" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:8px;margin-top:10px">
                       <div v-for="item in mixedSampleImport.preview.unresolved" :key="item.sample_id" class="panel" style="padding:8px;margin:0">
                         <strong>{{ item.sample_id }}｜{{ item.product_code }}</strong><div class="muted">{{ item.reason }}</div>
-                        <select v-if="item.candidates?.length" class="input" style="width:100%;margin-top:6px" v-model="mixedSampleImport.overrides[item.sample_id]">
-                          <option value="">请选择正确客户/资料</option>
-                          <option v-for="candidate in item.candidates" :key="candidate.key" :value="candidate.key">{{ candidate.customer_code }}｜{{ candidate.product_name }}｜图号 {{ candidate.drawing_number || '-' }}｜{{ candidate.dimensions }}｜报料 {{ candidate.report_size }}</option>
-                        </select>
+                        <div v-if="item.candidates?.length" style="display:grid;gap:6px;margin-top:7px">
+                          <div class="toolbar" style="align-items:flex-start">
+                            <div class="muted">请人工勾选正确资料；同一实物如为跨客户通用，可同时勾选不同客户。同一客户仍只能选一款，系统不会自动双选。</div>
+                            <button v-if="mixedSampleCanSelectAllCustomers(item)" class="btn small" @click="toggleAllMixedSampleCustomers(item)">{{ mixedSampleAllCustomersSelected(item) ? '取消全部通用' : (item.candidates.length === 2 ? '两个客户都通用' : '所列客户都通用') }}</button>
+                          </div>
+                          <label v-for="candidate in item.candidates" :key="candidate.key" class="panel" style="padding:7px;margin:0;cursor:pointer;display:flex;gap:7px;align-items:flex-start">
+                            <input type="checkbox" :checked="mixedSampleCandidateSelected(item.sample_id,candidate.key)" @change="toggleMixedSampleCandidate(item,candidate)" />
+                            <span><strong>{{ candidate.customer_code }}</strong>｜{{ candidate.product_name }}｜图号 {{ candidate.drawing_number || '-' }}｜{{ candidate.dimensions }}｜报料 {{ candidate.report_size }}</span>
+                          </label>
+                        </div>
                         <div v-else class="muted" style="margin-top:6px">请在样品 Excel 修正手写型号，或先补入三客户基础资料后重新预检。</div>
                       </div>
                     </div>
@@ -16588,6 +16594,50 @@
             } finally {
               state.loading = false;
             }
+          },
+          mixedSampleSelectedKeys(sampleId) {
+            const value = this.mixedSampleImport.overrides?.[sampleId];
+            if (Array.isArray(value)) return value;
+            return value ? [value] : [];
+          },
+          mixedSampleCandidateSelected(sampleId,candidateKey) {
+            return this.mixedSampleSelectedKeys(sampleId).includes(candidateKey);
+          },
+          mixedSampleCanSelectAllCustomers(item) {
+            const candidates = item?.candidates || [];
+            return candidates.length >= 2
+              && new Set(candidates.map(candidate=>candidate.customer_code)).size === candidates.length;
+          },
+          mixedSampleAllCustomersSelected(item) {
+            const selected = new Set(this.mixedSampleSelectedKeys(item.sample_id));
+            return this.mixedSampleCanSelectAllCustomers(item)
+              && item.candidates.every(candidate=>selected.has(candidate.key));
+          },
+          toggleAllMixedSampleCustomers(item) {
+            if (this.mixedSampleAllCustomersSelected(item)) {
+              delete this.mixedSampleImport.overrides[item.sample_id];
+              return;
+            }
+            this.mixedSampleImport.overrides[item.sample_id] = item.candidates.map(candidate=>candidate.key);
+          },
+          toggleMixedSampleCandidate(item,candidate) {
+            const sampleId = item.sample_id;
+            let selected = [...this.mixedSampleSelectedKeys(sampleId)];
+            if (selected.includes(candidate.key)) {
+              selected = selected.filter(key=>key !== candidate.key);
+            } else {
+              const sameCustomerKeys = new Set(
+                (item.candidates || [])
+                  .filter(option=>option.customer_code === candidate.customer_code)
+                  .map(option=>option.key),
+              );
+              const replaced = selected.some(key=>sameCustomerKeys.has(key));
+              selected = selected.filter(key=>!sameCustomerKeys.has(key));
+              selected.push(candidate.key);
+              if (replaced) this.showToast(`同一客户 ${candidate.customer_code} 只能选一款，已替换原选择`);
+            }
+            if (selected.length) this.mixedSampleImport.overrides[sampleId] = selected;
+            else delete this.mixedSampleImport.overrides[sampleId];
           },
           async applyMixedSampleImport() {
             const state = this.mixedSampleImport;

@@ -38,7 +38,7 @@ EXTERNAL_PACKAGING_CATEGORIES = {
     "epe_cushion",
     "other_packaging",
 }
-PURCHASE_UNITS = {"根", "米", "件", "张", "令", "kg", "吨", "只", "个", "套", "片", "卷"}
+PURCHASE_UNITS = {"根", "米", "件", "张", "令", "kg", "吨", "只", "个", "套", "片", "卷", "箱"}
 
 
 class SupplierPayload(BaseModel):

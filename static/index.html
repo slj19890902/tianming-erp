@@ -1185,6 +1185,12 @@
       .bom-preview-title { color: #075985; font-weight: 700; }
       .bom-preview-list { display: grid; gap: 2px; margin-top: 2px; }
       .bom-preview-item { overflow-wrap: anywhere; }
+      .external-packaging-order-panel { margin-top:12px; padding:12px; border:1px solid #f59e0b; border-radius:10px; background:#fffbeb; }
+      .external-packaging-order-item { margin-top:9px; padding:9px 10px; border:1px solid #fde68a; border-radius:8px; background:#fff; }
+      .external-packaging-order-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:7px; margin-top:7px; }
+      .external-packaging-order-card { padding:8px 9px; border:1px solid #e5e7eb; border-radius:8px; background:#f8fafc; line-height:1.45; }
+      .external-packaging-order-card strong { color:#92400e; }
+      .external-packaging-order-meta { margin-top:3px; color:var(--muted); font-size:12px; white-space:normal; }
       @media (max-width: 900px) {
         .bom-component-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       }
@@ -2754,7 +2760,7 @@
                                   <tr v-for="(item,itemIndex) in row.items" :key="item.id">
                                     <td class="col-order-item-sequence">{{ item.item_sequence || itemIndex + 1 }}</td>
                                     <td><span v-for="(part,index) in orderSearchHighlightParts(plainProductText(item.snapshot_product_code))" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span></td>
-                                    <td><span v-for="(part,index) in orderSearchHighlightParts(plainProductText(item.snapshot_product_name))" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span><div v-if="item.combination_role==='priced_component'" class="status blue" style="margin-top:3px">{{ combinationGroupLabel(item) }}</div><div v-if="item.mold_location" class="muted" style="font-size:11px">模具：{{ moldLocationText(item) }}</div></td>
+                                    <td><span v-for="(part,index) in orderSearchHighlightParts(plainProductText(item.snapshot_product_name))" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span><div v-if="item.combination_role==='priced_component'" class="status blue" style="margin-top:3px">{{ combinationGroupLabel(item) }}</div><div v-if="hasExternalPackagingRequirements(item)" class="status orange" style="margin-top:3px;white-space:normal">下一步：核对外购包装 {{ item.external_packaging_requirements.length }} 项</div><div v-if="item.mold_location" class="muted" style="font-size:11px">模具：{{ moldLocationText(item) }}</div></td>
                                     <td><span v-for="(part,index) in orderSearchHighlightParts(item.snapshot_spec || '-')" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span></td>
                                     <td style="white-space:normal;word-break:break-all;max-width:140px;font-size:12px"><span v-for="(part,index) in orderSearchHighlightParts(orderItemMaterialText(item, false))" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span></td>
                                     <td class="cell-right"><strong>{{ item.quantity }}</strong><div v-if="Number(item.business_delivered_quantity || 0) > 0" class="order-delivery-compact">已送 {{ item.business_delivered_quantity }}/{{ item.quantity }}</div></td>
@@ -5602,6 +5608,24 @@
                   <span v-else class="muted">-</span>
                 </td>
               </tr></tbody></table>
+              <div v-if="orderDetail.items.some(hasExternalPackagingRequirements)" class="external-packaging-order-panel">
+                <div><strong>下一步：外购包装待确认</strong></div>
+                <div class="muted" style="margin-top:3px">这里是下单时冻结的用量建议，不会自动选供应商或生成采购单。</div>
+                <div v-for="item in orderDetail.items.filter(hasExternalPackagingRequirements)" :key="`external-${item.id}`" class="external-packaging-order-item">
+                  <div><strong>{{ item.item_sequence || '-' }}. {{ item.snapshot_product_code || '-' }}｜{{ item.snapshot_product_name || '-' }}</strong> · 订单 {{ item.quantity }} 个</div>
+                  <div class="external-packaging-order-grid">
+                    <div v-for="component in item.external_packaging_requirements" :key="component.id" class="external-packaging-order-card">
+                      <strong>{{ component.purpose }}</strong>
+                      <div>{{ component.specification_summary }}</div>
+                      <div>需要 {{ component.requirement_quantity }} {{ component.requirement_unit }}</div>
+                      <div v-if="component.suggested_purchase_quantity !== null">建议采购 <strong>{{ component.suggested_purchase_quantity }} {{ component.suggested_purchase_unit }}</strong></div>
+                      <div v-else class="status orange">暂不能换算：{{ component.suggestion_blocked_reason }}</div>
+                      <div v-if="component.default_candidate" class="external-packaging-order-meta">默认建议：{{ externalPackagingCandidateText(component.default_candidate) }}</div>
+                      <div v-if="component.alternative_candidates?.length" class="external-packaging-order-meta">其他可选：{{ component.alternative_candidates.map(externalPackagingCandidateText).join('；') }}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
             <div v-else-if="modal.type === 'requisitionHold'" class="requisition-hold-modal">
               <div class="notice">暂缓只把明细移到等候报料，不会生成报料单、待入库或库存。</div>
@@ -6935,7 +6959,7 @@
               {value:"epe_cushion",label:"EPE缓冲包装"},
               {value:"other_packaging",label:"其他外购包装"},
             ],
-            externalPackagingUnits:["根","米","件","张","令","kg","吨","只","个","套","片","卷"],
+            externalPackagingUnits:["根","米","件","张","令","kg","吨","只","个","套","片","卷","箱"],
             supplierPackagingSupplier:null,
             supplierPackagingProducts:[],
             supplierPackagingSearch:"",
@@ -16550,6 +16574,16 @@
           },
           hasBomComponents(item) {
             return Array.isArray(item?.bom_components) && item.bom_components.length > 0;
+          },
+          hasExternalPackagingRequirements(item) {
+            return Array.isArray(item?.external_packaging_requirements) && item.external_packaging_requirements.length > 0;
+          },
+          externalPackagingCandidateText(candidate) {
+            if (!candidate) return "-";
+            const supplier = candidate.supplier_name || "供应商";
+            const code = candidate.supplier_product_code || "-";
+            const name = candidate.product_name || "外购产品";
+            return `${supplier}｜${code}｜${name}`;
           },
           orderBomComponentText(component) {
             const code = component?.internal_code || component?.product_code || "-";

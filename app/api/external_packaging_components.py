@@ -25,7 +25,7 @@ from app.services.supplier_master import SUPPLIER_CATEGORY_LABELS
 
 router = APIRouter()
 admin_only = RoleChecker(["admin"])
-ALLOWED_UNITS = {"根", "米", "件", "张", "令", "kg", "吨", "只", "个", "套", "片", "卷"}
+ALLOWED_UNITS = {"根", "米", "件", "张", "令", "kg", "吨", "只", "个", "套", "片", "卷", "箱"}
 
 
 class ExternalCandidatePayload(BaseModel):

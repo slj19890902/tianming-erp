@@ -151,6 +151,10 @@ from app.services.composite_bom import (
     is_composite_product,
     raise_http as raise_composite_bom_http,
 )
+from app.services.order_external_packaging import (
+    freeze_order_item_external_components,
+    get_order_item_external_components_by_item_ids,
+)
 from app.services.composite_bom_workflow import (
     CompositeBomWorkflowError,
     append_component_demand_adjustment,
@@ -1658,6 +1662,7 @@ def _order_response(
     display_registry=None,
     completion_dates: dict[int, date] | None = None,
     bom_components_by_item_id: dict[int, list[dict]] | None = None,
+    external_components_by_item_id: dict[int, list[dict]] | None = None,
     business_projection: dict | None = None,
     active_holds_by_item_id: dict[int, RequisitionHold] | None = None,
 ) -> dict:
@@ -1694,6 +1699,12 @@ def _order_response(
     if bom_components_by_item_id is None:
         bom_components_by_item_id = (
             get_order_item_bom_components_by_item_ids(db, item_ids)
+            if db is not None
+            else {}
+        )
+    if external_components_by_item_id is None:
+        external_components_by_item_id = (
+            get_order_item_external_components_by_item_ids(db, list(order.items))
             if db is not None
             else {}
         )
@@ -1782,6 +1793,9 @@ def _order_response(
                 "combination_set_quantity_snapshot": item.combination_set_quantity_snapshot,
                 "combination_quantity_per_set_snapshot": item.combination_quantity_per_set_snapshot,
                 "bom_components": item_bom_components,
+                "external_packaging_requirements": external_components_by_item_id.get(
+                    item.id, []
+                ),
                 "delivered_quantity": item.delivered_quantity,
                 "remaining_quantity": max(
                     int(item.quantity or 0) - int(item.delivered_quantity or 0),
@@ -4540,6 +4554,9 @@ def get_order_group_detail(
     bom_components_by_item_id = get_order_item_bom_components_by_item_ids(
         db, item_ids
     )
+    external_components_by_item_id = get_order_item_external_components_by_item_ids(
+        db, [item for order in orders for item in order.items]
+    )
     customer = db.get(Customer, customer_id)
     display_registry = build_display_registry(db)
     return {
@@ -4556,6 +4573,7 @@ def get_order_group_detail(
                 display_registry=display_registry,
                 completion_dates=completion_dates,
                 bom_components_by_item_id=bom_components_by_item_id,
+                external_components_by_item_id=external_components_by_item_id,
                 business_projection=business_projections.get(int(order.id)),
             )
             for order in orders
@@ -5668,6 +5686,7 @@ def _create_order_impl(
         db.flush()  # 获取 item.id 以便处理图纸
         for index, created_item in enumerate(created_items, start=1):
             product = resolved_products[index]
+            freeze_order_item_external_components(db, order_item=created_item)
             if created_item.combination_role == "set_parent":
                 create_order_item_bom_snapshots(
                     db,

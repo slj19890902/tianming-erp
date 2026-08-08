@@ -1336,6 +1336,10 @@ def test_material_price_history_records_initial_and_single_edit_contract(
         page = client.get(
             f"/api/master/materials/{material['id']}/price-history?offset=0&limit=1"
         )
+        newest = client.get(
+            f"/api/master/materials/{material['id']}/price-history",
+            params={"offset": 0, "limit": 1, "order": "desc"},
+        )
         filtered = client.get(
             f"/api/master/materials/{material['id']}/price-history"
             "?date_from=2026-08-02&date_to=2026-08-03"
@@ -1355,6 +1359,10 @@ def test_material_price_history_records_initial_and_single_edit_contract(
     assert history.status_code == 200, history.text
     assert history.json()["total"] == 3
     assert history.json()["current_price"] == 4.9
+    assert history.json()["previous_effective_price"] == 5.2
+    assert history.json()["current_change_amount"] == pytest.approx(-0.3)
+    assert history.json()["current_change_percent"] == pytest.approx(-5.7692)
+    assert history.json()["chart_compatible"] is True
     assert [item["new_price"] for item in history.json()["items"]] == [
         5.0,
         5.2,
@@ -1369,6 +1377,9 @@ def test_material_price_history_records_initial_and_single_edit_contract(
     assert page.json()["total"] == 3
     assert page.json()["has_more"] is True
     assert len(page.json()["items"]) == 1
+    assert newest.status_code == 200
+    assert newest.json()["items"][0]["new_price"] == 4.9
+    assert newest.json()["order"] == "desc"
     assert filtered.status_code == 200
     assert filtered.json()["total"] == 2
     with writer_app.state.session_factory() as session:
@@ -1451,12 +1462,26 @@ def test_material_price_history_marks_legacy_gap_future_and_unknown_time(
 
     with TestClient(writer_app) as client:
         history = client.get(f"/api/master/materials/{legacy_id}/price-history")
+        pending_only = client.get(
+            f"/api/master/materials/{legacy_id}/price-history",
+            params={"effective_status": "pending"},
+        )
+        unknown_only = client.get(
+            f"/api/master/materials/{legacy_id}/price-history",
+            params={"effective_status": "time_unknown"},
+        )
 
     assert history.status_code == 200, history.text
     assert [item["effective_status"] for item in history.json()["items"]] == [
         "pending",
         "time_unknown",
     ]
+    assert pending_only.status_code == 200
+    assert pending_only.json()["total"] == 1
+    assert pending_only.json()["items"][0]["effective_status"] == "pending"
+    assert unknown_only.status_code == 200
+    assert unknown_only.json()["total"] == 1
+    assert unknown_only.json()["items"][0]["effective_status"] == "time_unknown"
     with TestClient(writer_app) as client:
         invalid_range = client.get(
             f"/api/master/materials/{legacy_id}/price-history"
@@ -1514,6 +1539,8 @@ def test_material_price_history_records_date_and_unit_only_changes(
     assert "报价日期" in history.json()["items"][1]["adjust_reason"]
     assert "计价单位" in history.json()["items"][2]["adjust_reason"]
     assert history.json()["current_price_unit"] == "元/张"
+    assert history.json()["chart_compatible"] is False
+    assert "不同单位" in history.json()["chart_notice"]
 
 
 def test_material_price_history_requires_cost_permission(writer_app: FastAPI) -> None:

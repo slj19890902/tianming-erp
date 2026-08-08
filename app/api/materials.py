@@ -1348,6 +1348,10 @@ def get_material_price_history(
     date_to: date | None = Query(default=None),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=200, ge=1, le=500),
+    effective_status: Literal["effective", "pending", "time_unknown"] | None = Query(
+        default=None
+    ),
+    order: Literal["asc", "desc"] = Query(default="asc"),
     db: Session = Depends(get_db),
     user: User = Depends(can_cost),
 ) -> dict:
@@ -1415,6 +1419,17 @@ def get_material_price_history(
         filters.append(MaterialPriceHistory.effective_date >= date_from)
     if date_to is not None:
         filters.append(MaterialPriceHistory.effective_date <= date_to)
+    if effective_status == "effective":
+        filters.extend(
+            [
+                MaterialPriceHistory.effective_date.is_not(None),
+                MaterialPriceHistory.effective_date <= today,
+            ]
+        )
+    elif effective_status == "pending":
+        filters.append(MaterialPriceHistory.effective_date > today)
+    elif effective_status == "time_unknown":
+        filters.append(MaterialPriceHistory.effective_date.is_(None))
     total = int(
         db.scalar(
             select(func.count())
@@ -1423,11 +1438,21 @@ def get_material_price_history(
         )
         or 0
     )
+    if order == "desc":
+        history_order = (
+            MaterialPriceHistory.created_at.desc(),
+            MaterialPriceHistory.id.desc(),
+        )
+    else:
+        history_order = (
+            MaterialPriceHistory.created_at.asc(),
+            MaterialPriceHistory.id.asc(),
+        )
     rows = list(
         db.scalars(
             select(MaterialPriceHistory)
             .where(*filters)
-            .order_by(MaterialPriceHistory.created_at.asc(), MaterialPriceHistory.id.asc())
+            .order_by(*history_order)
             .offset(offset)
             .limit(limit)
         ).all()
@@ -1443,6 +1468,61 @@ def get_material_price_history(
         current_effective_price = _price_decimal(next_pending_row.old_price)
     else:
         current_effective_price = _price_decimal(material.quote_price)
+    effective_rows = list(
+        db.scalars(
+            select(MaterialPriceHistory)
+            .where(
+                *base_filters,
+                MaterialPriceHistory.effective_date.is_not(None),
+                MaterialPriceHistory.effective_date <= today,
+            )
+            .order_by(
+                MaterialPriceHistory.effective_date.desc(),
+                MaterialPriceHistory.created_at.desc(),
+                MaterialPriceHistory.id.desc(),
+            )
+            .limit(2)
+        ).all()
+    )
+    previous_effective_price = (
+        _price_decimal(effective_rows[1].new_price)
+        if len(effective_rows) > 1
+        else (
+            _price_decimal(effective_rows[0].old_price)
+            if effective_rows and effective_rows[0].old_price is not None
+            else None
+        )
+    )
+    current_change_amount = (
+        current_effective_price - previous_effective_price
+        if current_effective_price is not None and previous_effective_price is not None
+        else None
+    )
+    current_change_percent = _price_adjust_percent(
+        previous_effective_price,
+        current_effective_price,
+    )
+    pending_count = int(
+        db.scalar(
+            select(func.count())
+            .select_from(MaterialPriceHistory)
+            .where(
+                *base_filters,
+                MaterialPriceHistory.effective_date > today,
+            )
+        )
+        or 0
+    )
+    unit_change_detected = bool(
+        db.scalar(
+            select(MaterialPriceHistory.id)
+            .where(
+                *base_filters,
+                MaterialPriceHistory.adjust_reason.contains("计价单位："),
+            )
+            .limit(1)
+        )
+    )
 
     def history_item(history: MaterialPriceHistory) -> dict:
         old_price = _price_decimal(history.old_price)
@@ -1502,6 +1582,32 @@ def get_material_price_history(
             if next_pending_row is not None and next_pending_row.effective_date is not None
             else None
         ),
+        "previous_effective_price": (
+            float(previous_effective_price)
+            if previous_effective_price is not None
+            else None
+        ),
+        "current_change_amount": (
+            float(current_change_amount) if current_change_amount is not None else None
+        ),
+        "current_change_percent": (
+            float(current_change_percent)
+            if current_change_percent is not None
+            else None
+        ),
+        "latest_effective_date": (
+            current_effective_row.effective_date.isoformat()
+            if current_effective_row is not None
+            and current_effective_row.effective_date is not None
+            else None
+        ),
+        "pending_count": pending_count,
+        "chart_compatible": not unit_change_detected,
+        "chart_notice": (
+            "历史中存在计价单位变化；没有可信换算时不把不同单位画在同一纵轴。"
+            if unit_change_detected
+            else None
+        ),
         "current_price_unit": material.price_unit,
         "material_active": material.is_active,
         "history_incomplete": history_incomplete,
@@ -1513,6 +1619,8 @@ def get_material_price_history(
         "total": total,
         "offset": offset,
         "limit": limit,
+        "effective_status": effective_status,
+        "order": order,
         "has_more": offset + len(rows) < total,
         "items": [history_item(history) for history in rows],
     }

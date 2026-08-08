@@ -280,6 +280,28 @@ def _movement(
     return row
 
 
+def record_location_transfer_without_quantity_change(
+    db: Session,
+    *,
+    lot: InventoryLot,
+    operator_id: int | None,
+    idempotency_key: str,
+    remarks: str,
+) -> InventoryMovement:
+    """Record a physical location change without altering inventory balances."""
+    before = _balances(lot)
+    return _movement(
+        db,
+        lot=lot,
+        movement_type="location_transfer",
+        quantity=0,
+        before=before,
+        operator_id=operator_id,
+        remarks=remarks,
+        idempotency_key=idempotency_key,
+    )
+
+
 def _transfer_key(*parts: object, max_length: int = 100) -> str:
     raw = ":".join(str(part).strip() for part in parts)
     if len(raw) <= max_length:

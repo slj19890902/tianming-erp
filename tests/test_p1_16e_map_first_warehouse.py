@@ -8,6 +8,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WAREHOUSE = (ROOT / "static" / "warehouse.html").read_text(encoding="utf-8")
+WAREHOUSE_TWIN = (
+    ROOT / "factory_twin" / "frontend" / "src" / "WarehouseTwinApp.tsx"
+).read_text(encoding="utf-8")
 
 
 def test_warehouse_daily_navigation_defaults_to_measured_twin_floor() -> None:
@@ -91,6 +94,80 @@ def test_measured_twin_location_detail_exposes_the_same_controlled_move() -> Non
     assert '"数字孪生地图移动整栈板"' in mover
     assert "selectTwinOperationalArea(floor3AreaCode(targetRow))" in mover
     assert "await selectTwinOperationalLocation(Number(locationId))" in WAREHOUSE
+
+
+def test_p1_16e2_merge_all_is_a_single_confirm_without_quantity_or_reason() -> None:
+    merger = WAREHOUSE.split(
+        "async function mergeFloor3PalletAll(palletId,selectId,twinMode){", 1
+    )[1].split("async function clearFloor3Pallet", 1)[0]
+    panel = WAREHOUSE.split("function floor3MergePanel(pallet,selectId,twinMode){", 1)[
+        1
+    ].split("function floor3ExpectedVersion", 1)[0]
+    assert "/api/warehouse/pallets/${source.id}/merge-all" in merger
+    assert merger.count("confirm(") == 1
+    assert "target_pallet_id:target.id" in merger
+    assert "expected_target_version:targetVersion" in merger
+    assert "confirmed:true" in merger
+    assert "idempotency_key:idempotencyKey" in merger
+    assert "<input" not in panel.lower()
+    assert "reason" not in panel.lower()
+    assert "合并全部剩余货物" in panel
+    assert "同客户、同库存类型" in panel
+
+
+def test_p1_16e2_only_lists_compatible_occupied_target_pallets() -> None:
+    signature = WAREHOUSE.split("function floor3PalletMergeSignature(pallet){", 1)[
+        1
+    ].split("function floor3MergeTypeLabel", 1)[0]
+    loader = WAREHOUSE.split("async function loadFloor3MergeLocations(pallet){", 1)[
+        1
+    ].split("function renderFloor3Locations", 1)[0]
+    assert "customers.length===1" in signature
+    assert "types.length===1" in signature
+    assert "signature?.customerId===source.customerId" in signature
+    assert "signature?.inventoryType===source.inventoryType" in signature
+    assert 'occupancy:"occupied"' in loader
+    assert "customer_id:signature.customerId" in loader
+
+
+def test_p1_16e2_merge_action_is_available_in_both_map_details() -> None:
+    standard = WAREHOUSE.split("function renderFloor3Detail(){", 1)[1].split(
+        "function closeFloor3Detail", 1
+    )[0]
+    twin = WAREHOUSE.split("function renderTwinOperationalDetail(){", 1)[1].split(
+        "async function loadTwinOperationalLayout", 1
+    )[0]
+    assert 'floor3MergePanel(pallet,"floor3PalletMergeTarget",false)' in standard
+    assert 'floor3MergePanel(pallet,"twinPalletMergeTarget",true)' in twin
+    assert "mergePanel" in standard
+    assert "mergePanel" in twin
+
+
+def test_p1_16e2_current_twin_entry_exposes_single_confirm_merge() -> None:
+    merger = WAREHOUSE_TWIN.split(
+        "const confirmPalletMergeAll = async () => {", 1
+    )[1].split("const correctSelectedInventoryLot", 1)[0]
+    form = WAREHOUSE_TWIN.split(
+        '<div className="twin-pallet-merge-form">', 1
+    )[1].split("</div>}", 1)[0]
+    assert "/api/warehouse/pallets/${selectedLocation.pallet.pallet_id}/merge-all" in merger
+    assert merger.count("window.confirm(") == 1
+    assert "target_pallet_id: target.pallet.pallet_id" in merger
+    assert "expected_target_version: target.pallet.version" in merger
+    assert "confirmed: true" in merger
+    assert "idempotency_key: mergeIdempotencyKey" in merger
+    assert "数量" not in form.replace("不拆数量", "")
+    assert "原因" not in form
+    assert "合并全部剩余货物" in form
+
+
+def test_p1_16e2_current_twin_only_lists_compatible_target_pallets() -> None:
+    assert "const selectedMergeSignature = palletMergeSignature(selectedLocation);" in WAREHOUSE_TWIN
+    assert 'item.occupancy_status !== "occupied"' in WAREHOUSE_TWIN
+    assert 'item.storage_type === "rack"' in WAREHOUSE_TWIN
+    assert "signature?.customerId === selectedMergeSignature.customerId" in WAREHOUSE_TWIN
+    assert "signature.inventoryType === selectedMergeSignature.inventoryType" in WAREHOUSE_TWIN
+    assert "同客户、同库存类型" in WAREHOUSE_TWIN
 
 
 def test_map_lot_card_shows_authoritative_quantity_breakdown() -> None:

@@ -235,6 +235,302 @@ def _matched_item(customer_id: int, product_id: int, code: str) -> dict:
     }
 
 
+def test_p1_16e2_merge_all_preserves_formal_lots_and_is_idempotent(
+    floor3_app,
+) -> None:
+    from app.models.audit import OperationLog
+    from app.models.warehouse_inventory import (
+        InventoryLocationMovement,
+        InventoryLot,
+        InventoryMovement,
+        InventoryPallet,
+        InventoryPalletItem,
+    )
+    from app.services.warehouse_inventory import manual_finished_in
+
+    app, ids, factory = floor3_app
+    with factory() as db:
+        first = manual_finished_in(
+            db,
+            customer_id=ids["tianhua"],
+            product_id=ids["products"][0],
+            location_id=ids["locations"][0],
+            quantity=10,
+            stock_date=date(2026, 7, 14),
+            source_type="manual",
+            remarks=None,
+            operator_id=ids["admin"],
+            idempotency_key="p1-16e2-source-lot-1",
+            pallet_code="PLT-P1-16E2-SOURCE",
+        )
+        source_pallet_id = first.pallet_item.pallet_id
+        second = manual_finished_in(
+            db,
+            customer_id=ids["tianhua"],
+            product_id=ids["products"][1],
+            location_id=ids["locations"][0],
+            quantity=7,
+            stock_date=date(2026, 7, 10),
+            source_type="manual",
+            remarks=None,
+            operator_id=ids["admin"],
+            idempotency_key="p1-16e2-source-lot-2",
+            pallet_id=source_pallet_id,
+        )
+        target_lot = manual_finished_in(
+            db,
+            customer_id=ids["tianhua"],
+            product_id=ids["products"][2],
+            location_id=ids["locations"][1],
+            quantity=5,
+            stock_date=date(2026, 7, 1),
+            source_type="manual",
+            remarks=None,
+            operator_id=ids["admin"],
+            idempotency_key="p1-16e2-target-lot",
+            pallet_code="PLT-P1-16E2-TARGET",
+        )
+        first.quantity_available = 8
+        first.quantity_reserved = 2
+        first.estimated_unit_cost_snapshot = Decimal("1.2345")
+        db.commit()
+        source = db.get(InventoryPallet, source_pallet_id)
+        target_pallet_id = target_lot.pallet_item.pallet_id
+        target = db.get(InventoryPallet, target_pallet_id)
+        source_version = source.version
+        target_version = target.version
+        lot_before = {
+            row.id: (
+                row.quantity_available,
+                row.quantity_reserved,
+                row.quantity_consumed,
+                row.quantity_damaged,
+                row.quantity_scrapped,
+                row.stock_date,
+                row.estimated_unit_cost_snapshot,
+            )
+            for row in (first, second, target_lot)
+        }
+        source_lot_ids = [first.id, second.id]
+
+    payload = {
+        "expected_version": source_version,
+        "target_pallet_id": target_pallet_id,
+        "expected_target_version": target_version,
+        "confirmed": True,
+        "idempotency_key": "p1-16e2-merge-success",
+    }
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        merged = client.post(
+            f"/api/warehouse/pallets/{source_pallet_id}/merge-all",
+            json=payload,
+        )
+        assert merged.status_code == 200, merged.text
+        body = merged.json()
+        assert body["idempotent_replay"] is False
+        assert body["moved_item_count"] == 2
+        assert body["source_pallet"]["is_current"] is False
+        assert body["source_pallet"]["location_id"] is None
+        assert body["target_pallet"]["item_count"] == 3
+
+        replay = client.post(
+            f"/api/warehouse/pallets/{source_pallet_id}/merge-all",
+            json=payload,
+        )
+        assert replay.status_code == 200, replay.text
+        assert replay.json()["idempotent_replay"] is True
+
+        source_location = client.get(
+            f"/api/warehouse/floor3/locations/{ids['locations'][0]}"
+        ).json()
+        target_location = client.get(
+            f"/api/warehouse/floor3/locations/{ids['locations'][1]}"
+        ).json()
+        assert source_location["occupancy_status"] == "empty"
+        assert target_location["occupancy_status"] == "occupied"
+
+    with factory() as db:
+        source = db.get(InventoryPallet, source_pallet_id)
+        target = db.get(InventoryPallet, target_pallet_id)
+        assert source.status == "closed"
+        assert source.version == source_version + 1
+        assert target.status == "active"
+        assert target.version == target_version + 1
+        assert db.scalar(
+            select(func.count(InventoryPalletItem.id)).where(
+                InventoryPalletItem.pallet_id == target_pallet_id
+            )
+        ) == 3
+        for lot_id, before in lot_before.items():
+            lot = db.get(InventoryLot, lot_id)
+            assert (
+                lot.quantity_available,
+                lot.quantity_reserved,
+                lot.quantity_consumed,
+                lot.quantity_damaged,
+                lot.quantity_scrapped,
+                lot.stock_date,
+                lot.estimated_unit_cost_snapshot,
+            ) == before
+        for lot_id in source_lot_ids:
+            lot = db.get(InventoryLot, lot_id)
+            assert lot.warehouse_location_id == ids["locations"][1]
+            assert lot.pallet_item.pallet_id == target_pallet_id
+        lot_movements = db.scalars(
+            select(InventoryMovement).where(
+                InventoryMovement.movement_type == "location_transfer",
+                InventoryMovement.inventory_lot_id.in_(source_lot_ids),
+            )
+        ).all()
+        assert len(lot_movements) == 2
+        assert all(row.quantity == 0 for row in lot_movements)
+        pallet_movements = db.scalars(
+            select(InventoryLocationMovement).where(
+                InventoryLocationMovement.idempotency_key.in_(
+                    ("p1-16e2-merge-success", "p1-16e2-merge-success:target")
+                )
+            )
+        ).all()
+        assert {row.movement_type for row in pallet_movements} == {
+            "clear",
+            "add_item",
+        }
+        assert db.scalar(
+            select(func.count(OperationLog.id)).where(
+                OperationLog.description.in_(
+                    (
+                        "源栈板全部剩余货物已合并并释放",
+                        "目标栈板接收全部零散货",
+                    )
+                )
+            )
+        ) == 2
+
+
+def test_p1_16e2_merge_rejects_customer_type_and_stale_target(
+    floor3_app,
+) -> None:
+    from app.models.warehouse_inventory import InventoryPallet, InventoryPalletItem, WarehouseLocation
+    from app.services.floor3_locations import create_pallet
+
+    app, ids, factory = floor3_app
+    with factory() as db:
+        extra_locations = []
+        for index in range(3):
+            extra_locations.append(
+                WarehouseLocation(
+                    location_code=f"A1-L1{index + 3}",
+                    location_name=f"A1-L1{index + 3}",
+                    warehouse_type="finished",
+                    warehouse_floor=3,
+                    area_code="A1",
+                    storage_type="ground",
+                    sort_order=20 + index,
+                    source_version="V11",
+                )
+            )
+        db.add_all(extra_locations)
+        db.flush()
+        source = create_pallet(
+            db,
+            location_id=ids["locations"][0],
+            pallet_code="PLT-P1-16E2-RULE-SOURCE",
+            items=[_matched_item(ids["tianhua"], ids["products"][0], "TH-A")],
+            remarks=None,
+            operator_id=ids["admin"],
+        )
+        other_customer = create_pallet(
+            db,
+            location_id=ids["locations"][1],
+            pallet_code="PLT-P1-16E2-OTHER",
+            items=[_matched_item(ids["other"], ids["other_product"], "QT-A")],
+            remarks=None,
+            operator_id=ids["admin"],
+        )
+        other_type_item = _matched_item(
+            ids["tianhua"], ids["products"][1], "TH-SEMI"
+        )
+        other_type_item.update(item_type="semi_finished", unit="sheets")
+        other_type = create_pallet(
+            db,
+            location_id=extra_locations[0].id,
+            pallet_code="PLT-P1-16E2-SEMI",
+            items=[other_type_item],
+            remarks=None,
+            operator_id=ids["admin"],
+        )
+        compatible = create_pallet(
+            db,
+            location_id=extra_locations[1].id,
+            pallet_code="PLT-P1-16E2-COMPATIBLE",
+            items=[_matched_item(ids["tianhua"], ids["products"][2], "TH-B")],
+            remarks=None,
+            operator_id=ids["admin"],
+        )
+        db.commit()
+        source_id = source.id
+        source_version = source.version
+        other_customer_id = other_customer.id
+        other_customer_version = other_customer.version
+        other_type_id = other_type.id
+        other_type_version = other_type.version
+        compatible_id = compatible.id
+        compatible_version = compatible.version
+
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        wrong_customer = client.post(
+            f"/api/warehouse/pallets/{source_id}/merge-all",
+            json={
+                "expected_version": source_version,
+                "target_pallet_id": other_customer_id,
+                "expected_target_version": other_customer_version,
+                "confirmed": True,
+                "idempotency_key": "p1-16e2-wrong-customer",
+            },
+        )
+        assert wrong_customer.status_code == 409
+        assert "同一客户" in wrong_customer.json()["detail"]
+
+        wrong_type = client.post(
+            f"/api/warehouse/pallets/{source_id}/merge-all",
+            json={
+                "expected_version": source_version,
+                "target_pallet_id": other_type_id,
+                "expected_target_version": other_type_version,
+                "confirmed": True,
+                "idempotency_key": "p1-16e2-wrong-type",
+            },
+        )
+        assert wrong_type.status_code == 409
+        assert "同一库存类型" in wrong_type.json()["detail"]
+
+        stale_target = client.post(
+            f"/api/warehouse/pallets/{source_id}/merge-all",
+            json={
+                "expected_version": source_version,
+                "target_pallet_id": compatible_id,
+                "expected_target_version": compatible_version + 99,
+                "confirmed": True,
+                "idempotency_key": "p1-16e2-stale-target",
+            },
+        )
+        assert stale_target.status_code == 409
+        assert "其他操作更新" in stale_target.json()["detail"]
+
+    with factory() as db:
+        source = db.get(InventoryPallet, source_id)
+        assert source.is_current is True
+        assert source.location_id == ids["locations"][0]
+        assert source.version == source_version
+        assert db.scalar(
+            select(func.count(InventoryPalletItem.id)).where(
+                InventoryPalletItem.pallet_id == source_id
+            )
+        ) == 1
+
+
 def test_floor3_locations_filter_by_customer_and_combine_with_existing_filters(
     floor3_app,
 ) -> None:

@@ -5772,6 +5772,102 @@ def list_locations(
     return {"items": [_location_dict(row) for row in rows]}
 
 
+def _require_printable_location_label(row: WarehouseLocation) -> None:
+    if (
+        not row.is_active
+        or (row.placement_status or "placed") != "placed"
+        or row.is_temporary
+        or row.storage_type == "temporary_aisle"
+        or _location_map_status(row) != "floor3_mapped"
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="仅已发布到三楼平面图的正式位置可以打印位置标签",
+        )
+
+
+def _location_label_dict(
+    row: WarehouseLocation,
+    request: Request,
+    lan_ip: str | None = None,
+) -> dict:
+    _require_printable_location_label(row)
+    floor_number = int(row.warehouse_floor or 0)
+    floor_text = {1: "一楼", 2: "二楼", 3: "三楼", 4: "四楼"}.get(
+        floor_number,
+        f"{floor_number}楼" if floor_number else "楼层待确认",
+    )
+    area_text = f"{row.area_code}区" if row.area_code else "区域待确认"
+    port = request.url.port or 8000
+    lookup_url = (
+        f"http://{lan_ip or _lan_ip()}:{port}/warehouse.html"
+        f"?tab=locations&location_id={row.id}"
+    )
+    image = qrcode.make(lookup_url)
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return {
+        **_location_dict(row),
+        "floor_text": floor_text,
+        "area_text": area_text,
+        "display_path": f"{floor_text} · {area_text} · {row.location_name}",
+        "layout_version": row.floor3_layout.version if row.floor3_layout else None,
+        "lookup_url": lookup_url,
+        "qr_data_url": (
+            "data:image/png;base64,"
+            + base64.b64encode(buffer.getvalue()).decode("ascii")
+        ),
+    }
+
+
+@router.get("/locations/labels")
+def get_location_labels(
+    request: Request,
+    location_ids: str = Query(min_length=1, max_length=1200),
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_read),
+) -> dict:
+    raw_ids = [part.strip() for part in location_ids.split(",") if part.strip()]
+    if not raw_ids or any(not part.isdigit() or int(part) <= 0 for part in raw_ids):
+        raise HTTPException(status_code=422, detail="位置批量标签参数无效")
+    ordered_ids = list(dict.fromkeys(int(part) for part in raw_ids))
+    if len(ordered_ids) > 100:
+        raise HTTPException(status_code=422, detail="一次最多打印 100 个位置")
+    rows = db.scalars(
+        select(WarehouseLocation)
+        .options(selectinload(WarehouseLocation.floor3_layout))
+        .where(WarehouseLocation.id.in_(ordered_ids))
+    ).all()
+    rows_by_id = {row.id: row for row in rows}
+    if any(location_id not in rows_by_id for location_id in ordered_ids):
+        raise HTTPException(status_code=404, detail="所选位置已变化，请返回台账重新选择")
+    ordered_rows = [rows_by_id[location_id] for location_id in ordered_ids]
+    for row in ordered_rows:
+        _require_printable_location_label(row)
+    lan_ip = _lan_ip()
+    return {
+        "items": [_location_label_dict(row, request, lan_ip) for row in ordered_rows],
+        "count": len(ordered_rows),
+    }
+
+
+@router.get("/locations/{location_id}/label")
+def get_location_label(
+    location_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_read),
+) -> dict:
+    row = db.scalar(
+        select(WarehouseLocation)
+        .options(selectinload(WarehouseLocation.floor3_layout))
+        .where(WarehouseLocation.id == location_id)
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="位置不存在")
+    return _location_label_dict(row, request)
+
+
 @router.get("/location-candidates")
 def list_location_candidates(
     inventory_type: Literal["finished", "semi_finished"] = "finished",

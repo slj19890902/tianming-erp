@@ -639,12 +639,12 @@ def candidate_view(candidate: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def select_reference_candidate(
+def select_reference_candidates(
     records: list[dict[str, Any]],
     registration: dict[str, Any],
     *,
-    override_key: str | None = None,
-) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    override_keys: list[str] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str | None]:
     candidates = collapse_reference_candidates(
         reference_candidates(
             records,
@@ -652,15 +652,33 @@ def select_reference_candidate(
             customer_hint=registration.get("customer_hint"),
         )
     )
-    if override_key:
-        selected = next(
-            (candidate for candidate in candidates if candidate["key"] == override_key),
-            None,
-        )
-        return selected, candidates
+    if override_keys is not None:
+        if not override_keys:
+            return [], candidates, None
+        candidates_by_key = {candidate["key"]: candidate for candidate in candidates}
+        selected: list[dict[str, Any]] = []
+        seen_keys: set[str] = set()
+        seen_customers: set[str] = set()
+        for key in override_keys:
+            if key in seen_keys:
+                return [], candidates, "同一客户资料不能重复选择"
+            candidate = candidates_by_key.get(key)
+            if candidate is None:
+                return [], candidates, "所选客户资料已变化，请重新选择"
+            customer_code = candidate["customer_code"]
+            if customer_code in seen_customers:
+                return (
+                    [],
+                    candidates,
+                    "同一客户只能选择一款资料；跨客户通用时可为不同客户各选一款",
+                )
+            selected.append(candidate)
+            seen_keys.add(key)
+            seen_customers.add(customer_code)
+        return selected, candidates, None
     if len(candidates) == 1:
-        return candidates[0], candidates
-    return None, candidates
+        return [candidates[0]], candidates, None
+    return [], candidates, None
 
 
 def merge_registration(target: dict[str, Any], incoming: dict[str, Any]) -> str | None:

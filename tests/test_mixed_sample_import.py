@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from io import BytesIO
 
 from fastapi import FastAPI
@@ -109,6 +110,24 @@ def _reference_workbook() -> bytes:
     return _xlsx(workbook)
 
 
+def _reference_workbook_with_two_yke_choices() -> bytes:
+    workbook = load_workbook(BytesIO(_reference_workbook()))
+    sheet = workbook["YKE"]
+    row = [None] * 19
+    row[1] = "研光共享箱第二款"
+    row[2] = "DRAW-YKE-2"
+    row[3] = "SHARED001"
+    row[8] = "310*210*110"
+    row[9] = "125*110*125=360"
+    row[10] = 360
+    row[12] = 1020
+    row[15] = "VSNIV/AB"
+    row[17] = 7.1
+    row[18] = "红钉"
+    sheet.append(row)
+    return _xlsx(workbook)
+
+
 def _registration_workbook() -> bytes:
     from app.services.mixed_sample_import import build_mixed_sample_workbook
 
@@ -133,6 +152,32 @@ def _jpeg_bytes() -> bytes:
     output = BytesIO()
     Image.new("RGB", (160, 100), "white").save(output, "JPEG", quality=80)
     return output.getvalue()
+
+
+def _mixed_files(reference: bytes | None = None) -> list[tuple[str, tuple]]:
+    return [
+        (
+            "reference_file",
+            ("三客户基础资料.xlsx", reference or _reference_workbook(), EXCEL_MIME),
+        ),
+        ("files", ("现场登记.xlsx", _registration_workbook(), EXCEL_MIME)),
+        ("drawings", ("YP001_1.jpg", _jpeg_bytes(), "image/jpeg")),
+    ]
+
+
+def _candidate_keys(client: TestClient, reference: bytes | None = None) -> dict[str, str]:
+    response = client.post(
+        "/api/master/products/mixed-import/preview",
+        data={"overrides": "{}"},
+        files=_mixed_files(reference),
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["valid"] is False, payload
+    return {
+        candidate["customer_code"]: candidate["key"]
+        for candidate in payload["unresolved"][0]["candidates"]
+    }
 
 
 def test_mixed_template_replaces_csv_and_bat_workflow() -> None:
@@ -212,6 +257,134 @@ def test_mixed_preview_requires_explicit_customer_then_applies_atomically(
         assert products[0].report_length_mm == 1000
         assert products[0].production_process == "开槽、印刷、打钉"
         assert db.scalar(select(ProductDrawing).where(ProductDrawing.product_id == products[0].id)) is not None
+
+
+def test_shared_sample_can_be_imported_for_two_distinct_customers_with_same_photo(
+    mixed_sample_app: FastAPI,
+) -> None:
+    from app.models.customer import Customer
+    from app.models.product import Product
+    from app.models.product_drawing import ProductDrawing
+
+    with TestClient(mixed_sample_app) as client:
+        _login(client)
+        keys = _candidate_keys(client)
+        preview_response = client.post(
+            "/api/master/products/mixed-import/preview",
+            data={"overrides": json.dumps({"YP001": [keys["YKE"], keys["KEW"]]})},
+            files=_mixed_files(),
+        )
+        assert preview_response.status_code == 200, preview_response.text
+        preview = preview_response.json()
+        assert preview["valid"] is True, preview
+        assert preview["summary"]["samples"] == 1
+        assert preview["summary"]["resolved_samples"] == 1
+        assert preview["summary"]["resolved_products"] == 2
+        assert preview["summary"]["drawings"] == 1
+        assert preview["summary"]["resolved_drawings"] == 1
+        assert {group["customer_code"] for group in preview["groups"]} == {"YKE", "KEW"}
+        assert len(preview["items"]) == 2
+
+        applied = client.post(
+            "/api/master/products/mixed-import/apply",
+            json={"preview_token": preview["preview_token"]},
+        )
+        assert applied.status_code == 200, applied.text
+        assert applied.json()["summary"]["drawings"] == 2
+
+    with mixed_sample_app.state.session_factory() as db:
+        products = db.scalars(select(Product).order_by(Product.id)).all()
+        assert len(products) == 2
+        assert {
+            db.get(Customer, product.customer_id).customer_code for product in products
+        } == {"YKE", "KEW"}
+        drawings = db.scalars(select(ProductDrawing).order_by(ProductDrawing.id)).all()
+        assert len(drawings) == 2
+        assert {drawing.product_id for drawing in drawings} == {
+            product.id for product in products
+        }
+
+
+def test_same_customer_cannot_select_two_reference_rows(
+    mixed_sample_app: FastAPI,
+) -> None:
+    reference = _reference_workbook_with_two_yke_choices()
+    with TestClient(mixed_sample_app) as client:
+        _login(client)
+        first = client.post(
+            "/api/master/products/mixed-import/preview",
+            data={"overrides": "{}"},
+            files=_mixed_files(reference),
+        )
+        assert first.status_code == 200, first.text
+        candidates = first.json()["unresolved"][0]["candidates"]
+        yke_keys = [
+            candidate["key"]
+            for candidate in candidates
+            if candidate["customer_code"] == "YKE"
+        ]
+        assert len(yke_keys) == 2
+
+        second = client.post(
+            "/api/master/products/mixed-import/preview",
+            data={"overrides": json.dumps({"YP001": yke_keys})},
+            files=_mixed_files(reference),
+        )
+        assert second.status_code == 200, second.text
+        payload = second.json()
+        assert payload["valid"] is False
+        assert "同一客户只能选择一款资料" in payload["unresolved"][0]["reason"]
+        assert payload["summary"]["resolved_products"] == 0
+
+
+def test_two_customer_import_rolls_back_both_when_second_drawing_fails(
+    mixed_sample_app: FastAPI,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from app.api import product_import
+    from app.models.product import Product
+    from app.models.product_drawing import ProductDrawing
+
+    with TestClient(mixed_sample_app) as client:
+        _login(client)
+        keys = _candidate_keys(client)
+        preview_response = client.post(
+            "/api/master/products/mixed-import/preview",
+            data={"overrides": json.dumps({"YP001": [keys["YKE"], keys["KEW"]]})},
+            files=_mixed_files(),
+        )
+        preview = preview_response.json()
+        assert preview["valid"] is True, preview
+
+        original_save = product_import.save_product_drawing_files
+        call_count = 0
+
+        def fail_second_save(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                raise RuntimeError("forced second customer drawing failure")
+            return original_save(*args, **kwargs)
+
+        monkeypatch.setattr(
+            product_import,
+            "save_product_drawing_files",
+            fail_second_save,
+        )
+        with pytest.raises(RuntimeError, match="forced second customer drawing failure"):
+            client.post(
+                "/api/master/products/mixed-import/apply",
+                json={"preview_token": preview["preview_token"]},
+            )
+
+    with mixed_sample_app.state.session_factory() as db:
+        assert db.scalar(select(Product)) is None
+        assert db.scalar(select(ProductDrawing)) is None
+    private_files = [
+        path for path in (tmp_path / "private_uploads").rglob("*") if path.is_file()
+    ]
+    assert private_files == []
 
 
 def test_legacy_embedded_rows_with_invalid_old_choices_are_still_read() -> None:

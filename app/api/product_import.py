@@ -80,7 +80,7 @@ from app.services.mixed_sample_import import (
     process_from_registration,
     read_mixed_reference_workbook,
     read_mixed_sample_workbook,
-    select_reference_candidate,
+    select_reference_candidates,
     store_mixed_preview,
 )
 from app.services.secure_uploads import (
@@ -835,11 +835,18 @@ async def preview_mixed_sample_import(
         parsed_overrides = json.loads(overrides or "{}")
     except json.JSONDecodeError as error:
         raise HTTPException(status_code=400, detail="待确认客户选择格式错误") from error
-    if not isinstance(parsed_overrides, dict) or any(
-        not isinstance(key, str) or not isinstance(value, str)
-        for key, value in parsed_overrides.items()
-    ):
+    if not isinstance(parsed_overrides, dict):
         raise HTTPException(status_code=400, detail="待确认客户选择格式错误")
+    normalized_overrides: dict[str, list[str]] = {}
+    for key, value in parsed_overrides.items():
+        if not isinstance(key, str):
+            raise HTTPException(status_code=400, detail="待确认客户选择格式错误")
+        if isinstance(value, str):
+            normalized_overrides[key] = [value] if value else []
+        elif isinstance(value, list) and all(isinstance(item, str) for item in value):
+            normalized_overrides[key] = value
+        else:
+            raise HTTPException(status_code=400, detail="待确认客户选择格式错误")
 
     errors: list[dict] = []
     try:
@@ -1012,41 +1019,46 @@ async def preview_mixed_sample_import(
     resolved: list[tuple[dict, dict, Customer]] = []
     customer_cache: dict[str, Customer | None] = {}
     for registration in registrations.values():
-        override_key = parsed_overrides.get(str(registration["sample_id"]))
-        reference, candidates = select_reference_candidate(
+        sample_id = str(registration["sample_id"])
+        override_keys = normalized_overrides.get(sample_id)
+        selected_references, candidates, selection_error = select_reference_candidates(
             reference_records,
             registration,
-            override_key=override_key,
+            override_keys=override_keys,
         )
-        if reference is None:
+        if not selected_references:
             unresolved.append(
                 {
                     "sample_id": registration["sample_id"],
                     "product_code": registration["product_code"],
                     "reason": (
-                        "基础资料中找不到该型号"
-                        if not candidates
-                        else "该型号对应多个客户或多款资料，请明确选择"
+                        selection_error
+                        or (
+                            "基础资料中找不到该型号"
+                            if not candidates
+                            else "该型号对应多个客户或多款资料，请明确选择；跨客户通用可同时勾选"
+                        )
                     ),
                     "candidates": [candidate_view(candidate) for candidate in candidates],
                 }
             )
             continue
-        customer_code = reference["customer_code"]
-        if customer_code not in customer_cache:
-            customer_cache[customer_code] = _mixed_customer_by_code(db, customer_code)
-        customer = customer_cache[customer_code]
-        if customer is None:
-            errors.append(
-                {
-                    "sheet": "客户主档",
-                    "row_number": registration["row_number"],
-                    "message": f"ERP 中不存在客户代码 {customer_code}",
-                }
-            )
-            continue
-        require_customer_access(customer.id, current_user=user, db=db)
-        resolved.append((registration, reference, customer))
+        for reference in selected_references:
+            customer_code = reference["customer_code"]
+            if customer_code not in customer_cache:
+                customer_cache[customer_code] = _mixed_customer_by_code(db, customer_code)
+            customer = customer_cache[customer_code]
+            if customer is None:
+                errors.append(
+                    {
+                        "sheet": "客户主档",
+                        "row_number": registration["row_number"],
+                        "message": f"ERP 中不存在客户代码 {customer_code}",
+                    }
+                )
+                continue
+            require_customer_access(customer.id, current_user=user, db=db)
+            resolved.append((registration, reference, customer))
 
     product_items: list[dict] = []
     seen_products: set[tuple[int, str]] = set()
@@ -1103,12 +1115,15 @@ async def preview_mixed_sample_import(
             continue
         for filename, image in zip(names, images, strict=True):
             key = filename.casefold()
-            if key in required_names:
+            existing = required_names.get(key)
+            if existing is not None:
+                if sha256(existing[1]).digest() == sha256(image.content).digest():
+                    continue
                 _append_error(
                     errors,
                     sheet=MIXED_PRODUCT_SHEET,
                     row_number=item["row_number"],
-                    message=f"照片文件名在本批次重复：{filename}",
+                    message=f"照片同名但内容不同：{filename}",
                 )
                 continue
             required_names[key] = (filename, image.content, item["row_number"])
@@ -1116,7 +1131,10 @@ async def preview_mixed_sample_import(
     summary = {
         "workbooks": len(source_files),
         "samples": len(registrations),
-        "resolved_samples": len(product_items),
+        "resolved_samples": len(
+            {str(item["sample_id"]).casefold() for item in product_items}
+        ),
+        "resolved_products": len(product_items),
         "unresolved_samples": len(unresolved),
         "create_products": sum(item["action"] == "新增" for item in product_items),
         "update_products": sum(item["action"] == "更新" for item in product_items),

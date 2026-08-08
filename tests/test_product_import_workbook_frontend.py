@@ -45,3 +45,15 @@ def test_mixed_sample_import_is_global_and_removes_csv_bat_steps() -> None:
     assert '"/api/master/products/mixed-import/apply"' in INDEX
     assert 'form.append("overrides",JSON.stringify(state.overrides || {}))' in INDEX
     assert "确认录入三家客户" in INDEX
+
+
+def test_mixed_sample_shared_code_allows_distinct_customer_multi_select() -> None:
+    assert 'type="checkbox" :checked="mixedSampleCandidateSelected(item.sample_id,candidate.key)"' in INDEX
+    assert '@change="toggleMixedSampleCandidate(item,candidate)"' in INDEX
+    assert "同一实物如为跨客户通用，可同时勾选不同客户" in INDEX
+    assert "同一客户仍只能选一款，系统不会自动双选" in INDEX
+    assert "两个客户都通用" in INDEX
+    assert '@click="toggleAllMixedSampleCustomers(item)"' in INDEX
+    assert "mixedSampleCanSelectAllCustomers(item)" in INDEX
+    assert "sameCustomerKeys" in INDEX
+    assert "目标常用箱 {{ mixedSampleImport.preview.summary?.resolved_products || 0 }} 款" in INDEX

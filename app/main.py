@@ -37,6 +37,7 @@ from app.api.mobile_erp import router as mobile_erp_router
 from app.api.master_data_versions import router as master_data_versions_router
 from app.api.materials import router as materials_router
 from app.api.suppliers import router as suppliers_router
+from app.api.external_packaging_prices import router as external_packaging_prices_router
 from app.api.orders import router as orders_router
 from app.api.pricing import router as pricing_router
 from app.api.products import (
@@ -434,6 +435,11 @@ def create_app() -> FastAPI:
         ("/api/master/customers", customers_router, "master-customers"),
         ("/api/master/materials", materials_router, "master-materials"),
         ("/api/master/suppliers", suppliers_router, "master-suppliers"),
+        (
+            "/api/master/external-packaging",
+            external_packaging_prices_router,
+            "external-packaging-prices",
+        ),
         ("/api/master/products", product_import_router, "master-product-import"),
         ("/api/master/products", products_router, "master-products"),
     )

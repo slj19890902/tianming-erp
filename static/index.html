@@ -4090,7 +4090,7 @@
               <div v-else class="table-wrap"><table class="compact-table"><thead><tr><th>类别</th><th>供应商产品代码</th><th>产品名称</th><th>规格</th><th>采购单位</th><th>交期</th><th>状态</th><th>操作</th></tr></thead><tbody>
                 <tr v-for="row in supplierPackagingProducts" :key="row.id">
                   <td>{{ supplierCategoryLabel(row.category_code) }}</td><td><strong>{{ row.supplier_product_code }}</strong></td><td>{{ row.product_name }}</td><td>{{ row.specification_summary }}</td><td>{{ row.purchase_unit }}</td><td>{{ row.lead_time_days == null ? '-' : row.lead_time_days+'天' }}</td><td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td>
-                  <td class="toolbar-group"><button class="btn small" @click="openSupplierPackagingProduct(row)">编辑</button><button :class="['btn','small',row.is_active ? 'danger' : 'success']" @click="toggleSupplierPackagingProduct(row)">{{ row.is_active ? '停用' : '启用' }}</button></td>
+                  <td class="toolbar-group"><button class="btn small" @click="openSupplierPackagingProduct(row)">编辑</button><button v-if="canViewCosts" class="btn small" @click="openSupplierPackagingPrices(row)">采购报价</button><button :class="['btn','small',row.is_active ? 'danger' : 'success']" @click="toggleSupplierPackagingProduct(row)">{{ row.is_active ? '停用' : '启用' }}</button></td>
                 </tr>
               </tbody></table></div>
             </div>
@@ -4114,6 +4114,44 @@
               </div>
               <div class="field" style="margin-top:12px"><label>备注</label><textarea class="textarea" v-model.trim="supplierPackagingForm.remarks"></textarea></div>
               <div class="toolbar" style="justify-content:flex-end;margin-top:12px"><button class="btn" @click="returnToSupplierPackagingCatalog">取消</button><button class="btn primary" :disabled="supplierPackagingSaving" @click="saveSupplierPackagingProduct">{{ supplierPackagingSaving ? '保存中…' : '保存产品' }}</button></div>
+            </div>
+            <div v-else-if="modal.type === 'supplierPackagingPrices'" class="cost-sensitive">
+              <div v-if="supplierPriceLoading" class="empty">正在读取报价版本…</div>
+              <div v-else>
+                <div class="panel" style="margin-bottom:10px">
+                  <div class="toolbar"><div><strong>{{ supplierPriceProduct?.supplier_product_code }}｜{{ supplierPriceProduct?.product_name }}</strong><div class="muted">{{ supplierPriceProduct?.supplier_name }}｜{{ supplierPriceProduct?.specification_summary }}</div></div><button class="btn" @click="loadSupplierPriceComparison">同规格比价</button></div>
+                  <div v-if="supplierPriceCurrent" class="toolbar-group" style="margin-top:8px;flex-wrap:wrap"><span class="status green">当前有效 v{{ supplierPriceCurrent.version_number }}</span><strong>{{ supplierPriceCurrent.currency }} {{ supplierPriceCurrent.unit_price }} / {{ supplierPriceCurrent.quote_unit }}</strong><span>{{ supplierPriceTaxLabel(supplierPriceCurrent) }}</span><span v-if="supplierPriceCurrent.moq_quantity">MOQ {{ supplierPriceCurrent.moq_quantity }} {{ supplierPriceCurrent.moq_unit }}</span><span class="muted">生效 {{ supplierPriceCurrent.effective_from }}</span></div>
+                  <div v-else class="status orange" style="margin-top:8px">采购价待完善（不会自动填 0）</div>
+                </div>
+                <details class="panel" open><summary style="cursor:pointer;font-weight:700">新增真实报价版本</summary>
+                  <div class="notice" style="margin:8px 0">只有拿到供应商真实报价后填写。同一事实重复保存不会增加版本；价格或口径变化才新增。</div>
+                  <div class="form-grid">
+                    <div class="field"><label>单价（必填）</label><input class="input" type="number" min="0.000001" step="0.000001" v-model="supplierPriceForm.unit_price" /></div>
+                    <div class="field"><label>报价主单位</label><select class="select" v-model="supplierPriceForm.quote_unit"><option v-for="unit in externalPackagingUnits" :key="unit" :value="unit">{{ unit }}</option><option value="㎡">㎡</option><option value="m³">m³</option></select></div>
+                    <div v-if="supplierPriceForm.quote_unit && supplierPriceForm.quote_unit!==supplierPriceProduct?.purchase_unit" class="field wide"><label>单位换算依据（必填）</label><input class="input" v-model.trim="supplierPriceForm.unit_conversion_basis" placeholder="供应商报价单或包装换算说明" /></div>
+                    <div class="field"><label>币种</label><input class="input" maxlength="3" v-model.trim="supplierPriceForm.currency" /></div>
+                    <div class="field"><label>税费口径</label><select class="select" v-model="supplierPriceForm.tax_mode"><option value="tax_inclusive">含税</option><option value="tax_exclusive">未税</option></select></div>
+                    <div class="field"><label>税率</label><input class="input" type="number" min="0" max="1" step="0.01" v-model="supplierPriceForm.tax_rate" /></div>
+                    <div class="field"><label>每单位税额（报价有写才填）</label><input class="input" type="number" min="0" step="0.000001" v-model="supplierPriceForm.tax_amount_per_unit" /></div>
+                    <div class="field"><label>生效日期</label><input class="input" type="date" v-model="supplierPriceForm.effective_from" /></div>
+                    <div class="field"><label>失效日期（可空）</label><input class="input" type="date" v-model="supplierPriceForm.effective_to" /></div>
+                    <div class="field"><label>MOQ（{{ supplierPriceForm.quote_unit || '-' }}）</label><input class="input" type="number" min="0.0001" step="0.0001" v-model="supplierPriceForm.moq_quantity" /></div>
+                    <div class="field"><label>包装倍数</label><input class="input" type="number" min="0.0001" step="0.0001" v-model="supplierPriceForm.packaging_multiple" /></div>
+                    <div class="field"><label>运费方式</label><select class="select" v-model="supplierPriceForm.shipping_fee_mode"><option value="not_provided">报价未说明</option><option value="included">已含单价</option><option value="per_order">按单</option><option value="per_unit">按单位</option></select></div>
+                    <div v-if="['per_order','per_unit'].includes(supplierPriceForm.shipping_fee_mode)" class="field"><label>运费金额</label><input class="input" type="number" min="0" step="0.01" v-model="supplierPriceForm.shipping_fee" /></div>
+                    <div class="field"><label>打样费</label><input class="input" type="number" min="0" step="0.01" v-model="supplierPriceForm.sample_fee" /></div>
+                    <div class="field"><label>版费</label><input class="input" type="number" min="0" step="0.01" v-model="supplierPriceForm.plate_fee" /></div>
+                    <div class="field"><label>刀模费</label><input class="input" type="number" min="0" step="0.01" v-model="supplierPriceForm.die_fee" /></div>
+                    <div class="field wide"><label>报价证据（必填）</label><input class="input" v-model.trim="supplierPriceForm.evidence_reference" placeholder="报价单号 / 文件名 / 确认日期" /></div>
+                  </div>
+                  <div class="panel" style="margin-top:10px"><div class="toolbar"><strong>阶梯价（可选）</strong><button class="btn small" @click="supplierPriceForm.tier_prices.push({min_quantity:'',unit_price:''})">增加阶梯</button></div><div v-for="(tier,index) in supplierPriceForm.tier_prices" :key="index" class="toolbar-group" style="margin-top:6px"><input class="input" style="width:150px" type="number" min="0.0001" step="0.0001" v-model="tier.min_quantity" placeholder="起订数量" /><input class="input" style="width:150px" type="number" min="0.000001" step="0.000001" v-model="tier.unit_price" placeholder="该档单价" /><button class="btn small danger" @click="supplierPriceForm.tier_prices.splice(index,1)">删除</button></div></div>
+                  <div class="field" style="margin-top:10px"><label>备注</label><textarea class="textarea" v-model.trim="supplierPriceForm.remarks"></textarea></div>
+                  <div class="toolbar" style="justify-content:flex-end;margin-top:10px"><button class="btn primary" :disabled="supplierPriceSaving" @click="saveSupplierPriceVersion">{{ supplierPriceSaving ? '保存中…' : '保存报价版本' }}</button></div>
+                </details>
+                <div v-if="supplierPriceComparison" class="panel" style="margin-top:10px"><div class="toolbar"><strong>同规格同口径比价</strong><span class="muted">不同单位、币种或税费口径不会进入比较</span></div><div v-if="!supplierPriceComparison.items?.length" class="muted" style="margin-top:8px">暂无可直接比较的其他报价。</div><div v-else class="table-wrap" style="margin-top:8px"><table class="compact-table"><thead><tr><th>供应商</th><th>产品代码</th><th>单价</th><th>比最低</th><th>条件差异</th></tr></thead><tbody><tr v-for="row in supplierPriceComparison.items" :key="row.external_product_id"><td>{{ row.supplier?.display_name || row.supplier?.standard_name }}</td><td>{{ row.supplier_product_code }}</td><td>{{ row.currency }} {{ row.unit_price }}/{{ row.quote_unit }}</td><td>{{ Number(row.difference_to_lowest || 0)===0 ? '当前最低' : '+'+row.difference_to_lowest }}</td><td>{{ row.condition_differences?.join('、') || '无' }}</td></tr></tbody></table></div></div>
+                <div class="panel" style="margin-top:10px"><strong>不可变价格历史</strong><div v-if="!supplierPriceItems.length" class="muted" style="margin-top:8px">暂无历史报价。</div><div v-else class="table-wrap" style="margin-top:8px"><table class="compact-table"><thead><tr><th>版本</th><th>单价/单位</th><th>税费</th><th>MOQ/倍数</th><th>运费</th><th>一次性费用</th><th>生效期</th><th>证据</th></tr></thead><tbody><tr v-for="row in supplierPriceItems" :key="row.id"><td>v{{ row.version_number }}</td><td><strong>{{ row.currency }} {{ row.unit_price }}/{{ row.quote_unit }}</strong></td><td>{{ supplierPriceTaxLabel(row) }}</td><td>{{ row.moq_quantity ? row.moq_quantity+' '+row.moq_unit : '-' }} / {{ row.packaging_multiple || '-' }}</td><td>{{ supplierPriceShippingLabel(row) }}</td><td>样 {{ row.sample_fee ?? '-' }} / 版 {{ row.plate_fee ?? '-' }} / 刀模 {{ row.die_fee ?? '-' }}</td><td>{{ row.effective_from }}～{{ row.effective_to || '长期' }}</td><td>{{ row.evidence_reference }}</td></tr></tbody></table></div></div>
+                <div class="toolbar" style="justify-content:flex-end;margin-top:10px"><button class="btn" @click="returnToSupplierPackagingCatalog">返回外购产品</button></div>
+              </div>
             </div>
             <div v-else-if="modal.type === 'quotationConvert'" class="product-edit-grid">
               <div class="status blue" style="display:block;white-space:normal;margin-bottom:10px">
@@ -6657,6 +6695,14 @@
         purchase_unit:"", specification:{}, drawing_sample_version:"", lead_time_days:null,
         remarks:"", is_active:true,
       });
+      const blankSupplierPrice = (unit="") => ({
+        quote_unit:unit || "件", unit_conversion_basis:"", currency:"CNY",
+        tax_mode:"tax_inclusive", tax_rate:"0.13", tax_amount_per_unit:"",
+        unit_price:"", effective_from:today(), effective_to:"",
+        moq_quantity:"", packaging_multiple:"", tier_prices:[],
+        shipping_fee_mode:"not_provided", shipping_fee:"",
+        sample_fee:"", plate_fee:"", die_fee:"", evidence_reference:"", remarks:"",
+      });
       const blankProduct = () => ({
         id: null, version: null, customer_id: null, product_code: "", customer_material_code: "",
         product_name: "", material_id: null, legacy_material_text: null,
@@ -6844,6 +6890,13 @@
             supplierPackagingError:"",
             supplierPackagingSaving:false,
             supplierPackagingForm:blankSupplierPackagingProduct(),
+            supplierPriceLoading:false,
+            supplierPriceSaving:false,
+            supplierPriceProduct:null,
+            supplierPriceCurrent:null,
+            supplierPriceItems:[],
+            supplierPriceComparison:null,
+            supplierPriceForm:blankSupplierPrice(),
             materialSuppliers: [],
             productEditorOptionsLoading: false,
             productEditorOptionsError: "",
@@ -11348,6 +11401,111 @@
             } catch (error) {
               this.showToast(this.errorMessage(error),true);
             }
+          },
+          async openSupplierPackagingPrices(row) {
+            if (!this.canViewCosts || !row?.id) return;
+            this.supplierPriceLoading = true;
+            this.supplierPriceProduct = {...JSON.parse(JSON.stringify(row)),supplier_name:this.supplierPackagingSupplier?.display_name || this.supplierPackagingSupplier?.standard_name};
+            this.supplierPriceCurrent = null;
+            this.supplierPriceItems = [];
+            this.supplierPriceComparison = null;
+            this.supplierPriceForm = blankSupplierPrice(row.purchase_unit);
+            this.modal = {type:"supplierPackagingPrices",title:`采购报价｜${row.supplier_product_code}`};
+            try {
+              await this.loadSupplierPriceVersions();
+            } finally {
+              this.supplierPriceLoading = false;
+            }
+          },
+          async loadSupplierPriceVersions() {
+            const productId = Number(this.supplierPriceProduct?.id || 0);
+            if (!productId) return false;
+            try {
+              const {data} = await axios.get(`/api/master/external-packaging/products/${productId}/prices`);
+              this.supplierPriceProduct = data?.product || this.supplierPriceProduct;
+              this.supplierPriceCurrent = data?.current || null;
+              this.supplierPriceItems = Array.isArray(data?.items) ? data.items : [];
+              return true;
+            } catch (error) {
+              this.showToast(this.errorMessage(error),true);
+              return false;
+            }
+          },
+          supplierPriceNullable(value) {
+            return value === "" || value == null ? null : String(value);
+          },
+          supplierPricePayload() {
+            const form = this.supplierPriceForm || {};
+            if (!String(form.unit_price || "").trim()) throw new Error("请填写真实单价");
+            if (!String(form.effective_from || "").trim()) throw new Error("请选择生效日期");
+            if (!String(form.evidence_reference || "").trim()) throw new Error("请填写报价证据");
+            const tiers = (form.tier_prices || []).map(row => ({
+              min_quantity:String(row.min_quantity || "").trim(),
+              unit_price:String(row.unit_price || "").trim(),
+            }));
+            if (tiers.some(row => !row.min_quantity || !row.unit_price)) throw new Error("请补全阶梯价数量和单价，或删除空行");
+            return {
+              quote_unit:form.quote_unit,
+              unit_conversion_basis:String(form.unit_conversion_basis || "").trim() || null,
+              currency:String(form.currency || "CNY").trim().toUpperCase(),
+              tax_mode:form.tax_mode,
+              tax_rate:String(form.tax_rate ?? "0"),
+              tax_amount_per_unit:this.supplierPriceNullable(form.tax_amount_per_unit),
+              unit_price:String(form.unit_price),
+              effective_from:form.effective_from,
+              effective_to:form.effective_to || null,
+              moq_quantity:this.supplierPriceNullable(form.moq_quantity),
+              moq_unit:this.supplierPriceNullable(form.moq_quantity) == null ? null : form.quote_unit,
+              packaging_multiple:this.supplierPriceNullable(form.packaging_multiple),
+              tier_prices:tiers,
+              shipping_fee_mode:form.shipping_fee_mode,
+              shipping_fee:this.supplierPriceNullable(form.shipping_fee),
+              sample_fee:this.supplierPriceNullable(form.sample_fee),
+              plate_fee:this.supplierPriceNullable(form.plate_fee),
+              die_fee:this.supplierPriceNullable(form.die_fee),
+              evidence_reference:String(form.evidence_reference).trim(),
+              remarks:String(form.remarks || "").trim() || null,
+            };
+          },
+          async saveSupplierPriceVersion() {
+            if (this.supplierPriceSaving) return false;
+            const productId = Number(this.supplierPriceProduct?.id || 0);
+            if (!productId) return false;
+            this.supplierPriceSaving = true;
+            try {
+              const {data} = await axios.post(`/api/master/external-packaging/products/${productId}/prices`,this.supplierPricePayload());
+              await this.loadSupplierPriceVersions();
+              await this.loadSupplierPriceComparison();
+              this.supplierPriceForm = blankSupplierPrice(this.supplierPriceProduct?.purchase_unit);
+              this.showToast(data?.created === false ? "报价事实未变化，沿用原版本" : `报价版本 v${data?.item?.version_number || ""} 已保存`);
+              return true;
+            } catch (error) {
+              this.showToast(this.errorMessage(error),true);
+              return false;
+            } finally {
+              this.supplierPriceSaving = false;
+            }
+          },
+          async loadSupplierPriceComparison() {
+            const productId = Number(this.supplierPriceProduct?.id || 0);
+            if (!productId) return false;
+            try {
+              const {data} = await axios.get(`/api/master/external-packaging/products/${productId}/price-comparison`);
+              this.supplierPriceComparison = data || null;
+              return true;
+            } catch (error) {
+              this.showToast(this.errorMessage(error),true);
+              return false;
+            }
+          },
+          supplierPriceTaxLabel(row) {
+            if (!row) return "-";
+            return `${row.tax_mode === "tax_inclusive" ? "含税" : "未税"} ${Number(row.tax_rate || 0) * 100}%`;
+          },
+          supplierPriceShippingLabel(row) {
+            const labels={not_provided:"未说明",included:"已含单价",per_order:"按单",per_unit:"按单位"};
+            const label=labels[row?.shipping_fee_mode] || "-";
+            return row?.shipping_fee == null ? label : `${label} ${row.currency || ""} ${row.shipping_fee}`;
           },
           async openSupplierMaterials(row) {
             this.materialSupplierFilter = row?.standard_name || "";

@@ -369,7 +369,8 @@ def test_n034_order_responses_bulk_attach_snapshots_and_phase_a_has_no_fact_writ
     phase_a_source = inspect.getsource(create_order_item_bom_snapshots)
     create_order_source = inspect.getsource(orders._create_order_impl)
 
-    assert '"bom_components": bom_components_by_item_id.get(item.id, [])' in response_source
+    assert "item_bom_components = bom_components_by_item_id.get(item.id, [])" in response_source
+    assert '"bom_components": item_bom_components' in response_source
     assert "get_order_item_bom_components_by_item_ids" in list_source
     assert "bom_components_by_item_id=bom_components_by_item_id" in list_source
     assert "db.add(OrderItem(" not in phase_a_source

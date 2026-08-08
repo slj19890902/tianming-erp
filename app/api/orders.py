@@ -97,6 +97,7 @@ from app.services.order_numbering import (
     reserve_next_order_number,
 )
 from app.services.order_document_trace import build_order_item_document_trace
+from app.services.order_material_cost import estimate_order_item_material_cost
 from app.services.audit_log import append_audit_event
 from app.services.order_business_status import (
     BUSINESS_STATUS_ORDER,
@@ -1756,8 +1757,13 @@ def _order_response(
             item.quantity - finished_reserved_quantity, 0
         )
         may_view_cost = has_permission(user, "cost.view")
+        item_bom_components = bom_components_by_item_id.get(item.id, [])
         cost_reference = (
-            calculate_draft_cost(db, item.product_id, item.material_id)
+            estimate_order_item_material_cost(
+                db,
+                item,
+                bom_components=item_bom_components,
+            )
             if db is not None and may_view_cost
             else {}
         )
@@ -1775,7 +1781,7 @@ def _order_response(
                 "combination_parent_name_snapshot": item.combination_parent_name_snapshot,
                 "combination_set_quantity_snapshot": item.combination_set_quantity_snapshot,
                 "combination_quantity_per_set_snapshot": item.combination_quantity_per_set_snapshot,
-                "bom_components": bom_components_by_item_id.get(item.id, []),
+                "bom_components": item_bom_components,
                 "delivered_quantity": item.delivered_quantity,
                 "remaining_quantity": max(
                     int(item.quantity or 0) - int(item.delivered_quantity or 0),

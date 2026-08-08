@@ -1272,6 +1272,9 @@
       .role-workshop .sensitive-price { display: none !important; }
       .cost-sensitive { font-variant-numeric: tabular-nums; }
       .role-no-costs .cost-sensitive { display: none !important; }
+      .material-cost-compact { margin-top:5px; padding:5px 7px; border-radius:6px; background:#f0f9ff; color:#075985; font-size:11px; line-height:1.45; }
+      .material-cost-compact summary { cursor:pointer; color:#0369a1; }
+      .material-cost-compact .missing { color:#b45309; white-space:normal; }
       .role-boss .role-sensitive-cost { font-variant-numeric: tabular-nums; }
 
       /* Search-select dropdown */
@@ -5203,7 +5206,7 @@
               <tbody><tr v-for="item in orderDetail.items" :key="item.id">
                 <td class="sys-num" style="font-size:12px">{{ item.item_order_number || "-" }}<div style="margin-top:4px"><status-tag :value="itemBusinessStatusKey(item)"></status-tag></div><div v-if="item.requisition_hold?.status === 'active'" class="status orange" style="margin-top:4px">{{ item.requisition_hold.label || '等候中' }}</div><div v-if="Number(item.business_delivered_quantity || 0) > 0" class="order-delivery-compact">已送 {{ item.business_delivered_quantity }}/{{ item.quantity }}</div></td>
                 <td>{{ item.snapshot_product_code }}</td>
-                <td :title="item.snapshot_product_name" style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:normal">{{ item.snapshot_product_name }}<div v-if="item.combination_role==='priced_component'" class="status blue" style="margin-top:3px">{{ combinationGroupLabel(item) }}</div><div v-if="hasBomComponents(item)" class="bom-preview-box"><div class="bom-preview-title">内部 BOM 预览（客户订单仍为一个父产品 / 套）</div><div class="bom-preview-list"><div v-for="component in item.bom_components" :key="component.id || component.component_product_id || component.internal_code" class="bom-preview-item">{{ bomPreviewComponentLabel(component) }}</div></div></div></td>
+                <td :title="item.snapshot_product_name" style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:normal">{{ item.snapshot_product_name }}<div v-if="item.combination_role==='priced_component'" class="status blue" style="margin-top:3px">{{ combinationGroupLabel(item) }}</div><div v-if="hasBomComponents(item)" class="bom-preview-box"><div class="bom-preview-title">内部 BOM 预览（客户订单仍为一个父产品 / 套）</div><div class="bom-preview-list"><div v-for="component in item.bom_components" :key="component.id || component.component_product_id || component.internal_code" class="bom-preview-item">{{ bomPreviewComponentLabel(component) }}</div></div></div><div v-if="canViewCosts" class="material-cost-compact cost-sensitive"><strong>{{ orderMaterialCostSummary(item) }}</strong><details><summary>查看材料成本依据</summary><div v-for="(component,index) in item.material_cost_components || []" :key="`${item.id}-cost-${index}`">{{ orderMaterialCostComponentText(component) }}</div><div v-for="missing in item.material_cost_missing_items || []" :key="missing" class="missing">待补：{{ missing }}</div><div class="muted">未计生产损耗和加工费；历史订单为当前规则估算。</div></details></div></td>
                 <td>{{ item.snapshot_spec || "-" }}</td>
                 <td style="white-space:normal;word-break:break-all;font-size:12px;max-width:160px">{{ orderItemMaterialText(item) }}</td>
                 <td>{{ item.snapshot_production_notes || "-" }}<div v-if="item.mold_location" class="status blue" style="margin-top:4px;white-space:normal">模具：{{ moldLocationText(item) }}</div></td>
@@ -8338,6 +8341,19 @@
             if (includeWeight && weight) parts.push(weight);
             if (supplier) parts.push(supplier);
             return parts.join("｜");
+          },
+          orderMaterialCostSummary(item) {
+            if (item?.estimated_material_total_cost != null) {
+              return `材料总成本 ¥${this.money(item.estimated_material_total_cost)}`;
+            }
+            return item?.material_cost_status_label || "材料成本待完善";
+          },
+          orderMaterialCostComponentText(component) {
+            const dims = `${component?.report_length_mm || "-"}×${component?.report_width_mm || "-"}`;
+            const sheets = component?.purchase_sheet_quantity ?? "-";
+            const price = component?.effective_square_price ?? "-";
+            const total = component?.estimated_material_cost ?? "-";
+            return `${component?.label || "用料"}：${dims}mm，${sheets}张，¥${price}/㎡，小计¥${this.money(total)}`;
           },
 	          // 新建订单表单中「材质+楞型」列的压缩显示（来自常用箱时）
 	          orderItemCompressedMaterial(item) {

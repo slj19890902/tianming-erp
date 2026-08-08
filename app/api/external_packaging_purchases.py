@@ -15,6 +15,7 @@ from app.models.user import User
 from app.services.audit_log import append_audit_event
 from app.services.external_packaging_purchase import (
     ExternalPurchaseContractError,
+    build_external_purchase_print,
     build_external_purchase_preview,
     confirm_external_purchase,
     serialize_external_purchase_batch,
@@ -55,6 +56,19 @@ def get_external_packaging_purchase_preview(
 ) -> dict[str, Any]:
     try:
         return build_external_purchase_preview(db, order_id)
+    except ExternalPurchaseContractError as error:
+        raise _translate(error) from error
+
+
+@router.get("/external-packaging-purchases/{purchase_order_id}/print")
+def print_external_packaging_purchase(
+    purchase_order_id: int,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(admin_only),
+    _cost_user: User = Depends(can_cost),
+) -> dict[str, Any]:
+    try:
+        return build_external_purchase_print(db, purchase_order_id)
     except ExternalPurchaseContractError as error:
         raise _translate(error) from error
 

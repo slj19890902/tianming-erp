@@ -892,6 +892,51 @@ def test_floor3_pallet_supports_five_items_move_clear_and_history(floor3_app) ->
         assert pallet.location_id is None
 
 
+def test_released_snapshot_pallet_is_not_reused_as_empty(floor3_app) -> None:
+    app, ids, factory = floor3_app
+    item = _matched_item(ids["tianhua"], ids["products"][0], "SNAPSHOT-STILL-HERE")
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        created = client.post(
+            "/api/warehouse/pallets",
+            json={
+                "location_id": ids["locations"][0],
+                "pallet_code": "PLT-SNAPSHOT-NOT-EMPTY",
+                "items": [item],
+            },
+        )
+        assert created.status_code == 201, created.text
+        old_pallet_id = int(created.json()["pallet"]["id"])
+        cleared = client.post(
+            f"/api/warehouse/pallets/{old_pallet_id}/clear",
+            json={"expected_version": created.json()["pallet"]["version"]},
+        )
+        assert cleared.status_code == 200, cleared.text
+
+        inbound = client.post(
+            "/api/warehouse/pallets",
+            json={
+                "location_id": ids["locations"][1],
+                "items": [
+                    _matched_item(
+                        ids["tianhua"], ids["products"][1], "NEW-SNAPSHOT"
+                    )
+                ],
+            },
+        )
+        assert inbound.status_code == 201, inbound.text
+        assert int(inbound.json()["pallet"]["id"]) != old_pallet_id
+
+    from app.models.warehouse_inventory import InventoryPallet
+
+    with factory() as db:
+        old_pallet = db.get(InventoryPallet, old_pallet_id)
+        assert old_pallet is not None
+        assert old_pallet.is_current is False
+        assert old_pallet.location_id is None
+        assert len(old_pallet.items) == 1
+
+
 def test_floor3_same_product_can_be_registered_at_multiple_locations(floor3_app) -> None:
     app, ids, _factory = floor3_app
     with TestClient(app) as client:

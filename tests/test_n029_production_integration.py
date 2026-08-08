@@ -642,6 +642,126 @@ def test_authorized_over_delivery_103_consumes_stock_and_records_three(
         assert release.from_location_id == ids["temporary_location"]
 
 
+def test_new_finished_in_reuses_released_empty_pallet(
+    n029_delivery_app,
+) -> None:
+    from app.models.order import OrderItem
+    from app.models.warehouse_inventory import (
+        InventoryLocationMovement,
+        InventoryLot,
+        InventoryPallet,
+        InventoryPalletItem,
+    )
+    from app.services.warehouse_inventory import manual_finished_in
+
+    app, factory, ids = n029_delivery_app
+    old_lot_id = _prepare_103_finished_stock(factory, ids)
+    pallet_id = _bind_finished_lot_to_test_pallet(factory, old_lot_id)
+    with factory() as db:
+        pallet = db.get(InventoryPallet, pallet_id)
+        assert pallet is not None
+        pallet_code = pallet.pallet_code
+
+    with TestClient(app) as client:
+        _login(client)
+        created = client.post(
+            "/api/deliveries",
+            json={
+                "customer_id": ids["customer"],
+                "items": [
+                    {
+                        "order_item_id": ids["task_completed"],
+                        "delivered_quantity": 103,
+                    }
+                ],
+            },
+        )
+        assert created.status_code == 201, created.text
+        delivery_id = int(created.json()["id"])
+        dispatched = client.put(f"/api/deliveries/{delivery_id}/dispatch")
+        assert dispatched.status_code == 200, dispatched.text
+
+    with factory() as db:
+        item = db.get(OrderItem, ids["task_completed"])
+        assert item is not None
+        new_lot = manual_finished_in(
+            db,
+            customer_id=ids["customer"],
+            product_id=item.product_id,
+            location_id=ids["temporary_location"],
+            quantity=5,
+            stock_date=date.today(),
+            source_type="manual",
+            remarks="P1-16E-4 空栈板复用测试",
+            operator_id=1,
+            idempotency_key="P1-16E-4-REUSE-ONCE",
+            require_empty_pallet=True,
+        )
+        db.commit()
+        new_lot_id = int(new_lot.id)
+
+    with factory() as db:
+        old_lot = db.get(InventoryLot, old_lot_id)
+        new_lot = db.get(InventoryLot, new_lot_id)
+        pallet = db.get(InventoryPallet, pallet_id)
+        pallet_items = list(
+            db.scalars(
+                select(InventoryPalletItem).where(
+                    InventoryPalletItem.pallet_id == pallet_id
+                )
+            )
+        )
+        movements = list(
+            db.scalars(
+                select(InventoryLocationMovement)
+                .where(InventoryLocationMovement.pallet_id == pallet_id)
+                .order_by(InventoryLocationMovement.id)
+            )
+        )
+        assert old_lot is not None and old_lot.pallet_item is None
+        assert new_lot is not None and new_lot.pallet_item is not None
+        assert new_lot.pallet_item.pallet_id == pallet_id
+        assert pallet is not None
+        assert pallet.pallet_code == pallet_code
+        assert pallet.is_current is True
+        assert pallet.status == "active"
+        assert pallet.location_id == ids["temporary_location"]
+        assert pallet.closed_at is None
+        assert len(pallet_items) == 1
+        assert pallet_items[0].inventory_lot_id == new_lot_id
+        assert [movement.movement_type for movement in movements][-2:] == [
+            "clear",
+            "move",
+        ]
+        assert movements[-1].from_location_id is None
+        assert movements[-1].to_location_id == ids["temporary_location"]
+
+        repeated = manual_finished_in(
+            db,
+            customer_id=ids["customer"],
+            product_id=item.product_id,
+            location_id=ids["temporary_location"],
+            quantity=5,
+            stock_date=date.today(),
+            source_type="manual",
+            remarks="P1-16E-4 空栈板复用测试",
+            operator_id=1,
+            idempotency_key="P1-16E-4-REUSE-ONCE",
+            require_empty_pallet=True,
+        )
+        assert repeated.id == new_lot_id
+        db.commit()
+        assert len(
+            list(
+                db.scalars(
+                    select(InventoryLocationMovement).where(
+                        InventoryLocationMovement.pallet_id == pallet_id
+                    )
+                )
+            )
+        ) == len(movements)
+
+
 def test_cancel_full_delivery_restores_auto_released_pallet(
     n029_delivery_app,
 ) -> None:

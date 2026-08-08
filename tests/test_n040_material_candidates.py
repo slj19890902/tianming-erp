@@ -787,6 +787,7 @@ def test_product_material_context_uses_only_this_product_and_prefers_official_fa
         assert response.status_code == 200, response.text
         payload = response.json()
         assert payload["product_id"] == ids["product"]
+        assert payload["product_version"] >= 1
         assert payload["customer_id"] == ids["customer"]
         assert payload["original_material_code"] == "9CCC9"
 

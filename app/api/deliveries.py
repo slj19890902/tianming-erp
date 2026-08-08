@@ -97,6 +97,8 @@ from app.services.warehouse_inventory import (
     active_finished_reserved_qty,
     active_finished_reservations_by_item_ids,
     inventory_fifo_order_columns,
+    release_empty_pallets_after_delivery,
+    restore_auto_released_pallets_after_delivery_cancel,
 )
 from app.services.unordered_finished_delivery import (
     cancel_unordered_finished_dispatch,
@@ -5171,6 +5173,11 @@ def dispatch_delivery(
                 operator_id=user.id,
                 dispatched_at=dispatched_at,
             )
+            released_pallet_ids = release_empty_pallets_after_delivery(
+                db,
+                delivery_id=delivery_id,
+                operator_id=user.id,
+            )
             if pick_task is not None:
                 pick_task.status = "dispatched"
                 pick_task.dispatched_at = dispatched_at
@@ -5187,6 +5194,7 @@ def dispatch_delivery(
                     "total_quantity": sum(
                         int(line.delivered_quantity or 0) for line in lines
                     ),
+                    "released_pallet_ids": released_pallet_ids,
                 },
                 description="确认无订单客户专用成品正式发货",
             )
@@ -5351,6 +5359,11 @@ def dispatch_delivery(
                 operator_id=user.id,
                 dispatched_at=dispatched_at,
             )
+        released_pallet_ids = release_empty_pallets_after_delivery(
+            db,
+            delivery_id=delivery_id,
+            operator_id=user.id,
+        )
         for order_id in affected_order_ids:
             _refresh_order_status(db, order_id)
         if pick_task is not None:
@@ -5367,6 +5380,7 @@ def dispatch_delivery(
                 "item_count": len(lines),
                 "source_mode": delivery.source_mode,
                 "unordered_item_count": len(unordered_lines),
+                "released_pallet_ids": released_pallet_ids,
                 "over_delivery_quantity": sum(
                     int(line.over_delivery_quantity or 0) for line in lines
                 ),
@@ -5883,6 +5897,11 @@ def cancel_delivery(
                 operator_id=user.id,
             )
         if delivery.source_mode == "unordered_finished":
+            restored_pallet_ids = restore_auto_released_pallets_after_delivery_cancel(
+                db,
+                delivery_id=delivery_id,
+                operator_id=user.id,
+            )
             # Once an unordered-stock dispatch has been reversed, its immutable
             # allocation/reversal audit must remain attached to the original
             # document.  Archive it immediately instead of presenting a
@@ -5909,6 +5928,7 @@ def cancel_delivery(
                     "item_count": len(lines),
                     "restored_quantity": delivery.total_quantity,
                     "disposition": "voided_after_dispatch_cancel",
+                    "restored_pallet_ids": restored_pallet_ids,
                 },
                 description="取消无订单成品送货、退回原库存批次并归档",
             )
@@ -5965,6 +5985,11 @@ def cancel_delivery(
                 affected_order_ids.add(order_id)
         for order_id in affected_order_ids:
             _refresh_order_status(db, order_id)
+        restored_pallet_ids = restore_auto_released_pallets_after_delivery_cancel(
+            db,
+            delivery_id=delivery_id,
+            operator_id=user.id,
+        )
         _discard_delivery_pick_task(
             db,
             delivery_id=delivery_id,
@@ -5988,6 +6013,7 @@ def cancel_delivery(
                 "item_count": len(lines),
                 "restored_quantity": delivery.total_quantity,
                 "source_mode": delivery.source_mode,
+                "restored_pallet_ids": restored_pallet_ids,
                 "disposition": (
                     "voided_after_dispatch_cancel" if unordered_lines else "pending"
                 ),

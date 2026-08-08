@@ -30,6 +30,8 @@ from app.models.warehouse_inventory import (
     InventoryLotTransfer,
     InventoryMovement,
     InventoryPallet,
+    InventoryPalletItem,
+    InventoryLocationMovement,
     InventoryReservation,
     OrderItemSemiRequirement,
     SemiFinishedInventoryDetail,
@@ -49,6 +51,217 @@ class WarehouseInventoryError(ValueError):
     def __init__(self, message: str, status_code: int = 400) -> None:
         super().__init__(message)
         self.status_code = status_code
+
+
+def _delivery_pallet_release_key(delivery_id: int, pallet_id: int) -> str:
+    return f"delivery-{delivery_id}-auto-release-pallet-{pallet_id}"
+
+
+def _pallet_has_physical_goods(db: Session, pallet_id: int) -> bool:
+    snapshot_exists = db.scalar(
+        select(InventoryPalletItem.id)
+        .where(
+            InventoryPalletItem.pallet_id == pallet_id,
+            InventoryPalletItem.inventory_lot_id.is_(None),
+            InventoryPalletItem.quantity > 0,
+        )
+        .limit(1)
+    )
+    if snapshot_exists is not None:
+        return True
+    live_lot_exists = db.scalar(
+        select(InventoryLot.id)
+        .join(
+            InventoryPalletItem,
+            InventoryPalletItem.inventory_lot_id == InventoryLot.id,
+        )
+        .where(
+            InventoryPalletItem.pallet_id == pallet_id,
+            (
+                InventoryLot.quantity_available
+                + InventoryLot.quantity_reserved
+                + InventoryLot.quantity_damaged
+            )
+            > 0,
+        )
+        .limit(1)
+    )
+    return live_lot_exists is not None
+
+
+def release_empty_pallets_after_delivery(
+    db: Session,
+    *,
+    delivery_id: int,
+    operator_id: int | None,
+) -> list[int]:
+    """Release only pallets emptied by this formal delivery transaction."""
+    db.flush()
+    pallet_ids = list(
+        db.scalars(
+            select(InventoryPalletItem.pallet_id)
+            .join(
+                InventoryMovement,
+                InventoryMovement.inventory_lot_id
+                == InventoryPalletItem.inventory_lot_id,
+            )
+            .where(
+                InventoryMovement.related_delivery_id == delivery_id,
+                InventoryMovement.movement_type == "consume",
+            )
+            .distinct()
+            .order_by(InventoryPalletItem.pallet_id)
+        )
+    )
+    if not pallet_ids:
+        return []
+
+    from app.services.floor3_locations import Floor3LocationError, clear_pallet
+
+    released: list[int] = []
+    for pallet_id in pallet_ids:
+        pallet = db.get(InventoryPallet, pallet_id)
+        if pallet is None or not pallet.is_current or pallet.location_id is None:
+            continue
+        if _pallet_has_physical_goods(db, pallet_id):
+            continue
+        try:
+            clear_pallet(
+                db,
+                pallet_id=pallet_id,
+                expected_version=int(pallet.version),
+                remarks=f"送货单 {delivery_id} 正式发货后货物清零，自动释放空栈板",
+                operator_id=operator_id,
+                idempotency_key=_delivery_pallet_release_key(delivery_id, pallet_id),
+            )
+        except Floor3LocationError as error:
+            raise WarehouseInventoryError(str(error), error.status_code) from error
+        released.append(int(pallet_id))
+    db.flush()
+    return released
+
+
+def restore_auto_released_pallets_after_delivery_cancel(
+    db: Session,
+    *,
+    delivery_id: int,
+    operator_id: int | None,
+) -> list[int]:
+    """Restore pallet projection when cancelling a dispatch restores its stock."""
+    db.flush()
+    prefix = f"delivery-{delivery_id}-auto-release-pallet-"
+    clear_movements = list(
+        db.scalars(
+            select(InventoryLocationMovement)
+            .where(
+                InventoryLocationMovement.movement_type == "clear",
+                InventoryLocationMovement.idempotency_key.like(f"{prefix}%"),
+            )
+            .order_by(InventoryLocationMovement.pallet_id)
+        )
+    )
+    restored: list[int] = []
+    for clear_movement in clear_movements:
+        pallet = db.get(InventoryPallet, clear_movement.pallet_id)
+        if pallet is None or not _pallet_has_physical_goods(db, pallet.id):
+            continue
+        restore_key = f"{clear_movement.idempotency_key}:restore"
+        existing = db.scalar(
+            select(InventoryLocationMovement).where(
+                InventoryLocationMovement.idempotency_key == restore_key
+            )
+        )
+        if existing is not None:
+            if existing.pallet_id != pallet.id or existing.movement_type != "move":
+                raise WarehouseInventoryError("栈板恢复幂等键已用于其他业务", 409)
+            continue
+        target_location_id = clear_movement.from_location_id
+        if target_location_id is None:
+            raise WarehouseInventoryError("空栈板缺少原库位，无法安全取消发货", 409)
+        target_location = db.get(WarehouseLocation, target_location_id)
+        if target_location is None or not target_location.is_active:
+            raise WarehouseInventoryError("空栈板原库位已停用，无法安全取消发货", 409)
+        if pallet.is_current or pallet.location_id is not None:
+            raise WarehouseInventoryError("空栈板状态已变化，无法安全取消发货", 409)
+        occupied = db.scalar(
+            select(InventoryPallet.id)
+            .where(
+                InventoryPallet.location_id == target_location_id,
+                InventoryPallet.is_current.is_(True),
+                InventoryPallet.id != pallet.id,
+            )
+            .limit(1)
+        )
+        if occupied is not None:
+            raise WarehouseInventoryError(
+                "原库位已被其他栈板占用，无法取消发货；请先腾空原库位后重试",
+                409,
+            )
+        misplaced_lot = db.scalar(
+            select(InventoryLot.id)
+            .join(
+                InventoryPalletItem,
+                InventoryPalletItem.inventory_lot_id == InventoryLot.id,
+            )
+            .where(
+                InventoryPalletItem.pallet_id == pallet.id,
+                or_(
+                    InventoryLot.warehouse_location_id.is_(None),
+                    InventoryLot.warehouse_location_id != target_location_id,
+                ),
+                (
+                    InventoryLot.quantity_available
+                    + InventoryLot.quantity_reserved
+                    + InventoryLot.quantity_damaged
+                )
+                > 0,
+            )
+            .limit(1)
+        )
+        if misplaced_lot is not None:
+            raise WarehouseInventoryError("恢复库存位置与原栈板不一致，无法安全取消发货", 409)
+
+        version_before = int(pallet.version)
+        changed = db.execute(
+            update(InventoryPallet)
+            .where(
+                InventoryPallet.id == pallet.id,
+                InventoryPallet.version == version_before,
+                InventoryPallet.is_current.is_(False),
+                InventoryPallet.location_id.is_(None),
+            )
+            .values(
+                location_id=target_location_id,
+                status="active",
+                is_current=True,
+                needs_relocation=bool(target_location.is_temporary),
+                version=InventoryPallet.version + 1,
+                closed_at=None,
+                updated_by=operator_id,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if changed.rowcount != 1:
+            raise WarehouseInventoryError("空栈板状态已变化，请刷新后重试", 409)
+        now = beijing_now_naive()
+        db.add(
+            InventoryLocationMovement(
+                pallet_id=pallet.id,
+                from_location_id=None,
+                to_location_id=target_location_id,
+                movement_type="move",
+                operator_id=operator_id,
+                moved_at=now,
+                idempotency_key=restore_key,
+                confirmed_at=now,
+                pallet_version_before=version_before,
+                pallet_version_after=version_before + 1,
+                remarks=f"取消送货单 {delivery_id}，恢复原库存与栈板位置",
+            )
+        )
+        restored.append(int(pallet.id))
+    db.flush()
+    return restored
 
 
 STOCK_DATE_ACCURACIES = frozenset({"exact", "estimated", "unknown"})

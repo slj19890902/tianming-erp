@@ -98,6 +98,12 @@ from app.services.order_numbering import (
 )
 from app.services.order_document_trace import build_order_item_document_trace
 from app.services.order_material_cost import estimate_order_item_material_cost
+from app.services.order_material_cost_snapshot import (
+    freeze_order_item_material_cost,
+    get_latest_order_item_material_cost_snapshots_by_items,
+    mark_current_estimate_as_non_historical,
+    serialize_order_item_material_cost_snapshot,
+)
 from app.services.audit_log import append_audit_event
 from app.services.order_business_status import (
     BUSINESS_STATUS_ORDER,
@@ -1755,6 +1761,14 @@ def _order_response(
         "external_packaging_purchase_summary": external_purchase_summary,
         "items": [],
     }
+    may_view_cost = has_permission(user, "cost.view")
+    frozen_cost_by_item_id = (
+        get_latest_order_item_material_cost_snapshots_by_items(
+            db, list(order.items)
+        )
+        if db is not None and may_view_cost
+        else {}
+    )
     for item in order.items:
         item_business_projection = business_projection.get("items", {}).get(
             int(item.id), {}
@@ -1777,17 +1791,21 @@ def _order_response(
         production_required_quantity = max(
             item.quantity - finished_reserved_quantity, 0
         )
-        may_view_cost = has_permission(user, "cost.view")
         item_bom_components = bom_components_by_item_id.get(item.id, [])
-        cost_reference = (
-            estimate_order_item_material_cost(
-                db,
-                item,
-                bom_components=item_bom_components,
+        cost_reference = {}
+        if db is not None and may_view_cost:
+            frozen_cost = frozen_cost_by_item_id.get(item.id)
+            cost_reference = (
+                serialize_order_item_material_cost_snapshot(frozen_cost)
+                if frozen_cost is not None
+                else mark_current_estimate_as_non_historical(
+                    estimate_order_item_material_cost(
+                        db,
+                        item,
+                        bom_components=item_bom_components,
+                    )
+                )
             )
-            if db is not None and may_view_cost
-            else {}
-        )
         item_data = {
                 "id": item.id,
                 "product_id": item.product_id,
@@ -5747,6 +5765,12 @@ def _create_order_impl(
             if created_item.combination_role != "set_parent":
                 refresh_production_task(db, created_item.id)
         refresh_order_production_status(db, order.id)
+        for created_item in created_items:
+            freeze_order_item_material_cost(
+                db,
+                created_item,
+                actor_id=user.id,
+            )
         _set_order_save_stage(observability, "build_response")
         db.flush()
         db.refresh(order)
@@ -6009,6 +6033,7 @@ def update_order_item_bom_component_demand(
             db.rollback()
             return get_order_item_bom_preview(db, item.id)
         ensure_component_production_tasks(db, item.id)
+        freeze_order_item_material_cost(db, item, actor_id=user.id)
         _log_component_demand_change(
             db,
             request=request,
@@ -6763,6 +6788,7 @@ def update_order_item(
         object_ref=item.item_order_number or f"{order.order_number}:{item.id}",
         resource="OrderItem",
     )
+    freeze_order_item_material_cost(db, item, actor_id=user.id)
     db.commit()
     db.refresh(item)
     return {

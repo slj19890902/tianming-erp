@@ -242,3 +242,75 @@ class ExternalPackagingPurchaseItem(Base):
     purchase_order: Mapped[ExternalPackagingPurchaseOrder] = relationship(
         back_populates="items"
     )
+
+
+class ExternalPackagingReceipt(Base):
+    """One append-only external-packaging receiving event."""
+
+    __tablename__ = "external_packaging_receipts"
+    __table_args__ = (
+        UniqueConstraint(
+            "receipt_number", name="uq_external_packaging_receipt_number"
+        ),
+        UniqueConstraint(
+            "idempotency_key", name="uq_external_packaging_receipt_key"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    purchase_order_id: Mapped[int] = mapped_column(
+        ForeignKey("external_packaging_purchase_orders.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    receipt_number: Mapped[str] = mapped_column(String(60), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    received_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.current_timestamp()
+    )
+
+    items: Mapped[list["ExternalPackagingReceiptItem"]] = relationship(
+        back_populates="receipt",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="ExternalPackagingReceiptItem.id",
+    )
+
+
+class ExternalPackagingReceiptItem(Base):
+    """Original-unit quantity received for one frozen purchase line."""
+
+    __tablename__ = "external_packaging_receipt_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "receipt_id",
+            "purchase_item_id",
+            name="uq_external_packaging_receipt_purchase_item",
+        ),
+        CheckConstraint(
+            "received_quantity > 0",
+            name="ck_external_packaging_receipt_item_quantity",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    receipt_id: Mapped[int] = mapped_column(
+        ForeignKey("external_packaging_receipts.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    purchase_item_id: Mapped[int] = mapped_column(
+        ForeignKey("external_packaging_purchase_items.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    received_quantity: Mapped[Decimal] = mapped_column(
+        Numeric(18, 6), nullable=False
+    )
+    purchase_unit_snapshot: Mapped[str] = mapped_column(String(20), nullable=False)
+
+    receipt: Mapped[ExternalPackagingReceipt] = relationship(back_populates="items")

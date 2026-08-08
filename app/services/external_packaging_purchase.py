@@ -7,7 +7,7 @@ import hashlib
 import json
 from typing import Any
 
-from sqlalchemy import or_, select, text
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.core.time_contract import beijing_today
@@ -18,6 +18,7 @@ from app.models.external_packaging_purchase import (
     ExternalPackagingPurchaseBatch,
     ExternalPackagingPurchaseItem,
     ExternalPackagingPurchaseOrder,
+    ExternalPackagingReceiptItem,
 )
 from app.models.order import Order, OrderItem
 from app.models.order_external_packaging import (
@@ -289,19 +290,76 @@ def _candidate_preview(
 def get_external_purchase_summary(db: Session, order_id: int) -> dict[str, Any]:
     batch = db.scalar(
         select(ExternalPackagingPurchaseBatch)
-        .options(selectinload(ExternalPackagingPurchaseBatch.purchase_orders))
+        .options(
+            selectinload(ExternalPackagingPurchaseBatch.purchase_orders).selectinload(
+                ExternalPackagingPurchaseOrder.items
+            )
+        )
         .where(ExternalPackagingPurchaseBatch.sales_order_id == order_id)
     )
     if batch is None:
         return {"status": "pending", "purchase_numbers": []}
+    purchase_item_ids = {
+        item.id for purchase in batch.purchase_orders for item in purchase.items
+    }
+    received_totals: dict[int, Decimal] = {}
+    if purchase_item_ids:
+        received_totals = {
+            int(item_id): Decimal(quantity or 0)
+            for item_id, quantity in db.execute(
+                select(
+                    ExternalPackagingReceiptItem.purchase_item_id,
+                    func.sum(ExternalPackagingReceiptItem.received_quantity),
+                )
+                .where(
+                    ExternalPackagingReceiptItem.purchase_item_id.in_(
+                        purchase_item_ids
+                    )
+                )
+                .group_by(ExternalPackagingReceiptItem.purchase_item_id)
+            ).all()
+        }
+
+    def receipt_status(purchase: ExternalPackagingPurchaseOrder) -> str:
+        if all(
+            received_totals.get(item.id, Decimal("0"))
+            >= Decimal(item.purchase_quantity)
+            for item in purchase.items
+        ):
+            return "received"
+        if any(
+            received_totals.get(item.id, Decimal("0")) > 0
+            for item in purchase.items
+        ):
+            return "partially_received"
+        return "pending_receipt"
+
+    purchase_statuses = {
+        row.id: receipt_status(row) for row in batch.purchase_orders
+    }
+    overall_receipt_status = (
+        "received"
+        if purchase_statuses
+        and all(value == "received" for value in purchase_statuses.values())
+        else (
+            "partially_received"
+            if any(value != "pending_receipt" for value in purchase_statuses.values())
+            else "pending_receipt"
+        )
+    )
     return {
         "status": "confirmed",
+        "receipt_status": overall_receipt_status,
         "batch_id": batch.id,
         "purchase_numbers": [
             row.purchase_number for row in batch.purchase_orders
         ],
         "purchase_orders": [
-            {"id": row.id, "purchase_number": row.purchase_number}
+            {
+                "id": row.id,
+                "purchase_number": row.purchase_number,
+                "receipt_status": purchase_statuses[row.id],
+            }
             for row in batch.purchase_orders
         ],
         "confirmed_at": (

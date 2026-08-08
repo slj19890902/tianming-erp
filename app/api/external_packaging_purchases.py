@@ -8,7 +8,13 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.deps import PermissionChecker, RoleChecker, get_db
+from app.api.deps import (
+    PermissionChecker,
+    RoleChecker,
+    customer_scope_ids,
+    get_db,
+    has_unrestricted_customer_access,
+)
 from app.models.customer import Customer
 from app.models.order import Order
 from app.models.user import User
@@ -20,11 +26,18 @@ from app.services.external_packaging_purchase import (
     confirm_external_purchase,
     serialize_external_purchase_batch,
 )
+from app.services.external_packaging_receiving import (
+    build_external_receiving_overview,
+    record_external_purchase_receipt,
+    serialize_external_receipt,
+)
 
 
 router = APIRouter()
 admin_only = RoleChecker(["admin"])
 can_cost = PermissionChecker("cost.view")
+can_incoming_read = PermissionChecker("incoming.view")
+can_incoming_execute = PermissionChecker("incoming.execute")
 
 
 class ExternalPurchaseLinePayload(BaseModel):
@@ -43,8 +56,119 @@ class ExternalPurchaseConfirmPayload(BaseModel):
         return str(value or "").strip()
 
 
+class ExternalReceiptLinePayload(BaseModel):
+    purchase_item_id: int = Field(gt=0)
+    received_quantity: Decimal = Field(gt=0, max_digits=18, decimal_places=6)
+
+
+class ExternalReceiptPayload(BaseModel):
+    idempotency_key: str = Field(min_length=1, max_length=120)
+    lines: list[ExternalReceiptLinePayload] = Field(min_length=1, max_length=100)
+
+    @field_validator("idempotency_key", mode="before")
+    @classmethod
+    def clean_key(cls, value: Any) -> str:
+        return str(value or "").strip()
+
+
 def _translate(error: ExternalPurchaseContractError) -> HTTPException:
     return HTTPException(status_code=error.status_code, detail=error.message)
+
+
+def _visible_customer_ids(user: User, db: Session) -> set[int] | None:
+    if has_unrestricted_customer_access(user, db):
+        return None
+    return customer_scope_ids(user, db)
+
+
+@router.get("/external-packaging-purchases/pending-receipts")
+def get_external_packaging_pending_receipts(
+    db: Session = Depends(get_db),
+    user: User = Depends(can_incoming_read),
+) -> dict[str, Any]:
+    return build_external_receiving_overview(
+        db,
+        visible_customer_ids=_visible_customer_ids(user, db),
+    )
+
+
+@router.post("/external-packaging-purchases/{purchase_order_id}/receipts")
+def receive_external_packaging_purchase(
+    purchase_order_id: int,
+    payload: ExternalReceiptPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_incoming_execute),
+) -> dict[str, Any]:
+    lines = [row.model_dump() for row in payload.lines]
+    visible_ids = _visible_customer_ids(user, db)
+    try:
+        receipt, created = record_external_purchase_receipt(
+            db,
+            purchase_order_id=purchase_order_id,
+            idempotency_key=payload.idempotency_key,
+            lines=lines,
+            user=user,
+            visible_customer_ids=visible_ids,
+        )
+        if created:
+            append_audit_event(
+                db,
+                event_category="business",
+                result="success",
+                source="web",
+                module_code="external_packaging_receiving",
+                action_code="external_packaging.receipt.post",
+                resource="ExternalPackagingReceipt",
+                legacy_action="RECEIVE_EXTERNAL_PACKAGING",
+                actor=user,
+                entity_type="external_packaging_receipt",
+                entity_id=receipt.id,
+                object_ref=receipt.receipt_number,
+                description="确认外购包装本次实收",
+                details={
+                    "purchase_order_id": purchase_order_id,
+                    "receipt_number": receipt.receipt_number,
+                    "line_count": len(lines),
+                    "original_units_preserved": True,
+                    "prices_redacted": True,
+                    "no_inventory_created": True,
+                    "no_location_required": True,
+                },
+            )
+            db.commit()
+        return {
+            "created": created,
+            "receipt": serialize_external_receipt(receipt),
+            "overview": build_external_receiving_overview(
+                db, visible_customer_ids=visible_ids
+            ),
+        }
+    except IntegrityError:
+        db.rollback()
+        try:
+            receipt, created = record_external_purchase_receipt(
+                db,
+                purchase_order_id=purchase_order_id,
+                idempotency_key=payload.idempotency_key,
+                lines=lines,
+                user=user,
+                visible_customer_ids=visible_ids,
+            )
+        except ExternalPurchaseContractError as error:
+            raise _translate(error) from error
+        if created:
+            db.rollback()
+            raise HTTPException(status_code=409, detail="收料发生并发冲突，请刷新后核对")
+        return {
+            "created": False,
+            "receipt": serialize_external_receipt(receipt),
+            "overview": build_external_receiving_overview(
+                db, visible_customer_ids=visible_ids
+            ),
+        }
+    except ExternalPurchaseContractError as error:
+        db.rollback()
+        raise _translate(error) from error
 
 
 @router.get("/orders/{order_id}/external-packaging-purchase")

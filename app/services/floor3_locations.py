@@ -7,7 +7,7 @@ import math
 import re
 from uuid import uuid4
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.orm.attributes import set_committed_value
@@ -830,6 +830,129 @@ def _build_item(
     )
 
 
+def _pallet_is_released_and_empty(row: InventoryPallet) -> bool:
+    if row.is_current or row.location_id is not None or row.status != "closed":
+        return False
+    for item in row.items:
+        lot = item.inventory_lot
+        if lot is None:
+            if Decimal(item.quantity or 0) > 0:
+                return False
+            continue
+        if (
+            int(lot.quantity_available or 0)
+            + int(lot.quantity_reserved or 0)
+            + int(lot.quantity_damaged or 0)
+        ) > 0:
+            return False
+    return True
+
+
+def _released_empty_pallet(
+    db: Session,
+    *,
+    pallet_code: str | None,
+) -> InventoryPallet | None:
+    query = select(InventoryPallet).options(
+        selectinload(InventoryPallet.items).selectinload(
+            InventoryPalletItem.inventory_lot
+        )
+    )
+    if pallet_code:
+        row = db.scalar(query.where(InventoryPallet.pallet_code == pallet_code))
+        if row is None:
+            return None
+        if not _pallet_is_released_and_empty(row):
+            raise Floor3LocationError(
+                "该实体栈板编号仍在使用或仍有货物，不能重复入库",
+                status_code=409,
+            )
+        return row
+    rows = db.scalars(
+        query.where(
+            InventoryPallet.status == "closed",
+            InventoryPallet.is_current.is_(False),
+            InventoryPallet.location_id.is_(None),
+        ).order_by(
+            InventoryPallet.closed_at.asc(),
+            InventoryPallet.id.asc(),
+        )
+    ).all()
+    return next((row for row in rows if _pallet_is_released_and_empty(row)), None)
+
+
+def _reuse_released_pallet(
+    db: Session,
+    *,
+    row: InventoryPallet,
+    location: WarehouseLocation,
+    items: list[dict],
+    remarks: str | None,
+    operator_id: int | None,
+) -> InventoryPallet:
+    if not _pallet_is_released_and_empty(row):
+        raise Floor3LocationError("空栈板状态已变化，请刷新后重试", status_code=409)
+    version_before = int(row.version)
+    changed = db.execute(
+        update(InventoryPallet)
+        .where(
+            InventoryPallet.id == row.id,
+            InventoryPallet.version == version_before,
+            InventoryPallet.status == "closed",
+            InventoryPallet.is_current.is_(False),
+            InventoryPallet.location_id.is_(None),
+        )
+        .values(
+            location_id=location.id,
+            status="active",
+            is_current=True,
+            needs_relocation=False,
+            version=InventoryPallet.version + 1,
+            closed_at=None,
+            remarks=_trim(remarks),
+            updated_by=operator_id,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if changed.rowcount != 1:
+        raise Floor3LocationError(
+            "空栈板已被其他入库使用，请刷新后重试",
+            status_code=409,
+        )
+
+    # Old rows are the previous cycle's zero-balance projection. The pallet
+    # identity and every location movement remain available for audit.
+    db.execute(
+        delete(InventoryPalletItem).where(InventoryPalletItem.pallet_id == row.id)
+    )
+    db.flush()
+    db.expire(row)
+    new_items = [
+        _build_item(db, pallet_id=row.id, item=item, operator_id=operator_id)
+        for item in items
+    ]
+    db.add_all(new_items)
+    db.flush()
+    row.needs_relocation = _needs_relocation(location, new_items)
+    now = beijing_now_naive()
+    db.add(
+        InventoryLocationMovement(
+            pallet_id=row.id,
+            from_location_id=None,
+            to_location_id=location.id,
+            movement_type="move",
+            operator_id=operator_id,
+            moved_at=now,
+            confirmed_at=now,
+            pallet_version_before=version_before,
+            pallet_version_after=version_before + 1,
+            remarks=_trim(remarks) or "已释放空栈板自动复用",
+        )
+    )
+    db.flush()
+    return _pallet(db, row.id, refresh=True)
+
+
 def bind_finished_lot_to_floor3_pallet(
     db: Session,
     *,
@@ -965,8 +1088,23 @@ def create_pallet(
     if not items:
         raise Floor3LocationError("栈板至少需要一条内容")
 
+    normalized_pallet_code = _trim(pallet_code)
+    reusable = _released_empty_pallet(
+        db,
+        pallet_code=normalized_pallet_code,
+    )
+    if reusable is not None:
+        return _reuse_released_pallet(
+            db,
+            row=reusable,
+            location=location,
+            items=items,
+            remarks=remarks,
+            operator_id=operator_id,
+        )
+
     row = InventoryPallet(
-        pallet_code=_trim(pallet_code) or _generated_pallet_code(),
+        pallet_code=normalized_pallet_code or _generated_pallet_code(),
         location_id=location.id,
         status="active",
         is_current=True,

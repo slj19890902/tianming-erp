@@ -1191,6 +1191,10 @@
       .external-packaging-order-card { padding:8px 9px; border:1px solid #e5e7eb; border-radius:8px; background:#f8fafc; line-height:1.45; }
       .external-packaging-order-card strong { color:#92400e; }
       .external-packaging-order-meta { margin-top:3px; color:var(--muted); font-size:12px; white-space:normal; }
+      .external-purchase-table td { vertical-align:top; white-space:normal; }
+      .external-purchase-table .input { min-width:90px; }
+      .external-purchase-confirmed { margin-top:8px; padding:9px 10px; border:1px solid #86efac; border-radius:8px; background:#f0fdf4; }
+      .external-purchase-amount { color:#166534; font-weight:700; }
       @media (max-width: 900px) {
         .bom-component-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       }
@@ -2760,7 +2764,7 @@
                                   <tr v-for="(item,itemIndex) in row.items" :key="item.id">
                                     <td class="col-order-item-sequence">{{ item.item_sequence || itemIndex + 1 }}</td>
                                     <td><span v-for="(part,index) in orderSearchHighlightParts(plainProductText(item.snapshot_product_code))" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span></td>
-                                    <td><span v-for="(part,index) in orderSearchHighlightParts(plainProductText(item.snapshot_product_name))" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span><div v-if="item.combination_role==='priced_component'" class="status blue" style="margin-top:3px">{{ combinationGroupLabel(item) }}</div><div v-if="hasExternalPackagingRequirements(item)" class="status orange" style="margin-top:3px;white-space:normal">下一步：核对外购包装 {{ item.external_packaging_requirements.length }} 项</div><div v-if="item.mold_location" class="muted" style="font-size:11px">模具：{{ moldLocationText(item) }}</div></td>
+                                    <td><span v-for="(part,index) in orderSearchHighlightParts(plainProductText(item.snapshot_product_name))" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span><div v-if="item.combination_role==='priced_component'" class="status blue" style="margin-top:3px">{{ combinationGroupLabel(item) }}</div><div v-if="hasExternalPackagingRequirements(item)" :class="['status', row.external_packaging_purchase_summary?.status==='confirmed' ? 'green' : 'orange']" style="margin-top:3px;white-space:normal">{{ row.external_packaging_purchase_summary?.status==='confirmed' ? `外购包装已确认 ${row.external_packaging_purchase_summary.purchase_numbers.join('、')}` : `下一步：核对外购包装 ${item.external_packaging_requirements.length} 项` }}</div><div v-if="item.mold_location" class="muted" style="font-size:11px">模具：{{ moldLocationText(item) }}</div></td>
                                     <td><span v-for="(part,index) in orderSearchHighlightParts(item.snapshot_spec || '-')" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span></td>
                                     <td style="white-space:normal;word-break:break-all;max-width:140px;font-size:12px"><span v-for="(part,index) in orderSearchHighlightParts(orderItemMaterialText(item, false))" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span></td>
                                     <td class="cell-right"><strong>{{ item.quantity }}</strong><div v-if="Number(item.business_delivered_quantity || 0) > 0" class="order-delivery-compact">已送 {{ item.business_delivered_quantity }}/{{ item.quantity }}</div></td>
@@ -5609,8 +5613,14 @@
                 </td>
               </tr></tbody></table>
               <div v-if="orderDetail.items.some(hasExternalPackagingRequirements)" class="external-packaging-order-panel">
-                <div><strong>下一步：外购包装待确认</strong></div>
-                <div class="muted" style="margin-top:3px">这里是下单时冻结的用量建议，不会自动选供应商或生成采购单。</div>
+                <div class="toolbar" style="margin-bottom:0">
+                  <div>
+                    <strong>{{ orderDetail.external_packaging_purchase_summary?.status==='confirmed' ? '外购包装已确认采购' : '下一步：外购包装待确认' }}</strong>
+                    <div v-if="orderDetail.external_packaging_purchase_summary?.status==='confirmed'" class="status green" style="margin-top:4px">{{ orderDetail.external_packaging_purchase_summary.purchase_numbers.join('、') }}</div>
+                    <div v-else class="muted" style="margin-top:3px">下单时的用量建议已冻结；不会自动选供应商或生成采购单，管理员确认后才按供应商拆单。</div>
+                  </div>
+                  <button v-if="canAdmin && canViewCosts" class="btn primary" @click="openExternalPurchase(orderDetail)">{{ orderDetail.external_packaging_purchase_summary?.status==='confirmed' ? '查看采购确认' : '核对并确认采购' }}</button>
+                </div>
                 <div v-for="item in orderDetail.items.filter(hasExternalPackagingRequirements)" :key="`external-${item.id}`" class="external-packaging-order-item">
                   <div><strong>{{ item.item_sequence || '-' }}. {{ item.snapshot_product_code || '-' }}｜{{ item.snapshot_product_name || '-' }}</strong> · 订单 {{ item.quantity }} 个</div>
                   <div class="external-packaging-order-grid">
@@ -5626,6 +5636,36 @@
                   </div>
                 </div>
               </div>
+            </div>
+            <div v-else-if="modal.type === 'externalPurchase'">
+              <div v-if="externalPurchase.loading" class="empty">正在读取冻结候选和有效价格…</div>
+              <div v-else-if="externalPurchase.error" class="notice danger">{{ externalPurchase.error }}</div>
+              <template v-else-if="externalPurchase.status === 'confirmed' && externalPurchase.confirmation">
+                <div class="notice success">已确认采购；这里只查看冻结结果，不会自动收货或增加库存。</div>
+                <div v-for="purchase in externalPurchase.confirmation.purchase_orders" :key="purchase.id" class="external-purchase-confirmed">
+                  <div class="toolbar" style="margin-bottom:6px"><strong>{{ purchase.purchase_number }}｜{{ purchase.supplier_name }}</strong><span class="external-purchase-amount">合计 {{ purchase.currency }} {{ money(purchase.total_amount) }}</span></div>
+                  <table><thead><tr><th>用途 / 产品</th><th>数量</th><th>单价</th><th>货品金额</th><th>税额</th></tr></thead><tbody>
+                    <tr v-for="item in purchase.items" :key="item.id"><td><strong>{{ item.purpose }}</strong><br>{{ item.supplier_product_code }}｜{{ item.product_name }}<br><span class="muted">{{ item.specification_summary }}</span></td><td>{{ item.purchase_quantity }} {{ item.purchase_unit }}</td><td>{{ item.currency }} {{ item.unit_price }}</td><td>{{ item.line_amount }}</td><td>{{ item.tax_amount }}</td></tr>
+                  </tbody></table>
+                </div>
+              </template>
+              <template v-else>
+                <div class="notice">一次核对全部外购组件；同一供应商自动合并为一张采购单。附加费按价格版本保留为条款，本阶段不自动收货入库。</div>
+                <div class="table-wrap"><table class="external-purchase-table"><thead><tr><th>订单明细</th><th>外购组件</th><th>采购数量</th><th>供应商候选</th><th>当前有效价格</th></tr></thead><tbody>
+                  <tr v-for="row in externalPurchase.items" :key="row.order_component_id">
+                    <td>序号 {{ row.item_sequence || '-' }}<br>{{ row.product_code || '-' }}<br><span class="muted">{{ row.product_name || '-' }}</span></td>
+                    <td><strong>{{ row.purpose }}</strong><br><span class="muted">{{ row.specification_summary }}</span></td>
+                    <td><input class="input" type="number" min="0.000001" step="0.001" v-model="row.purchase_quantity" /><div class="muted" style="margin-top:4px">单位：{{ selectedExternalPurchaseCandidate(row)?.purchase_unit || row.purchase_unit || '-' }}</div></td>
+                    <td><select class="input" v-model.number="row.selected_candidate_id"><option v-for="candidate in row.candidates" :key="candidate.id" :value="candidate.id" :disabled="!!candidate.blocked_reason">{{ externalPackagingCandidateText(candidate) }}{{ candidate.blocked_reason ? `（${candidate.blocked_reason}）` : '' }}</option></select></td>
+                    <td>
+                      <template v-if="selectedExternalPurchaseCandidate(row)?.price"><strong>{{ selectedExternalPurchaseCandidate(row).price.currency }} {{ selectedExternalPurchaseCandidate(row).price.unit_price }} / {{ selectedExternalPurchaseCandidate(row).price.quote_unit }}</strong><div class="muted">价格版本 {{ selectedExternalPurchaseCandidate(row).price.version_number }}；{{ selectedExternalPurchaseCandidate(row).price.tax_mode==='tax_inclusive' ? '含税' : '未税' }}</div><div v-if="selectedExternalPurchaseCandidate(row).suggested_quantity_warning" class="status orange" style="margin-top:4px;white-space:normal">{{ selectedExternalPurchaseCandidate(row).suggested_quantity_warning }}，可修改数量后提交</div></template>
+                      <span v-else class="status red">{{ selectedExternalPurchaseCandidate(row)?.blocked_reason || '缺少有效价格' }}</span>
+                    </td>
+                  </tr>
+                </tbody></table></div>
+                <div v-if="externalPurchase.submitError" class="notice danger" style="margin-top:8px">{{ externalPurchase.submitError }}</div>
+                <div class="toolbar-group" style="justify-content:flex-end;margin-top:10px"><button class="btn primary" :disabled="externalPurchaseConfirmBlocked" @click="confirmExternalPurchase">{{ externalPurchase.saving ? '正在确认…' : '确认采购并按供应商拆单' }}</button></div>
+              </template>
             </div>
             <div v-else-if="modal.type === 'requisitionHold'" class="requisition-hold-modal">
               <div class="notice">暂缓只把明细移到等候报料，不会生成报料单、待入库或库存。</div>
@@ -7102,6 +7142,7 @@
             },
             requisitionForm: { supplier_name: "", items: [] },
             receiptForm: { items: [] }, orderItemForm: {}, orderDetail:null, orderGroupDetail:null, orderTrace:null, orderTraceEventDetail:null, orderTraceEventDetailLoadingKey:"", orderTraceReturnContext:null, traceRollbackBusy:false, drawingFile:null,
+            externalPurchase:{loading:false,saving:false,error:"",submitError:"",status:"",orderId:null,items:[],confirmation:null,idempotencyKey:""},
             orderItemSaveState:{saving:false,committed:false,outcomeUncertain:false,result:null},
             finishedInventoryCandidates: [], finishedInventoryCandidatesLoaded: false,
             finishedInventoryReservations: [],
@@ -7594,6 +7635,14 @@
           canSubmitPdfCorrection() { return this.hasPermission("pdf_training.manage"); },
           canManagePermissions() { return this.user?.role === "admin"; },
           canViewCosts() { return this.hasPermission("cost.view"); },
+          externalPurchaseConfirmBlocked() {
+            if (this.externalPurchase.loading || this.externalPurchase.saving || !this.externalPurchase.items.length) return true;
+            return this.externalPurchase.items.some(row => {
+              const candidate = this.selectedExternalPurchaseCandidate(row);
+              const quantity = Number(row.purchase_quantity);
+              return !candidate || !candidate.price || !!candidate.blocked_reason || !Number.isFinite(quantity) || quantity <= 0;
+            });
+          },
           canCreateCustomers() { return this.hasPermission("customers.create"); },
           canEditCustomers() { return this.hasPermission("customers.edit"); },
           canDeactivateCustomers() { return this.hasPermission("customers.deactivate"); },
@@ -16584,6 +16633,55 @@
             const code = candidate.supplier_product_code || "-";
             const name = candidate.product_name || "外购产品";
             return `${supplier}｜${code}｜${name}`;
+          },
+          selectedExternalPurchaseCandidate(row) {
+            return (row?.candidates || []).find(candidate => Number(candidate.id) === Number(row?.selected_candidate_id)) || null;
+          },
+          async openExternalPurchase(order) {
+            const orderId = Number(order?.id || 0);
+            if (!orderId || !this.canAdmin || !this.canViewCosts) return;
+            this.externalPurchase = {loading:true,saving:false,error:"",submitError:"",status:"",orderId,items:[],confirmation:null,idempotencyKey:createIdempotencyKey()};
+            this.modal = {type:"externalPurchase",title:`外购包装采购核对 · ${this.displayOrderNumber(order)}`};
+            try {
+              const {data} = await axios.get(`/api/orders/${orderId}/external-packaging-purchase`);
+              this.externalPurchase.status = data.status;
+              this.externalPurchase.confirmation = data.confirmation || null;
+              this.externalPurchase.items = (data.items || []).map(row => ({
+                ...row,
+                selected_candidate_id: Number(row.default_candidate_id || row.candidates?.find(candidate => !candidate.blocked_reason)?.id || 0),
+                purchase_quantity: row.suggested_purchase_quantity,
+              }));
+            } catch (error) {
+              this.externalPurchase.error = this.errorMessage(error);
+            } finally {
+              this.externalPurchase.loading = false;
+            }
+          },
+          async confirmExternalPurchase() {
+            if (this.externalPurchaseConfirmBlocked) return;
+            this.externalPurchase.saving = true;
+            this.externalPurchase.submitError = "";
+            try {
+              const payload = {
+                idempotency_key:this.externalPurchase.idempotencyKey,
+                lines:this.externalPurchase.items.map(row => ({
+                  order_component_id:Number(row.order_component_id),
+                  candidate_id:Number(row.selected_candidate_id),
+                  purchase_quantity:String(row.purchase_quantity),
+                })),
+              };
+              const {data} = await axios.post(`/api/orders/${this.externalPurchase.orderId}/external-packaging-purchase/confirm`, payload);
+              this.externalPurchase.status = "confirmed";
+              this.externalPurchase.confirmation = data.confirmation;
+              const detail = await axios.get(`/api/orders/${this.externalPurchase.orderId}`);
+              this.orderDetail = detail.data;
+              await this.loadOrders();
+              this.showToast(data.created ? "外购包装已按供应商确认采购" : "该采购已确认，本次未重复创建");
+            } catch (error) {
+              this.externalPurchase.submitError = this.errorMessage(error);
+            } finally {
+              this.externalPurchase.saving = false;
+            }
           },
           orderBomComponentText(component) {
             const code = component?.internal_code || component?.product_code || "-";

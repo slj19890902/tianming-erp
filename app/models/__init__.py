@@ -79,6 +79,12 @@ from app.models.order_external_packaging import (  # noqa: E402,F401
     SalesOrderItemExternalComponent,
     SalesOrderItemExternalComponentCandidate,
 )
+from app.models.external_packaging_purchase import (  # noqa: E402,F401
+    ExternalPackagingPurchaseBatch,
+    ExternalPackagingPurchaseDailySequence,
+    ExternalPackagingPurchaseItem,
+    ExternalPackagingPurchaseOrder,
+)
 from app.models.supplier_flute_price_rule import (  # noqa: E402,F401
     SupplierFlutePriceRule,
 )

@@ -39,6 +39,7 @@ from app.api.materials import router as materials_router
 from app.api.suppliers import router as suppliers_router
 from app.api.external_packaging_prices import router as external_packaging_prices_router
 from app.api.external_packaging_components import router as external_packaging_components_router
+from app.api.external_packaging_purchases import router as external_packaging_purchases_router
 from app.api.orders import router as orders_router
 from app.api.pricing import router as pricing_router
 from app.api.products import (
@@ -430,6 +431,15 @@ def create_app() -> FastAPI:
             audit_router,
             prefix="/api/audit",
             tags=["audit"],
+        )
+    if not any(
+        route.path == "/api/orders/{order_id}/external-packaging-purchase"
+        for route in application.routes
+    ):
+        application.include_router(
+            external_packaging_purchases_router,
+            prefix="/api",
+            tags=["external-packaging-purchases"],
         )
     router_specs = (
         ("/api/customers", customers_router, "customers"),

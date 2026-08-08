@@ -69,6 +69,7 @@ from app.services.floor3_locations import (
     convert_snapshot_to_finished_lot,
     create_pallet,
     create_layout_slot,
+    merge_pallet_remaining_goods,
     move_pallet,
     set_pallet_relocation,
     set_layout_slot_active,
@@ -518,6 +519,22 @@ class Floor3PalletMovePayload(BaseModel):
         if value is not True:
             raise ValueError("移位操作必须明确确认")
         return value
+
+
+class Floor3PalletMergePayload(BaseModel):
+    expected_version: int = Field(gt=0)
+    target_pallet_id: int = Field(gt=0)
+    expected_target_version: int = Field(gt=0)
+    confirmed: Literal[True]
+    idempotency_key: str = Field(min_length=1, max_length=70)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def strip_floor3_merge_idempotency_key(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("幂等键不能为空")
+        return text
 
 
 class TwinFinishedInboundPayload(BaseModel):
@@ -4635,6 +4652,82 @@ def move_floor3_pallet(
     except IntegrityError as error:
         db.rollback()
         raise HTTPException(status_code=409, detail="目标货位已被占用，请刷新后重试") from error
+
+
+@router.post("/pallets/{pallet_id}/merge-all")
+def merge_floor3_pallet_remaining_goods(
+    pallet_id: int,
+    payload: Floor3PalletMergePayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    source = _floor3_get_pallet(db, pallet_id)
+    target = _floor3_get_pallet(db, payload.target_pallet_id)
+    _require_floor3_pallet_customer_access(db, source, user)
+    _require_floor3_pallet_customer_access(db, target, user)
+    source_location_id = source.location_id
+    target_location_id = target.location_id
+    try:
+        result = merge_pallet_remaining_goods(
+            db,
+            source_pallet_id=pallet_id,
+            target_pallet_id=payload.target_pallet_id,
+            expected_source_version=payload.expected_version,
+            expected_target_version=payload.expected_target_version,
+            operator_id=user.id,
+            idempotency_key=payload.idempotency_key,
+        )
+        if not result.replayed:
+            common_details = {
+                "source_pallet_id": pallet_id,
+                "target_pallet_id": payload.target_pallet_id,
+                "source_location_id": source_location_id,
+                "target_location_id": target_location_id,
+                "moved_item_count": result.moved_item_count,
+                "expected_source_version": payload.expected_version,
+                "expected_target_version": payload.expected_target_version,
+                "idempotency_key": payload.idempotency_key,
+            }
+            _floor3_log(
+                db,
+                request=request,
+                user=user,
+                action="UPDATE",
+                pallet=result.source_pallet,
+                description="源栈板全部剩余货物已合并并释放",
+                details=common_details,
+            )
+            _floor3_log(
+                db,
+                request=request,
+                user=user,
+                action="UPDATE",
+                pallet=result.target_pallet,
+                description="目标栈板接收全部零散货",
+                details=common_details,
+            )
+        db.commit()
+        return {
+            "message": "零散货已全部合并，源栈板已释放",
+            "source_pallet": _floor3_pallet_response(
+                db, result.source_pallet, user
+            ),
+            "target_pallet": _floor3_pallet_response(
+                db, result.target_pallet, user
+            ),
+            "moved_item_count": result.moved_item_count,
+            "idempotent_replay": result.replayed,
+        }
+    except Floor3LocationError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="栈板或库存状态已变化，请刷新后重试",
+        ) from error
 
 
 @router.post("/pallets/{pallet_id}/clear")

@@ -49,6 +49,16 @@ class Floor3MoveResult:
 
 
 @dataclass(frozen=True)
+class Floor3MergeResult:
+    source_pallet: InventoryPallet
+    target_pallet: InventoryPallet
+    source_movement: InventoryLocationMovement
+    target_movement: InventoryLocationMovement
+    moved_item_count: int
+    replayed: bool
+
+
+@dataclass(frozen=True)
 class Floor3AreaLocationCountResult:
     area_code: str
     target_count: int
@@ -1215,6 +1225,239 @@ def _movement_by_idempotency_key(
         select(InventoryLocationMovement).where(
             InventoryLocationMovement.idempotency_key == idempotency_key
         )
+    )
+
+
+def _merge_target_idempotency_key(idempotency_key: str) -> str:
+    return f"{idempotency_key}:target"
+
+
+def _remaining_pallet_items(pallet: InventoryPallet) -> list[InventoryPalletItem]:
+    remaining: list[InventoryPalletItem] = []
+    for item in pallet.items:
+        lot = item.inventory_lot
+        quantity = (
+            int(lot.quantity_available or 0)
+            + int(lot.quantity_reserved or 0)
+            + int(lot.quantity_damaged or 0)
+            if lot is not None
+            else Decimal(str(item.quantity or 0))
+        )
+        if quantity > 0:
+            remaining.append(item)
+    return remaining
+
+
+def _pallet_merge_signature(
+    pallet: InventoryPallet,
+) -> tuple[int, str, list[InventoryPalletItem]]:
+    items = _remaining_pallet_items(pallet)
+    if not items:
+        raise Floor3LocationError("栈板没有可合并的剩余货物", status_code=409)
+    customer_ids = {item.customer_id for item in items}
+    if None in customer_ids or len(customer_ids) != 1:
+        raise Floor3LocationError(
+            "栈板客户归属不唯一，不能执行零散货合并", status_code=409
+        )
+    inventory_types = {
+        item.inventory_lot.inventory_type
+        if item.inventory_lot is not None
+        else item.item_type
+        for item in items
+    }
+    if len(inventory_types) != 1:
+        raise Floor3LocationError(
+            "栈板库存类型不唯一，不能执行零散货合并", status_code=409
+        )
+    return int(next(iter(customer_ids))), next(iter(inventory_types)), items
+
+
+def _idempotent_merge_result(
+    db: Session,
+    source_movement: InventoryLocationMovement,
+    *,
+    source_pallet_id: int,
+    target_pallet_id: int,
+    expected_source_version: int,
+    expected_target_version: int,
+    idempotency_key: str,
+) -> Floor3MergeResult:
+    target_movement = _movement_by_idempotency_key(
+        db, _merge_target_idempotency_key(idempotency_key)
+    )
+    if (
+        source_movement.movement_type != "clear"
+        or source_movement.pallet_id != source_pallet_id
+        or source_movement.pallet_version_before != expected_source_version
+        or target_movement is None
+        or target_movement.movement_type != "add_item"
+        or target_movement.pallet_id != target_pallet_id
+        or target_movement.pallet_version_before != expected_target_version
+        or source_movement.to_location_id != target_movement.to_location_id
+    ):
+        raise Floor3LocationError("幂等键已用于不同的栈板合并业务", status_code=409)
+    return Floor3MergeResult(
+        source_pallet=_pallet(db, source_pallet_id, refresh=True),
+        target_pallet=_pallet(db, target_pallet_id, refresh=True),
+        source_movement=source_movement,
+        target_movement=target_movement,
+        moved_item_count=0,
+        replayed=True,
+    )
+
+
+def merge_pallet_remaining_goods(
+    db: Session,
+    *,
+    source_pallet_id: int,
+    target_pallet_id: int,
+    expected_source_version: int,
+    expected_target_version: int,
+    operator_id: int | None,
+    idempotency_key: str,
+) -> Floor3MergeResult:
+    """Move every remaining item to one compatible pallet and release the source."""
+    existing = _movement_by_idempotency_key(db, idempotency_key)
+    if existing is not None:
+        return _idempotent_merge_result(
+            db,
+            existing,
+            source_pallet_id=source_pallet_id,
+            target_pallet_id=target_pallet_id,
+            expected_source_version=expected_source_version,
+            expected_target_version=expected_target_version,
+            idempotency_key=idempotency_key,
+        )
+    if source_pallet_id == target_pallet_id:
+        raise Floor3LocationError("源栈板和目标栈板不能相同")
+
+    source = _pallet(db, source_pallet_id)
+    target = _pallet(db, target_pallet_id)
+    if not source.is_current or source.location_id is None:
+        raise Floor3LocationError("源栈板已释放，不能再次合并", status_code=409)
+    if not target.is_current or target.location_id is None:
+        raise Floor3LocationError("目标栈板已释放，不能接收货物", status_code=409)
+    source_location = _location(db, source.location_id)
+    target_location = _location(db, target.location_id)
+    if source_location.storage_type == "rack" or target_location.storage_type == "rack":
+        raise Floor3LocationError("零散货合并只适用于真实木栈板", status_code=409)
+
+    source_customer, source_type, moved_items = _pallet_merge_signature(source)
+    target_customer, target_type, target_items = _pallet_merge_signature(target)
+    if source_customer != target_customer:
+        raise Floor3LocationError("只能合并同一客户的零散货", status_code=409)
+    if source_type != target_type:
+        raise Floor3LocationError("只能合并同一库存类型的零散货", status_code=409)
+
+    try:
+        claims = sorted(
+            (
+                (source, expected_source_version),
+                (target, expected_target_version),
+            ),
+            key=lambda entry: entry[0].id,
+        )
+        _claim_pallet_version(db, claims[0][0], expected_version=claims[0][1])
+        existing = _movement_by_idempotency_key(db, idempotency_key)
+        if existing is not None:
+            return _idempotent_merge_result(
+                db,
+                existing,
+                source_pallet_id=source_pallet_id,
+                target_pallet_id=target_pallet_id,
+                expected_source_version=expected_source_version,
+                expected_target_version=expected_target_version,
+                idempotency_key=idempotency_key,
+            )
+        _claim_pallet_version(db, claims[1][0], expected_version=claims[1][1])
+
+        source_version_after = expected_source_version + 1
+        target_version_after = expected_target_version + 1
+        system_note = (
+            f"P1-16E-2零散货合并：{source.pallet_code} → {target.pallet_code}"
+        )
+        now = beijing_now_naive()
+        lot_now = utc_now_naive()
+        from app.services.warehouse_inventory import (
+            record_location_transfer_without_quantity_change,
+        )
+
+        for item in moved_items:
+            item.pallet = target
+            lot = item.inventory_lot
+            if lot is not None:
+                lot.warehouse_location_id = target_location.id
+                lot.version += 1
+                lot.last_movement_at = lot_now
+                record_location_transfer_without_quantity_change(
+                    db,
+                    lot=lot,
+                    operator_id=operator_id,
+                    idempotency_key=f"{idempotency_key}:lot:{lot.id}",
+                    remarks=system_note,
+                )
+
+        source.location_id = None
+        source.status = "closed"
+        source.is_current = False
+        source.needs_relocation = False
+        source.closed_at = now
+        source.updated_by = operator_id
+        target.status = "active"
+        target.needs_relocation = _needs_relocation(
+            target_location, [*target_items, *moved_items]
+        )
+        target.updated_by = operator_id
+
+        source_movement = InventoryLocationMovement(
+            pallet_id=source.id,
+            from_location_id=source_location.id,
+            to_location_id=target_location.id,
+            movement_type="clear",
+            operator_id=operator_id,
+            moved_at=now,
+            idempotency_key=idempotency_key,
+            confirmed_at=now,
+            pallet_version_before=expected_source_version,
+            pallet_version_after=source_version_after,
+            remarks=system_note,
+        )
+        target_movement = InventoryLocationMovement(
+            pallet_id=target.id,
+            from_location_id=target_location.id,
+            to_location_id=target_location.id,
+            movement_type="add_item",
+            operator_id=operator_id,
+            moved_at=now,
+            idempotency_key=_merge_target_idempotency_key(idempotency_key),
+            confirmed_at=now,
+            pallet_version_before=expected_target_version,
+            pallet_version_after=target_version_after,
+            remarks=system_note,
+        )
+        db.add_all([source_movement, target_movement])
+        db.flush()
+    except (Floor3LocationError, IntegrityError):
+        existing = _movement_by_idempotency_key(db, idempotency_key)
+        if existing is not None:
+            return _idempotent_merge_result(
+                db,
+                existing,
+                source_pallet_id=source_pallet_id,
+                target_pallet_id=target_pallet_id,
+                expected_source_version=expected_source_version,
+                expected_target_version=expected_target_version,
+                idempotency_key=idempotency_key,
+            )
+        raise
+
+    return Floor3MergeResult(
+        source_pallet=_pallet(db, source.id, refresh=True),
+        target_pallet=_pallet(db, target.id, refresh=True),
+        source_movement=source_movement,
+        target_movement=target_movement,
+        moved_item_count=len(moved_items),
+        replayed=False,
     )
 
 

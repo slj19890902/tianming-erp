@@ -193,6 +193,11 @@ class ExternalPackagingProduct(Base):
         nullable=False,
         index=True,
     )
+    customer_scope_id: Mapped[int | None] = mapped_column(
+        ForeignKey("customers.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
     category_code: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     supplier_product_code: Mapped[str] = mapped_column(String(100), nullable=False)
     normalized_supplier_product_code: Mapped[str] = mapped_column(
@@ -219,3 +224,4 @@ class ExternalPackagingProduct(Base):
     )
 
     supplier: Mapped[Supplier] = relationship(back_populates="packaging_products")
+    customer_scope = relationship("Customer")

@@ -1368,6 +1368,29 @@
       .incoming-customer-cell { line-height: 1.35; }
       .incoming-decision-cell { width: 14%; }
       .incoming-location-picker { display: grid; gap: 4px; margin-top: 5px; }
+      .external-incoming-panel {
+        margin: 10px 0; padding: 12px; border: 1px solid #bfdbfe;
+        border-radius: 12px; background: #f8fbff;
+      }
+      .external-incoming-head {
+        display: flex; align-items: center; justify-content: space-between;
+        gap: 10px; margin-bottom: 8px;
+      }
+      .external-incoming-order { margin-top: 8px; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+      .external-incoming-order-head {
+        display: grid; grid-template-columns: 1fr 1fr auto; align-items: center;
+        gap: 10px; padding: 8px 10px; background: #eff6ff;
+      }
+      .external-incoming-table { width: 100%; min-width: 0; table-layout: fixed; }
+      .external-incoming-table th, .external-incoming-table td {
+        min-width: 0; padding: 7px 8px; white-space: normal;
+        word-break: break-word; overflow-wrap: anywhere;
+      }
+      .external-incoming-table th:nth-child(1) { width: 31%; }
+      .external-incoming-table th:nth-child(2) { width: 21%; }
+      .external-incoming-table th:nth-child(3) { width: 25%; }
+      .external-incoming-table th:nth-child(4) { width: 23%; }
+      .external-incoming-quantity { width: 92px; min-width: 0 !important; }
       .requisition-pending-table { min-width: 1580px; }
       .requisition-demand-cell { min-width: 132px; font-size: 12px; line-height: 1.55; white-space: nowrap; }
       .requisition-demand-cell .semi-deducted { color: #047857; font-weight: 700; }
@@ -2987,7 +3010,7 @@
               <page-head title="仓库来料入库" desc="老板端与车间共用同一批来料任务，可核对纸板尺寸并调整本次入库数量。"></page-head>
               <div class="toolbar">
                 <div class="toolbar-group">
-                  <button :class="['btn',{primary:incomingTab==='pending'}]" @click="selectIncomingTab('pending')">待入库 {{ incomingPending.length }}</button>
+                  <button :class="['btn',{primary:incomingTab==='pending'}]" @click="selectIncomingTab('pending')">待入库 {{ incomingPending.length + externalIncomingPending.length }}</button>
                   <button :class="['btn',{primary:incomingTab==='received'}]" @click="selectIncomingTab('received')">今日实收<span v-if="incomingReceivedLoaded"> {{ incomingReceived.length }}</span></button>
                   <button :class="['btn',{primary:incomingTab==='history'}]" @click="selectIncomingTab('history')">历史入库</button>
                 </div>
@@ -3002,6 +3025,30 @@
               <div v-if="incomingTab==='pending' && incomingReceiptLocationsError" class="status orange" style="display:block;margin:8px 0">{{ incomingReceiptLocationsError }} <button class="btn small" @click="ensureIncomingReceiptLocations()">重试</button></div>
               <div v-if="incomingTab==='pending' && incomingLocationsLoading" class="status blue" style="display:block;margin:8px 0">正在读取余量转半成品所需库位…</div>
               <div v-if="incomingTab==='pending' && incomingLocationsError" class="status orange" style="display:block;margin:8px 0">{{ incomingLocationsError }} <button class="btn small" @click="ensureIncomingLocations()">重试</button></div>
+              <section v-if="incomingTab==='pending' && (externalIncomingPending.length || externalIncomingLoading || externalIncomingError)" class="external-incoming-panel">
+                <div class="external-incoming-head">
+                  <div><strong>外购包装待收 {{ externalIncomingPending.length }}</strong><div class="muted">护角、EPE、外购彩盒等按采购原单位收料；这里只记实收，不增加纸板或成品库存。</div></div>
+                  <button v-if="externalIncomingError" class="btn small" @click="loadExternalIncoming">重试</button>
+                </div>
+                <div v-if="externalIncomingLoading" class="status blue">正在读取外购包装待收…</div>
+                <div v-if="externalIncomingError" class="status orange">{{ externalIncomingError }}</div>
+                <article v-for="purchase in externalIncomingPending" :key="purchase.id" class="external-incoming-order">
+                  <div class="external-incoming-order-head">
+                    <div><strong>{{ purchase.supplier_name }}</strong><div class="muted">{{ purchase.purchase_number }}</div></div>
+                    <div><strong>{{ purchase.customer_name }}</strong><div class="muted">订单 {{ purchase.order_number }}</div></div>
+                    <button v-if="hasPermission('incoming.execute')" class="btn small success" :disabled="externalIncomingSavingId===purchase.id" @click="receiveExternalPurchase(purchase)">{{ externalIncomingSavingId===purchase.id ? '正在保存…' : '确认本次收料' }}</button>
+                  </div>
+                  <table class="external-incoming-table">
+                    <thead><tr><th>外购包装</th><th>采购单位</th><th>采购 / 已收 / 待收</th><th>本次实收</th></tr></thead>
+                    <tbody><tr v-for="line in purchase.items" :key="line.purchase_item_id">
+                      <td><strong>{{ line.product_name }}</strong><div class="muted">{{ line.purpose }}<template v-if="line.supplier_product_code">｜{{ line.supplier_product_code }}</template></div><div class="muted">{{ line.specification_summary || '-' }}</div></td>
+                      <td>{{ line.purchase_unit }}</td>
+                      <td>采购 {{ line.ordered_quantity }}<br>已收 {{ line.received_quantity }}<br><strong>待收 {{ line.remaining_quantity }}</strong></td>
+                      <td><input v-if="hasPermission('incoming.execute')" class="input external-incoming-quantity" type="number" min="0" step="any" v-model="externalIncomingDrafts[externalIncomingDraftKey(purchase.id,line.purchase_item_id)]" /><strong v-else>{{ line.remaining_quantity }}</strong></td>
+                    </tr></tbody>
+                  </table>
+                </article>
+              </section>
               <data-panel v-if="incomingTab !== 'history'" :empty="!(incomingTab==='pending' ? incomingPending : incomingReceived).length && !(incomingTab==='received' && (incomingReceivedLoading || incomingReceivedError))">
                 <table class="incoming-table">
                   <thead><tr><th v-if="incomingTab==='pending' && hasPermission('incoming.execute')"><input type="checkbox" :checked="allIncomingSelected" @change="toggleAllIncoming($event.target.checked)" /> 全选</th><th>报料尺寸</th><th>客户</th><th>存货编码</th><th>产品</th><th>材质</th><th>计划 / 已收 / 待收</th><th>本次收料</th><th class="incoming-decision-cell">收料结果 / 入库位</th><th>报料日期</th><th>图纸</th><th>生产卡</th><th v-if="hasPermission('incoming.execute')">操作</th></tr></thead>
@@ -7151,6 +7198,7 @@
             reportedFilters: { customer_id:"", report_length_mm:"", report_width_mm:"", document_number:"", order_number:"", product_code:"", product_name:"", material_code:"", flute_type:"", supplier_name:"", status:"", date_from:"", date_to:"" },
             reportedCustomerOptions: [], reportedAdvancedVisible: false, reportedExpanded: {},
             incomingTab: "pending", incomingPending: [], incomingReceived: [], incomingReceivedLoaded: false, incomingReceivedLoading: false, incomingReceivedError: "", incomingHistory: [], incomingHistoryTotal: 0, incomingLocations: [], incomingLocationsLoading: false, incomingLocationsError: "", incomingReceiptLocations: [], incomingReceiptLocationsLoading: false, incomingReceiptLocationsError: "",
+            externalIncomingPending: [], externalIncomingLoading: false, externalIncomingError: "", externalIncomingDrafts: {}, externalIncomingSavingId: null,
             incomingHistoryFilters: { customer_id:"", document_keyword:"", product_code:"", product_name:"", supplier_name:"", date_from:"", date_to:"", receipt_status:"" },
             productionTab: "pending", productionPending: [], productionHistory: [], productionHistoryTotal: 0, productionLocations: [], productionLocationsLoading: false, productionLocationsError: "", productionSelected: {}, productionBusy: false,
             productionHistoryFilters: { customer_id:"", order_keyword:"", product_code:"", product_name:"", completed_date_from:"", completed_date_to:"", status:"" },
@@ -14083,7 +14131,10 @@
           async loadIncoming() {
             const controller = this.beginLatestRequest("incoming:pending");
             try {
-              const pending = await axios.get("/api/incoming/pending", {signal:controller.signal});
+              const [pending] = await Promise.all([
+                axios.get("/api/incoming/pending", {signal:controller.signal}),
+                this.loadExternalIncoming(),
+              ]);
               this.incomingPending=(pending.data.items || []).map(row=>({...row,incoming_quantity:Number(row.remaining_quantity ?? row.incoming_quantity ?? row.requisition_qty ?? row.quantity ?? 0),resolution_action:"",resolution_reason:"",receipt_location_id:Number(row.default_location_id)||null,surplus_location_id:null}));
               if (this.incomingPending.some(row => row.source_type === "stock_replenishment")) this.ensureIncomingReceiptLocations();
               const pendingIds = new Set(this.incomingPending.map(row => row.item_id));
@@ -14094,6 +14145,58 @@
               if (!this.isCancelledRequest(error)) throw error;
             } finally {
               this.finishLatestRequest("incoming:pending", controller);
+            }
+          },
+          externalIncomingDraftKey(purchaseId, purchaseItemId) {
+            return `${purchaseId}:${purchaseItemId}`;
+          },
+          applyExternalIncomingOverview(data) {
+            this.externalIncomingPending = data?.purchase_orders || [];
+            const drafts = {};
+            this.externalIncomingPending.forEach(purchase => {
+              (purchase.items || []).forEach(line => {
+                drafts[this.externalIncomingDraftKey(purchase.id, line.purchase_item_id)] = line.remaining_quantity;
+              });
+            });
+            this.externalIncomingDrafts = drafts;
+          },
+          async loadExternalIncoming() {
+            const controller = this.beginLatestRequest("incoming:external-pending");
+            this.externalIncomingLoading = true;
+            this.externalIncomingError = "";
+            try {
+              const response = await axios.get("/api/external-packaging-purchases/pending-receipts", {signal:controller.signal});
+              this.applyExternalIncomingOverview(response.data);
+            } catch (error) {
+              if (!this.isCancelledRequest(error)) this.externalIncomingError = "外购包装待收读取失败：" + this.errorMessage(error);
+            } finally {
+              if (latestRequestControllers.get("incoming:external-pending") === controller) this.externalIncomingLoading = false;
+              this.finishLatestRequest("incoming:external-pending", controller);
+            }
+          },
+          async receiveExternalPurchase(purchase) {
+            if (this.externalIncomingSavingId) return;
+            const lines = (purchase.items || []).map(line => ({
+              purchase_item_id: line.purchase_item_id,
+              received_quantity: this.externalIncomingDrafts[this.externalIncomingDraftKey(purchase.id, line.purchase_item_id)],
+            })).filter(line => Number(line.received_quantity) > 0);
+            if (!lines.length) {
+              this.showToast("请填写至少一条本次实收数量", true);
+              return;
+            }
+            this.externalIncomingSavingId = purchase.id;
+            try {
+              const response = await axios.post(`/api/external-packaging-purchases/${purchase.id}/receipts`, {
+                idempotency_key: createIdempotencyKey(),
+                lines,
+              });
+              this.applyExternalIncomingOverview(response.data.overview);
+              this.showToast(response.data.created ? "外购包装实收已保存" : "该次实收已经保存，无需重复操作");
+              await Promise.all([this.loadKpi(), this.loadOrders()]);
+            } catch (error) {
+              this.showToast("外购包装收料失败：" + this.errorMessage(error), true);
+            } finally {
+              this.externalIncomingSavingId = null;
             }
           },
           async loadIncomingReceived({force=false}={}) {

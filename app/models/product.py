@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from app.models.customer import Customer
     from app.models.material import Material
     from app.models.mold_tool import MoldTool
+    from app.models.printing_plate import PrintingPlate
     from app.models.product_bom import ProductBomComponent
     from app.models.product_drawing import ProductDrawing
 
@@ -54,10 +55,23 @@ class Product(Base):
             "combination_mode IN ('parent_priced_set', 'component_priced')",
             name="ck_products_combination_mode",
         ),
+        CheckConstraint(
+            "printing_plate_mode IN ('no_plate', 'plate')",
+            name="ck_products_printing_plate_mode",
+        ),
+        CheckConstraint(
+            "printing_plate_mode = 'plate' OR "
+            "(printing_plate_1_id IS NULL AND printing_plate_2_id IS NULL "
+            "AND printing_plate_3_id IS NULL)",
+            name="ck_products_no_plate_has_no_binding",
+        ),
         CheckConstraint("version >= 1", name="ck_products_version"),
         Index("ix_products_customer_id", "customer_id"),
         Index("ix_products_material_id", "material_id"),
         Index("ix_products_mold_tool_id", "mold_tool_id"),
+        Index("ix_products_printing_plate_1_id", "printing_plate_1_id"),
+        Index("ix_products_printing_plate_2_id", "printing_plate_2_id"),
+        Index("ix_products_printing_plate_3_id", "printing_plate_3_id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -88,6 +102,33 @@ class Product(Base):
     box_style: Mapped[str | None] = mapped_column(String(150), nullable=True)
     print_content: Mapped[str | None] = mapped_column(Text, nullable=True)
     printing_colors: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    printing_plate_mode: Mapped[str] = mapped_column(
+        String(20), default="no_plate", server_default="no_plate", nullable=False
+    )
+    printing_plate_1_id: Mapped[int | None] = mapped_column(
+        ForeignKey("printing_plates.id", ondelete="SET NULL"), nullable=True
+    )
+    printing_plate_2_id: Mapped[int | None] = mapped_column(
+        ForeignKey("printing_plates.id", ondelete="SET NULL"), nullable=True
+    )
+    printing_plate_3_id: Mapped[int | None] = mapped_column(
+        ForeignKey("printing_plates.id", ondelete="SET NULL"), nullable=True
+    )
+    plate_alignment_value_mm: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
+    plate_mount_value_mm: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
+    machine_set_length_mm: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
+    machine_set_width_mm: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
+    machine_set_height_mm: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
     production_process: Mapped[str | None] = mapped_column(Text, nullable=True)
     unit: Mapped[str] = mapped_column(String(20), default="只", nullable=False)
     sale_unit_price: Mapped[Decimal | None] = mapped_column(
@@ -212,6 +253,15 @@ class Product(Base):
     customer: Mapped["Customer"] = relationship(back_populates="products")
     material: Mapped["Material | None"] = relationship(back_populates="products")
     mold_tool: Mapped["MoldTool | None"] = relationship(back_populates="products")
+    printing_plate_1: Mapped["PrintingPlate | None"] = relationship(
+        foreign_keys=[printing_plate_1_id]
+    )
+    printing_plate_2: Mapped["PrintingPlate | None"] = relationship(
+        foreign_keys=[printing_plate_2_id]
+    )
+    printing_plate_3: Mapped["PrintingPlate | None"] = relationship(
+        foreign_keys=[printing_plate_3_id]
+    )
     bom_components: Mapped[list["ProductBomComponent"]] = relationship(
         "ProductBomComponent",
         foreign_keys="ProductBomComponent.parent_product_id",

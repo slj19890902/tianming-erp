@@ -202,6 +202,21 @@ def test_plate_codes_locations_and_product_colour_count_are_fail_closed(
             "PL000002",
         }
 
+        located = client.get(
+            "/api/warehouse/twin-operations/locate",
+            params={"keyword": "PL000001", "search_type": "printing_plate"},
+        )
+        assert located.status_code == 200, located.text
+        resources = located.json()["resources"]
+        plate_resource = next(
+            row for row in resources if row["resource_id"] == f"printing-plate:{red['id']}"
+        )
+        assert plate_resource["primary_code"] == "PL000001"
+        assert plate_resource["location_code"] == "1F-PL-R01-L1-P01"
+        assert plate_resource["feature_codes"] == ["ZONE-1F-PLATE-002"]
+        assert plate_resource["map_status"] == "mapped"
+        assert "PLATE-PRODUCT-001" in plate_resource["subtitle"]
+
 
 def test_no_plate_is_default_and_clears_plate_only_settings(plate_app) -> None:
     app, _factory = plate_app

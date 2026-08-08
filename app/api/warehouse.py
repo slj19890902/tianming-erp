@@ -5516,49 +5516,53 @@ def _twin_printing_plate_resources(
     keyword: str,
     visible_customer_ids: set[int] | None,
 ) -> list[dict]:
-    pattern = f"%{keyword}%"
-    query = (
-        select(Product, Customer)
-        .join(Customer, Customer.id == Product.customer_id)
-        .where(
-            Product.is_active.is_(True),
-            Product.deleted_at.is_(None),
-            Product.die_cut_path.is_not(None),
-            func.trim(Product.die_cut_path) != "",
-            or_(
-                Product.product_code.like(pattern),
-                Product.customer_material_code.like(pattern),
-                Product.product_name.like(pattern),
-                Product.die_cut_path.like(pattern),
-                Customer.name.like(pattern),
-            ),
-        )
+    response = list_printing_plates(
+        q=keyword,
+        customer_id=None,
+        include_inactive=False,
+        limit=100,
+        db=db,
+        user=user,
     )
-    if visible_customer_ids is not None:
-        query = query.where(Product.customer_id.in_(visible_customer_ids))
-    rows = db.execute(query.order_by(Customer.name, Product.product_code).limit(100)).all()
     resources: list[dict] = []
-    for product, customer in rows:
-        feature_codes = _twin_reference_feature_codes(
-            "printing_plate", product.die_cut_path
+    for plate in response.get("items") or []:
+        if (
+            visible_customer_ids is not None
+            and plate.get("customer_id") not in visible_customer_ids
+        ):
+            continue
+        guide = plate.get("location_guide") or describe_printing_plate_location(
+            str(plate.get("rack_location") or "")
         )
+        feature_codes = (
+            ["ZONE-1F-PLATE-002"]
+            if guide.get("kind") == "plate_rack"
+            else []
+        )
+        product_summary = "、".join(
+            str(item.get("product_code") or item.get("product_name") or "")
+            for item in (plate.get("products") or [])[:3]
+        )
+        subtitle_parts = [
+            str(plate.get("customer_name") or "").strip(),
+            str(plate.get("color_name") or "").strip(),
+            product_summary,
+        ]
         resources.append(
             {
-                "resource_id": f"printing-plate:{product.id}",
+                "resource_id": f"printing-plate:{plate.get('id')}",
                 "kind": "printing_plate",
-                "primary_code": product.product_code or product.customer_material_code,
-                "title": product.product_name,
-                "subtitle": customer.name,
-                "floor_code": "1F" if feature_codes else "TEXT",
-                "area_code": None,
+                "primary_code": plate.get("plate_code"),
+                "title": plate.get("plate_name") or "印刷挂板",
+                "subtitle": " · ".join(value for value in subtitle_parts if value),
+                "floor_code": guide.get("floor") or "TEXT",
+                "area_code": "ZONE-1F-PLATE-002" if feature_codes else None,
                 "location_id": None,
-                "location_code": product.die_cut_path,
+                "location_code": plate.get("rack_location"),
                 "pallet_id": None,
                 "feature_codes": feature_codes,
                 "map_status": "mapped" if feature_codes else "text_only",
-                "prompt": (
-                    f"请前往“{product.die_cut_path}”查找印刷版/模板，拿取前核对存货编码。"
-                ),
+                "prompt": guide.get("prompt"),
             }
         )
     return resources

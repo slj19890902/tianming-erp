@@ -338,6 +338,19 @@ function inventoryLabelQuantity(item: InventoryItem) {
   return Number(item.available_quantity || 0) + Number(item.reserved_quantity || 0);
 }
 
+function palletMergeSignature(location: DashboardLocation | undefined) {
+  const items = (location?.pallet?.items || []).filter((item) => inventoryLabelQuantity(item) > 0);
+  const customerIds = [...new Set(items.map((item) => Number(item.customer_id || 0)).filter((value) => value > 0))];
+  const inventoryTypes = [...new Set(items.map((item) => item.inventory_type).filter(Boolean))];
+  if (!location?.pallet || !items.length || customerIds.length !== 1 || inventoryTypes.length !== 1) return null;
+  return {
+    customerId: customerIds[0],
+    customerName: items.find((item) => Number(item.customer_id || 0) === customerIds[0])?.customer_name || "客户待确认",
+    inventoryType: inventoryTypes[0],
+    totalQuantity: items.reduce((total, item) => total + Number(inventoryLabelQuantity(item)), 0)
+  };
+}
+
 function searchProductKey(item: Pick<InventoryItem, "customer_id" | "customer_name" | "inventory_code" | "product_name">) {
   return [item.customer_id || 0, item.customer_name || "", item.inventory_code || "", item.product_name || ""].join("::").toLocaleLowerCase("zh-CN");
 }
@@ -623,6 +636,8 @@ export function WarehouseTwinApp() {
   const [temporaryIdempotencyKey, setTemporaryIdempotencyKey] = useState(() => operationKey("map-temporary-inbound"));
   const [moveTargetLocationId, setMoveTargetLocationId] = useState("");
   const [moveIdempotencyKey, setMoveIdempotencyKey] = useState(() => operationKey("map-move"));
+  const [mergeTargetPalletId, setMergeTargetPalletId] = useState("");
+  const [mergeIdempotencyKey, setMergeIdempotencyKey] = useState(() => operationKey("map-merge"));
   const [rackFocusId, setRackFocusId] = useState<string | null>(null);
   const [correctionLotId, setCorrectionLotId] = useState<number | null>(null);
   const [correctionQuantity, setCorrectionQuantity] = useState("");
@@ -962,6 +977,20 @@ export function WarehouseTwinApp() {
       && ["finished", "shared"].includes(item.warehouse_type)
       && item.location_id !== selectedLocation?.location_id
   );
+  const selectedMergeSignature = palletMergeSignature(selectedLocation);
+  const compatibleMergeTargets = selectedMergeSignature ? visualLocations.filter((item) => {
+    if (
+      item.floor_code !== "3F"
+      || item.occupancy_status !== "occupied"
+      || item.position_status !== "mapped"
+      || item.storage_type === "rack"
+      || !item.pallet
+      || item.pallet.pallet_id === selectedLocation?.pallet?.pallet_id
+    ) return false;
+    const signature = palletMergeSignature(item);
+    return signature?.customerId === selectedMergeSignature.customerId
+      && signature.inventoryType === selectedMergeSignature.inventoryType;
+  }).sort((left, right) => left.location_code.localeCompare(right.location_code, "zh-CN", { numeric: true })) : [];
   const selectedInboundProduct = productCandidates.find(
     (item) => String(item.product_id) === inboundProductId
   );
@@ -1082,6 +1111,9 @@ export function WarehouseTwinApp() {
     setCorrectionLotId(null);
     setCorrectionQuantity("");
     setCorrectionReason("");
+    setMoveTargetLocationId("");
+    setMergeTargetPalletId("");
+    setMergeIdempotencyKey(operationKey("map-merge"));
     setWarehouseOperationMessage("");
   }, [selected?.kind, selected?.id, selectedLocation?.occupancy_status]);
   const filteredSelectedInventory = useMemo(
@@ -1612,6 +1644,38 @@ export function WarehouseTwinApp() {
     }
   };
 
+  const confirmPalletMergeAll = async () => {
+    if (!selectedLocation?.pallet || !selectedMergeSignature || !mergeTargetPalletId) return;
+    const target = compatibleMergeTargets.find((item) => String(item.pallet?.pallet_id) === mergeTargetPalletId);
+    if (!target?.pallet) {
+      setWarehouseOperationMessage("请选择同客户、同库存类型的目标栈板。");
+      return;
+    }
+    const sourcePalletCode = selectedLocation.pallet.pallet_code;
+    const sourceLocationCode = selectedLocation.location_code;
+    if (!window.confirm(`确认把 ${sourceLocationCode} · ${sourcePalletCode} 的全部剩余货物合并到 ${target.location_code} · ${target.pallet.pallet_code} 吗？\n\n不拆数量；合并后源栈板清空并释放回生产区复用。`)) return;
+    setWarehouseOperationBusy(true);
+    setWarehouseOperationMessage("");
+    try {
+      await mutateJson(`/api/warehouse/pallets/${selectedLocation.pallet.pallet_id}/merge-all`, "POST", {
+        expected_version: selectedLocation.pallet.version,
+        target_pallet_id: target.pallet.pallet_id,
+        expected_target_version: target.pallet.version,
+        confirmed: true,
+        idempotency_key: mergeIdempotencyKey
+      });
+      await refreshDashboard();
+      setSelected({ kind: "pallet", id: `erp-location-${target.location_id}` });
+      setMergeTargetPalletId("");
+      setMergeIdempotencyKey(operationKey("map-merge"));
+      setWarehouseOperationMessage(`${sourcePalletCode} 的剩余货物已全部并入 ${target.pallet.pallet_code}；源栈板已释放。`);
+    } catch (reason) {
+      setWarehouseOperationMessage((reason as Error).message);
+    } finally {
+      setWarehouseOperationBusy(false);
+    }
+  };
+
   const correctSelectedInventoryLot = async (action: "decrease" | "remove") => {
     if (!selectedLocation || !selectedCorrectionItem?.lot_id || !selectedCorrectionItem.version) return;
     const available = Number(selectedCorrectionItem.available_quantity || 0);
@@ -2131,6 +2195,15 @@ export function WarehouseTwinApp() {
               <small className="twin-formal-selected">本次会同步移动实体栈板及其关联正式库存位置，不改变库存数量。</small>
               <button type="button" className="twin-primary-action" disabled={warehouseOperationBusy || !moveTargetLocationId || !selectedLocation.pallet} onClick={confirmMapPalletMove}>确认正式栈板移位</button>
             </>}
+            {selectedLocation.occupancy_status === "occupied" && selectedLocationSupportsPallet && <div className="twin-formal-divider"><span>合并零散货</span></div>}
+            {selectedLocation.occupancy_status === "occupied" && selectedLocationSupportsPallet && <div className="twin-pallet-merge-form">
+              <small className="twin-formal-selected">整托合并：只显示同客户、同库存类型的目标栈板；不拆数量。</small>
+              {selectedMergeSignature ? <>
+                <label><span>目标栈板</span><select value={mergeTargetPalletId} onChange={(event) => { setMergeTargetPalletId(event.target.value); setMergeIdempotencyKey(operationKey("map-merge")); }}><option value="">请选择目标栈板</option>{compatibleMergeTargets.map((item) => <option key={item.pallet!.pallet_id} value={item.pallet!.pallet_id}>{item.area_code} · {item.location_code} · {item.pallet!.pallet_code} · 现有 {formatNumber(palletMergeSignature(item)?.totalQuantity)} {inventoryUnitLabel(item.pallet!.items[0]?.unit)}</option>)}</select></label>
+                {compatibleMergeTargets.length === 0 && <p className="twin-correction-hint">当前没有可合并的同客户、同库存类型目标栈板。</p>}
+                <button type="button" className="twin-primary-action" disabled={warehouseOperationBusy || !mergeTargetPalletId} onClick={confirmPalletMergeAll}>合并全部剩余货物</button>
+              </> : <p className="twin-correction-hint">当前栈板混有不同客户或不同库存类型，系统不会允许直接合并。</p>}
+            </div>}
           </section>}
           {canEditLocations && viewMode === "2d" && !locationEditMode && !selectedLocationCanReceiveFinished && !selectedLocationCanReceiveSemiFinished && <p className="twin-location-readonly-note">该位置尚未启用、未完成布局、库存类型不匹配或与柱子冲突，暂不能办理入仓；请直接在地图上改选兼容位置。</p>}
           {locationEditMode && canEditLocations && <div className="twin-location-edit-actions">

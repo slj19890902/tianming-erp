@@ -737,7 +737,7 @@
     }
     // END IDEMPOTENCY_KEY_HELPER
 
-    const state={user:null,permissions:[],readOnly:warehouseReadonlyMode,tab:"locations",lotPage:1,lotPageSize:25,lotTotal:0,locationView:"floor3",locations:[],locationLabelSelection:new Set(),finishedLocationCandidates:[],locationsLoaded:false,locationsPromise:null,warehouseFloors:[],selectedWarehouseFloorId:null,customers:[],customersLoaded:false,customersPromise:null,lots:[],molds:[],moldSelection:new Set(),printingPlates:[],insights:null,loadRequests:{lots:0,locations:0,insights:0,movements:0,molds:0,printingPlates:0},operationPending:new Set(),finishedProductCandidates:[],finishedProductSearchTimer:null,finishedProductSearchRequestId:0,stocktakeReviews:[],stocktakeReviewDetail:null,stocktakeReviewSelectedId:null,stocktakeReviewAttempt:{signature:"",key:null},lotEdit:{lotId:null,version:null,candidates:[],selectedProduct:null,searchTimer:null,requestId:0,sessionId:0,saving:false},stagingTransfer:{lotId:null,version:null,total:0,saving:false,sessionId:0},semiLotEdit:null,assignment:{lotId:null,items:[],selected:new Set()},onboarding:{batches:[],batch:null,lines:[],selectedBatchId:null,editingLineId:null,busy:false,submitAttempt:{signature:"",key:null}},factoryMap:{activeFloor:"3F",floor1:null,selectedZoneCode:"",selectedRackId:"",selectedRackSlot:"",loading:false,twinFloors:{},selectedTwinFeatureId:"",selectedTwinLocationId:null,twinZoom:100,twinViewBox:null,pan:{active:false,startX:0,startY:0,viewBox:null}},twinDashboard:{data:null,days:30,loading:false,requestId:0,searchTimer:null,searchRequestId:0,search:null,lastError:null},floor3:{locations:[],mapLocations:[],moveLocations:[],detail:null,selectedLocationId:null,selectedAreaCode:"",planZoom:100,viewMode:"overview",mapPopoverLocationId:null,mapPopoverPoint:{left:50,top:50},pendingMove:null,moveMode:false,layoutEdit:false,layoutDrag:null,layoutDraft:{},areaNavCollapsed:false,legendVisible:true,searchFocusLocationId:null,deepLinkLotId:null,searchTimer:null,searchRequestId:0,loading:false,error:"",pan:{active:false,startX:0,startY:0,scrollLeft:0,scrollTop:0},bindPanelOpen:false,bindRows:[],addCandidates:[],addCandidate:null,addSearchTimer:null,addSearchRequestId:0,addSearchKey:"",addInventoryIdempotencyKey:null,promotionKeys:{},promotionPending:new Set()}};
+    const state={user:null,permissions:[],readOnly:warehouseReadonlyMode,tab:"locations",lotPage:1,lotPageSize:25,lotTotal:0,locationView:"floor3",locations:[],locationLabelSelection:new Set(),finishedLocationCandidates:[],locationsLoaded:false,locationsPromise:null,warehouseFloors:[],selectedWarehouseFloorId:null,customers:[],customersLoaded:false,customersPromise:null,lots:[],molds:[],moldSelection:new Set(),printingPlates:[],insights:null,loadRequests:{lots:0,locations:0,insights:0,movements:0,molds:0,printingPlates:0},operationPending:new Set(),finishedProductCandidates:[],finishedProductSearchTimer:null,finishedProductSearchRequestId:0,stocktakeReviews:[],stocktakeReviewDetail:null,stocktakeReviewSelectedId:null,stocktakeReviewAttempt:{signature:"",key:null},lotEdit:{lotId:null,version:null,candidates:[],selectedProduct:null,searchTimer:null,requestId:0,sessionId:0,saving:false},stagingTransfer:{lotId:null,version:null,total:0,saving:false,sessionId:0},semiLotEdit:null,assignment:{lotId:null,items:[],selected:new Set()},onboarding:{batches:[],batch:null,lines:[],selectedBatchId:null,editingLineId:null,busy:false,submitAttempt:{signature:"",key:null}},factoryMap:{activeFloor:"3F",floor1:null,selectedZoneCode:"",selectedRackId:"",selectedRackSlot:"",loading:false,twinFloors:{},selectedTwinFeatureId:"",selectedTwinLocationId:null,twinZoom:100,twinViewBox:null,pan:{active:false,startX:0,startY:0,viewBox:null}},twinDashboard:{data:null,days:30,loading:false,requestId:0,searchTimer:null,searchRequestId:0,search:null,lastError:null},floor3:{locations:[],mapLocations:[],moveLocations:[],mergeLocations:[],mergeAttempt:{signature:"",key:null},detail:null,selectedLocationId:null,selectedAreaCode:"",planZoom:100,viewMode:"overview",mapPopoverLocationId:null,mapPopoverPoint:{left:50,top:50},pendingMove:null,moveMode:false,layoutEdit:false,layoutDrag:null,layoutDraft:{},areaNavCollapsed:false,legendVisible:true,searchFocusLocationId:null,deepLinkLotId:null,searchTimer:null,searchRequestId:0,loading:false,error:"",pan:{active:false,startX:0,startY:0,scrollLeft:0,scrollTop:0},bindPanelOpen:false,bindRows:[],addCandidates:[],addCandidate:null,addSearchTimer:null,addSearchRequestId:0,addSearchKey:"",addInventoryIdempotencyKey:null,promotionKeys:{},promotionPending:new Set()}};
     const $=id=>document.getElementById(id);
     const hasPermission=code=>state.user?.role==="admin"||state.permissions.includes(code);
     const canReviewStocktakes=()=>!state.readOnly&&hasPermission("warehouse.stocktake.review");
@@ -1777,7 +1777,7 @@
     }
     function renderTwinOperationalDetail(){
       const data=currentTwinOperationalFloor(),host=$("twinOperationalDetail");if(!data){host.innerHTML='<h3>地图读取中</h3>';return}const feature=(data.features||[]).find(item=>item.id===state.factoryMap.selectedTwinFeatureId),area=state.floor3.selectedAreaCode,rows=state.floor3.locations||[],selectedRow=rows.find(row=>Number(row.id)===Number(state.factoryMap.selectedTwinLocationId)),detailLocation=state.floor3.detail?.location||state.floor3.detail,detailPallet=state.floor3.detail?.current_pallet||state.floor3.detail?.pallet,selected=selectedRow&&Number(detailLocation?.id)===Number(selectedRow.id)?{...selectedRow,...detailLocation,current_pallet:detailPallet||floor3CurrentPallet(selectedRow),items:state.floor3.detail?.items||detailPallet?.items||selectedRow.items}:selectedRow;
-      if(selected){const pallet=floor3CurrentPallet(selected),movePanel=twinOperationalMovePanel(selected,pallet);host.innerHTML=`<button class="btn" type="button" onclick="selectTwinOperationalLocation(null)">‹ 返回${h(area)}区</button><h3 style="margin-top:9px">${h(selected.location_code||selected.code||selected.location_name)}</h3><p><span class="tag ${floor3LocationOccupied(selected)?"warn":""}">${floor3LocationOccupied(selected)?"已占用":"空闲"}</span></p>${twinOperationalGoodsHtml(selected)}${movePanel}<p class="muted">地图显示正式 ERP 库存事实；数量调整和审核仍使用高级台账。</p>`;if(movePanel)initializeFloor3MoveCascade();return}
+      if(selected){const pallet=floor3CurrentPallet(selected),movePanel=twinOperationalMovePanel(selected,pallet),mergePanel=floor3CanMoveSelectedPallet({...selected,current_pallet:pallet})?floor3MergePanel(pallet,"twinPalletMergeTarget",true):"";host.innerHTML=`<button class="btn" type="button" onclick="selectTwinOperationalLocation(null)">‹ 返回${h(area)}区</button><h3 style="margin-top:9px">${h(selected.location_code||selected.code||selected.location_name)}</h3><p><span class="tag ${floor3LocationOccupied(selected)?"warn":""}">${floor3LocationOccupied(selected)?"已占用":"空闲"}</span></p>${twinOperationalGoodsHtml(selected)}${movePanel}${mergePanel}<p class="muted">地图显示正式 ERP 库存事实；数量调整和审核仍使用高级台账。</p>`;if(movePanel)initializeFloor3MoveCascade();return}
       if(feature&&!feature.erp_area_code){host.innerHTML=`<h3>${h(feature.name)}</h3><p><span class="tag">${h(feature.subtype)}</span> ${feature.is_locked?'<span class="tag">已确认并锁定</span>':feature.status==="confirmed"?'<span class="tag">已确认</span>':'<span class="tag warn">可编辑候选</span>'}</p><p class="muted">${h(feature.feature_code)} · 该对象不是旧库位区域，不附加猜测库存位置。</p>`;return}
       if(area){const occupied=rows.filter(floor3LocationOccupied).length,items=rows.reduce((sum,row)=>sum+floor3Items(row).length,0);host.innerHTML=`<h3>${h(area)} 区正式库存</h3><p>库位 ${rows.length} · 占用 ${occupied} · 空闲 ${Math.max(0,rows.length-occupied)} · 货物明细 ${items}</p><div class="twin-location-list">${rows.slice(0,80).map(row=>`<button class="twin-location-card" type="button" onclick="selectTwinOperationalLocation(${row.id})"><b>${h(row.location_code||row.code||row.id)}</b><span>${floor3LocationOccupied(row)?"已占用":"空闲"}${floor3NeedsRelocation(row,floor3CurrentPallet(row))?" · 待归位":""}</span><small>${h(row.location_name||"")}</small></button>`).join("")||'<div class="muted">当前筛选下没有库位或库存。</div>'}</div>`;return}
       const mapped=(data.features||[]).filter(item=>item.erp_area_code).length;host.innerHTML=`<h3>${h(data.name)}</h3><p>${h(data.projection_notice||"")}</p><p>墙柱/门窗 ${data.structures.length} · 语义对象 ${data.features.length} · 货架 ${data.racks.length} · ERP区域映射 ${mapped}</p><div class="notice info">旧库位只保留区域、库存与受控业务关系；旧方块坐标、理论格数和猜测画法不再显示。</div>`;
@@ -1795,8 +1795,9 @@
       if(locationId===null){state.factoryMap.selectedTwinLocationId=null;state.floor3.detail=null;renderTwinOperationalDetail();return}
       const targetId=Number(locationId);state.factoryMap.selectedTwinLocationId=targetId;state.floor3.detail=null;renderTwinOperationalDetail();
       try{
-        const detail=await api(`/api/warehouse/floor3/locations/${targetId}`);if(Number(state.factoryMap.selectedTwinLocationId)!==targetId)return;state.floor3.detail=detail;state.floor3.moveLocations=[];
+        const detail=await api(`/api/warehouse/floor3/locations/${targetId}`);if(Number(state.factoryMap.selectedTwinLocationId)!==targetId)return;state.floor3.detail=detail;state.floor3.moveLocations=[];state.floor3.mergeLocations=[];
         const location=detail?.location||detail,pallet=detail?.current_pallet||detail?.pallet;if(floor3CanMoveSelectedPallet({...location,current_pallet:pallet}))await loadFloor3MoveLocations();
+        if(floor3CanMoveSelectedPallet({...location,current_pallet:pallet}))await loadFloor3MergeLocations(pallet);
         if(Number(state.factoryMap.selectedTwinLocationId)===targetId)renderTwinOperationalDetail();
       }catch(error){if(Number(state.factoryMap.selectedTwinLocationId)!==targetId)return;toast(`货位详情加载失败：${error.message}`,true);renderTwinOperationalDetail()}
     }
@@ -1974,6 +1975,21 @@
     function floor3CurrentPallet(row){return row?.current_pallet||row?.pallet||row?.currentPallet||null}
     function floor3PalletRestricted(pallet){return Boolean(pallet?.access_restricted)}
     function floor3Items(row){const pallet=floor3CurrentPallet(row);return floor3PalletRestricted(pallet)?[]:(row?.items||pallet?.items||[])}
+    function floor3PalletMergeSignature(pallet){
+      const items=(pallet?.items||[]).filter(item=>Number(item.quantity)>0),customers=[...new Set(items.map(item=>Number(item.customer_id)).filter(Number.isInteger))],types=[...new Set(items.map(item=>String(item.item_type||"")))];return items.length&&customers.length===1&&types.length===1?{customerId:customers[0],customerName:items[0].customer_name||"当前客户",inventoryType:types[0],items}:null;
+    }
+    function floor3MergeCandidates(pallet){
+      const source=floor3PalletMergeSignature(pallet);if(!source)return [];
+      return (state.floor3.mergeLocations||[]).filter(row=>{const target=floor3CurrentPallet(row),signature=floor3PalletMergeSignature(target);return target&&!floor3PalletRestricted(target)&&Number(target.id)!==Number(pallet.id)&&signature?.customerId===source.customerId&&signature?.inventoryType===source.inventoryType});
+    }
+    function floor3MergeTypeLabel(type){return type==="finished"?"成品":(type==="semi_finished"?"半成品":"原料")}
+    function floor3MergeOptions(pallet){
+      const rows=floor3MergeCandidates(pallet);return '<option value="">选择要合并到的栈板</option>'+rows.map(row=>{const target=floor3CurrentPallet(row),code=row.location_code||row.code||row.id;return `<option value="${target.id}">${h(floor3AreaCode(row))}区 · ${h(code)} · ${h(target.pallet_code||"现场栈板")} · 现有${h(target.total_quantity??0)}</option>`}).join("");
+    }
+    function floor3MergePanel(pallet,selectId,twinMode){
+      const signature=floor3PalletMergeSignature(pallet);if(!signature)return "";const candidates=floor3MergeCandidates(pallet),hint=candidates.length?"把本栈板全部剩余货物搬到目标栈板；数量和库存批次不会改变。":"当前没有同客户、同库存类型的可合并目标栈板。";
+      return `<div class="panel" style="margin-top:10px;padding:10px"><h3>合并零散货</h3><div class="muted" style="margin-bottom:8px">${h(signature.customerName)} · ${h(floor3MergeTypeLabel(signature.inventoryType))}｜${h(hint)}</div>${candidates.length?`<div class="field"><label>目标栈板</label><select id="${selectId}">${floor3MergeOptions(pallet)}</select></div><button class="btn primary" style="margin-top:8px" type="button" onclick="mergeFloor3PalletAll(${pallet.id},'${selectId}',${twinMode?"true":"false"})">合并全部剩余货物</button>`:""}</div>`;
+    }
     function floor3ExpectedVersion(palletId){
       const pallet=floor3CurrentPallet(state.floor3.detail),version=Number(pallet?.version);
       if(!pallet||floor3PalletRestricted(pallet)||Number(pallet.id)!==Number(palletId)||!Number.isInteger(version)||version<=0)return null;
@@ -2323,6 +2339,10 @@
       const data=await api("/api/warehouse/location-candidates?inventory_type=finished&empty_only=true&pallet_storage_only=true&include_hierarchy=false");
       state.floor3.moveLocations=(data.items||[]).filter(floor3CanReceivePallet);
     }
+    async function loadFloor3MergeLocations(pallet){
+      const signature=floor3PalletMergeSignature(pallet);state.floor3.mergeLocations=[];if(!signature)return;
+      const data=await api(`/api/warehouse/floor3/locations?${queryString({customer_id:signature.customerId,occupancy:"occupied",page_size:"500"})}`);state.floor3.mergeLocations=data.items||[];
+    }
     function renderFloor3Locations(){
       const rows=state.floor3.locations||[],hasWorkspace=floor3HasWorkspaceFilter(),searching=floor3IsSearching(),areaFocus=state.floor3.viewMode==="areaFocus";
       renderFloor3Plan();
@@ -2437,11 +2457,12 @@
         const mapLocation=(state.floor3.mapLocations||[]).find(item=>Number(item.id)===Number(locationId));if(mapLocation&&state.floor3.viewMode!=="areaFocus"){const areaCode=FLOOR3_F_AREA_CODES.includes(floor3AreaCode(mapLocation))?"F":floor3AreaCode(mapLocation);state.floor3.selectedAreaCode=areaCode;state.floor3.viewMode="areaFocus";$("floor3AreaFilter").value=areaCode;state.floor3.locations=(state.floor3.mapLocations||[]).filter(row=>floor3AreaMatches(row,areaCode));renderFloor3Locations()}
         state.floor3.selectedLocationId=locationId;
         state.floor3.detail=await api(`/api/warehouse/floor3/locations/${locationId}`);
-        state.floor3.moveLocations=[];
+        state.floor3.moveLocations=[];state.floor3.mergeLocations=[];
         const detailLocation=state.floor3.detail?.location||state.floor3.detail,pallet=state.floor3.detail?.current_pallet||state.floor3.detail?.pallet;
         state.floor3.bindPanelOpen=false;
         if(floor3CanMoveSelectedPallet({...detailLocation,current_pallet:pallet})){
           try{await loadFloor3MoveLocations()}catch(error){toast(`移动目标加载失败：${error.message}`,true)}
+          try{await loadFloor3MergeLocations(pallet)}catch(error){toast(`合并目标加载失败：${error.message}`,true)}
         }
         renderFloor3Detail();
         if(state.floor3.selectedAreaCode==="F")renderFloor3AreaSlots();
@@ -2488,10 +2509,11 @@
       const palletSummary=restricted?"当前位置已占用（客户范围受限）":(pallet?`当前${rack?"货架登记单元":"栈板"}：${h(pallet.pallet_code||pallet.code||pallet.id)}`:"当前为空闲");
       const itemSummary=restricted?'<div class="empty">位置内容受客户范围权限保护</div>':(items.map(item=>floor3FormatItem(item,pallet,location.id)).join("")||`<div class="empty">当前没有${rack?"货架物料":"栈板产品"}</div>`);
       const movePanel=movable?`<div class="panel"><h2>移动货物（整栈板）</h2><div class="muted" style="margin-bottom:8px">选择空位后一次确认，栈板内全部货物会一起移动。</div><div class="grid"><div class="field"><label>楼层</label><select id="floor3MoveFloor" onchange="refreshFloor3MoveAreaOptions()">${floor3MoveFloorOptions()}</select></div><div class="field"><label>区域</label><select id="floor3MoveArea" onchange="refreshFloor3MoveTargetOptions()"></select></div><div class="field"><label>具体空位</label><select id="floor3MoveTarget"></select></div></div><button class="btn primary" style="margin-top:8px" type="button" onclick="moveFloor3Pallet(${pallet.id})">确认移动整栈板</button></div>`:"";
+      const mergePanel=movable?floor3MergePanel(pallet,"floor3PalletMergeTarget",false):"";
       const relocationAction=!pallet||rack?"":(needs?(floor3IsTemporary(location)?'<span class="muted">请先移动到固定货位后归位</span>':`<button class="btn primary" type="button" onclick="confirmFloor3Placement(${pallet.id})">确认已归位</button>`):`<button class="btn" type="button" onclick="setFloor3Relocation(${pallet.id},true)">标记待归位</button>`);
       const actionPanel=pallet&&!restricted&&canOperate()?`<div class="panel"><div class="actions"><button class="btn" type="button" onclick="toggleFloor3AddItemPanel()">增加${rack?"货架物料":"同栈板产品"}</button>${relocationAction}<button class="btn danger" type="button" onclick="clearFloor3Pallet(${pallet.id})">清空${rack?"货架格":"栈板"}</button></div></div>`:"";
       const emptyPanel=!pallet?`<div class="floor3-empty-binding"><b>当前位空闲</b>${canOperate()?'<button class="btn primary" type="button" onclick="openFloor3BindPanel()">绑定货物</button>':""}</div>`:`<div class="panel" style="padding:10px;margin-top:10px"><b>${palletSummary}</b>${!restricted&&needs&&!rack?'<span class="tag red" style="margin-left:8px">需归位</span>':""}<div class="floor3-item-grid" style="margin-top:10px">${itemSummary}</div></div>`;
-      const writePanels=movePanel+actionPanel;
+      const writePanels=movePanel+mergePanel+actionPanel;
       $("floor3DetailPanel").classList.remove("hidden","floor3-f-rack-panel");
       $("floor3DetailPanel").innerHTML=`<div class="floor3-detail-grid"><div><div class="actions" style="justify-content:space-between"><div><h2>${h(code)} 详情</h2><div class="muted">区域：${h(location.area_name||location.area_code||"未分区")} · ${rack?"货架格":(floor3IsTemporary(location)?"过道临放":"固定地面位")} ${needs&&!rack?"· 需归位":""}</div></div><button class="btn" type="button" onclick="closeFloor3Detail()">关闭</button></div>${emptyPanel}${history.length?`<h3>历史</h3><ul class="floor3-history">${history.map(x=>`<li>${h(x.moved_at||x.created_at||"")} · ${h(x.movement_type||x.action||"")} · ${h(x.from_location_code||"-")} → ${h(x.to_location_code||"-")} ${h(x.remarks||"")}</li>`).join("")}</ul>`:""}</div><div>${writePanels}</div></div>`;
       $("floor3BindPanel").classList.toggle("hidden",Boolean(pallet)||!canOperate()||!state.floor3.bindPanelOpen);
@@ -2617,6 +2639,16 @@
       try{
         await runWarehouseMutation(`floor3-move:${palletId}`,()=>performFloor3Move(palletId,expectedVersion,target,"数字孪生地图移动整栈板"),async()=>{state.floor3.detail=null;await selectTwinOperationalArea(floor3AreaCode(targetRow));await selectTwinOperationalLocation(Number(target))},"栈板移动成功");
       }catch(error){if(error.status===409){toast("目标货位状态已变化，已刷新地图",true);state.floor3.detail=null;await loadTwinOperationalLocations();return}toast(`栈板移动失败：${error.message}`,true)}
+    }
+    async function mergeFloor3PalletAll(palletId,selectId,twinMode){
+      if(!canOperate())return;const detail=state.floor3.detail,location=detail?.location||detail,source=detail?.current_pallet||detail?.pallet,select=$(selectId);if(!source||Number(source.id)!==Number(palletId)||floor3PalletRestricted(source)){toast("源栈板状态已变化，请刷新后重试",true);return}
+      const targetId=Number(select?.value),targetRow=floor3MergeCandidates(source).find(row=>Number(floor3CurrentPallet(row)?.id)===targetId),target=floor3CurrentPallet(targetRow);if(!targetRow||!target){toast("请选择同客户、同库存类型的目标栈板",true);return}
+      const sourceVersion=floor3ExpectedPalletVersion(source),targetVersion=floor3ExpectedPalletVersion(target);if(!sourceVersion||!targetVersion){toast("栈板版本缺失，请刷新后重试",true);return}
+      const sourceCode=location?.location_code||location?.code||source.location_id,targetCode=targetRow.location_code||targetRow.code||target.location_id,sourceQuantity=source.total_quantity??0;if(!confirm(`确认把 ${sourceCode} 栈板剩余的 ${sourceQuantity} 全部合并到 ${targetCode}？\n源栈板将清空并释放；库存数量、批次和订单占用不会改变。`))return;
+      const signature=`${source.id}:${sourceVersion}:${target.id}:${targetVersion}`;if(state.floor3.mergeAttempt.signature!==signature)state.floor3.mergeAttempt={signature,key:createIdempotencyKey()};const idempotencyKey=state.floor3.mergeAttempt.key;
+      try{
+        await runWarehouseMutation(`floor3-merge:${source.id}`,()=>api(`/api/warehouse/pallets/${source.id}/merge-all`,{method:"POST",body:JSON.stringify({expected_version:sourceVersion,target_pallet_id:target.id,expected_target_version:targetVersion,confirmed:true,idempotency_key:idempotencyKey})}),async()=>{state.floor3.mergeAttempt={signature:"",key:null};if(twinMode){state.floor3.detail=null;await selectTwinOperationalArea(floor3AreaCode(targetRow));await selectTwinOperationalLocation(Number(targetRow.id))}else await refreshFloor3AfterPalletMove(Number(targetRow.id))},"零散货已合并，源栈板已释放");
+      }catch(error){if(error.status===409){toast(`合并失败：${error.message}；页面已刷新`,true);state.floor3.detail=null;if(twinMode)await loadTwinOperationalLocations();else{closeFloor3Detail();await refreshFloor3LocationData()}return}toast(`合并零散货失败：${error.message}`,true)}
     }
     async function clearFloor3Pallet(palletId){
       if(!canOperate())return;if(!confirm("确认清空当前栈板吗？产品记录会离开当前货位，正式成品库存未清零时系统会拒绝；操作人、时间和原货位会自动记录。"))return;

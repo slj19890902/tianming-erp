@@ -14,18 +14,23 @@ def test_owner_confirmed_physical_rack_modules_are_independently_addressable() -
     assert len(d2) == 5
     assert len(f) == 12
     special = next(rack for rack in d2 if "SPECIAL" in rack["rack_code"])
-    assert (special["width_mm"], special["depth_mm"]) == (3000, 1500)
+    assert (special["width_mm"], special["depth_mm"], special["height_mm"]) == (2000, 2000, 2600)
     assert all(
-        (rack["width_mm"], rack["depth_mm"]) == (2800, 1100)
-        for rack in specs if rack is not special
+        (rack["width_mm"], rack["depth_mm"], rack["height_mm"]) == (1800, 1100, 2600)
+        for rack in d2 if rack is not special
     )
+    assert all((rack["width_mm"], rack["depth_mm"]) == (2800, 1100) for rack in f)
 
 
 def test_every_module_has_adjustable_levels_and_operator_cargo_rows() -> None:
     for rack in rack_specs():
-        assert rack["height_mm"] == 2200
         assert rack["levels"] == 3
-        assert rack["level_heights_mm"] == [750, 1500]
+        if rack["rack_code"].startswith("RACK-3F-D2-"):
+            assert rack["height_mm"] == 2600
+            assert rack["level_heights_mm"] == [867, 1733]
+        else:
+            assert rack["height_mm"] == 2200
+            assert rack["level_heights_mm"] == [750, 1500]
         assert 3 <= rack["cargo_rows"] <= 5
         assert rack["bays"] == 1
 

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-06T05:48:24.089979+00:00",
+  "generated_at": "2026-08-08T06:44:33.697873+00:00",
   "source": "factory_twin_candidate_read_only_export",
   "inventory_source": "ERP inventory_lots remains authoritative; layout pallets are isolated visual targets only",
   "floors": {
@@ -3579,6 +3579,72 @@
           "is_locked": false,
           "version": 4,
           "erp_area_code": null
+        },
+        {
+          "id": "3d0f3f41-1796-507f-9921-d631f3d55a00",
+          "layout_id": "756bcfa7-74d8-48f2-ba64-a4a23c9984ae",
+          "feature_code": "PENDING-1F-MOLD-OVERSIZE-SOUTH-001",
+          "name": "南墙特大模板暂放（待归区）",
+          "feature_kind": "structure",
+          "subtype": "pending_mold_wall_storage",
+          "points": [
+            [
+              -4180,
+              -23100
+            ],
+            [
+              -2780,
+              -23100
+            ]
+          ],
+          "width_mm": 450,
+          "direction": null,
+          "no_stacking": false,
+          "storage_mode": "floor",
+          "elevation_mm": 0,
+          "storage_height_mm": 0,
+          "color": "#f97316",
+          "area_mm2": 0,
+          "source": "manual",
+          "status": "candidate",
+          "is_locked": false,
+          "version": 1,
+          "erp_area_code": null,
+          "formal_location_mapping": false,
+          "site_note": "特别大的模板靠墙暂放；待归区，不属于模具001或002"
+        },
+        {
+          "id": "4714a678-7e01-506e-a837-79375273f2b3",
+          "layout_id": "756bcfa7-74d8-48f2-ba64-a4a23c9984ae",
+          "feature_code": "PENDING-1F-MOLD-OVERSIZE-WEST-001",
+          "name": "西墙特大模板暂放（待归区）",
+          "feature_kind": "structure",
+          "subtype": "pending_mold_wall_storage",
+          "points": [
+            [
+              -4430,
+              -22850
+            ],
+            [
+              -4430,
+              -18800
+            ]
+          ],
+          "width_mm": 450,
+          "direction": null,
+          "no_stacking": false,
+          "storage_mode": "floor",
+          "elevation_mm": 0,
+          "storage_height_mm": 0,
+          "color": "#f97316",
+          "area_mm2": 0,
+          "source": "manual",
+          "status": "candidate",
+          "is_locked": false,
+          "version": 1,
+          "erp_area_code": null,
+          "formal_location_mapping": false,
+          "site_note": "特别大的模板靠墙暂放；待归区，不属于模具001或002"
         }
       ],
       "placements": [
@@ -3759,7 +3825,148 @@
           "version": 28
         }
       ],
-      "racks": [],
+      "racks": [
+        {
+          "id": "b473f407-dee7-576b-9489-57cd5127e7f8",
+          "layout_id": "756bcfa7-74d8-48f2-ba64-a4a23c9984ae",
+          "rack_code": "RACK-1F-MOLD-002-LEFT-001",
+          "name": "模具002左架（小模切机上方）",
+          "x_mm": -3353.6663575916955,
+          "y_mm": -13441.557022516077,
+          "z_mm": 0,
+          "width_mm": 2200,
+          "depth_mm": 1370,
+          "height_mm": 3500,
+          "levels": 3,
+          "level_heights_mm": [
+            1300,
+            2400
+          ],
+          "cargo_rows": 3,
+          "bays": 1,
+          "access_side": "both",
+          "min_aisle_width_mm": 1200,
+          "rotation_deg": 90,
+          "color": "#f59e0b",
+          "source": "manual",
+          "status": "candidate",
+          "is_locked": false,
+          "version": 1,
+          "area_feature_id": "c94e7b64-7671-4e70-9eb5-3ee9eee785e4",
+          "area_code": "ZONE-1F-MOLD-002",
+          "measurement_status": "footprint_visual_candidate_pending_measurement",
+          "level_usage": [
+            "底层：小模切机（不可入库）",
+            "第二层：模板",
+            "第三层：模板"
+          ],
+          "formal_location_mapping": false
+        },
+        {
+          "id": "8893d9bb-7080-58fd-bd36-c7d20dfbd866",
+          "layout_id": "756bcfa7-74d8-48f2-ba64-a4a23c9984ae",
+          "rack_code": "RACK-1F-MOLD-002-MIDDLE-001",
+          "name": "模具002中架（中模切机上方）",
+          "x_mm": -3274.2148167867363,
+          "y_mm": -16871.523706308042,
+          "z_mm": 0,
+          "width_mm": 3200,
+          "depth_mm": 1370,
+          "height_mm": 3500,
+          "levels": 2,
+          "level_heights_mm": [
+            1500
+          ],
+          "cargo_rows": 3,
+          "bays": 1,
+          "access_side": "both",
+          "min_aisle_width_mm": 1200,
+          "rotation_deg": 90,
+          "color": "#f59e0b",
+          "source": "manual",
+          "status": "candidate",
+          "is_locked": false,
+          "version": 1,
+          "area_feature_id": "c94e7b64-7671-4e70-9eb5-3ee9eee785e4",
+          "area_code": "ZONE-1F-MOLD-002",
+          "measurement_status": "footprint_visual_candidate_pending_measurement",
+          "level_usage": [
+            "底层：中模切机（不可入库）",
+            "第二层：模板"
+          ],
+          "formal_location_mapping": false
+        },
+        {
+          "id": "3d4e21a9-1764-5a72-98a2-fcdcb86fa146",
+          "layout_id": "756bcfa7-74d8-48f2-ba64-a4a23c9984ae",
+          "rack_code": "RACK-1F-MOLD-001-RIGHT-001",
+          "name": "模具001右侧三层架",
+          "x_mm": -3480,
+          "y_mm": -20825,
+          "z_mm": 0,
+          "width_mm": 4000,
+          "depth_mm": 1400,
+          "height_mm": 3500,
+          "levels": 3,
+          "level_heights_mm": [
+            1200,
+            2400
+          ],
+          "cargo_rows": 3,
+          "bays": 1,
+          "access_side": "both",
+          "min_aisle_width_mm": 1200,
+          "rotation_deg": 90,
+          "color": "#f59e0b",
+          "source": "manual",
+          "status": "candidate",
+          "is_locked": false,
+          "version": 1,
+          "area_feature_id": "21921d96-287d-4160-b7af-08ae76cf2a68",
+          "area_code": "ZONE-1F-MOLD-001",
+          "measurement_status": "footprint_visual_candidate_pending_measurement",
+          "level_usage": [
+            "第一层：大模板",
+            "第二层：模板",
+            "第三层：模板"
+          ],
+          "formal_location_mapping": false
+        },
+        {
+          "id": "fb413762-0d32-5efd-9a00-e824d6cbdc14",
+          "layout_id": "756bcfa7-74d8-48f2-ba64-a4a23c9984ae",
+          "rack_code": "RACK-1F-PLATE-002-001",
+          "name": "挂板002两层整体架（现场实测）",
+          "x_mm": -9975,
+          "y_mm": -27250,
+          "z_mm": 0,
+          "width_mm": 2000,
+          "depth_mm": 1600,
+          "height_mm": 3500,
+          "levels": 2,
+          "level_heights_mm": [
+            1750
+          ],
+          "cargo_rows": 3,
+          "bays": 1,
+          "access_side": "both",
+          "min_aisle_width_mm": 1200,
+          "rotation_deg": 0,
+          "color": "#f59e0b",
+          "source": "manual",
+          "status": "candidate",
+          "is_locked": false,
+          "version": 1,
+          "area_feature_id": "3c59de25-bc82-48d0-ae4f-c806673daba3",
+          "area_code": "ZONE-1F-PLATE-002",
+          "measurement_status": "measured_outer_dimensions",
+          "level_usage": [
+            "第一层：挂板",
+            "第二层：挂板"
+          ],
+          "formal_location_mapping": false
+        }
+      ],
       "pallets": [
         {
           "id": "03bde81f-3dd8-40ab-8abc-88c3bb8e07bf",
@@ -4013,7 +4220,9 @@
       "source_updated_at": "2026-08-06T04:05:34+00:00",
       "erp_area_codes": [],
       "pallets_inventory_linked": false,
-      "revision": "f65ee0e987883562"
+      "revision": "e0b9334a18aa93f1",
+      "layout_edited_at": "2026-08-08T06:44:33.697873+00:00",
+      "site_layout_receipt": "P1-16D-1-20260808"
     },
     "3F": {
       "layout_id": "edfd9fd4-f013-41cf-b491-cd9d5dce6f52",
@@ -9265,17 +9474,17 @@
           "id": "818a5519-8237-498c-bc22-ea7ef73f055d",
           "layout_id": "edfd9fd4-f013-41cf-b491-cd9d5dce6f52",
           "rack_code": "RACK-3F-D2-EAST-NORTH-001",
-          "name": "D2东排北段标准货架",
+          "name": "D2东排北段三层货架（现场实测）",
           "x_mm": 18459.0,
           "y_mm": -10585.0,
           "z_mm": 0,
-          "width_mm": 2800.0,
-          "depth_mm": 1100.0,
-          "height_mm": 2200.0,
+          "width_mm": 1800,
+          "depth_mm": 1100,
+          "height_mm": 2600,
           "levels": 3,
           "level_heights_mm": [
-            750.0,
-            1500.0
+            867,
+            1733
           ],
           "cargo_rows": 4,
           "bays": 1,
@@ -9286,23 +9495,33 @@
           "source": "ai",
           "status": "candidate",
           "is_locked": false,
-          "version": 3
+          "version": 4,
+          "area_code": "D2",
+          "measurement_status": "measured_outer_dimensions",
+          "shelf_height_status": "equal_visual_draft_pending_measurement",
+          "cell_plan_status": "pending_admin_configuration",
+          "level_usage": [
+            "下层：栈板",
+            "上层：小型手工模切成品",
+            "上层：小型手工模切成品"
+          ],
+          "formal_location_mapping": false
         },
         {
           "id": "c8fcb310-b145-4246-84a6-7392a3cf560f",
           "layout_id": "edfd9fd4-f013-41cf-b491-cd9d5dce6f52",
           "rack_code": "RACK-3F-D2-EAST-SOUTH-001",
-          "name": "D2东排南段标准货架",
+          "name": "D2东排南段三层货架（现场实测）",
           "x_mm": 18403.0,
           "y_mm": -14423.0,
           "z_mm": 0,
-          "width_mm": 2800.0,
-          "depth_mm": 1100.0,
-          "height_mm": 2200.0,
+          "width_mm": 1800,
+          "depth_mm": 1100,
+          "height_mm": 2600,
           "levels": 3,
           "level_heights_mm": [
-            750.0,
-            1500.0
+            867,
+            1733
           ],
           "cargo_rows": 4,
           "bays": 1,
@@ -9313,23 +9532,33 @@
           "source": "ai",
           "status": "candidate",
           "is_locked": false,
-          "version": 3
+          "version": 4,
+          "area_code": "D2",
+          "measurement_status": "measured_outer_dimensions",
+          "shelf_height_status": "equal_visual_draft_pending_measurement",
+          "cell_plan_status": "pending_admin_configuration",
+          "level_usage": [
+            "下层：栈板",
+            "上层：小型手工模切成品",
+            "上层：小型手工模切成品"
+          ],
+          "formal_location_mapping": false
         },
         {
           "id": "457e7b36-7550-4cc9-9f30-05b892cdc86a",
           "layout_id": "edfd9fd4-f013-41cf-b491-cd9d5dce6f52",
           "rack_code": "RACK-3F-D2-SPECIAL-001",
-          "name": "D2南端3000×1500特殊货架",
+          "name": "D2方形三层货架（现场实测）",
           "x_mm": 17845.0,
           "y_mm": -17485.0,
           "z_mm": 0,
-          "width_mm": 3000.0,
-          "depth_mm": 1500.0,
-          "height_mm": 2200.0,
+          "width_mm": 2000,
+          "depth_mm": 2000,
+          "height_mm": 2600,
           "levels": 3,
           "level_heights_mm": [
-            750.0,
-            1500.0
+            867,
+            1733
           ],
           "cargo_rows": 4,
           "bays": 1,
@@ -9340,23 +9569,33 @@
           "source": "ai",
           "status": "candidate",
           "is_locked": false,
-          "version": 2
+          "version": 3,
+          "area_code": "D2",
+          "measurement_status": "measured_outer_dimensions",
+          "shelf_height_status": "equal_visual_draft_pending_measurement",
+          "cell_plan_status": "pending_admin_configuration",
+          "level_usage": [
+            "下层：栈板",
+            "上层：小型手工模切成品",
+            "上层：小型手工模切成品"
+          ],
+          "formal_location_mapping": false
         },
         {
           "id": "85408e29-21e1-498b-ac74-318e9714c296",
           "layout_id": "edfd9fd4-f013-41cf-b491-cd9d5dce6f52",
           "rack_code": "RACK-3F-D2-WEST-NORTH-001",
-          "name": "D2西排北段标准货架",
+          "name": "D2西排北段三层货架（现场实测）",
           "x_mm": 17247.0,
           "y_mm": -10561.0,
           "z_mm": 0,
-          "width_mm": 2800.0,
-          "depth_mm": 1100.0,
-          "height_mm": 2200.0,
+          "width_mm": 1800,
+          "depth_mm": 1100,
+          "height_mm": 2600,
           "levels": 3,
           "level_heights_mm": [
-            750.0,
-            1500.0
+            867,
+            1733
           ],
           "cargo_rows": 4,
           "bays": 1,
@@ -9367,23 +9606,33 @@
           "source": "ai",
           "status": "candidate",
           "is_locked": false,
-          "version": 2
+          "version": 3,
+          "area_code": "D2",
+          "measurement_status": "measured_outer_dimensions",
+          "shelf_height_status": "equal_visual_draft_pending_measurement",
+          "cell_plan_status": "pending_admin_configuration",
+          "level_usage": [
+            "下层：栈板",
+            "上层：小型手工模切成品",
+            "上层：小型手工模切成品"
+          ],
+          "formal_location_mapping": false
         },
         {
           "id": "90df5388-d3e1-4292-aac8-feeea51e5829",
           "layout_id": "edfd9fd4-f013-41cf-b491-cd9d5dce6f52",
           "rack_code": "RACK-3F-D2-WEST-SOUTH-001",
-          "name": "D2西排南段标准货架",
+          "name": "D2西排南段三层货架（现场实测）",
           "x_mm": 17239.0,
           "y_mm": -14463.0,
           "z_mm": 0,
-          "width_mm": 2800.0,
-          "depth_mm": 1100.0,
-          "height_mm": 2200.0,
+          "width_mm": 1800,
+          "depth_mm": 1100,
+          "height_mm": 2600,
           "levels": 3,
           "level_heights_mm": [
-            750.0,
-            1500.0
+            867,
+            1733
           ],
           "cargo_rows": 4,
           "bays": 1,
@@ -9394,7 +9643,17 @@
           "source": "ai",
           "status": "candidate",
           "is_locked": false,
-          "version": 3
+          "version": 4,
+          "area_code": "D2",
+          "measurement_status": "measured_outer_dimensions",
+          "shelf_height_status": "equal_visual_draft_pending_measurement",
+          "cell_plan_status": "pending_admin_configuration",
+          "level_usage": [
+            "下层：栈板",
+            "上层：小型手工模切成品",
+            "上层：小型手工模切成品"
+          ],
+          "formal_location_mapping": false
         },
         {
           "id": "e32aa71a-09d4-45ca-b8ee-b1ed83be6397",
@@ -9792,8 +10051,15 @@
         "F4"
       ],
       "pallets_inventory_linked": false,
-      "layout_edited_at": "2026-08-06T15:07:22.9053131Z",
-      "revision": "7732ef3f04c7f06f"
+      "layout_edited_at": "2026-08-08T06:44:33.697873+00:00",
+      "revision": "9b6d9f2818f63000",
+      "site_layout_receipt": "P1-16D-1-20260808"
     }
+  },
+  "site_layout_receipt": {
+    "code": "P1-16D-1-20260808",
+    "inventory_effect": "none",
+    "formal_location_effect": "none",
+    "unmeasured_geometry": "visual_candidate_only"
   }
 }

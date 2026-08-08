@@ -2279,16 +2279,18 @@
                 <div v-else-if="!filteredSuppliers.length" class="empty">暂无符合条件的供应商</div>
                 <div v-else class="table-wrap">
                   <table class="compact-table">
-                    <thead><tr><th>供应商全称</th><th>显示简称</th><th>业务代码</th><th>状态</th><th>联系人 / 电话</th><th>操作</th></tr></thead>
+                    <thead><tr><th>供应商全称</th><th>显示简称</th><th>供货类别</th><th>业务代码</th><th>状态</th><th>联系人 / 电话</th><th>操作</th></tr></thead>
                     <tbody><tr v-for="row in filteredSuppliers" :key="row.id">
                       <td><strong>{{ row.standard_name }}</strong></td>
                       <td>{{ row.display_name || row.standard_name }}</td>
+                      <td><span v-for="code in (row.supply_categories || ['corrugated_board'])" :key="code" class="status blue" style="margin:2px">{{ supplierCategoryLabel(code) }}</span></td>
                       <td>{{ row.business_code || "-" }}</td>
                       <td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td>
                       <td>{{ [row.contact_name,row.phone].filter(Boolean).join(" / ") || "-" }}</td>
                       <td class="toolbar-group">
                         <button class="btn small" @click="openSupplier(row)">编辑</button>
                         <button class="btn small" @click="openSupplierMaterials(row)">材质维护</button>
+                        <button class="btn small" @click="openSupplierPackagingCatalog(row)">外购产品</button>
                       </td>
                     </tr></tbody>
                   </table>
@@ -4055,6 +4057,15 @@
                 <div class="field"><label>状态</label><select class="select" v-model="supplierForm.is_active"><option :value="true">启用</option><option :value="false">停用</option></select></div>
                 <div class="field"><label>排序</label><input class="input" type="number" min="0" step="1" v-model.number="supplierForm.sort_order" /></div>
               </div>
+              <div class="panel" style="margin-top:12px">
+                <strong>供货类别</strong>
+                <div class="toolbar-group" style="margin-top:8px;flex-wrap:wrap">
+                  <label v-for="option in supplierCategoryOptions" :key="option.value" class="status blue" style="padding:7px 10px">
+                    <input type="checkbox" :value="option.value" v-model="supplierForm.supply_categories" /> {{ option.label }}
+                  </label>
+                </div>
+                <div class="muted" style="margin-top:7px">供应商可同时供应多类产品；取消类别不会删除已建历史产品。</div>
+              </div>
               <details class="panel" style="margin-top:12px">
                 <summary style="cursor:pointer;font-weight:600">选填：联系人、电话和备注</summary>
                 <div class="form-grid" style="margin-top:10px">
@@ -4063,6 +4074,46 @@
                   <div class="field wide"><label>备注</label><textarea class="textarea" v-model.trim="supplierForm.remarks"></textarea></div>
                 </div>
               </details>
+            </div>
+            <div v-else-if="modal.type === 'supplierPackagingCatalog'">
+              <div class="toolbar" style="margin-bottom:10px">
+                <div class="toolbar-group">
+                  <input class="input" style="width:260px" v-model.trim="supplierPackagingSearch" placeholder="产品代码 / 名称 / 规格" />
+                  <button class="btn" @click="loadSupplierPackagingProducts">搜索</button>
+                  <button class="btn primary" @click="openSupplierPackagingProduct()">新增外购产品</button>
+                </div>
+                <span class="muted">{{ supplierPackagingSupplier?.display_name || supplierPackagingSupplier?.standard_name }}</span>
+              </div>
+              <div v-if="supplierPackagingError" class="notice danger">{{ supplierPackagingError }}</div>
+              <div v-if="supplierPackagingLoading" class="empty">正在读取外购产品…</div>
+              <div v-else-if="!supplierPackagingProducts.length" class="empty">暂无外购包装产品</div>
+              <div v-else class="table-wrap"><table class="compact-table"><thead><tr><th>类别</th><th>供应商产品代码</th><th>产品名称</th><th>规格</th><th>采购单位</th><th>交期</th><th>状态</th><th>操作</th></tr></thead><tbody>
+                <tr v-for="row in supplierPackagingProducts" :key="row.id">
+                  <td>{{ supplierCategoryLabel(row.category_code) }}</td><td><strong>{{ row.supplier_product_code }}</strong></td><td>{{ row.product_name }}</td><td>{{ row.specification_summary }}</td><td>{{ row.purchase_unit }}</td><td>{{ row.lead_time_days == null ? '-' : row.lead_time_days+'天' }}</td><td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td>
+                  <td class="toolbar-group"><button class="btn small" @click="openSupplierPackagingProduct(row)">编辑</button><button :class="['btn','small',row.is_active ? 'danger' : 'success']" @click="toggleSupplierPackagingProduct(row)">{{ row.is_active ? '停用' : '启用' }}</button></td>
+                </tr>
+              </tbody></table></div>
+            </div>
+            <div v-else-if="modal.type === 'supplierPackagingProduct'">
+              <div class="notice" style="margin-bottom:10px">只记录供应商原生产品与采购单位；本阶段不录价格，也不会自动写入订单或常用箱。</div>
+              <div class="form-grid">
+                <div class="field"><label>产品类别（必填）</label><select class="select" v-model="supplierPackagingForm.category_code"><option value="">请选择</option><option v-for="option in activeExternalPackagingCategoryOptions" :key="option.value" :value="option.value">{{ option.label }}</option></select></div>
+                <div class="field"><label>供应商产品代码（必填）</label><input class="input" v-model.trim="supplierPackagingForm.supplier_product_code" /></div>
+                <div class="field wide"><label>产品名称（必填）</label><input class="input" v-model.trim="supplierPackagingForm.product_name" /></div>
+                <div class="field"><label>采购单位（必填）</label><select class="select" v-model="supplierPackagingForm.purchase_unit"><option value="">请选择</option><option v-for="unit in externalPackagingUnits" :key="unit" :value="unit">{{ unit }}</option></select></div>
+                <div class="field"><label>常规交期（天）</label><input class="input" type="number" min="0" step="1" v-model.number="supplierPackagingForm.lead_time_days" /></div>
+                <div class="field"><label>图纸/样品版本</label><input class="input" v-model.trim="supplierPackagingForm.drawing_sample_version" /></div>
+              </div>
+              <div class="panel" style="margin-top:12px"><strong>类别规格</strong>
+                <div v-if="supplierPackagingForm.category_code==='paper_corner_guard'" class="form-grid" style="margin-top:8px"><div class="field"><label>形状</label><select class="select" v-model="supplierPackagingForm.specification.shape"><option value="L">L型</option><option value="U">U型</option><option value="其他">其他</option></select></div><div class="field"><label>边宽A(mm)</label><input class="input" type="number" min="0.1" v-model.number="supplierPackagingForm.specification.side_a_mm" /></div><div class="field"><label>边宽B(mm)</label><input class="input" type="number" min="0.1" v-model.number="supplierPackagingForm.specification.side_b_mm" /></div><div class="field"><label>厚度(mm)</label><input class="input" type="number" min="0.1" step="0.1" v-model.number="supplierPackagingForm.specification.thickness_mm" /></div><div class="field"><label>长度(mm)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.length_mm" /></div></div>
+                <div v-else-if="supplierPackagingForm.category_code==='coated_board'" class="form-grid" style="margin-top:8px"><div class="field"><label>实际材质</label><input class="input" v-model.trim="supplierPackagingForm.specification.material_type" placeholder="白卡/灰底白等" /></div><div class="field"><label>克重(g/㎡)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.basis_weight_gsm" /></div><div class="field"><label>厚度(mm)</label><input class="input" type="number" min="0.01" step="0.01" v-model.number="supplierPackagingForm.specification.thickness_mm" /></div><div class="field"><label>单张长(mm)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.sheet_length_mm" /></div><div class="field"><label>单张宽(mm)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.sheet_width_mm" /></div></div>
+                <div v-else-if="supplierPackagingForm.category_code==='printed_folding_carton'" class="form-grid" style="margin-top:8px"><div class="field"><label>结构</label><input class="input" v-model.trim="supplierPackagingForm.specification.structure" /></div><div class="field"><label>基材</label><input class="input" v-model.trim="supplierPackagingForm.specification.substrate" /></div><div class="field"><label>成品长(mm)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.finished_length_mm" /></div><div class="field"><label>成品宽(mm)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.finished_width_mm" /></div><div class="field"><label>成品高(mm)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.finished_height_mm" /></div><div class="field"><label>展开长(mm)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.unfolded_length_mm" /></div><div class="field"><label>展开宽(mm)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.unfolded_width_mm" /></div><div class="field"><label>印刷色数</label><input class="input" type="number" min="1" max="12" v-model.number="supplierPackagingForm.specification.print_color_count" /></div><div class="field wide"><label>后道工艺（按顺序）</label><input class="input" v-model="supplierPackagingForm.specification.ordered_processes" placeholder="覆膜→烫金→模切" /></div></div>
+                <div v-else-if="supplierPackagingForm.category_code==='epe_cushion'" class="form-grid" style="margin-top:8px"><div class="field"><label>形态</label><input class="input" v-model.trim="supplierPackagingForm.specification.shape" placeholder="内衬/护角/片材等" /></div><div class="field"><label>长(mm)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.length_mm" /></div><div class="field"><label>宽(mm)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.width_mm" /></div><div class="field"><label>厚度(mm)</label><input class="input" type="number" min="0.1" step="0.1" v-model.number="supplierPackagingForm.specification.thickness_mm" /></div><div class="field"><label>复合层数</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.layers" /></div><div class="field"><label>密度(kg/m³，可选)</label><input class="input" type="number" min="0.1" step="0.1" v-model.number="supplierPackagingForm.specification.density_kg_m3" /></div><div class="field wide"><label>性能依据（有资料才填）</label><input class="input" v-model.trim="supplierPackagingForm.specification.performance" placeholder="供应商检测资料/合同要求" /></div></div>
+                <div v-else-if="supplierPackagingForm.category_code==='other_packaging'" class="field" style="margin-top:8px"><label>规格摘要</label><input class="input" v-model.trim="supplierPackagingForm.specification.summary" /></div>
+                <div v-else class="muted" style="margin-top:8px">请先选择产品类别。</div>
+              </div>
+              <div class="field" style="margin-top:12px"><label>备注</label><textarea class="textarea" v-model.trim="supplierPackagingForm.remarks"></textarea></div>
+              <div class="toolbar" style="justify-content:flex-end;margin-top:12px"><button class="btn" @click="returnToSupplierPackagingCatalog">取消</button><button class="btn primary" :disabled="supplierPackagingSaving" @click="saveSupplierPackagingProduct">{{ supplierPackagingSaving ? '保存中…' : '保存产品' }}</button></div>
             </div>
             <div v-else-if="modal.type === 'quotationConvert'" class="product-edit-grid">
               <div class="status blue" style="display:block;white-space:normal;margin-bottom:10px">
@@ -6598,7 +6649,13 @@
       });
       const blankSupplier = () => ({
         id:null, version:null, standard_name:"", display_name:"", business_code:"",
-        is_active:true, sort_order:100, contact_name:"", phone:"", remarks:"", aliases:[]
+        is_active:true, sort_order:100, contact_name:"", phone:"", remarks:"", aliases:[],
+        supply_categories:["corrugated_board"]
+      });
+      const blankSupplierPackagingProduct = () => ({
+        id:null, version:null, category_code:"", supplier_product_code:"", product_name:"",
+        purchase_unit:"", specification:{}, drawing_sample_version:"", lead_time_days:null,
+        remarks:"", is_active:true,
       });
       const blankProduct = () => ({
         id: null, version: null, customer_id: null, product_code: "", customer_material_code: "",
@@ -6771,6 +6828,22 @@
             supplierError: "",
             supplierSearch: "",
             supplierForm: blankSupplier(),
+            supplierCategoryOptions: [
+              {value:"corrugated_board",label:"瓦楞纸板"},
+              {value:"paper_corner_guard",label:"纸护角"},
+              {value:"coated_board",label:"涂布白板/灰底白"},
+              {value:"printed_folding_carton",label:"印刷折叠彩盒"},
+              {value:"epe_cushion",label:"EPE缓冲包装"},
+              {value:"other_packaging",label:"其他外购包装"},
+            ],
+            externalPackagingUnits:["根","米","件","张","令","kg","吨","只","个","套","片","卷"],
+            supplierPackagingSupplier:null,
+            supplierPackagingProducts:[],
+            supplierPackagingSearch:"",
+            supplierPackagingLoading:false,
+            supplierPackagingError:"",
+            supplierPackagingSaving:false,
+            supplierPackagingForm:blankSupplierPackagingProduct(),
             materialSuppliers: [],
             productEditorOptionsLoading: false,
             productEditorOptionsError: "",
@@ -7174,6 +7247,10 @@
               row.standard_name, row.display_name, row.business_code, row.contact_name, row.phone,
               ...(row.aliases || []),
             ].some(value => String(value || "").toLowerCase().includes(keyword)));
+          },
+          activeExternalPackagingCategoryOptions() {
+            const active = new Set(this.supplierPackagingSupplier?.supply_categories || []);
+            return this.supplierCategoryOptions.filter(option => option.value !== "corrugated_board" && active.has(option.value));
           },
           // 新业务只允许选择供应商主数据中启用的标准名称。
           materialSupplierSelectOptions() {
@@ -11168,7 +11245,109 @@
               phone:String(form.phone || "").trim() || null,
               remarks:String(form.remarks || "").trim() || null,
               aliases:Array.isArray(form.aliases) ? form.aliases : [],
+              supply_categories:Array.isArray(form.supply_categories) ? form.supply_categories : ["corrugated_board"],
             };
+          },
+          supplierCategoryLabel(code) {
+            return this.supplierCategoryOptions.find(option => option.value === code)?.label || code || "-";
+          },
+          async openSupplierPackagingCatalog(row) {
+            if (!this.canAdmin || !row?.id) return;
+            this.supplierPackagingSupplier = JSON.parse(JSON.stringify(row));
+            this.supplierPackagingSearch = "";
+            this.supplierPackagingProducts = [];
+            this.supplierPackagingError = "";
+            this.modal = {type:"supplierPackagingCatalog",title:`外购产品｜${row.display_name || row.standard_name}`};
+            await this.loadSupplierPackagingProducts();
+          },
+          async loadSupplierPackagingProducts() {
+            const supplierId = Number(this.supplierPackagingSupplier?.id || 0);
+            if (!supplierId) return false;
+            this.supplierPackagingLoading = true;
+            this.supplierPackagingError = "";
+            try {
+              const {data} = await axios.get(`/api/master/suppliers/${supplierId}/packaging-products`,{params:{keyword:this.supplierPackagingSearch || "",include_inactive:true}});
+              this.supplierPackagingSupplier = data?.supplier || this.supplierPackagingSupplier;
+              this.supplierPackagingProducts = Array.isArray(data?.items) ? data.items : [];
+              return true;
+            } catch (error) {
+              this.supplierPackagingError = `外购产品读取失败：${this.errorMessage(error)}`;
+              return false;
+            } finally {
+              this.supplierPackagingLoading = false;
+            }
+          },
+          openSupplierPackagingProduct(row=null) {
+            if (!this.canAdmin) return;
+            if (!this.activeExternalPackagingCategoryOptions.length) {
+              this.showToast("请先编辑供应商并启用至少一个外购包装类别",true);
+              return;
+            }
+            this.supplierPackagingForm = row ? {
+              ...blankSupplierPackagingProduct(),
+              ...JSON.parse(JSON.stringify(row)),
+              specification:{...(row.specification || {})},
+            } : {
+              ...blankSupplierPackagingProduct(),
+              category_code:this.activeExternalPackagingCategoryOptions[0]?.value || "",
+            };
+            this.modal = {type:"supplierPackagingProduct",title:row ? "编辑外购产品" : "新增外购产品"};
+          },
+          returnToSupplierPackagingCatalog() {
+            const supplier = this.supplierPackagingSupplier;
+            this.modal = {type:"supplierPackagingCatalog",title:`外购产品｜${supplier?.display_name || supplier?.standard_name || "供应商"}`};
+          },
+          supplierPackagingPayload() {
+            const form = this.supplierPackagingForm || {};
+            if (!form.category_code) throw new Error("请选择产品类别");
+            if (!String(form.supplier_product_code || "").trim()) throw new Error("请填写供应商产品代码");
+            if (!String(form.product_name || "").trim()) throw new Error("请填写产品名称");
+            if (!String(form.purchase_unit || "").trim()) throw new Error("请选择采购单位");
+            return {
+              category_code:form.category_code,
+              supplier_product_code:String(form.supplier_product_code).trim(),
+              product_name:String(form.product_name).trim(),
+              purchase_unit:form.purchase_unit,
+              specification:{...(form.specification || {})},
+              drawing_sample_version:String(form.drawing_sample_version || "").trim() || null,
+              lead_time_days:form.lead_time_days === "" || form.lead_time_days == null ? null : Number(form.lead_time_days),
+              remarks:String(form.remarks || "").trim() || null,
+            };
+          },
+          async saveSupplierPackagingProduct() {
+            if (this.supplierPackagingSaving) return false;
+            const supplierId = Number(this.supplierPackagingSupplier?.id || 0);
+            if (!supplierId) return false;
+            this.supplierPackagingSaving = true;
+            try {
+              const payload = this.supplierPackagingPayload();
+              const row = this.supplierPackagingForm;
+              if (row.id) {
+                await axios.put(`/api/master/suppliers/${supplierId}/packaging-products/${row.id}`,{...payload,expected_version:Number(row.version)});
+              } else {
+                await axios.post(`/api/master/suppliers/${supplierId}/packaging-products`,payload);
+              }
+              this.returnToSupplierPackagingCatalog();
+              await this.loadSupplierPackagingProducts();
+              this.showToast(row.id ? "外购产品已更新" : "外购产品已新增");
+              return true;
+            } catch (error) {
+              this.showToast(this.errorMessage(error),true);
+              return false;
+            } finally {
+              this.supplierPackagingSaving = false;
+            }
+          },
+          async toggleSupplierPackagingProduct(row) {
+            const supplierId = Number(this.supplierPackagingSupplier?.id || 0);
+            if (!supplierId || !row?.id) return;
+            try {
+              await axios.put(`/api/master/suppliers/${supplierId}/packaging-products/${row.id}/status`,{expected_version:Number(row.version),is_active:row.is_active === false});
+              await this.loadSupplierPackagingProducts();
+              this.showToast(row.is_active === false ? "外购产品已启用" : "外购产品已停用");
+            } catch (error) {
+              this.showToast(this.errorMessage(error),true);
+            }
           },
           async openSupplierMaterials(row) {
             this.materialSupplierFilter = row?.standard_name || "";

@@ -8,6 +8,16 @@ from sqlalchemy.orm import Session, selectinload
 from app.models.supplier import Supplier, SupplierAlias
 
 
+SUPPLIER_CATEGORY_LABELS = {
+    "corrugated_board": "瓦楞纸板",
+    "paper_corner_guard": "纸护角",
+    "coated_board": "涂布白板/灰底白",
+    "printed_folding_carton": "印刷折叠彩盒",
+    "epe_cushion": "EPE缓冲包装",
+    "other_packaging": "其他外购包装",
+}
+
+
 class SupplierLookupError(ValueError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
@@ -29,6 +39,7 @@ def clean_business_code(value: object) -> str | None:
 
 
 def supplier_snapshot(supplier: Supplier) -> dict:
+    category_rows = list(supplier.supply_categories)
     return {
         "id": supplier.id,
         "standard_name": supplier.standard_name,
@@ -41,6 +52,11 @@ def supplier_snapshot(supplier: Supplier) -> dict:
         "is_active": supplier.is_active,
         "version": supplier.version,
         "aliases": [alias.alias_name for alias in supplier.aliases],
+        "supply_categories": (
+            [row.category_code for row in category_rows if row.is_active]
+            if category_rows
+            else ["corrugated_board"]
+        ),
     }
 
 
@@ -60,14 +76,20 @@ def resolve_supplier(
 
     supplier = db.scalar(
         select(Supplier)
-        .options(selectinload(Supplier.aliases))
+        .options(
+            selectinload(Supplier.aliases),
+            selectinload(Supplier.supply_categories),
+        )
         .where(Supplier.normalized_name == normalized)
     )
     if supplier is None:
         supplier = db.scalar(
             select(Supplier)
             .join(SupplierAlias)
-            .options(selectinload(Supplier.aliases))
+            .options(
+                selectinload(Supplier.aliases),
+                selectinload(Supplier.supply_categories),
+            )
             .where(SupplierAlias.normalized_alias == normalized)
         )
     if supplier is None:

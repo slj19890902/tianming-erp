@@ -78,7 +78,7 @@ def test_requisition_actions_are_separated_and_fixed_in_requested_order() -> Non
         ">暂不报料<",
         '@click="openStockReplenishment">库存补库',
         ">等候报料 ",
-        ">刷新<",
+        "refreshRequisitionTab())",
     ]
     positions = [actions.index(marker) for marker in markers]
     assert positions == sorted(positions)

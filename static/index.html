@@ -1593,6 +1593,33 @@
       .workbench-tab.active { border-color:var(--primary); background:var(--primary); color:#fff; }
       .workbench-nav-primary .workbench-tabs { order:-1; flex:0 0 auto; }
       .workbench-nav-primary .workbench-nav-title { flex:1 1 auto; text-align:right; }
+      .business-flow-guide {
+        display:grid; grid-template-columns:auto minmax(0,1fr); align-items:center; gap:12px;
+        margin:0 0 12px; padding:8px 12px; border:1px solid #cfe0f7; border-radius:12px;
+        background:#f7fbff;
+      }
+      .business-flow-guide-label { color:var(--text-secondary); font-size:12px; font-weight:700; white-space:nowrap; }
+      .business-flow-steps { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:6px; min-width:0; }
+      .business-flow-step {
+        position:relative; min-width:0; min-height:34px; padding:5px 8px; border:1px solid var(--line-strong);
+        border-radius:9px; background:#fff; color:var(--text-secondary); font-size:12px; font-weight:700;
+        overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+      }
+      .business-flow-step:not(:last-child)::after {
+        content:""; position:absolute; top:50%; right:-7px; width:7px; border-top:1px solid #9cb8dc; z-index:2;
+      }
+      .business-flow-step.current { border-color:var(--primary); background:var(--primary); color:#fff; box-shadow:0 4px 12px rgba(25,118,210,.18); }
+      .business-flow-step:disabled { cursor:default; opacity:.55; }
+      .order-next-step-guide {
+        display:flex; align-items:center; justify-content:space-between; gap:12px; margin:0 0 12px;
+        padding:10px 12px; border:1px solid #9bd6b3; border-radius:12px; background:#eefaf3;
+      }
+      .order-next-step-copy { min-width:0; }
+      .order-next-step-copy strong { display:block; color:#176b3a; }
+      .order-next-step-copy span { display:block; margin-top:2px; color:var(--text-secondary); font-size:13px; }
+      .order-next-step-actions { display:flex; align-items:center; justify-content:flex-end; gap:6px; flex:0 0 auto; }
+      .ui-large .business-flow-step { min-height:38px; font-size:14px; }
+      .ui-large .order-next-step-copy span { font-size:15px; }
       .order-page-actionbar, .requisition-page-actionbar {
         display:flex; align-items:center; justify-content:space-between; gap:10px;
       }
@@ -1706,6 +1733,9 @@
       @media(max-width:900px) {
         .workbench-nav { align-items:flex-start; flex-direction:column; }
         .workbench-nav-primary .workbench-nav-title { text-align:left; }
+        .business-flow-guide { grid-template-columns:1fr; gap:6px; }
+        .business-flow-steps { grid-template-columns:repeat(3,minmax(0,1fr)); }
+        .order-next-step-guide { align-items:flex-start; flex-direction:column; }
         .warehouse-shell-frame { min-height: 0; }
         .production-location-picker { grid-template-columns: 1fr; }
         .audit-filter-grid, .audit-detail-grid { grid-template-columns: 1fr; }
@@ -1760,6 +1790,35 @@
                 <template v-for="page in (currentNavigationGroup ? currentNavigationGroup.pages : [])" :key="page.key">
                   <button v-if="pageAllowed(page.key)" type="button" :class="['workbench-tab',{active:activePage===page.key}]" @click="go(page.key)">{{ page.label }}</button>
                 </template>
+              </div>
+            </section>
+
+            <section v-if="businessFlowCurrentStep" class="business-flow-guide" aria-label="订单到对账操作顺序">
+              <span class="business-flow-guide-label">按顺序做</span>
+              <div class="business-flow-steps">
+                <button
+                  v-for="(step,index) in businessFlowSteps"
+                  :key="step.key"
+                  type="button"
+                  :class="['business-flow-step',{current:businessFlowCurrentStep.key===step.key}]"
+                  :disabled="!pageAllowed(step.page)"
+                  :aria-current="businessFlowCurrentStep.key===step.key ? 'step' : null"
+                  :title="step.hint"
+                  @click="openBusinessFlowStep(step)"
+                >{{ index + 1 }}. {{ step.label }}</button>
+              </div>
+            </section>
+
+            <section v-if="orderNextStepGuide.visible && ['orders','orders_legacy'].includes(activePage)" class="order-next-step-guide" aria-live="polite">
+              <div class="order-next-step-copy">
+                <strong>{{ orderNextStepGuideTitle }}</strong>
+                <span>下一步去报料，核对材质和报料数量。</span>
+              </div>
+              <div class="order-next-step-actions">
+                <button v-if="canRequisition && pageAllowed('requisition')" type="button" class="btn primary" @click="goToRequisitionFromOrderGuide">下一步：去报料</button>
+                <span v-else class="muted">请交给有报料权限的账号继续</span>
+                <button v-if="canCreateOrders" type="button" class="btn" @click="continueCreateOrderFromGuide">继续录订单</button>
+                <button type="button" class="btn" @click="dismissOrderNextStepGuide">关闭</button>
               </div>
             </section>
 
@@ -6627,6 +6686,7 @@
         data() {
           return {
             user: null, loading: false, loginError: "", activePage: "dashboard", uiModeSaving: false, authGeneration: 0,
+            orderNextStepGuide: {visible:false, orderNo:"", count:0, source:""},
             pageCacheUpdatedAt: {},
             warehouseFrameUrl: "", warehouseFrameRevision: 0, warehouseTwinFloor: "3F",
             loginForm: { username: localStorage.getItem("erp_username") || "", password: "", remember_me: true },
@@ -6925,6 +6985,26 @@
           };
         },
         computed: {
+          businessFlowSteps() {
+            return [
+              {key:"orders",label:"订单",page:"orders",hint:"录入并确认客户订单"},
+              {key:"requisition",label:"报料",page:"requisition",hint:"核对材质和报料数量"},
+              {key:"incoming",label:"来料",page:"incoming",hint:"供应商到料后确认收货"},
+              {key:"production",label:"生产",page:"production",hint:"确认合格数量和完工去向"},
+              {key:"deliveries",label:"送货",page:"deliveries",hint:"拿货、发货并确认回单"},
+              {key:"finance",label:"回单/对账",page:"finance",hint:"按回单数量对账、开票和收款"},
+            ];
+          },
+          businessFlowCurrentStep() {
+            const pageKey = this.activePage === "orders_legacy" ? "orders" : this.activePage;
+            return this.businessFlowSteps.find(step => step.page === pageKey) || null;
+          },
+          orderNextStepGuideTitle() {
+            const count = Number(this.orderNextStepGuide?.count || 0);
+            const orderNo = String(this.orderNextStepGuide?.orderNo || "").trim();
+            if (count > 1) return `${count} 张订单已保存`;
+            return orderNo ? `订单 ${orderNo} 已保存` : "订单已保存";
+          },
           currentReleaseDetails() {
             const currentVersion = String(this.versionInfo?.version || "").trim();
             const externalAcceptanceRequired = this.versionInfo?.external_acceptance_required !== false;
@@ -10520,6 +10600,42 @@
             if (page !== "requisition") this.cancelSupplierRequisitionPreview();
             this.activePage = page;
             await this.loadPage(page);
+          },
+          async openBusinessFlowStep(step) {
+            const page = step?.page;
+            if (!page || !this.pageAllowed(page)) {
+              this.showToast("当前账号没有访问该步骤的权限", true);
+              return false;
+            }
+            if (page === "requisition") this.requisitionTab = "pending";
+            await this.go(page);
+            return true;
+          },
+          showOrderNextStepGuide({orderNo="",count=1,source="manual"}={}) {
+            this.orderNextStepGuide = {
+              visible:true,
+              orderNo:String(orderNo || "").trim(),
+              count:Math.max(1,Number(count || 1)),
+              source:String(source || "manual"),
+            };
+          },
+          dismissOrderNextStepGuide() {
+            this.orderNextStepGuide = {visible:false,orderNo:"",count:0,source:""};
+          },
+          async continueCreateOrderFromGuide() {
+            this.dismissOrderNextStepGuide();
+            if (this.canCreateOrders) await this.openOrder();
+          },
+          async goToRequisitionFromOrderGuide() {
+            if (!this.canRequisition || !this.pageAllowed("requisition")) {
+              this.showToast("当前账号没有报料权限", true);
+              return false;
+            }
+            this.dismissOrderNextStepGuide();
+            this.requisitionTab = "pending";
+            this.invalidatePageCache("requisition");
+            await this.go("requisition");
+            return true;
           },
           isMenuActive(menuKey) {
             const group = this.navigationGroups.find(item => item.key === menuKey);
@@ -19462,6 +19578,9 @@
                 }
               }
               await Promise.all([this.loadOrders(),this.loadKpi()]);
+              if (succeeded.length) {
+                this.showOrderNextStepGuide({count:succeeded.length,source:"pdf"});
+              }
               const remainingFailed = this.orderImportDrafts.filter(
                 draft => draft._save_status === "failed"
               );
@@ -22706,6 +22825,7 @@
             } else {
               this.showToast(`${label} 已保存`);
             }
+            this.showOrderNextStepGuide({orderNo,count:1,source:"manual"});
             return {...(data || {}), _refresh_failed:errors.length > 0};
           },
           async saveCurrentOrderItem(orderItemId, orderItemPayload) {

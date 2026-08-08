@@ -62,7 +62,7 @@ def test_requisition_toolbar_refreshes_only_visible_tab() -> None:
 
     assert "if (this.requisitionTab === \"submitted\") return this.loadReportedDocuments();" in refresh
     assert "return this.loadRequisition();" in refresh
-    assert '@click="refreshRequisitionTab"' in INDEX
+    assert "refreshRequisitionTab())" in INDEX
     assert '@click="selectRequisitionTab(\'submitted\')"' in INDEX
 
 

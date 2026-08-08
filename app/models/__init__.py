@@ -67,6 +67,9 @@ from app.models.material_price_history import (  # noqa: E402,F401
     MaterialPriceAdjustmentBatch,
     MaterialPriceHistory,
 )
+from app.models.external_packaging_price import (  # noqa: E402,F401
+    ExternalPackagingPriceVersion,
+)
 from app.models.supplier_flute_price_rule import (  # noqa: E402,F401
     SupplierFlutePriceRule,
 )

@@ -1410,27 +1410,42 @@ def test_material_price_history_marks_legacy_gap_future_and_unknown_time(
     assert empty_history.json()["items"] == []
 
     with writer_app.state.session_factory() as session:
-        session.add_all(
-            [
-                MaterialPriceHistory(
-                    material_id=legacy_id,
-                    supplier_name="P4供应商A1",
-                    material_code="LEG",
-                    old_price=Decimal("1.80"),
-                    new_price=Decimal("2.00"),
-                    effective_date=date(2099, 1, 1),
-                    operator="history-fixture",
-                ),
-                MaterialPriceHistory(
-                    material_id=legacy_id,
-                    supplier_name="P4供应商A1",
-                    material_code="LEG",
-                    old_price=Decimal("2.00"),
-                    new_price=Decimal("2.10"),
-                    effective_date=None,
-                    operator="history-fixture",
-                ),
-            ]
+        session.add(
+            MaterialPriceHistory(
+                material_id=legacy_id,
+                supplier_name="P4供应商A1",
+                material_code="LEG",
+                old_price=Decimal("1.80"),
+                new_price=Decimal("2.00"),
+                effective_date=date(2099, 1, 1),
+                operator="history-fixture",
+            )
+        )
+        session.commit()
+
+    with TestClient(writer_app) as client:
+        future_history = client.get(
+            f"/api/master/materials/{legacy_id}/price-history"
+        )
+
+    assert future_history.status_code == 200, future_history.text
+    assert future_history.json()["history_incomplete"] is True
+    assert future_history.json()["current_price"] == 1.8
+    assert future_history.json()["latest_recorded_price"] == 2.0
+    assert future_history.json()["next_pending_price"] == 2.0
+    assert future_history.json()["next_pending_effective_date"] == "2099-01-01"
+
+    with writer_app.state.session_factory() as session:
+        session.add(
+            MaterialPriceHistory(
+                material_id=legacy_id,
+                supplier_name="P4供应商A1",
+                material_code="LEG",
+                old_price=Decimal("2.00"),
+                new_price=Decimal("2.10"),
+                effective_date=None,
+                operator="history-fixture",
+            )
         )
         session.commit()
 
@@ -1438,7 +1453,6 @@ def test_material_price_history_marks_legacy_gap_future_and_unknown_time(
         history = client.get(f"/api/master/materials/{legacy_id}/price-history")
 
     assert history.status_code == 200, history.text
-    assert history.json()["history_incomplete"] is True
     assert [item["effective_status"] for item in history.json()["items"]] == [
         "pending",
         "time_unknown",

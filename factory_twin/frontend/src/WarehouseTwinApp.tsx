@@ -31,7 +31,7 @@ type InventoryUsage = "finished" | "semi_finished" | "raw_material" | "mold" | "
 type StorageLayout = "rack" | "pallet_ground" | "mixed";
 type WarehouseSearchType = "finished" | "mold" | "printing_plate";
 type InboundInventoryType = "finished" | "semi_finished";
-type RackDraft = Rack & { level_clear_heights_mm: number[] };
+type RackDraft = Rack & { level_clear_heights_mm: number[]; level_cell_counts: number[] };
 
 interface LayoutMutationResponse<T> {
   item: T;
@@ -395,8 +395,21 @@ function rackShelfHeights(clearHeights: number[]) {
   });
 }
 
+function rackLevelCellCounts(rack: Pick<Rack, "levels" | "cargo_rows" | "level_cell_counts">) {
+  const levels = Math.max(1, Math.min(20, Math.round(Number(rack.levels) || 1)));
+  if (Array.isArray(rack.level_cell_counts) && rack.level_cell_counts.length === levels) {
+    return rack.level_cell_counts.map((value) => Math.max(0, Math.min(50, Math.round(Number(value) || 0))));
+  }
+  const legacyCount = Math.max(3, Math.min(5, Math.round(Number(rack.cargo_rows) || 3)));
+  return Array.from({ length: levels }, () => legacyCount);
+}
+
 function rackDraft(rack: Rack): RackDraft {
-  return { ...rack, level_clear_heights_mm: rackClearHeights(rack) };
+  return {
+    ...rack,
+    level_clear_heights_mm: rackClearHeights(rack),
+    level_cell_counts: rackLevelCellCounts(rack)
+  };
 }
 
 function featureCenter(feature: LayoutFeature) {
@@ -466,7 +479,7 @@ function WarehouseRackElevation({
   onClose: () => void;
 }) {
   const levels = Array.from({ length: Math.max(1, rack.levels) }, (_, index) => Math.max(1, rack.levels) - index);
-  const bays = Math.max(1, Math.min(6, rack.cargo_rows || rack.bays || 3));
+  const levelCellCounts = rackLevelCellCounts(rack);
   const [selectedItem, setSelectedItem] = useState<RackInventoryItem | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   useEffect(() => { setSelectedItem(null); setDetailOpen(false); }, [rack.id]);
@@ -479,10 +492,11 @@ function WarehouseRackElevation({
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
   }, [onClose, onPrevious, onNext]);
-  const slots = Array.from({ length: levels.length * bays }, (_, index) => ({
+  const slots = Array.from({ length: levelCellCounts.reduce((sum, value) => sum + value, 0) }, (_, index) => ({
     item: items[index] || null,
     location: items[index] ? null : emptyLocations[index - items.length] || null
   }));
+  let slotOffset = 0;
   return <div className="twin-rack-modal" role="dialog" aria-modal="true" aria-label={`${rack.rack_code} 参数化正视图`}>
     <button className="twin-modal-backdrop" type="button" aria-label="关闭货架正视图" onClick={onClose} />
     <section className="twin-rack-stage">
@@ -495,16 +509,19 @@ function WarehouseRackElevation({
         <div className="twin-elevation-shell">
           <div className="twin-height-ruler"><b>{formatNumber(rack.height_mm)} mm</b></div>
           <div className="twin-elevation-frame">
-            {levels.map((level, levelIndex) => <div className="twin-elevation-level" key={level}>
-              <span>{level === 1 ? "地面栈板层" : `${level} 层`}</span>
-              <div>{Array.from({ length: bays }, (_, bay) => {
-                const slot = slots[levelIndex * bays + bay];
+            {levels.map((level) => {
+              const cellCount = levelCellCounts[level - 1] || 0;
+              const levelSlots = slots.slice(slotOffset, slotOffset + cellCount);
+              slotOffset += cellCount;
+              return <div className="twin-elevation-level" key={level}>
+              <span>第 {level} 层 · {cellCount ? `${cellCount} 格` : "尚未分格"}</span>
+              <div className={cellCount ? "" : "unpartitioned"}>{cellCount === 0 ? <i className="twin-unpartitioned-cell">本层尚未分格</i> : levelSlots.map((slot, bay) => {
                 const item = slot.item;
                 if (item) return <button type="button" className={selectedItem?.lot_id === item.lot_id ? "selected" : ""} key={`${item.lot_id}-${bay}`} onClick={() => { setSelectedItem(item); setDetailOpen(false); }}><b>{item.inventory_code || item.lot_number || `批次 ${item.lot_id}`}</b><span>{item.customer_name || "客户待确认"}</span><strong>{formatNumber(inventoryLabelQuantity(item))} {inventoryUnitLabel(item.unit)}</strong></button>;
                 if (slot.location) return <button type="button" className="empty" key={`empty-${slot.location.location_id}`} disabled={!canChooseProducts} onClick={() => onChooseEmptyLocation(slot.location!.location_id)}><b>＋ 为此货位选产品</b><span>{slot.location.location_name}</span><strong>当前空位</strong></button>;
                 return <i key={bay}>暂无已建空货位</i>;
               })}</div>
-            </div>)}
+            </div>})}
           </div>
           <div className="twin-width-ruler">正面宽度 {formatNumber(rack.width_mm)} mm</div>
         </div>
@@ -1656,7 +1673,11 @@ export function WarehouseTwinApp() {
     const normalized = Math.max(1, Math.min(20, Math.round(levels || 1)));
     const base = Math.floor(rack.height_mm / normalized);
     const clear = Array.from({ length: normalized }, (_, index) => index === normalized - 1 ? rack.height_mm - base * (normalized - 1) : base);
-    updateRackDraft(rack.id, { levels: normalized, level_clear_heights_mm: clear, level_heights_mm: rackShelfHeights(clear) });
+    const levelCellCounts = Array.from(
+      { length: normalized },
+      (_, index) => rack.level_cell_counts[index] ?? 0
+    );
+    updateRackDraft(rack.id, { levels: normalized, level_clear_heights_mm: clear, level_heights_mm: rackShelfHeights(clear), level_cell_counts: levelCellCounts });
   };
 
   const changeRackTotalHeight = (rack: RackDraft, heightMm: number) => {
@@ -1672,6 +1693,12 @@ export function WarehouseTwinApp() {
     updateRackDraft(rack.id, { height_mm: clear.reduce((sum, value) => sum + value, 0), level_clear_heights_mm: clear, level_heights_mm: rackShelfHeights(clear) });
   };
 
+  const changeRackLevelCellCount = (rack: RackDraft, levelIndex: number, count: number) => {
+    const levelCellCounts = [...rack.level_cell_counts];
+    levelCellCounts[levelIndex] = Math.max(0, Math.min(50, Math.round(count || 0)));
+    updateRackDraft(rack.id, { level_cell_counts: levelCellCounts });
+  };
+
   const rackMutationPayload = (rack: RackDraft) => ({
     name: rack.name,
     x_mm: rack.x_mm,
@@ -1682,6 +1709,7 @@ export function WarehouseTwinApp() {
     levels: rack.levels,
     level_heights_mm: rackShelfHeights(rack.level_clear_heights_mm),
     cargo_rows: rack.cargo_rows,
+    level_cell_counts: rack.level_cell_counts,
     bays: rack.bays,
     access_side: rack.access_side,
     min_aisle_width_mm: rack.min_aisle_width_mm,
@@ -1747,6 +1775,7 @@ export function WarehouseTwinApp() {
           levels: 3,
           level_heights_mm: [733, 1466],
           cargo_rows: 4,
+          level_cell_counts: [0, 0, 0],
           bays: 1,
           access_side: "south",
           min_aisle_width_mm: 1500,
@@ -2014,12 +2043,8 @@ export function WarehouseTwinApp() {
             <label><span>宽度 mm</span><input type="number" min="1" value={selectedRackEditDraft.depth_mm} onChange={(event) => updateRackDraft(selectedRackEditDraft.id, { depth_mm: Number(event.target.value) })} /></label>
             <label><span>总高度 mm</span><input type="number" min="1" value={selectedRackEditDraft.height_mm} onChange={(event) => changeRackTotalHeight(selectedRackEditDraft, Number(event.target.value))} /></label>
           </div>
-          <div className="twin-rack-dimension-grid">
-            <label><span>层数</span><input type="number" min="1" max="20" value={selectedRackEditDraft.levels} onChange={(event) => changeRackLevels(selectedRackEditDraft, Number(event.target.value))} /></label>
-            <label><span>每层货位数</span><input type="number" min="3" max="5" value={selectedRackEditDraft.cargo_rows} onChange={(event) => updateRackDraft(selectedRackEditDraft.id, { cargo_rows: Number(event.target.value) })} /></label>
-            <label><span>结构格数</span><input type="number" min="1" max="50" value={selectedRackEditDraft.bays} onChange={(event) => updateRackDraft(selectedRackEditDraft.id, { bays: Number(event.target.value) })} /></label>
-          </div>
-          <div className="twin-rack-level-editor"><b>每层净高（修改后自动合计总高度）</b>{selectedRackEditDraft.level_clear_heights_mm.map((height, index) => <label key={`${selectedRackEditDraft.id}-level-${index}`}><span>第 {index + 1} 层 mm</span><input type="number" min="1" value={height} onChange={(event) => changeRackLevelHeight(selectedRackEditDraft, index, Number(event.target.value))} /></label>)}</div>
+          <label><span>货架层数</span><input type="number" min="1" max="20" value={selectedRackEditDraft.levels} onChange={(event) => changeRackLevels(selectedRackEditDraft, Number(event.target.value))} /></label>
+          <div className="twin-rack-level-editor"><b>逐层设置（修改净高会自动合计总高度）</b>{selectedRackEditDraft.level_clear_heights_mm.map((height, index) => <div className="twin-rack-level-row" key={`${selectedRackEditDraft.id}-level-${index}`}><label><span>第 {index + 1} 层净高 mm</span><input type="number" min="1" value={height} onChange={(event) => changeRackLevelHeight(selectedRackEditDraft, index, Number(event.target.value))} /></label><label><span>第 {index + 1} 层格数</span><input type="number" min="0" max="50" value={selectedRackEditDraft.level_cell_counts[index]} onChange={(event) => changeRackLevelCellCount(selectedRackEditDraft, index, Number(event.target.value))} /></label></div>)}<small>格数填 0 表示本层尚未分格；这里只保存平面规划，不生成正式库位。</small></div>
           <div className="twin-rack-coordinate-grid">
             <label><span>正面操作方向</span><select value={selectedRackEditDraft.access_side} onChange={(event) => updateRackDraft(selectedRackEditDraft.id, { access_side: event.target.value as Rack["access_side"] })}><option value="north">北</option><option value="south">南</option><option value="east">东</option><option value="west">西</option><option value="both">双面</option></select></label>
             <label><span>最小通道 mm</span><input type="number" min="0" value={selectedRackEditDraft.min_aisle_width_mm} onChange={(event) => updateRackDraft(selectedRackEditDraft.id, { min_aisle_width_mm: Number(event.target.value) })} /></label>

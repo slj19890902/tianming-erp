@@ -40,6 +40,7 @@ from app.models.customer import Customer
 from app.models.material import Material
 from app.models.master_data_object_version import MasterDataObjectVersion
 from app.models.mold_tool import MoldTool
+from app.models.printing_plate import PrintingPlate
 from app.models.product import Product
 from app.models.product_drawing import ProductDrawing
 from app.models.user import User
@@ -163,6 +164,70 @@ def _normalize_product_mold_binding(payload: ProductPayload) -> None:
     payload.mold_tool_id = None
 
 
+_NO_PRINT_VALUES = {"", "无印刷", "无", "否", "不印刷"}
+
+
+def _required_printing_plate_count(print_content: str | None) -> int:
+    value = (print_content or "").strip()
+    if value in _NO_PRINT_VALUES:
+        return 0
+    if value == "单色印刷":
+        return 1
+    if value == "双色印刷":
+        return 2
+    if value in {"三色印刷", "多色印刷"}:
+        return 3
+    return -1
+
+
+def _normalize_product_printing_plate_configuration(payload: ProductPayload) -> None:
+    required = _required_printing_plate_count(payload.print_content)
+    plate_fields = (
+        "printing_plate_1_id",
+        "printing_plate_2_id",
+        "printing_plate_3_id",
+    )
+    setting_fields = (
+        "plate_alignment_value_mm",
+        "plate_mount_value_mm",
+        "machine_set_length_mm",
+        "machine_set_width_mm",
+        "machine_set_height_mm",
+    )
+    if required == 0 or payload.printing_plate_mode == "no_plate":
+        payload.printing_plate_mode = "no_plate"
+        for field in (*plate_fields, *setting_fields):
+            setattr(payload, field, None)
+        return
+    if required < 0:
+        raise ValueError("挂板印刷只支持单色、双色或三色印刷")
+    ids = [getattr(payload, field) for field in plate_fields]
+    selected = [value for value in ids if value is not None]
+    if len(selected) != required or any(
+        ids[index] is None for index in range(required)
+    ) or any(ids[index] is not None for index in range(required, 3)):
+        raise ValueError(f"{payload.print_content}挂板必须按颜色顺序选择 {required} 块挂板")
+    if len(set(selected)) != len(selected):
+        raise ValueError("同一块挂板不能在一个常用箱中重复绑定")
+
+
+def _validate_product_printing_plates(db: Session, payload: ProductPayload) -> None:
+    for plate_id in (
+        payload.printing_plate_1_id,
+        payload.printing_plate_2_id,
+        payload.printing_plate_3_id,
+    ):
+        if plate_id is None:
+            continue
+        plate = db.get(PrintingPlate, plate_id)
+        if plate is None:
+            raise HTTPException(status_code=400, detail="所选挂板不存在")
+        if plate.status != "active":
+            raise HTTPException(status_code=400, detail=f"挂板 {plate.plate_code} 不是启用状态")
+        if plate.customer_id != payload.customer_id:
+            raise HTTPException(status_code=400, detail=f"挂板 {plate.plate_code} 不属于当前客户")
+
+
 def _crease_width_error(
     *,
     label: str,
@@ -279,6 +344,15 @@ class ProductPayload(BaseModel):
     box_style: str | None = None
     print_content: str | None = None
     printing_colors: str | None = None
+    printing_plate_mode: Literal["no_plate", "plate"] = "no_plate"
+    printing_plate_1_id: int | None = Field(default=None, gt=0)
+    printing_plate_2_id: int | None = Field(default=None, gt=0)
+    printing_plate_3_id: int | None = Field(default=None, gt=0)
+    plate_alignment_value_mm: Decimal | None = Field(default=None, ge=0)
+    plate_mount_value_mm: Decimal | None = Field(default=None, ge=0)
+    machine_set_length_mm: Decimal | None = Field(default=None, ge=0)
+    machine_set_width_mm: Decimal | None = Field(default=None, ge=0)
+    machine_set_height_mm: Decimal | None = Field(default=None, ge=0)
     production_process: str | None = None
     unit: str = "只"
     sale_unit_price: Decimal | None = Field(default=None, ge=0)
@@ -352,6 +426,7 @@ class ProductPayload(BaseModel):
                 self.print_content = "单色印刷"
             if not (self.printing_colors or "").strip():
                 self.printing_colors = "黑色"
+        _normalize_product_printing_plate_configuration(self)
         secondary_gluing_error = _secondary_gluing_error(
             production_process=self.production_process,
             box_style=self.box_style,
@@ -555,6 +630,7 @@ def _validated_product_versioned_updates(
     user: User,
 ) -> dict:
     _normalize_product_mold_binding(payload)
+    _normalize_product_printing_plate_configuration(payload)
     _validate_references(
         db,
         customer_id=payload.customer_id,
@@ -563,6 +639,7 @@ def _validated_product_versioned_updates(
         historical_material_id=product.material_id,
     )
     _validate_product_material_flute(db, payload)
+    _validate_product_printing_plates(db, payload)
     _validate_changed_product_crease_widths(payload, product)
     updates = _product_write_data(payload, user)
     versioned_fields = set(serialize_versioned_entity("product", product))
@@ -635,6 +712,22 @@ def _response(product: Product, user: User) -> dict:
         }
     else:
         data["mold_tool"] = None
+    data["printing_plates"] = [
+        {
+            "id": plate.id,
+            "plate_code": plate.plate_code,
+            "plate_name": plate.plate_name,
+            "color_name": plate.color_name,
+            "rack_location": plate.rack_location,
+            "status": plate.status,
+        }
+        for plate in (
+            product.printing_plate_1,
+            product.printing_plate_2,
+            product.printing_plate_3,
+        )
+        if plate is not None
+    ]
     if product.deleted_at is not None:
         expires_at = product.deleted_at + timedelta(days=30)
         data["deleted_expires_at"] = beijing_naive_to_api(expires_at)
@@ -1382,6 +1475,7 @@ def create_product(
 ) -> dict:
     require_customer_access(payload.customer_id, current_user=user, db=db)
     _normalize_product_mold_binding(payload)
+    _normalize_product_printing_plate_configuration(payload)
     _validate_references(
         db,
         customer_id=payload.customer_id,
@@ -1389,6 +1483,7 @@ def create_product(
         mold_tool_id=payload.mold_tool_id,
     )
     _validate_product_material_flute(db, payload)
+    _validate_product_printing_plates(db, payload)
     _validate_product_crease_widths(payload)
     data = _product_write_data(payload, user)
     data.update(

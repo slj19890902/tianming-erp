@@ -23,6 +23,7 @@ from app.models.customer import Customer
 from app.models.master_data_object_version import MasterDataObjectVersion
 from app.models.material import Material
 from app.models.mold_tool import MoldTool
+from app.models.printing_plate import PrintingPlate
 from app.models.product import Product
 from app.models.user import User
 from app.services.master_data_versioning import (
@@ -57,6 +58,7 @@ def db(monkeypatch: pytest.MonkeyPatch) -> Generator[Session, None, None]:
         UserCustomerScope.__table__,
         Material.__table__,
         MoldTool.__table__,
+        PrintingPlate.__table__,
         Product.__table__,
         OperationLog.__table__,
         MasterDataObjectVersion.__table__,

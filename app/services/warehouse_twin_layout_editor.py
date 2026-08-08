@@ -222,6 +222,17 @@ def _validate_rack_values(values: dict[str, Any]) -> dict[str, Any]:
     if cargo_rows < 3 or cargo_rows > 5:
         raise WarehouseTwinLayoutEditError("每层货位数必须为 3 至 5")
     normalized["cargo_rows"] = cargo_rows
+    raw_level_cell_counts = normalized.get("level_cell_counts")
+    if raw_level_cell_counts is not None:
+        level_cell_counts = [int(value) for value in raw_level_cell_counts]
+        if len(level_cell_counts) != levels:
+            raise WarehouseTwinLayoutEditError("每层分格数量必须与货架层数一致")
+        if any(value < 0 or value > 50 for value in level_cell_counts):
+            raise WarehouseTwinLayoutEditError("每层分格数量必须为 0 至 50；0 表示尚未分格")
+        normalized["level_cell_counts"] = level_cell_counts
+        normalized["cell_plan_status"] = (
+            "configured" if any(level_cell_counts) else "pending_admin_configuration"
+        )
     bays = int(normalized.get("bays") or 1)
     if bays < 1 or bays > 50:
         raise WarehouseTwinLayoutEditError("结构格数必须为 1 至 50")

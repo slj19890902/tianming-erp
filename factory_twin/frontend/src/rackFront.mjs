@@ -1,12 +1,16 @@
 export function buildRackFrontSlots(rack) {
   const levels = Math.max(1, Math.round(Number(rack?.levels) || 1));
-  const columns = Math.min(5, Math.max(3, Math.round(Number(rack?.cargo_rows) || 3)));
+  const configuredCounts = Array.isArray(rack?.level_cell_counts) && rack.level_cell_counts.length === levels
+    ? rack.level_cell_counts.map((value) => Math.min(50, Math.max(0, Math.round(Number(value) || 0))))
+    : null;
+  const legacyColumns = Math.min(5, Math.max(3, Math.round(Number(rack?.cargo_rows) || 3)));
   const heights = Array.isArray(rack?.level_heights_mm) ? rack.level_heights_mm : [];
   const rackHeight = Math.max(1, Number(rack?.height_mm) || 1);
   const rackCode = String(rack?.rack_code || "RACK");
 
   return Array.from({ length: levels }, (_, displayIndex) => {
     const tier = levels - displayIndex;
+    const columns = configuredCounts ? configuredCounts[tier - 1] : legacyColumns;
     const isGround = tier === 1;
     const baseHeight = isGround ? 0 : Number(heights[tier - 2] ?? ((tier - 1) * rackHeight / levels));
     return {

@@ -433,7 +433,8 @@ def test_floor3_move_mode_is_explicit_and_stale_controls_cannot_move_inventory()
     assert 'id="floor3EditNotice"' in WAREHOUSE_HTML
     assert "async function toggleFloor3MoveMode()" in WAREHOUSE_HTML
     assert 'state.floor3.moveMode=!state.floor3.moveMode' in WAREHOUSE_HTML
-    assert 'if(!canOperate()||!state.floor3.moveMode){toast("请先进入移动栈板模式",true);return}' in WAREHOUSE_HTML
+    assert "function floor3CanMoveSelectedPallet(row)" in WAREHOUSE_HTML
+    assert "function floor3CanMovePallet(row){return Boolean(state.floor3.moveMode&&floor3CanMoveSelectedPallet(row))}" in WAREHOUSE_HTML
     assert "移动栈板模式" in WAREHOUSE_HTML
     assert "调整平面图布局" in WAREHOUSE_HTML
     assert "if(state.floor3.detail)renderFloor3Detail()" in WAREHOUSE_HTML
@@ -674,7 +675,7 @@ def test_floor3_move_targets_are_loaded_independently_from_browse_filters() -> N
     loader = WAREHOUSE_HTML.split("async function loadFloor3MoveLocations(){", 1)[1].split(
         "function renderFloor3Locations(){", 1
     )[0]
-    assert 'queryString({occupancy:"empty",page_size:"500"})' in loader
+    assert 'location-candidates?inventory_type=finished&empty_only=true&pallet_storage_only=true&include_hierarchy=false' in loader
     assert '$("floor3AreaFilter")' not in loader
     assert '$("floor3KeywordFilter")' not in loader
     assert '$("floor3OccupancyFilter")' not in loader

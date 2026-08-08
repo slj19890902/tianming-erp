@@ -36,7 +36,8 @@ export function RackFrontView({ rack, onClose }: Props) {
             <i className="rack-post left" /><i className="rack-post right" />
             {tiers.map((tier) => <div className={`rack-tier ${tier.isGround ? "ground" : "shelf"}`} key={tier.tier}>
               <div className="rack-tier-meta"><strong>{tier.title}</strong><small>{tier.isGround ? "地面 0 mm" : `横梁离地 ${tier.heightMm} mm`}</small></div>
-              <div className="rack-cargo-row" style={{ gridTemplateColumns: `repeat(${tier.slots.length}, minmax(0, 1fr))` }}>
+              <div className="rack-cargo-row" style={{ gridTemplateColumns: `repeat(${Math.max(1, tier.slots.length)}, minmax(0, 1fr))` }}>
+                {tier.slots.length === 0 && <div className="rack-tier-unpartitioned">本层尚未分格</div>}
                 {tier.slots.map((slot) => <button type="button" className={`rack-cargo ${slot.isGround ? "pallet-cargo" : "box-cargo"} ${selectedCargo?.id === slot.id ? "selected" : ""}`} key={slot.id} onClick={() => setSelectedCargo(slot)}>
                   <span className="cargo-mark">TM</span><b>{slot.label}</b><small>{slot.quantity}{slot.unit}</small>
                 </button>)}

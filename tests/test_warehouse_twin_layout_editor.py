@@ -7,6 +7,7 @@ import pytest
 
 from app.services.warehouse_twin_layout_editor import (
     WarehouseTwinLayoutEditConflictError,
+    WarehouseTwinLayoutEditError,
     _floor_revision,
     create_warehouse_twin_rack,
     delete_warehouse_twin_rack,
@@ -57,6 +58,7 @@ def _rack_values(**changes) -> dict:
         "levels": 3,
         "level_heights_mm": [700, 1450],
         "cargo_rows": 4,
+        "level_cell_counts": [0, 0, 0],
         "bays": 1,
         "access_side": "south",
         "min_aisle_width_mm": 1500,
@@ -81,6 +83,8 @@ def test_rack_crud_is_versioned_idempotent_and_deletion_is_recoverable(tmp_path:
     assert created.applied is True
     assert created.value["area_code"] == "F1"
     assert created.value["rack_code"] == "RACK-3F-F1-EDIT-001"
+    assert created.value["level_cell_counts"] == [0, 0, 0]
+    assert created.value["cell_plan_status"] == "pending_admin_configuration"
 
     retried = create_warehouse_twin_rack(
         "3F",
@@ -99,11 +103,18 @@ def test_rack_crud_is_versioned_idempotent_and_deletion_is_recoverable(tmp_path:
         expected_revision=created.floor_revision,
         expected_version=1,
         operation_key="update-rack-0001",
-        values=_rack_values(name="F1现场货架", width_mm=5600, rotation_deg=90),
+        values=_rack_values(
+            name="F1现场货架",
+            width_mm=5600,
+            rotation_deg=90,
+            level_cell_counts=[1, 4, 7],
+        ),
         path=path,
     )
     assert updated.value["width_mm"] == 5600
     assert updated.value["rotation_deg"] == 90
+    assert updated.value["level_cell_counts"] == [1, 4, 7]
+    assert updated.value["cell_plan_status"] == "configured"
     assert updated.value["version"] == 2
 
     with pytest.raises(WarehouseTwinLayoutEditConflictError):
@@ -131,6 +142,27 @@ def test_rack_crud_is_versioned_idempotent_and_deletion_is_recoverable(tmp_path:
     assert floor["racks"] == []
     assert floor["retired_racks"][0]["id"] == created.value["id"]
     assert len(floor["layout_edit_receipts"]) == 3
+
+
+@pytest.mark.parametrize(
+    "level_cell_counts",
+    ([0, 1], [-1, 1, 1], [1, 1, 51]),
+)
+def test_rack_level_cell_counts_must_match_levels_and_stay_within_range(
+    tmp_path: Path,
+    level_cell_counts: list[int],
+) -> None:
+    path = _asset(tmp_path / "layout.json")
+    revision = json.loads(path.read_text(encoding="utf-8"))["floors"]["3F"]["revision"]
+    with pytest.raises(WarehouseTwinLayoutEditError):
+        create_warehouse_twin_rack(
+            "3F",
+            expected_revision=revision,
+            operation_key="create-rack-invalid-cells",
+            area_feature_id="zone-f1",
+            values=_rack_values(level_cell_counts=level_cell_counts),
+            path=path,
+        )
 
 
 def test_zone_policy_keeps_business_usage_separate_from_storage_layout(tmp_path: Path) -> None:

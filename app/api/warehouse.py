@@ -12,7 +12,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 import qrcode
 from pydantic import BaseModel, Field, field_validator, model_validator
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -39,6 +39,7 @@ from app.models.audit import OperationLog
 from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryPickTask
 from app.models.mold_tool import MoldLocationMovement, MoldTool
+from app.models.printing_plate import PrintingPlate, PrintingPlateLocationMovement
 from app.models.product import Product
 from app.models.product_bom import SalesOrderItemBomComponent
 from app.models.order import Order, OrderItem
@@ -152,7 +153,17 @@ from app.services.mold_location import (
     MoldLocationPreview,
     confirm_mold_location_move,
     describe_mold_location,
+    one_floor_mold_location_options,
     preview_mold_location_move,
+)
+from app.services.printing_plate_location import (
+    PrintingPlateLocationError,
+    PrintingPlateLocationPreview,
+    PrintingPlateMoveResult,
+    confirm_printing_plate_move,
+    describe_printing_plate_location,
+    normalize_printing_plate_location,
+    preview_printing_plate_move,
 )
 
 
@@ -738,6 +749,76 @@ class MoldLocationConfirmPayload(MoldLocationPreviewPayload):
     def strip_mold_location_note(cls, value: str | None) -> str | None:
         text = (value or "").strip()
         return text or None
+
+
+class PrintingPlateCreatePayload(BaseModel):
+    customer_id: int = Field(gt=0)
+    plate_name: str = Field(min_length=1, max_length=200)
+    color_name: str = Field(min_length=1, max_length=100)
+    rack_location: str = Field(min_length=1, max_length=100)
+    remarks: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("plate_name", "color_name", "rack_location")
+    @classmethod
+    def strip_required_plate_fields(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("remarks")
+    @classmethod
+    def strip_optional_plate_fields(cls, value: str | None) -> str | None:
+        return (value or "").strip() or None
+
+
+class PrintingPlateUpdatePayload(BaseModel):
+    expected_version: int = Field(gt=0)
+    plate_name: str = Field(min_length=1, max_length=200)
+    color_name: str = Field(min_length=1, max_length=100)
+    rack_location: str = Field(min_length=1, max_length=100)
+    remarks: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("plate_name", "color_name", "rack_location")
+    @classmethod
+    def strip_required_plate_update_fields(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("remarks")
+    @classmethod
+    def strip_optional_plate_update_fields(cls, value: str | None) -> str | None:
+        return (value or "").strip() or None
+
+
+class PrintingPlateStatusPayload(BaseModel):
+    expected_version: int = Field(gt=0)
+    status: Literal["active", "inactive", "damaged"]
+
+
+class PrintingPlateLocationPreviewPayload(BaseModel):
+    plate_code: str = Field(min_length=1, max_length=30)
+    target_location: str = Field(min_length=1, max_length=100)
+
+    @field_validator("plate_code", "target_location")
+    @classmethod
+    def strip_printing_plate_location_fields(cls, value: str) -> str:
+        return value.strip()
+
+
+class PrintingPlateLocationConfirmPayload(PrintingPlateLocationPreviewPayload):
+    expected_version: int = Field(gt=0)
+    idempotency_key: str = Field(min_length=8, max_length=120)
+    source: Literal["manual_input", "scanner_paste", "url_parameter", "api"] = (
+        "manual_input"
+    )
+    note: str | None = Field(default=None, max_length=500)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def strip_printing_plate_idempotency_key(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("note")
+    @classmethod
+    def strip_printing_plate_note(cls, value: str | None) -> str | None:
+        return (value or "").strip() or None
 
 
 class FinishedManualInPayload(BaseModel):
@@ -4831,6 +4912,7 @@ class TwinRackLayoutFields(BaseModel):
     levels: int = Field(ge=1, le=20)
     level_heights_mm: list[float] = Field(max_length=19)
     cargo_rows: int = Field(ge=3, le=5)
+    level_cell_counts: list[int] | None = Field(default=None, max_length=20)
     bays: int = Field(default=1, ge=1, le=50)
     access_side: Literal["north", "south", "east", "west", "both"] = "south"
     min_aisle_width_mm: float = Field(default=1500, ge=0, le=20_000)
@@ -4905,7 +4987,8 @@ def _twin_layout_asset_log(
 
 def _rack_layout_values(payload: TwinRackLayoutFields) -> dict:
     return payload.model_dump(
-        exclude={"expected_revision", "expected_version", "operation_key", "area_feature_id"}
+        exclude={"expected_revision", "expected_version", "operation_key", "area_feature_id"},
+        exclude_none=True,
     )
 
 
@@ -5433,49 +5516,53 @@ def _twin_printing_plate_resources(
     keyword: str,
     visible_customer_ids: set[int] | None,
 ) -> list[dict]:
-    pattern = f"%{keyword}%"
-    query = (
-        select(Product, Customer)
-        .join(Customer, Customer.id == Product.customer_id)
-        .where(
-            Product.is_active.is_(True),
-            Product.deleted_at.is_(None),
-            Product.die_cut_path.is_not(None),
-            func.trim(Product.die_cut_path) != "",
-            or_(
-                Product.product_code.like(pattern),
-                Product.customer_material_code.like(pattern),
-                Product.product_name.like(pattern),
-                Product.die_cut_path.like(pattern),
-                Customer.name.like(pattern),
-            ),
-        )
+    response = list_printing_plates(
+        q=keyword,
+        customer_id=None,
+        include_inactive=False,
+        limit=100,
+        db=db,
+        user=user,
     )
-    if visible_customer_ids is not None:
-        query = query.where(Product.customer_id.in_(visible_customer_ids))
-    rows = db.execute(query.order_by(Customer.name, Product.product_code).limit(100)).all()
     resources: list[dict] = []
-    for product, customer in rows:
-        feature_codes = _twin_reference_feature_codes(
-            "printing_plate", product.die_cut_path
+    for plate in response.get("items") or []:
+        if (
+            visible_customer_ids is not None
+            and plate.get("customer_id") not in visible_customer_ids
+        ):
+            continue
+        guide = plate.get("location_guide") or describe_printing_plate_location(
+            str(plate.get("rack_location") or "")
         )
+        feature_codes = (
+            ["ZONE-1F-PLATE-002"]
+            if guide.get("kind") == "plate_rack"
+            else []
+        )
+        product_summary = "、".join(
+            str(item.get("product_code") or item.get("product_name") or "")
+            for item in (plate.get("products") or [])[:3]
+        )
+        subtitle_parts = [
+            str(plate.get("customer_name") or "").strip(),
+            str(plate.get("color_name") or "").strip(),
+            product_summary,
+        ]
         resources.append(
             {
-                "resource_id": f"printing-plate:{product.id}",
+                "resource_id": f"printing-plate:{plate.get('id')}",
                 "kind": "printing_plate",
-                "primary_code": product.product_code or product.customer_material_code,
-                "title": product.product_name,
-                "subtitle": customer.name,
-                "floor_code": "1F" if feature_codes else "TEXT",
-                "area_code": None,
+                "primary_code": plate.get("plate_code"),
+                "title": plate.get("plate_name") or "印刷挂板",
+                "subtitle": " · ".join(value for value in subtitle_parts if value),
+                "floor_code": guide.get("floor") or "TEXT",
+                "area_code": "ZONE-1F-PLATE-002" if feature_codes else None,
                 "location_id": None,
-                "location_code": product.die_cut_path,
+                "location_code": plate.get("rack_location"),
                 "pallet_id": None,
                 "feature_codes": feature_codes,
                 "map_status": "mapped" if feature_codes else "text_only",
-                "prompt": (
-                    f"请前往“{product.die_cut_path}”查找印刷版/模板，拿取前核对存货编码。"
-                ),
+                "prompt": guide.get("prompt"),
             }
         )
     return resources
@@ -5991,6 +6078,383 @@ def _mold_customer_scope(user: User, db: Session) -> set[int] | None:
     return customer_scope_ids(user, db)
 
 
+def _printing_plate_product_filter(plate_id: int):
+    return or_(
+        Product.printing_plate_1_id == plate_id,
+        Product.printing_plate_2_id == plate_id,
+        Product.printing_plate_3_id == plate_id,
+    )
+
+
+def _printing_plate_products(
+    db: Session,
+    plate_id: int,
+    allowed_customer_ids: set[int] | None,
+) -> list[Product]:
+    query = select(Product).where(
+        _printing_plate_product_filter(plate_id),
+        Product.deleted_at.is_(None),
+        Product.is_active.is_(True),
+    )
+    if allowed_customer_ids is not None:
+        query = query.where(Product.customer_id.in_(allowed_customer_ids))
+    return list(db.scalars(query.order_by(Product.product_code, Product.id)).all())
+
+
+def _printing_plate_dict(
+    db: Session,
+    row: PrintingPlate,
+    allowed_customer_ids: set[int] | None = None,
+) -> dict:
+    products = _printing_plate_products(db, row.id, allowed_customer_ids)
+    return {
+        "id": row.id,
+        "plate_code": row.plate_code,
+        "customer_id": row.customer_id,
+        "customer_name": row.customer.name if row.customer else None,
+        "plate_name": row.plate_name,
+        "color_name": row.color_name,
+        "rack_location": row.rack_location,
+        "location_guide": describe_printing_plate_location(row.rack_location),
+        "status": row.status,
+        "version": row.version,
+        "location_version": row.location_version,
+        "last_location_confirmed_at": (
+            utc_naive_to_api(row.last_location_confirmed_at)
+            if row.last_location_confirmed_at
+            else None
+        ),
+        "last_location_confirmed_by": row.last_location_confirmed_by,
+        "remarks": row.remarks,
+        "product_count": len(products),
+        "products": [
+            {
+                "id": product.id,
+                "customer_id": product.customer_id,
+                "product_code": product.product_code,
+                "product_name": product.product_name,
+            }
+            for product in products
+        ],
+        "created_at": utc_naive_to_api(row.created_at),
+        "updated_at": utc_naive_to_api(row.updated_at) if row.updated_at else None,
+    }
+
+
+def _printing_plate_or_404(db: Session, plate_id: int) -> PrintingPlate:
+    row = db.scalar(
+        select(PrintingPlate)
+        .options(selectinload(PrintingPlate.customer))
+        .where(PrintingPlate.id == plate_id)
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="挂板不存在")
+    return row
+
+
+def _next_printing_plate_code(db: Session) -> str:
+    next_number = int(db.scalar(select(func.coalesce(func.max(PrintingPlate.id), 0))) or 0) + 1
+    return f"PL{next_number:06d}"
+
+
+@router.get("/printing-plates")
+def list_printing_plates(
+    q: str | None = None,
+    customer_id: int | None = Query(default=None, gt=0),
+    include_inactive: bool = False,
+    limit: int = Query(default=200, ge=1, le=500),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    allowed_customer_ids = _mold_customer_scope(user, db)
+    if allowed_customer_ids == set():
+        return {"items": []}
+    query = select(PrintingPlate).options(selectinload(PrintingPlate.customer))
+    if allowed_customer_ids is not None:
+        query = query.where(PrintingPlate.customer_id.in_(allowed_customer_ids))
+    if customer_id is not None:
+        require_customer_access(customer_id, current_user=user, db=db)
+        query = query.where(PrintingPlate.customer_id == customer_id)
+    if not include_inactive:
+        query = query.where(PrintingPlate.status == "active")
+    keyword = (q or "").strip()
+    if keyword:
+        pattern = f"%{keyword}%"
+        linked_product_match = (
+            select(Product.id)
+            .where(
+                or_(
+                    Product.printing_plate_1_id == PrintingPlate.id,
+                    Product.printing_plate_2_id == PrintingPlate.id,
+                    Product.printing_plate_3_id == PrintingPlate.id,
+                ),
+                or_(
+                    Product.product_code.like(pattern),
+                    Product.customer_material_code.like(pattern),
+                    Product.product_name.like(pattern),
+                ),
+            )
+            .exists()
+        )
+        query = query.where(
+            or_(
+                PrintingPlate.plate_code.like(pattern),
+                PrintingPlate.plate_name.like(pattern),
+                PrintingPlate.color_name.like(pattern),
+                PrintingPlate.rack_location.like(pattern),
+                PrintingPlate.remarks.like(pattern),
+                PrintingPlate.customer.has(Customer.name.like(pattern)),
+                linked_product_match,
+            )
+        )
+    rows = db.scalars(
+        query.order_by(
+            PrintingPlate.rack_location,
+            PrintingPlate.plate_code,
+        ).limit(limit)
+    ).all()
+    return {
+        "items": [
+            _printing_plate_dict(db, row, allowed_customer_ids) for row in rows
+        ]
+    }
+
+
+@router.post("/printing-plates", status_code=201)
+def create_printing_plate(
+    payload: PrintingPlateCreatePayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    customer = db.get(Customer, payload.customer_id)
+    if customer is None:
+        raise HTTPException(status_code=400, detail="客户不存在")
+    location = normalize_printing_plate_location(payload.rack_location)
+    occupied = db.scalar(
+        select(PrintingPlate.id).where(
+            PrintingPlate.status.in_(("active", "damaged")),
+            PrintingPlate.rack_location == location,
+        )
+    )
+    if occupied is not None:
+        raise HTTPException(status_code=409, detail="该挂板格位已被占用")
+    row = PrintingPlate(
+        plate_code=_next_printing_plate_code(db),
+        customer_id=payload.customer_id,
+        plate_name=payload.plate_name,
+        color_name=payload.color_name,
+        rack_location=location,
+        remarks=payload.remarks,
+        created_by=user.id,
+        updated_by=user.id,
+    )
+    db.add(row)
+    try:
+        db.commit()
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="挂板编号或格位冲突，请刷新后重试",
+        ) from error
+    db.refresh(row)
+    return _printing_plate_dict(db, row)
+
+
+@router.put("/printing-plates/{plate_id}")
+def update_printing_plate(
+    plate_id: int,
+    payload: PrintingPlateUpdatePayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    row = _printing_plate_or_404(db, plate_id)
+    normalized_location = normalize_printing_plate_location(payload.rack_location)
+    if normalized_location != row.rack_location:
+        raise HTTPException(
+            status_code=409,
+            detail="挂板位置不能在档案编辑中直接修改，请使用挂板编号 + 位置码移动确认",
+        )
+    claimed = db.execute(
+        update(PrintingPlate)
+        .where(
+            PrintingPlate.id == plate_id,
+            PrintingPlate.version == payload.expected_version,
+        )
+        .values(
+            plate_name=payload.plate_name,
+            color_name=payload.color_name,
+            remarks=payload.remarks,
+            version=payload.expected_version + 1,
+            updated_by=user.id,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if claimed.rowcount != 1:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="挂板资料已变化，请刷新后重试")
+    db.commit()
+    return _printing_plate_dict(db, _printing_plate_or_404(db, plate_id))
+
+
+@router.put("/printing-plates/{plate_id}/status")
+def update_printing_plate_status(
+    plate_id: int,
+    payload: PrintingPlateStatusPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    row = _printing_plate_or_404(db, plate_id)
+    if payload.status != "active" and db.scalar(
+        select(Product.id).where(_printing_plate_product_filter(plate_id)).limit(1)
+    ) is not None:
+        raise HTTPException(status_code=409, detail="该挂板仍绑定常用箱，请先解除绑定")
+    if payload.status == "active":
+        occupant = db.scalar(
+            select(PrintingPlate.id).where(
+                PrintingPlate.id != plate_id,
+                PrintingPlate.status.in_(("active", "damaged")),
+                PrintingPlate.rack_location == row.rack_location,
+            )
+        )
+        if occupant is not None:
+            raise HTTPException(status_code=409, detail="当前格位已被其他挂板占用")
+    claimed = db.execute(
+        update(PrintingPlate)
+        .where(
+            PrintingPlate.id == plate_id,
+            PrintingPlate.version == payload.expected_version,
+        )
+        .values(
+            status=payload.status,
+            version=payload.expected_version + 1,
+            updated_by=user.id,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if claimed.rowcount != 1:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="挂板资料已变化，请刷新后重试")
+    db.commit()
+    return _printing_plate_dict(db, _printing_plate_or_404(db, plate_id))
+
+
+def _printing_plate_preview_dict(
+    db: Session, preview: PrintingPlateLocationPreview
+) -> dict:
+    return {
+        "plate": _printing_plate_dict(db, preview.plate),
+        "target_location": preview.target_location,
+        "target_guide": preview.target_guide,
+        "expected_version": preview.plate.location_version,
+        "same_location": preview.same_location,
+        "can_confirm": preview.occupant is None,
+        "occupancy_conflict": (
+            {
+                "printing_plate_id": preview.occupant.id,
+                "plate_code": preview.occupant.plate_code,
+            }
+            if preview.occupant is not None
+            else None
+        ),
+    }
+
+
+@router.post("/printing-plates/location-movement/preview")
+def preview_printing_plate_location_movement(
+    payload: PrintingPlateLocationPreviewPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    try:
+        preview = preview_printing_plate_move(
+            db,
+            plate_code=payload.plate_code,
+            target_location=payload.target_location,
+        )
+        require_customer_access(preview.plate.customer_id, current_user=user, db=db)
+        return _printing_plate_preview_dict(db, preview)
+    except PrintingPlateLocationError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+
+
+@router.post("/printing-plates/location-movement/confirm")
+def confirm_printing_plate_location_movement(
+    payload: PrintingPlateLocationConfirmPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    try:
+        preview = preview_printing_plate_move(
+            db,
+            plate_code=payload.plate_code,
+            target_location=payload.target_location,
+        )
+        require_customer_access(preview.plate.customer_id, current_user=user, db=db)
+        result = confirm_printing_plate_move(
+            db,
+            plate_code=payload.plate_code,
+            target_location=payload.target_location,
+            expected_version=payload.expected_version,
+            idempotency_key=payload.idempotency_key,
+            actor_id=user.id,
+            source=payload.source,
+            note=payload.note,
+        )
+        if result.movement is not None and not result.replayed:
+            db.add(
+                OperationLog(
+                    user_id=user.id,
+                    username=user.username,
+                    role=user.role,
+                    action="UPDATE",
+                    resource=f"warehouse/printing-plates/{result.plate.id}/location",
+                    entity_type="printing_plate",
+                    entity_id=result.plate.id,
+                    description="双码确认挂板位置移动",
+                    details=json.dumps(
+                        {
+                            "movement_id": result.movement.id,
+                            "plate_code": result.movement.plate_code_snapshot,
+                            "from_location": result.movement.from_location,
+                            "to_location": result.movement.to_location,
+                            "expected_version": result.movement.expected_version,
+                            "resulting_version": result.movement.resulting_version,
+                            "idempotency_key": result.movement.idempotency_key,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    ip_address=request.client.host if request.client else None,
+                    user_agent=request.headers.get("user-agent"),
+                )
+            )
+        db.commit()
+        return {
+            "message": "挂板已在目标位置，无需移动" if result.no_change else "挂板位置移动已确认",
+            "plate": _printing_plate_dict(db, result.plate),
+            "movement": (
+                {
+                    "id": result.movement.id,
+                    "from_location": result.movement.from_location,
+                    "to_location": result.movement.to_location,
+                    "expected_version": result.movement.expected_version,
+                    "resulting_version": result.movement.resulting_version,
+                }
+                if result.movement is not None
+                else None
+            ),
+            "idempotent_replay": result.replayed,
+            "no_change": result.no_change,
+        }
+    except PrintingPlateLocationError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="挂板位置或幂等键冲突，请重新预览") from error
+
+
 def _visible_mold_products(
     row: MoldTool,
     allowed_customer_ids: set[int] | None,
@@ -6211,6 +6675,18 @@ def _mold_location_move_response(
         ),
         "idempotent_replay": result.replayed,
         "no_change": result.no_change,
+    }
+
+
+@router.get("/molds/location-options")
+def get_mold_location_options(
+    _user: User = Depends(can_read),
+) -> dict:
+    return {
+        "floor_code": "1F",
+        "position_order": "left_to_right",
+        "position_numbers_are_dynamic": True,
+        "racks": one_floor_mold_location_options(),
     }
 
 

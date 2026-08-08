@@ -187,8 +187,11 @@ def test_phase2c13_uses_2d_layout_mode_for_rack_and_area_spatial_modeling() -> N
     assert 'onMoveRack={moveRackDraft}' in SOURCE
     assert 'rackEditingEnabled={locationEditMode}' in SOURCE
     assert 'className="twin-rack-layout-editor"' in SOURCE
-    assert "每层货位数" in SOURCE
-    assert "每层净高" in SOURCE
+    assert "逐层设置" in SOURCE
+    assert "层格数" in SOURCE
+    assert "本层尚未分格" in SOURCE
+    assert "level_cell_counts" in SOURCE
+    assert "不生成正式库位" in SOURCE
     assert "添加货架" in SOURCE
     assert "删除货架" in SOURCE
     assert "区域设置" in SOURCE

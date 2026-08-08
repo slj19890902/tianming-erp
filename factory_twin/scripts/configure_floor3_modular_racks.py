@@ -31,6 +31,9 @@ def _rack(
     *,
     width_mm: float = 2800,
     depth_mm: float = 1100,
+    height_mm: float = 2200,
+    level_heights_mm: list[float] | None = None,
+    cargo_rows: int = 4,
     access_side: str = "both",
 ) -> dict[str, Any]:
     return {
@@ -41,10 +44,10 @@ def _rack(
         "z_mm": 0,
         "width_mm": width_mm,
         "depth_mm": depth_mm,
-        "height_mm": 2200,
+        "height_mm": height_mm,
         "levels": 3,
-        "level_heights_mm": [750, 1500],
-        "cargo_rows": 4,
+        "level_heights_mm": level_heights_mm or [750, 1500],
+        "cargo_rows": cargo_rows,
         "bays": 1,
         "access_side": access_side,
         "min_aisle_width_mm": 1500,
@@ -56,11 +59,31 @@ def _rack(
 
 def rack_specs() -> list[dict[str, Any]]:
     specs = [
-        _rack("RACK-3F-D2-SPECIAL-001", "D2南端3000×1500特殊货架", 17973, -18190, width_mm=3000, depth_mm=1500, access_side="north"),
-        _rack("RACK-3F-D2-WEST-SOUTH-001", "D2西排南段标准货架", 17303, -14590, access_side="west"),
-        _rack("RACK-3F-D2-WEST-NORTH-001", "D2西排北段标准货架", 17303, -11790, access_side="west"),
-        _rack("RACK-3F-D2-EAST-SOUTH-001", "D2东排南段标准货架", 18403, -14590, access_side="east"),
-        _rack("RACK-3F-D2-EAST-NORTH-001", "D2东排北段标准货架", 18403, -11790, access_side="east"),
+        _rack(
+            "RACK-3F-D2-SPECIAL-001", "D2方形三层货架（现场实测）", 17845, -17485,
+            width_mm=2000, depth_mm=2000, height_mm=2600,
+            level_heights_mm=[867, 1733], access_side="north",
+        ),
+        _rack(
+            "RACK-3F-D2-WEST-SOUTH-001", "D2西排南侧三层货架（现场实测）", 17239, -14463,
+            width_mm=1800, depth_mm=1100, height_mm=2600,
+            level_heights_mm=[867, 1733], access_side="west",
+        ),
+        _rack(
+            "RACK-3F-D2-WEST-NORTH-001", "D2西排北侧三层货架（现场实测）", 17247, -10561,
+            width_mm=1800, depth_mm=1100, height_mm=2600,
+            level_heights_mm=[867, 1733], access_side="west",
+        ),
+        _rack(
+            "RACK-3F-D2-EAST-SOUTH-001", "D2东排南侧三层货架（现场实测）", 18403, -14423,
+            width_mm=1800, depth_mm=1100, height_mm=2600,
+            level_heights_mm=[867, 1733], access_side="east",
+        ),
+        _rack(
+            "RACK-3F-D2-EAST-NORTH-001", "D2东排北侧三层货架（现场实测）", 18459, -10585,
+            width_mm=1800, depth_mm=1100, height_mm=2600,
+            level_heights_mm=[867, 1733], access_side="east",
+        ),
     ]
     f_rows = {
         "F1": [(-1590, "WEST", "west"), (-490, "EAST", "east")],

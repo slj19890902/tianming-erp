@@ -22,6 +22,7 @@ from app.models.delivery import Delivery, DeliveryItem
 from app.models.incoming_receipt import IncomingReceiptItem
 from app.models.order import Order, OrderItem
 from app.models.product import Product
+from app.models.printing_plate import PrintingPlate
 from app.models.product_bom import (
     BomComponentDirectDeliveryAllocation,
     SalesOrderItemBomComponent,
@@ -91,6 +92,101 @@ class ProductionWorkflowError(ValueError):
     def __init__(self, message: str, status_code: int = 400) -> None:
         super().__init__(message)
         self.status_code = status_code
+
+
+def _new_task_printing_snapshot(db: Session, product: Product | None) -> dict:
+    """Freeze common-box printing setup once when a production task is created."""
+
+    if product is None or product.printing_plate_mode != "plate":
+        return {
+            "printing_plate_mode_snapshot": "no_plate",
+            "print_content_snapshot": product.print_content if product is not None else None,
+            "printing_plate_codes_snapshot": "[]",
+            "printing_plate_details_snapshot": "[]",
+            "plate_alignment_value_mm_snapshot": None,
+            "plate_mount_value_mm_snapshot": None,
+            "machine_set_length_mm_snapshot": None,
+            "machine_set_width_mm_snapshot": None,
+            "machine_set_height_mm_snapshot": None,
+        }
+    plate_ids = [
+        value
+        for value in (
+            product.printing_plate_1_id,
+            product.printing_plate_2_id,
+            product.printing_plate_3_id,
+        )
+        if value is not None
+    ]
+    plates = {
+        row.id: row
+        for row in db.scalars(
+            select(PrintingPlate).where(PrintingPlate.id.in_(plate_ids))
+        ).all()
+    }
+    codes = [plates[plate_id].plate_code for plate_id in plate_ids if plate_id in plates]
+    details = [
+        {
+            "plate_code": plates[plate_id].plate_code,
+            "color_name": plates[plate_id].color_name,
+        }
+        for plate_id in plate_ids
+        if plate_id in plates
+    ]
+    return {
+        "printing_plate_mode_snapshot": "plate",
+        "print_content_snapshot": product.print_content,
+        "printing_plate_codes_snapshot": json.dumps(codes, ensure_ascii=False),
+        "printing_plate_details_snapshot": json.dumps(details, ensure_ascii=False),
+        "plate_alignment_value_mm_snapshot": product.plate_alignment_value_mm,
+        "plate_mount_value_mm_snapshot": product.plate_mount_value_mm,
+        "machine_set_length_mm_snapshot": product.machine_set_length_mm,
+        "machine_set_width_mm_snapshot": product.machine_set_width_mm,
+        "machine_set_height_mm_snapshot": product.machine_set_height_mm,
+    }
+
+
+def _task_printing_snapshot(task: ProductionTask) -> dict:
+    try:
+        codes = json.loads(task.printing_plate_codes_snapshot or "[]")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        codes = []
+    if not isinstance(codes, list):
+        codes = []
+    try:
+        details = json.loads(task.printing_plate_details_snapshot or "[]")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        details = []
+    if not isinstance(details, list):
+        details = []
+    safe_details = [
+        {
+            "plate_code": str(value.get("plate_code") or "").strip(),
+            "color_name": str(value.get("color_name") or "").strip(),
+        }
+        for value in details
+        if isinstance(value, dict) and str(value.get("plate_code") or "").strip()
+    ]
+    return {
+        "print_content": task.print_content_snapshot,
+        "printing_plate_mode": task.printing_plate_mode_snapshot or "no_plate",
+        "printing_plate_codes": [str(value) for value in codes if str(value).strip()],
+        "printing_plates": safe_details,
+        "plate_alignment_value_mm": task.plate_alignment_value_mm_snapshot,
+        "plate_mount_value_mm": task.plate_mount_value_mm_snapshot,
+        "machine_set_length_mm": task.machine_set_length_mm_snapshot,
+        "machine_set_width_mm": task.machine_set_width_mm_snapshot,
+        "machine_set_height_mm": task.machine_set_height_mm_snapshot,
+        "printing_instruction": (
+            "无需印刷"
+            if (task.print_content_snapshot or "").strip() in {"", "无印刷", "无", "否", "不印刷"}
+            else (
+                "按挂板编号安装并核对机器设定值"
+                if task.printing_plate_mode_snapshot == "plate"
+                else "不挂板：按图纸核对印刷内容，注意印刷尺寸偏差"
+            )
+        ),
+    }
 
 
 @dataclass(frozen=True)
@@ -460,6 +556,7 @@ def _refresh_composite_production_tasks(
         if task is None:
             if not create_if_missing:
                 continue
+            component_product = db.get(Product, snapshot.component_product_id)
             task = ProductionTask(
                 order_item_id=item.id,
                 sales_order_item_bom_component_id=demand.snapshot_id,
@@ -473,6 +570,7 @@ def _refresh_composite_production_tasks(
                 readiness_basis=None,
                 ready_at=None,
                 version=1,
+                **_new_task_printing_snapshot(db, component_product),
             )
             db.add(task)
             db.flush()
@@ -568,6 +666,7 @@ def refresh_production_task(
     if task is None:
         if not create_if_missing:
             return None
+        product = db.get(Product, item.product_id)
         task = ProductionTask(
             order_item_id=item.id,
             status=WAITING_MATERIAL,
@@ -580,6 +679,7 @@ def refresh_production_task(
             readiness_basis=None,
             ready_at=None,
             version=1,
+            **_new_task_printing_snapshot(db, product),
         )
         db.add(task)
         db.flush()
@@ -2183,6 +2283,7 @@ def _task_product_snapshot(
     if snapshot_id is None:
         return {
             **_item_product_snapshot(item, parent_product),
+            **_task_printing_snapshot(task),
             "is_component_task": False,
             "bom_component_snapshot_id": None,
             "production_quantity_unit": "sets",
@@ -2233,6 +2334,7 @@ def _task_product_snapshot(
         ),
         "mold_name": snapshot.snapshot_mold_tool_name if snapshot is not None else None,
         "mold_location": snapshot.snapshot_mold_tool_code if snapshot is not None else None,
+        **_task_printing_snapshot(task),
         "is_component_task": True,
         "bom_component_snapshot_id": snapshot_id,
         "component_quantity_per_set": (
@@ -2443,6 +2545,7 @@ def _ordinary_pending_task_fast_payload(
         "customer_id": order.customer_id,
         "customer_name": customer.name,
         **_item_product_snapshot(item, product),
+        **_task_printing_snapshot(task),
         "is_component_task": False,
         "bom_component_snapshot_id": None,
         "production_quantity_unit": "sets",

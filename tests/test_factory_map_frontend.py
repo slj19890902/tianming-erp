@@ -7,7 +7,7 @@ WAREHOUSE_HTML = (
 
 
 def test_warehouse_map_has_floor_switch_and_keeps_floor3_entry() -> None:
-    assert 'data-location-view="floor3" type="button">仓库地图' in WAREHOUSE_HTML
+    assert 'data-location-view="floor3" type="button">数字孪生库位图' in WAREHOUSE_HTML
     assert 'data-factory-floor="1F"' in WAREHOUSE_HTML
     assert 'data-factory-floor="3F"' in WAREHOUSE_HTML
     assert 'id="factoryFloor1Content"' in WAREHOUSE_HTML
@@ -31,7 +31,7 @@ def test_floor1_map_uses_read_only_api_and_real_dxf_layers() -> None:
 
 
 def test_floor1_map_renders_an_employee_friendly_professional_floor_plan() -> None:
-    assert "一楼工厂平面图 · 员工易读版" in WAREHOUSE_HTML
+    assert "一楼工厂平面图" in WAREHOUSE_HTML
     assert "function factoryMapOrthogonalPoints(primitive,data)" in WAREHOUSE_HTML
     assert "function factoryMapOpeningSvg(data,primitive)" in WAREHOUSE_HTML
     assert "function factoryMapStaffLabelSvg(data,item)" in WAREHOUSE_HTML

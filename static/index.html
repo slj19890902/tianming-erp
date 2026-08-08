@@ -1119,6 +1119,25 @@
       .product-print-row {
         grid-template-columns: minmax(310px, 1.25fr) minmax(180px, .7fr) minmax(250px, 1fr) minmax(330px, 1.35fr);
       }
+      .product-printing-plate-config {
+        grid-column: 1 / -1;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 8px 10px;
+        padding: 10px;
+        border: 1px solid #fed7aa;
+        border-radius: 9px;
+        background: #fff7ed;
+      }
+      .production-printing-setup {
+        color: #7c2d12;
+        font-size: 11px;
+        line-height: 1.3;
+        min-width:0;
+        overflow:hidden;
+        text-overflow:ellipsis;
+        white-space:nowrap;
+      }
       .product-final-row {
         grid-template-columns: minmax(150px, .3fr) minmax(220px, .6fr) minmax(260px, .8fr);
         border-bottom: 0;
@@ -2902,7 +2921,7 @@
 	                  <tbody><tr v-for="row in productionPending" :key="row.id" :class="{'requisition-selected': productionSelected[row.id]}">
 	                    <td v-if="canProductionExecute"><input v-if="productionUsesBatchConfirmation(row)" type="checkbox" :checked="!!productionSelected[row.id]" :disabled="productionBusy || !canConfirmProductionRow(row)" @change="onProductionSelectionChange(row,$event.target.checked)" /><span v-else class="muted">{{ row._direct_submitting ? '处理中' : '-' }}</span></td>
 	                    <td style="white-space:normal"><strong>{{ row.item_order_number || row.order_number || '-' }}</strong><br><span class="muted">{{ row.customer_name || '-' }}</span></td>
-	                    <td style="white-space:normal"><div class="production-product-summary" :title="productionProductTitle(row)"><div class="production-product-line"><span v-if="row.is_component_task" class="status blue">组件</span><strong>{{ row.product_code || '-' }}</strong><span>｜{{ row.product_name || '-' }}</span></div><div class="production-product-meta">{{ row.specification || '-' }}<span v-if="productionBoardPreparationSummary(row)">｜{{ productionBoardPreparationSummary(row) }}</span></div></div></td>
+	                    <td style="white-space:normal"><div class="production-product-summary" :title="productionProductTitle(row)"><div class="production-product-line"><span v-if="row.is_component_task" class="status blue">组件</span><strong>{{ row.product_code || '-' }}</strong><span>｜{{ row.product_name || '-' }}</span></div><div :class="productionPrintingSetup(row)?'production-printing-setup':'production-product-meta'">{{ productionPrintingSetup(row) || (row.specification || '-') }}<span v-if="!productionPrintingSetup(row) && productionBoardPreparationSummary(row)">｜{{ productionBoardPreparationSummary(row) }}</span></div></div></td>
 	                    <td style="white-space:normal"><div class="production-quantity-summary"><div>订单 <strong>{{ row.order_quantity || 0 }}</strong>{{ productionOutputUnit(row) }}｜已到纸板 <strong>{{ row.material_received_quantity || 0 }}</strong>张</div><div>本次做 <strong>{{ row.planned_output_quantity || row.planned_quantity || 0 }}</strong>{{ productionOutputUnit(row) }}<span v-if="productionCuttingModeLabel(row)" class="muted">｜{{ productionCuttingModeLabel(row) }}</span></div></div></td>
 	                    <td style="white-space:normal"><div class="production-input-line"><label class="muted">用纸板</label><input class="input" type="number" min="1" v-model.number="row.actual_input_quantity" @input="syncProductionQuantities(row)" /><span class="production-input-unit">张</span></div><div class="production-input-line"><label class="muted">做成品</label><input class="input" type="number" min="1" v-model.number="row.actual_output_quantity" @input="syncProductionQuantities(row)" /><span class="production-input-unit">{{ productionOutputUnit(row) }}｜损耗 {{ productionDefectiveQuantity(row) }}</span></div></td>
 	                    <td style="white-space:normal"><div>用于订单 <strong>{{ productionOrderCoverage(row) }}</strong></div><div :class="productionSurplusQuantity(row)>0?'status orange':'muted'" style="margin-top:4px">多出 {{ productionSurplusQuantity(row) }}</div></td>
@@ -2930,7 +2949,7 @@
                   <thead><tr><th class="production-history-time">完工时间</th><th style="width:18%">订单 / 客户</th><th style="width:24%">存货编码 / 产品</th><th style="width:13%">数量 / 操作人</th><th style="width:16%">去向 / 库位</th><th class="production-history-actions">操作</th></tr></thead>
                   <tbody><tr v-for="row in productionHistory" :key="row.id">
                     <td class="production-history-time">{{ formatDateTime(row.completed_at) }}</td><td><strong>{{ row.item_order_number || row.order_number || '-' }}</strong><br><span class="muted">{{ row.customer_name || '-' }}</span></td>
-                    <td style="white-space:normal"><span v-if="row.is_component_task" class="status blue">复合组件</span><strong>{{ row.product_code || '-' }}</strong><br>{{ row.product_name || '-' }}<br><span class="muted">{{ row.specification || '-' }}</span></td><td><strong>{{ row.quantity || 0 }}{{ row.is_component_task ? '片' : '' }}</strong><br><span class="muted">{{ row.completed_by_name || '-' }}</span></td>
+                    <td style="white-space:normal"><div class="production-product-summary" :title="productionProductTitle(row)"><div class="production-product-line"><span v-if="row.is_component_task" class="status blue">组件</span><strong>{{ row.product_code || '-' }}</strong><span>｜{{ row.product_name || '-' }}</span></div><div :class="productionPrintingSetup(row)?'production-printing-setup':'production-product-meta'">{{ productionPrintingSetup(row) || (row.specification || '-') }}</div></div></td><td><strong>{{ row.quantity || 0 }}{{ row.is_component_task ? '片' : '' }}</strong><br><span class="muted">{{ row.completed_by_name || '-' }}</span></td>
                     <td style="white-space:normal"><span v-if="row.status==='reversed'" class="status orange">已撤销</span><span v-else :class="['status',productionCompletionIsStock(row)?'green':'blue']">{{ productionDestinationLabel(row) }}</span><br><template v-if="row.warehouse_location_code"><strong>{{ row.warehouse_location_code }}</strong></template><template v-else-if="row.status!=='reversed'"><span class="muted">已进入待送货</span></template><div>投入 {{ row.material_input_quantity }} / 合格 {{ row.actual_output_quantity }} / 损耗 {{ row.defective_quantity }}</div><div v-if="row.surplus_finished_quantity" class="status orange">客户余货 {{ row.surplus_finished_quantity }}</div><div v-if="row.status==='reversed'" class="muted">{{ row.reversal_reason || '管理员撤销生产确认' }}</div></td>
                     <td class="production-history-actions"><div class="toolbar-group"><template v-if="row.status!=='reversed' && row.can_transfer_to_stock && canWarehouseExecute"><div class="production-location-picker"><select class="select" v-model.number="row.transfer_floor_number" :disabled="productionBusy" @change="onProductionFloorChange(row,'transfer_floor_number','transfer_area_code','transfer_location_id')"><option :value="null">先选楼层</option><option v-for="floor in productionLocationFloors" :key="floor.number" :value="floor.number">{{ floor.label }}（{{ floor.count }} 个空位）</option></select><select class="select" v-model="row.transfer_area_code" :disabled="productionBusy || !row.transfer_floor_number" @change="onProductionAreaChange(row,'transfer_floor_number','transfer_area_code','transfer_location_id')"><option value="">{{ row.transfer_floor_number ? '再选区域' : '请先选择楼层' }}</option><option v-for="area in productionAreasForFloor(row.transfer_floor_number)" :key="area.code" :value="area.code">{{ area.code }}（{{ area.count }} 个空位）</option></select><select class="select" v-model.number="row.transfer_location_id" :disabled="productionBusy || !row.transfer_area_code"><option :value="null">{{ row.transfer_area_code ? '再选库位' : '请先选择区域' }}</option><option v-for="location in productionLocationsForArea(row.transfer_floor_number,row.transfer_area_code)" :key="location.id" :value="location.id">{{ location.location_code }}｜{{ location.is_temporary ? '临时' : '固定' }}</option></select></div><button class="btn small success" :disabled="productionBusy || !row.transfer_location_id" @click="transferProductionCompletionToStock(row)">转入成品库存</button></template><button v-if="user?.role==='admin' && row.can_supplement" class="btn small success" :disabled="productionBusy" @click="supplementProductionCompletion(row)">补录余量 {{ row.available_material_input_quantity }}</button><button v-if="row.status!=='reversed'" class="btn small" :disabled="productionBusy" @click="productionCompletionIsStock(row)?openProductionInventory(row):go('deliveries')">{{ productionCompletionIsStock(row)?'定位库存':'去送货' }}</button><button v-if="user?.role==='admin' && row.can_revert" class="btn small danger" :disabled="productionBusy" @click="revertProductionCompletion(row)">撤销生产确认</button></div></td>
                   </tr></tbody>
@@ -4232,13 +4251,32 @@
                   </div>
                 </div>
                 <div class="field"><label>印刷情况</label>
-                  <select class="select" v-model="productForm.print_content">
+                  <select class="select" v-model="productForm.print_content" @change="onProductPrintingChanged">
                     <option value="无印刷">无印刷</option>
                     <option value="单色印刷">单色印刷</option>
                     <option value="双色印刷">双色印刷</option>
-                    <option value="多色印刷">多色印刷</option>
-                    <option v-if="productForm.print_content && !['无印刷','单色印刷','双色印刷','多色印刷'].includes(productForm.print_content)" :value="productForm.print_content">原记录：{{ productForm.print_content }}</option>
+                    <option value="三色印刷">三色印刷</option>
+                    <option v-if="productForm.print_content && !['无印刷','单色印刷','双色印刷','三色印刷'].includes(productForm.print_content)" :value="productForm.print_content">原记录：{{ productForm.print_content }}</option>
                   </select>
+                </div>
+                <div v-if="productHasPrinting(productForm)" class="field"><label>印刷方式</label>
+                  <select class="select" v-model="productForm.printing_plate_mode" @change="onProductPrintingChanged">
+                    <option value="no_plate">不挂板（默认）</option>
+                    <option value="plate">挂板</option>
+                  </select>
+                  <div v-if="productForm.printing_plate_mode==='no_plate'" class="status orange" style="display:block;margin-top:4px">按图纸核对印刷内容，可能有印刷尺寸偏差</div>
+                </div>
+                <div v-if="productHasPrinting(productForm) && productForm.printing_plate_mode==='plate'" class="product-printing-plate-config">
+                  <div class="field" v-for="index in productPrintingPlateCount(productForm)" :key="`printing-plate-${index}`">
+                    <label>第{{ index }}色挂板</label>
+                    <search-select v-model="productForm[`printing_plate_${index}_id`]" :options="printingPlateSelectOptions()" label-key="_label" value-key="id" :placeholder="`选择第${index}色挂板`" :allow-empty="false"></search-select>
+                  </div>
+                  <div class="field"><label>对版值(mm)</label><input class="input" type="number" min="0" step="0.01" v-model="productForm.plate_alignment_value_mm" /></div>
+                  <div class="field"><label>挂版值(mm)</label><input class="input" type="number" min="0" step="0.01" v-model="productForm.plate_mount_value_mm" /></div>
+                  <div class="field"><label>机器设定箱长(mm)</label><input class="input" type="number" min="0" step="0.01" v-model="productForm.machine_set_length_mm" /></div>
+                  <div class="field"><label>机器设定箱宽(mm)</label><input class="input" type="number" min="0" step="0.01" v-model="productForm.machine_set_width_mm" /></div>
+                  <div class="field"><label>机器设定箱高(mm)</label><input class="input" type="number" min="0" step="0.01" v-model="productForm.machine_set_height_mm" /></div>
+                  <div v-if="productPrintingPlateError" class="status orange" style="grid-column:1/-1">{{ productPrintingPlateError }}</div>
                 </div>
                 <div class="field"><label>报料备注</label><input class="input" v-model.trim="productForm.report_notes" placeholder="供应商直发、特殊压线等" /></div>
                 <div class="product-drawing-independent-section">
@@ -6177,7 +6215,7 @@
             <button v-if="canSaveModal && modal?.type==='order'" class="btn primary" :disabled="loading || orderCreateSaveState.saving || orderCreateSaveState.committed || orderCreateSaveState.outcomeUncertain" @click="saveModal()">{{ orderCreateSaveState.saving ? '正在保存订单…' : (orderCreateSaveState.committed ? '订单已保存' : '保存') }}</button>
             <button v-if="canSaveModal && modal?.type==='orderEdit'" class="btn primary" :disabled="loading || orderGroupSaveState.saving || orderGroupSaveState.committed || orderGroupSaveState.outcomeUncertain" @click="saveModal()">{{ orderGroupSaveState.saving ? '正在保存订单组…' : (orderGroupSaveState.committed ? '订单组已保存' : '保存') }}</button>
             <button v-if="canSaveModal && modal?.type==='orderItem'" class="btn primary" :disabled="loading || orderItemSaveState.saving || orderItemSaveState.committed || orderItemSaveState.outcomeUncertain || finishedReservationActionBlocked() || !!orderItemCreaseMismatch" @click="saveModal()">{{ orderItemSaveState.saving ? '正在保存明细…' : (orderItemSaveState.committed ? '订单明细已保存' : '保存') }}</button>
-            <button v-if="canSaveModal && !['quotationConvert','order','orderEdit','orderItem'].includes(modal?.type)" class="btn primary" :disabled="loading || masterSavePending || (['supplierRequisitionDraft','requisition'].includes(modal?.type) && requisitionInventoryActionBlocked()) || (modal?.type==='supplierRequisitionDraft' && (supplierRequisitionSaveState.saving || supplierRequisitionSaveState.committed)) || (modal?.type==='requisition' && (compositeRequisitionSaveState.saving || compositeRequisitionSaveState.committed)) || (modal?.type==='stockReplenishment' && (stockReplenishmentSaveState.saving || stockReplenishmentSaveState.committed)) || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError)) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && (deliverySaveState.saving || deliverySaveState.outcomeUncertain || !!deliveryValidationError || !!deliveryOperationState.action)) || (modal?.type==='receipt' && !!receiptOperationState.action) || (modal?.type==='requisitionHold' && requisitionHoldSaveBlocked)" @click="modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()">{{ ['customer','product','material','supplier'].includes(modal?.type) && masterSavePending ? '保存中…' : (modal?.type==='delivery' ? (deliverySaveState.saving ? '正在保存草稿…' : deliveryPrimaryLabel()) : (modal?.type==='receipt' ? (receiptOperationState.action==='save' ? '保存中…' : '保存回单') : (modal?.type==='supplierRequisitionDraft' ? (supplierRequisitionSaveState.saving ? '正在生成采购单…' : (supplierRequisitionSaveState.committed ? '采购单已生成' : '确认生成正式采购单')) : (modal?.type==='requisition' ? (compositeRequisitionSaveState.saving ? '正在生成组合报料…' : (compositeRequisitionSaveState.committed ? '组合报料已生成' : '确认生成正式采购单')) : (modal?.type==='requisitionHold' ? '确认暂缓' : (modal?.type==='stockReplenishment' ? (stockReplenishmentSaveState.saving ? '正在保存补库草稿…' : (stockReplenishmentSaveState.committed ? '补库草稿已保存' : (stockReplenishmentForm.source_type==='stock_warning' ? '保存报料草稿' : '保存补库报料草稿'))) : '保存')))))) }}</button>
+            <button v-if="canSaveModal && !['quotationConvert','order','orderEdit','orderItem'].includes(modal?.type)" class="btn primary" :disabled="loading || masterSavePending || (['supplierRequisitionDraft','requisition'].includes(modal?.type) && requisitionInventoryActionBlocked()) || (modal?.type==='supplierRequisitionDraft' && (supplierRequisitionSaveState.saving || supplierRequisitionSaveState.committed)) || (modal?.type==='requisition' && (compositeRequisitionSaveState.saving || compositeRequisitionSaveState.committed)) || (modal?.type==='stockReplenishment' && (stockReplenishmentSaveState.saving || stockReplenishmentSaveState.committed)) || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError || !!productPrintingPlateError)) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && (deliverySaveState.saving || deliverySaveState.outcomeUncertain || !!deliveryValidationError || !!deliveryOperationState.action)) || (modal?.type==='receipt' && !!receiptOperationState.action) || (modal?.type==='requisitionHold' && requisitionHoldSaveBlocked)" @click="modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()">{{ ['customer','product','material','supplier'].includes(modal?.type) && masterSavePending ? '保存中…' : (modal?.type==='delivery' ? (deliverySaveState.saving ? '正在保存草稿…' : deliveryPrimaryLabel()) : (modal?.type==='receipt' ? (receiptOperationState.action==='save' ? '保存中…' : '保存回单') : (modal?.type==='supplierRequisitionDraft' ? (supplierRequisitionSaveState.saving ? '正在生成采购单…' : (supplierRequisitionSaveState.committed ? '采购单已生成' : '确认生成正式采购单')) : (modal?.type==='requisition' ? (compositeRequisitionSaveState.saving ? '正在生成组合报料…' : (compositeRequisitionSaveState.committed ? '组合报料已生成' : '确认生成正式采购单')) : (modal?.type==='requisitionHold' ? '确认暂缓' : (modal?.type==='stockReplenishment' ? (stockReplenishmentSaveState.saving ? '正在保存补库草稿…' : (stockReplenishmentSaveState.committed ? '补库草稿已保存' : (stockReplenishmentForm.source_type==='stock_warning' ? '保存报料草稿' : '保存补库报料草稿'))) : '保存')))))) }}</button>
           </div>
         </div>
       </div>
@@ -6443,6 +6481,9 @@
         product_name: "", material_id: null, legacy_material_text: null,
         length_mm: null, width_mm: null, height_mm: null, box_category: "normal",
         box_style: "", print_content: "无印刷", printing_colors: "",
+        printing_plate_mode: "no_plate", printing_plate_1_id: null, printing_plate_2_id: null, printing_plate_3_id: null,
+        printing_plates: [], plate_alignment_value_mm: null, plate_mount_value_mm: null,
+        machine_set_length_mm: null, machine_set_width_mm: null, machine_set_height_mm: null,
         production_process: "", _production_processes: [], _production_process_legacy: "", unit: "只", sale_unit_price: "0",
         sale_unit_price_no_tax: null, cost_unit_price: null, board_price: null,
         suggested_price: null, die_cut_path: null, mold_tool_id: null, mold_tool: null, drawings: [],
@@ -6626,7 +6667,7 @@
             // v0.19.2-B 楞型加价规则
             fluteRules: [], showFluteRuleModal: false, fluteRuleLoading: false, fluteRuleError: "", fluteRuleAction:{action:"",ruleId:null},
             fluteRuleForm: { id: null, supplier_name: "", layer_count: 3, flute_type: "A", price_delta: "0", effective_date: "", remark: "", is_active: true },
-            deliveries: [], pendingDeliveryItems: [], deliveryCustomerCandidates: [], deliveryPickTasks: [], deliveryPickers: [], expandedDeliveryRows: {}, deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false, request_token:0 }, deliveryPendingState:{loading:false,error:"",request_token:0}, deliveryCandidateLoading:false, deliveryCandidateError:"", deliveryCandidateRequestSequence:0, deliveryBatchRequestSequence:0, unorderedFinishedRequestSequence:0, deliveryOperationState:{action:"",deliveryId:null,deliveryNumber:""}, deliverySaveState:{saving:false,committed:false,outcomeUncertain:false,result:null}, receiptOperationState:{action:"",deliveryId:null,receiptId:null,deliveryNumber:""}, statements: [], invoices: [], moldTools: [],
+            deliveries: [], pendingDeliveryItems: [], deliveryCustomerCandidates: [], deliveryPickTasks: [], deliveryPickers: [], expandedDeliveryRows: {}, deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false, request_token:0 }, deliveryPendingState:{loading:false,error:"",request_token:0}, deliveryCandidateLoading:false, deliveryCandidateError:"", deliveryCandidateRequestSequence:0, deliveryBatchRequestSequence:0, unorderedFinishedRequestSequence:0, deliveryOperationState:{action:"",deliveryId:null,deliveryNumber:""}, deliverySaveState:{saving:false,committed:false,outcomeUncertain:false,result:null}, receiptOperationState:{action:"",deliveryId:null,receiptId:null,deliveryNumber:""}, statements: [], invoices: [], moldTools: [], printingPlates: [],
             invoiceTasks: [], invoiceTaskFilters:{customer_id:"",statement_month:"",status:""}, invoiceTaskState:{loading:false,error:""},
             invoiceTaskDetail:null, invoiceTaskResult:{task_id:null,status:"issued",invoice_number:"",invoice_date:"",failure_reason:"",expected_version:null},
             invoiceTaskOperationState:{detailLoading:false,detailError:"",detailTaskId:null,detailTaskNumber:"",confirmingTaskId:null,resultSaving:false},
@@ -7333,6 +7374,17 @@
             if (!this.productUsesMold(this.productForm)) return "";
             return this.productForm.mold_tool_id ? "" : "生产工艺包含模切，必须选择已登记的生产模具及货架位置";
           },
+          productPrintingPlateError() {
+            if (!this.modal || this.modal.type !== "product") return "";
+            if (!this.productHasPrinting(this.productForm) || this.productForm.printing_plate_mode !== "plate") return "";
+            const count = this.productPrintingPlateCount(this.productForm);
+            if (!count) return "挂板印刷只支持单色、双色或三色";
+            const ids = [1,2,3].map(index=>Number(this.productForm[`printing_plate_${index}_id`]||0));
+            const selected = ids.slice(0,count);
+            if (selected.some(value=>!value)) return `${this.productForm.print_content}必须选择 ${count} 块挂板`;
+            if (new Set(selected).size !== selected.length) return "同一块挂板不能重复绑定";
+            return "";
+          },
           stockReplenishmentCreaseBlocked() {
             if (!this.modal || this.modal.type !== "stockReplenishment") return false;
             return (this.stockReplenishmentForm.items || []).some(line => !!this.stockCreaseMismatch(line));
@@ -7835,7 +7887,11 @@
                   ["base_crease_middle_mm","底中压线(mm)"], ["base_crease_right_mm","底右压线(mm)"],
                   ["base_report_notes","底料备注"], ["_material_supplier","材质供应商"], ["layer_count","层数"],
                   ["flute_type","楞型"], ["material_id","材质"], ["_production_processes","生产工艺"],
-                  ["print_content","印刷内容"], ["report_notes","报料备注"], ["sale_unit_price","默认单价"],
+                  ["print_content","印刷内容"], ["printing_plate_mode","印刷方式"],
+                  ["printing_plate_1_id","第1色挂板"], ["printing_plate_2_id","第2色挂板"], ["printing_plate_3_id","第3色挂板"],
+                  ["plate_alignment_value_mm","对版值"], ["plate_mount_value_mm","挂版值"],
+                  ["machine_set_length_mm","机器设定箱长"], ["machine_set_width_mm","机器设定箱宽"], ["machine_set_height_mm","机器设定箱高"],
+                  ["report_notes","报料备注"], ["sale_unit_price","默认单价"],
                   ["mold_tool_id","生产模具"], ["remark","备注"]
                 ]
               },
@@ -7874,7 +7930,9 @@
               "customer_number","payment_term_days","statement_cycle_start_day","customer_id","length_mm","width_mm",
               "height_mm","pieces_per_box","flap_mm","report_length_mm","report_width_mm","crease_left_mm",
               "crease_middle_mm","crease_right_mm","base_report_length_mm","base_report_width_mm","base_crease_left_mm",
-              "base_crease_middle_mm","base_crease_right_mm","layer_count","material_id","sale_unit_price","mold_tool_id","quote_price"
+              "base_crease_middle_mm","base_crease_right_mm","layer_count","material_id","sale_unit_price","mold_tool_id","quote_price",
+              "printing_plate_1_id","printing_plate_2_id","printing_plate_3_id","plate_alignment_value_mm","plate_mount_value_mm",
+              "machine_set_length_mm","machine_set_width_mm","machine_set_height_mm"
             ]);
             if (numericFields.has(field) && Number.isFinite(Number(value))) return Number(value);
             return String(value).trim();
@@ -7892,6 +7950,11 @@
               const row = this.moldTools.find(item => Number(item.id) === Number(value));
               return row ? (row.tool_code || row.name || `模具#${value}`) : `模具#${value}`;
             }
+            if (["printing_plate_1_id","printing_plate_2_id","printing_plate_3_id"].includes(field)) {
+              const row = this.printingPlates.find(item => Number(item.id) === Number(value));
+              return row ? `${row.plate_code}｜${row.color_name}` : `挂板#${value}`;
+            }
+            if (field === "printing_plate_mode") return value === "plate" ? "挂板" : "不挂板";
             if (field === "status") return value === "active" ? "启用" : value === "inactive" ? "停用" : String(value);
             if (field === "is_active" || typeof value === "boolean") return value ? "启用" : "停用";
             return String(value);
@@ -8030,6 +8093,7 @@
             const productCreaseError = this.validateProductCreaseAndReport(this.productForm);
             if (productCreaseError) throw new Error(productCreaseError);
             if (this.productMoldError) throw new Error(this.productMoldError);
+            if (this.productPrintingPlateError) throw new Error(this.productPrintingPlateError);
             const payload = { ...this.productForm };
             delete payload.id;
             payload.production_process = this.serializeProductionProcesses(
@@ -8049,6 +8113,7 @@
             delete payload._recommendation_message;
             delete payload.drawings;
             delete payload.mold_tool;
+            delete payload.printing_plates;
             delete payload.manual_modified;
             delete payload.manual_modified_at;
             if (!payload.customer_material_code) payload.customer_material_code = payload.product_code;
@@ -8065,6 +8130,18 @@
                 payload[key] = this.normalizeMmInteger(payload[key]);
               }
             });
+            [
+              "plate_alignment_value_mm", "plate_mount_value_mm",
+              "machine_set_length_mm", "machine_set_width_mm", "machine_set_height_mm",
+            ].forEach(key => {
+              if (payload[key] === "") payload[key] = null;
+              else if (payload[key] !== null && payload[key] !== undefined) payload[key] = Number(payload[key]);
+            });
+            if (!this.productHasPrinting(payload) || payload.printing_plate_mode !== "plate") {
+              payload.printing_plate_mode="no_plate";
+              [1,2,3].forEach(index=>payload[`printing_plate_${index}_id`]=null);
+              ["plate_alignment_value_mm","plate_mount_value_mm","machine_set_length_mm","machine_set_width_mm","machine_set_height_mm"].forEach(key=>payload[key]=null);
+            }
             if (payload.sale_unit_price === "") payload.sale_unit_price = null;
             payload.print_content = payload.print_content || "无印刷";
             return this.attachMasterUpdateMetadata("product",payload,options);
@@ -10671,10 +10748,29 @@
               this.finishLatestRequest(requestKey, controller);
             }
           },
+          async loadPrintingPlates() {
+            if (this.isWorkshop) return true;
+            const requestKey = "product:printing-plates";
+            const controller = this.beginLatestRequest(requestKey);
+            try {
+              const { data } = await axios.get("/api/warehouse/printing-plates", {
+                params:{ limit:500 }, signal:controller.signal,
+              });
+              if (latestRequestControllers.get(requestKey) !== controller) return false;
+              this.printingPlates = data.items || [];
+              return true;
+            } catch (error) {
+              if (this.isCancelledRequest(error)) return false;
+              throw error;
+            } finally {
+              this.finishLatestRequest(requestKey, controller);
+            }
+          },
           async ensureProductEditorOptions({force=false} = {}) {
             const needsMaterials = force || !this.allMaterials.length;
             const needsMolds = !this.isWorkshop && (force || !this.moldTools.length);
-            if (!needsMaterials && !needsMolds) return true;
+            const needsPrintingPlates = !this.isWorkshop && (force || !this.printingPlates.length);
+            if (!needsMaterials && !needsMolds && !needsPrintingPlates) return true;
             const requestKey = "product:editor-options";
             const controller = this.beginLatestRequest(requestKey);
             this.productEditorOptionsLoading = true;
@@ -10683,16 +10779,17 @@
               const tasks = [];
               if (needsMaterials) tasks.push(this.loadMaterials());
               if (needsMolds) tasks.push(this.loadMoldTools());
+              if (needsPrintingPlates) tasks.push(this.loadPrintingPlates());
               const results = await Promise.all(tasks);
               if (latestRequestControllers.get(requestKey) !== controller) return false;
               if (results.some(result => result !== true)) {
-                this.productEditorOptionsError = "材质与模具选择数据读取失败，请重试";
+                this.productEditorOptionsError = "材质、模具与挂板选择数据读取失败，请重试";
                 return false;
               }
               return true;
             } catch (error) {
               if (!this.isCancelledRequest(error) && latestRequestControllers.get(requestKey) === controller) {
-                this.productEditorOptionsError = "材质与模具选择数据读取失败，请重试";
+                this.productEditorOptionsError = "材质、模具与挂板选择数据读取失败，请重试";
               }
               return false;
             } finally {
@@ -10706,6 +10803,13 @@
             return (this.moldTools || []).filter(row=>row.is_active).map(row=>({
               ...row,
               _label:`${row.mold_code}｜${row.mold_name}｜${row.rack_location}`,
+            }));
+          },
+          printingPlateSelectOptions() {
+            const customerId = Number(this.productForm?.customer_id || 0);
+            return (this.printingPlates || []).filter(row=>row.status==="active" && Number(row.customer_id)===customerId).map(row=>({
+              ...row,
+              _label:`${row.plate_code}｜${row.color_name}｜${row.plate_name}｜${row.rack_location}`,
             }));
           },
           // 分页拉取材质：后端限制 page_size<=200，因此用 page 翻页拉全部，
@@ -12767,11 +12871,25 @@
               : "";
             return `有备料 ${sheets} 张${locationText}，可做 ${products} 个`;
           },
+          productionPrintingSetup(row) {
+            const content = String(row?.print_content || "").trim();
+            if (!content || ["无印刷","无","否","不印刷"].includes(content)) return "";
+            if (row?.printing_plate_mode !== "plate") return `${content}｜不挂板·看图纸`;
+            const details = Array.isArray(row?.printing_plates) ? row.printing_plates : [];
+            const codes = details.length
+              ? details.map(item=>`${item.color_name || "颜色未填"} ${item.plate_code}`).join("/")
+              : (Array.isArray(row?.printing_plate_codes) ? row.printing_plate_codes.join("/") : "");
+            const machine = [row?.machine_set_length_mm,row?.machine_set_width_mm,row?.machine_set_height_mm]
+              .map(value=>value ?? "-").join("×");
+            return `${content}｜${codes || "挂板未登记"}｜对${row?.plate_alignment_value_mm ?? "-"} 挂${row?.plate_mount_value_mm ?? "-"}｜机${machine}`;
+          },
           productionProductTitle(row) {
             const parts = [
               `${row?.product_code || "-"}｜${row?.product_name || "-"}`,
               row?.specification || "-",
             ];
+            const printingSetup = this.productionPrintingSetup(row);
+            if (printingSetup) parts.push(printingSetup);
             const sources = Array.isArray(row?.customer_board_preparation_sources)
               ? row.customer_board_preparation_sources
               : [];
@@ -16199,6 +16317,31 @@
               : this.parseProductionProcesses(form.production_process);
             return values.includes("模切");
           },
+          productHasPrinting(form) {
+            return !!form && !["", "无印刷", "无", "否", "不印刷"].includes(String(form.print_content || "").trim());
+          },
+          productPrintingPlateCount(form) {
+            const value = String(form?.print_content || "").trim();
+            if (value === "单色印刷") return 1;
+            if (value === "双色印刷") return 2;
+            if (["三色印刷", "多色印刷"].includes(value)) return 3;
+            return 0;
+          },
+          onProductPrintingChanged() {
+            const form = this.productForm;
+            if (!this.productHasPrinting(form) || form.printing_plate_mode !== "plate") {
+              form.printing_plate_mode = "no_plate";
+              [1,2,3].forEach(index=>form[`printing_plate_${index}_id`]=null);
+              form.plate_alignment_value_mm=null;
+              form.plate_mount_value_mm=null;
+              form.machine_set_length_mm=null;
+              form.machine_set_width_mm=null;
+              form.machine_set_height_mm=null;
+              return;
+            }
+            const count = this.productPrintingPlateCount(form);
+            for (let index=count+1; index<=3; index+=1) form[`printing_plate_${index}_id`]=null;
+          },
           onProductProcessesChanged() {
             if (!this.productUsesMold(this.productForm)) {
               this.productForm.mold_tool_id=null;
@@ -16209,6 +16352,7 @@
             const form = { ...blankProduct(), ...JSON.parse(JSON.stringify(detail || {})) };
             form.box_style = this.normalizeBoxTypeDisplay(form.box_style || "");
             form.print_content = form.print_content || "无印刷";
+            form.printing_plate_mode = form.printing_plate_mode === "plate" ? "plate" : "no_plate";
             const boxRule = this.productBoxTypeRule(form.box_style);
             if (boxRule) {
               form.splice_mode = this.usesProductSplice(form.box_style)
@@ -16275,6 +16419,12 @@
               material_id: f.material_id, box_category: f.box_category, box_style: f.box_style,
               length_mm: f.length_mm, width_mm: f.width_mm, height_mm: f.height_mm,
               print_content: f.print_content, production_processes: f._production_processes,
+              printing_plate_mode: f.printing_plate_mode,
+              printing_plate_1_id: f.printing_plate_1_id, printing_plate_2_id: f.printing_plate_2_id,
+              printing_plate_3_id: f.printing_plate_3_id,
+              plate_alignment_value_mm: f.plate_alignment_value_mm, plate_mount_value_mm: f.plate_mount_value_mm,
+              machine_set_length_mm: f.machine_set_length_mm, machine_set_width_mm: f.machine_set_width_mm,
+              machine_set_height_mm: f.machine_set_height_mm,
               sale_unit_price: f.sale_unit_price, die_cut_path: f.die_cut_path, mold_tool_id: f.mold_tool_id, remark: f.remark,
               layer_count: f.layer_count, flute_type: f.flute_type,
               splice_mode: f.splice_mode, pieces_per_box: f.pieces_per_box,

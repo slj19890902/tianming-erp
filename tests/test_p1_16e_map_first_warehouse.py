@@ -53,6 +53,62 @@ def test_map_first_change_does_not_remove_authoritative_ledgers_or_actions() -> 
     assert "inventory_lots" not in WAREHOUSE.lower()
 
 
+def test_selected_map_location_can_move_whole_pallet_without_drag_mode() -> None:
+    opener = WAREHOUSE.split("async function openFloor3Location(locationId){", 1)[1].split(
+        "function floor3FormatItem", 1
+    )[0]
+    detail = WAREHOUSE.split("function renderFloor3Detail(){", 1)[1].split(
+        "function closeFloor3Detail", 1
+    )[0]
+    mover = WAREHOUSE.split("async function moveFloor3Pallet(palletId){", 1)[1].split(
+        "async function clearFloor3Pallet", 1
+    )[0]
+    assert "floor3CanMoveSelectedPallet" in opener
+    assert "移动货物（整栈板）" in detail
+    assert "确认移动整栈板" in detail
+    assert "移动备注" not in detail
+    assert "state.floor3.moveMode" not in mover
+    assert "floor3CanMoveSelectedPallet" in mover
+    assert '"地图详情移动整栈板"' in mover
+    assert "/api/warehouse/pallets/${palletId}/move" in WAREHOUSE
+
+
+def test_measured_twin_location_detail_exposes_the_same_controlled_move() -> None:
+    detail = WAREHOUSE.split("function twinOperationalGoodsHtml(row){", 1)[1].split(
+        "async function loadTwinOperationalLayout", 1
+    )[0]
+    mover = WAREHOUSE.split(
+        "async function moveTwinOperationalPallet(palletId){", 1
+    )[1].split("async function clearFloor3Pallet", 1)[0]
+    selector = WAREHOUSE.split(
+        "async function selectTwinOperationalLocation(locationId){", 1
+    )[1].split("async function focusTwinOperationalLocation", 1)[0]
+    assert "移动货物（整栈板）" in detail
+    assert "确认移动整栈板" in detail
+    assert "floor3QuantityHtml(item)" in detail
+    assert "loadFloor3MoveLocations()" in selector
+    assert "state.floor3.moveMode" not in mover
+    assert '"数字孪生地图移动整栈板"' in mover
+    assert "selectTwinOperationalArea(floor3AreaCode(targetRow))" in mover
+    assert "await selectTwinOperationalLocation(Number(locationId))" in WAREHOUSE
+
+
+def test_map_lot_card_shows_authoritative_quantity_breakdown() -> None:
+    block = WAREHOUSE.split("function floor3QuantityHtml(item){", 1)[1].split(
+        "function floor3CurrentPallet", 1
+    )[0]
+    assert "item?.official_inventory" in block
+    assert "总数" in block
+    assert "可用" in block
+    assert "订单已占" in block
+
+
+def test_drag_mode_stays_separate_from_direct_detail_action() -> None:
+    assert "function floor3CanMoveSelectedPallet(row)" in WAREHOUSE
+    assert "function floor3CanMovePallet(row){return Boolean(state.floor3.moveMode&&floor3CanMoveSelectedPallet(row))}" in WAREHOUSE
+    assert 'state.floor3.moveMode=!state.floor3.moveMode' in WAREHOUSE
+
+
 def test_warehouse_inline_script_remains_valid(tmp_path: Path) -> None:
     node = shutil.which("node")
     assert node, "Node.js is required for frontend syntax validation"

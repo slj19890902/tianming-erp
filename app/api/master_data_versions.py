@@ -19,6 +19,7 @@ from app.models.customer import Customer
 from app.models.master_data_object_version import MasterDataObjectVersion
 from app.models.material import Material
 from app.models.product import Product
+from app.models.printing_plate import PrintingPlate
 from app.models.user import User
 from app.services.master_data_versioning import (
     apply_versioned_update,
@@ -173,6 +174,69 @@ def _integrity_error_detail(error: IntegrityError) -> str:
     return "恢复失败：目标版本与当前主数据约束冲突"
 
 
+def _validate_product_printing_plate_restore(
+    db: Session,
+    *,
+    product: Product,
+    updates: dict,
+) -> None:
+    """Prevent history restore from bypassing current plate-binding rules."""
+
+    values = {
+        field: updates.get(field, getattr(product, field))
+        for field in (
+            "customer_id",
+            "print_content",
+            "printing_plate_mode",
+            "printing_plate_1_id",
+            "printing_plate_2_id",
+            "printing_plate_3_id",
+        )
+    }
+    ids = [
+        values["printing_plate_1_id"],
+        values["printing_plate_2_id"],
+        values["printing_plate_3_id"],
+    ]
+    mode = values["printing_plate_mode"] or "no_plate"
+    if mode == "no_plate":
+        if any(value is not None for value in ids):
+            raise ValueError("历史版本中的不挂板配置仍包含挂板绑定，禁止恢复")
+        return
+    if mode != "plate":
+        raise ValueError("历史版本中的印刷挂板方式无效，禁止恢复")
+    required = {
+        "单色印刷": 1,
+        "双色印刷": 2,
+        "三色印刷": 3,
+        "多色印刷": 3,
+    }.get(str(values["print_content"] or "").strip())
+    if required is None:
+        raise ValueError("历史版本挂板只支持单色、双色或三色印刷")
+    selected = [value for value in ids if value is not None]
+    if (
+        len(selected) != required
+        or any(ids[index] is None for index in range(required))
+        or any(ids[index] is not None for index in range(required, 3))
+        or len(set(selected)) != len(selected)
+    ):
+        raise ValueError(f"历史版本的{values['print_content']}挂板数量或顺序无效")
+    plates = {
+        row.id: row
+        for row in db.scalars(
+            select(PrintingPlate).where(PrintingPlate.id.in_(selected))
+        ).all()
+    }
+    for plate_id in selected:
+        plate = plates.get(plate_id)
+        if plate is None:
+            raise ValueError("历史版本引用的挂板已不存在，禁止恢复")
+        if plate.status != "active":
+            raise ValueError(f"历史版本引用的挂板 {plate.plate_code} 不是启用状态")
+        if plate.customer_id != values["customer_id"]:
+            raise ValueError(f"历史版本引用的挂板 {plate.plate_code} 不属于当前客户")
+
+
 def _visible_revision_payload(
     payload: dict,
     *,
@@ -325,6 +389,12 @@ def restore_preview(
         version=version,
     )
     try:
+        if object_type == "product":
+            _validate_product_printing_plate_restore(
+                db,
+                product=entity,
+                updates=snapshot_updates(object_type, revision),
+            )
         return preview_versioned_restore(
             db,
             object_type=object_type,
@@ -363,6 +433,12 @@ def restore_version(
     )
     try:
         updates = snapshot_updates(object_type, target)
+        if object_type == "product":
+            _validate_product_printing_plate_restore(
+                db,
+                product=entity,
+                updates=updates,
+            )
         restored = apply_versioned_update(
             db,
             object_type=object_type,

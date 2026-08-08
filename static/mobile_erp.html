@@ -589,6 +589,16 @@
         if (task.mold_name || task.mold_location) {
           card.append(node("p", "fact-line", `模具：${task.mold_name || "未命名"}｜位置 ${task.mold_location || "未登记"}`));
         }
+        if (task.printing_plate_mode === "plate") {
+          const machine = [task.machine_set_length_mm, task.machine_set_width_mm, task.machine_set_height_mm]
+            .map(value => value ?? "-").join("×");
+          const plates = Array.isArray(task.printing_plates) && task.printing_plates.length
+            ? task.printing_plates.map(item => `${item.color_name || "颜色未填"} ${item.plate_code}`).join(" / ")
+            : (task.printing_plate_codes || []).join(" / ");
+          card.append(node("p", "fact-line", `挂板：${plates || "未登记"}｜对版 ${task.plate_alignment_value_mm ?? "-"}｜挂版 ${task.plate_mount_value_mm ?? "-"}｜机设 ${machine}mm`));
+        } else if (task.printing_instruction) {
+          card.append(node("p", "fact-line", task.printing_instruction));
+        }
         if (task.drawing_path) {
           const drawing = node("button", "drawing-btn", "查看图纸");
           drawing.type = "button";

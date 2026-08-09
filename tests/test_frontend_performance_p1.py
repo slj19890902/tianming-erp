@@ -134,7 +134,11 @@ def test_performance_middleware_adds_timing_cache_and_slow_api_log(caplog) -> No
 
     assert api_response.status_code == 200
     assert api_response.headers["server-timing"].startswith("app;dur=")
+    assert ", db;dur=" in api_response.headers["server-timing"]
     assert "slow_api method=GET path=/api/demo status=200" in caplog.text
+    assert "query_count=0" in caplog.text
+    assert "db_duration_ms=0.0" in caplog.text
+    assert "response_bytes=" in caplog.text
     assert (
         vendor_response.headers["cache-control"]
         == "public, max-age=31536000, immutable"

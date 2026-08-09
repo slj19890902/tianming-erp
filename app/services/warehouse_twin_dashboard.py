@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import date, timedelta
 from decimal import Decimal
+from math import ceil
 from typing import Iterable
 
 from sqlalchemy import select
@@ -10,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.time_contract import (
     beijing_date_bounds_utc_naive,
+    beijing_naive_to_api,
     utc_naive_to_api,
     utc_naive_to_beijing_date,
     utc_now_naive,
@@ -33,6 +35,7 @@ AGE_BUCKETS = (
 )
 EXTERNAL_INBOUND_MOVEMENTS = {"manual_in", "return_in"}
 EXTERNAL_OUTBOUND_MOVEMENTS = {"consume", "return_reconsume", "scrap"}
+CAPACITY_THRESHOLDS = {"attention": 0.80, "warning": 0.90, "critical": 0.95}
 
 
 def _number(value: Decimal | int | float | None) -> float:
@@ -172,6 +175,121 @@ def _location_position(row: WarehouseLocation) -> tuple[str, dict | None]:
 
 def _floor_key(value: int | None) -> str:
     return f"{value}F" if value else "UNLOCATED"
+
+
+def warehouse_capacity_summary(
+    floor: WarehouseFloor | None,
+    *,
+    occupied_pallets: int,
+    visible: bool,
+) -> dict:
+    """Return the single capacity projection used by ledgers and dashboards.
+
+    A planning reference may drive an explicitly labelled planning alert while
+    field review is incomplete.  It never becomes the confirmed safe capacity.
+    """
+
+    if not visible:
+        return {
+            "visible": False,
+            "confirmed": False,
+            "basis": "hidden",
+            "safe_pallet_capacity": None,
+            "confirmed_area_capacity": None,
+            "planned_pallet_capacity": None,
+            "reference_pallet_capacity": None,
+            "occupied_pallets": None,
+            "empty_pallet_slots": None,
+            "utilization_percent": None,
+            "coverage_percent": None,
+            "reviewed_area_count": None,
+            "review_required_area_count": None,
+            "unreviewed_area_count": None,
+            "last_reviewed_at": None,
+            "alert_level": "hidden",
+            "alert_label": "按权限隐藏",
+            "status": "hidden",
+            "label": "按权限隐藏",
+            "thresholds": None,
+        }
+
+    areas = list(floor.areas) if floor is not None else []
+    review_required = [area for area in areas if area.construction_status == "enabled"]
+    reviewed = [
+        area
+        for area in review_required
+        if area.capacity_review_status in {"confirmed", "excluded"}
+        and area.capacity_reviewed_at is not None
+    ]
+    included = [
+        area
+        for area in reviewed
+        if area.capacity_review_status == "confirmed"
+        and area.capacity_eligible
+        and area.confirmed_pallet_capacity is not None
+    ]
+    confirmed_area_capacity = sum(int(area.confirmed_pallet_capacity or 0) for area in included)
+    coverage_percent = (
+        round(len(reviewed) * 100 / len(review_required), 1) if review_required else 0.0
+    )
+    confirmed = bool(review_required) and len(reviewed) == len(review_required) and confirmed_area_capacity > 0
+    safe_capacity = confirmed_area_capacity if confirmed else None
+    planned_capacity = int(
+        (floor.planning_reference_pallet_capacity if floor is not None else 0)
+        or sum(int(area.planned_pallet_capacity or 0) for area in areas)
+    )
+    reference_capacity = safe_capacity or planned_capacity or None
+    utilization = (
+        round(occupied_pallets * 100 / reference_capacity, 1)
+        if reference_capacity
+        else None
+    )
+    if utilization is None:
+        alert_level, alert_label = "unknown", "容量资料待补"
+    elif utilization > 100:
+        alert_level, alert_label = "over_capacity", "已超过容量"
+    elif utilization >= 95:
+        alert_level, alert_label = "critical", "红色临界"
+    elif utilization >= 90:
+        alert_level, alert_label = "warning", "橙色紧张"
+    elif utilization >= 80:
+        alert_level, alert_label = "attention", "黄色关注"
+    else:
+        alert_level, alert_label = "normal", "正常"
+    reviewed_times = [area.capacity_reviewed_at for area in reviewed if area.capacity_reviewed_at]
+    return {
+        "visible": True,
+        "confirmed": confirmed,
+        "basis": "confirmed" if confirmed else ("planning" if reference_capacity else "missing"),
+        "safe_pallet_capacity": safe_capacity,
+        "confirmed_area_capacity": confirmed_area_capacity,
+        "planned_pallet_capacity": planned_capacity,
+        "reference_pallet_capacity": reference_capacity,
+        "occupied_pallets": occupied_pallets,
+        "empty_pallet_slots": (
+            max(reference_capacity - occupied_pallets, 0) if reference_capacity else None
+        ),
+        "utilization_percent": utilization,
+        "coverage_percent": coverage_percent,
+        "reviewed_area_count": len(reviewed),
+        "review_required_area_count": len(review_required),
+        "unreviewed_area_count": max(len(review_required) - len(reviewed), 0),
+        "last_reviewed_at": (
+            beijing_naive_to_api(max(reviewed_times)) if reviewed_times else None
+        ),
+        "alert_level": alert_level,
+        "alert_label": alert_label,
+        "status": "confirmed" if confirmed else "awaiting_field_confirmation",
+        "label": "现场安全容量已确认" if confirmed else "规划容量预警（现场待复核）",
+        "thresholds": (
+            {
+                key: ceil(reference_capacity * ratio)
+                for key, ratio in CAPACITY_THRESHOLDS.items()
+            }
+            if reference_capacity
+            else None
+        ),
+    }
 
 
 def _location_payload(
@@ -435,41 +553,29 @@ def build_warehouse_twin_dashboard(
             for row in floor_locations
             if row["position_status"] in {"unplaced", "unlocated", "area_only"}
         ]
-        areas = list(floor.areas) if floor is not None else []
-        planned_capacity = sum(int(area.planned_pallet_capacity) for area in areas)
-        reviewed_areas = [
-            area
-            for area in areas
-            if area.construction_status == "enabled" and area.planned_pallet_capacity > 0
-        ]
-        coverage = (
-            round(len(reviewed_areas) * 100 / len(areas), 1) if areas else 0.0
+        occupied_pallets = len(
+            {
+                row["pallet"]["pallet_id"]
+                for row in occupied
+                if row["pallet"] is not None
+            }
+        )
+        capacity = warehouse_capacity_summary(
+            floor,
+            occupied_pallets=occupied_pallets,
+            visible=visible_customer_ids is None,
         )
         floor_summaries.append(
             {
                 "floor_code": f"{floor_number}F",
                 "floor_name": floor.floor_name if floor is not None else f"{floor_number}楼",
                 "construction_status": floor.construction_status if floor is not None else "not_started",
-                "occupied_pallets": len(
-                    {
-                        row["pallet"]["pallet_id"]
-                        for row in occupied
-                        if row["pallet"] is not None
-                    }
-                ),
+                "occupied_pallets": occupied_pallets,
                 "occupied_locations": len(occupied),
                 "empty_mapped_locations": len(empty),
                 "unlocated_locations": len(unlocated),
                 "active_lots": sum(len(lots_by_location.get(row["location_id"], [])) for row in floor_locations),
-                "capacity": {
-                    "visible": visible_customer_ids is None,
-                    "confirmed": False,
-                    "safe_pallet_capacity": None,
-                    "planned_pallet_capacity": planned_capacity if visible_customer_ids is None else None,
-                    "coverage_percent": coverage if visible_customer_ids is None else None,
-                    "status": "awaiting_field_confirmation",
-                    "label": "现场安全容量待确认",
-                },
+                "capacity": capacity,
             }
         )
 
@@ -529,6 +635,83 @@ def build_warehouse_twin_dashboard(
         or not row.location.area_code
         or (row.location.placement_status or "placed") == "unplaced"
     ]
+    visible_capacities = [
+        floor["capacity"]
+        for floor in floor_summaries
+        if floor["capacity"]["visible"] and floor["capacity"]["reference_pallet_capacity"]
+    ]
+    capacity_reference_total = sum(
+        int(row["reference_pallet_capacity"] or 0) for row in visible_capacities
+    )
+    capacity_occupied_total = sum(int(row["occupied_pallets"] or 0) for row in visible_capacities)
+    tightest_floor = max(
+        (
+            floor
+            for floor in floor_summaries
+            if floor["capacity"]["visible"]
+            and floor["capacity"]["utilization_percent"] is not None
+        ),
+        key=lambda floor: float(floor["capacity"]["utilization_percent"]),
+        default=None,
+    )
+    capacity_alerts = []
+    if visible_customer_ids is None:
+        planning_floors = [
+            floor for floor in floor_summaries if floor["capacity"]["basis"] == "planning"
+        ]
+        if planning_floors:
+            capacity_alerts.append(
+                {
+                    "code": "capacity_planning_basis",
+                    "level": "warning",
+                    "message": "当前按规划容量预警；区域现场复核完成后自动切换为安全容量。",
+                }
+            )
+        for floor in floor_summaries:
+            capacity = floor["capacity"]
+            alert_level = capacity["alert_level"]
+            if alert_level == "unknown":
+                capacity_alerts.append(
+                    {
+                        "code": f"capacity_missing_{floor['floor_code'].lower()}",
+                        "level": "warning",
+                        "floor_code": floor["floor_code"],
+                        "message": f"{floor['floor_code']}尚未填写规划容量，暂不能计算容量预警。",
+                    }
+                )
+            elif alert_level != "normal":
+                threshold_label = {
+                    "attention": "达到80%",
+                    "warning": "达到90%",
+                    "critical": "达到95%",
+                    "over_capacity": "超过100%",
+                }[alert_level]
+                capacity_alerts.append(
+                    {
+                        "code": f"capacity_{alert_level}_{floor['floor_code'].lower()}",
+                        "level": "error" if alert_level in {"critical", "over_capacity"} else "warning",
+                        "floor_code": floor["floor_code"],
+                        "message": (
+                            f"{floor['floor_code']}已占 {capacity['occupied_pallets']}/"
+                            f"{capacity['reference_pallet_capacity']} 个栈板位，"
+                            f"利用率 {capacity['utilization_percent']}%，{threshold_label}。"
+                        ),
+                    }
+                )
+    temporary_occupied_count = sum(
+        1
+        for row in location_rows
+        if row["is_temporary"] and row["occupancy_status"] == "occupied"
+    )
+    if temporary_occupied_count and visible_customer_ids is None:
+        capacity_alerts.append(
+            {
+                "code": "temporary_capacity_pressure",
+                "level": "error",
+                "message": f"有 {temporary_occupied_count} 个临时位置正在占用，不计入长期容量但必须尽快整理。",
+            }
+        )
+
     return {
         "schema_version": "P1-29-v1",
         "mode": "erp_business_twin",
@@ -560,6 +743,25 @@ def build_warehouse_twin_dashboard(
                 for row in location_rows
                 if row["is_temporary"] and row["occupancy_status"] == "occupied"
             ),
+            "capacity": (
+                {
+                    "visible": True,
+                    "reference_pallet_capacity": capacity_reference_total,
+                    "occupied_pallets": capacity_occupied_total,
+                    "empty_pallet_slots": max(capacity_reference_total - capacity_occupied_total, 0),
+                    "utilization_percent": (
+                        round(capacity_occupied_total * 100 / capacity_reference_total, 1)
+                        if capacity_reference_total
+                        else None
+                    ),
+                    "tightest_floor_code": tightest_floor["floor_code"] if tightest_floor else None,
+                    "tightest_floor_utilization_percent": (
+                        tightest_floor["capacity"]["utilization_percent"] if tightest_floor else None
+                    ),
+                }
+                if visible_customer_ids is None
+                else {"visible": False}
+            ),
             "quantities": _quantity_groups(current_lots),
         },
         "floors": floor_summaries,
@@ -572,11 +774,7 @@ def build_warehouse_twin_dashboard(
         "trend": trend,
         "throughput": throughput,
         "alerts": [
-            {
-                "code": "capacity_unconfirmed",
-                "level": "warning",
-                "message": "P1-27现场安全容量尚未确认；当前不显示满载率和80%预警。",
-            },
+            *capacity_alerts,
             *(
                 [
                     {

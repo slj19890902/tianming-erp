@@ -22,6 +22,9 @@ MONEY = Decimal("0.01")
 UNIT = Decimal("0.000001")
 ALLOWED_LOSS_RATES = {Decimal("0.03"), Decimal("0.05")}
 ONE_TIME_FEE_KEYS = ("die_fee", "plate_fee", "freight_fee", "other_fee")
+COST_HEALTH_VERSION = "p1-28c2-health-v1"
+VERY_LOW_MARGIN_RATE = Decimal("0.15")
+REVIEW_MARGIN_RATE = Decimal("0.25")
 
 
 def _json(value: object) -> str:
@@ -290,10 +293,68 @@ def get_latest_order_item_estimated_cost_snapshot(
     )
 
 
-def serialize_order_item_estimated_cost_snapshot(snapshot: SalesOrderItemEstimatedCostSnapshot) -> dict[str, Any]:
+def classify_estimated_cost_health(
+    snapshot: SalesOrderItemEstimatedCostSnapshot,
+    sale_amount: object,
+) -> dict[str, Any]:
+    """Return an advisory-only health label using Decimal comparisons."""
+
+    common = {
+        "estimated_cost_health_version": COST_HEALTH_VERSION,
+        "estimated_cost_health_basis_label": "按订单录入售价试算，预计而非实际利润",
+        "estimated_cost_health_blocks_save": False,
+    }
+    if (
+        snapshot.calculation_status != "calculated"
+        or snapshot.estimated_order_total_cost is None
+    ):
+        return {
+            **common,
+            "estimated_cost_health_code": "cost_incomplete",
+            "estimated_cost_health_label": "成本资料待完善",
+            "estimated_cost_health_tone": "orange",
+            "estimated_gross_profit": None,
+            "estimated_margin_rate": None,
+        }
+    sale = Decimal(str(sale_amount or 0))
+    if not sale.is_finite() or sale <= 0:
+        return {
+            **common,
+            "estimated_cost_health_code": "sale_missing",
+            "estimated_cost_health_label": "售价待完善",
+            "estimated_cost_health_tone": "orange",
+            "estimated_gross_profit": None,
+            "estimated_margin_rate": None,
+        }
+    cost = Decimal(str(snapshot.estimated_order_total_cost))
+    profit = (sale - cost).quantize(MONEY, rounding=ROUND_HALF_UP)
+    margin = (profit / sale).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+    if profit < 0:
+        code, label, tone = "estimated_loss", "预计亏损", "red"
+    elif margin < VERY_LOW_MARGIN_RATE:
+        code, label, tone = "very_low", "利润空间很低", "red"
+    elif margin < REVIEW_MARGIN_RATE:
+        code, label, tone = "review", "建议复核", "orange"
+    else:
+        code, label, tone = "healthy", "预计正常", "green"
+    return {
+        **common,
+        "estimated_cost_health_code": code,
+        "estimated_cost_health_label": label,
+        "estimated_cost_health_tone": tone,
+        "estimated_gross_profit": str(profit),
+        "estimated_margin_rate": str(margin),
+    }
+
+
+def serialize_order_item_estimated_cost_snapshot(
+    snapshot: SalesOrderItemEstimatedCostSnapshot,
+    *,
+    sale_amount: object | None = None,
+) -> dict[str, Any]:
     total = str(snapshot.estimated_order_total_cost) if snapshot.estimated_order_total_cost is not None else None
     unit = str(snapshot.estimated_unit_total_cost) if snapshot.estimated_unit_total_cost is not None else None
-    return {
+    data = {
         "estimated_total_cost_status": snapshot.calculation_status,
         "estimated_total_cost_status_label": {
             "calculated": "预计总成本已冻结",
@@ -314,3 +375,6 @@ def serialize_order_item_estimated_cost_snapshot(snapshot: SalesOrderItemEstimat
         "cost_status": "calculated" if snapshot.calculation_status == "calculated" else "pending",
         "estimated_cost": unit,
     }
+    if sale_amount is not None:
+        data.update(classify_estimated_cost_health(snapshot, sale_amount))
+    return data

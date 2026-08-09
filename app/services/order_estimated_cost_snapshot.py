@@ -6,6 +6,7 @@ import json
 from typing import Any, Mapping, Sequence
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.order import OrderItem
@@ -25,6 +26,39 @@ ONE_TIME_FEE_KEYS = ("die_fee", "plate_fee", "freight_fee", "other_fee")
 COST_HEALTH_VERSION = "p1-28c2-health-v1"
 VERY_LOW_MARGIN_RATE = Decimal("0.15")
 REVIEW_MARGIN_RATE = Decimal("0.25")
+
+ESTIMATED_COST_SNAPSHOT_UNIQUE_CONSTRAINTS = frozenset(
+    {
+        "uq_order_item_estimated_cost_snapshot_version",
+        "uq_order_item_estimated_cost_snapshot_fingerprint",
+    }
+)
+_SQLITE_ESTIMATED_COST_UNIQUE_SIGNATURES = (
+    "unique constraint failed: "
+    "sales_order_item_estimated_cost_snapshots.order_item_reference_snapshot, "
+    "sales_order_item_estimated_cost_snapshots.snapshot_version",
+    "unique constraint failed: "
+    "sales_order_item_estimated_cost_snapshots.order_item_reference_snapshot, "
+    "sales_order_item_estimated_cost_snapshots.source_fingerprint",
+)
+
+
+def is_estimated_cost_snapshot_unique_conflict(error: IntegrityError) -> bool:
+    """Return true only for the two intentional snapshot idempotency races."""
+
+    original = getattr(error, "orig", None)
+    diagnostic = getattr(original, "diag", None)
+    constraint_name = getattr(diagnostic, "constraint_name", None)
+    if constraint_name in ESTIMATED_COST_SNAPSHOT_UNIQUE_CONSTRAINTS:
+        return True
+
+    message = " ".join(str(original or "").lower().split())
+    if any(signature in message for signature in _SQLITE_ESTIMATED_COST_UNIQUE_SIGNATURES):
+        return True
+    return any(
+        name.lower() in message
+        for name in ESTIMATED_COST_SNAPSHOT_UNIQUE_CONSTRAINTS
+    )
 
 
 def _json(value: object) -> str:

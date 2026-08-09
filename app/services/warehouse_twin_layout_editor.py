@@ -13,7 +13,10 @@ from threading import Lock
 from typing import Any, Callable
 from uuid import uuid4
 
-from app.services.warehouse_twin_layout import TWIN_LAYOUT_PATH
+from app.services.warehouse_twin_layout import (
+    TWIN_LAYOUT_PATH as TWIN_LAYOUT_BASELINE_PATH,
+    TWIN_LAYOUT_RUNTIME_PATH as DEFAULT_TWIN_LAYOUT_RUNTIME_PATH,
+)
 
 
 ALLOWED_INVENTORY_TYPES = {
@@ -28,6 +31,7 @@ ALLOWED_STORAGE_LAYOUTS = {"rack", "pallet_ground", "mixed"}
 ALLOWED_ACCESS_SIDES = {"north", "south", "east", "west", "both"}
 _LAYOUT_EDIT_LOCK = Lock()
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
+TWIN_LAYOUT_PATH = DEFAULT_TWIN_LAYOUT_RUNTIME_PATH
 TWIN_LAYOUT_DRAFT_PATH = _PROJECT_ROOT / "data" / "layout_drafts" / "twin_layout_v1.draft.json"
 TWIN_LAYOUT_BACKUP_DIR = _PROJECT_ROOT / "data" / "layout_backups"
 
@@ -55,6 +59,21 @@ class LayoutMutation:
 class LayoutDraftAction:
     value: dict[str, Any]
     applied: bool
+
+
+@dataclass(frozen=True)
+class _PublishedLayoutPaths:
+    source: Path
+    target: Path
+
+
+def _published_layout_paths(explicit_path: Path | None = None) -> _PublishedLayoutPaths:
+    if explicit_path is not None:
+        return _PublishedLayoutPaths(source=explicit_path, target=explicit_path)
+    runtime_target = TWIN_LAYOUT_PATH
+    if runtime_target.exists():
+        return _PublishedLayoutPaths(source=runtime_target, target=runtime_target)
+    return _PublishedLayoutPaths(source=TWIN_LAYOUT_BASELINE_PATH, target=runtime_target)
 
 
 def _utc_iso() -> str:
@@ -212,8 +231,9 @@ def _apply_mutation(
     with _LAYOUT_EDIT_LOCK:
         if path is None:
             target = TWIN_LAYOUT_DRAFT_PATH
+            published_paths = _published_layout_paths()
             document = _active_draft_document_unlocked(
-                published_path=TWIN_LAYOUT_PATH,
+                published_path=published_paths.source,
                 draft_path=target,
                 create=True,
             )
@@ -599,7 +619,7 @@ def load_warehouse_twin_layout_draft(
     draft_path: Path | None = None,
 ) -> dict[str, Any]:
     normalized = _normalize_floor_code(floor_code)
-    published_target = published_path or TWIN_LAYOUT_PATH
+    published_target = _published_layout_paths(published_path).source
     draft_target = draft_path or TWIN_LAYOUT_DRAFT_PATH
     with _LAYOUT_EDIT_LOCK:
         published = _read_document(published_target)
@@ -647,7 +667,7 @@ def validate_warehouse_twin_layout_draft(
     draft_path: Path | None = None,
 ) -> LayoutDraftAction:
     normalized = _normalize_floor_code(floor_code)
-    published_target = published_path or TWIN_LAYOUT_PATH
+    published_target = _published_layout_paths(published_path).source
     draft_target = draft_path or TWIN_LAYOUT_DRAFT_PATH
     with _LAYOUT_EDIT_LOCK:
         draft = _active_draft_document_unlocked(
@@ -709,10 +729,13 @@ def publish_warehouse_twin_layout_draft(
     normalized_key = str(operation_key or "").strip()
     if len(normalized_key) < 8 or len(normalized_key) > 120:
         raise WarehouseTwinLayoutEditError("发布操作键长度必须为 8 至 120 个字符")
-    published_target = published_path or TWIN_LAYOUT_PATH
+    published_paths = _published_layout_paths(published_path)
+    published_source = published_paths.source
+    published_target = published_paths.target
     draft_target = draft_path or TWIN_LAYOUT_DRAFT_PATH
     backup_target = backup_dir or TWIN_LAYOUT_BACKUP_DIR
     with _LAYOUT_EDIT_LOCK:
+        published = _read_document(published_source)
         if draft_target.is_file():
             replay_document = _read_document(draft_target)
             replay_meta = replay_document.get("draft_meta") or {}
@@ -721,13 +744,12 @@ def publish_warehouse_twin_layout_draft(
                 return LayoutDraftAction(value=dict(receipt.get("result") or {}), applied=False)
 
         draft = _active_draft_document_unlocked(
-            published_path=published_target,
+            published_path=published_source,
             draft_path=draft_target,
             create=False,
         )
         if draft is None:
             raise WarehouseTwinLayoutEditNotFoundError("当前没有可发布的布局草稿")
-        published = _read_document(published_target)
         published_floor = published["floors"].get(normalized)
         draft_floor = draft["floors"].get(normalized)
         if not isinstance(published_floor, dict) or not isinstance(draft_floor, dict):
@@ -755,16 +777,38 @@ def publish_warehouse_twin_layout_draft(
 
         backup_target.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
-        old_sha256 = _path_sha256(published_target)
-        backup_path = backup_target / f"{published_target.stem}.before_{stamp}_{old_sha256[:12]}.json"
-        shutil.copy2(published_target, backup_path)
+        old_sha256 = _path_sha256(published_source)
+        backup_path = backup_target / f"{published_source.stem}.before_{stamp}_{old_sha256[:12]}.json"
+        shutil.copy2(published_source, backup_path)
         if _path_sha256(backup_path) != old_sha256:
             backup_path.unlink(missing_ok=True)
             raise WarehouseTwinLayoutEditError("正式地图备份校验失败，已停止发布")
 
         candidate = deepcopy(draft)
         candidate.pop("draft_meta", None)
-        _write_document(published_target, candidate)
+        try:
+            _write_document(published_target, candidate)
+            written = _read_document(published_target)
+            written_blockers, _written_warnings = _validate_document_for_publish(written)
+            if written != candidate or written_blockers:
+                raise WarehouseTwinLayoutEditError("运行地图发布后内容校验失败")
+            if published_source != published_target and _path_sha256(published_source) != old_sha256:
+                raise WarehouseTwinLayoutEditError("静态地图基线发生变化，已停止发布")
+        except Exception as error:
+            try:
+                if published_source == published_target:
+                    shutil.copy2(backup_path, published_target)
+                    if _path_sha256(published_target) != old_sha256:
+                        raise WarehouseTwinLayoutEditError("运行地图发布失败且备份恢复校验失败")
+                else:
+                    published_target.unlink(missing_ok=True)
+            except Exception as restore_error:
+                raise WarehouseTwinLayoutEditError(
+                    "运行地图发布失败且自动恢复失败，请停止编辑并人工恢复备份"
+                ) from restore_error
+            if isinstance(error, WarehouseTwinLayoutEditError):
+                raise
+            raise WarehouseTwinLayoutEditError("运行地图发布后校验失败，已恢复发布前版本") from error
         published_sha256 = _path_sha256(published_target)
         result = {
             "status": "published",
@@ -773,6 +817,7 @@ def publish_warehouse_twin_layout_draft(
             "published_sha256": published_sha256,
             "backup_name": backup_path.name,
             "backup_sha256": old_sha256,
+            "published_storage": "runtime",
             "warnings": warnings,
             "inventory_changed": False,
             "published_at": _utc_iso(),

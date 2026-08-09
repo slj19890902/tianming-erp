@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.74"
-    assert APP_VERSION_NAME == "全系统实测优化与仓储报料可靠性"
+    assert APP_VERSION == "v0.22.75"
+    assert APP_VERSION_NAME == "预计利润复核与仓库地图受控发布"
     assert APP_BUILD_DATE == "2026-08-09"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -50,20 +50,32 @@ def test_factory_update_reports_current_release_version() -> None:
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
     assert any(
-        "本次更新｜" in item and "双拼报料" in item and "并发重复建单" in item
+        "本次更新｜" in item and "预计总成本快照" in item and "预计成本" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "车间账号" in item and "销售金额" in item
+        "本次更新｜" in item and "成本健康" in item and "车间" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "安全压缩" in item and "分段读取" in item
+        "本次更新｜" in item and "版本校验" in item and "同时修改" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "全收" in item and "部分收料" in item
+        "本次更新｜" in item and "仓库地图" in item and "普通员工" in item
         for item in current_release
+    )
+    assert any(
+        "本次更新｜" in item and "数据目录" in item and "不回填" in item
+        for item in current_release
+    )
+    assert any(
+        item.startswith("v0.22.74：本次更新｜") and "双拼报料" in item
+        for item in APP_CHANGELOG
+    )
+    assert any(
+        item.startswith("v0.22.74：如何验证｜") and "v0.22.74" in item
+        for item in APP_CHANGELOG
     )
     assert any(
         item.startswith("v0.22.73：本次更新｜") and "外购包装" in item
@@ -74,7 +86,7 @@ def test_factory_update_reports_current_release_version() -> None:
         for item in APP_CHANGELOG
     )
     assert any(
-        "如何验证｜" in item and "v0.22.74" in item
+        "如何验证｜" in item and "v0.22.75" in item
         for item in current_release
     )
     assert any(

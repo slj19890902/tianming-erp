@@ -1,0 +1,133 @@
+from __future__ import annotations
+
+import re
+import shutil
+import subprocess
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+INDEX = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+TASK_PRINT = (ROOT / "static" / "requisition-production-print.html").read_text(
+    encoding="utf-8"
+)
+LABEL_PRINT = (ROOT / "static" / "production-packaging-label.html").read_text(
+    encoding="utf-8"
+)
+MAIN = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
+
+
+def _inline_scripts(source: str) -> list[str]:
+    return [
+        script
+        for script in re.findall(
+            r"<script(?:\s[^>]*)?>(.*?)</script>", source, re.DOTALL
+        )
+        if script.strip()
+    ]
+
+
+def test_product_editor_exposes_disabled_by_default_label_policy() -> None:
+    for marker in (
+        "随生产任务打印包装标签",
+        "每张标签代表只数",
+        'v-model="productForm.production_label_enabled"',
+        'v-model="productForm.production_label_units_per_label"',
+        "production_label_enabled: false",
+        "production_label_units_per_label: null",
+        "onProductProductionLabelToggle",
+        "productProductionLabelError",
+    ):
+        assert marker in INDEX
+
+    assert 'code === "a1_0201"' in INDEX
+    for box_type in (
+        "die_cut_inner_box",
+        "liner",
+        "die_cut_partition",
+        "divider",
+    ):
+        assert box_type in INDEX
+    assert "每张标签数量必须是正整数" in INDEX
+    assert "payload.production_label_units_per_label = null" in INDEX
+    assert "!!productProductionLabelError" in INDEX
+
+
+def test_product_policy_participates_in_payload_hydration_and_dirty_tracking() -> None:
+    assert "payload.production_label_enabled = payload.production_label_enabled === true" in INDEX
+    assert "form.production_label_enabled = form.production_label_enabled === true" in INDEX
+    assert "production_label_enabled: f.production_label_enabled" in INDEX
+    assert (
+        "production_label_units_per_label: f.production_label_units_per_label"
+        in INDEX
+    )
+    assert "只保存以后新生产任务的包装标签规则" in INDEX
+    assert "不会立即打印" in INDEX
+
+
+def test_waiting_material_task_page_opens_separate_packaging_label_page() -> None:
+    assert 'id="labelButton"' in TASK_PRINT
+    assert "生产包装标签" in TASK_PRINT
+    assert "/production-packaging-label.html?id=" in TASK_PRINT
+    assert 'window.open(`/production-packaging-label.html?id=${encodeURIComponent(orderId)}`, "_blank", "noopener")' in TASK_PRINT
+    assert "window.opener" not in TASK_PRINT
+
+
+def test_packaging_label_page_is_get_only_and_has_no_finished_inventory_identity() -> None:
+    for marker in (
+        "生产包装标签",
+        "非库存标签",
+        "本标签",
+        "计划总数：",
+        "标签序号：",
+        "生产任务：",
+        "报料单号：",
+        "计划指纹：",
+        "本标签仅供生产分装，不代表收货、完工或入库",
+        "/production-packaging-label-package",
+        'method:"GET"',
+        'credentials:"include"',
+        'cache:"no-store"',
+        "detail.reasons",
+        "生产计划已变化或标签快照不完整",
+    ):
+        assert marker in LABEL_PRINT
+
+    for forbidden in (
+        "库存批次",
+        "库位",
+        "可用库存",
+        "实收数量",
+        "单价",
+        "成本",
+        "价格",
+        'method:"POST"',
+        'method:"PUT"',
+        'method:"DELETE"',
+        "window.opener",
+        "finished-goods-label",
+    ):
+        assert forbidden not in LABEL_PRINT
+
+
+def test_packaging_label_route_uses_conditional_same_origin_file_response() -> None:
+    assert 'route.path == "/production-packaging-label.html"' in MAIN
+    assert '"production-packaging-label.html"' in MAIN
+    assert "_conditional_file_endpoint(production_packaging_label_path)" in MAIN
+    assert 'methods=["GET"]' in MAIN
+
+
+def test_packaging_label_inline_javascript_is_valid(tmp_path: Path) -> None:
+    node = shutil.which("node")
+    assert node is not None, "Node.js is required for the label contract test"
+    scripts = _inline_scripts(LABEL_PRINT)
+    assert len(scripts) == 1
+    target = tmp_path / "production-packaging-label-inline.js"
+    target.write_text(scripts[0], encoding="utf-8")
+    result = subprocess.run(
+        [node, "--check", str(target)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    assert result.returncode == 0, result.stderr

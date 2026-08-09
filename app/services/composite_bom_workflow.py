@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.models.delivery import DeliveryItem
 from app.models.order import OrderItem
+from app.models.product import Product
 from app.models.product_bom import (
     BomComponentDirectDeliveryAllocation,
     SalesOrderItemBomComponent,
@@ -34,6 +35,10 @@ from app.models.warehouse_inventory import (
     DeliveryInventoryAllocation,
     InventoryLot,
     InventoryReservation,
+)
+from app.services.production_label_strategy import (
+    ProductionLabelStrategyError,
+    build_new_task_production_label_snapshot,
 )
 from app.services.warehouse_inventory import _balances, _movement, utc_now_naive
 
@@ -358,7 +363,20 @@ def ensure_component_production_tasks(
                 ProductionTask.sales_order_item_bom_component_id == demand.snapshot_id
             )
         )
+        initial_coverage: int | None = None
         if task is None:
+            initial_coverage = component_available_quantity(db, demand.snapshot_id)
+            component_product = db.get(Product, snapshot.component_product_id)
+            try:
+                label_snapshot = build_new_task_production_label_snapshot(
+                    component_product,
+                    total_quantity=max(
+                        demand.required_piece_quantity - initial_coverage,
+                        0,
+                    ),
+                )
+            except ProductionLabelStrategyError as error:
+                raise CompositeBomWorkflowError(str(error)) from error
             task = ProductionTask(
                 order_item_id=order_item_id,
                 sales_order_item_bom_component_id=demand.snapshot_id,
@@ -370,6 +388,7 @@ def ensure_component_production_tasks(
                 output_factor=output_factor,
                 readiness_basis=None,
                 version=1,
+                **label_snapshot,
             )
             db.add(task)
             db.flush()
@@ -378,7 +397,11 @@ def ensure_component_production_tasks(
             tasks.append(task)
             continue
         ready = item.material_status == "received"
-        coverage = component_available_quantity(db, demand.snapshot_id)
+        coverage = (
+            initial_coverage
+            if initial_coverage is not None
+            else component_available_quantity(db, demand.snapshot_id)
+        )
         planned_quantity = max(demand.required_piece_quantity - coverage, 0)
         input_quantity = (
             ceil(planned_quantity / max(output_factor, 1)) if ready else 0

@@ -66,6 +66,10 @@ from app.services.product_lifecycle import (
 )
 from app.services.report_crease import crease_width_error
 from app.services.product_readiness import product_readiness
+from app.services.production_label_strategy import (
+    ProductionLabelStrategyError,
+    normalize_production_label_strategy,
+)
 from app.services.supplier_master import SupplierLookupError, resolve_supplier
 from app.services.master_data_versioning import (
     apply_versioned_update,
@@ -385,6 +389,8 @@ class ProductPayload(BaseModel):
     splice_mode: str | None = "single"
     pieces_per_box: int | None = None
     default_cutting_mode: Literal["一开一", "一开二", "一开三", "一开四", "一开五", "一开六"] = "一开一"
+    production_label_enabled: bool = False
+    production_label_units_per_label: int | None = Field(default=None, gt=0)
     flap_mm: int | None = 30
     combination_mode: Literal["parent_priced_set", "component_priced"] = "parent_priced_set"
 
@@ -414,6 +420,21 @@ class ProductPayload(BaseModel):
         self.pieces_per_box = configuration["pieces_per_box"]
         self.flap_mm = configuration["flap_mm"]
         self.default_cutting_mode = configuration["default_cutting_mode"]
+        if {
+            "production_label_enabled",
+            "production_label_units_per_label",
+        }.intersection(self.model_fields_set):
+            try:
+                (
+                    self.production_label_enabled,
+                    self.production_label_units_per_label,
+                ) = normalize_production_label_strategy(
+                    box_style=self.box_style,
+                    enabled=self.production_label_enabled,
+                    units_per_label=self.production_label_units_per_label,
+                )
+            except ProductionLabelStrategyError as error:
+                raise ValueError(str(error)) from error
         process_tokens = _production_process_tokens(self.production_process)
         if "印刷" in process_tokens:
             if (self.print_content or "").strip() in {
@@ -642,6 +663,14 @@ def _validated_product_versioned_updates(
     _validate_product_printing_plates(db, payload)
     _validate_changed_product_crease_widths(payload, product)
     updates = _product_write_data(payload, user)
+    if not {
+        "production_label_enabled",
+        "production_label_units_per_label",
+    }.intersection(payload.model_fields_set):
+        # Legacy full-update clients do not know these fields and must not
+        # silently disable a strategy configured by a newer client.
+        updates.pop("production_label_enabled", None)
+        updates.pop("production_label_units_per_label", None)
     versioned_fields = set(serialize_versioned_entity("product", product))
     updates = {
         key: value for key, value in updates.items() if key in versioned_fields

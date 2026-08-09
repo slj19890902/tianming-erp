@@ -4,6 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -13,6 +14,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
     func,
     text,
 )
@@ -49,6 +51,17 @@ class ProductionTask(Base):
         CheckConstraint(
             "finished_coverage_snapshot >= 0",
             name="ck_production_tasks_finished_coverage_nonnegative",
+        ),
+        CheckConstraint(
+            "((production_label_enabled_snapshot = false "
+            "AND production_label_units_per_label_snapshot IS NULL "
+            "AND production_label_total_quantity_snapshot = 0 "
+            "AND production_label_count_snapshot = 0) OR "
+            "(production_label_enabled_snapshot = true "
+            "AND production_label_units_per_label_snapshot > 0 "
+            "AND production_label_total_quantity_snapshot > 0 "
+            "AND production_label_count_snapshot > 0))",
+            name="ck_production_tasks_production_label_snapshot",
         ),
         CheckConstraint("version >= 1", name="ck_production_tasks_version"),
         CheckConstraint(
@@ -112,6 +125,28 @@ class ProductionTask(Base):
     )
     machine_set_height_mm_snapshot: Mapped[Decimal | None] = mapped_column(
         Numeric(12, 2), nullable=True
+    )
+    production_label_enabled_snapshot: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=false(),
+        nullable=False,
+    )
+    production_label_units_per_label_snapshot: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+    production_label_total_quantity_snapshot: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        server_default="0",
+        nullable=False,
+    )
+    production_label_count_snapshot: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        server_default="0",
+        nullable=False,
     )
     ready_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     version: Mapped[int] = mapped_column(

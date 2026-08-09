@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>生产包装标签</title>
+  <style>
+    :root { color-scheme:light; font-family:"Microsoft YaHei","SimSun",sans-serif; color:#0f172a; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:#e2e8f0; }
+    .toolbar { position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:10px; padding:10px 16px; background:#fff; border-bottom:1px solid #cbd5e1; }
+    button { border:1px solid #94a3b8; border-radius:6px; background:#fff; padding:8px 15px; cursor:pointer; font-size:14px; }
+    button.primary { color:#fff; background:#0f766e; border-color:#0f766e; }
+    button:disabled { opacity:.45; cursor:not-allowed; }
+    .toolbar-note { margin-left:auto; color:#64748b; font-size:12px; }
+    .message { max-width:760px; margin:18px auto; padding:14px 16px; border:1px solid #93c5fd; border-radius:8px; color:#1e3a8a; background:#eff6ff; text-align:center; }
+    .message.error { color:#991b1b; border-color:#fca5a5; background:#fff1f2; }
+    .label-list { display:grid; gap:14px; justify-items:center; padding:14px; }
+    .label-card { width:min(100%,760px); min-height:360px; padding:24px; border:3px solid #0f766e; border-radius:12px; background:#fff; box-shadow:0 2px 12px #0f172a22; break-inside:avoid; page-break-inside:avoid; }
+    .label-head { display:flex; justify-content:space-between; align-items:flex-start; gap:20px; padding-bottom:14px; border-bottom:3px solid #0f172a; }
+    .label-title { margin:0; font-size:28px; letter-spacing:3px; }
+    .identity { flex:0 0 auto; padding:6px 12px; border:2px solid #c2410c; border-radius:99px; color:#9a3412; background:#fff7ed; font-size:16px; font-weight:900; }
+    .customer { margin-top:18px; font-size:22px; font-weight:900; }
+    .product { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:20px; align-items:center; margin-top:12px; }
+    .product-code { font-size:32px; font-weight:900; line-height:1.15; overflow-wrap:anywhere; }
+    .product-name { margin-top:6px; font-size:21px; font-weight:700; }
+    .specification { margin-top:5px; color:#475569; font-size:17px; }
+    .quantity { min-width:170px; padding:14px; border:3px solid #0f766e; border-radius:10px; text-align:center; }
+    .quantity span { display:block; color:#475569; font-size:16px; font-weight:700; }
+    .quantity strong { display:block; margin:4px 0; color:#b91c1c; font-size:58px; line-height:1; }
+    .quantity b { font-size:18px; }
+    .meta { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px 18px; margin-top:18px; padding-top:14px; border-top:1px solid #94a3b8; font-size:14px; }
+    .meta strong { display:inline-block; min-width:84px; }
+    .notice { grid-column:1 / -1; margin-top:5px; padding:8px 10px; color:#9a3412; background:#fff7ed; border-radius:6px; font-size:13px; font-weight:700; text-align:center; }
+    [hidden] { display:none !important; }
+    @page { margin:4mm; }
+    @media (max-width:620px) {
+      .product { grid-template-columns:1fr; }
+      .quantity { min-width:0; }
+      .meta { grid-template-columns:1fr; }
+      .notice { grid-column:auto; }
+      .toolbar-note { display:none; }
+    }
+    @media print {
+      body { background:#fff; }
+      .toolbar,.message { display:none !important; }
+      .label-list { display:block; padding:0; }
+      .label-card { width:100%; min-height:0; margin:0; border-radius:0; box-shadow:none; break-after:page; page-break-after:always; }
+      .label-card:last-child { break-after:auto; page-break-after:auto; }
+    }
+  </style>
+</head>
+<body>
+  <nav class="toolbar">
+    <button id="retryButton" type="button">重新加载</button>
+    <button id="printButton" class="primary" type="button" disabled>打印包装标签</button>
+    <button id="closeButton" type="button">关闭</button>
+    <span class="toolbar-note">实际纸型、方向和间隙由标签打印机设置</span>
+  </nav>
+  <div id="message" class="message">正在读取冻结的生产包装标签计划……</div>
+  <main id="labelList" class="label-list" aria-live="polite"></main>
+  <script>
+    (() => {
+      "use strict";
+      const message = document.getElementById("message");
+      const labelList = document.getElementById("labelList");
+      const retryButton = document.getElementById("retryButton");
+      const printButton = document.getElementById("printButton");
+      const closeButton = document.getElementById("closeButton");
+      const params = new URLSearchParams(window.location.search);
+      const supplierOrderId = Number(params.get("id"));
+      let loadGeneration = 0;
+      let activeController = null;
+      let loadedPackage = null;
+
+      const escapeHtml = (value) => String(value ?? "-")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+      const textList = (value) => Array.isArray(value) && value.length
+        ? value.map((item) => String(item)).join(" / ")
+        : "-";
+      const positiveInteger = (value) => Number.isInteger(Number(value)) && Number(value) > 0;
+
+      function errorMessage(status, payload) {
+        const detail = payload && typeof payload === "object" ? payload.detail : null;
+        if (typeof detail === "string" && detail.trim()) return detail.trim();
+        if (detail && typeof detail === "object" && typeof detail.message === "string") {
+          const reasons = Array.isArray(detail.reasons) && detail.reasons.length
+            ? `：${detail.reasons.map((item) => String(item)).join("；")}`
+            : "";
+          return `${detail.message}${detail.code ? `（${detail.code}）` : ""}${reasons}`;
+        }
+        if (Array.isArray(detail) && detail.length) {
+          return detail.map((item) => item && item.msg ? item.msg : String(item)).join("；");
+        }
+        if (status === 401) return "登录已失效，请回到 ERP 重新登录后再试";
+        if (status === 403) return "没有查看该报料单包装标签的权限";
+        if (status === 404) return "报料单不存在";
+        return `加载失败（HTTP ${status || "网络连接失败"}）`;
+      }
+
+      function validatePackage(packageData) {
+        if (!packageData || typeof packageData !== "object" || !Array.isArray(packageData.labels)) {
+          throw new Error("服务器返回的包装标签数据不完整，请重试");
+        }
+        if (packageData.review_required || packageData.printable === false) {
+          throw new Error("生产计划已变化或标签快照不完整，请先核对并重新报料");
+        }
+        if (!packageData.labels.length || Number(packageData.label_count) !== packageData.labels.length) {
+          throw new Error("该报料单没有可打印的生产包装标签");
+        }
+        packageData.labels.forEach((label) => {
+          if (![label.quantity, label.total_quantity, label.units_per_label, label.label_number, label.label_count].every(positiveInteger)) {
+            throw new Error("包装标签数量快照不完整，已停止打印");
+          }
+          if (Number(label.label_number) > Number(label.label_count) || Number(label.quantity) > Number(label.units_per_label)) {
+            throw new Error("包装标签序号或数量异常，已停止打印");
+          }
+        });
+      }
+
+      function labelHtml(label, packageData) {
+        const fingerprint = String(packageData.plan_fingerprint || "").slice(0, 12) || "-";
+        return `<article class="label-card">
+          <header class="label-head"><h1 class="label-title">生产包装标签</h1><span class="identity">非库存标签</span></header>
+          <div class="customer">${escapeHtml(label.customer_name || "客户待确认")}</div>
+          <section class="product"><div><div class="product-code">${escapeHtml(label.product_code || "存货编码待确认")}</div><div class="product-name">${escapeHtml(label.product_name || "产品名称待确认")}</div><div class="specification">${escapeHtml(label.specification || "规格待确认")}</div></div><div class="quantity"><span>本标签</span><strong>${escapeHtml(label.quantity)}</strong><b>只</b></div></section>
+          <footer class="meta"><div><strong>计划总数：</strong>${escapeHtml(label.total_quantity)} 只</div><div><strong>标签序号：</strong>第 ${escapeHtml(label.label_number)} / ${escapeHtml(label.label_count)} 张</div><div><strong>每张数量：</strong>${escapeHtml(label.units_per_label)} 只</div><div><strong>生产任务：</strong>#${escapeHtml(label.production_task_id)} / v${escapeHtml(label.production_task_version)}</div><div><strong>报料单号：</strong>${escapeHtml(packageData.supplier_order_number)}</div><div><strong>系统订单：</strong>${escapeHtml(textList(label.order_numbers))}</div><div><strong>客户单号：</strong>${escapeHtml(textList(label.customer_pos))}</div><div><strong>计划指纹：</strong>${escapeHtml(fingerprint)}</div><div class="notice">本标签仅供生产分装，不代表收货、完工或入库。</div></footer>
+        </article>`;
+      }
+
+      function render(packageData) {
+        validatePackage(packageData);
+        labelList.innerHTML = packageData.labels.map((label) => labelHtml(label, packageData)).join("");
+        loadedPackage = packageData;
+        message.hidden = true;
+        printButton.disabled = false;
+      }
+
+      async function loadPackage() {
+        const generation = ++loadGeneration;
+        if (activeController) activeController.abort();
+        activeController = new AbortController();
+        loadedPackage = null;
+        printButton.disabled = true;
+        labelList.innerHTML = "";
+        message.hidden = false;
+        message.className = "message";
+        message.textContent = "正在读取冻结的生产包装标签计划……";
+        if (!Number.isInteger(supplierOrderId) || supplierOrderId <= 0) {
+          message.className = "message error";
+          message.textContent = "报料单编号无效";
+          return;
+        }
+        try {
+          const response = await fetch(`/api/requisition/supplier-orders/${supplierOrderId}/production-packaging-label-package`, {
+            method:"GET",
+            credentials:"include",
+            cache:"no-store",
+            headers:{"Accept":"application/json"},
+            signal:activeController.signal,
+          });
+          let payload = null;
+          try { payload = await response.json(); } catch (_error) { payload = null; }
+          if (!response.ok) throw Object.assign(new Error(errorMessage(response.status, payload)), {status:response.status});
+          if (generation !== loadGeneration) return;
+          render(payload);
+        } catch (error) {
+          if (error && error.name === "AbortError") return;
+          if (generation !== loadGeneration) return;
+          message.className = "message error";
+          message.textContent = error instanceof TypeError
+            ? "无法连接 ERP 服务，请检查网络后重试"
+            : error && error.message
+            ? error.message
+            : "连接 ERP 失败，请重试";
+        }
+      }
+
+      retryButton.addEventListener("click", loadPackage);
+      printButton.addEventListener("click", () => { if (loadedPackage) window.print(); });
+      closeButton.addEventListener("click", () => window.close());
+      loadPackage();
+    })();
+  </script>
+</body>
+</html>

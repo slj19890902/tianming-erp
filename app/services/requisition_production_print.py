@@ -552,6 +552,19 @@ def build_supplier_requisition_production_package(
         [message for card in cards for message in card["review_messages"]]
     )
     layout_overflow = any(len(card["components"]) > 6 for card in cards)
+    used_task_ids = {
+        int(component["production_task_id"])
+        for card in cards
+        for component in card["components"]
+        if component.get("production_task_id") is not None
+    }
+    label_tasks = {
+        int(task.id): task
+        for task in tasks
+        if int(task.id) in used_task_ids
+        and bool(task.production_label_enabled_snapshot)
+        and int(task.production_label_count_snapshot or 0) > 0
+    }
     return {
         "supplier_order_id": order.id,
         "supplier_order_number": order.order_number,
@@ -566,6 +579,11 @@ def build_supplier_requisition_production_package(
         "review_messages": review_messages,
         "layout_overflow": layout_overflow,
         "printable": not layout_overflow,
+        "production_label_task_count": len(label_tasks),
+        "production_label_count": sum(
+            int(task.production_label_count_snapshot or 0)
+            for task in label_tasks.values()
+        ),
         "cards": cards,
         "pages": pages,
     }

@@ -15,6 +15,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -64,6 +65,13 @@ class Product(Base):
             "(printing_plate_1_id IS NULL AND printing_plate_2_id IS NULL "
             "AND printing_plate_3_id IS NULL)",
             name="ck_products_no_plate_has_no_binding",
+        ),
+        CheckConstraint(
+            "((production_label_enabled = false "
+            "AND production_label_units_per_label IS NULL) OR "
+            "(production_label_enabled = true "
+            "AND production_label_units_per_label > 0))",
+            name="ck_products_production_label_policy",
         ),
         CheckConstraint("version >= 1", name="ck_products_version"),
         Index("ix_products_customer_id", "customer_id"),
@@ -198,6 +206,16 @@ class Product(Base):
         default="一开一",
         server_default="一开一",
         nullable=False,
+    )
+    production_label_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=false(),
+        nullable=False,
+    )
+    production_label_units_per_label: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
     )
     flap_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_composite: Mapped[bool] = mapped_column(

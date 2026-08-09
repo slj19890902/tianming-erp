@@ -56,6 +56,10 @@ from app.services.location_candidates import (
     list_operational_locations,
     operational_location_issue,
 )
+from app.services.production_label_strategy import (
+    ProductionLabelStrategyError,
+    build_new_task_production_label_snapshot,
+)
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     active_finished_reserved_qty,
@@ -144,6 +148,20 @@ def _new_task_printing_snapshot(db: Session, product: Product | None) -> dict:
         "machine_set_width_mm_snapshot": product.machine_set_width_mm,
         "machine_set_height_mm_snapshot": product.machine_set_height_mm,
     }
+
+
+def _new_task_label_snapshot(
+    product: Product | None,
+    *,
+    total_quantity: int,
+) -> dict[str, object]:
+    try:
+        return build_new_task_production_label_snapshot(
+            product,
+            total_quantity=total_quantity,
+        )
+    except ProductionLabelStrategyError as error:
+        raise ProductionWorkflowError(str(error), 409) from error
 
 
 def _task_printing_snapshot(task: ProductionTask) -> dict:
@@ -553,9 +571,11 @@ def _refresh_composite_production_tasks(
                 ProductionTask.sales_order_item_bom_component_id == demand.snapshot_id
             )
         )
+        initial_coverage: int | None = None
         if task is None:
             if not create_if_missing:
                 continue
+            initial_coverage = component_available_quantity(db, demand.snapshot_id)
             component_product = db.get(Product, snapshot.component_product_id)
             task = ProductionTask(
                 order_item_id=item.id,
@@ -571,6 +591,13 @@ def _refresh_composite_production_tasks(
                 ready_at=None,
                 version=1,
                 **_new_task_printing_snapshot(db, component_product),
+                **_new_task_label_snapshot(
+                    component_product,
+                    total_quantity=max(
+                        demand.required_piece_quantity - initial_coverage,
+                        0,
+                    ),
+                ),
             )
             db.add(task)
             db.flush()
@@ -581,7 +608,11 @@ def _refresh_composite_production_tasks(
             tasks.append(task)
             continue
 
-        coverage = component_available_quantity(db, demand.snapshot_id)
+        coverage = (
+            initial_coverage
+            if initial_coverage is not None
+            else component_available_quantity(db, demand.snapshot_id)
+        )
         production_needed = max(demand.required_piece_quantity - coverage, 0)
         semi_inventory_ready = _component_semi_inventory_fully_covers(
             db,
@@ -663,10 +694,18 @@ def refresh_production_task(
             ProductionTask.sales_order_item_bom_component_id.is_(None),
         )
     )
+    initial_finished_coverage: int | None = None
     if task is None:
         if not create_if_missing:
             return None
         product = db.get(Product, item.product_id)
+        order_quantity = int(item.quantity or 0)
+        if order_quantity <= 0:
+            raise ProductionWorkflowError("订单明细数量必须大于0", 409)
+        initial_finished_coverage = min(
+            max(active_finished_reserved_qty(db, item.id), 0),
+            order_quantity,
+        )
         task = ProductionTask(
             order_item_id=item.id,
             status=WAITING_MATERIAL,
@@ -680,6 +719,10 @@ def refresh_production_task(
             ready_at=None,
             version=1,
             **_new_task_printing_snapshot(db, product),
+            **_new_task_label_snapshot(
+                product,
+                total_quantity=max(order_quantity - initial_finished_coverage, 0),
+            ),
         )
         db.add(task)
         db.flush()
@@ -690,8 +733,13 @@ def refresh_production_task(
     order_quantity = int(item.quantity or 0)
     if order_quantity <= 0:
         raise ProductionWorkflowError("订单明细数量必须大于0", 409)
-    finished_coverage = min(
-        max(active_finished_reserved_qty(db, item.id), 0), order_quantity
+    finished_coverage = (
+        initial_finished_coverage
+        if initial_finished_coverage is not None
+        else min(
+            max(active_finished_reserved_qty(db, item.id), 0),
+            order_quantity,
+        )
     )
     received_quantity, material_input_quantity = _material_quantity_facts(db, item)
     output_factor = cutting_output_factor(item.special_process)

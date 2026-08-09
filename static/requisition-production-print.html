@@ -11,6 +11,7 @@
     .toolbar { position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:10px; padding:10px 16px; background:#fff; border-bottom:1px solid #d9e0e8; }
     button { border:1px solid #b8c3d1; border-radius:6px; background:#fff; padding:7px 14px; cursor:pointer; font-size:14px; }
     button.primary { background:#0b72e7; border-color:#0b72e7; color:#fff; }
+    button.label-action { background:#0f766e; border-color:#0f766e; color:#fff; }
     button:disabled { opacity:.45; cursor:not-allowed; }
     .toolbar-note { margin-left:auto; color:#5b6574; font-size:13px; }
     .message { max-width:980px; margin:16px auto; padding:14px 16px; border-radius:8px; background:#fff; border:1px solid #d9e0e8; }
@@ -53,6 +54,7 @@
   <div class="toolbar">
     <button id="retryButton" type="button">重新加载</button>
     <button id="printButton" class="primary" type="button" disabled>打印</button>
+    <button id="labelButton" class="label-action" type="button" disabled>生产包装标签</button>
     <button id="closeButton" type="button">关闭</button>
     <span class="toolbar-note">A4 纵向 · 每页上下两款</span>
   </div>
@@ -65,6 +67,7 @@
       const pagesHost = document.getElementById("pages");
       const retryButton = document.getElementById("retryButton");
       const printButton = document.getElementById("printButton");
+      const labelButton = document.getElementById("labelButton");
       const closeButton = document.getElementById("closeButton");
       const params = new URLSearchParams(window.location.search);
       const orderId = Number(params.get("id"));
@@ -170,6 +173,9 @@
         }
         message.hidden = true;
         printButton.disabled = !(packageData.pages || []).length || packageData.printable === false;
+        const labelCount = Number(packageData.production_label_count || 0);
+        labelButton.textContent = labelCount > 0 ? `生产包装标签（${labelCount}张）` : "未启用包装标签";
+        labelButton.disabled = labelCount <= 0 || packageData.review_required === true;
       }
 
       async function loadPackage() {
@@ -178,6 +184,7 @@
         activeController = new AbortController();
         loadedPackage = null;
         printButton.disabled = true;
+        labelButton.disabled = true;
         pagesHost.innerHTML = "";
         message.hidden = false;
         message.className = "message";
@@ -218,6 +225,10 @@
 
       retryButton.addEventListener("click", loadPackage);
       printButton.addEventListener("click", () => { if (loadedPackage) window.print(); });
+      labelButton.addEventListener("click", () => {
+        if (!loadedPackage) return;
+        window.open(`/production-packaging-label.html?id=${encodeURIComponent(orderId)}`, "_blank", "noopener");
+      });
       closeButton.addEventListener("click", () => window.close());
       loadPackage();
     })();

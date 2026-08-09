@@ -168,12 +168,16 @@ from app.services.requisition_quantities import (
 from app.services.requisition_production_print import (
     build_supplier_requisition_production_package,
 )
+from app.services.production_packaging_label import (
+    build_supplier_requisition_packaging_label_package,
+)
 
 
 router = APIRouter()
 can_read = PermissionChecker("requisition.view")
 can_operate = PermissionChecker("requisition.execute")
 can_reserve = PermissionChecker("warehouse.reserve")
+can_read_production_labels = PermissionChecker("orders.view")
 admin_rollback = RoleChecker(["admin"])
 _FINISHED_STOCK_POLICY_WRITE_LOCK = Lock()
 _SUPPLIER_ORDER_CREATE_WRITE_LOCK = Lock()
@@ -15563,6 +15567,42 @@ def get_supplier_order_production_print_package(
         raise HTTPException(
             status_code=409,
             detail="同一存货编码的物理组件超过半页容量，请先核对并拆分报料后再打印",
+        )
+    return package
+
+
+@router.get("/supplier-orders/{order_id}/production-packaging-label-package")
+def get_supplier_order_production_packaging_label_package(
+    order_id: int,
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_read_production_labels),
+) -> dict:
+    """Return production packaging labels without creating inventory facts."""
+
+    user = _user
+    order = db.get(SupplierRequisitionOrder, order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="供应商报料单不存在")
+    _require_supplier_order_customer_access(order, user, db)
+    if order.status != "confirmed":
+        raise HTTPException(
+            status_code=409,
+            detail="只有正式有效的报料单可以打印生产包装标签",
+        )
+    package = build_supplier_requisition_packaging_label_package(db, order)
+    if not package["label_count"]:
+        raise HTTPException(
+            status_code=409,
+            detail="该报料单没有启用生产包装标签的任务",
+        )
+    if package["review_required"]:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "production_label_review_required",
+                "message": "生产计划已变化或标签快照不完整，请先核对并重新报料",
+                "reasons": package["review_messages"],
+            },
         )
     return package
 

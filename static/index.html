@@ -1196,6 +1196,26 @@
         border-radius: 9px;
         background: #fff7ed;
       }
+      .product-production-label-config {
+        grid-column: 1 / -1;
+        display: grid;
+        grid-template-columns: minmax(260px, .8fr) minmax(180px, .55fr) minmax(280px, 1.4fr);
+        gap: 8px 12px;
+        align-items: start;
+        padding: 10px;
+        border: 1px solid #bfdbfe;
+        border-radius: 9px;
+        background: #eff6ff;
+      }
+      .product-production-label-switch {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 34px;
+        color: #1e3a8a;
+        font-weight: 700;
+      }
+      .product-production-label-note { color: #475569; font-size: 11px; line-height: 1.45; }
       .production-printing-setup {
         color: #7c2d12;
         font-size: 11px;
@@ -1367,6 +1387,8 @@
         .product-crease-type-field { grid-column: span 1; }
         .product-cutting-mode-field { grid-column: span 2; }
         .product-crease-field { grid-column: span 3; }
+        .product-production-label-config { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .product-production-label-note { grid-column: 1 / -1; }
         .telescoping-component-grid { grid-template-columns: 1fr; }
       }
       @media (max-width: 680px) {
@@ -1382,6 +1404,8 @@
         .product-material-comparison-panel { grid-column: auto; }
         .product-material-candidate-metrics { grid-template-columns: 1fr; }
         .product-material-history-row { grid-template-columns: 1fr; }
+        .product-production-label-config { grid-template-columns: 1fr; }
+        .product-production-label-note { grid-column: auto; }
       }
 
       /* Toast */
@@ -4784,6 +4808,11 @@
                   <div class="field"><label>机器设定箱高(mm)</label><input class="input" type="number" min="0" step="0.01" v-model="productForm.machine_set_height_mm" /></div>
                   <div v-if="productPrintingPlateError" class="status orange" style="grid-column:1/-1">{{ productPrintingPlateError }}</div>
                 </div>
+                <div class="product-production-label-config">
+                  <label class="product-production-label-switch"><input type="checkbox" v-model="productForm.production_label_enabled" @change="onProductProductionLabelToggle" />随生产任务打印包装标签</label>
+                  <div class="field"><label>每张标签代表只数</label><input class="input" type="number" min="1" step="1" inputmode="numeric" v-model="productForm.production_label_units_per_label" :disabled="!productForm.production_label_enabled" placeholder="请输入正整数" /><div v-if="productProductionLabelError" class="status orange" style="display:block;margin-top:4px">{{ productProductionLabelError }}</div></div>
+                  <div class="product-production-label-note">只保存以后新生产任务的包装标签规则，不会立即打印，也不会改动旧订单、旧报料或旧生产任务。A1/0201 首次开启默认 5 只；模切内盒、衬板、刀卡、隔板默认 50 只。</div>
+                </div>
                 <div class="field"><label>报料备注</label><input class="input" v-model.trim="productForm.report_notes" placeholder="供应商直发、特殊压线等" /></div>
                 <div class="product-drawing-independent-section">
                   <div class="field"><label>上传产品图片/图纸</label>
@@ -6916,7 +6945,7 @@
             <button v-if="canSaveModal && modal?.type==='order'" class="btn primary" :disabled="loading || orderCreateSaveState.saving || orderCreateSaveState.committed || orderCreateSaveState.outcomeUncertain" @click="saveModal()">{{ orderCreateSaveState.saving ? '正在保存订单…' : (orderCreateSaveState.committed ? '订单已保存' : '保存') }}</button>
             <button v-if="canSaveModal && modal?.type==='orderEdit'" class="btn primary" :disabled="loading || orderGroupSaveState.saving || orderGroupSaveState.committed || orderGroupSaveState.outcomeUncertain" @click="saveModal()">{{ orderGroupSaveState.saving ? '正在保存订单组…' : (orderGroupSaveState.committed ? '订单组已保存' : '保存') }}</button>
             <button v-if="canSaveModal && modal?.type==='orderItem'" class="btn primary" :disabled="loading || orderItemSaveState.saving || orderItemSaveState.committed || orderItemSaveState.outcomeUncertain || finishedReservationActionBlocked() || !!orderItemCreaseMismatch" @click="saveModal()">{{ orderItemSaveState.saving ? '正在保存明细…' : (orderItemSaveState.committed ? '订单明细已保存' : '保存') }}</button>
-            <button v-if="canSaveModal && !['quotationConvert','order','orderEdit','orderItem'].includes(modal?.type)" class="btn primary" :class="{'delivery-guide-target':modal?.type==='delivery' && ['review','save','print'].includes(deliveryGuideStage)}" :disabled="loading || masterSavePending || (['supplierRequisitionDraft','requisition'].includes(modal?.type) && requisitionInventoryActionBlocked()) || (modal?.type==='supplierRequisitionDraft' && (supplierRequisitionSaveState.saving || supplierRequisitionSaveState.committed)) || (modal?.type==='requisition' && (compositeRequisitionSaveState.saving || compositeRequisitionSaveState.committed)) || (modal?.type==='stockReplenishment' && (stockReplenishmentSaveState.saving || stockReplenishmentSaveState.committed)) || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError || !!productPrintingPlateError)) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && (deliverySaveState.saving || deliverySaveState.outcomeUncertain || !!deliveryValidationError || !!deliveryOperationState.action)) || (modal?.type==='receipt' && !!receiptOperationState.action) || (modal?.type==='requisitionHold' && requisitionHoldSaveBlocked)" @click="modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()">{{ ['customer','product','material','supplier'].includes(modal?.type) && masterSavePending ? '保存中…' : (modal?.type==='delivery' ? (deliverySaveState.saving ? '正在保存草稿…' : deliveryPrimaryLabel()) : (modal?.type==='receipt' ? (receiptOperationState.action==='save' ? '保存中…' : '保存回单') : (modal?.type==='supplierRequisitionDraft' ? (supplierRequisitionSaveState.saving ? '正在生成采购单…' : (supplierRequisitionSaveState.committed ? '采购单已生成' : '确认生成正式采购单')) : (modal?.type==='requisition' ? (compositeRequisitionSaveState.saving ? '正在生成组合报料…' : (compositeRequisitionSaveState.committed ? '组合报料已生成' : '确认生成正式采购单')) : (modal?.type==='requisitionHold' ? '确认暂缓' : (modal?.type==='stockReplenishment' ? (stockReplenishmentSaveState.saving ? '正在保存补库草稿…' : (stockReplenishmentSaveState.committed ? '补库草稿已保存' : (stockReplenishmentForm.source_type==='stock_warning' ? '保存报料草稿' : '保存补库报料草稿'))) : '保存')))))) }}</button>
+            <button v-if="canSaveModal && !['quotationConvert','order','orderEdit','orderItem'].includes(modal?.type)" class="btn primary" :class="{'delivery-guide-target':modal?.type==='delivery' && ['review','save','print'].includes(deliveryGuideStage)}" :disabled="loading || masterSavePending || (['supplierRequisitionDraft','requisition'].includes(modal?.type) && requisitionInventoryActionBlocked()) || (modal?.type==='supplierRequisitionDraft' && (supplierRequisitionSaveState.saving || supplierRequisitionSaveState.committed)) || (modal?.type==='requisition' && (compositeRequisitionSaveState.saving || compositeRequisitionSaveState.committed)) || (modal?.type==='stockReplenishment' && (stockReplenishmentSaveState.saving || stockReplenishmentSaveState.committed)) || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError || !!productPrintingPlateError || !!productProductionLabelError)) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && (deliverySaveState.saving || deliverySaveState.outcomeUncertain || !!deliveryValidationError || !!deliveryOperationState.action)) || (modal?.type==='receipt' && !!receiptOperationState.action) || (modal?.type==='requisitionHold' && requisitionHoldSaveBlocked)" @click="modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()">{{ ['customer','product','material','supplier'].includes(modal?.type) && masterSavePending ? '保存中…' : (modal?.type==='delivery' ? (deliverySaveState.saving ? '正在保存草稿…' : deliveryPrimaryLabel()) : (modal?.type==='receipt' ? (receiptOperationState.action==='save' ? '保存中…' : '保存回单') : (modal?.type==='supplierRequisitionDraft' ? (supplierRequisitionSaveState.saving ? '正在生成采购单…' : (supplierRequisitionSaveState.committed ? '采购单已生成' : '确认生成正式采购单')) : (modal?.type==='requisition' ? (compositeRequisitionSaveState.saving ? '正在生成组合报料…' : (compositeRequisitionSaveState.committed ? '组合报料已生成' : '确认生成正式采购单')) : (modal?.type==='requisitionHold' ? '确认暂缓' : (modal?.type==='stockReplenishment' ? (stockReplenishmentSaveState.saving ? '正在保存补库草稿…' : (stockReplenishmentSaveState.committed ? '补库草稿已保存' : (stockReplenishmentForm.source_type==='stock_warning' ? '保存报料草稿' : '保存补库报料草稿'))) : '保存')))))) }}</button>
           </div>
         </div>
       </div>
@@ -7259,6 +7288,7 @@
         printing_plate_mode: "no_plate", printing_plate_1_id: null, printing_plate_2_id: null, printing_plate_3_id: null,
         printing_plates: [], plate_alignment_value_mm: null, plate_mount_value_mm: null,
         machine_set_length_mm: null, machine_set_width_mm: null, machine_set_height_mm: null,
+        production_label_enabled: false, production_label_units_per_label: null,
         production_process: "", _production_processes: [], _production_process_legacy: "", unit: "只", sale_unit_price: "0",
         sale_unit_price_no_tax: null, cost_unit_price: null, board_price: null,
         suggested_price: null, die_cut_path: null, mold_tool_id: null, mold_tool: null, drawings: [],
@@ -8341,6 +8371,13 @@
             if (new Set(selected).size !== selected.length) return "同一块挂板不能重复绑定";
             return "";
           },
+          productProductionLabelError() {
+            if (!this.modal || this.modal.type !== "product" || !this.productForm.production_label_enabled) return "";
+            const raw = this.productForm.production_label_units_per_label;
+            if (raw === null || raw === undefined || String(raw).trim() === "") return "开启包装标签后，必须填写每张标签数量";
+            const value = Number(raw);
+            return Number.isInteger(value) && value > 0 ? "" : "每张标签数量必须是正整数";
+          },
           stockReplenishmentCreaseBlocked() {
             if (!this.modal || this.modal.type !== "stockReplenishment") return false;
             return (this.stockReplenishmentForm.items || []).some(line => !!this.stockCreaseMismatch(line));
@@ -9082,6 +9119,7 @@
             if (productCreaseError) throw new Error(productCreaseError);
             if (this.productMoldError) throw new Error(this.productMoldError);
             if (this.productPrintingPlateError) throw new Error(this.productPrintingPlateError);
+            if (this.productProductionLabelError) throw new Error(this.productProductionLabelError);
             const payload = { ...this.productForm };
             delete payload.id;
             payload.production_process = this.serializeProductionProcesses(
@@ -9129,6 +9167,14 @@
               payload.printing_plate_mode="no_plate";
               [1,2,3].forEach(index=>payload[`printing_plate_${index}_id`]=null);
               ["plate_alignment_value_mm","plate_mount_value_mm","machine_set_length_mm","machine_set_width_mm","machine_set_height_mm"].forEach(key=>payload[key]=null);
+            }
+            payload.production_label_enabled = payload.production_label_enabled === true;
+            if (payload.production_label_enabled) {
+              const unitsPerLabel = Number(payload.production_label_units_per_label);
+              if (!Number.isInteger(unitsPerLabel) || unitsPerLabel <= 0) throw new Error("每张标签数量必须是正整数");
+              payload.production_label_units_per_label = unitsPerLabel;
+            } else {
+              payload.production_label_units_per_label = null;
             }
             if (payload.sale_unit_price === "") payload.sale_unit_price = null;
             payload.print_content = payload.print_content || "无印刷";
@@ -18808,6 +18854,25 @@
             const count = this.productPrintingPlateCount(form);
             for (let index=count+1; index<=3; index+=1) form[`printing_plate_${index}_id`]=null;
           },
+          productionLabelDefaultUnits(boxStyle) {
+            const code = this.productBoxTypeRule(boxStyle)?.code;
+            if (code === "a1_0201") return 5;
+            if (["die_cut_inner_box", "liner", "die_cut_partition", "divider"].includes(code)) return 50;
+            return null;
+          },
+          async onProductProductionLabelToggle() {
+            const form = this.productForm;
+            form.production_label_enabled = form.production_label_enabled === true;
+            if (!form.production_label_enabled) {
+              form.production_label_units_per_label = null;
+              return;
+            }
+            const current = Number(form.production_label_units_per_label);
+            if (Number.isInteger(current) && current > 0) return;
+            await this.loadProductBoxTypeRules();
+            if (!form.production_label_enabled || (Number.isInteger(Number(form.production_label_units_per_label)) && Number(form.production_label_units_per_label) > 0)) return;
+            form.production_label_units_per_label = this.productionLabelDefaultUnits(form.box_style);
+          },
           onProductProcessesChanged() {
             if (!this.productUsesMold(this.productForm)) {
               this.productForm.mold_tool_id=null;
@@ -18819,6 +18884,11 @@
             form.box_style = this.normalizeBoxTypeDisplay(form.box_style || "");
             form.print_content = form.print_content || "无印刷";
             form.printing_plate_mode = form.printing_plate_mode === "plate" ? "plate" : "no_plate";
+            form.production_label_enabled = form.production_label_enabled === true;
+            const productionLabelUnits = Number(form.production_label_units_per_label);
+            form.production_label_units_per_label = form.production_label_enabled && Number.isInteger(productionLabelUnits) && productionLabelUnits > 0
+              ? productionLabelUnits
+              : null;
             const boxRule = this.productBoxTypeRule(form.box_style);
             if (boxRule) {
               form.splice_mode = this.usesProductSplice(form.box_style)
@@ -18891,6 +18961,8 @@
               plate_alignment_value_mm: f.plate_alignment_value_mm, plate_mount_value_mm: f.plate_mount_value_mm,
               machine_set_length_mm: f.machine_set_length_mm, machine_set_width_mm: f.machine_set_width_mm,
               machine_set_height_mm: f.machine_set_height_mm,
+              production_label_enabled: f.production_label_enabled,
+              production_label_units_per_label: f.production_label_units_per_label,
               sale_unit_price: f.sale_unit_price, die_cut_path: f.die_cut_path, mold_tool_id: f.mold_tool_id, remark: f.remark,
               layer_count: f.layer_count, flute_type: f.flute_type,
               splice_mode: f.splice_mode, pieces_per_box: f.pieces_per_box,

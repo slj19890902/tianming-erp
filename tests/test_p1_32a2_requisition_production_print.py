@@ -542,3 +542,102 @@ def test_print_page_and_erp_entry_keep_purchase_and_receipt_prints_separate():
     assert "method: \"DELETE\"" not in print_html
     for forbidden in ("单价", "成本", "库存批次", "可用库存"):
         assert forbidden not in print_html
+
+
+def test_production_packaging_labels_deduplicate_split_rows_and_keep_remainder(
+    production_print_app,
+):
+    from app.models.production import ProductionTask
+    from app.models.supplier_requisition_order import SupplierRequisitionOrder
+    from app.services.production_packaging_label import (
+        build_supplier_requisition_packaging_label_package,
+    )
+    from app.services.requisition_production_print import (
+        build_supplier_requisition_production_package,
+    )
+
+    session_factory = production_print_app["session_factory"]
+    with session_factory() as db:
+        task = db.scalar(
+            select(ProductionTask).where(
+                ProductionTask.order_item_id == production_print_app["order_item_id"]
+            )
+        )
+        task.production_label_enabled_snapshot = True
+        task.production_label_units_per_label_snapshot = 5
+        task.production_label_total_quantity_snapshot = 23
+        task.production_label_count_snapshot = 5
+        db.commit()
+        order = db.get(
+            SupplierRequisitionOrder,
+            production_print_app["supplier_order_id"],
+        )
+        before = db.scalar(select(func.count()).select_from(ProductionTask))
+        first = build_supplier_requisition_packaging_label_package(db, order)
+        second = build_supplier_requisition_packaging_label_package(db, order)
+        after = db.scalar(select(func.count()).select_from(ProductionTask))
+
+    # Cover/base supplier rows share one ordinary production task and must not
+    # duplicate its packaging-label plan.
+    assert first["production_task_count"] == 1
+    assert first["label_count"] == 5
+    assert [row["quantity"] for row in first["labels"]] == [5, 5, 5, 5, 3]
+    assert {row["production_task_id"] for row in first["labels"]} == {task.id}
+    assert first["plan_fingerprint"] == second["plan_fingerprint"]
+    assert before == after == 4
+    with session_factory() as db:
+        order = db.get(
+            SupplierRequisitionOrder,
+            production_print_app["supplier_order_id"],
+        )
+        task_sheet = build_supplier_requisition_production_package(db, order)
+    assert task_sheet["production_label_task_count"] == 1
+    assert task_sheet["production_label_count"] == 5
+    serialized = json.dumps(first, ensure_ascii=False, sort_keys=True, default=str)
+    for forbidden in (
+        "inventory_lot",
+        "location_id",
+        "available_quantity",
+        "reserved_quantity",
+        "unit_price",
+        "cost",
+    ):
+        assert forbidden not in serialized
+
+
+def test_production_packaging_label_api_is_read_only_and_customer_scoped(
+    production_print_app,
+):
+    from app.models.production import ProductionTask
+
+    order_id = production_print_app["supplier_order_id"]
+    with production_print_app["session_factory"]() as db:
+        task = db.scalar(
+            select(ProductionTask).where(
+                ProductionTask.order_item_id == production_print_app["order_item_id"]
+            )
+        )
+        task.production_label_enabled_snapshot = True
+        task.production_label_units_per_label_snapshot = 5
+        task.production_label_total_quantity_snapshot = 23
+        task.production_label_count_snapshot = 5
+        db.commit()
+
+    with TestClient(production_print_app["app"]) as client:
+        _login(client, "p132a2-admin")
+        first = client.get(
+            f"/api/requisition/supplier-orders/{order_id}/production-packaging-label-package"
+        )
+        second = client.get(
+            f"/api/requisition/supplier-orders/{order_id}/production-packaging-label-package"
+        )
+        assert first.status_code == second.status_code == 200
+        assert first.json() == second.json()
+        assert first.json()["label_count"] == 5
+
+    with TestClient(production_print_app["app"]) as client:
+        _login(client, "p132a2-sales")
+        forbidden = client.get(
+            f"/api/requisition/supplier-orders/{order_id}/production-packaging-label-package"
+        )
+        assert forbidden.status_code == 403

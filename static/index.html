@@ -1373,6 +1373,9 @@
       .material-cost-compact { margin-top:5px; padding:5px 7px; border-radius:6px; background:#f0f9ff; color:#075985; font-size:11px; line-height:1.45; }
       .material-cost-compact summary { cursor:pointer; color:#0369a1; }
       .material-cost-compact .missing { color:#b45309; white-space:normal; }
+      .cost-gap-summary { display:flex; gap:6px; flex-wrap:wrap; margin:10px 0; }
+      .cost-gap-table td { vertical-align:top; white-space:normal; }
+      .cost-gap-detail { margin-top:4px; color:var(--muted); font-size:11px; line-height:1.4; }
       .role-boss .role-sensitive-cost { font-variant-numeric: tabular-nums; }
 
       /* Search-select dropdown */
@@ -2770,7 +2773,10 @@
                       <button v-if="canCreateOrders" class="btn primary" @click="openOrder">新建订单</button>
                       <button v-if="canCreateOrders" class="btn" @click="openOrderPdfImport">识别PDF订单</button>
                     </div>
-                    <button class="btn" @click="loadOrders()">刷新</button>
+                    <div class="toolbar-group">
+                      <button v-if="canViewCosts" class="btn" @click="openCostGaps">成本缺口</button>
+                      <button class="btn" @click="loadOrders()">刷新</button>
+                    </div>
                   </div>
                 </div>
                 <div class="order-filter-card">
@@ -5725,6 +5731,35 @@
               <div class="field"><label>其他一次性费用</label><input class="input" type="number" min="0" step="0.01" v-model.number="estimatedCostForm.other_fee" /></div>
               <div class="field wide notice warning">预计成本，非实际成本。税率参考 13%，沿用材料价原口径，不重复加税；费用只影响当前订单快照。</div>
             </div>
+            <div v-else-if="modal.type === 'costGaps'" class="cost-sensitive">
+              <div class="notice">{{ costGapState.scope_label || '仅统计已有预计成本快照的当前订单；旧订单不回填' }}</div>
+              <div v-if="costGapState.loading" class="empty">正在读取成本缺口…</div>
+              <div v-else-if="costGapState.error" class="empty">
+                <div class="notice danger">读取失败：{{ costGapState.error }}</div>
+                <button class="btn" style="margin-top:8px" @click="loadCostGaps">重新加载</button>
+              </div>
+              <template v-else>
+                <div class="cost-gap-summary">
+                  <button :class="['btn','small',{primary:costGapState.filter==='all'}]" @click="costGapState.filter='all'">全部 {{ costGapState.total_items }}</button>
+                  <button v-for="category in costGapState.categories" :key="category.code" :class="['btn','small',{primary:costGapState.filter===category.code}]" @click="costGapState.filter=category.code">{{ category.label }} {{ category.count }}</button>
+                </div>
+                <div v-if="!costGapVisibleItems().length" class="empty">当前没有这类成本缺口</div>
+                <div v-else class="table-wrap">
+                  <table class="cost-gap-table">
+                    <thead><tr><th>客户 / 客户单号</th><th>序号</th><th>存货编码</th><th>产品名称</th><th>需要补齐</th><th>操作</th></tr></thead>
+                    <tbody><tr v-for="row in costGapVisibleItems()" :key="row.item_id">
+                      <td><strong>{{ row.customer_name || '-' }}</strong><div class="muted">{{ row.customer_po || '未填写客户单号' }}</div></td>
+                      <td>{{ row.item_sequence || '-' }}</td>
+                      <td>{{ row.product_code || '-' }}</td>
+                      <td>{{ row.product_name || '-' }}</td>
+                      <td><span v-for="category in row.categories" :key="category.code" class="status orange" style="margin:0 4px 3px 0">{{ category.label }}</span><div class="cost-gap-detail">{{ (row.missing_details || []).join('；') }}</div></td>
+                      <td><button class="btn small primary" @click="openCostGapOrder(row)">查看订单</button></td>
+                    </tr></tbody>
+                  </table>
+                </div>
+                <div v-if="costGapState.truncated" class="notice warning" style="margin-top:10px">缺口较多，当前先显示 {{ costGapState.returned_items }} 条；可先按上方类别处理。</div>
+              </template>
+            </div>
             <div v-else-if="modal.type === 'orderDetail' && orderDetail">
               <div class="form-grid">
                 <div class="field"><label class="sys-num">系统单号</label><div class="sys-num">{{ displayOrderNumber(orderDetail) }}</div></div>
@@ -7321,7 +7356,9 @@
               selected:{}, selection_sequence:0, request_id:0,
             },
             requisitionForm: { supplier_name: "", items: [] },
-            receiptForm: { items: [] }, orderItemForm: {}, estimatedCostForm:{}, orderDetail:null, orderGroupDetail:null, orderTrace:null, orderTraceEventDetail:null, orderTraceEventDetailLoadingKey:"", orderTraceReturnContext:null, traceRollbackBusy:false, drawingFile:null,
+            receiptForm: { items: [] }, orderItemForm: {}, estimatedCostForm:{},
+            costGapState:{loading:false,error:"",scope_label:"",total_items:0,returned_items:0,truncated:false,categories:[],items:[],filter:"all"},
+            orderDetail:null, orderGroupDetail:null, orderTrace:null, orderTraceEventDetail:null, orderTraceEventDetailLoadingKey:"", orderTraceReturnContext:null, traceRollbackBusy:false, drawingFile:null,
             externalPurchase:{loading:false,saving:false,error:"",submitError:"",status:"",orderId:null,items:[],confirmation:null,idempotencyKey:""},
             orderItemSaveState:{saving:false,committed:false,outcomeUncertain:false,result:null},
             finishedInventoryCandidates: [], finishedInventoryCandidatesLoaded: false,
@@ -21429,6 +21466,43 @@
             } finally {
               if (latestRequestControllers.get(requestKey) === controller) this.finishLatestRequest(requestKey, controller);
             }
+          },
+          async openCostGaps() {
+            if (!this.canViewCosts) {
+              this.showToast("当前账号没有查看成本资料的权限", true);
+              return false;
+            }
+            this.costGapState.filter = "all";
+            this.modal = {type:"costGaps", title:"成本资料缺口"};
+            return this.loadCostGaps();
+          },
+          async loadCostGaps() {
+            this.costGapState.loading = true;
+            this.costGapState.error = "";
+            try {
+              const {data} = await axios.get("/api/orders/cost-readiness", {params:{limit:200}});
+              this.costGapState = {
+                ...this.costGapState,
+                ...data,
+                loading:false,
+                error:"",
+                categories:data.categories || [],
+                items:data.items || [],
+              };
+              return true;
+            } catch(error) {
+              this.costGapState.loading = false;
+              this.costGapState.error = this.errorMessage(error);
+              return false;
+            }
+          },
+          costGapVisibleItems() {
+            const rows = this.costGapState.items || [];
+            if (this.costGapState.filter === "all") return rows;
+            return rows.filter(row => (row.category_codes || []).includes(this.costGapState.filter));
+          },
+          openCostGapOrder(row) {
+            return this.openOrderDetail({id:row?.order_id});
           },
           async openOrderDetail(row) {
             const requestKey = "orders:read-detail-modal";

@@ -109,6 +109,7 @@ from app.services.order_material_cost_snapshot import (
     serialize_order_item_material_cost_snapshot,
 )
 from app.services.order_estimated_cost_snapshot import (
+    classify_estimated_cost_health,
     freeze_order_item_estimated_cost,
     get_latest_order_item_estimated_cost_snapshot,
     get_latest_order_item_estimated_cost_snapshots_by_items,
@@ -2670,6 +2671,169 @@ def list_order_cost_readiness(
             {**category, "count": category_counts[category["code"]]}
             for category in COST_GAP_CATEGORIES
             if category_counts[category["code"]]
+        ],
+        "items": visible_items,
+    }
+
+
+@router.get("/cost-review")
+def list_order_cost_review(
+    limit: int = Query(default=100, ge=1, le=200),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+    _cost_user: User = Depends(can_view_cost),
+) -> dict:
+    """List current frozen estimates that need an internal margin review.
+
+    The result reuses the P1-28C2 health classifier. It is advisory and
+    read-only: healthy rows stay in the summary, while incomplete estimates
+    remain exclusively in the cost-readiness list.
+    """
+
+    latest_versions = (
+        select(
+            SalesOrderItemEstimatedCostSnapshot.sales_order_item_id.label("item_id"),
+            func.max(
+                SalesOrderItemEstimatedCostSnapshot.snapshot_version
+            ).label("snapshot_version"),
+        )
+        .group_by(SalesOrderItemEstimatedCostSnapshot.sales_order_item_id)
+        .subquery()
+    )
+    query = (
+        select(
+            SalesOrderItemEstimatedCostSnapshot,
+            OrderItem,
+            Order,
+            Customer,
+        )
+        .join(
+            latest_versions,
+            and_(
+                latest_versions.c.item_id
+                == SalesOrderItemEstimatedCostSnapshot.sales_order_item_id,
+                latest_versions.c.snapshot_version
+                == SalesOrderItemEstimatedCostSnapshot.snapshot_version,
+            ),
+        )
+        .join(
+            OrderItem,
+            OrderItem.id
+            == SalesOrderItemEstimatedCostSnapshot.sales_order_item_id,
+        )
+        .join(Order, Order.id == OrderItem.order_id)
+        .join(Customer, Customer.id == Order.customer_id)
+        .where(
+            SalesOrderItemEstimatedCostSnapshot.calculation_status
+            == "calculated",
+            ~Order.order_number.like("RUIDA-%"),
+            Order.status.notin_(_BUSINESS_EXCLUDED_STATUSES),
+        )
+        .order_by(
+            Order.created_at.desc(),
+            Order.id.desc(),
+            OrderItem.item_sequence.asc(),
+            OrderItem.id.asc(),
+        )
+    )
+    if not has_unrestricted_customer_access(user, db):
+        query = query.where(Order.customer_id.in_(customer_scope_ids(user, db)))
+
+    candidates = list(db.execute(query).all())
+    order_ids = {int(row[2].id) for row in candidates}
+    orders = (
+        list(
+            db.scalars(
+                select(Order)
+                .options(selectinload(Order.items))
+                .where(Order.id.in_(order_ids))
+            ).all()
+        )
+        if order_ids
+        else []
+    )
+    business_projections = build_order_business_statuses(
+        db,
+        orders,
+        include_finance=False,
+    )
+
+    summary_definitions = (
+        ("estimated_loss", "预计亏损", "red"),
+        ("very_low", "利润空间很低", "red"),
+        ("review", "建议复核", "orange"),
+        ("sale_missing", "售价待完善", "orange"),
+        ("healthy", "预计正常", "green"),
+    )
+    summary_counts = {code: 0 for code, _label, _tone in summary_definitions}
+    severity = {
+        "estimated_loss": 0,
+        "very_low": 1,
+        "review": 2,
+        "sale_missing": 3,
+    }
+    items: list[dict[str, object]] = []
+    for snapshot, item, order, customer in candidates:
+        if (
+            business_projections.get(int(order.id), {}).get("business_status")
+            == "completed"
+        ):
+            continue
+        expected_reference = (
+            (item.item_order_number or "").strip()
+            or f"order-{int(item.order_id)}-item-{int(item.id)}"
+        )
+        if snapshot.order_item_reference_snapshot != expected_reference:
+            continue
+        health = classify_estimated_cost_health(snapshot, item.subtotal)
+        health_code = str(health["estimated_cost_health_code"])
+        if health_code not in summary_counts:
+            continue
+        summary_counts[health_code] += 1
+        if health_code == "healthy":
+            continue
+        items.append(
+            {
+                "order_id": int(order.id),
+                "customer_id": int(order.customer_id),
+                "customer_name": sanitize_user_text(customer.name),
+                "customer_po": sanitize_user_text(order.customer_po),
+                "order_date": order.order_date,
+                "item_id": int(item.id),
+                "item_sequence": item.item_sequence,
+                "product_code": sanitize_user_text(item.snapshot_product_code),
+                "product_name": sanitize_user_text(item.snapshot_product_name),
+                "sale_amount": str(item.subtotal),
+                "estimated_order_total_cost": str(
+                    snapshot.estimated_order_total_cost
+                ),
+                "estimated_gross_profit": health["estimated_gross_profit"],
+                "estimated_margin_rate": health["estimated_margin_rate"],
+                "health_code": health_code,
+                "health_label": health["estimated_cost_health_label"],
+                "health_tone": health["estimated_cost_health_tone"],
+                "health_version": health["estimated_cost_health_version"],
+            }
+        )
+
+    # Python sorting is stable, preserving newest-order-first within one level.
+    items.sort(key=lambda row: severity[str(row["health_code"])])
+    total_items = len(items)
+    visible_items = items[:limit]
+    return {
+        "scope_label": "当前订单冻结预计成本，仅供内部复核，不是实际利润",
+        "evaluated_items": sum(summary_counts.values()),
+        "total_items": total_items,
+        "returned_items": len(visible_items),
+        "truncated": total_items > len(visible_items),
+        "summary": [
+            {
+                "code": code,
+                "label": label,
+                "tone": tone,
+                "count": summary_counts[code],
+            }
+            for code, label, tone in summary_definitions
         ],
         "items": visible_items,
     }

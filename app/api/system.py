@@ -8,13 +8,20 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 import jwt
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.api.deps import PermissionChecker, RoleChecker, get_current_user, get_db
+from app.api.deps import (
+    PermissionChecker,
+    RoleChecker,
+    effective_permissions,
+    get_current_user,
+    get_db,
+)
 from app.core.time_contract import (
     beijing_naive_to_api,
     beijing_now_naive,
@@ -33,6 +40,20 @@ from app.models.user import User
 from app.services.delivery_print_settings import (
     get_delivery_print_settings,
     save_delivery_print_settings,
+)
+from app.services.audit_log import append_audit_event
+from app.services.ui_layout_settings import (
+    DISPLAY_MODES,
+    LAYOUT_ROLES,
+    UiLayoutConflict,
+    UiLayoutError,
+    admin_state,
+    effective_layout,
+    layout_diff_summary,
+    publish_draft,
+    restore_default,
+    rollback_release,
+    save_draft,
 )
 
 logger = logging.getLogger(__name__)
@@ -79,6 +100,34 @@ class DeliveryPrintSettingsUpdate(BaseModel):
     orientation_mode: str = "driver_managed"
     paper_width_mm: float
     paper_height_mm: float
+
+
+class UiLayoutComponentPayload(BaseModel):
+    id: str = Field(min_length=1, max_length=80)
+    visible: bool
+
+
+class UiLayoutPayload(BaseModel):
+    catalog_version: str = Field(min_length=1, max_length=40)
+    menus: list[UiLayoutComponentPayload] = Field(max_length=20)
+    dashboard_cards: list[UiLayoutComponentPayload] = Field(max_length=30)
+    quick_actions: list[UiLayoutComponentPayload] = Field(max_length=20)
+
+
+class UiLayoutDraftUpdate(BaseModel):
+    role_code: str
+    display_mode: str
+    expected_draft_version: int = Field(ge=0)
+    operation_key: str = Field(min_length=8, max_length=64, pattern=r"^[A-Za-z0-9._:-]+$")
+    layout: UiLayoutPayload
+
+
+class UiLayoutVersionAction(BaseModel):
+    role_code: str
+    display_mode: str
+    expected_draft_version: int = Field(ge=0)
+    expected_release_version: int = Field(ge=0)
+    operation_key: str = Field(min_length=8, max_length=64, pattern=r"^[A-Za-z0-9._:-]+$")
 
 
 def _safe_backup_path(backup_dir: Path, filename: str) -> Path:
@@ -1431,3 +1480,207 @@ def update_delivery_print_paper_settings(
     )
     db.commit()
     return settings
+
+
+# ---------------------------------------------------------------------------
+# Q2-02C1 administrator-controlled role and display-mode UI layout
+# ---------------------------------------------------------------------------
+
+
+def _validate_ui_layout_query(role_code: str, display_mode: str) -> None:
+    if role_code not in LAYOUT_ROLES:
+        raise HTTPException(status_code=422, detail="不支持的角色")
+    if display_mode not in DISPLAY_MODES:
+        raise HTTPException(status_code=422, detail="不支持的显示模式")
+
+
+@router.get("/ui-layout/effective")
+def get_effective_ui_layout(
+    display_mode: str = Query("standard"),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    _validate_ui_layout_query(user.role, display_mode)
+    return effective_layout(
+        db,
+        role_code=user.role,
+        display_mode=display_mode,
+        permissions=effective_permissions(user),
+    )
+
+
+@router.get("/ui-layout/admin", dependencies=[Depends(admin_only)])
+def get_admin_ui_layout(
+    role_code: str = Query(...),
+    display_mode: str = Query(...),
+    _admin: User = Depends(admin_only),
+    db: Session = Depends(get_db),
+) -> dict:
+    _validate_ui_layout_query(role_code, display_mode)
+    return admin_state(db, role_code, display_mode)
+
+
+def _commit_ui_layout_operation(
+    *,
+    operation: str,
+    body: UiLayoutDraftUpdate | UiLayoutVersionAction,
+    request: Request,
+    db: Session,
+    user: User,
+) -> dict:
+    _validate_ui_layout_query(body.role_code, body.display_mode)
+    before_state = admin_state(db, body.role_code, body.display_mode)
+    before_layout = (
+        before_state["draft"]["layout"]
+        if operation == "save_draft"
+        else before_state["published"]["layout"]
+    )
+    common = {
+        "role_code": body.role_code,
+        "display_mode": body.display_mode,
+        "operation_key": body.operation_key,
+        "actor_id": user.id,
+    }
+    def execute_operation() -> dict:
+        if operation == "save_draft":
+            assert isinstance(body, UiLayoutDraftUpdate)
+            return save_draft(
+                db,
+                **common,
+                expected_draft_version=body.expected_draft_version,
+                layout=body.layout.model_dump(),
+            )
+        assert isinstance(body, UiLayoutVersionAction)
+        versioned = {
+            **common,
+            "expected_draft_version": body.expected_draft_version,
+            "expected_release_version": body.expected_release_version,
+        }
+        if operation == "publish":
+            return publish_draft(db, **versioned)
+        if operation == "restore_default":
+            return restore_default(db, **versioned)
+        if operation == "rollback":
+            return rollback_release(db, **versioned)
+        raise UiLayoutError("未知界面布局操作")
+
+    try:
+        result = execute_operation()
+    except UiLayoutConflict as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except UiLayoutError as error:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except IntegrityError as error:
+        db.rollback()
+        try:
+            result = execute_operation()
+        except UiLayoutConflict as retry_error:
+            db.rollback()
+            raise HTTPException(status_code=409, detail=str(retry_error)) from retry_error
+        except UiLayoutError as retry_error:
+            db.rollback()
+            raise HTTPException(status_code=422, detail=str(retry_error)) from retry_error
+        except IntegrityError as retry_error:
+            db.rollback()
+            raise HTTPException(status_code=409, detail="界面布局版本已变化，请重新载入") from retry_error
+        if not result.get("replayed"):
+            db.rollback()
+            raise HTTPException(status_code=409, detail="界面布局版本已变化，请重新载入") from error
+
+    if not result.get("replayed"):
+        after_layout = (
+            result["draft"]["layout"]
+            if operation == "save_draft"
+            else result["published"]["layout"]
+        )
+        action_codes = {
+            "save_draft": ("ui_layout.save_draft", "UI_LAYOUT_DRAFT", "保存草稿"),
+            "publish": ("ui_layout.publish", "UI_LAYOUT_PUBLISH", "发布"),
+            "restore_default": ("ui_layout.restore_default", "UI_LAYOUT_DEFAULT", "恢复默认"),
+            "rollback": ("ui_layout.rollback", "UI_LAYOUT_ROLLBACK", "回滚"),
+        }
+        action_code, legacy_action, operation_label = action_codes[operation]
+        object_stream = "draft" if operation == "save_draft" else "release"
+        object_version = result["draft" if operation == "save_draft" else "published"]["version"]
+        append_audit_event(
+            db,
+            event_category="system",
+            result="success",
+            source="web",
+            module_code="system",
+            action_code=action_code,
+            legacy_action=legacy_action,
+            resource="UiLayout",
+            request=request,
+            actor=user,
+            entity_type="ui_layout",
+            object_ref=(
+                f"{body.role_code}:{body.display_mode}:"
+                f"{object_stream}:v{object_version}"
+            ),
+            batch_id=body.operation_key,
+            description=(
+                f"管理员{operation_label}角色界面："
+                f"{body.role_code}/{body.display_mode}"
+            ),
+            details={
+                "role_code": body.role_code,
+                "display_mode": body.display_mode,
+                "draft_version": result["draft"]["version"],
+                "release_version": result["published"]["version"],
+                "catalog_version": result["catalog"]["catalog_version"],
+                "diff": layout_diff_summary(before_layout, after_layout),
+            },
+        )
+    db.commit()
+    return result
+
+
+@router.put("/ui-layout/admin/draft", dependencies=[Depends(admin_only)])
+def update_admin_ui_layout_draft(
+    body: UiLayoutDraftUpdate,
+    request: Request,
+    user: User = Depends(admin_only),
+    db: Session = Depends(get_db),
+) -> dict:
+    return _commit_ui_layout_operation(
+        operation="save_draft", body=body, request=request, db=db, user=user
+    )
+
+
+@router.post("/ui-layout/admin/publish", dependencies=[Depends(admin_only)])
+def publish_admin_ui_layout(
+    body: UiLayoutVersionAction,
+    request: Request,
+    user: User = Depends(admin_only),
+    db: Session = Depends(get_db),
+) -> dict:
+    return _commit_ui_layout_operation(
+        operation="publish", body=body, request=request, db=db, user=user
+    )
+
+
+@router.post("/ui-layout/admin/restore-default", dependencies=[Depends(admin_only)])
+def restore_admin_ui_layout_default(
+    body: UiLayoutVersionAction,
+    request: Request,
+    user: User = Depends(admin_only),
+    db: Session = Depends(get_db),
+) -> dict:
+    return _commit_ui_layout_operation(
+        operation="restore_default", body=body, request=request, db=db, user=user
+    )
+
+
+@router.post("/ui-layout/admin/rollback", dependencies=[Depends(admin_only)])
+def rollback_admin_ui_layout(
+    body: UiLayoutVersionAction,
+    request: Request,
+    user: User = Depends(admin_only),
+    db: Session = Depends(get_db),
+) -> dict:
+    return _commit_ui_layout_operation(
+        operation="rollback", body=body, request=request, db=db, user=user
+    )

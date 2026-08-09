@@ -229,6 +229,11 @@
         initializing: false,
       };
       const mobilePages = new Set(["home", "search", "production"]);
+      const mobileLayoutPageIds = {
+        mobile_home: "home",
+        mobile_search: "search",
+        mobile_production: "production",
+      };
       const byId = id => document.getElementById(id);
 
       function node(tag, className, text) {
@@ -701,11 +706,34 @@
           const canSearch = permissions.includes("warehouse.view");
           const canProduction = permissions.includes("orders.view") && permissions.includes("incoming.view");
           const canHome = permissions.includes("dashboard.view");
+          const navContainer = document.querySelector(".bottom-inner");
+          ["home", "search", "production"].forEach(page => {
+            const button = document.querySelector(`[data-page="${page}"]`);
+            button.hidden = false;
+            navContainer.append(button);
+          });
           document.querySelector('[data-page="home"]').hidden = !canHome;
           document.querySelector('[data-page="search"]').hidden = !canSearch;
           byId("zeroStockControl").hidden = !canSearch || user.role !== "admin";
           document.querySelector('[data-page="production"]').hidden = !canProduction;
-          const visibleNav = [...document.querySelectorAll(".nav-btn")].filter(button => !button.hidden);
+          let configuredMenus = null;
+          try {
+            const configured = await apiGet("/api/system/ui-layout/effective?display_mode=mobile");
+            configuredMenus = configured?.layout?.menus;
+          } catch (_error) {
+            configuredMenus = null;
+          }
+          let visibleNav = [...document.querySelectorAll(".nav-btn")].filter(button => !button.hidden);
+          if (Array.isArray(configuredMenus)) {
+            const permittedByPage = new Map(visibleNav.map(button => [button.dataset.page, button]));
+            visibleNav = configuredMenus
+              .map(item => permittedByPage.get(mobileLayoutPageIds[item.id]))
+              .filter(Boolean);
+            document.querySelectorAll(".nav-btn").forEach(button => {
+              button.hidden = !visibleNav.includes(button);
+            });
+            visibleNav.forEach(button => navContainer.append(button));
+          }
           state.allowedPages = new Set(visibleNav.map(button => button.dataset.page));
           document.querySelector(".bottom-inner").style.setProperty("--nav-count", visibleNav.length || 1);
           if (!visibleNav.length) {

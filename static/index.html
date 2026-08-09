@@ -2271,7 +2271,8 @@
                 </div>
                 <div class="toolbar-group" v-if="contractCustomer">
                   <button class="btn" :disabled="loading || contractActionBusy() || !contractEditable" @click="saveContractDraft">{{ loading ? '保存中…' : '保存合同草稿' }}</button>
-                  <button class="btn" :disabled="!contractDraft.id" @click="printContract(contractDraft)">打印/PDF</button>
+                  <button class="btn primary" :disabled="!contractDraft.id || contractPdfExportBusy()" @click="exportContractPdf(contractDraft)">{{ contractPdfExportBusy(contractDraft.id) ? '正在导出…' : '导出 PDF（未盖章）' }}</button>
+                  <button class="btn" :disabled="!contractDraft.id" @click="printContract(contractDraft)">网页预览/自助打印</button>
                   <button v-if="contractDraft.id && contractDraft.status === 'draft' && canEditContracts" class="btn success" :disabled="loading || contractActionBusy()" @click="confirmContract(contractDraft)">{{ contractActionPending('confirm',contractDraft.id) ? '确认中…' : '客户确认合同' }}</button>
                   <button v-if="contractDraft.status === 'confirmed' && canConvertContracts" class="btn success" :disabled="loading || contractActionBusy()" @click="convertContract(contractDraft)">{{ contractActionPending('convert',contractDraft.id) ? '转单中…' : '确认并转订单' }}</button>
                   <button v-if="contractDraft.id && contractDraft.status === 'draft' && canEditContracts" class="btn danger" :disabled="loading || contractActionBusy()" @click="deleteContract(contractDraft)">{{ contractActionPending('delete',contractDraft.id) ? '删除中…' : '删除草稿' }}</button>
@@ -2318,7 +2319,7 @@
                     <td><strong>{{ row.contract_no }}</strong></td><td>{{ row.contract_date || '-' }}</td><td>{{ row.customer_po || '-' }}</td><td>{{ row.delivery_date || '-' }}</td>
                     <td><span :class="['status','contract-status',contractStatusTone(row.status)]">{{ contractStatusText(row.status) }}</span></td>
                     <td><div v-for="item in row.items || []" :key="item.id || item.product_id">{{ item.product_code || '-' }}｜{{ item.product_name || '-' }} × {{ item.quantity || 0 }}</div></td><td>￥ {{ money(row.total_amount) }}</td>
-                    <td class="toolbar-group"><button class="btn small" :disabled="loading || contractActionBusy()" @click="editContract(row)">{{ row.status === 'draft' ? '查看/编辑' : '查看' }}</button><button class="btn small" @click="printContract(row)">打印/PDF</button><button v-if="row.status === 'draft' && canEditContracts" class="btn small success" :disabled="loading || contractActionBusy()" @click="confirmContract(row)">{{ contractActionPending('confirm',row.id) ? '确认中…' : '客户确认' }}</button><button v-if="row.status === 'confirmed' && canConvertContracts" class="btn small success" :disabled="loading || contractActionBusy()" @click="convertContract(row)">{{ contractActionPending('convert',row.id) ? '转单中…' : '转订单' }}</button><button v-if="row.status === 'draft' && canEditContracts" class="btn small danger" :disabled="loading || contractActionBusy()" @click="deleteContract(row)">{{ contractActionPending('delete',row.id) ? '删除中…' : '删除' }}</button></td>
+                    <td class="toolbar-group"><button class="btn small" :disabled="loading || contractActionBusy()" @click="editContract(row)">{{ row.status === 'draft' ? '查看/编辑' : '查看' }}</button><button class="btn small primary" :disabled="contractPdfExportBusy()" @click="exportContractPdf(row)">{{ contractPdfExportBusy(row.id) ? '正在导出…' : '导出 PDF（未盖章）' }}</button><button class="btn small" @click="printContract(row)">网页预览/自助打印</button><button v-if="row.status === 'draft' && canEditContracts" class="btn small success" :disabled="loading || contractActionBusy()" @click="confirmContract(row)">{{ contractActionPending('confirm',row.id) ? '确认中…' : '客户确认' }}</button><button v-if="row.status === 'confirmed' && canConvertContracts" class="btn small success" :disabled="loading || contractActionBusy()" @click="convertContract(row)">{{ contractActionPending('convert',row.id) ? '转单中…' : '转订单' }}</button><button v-if="row.status === 'draft' && canEditContracts" class="btn small danger" :disabled="loading || contractActionBusy()" @click="deleteContract(row)">{{ contractActionPending('delete',row.id) ? '删除中…' : '删除' }}</button></td>
                   </tr>
                 </tbody></table></div>
               </div>
@@ -7368,6 +7369,7 @@
             contractHistory: [],
             contractProducts: [],
             contractAction:{action:"",contractId:null},
+            contractPdfExportState:{contractId:null,requestId:0},
             materialLayerFilter: 3,
             materialLayerTabs: [
               { value: 3, label: "三层" },
@@ -16997,6 +16999,135 @@
           },
           printContract(row) {
             if (row?.id) window.open(`/contract-print.html?id=${encodeURIComponent(row.id)}`, "_blank");
+          },
+          contractPdfExportBusy(contractId=null) {
+            const activeId = Number(this.contractPdfExportState?.contractId || 0);
+            if (!activeId) return false;
+            return contractId === null || contractId === undefined
+              ? true
+              : activeId === Number(contractId);
+          },
+          contractPdfFallbackFilename(target) {
+            const base = String(target.contractNo || `合同_${target.id}`).trim() || `合同_${target.id}`;
+            return `${base}_v${target.version}_未盖章.pdf`.replace(/[\\/:*?"<>|\u0000-\u001f]/g,"_");
+          },
+          contractPdfDownloadFilename(disposition, fallback) {
+            const raw = String(disposition || "");
+            let filename = "";
+            const utf8 = raw.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
+            if (utf8) {
+              try { filename = decodeURIComponent(utf8[1].trim().replace(/^"|"$/g,"")); }
+              catch (_error) { filename = ""; }
+            }
+            if (!filename) {
+              const plain = raw.match(/filename\s*=\s*(?:"([^"]+)"|([^;]+))/i);
+              filename = String(plain?.[1] || plain?.[2] || fallback || "合同.pdf").trim();
+            }
+            filename = filename.split(/[\\/]/).pop().replace(/[\\/:*?"<>|\u0000-\u001f]/g,"_") || "合同.pdf";
+            return /\.pdf$/i.test(filename) ? filename : `${filename}.pdf`;
+          },
+          contractPdfDetailInfo(value) {
+            if (value === null || value === undefined || value === "") return {message:"",code:""};
+            if (typeof value === "string") {
+              const raw = value.trim();
+              if (!raw) return {message:"",code:""};
+              try { return this.contractPdfDetailInfo(JSON.parse(raw)); }
+              catch (_error) { return {message:raw,code:""}; }
+            }
+            if (Array.isArray(value)) {
+              const messages = value.map(item => this.contractPdfDetailInfo(item).message).filter(Boolean);
+              return {message:messages.join("；"),code:""};
+            }
+            if (typeof value === "object") {
+              const nested = Object.prototype.hasOwnProperty.call(value,"detail")
+                ? this.contractPdfDetailInfo(value.detail)
+                : {message:String(value.message || "").trim(),code:""};
+              return {
+                message:nested.message || String(value.message || "").trim(),
+                code:String(nested.code || value.code || "").trim(),
+              };
+            }
+            return {message:String(value),code:""};
+          },
+          async contractPdfErrorMessage(response, body=null) {
+            const status = Number(response?.status || 0);
+            const contentType = String(response?.headers?.get?.("Content-Type") || "").toLowerCase();
+            const requestId = String(response?.headers?.get?.("X-Request-ID") || "").trim();
+            let raw = "";
+            try {
+              if (body instanceof Blob) raw = await body.text();
+              else if (typeof body === "string") raw = body;
+              else if (body !== null && body !== undefined) raw = JSON.stringify(body);
+            } catch (_error) { raw = ""; }
+            const looksJson = contentType.includes("json") || /^[\[{]/.test(raw.trim());
+            const detail = looksJson ? this.contractPdfDetailInfo(raw) : {message:"",code:""};
+            const fallback = status === 401
+              ? "登录已失效，请重新登录后导出"
+              : status === 403
+                ? "当前账号没有合同 PDF 导出权限"
+                : status >= 500
+                  ? "服务器内部错误，合同 PDF 未生成"
+                  : status === 200
+                    ? "服务器未返回有效的合同 PDF"
+                    : "合同 PDF 导出失败";
+            const parts = [detail.message || fallback];
+            if (detail.code) parts.push(`错误代码 ${detail.code}`);
+            if (status) parts.push(`HTTP ${status}`);
+            if (requestId) parts.push(`请求编号 ${requestId}`);
+            return parts.join(" · ");
+          },
+          async exportContractPdf(row) {
+            if (this.contractPdfExportBusy()) return false;
+            const target = {
+              id:Number(row?.id || 0),
+              version:Number(row?.version || 1),
+              contractNo:String(row?.contract_no || "").trim(),
+            };
+            if (!target.id) {
+              this.showToast("请先保存合同，再导出 PDF",true);
+              return false;
+            }
+            const requestId = Number(this.contractPdfExportState?.requestId || 0) + 1;
+            this.contractPdfExportState = {contractId:target.id,requestId};
+            let objectUrl = "";
+            try {
+              const response = await fetch(`/api/contracts/${target.id}/pdf?expected_version=${encodeURIComponent(target.version)}`,{
+                method:"GET",
+                credentials:"same-origin",
+                headers:{Accept:"application/pdf"},
+              });
+              const body = await response.blob();
+              if (!response.ok) throw new Error(await this.contractPdfErrorMessage(response,body));
+              const contentType = String(response.headers?.get?.("Content-Type") || "").toLowerCase();
+              if (!body.size) throw new Error(await this.contractPdfErrorMessage(response,body));
+              const signature = await body.slice(0,5).text();
+              if (!contentType.includes("application/pdf") || signature !== "%PDF-") {
+                throw new Error(await this.contractPdfErrorMessage(response,body));
+              }
+              objectUrl = URL.createObjectURL(body);
+              const anchor = document.createElement("a");
+              anchor.href = objectUrl;
+              anchor.download = this.contractPdfDownloadFilename(
+                response.headers?.get?.("Content-Disposition"),
+                this.contractPdfFallbackFilename(target),
+              );
+              document.body.appendChild(anchor);
+              anchor.click();
+              anchor.remove();
+              this.showToast(`合同 ${target.contractNo || target.id} 的未盖章 PDF 已下载`);
+              return true;
+            } catch (error) {
+              const message = error instanceof TypeError
+                ? "无法连接 ERP 服务，请检查网络后重试"
+                : (error?.message || "合同 PDF 导出失败，请重试");
+              this.showToast(message,true);
+              return false;
+            } finally {
+              if (objectUrl) setTimeout(() => URL.revokeObjectURL(objectUrl),1000);
+              if (Number(this.contractPdfExportState?.requestId) === requestId) {
+                this.contractPdfExportState = {contractId:null,requestId};
+              }
+            }
           },
           addContractLine() { this.contractDraft.items.push(blankContractLine()); },
           removeContractLine(index) {

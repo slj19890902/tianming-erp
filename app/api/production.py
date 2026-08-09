@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -34,6 +34,7 @@ from app.services.production_workflow import (
     batch_customer_ids,
     complete_production_batch,
     completion_customer_id,
+    count_production_tasks,
     list_production_completions_page,
     list_production_completions,
     list_production_tasks,
@@ -231,15 +232,38 @@ def get_production_tasks(
         "waiting_material", "pending", "completed", "not_required"
     ]
     | None = Query(default=None, alias="status"),
+    page: Annotated[int | None, Query(ge=1)] = None,
+    page_size: Annotated[int | None, Query(ge=1, le=200)] = None,
     user: User = Depends(can_read),
     db: Session = Depends(get_db),
 ) -> dict:
+    allowed_customer_ids = _allowed_customer_ids(user, db)
+    if page is None and page_size is None:
+        return {
+            "items": list_production_tasks(
+                db,
+                allowed_customer_ids=allowed_customer_ids,
+                status=task_status,
+            )
+        }
+
+    resolved_page = page or 1
+    resolved_page_size = page_size or 25
     return {
         "items": list_production_tasks(
             db,
-            allowed_customer_ids=_allowed_customer_ids(user, db),
+            allowed_customer_ids=allowed_customer_ids,
             status=task_status,
-        )
+            page=resolved_page,
+            page_size=resolved_page_size,
+        ),
+        "total": count_production_tasks(
+            db,
+            allowed_customer_ids=allowed_customer_ids,
+            status=task_status,
+        ),
+        "page": resolved_page,
+        "page_size": resolved_page_size,
     }
 
 

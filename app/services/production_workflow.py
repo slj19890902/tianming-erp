@@ -2253,6 +2253,21 @@ def _task_query(db: Session, allowed_customer_ids: set[int] | None):
     return query
 
 
+def _filtered_task_query(
+    db: Session,
+    *,
+    allowed_customer_ids: set[int] | None,
+    status: str | None,
+):
+    query = _task_query(db, allowed_customer_ids).where(
+        Order.status.in_(MUTABLE_ORDER_STATUSES),
+        OrderItem.is_force_closed.is_(False),
+    )
+    if status:
+        query = query.where(ProductionTask.status == status)
+    return query
+
+
 def _item_product_snapshot(item: OrderItem, product: Product) -> dict:
     is_die_cut = product.box_category == "die_cut"
     mold = product.mold_tool if is_die_cut else None
@@ -2588,14 +2603,17 @@ def list_production_tasks(
     *,
     allowed_customer_ids: set[int] | None,
     status: str | None = None,
+    page: int | None = None,
+    page_size: int | None = None,
 ) -> list[dict]:
-    query = _task_query(db, allowed_customer_ids).where(
-        Order.status.in_(MUTABLE_ORDER_STATUSES),
-        OrderItem.is_force_closed.is_(False),
-    )
-    if status:
-        query = query.where(ProductionTask.status == status)
-    rows = db.execute(query.order_by(Order.delivery_date, Order.id, OrderItem.id)).all()
+    query = _filtered_task_query(
+        db,
+        allowed_customer_ids=allowed_customer_ids,
+        status=status,
+    ).order_by(Order.delivery_date, Order.id, OrderItem.id, ProductionTask.id)
+    if page is not None and page_size is not None:
+        query = query.offset((page - 1) * page_size).limit(page_size)
+    rows = db.execute(query).all()
     pending_context = (
         _pending_production_read_context(db, rows)
         if status == PENDING
@@ -2735,6 +2753,25 @@ def list_production_tasks(
             ),
         })
     return result
+
+
+def count_production_tasks(
+    db: Session,
+    *,
+    allowed_customer_ids: set[int] | None,
+    status: str | None = None,
+) -> int:
+    task_ids = (
+        _filtered_task_query(
+            db,
+            allowed_customer_ids=allowed_customer_ids,
+            status=status,
+        )
+        .with_only_columns(ProductionTask.id)
+        .order_by(None)
+        .subquery()
+    )
+    return int(db.scalar(select(func.count()).select_from(task_ids)) or 0)
 
 
 def _completion_rows(

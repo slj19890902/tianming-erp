@@ -912,6 +912,7 @@ def test_order_list_uses_new_multi_item_orders_and_masks_workshop_prices(
     assert "total_amount" not in workshop_list.json()["items"][0]
     assert "unit_price" not in workshop_list.json()["items"][0]["items"][0]
     assert "subtotal" not in workshop_list.json()["items"][0]["items"][0]
+    assert "sale_amount" not in workshop_list.json()["items"][0]["items"][0]
 
 
 def test_order_list_supports_tm_display_search_and_hides_legacy_raw_number(

@@ -11,11 +11,13 @@ from datetime import datetime
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+
+from app.web_assets import conditional_file_response
 
 
 APP_NAME = "三级纸箱厂极简ERP"
@@ -2116,8 +2118,8 @@ def create_order(payload: OrderCreateRequest) -> JSONResponse:
 
 
 @app.get("/")
-def index() -> FileResponse:
-    return FileResponse(index_html_path())
+def index(request: Request):
+    return conditional_file_response(request, index_html_path())
 
 
 @app.get("/customers")

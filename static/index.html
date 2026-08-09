@@ -355,6 +355,37 @@
         line-height: 1.35;
         white-space: nowrap;
       }
+      @media (max-width: 1800px) {
+        .order-group-table {
+          width: 100%; min-width: 0; table-layout: fixed; white-space: normal;
+        }
+        .order-group-table > thead > tr > th,
+        .order-group-table > tbody > tr.order-group-row > td {
+          min-width: 0; padding: 8px; white-space: normal;
+          word-break: break-word; overflow-wrap: anywhere;
+        }
+        .order-group-table .col-customer-name { width: 20%; min-width: 0; }
+        .order-group-table .col-customer-po { width: 14%; max-width: none; }
+        .order-group-table .col-actions { width: 180px; min-width: 0; }
+        .order-group-table .cell-actions { white-space: normal; }
+        .order-group-table .cell-actions .toolbar-group { gap: 4px; flex-wrap: wrap; }
+        .ui-large .order-group-table .cell-actions .btn.small {
+          padding-left: 8px; padding-right: 8px;
+        }
+        .order-group-detail-row .order-group-detail-card { min-width: 0; }
+        .order-group-detail-row .order-group-detail-card > table {
+          width: 100%; min-width: 0; table-layout: fixed;
+        }
+        .order-group-detail-row .order-group-detail-card > table th,
+        .order-group-detail-row .order-group-detail-card > table td {
+          min-width: 0; padding: 7px 5px; white-space: normal;
+          word-break: break-word; overflow-wrap: anywhere;
+        }
+        .order-group-detail-row .order-group-detail-card > table .toolbar-group {
+          min-width: 0; gap: 4px; flex-wrap: wrap;
+        }
+        .order-group-detail-row .order-delivery-compact { white-space: normal; }
+      }
       .main-order-number { color: var(--muted); font-size: 11px; }
       .order-search-highlight { background: #fef08a; border-radius: 2px; color: inherit; }
       .delivery-batch-picker-toolbar,
@@ -1391,8 +1422,58 @@
       .external-incoming-table th:nth-child(3) { width: 25%; }
       .external-incoming-table th:nth-child(4) { width: 23%; }
       .external-incoming-quantity { width: 92px; min-width: 0 !important; }
-      .requisition-pending-table { min-width: 1580px; }
-      .requisition-demand-cell { min-width: 132px; font-size: 12px; line-height: 1.55; white-space: nowrap; }
+      .requisition-pending-table {
+        width: 100%; min-width: 0; table-layout: fixed; white-space: normal;
+      }
+      .requisition-pending-table th,
+      .requisition-pending-table td {
+        min-width: 0; padding: 7px 6px; white-space: normal;
+        word-break: break-word; overflow-wrap: anywhere; vertical-align: middle;
+      }
+      .requisition-pending-table th:nth-child(1) { width: 5%; }
+      .requisition-pending-table th:nth-child(2) { width: 8%; }
+      .requisition-pending-table th:nth-child(3) { width: 7%; }
+      .requisition-pending-table th:nth-child(4) { width: 11%; }
+      .requisition-pending-table th:nth-child(5) { width: 12%; }
+      .requisition-pending-table th:nth-child(6) { width: 11%; }
+      .requisition-pending-table th:nth-child(7) { width: 5%; }
+      .requisition-pending-table th:nth-child(8) { width: 7%; }
+      .requisition-pending-table th:nth-child(9) { width: 7%; }
+      .requisition-pending-table th:nth-child(10) { width: 11%; }
+      .requisition-pending-table th:nth-child(11) { width: 6%; }
+      .requisition-pending-table th:nth-child(12) { width: 10%; }
+      .requisition-pending-table .status,
+      .requisition-pending-table td:last-child .btn {
+        max-width: 100%; white-space: normal;
+      }
+      .requisition-pending-table td:last-child .btn {
+        padding-left: 8px; padding-right: 8px;
+      }
+      @media (max-width: 1800px) {
+        .requisition-pending-table th:nth-child(1) { width: 4%; }
+        .requisition-pending-table th:nth-child(2) { width: 10%; }
+        .requisition-pending-table th:nth-child(3) { width: 9%; }
+        .requisition-pending-table th:nth-child(4) { width: 12%; }
+        .requisition-pending-table th:nth-child(5) { width: 11%; }
+        .requisition-pending-table th:nth-child(6) { width: 9%; }
+        .requisition-pending-table th:nth-child(7) { width: 5%; }
+        .requisition-pending-table th:nth-child(8) { width: 6%; }
+        .requisition-pending-table th:nth-child(9) { width: 6%; }
+        .requisition-pending-table th:nth-child(10) { width: 12%; }
+        .requisition-pending-table th:nth-child(11) { width: 7%; }
+        .requisition-pending-table th:nth-child(12) { width: 9%; }
+        .requisition-pending-table .merge-size-editor {
+          display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+          white-space: normal;
+        }
+        .requisition-pending-table .merge-size-input,
+        .requisition-pending-table .merge-cutter-select,
+        .requisition-pending-table .merge-supplier-select,
+        .requisition-pending-table .merge-remark-input {
+          width: 100% !important; min-width: 0 !important; max-width: 100%;
+        }
+      }
+      .requisition-demand-cell { min-width: 0; font-size: 12px; line-height: 1.55; white-space: normal; }
       .requisition-demand-cell .semi-deducted { color: #047857; font-weight: 700; }
       .requisition-demand-cell .remaining-demand { color: #b45309; font-weight: 700; }
       .requisition-demand-cell .purchase-demand { color: #1d4ed8; font-weight: 800; }
@@ -3195,7 +3276,7 @@
                     <td>{{ row.delivery_date }}</td>
                     <td>{{ row.vehicle_number || "-" }}</td>
                     <td>{{ deliveryActualGoodsQuantity(row) }}</td>
-                    <td><status-tag :value="row.status"></status-tag> <span v-if="row.pick_task" :class="['status', deliveryPickStatusClass(row)]">{{ deliveryPickStatusLabel(row) }}</span> <span v-if="row.is_printed" class="status green">已打印</span></td>
+                    <td><status-tag :value="row.status"></status-tag> <span v-if="row.pick_task && deliveryPickStatusLabel(row) !== statusText(row.status)" :class="['status', deliveryPickStatusClass(row)]">{{ deliveryPickStatusLabel(row) }}</span> <span v-if="row.is_printed" class="status green">已打印</span></td>
                     <td><status-tag :value="row.return_receipt_status === 'cancelled' ? 'receipt_cancelled' : (row.return_receipt_status || 'waiting_receipt')"></status-tag></td>
                     <td><button class="btn small" @click="toggleDeliveryListDetail(row)">{{ expandedDeliveryRows[row.id] ? '收起明细' : `查看明细（${(row.items || []).length}）` }}</button></td>
                     <td class="toolbar-group delivery-list-actions">

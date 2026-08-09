@@ -6,7 +6,7 @@ from pathlib import Path
 import sqlite3
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.httpsredirect import (
     HTTPSRedirectMiddleware as StarletteHTTPSRedirectMiddleware,
@@ -66,6 +66,14 @@ from app.middleware.performance import (
     slow_request_threshold_ms,
 )
 from app.middleware.private_uploads import PrivateUploadGuardMiddleware
+from app.web_assets import SelectiveGZipMiddleware, conditional_file_response
+
+
+def _conditional_file_endpoint(path: Path):
+    async def endpoint(request: Request):
+        return conditional_file_response(request, path)
+
+    return endpoint
 
 
 @asynccontextmanager
@@ -260,7 +268,7 @@ def create_app() -> FastAPI:
         if not any(route.path == page_path for route in application.routes):
             application.add_api_route(
                 page_path,
-                lambda path=index_path: FileResponse(path),
+                _conditional_file_endpoint(index_path),
                 methods=["GET"],
                 include_in_schema=False,
             )
@@ -672,6 +680,7 @@ def create_app() -> FastAPI:
         HSTSMiddleware,
         CookieOriginCSRFMiddleware,
         ProxyHeadersMiddleware,
+        SelectiveGZipMiddleware,
         PrivateUploadGuardMiddleware,
         PerformanceObservabilityMiddleware,
     }
@@ -692,6 +701,11 @@ def create_app() -> FastAPI:
     )
     apply_production_security(application, current)
     apply_transport_security(application, current)
+    application.add_middleware(
+        SelectiveGZipMiddleware,
+        minimum_size=1024,
+        compresslevel=6,
+    )
     application.add_middleware(
         PerformanceObservabilityMiddleware,
         slow_request_ms=slow_request_threshold_ms(),

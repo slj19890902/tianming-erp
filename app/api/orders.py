@@ -1974,6 +1974,7 @@ def _order_response(
         for item in data["items"]:
             item.pop("unit_price", None)
             item.pop("subtotal", None)
+            item.pop("sale_amount", None)
     return data
 
 

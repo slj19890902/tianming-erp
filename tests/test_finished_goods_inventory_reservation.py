@@ -14,6 +14,7 @@ from app.models import Base
 from app.models.customer import Customer
 from app.models.order import Order, OrderItem
 from app.models.product import Product
+from app.models.supplier import Supplier
 from app.models.user import User
 from app.models.warehouse_inventory import (
     InventoryMovement,
@@ -28,6 +29,7 @@ from app.services.warehouse_inventory import (
     release_finished_reservation,
     reserve_finished_inventory,
 )
+from app.services.supplier_master import normalize_supplier_identity
 
 
 @pytest.fixture()
@@ -57,7 +59,15 @@ def reservation_db(tmp_path: Path):
             payment_term_days=0,
             credit_limit=0,
         )
-        db.add_all([admin, customer, other_customer])
+        supplier = Supplier(
+            standard_name="测试供应商",
+            normalized_name=normalize_supplier_identity("测试供应商"),
+            display_name="测试供应商",
+            sort_order=10,
+            is_active=True,
+            version=1,
+        )
+        db.add_all([admin, customer, other_customer, supplier])
         db.flush()
         product = Product(
             customer_id=customer.id,
@@ -118,6 +128,7 @@ def reservation_db(tmp_path: Path):
             "admin": admin,
             "customer": customer,
             "other_customer": other_customer,
+            "supplier": supplier,
             "product": product,
             "other_product": other_product,
             "location": location,

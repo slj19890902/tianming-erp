@@ -170,6 +170,7 @@ can_operate = PermissionChecker("requisition.execute")
 can_reserve = PermissionChecker("warehouse.reserve")
 admin_rollback = RoleChecker(["admin"])
 _FINISHED_STOCK_POLICY_WRITE_LOCK = Lock()
+_SUPPLIER_ORDER_CREATE_WRITE_LOCK = Lock()
 
 
 def _require_active_supplier(
@@ -5749,6 +5750,39 @@ def _draft_group_entries_by_purchase_lines(
             if requested_line_total <= 0:
                 raise HTTPException(status_code=400, detail="本次报料张数必须大于 0")
             is_over_quantity = requested_line_total > remaining_line_total
+            submitted_source_quantities = [
+                (
+                    int(ref["source_payload"].requisition_qty)
+                    if ref["source_payload"].requisition_qty is not None
+                    else None
+                )
+                for ref in source_refs
+            ]
+            stale_source_quantities = any(
+                submitted is not None and submitted != remaining
+                for submitted, remaining in zip(
+                    submitted_source_quantities,
+                    remaining_requisition_quantities,
+                )
+            )
+            submitted_source_total = sum(
+                submitted or 0 for submitted in submitted_source_quantities
+            )
+            if (
+                is_over_quantity
+                and not draft_line.quantity_override_acknowledged
+                and stale_source_quantities
+                and submitted_source_total == requested_line_total
+            ):
+                # A stale page can carry both the old line total and the old
+                # per-source totals after a finished-inventory reservation or
+                # double-splice recomputation. Those hidden source values are
+                # not an operator overage decision, so normalize them to the
+                # current server-derived demand before applying the overage
+                # gate. A deliberate line-only increase still requires the
+                # explicit admin acknowledgement below.
+                requested_line_total = remaining_line_total
+                is_over_quantity = False
             if is_over_quantity and user.role not in {"admin", "boss"}:
                 raise HTTPException(
                     status_code=403,
@@ -13040,8 +13074,49 @@ def create_supplier_order(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
+    # The formal SQLite deployment uses one application worker.  Serialize this
+    # legacy write endpoint so two requests cannot both observe an item as
+    # unreported before either transaction commits.
+    with _SUPPLIER_ORDER_CREATE_WRITE_LOCK:
+        return _create_supplier_order_locked(payload=payload, db=db, user=user)
+
+
+def _create_supplier_order_locked(
+    *,
+    payload: SupplierOrderCreatePayload,
+    db: Session,
+    user: User,
+) -> dict:
     if not payload.members:
         raise HTTPException(status_code=400, detail="至少需要一条明细")
+
+    # Authorize every referenced customer before supplier/material validation.
+    # Otherwise a scoped user can distinguish supplier-master validation errors
+    # for an order item they are not allowed to access.
+    linked_item_ids: list[int] = []
+    for member in payload.members:
+        if member.item_id is None:
+            if user.role not in {"admin", "boss"}:
+                raise HTTPException(
+                    status_code=403,
+                    detail="受限账号不能创建无订单明细关联的手工报料单",
+                )
+            continue
+        linked_item_ids.append(member.item_id)
+    if len(linked_item_ids) != len(set(linked_item_ids)):
+        raise HTTPException(status_code=400, detail="同一订单明细不能重复报料")
+
+    authorized_order_items: dict[int, OrderItem] = {}
+    for item_id in sorted(linked_item_ids):
+        order_item = db.scalar(
+            select(OrderItem)
+            .where(OrderItem.id == item_id)
+            .with_for_update()
+        )
+        if order_item is None:
+            raise HTTPException(status_code=404, detail="订单明细不存在")
+        _require_order_item_customer_access(db, order_item, user)
+        authorized_order_items[item_id] = order_item
 
     supplier_name = _require_active_supplier(db, payload.supplier_name)
     material = db.get(Material, payload.material_id) if payload.material_id else None
@@ -13065,24 +13140,12 @@ def create_supplier_order(
                 status_code=400,
                 detail="旧库存抵扣字段已停用，真实抵扣只能来自成品库存预占",
             )
-        if member.item_id is None and user.role not in {"admin", "boss"}:
-            raise HTTPException(
-                status_code=403,
-                detail="受限账号不能创建无订单明细关联的手工报料单",
-            )
         order_item = (
-            db.scalar(
-                select(OrderItem)
-                .where(OrderItem.id == member.item_id)
-                .with_for_update()
-            )
-            if member.item_id
+            authorized_order_items.get(member.item_id)
+            if member.item_id is not None
             else None
         )
-        if member.item_id is not None and order_item is None:
-            raise HTTPException(status_code=404, detail="订单明细不存在")
         if order_item is not None:
-            _require_order_item_customer_access(db, order_item, user)
             if _active_requisition_hold(db, order_item.id) is not None:
                 raise HTTPException(
                     status_code=409,

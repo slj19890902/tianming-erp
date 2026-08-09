@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Generator
 from datetime import date, datetime
 from decimal import Decimal
@@ -1197,7 +1198,9 @@ def test_scoped_supplier_order_creation_requires_an_authorized_order_item(
 ) -> None:
     from app.models.order import Order, OrderItem
     from app.models.product import Product
+    from app.models.supplier import Supplier
     from app.models.supplier_requisition_order import SupplierRequisitionOrder
+    from app.services.supplier_master import normalize_supplier_identity
 
     app, ids, factory = n028_customer_scope_app
     with factory() as db:
@@ -1218,6 +1221,16 @@ def test_scoped_supplier_order_creation_requires_an_authorized_order_item(
             snapshot_product_name="N028 manual B secret",
         )
         db.add(item_b)
+        db.add(
+            Supplier(
+                standard_name="N028 manual supplier",
+                normalized_name=normalize_supplier_identity("N028 manual supplier"),
+                display_name="N028 manual supplier",
+                sort_order=10,
+                is_active=True,
+                version=1,
+            )
+        )
         db.commit()
         item_b_id = item_b.id
 
@@ -1272,6 +1285,91 @@ def test_scoped_supplier_order_creation_requires_an_authorized_order_item(
 
     with factory() as db:
         assert db.scalar(select(func.count()).select_from(SupplierRequisitionOrder)) == 2
+
+
+def test_supplier_order_creation_rejects_duplicate_items_and_serializes_writes(
+    n028_customer_scope_app,
+) -> None:
+    from app.models.order import Order, OrderItem
+    from app.models.product import Product
+    from app.models.supplier import Supplier
+    from app.models.supplier_requisition_order import (
+        SupplierRequisitionOrder,
+        SupplierRequisitionOrderItem,
+    )
+    from app.services.supplier_master import normalize_supplier_identity
+
+    app, ids, factory = n028_customer_scope_app
+    with factory() as db:
+        order = db.scalar(select(Order).where(Order.customer_id == ids["customer"]))
+        product = db.get(Product, ids["product"])
+        assert order is not None and product is not None
+        item = OrderItem(
+            order_id=order.id,
+            product_id=product.id,
+            quantity=2,
+            unit_price=Decimal("1.00"),
+            subtotal=Decimal("2.00"),
+            snapshot_product_code="N028-SERIAL-P001",
+            snapshot_product_name="N028 serialized item",
+        )
+        db.add_all(
+            [
+                item,
+                Supplier(
+                    standard_name="N028 serialized supplier",
+                    normalized_name=normalize_supplier_identity(
+                        "N028 serialized supplier"
+                    ),
+                    display_name="N028 serialized supplier",
+                    sort_order=10,
+                    is_active=True,
+                    version=1,
+                ),
+            ]
+        )
+        db.commit()
+        item_id = item.id
+
+    member = {
+        "item_id": item_id,
+        "quantity": 2,
+        "product_code": "N028-SERIAL-P001",
+        "product_name": "N028 serialized item",
+    }
+    payload = {
+        "supplier_name": "N028 serialized supplier",
+        "members": [member],
+    }
+    with TestClient(app) as client:
+        _login(client, "n028-admin", "AdminPass123!")
+        duplicate = client.post(
+            "/api/requisition/supplier-orders",
+            json={**payload, "members": [member, dict(member)]},
+        )
+        assert duplicate.status_code == 400
+        assert "不能重复报料" in duplicate.json()["detail"]
+
+    with TestClient(app) as first_client, TestClient(app) as second_client:
+        _login(first_client, "n028-admin", "AdminPass123!")
+        _login(second_client, "n028-admin", "AdminPass123!")
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            responses = list(
+                executor.map(
+                    lambda client: client.post(
+                        "/api/requisition/supplier-orders", json=payload
+                    ),
+                    (first_client, second_client),
+                )
+            )
+
+    assert sorted(response.status_code for response in responses) == [201, 409]
+    with factory() as db:
+        assert db.scalar(select(func.count()).select_from(SupplierRequisitionOrder)) == 1
+        assert (
+            db.scalar(select(func.count()).select_from(SupplierRequisitionOrderItem))
+            == 1
+        )
 
 
 def test_stock_replenishment_full_chain_is_customer_scoped(

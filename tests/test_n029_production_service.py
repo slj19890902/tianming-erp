@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.api.auth import router as auth_router
@@ -742,6 +742,128 @@ def _complete(
             ],
         },
     )
+
+
+def test_production_tasks_paged_contract_matches_legacy_and_customer_scope(
+    production_app,
+) -> None:
+    app, _factory, ids = production_app
+    with TestClient(app) as client:
+        _login(client)
+        legacy = client.get("/api/production/tasks", params={"status": "pending"})
+        first = client.get(
+            "/api/production/tasks",
+            params={"status": "pending", "page": 1, "page_size": 3},
+        )
+        second = client.get(
+            "/api/production/tasks",
+            params={"status": "pending", "page": 2, "page_size": 3},
+        )
+        invalid = client.get(
+            "/api/production/tasks",
+            params={"status": "pending", "page": 1, "page_size": 201},
+        )
+
+        _login(client, "n029-scoped")
+        scoped_legacy = client.get(
+            "/api/production/tasks", params={"status": "pending"}
+        )
+        scoped_page = client.get(
+            "/api/production/tasks",
+            params={"status": "pending", "page": 1, "page_size": 200},
+        )
+
+    assert legacy.status_code == 200, legacy.text
+    legacy_items = legacy.json()["items"]
+    legacy_by_id = {row["id"]: row for row in legacy_items}
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    first_payload = first.json()
+    second_payload = second.json()
+    assert first_payload == {
+        "items": legacy_items[:3],
+        "total": len(legacy_items),
+        "page": 1,
+        "page_size": 3,
+    }
+    assert second_payload == {
+        "items": legacy_items[3:6],
+        "total": len(legacy_items),
+        "page": 2,
+        "page_size": 3,
+    }
+    assert all(legacy_by_id[row["id"]] == row for row in first_payload["items"])
+    assert invalid.status_code == 422
+
+    assert scoped_legacy.status_code == 200, scoped_legacy.text
+    assert scoped_page.status_code == 200, scoped_page.text
+    scoped_items = scoped_legacy.json()["items"]
+    assert scoped_page.json()["items"] == scoped_items
+    assert scoped_page.json()["total"] == len(scoped_items)
+    assert ids["cases"]["cross"]["task"] not in {
+        row["id"] for row in scoped_page.json()["items"]
+    }
+    assert all(row["customer_id"] == ids["customer_a"] for row in scoped_items)
+
+
+def test_production_tasks_paging_limits_payload_and_query_families(
+    production_app,
+) -> None:
+    app, factory, ids = production_app
+    with factory() as db:
+        db.execute(update(Order).values(status="closed"))
+        customer = db.get(Customer, ids["customer_a"])
+        product = db.get(Product, ids["product_a"])
+        for number in range(30):
+            _add_case(
+                db,
+                key=f"page-{number:02d}",
+                customer=customer,
+                product=product,
+                quantity=number + 1,
+            )
+        db.commit()
+        engine = db.get_bind()
+
+    select_statements: list[str] = []
+
+    def record_selects(
+        _connection, _cursor, statement, _parameters, _context, _executemany
+    ) -> None:
+        if statement.lstrip().upper().startswith("SELECT"):
+            select_statements.append(statement)
+
+    with TestClient(app) as client:
+        _login(client)
+        event.listen(engine, "before_cursor_execute", record_selects)
+        try:
+            one = client.get(
+                "/api/production/tasks",
+                params={"status": "pending", "page": 1, "page_size": 1},
+            )
+            one_selects = len(select_statements)
+            select_statements.clear()
+            twenty = client.get(
+                "/api/production/tasks",
+                params={"status": "pending", "page": 1, "page_size": 20},
+            )
+            twenty_selects = len(select_statements)
+            select_statements.clear()
+            legacy = client.get(
+                "/api/production/tasks", params={"status": "pending"}
+            )
+        finally:
+            event.remove(engine, "before_cursor_execute", record_selects)
+
+    assert one.status_code == 200, one.text
+    assert twenty.status_code == 200, twenty.text
+    assert legacy.status_code == 200, legacy.text
+    assert one.json()["total"] == 30
+    assert len(one.json()["items"]) == 1
+    assert len(twenty.json()["items"]) == 20
+    assert one_selects == twenty_selects
+    assert one_selects <= 9
+    assert len(twenty.content) < len(legacy.content)
 
 
 def test_double_splice_sixty_pieces_complete_and_deliver_as_thirty_boxes(

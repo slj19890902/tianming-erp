@@ -166,6 +166,22 @@ def _read_and_count(factory, user_id: int):
     return response, statements
 
 
+def _read_page(factory, user_id: int, *, page: int, page_size: int):
+    from app.api.production import get_production_tasks
+    from app.models.user import User
+
+    with factory() as db:
+        user = db.get(User, user_id)
+        assert user is not None
+        return get_production_tasks(
+            task_status="pending",
+            page=page,
+            page_size=page_size,
+            user=user,
+            db=db,
+        )
+
+
 def _select_count(statements: list[str]) -> int:
     return sum(statement.startswith("select") for statement in statements)
 
@@ -423,6 +439,14 @@ def test_pending_production_observes_component_board_preparation_and_double_spli
     assert splice["is_component_task"] is False
     assert splice["pieces_per_box"] == 2
     assert splice["planned_output_quantity"] == 50
+    paged_items: list[dict] = []
+    for page in range(1, len(response["items"]) + 1):
+        paged = _read_page(factory, user_id, page=page, page_size=1)
+        assert paged["total"] == len(response["items"])
+        assert paged["page"] == page
+        assert paged["page_size"] == 1
+        paged_items.extend(paged["items"])
+    assert paged_items == response["items"]
     assert all(
         not statement.startswith(("insert", "update", "delete")) for statement in statements
     )

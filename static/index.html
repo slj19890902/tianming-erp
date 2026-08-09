@@ -3268,14 +3268,18 @@
               <page-head title="生产确认" desc="按实际投入和实际合格产量确认；超过订单需求的合格品必须进入客户专用成品库存。"></page-head>
               <div class="toolbar">
                 <div class="toolbar-group">
-                  <button :class="['btn',{primary:productionTab==='pending'}]" :disabled="productionBusy" @click="productionTab='pending'">待生产 {{ productionPending.length }}</button>
+                  <button :class="['btn',{primary:productionTab==='pending'}]" :disabled="productionBusy" @click="productionTab='pending'">待生产 {{ productionPendingTotal }}</button>
                   <button :class="['btn',{primary:productionTab==='history'}]" :disabled="productionBusy" @click="productionTab='history'; loadProductionHistory()">完工历史 {{ productionHistoryTotal }}</button>
                   <button v-if="canProductionExecute && productionTab==='pending'" class="btn success" :disabled="productionBusy || !productionSelectedCount()" @click="batchConfirmProduction">{{ productionBusy ? '处理中…' : `批量确认入库（${productionSelectedCount()}）` }}</button>
                   <span v-else-if="!canProductionExecute && productionTab==='pending'" class="muted">当前为只读查看；确认完工需“订单状态操作”权限。</span>
                 </div>
-                <button class="btn" :disabled="productionBusy" @click="loadProduction">刷新</button>
+                <div class="toolbar-group">
+                  <pager v-if="productionTab==='pending'" :page="pages.productionPending" :total="productionPendingTotal" :page-size="pageSize" :always="true" :compact="true" @change="loadProductionPage($event)"></pager>
+                  <button class="btn" :disabled="productionBusy || productionPendingLoading" @click="loadProduction">{{ productionPendingLoading ? '读取中…' : '刷新' }}</button>
+                </div>
               </div>
               <div v-if="productionTab==='pending'" class="status blue" style="display:block;margin:8px 0">直接待送：选择后整批进入一楼待送区。全部入库：选好库位，再点顶部“批量确认入库”。</div>
+              <div v-if="productionTab==='pending' && productionPendingError" class="status orange" style="display:block;margin:8px 0">{{ productionPendingError }} <button class="btn small" @click="loadProduction">重试</button></div>
               <data-panel v-if="productionTab==='pending'" :empty="!productionPending.length">
                 <table class="production-table" style="table-layout:fixed;width:100%">
 	                  <thead><tr><th v-if="canProductionExecute" style="width:58px"><input type="checkbox" :checked="allProductionSelected" :disabled="productionBusy" @change="toggleAllProduction($event.target.checked)" /> 全选</th><th style="width:13%">订单 / 客户</th><th style="width:21%">存货编码 / 产品</th><th style="width:16%">数量情况</th><th style="width:19%">本次生产</th><th style="width:11%">订单 / 多出</th><th v-if="canProductionExecute" class="production-destination-column">完工去向</th></tr></thead>
@@ -7449,7 +7453,7 @@
             incomingTab: "pending", incomingPending: [], incomingReceived: [], incomingReceivedLoaded: false, incomingReceivedLoading: false, incomingReceivedError: "", incomingHistory: [], incomingHistoryTotal: 0, incomingLocations: [], incomingLocationsLoading: false, incomingLocationsError: "", incomingReceiptLocations: [], incomingReceiptLocationsLoading: false, incomingReceiptLocationsError: "",
             externalIncomingPending: [], externalIncomingLoading: false, externalIncomingError: "", externalIncomingDrafts: {}, externalIncomingSavingId: null,
             incomingHistoryFilters: { customer_id:"", document_keyword:"", product_code:"", product_name:"", supplier_name:"", date_from:"", date_to:"", receipt_status:"" },
-            productionTab: "pending", productionPending: [], productionHistory: [], productionHistoryTotal: 0, productionLocations: [], productionLocationsLoading: false, productionLocationsError: "", productionSelected: {}, productionBusy: false,
+            productionTab: "pending", productionPending: [], productionPendingTotal: 0, productionPendingLoading: false, productionPendingError: "", productionHistory: [], productionHistoryTotal: 0, productionLocations: [], productionLocationsLoading: false, productionLocationsError: "", productionSelected: {}, productionBusy: false,
             productionHistoryFilters: { customer_id:"", order_keyword:"", product_code:"", product_name:"", completed_date_from:"", completed_date_to:"", status:"" },
             productionCompletionAttempts: {}, productionDirectAttempts: {}, productionTransferAttempts: {},
             productFormSnapshot: null, productBomSnapshot: null,
@@ -7490,7 +7494,7 @@
             financeReportData: { monthly:[], yearly_summary:{}, selected_month_summary:{}, selected_month_customers:[], customer_balances:[], aging:[], as_of:"", included_through_statement_month:"" },
             financeReportState: { loading:false, error:"", loaded:false },
             statementsTotal: 0, financeCustomersTotal: 0, invoicesTotal: 0, pageSize: 25,
-            pages: { customers: 1, products: 1, orders: 1, requisitionHolds: 1, requisitionReported: 1, incomingHistory: 1, productionHistory: 1, deliveries: 1, statements: 1, invoices: 1, financeCurrent: 1, financeSettled: 1 },
+            pages: { customers: 1, products: 1, orders: 1, requisitionHolds: 1, requisitionReported: 1, incomingHistory: 1, productionPending: 1, productionHistory: 1, deliveries: 1, statements: 1, invoices: 1, financeCurrent: 1, financeSettled: 1 },
             productTab: "products", modal: null,
             materialCandidateItems: [], materialCandidateLoading: false,
             materialCandidateFilter: { customer_id:null, q:"", include_inactive:false },
@@ -8284,7 +8288,7 @@
             const items = [
               { key: "dashboard", label: "首页" },
               { key: "workbench", label: "订单与仓库", count: this.ordersUnfinishedTotal + this.requisitionPending.length + this.incomingPending.length },
-              { key: "production", label: "生产确认", count: this.productionPending.length },
+              { key: "production", label: "生产确认", count: this.productionPendingTotal },
               { key: "deliveries", label: "送货与回单", count: this.deliveriesTotal },
               { key: "finance", label: "对账开票收款" },
               { key: "master", label: "主数据" },
@@ -13860,16 +13864,29 @@
             } catch(error) { this.showToast(this.errorMessage(error),true); }
           },
           async loadProduction() {
+            return this.loadProductionPage(this.pages.productionPending || 1);
+          },
+          async loadProductionPage(requestedPage = 1) {
             const controller = this.beginLatestRequest("production:pending");
+            const page = Math.max(Number(requestedPage || 1), 1);
             let pending;
+            this.productionPendingLoading = true;
+            this.productionPendingError = "";
             try {
-              pending = await axios.get("/api/production/tasks", { params: { status: "pending" }, signal:controller.signal });
+              pending = await axios.get("/api/production/tasks", { params: { status: "pending", page, page_size: this.pageSize }, signal:controller.signal });
+              if (latestRequestControllers.get("production:pending") !== controller) return false;
             } catch (error) {
-              if (!this.isCancelledRequest(error)) throw error;
-              return;
+              if (!this.isCancelledRequest(error) && latestRequestControllers.get("production:pending") === controller) {
+                this.productionPendingError = `待生产读取失败：${this.errorMessage(error)}`;
+              }
+              return false;
             } finally {
+              if (latestRequestControllers.get("production:pending") === controller) this.productionPendingLoading = false;
               this.finishLatestRequest("production:pending", controller);
             }
+            const total = Number(pending.data.total || 0);
+            const lastPage = Math.max(Math.ceil(total / Number(pending.data.page_size || this.pageSize || 1)), 1);
+            if (page > lastPage) return this.loadProductionPage(lastPage);
             const locationItems = this.productionLocations || [];
             const floorNumbers = [...new Set(locationItems.filter(location => location.is_empty).map(location => Number(location.warehouse_floor)).filter(Boolean))];
             const defaultFloorNumber = floorNumbers.length === 1 ? floorNumbers[0] : null;
@@ -13891,10 +13908,13 @@
                 _direct_submitting: false,
               };
             });
+            this.productionPendingTotal = total;
+            this.pages.productionPending = Number(pending.data.page || page);
             const validIds = new Set(this.productionPending.map(row => String(row.id)));
             Object.keys(this.productionSelected).forEach(taskId => {
               if (!validIds.has(taskId)) delete this.productionSelected[taskId];
             });
+            return true;
           },
           async ensureProductionLocations({force=false} = {}) {
             if (this.productionLocationsLoading) return false;

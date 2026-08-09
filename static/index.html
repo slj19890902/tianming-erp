@@ -11207,10 +11207,15 @@
             return request;
           },
           async checkSession() {
+            const requestAuthGeneration = this.authGeneration;
+            const requestIsCurrent = () => requestAuthGeneration === this.authGeneration;
             try {
               const { data } = await axios.get("/api/auth/me");
-              this.user = {...data.user, permissions:data.permissions || [], customer_scope:data.customer_scope || [], unrestricted_customer_access:!!data.unrestricted_customer_access};
+              if (!requestIsCurrent()) return;
+              const sessionUser = {...data.user, permissions:data.permissions || [], customer_scope:data.customer_scope || [], unrestricted_customer_access:!!data.unrestricted_customer_access};
+              this.user = sessionUser;
               await this.loadProductBoxTypeRules();
+              if (!requestIsCurrent() || Number(this.user?.id || 0) !== Number(sessionUser.id || 0)) return;
               if (this.redirectAfterLogin()) return;
               const initialPage = this.initialPageFromLocation();
               this.activePage = initialPage;
@@ -11218,31 +11223,41 @@
               if (!await this.loadInitialPageResources()) return;
               if (this.user?.must_change_password) this.openChangePassword(true);
             } catch (error) {
+              if (!requestIsCurrent()) return;
               if (error?.response?.status !== 401) this.loginError = this.errorMessage(error);
             }
           },
           async login() {
             const requestSequence = ++this.loginAttemptSequence;
             const requestAuthGeneration = this.authGeneration;
+            const loginPayload = {...this.loginForm};
             const requestIsCurrent = () => (
               requestSequence === this.loginAttemptSequence
               && requestAuthGeneration === this.authGeneration
             );
             this.loading = true; this.loginError = "";
             try {
-              await axios.post("/api/auth/login", this.loginForm);
-              if (this.loginForm.remember_me) localStorage.setItem("erp_username", this.loginForm.username);
+              await axios.post("/api/auth/login", loginPayload);
+              if (!requestIsCurrent()) return;
+              if (loginPayload.remember_me) localStorage.setItem("erp_username", loginPayload.username);
               else localStorage.removeItem("erp_username");
               const { data } = await axios.get("/api/auth/me");
-              this.user = {...data.user, permissions:data.permissions || [], customer_scope:data.customer_scope || [], unrestricted_customer_access:!!data.unrestricted_customer_access};
+              if (!requestIsCurrent()) return;
+              const loginUser = {...data.user, permissions:data.permissions || [], customer_scope:data.customer_scope || [], unrestricted_customer_access:!!data.unrestricted_customer_access};
+              this.user = loginUser;
               await this.loadProductBoxTypeRules();
-              const currentPassword = this.loginForm.password;
-              this.loginForm.password = "";
+              if (!requestIsCurrent() || Number(this.user?.id || 0) !== Number(loginUser.id || 0)) return;
+              const currentPassword = loginPayload.password;
+              if (
+                this.loginForm.username === loginPayload.username
+                && this.loginForm.password === loginPayload.password
+              ) this.loginForm.password = "";
               if (this.redirectAfterLogin()) return;
               const initialPage = this.initialPageFromLocation();
               this.activePage = initialPage;
               if (!this.pageAllowed(this.activePage)) this.activePage = this.firstAllowedPage();
-              if (!await this.loadInitialPageResources()) return;
+              const initialResourcesReady = await this.loadInitialPageResources();
+              if (!requestIsCurrent() || !initialResourcesReady) return;
               if (this.user?.must_change_password) this.openChangePassword(true, currentPassword);
             } catch (error) {
               if (requestIsCurrent()) this.loginError = this.errorMessage(error);
@@ -11268,6 +11283,7 @@
           resetPagePerformanceState() {
             this.loginAttemptSequence += 1;
             this.pageLoadSequence += 1;
+            this.loading = false;
             this.pageCacheUpdatedAt = {};
             for (const controller of latestRequestControllers.values()) controller.abort();
             latestRequestControllers.clear();
@@ -11275,6 +11291,9 @@
             this.orderGroupDetails = {};
             this.orderGroupDetailLoading = {};
             this.orderGroupDetailErrors = {};
+            this.deliveryDetailRequestSequence += 1;
+            this.deliveryDetailState = {};
+            this.expandedDeliveryRows = {};
             this.supplierRequisitionPreviewLoading = false;
             for (const timer of searchDebounceTimers.values()) clearTimeout(timer);
             searchDebounceTimers.clear();

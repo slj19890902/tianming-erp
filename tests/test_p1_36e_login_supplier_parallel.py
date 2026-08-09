@@ -38,7 +38,8 @@ def test_session_and_login_share_parallel_initial_loader() -> None:
     )
 
     assert check_session.count("if (!await this.loadInitialPageResources()) return;") == 1
-    assert login.count("if (!await this.loadInitialPageResources()) return;") == 1
+    assert "const initialResourcesReady = await this.loadInitialPageResources();" in login
+    assert "if (!requestIsCurrent() || !initialResourcesReady) return;" in login
     for block in (check_session, login):
         assert "await this.loadSuppliers();" not in block
         assert "await this.loadPage(this.activePage, { force:true });" not in block
@@ -54,14 +55,18 @@ def test_session_and_login_share_parallel_initial_loader() -> None:
     assert login.index("/api/auth/me") < login.index(
         "loadInitialPageResources()"
     )
-    assert "this.pageLoadSequence += 1;" in _method_body(
-        "resetPagePerformanceState() {", "pageCacheFresh(page) {"
-    )
-    assert "this.loginAttemptSequence += 1;" in _method_body(
-        "resetPagePerformanceState() {", "pageCacheFresh(page) {"
-    )
+    reset = _method_body("resetPagePerformanceState() {", "pageCacheFresh(page) {")
+    assert "this.pageLoadSequence += 1;" in reset
+    assert "this.loginAttemptSequence += 1;" in reset
+    assert "this.loading = false;" in reset
+    assert "this.deliveryDetailRequestSequence += 1;" in reset
+    assert "this.deliveryDetailState = {};" in reset
+    assert "this.expandedDeliveryRows = {};" in reset
     assert "const requestSequence = ++this.loginAttemptSequence;" in login
     assert "if (requestIsCurrent()) this.loading = false;" in login
+    assert "if (!requestIsCurrent()) return;" in check_session
+    assert "if (!requestIsCurrent()) return;" in login
+    assert "const loginPayload = {...this.loginForm};" in login
 
     suppliers = _method_body(
         "async loadSuppliers(includeInactive = this.canAdmin) {",
@@ -237,7 +242,7 @@ globalThis.localStorage = {{setItem() {{}}, removeItem() {{}}}};
     get: async () => {{
       authReads += 1;
       return {{data:{{
-        user:{{id:authReads,must_change_password:authReads === 1}},
+        user:{{id:7,must_change_password:true}},
         permissions:[],customer_scope:[],unrestricted_customer_access:true,
       }}}};
     }},
@@ -262,14 +267,15 @@ globalThis.localStorage = {{setItem() {{}}, removeItem() {{}}}};
   for (let index = 0; index < 12 && startupCalls < 2; index += 1) await Promise.resolve();
   expect(startupCalls === 2, "replacement login did not reach initial page loading");
   expect(concurrentVm.loading === true, "replacement login did not own loading state");
-  firstStartup.resolve(false);
+  firstStartup.resolve(true);
   await firstLogin;
   expect(concurrentVm.loading === true, "old login cleared replacement login loading state");
   expect(passwordPrompts.length === 0, "old login opened its password prompt during replacement");
   secondStartup.resolve(true);
   await secondLogin;
   expect(concurrentVm.loading === false, "current login did not release loading state");
-  expect(passwordPrompts.length === 0, "replacement account inherited old password-change state");
+  expect(passwordPrompts.length === 1, "current account did not open exactly one password-change prompt");
+  expect(passwordPrompts[0][1] === "new-password", "password-change prompt received stale login credentials");
 }})().catch(error => {{ console.error(error); process.exit(1); }});
 """
     _run_node(script, tmp_path)
@@ -330,6 +336,88 @@ const pageBody = {json.dumps(page_body, ensure_ascii=False)};
   await newRequest;
   expect(vm.loading === false, "current page did not finish loading");
   expect(cacheWrites.join(",") === "2:dashboard", "current page cache was not written once");
+}})().catch(error => {{ console.error(error); process.exit(1); }});
+"""
+    _run_node(script, tmp_path)
+
+
+def test_auth_me_response_cannot_revive_logged_out_session(tmp_path: Path) -> None:
+    check_session_body = _method_body("async checkSession() {", "async login() {")
+    login_body = _method_body("async login() {", "async logout() {")
+    script = f"""
+const AsyncFunction = Object.getPrototypeOf(async function(){{}}).constructor;
+const deferred = () => {{
+  let resolve;
+  const promise = new Promise(done => {{ resolve = done; }});
+  return {{promise, resolve}};
+}};
+const expect = (value, message) => {{ if (!value) throw new Error(message); }};
+globalThis.localStorage = {{setItem() {{}}, removeItem() {{}}}};
+const authData = userId => ({{data:{{
+  user:{{id:userId,must_change_password:true}},
+  permissions:[],customer_scope:[],unrestricted_customer_access:true,
+}}}});
+
+(async () => {{
+  const sessionMe = deferred();
+  let sessionResources = 0;
+  let sessionRules = 0;
+  let passwordPrompts = 0;
+  globalThis.axios = {{get: () => sessionMe.promise}};
+  const sessionVm = {{
+    authGeneration:0,user:null,loginError:"",activePage:"dashboard",
+    loadProductBoxTypeRules:async () => {{ sessionRules += 1; }},
+    redirectAfterLogin:() => false,initialPageFromLocation:() => "dashboard",
+    pageAllowed:() => true,firstAllowedPage:() => "dashboard",
+    loadInitialPageResources:async () => {{ sessionResources += 1; return true; }},
+    openChangePassword:() => {{ passwordPrompts += 1; }},
+    errorMessage:error => String(error?.message || error),
+  }};
+  sessionVm.checkSession = new AsyncFunction({json.dumps(check_session_body, ensure_ascii=False)}).bind(sessionVm);
+  const oldSession = sessionVm.checkSession();
+  await Promise.resolve();
+  sessionVm.authGeneration += 1;
+  sessionVm.user = null;
+  sessionVm.loginError = "登录已失效，请重新登录";
+  sessionMe.resolve(authData(11));
+  await oldSession;
+  expect(sessionVm.user === null, "stale auth/me revived a logged-out session");
+  expect(sessionRules === 0 && sessionResources === 0, "stale session started protected resources");
+  expect(passwordPrompts === 0, "stale session opened password change");
+  expect(sessionVm.loginError === "登录已失效，请重新登录", "stale session replaced auth-expired message");
+
+  const loginMe = deferred();
+  let loginResources = 0;
+  let loginRules = 0;
+  passwordPrompts = 0;
+  globalThis.axios = {{
+    post:async () => ({{data:{{ok:true}}}}),
+    get:() => loginMe.promise,
+  }};
+  const loginVm = {{
+    authGeneration:0,loginAttemptSequence:0,user:null,loginError:"",loading:false,
+    activePage:"dashboard",loginForm:{{remember_me:false,username:"old",password:"secret"}},
+    loadProductBoxTypeRules:async () => {{ loginRules += 1; }},
+    redirectAfterLogin:() => false,initialPageFromLocation:() => "dashboard",
+    pageAllowed:() => true,firstAllowedPage:() => "dashboard",
+    loadInitialPageResources:async () => {{ loginResources += 1; return true; }},
+    openChangePassword:() => {{ passwordPrompts += 1; }},
+    errorMessage:error => String(error?.message || error),
+  }};
+  loginVm.login = new AsyncFunction({json.dumps(login_body, ensure_ascii=False)}).bind(loginVm);
+  const oldLogin = loginVm.login();
+  await Promise.resolve(); await Promise.resolve();
+  loginVm.authGeneration += 1;
+  loginVm.loginAttemptSequence += 1;
+  loginVm.user = null;
+  loginVm.loginError = "登录已失效，请重新登录";
+  loginMe.resolve(authData(12));
+  await oldLogin;
+  expect(loginVm.user === null, "stale login auth/me revived a logged-out session");
+  expect(loginRules === 0 && loginResources === 0, "stale login started protected resources");
+  expect(passwordPrompts === 0, "stale login opened password change");
+  expect(loginVm.loading === true, "stale login cleared replacement loading state");
+  expect(loginVm.loginError === "登录已失效，请重新登录", "stale login replaced auth-expired message");
 }})().catch(error => {{ console.error(error); process.exit(1); }});
 """
     _run_node(script, tmp_path)

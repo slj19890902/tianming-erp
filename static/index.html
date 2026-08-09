@@ -2693,7 +2693,7 @@
                       <button v-if="canCreateOrders" class="btn" @click="openOrderPdfImport">识别PDF订单</button>
                     </div>
                     <div class="toolbar-group">
-                      <button v-if="canViewCosts" class="btn" @click="openCostGaps">成本缺口</button>
+                      <button v-if="canViewCosts" class="btn" @click="openCostGaps">成本检查</button>
                       <button class="btn" @click="loadOrders()">刷新</button>
                     </div>
                   </div>
@@ -5651,32 +5651,68 @@
               <div class="field wide notice warning">预计成本，非实际成本。税率参考 13%，沿用材料价原口径，不重复加税；费用只影响当前订单快照。</div>
             </div>
             <div v-else-if="modal.type === 'costGaps'" class="cost-sensitive">
-              <div class="notice">{{ costGapState.scope_label || '仅统计已有预计成本快照的当前订单；旧订单不回填' }}</div>
-              <div v-if="costGapState.loading" class="empty">正在读取成本缺口…</div>
-              <div v-else-if="costGapState.error" class="empty">
-                <div class="notice danger">读取失败：{{ costGapState.error }}</div>
-                <button class="btn" style="margin-top:8px" @click="loadCostGaps">重新加载</button>
+              <div class="tabs" style="margin-bottom:10px">
+                <button :class="['tab',{active:costPanelTab==='gaps'}]" @click="switchCostPanel('gaps')">待补资料 {{ costGapState.total_items || 0 }}</button>
+                <button :class="['tab',{active:costPanelTab==='review'}]" @click="switchCostPanel('review')">利润复核 {{ costReviewState.loaded ? costReviewState.total_items : '' }}</button>
               </div>
+              <template v-if="costPanelTab==='gaps'">
+                <div class="notice">{{ costGapState.scope_label || '成本资料缺口：仅统计已有预计成本快照的当前订单；旧订单不回填' }}</div>
+                <div v-if="costGapState.loading" class="empty">正在读取成本缺口…</div>
+                <div v-else-if="costGapState.error" class="empty">
+                  <div class="notice danger">读取失败：{{ costGapState.error }}</div>
+                  <button class="btn" style="margin-top:8px" @click="loadCostGaps">重新加载</button>
+                </div>
+                <template v-else>
+                  <div class="cost-gap-summary">
+                    <button :class="['btn','small',{primary:costGapState.filter==='all'}]" @click="costGapState.filter='all'">全部 {{ costGapState.total_items }}</button>
+                    <button v-for="category in costGapState.categories" :key="category.code" :class="['btn','small',{primary:costGapState.filter===category.code}]" @click="costGapState.filter=category.code">{{ category.label }} {{ category.count }}</button>
+                  </div>
+                  <div v-if="!costGapVisibleItems().length" class="empty">当前没有这类成本缺口</div>
+                  <div v-else class="table-wrap">
+                    <table class="cost-gap-table">
+                      <thead><tr><th>客户 / 客户单号</th><th>序号</th><th>存货编码</th><th>产品名称</th><th>需要补齐</th><th>操作</th></tr></thead>
+                      <tbody><tr v-for="row in costGapVisibleItems()" :key="row.item_id">
+                        <td><strong>{{ row.customer_name || '-' }}</strong><div class="muted">{{ row.customer_po || '未填写客户单号' }}</div></td>
+                        <td>{{ row.item_sequence || '-' }}</td>
+                        <td>{{ row.product_code || '-' }}</td>
+                        <td>{{ row.product_name || '-' }}</td>
+                        <td><span v-for="category in row.categories" :key="category.code" class="status orange" style="margin:0 4px 3px 0">{{ category.label }}</span><div class="cost-gap-detail">{{ (row.missing_details || []).join('；') }}</div></td>
+                        <td><button class="btn small primary" @click="openCostGapOrder(row)">查看订单</button></td>
+                      </tr></tbody>
+                    </table>
+                  </div>
+                  <div v-if="costGapState.truncated" class="notice warning" style="margin-top:10px">缺口较多，当前先显示 {{ costGapState.returned_items }} 条；可先按上方类别处理。</div>
+                </template>
+              </template>
               <template v-else>
-                <div class="cost-gap-summary">
-                  <button :class="['btn','small',{primary:costGapState.filter==='all'}]" @click="costGapState.filter='all'">全部 {{ costGapState.total_items }}</button>
-                  <button v-for="category in costGapState.categories" :key="category.code" :class="['btn','small',{primary:costGapState.filter===category.code}]" @click="costGapState.filter=category.code">{{ category.label }} {{ category.count }}</button>
+                <div class="notice warning">{{ costReviewState.scope_label || '当前订单冻结预计成本，仅供内部复核，不是实际利润' }}</div>
+                <div v-if="costReviewState.loading" class="empty">正在读取利润复核清单…</div>
+                <div v-else-if="costReviewState.error" class="empty">
+                  <div class="notice danger">读取失败：{{ costReviewState.error }}</div>
+                  <button class="btn" style="margin-top:8px" @click="loadCostReview">重新加载</button>
                 </div>
-                <div v-if="!costGapVisibleItems().length" class="empty">当前没有这类成本缺口</div>
-                <div v-else class="table-wrap">
-                  <table class="cost-gap-table">
-                    <thead><tr><th>客户 / 客户单号</th><th>序号</th><th>存货编码</th><th>产品名称</th><th>需要补齐</th><th>操作</th></tr></thead>
-                    <tbody><tr v-for="row in costGapVisibleItems()" :key="row.item_id">
-                      <td><strong>{{ row.customer_name || '-' }}</strong><div class="muted">{{ row.customer_po || '未填写客户单号' }}</div></td>
-                      <td>{{ row.item_sequence || '-' }}</td>
-                      <td>{{ row.product_code || '-' }}</td>
-                      <td>{{ row.product_name || '-' }}</td>
-                      <td><span v-for="category in row.categories" :key="category.code" class="status orange" style="margin:0 4px 3px 0">{{ category.label }}</span><div class="cost-gap-detail">{{ (row.missing_details || []).join('；') }}</div></td>
-                      <td><button class="btn small primary" @click="openCostGapOrder(row)">查看订单</button></td>
-                    </tr></tbody>
-                  </table>
-                </div>
-                <div v-if="costGapState.truncated" class="notice warning" style="margin-top:10px">缺口较多，当前先显示 {{ costGapState.returned_items }} 条；可先按上方类别处理。</div>
+                <template v-else>
+                  <div class="cost-gap-summary">
+                    <span v-for="item in costReviewState.summary" :key="item.code" :class="['status',item.tone]">{{ item.label }} {{ item.count }}</span>
+                  </div>
+                  <div v-if="!costReviewState.items.length" class="empty">当前没有需要复核的预计利润</div>
+                  <div v-else class="table-wrap">
+                    <table class="cost-gap-table">
+                      <thead><tr><th>客户 / 客户单号</th><th>序号</th><th>存货编码 / 产品</th><th>订单金额</th><th>预计成本</th><th>预计毛利</th><th>状态</th><th>操作</th></tr></thead>
+                      <tbody><tr v-for="row in costReviewState.items" :key="row.item_id">
+                        <td><strong>{{ row.customer_name || '-' }}</strong><div class="muted">{{ row.customer_po || '未填写客户单号' }}</div></td>
+                        <td>{{ row.item_sequence || '-' }}</td>
+                        <td><strong>{{ row.product_code || '-' }}</strong><div class="muted">{{ row.product_name || '-' }}</div></td>
+                        <td>¥ {{ money(row.sale_amount) }}</td>
+                        <td>¥ {{ money(row.estimated_order_total_cost) }}</td>
+                        <td><template v-if="row.estimated_gross_profit !== null">¥ {{ money(row.estimated_gross_profit) }}<div class="muted">{{ (Number(row.estimated_margin_rate) * 100).toFixed(1) }}%</div></template><span v-else>-</span></td>
+                        <td><span :class="['status',row.health_tone]">{{ row.health_label }}</span></td>
+                        <td><button class="btn small primary" @click="openCostGapOrder(row)">查看订单</button></td>
+                      </tr></tbody>
+                    </table>
+                  </div>
+                  <div v-if="costReviewState.truncated" class="notice warning" style="margin-top:10px">需要复核的明细较多，当前先显示 {{ costReviewState.returned_items }} 条。</div>
+                </template>
               </template>
             </div>
             <div v-else-if="modal.type === 'orderDetail' && orderDetail">
@@ -7276,7 +7312,9 @@
             },
             requisitionForm: { supplier_name: "", items: [] },
             receiptForm: { items: [] }, orderItemForm: {}, estimatedCostForm:{},
+            costPanelTab:"gaps",
             costGapState:{loading:false,error:"",scope_label:"",total_items:0,returned_items:0,truncated:false,categories:[],items:[],filter:"all"},
+            costReviewState:{loading:false,loaded:false,error:"",scope_label:"",evaluated_items:0,total_items:0,returned_items:0,truncated:false,summary:[],items:[]},
             orderDetail:null, orderGroupDetail:null, orderTrace:null, orderTraceEventDetail:null, orderTraceEventDetailLoadingKey:"", orderTraceReturnContext:null, traceRollbackBusy:false, drawingFile:null,
             externalPurchase:{loading:false,saving:false,error:"",submitError:"",status:"",orderId:null,items:[],confirmation:null,idempotencyKey:""},
             orderItemSaveState:{saving:false,committed:false,outcomeUncertain:false,result:null},
@@ -21391,8 +21429,10 @@
               this.showToast("当前账号没有查看成本资料的权限", true);
               return false;
             }
+            this.costPanelTab = "gaps";
             this.costGapState.filter = "all";
-            this.modal = {type:"costGaps", title:"成本资料缺口"};
+            this.costReviewState = {loading:false,loaded:false,error:"",scope_label:"",evaluated_items:0,total_items:0,returned_items:0,truncated:false,summary:[],items:[]};
+            this.modal = {type:"costGaps", title:"成本检查"};
             return this.loadCostGaps();
           },
           async loadCostGaps() {
@@ -21419,6 +21459,35 @@
             const rows = this.costGapState.items || [];
             if (this.costGapState.filter === "all") return rows;
             return rows.filter(row => (row.category_codes || []).includes(this.costGapState.filter));
+          },
+          async switchCostPanel(tab) {
+            this.costPanelTab = tab === "review" ? "review" : "gaps";
+            if (this.costPanelTab === "review" && !this.costReviewState.loaded && !this.costReviewState.loading) {
+              return this.loadCostReview();
+            }
+            return true;
+          },
+          async loadCostReview() {
+            this.costReviewState.loading = true;
+            this.costReviewState.error = "";
+            try {
+              const {data} = await axios.get("/api/orders/cost-review", {params:{limit:200}});
+              this.costReviewState = {
+                ...this.costReviewState,
+                ...data,
+                loading:false,
+                loaded:true,
+                error:"",
+                summary:data.summary || [],
+                items:data.items || [],
+              };
+              return true;
+            } catch(error) {
+              this.costReviewState.loading = false;
+              this.costReviewState.loaded = false;
+              this.costReviewState.error = this.errorMessage(error);
+              return false;
+            }
           },
           openCostGapOrder(row) {
             return this.openOrderDetail({id:row?.order_id});

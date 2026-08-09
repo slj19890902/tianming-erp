@@ -57,6 +57,7 @@ from app.models.warehouse_inventory import (
     OrderItemSemiRequirement,
     SemiFinishedInventoryDetail,
     SemiFinishedLotAllowedProduct,
+    WAREHOUSE_CAPACITY_REVIEW_STATUSES,
     WarehouseArea,
     WarehouseFloor,
     WarehouseLocation,
@@ -140,6 +141,7 @@ from app.services.warehouse_twin_dashboard import (
     build_inventory_code_search_results,
     build_warehouse_twin_dashboard,
     inventory_search_matches,
+    warehouse_capacity_summary,
 )
 from app.services.audit_log import append_audit_event
 from app.services.location_candidates import (
@@ -338,6 +340,7 @@ class WarehouseFloorPayload(BaseModel):
     floor_code: str = Field(min_length=1, max_length=30)
     floor_name: str = Field(min_length=1, max_length=100)
     floor_number: int = Field(ge=1, le=99)
+    planning_reference_pallet_capacity: int = Field(default=0, ge=0)
     construction_status: str = "not_started"
     remarks: str | None = None
 
@@ -371,6 +374,9 @@ class WarehouseAreaPayload(BaseModel):
     area_name: str = Field(min_length=1, max_length=100)
     planned_location_count: int = Field(default=0, ge=0)
     planned_pallet_capacity: int = Field(default=0, ge=0)
+    capacity_review_status: str = "pending"
+    capacity_eligible: bool = False
+    confirmed_pallet_capacity: int | None = Field(default=None, gt=0)
     construction_status: str = "ledger_building"
     remarks: str | None = None
 
@@ -391,11 +397,30 @@ class WarehouseAreaPayload(BaseModel):
             raise ValueError("建设状态不合法")
         return value
 
+    @field_validator("capacity_review_status")
+    @classmethod
+    def valid_capacity_review_status(cls, value: str) -> str:
+        if value not in WAREHOUSE_CAPACITY_REVIEW_STATUSES:
+            raise ValueError("容量复核状态不合法")
+        return value
+
     @field_validator("remarks")
     @classmethod
     def strip_area_remarks(cls, value: str | None) -> str | None:
         normalized = (value or "").strip()
         return normalized or None
+
+    @model_validator(mode="after")
+    def validate_capacity_review(self):
+        if self.capacity_review_status == "pending":
+            if self.capacity_eligible or self.confirmed_pallet_capacity is not None:
+                raise ValueError("待复核区域不能提前计入安全容量")
+        elif self.capacity_review_status == "confirmed":
+            if not self.capacity_eligible or self.confirmed_pallet_capacity is None:
+                raise ValueError("计入长期容量时必须填写现场确认栈板数")
+        elif self.capacity_eligible or self.confirmed_pallet_capacity is not None:
+            raise ValueError("不计入容量的区域不能填写现场确认栈板数")
+        return self
 
 
 class Floor3PalletItemPayload(BaseModel):
@@ -4908,6 +4933,15 @@ def _warehouse_area_dict(db: Session, row: WarehouseArea) -> dict:
         "area_name": row.area_name,
         "planned_location_count": row.planned_location_count,
         "planned_pallet_capacity": row.planned_pallet_capacity,
+        "capacity_review_status": row.capacity_review_status,
+        "capacity_eligible": row.capacity_eligible,
+        "confirmed_pallet_capacity": row.confirmed_pallet_capacity,
+        "capacity_reviewed_by": row.capacity_reviewed_by,
+        "capacity_reviewed_at": (
+            beijing_naive_to_api(row.capacity_reviewed_at)
+            if row.capacity_reviewed_at
+            else None
+        ),
         "construction_status": row.construction_status,
         "remarks": row.remarks,
         **_warehouse_area_stats(db, row),
@@ -4917,12 +4951,21 @@ def _warehouse_area_dict(db: Session, row: WarehouseArea) -> dict:
 def _warehouse_floor_dict(db: Session, row: WarehouseFloor) -> dict:
     areas = sorted(row.areas, key=lambda item: (item.area_code, item.id))
     area_items = [_warehouse_area_dict(db, area) for area in areas]
+    occupied_pallet_count = sum(
+        area["occupied_pallet_count"] for area in area_items
+    )
+    capacity = warehouse_capacity_summary(
+        row,
+        occupied_pallets=occupied_pallet_count,
+        visible=True,
+    )
     return {
         "id": row.id,
         "floor_code": row.floor_code,
         "floor_name": row.floor_name,
         "floor_number": row.floor_number,
         "construction_status": row.construction_status,
+        "planning_reference_pallet_capacity": row.planning_reference_pallet_capacity,
         "remarks": row.remarks,
         "area_count": len(area_items),
         "planned_location_count": sum(
@@ -4934,15 +4977,14 @@ def _warehouse_floor_dict(db: Session, row: WarehouseFloor) -> dict:
         "planned_pallet_capacity": sum(
             area["planned_pallet_capacity"] for area in area_items
         ),
-        "occupied_pallet_count": sum(
-            area["occupied_pallet_count"] for area in area_items
-        ),
+        "occupied_pallet_count": occupied_pallet_count,
         "laid_out_location_count": sum(
             area["laid_out_location_count"] for area in area_items
         ),
         "pending_layout_count": sum(
             area["pending_layout_count"] for area in area_items
         ),
+        "capacity": capacity,
         "areas": area_items,
     }
 
@@ -4971,6 +5013,57 @@ def _require_registered_area(
             detail="该楼层区域尚未建立台账，请先新增楼层和区域。",
         )
     return area
+
+
+def _capacity_reviewer_name(user: User) -> str:
+    return (user.display_name or user.real_name or user.username).strip()
+
+
+def _apply_capacity_review(
+    row: WarehouseArea,
+    *,
+    user: User,
+    review_changed: bool,
+) -> None:
+    if row.capacity_review_status == "pending":
+        row.capacity_eligible = False
+        row.confirmed_pallet_capacity = None
+        row.capacity_reviewed_by = None
+        row.capacity_reviewed_at = None
+    elif review_changed or row.capacity_reviewed_at is None:
+        row.capacity_reviewed_by = _capacity_reviewer_name(user)
+        row.capacity_reviewed_at = beijing_now_naive()
+
+
+def _warehouse_capacity_log(
+    db: Session,
+    *,
+    request: Request,
+    user: User,
+    action: str,
+    entity_type: str,
+    entity_id: int,
+    object_ref: str,
+    before: dict | None,
+    after: dict,
+) -> None:
+    append_audit_event(
+        db,
+        request=request,
+        actor=user,
+        event_category="system",
+        result="success",
+        source="web",
+        module_code="warehouse",
+        action_code=action,
+        legacy_action="CAPACITY_UPDATE",
+        resource=f"warehouse/capacity/{entity_type}/{entity_id}",
+        entity_type=entity_type,
+        entity_id=entity_id,
+        object_ref=object_ref,
+        description="仓储容量台账已更新",
+        details={"before": before, "after": after},
+    )
 
 
 @router.get("/factory-maps/floors/{floor_code}")
@@ -5452,6 +5545,94 @@ def get_warehouse_twin_dashboard(
     )
 
 
+@router.get("/capacity/summary")
+def get_warehouse_capacity_summary(
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    if _twin_locator_visible_customer_ids(db, user) is not None:
+        return {
+            "visible": False,
+            "notice": "当前账号按客户范围查看库存，不显示全仓容量。",
+            "floors": [],
+        }
+    floors = list(
+        db.scalars(
+            select(WarehouseFloor)
+            .options(selectinload(WarehouseFloor.areas))
+            .where(WarehouseFloor.floor_number.in_((1, 3)))
+            .order_by(WarehouseFloor.floor_number)
+        ).all()
+    )
+    occupied_by_floor = {
+        int(floor_number): int(count or 0)
+        for floor_number, count in db.execute(
+            select(
+                WarehouseLocation.warehouse_floor,
+                func.count(InventoryPallet.id),
+            )
+            .join(
+                InventoryPallet,
+                InventoryPallet.location_id == WarehouseLocation.id,
+            )
+            .where(
+                InventoryPallet.is_current.is_(True),
+                _formal_inventory_location_condition(),
+                WarehouseLocation.warehouse_floor.in_((1, 3)),
+            )
+            .group_by(WarehouseLocation.warehouse_floor)
+        ).all()
+        if floor_number is not None
+    }
+    floor_items = []
+    for floor in floors:
+        capacity = warehouse_capacity_summary(
+            floor,
+            occupied_pallets=occupied_by_floor.get(floor.floor_number, 0),
+            visible=True,
+        )
+        floor_items.append(
+            {
+                "floor_code": floor.floor_code,
+                "floor_name": floor.floor_name,
+                "floor_number": floor.floor_number,
+                "capacity": capacity,
+            }
+        )
+    reference_total = sum(
+        int(row["capacity"]["reference_pallet_capacity"] or 0) for row in floor_items
+    )
+    occupied_total = sum(int(row["capacity"]["occupied_pallets"] or 0) for row in floor_items)
+    tightest = max(
+        (
+            row
+            for row in floor_items
+            if row["capacity"]["utilization_percent"] is not None
+        ),
+        key=lambda row: float(row["capacity"]["utilization_percent"]),
+        default=None,
+    )
+    return {
+        "visible": True,
+        "reference_pallet_capacity": reference_total,
+        "occupied_pallets": occupied_total,
+        "empty_pallet_slots": max(reference_total - occupied_total, 0),
+        "utilization_percent": (
+            round(occupied_total * 100 / reference_total, 1) if reference_total else None
+        ),
+        "tightest_floor_code": tightest["floor_code"] if tightest else None,
+        "tightest_floor_utilization_percent": (
+            tightest["capacity"]["utilization_percent"] if tightest else None
+        ),
+        "alert_count": sum(
+            row["capacity"]["alert_level"] not in {"normal", "unknown"}
+            for row in floor_items
+        ),
+        "floors": floor_items,
+        "notice": "只读取正式栈板和库位；规划预警不会移动货物或修改库存。",
+    }
+
+
 @router.get("/twin-dashboard/search")
 def search_warehouse_twin_inventory(
     keyword: str | None = Query(default=None, max_length=150),
@@ -5848,12 +6029,28 @@ def list_warehouse_floors(
 @router.post("/space/floors", status_code=201)
 def create_warehouse_floor(
     payload: WarehouseFloorPayload,
+    request: Request,
     db: Session = Depends(get_db),
-    _user: User = Depends(admin_only),
+    user: User = Depends(admin_only),
 ) -> dict:
     row = WarehouseFloor(**payload.model_dump())
     db.add(row)
     try:
+        db.flush()
+        if row.planning_reference_pallet_capacity:
+            _warehouse_capacity_log(
+                db,
+                request=request,
+                user=user,
+                action="warehouse_floor_capacity_create",
+                entity_type="warehouse_floor",
+                entity_id=row.id,
+                object_ref=row.floor_code,
+                before=None,
+                after={
+                    "planning_reference_pallet_capacity": row.planning_reference_pallet_capacity
+                },
+            )
         db.commit()
         db.refresh(row)
     except IntegrityError as error:
@@ -5868,15 +6065,31 @@ def create_warehouse_floor(
 def update_warehouse_floor(
     floor_id: int,
     payload: WarehouseFloorPayload,
+    request: Request,
     db: Session = Depends(get_db),
-    _user: User = Depends(admin_only),
+    user: User = Depends(admin_only),
 ) -> dict:
     row = db.get(WarehouseFloor, floor_id)
     if row is None:
         raise HTTPException(status_code=404, detail="楼层不存在")
+    before_capacity = row.planning_reference_pallet_capacity
     for key, value in payload.model_dump().items():
         setattr(row, key, value)
     try:
+        if before_capacity != row.planning_reference_pallet_capacity:
+            _warehouse_capacity_log(
+                db,
+                request=request,
+                user=user,
+                action="warehouse_floor_capacity_update",
+                entity_type="warehouse_floor",
+                entity_id=row.id,
+                object_ref=row.floor_code,
+                before={"planning_reference_pallet_capacity": before_capacity},
+                after={
+                    "planning_reference_pallet_capacity": row.planning_reference_pallet_capacity
+                },
+            )
         db.commit()
         db.refresh(row)
     except IntegrityError as error:
@@ -5890,15 +6103,36 @@ def update_warehouse_floor(
 @router.post("/space/areas", status_code=201)
 def create_warehouse_area(
     payload: WarehouseAreaPayload,
+    request: Request,
     db: Session = Depends(get_db),
-    _user: User = Depends(admin_only),
+    user: User = Depends(admin_only),
 ) -> dict:
     floor = db.get(WarehouseFloor, payload.floor_id)
     if floor is None:
         raise HTTPException(status_code=404, detail="楼层不存在")
     row = WarehouseArea(**payload.model_dump())
+    _apply_capacity_review(row, user=user, review_changed=True)
     db.add(row)
     try:
+        db.flush()
+        _warehouse_capacity_log(
+            db,
+            request=request,
+            user=user,
+            action="warehouse_area_capacity_create",
+            entity_type="warehouse_area",
+            entity_id=row.id,
+            object_ref=f"{floor.floor_code}/{row.area_code}",
+            before=None,
+            after={
+                "planned_pallet_capacity": row.planned_pallet_capacity,
+                "capacity_review_status": row.capacity_review_status,
+                "capacity_eligible": row.capacity_eligible,
+                "confirmed_pallet_capacity": row.confirmed_pallet_capacity,
+                "capacity_reviewed_by": row.capacity_reviewed_by,
+                "capacity_reviewed_at": row.capacity_reviewed_at,
+            },
+        )
         db.commit()
         db.refresh(row)
     except IntegrityError as error:
@@ -5913,8 +6147,9 @@ def create_warehouse_area(
 def update_warehouse_area(
     area_id: int,
     payload: WarehouseAreaPayload,
+    request: Request,
     db: Session = Depends(get_db),
-    _user: User = Depends(admin_only),
+    user: User = Depends(admin_only),
 ) -> dict:
     row = db.get(WarehouseArea, area_id)
     if row is None:
@@ -5922,9 +6157,48 @@ def update_warehouse_area(
     floor = db.get(WarehouseFloor, payload.floor_id)
     if floor is None:
         raise HTTPException(status_code=404, detail="楼层不存在")
+    before_capacity = {
+        "planned_pallet_capacity": row.planned_pallet_capacity,
+        "capacity_review_status": row.capacity_review_status,
+        "capacity_eligible": row.capacity_eligible,
+        "confirmed_pallet_capacity": row.confirmed_pallet_capacity,
+        "capacity_reviewed_by": row.capacity_reviewed_by,
+        "capacity_reviewed_at": row.capacity_reviewed_at,
+    }
+    review_before = (
+        row.capacity_review_status,
+        row.capacity_eligible,
+        row.confirmed_pallet_capacity,
+    )
     for key, value in payload.model_dump().items():
         setattr(row, key, value)
+    review_changed = review_before != (
+        row.capacity_review_status,
+        row.capacity_eligible,
+        row.confirmed_pallet_capacity,
+    )
+    _apply_capacity_review(row, user=user, review_changed=review_changed)
     try:
+        after_capacity = {
+            "planned_pallet_capacity": row.planned_pallet_capacity,
+            "capacity_review_status": row.capacity_review_status,
+            "capacity_eligible": row.capacity_eligible,
+            "confirmed_pallet_capacity": row.confirmed_pallet_capacity,
+            "capacity_reviewed_by": row.capacity_reviewed_by,
+            "capacity_reviewed_at": row.capacity_reviewed_at,
+        }
+        if before_capacity != after_capacity:
+            _warehouse_capacity_log(
+                db,
+                request=request,
+                user=user,
+                action="warehouse_area_capacity_update",
+                entity_type="warehouse_area",
+                entity_id=row.id,
+                object_ref=f"{floor.floor_code}/{row.area_code}",
+                before=before_capacity,
+                after=after_capacity,
+            )
         db.commit()
         db.refresh(row)
     except IntegrityError as error:

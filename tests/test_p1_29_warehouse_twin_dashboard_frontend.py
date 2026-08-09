@@ -9,6 +9,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 WAREHOUSE_HTML = (ROOT / "static" / "warehouse.html").read_text(encoding="utf-8")
+INDEX_HTML = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
 
 
 def test_measured_twin_floor_is_the_operational_default() -> None:
@@ -58,8 +59,27 @@ def test_dashboard_read_paths_do_not_add_inventory_mutations() -> None:
     )[0]
     for method in ('method:"POST"', 'method:"PUT"', 'method:"PATCH"', 'method:"DELETE"'):
         assert method not in dashboard_script
-    assert "P1-27现场安全容量尚未确认" in WAREHOUSE_HTML
-    assert "不计算伪精确满载率" in WAREHOUSE_HTML
+    assert "未完成现场复核时按规划容量" in WAREHOUSE_HTML
+    assert "全部区域复核后自动切换为安全容量" in WAREHOUSE_HTML
+    assert "warehouseAreaCapacityReview" in WAREHOUSE_HTML
+    assert "warehouseAreaConfirmedCapacity" in WAREHOUSE_HTML
+    assert 'capacity_eligible:review==="confirmed"' in WAREHOUSE_HTML
+
+
+def test_capacity_cards_show_compact_operational_values() -> None:
+    assert "已占 / ${h(basis)}" in WAREHOUSE_HTML
+    assert "利用率" in WAREHOUSE_HTML
+    assert "空闲 · 覆盖" in WAREHOUSE_HTML
+    assert "twin-capacity-progress" in WAREHOUSE_HTML
+    assert "规划容量预警" not in WAREHOUSE_HTML.split("function renderTwinFloorOverview", 1)[0]
+
+
+def test_homepage_has_one_compact_read_only_capacity_card() -> None:
+    assert '{ key: "warehouse_capacity", title: "仓储容量" }' in INDEX_HTML
+    assert 'axios.get("/api/warehouse/capacity/summary")' in INDEX_HTML
+    assert 'key:"warehouse_capacity", title:"仓储容量"' in INDEX_HTML
+    assert 'button_label:"看仓库", target:"warehouse"' in INDEX_HTML
+    assert "最紧张 ${capacity.tightest_floor_code}" in INDEX_HTML
 
 
 def test_dashboard_inline_javascript_is_valid(tmp_path: Path) -> None:

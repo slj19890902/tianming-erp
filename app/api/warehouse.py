@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+import hashlib
 from io import BytesIO
 import json
 import socket
@@ -44,6 +45,7 @@ from app.models.product import Product
 from app.models.product_bom import SalesOrderItemBomComponent
 from app.models.order import Order, OrderItem
 from app.models.production import ProductionTask
+from app.models.warehouse_capacity import WarehouseCapacityForecastPlan
 from app.models.warehouse_inventory import (
     FinishedGoodsInventoryDetail,
     Floor3LocationLayout,
@@ -142,6 +144,12 @@ from app.services.warehouse_twin_dashboard import (
     build_warehouse_twin_dashboard,
     inventory_search_matches,
     warehouse_capacity_summary,
+)
+from app.services.warehouse_capacity_forecast import (
+    ALLOWED_EFFECTS,
+    build_warehouse_capacity_forecast,
+    resolve_capacity_forecast_source,
+    serialize_capacity_forecast_plan,
 )
 from app.services.audit_log import append_audit_event
 from app.services.location_candidates import (
@@ -421,6 +429,34 @@ class WarehouseAreaPayload(BaseModel):
         elif self.capacity_eligible or self.confirmed_pallet_capacity is not None:
             raise ValueError("不计入容量的区域不能填写现场确认栈板数")
         return self
+
+
+class WarehouseCapacityForecastPlanPayload(BaseModel):
+    source_type: Literal["supplier_requisition", "production_task", "delivery"]
+    source_id: int = Field(gt=0)
+    effect: Literal["inflow", "outflow", "no_storage"]
+    floor_id: int | None = Field(default=None, gt=0)
+    planned_date: date
+    pallet_slots: int = Field(default=0, ge=0)
+    expected_version: int | None = Field(default=None, ge=1)
+    operation_key: str = Field(min_length=8, max_length=64)
+
+    @model_validator(mode="after")
+    def validate_effect(self):
+        allowed = ALLOWED_EFFECTS[self.source_type]
+        if self.effect not in allowed:
+            raise ValueError("该单据不能使用所选的容量变化方式")
+        if self.effect == "no_storage":
+            if self.floor_id is not None or self.pallet_slots != 0:
+                raise ValueError("直接使用或直接待送不填写楼层和栈板位")
+        elif self.floor_id is None or self.pallet_slots <= 0:
+            raise ValueError("预计入仓或出仓必须选择楼层并填写大于 0 的栈板位")
+        return self
+
+
+class WarehouseCapacityForecastCancelPayload(BaseModel):
+    expected_version: int = Field(ge=1)
+    operation_key: str = Field(min_length=8, max_length=64)
 
 
 class Floor3PalletItemPayload(BaseModel):
@@ -5612,6 +5648,20 @@ def get_warehouse_capacity_summary(
         key=lambda row: float(row["capacity"]["utilization_percent"]),
         default=None,
     )
+    forecast = build_warehouse_capacity_forecast(
+        db,
+        horizon=7,
+        as_of=beijing_today(),
+    )
+    forecast_tightest = max(
+        (
+            row
+            for row in forecast["floors"]
+            if row["peak_utilization_percent"] is not None
+        ),
+        key=lambda row: float(row["peak_utilization_percent"]),
+        default=None,
+    )
     return {
         "visible": True,
         "reference_pallet_capacity": reference_total,
@@ -5628,9 +5678,243 @@ def get_warehouse_capacity_summary(
             row["capacity"]["alert_level"] not in {"normal", "unknown"}
             for row in floor_items
         ),
+        "forecast_7d_complete": forecast["forecast_complete"],
+        "forecast_7d_status_label": forecast["forecast_status_label"],
+        "forecast_7d_peak_floor_code": (
+            forecast_tightest["floor_code"] if forecast_tightest else None
+        ),
+        "forecast_7d_peak_utilization_percent": (
+            forecast_tightest["peak_utilization_percent"] if forecast_tightest else None
+        ),
+        "forecast_7d_action_count": len(forecast["actions"]),
         "floors": floor_items,
         "notice": "只读取正式栈板和库位；规划预警不会移动货物或修改库存。",
     }
+
+
+def _capacity_forecast_request_hash(payload: dict) -> str:
+    rendered = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+
+
+def _capacity_forecast_scope_key(effect: str, floor_id: int | None) -> str:
+    return "none" if effect == "no_storage" else f"floor:{int(floor_id or 0)}"
+
+
+def _capacity_forecast_audit(
+    db: Session,
+    *,
+    request: Request,
+    user: User,
+    action_code: str,
+    plan: WarehouseCapacityForecastPlan,
+    before: dict | None,
+    after: dict,
+) -> None:
+    append_audit_event(
+        db,
+        request=request,
+        actor=user,
+        event_category="system",
+        result="success",
+        source="web",
+        module_code="warehouse",
+        action_code=action_code,
+        legacy_action="CAP_FORECAST",
+        resource=f"warehouse/capacity-forecast/{plan.id}",
+        entity_type="warehouse_capacity_forecast_plan",
+        entity_id=plan.id,
+        object_ref=f"{plan.source_type}:{plan.source_id}:{plan.scope_key}",
+        description="仓储容量预测计划已更新；不改变任何库存事实",
+        details={"before": before, "after": after},
+    )
+
+
+@router.get("/capacity/forecast")
+def get_warehouse_capacity_forecast(
+    horizon: int = Query(default=7),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    if horizon not in {7, 14, 30}:
+        raise HTTPException(status_code=422, detail="容量预测仅支持 7、14、30 天")
+    if _twin_locator_visible_customer_ids(db, user) is not None:
+        return {
+            "visible": False,
+            "notice": "当前账号按客户范围查看库存，不显示全仓容量预测。",
+            "horizon_days": horizon,
+            "floors": [],
+            "plans": [],
+            "missing_sources": [],
+            "stale_plans": [],
+            "actions": [],
+        }
+    return build_warehouse_capacity_forecast(
+        db,
+        horizon=horizon,
+        as_of=beijing_today(),
+    )
+
+
+@router.post("/capacity/forecast-plans")
+def save_warehouse_capacity_forecast_plan(
+    payload: WarehouseCapacityForecastPlanPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    today = beijing_today()
+    if payload.planned_date < today - timedelta(days=30) or payload.planned_date > today + timedelta(days=365):
+        raise HTTPException(status_code=422, detail="预测日期只能填写近 30 天到未来 365 天")
+    source = resolve_capacity_forecast_source(db, payload.source_type, payload.source_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="对应业务单据不存在")
+    if not source["valid"]:
+        raise HTTPException(status_code=409, detail="对应业务单据已完成、作废或数量无效，不能再加入预测")
+    floor = None
+    if payload.floor_id is not None:
+        floor = db.get(WarehouseFloor, payload.floor_id)
+        if floor is None or floor.floor_number not in {1, 3}:
+            raise HTTPException(status_code=422, detail="容量预测只允许选择已建档的一楼或三楼")
+    scope_key = _capacity_forecast_scope_key(payload.effect, payload.floor_id)
+    request_payload = payload.model_dump(mode="json", exclude={"operation_key"})
+    request_hash = _capacity_forecast_request_hash(request_payload)
+    row = db.scalar(
+        select(WarehouseCapacityForecastPlan).where(
+            WarehouseCapacityForecastPlan.source_type == payload.source_type,
+            WarehouseCapacityForecastPlan.source_id == payload.source_id,
+            WarehouseCapacityForecastPlan.scope_key == scope_key,
+        )
+    )
+    before = None
+    if row is not None:
+        if row.last_operation_key == payload.operation_key:
+            if row.last_request_hash != request_hash:
+                raise HTTPException(status_code=409, detail="同一操作键不能用于不同的预测内容")
+            return {
+                "ok": True,
+                "replayed": True,
+                "plan": serialize_capacity_forecast_plan(row, floor=floor, source_valid=True),
+            }
+        if payload.expected_version is None or payload.expected_version != row.version:
+            raise HTTPException(status_code=409, detail="预测资料已被修改，请刷新后再保存")
+        before = serialize_capacity_forecast_plan(
+            row,
+            floor=db.get(WarehouseFloor, row.floor_id) if row.floor_id else None,
+            source_valid=True,
+        )
+        row.source_number_snapshot = source["source_number"]
+        row.source_label_snapshot = source["source_label"]
+        row.effect = payload.effect
+        row.floor_id = payload.floor_id
+        row.planned_date = payload.planned_date
+        row.pallet_slots = payload.pallet_slots
+        row.status = "active"
+        row.cancelled_by = None
+        row.cancelled_at = None
+        row.version += 1
+        row.updated_by = user.id
+        row.updated_at = beijing_now_naive()
+        row.last_operation_key = payload.operation_key
+        row.last_request_hash = request_hash
+    else:
+        if payload.expected_version is not None:
+            raise HTTPException(status_code=409, detail="预测资料不存在，请刷新后重新操作")
+        row = WarehouseCapacityForecastPlan(
+            source_type=payload.source_type,
+            source_id=payload.source_id,
+            source_number_snapshot=source["source_number"],
+            source_label_snapshot=source["source_label"],
+            effect=payload.effect,
+            floor_id=payload.floor_id,
+            scope_key=scope_key,
+            planned_date=payload.planned_date,
+            pallet_slots=payload.pallet_slots,
+            status="active",
+            version=1,
+            last_operation_key=payload.operation_key,
+            last_request_hash=request_hash,
+            created_by=user.id,
+            updated_by=user.id,
+            updated_at=beijing_now_naive(),
+        )
+        db.add(row)
+    try:
+        db.flush()
+        after = serialize_capacity_forecast_plan(row, floor=floor, source_valid=True)
+        _capacity_forecast_audit(
+            db,
+            request=request,
+            user=user,
+            action_code="warehouse_capacity_forecast_save",
+            plan=row,
+            before=before,
+            after=after,
+        )
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="预测资料已存在，请刷新后再保存") from exc
+    db.refresh(row)
+    return {
+        "ok": True,
+        "replayed": False,
+        "plan": serialize_capacity_forecast_plan(row, floor=floor, source_valid=True),
+    }
+
+
+@router.post("/capacity/forecast-plans/{plan_id}/cancel")
+def cancel_warehouse_capacity_forecast_plan(
+    plan_id: int,
+    payload: WarehouseCapacityForecastCancelPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    row = db.get(WarehouseCapacityForecastPlan, plan_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="预测资料不存在")
+    request_hash = _capacity_forecast_request_hash(
+        {"plan_id": plan_id, "expected_version": payload.expected_version, "action": "cancel"}
+    )
+    if row.last_operation_key == payload.operation_key:
+        if row.last_request_hash != request_hash:
+            raise HTTPException(status_code=409, detail="同一操作键不能用于不同操作")
+        return {"ok": True, "replayed": True, "plan_id": row.id, "version": row.version}
+    if row.status != "active":
+        raise HTTPException(status_code=409, detail="该预测资料已经取消")
+    if row.version != payload.expected_version:
+        raise HTTPException(status_code=409, detail="预测资料已被修改，请刷新后再取消")
+    before = serialize_capacity_forecast_plan(
+        row,
+        floor=db.get(WarehouseFloor, row.floor_id) if row.floor_id else None,
+        source_valid=None,
+    )
+    row.status = "cancelled"
+    row.cancelled_by = user.id
+    row.cancelled_at = beijing_now_naive()
+    row.updated_by = user.id
+    row.updated_at = row.cancelled_at
+    row.version += 1
+    row.last_operation_key = payload.operation_key
+    row.last_request_hash = request_hash
+    db.flush()
+    after = serialize_capacity_forecast_plan(
+        row,
+        floor=db.get(WarehouseFloor, row.floor_id) if row.floor_id else None,
+        source_valid=None,
+    )
+    _capacity_forecast_audit(
+        db,
+        request=request,
+        user=user,
+        action_code="warehouse_capacity_forecast_cancel",
+        plan=row,
+        before=before,
+        after=after,
+    )
+    db.commit()
+    return {"ok": True, "replayed": False, "plan_id": row.id, "version": row.version}
 
 
 @router.get("/twin-dashboard/search")

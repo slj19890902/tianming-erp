@@ -52,6 +52,9 @@ from app.models.order import Order, OrderDailySequence, OrderItem  # noqa: E402,
 from app.models.order_material_cost_snapshot import (  # noqa: E402,F401
     SalesOrderItemMaterialCostSnapshot,
 )
+from app.models.order_estimated_cost_snapshot import (  # noqa: E402,F401
+    SalesOrderItemEstimatedCostSnapshot,
+)
 from app.models.requisition import (  # noqa: E402,F401
     Requisition,
     RequisitionDailySequence,

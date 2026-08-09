@@ -7708,7 +7708,7 @@
                 count:utilization == null ? 0 : utilization,
                 count_unit:utilization == null ? "待补" : "%",
                 description:capacity.tightest_floor_code
-                  ? `最紧张 ${capacity.tightest_floor_code} ${capacity.tightest_floor_utilization_percent}% · 已占 ${capacity.occupied_pallets}/${capacity.reference_pallet_capacity} 栈板位`
+                  ? `现在 ${capacity.tightest_floor_code} ${capacity.tightest_floor_utilization_percent}% · 7天峰值 ${capacity.forecast_7d_peak_floor_code || "-"} ${capacity.forecast_7d_peak_utilization_percent ?? "-"}% · ${capacity.forecast_7d_action_count || 0}项需核对`
                   : "尚无可用容量资料",
                 button_label:"看仓库", target:"warehouse",
               });

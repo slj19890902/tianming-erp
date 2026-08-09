@@ -53,12 +53,17 @@ def test_inventory_code_search_is_server_side_debounced_and_race_safe() -> None:
     assert "尚无已发布坐标，仅显示文字位置" in WAREHOUSE_HTML
 
 
-def test_dashboard_read_paths_do_not_add_inventory_mutations() -> None:
+def test_dashboard_write_paths_are_limited_to_non_inventory_forecast_plans() -> None:
     dashboard_script = WAREHOUSE_HTML.split("function twinUnitLabel", 1)[1].split(
         "async function switchLocationView", 1
     )[0]
-    for method in ('method:"POST"', 'method:"PUT"', 'method:"PATCH"', 'method:"DELETE"'):
+    assert 'api("/api/warehouse/capacity/forecast-plans",{method:"POST"' in dashboard_script
+    assert "/api/warehouse/capacity/forecast-plans/${planId}/cancel" in dashboard_script
+    for method in ('method:"PUT"', 'method:"PATCH"', 'method:"DELETE"'):
         assert method not in dashboard_script
+    for inventory_write_path in ("/manual-in", "/pallets/", "/lots/", "/relocate"):
+        assert inventory_write_path not in dashboard_script
+    assert "不会自动入库、移库或发货" in WAREHOUSE_HTML
     assert "未完成现场复核时按规划容量" in WAREHOUSE_HTML
     assert "全部区域复核后自动切换为安全容量" in WAREHOUSE_HTML
     assert "warehouseAreaCapacityReview" in WAREHOUSE_HTML
@@ -74,12 +79,23 @@ def test_capacity_cards_show_compact_operational_values() -> None:
     assert "规划容量预警" not in WAREHOUSE_HTML.split("function renderTwinFloorOverview", 1)[0]
 
 
+def test_capacity_forecast_is_compact_and_requires_explicit_pallet_slots() -> None:
+    assert 'data-capacity-forecast-days="7"' in WAREHOUSE_HTML
+    assert 'data-capacity-forecast-days="14"' in WAREHOUSE_HTML
+    assert 'data-capacity-forecast-days="30"' in WAREHOUSE_HTML
+    assert 'id="capacityForecastSlots" type="number" min="1"' in WAREHOUSE_HTML
+    assert "直接使用/待送" in WAREHOUSE_HTML
+    assert "/api/warehouse/capacity/forecast?horizon=${state.capacityForecast.days}" in WAREHOUSE_HTML
+
+
 def test_homepage_has_one_compact_read_only_capacity_card() -> None:
     assert '{ key: "warehouse_capacity", title: "仓储容量" }' in INDEX_HTML
     assert 'axios.get("/api/warehouse/capacity/summary")' in INDEX_HTML
     assert 'key:"warehouse_capacity", title:"仓储容量"' in INDEX_HTML
     assert 'button_label:"看仓库", target:"warehouse"' in INDEX_HTML
-    assert "最紧张 ${capacity.tightest_floor_code}" in INDEX_HTML
+    assert "现在 ${capacity.tightest_floor_code}" in INDEX_HTML
+    assert "7天峰值 ${capacity.forecast_7d_peak_floor_code" in INDEX_HTML
+    assert "${capacity.forecast_7d_action_count || 0}项需核对" in INDEX_HTML
 
 
 def test_dashboard_inline_javascript_is_valid(tmp_path: Path) -> None:

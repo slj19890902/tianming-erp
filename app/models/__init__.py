@@ -194,3 +194,6 @@ from app.models.incoming_receipt import (  # noqa: E402,F401
     IncomingReceipt,
     IncomingReceiptItem,
 )
+from app.models.warehouse_capacity import (  # noqa: E402,F401
+    WarehouseCapacityForecastPlan,
+)

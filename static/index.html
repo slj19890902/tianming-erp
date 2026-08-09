@@ -5715,6 +5715,16 @@
                 </table>
               </div>
             </div>
+            <div v-else-if="modal.type === 'estimatedCost'" class="form-grid">
+              <div class="field wide"><label>适用明细</label><div>{{ estimatedCostForm.product_code || '-' }}｜{{ estimatedCostForm.product_name || '-' }}</div></div>
+              <div class="field"><label>当前版本</label><div>V{{ estimatedCostForm.expected_snapshot_version }}</div></div>
+              <div class="field"><label>生产加报损耗</label><select class="select" v-model="estimatedCostForm.loss_rate"><option value="0.03">3%（常规）</option><option value="0.05">5%（新款/试产）</option></select></div>
+              <div class="field"><label>刀模费</label><input class="input" type="number" min="0" step="0.01" v-model.number="estimatedCostForm.die_fee" /></div>
+              <div class="field"><label>挂板费</label><input class="input" type="number" min="0" step="0.01" v-model.number="estimatedCostForm.plate_fee" /></div>
+              <div class="field"><label>运输费</label><input class="input" type="number" min="0" step="0.01" v-model.number="estimatedCostForm.freight_fee" /></div>
+              <div class="field"><label>其他一次性费用</label><input class="input" type="number" min="0" step="0.01" v-model.number="estimatedCostForm.other_fee" /></div>
+              <div class="field wide notice warning">预计成本，非实际成本。税率参考 13%，沿用材料价原口径，不重复加税；费用只影响当前订单快照。</div>
+            </div>
             <div v-else-if="modal.type === 'orderDetail' && orderDetail">
               <div class="form-grid">
                 <div class="field"><label class="sys-num">系统单号</label><div class="sys-num">{{ displayOrderNumber(orderDetail) }}</div></div>
@@ -5738,7 +5748,17 @@
               <tbody><tr v-for="item in orderDetail.items" :key="item.id">
                 <td class="sys-num" style="font-size:12px">{{ item.item_order_number || "-" }}<div style="margin-top:4px"><status-tag :value="itemBusinessStatusKey(item)"></status-tag></div><div v-if="item.requisition_hold?.status === 'active'" class="status orange" style="margin-top:4px">{{ item.requisition_hold.label || '等候中' }}</div><div v-if="Number(item.business_delivered_quantity || 0) > 0" class="order-delivery-compact">已送 {{ item.business_delivered_quantity }}/{{ item.quantity }}</div></td>
                 <td>{{ item.snapshot_product_code }}</td>
-                <td :title="item.snapshot_product_name" style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:normal">{{ item.snapshot_product_name }}<div v-if="item.combination_role==='priced_component'" class="status blue" style="margin-top:3px">{{ combinationGroupLabel(item) }}</div><div v-if="hasBomComponents(item)" class="bom-preview-box"><div class="bom-preview-title">内部 BOM 预览（客户订单仍为一个父产品 / 套）</div><div class="bom-preview-list"><div v-for="component in item.bom_components" :key="component.id || component.component_product_id || component.internal_code" class="bom-preview-item">{{ bomPreviewComponentLabel(component) }}</div></div></div><div v-if="canViewCosts" class="material-cost-compact cost-sensitive"><strong>{{ orderMaterialCostSummary(item) }}</strong><div class="muted">{{ item.material_cost_history_label }}</div><details><summary>查看材料成本依据</summary><div v-for="(component,index) in item.material_cost_components || []" :key="`${item.id}-cost-${index}`">{{ orderMaterialCostComponentText(component) }}</div><div v-for="missing in item.material_cost_missing_items || []" :key="missing" class="missing">待补：{{ missing }}</div><div class="muted">{{ item.material_cost_scope_label || '材料成本（未计生产损耗和加工费）' }}</div></details></div></td>
+                <td :title="item.snapshot_product_name" style="max-width:210px;overflow:hidden;text-overflow:ellipsis;white-space:normal">
+                  {{ item.snapshot_product_name }}
+                  <div v-if="item.combination_role==='priced_component'" class="status blue" style="margin-top:3px">{{ combinationGroupLabel(item) }}</div>
+                  <div v-if="hasBomComponents(item)" class="bom-preview-box"><div class="bom-preview-title">内部 BOM 预览（客户订单仍为一个父产品 / 套）</div><div class="bom-preview-list"><div v-for="component in item.bom_components" :key="component.id || component.component_product_id || component.internal_code" class="bom-preview-item">{{ bomPreviewComponentLabel(component) }}</div></div></div>
+                  <div v-if="canViewCosts" class="material-cost-compact cost-sensitive">
+                    <strong>{{ item.estimated_total_cost_status === 'calculated' ? `预计总成本 ¥ ${money(item.estimated_order_total_cost)}` : (item.estimated_total_cost_status_label || '预计总成本待完善') }}</strong>
+                    <div class="muted">预计成本，非实际成本 · V{{ item.estimated_total_cost_snapshot_version || '-' }}</div>
+                    <button v-if="item.estimated_total_cost_snapshot_version" class="btn small" type="button" @click="openEstimatedCost(orderDetail,item)">调整预计成本</button>
+                    <details><summary>查看材料成本依据与预计总成本</summary><div><strong>{{ orderMaterialCostSummary(item) }}</strong> · {{ item.material_cost_history_label }}</div><div class="muted">{{ item.material_cost_scope_label || '材料成本（未计生产损耗和加工费）' }}</div><div v-for="(component,index) in item.material_cost_components || []" :key="`${item.id}-cost-${index}`">{{ orderMaterialCostComponentText(component) }}</div><div v-if="item.estimated_cost_breakdown">损耗材料 ¥ {{ money(item.estimated_cost_breakdown.loss_material_total_cost) }} · 加工 ¥ {{ money(item.estimated_cost_breakdown.processing_total_cost) }} · 一次性费用 ¥ {{ money(item.estimated_cost_breakdown.one_time_fee_total) }}</div><div v-for="missing in item.material_cost_missing_items || []" :key="missing" class="missing">材料待补：{{ missing }}</div><div v-for="missing in item.estimated_cost_missing_items || []" :key="`estimated-${missing}`" class="missing">成本待补：{{ missing }}</div><div class="muted">损耗 {{ Number(item.estimated_loss_rate || 0) * 100 }}% · {{ item.estimated_total_cost_scope_label || '预计成本，非实际成本' }}</div></details>
+                  </div>
+                </td>
                 <td>{{ item.snapshot_spec || "-" }}</td>
                 <td style="white-space:normal;word-break:break-all;font-size:12px;max-width:160px">{{ orderItemMaterialText(item) }}</td>
                 <td>{{ item.snapshot_production_notes || "-" }}<div v-if="item.mold_location" class="status blue" style="margin-top:4px;white-space:normal">模具：{{ moldLocationText(item) }}</div></td>
@@ -7299,7 +7319,7 @@
               selected:{}, selection_sequence:0, request_id:0,
             },
             requisitionForm: { supplier_name: "", items: [] },
-            receiptForm: { items: [] }, orderItemForm: {}, orderDetail:null, orderGroupDetail:null, orderTrace:null, orderTraceEventDetail:null, orderTraceEventDetailLoadingKey:"", orderTraceReturnContext:null, traceRollbackBusy:false, drawingFile:null,
+            receiptForm: { items: [] }, orderItemForm: {}, estimatedCostForm:{}, orderDetail:null, orderGroupDetail:null, orderTrace:null, orderTraceEventDetail:null, orderTraceEventDetailLoadingKey:"", orderTraceReturnContext:null, traceRollbackBusy:false, drawingFile:null,
             externalPurchase:{loading:false,saving:false,error:"",submitError:"",status:"",orderId:null,items:[],confirmation:null,idempotencyKey:""},
             orderItemSaveState:{saving:false,committed:false,outcomeUncertain:false,result:null},
             finishedInventoryCandidates: [], finishedInventoryCandidatesLoaded: false,
@@ -8056,6 +8076,7 @@
             if (this.modal.type === "materialCandidate") return this.canAdmin;
             if (this.modal.type === "order") return this.canCreateOrders;
             if (["orderEdit","orderItem"].includes(this.modal.type)) return this.canEditOrders;
+            if (this.modal.type === "estimatedCost") return this.canViewCosts;
             if (this.modal.type === "quotationConvert") return this.canEditQuotations && this.canCreateProducts;
             if (this.modal.type === "requisitionMaterial") return this.canRequisition;
             if (this.modal.type === "requisitionHold") return this.canRequisition;
@@ -21430,6 +21451,39 @@
               if (latestRequestControllers.get(requestKey) === controller) this.finishLatestRequest(requestKey, controller);
             }
           },
+          openEstimatedCost(order, item) {
+            const fees = item?.estimated_cost_breakdown?.one_time_fees || {};
+            this.estimatedCostForm = {
+              order_id:Number(order?.id || 0),
+              item_id:Number(item?.id || 0),
+              product_code:item?.snapshot_product_code || "",
+              product_name:item?.snapshot_product_name || "",
+              expected_snapshot_version:Number(item?.estimated_total_cost_snapshot_version || 0),
+              loss_rate:String(Number(item?.estimated_loss_rate || 0.03).toFixed(2)),
+              die_fee:Number(fees.die_fee || 0),
+              plate_fee:Number(fees.plate_fee || 0),
+              freight_fee:Number(fees.freight_fee || 0),
+              other_fee:Number(fees.other_fee || 0),
+            };
+            this.modal = {type:"estimatedCost", title:"调整预计成本（仅当前订单）"};
+          },
+          async saveEstimatedCost() {
+            const form = this.estimatedCostForm || {};
+            if (!form.item_id || !form.expected_snapshot_version) throw new Error("预计成本版本缺失，请刷新订单详情");
+            for (const key of ["die_fee","plate_fee","freight_fee","other_fee"]) {
+              if (!Number.isFinite(Number(form[key])) || Number(form[key]) < 0) throw new Error("一次性费用不能小于 0");
+            }
+            await axios.post(`/api/orders/items/${form.item_id}/estimated-cost`, {
+              expected_snapshot_version:Number(form.expected_snapshot_version),
+              loss_rate:String(form.loss_rate),
+              die_fee:String(form.die_fee || 0),
+              plate_fee:String(form.plate_fee || 0),
+              freight_fee:String(form.freight_fee || 0),
+              other_fee:String(form.other_fee || 0),
+            });
+            this.showToast("预计成本已保存");
+            return this.openOrderDetail({id:form.order_id});
+          },
           async openOrderTrace(order, item) {
             const requestKey = "orders:read-detail-modal";
             const orderId = Number(order?.id || 0);
@@ -24072,6 +24126,7 @@
             throw failedEntries[0]?.reason || new Error("订单组保存失败");
           },
           async saveModal() {
+            if (this.modal?.type === "estimatedCost") return this.saveEstimatedCost();
             if (this.modal?.type === "receipt") return this.saveReceipt();
             if (["supplierRequisitionDraft","requisition"].includes(this.modal?.type) && this.requisitionInventoryActionBlocked()) {
               this.showToast(

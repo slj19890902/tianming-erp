@@ -100,9 +100,16 @@ from app.services.order_document_trace import build_order_item_document_trace
 from app.services.order_material_cost import estimate_order_item_material_cost
 from app.services.order_material_cost_snapshot import (
     freeze_order_item_material_cost,
+    get_latest_order_item_material_cost_snapshot,
     get_latest_order_item_material_cost_snapshots_by_items,
     mark_current_estimate_as_non_historical,
     serialize_order_item_material_cost_snapshot,
+)
+from app.services.order_estimated_cost_snapshot import (
+    freeze_order_item_estimated_cost,
+    get_latest_order_item_estimated_cost_snapshot,
+    get_latest_order_item_estimated_cost_snapshots_by_items,
+    serialize_order_item_estimated_cost_snapshot,
 )
 from app.services.audit_log import append_audit_event
 from app.services.order_business_status import (
@@ -567,6 +574,22 @@ class BomComponentDemandUpdate(BaseModel):
     required_piece_quantity: int = Field(gt=0, strict=True)
     expected_required_piece_quantity: int = Field(gt=0, strict=True)
     idempotency_key: str = Field(min_length=1, max_length=120)
+
+
+class EstimatedCostUpdate(BaseModel):
+    expected_snapshot_version: int = Field(ge=1)
+    loss_rate: Decimal = Decimal("0.03")
+    die_fee: Decimal = Field(default=Decimal("0"), ge=0)
+    plate_fee: Decimal = Field(default=Decimal("0"), ge=0)
+    freight_fee: Decimal = Field(default=Decimal("0"), ge=0)
+    other_fee: Decimal = Field(default=Decimal("0"), ge=0)
+
+    @field_validator("loss_rate")
+    @classmethod
+    def _validate_loss_rate(cls, value: Decimal) -> Decimal:
+        if value not in {Decimal("0.03"), Decimal("0.05")}:
+            raise ValueError("生产加报损耗只能选择 3% 或 5%")
+        return value
 
 
 class OrderCreate(BaseModel):
@@ -1769,6 +1792,13 @@ def _order_response(
         if db is not None and may_view_cost
         else {}
     )
+    frozen_estimated_cost_by_item_id = (
+        get_latest_order_item_estimated_cost_snapshots_by_items(
+            db, list(order.items)
+        )
+        if db is not None and may_view_cost
+        else {}
+    )
     for item in order.items:
         item_business_projection = business_projection.get("items", {}).get(
             int(item.id), {}
@@ -1806,6 +1836,23 @@ def _order_response(
                     )
                 )
             )
+            frozen_estimated_cost = frozen_estimated_cost_by_item_id.get(item.id)
+            if frozen_estimated_cost is not None:
+                cost_reference.update(
+                    serialize_order_item_estimated_cost_snapshot(
+                        frozen_estimated_cost
+                    )
+                )
+            else:
+                cost_reference.update(
+                    {
+                        "estimated_total_cost_status": "not_frozen",
+                        "estimated_total_cost_status_label": "预计总成本待冻结",
+                        "estimated_total_cost_scope_label": "预计成本，非实际成本",
+                        "cost_status": "pending",
+                        "estimated_cost": None,
+                    }
+                )
         item_data = {
                 "id": item.id,
                 "product_id": item.product_id,
@@ -5767,9 +5814,15 @@ def _create_order_impl(
                 refresh_production_task(db, created_item.id)
         refresh_order_production_status(db, order.id)
         for created_item in created_items:
-            freeze_order_item_material_cost(
+            material_snapshot, _ = freeze_order_item_material_cost(
                 db,
                 created_item,
+                actor_id=user.id,
+            )
+            freeze_order_item_estimated_cost(
+                db,
+                created_item,
+                material_snapshot=material_snapshot,
                 actor_id=user.id,
             )
         _set_order_save_stage(observability, "build_response")
@@ -6035,6 +6088,13 @@ def update_order_item_bom_component_demand(
             return get_order_item_bom_preview(db, item.id)
         ensure_component_production_tasks(db, item.id)
         freeze_order_item_material_cost(db, item, actor_id=user.id)
+        material_snapshot = get_latest_order_item_material_cost_snapshot(db, item)
+        freeze_order_item_estimated_cost(
+            db,
+            item,
+            material_snapshot=material_snapshot,
+            actor_id=user.id,
+        )
         _log_component_demand_change(
             db,
             request=request,
@@ -6056,6 +6116,62 @@ def update_order_item_bom_component_demand(
     except IntegrityError as error:
         db.rollback()
         raise HTTPException(status_code=409, detail="组件需求调整已提交，请刷新查看") from error
+
+
+@router.post("/items/{item_id}/estimated-cost")
+def update_order_item_estimated_cost(
+    item_id: int,
+    payload: EstimatedCostUpdate,
+    request: Request = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_view_cost),
+) -> dict:
+    item = db.get(OrderItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="订单明细不存在")
+    order = db.get(Order, item.order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="订单不存在")
+    require_customer_access(order.customer_id, current_user=user, db=db)
+    latest = get_latest_order_item_estimated_cost_snapshot(db, item)
+    if latest is None:
+        raise HTTPException(status_code=409, detail="预计成本尚未冻结，请刷新订单后重试")
+    if latest.snapshot_version != payload.expected_snapshot_version:
+        raise HTTPException(
+            status_code=409,
+            detail="预计成本已被更新，请刷新后再修改",
+        )
+    material_snapshot, _ = freeze_order_item_material_cost(
+        db, item, actor_id=user.id
+    )
+    snapshot, created = freeze_order_item_estimated_cost(
+        db,
+        item,
+        material_snapshot=material_snapshot,
+        actor_id=user.id,
+        parameters=payload.model_dump(),
+    )
+    _append_order_audit(
+        db,
+        request=request,
+        user=user,
+        order=order,
+        action_code="order.item.estimated_cost.update",
+        legacy_action="UPDATE_ESTIMATED_COST",
+        description="调整当前订单预计损耗与一次性费用",
+        details={
+            "snapshot_version": snapshot.snapshot_version,
+            "created": created,
+            "loss_rate": str(snapshot.loss_rate),
+            "scope": "estimated_not_actual",
+        },
+        entity_type="order_item",
+        entity_id=item.id,
+        object_ref=item.item_order_number or str(item.id),
+        resource="OrderItemEstimatedCost",
+    )
+    db.commit()
+    return serialize_order_item_estimated_cost_snapshot(snapshot)
 
 
 @router.put("/items/{item_id}")
@@ -6789,7 +6905,15 @@ def update_order_item(
         object_ref=item.item_order_number or f"{order.order_number}:{item.id}",
         resource="OrderItem",
     )
-    freeze_order_item_material_cost(db, item, actor_id=user.id)
+    material_snapshot, _ = freeze_order_item_material_cost(
+        db, item, actor_id=user.id
+    )
+    freeze_order_item_estimated_cost(
+        db,
+        item,
+        material_snapshot=material_snapshot,
+        actor_id=user.id,
+    )
     db.commit()
     db.refresh(item)
     return {

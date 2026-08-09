@@ -89,8 +89,12 @@ from app.services.warehouse_twin_layout_editor import (
     WarehouseTwinLayoutEditNotFoundError,
     create_warehouse_twin_rack,
     delete_warehouse_twin_rack,
+    discard_warehouse_twin_layout_draft,
+    load_warehouse_twin_layout_draft,
+    publish_warehouse_twin_layout_draft,
     update_warehouse_twin_rack,
     update_warehouse_twin_zone_policy,
+    validate_warehouse_twin_layout_draft,
 )
 from app.services.warehouse_twin_production import (
     WarehouseTwinProductionError,
@@ -5124,6 +5128,17 @@ def get_warehouse_twin_floor_layout(
         raise HTTPException(status_code=404, detail=str(error)) from error
 
 
+@router.get("/twin-layout/floors/{floor_code}/draft")
+def get_warehouse_twin_floor_layout_draft(
+    floor_code: str,
+    _user: User = Depends(admin_only),
+) -> dict:
+    try:
+        return load_warehouse_twin_layout_draft(floor_code)
+    except WarehouseTwinLayoutEditError as error:
+        _handle_twin_layout_edit_error(error)
+
+
 class TwinRackLayoutFields(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     x_mm: float = Field(ge=-10_000_000, le=10_000_000)
@@ -5171,6 +5186,20 @@ class TwinZoneStoragePolicyPayload(BaseModel):
     storage_layout: Literal["rack", "pallet_ground", "mixed"]
 
 
+class TwinLayoutDraftValidatePayload(BaseModel):
+    expected_revision: str = Field(min_length=1, max_length=64)
+
+
+class TwinLayoutDraftPublishPayload(BaseModel):
+    expected_published_revision: str = Field(min_length=1, max_length=64)
+    expected_draft_revision: str = Field(min_length=1, max_length=64)
+    operation_key: str = Field(min_length=8, max_length=120)
+
+
+class TwinLayoutDraftDiscardPayload(BaseModel):
+    expected_revision: str = Field(min_length=1, max_length=64)
+
+
 def _handle_twin_layout_edit_error(error: WarehouseTwinLayoutEditError) -> None:
     if isinstance(error, WarehouseTwinLayoutEditNotFoundError):
         raise HTTPException(status_code=404, detail=str(error)) from error
@@ -5212,6 +5241,97 @@ def _rack_layout_values(payload: TwinRackLayoutFields) -> dict:
         exclude={"expected_revision", "expected_version", "operation_key", "area_feature_id"},
         exclude_none=True,
     )
+
+
+@router.post("/twin-layout/floors/{floor_code}/draft/validate")
+def validate_twin_layout_draft(
+    floor_code: str,
+    payload: TwinLayoutDraftValidatePayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    try:
+        result = validate_warehouse_twin_layout_draft(
+            floor_code,
+            expected_revision=payload.expected_revision,
+        )
+    except WarehouseTwinLayoutEditError as error:
+        _handle_twin_layout_edit_error(error)
+    _twin_layout_asset_log(
+        db,
+        request=request,
+        user=user,
+        action="TWIN_LAYOUT_DRAFT_VALIDATE",
+        entity_type="twin_layout_draft",
+        entity_id=floor_code.upper(),
+        description="管理员校验仓库地图草稿",
+        details=result.value,
+    )
+    db.commit()
+    return {**result.value, "applied": result.applied}
+
+
+@router.post("/twin-layout/floors/{floor_code}/draft/publish")
+def publish_twin_layout_draft(
+    floor_code: str,
+    payload: TwinLayoutDraftPublishPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    try:
+        result = publish_warehouse_twin_layout_draft(
+            floor_code,
+            expected_published_revision=payload.expected_published_revision,
+            expected_draft_revision=payload.expected_draft_revision,
+            operation_key=payload.operation_key,
+        )
+    except WarehouseTwinLayoutEditError as error:
+        _handle_twin_layout_edit_error(error)
+    if result.applied:
+        _twin_layout_asset_log(
+            db,
+            request=request,
+            user=user,
+            action="TWIN_LAYOUT_PUBLISH",
+            entity_type="twin_layout",
+            entity_id=floor_code.upper(),
+            description="管理员发布已校验的仓库地图草稿",
+            details=result.value,
+        )
+        db.commit()
+    return {**result.value, "applied": result.applied}
+
+
+@router.post("/twin-layout/floors/{floor_code}/draft/discard")
+def discard_twin_layout_draft(
+    floor_code: str,
+    payload: TwinLayoutDraftDiscardPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    try:
+        result = discard_warehouse_twin_layout_draft(
+            floor_code,
+            expected_revision=payload.expected_revision,
+        )
+    except WarehouseTwinLayoutEditError as error:
+        _handle_twin_layout_edit_error(error)
+    if result.applied:
+        _twin_layout_asset_log(
+            db,
+            request=request,
+            user=user,
+            action="TWIN_LAYOUT_DRAFT_DISCARD",
+            entity_type="twin_layout_draft",
+            entity_id=floor_code.upper(),
+            description="管理员放弃仓库地图草稿",
+            details=result.value,
+        )
+        db.commit()
+    return {**result.value, "applied": result.applied}
 
 
 @router.post("/twin-layout/floors/{floor_code}/racks", status_code=201)

@@ -165,6 +165,9 @@ from app.services.requisition_quantities import (
     purchase_sheet_quantity,
     required_piece_quantity,
 )
+from app.services.requisition_production_print import (
+    build_supplier_requisition_production_package,
+)
 
 
 router = APIRouter()
@@ -12287,6 +12290,13 @@ def create_supplier_order_from_merge_group(
                     order_number=order_item.item_order_number,
                     product_code=req_item.product_code_snapshot,
                     product_name=req_item.product_name_snapshot,
+                    source_key=_supplier_requisition_source_key(
+                        order_item,
+                        req_item,
+                        component_type=_requisition_item_component(req_item),
+                    ),
+                    report_length_mm=int(req_item.cardboard_len),
+                    report_width_mm=int(req_item.cardboard_width),
                     quantity=int(requirements["production_required_qty"]),
                     stock_deduction_qty=int(
                         requirements["finished_inventory_reserved_qty"]
@@ -13288,6 +13298,9 @@ def _created_supplier_orders_response(
                 "supplier_order_id": order.id,
                 "supplier_order_number": order.order_number,
                 "pdf_url": f"/api/requisition/supplier-orders/{order.id}/pdf",
+                "production_print_url": (
+                    f"/requisition-production-print.html?id={order.id}"
+                ),
                 "item_count": len(order.items),
             }
             for order in orders
@@ -13690,6 +13703,13 @@ def _create_supplier_order_locked(
             order_number=m.order_number,
             product_code=m.product_code,
             product_name=m.product_name,
+            source_key=(
+                _supplier_requisition_source_key(oi)
+                if oi is not None
+                else None
+            ),
+            report_length_mm=payload.report_length_mm,
+            report_width_mm=payload.report_width_mm,
             quantity=validated["production_required_qty"],
             stock_deduction_qty=validated["finished_reserved_qty"],
             requisition_qty=req_qty,
@@ -14831,6 +14851,9 @@ def _build_reported_documents(
                 "customer_names": customer_names,
                 "requisition_qty": order.requisition_qty,
                 "pdf_url": f"/api/requisition/supplier-orders/{order.id}/pdf",
+                "production_print_url": (
+                    f"/requisition-production-print.html?id={order.id}"
+                ),
                 "line_items": line_items,
                 "_customer_ids": supplier_customer_ids.get(order.id, set()),
             }
@@ -15507,6 +15530,38 @@ def get_supplier_order(
         raise HTTPException(status_code=404, detail="供应商报料单不存在")
     _require_supplier_order_customer_access(order, user, db)
     return _supplier_order_dict(order, db)
+
+
+@router.get("/supplier-orders/{order_id}/production-print-package")
+def get_supplier_order_production_print_package(
+    order_id: int,
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_read),
+) -> dict:
+    """Return the deterministic pre-receipt production print projection."""
+
+    user = _user
+    order = db.get(SupplierRequisitionOrder, order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="供应商报料单不存在")
+    _require_supplier_order_customer_access(order, user, db)
+    if order.status != "confirmed":
+        raise HTTPException(
+            status_code=409,
+            detail="只有正式有效的报料单可以打印待来料生产任务单",
+        )
+    package = build_supplier_requisition_production_package(db, order)
+    if not package["card_count"]:
+        raise HTTPException(
+            status_code=409,
+            detail="该报料单没有可打印的正式明细",
+        )
+    if package["layout_overflow"]:
+        raise HTTPException(
+            status_code=409,
+            detail="同一存货编码的物理组件超过半页容量，请先核对并拆分报料后再打印",
+        )
+    return package
 
 
 @router.put("/supplier-orders/{order_id}/void")

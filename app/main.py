@@ -288,6 +288,21 @@ def create_app() -> FastAPI:
             include_in_schema=False,
         )
     if not any(
+        route.path == "/requisition-production-print.html"
+        for route in application.routes
+    ):
+        requisition_production_print_path = (
+            Path(__file__).resolve().parents[1]
+            / "static"
+            / "requisition-production-print.html"
+        )
+        application.add_api_route(
+            "/requisition-production-print.html",
+            _conditional_file_endpoint(requisition_production_print_path),
+            methods=["GET"],
+            include_in_schema=False,
+        )
+    if not any(
         route.path == "/external-purchase-print.html"
         for route in application.routes
     ):

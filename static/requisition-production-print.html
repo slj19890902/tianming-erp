@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>待来料生产任务单</title>
+  <style>
+    :root { color-scheme: light; font-family: "Microsoft YaHei", "SimSun", sans-serif; color:#111827; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:#eef2f7; }
+    .toolbar { position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:10px; padding:10px 16px; background:#fff; border-bottom:1px solid #d9e0e8; }
+    button { border:1px solid #b8c3d1; border-radius:6px; background:#fff; padding:7px 14px; cursor:pointer; font-size:14px; }
+    button.primary { background:#0b72e7; border-color:#0b72e7; color:#fff; }
+    button:disabled { opacity:.45; cursor:not-allowed; }
+    .toolbar-note { margin-left:auto; color:#5b6574; font-size:13px; }
+    .message { max-width:980px; margin:16px auto; padding:14px 16px; border-radius:8px; background:#fff; border:1px solid #d9e0e8; }
+    .message.error { color:#a41414; background:#fff5f5; border-color:#efb1b1; }
+    .pages { display:flex; flex-direction:column; align-items:center; gap:12px; padding:14px; }
+    .page { width:210mm; height:297mm; padding:8mm 10mm; background:#fff; box-shadow:0 2px 12px rgba(15,23,42,.12); display:grid; grid-template-rows:140.5mm 140.5mm; overflow:hidden; break-after:page; page-break-after:always; }
+    .page:last-child { break-after:auto; page-break-after:auto; }
+    .half-card { min-height:0; padding:4mm 1.5mm 3mm; border-bottom:1px dashed #7b8796; overflow:hidden; break-inside:avoid; page-break-inside:avoid; }
+    .half-card:nth-child(2) { border-bottom:0; }
+    .half-card.blank { visibility:hidden; }
+    .half-card.dense table { font-size:8px; }
+    .half-card.dense th,.half-card.dense td { padding:.7mm .9mm; line-height:1.15; }
+    .half-card.layout-overflow { overflow:auto; outline:2px solid #d92d20; outline-offset:-2px; }
+    .card-head { display:grid; grid-template-columns:1fr auto; gap:5mm; align-items:start; border-bottom:1.5px solid #1f2937; padding-bottom:2mm; }
+    h1 { margin:0; font-size:18px; text-align:center; letter-spacing:2px; }
+    .status { display:inline-block; padding:2px 8px; border:1px solid #0b72e7; border-radius:12px; color:#0759b4; font-size:12px; font-weight:700; }
+    .status.warn { color:#b42318; border-color:#d92d20; background:#fff4f2; }
+    .meta { display:grid; grid-template-columns:1.25fr 1fr 1fr; gap:1.5mm 4mm; margin:2.5mm 0; font-size:11px; line-height:1.35; }
+    .meta strong { font-weight:700; }
+    .summary { display:grid; grid-template-columns:1fr 1fr; gap:3mm; margin:2mm 0; }
+    .metric { border:1px solid #9aa6b2; padding:1.6mm 2.4mm; font-size:12px; }
+    .metric strong { font-size:17px; margin-left:5px; }
+    table { width:100%; border-collapse:collapse; table-layout:fixed; font-size:9.5px; }
+    th,td { border:1px solid #6f7b88; padding:1.1mm 1.2mm; text-align:left; vertical-align:top; line-height:1.25; overflow-wrap:anywhere; }
+    th { background:#edf2f7; text-align:center; font-weight:700; }
+    .c-part { width:10%; }.c-size { width:15%; }.c-qty { width:12%; }.c-material { width:17%; }.c-crease { width:12%; }.c-work { width:34%; }
+    .work-line { display:block; }
+    .warning { margin-top:1.5mm; padding:1.3mm 2mm; border:1px solid #d92d20; color:#b42318; background:#fff4f2; font-size:10px; font-weight:700; }
+    .foot { display:flex; justify-content:space-between; gap:4mm; margin-top:1.2mm; color:#5b6574; font-size:8.5px; }
+    @page { size:A4 portrait; margin:0; }
+    @media print {
+      body { background:#fff; }
+      .toolbar,.message { display:none !important; }
+      .pages { display:block; padding:0; }
+      .page { box-shadow:none; margin:0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <button id="retryButton" type="button">重新加载</button>
+    <button id="printButton" class="primary" type="button" disabled>打印</button>
+    <button id="closeButton" type="button">关闭</button>
+    <span class="toolbar-note">A4 纵向 · 每页上下两款</span>
+  </div>
+  <div id="message" class="message">正在读取正式报料快照…</div>
+  <main id="pages" class="pages" aria-live="polite"></main>
+  <script>
+    (() => {
+      "use strict";
+      const message = document.getElementById("message");
+      const pagesHost = document.getElementById("pages");
+      const retryButton = document.getElementById("retryButton");
+      const printButton = document.getElementById("printButton");
+      const closeButton = document.getElementById("closeButton");
+      const params = new URLSearchParams(window.location.search);
+      const orderId = Number(params.get("id"));
+      let loadGeneration = 0;
+      let activeController = null;
+      let loadedPackage = null;
+
+      const escapeHtml = (value) => String(value ?? "-")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+      const textList = (value) => Array.isArray(value) && value.length
+        ? value.map((item) => String(item)).join(" / ") : "-";
+      const dateText = (value) => value ? String(value).slice(0, 10) : "-";
+
+      function errorMessage(status, payload) {
+        const detail = payload && typeof payload === "object" ? payload.detail : null;
+        if (typeof detail === "string" && detail.trim()) return detail.trim();
+        if (detail && typeof detail === "object" && typeof detail.message === "string") {
+          return detail.code ? `${detail.message}（${detail.code}）` : detail.message;
+        }
+        if (Array.isArray(detail) && detail.length) {
+          return detail.map((item) => item && item.msg ? item.msg : String(item)).join("；");
+        }
+        if (status === 401) return "登录已失效，请回到 ERP 重新登录后再试";
+        if (status === 403) return "没有查看该报料单的权限";
+        if (status === 404) return "报料单不存在";
+        return `加载失败（HTTP ${status || "网络连接失败"}）`;
+      }
+
+      function componentRows(card) {
+        return (card.components || []).map((line) => {
+          const printing = line.printing_instruction || "-";
+          const plates = textList(line.printing_plate_codes);
+          const notes = textList(line.production_notes);
+          const printContent = line.print_content || "-";
+          const drawing = line.drawing_reference || "-";
+          const mold = [line.mold_code, line.mold_name].filter(Boolean).join(" ") || "-";
+          const machineSet = [
+            line.machine_set_length_mm,
+            line.machine_set_width_mm,
+            line.machine_set_height_mm,
+          ].map((value) => value ?? "-").join(" × ");
+          const plateValues = `对版 ${line.plate_alignment_value_mm ?? "-"} / 挂版 ${line.plate_mount_value_mm ?? "-"}`;
+          const taskVersion = line.production_task_version
+            ? `任务 #${line.production_task_id || "-"} / v${line.production_task_version}`
+            : "任务待生成/核对";
+          return `<tr>
+            <td>${escapeHtml(line.component_label || "整片")}<br>${escapeHtml(line.product_name || "-")}</td>
+            <td>${escapeHtml(line.report_length_mm)} × ${escapeHtml(line.report_width_mm)}<br>${escapeHtml(line.specification || "-")}</td>
+            <td><strong>${escapeHtml(line.requisition_quantity || 0)} ${escapeHtml(line.requisition_unit || "张")}</strong><br>需件 ${escapeHtml(line.required_piece_quantity || 0)}</td>
+            <td>${escapeHtml(line.material_code || "-")}<br>${escapeHtml(line.layer_count || "-")}层 / ${escapeHtml(line.flute_type || "-")}</td>
+            <td>${escapeHtml(line.crease_display || "-")}<br>${escapeHtml(line.cutting_mode || "-")}</td>
+            <td><span class="work-line">印刷：${escapeHtml(printContent)} / ${escapeHtml(printing)}${plates !== "-" ? ` / ${escapeHtml(plates)}` : ""}</span><span class="work-line">机器：${escapeHtml(machineSet)}；${escapeHtml(plateValues)}</span><span class="work-line">图纸：${escapeHtml(drawing)}　模具：${escapeHtml(mold)}</span><span class="work-line">工艺：${escapeHtml(notes)}</span><span class="work-line">${escapeHtml(taskVersion)}</span></td>
+          </tr>`;
+        }).join("");
+      }
+
+      function cardHtml(card, packageData) {
+        if (!card) return '<section class="half-card blank" aria-hidden="true"></section>';
+        const statusClass = card.review_required ? "status warn" : "status";
+        const warnings = card.review_required
+          ? `<div class="warning">计划已变化/请核对并重打：${escapeHtml(textList(card.review_messages))}</div>`
+          : "";
+        const denseClass = (card.components || []).length > 3 ? "half-card dense" : "half-card";
+        return `<section class="${denseClass}">
+          <header class="card-head"><div><h1>待来料生产任务单</h1></div><span class="${statusClass}">${escapeHtml(card.status_label || "待来料")}</span></header>
+          <div class="meta">
+            <div>客户：<strong>${escapeHtml(card.customer_name || "-")}</strong></div>
+            <div>存货编码：<strong>${escapeHtml(card.product_code || "-")}</strong></div>
+            <div>产品：<strong>${escapeHtml(card.product_name || "-")}</strong></div>
+            <div>规格：${escapeHtml(textList(card.specifications))}</div>
+            <div>系统订单：${escapeHtml(textList(card.order_numbers))}</div>
+            <div>客户单号：${escapeHtml(textList(card.customer_pos))}</div>
+            <div>报料单：${escapeHtml(packageData.supplier_order_number || "-")}</div>
+            <div>明细编号：${escapeHtml(textList(card.item_order_numbers))}</div>
+            <div>交期：${escapeHtml(textList((card.delivery_dates || []).map(dateText)))}</div>
+          </div>
+          <div class="summary">
+            <div class="metric">计划成品<strong>${escapeHtml(card.planned_finished_quantity || 0)} 只</strong></div>
+            <div class="metric">采购纸板<strong>${escapeHtml(card.requisition_quantity || 0)} 张</strong></div>
+          </div>
+          <table><thead><tr><th class="c-part">部件</th><th class="c-size">报料尺寸</th><th class="c-qty">采购数</th><th class="c-material">材质 / 楞型</th><th class="c-crease">压线 / 开料</th><th class="c-work">印刷 / 图纸 / 工艺</th></tr></thead><tbody>${componentRows(card)}</tbody></table>
+          ${warnings}
+          <footer class="foot"><span>版本指纹：${escapeHtml(String(packageData.plan_fingerprint || "").slice(0, 12))}</span><span>生成：${escapeHtml(packageData.created_at || "-")}</span></footer>
+        </section>`;
+      }
+
+      function render(packageData) {
+        pagesHost.innerHTML = (packageData.pages || []).map((page) => `<article class="page" data-page="${escapeHtml(page.page_number)}">${cardHtml(page.top, packageData)}${cardHtml(page.bottom, packageData)}</article>`).join("");
+        const overflowingCards = Array.from(
+          pagesHost.querySelectorAll(".half-card:not(.blank)")
+        ).filter((card) => card.scrollHeight > card.clientHeight + 1);
+        if (overflowingCards.length) {
+          overflowingCards.forEach((card) => card.classList.add("layout-overflow"));
+          message.hidden = false;
+          message.className = "message error";
+          message.textContent = "任务内容超过半页容量，已停止打印。请核对过长工艺说明或拆分报料。";
+          printButton.disabled = true;
+          return;
+        }
+        message.hidden = true;
+        printButton.disabled = !(packageData.pages || []).length || packageData.printable === false;
+      }
+
+      async function loadPackage() {
+        const generation = ++loadGeneration;
+        if (activeController) activeController.abort();
+        activeController = new AbortController();
+        loadedPackage = null;
+        printButton.disabled = true;
+        pagesHost.innerHTML = "";
+        message.hidden = false;
+        message.className = "message";
+        message.textContent = "正在读取正式报料快照…";
+        if (!Number.isInteger(orderId) || orderId <= 0) {
+          message.className = "message error";
+          message.textContent = "报料单编号无效";
+          return;
+        }
+        try {
+          const response = await fetch(`/api/requisition/supplier-orders/${orderId}/production-print-package`, {
+            method: "GET",
+            credentials: "include",
+            cache: "no-store",
+            headers: { "Accept": "application/json" },
+            signal: activeController.signal,
+          });
+          let payload = null;
+          try { payload = await response.json(); } catch (_error) { payload = null; }
+          if (!response.ok) throw Object.assign(new Error(errorMessage(response.status, payload)), { status: response.status });
+          if (generation !== loadGeneration) return;
+          if (!payload || typeof payload !== "object" || !Array.isArray(payload.pages)) {
+            throw new Error("服务器返回的任务单数据不完整，请重试");
+          }
+          loadedPackage = payload;
+          render(payload);
+        } catch (error) {
+          if (error && error.name === "AbortError") return;
+          if (generation !== loadGeneration) return;
+          message.className = "message error";
+          message.textContent = error instanceof TypeError
+            ? "无法连接 ERP 服务，请检查网络后重试"
+            : error && error.message
+            ? error.message
+            : "连接 ERP 失败，请重试";
+        }
+      }
+
+      retryButton.addEventListener("click", loadPackage);
+      printButton.addEventListener("click", () => { if (loadedPackage) window.print(); });
+      closeButton.addEventListener("click", () => window.close());
+      loadPackage();
+    })();
+  </script>
+</body>
+</html>

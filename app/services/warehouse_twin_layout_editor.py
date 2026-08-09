@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import tempfile
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -25,6 +27,9 @@ ALLOWED_INVENTORY_TYPES = {
 ALLOWED_STORAGE_LAYOUTS = {"rack", "pallet_ground", "mixed"}
 ALLOWED_ACCESS_SIDES = {"north", "south", "east", "west", "both"}
 _LAYOUT_EDIT_LOCK = Lock()
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+TWIN_LAYOUT_DRAFT_PATH = _PROJECT_ROOT / "data" / "layout_drafts" / "twin_layout_v1.draft.json"
+TWIN_LAYOUT_BACKUP_DIR = _PROJECT_ROOT / "data" / "layout_backups"
 
 
 class WarehouseTwinLayoutEditError(ValueError):
@@ -43,6 +48,12 @@ class WarehouseTwinLayoutEditConflictError(WarehouseTwinLayoutEditError):
 class LayoutMutation:
     value: dict[str, Any]
     floor_revision: str
+    applied: bool
+
+
+@dataclass(frozen=True)
+class LayoutDraftAction:
+    value: dict[str, Any]
     applied: bool
 
 
@@ -88,6 +99,67 @@ def _write_document(path: Path, payload: dict[str, Any]) -> None:
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _path_sha256(path: Path) -> str:
+    if not path.is_file():
+        raise WarehouseTwinLayoutEditNotFoundError("正式仓库地图尚未生成")
+    return sha256(path.read_bytes()).hexdigest()
+
+
+def _new_draft_document(published_path: Path) -> dict[str, Any]:
+    published = _read_document(published_path)
+    now = _utc_iso()
+    draft = deepcopy(published)
+    draft["draft_meta"] = {
+        "status": "draft",
+        "created_at": now,
+        "updated_at": now,
+        "base_published_sha256": _path_sha256(published_path),
+        "base_floor_revisions": {
+            code: str(floor.get("revision") or "")
+            for code, floor in published["floors"].items()
+            if isinstance(floor, dict)
+        },
+    }
+    return draft
+
+
+def _active_draft_document_unlocked(
+    *,
+    published_path: Path,
+    draft_path: Path,
+    create: bool,
+) -> dict[str, Any] | None:
+    if draft_path.is_file():
+        draft = _read_document(draft_path)
+        meta = draft.get("draft_meta")
+        if isinstance(meta, dict) and meta.get("status") in {"draft", "validated"}:
+            if str(meta.get("base_published_sha256") or "") != _path_sha256(published_path):
+                raise WarehouseTwinLayoutEditConflictError(
+                    "正式地图已更新，当前草稿已过期；请放弃旧草稿后重新编辑"
+                )
+            return draft
+    if not create:
+        return None
+    draft = _new_draft_document(published_path)
+    _write_document(draft_path, draft)
+    return draft
+
+
+def _mark_draft_changed(document: dict[str, Any]) -> None:
+    meta = document.get("draft_meta")
+    if not isinstance(meta, dict):
+        return
+    meta["status"] = "draft"
+    meta["updated_at"] = _utc_iso()
+    for key in (
+        "validated_at",
+        "validated_floor_revisions",
+        "validation_blockers",
+        "validation_warnings",
+    ):
+        meta.pop(key, None)
 
 
 def _normalize_floor_code(floor_code: str) -> str:
@@ -137,9 +209,18 @@ def _apply_mutation(
     normalized_key = str(operation_key or "").strip()
     if len(normalized_key) < 8 or len(normalized_key) > 120:
         raise WarehouseTwinLayoutEditError("布局操作键长度必须为 8 至 120 个字符")
-    target = path or TWIN_LAYOUT_PATH
     with _LAYOUT_EDIT_LOCK:
-        document = _read_document(target)
+        if path is None:
+            target = TWIN_LAYOUT_DRAFT_PATH
+            document = _active_draft_document_unlocked(
+                published_path=TWIN_LAYOUT_PATH,
+                draft_path=target,
+                create=True,
+            )
+            assert document is not None
+        else:
+            target = path
+            document = _read_document(target)
         floor = document["floors"].get(normalized)
         if not isinstance(floor, dict):
             raise WarehouseTwinLayoutEditNotFoundError(f"数字孪生平面缺少 {normalized}")
@@ -163,6 +244,8 @@ def _apply_mutation(
         floor["layout_edited_at"] = _utc_iso()
         floor["revision"] = _floor_revision(floor)
         document["generated_at"] = floor["layout_edited_at"]
+        if path is None:
+            _mark_draft_changed(document)
         _write_document(target, document)
         return LayoutMutation(
             value=result,
@@ -422,3 +505,313 @@ def update_warehouse_twin_zone_policy(
         mutate=mutate,
         path=path,
     )
+
+
+def _duplicate_values(items: list[dict[str, Any]], key: str) -> list[str]:
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for item in items:
+        value = str(item.get(key) or "").strip()
+        if not value:
+            continue
+        if value in seen:
+            duplicates.add(value)
+        seen.add(value)
+    return sorted(duplicates)
+
+
+def _validate_document_for_publish(document: dict[str, Any]) -> tuple[list[str], list[str]]:
+    blockers: list[str] = []
+    warnings: list[str] = []
+    floors = document.get("floors")
+    if not isinstance(floors, dict) or not floors:
+        return ["地图没有任何楼层"], warnings
+
+    for code, floor in floors.items():
+        if not isinstance(floor, dict):
+            blockers.append(f"{code} 楼层数据格式错误")
+            continue
+        if str(floor.get("floor_code") or "").upper() != str(code).upper():
+            blockers.append(f"{code} 的楼层编号与内容不一致")
+        if str(floor.get("revision") or "") != _floor_revision(floor):
+            blockers.append(f"{code} 的布局修订号校验失败")
+
+        features = floor.get("features") or []
+        racks = floor.get("racks") or []
+        if not isinstance(features, list) or not all(isinstance(item, dict) for item in features):
+            blockers.append(f"{code} 的区域列表格式错误")
+            features = []
+        if not isinstance(racks, list) or not all(isinstance(item, dict) for item in racks):
+            blockers.append(f"{code} 的货架列表格式错误")
+            racks = []
+
+        for value in _duplicate_values(features, "id"):
+            blockers.append(f"{code} 存在重复区域标识：{value}")
+        for value in _duplicate_values(features, "feature_code"):
+            blockers.append(f"{code} 存在重复区域编号：{value}")
+        for value in _duplicate_values(racks, "id"):
+            blockers.append(f"{code} 存在重复货架标识：{value}")
+        for value in _duplicate_values(racks, "rack_code"):
+            blockers.append(f"{code} 存在重复货架编号：{value}")
+
+        zones = {
+            str(item.get("id")): item
+            for item in features
+            if item.get("feature_kind") == "zone" and item.get("id")
+        }
+        for feature in zones.values():
+            allowed = feature.get("allowed_inventory_types")
+            if allowed is not None and (
+                not isinstance(allowed, list)
+                or not allowed
+                or any(item not in ALLOWED_INVENTORY_TYPES for item in allowed)
+            ):
+                blockers.append(f"{code} 区域 {feature.get('name') or feature.get('id')} 的允许存放类型无效")
+            storage_layout = feature.get("storage_layout")
+            if storage_layout is not None and storage_layout not in ALLOWED_STORAGE_LAYOUTS:
+                blockers.append(f"{code} 区域 {feature.get('name') or feature.get('id')} 的存储形式无效")
+
+        for rack in racks:
+            rack_label = str(rack.get("rack_code") or rack.get("name") or rack.get("id") or "未编号货架")
+            if not rack.get("id") or not rack.get("rack_code"):
+                blockers.append(f"{code} 存在缺少稳定标识的货架")
+                continue
+            try:
+                _validate_rack_values(rack)
+            except (KeyError, TypeError, ValueError, WarehouseTwinLayoutEditError) as error:
+                blockers.append(f"{code} 货架 {rack_label} 参数无效：{error}")
+            area_feature_id = str(rack.get("area_feature_id") or "").strip()
+            if area_feature_id and area_feature_id not in zones:
+                blockers.append(f"{code} 货架 {rack_label} 引用了不存在的仓储区域")
+            if not area_feature_id:
+                warnings.append(f"{code} 货架 {rack_label} 尚未绑定区域对象")
+            counts = rack.get("level_cell_counts")
+            if isinstance(counts, list) and counts and not any(int(value) for value in counts):
+                warnings.append(f"{code} 货架 {rack_label} 尚未分格")
+
+    return blockers, warnings
+
+
+def load_warehouse_twin_layout_draft(
+    floor_code: str,
+    *,
+    published_path: Path | None = None,
+    draft_path: Path | None = None,
+) -> dict[str, Any]:
+    normalized = _normalize_floor_code(floor_code)
+    published_target = published_path or TWIN_LAYOUT_PATH
+    draft_target = draft_path or TWIN_LAYOUT_DRAFT_PATH
+    with _LAYOUT_EDIT_LOCK:
+        published = _read_document(published_target)
+        published_floor = published["floors"].get(normalized)
+        if not isinstance(published_floor, dict):
+            raise WarehouseTwinLayoutEditNotFoundError(f"数字孪生平面缺少 {normalized}")
+        draft = _active_draft_document_unlocked(
+            published_path=published_target,
+            draft_path=draft_target,
+            create=False,
+        )
+        floor = published_floor
+        meta: dict[str, Any] = {}
+        has_draft = draft is not None
+        if draft is not None:
+            candidate = draft["floors"].get(normalized)
+            if not isinstance(candidate, dict):
+                raise WarehouseTwinLayoutEditError(f"布局草稿缺少 {normalized}")
+            floor = candidate
+            meta = dict(draft.get("draft_meta") or {})
+        return {
+            **deepcopy(floor),
+            "generated_at": (draft if draft is not None else published).get("generated_at"),
+            "projection_notice": "当前为管理员布局草稿；正式库存数量仍以 ERP 库存账为准。",
+            "draft_control": {
+                "has_draft": has_draft,
+                "status": str(meta.get("status") or "none") if has_draft else "none",
+                "published_revision": str(published_floor.get("revision") or ""),
+                "draft_revision": str(floor.get("revision") or "") if has_draft else None,
+                "base_published_sha256": meta.get("base_published_sha256"),
+                "created_at": meta.get("created_at"),
+                "updated_at": meta.get("updated_at"),
+                "validated_at": meta.get("validated_at"),
+                "blockers": list(meta.get("validation_blockers") or []),
+                "warnings": list(meta.get("validation_warnings") or []),
+            },
+        }
+
+
+def validate_warehouse_twin_layout_draft(
+    floor_code: str,
+    *,
+    expected_revision: str,
+    published_path: Path | None = None,
+    draft_path: Path | None = None,
+) -> LayoutDraftAction:
+    normalized = _normalize_floor_code(floor_code)
+    published_target = published_path or TWIN_LAYOUT_PATH
+    draft_target = draft_path or TWIN_LAYOUT_DRAFT_PATH
+    with _LAYOUT_EDIT_LOCK:
+        draft = _active_draft_document_unlocked(
+            published_path=published_target,
+            draft_path=draft_target,
+            create=False,
+        )
+        if draft is None:
+            raise WarehouseTwinLayoutEditNotFoundError("当前没有可校验的布局草稿")
+        floor = draft["floors"].get(normalized)
+        if not isinstance(floor, dict):
+            raise WarehouseTwinLayoutEditNotFoundError(f"布局草稿缺少 {normalized}")
+        if str(floor.get("revision") or "") != str(expected_revision or ""):
+            raise WarehouseTwinLayoutEditConflictError("布局草稿已更新，请刷新后重新校验")
+        blockers, warnings = _validate_document_for_publish(draft)
+        meta = draft["draft_meta"]
+        now = _utc_iso()
+        meta["updated_at"] = now
+        meta["validation_blockers"] = blockers
+        meta["validation_warnings"] = warnings
+        if blockers:
+            meta["status"] = "draft"
+            meta.pop("validated_at", None)
+            meta.pop("validated_floor_revisions", None)
+        else:
+            meta["status"] = "validated"
+            meta["validated_at"] = now
+            meta["validated_floor_revisions"] = {
+                code: str(item.get("revision") or "")
+                for code, item in draft["floors"].items()
+                if isinstance(item, dict)
+            }
+        _write_document(draft_target, draft)
+        return LayoutDraftAction(
+            value={
+                "status": meta["status"],
+                "floor_code": normalized,
+                "draft_revision": str(floor.get("revision") or ""),
+                "blockers": blockers,
+                "warnings": warnings,
+                "validated_at": meta.get("validated_at"),
+                "inventory_changed": False,
+            },
+            applied=True,
+        )
+
+
+def publish_warehouse_twin_layout_draft(
+    floor_code: str,
+    *,
+    expected_published_revision: str,
+    expected_draft_revision: str,
+    operation_key: str,
+    published_path: Path | None = None,
+    draft_path: Path | None = None,
+    backup_dir: Path | None = None,
+) -> LayoutDraftAction:
+    normalized = _normalize_floor_code(floor_code)
+    normalized_key = str(operation_key or "").strip()
+    if len(normalized_key) < 8 or len(normalized_key) > 120:
+        raise WarehouseTwinLayoutEditError("发布操作键长度必须为 8 至 120 个字符")
+    published_target = published_path or TWIN_LAYOUT_PATH
+    draft_target = draft_path or TWIN_LAYOUT_DRAFT_PATH
+    backup_target = backup_dir or TWIN_LAYOUT_BACKUP_DIR
+    with _LAYOUT_EDIT_LOCK:
+        if draft_target.is_file():
+            replay_document = _read_document(draft_target)
+            replay_meta = replay_document.get("draft_meta") or {}
+            receipt = replay_meta.get("last_publish") or {}
+            if replay_meta.get("status") == "published" and receipt.get("operation_key") == normalized_key:
+                return LayoutDraftAction(value=dict(receipt.get("result") or {}), applied=False)
+
+        draft = _active_draft_document_unlocked(
+            published_path=published_target,
+            draft_path=draft_target,
+            create=False,
+        )
+        if draft is None:
+            raise WarehouseTwinLayoutEditNotFoundError("当前没有可发布的布局草稿")
+        published = _read_document(published_target)
+        published_floor = published["floors"].get(normalized)
+        draft_floor = draft["floors"].get(normalized)
+        if not isinstance(published_floor, dict) or not isinstance(draft_floor, dict):
+            raise WarehouseTwinLayoutEditNotFoundError(f"地图缺少 {normalized}")
+        if str(published_floor.get("revision") or "") != str(expected_published_revision or ""):
+            raise WarehouseTwinLayoutEditConflictError("正式地图已更新，请刷新草稿后重新处理")
+        if str(draft_floor.get("revision") or "") != str(expected_draft_revision or ""):
+            raise WarehouseTwinLayoutEditConflictError("布局草稿已更新，请重新校验后发布")
+        meta = draft["draft_meta"]
+        validated_revisions = meta.get("validated_floor_revisions") or {}
+        current_revisions = {
+            code: str(item.get("revision") or "")
+            for code, item in draft["floors"].items()
+            if isinstance(item, dict)
+        }
+        if (
+            meta.get("status") != "validated"
+            or validated_revisions.get(normalized) != expected_draft_revision
+            or validated_revisions != current_revisions
+        ):
+            raise WarehouseTwinLayoutEditConflictError("请先校验当前布局草稿，再执行发布")
+        blockers, warnings = _validate_document_for_publish(draft)
+        if blockers:
+            raise WarehouseTwinLayoutEditError("布局草稿校验未通过：" + "；".join(blockers[:5]))
+
+        backup_target.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+        old_sha256 = _path_sha256(published_target)
+        backup_path = backup_target / f"{published_target.stem}.before_{stamp}_{old_sha256[:12]}.json"
+        shutil.copy2(published_target, backup_path)
+        if _path_sha256(backup_path) != old_sha256:
+            backup_path.unlink(missing_ok=True)
+            raise WarehouseTwinLayoutEditError("正式地图备份校验失败，已停止发布")
+
+        candidate = deepcopy(draft)
+        candidate.pop("draft_meta", None)
+        _write_document(published_target, candidate)
+        published_sha256 = _path_sha256(published_target)
+        result = {
+            "status": "published",
+            "floor_code": normalized,
+            "published_revision": str(draft_floor.get("revision") or ""),
+            "published_sha256": published_sha256,
+            "backup_name": backup_path.name,
+            "backup_sha256": old_sha256,
+            "warnings": warnings,
+            "inventory_changed": False,
+            "published_at": _utc_iso(),
+        }
+        meta["status"] = "published"
+        meta["published_at"] = result["published_at"]
+        meta["last_publish"] = {"operation_key": normalized_key, "result": result}
+        _write_document(draft_target, draft)
+        return LayoutDraftAction(value=result, applied=True)
+
+
+def discard_warehouse_twin_layout_draft(
+    floor_code: str,
+    *,
+    expected_revision: str,
+    draft_path: Path | None = None,
+) -> LayoutDraftAction:
+    normalized = _normalize_floor_code(floor_code)
+    target = draft_path or TWIN_LAYOUT_DRAFT_PATH
+    with _LAYOUT_EDIT_LOCK:
+        if not target.is_file():
+            return LayoutDraftAction(
+                value={"status": "none", "floor_code": normalized, "inventory_changed": False},
+                applied=False,
+            )
+        draft = _read_document(target)
+        meta = draft.get("draft_meta") or {}
+        if meta.get("status") not in {"draft", "validated"}:
+            return LayoutDraftAction(
+                value={"status": "none", "floor_code": normalized, "inventory_changed": False},
+                applied=False,
+            )
+        floor = draft["floors"].get(normalized)
+        if not isinstance(floor, dict):
+            raise WarehouseTwinLayoutEditNotFoundError(f"布局草稿缺少 {normalized}")
+        if str(floor.get("revision") or "") != str(expected_revision or ""):
+            raise WarehouseTwinLayoutEditConflictError("布局草稿已更新，请刷新后再放弃")
+        target.unlink()
+        return LayoutDraftAction(
+            value={"status": "discarded", "floor_code": normalized, "inventory_changed": False},
+            applied=True,
+        )

@@ -7,7 +7,6 @@
     <link rel="icon" type="image/x-icon" href="/static/assets/logo.ico" />
     <script src="/static/vendor/vue-3.5.40.global.prod.js"></script>
     <script src="/static/vendor/axios-1.18.1.min.js"></script>
-    <script src="/static/vendor/pinyin-pro-3.26.0.js"></script>
     <script src="/static/assets/time-utils.js?v=95c91f9ded41"></script>
     <style>
       :root {
@@ -7091,6 +7090,61 @@
       const pageSearchGenerations = new Map();
       const orderGroupDetailRequests = new Map();
       let orderGroupDetailRequestSequence = 0;
+      const PINYIN_RUNTIME_SRC = "/static/vendor/pinyin-pro-3.26.0.js";
+      const PINYIN_SEARCH_CACHE_LIMIT = 4096;
+      const pinyinSearchTextCache = new Map();
+      let pinyinRuntimeState = typeof window.pinyinPro?.pinyin === "function" ? "ready" : "idle";
+      let pinyinRuntimePromise = null;
+      const normalizeSearchValue = (value) => String(value || "").trim().toLowerCase().replace(/\s+/g, "");
+      const queryNeedsPinyin = (value) => /^[a-z]+$/i.test(normalizeSearchValue(value));
+      const ensurePinyinRuntime = () => {
+        if (typeof window.pinyinPro?.pinyin === "function") {
+          pinyinRuntimeState = "ready";
+          return Promise.resolve(window.pinyinPro);
+        }
+        if (pinyinRuntimeState === "failed") return Promise.resolve(null);
+        if (pinyinRuntimePromise) return pinyinRuntimePromise;
+        pinyinRuntimeState = "loading";
+        pinyinRuntimePromise = new Promise((resolve) => {
+          const script = document.createElement("script");
+          let settled = false;
+          const finish = (runtime) => {
+            if (settled) return;
+            settled = true;
+            pinyinRuntimeState = runtime ? "ready" : "failed";
+            resolve(runtime || null);
+          };
+          script.src = PINYIN_RUNTIME_SRC;
+          script.async = true;
+          script.dataset.erpPinyinRuntime = "1";
+          script.addEventListener("load", () => {
+            finish(typeof window.pinyinPro?.pinyin === "function" ? window.pinyinPro : null);
+          }, { once:true });
+          script.addEventListener("error", () => finish(null), { once:true });
+          try { document.head.appendChild(script); }
+          catch (_) { finish(null); }
+        });
+        return pinyinRuntimePromise;
+      };
+      const cachedSearchText = (text, includeInitials=false) => {
+        const source = String(text || "");
+        let cached = pinyinSearchTextCache.get(source);
+        if (!cached) {
+          cached = { plain:normalizeSearchValue(source), initials:null };
+          pinyinSearchTextCache.set(source, cached);
+          if (pinyinSearchTextCache.size > PINYIN_SEARCH_CACHE_LIMIT) {
+            pinyinSearchTextCache.delete(pinyinSearchTextCache.keys().next().value);
+          }
+        }
+        if (includeInitials && cached.initials === null && pinyinRuntimeState === "ready") {
+          try {
+            cached.initials = window.pinyinPro.pinyin(source, {
+              pattern:"first", toneType:"none", type:"array"
+            }).join("").toLowerCase();
+          } catch (_) { cached.initials = ""; }
+        }
+        return cached;
+      };
       const today = () => TmTime.beijingToday();
       const plusDays = (days) => TmTime.addCalendarDays(TmTime.beijingToday(), days);
       const addWorkingDays = (startDate, workingDays=7) => TmTime.addWorkingDays(startDate, workingDays);
@@ -11304,6 +11358,7 @@
             for (const timer of searchDebounceTimers.values()) clearTimeout(timer);
             searchDebounceTimers.clear();
             pageSearchGenerations.clear();
+            pinyinSearchTextCache.clear();
           },
           pageCacheFresh(page) {
             const updatedAt = Number(this.pageCacheUpdatedAt[page] || 0);
@@ -26425,32 +26480,59 @@
           disabled: {type:Boolean,default:false}
         },
         emits:["update:modelValue","change","search"],
-        data() { return { query:"", open:false, timer:null }; },
+        data() {
+          return {
+            query:"", open:false, timer:null, pinyinRuntimeVersion:0,
+            pinyinLoadRequested:false, componentMounted:false
+          };
+        },
         computed: {
           selectedLabel() {
             const row=this.options.find(item=>String(item[this.valueKey])===String(this.modelValue));
             return row?.[this.labelKey] || "";
           },
           filtered() {
+            void this.pinyinRuntimeVersion;
             const query=this.normalize(this.query);
             if (!query) return this.options.slice(0,50);
-            return this.options.filter(row=>this.searchText(row).includes(query)).slice(0,50);
+            const includeInitials=queryNeedsPinyin(query) && pinyinRuntimeState === "ready";
+            const matches=[];
+            const directMatchIndexes=new Set();
+            for (let index=0; index < this.options.length && matches.length < 50; index += 1) {
+              const row=this.options[index];
+              const search=this.searchParts(row, false);
+              if (!search.plain.includes(query)) continue;
+              directMatchIndexes.add(index);
+              matches.push(row);
+            }
+            if (!includeInitials || matches.length >= 50) return matches;
+            for (let index=0; index < this.options.length && matches.length < 50; index += 1) {
+              if (directMatchIndexes.has(index)) continue;
+              const row=this.options[index];
+              const search=this.searchParts(row, true);
+              if ((search.initials || "").includes(query)) matches.push(row);
+            }
+            return matches;
           }
         },
         watch: {
           modelValue() { if (!this.open) this.query=this.selectedLabel; },
           disabled(value) { if (value) this.open = false; }
         },
-        mounted() { this.query=this.selectedLabel; },
+        mounted() { this.componentMounted=true; this.query=this.selectedLabel; },
+        beforeUnmount() { this.componentMounted=false; clearTimeout(this.timer); },
         methods: {
-          normalize(value) { return String(value || "").trim().toLowerCase().replace(/\s+/g,""); },
-          initials(value) {
-            try { return window.pinyinPro?.pinyin(String(value||""),{pattern:"first",toneType:"none",type:"array"}).join("").toLowerCase() || ""; }
-            catch (_) { return ""; }
-          },
-          searchText(row) {
+          normalize(value) { return normalizeSearchValue(value); },
+          searchParts(row, includeInitials=false) {
             const text=Object.values(row).filter(v=>["string","number"].includes(typeof v)).join(" ");
-            return this.normalize(text)+this.initials(text);
+            return cachedSearchText(text, includeInitials);
+          },
+          requestPinyinRuntime() {
+            if (this.pinyinLoadRequested || !queryNeedsPinyin(this.query)) return;
+            this.pinyinLoadRequested=true;
+            ensurePinyinRuntime().then((runtime) => {
+              if (runtime && this.componentMounted) this.pinyinRuntimeVersion += 1;
+            });
           },
           onInput() {
             if (this.disabled) return;
@@ -26458,6 +26540,7 @@
               this.$emit("update:modelValue", null);
             }
             this.open=true; clearTimeout(this.timer);
+            this.requestPinyinRuntime();
             this.timer=setTimeout(()=>this.$emit("search",this.query),220);
           },
           choose(row) {

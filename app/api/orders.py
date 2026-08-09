@@ -1703,6 +1703,133 @@ def _completion_dates_by_item(
     }
 
 
+def _build_full_order_response_context(
+    db: Session,
+    orders: list[Order],
+    user: User,
+    *,
+    business_projections: dict[int, dict] | None = None,
+) -> dict:
+    """Batch every read-only dependency shared by full order serializers."""
+
+    items = [item for order in orders for item in order.items]
+    item_ids = [int(item.id) for item in items]
+    completion_dates = _completion_dates_by_item(db, item_ids) if item_ids else {}
+    bom_components_by_item_id = (
+        get_order_item_bom_components_by_item_ids(db, item_ids) if item_ids else {}
+    )
+    external_components_by_item_id = (
+        get_order_item_external_components_by_item_ids(db, items) if items else {}
+    )
+    orders_with_external_requirements = [
+        int(order.id)
+        for order in orders
+        if any(
+            external_components_by_item_id.get(int(item.id))
+            for item in order.items
+        )
+    ]
+    external_purchase_summaries_by_order_id = (
+        get_external_purchase_summaries_by_order_ids(
+            db, orders_with_external_requirements
+        )
+        if orders_with_external_requirements
+        else {}
+    )
+    finished_reservations_by_item_id = (
+        active_finished_reservations_by_item_ids(db, item_ids) if item_ids else {}
+    )
+    active_holds_by_item_id = (
+        {
+            int(hold.order_item_id): hold
+            for hold in db.scalars(
+                select(RequisitionHold).where(
+                    RequisitionHold.order_item_id.in_(item_ids),
+                    RequisitionHold.status == "active",
+                )
+            ).all()
+            if hold.order_item_id is not None
+        }
+        if item_ids
+        else {}
+    )
+    may_view_cost = has_permission(user, "cost.view")
+    frozen_material_costs_by_item_id = (
+        get_latest_order_item_material_cost_snapshots_by_items(db, items)
+        if may_view_cost and items
+        else {}
+    )
+    frozen_estimated_costs_by_item_id = (
+        get_latest_order_item_estimated_cost_snapshots_by_items(db, items)
+        if may_view_cost and items
+        else {}
+    )
+    current_estimate_items = [
+        item
+        for item in items
+        if int(item.id) not in frozen_material_costs_by_item_id
+    ]
+    material_cost_context = (
+        build_material_cost_estimate_context(
+            db,
+            current_estimate_items,
+            bom_components_by_item_id=bom_components_by_item_id,
+        )
+        if may_view_cost and current_estimate_items
+        else None
+    )
+    resolved_business_projections = business_projections
+    if resolved_business_projections is None:
+        resolved_business_projections = (
+            build_order_business_statuses(
+                db,
+                orders,
+                include_finance=has_permission(user, "finance.view"),
+            )
+            if orders
+            else {}
+        )
+    return {
+        "completion_dates": completion_dates,
+        "bom_components_by_item_id": bom_components_by_item_id,
+        "external_components_by_item_id": external_components_by_item_id,
+        "business_projections": resolved_business_projections,
+        "active_holds_by_item_id": active_holds_by_item_id,
+        "finished_reservations_by_item_id": finished_reservations_by_item_id,
+        "external_purchase_summaries_by_order_id": (
+            external_purchase_summaries_by_order_id
+        ),
+        "frozen_material_costs_by_item_id": frozen_material_costs_by_item_id,
+        "frozen_estimated_costs_by_item_id": frozen_estimated_costs_by_item_id,
+        "material_cost_context": material_cost_context,
+    }
+
+
+def _full_order_response_kwargs(context: dict, order_id: int) -> dict:
+    return {
+        "completion_dates": context["completion_dates"],
+        "bom_components_by_item_id": context["bom_components_by_item_id"],
+        "external_components_by_item_id": context[
+            "external_components_by_item_id"
+        ],
+        "business_projection": context["business_projections"].get(order_id),
+        "active_holds_by_item_id": context["active_holds_by_item_id"],
+        "finished_reservations_by_item_id": context[
+            "finished_reservations_by_item_id"
+        ],
+        "external_purchase_summaries_by_order_id": context[
+            "external_purchase_summaries_by_order_id"
+        ],
+        "frozen_material_costs_by_item_id": context[
+            "frozen_material_costs_by_item_id"
+        ],
+        "frozen_estimated_costs_by_item_id": context[
+            "frozen_estimated_costs_by_item_id"
+        ],
+        "material_cost_context": context["material_cost_context"],
+    }
+
+
 def _order_response(
     order: Order,
     user: User,
@@ -2358,6 +2485,7 @@ def list_orders(
         )
     candidate_ids: list[int] = []
     candidate_orders: list[Order] = []
+    candidate_order_map: dict[int, Order] = {}
     candidate_projection: dict[int, dict] = {}
     needs_business_projection = bool(derived_status_filter) or resolved_scope in {
         "active",
@@ -2378,7 +2506,7 @@ def list_orders(
             candidate_orders,
             include_finance=has_permission(user, "finance.view"),
         )
-        candidate_order_map = {order.id: order for order in candidate_orders}
+        candidate_order_map = {int(order.id): order for order in candidate_orders}
         matched_ids = [
             order_id
             for order_id in candidate_ids
@@ -2415,23 +2543,32 @@ def list_orders(
 
     orders: list[Order] = []
     if page_ids:
-        load_options = [selectinload(Order.items)]
-        if detail_level == "full":
-            load_options = [
-                selectinload(Order.items)
-                .selectinload(OrderItem.product)
-                .selectinload(Product.drawings),  # type: ignore[attr-defined]
-                selectinload(Order.items)
-                .selectinload(OrderItem.product)
-                .selectinload(Product.mold_tool),  # type: ignore[attr-defined]
+        if detail_level == "summary" and needs_business_projection:
+            orders = [
+                candidate_order_map[item_id]
+                for item_id in page_ids
+                if item_id in candidate_order_map
             ]
-        loaded = db.scalars(
-            select(Order)
-            .options(*load_options)
-            .where(Order.id.in_(page_ids))
-        ).all()
-        order_map = {order.id: order for order in loaded}
-        orders = [order_map[item_id] for item_id in page_ids if item_id in order_map]
+        else:
+            load_options = [selectinload(Order.items)]
+            if detail_level == "full":
+                load_options = [
+                    selectinload(Order.items)
+                    .selectinload(OrderItem.product)
+                    .selectinload(Product.drawings),  # type: ignore[attr-defined]
+                    selectinload(Order.items)
+                    .selectinload(OrderItem.product)
+                    .selectinload(Product.mold_tool),  # type: ignore[attr-defined]
+                ]
+            loaded = db.scalars(
+                select(Order)
+                .options(*load_options)
+                .where(Order.id.in_(page_ids))
+            ).all()
+            order_map = {int(order.id): order for order in loaded}
+            orders = [
+                order_map[item_id] for item_id in page_ids if item_id in order_map
+            ]
 
     customer_ids = {order.customer_id for order in orders}
     customer_names = (
@@ -2443,88 +2580,6 @@ def list_orders(
         }
         if customer_ids
         else {}
-    )
-    page_items = [item for order in orders for item in order.items]
-    page_item_ids = [item.id for item in page_items]
-    completion_dates = (
-        _completion_dates_by_item(
-            db,
-            page_item_ids,
-        )
-        if detail_level == "full"
-        else {}
-    )
-    bom_components_by_item_id = (
-        get_order_item_bom_components_by_item_ids(
-            db,
-            page_item_ids,
-        )
-        if detail_level == "full"
-        else {}
-    )
-    external_components_by_item_id = (
-        get_order_item_external_components_by_item_ids(db, page_items)
-        if detail_level == "full"
-        else {}
-    )
-    orders_with_external_requirements = [
-        int(order.id)
-        for order in orders
-        if any(
-            external_components_by_item_id.get(int(item.id))
-            for item in order.items
-        )
-    ]
-    external_purchase_summaries_by_order_id = (
-        get_external_purchase_summaries_by_order_ids(
-            db, orders_with_external_requirements
-        )
-        if detail_level == "full" and orders_with_external_requirements
-        else {}
-    )
-    finished_reservations_by_item_id = (
-        active_finished_reservations_by_item_ids(db, page_item_ids)
-        if detail_level == "full"
-        else {}
-    )
-    active_holds_by_item_id = (
-        {
-            int(hold.order_item_id): hold
-            for hold in db.scalars(
-                select(RequisitionHold).where(
-                    RequisitionHold.order_item_id.in_(page_item_ids),
-                    RequisitionHold.status == "active",
-                )
-            ).all()
-            if hold.order_item_id is not None
-        }
-        if page_item_ids and detail_level == "full"
-        else {}
-    )
-    may_view_cost = has_permission(user, "cost.view")
-    frozen_material_costs_by_item_id = (
-        get_latest_order_item_material_cost_snapshots_by_items(db, page_items)
-        if detail_level == "full" and may_view_cost
-        else {}
-    )
-    frozen_estimated_costs_by_item_id = (
-        get_latest_order_item_estimated_cost_snapshots_by_items(db, page_items)
-        if detail_level == "full" and may_view_cost
-        else {}
-    )
-    current_estimate_items = [
-        item
-        for item in page_items
-        if int(item.id) not in frozen_material_costs_by_item_id
-    ]
-    material_cost_context = (
-        build_material_cost_estimate_context(
-            db,
-            current_estimate_items,
-            bom_components_by_item_id=bom_components_by_item_id,
-        )
-        if detail_level == "full" and may_view_cost and current_estimate_items
-        else None
     )
     business_projections = (
         {
@@ -2538,6 +2593,16 @@ def list_orders(
             orders,
             include_finance=has_permission(user, "finance.view"),
         )
+    )
+    full_response_context = (
+        _build_full_order_response_context(
+            db,
+            orders,
+            user,
+            business_projections=business_projections,
+        )
+        if detail_level == "full"
+        else None
     )
     can_reuse_global_candidate_projection = bool(
         needs_business_projection
@@ -2616,24 +2681,9 @@ def list_orders(
                     db=db,
                     customer_name=customer_names.get(order.customer_id),
                     display_registry=display_registry,
-                    completion_dates=completion_dates,
-                    bom_components_by_item_id=bom_components_by_item_id,
-                    external_components_by_item_id=external_components_by_item_id,
-                    business_projection=business_projections.get(int(order.id)),
-                    active_holds_by_item_id=active_holds_by_item_id,
-                    finished_reservations_by_item_id=(
-                        finished_reservations_by_item_id
+                    **_full_order_response_kwargs(
+                        full_response_context, int(order.id)
                     ),
-                    external_purchase_summaries_by_order_id=(
-                        external_purchase_summaries_by_order_id
-                    ),
-                    frozen_material_costs_by_item_id=(
-                        frozen_material_costs_by_item_id
-                    ),
-                    frozen_estimated_costs_by_item_id=(
-                        frozen_estimated_costs_by_item_id
-                    ),
-                    material_cost_context=material_cost_context,
                 )
             )
             for order in orders
@@ -5037,13 +5087,11 @@ def get_order_group_detail(
             detail="订单已不在当前业务范围，请刷新订单列表后重试",
         )
 
-    item_ids = [item.id for order in orders for item in order.items]
-    completion_dates = _completion_dates_by_item(db, item_ids)
-    bom_components_by_item_id = get_order_item_bom_components_by_item_ids(
-        db, item_ids
-    )
-    external_components_by_item_id = get_order_item_external_components_by_item_ids(
-        db, [item for order in orders for item in order.items]
+    full_response_context = _build_full_order_response_context(
+        db,
+        orders,
+        user,
+        business_projections=business_projections,
     )
     customer = db.get(Customer, customer_id)
     display_registry = build_display_registry(db)
@@ -5059,10 +5107,9 @@ def get_order_group_detail(
                 db=db,
                 customer_name=customer.name if customer is not None else None,
                 display_registry=display_registry,
-                completion_dates=completion_dates,
-                bom_components_by_item_id=bom_components_by_item_id,
-                external_components_by_item_id=external_components_by_item_id,
-                business_projection=business_projections.get(int(order.id)),
+                **_full_order_response_kwargs(
+                    full_response_context, int(order.id)
+                ),
             )
             for order in orders
         ],
@@ -5092,12 +5139,18 @@ def get_order_detail(
         raise HTTPException(status_code=404, detail="订单不存在")
     require_customer_access(order.customer_id, current_user=user, db=db)
     customer = db.get(Customer, order.customer_id)
+    full_response_context = _build_full_order_response_context(
+        db,
+        [order],
+        user,
+    )
     return _order_response(
         order,
         user,
         db=db,
         customer_name=customer.name if customer is not None else None,
         display_registry=display_registry,
+        **_full_order_response_kwargs(full_response_context, int(order.id)),
     )
 
 

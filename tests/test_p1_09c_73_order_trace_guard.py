@@ -64,14 +64,15 @@ const expect=(value,message)=>{{if(!value)throw new Error(message)}};
 
 def test_top_level_order_read_modals_share_latest_request_guard() -> None:
     ensure = _method_body(
-        "async ensureOrderGroupDetail(group, {force=false, signal=null}={}) {",
+        "async ensureOrderGroupDetail(group, {force=false}={}) {",
         "async toggleOrderGroup(group) {",
     )
     group = _method_body("async openOrderGroupDetail(group) {", "async openOrderDetail(row) {")
-    detail = _method_body("async openOrderDetail(row) {", "async openOrderTrace(order, item) {")
+    detail = _method_body("async openOrderDetail(row) {", "openEstimatedCost(order, item) {")
     trace = _method_body("async openOrderTrace(order, item) {", "traceCurrentEvent() {")
 
-    assert "{ params, signal }" in ensure
+    assert "orderGroupDetailRequests.get(key)" in ensure
+    assert "signal:controller.signal" in ensure
     for body in (group, detail, trace):
         assert 'const requestKey = "orders:read-detail-modal";' in body
         assert "beginLatestRequest(requestKey)" in body
@@ -79,11 +80,11 @@ def test_top_level_order_read_modals_share_latest_request_guard() -> None:
         assert "finishLatestRequest(requestKey, controller)" in body
     assert "signal:controller.signal" in detail
     assert "signal:controller.signal" in trace
-    assert "signal:controller.signal" in group
+    assert "await this.ensureOrderGroupDetail(group)" in group
 
 
 def test_latest_trace_beats_older_order_detail_and_owns_return_context(tmp_path: Path) -> None:
-    detail = _method_body("async openOrderDetail(row) {", "async openOrderTrace(order, item) {")
+    detail = _method_body("async openOrderDetail(row) {", "openEstimatedCost(order, item) {")
     trace = _method_body("async openOrderTrace(order, item) {", "traceCurrentEvent() {")
     script = _runtime({
         "openOrderDetail": (["row"], detail),
@@ -161,11 +162,11 @@ def test_order_detail_and_trace_reads_remain_read_only() -> None:
     block = "\n".join(
         (
             _method_body(
-                "async ensureOrderGroupDetail(group, {force=false, signal=null}={}) {",
+                "async ensureOrderGroupDetail(group, {force=false}={}) {",
                 "async toggleOrderGroup(group) {",
             ),
             _method_body("async openOrderGroupDetail(group) {", "async openOrderDetail(row) {"),
-            _method_body("async openOrderDetail(row) {", "async openOrderTrace(order, item) {"),
+            _method_body("async openOrderDetail(row) {", "openEstimatedCost(order, item) {"),
             _method_body("async openOrderTrace(order, item) {", "traceCurrentEvent() {"),
             _method_body("async reloadOrderTrace() {", "async rollbackTraceEvent(event) {"),
             _method_body("async openTraceEventDetail(event) {", "returnFromOrderTrace() {"),

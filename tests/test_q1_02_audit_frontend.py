@@ -13,12 +13,12 @@ AUDIT_PAGE = INDEX.split(
 
 
 def test_audit_menu_is_permission_gated() -> None:
-    assert '{ key: "audit", label: "操作记录" }' in INDEX
+    assert '{key:"audit",label:"操作记录"}' in INDEX
     assert 'audit: "audit.view"' in INDEX
     assert 'audit:"audit.view"' in INDEX
     assert '["audit", "操作记录查看", "audit.view"]' in INDEX
     assert '"users.manage","audit.view","warehouse.stocktake.review"' in INDEX
-    assert 'if (page === "audit") await this.loadAuditLogs()' in INDEX
+    assert 'if (page === "audit") await requirePageLoad(this.loadAuditLogs())' in INDEX
 
 
 def test_audit_page_has_two_simple_tabs_and_all_filters() -> None:

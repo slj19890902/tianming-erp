@@ -19,7 +19,7 @@ def test_system_default_section_only_requests_visible_core_data() -> None:
 
     assert 'systemSection:"basic"' in INDEX
     assert 'this.systemSection = "basic"' in page_loader
-    assert "await this.loadSystemSection(this.systemSection, { force })" in page_loader
+    assert "return this.loadSystemSection(this.systemSection, { force })" in page_loader
     assert 'axios.get("/api/auth/users")' in basic_loader
     assert 'axios.get("/api/system/version")' in basic_loader
     assert 'axios.get("/api/system/company")' in basic_loader

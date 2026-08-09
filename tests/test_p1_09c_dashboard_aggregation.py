@@ -19,7 +19,7 @@ def test_dashboard_cold_entry_uses_overview_embedded_kpi() -> None:
     load_page = _block(INDEX, "async loadPage(page", "refreshCurrent()")
     load_overview = _block(INDEX, "async loadOverview()", "async loadKpi()")
 
-    assert 'if (page === "dashboard") await this.loadOverview();' in load_page
+    assert 'if (page === "dashboard") await requirePageLoad(this.loadOverview());' in load_page
     assert "loadKpi()" not in load_page.split(
         'if (page === "dashboard")', 1
     )[1].split('if (page === "customers")', 1)[0]

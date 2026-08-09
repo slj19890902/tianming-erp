@@ -15,7 +15,7 @@ def test_desktop_incoming_cold_entry_only_requests_pending() -> None:
     load_page = _block(INDEX, "async loadPage(page", "refreshCurrent()")
     load_incoming = _block(INDEX, "async loadIncoming()", "async loadIncomingReceived")
 
-    assert 'if (page === "incoming") await this.loadIncoming();' in load_page
+    assert 'if (page === "incoming") await requirePageLoad(this.loadIncoming());' in load_page
     assert 'axios.get("/api/incoming/pending", {signal:controller.signal})' in load_incoming
     assert "/api/incoming/received" not in load_incoming
     assert "/api/incoming/surplus-locations" not in load_incoming

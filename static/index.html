@@ -11327,13 +11327,18 @@
             searchDebounceTimers.set(key, setTimeout(async () => {
               searchDebounceTimers.delete(key);
               if (this.activePage !== page && !(page === "orders" && this.activePage === "orders_legacy")) return;
+              const cachePage = page === "orders" && this.activePage === "orders_legacy" ? "orders_legacy" : page;
               if (this.pages[page] != null) this.pages[page] = 1;
-              this.invalidatePageCache(page);
+              this.invalidatePageCache(cachePage);
               try {
-                if (page === "customers") await this.loadCustomers();
-                if (page === "products") await this.loadProducts();
-                if (page === "orders") await this.loadOrders();
-                this.markPageCache(page === "orders" && this.activePage === "orders_legacy" ? "orders_legacy" : page);
+                let result = true;
+                if (page === "customers") result = await this.loadCustomers();
+                if (page === "products") result = await this.loadProducts();
+                if (page === "orders") result = await this.loadOrders();
+                const currentCachePage = page === "orders" && this.activePage === "orders_legacy" ? "orders_legacy" : this.activePage;
+                if (result !== false && currentCachePage === cachePage) {
+                  this.markPageCache(cachePage);
+                }
               } catch (error) {
                 if (!this.isCancelledRequest(error)) this.showToast(this.errorMessage(error), true);
               }
@@ -11564,39 +11569,63 @@
             );
             if (!force && this.pageCacheFresh(page)) {
               if (requestIsCurrent()) this.loading = false;
-              return;
+              return true;
             }
+            if (requestIsCurrent()) this.invalidatePageCache(page);
             this.loading = true;
+            let pageSucceeded = true;
+            const requirePageLoad = async promise => {
+              if (await promise === false) pageSucceeded = false;
+            };
             try {
-              if (page === "dashboard") await this.loadOverview();
-              if (page === "customers") await this.loadCustomers();
+              if (page === "dashboard") await requirePageLoad(this.loadOverview());
+              if (page === "customers") await requirePageLoad(this.loadCustomers());
               if (page === "quotations") {
-                await this.loadCustomerOptions(force);
-                if (this.quotationCustomer) await this.loadQuotationHistory();
+                await requirePageLoad(this.loadCustomerOptions(force));
+                if (this.quotationCustomer) await requirePageLoad(this.loadQuotationHistory());
               }
-              if (page === "contracts" && this.contractCustomer) await Promise.all([this.loadContractProducts(), this.loadContractHistory()]);
+              if (page === "contracts" && this.contractCustomer) await Promise.all([
+                requirePageLoad(this.loadContractProducts()),
+                requirePageLoad(this.loadContractHistory()),
+              ]);
               if (page === "products") {
-                await this.loadCustomerOptions(force);
-                if (this.productTab === "products" && this.selectedProductCustomer) await this.loadProducts();
-                if (this.productTab === "materials") await this.loadMaterials();
+                await requirePageLoad(this.loadCustomerOptions(force));
+                if (this.productTab === "products" && this.selectedProductCustomer) await requirePageLoad(this.loadProducts());
+                if (this.productTab === "materials") await requirePageLoad(this.loadMaterials());
                 if (this.productTab === "suppliers" && this.canAdmin) {
-                  await (supplierPromise || this.loadSuppliers(true));
+                  await requirePageLoad(supplierPromise || this.loadSuppliers(true));
                 }
               }
-              if (page === "orders") await Promise.all([this.loadCustomerOptions(force), this.loadOrderCustomerOptions(), this.loadOrders()]);
-              if (page === "orders_legacy") await Promise.all([this.loadCustomerOptions(force), this.loadOrders()]);
-              if (page === "requisition") await this.loadRequisition();
-              if (page === "incoming") await this.loadIncoming();
-              if (page === "production") await this.loadProduction();
-              if (page === "deliveries") await Promise.all([this.loadDeliveries(), this.loadCustomerOptions(force), this.loadDeliveryPickers()]);
+              if (page === "orders") await Promise.all([
+                requirePageLoad(this.loadCustomerOptions(force)),
+                requirePageLoad(this.loadOrderCustomerOptions()),
+                requirePageLoad(this.loadOrders()),
+              ]);
+              if (page === "orders_legacy") await Promise.all([
+                requirePageLoad(this.loadCustomerOptions(force)),
+                requirePageLoad(this.loadOrders()),
+              ]);
+              if (page === "requisition") await requirePageLoad(this.loadRequisition());
+              if (page === "incoming") await requirePageLoad(this.loadIncoming());
+              if (page === "production") await requirePageLoad(this.loadProduction());
+              if (page === "deliveries") await Promise.all([
+                requirePageLoad(this.loadDeliveries()),
+                requirePageLoad(this.loadCustomerOptions(force)),
+                requirePageLoad(this.loadDeliveryPickers()),
+              ]);
               if (page === "warehouse") this.ensureWarehouseFrame();
-              if (page === "finance") await Promise.all([this.loadCustomerOptions(force), this.loadFinance()]);
-              if (page === "audit") await this.loadAuditLogs();
-              if (page === "system") await this.loadSystem({ force });
-              if (page === "permissions") await this.loadPermissionUsers();
-              if (requestIsCurrent()) this.markPageCache(page);
+              if (page === "finance") await Promise.all([
+                requirePageLoad(this.loadCustomerOptions(force)),
+                requirePageLoad(this.loadFinance()),
+              ]);
+              if (page === "audit") await requirePageLoad(this.loadAuditLogs());
+              if (page === "system") await requirePageLoad(this.loadSystem({ force }));
+              if (page === "permissions") await requirePageLoad(this.loadPermissionUsers());
+              if (requestIsCurrent() && pageSucceeded) this.markPageCache(page);
+              return requestIsCurrent() && pageSucceeded;
             } catch (error) {
               if (requestIsCurrent()) this.showToast(this.errorMessage(error), true);
+              return false;
             }
             finally {
               if (requestIsCurrent()) this.loading = false;
@@ -11634,10 +11663,12 @@
               await this.loadWarehouseCapacitySummary();
               if (data.kpi) this.kpi = data.kpi;
               else await this.loadKpi();
+              return true;
             } catch (error) {
               this.overview = { cards: [], todos: [], summary: {} };
               this.kpi = {};
               this.overviewError = this.errorMessage(error);
+              return false;
             } finally {
               this.overviewLoading = false;
             }
@@ -11661,7 +11692,7 @@
             }
           },
           async loadCustomers() {
-            if (!this.hasPermission("customers.view")) return false;
+            if (!this.hasPermission("customers.view")) return true;
             const requestKey = "customers:list";
             const controller = this.beginLatestRequest(requestKey);
             try {
@@ -11683,7 +11714,7 @@
             }
           },
           async loadCustomerOptions(force=false) {
-            if (!this.hasPermission("customers.view")) return false;
+            if (!this.hasPermission("customers.view")) return true;
             if (!force && this.customerOptions.length) return true;
             const requestKey = "customers:options";
             const controller = this.beginLatestRequest(requestKey);
@@ -13104,8 +13135,10 @@
               ));
               this.selectedBomSnapshotIds = (this.selectedBomSnapshotIds || []).filter(sourceKey => validBomSourceKeys.has(String(sourceKey)));
               this.requisitionSelected = {};
+              return true;
             } catch (error) {
               if (!this.isCancelledRequest(error)) throw error;
+              return false;
             } finally {
               this.finishLatestRequest("requisition:pending", controller);
             }
@@ -14503,7 +14536,7 @@
           async loadIncoming() {
             const controller = this.beginLatestRequest("incoming:pending");
             try {
-              const [pending] = await Promise.all([
+              const [pending, externalLoaded] = await Promise.all([
                 axios.get("/api/incoming/pending", {signal:controller.signal}),
                 this.loadExternalIncoming(),
               ]);
@@ -14513,8 +14546,10 @@
               Object.keys(this.incomingSelected).forEach(itemId => {
                 if (!pendingIds.has(Number(itemId))) delete this.incomingSelected[itemId];
               });
+              return externalLoaded !== false;
             } catch (error) {
               if (!this.isCancelledRequest(error)) throw error;
+              return false;
             } finally {
               this.finishLatestRequest("incoming:pending", controller);
             }
@@ -14539,8 +14574,10 @@
             try {
               const response = await axios.get("/api/external-packaging-purchases/pending-receipts", {signal:controller.signal});
               this.applyExternalIncomingOverview(response.data);
+              return true;
             } catch (error) {
               if (!this.isCancelledRequest(error)) this.externalIncomingError = "外购包装待收读取失败：" + this.errorMessage(error);
+              return false;
             } finally {
               if (latestRequestControllers.get("incoming:external-pending") === controller) this.externalIncomingLoading = false;
               this.finishLatestRequest("incoming:external-pending", controller);
@@ -14898,12 +14935,14 @@
             window.open(`/static/delivery-pick-print.html?task_id=${encodeURIComponent(task.id)}`, "_blank", "noopener");
           },
           async loadDeliveryPickers() {
-            if (!this.canDelivery) return;
+            if (!this.canDelivery) return true;
             try {
               const { data } = await axios.get("/api/delivery-picks/assignees");
               this.deliveryPickers = data.items || [];
+              return true;
             } catch (error) {
               this.deliveryPickers = [];
+              return false;
             }
           },
           async assignDeliveryPickTask(row, pickerUserId) {
@@ -15065,12 +15104,13 @@
                 this.financeReportFilters.year = String(data.year || filters.year || month().slice(0,4));
                 this.financeReportFilters.statement_month = data.selected_month || filters.statement_month || month();
                 this.financeReportState.loaded = true;
+                return true;
               } catch (error) {
                 this.financeReportState.error = this.errorMessage(error);
+                return false;
               } finally {
                 this.financeReportState.loading = false;
               }
-              return;
             }
             if (this.financeView === "settled_history") {
               this.financeSettledState.loading = true;
@@ -15094,14 +15134,15 @@
                 this.financeSettledTotal = Number(data.total || 0);
                 this.financeSettledSummary = data.summary || {};
                 this.financeSettledState.loaded = true;
+                return true;
               } catch (error) {
                 this.financeSettledTotal = 0;
                 this.financeSettledSummary = {};
                 this.financeSettledState.error = this.errorMessage(error);
+                return false;
               } finally {
                 this.financeSettledState.loading = false;
               }
-              return;
             }
             if (this.financeView === "statements") {
               const [statements, invoices] = await Promise.all([
@@ -15112,7 +15153,7 @@
               this.statementsTotal = Number(statements.data.total || 0);
               this.invoices = invoices.data.items || [];
               this.invoicesTotal = Number(invoices.data.total || 0);
-              return;
+              return true;
             }
             this.financeCurrentState.loading = true;
             this.financeCurrentState.error = "";
@@ -15131,11 +15172,13 @@
               this.financeCustomersTotal = this.financeCurrentTotal;
               this.financeCurrentSummary = data.summary || {};
               this.financeCurrentState.loaded = true;
+              return true;
             } catch (error) {
               this.financeCurrentTotal = 0;
               this.financeCustomersTotal = 0;
               this.financeCurrentSummary = {};
               this.financeCurrentState.error = this.errorMessage(error);
+              return false;
             } finally {
               this.financeCurrentState.loading = false;
             }
@@ -15179,7 +15222,7 @@
           financeConfirmationText(statement) { return statement?.confirmation_status === "confirmed" ? `已确认 · v${statement.version || 1}` : `待核对 · v${statement?.version || 1}`; },
           invoiceTaskStatusText(status) { return ({draft:"待补资料",ready:"可导出",exported:"已导出待登记",issued:"已开票",failed:"失败",voided:"已作废"})[status] || "待核对"; },
           async loadInvoiceTasks() {
-            if (!this.canViewInvoiceTasks) return;
+            if (!this.canViewInvoiceTasks) return true;
             const requestKey = "finance:invoice-tasks";
             const controller = this.beginLatestRequest(requestKey);
             const filters = {...this.invoiceTaskFilters};
@@ -15190,13 +15233,15 @@
                 params:filters,
                 signal:controller.signal,
               });
-              if (latestRequestControllers.get(requestKey) !== controller) return;
+              if (latestRequestControllers.get(requestKey) !== controller) return false;
               this.invoiceTasks = data.items || [];
+              return true;
             } catch (error) {
               if (!this.isCancelledRequest(error) && latestRequestControllers.get(requestKey) === controller) {
                 this.invoiceTasks = [];
                 this.invoiceTaskState.error = this.errorMessage(error);
               }
+              return false;
             } finally {
               if (latestRequestControllers.get(requestKey) === controller) {
                 this.invoiceTaskState.loading = false;
@@ -15724,7 +15769,7 @@
             return params;
           },
           async loadAuditLogs({ resetPage=false } = {}) {
-            if (!this.hasPermission("audit.view")) return;
+            if (!this.hasPermission("audit.view")) return true;
             if (resetPage) this.auditLogState.page = 1;
             const requestKey = "auditLogs";
             const controller = this.beginLatestRequest(requestKey);
@@ -15735,18 +15780,20 @@
                 params:this.auditQueryParams(),
                 signal:controller.signal,
               });
-              if (latestRequestControllers.get(requestKey) !== controller) return;
+              if (latestRequestControllers.get(requestKey) !== controller) return false;
               this.auditLogState.items = Array.isArray(data?.items) ? data.items : [];
               this.auditLogState.total = Number(data?.total || 0);
               this.auditLogState.page = Number(data?.page || this.auditLogState.page || 1);
               this.auditLogState.page_size = Number(data?.page_size || this.auditLogState.page_size || 25);
               this.auditLogState.pages = Number(data?.pages || 0);
+              return true;
             } catch (error) {
               if (!this.isCancelledRequest(error)) {
                 this.auditLogState.items = [];
                 this.auditLogState.total = 0;
                 this.auditLogState.error = this.errorMessage(error);
               }
+              return false;
             } finally {
               if (latestRequestControllers.get(requestKey) === controller) {
                 this.auditLogState.loading = false;
@@ -15926,7 +15973,7 @@
             this.permissionSaveError = "";
             try {
               const { data } = await axios.get("/api/auth/users", { signal:controller.signal });
-              if (latestRequestControllers.get(requestKey) !== controller) return;
+              if (latestRequestControllers.get(requestKey) !== controller) return false;
               this.permissionUsers = data.items || [];
               this.permissionCatalog = this.permissionCatalogSeed();
               if (this.selectedPermissionUserId && this.permissionUsers.some(row => row.id === this.selectedPermissionUserId)) {
@@ -15936,6 +15983,7 @@
                 this.permissionProfile = null;
                 this.permissionDraft = { permissions:{}, customer_access_mode:"all", customer_ids:[] };
               }
+              return true;
             } catch (error) {
               if (!this.isCancelledRequest(error) && latestRequestControllers.get(requestKey) === controller) {
                 this.permissionProfile = null;
@@ -15943,6 +15991,7 @@
                 this.permissionError = `用户列表读取失败：${this.errorMessage(error)}`;
                 this.showToast(this.permissionError, true);
               }
+              return false;
             } finally {
               if (latestRequestControllers.get(requestKey) === controller) {
                 this.permissionUsersLoading = false;
@@ -16064,7 +16113,7 @@
           },
           async loadSystem({force=false}={}) {
             if (!["basic","print","backup","pdf"].includes(this.systemSection)) this.systemSection = "basic";
-            await this.loadSystemSection(this.systemSection, { force });
+            return this.loadSystemSection(this.systemSection, { force });
           },
           async selectSystemSection(section) {
             if (!["basic","print","backup","pdf"].includes(section)) return;
@@ -16078,8 +16127,8 @@
             await this.loadSystemSection(this.systemSection, { force:true });
           },
           async loadSystemSection(section, {force=false}={}) {
-            if (!force && this.systemSectionLoaded[section]) return;
-            if (this.systemSectionLoading[section]) return;
+            if (!force && this.systemSectionLoaded[section]) return true;
+            if (this.systemSectionLoading[section]) return false;
             this.systemSectionLoading = {...this.systemSectionLoading,[section]:true};
             this.systemSectionErrors = {...this.systemSectionErrors,[section]:""};
             try {
@@ -16108,9 +16157,11 @@
                 // PDF 样本统计和高级模板均由各自按钮/展开动作读取。
               }
               this.systemSectionLoaded = {...this.systemSectionLoaded,[section]:true};
+              return true;
             } catch (error) {
               const message = `${this.systemSectionLabel(section)}读取失败：${this.errorMessage(error)}`;
               this.systemSectionErrors = {...this.systemSectionErrors,[section]:message};
+              return false;
             } finally {
               this.systemSectionLoading = {...this.systemSectionLoading,[section]:false};
             }
@@ -16216,7 +16267,7 @@
           async loadOrderCustomerOptions() {
             if (!this.hasPermission("orders.view")) {
               this.orderCustomerOptions = [];
-              return;
+              return true;
             }
             const params = { scope:this.filters.orderScope || "active" };
             if (this.filters.orderStage) params.stage = this.filters.orderStage;
@@ -16227,8 +16278,10 @@
                 ...row,
                 name: `${row.name || "未命名客户"}${row.is_active === false ? "（已停用）" : ""}`,
               }));
+              return true;
             } catch (error) {
               if (!this.isCancelledRequest(error)) throw error;
+              return false;
             } finally {
               this.finishLatestRequest("orders:customer-options", controller);
             }

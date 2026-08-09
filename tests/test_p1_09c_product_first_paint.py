@@ -13,9 +13,9 @@ def test_product_cold_entry_only_loads_customer_options() -> None:
     load_page = _block("async loadPage(page", "refreshCurrent()")
 
     assert 'if (page === "products") {' in load_page
-    assert "await this.loadCustomerOptions(force);" in load_page
-    assert 'if (this.productTab === "products" && this.selectedProductCustomer) await this.loadProducts();' in load_page
-    assert 'if (this.productTab === "materials") await this.loadMaterials();' in load_page
+    assert "await requirePageLoad(this.loadCustomerOptions(force));" in load_page
+    assert 'if (this.productTab === "products" && this.selectedProductCustomer) await requirePageLoad(this.loadProducts());' in load_page
+    assert 'if (this.productTab === "materials") await requirePageLoad(this.loadMaterials());' in load_page
     assert "loadMoldTools()" not in load_page
 
 
@@ -70,7 +70,7 @@ def test_product_editor_loads_materials_and_molds_only_when_opened() -> None:
     assert "if (needsMolds) tasks.push(this.loadMoldTools());" in options
     assert "productEditorOptionsLoading = true" in options
     assert 'this.productEditorOptionsError = "";' in options
-    assert 'this.productEditorOptionsError = "材质与模具选择数据读取失败，请重试";' in options
+    assert 'this.productEditorOptionsError = "材质、模具与挂板选择数据读取失败，请重试";' in options
     assert "await this.ensureProductEditorOptions();" in open_product
     assert "正在读取材质与模具选择数据" in INDEX
     assert "ensureProductEditorOptions({force:true})" in INDEX

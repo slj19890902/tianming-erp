@@ -17,7 +17,7 @@ def test_requisition_cold_entry_requests_only_pending_business_data() -> None:
         "async loadReportedDocuments()",
     )
 
-    assert 'if (page === "requisition") await this.loadRequisition();' in load_page
+    assert 'if (page === "requisition") await requirePageLoad(this.loadRequisition());' in load_page
     assert "loadCustomerOptions(force)" not in load_page.split('if (page === "requisition")')[1].split('if (page === "incoming")')[0]
     assert "loadMaterials()" not in load_page.split('if (page === "requisition")')[1].split('if (page === "incoming")')[0]
     assert 'axios.get("/api/requisition/pending", { signal:controller.signal })' in requisition_load
@@ -34,7 +34,7 @@ def test_requisition_secondary_tabs_and_tools_load_on_demand() -> None:
 
     assert "if (tab === \"submitted\")" in tab_switch
     assert "this.loadReportedDocuments()" in tab_switch
-    assert "this.loadCustomerOptions()" in tab_switch
+    assert "this.loadReportedCustomerOptions()" in tab_switch
     assert 'beginLatestRequest("requisition:reported")' in INDEX
     assert 'beginLatestRequest("requisition:merge-suggestions")' in merge_open
     assert 'axios.get("/api/requisition/merge-suggestions", {signal:controller.signal})' in merge_open

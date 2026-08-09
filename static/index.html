@@ -2175,14 +2175,10 @@
               </div>
               <div class="section-grid">
                 <div class="panel"><div class="section-title">快捷入口</div><div class="section-body toolbar-group">
-                  <button v-if="canCreateOrders" class="btn primary" @click="openOrder">新建订单</button>
-                  <button v-if="hasPermission('orders.view')" class="btn" @click="go('orders')">订单管理</button>
-                  <button v-if="hasPermission('deliveries.view')" class="btn" @click="go('deliveries')">送货管理</button>
-                  <button v-if="canFinance" class="btn" @click="go('finance')">月结对账</button>
-                  <button v-if="hasPermission('incoming.view')" class="btn" @click="go('incoming')">仓库来料入库</button>
-                  <button v-if="hasPermission('warehouse.view')" class="btn" type="button" @click="go('warehouse')">仓库库存管理</button>
-                  <a v-if="hasPermission('warehouse.stocktake.view')" class="btn" href="/mobile/stocktake.html">手机库存盘点</a>
-                  <button v-if="hasPermission('incoming.execute')" class="btn" @click="openMobileEntry">手机扫码入口</button>
+                  <template v-for="action in dashboardQuickActions" :key="action.key">
+                    <a v-if="action.href" :class="['btn',{primary:action.primary}]" :href="action.href">{{ action.label }}</a>
+                    <button v-else type="button" :class="['btn',{primary:action.primary}]" @click="runDashboardQuickAction(action.key)">{{ action.label }}</button>
+                  </template>
                 </div></div>
                 <div class="panel"><div class="section-title">最近业务摘要</div><div class="section-body">
                   <div>今天新增订单：{{ kpi.today_orders || 0 }}</div>
@@ -3755,6 +3751,7 @@
               <page-head title="系统设置" desc="管理员可管理账号临时密码及 NAS 数据备份。"></page-head>
               <div class="toolbar" style="margin-bottom:12px;justify-content:flex-start">
                 <button :class="['btn',systemSection==='basic'?'primary':'']" @click="selectSystemSection('basic')">账号与公司</button>
+                <button v-if="user.role==='admin'" :class="['btn',systemSection==='layout'?'primary':'']" @click="selectSystemSection('layout')">界面布局</button>
                 <button :class="['btn',systemSection==='print'?'primary':'']" @click="selectSystemSection('print')">打印设置</button>
                 <button :class="['btn',systemSection==='backup'?'primary':'']" @click="selectSystemSection('backup')">数据备份</button>
                 <button :class="['btn',systemSection==='pdf'?'primary':'']" @click="selectSystemSection('pdf')">PDF 识别管理</button>
@@ -3882,6 +3879,47 @@
                   <button v-if="user.role === 'admin'" class="btn primary" @click="saveDeliveryPrintSettings">保存打印档案</button>
                 </div>
                 <div class="muted" style="font-size:12px;margin-top:8px">该打印档案保存在 ERP 服务器，所有电脑自动读取同一型号和尺寸。默认 EPSON SK820、241 × 139.5mm；宽是两侧针孔之间的横向纸宽，高是相邻横向撕纸线之间的走纸高度，不要交换宽高。为避免新 ERP 再旋转 90°，纸张物理方向沿用实际打印电脑已安装的打印机驱动，与旧 ERP 的正常打印方式一致。</div>
+              </div>
+              </template>
+
+              <template v-if="user.role === 'admin' && systemSection === 'layout' && (systemSectionLoaded.layout || (!systemSectionLoading.layout && !systemSectionErrors.layout))">
+              <div class="panel" style="padding:14px 18px">
+                <div class="section-title">按角色和显示模式调整入口</div>
+                <div class="muted" style="margin-bottom:12px">这里只能调整已登记入口的顺序和显示，不会改变账号权限、业务按钮或数据范围。</div>
+                <div class="toolbar" style="justify-content:flex-start;margin-bottom:12px">
+                  <div class="field" style="margin:0;min-width:180px"><label>角色</label>
+                    <select class="select" v-model="uiLayoutAdmin.role_code" :disabled="uiLayoutAdminBusy==='load'" @change="loadUiLayoutAdmin">
+                      <option value="admin">管理员</option><option value="finance">财务</option><option value="sales">业务</option><option value="workshop">生产仓库</option><option value="boss">老板</option>
+                    </select>
+                  </div>
+                  <div class="field" style="margin:0;min-width:180px"><label>显示模式</label>
+                    <select class="select" v-model="uiLayoutAdmin.display_mode" :disabled="uiLayoutAdminBusy==='load'" @change="loadUiLayoutAdmin">
+                      <option value="standard">标准</option><option value="large">大字</option><option value="mobile">手机</option>
+                    </select>
+                  </div>
+                  <span class="status blue">草稿 v{{ uiLayoutAdmin.draft.version || 0 }}</span>
+                  <span class="status green">已发布 v{{ uiLayoutAdmin.published.version || 0 }}</span>
+                </div>
+                <div v-for="section in uiLayoutEditorSections" :key="section.key" class="panel" style="margin-bottom:10px;padding:10px 12px">
+                  <div class="section-title">{{ section.label }}</div>
+                  <div v-for="(item,index) in section.items" :key="item.id" class="toolbar" style="justify-content:space-between;border-bottom:1px solid var(--border);padding:6px 0">
+                    <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" v-model="item.source.visible" :disabled="item.id==='dashboard' || item.id==='mobile_home'" @change="markUiLayoutDirty"/> {{ item.label }}</label>
+                    <div class="toolbar-group">
+                      <button class="btn small" type="button" :disabled="index===0" @click="moveUiLayoutItem(section.key,index,-1)">上移</button>
+                      <button class="btn small" type="button" :disabled="index===section.items.length-1" @click="moveUiLayoutItem(section.key,index,1)">下移</button>
+                    </div>
+                  </div>
+                </div>
+                <div v-if="uiLayoutAdminPreview" class="notice" style="margin:10px 0">
+                  <div v-for="section in uiLayoutEditorSections" :key="'preview-'+section.key" style="margin:4px 0"><strong>{{ section.label }}：</strong>{{ section.items.filter(item=>item.source.visible).map(item=>item.label).join(' → ') || '全部隐藏' }}</div>
+                </div>
+                <div class="toolbar-group" style="justify-content:flex-end">
+                  <button class="btn" type="button" @click="uiLayoutAdminPreview=!uiLayoutAdminPreview">{{ uiLayoutAdminPreview ? '关闭预览' : '预览草稿' }}</button>
+                  <button class="btn" type="button" :disabled="!!uiLayoutAdminBusy" @click="saveUiLayoutDraft">{{ uiLayoutAdminBusy==='draft' ? '保存中…' : '保存草稿' }}</button>
+                  <button class="btn primary" type="button" :disabled="!!uiLayoutAdminBusy || !uiLayoutAdmin.draft.version || uiLayoutAdminDirty" :title="uiLayoutAdminDirty ? '请先保存草稿再发布' : ''" @click="publishUiLayoutDraft">{{ uiLayoutAdminBusy==='publish' ? '发布中…' : '发布给该角色' }}</button>
+                  <button class="btn" type="button" :disabled="!!uiLayoutAdminBusy" @click="restoreUiLayoutDefault">恢复系统默认</button>
+                  <button class="btn danger" type="button" :disabled="!!uiLayoutAdminBusy || !uiLayoutAdmin.can_rollback" @click="rollbackUiLayoutRelease">回滚上一版</button>
+                </div>
               </div>
               </template>
 
@@ -7348,6 +7386,8 @@
         data() {
           return {
             user: null, loading: false, loginError: "", activePage: "dashboard", uiModeSaving: false, authGeneration: 0, loginAttemptSequence: 0, pageLoadSequence: 0,
+            uiLayoutEffective:null, uiLayoutAdminBusy:"", uiLayoutAdminPreview:false, uiLayoutAdminDirty:false, uiLayoutAdminLoadGeneration:0,
+            uiLayoutAdmin:{role_code:"admin",display_mode:"standard",catalog:null,draft:{version:0,base_release_version:0,layout:{catalog_version:"",menus:[],dashboard_cards:[],quick_actions:[]}},published:{version:0,layout:{catalog_version:"",menus:[],dashboard_cards:[],quick_actions:[]}},history:[],can_rollback:false},
             orderNextStepGuide: {visible:false, orderNo:"", count:0, source:""},
             requisitionNextStepGuide: {visible:false, documentNo:"", count:0, source:""},
             incomingNextStepGuide: {visible:false, count:0, pendingBalance:false},
@@ -7452,9 +7492,9 @@
             customerInvoiceState:{profileLoading:false,profileSaving:false,profileLoadedCustomerId:null,ruleLoading:false,ruleSaving:false,ruleLoadedCustomerId:null},
             pendingStatements: [], statementCustomers: [], statementDetail: null, statementEditForm: { id: null, statement_month: "" }, backups: [], backupStats: {}, backupCleanupPreview: null, showCleanupPreview: false, backupListLoading: false, backupListError: "", backupAction: "",
             systemUsers: [], systemSection:"basic",
-            systemSectionLoaded:{basic:false,print:false,backup:false,pdf:false},
-            systemSectionLoading:{basic:false,print:false,backup:false,pdf:false},
-            systemSectionErrors:{basic:"",print:"",backup:"",pdf:""},
+            systemSectionLoaded:{basic:false,layout:false,print:false,backup:false,pdf:false},
+            systemSectionLoading:{basic:false,layout:false,print:false,backup:false,pdf:false},
+            systemSectionErrors:{basic:"",layout:"",print:"",backup:"",pdf:""},
             expandedOrders: {}, orderGroupDetails:{}, orderGroupDetailLoading:{}, orderGroupDetailErrors:{}, orderListGeneration:0,
             permissionUsers: [], permissionProfile: null, permissionDraft: { permissions: {}, customer_access_mode: "all", customer_ids: [] },
             permissionCatalog: [], permissionUsersLoading: false, permissionProfileLoading: false, permissionSaving: false, permissionError: "", permissionSaveError: "", selectedPermissionUserId: null,
@@ -8042,11 +8082,40 @@
                 button_label:"看仓库", target:"warehouse",
               });
             }
-            if (!this.isBoss) return cards;
-            const byKey = new Map(cards.map(card => [card.key, card]));
-            return bossOverviewCardOrder
-              .map(item => byKey.has(item.key) ? {...byKey.get(item.key), title:item.title} : null)
-              .filter(Boolean);
+            let eligible = cards;
+            if (this.isBoss) {
+              const byKey = new Map(cards.map(card => [card.key, card]));
+              eligible = bossOverviewCardOrder
+                .map(item => byKey.has(item.key) ? {...byKey.get(item.key), title:item.title} : null)
+                .filter(Boolean);
+            }
+            return this.applyEffectiveLayout("dashboard_cards", eligible);
+          },
+          dashboardQuickActions() {
+            const eligible = [
+              {key:"order_create",label:"新建订单",primary:true,allowed:this.canCreateOrders},
+              {key:"orders",label:"订单管理",allowed:this.hasPermission("orders.view")},
+              {key:"deliveries",label:"送货管理",allowed:this.hasPermission("deliveries.view")},
+              {key:"finance",label:"月结对账",allowed:this.canFinance},
+              {key:"incoming",label:"仓库来料入库",allowed:this.hasPermission("incoming.view")},
+              {key:"warehouse",label:"仓库库存管理",allowed:this.hasPermission("warehouse.view")},
+              {key:"stocktake",label:"手机库存盘点",href:"/mobile/stocktake.html",allowed:this.hasPermission("warehouse.stocktake.view")},
+              {key:"mobile_scan",label:"手机扫码入口",allowed:this.hasPermission("incoming.execute")},
+            ].filter(item => item.allowed);
+            return this.applyEffectiveLayout("quick_actions", eligible);
+          },
+          uiLayoutEditorSections() {
+            const layout = this.uiLayoutAdmin?.draft?.layout || {};
+            const catalog = this.uiLayoutAdmin?.catalog || {};
+            return [
+              ["menus","左侧主菜单"],["dashboard_cards","首页提醒卡"],["quick_actions","首页快捷入口"],
+            ].map(([key,label]) => {
+              const labels = new Map((catalog[key] || []).map(item => [item.id,item.label]));
+              return {
+                key,label,
+                items:(layout[key] || []).map(item => ({source:item,id:item.id,label:labels.get(item.id) || item.id})),
+              };
+            });
           },
           dashboardRequisitionHoldSummary() {
             const pendingCard = (this.overview?.cards || []).find(card => card.key === "pending_material") || {};
@@ -8369,13 +8438,14 @@
               { key: "system_hub", label: "系统管理" }
             ];
             const allowed = roleMenus[this.user?.role] || [];
-            return items.filter(item => (
+            const eligible = items.filter(item => (
                 ["workbench","master","system_hub"].includes(item.key)
                   ? this.navigationGroups.find(group => group.key === item.key).pages.some(page => allowed.includes(page.key) || (!!this.pagePermission(page.key) && this.pageAllowed(page.key)))
                   : allowed.includes(item.key) || (!!this.pagePermission(item.key) && this.pageAllowed(item.key))
               ))
               .filter(item => item.key !== "system_hub" || this.user?.role !== "boss")
               .filter(item => ["workbench","master","system_hub"].includes(item.key) || this.pageAllowed(item.key));
+            return this.applyEffectiveLayout("menus", eligible);
           },
           deliveryCustomers() {
             const ids = [...new Set(this.pendingDeliveryItems.map(row => row.customer_id))];
@@ -8653,6 +8723,8 @@
             this.authGeneration += 1;
             this.resetPagePerformanceState();
             this.uiModeSaving = false;
+            this.uiLayoutEffective = null;
+            this.uiLayoutAdminPreview = false;
             this.activePage = "dashboard";
             this.user = null;
             this.loginError = "登录已失效，请重新登录";
@@ -8687,6 +8759,7 @@
               if (requestGeneration !== this.authGeneration || this.user?.id !== requestUserId) return;
               if (!data?.ok || !data?.user) throw new Error("显示模式保存失败");
               this.user = {...this.user, ...data.user, ui_mode:data.user.ui_mode || mode};
+              await this.loadEffectiveUiLayout();
               this.showToast(mode === "large" ? "已切换为大字模式" : "已切换为标准模式");
             } catch (error) {
               if (requestGeneration !== this.authGeneration || this.user?.id !== requestUserId) return;
@@ -8707,6 +8780,35 @@
               boss: ["customers.view","customers.create","customers.edit","products.view","products.create","products.edit","orders.view","orders.create","orders.edit","orders.status","orders.rollback","requisition.view","requisition.execute","cost.view"],
             };
             return (legacy[this.user?.role] || []).includes(code);
+          },
+          applyEffectiveLayout(section, eligible) {
+            const configured = this.uiLayoutEffective?.layout?.[section];
+            if (!Array.isArray(configured)) return eligible;
+            const byKey = new Map((eligible || []).map(item => [item.key,item]));
+            return configured.map(item => byKey.get(item.id)).filter(Boolean);
+          },
+          runDashboardQuickAction(key) {
+            const actions = {
+              order_create:() => this.openOrder(),
+              orders:() => this.go("orders"),
+              deliveries:() => this.go("deliveries"),
+              finance:() => this.go("finance"),
+              incoming:() => this.go("incoming"),
+              warehouse:() => this.go("warehouse"),
+              mobile_scan:() => this.openMobileEntry(),
+            };
+            if (actions[key]) return actions[key]();
+          },
+          async loadEffectiveUiLayout() {
+            if (!this.user) { this.uiLayoutEffective = null; return; }
+            const generation = this.authGeneration;
+            const userId = this.user.id;
+            try {
+              const {data} = await axios.get("/api/system/ui-layout/effective", {params:{display_mode:this.uiMode}});
+              if (generation === this.authGeneration && this.user?.id === userId) this.uiLayoutEffective = data;
+            } catch (_error) {
+              if (generation === this.authGeneration && this.user?.id === userId) this.uiLayoutEffective = null;
+            }
           },
           pagePermission(page) {
             return ({ dashboard:"dashboard.view", customers:"customers.view", quotations:"quotations.view", contracts:"contracts.view", products:"products.view", orders:"orders.view", orders_legacy:"orders.view", requisition:"requisition.view", incoming:"incoming.view", production:"orders.view", warehouse:"warehouse.view", deliveries:"deliveries.view", finance:"finance.view", audit:"audit.view", system:"system.backup", permissions:"users.manage" })[page] || null;
@@ -11286,7 +11388,7 @@
               if (!requestIsCurrent()) return;
               const sessionUser = {...data.user, permissions:data.permissions || [], customer_scope:data.customer_scope || [], unrestricted_customer_access:!!data.unrestricted_customer_access};
               this.user = sessionUser;
-              await this.loadProductBoxTypeRules();
+              await Promise.all([this.loadProductBoxTypeRules(), this.loadEffectiveUiLayout()]);
               if (!requestIsCurrent() || Number(this.user?.id || 0) !== Number(sessionUser.id || 0)) return;
               if (this.redirectAfterLogin()) return;
               const initialPage = this.initialPageFromLocation();
@@ -11317,7 +11419,7 @@
               if (!requestIsCurrent()) return;
               const loginUser = {...data.user, permissions:data.permissions || [], customer_scope:data.customer_scope || [], unrestricted_customer_access:!!data.unrestricted_customer_access};
               this.user = loginUser;
-              await this.loadProductBoxTypeRules();
+              await Promise.all([this.loadProductBoxTypeRules(), this.loadEffectiveUiLayout()]);
               if (!requestIsCurrent() || Number(this.user?.id || 0) !== Number(loginUser.id || 0)) return;
               const currentPassword = loginPayload.password;
               if (
@@ -11342,6 +11444,8 @@
             this.authGeneration += 1;
             this.resetPagePerformanceState();
             this.uiModeSaving = false;
+            this.uiLayoutEffective = null;
+            this.uiLayoutAdminPreview = false;
             this.activePage = "dashboard";
             this.warehouseFrameUrl = "";
             this.warehouseFrameRevision += 1;
@@ -16517,21 +16621,30 @@
             } catch (error) { this.showToast(this.errorMessage(error), true); }
           },
           async loadSystem({force=false}={}) {
-            if (!["basic","print","backup","pdf"].includes(this.systemSection)) this.systemSection = "basic";
+            if (!["basic","layout","print","backup","pdf"].includes(this.systemSection)) this.systemSection = "basic";
+            if (this.systemSection === "layout" && this.user?.role !== "admin") this.systemSection = "basic";
             return this.loadSystemSection(this.systemSection, { force });
           },
           async selectSystemSection(section) {
-            if (!["basic","print","backup","pdf"].includes(section)) return;
+            if (!["basic","layout","print","backup","pdf"].includes(section)) return;
+            if (section === "layout" && this.user?.role !== "admin") {
+              this.systemSection = "basic";
+              return this.loadSystemSection("basic");
+            }
             this.systemSection = section;
             await this.loadSystemSection(section);
           },
           systemSectionLabel(section) {
-            return { basic:"账号与公司", print:"打印设置", backup:"数据备份", pdf:"PDF 识别管理" }[section] || "系统设置";
+            return { basic:"账号与公司", layout:"界面布局", print:"打印设置", backup:"数据备份", pdf:"PDF 识别管理" }[section] || "系统设置";
           },
           async retrySystemSection() {
             await this.loadSystemSection(this.systemSection, { force:true });
           },
           async loadSystemSection(section, {force=false}={}) {
+            if (section === "layout" && this.user?.role !== "admin") {
+              this.systemSection = "basic";
+              section = "basic";
+            }
             if (!force && this.systemSectionLoaded[section]) return true;
             if (this.systemSectionLoading[section]) return false;
             this.systemSectionLoading = {...this.systemSectionLoading,[section]:true};
@@ -16556,6 +16669,8 @@
               } else if (section === "print") {
                 const {data} = await axios.get("/api/system/delivery-print-settings");
                 this.deliveryPrintSettings = { ...this.deliveryPrintSettings, ...data };
+              } else if (section === "layout") {
+                await this.loadUiLayoutAdmin({throwOnError:true});
               } else if (section === "backup") {
                 await this.loadBackups({throwOnError:true});
               } else if (section === "pdf") {
@@ -16570,6 +16685,104 @@
             } finally {
               this.systemSectionLoading = {...this.systemSectionLoading,[section]:false};
             }
+          },
+          async loadUiLayoutAdmin({throwOnError=false}={}) {
+            if (this.user?.role !== "admin") {
+              this.uiLayoutAdminLoadGeneration += 1;
+              return false;
+            }
+            const roleCode = this.uiLayoutAdmin.role_code || "admin";
+            const displayMode = this.uiLayoutAdmin.display_mode || "standard";
+            const requestGeneration = ++this.uiLayoutAdminLoadGeneration;
+            this.uiLayoutAdminBusy = "load";
+            this.systemSectionErrors = {...this.systemSectionErrors,layout:""};
+            try {
+              const {data} = await axios.get("/api/system/ui-layout/admin", {params:{role_code:roleCode,display_mode:displayMode}});
+              if (
+                requestGeneration !== this.uiLayoutAdminLoadGeneration
+                || this.uiLayoutAdmin.role_code !== roleCode
+                || this.uiLayoutAdmin.display_mode !== displayMode
+              ) return false;
+              this.uiLayoutAdmin = data;
+              this.uiLayoutAdminPreview = false;
+              this.uiLayoutAdminDirty = false;
+              return true;
+            } catch (error) {
+              if (requestGeneration !== this.uiLayoutAdminLoadGeneration) return false;
+              const message = `界面布局读取失败：${this.errorMessage(error)}`;
+              this.systemSectionErrors = {...this.systemSectionErrors,layout:message};
+              this.uiLayoutAdmin = {
+                role_code:roleCode,display_mode:displayMode,catalog:null,
+                draft:{version:0,base_release_version:0,layout:{catalog_version:"",menus:[],dashboard_cards:[],quick_actions:[]}},
+                published:{version:0,layout:{catalog_version:"",menus:[],dashboard_cards:[],quick_actions:[]}},
+                history:[],can_rollback:false,
+              };
+              this.uiLayoutAdminDirty = false;
+              if (throwOnError) throw error;
+              this.showToast(message, true);
+              return false;
+            } finally {
+              if (requestGeneration === this.uiLayoutAdminLoadGeneration) this.uiLayoutAdminBusy = "";
+            }
+          },
+          markUiLayoutDirty() {
+            this.uiLayoutAdminDirty = true;
+          },
+          moveUiLayoutItem(section,index,delta) {
+            const items = this.uiLayoutAdmin?.draft?.layout?.[section];
+            const target = index + delta;
+            if (!Array.isArray(items) || target < 0 || target >= items.length) return;
+            const [item] = items.splice(index,1);
+            items.splice(target,0,item);
+            this.markUiLayoutDirty();
+          },
+          async saveUiLayoutDraft() {
+            this.uiLayoutAdminBusy = "draft";
+            try {
+              const {data} = await axios.put("/api/system/ui-layout/admin/draft", {
+                role_code:this.uiLayoutAdmin.role_code,
+                display_mode:this.uiLayoutAdmin.display_mode,
+                expected_draft_version:Number(this.uiLayoutAdmin.draft.version || 0),
+                operation_key:createIdempotencyKey(),
+                layout:this.uiLayoutAdmin.draft.layout,
+              });
+              this.uiLayoutAdmin = data;
+              this.uiLayoutAdminDirty = false;
+              this.showToast("界面草稿已保存，尚未影响员工");
+            } catch (error) {
+              this.showToast(this.errorMessage(error), true);
+            } finally {
+              this.uiLayoutAdminBusy = "";
+            }
+          },
+          async executeUiLayoutVersionAction(action) {
+            this.uiLayoutAdminBusy = action;
+            try {
+              const {data} = await axios.post(`/api/system/ui-layout/admin/${action}`, {
+                role_code:this.uiLayoutAdmin.role_code,
+                display_mode:this.uiLayoutAdmin.display_mode,
+                expected_draft_version:Number(this.uiLayoutAdmin.draft.version || 0),
+                expected_release_version:Number(this.uiLayoutAdmin.published.version || 0),
+                operation_key:createIdempotencyKey(),
+              });
+              this.uiLayoutAdmin = data;
+              this.uiLayoutAdminDirty = false;
+              if (this.uiLayoutAdmin.role_code === this.user?.role && this.uiLayoutAdmin.display_mode === this.uiMode) await this.loadEffectiveUiLayout();
+              this.showToast(action === "publish" ? "界面布局已发布" : action === "restore-default" ? "已恢复系统默认布局" : "已回滚到上一版布局");
+            } catch (error) {
+              this.showToast(this.errorMessage(error), true);
+            } finally {
+              this.uiLayoutAdminBusy = "";
+            }
+          },
+          publishUiLayoutDraft() { return this.executeUiLayoutVersionAction("publish"); },
+          restoreUiLayoutDefault() {
+            if (!confirm("确认恢复该角色和显示模式的系统默认布局？")) return;
+            return this.executeUiLayoutVersionAction("restore-default");
+          },
+          rollbackUiLayoutRelease() {
+            if (!confirm("确认回滚到上一版已发布布局？")) return;
+            return this.executeUiLayoutVersionAction("rollback");
           },
           async loadSystemVersionHistory({force=false}={}) {
             if (!force && this.versionHistoryLoaded) return true;

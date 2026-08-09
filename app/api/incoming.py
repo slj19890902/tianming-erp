@@ -49,7 +49,12 @@ from app.models.supplier_requisition_order import (
 )
 from app.models.user import User
 from app.models.warehouse_inventory import WarehouseLocation
-from app.services.history_orders import build_display_registry, display_order_number
+from app.services.history_orders import (
+    build_display_registry,
+    build_display_registry_for_order_ids,
+    display_order_number,
+    is_history_order_number,
+)
 from app.services.location_candidates import list_operational_locations
 from app.services.incoming_receipts import (
     IncomingReceiptError,
@@ -455,6 +460,48 @@ def _visible_customer_ids(user: User, db: Session) -> set[int] | None:
     return customer_scope_ids(user, db)
 
 
+def _pending_order_item_query(query):
+    """Apply the authoritative pending-incoming eligibility and ordering."""
+    has_receivable_requisition_item = (
+        select(RequisitionItem.id)
+        .where(
+            RequisitionItem.order_item_id == OrderItem.id,
+            RequisitionItem.status.in_(["有效", "supplier_requisition_created"]),
+        )
+        .exists()
+    )
+    return query.where(
+        Order.status.notin_(["cancelled", "dead"]),
+        OrderItem.material_status == "pending",
+        or_(
+            OrderItem.requisition_status.in_(["已报料", "供应商已排单"]),
+            has_receivable_requisition_item,
+        ),
+    ).order_by(
+        OrderItem.requisition_date.desc(),
+        OrderItem.created_at.desc(),
+        OrderItem.id.desc(),
+    )
+
+
+def _stock_replenishment_pending_query(query, *, db: Session, user: User):
+    """Apply the authoritative stock-replenishment incoming eligibility."""
+    query = query.where(
+        StockReplenishmentOrder.status.in_(("confirmed", "partially_stocked")),
+        StockReplenishmentOrderItem.stocked_quantity
+        < StockReplenishmentOrderItem.quantity,
+    )
+    visible_customer_ids = _visible_customer_ids(user, db)
+    if visible_customer_ids is not None:
+        query = query.where(
+            StockReplenishmentOrderItem.customer_id.in_(visible_customer_ids)
+        )
+    return query.order_by(
+        StockReplenishmentOrder.created_at.desc(),
+        StockReplenishmentOrderItem.id.desc(),
+    )
+
+
 def _require_order_item_customer_access(
     db: Session,
     *,
@@ -520,21 +567,8 @@ def _stock_replenishment_pending_rows(
             selectinload(StockReplenishmentOrderItem.customer),
             selectinload(StockReplenishmentOrderItem.product),
         )
-        .where(
-            StockReplenishmentOrder.status.in_(("confirmed", "partially_stocked")),
-            StockReplenishmentOrderItem.stocked_quantity
-            < StockReplenishmentOrderItem.quantity,
-        )
-        .order_by(
-            StockReplenishmentOrder.created_at.desc(),
-            StockReplenishmentOrderItem.id.desc(),
-        )
     )
-    visible_customer_ids = _visible_customer_ids(user, db)
-    if visible_customer_ids is not None:
-        query = query.where(
-            StockReplenishmentOrderItem.customer_id.in_(visible_customer_ids)
-        )
+    query = _stock_replenishment_pending_query(query, db=db, user=user)
     rows: list[dict] = []
     for item, order in db.execute(query):
         customer_name = item.customer.name if item.customer else ""
@@ -795,6 +829,127 @@ def _all_expected_bom_material_received(
     return parent_received is not None
 
 
+def dashboard_pending_incoming_rows(db: Session, user: User) -> list[dict]:
+    """Return the pending-incoming projection consumed by the dashboard.
+
+    This deliberately shares the page's eligibility, customer scope, and
+    requisition-route selection while omitting page-only material, drawing,
+    location, and receipt-summary decoration.
+    """
+    query = (
+        select(
+            OrderItem.id.label("item_id"),
+            Order.id.label("order_id"),
+            Customer.id.label("customer_id"),
+            Customer.name.label("customer_name"),
+            Order.order_number,
+            Order.created_at,
+            Order.delivery_date,
+            func.coalesce(
+                OrderItem.snapshot_product_code,
+                Product.product_code,
+            ).label("product_code"),
+        )
+        .join(Order, Order.id == OrderItem.order_id)
+        .join(Product, Product.id == OrderItem.product_id)
+        .join(Customer, Customer.id == Order.customer_id)
+    )
+    visible_customer_ids = _visible_customer_ids(user, db)
+    if visible_customer_ids is not None:
+        query = query.where(Order.customer_id.in_(visible_customer_ids))
+    query = _pending_order_item_query(query)
+
+    base_rows = [dict(row._mapping) for row in db.execute(query)]
+    order_item_ids = [row["item_id"] for row in base_rows]
+    order_items_with_requisitions: set[int] = set()
+    active_by_order_item: dict[int, list[RequisitionItem]] = {}
+    if order_item_ids:
+        order_items_with_requisitions = set(
+            db.scalars(
+                select(RequisitionItem.order_item_id).where(
+                    RequisitionItem.order_item_id.in_(order_item_ids)
+                )
+            ).all()
+        )
+        for requisition_item in _active_requisition_components(
+            db,
+            order_item_ids=order_item_ids,
+        ):
+            active_by_order_item.setdefault(
+                requisition_item.order_item_id, []
+            ).append(requisition_item)
+
+    rows: list[dict] = []
+    for data in base_rows:
+        requisition_rows = active_by_order_item.get(data["item_id"], [])
+        if requisition_rows:
+            for requisition_item in requisition_rows:
+                component_data = dict(data)
+                component_data["order_item_id"] = data["item_id"]
+                component_data["requisition_item_id"] = requisition_item.id
+                component_data["item_id"] = f"r{requisition_item.id}"
+                component_data["product_code"] = (
+                    requisition_item.product_code_snapshot
+                    or data.get("product_code")
+                )
+                rows.append(component_data)
+        elif data["item_id"] not in order_items_with_requisitions:
+            rows.append(data)
+
+    history_order_ids = {
+        int(row["order_id"])
+        for row in rows
+        if is_history_order_number(row.get("order_number"))
+    }
+    registry = build_display_registry_for_order_ids(
+        db,
+        history_order_ids,
+    )
+    for row in rows:
+        display = (
+            registry.by_order_id.get(row["order_id"], row.get("order_number"))
+            if history_order_ids
+            else row.get("order_number")
+        )
+        row["order_number"] = display
+        row.pop("order_id", None)
+
+    stock_query = (
+        select(
+            StockReplenishmentOrderItem.id.label(
+                "stock_replenishment_item_id"
+            ),
+            StockReplenishmentOrderItem.customer_id,
+            Customer.name.label("customer_name"),
+            StockReplenishmentOrder.order_number,
+            StockReplenishmentOrder.created_at,
+            StockReplenishmentOrderItem.product_code_snapshot.label(
+                "product_code"
+            ),
+        )
+        .join(
+            StockReplenishmentOrder,
+            StockReplenishmentOrder.id
+            == StockReplenishmentOrderItem.replenishment_order_id,
+        )
+        .outerjoin(Customer, Customer.id == StockReplenishmentOrderItem.customer_id)
+    )
+    stock_query = _stock_replenishment_pending_query(
+        stock_query,
+        db=db,
+        user=user,
+    )
+    for result in db.execute(stock_query):
+        stock_row = dict(result._mapping)
+        stock_row["item_id"] = (
+            f"sr{stock_row['stock_replenishment_item_id']}"
+        )
+        stock_row["customer_name"] = stock_row.get("customer_name") or ""
+        stock_row["delivery_date"] = None
+        rows.append(stock_row)
+    return rows
+
+
 def _rows(
     db: Session,
     *,
@@ -857,30 +1012,7 @@ def _rows(
     if visible_customer_ids is not None:
         query = query.where(Order.customer_id.in_(visible_customer_ids))
     if received_since is None:
-        has_receivable_requisition_item = (
-            select(RequisitionItem.id)
-            .where(
-                RequisitionItem.order_item_id == OrderItem.id,
-                RequisitionItem.status.in_(
-                    ["有效", "supplier_requisition_created"]
-                ),
-            )
-            .exists()
-        )
-        query = query.where(
-            Order.status.notin_(["cancelled", "dead"]),
-            OrderItem.material_status == "pending",
-            or_(
-                OrderItem.requisition_status.in_(
-                    ["已报料", "供应商已排单"]
-                ),
-                has_receivable_requisition_item,
-            ),
-        ).order_by(
-            OrderItem.requisition_date.desc(),
-            OrderItem.created_at.desc(),
-            OrderItem.id.desc(),
-        )
+        query = _pending_order_item_query(query)
     else:
         query = query.where(
             OrderItem.material_status == "received",

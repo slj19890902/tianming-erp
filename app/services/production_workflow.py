@@ -7,7 +7,7 @@ import json
 from math import ceil
 from typing import Literal, Sequence
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import case, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -2266,6 +2266,71 @@ def _filtered_task_query(
     if status:
         query = query.where(ProductionTask.status == status)
     return query
+
+
+def list_production_task_dashboard_rows(
+    db: Session,
+    *,
+    allowed_customer_ids: set[int] | None,
+    status: str = PENDING,
+) -> list[dict]:
+    """Return the exact pending-task identities needed by the dashboard.
+
+    The production page deliberately keeps using :func:`list_production_tasks`.
+    This read-only projection shares that function's customer, mutable-order,
+    force-close and task-status filters, but avoids every BOM, material,
+    printing, inventory and location serializer used by the full page payload.
+
+    ``delivery_date`` and ``created_at`` remain ``None`` because the legacy full
+    task payload does not expose either field.  Keeping those values unchanged
+    preserves the dashboard todo ordering and message contract while the SQL
+    ordering continues to use the order delivery date exactly as before.
+    """
+
+    component_code = SalesOrderItemBomComponent.snapshot_component_product_code
+    parent_code = func.coalesce(
+        func.nullif(OrderItem.snapshot_product_code, ""),
+        Product.product_code,
+    )
+    product_code = case(
+        (
+            ProductionTask.sales_order_item_bom_component_id.is_not(None),
+            component_code,
+        ),
+        else_=parent_code,
+    ).label("product_code")
+    query = (
+        _filtered_task_query(
+            db,
+            allowed_customer_ids=allowed_customer_ids,
+            status=status,
+        )
+        .outerjoin(
+            SalesOrderItemBomComponent,
+            SalesOrderItemBomComponent.id
+            == ProductionTask.sales_order_item_bom_component_id,
+        )
+        .with_only_columns(
+            ProductionTask.id.label("id"),
+            Order.customer_id.label("customer_id"),
+            Customer.name.label("customer_name"),
+            Order.order_number.label("order_number"),
+            product_code,
+        )
+        .order_by(Order.delivery_date, Order.id, OrderItem.id, ProductionTask.id)
+    )
+    return [
+        {
+            "id": int(row.id),
+            "customer_id": int(row.customer_id),
+            "customer_name": row.customer_name,
+            "order_number": row.order_number,
+            "product_code": row.product_code,
+            "delivery_date": None,
+            "created_at": None,
+        }
+        for row in db.execute(query).mappings().all()
+    ]
 
 
 def _item_product_snapshot(item: OrderItem, product: Product) -> dict:

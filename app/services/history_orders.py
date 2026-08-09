@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import Integer, cast, func, select
 from sqlalchemy.orm import Session
 
 from app.models.order import Order
@@ -75,6 +75,73 @@ def build_display_registry(db: Session) -> DisplayOrderRegistry:
         by_order_id[order.id] = display
         by_display_number[display] = order.id
     return DisplayOrderRegistry(by_order_id=by_order_id, by_display_number=by_display_number)
+
+
+def build_display_registry_for_order_ids(
+    db: Session,
+    order_ids: set[int] | list[int] | tuple[int, ...],
+) -> DisplayOrderRegistry:
+    """Build exact legacy display numbers while returning only requested rows.
+
+    The ordinary registry materializes every historical ``Order`` object.  A
+    dashboard projection only needs the handful of historical orders currently
+    actionable, but their sequence still has to be calculated against all
+    historical siblings on the same effective date.  A window query performs
+    that ranking in SQLite and filters the returned rows to the requested IDs.
+    """
+
+    normalized_ids = sorted({int(order_id) for order_id in order_ids if order_id})
+    if not normalized_ids:
+        return DisplayOrderRegistry(by_order_id={}, by_display_number={})
+
+    effective_date = func.coalesce(
+        Order.order_date,
+        func.date(Order.created_at),
+    ).label("effective_date")
+    numeric_suffix = cast(
+        func.substr(
+            Order.order_number,
+            func.instr(Order.order_number, "-") + 1,
+        ),
+        Integer,
+    )
+    ranked = (
+        select(
+            Order.id.label("order_id"),
+            effective_date,
+            func.row_number()
+            .over(
+                partition_by=effective_date,
+                order_by=(numeric_suffix, Order.id),
+            )
+            .label("display_sequence"),
+        )
+        .where(Order.order_number.like("RUIDA-%"))
+        .subquery()
+    )
+    rows = db.execute(
+        select(
+            ranked.c.order_id,
+            ranked.c.effective_date,
+            ranked.c.display_sequence,
+        ).where(ranked.c.order_id.in_(normalized_ids))
+    ).all()
+
+    by_order_id: dict[int, str] = {}
+    by_display_number: dict[str, int] = {}
+    for order_id, raw_date, display_sequence in rows:
+        normalized_id = int(order_id)
+        if raw_date is None:
+            display = f"TM00000000-{normalized_id:04d}"
+        else:
+            date_text = str(raw_date).split(" ", 1)[0].replace("-", "")
+            display = f"TM{date_text}-{int(display_sequence):04d}"
+        by_order_id[normalized_id] = display
+        by_display_number[display] = normalized_id
+    return DisplayOrderRegistry(
+        by_order_id=by_order_id,
+        by_display_number=by_display_number,
+    )
 
 
 def display_order_number(order: Order, registry: DisplayOrderRegistry | None = None) -> str:

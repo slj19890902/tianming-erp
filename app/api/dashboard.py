@@ -642,27 +642,32 @@ def _authoritative_dashboard_data(
     can_view_deliveries: bool,
     can_view_finance: bool,
 ) -> dict:
-    # Import page endpoints lazily.  The dashboard intentionally reuses the same
-    # collection functions instead of rebuilding order-state approximations.
+    # Import the shared authoritative projections lazily.  The dashboard keeps
+    # the exact page eligibility rules and stable identities without building
+    # each page's full, display-heavy payload merely to count pending work.
     from app.api.deliveries import pending_delivery_customer_summaries
     from app.api.finance import pending_statement_customer_summaries
-    from app.api.incoming import pending_items as pending_incoming_items
-    from app.api.production import get_production_tasks
-    from app.api.requisition import pending_requisitions
+    from app.api.incoming import dashboard_pending_incoming_rows
+    from app.api.requisition import dashboard_pending_requisition_rows
+    from app.services.production_workflow import (
+        list_production_task_dashboard_rows,
+    )
 
     pending_material_rows = (
-        pending_requisitions(db=db, _user=user).get("items", [])
+        dashboard_pending_requisition_rows(db=db, user=user)
         if can_view_requisition
         else []
     )
     pending_incoming_rows = (
-        pending_incoming_items(db=db, user=user).get("items", [])
+        dashboard_pending_incoming_rows(db=db, user=user)
         if can_view_incoming
         else []
     )
     pending_production_rows = (
-        get_production_tasks(task_status="pending", db=db, user=user).get(
-            "items", []
+        list_production_task_dashboard_rows(
+            db,
+            allowed_customer_ids=visible_customer_ids,
+            status="pending",
         )
         if can_view_orders
         else []

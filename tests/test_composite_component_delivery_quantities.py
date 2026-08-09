@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.api.deliveries import (
     _composite_inventory_sources_for_order_item,
+    _delivery_list_page_context,
     _delivery_response,
     _pick_task_response,
     get_delivery_print_data,
@@ -269,6 +270,12 @@ def test_order_component_override_caps_multi_delivery_and_cancel(
             )
             db.commit()
             detail_payload = _delivery_response(db, preview.id)
+            list_context = _delivery_list_page_context(db, [preview.id])
+            assert _delivery_response(
+                db,
+                preview.id,
+                list_context=list_context,
+            ) == detail_payload
             assert [
                 line["quantity"]
                 for line in detail_payload["items"][0]["actual_goods_lines"]
@@ -364,6 +371,13 @@ def test_order_component_override_caps_multi_delivery_and_cancel(
             order_item.delivered_quantity = 1000
             first.status = "dispatched"
             db.commit()
+            first_detail = _delivery_response(db, first.id)
+            first_list_context = _delivery_list_page_context(db, [first.id])
+            assert _delivery_response(
+                db,
+                first.id,
+                list_context=first_list_context,
+            ) == first_detail
 
             second, second_item = _delivery(
                 db,

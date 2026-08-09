@@ -3178,17 +3178,19 @@
               <page-head title="仓库来料入库" desc="老板端与车间共用同一批来料任务，可核对纸板尺寸并调整本次入库数量。"></page-head>
               <div class="toolbar">
                 <div class="toolbar-group">
-                  <button :class="['btn',{primary:incomingTab==='pending'}]" @click="selectIncomingTab('pending')">待入库 {{ incomingPending.length + externalIncomingPending.length }}</button>
+                  <button :class="['btn',{primary:incomingTab==='pending'}]" @click="selectIncomingTab('pending')">待入库 {{ incomingPendingTotal + externalIncomingPending.length }}</button>
                   <button :class="['btn',{primary:incomingTab==='received'}]" @click="selectIncomingTab('received')">今日实收<span v-if="incomingReceivedLoaded"> {{ incomingReceived.length }}</span></button>
                   <button :class="['btn',{primary:incomingTab==='history'}]" @click="selectIncomingTab('history')">历史入库</button>
                 </div>
                 <div class="toolbar-group">
                   <button v-if="incomingTab==='pending' && hasPermission('incoming.execute')" class="btn success" :disabled="!incomingSelectedCount()" @click="batchReceiveIncoming">批量确认入库（{{ incomingSelectedCount() }}）</button>
-                  <button class="btn" @click="refreshIncomingTab">刷新</button>
+                  <button class="btn" :disabled="incomingTab==='pending' && incomingPendingLoading" @click="refreshIncomingTab">{{ incomingTab==='pending' && incomingPendingLoading ? '读取中…' : '刷新' }}</button>
                 </div>
               </div>
               <div v-if="incomingTab==='received' && incomingReceivedLoading" class="status blue" style="display:block;margin:8px 0">正在读取今日实收，已显示的记录不会被清空。</div>
               <div v-if="incomingTab==='received' && incomingReceivedError" class="status orange" style="display:block;margin:8px 0">{{ incomingReceivedError }} <button class="btn small" @click="loadIncomingReceived({force:true})">重试</button></div>
+              <div v-if="incomingTab==='pending' && incomingPendingLoading" class="status blue" style="display:block;margin:8px 0">正在读取当前页待入库，已显示的记录不会被清空。</div>
+              <div v-if="incomingTab==='pending' && incomingPendingError" class="status orange" style="display:block;margin:8px 0">{{ incomingPendingError }} <button class="btn small" :disabled="incomingPendingLoading" @click="retryIncomingPendingPage">重试</button></div>
               <div v-if="incomingTab==='pending' && incomingReceiptLocationsLoading" class="status blue" style="display:block;margin:8px 0">正在读取补库到厂后的可用库位…</div>
               <div v-if="incomingTab==='pending' && incomingReceiptLocationsError" class="status orange" style="display:block;margin:8px 0">{{ incomingReceiptLocationsError }} <button class="btn small" @click="ensureIncomingReceiptLocations()">重试</button></div>
               <div v-if="incomingTab==='pending' && incomingLocationsLoading" class="status blue" style="display:block;margin:8px 0">正在读取余量转半成品所需库位…</div>
@@ -3217,9 +3219,9 @@
                   </table>
                 </article>
               </section>
-              <data-panel v-if="incomingTab !== 'history'" :empty="!(incomingTab==='pending' ? incomingPending : incomingReceived).length && !(incomingTab==='received' && (incomingReceivedLoading || incomingReceivedError))">
+              <data-panel v-if="incomingTab !== 'history'" :empty="!(incomingTab==='pending' ? incomingPending : incomingReceived).length && !(incomingTab==='pending' && (incomingPendingLoading || incomingPendingError)) && !(incomingTab==='received' && (incomingReceivedLoading || incomingReceivedError))">
                 <table class="incoming-table">
-                  <thead><tr><th v-if="incomingTab==='pending' && hasPermission('incoming.execute')"><input type="checkbox" :checked="allIncomingSelected" @change="toggleAllIncoming($event.target.checked)" /> 全选</th><th class="incoming-board-cell">报料尺寸</th><th>客户</th><th>存货编码</th><th>产品</th><th>材质</th><th>计划 / 已收 / 待收</th><th>本次收料</th><th class="incoming-decision-cell">收料结果 / 入库位</th><th>报料日期</th><th>图纸</th><th>生产卡</th><th v-if="hasPermission('incoming.execute')" class="incoming-action-cell">操作</th></tr></thead>
+                  <thead><tr><th v-if="incomingTab==='pending' && hasPermission('incoming.execute')"><input type="checkbox" :checked="allIncomingSelected" @change="toggleAllIncoming($event.target.checked)" /> 全选本页</th><th class="incoming-board-cell">报料尺寸</th><th>客户</th><th>存货编码</th><th>产品</th><th>材质</th><th>计划 / 已收 / 待收</th><th>本次收料</th><th class="incoming-decision-cell">收料结果 / 入库位</th><th>报料日期</th><th>图纸</th><th>生产卡</th><th v-if="hasPermission('incoming.execute')" class="incoming-action-cell">操作</th></tr></thead>
                   <tbody><tr v-for="row in (incomingTab==='pending' ? incomingPending : incomingReceived)" :key="row.history_key || row.item_id">
                     <td v-if="incomingTab==='pending' && hasPermission('incoming.execute')"><input type="checkbox" v-model="incomingSelected[row.item_id]" :disabled="!canReceiveIncoming(row)" /></td>
                     <td class="incoming-board-cell"><strong>{{ formatBoardSpec(row.cardboard_len,row.cardboard_width) }}</strong></td>
@@ -3233,6 +3235,7 @@
                     <td v-if="hasPermission('incoming.execute')" class="incoming-action-cell"><template v-if="incomingTab==='pending'"><button class="btn small success" @click="receiveIncoming(row)">确认实收</button><button v-if="row.pending_receipt_item_id" class="btn small" @click="acceptShortIncoming(row)">不再补货，短收结单</button></template><button v-else-if="canAdmin" class="btn small danger" @click="revertIncoming(row)">撤销收料，回到已报料</button></td>
                   </tr></tbody>
                 </table>
+                <pager v-if="incomingTab==='pending'" :page="pages.incomingPending" :total="incomingPendingTotal" :page-size="pageSize" :always="true" :compact="true" @change="changeIncomingPendingPage($event)"></pager>
               </data-panel>
               <div v-else>
                 <div class="status orange" style="display:block;margin:8px 0">历史入库按真实收货记录分页显示。拥有“来料入库操作”权限才可撤销（订单已发货则禁止撤销）。</div>
@@ -7518,7 +7521,7 @@
             requisitionReportedTotal: 0, requisitionReportedMatchedLines: 0,
             reportedFilters: { customer_id:"", report_length_mm:"", report_width_mm:"", document_number:"", order_number:"", product_code:"", product_name:"", material_code:"", flute_type:"", supplier_name:"", status:"", date_from:"", date_to:"" },
             reportedCustomerOptions: [], reportedAdvancedVisible: false, reportedExpanded: {},
-            incomingTab: "pending", incomingPending: [], incomingReceived: [], incomingReceivedLoaded: false, incomingReceivedLoading: false, incomingReceivedError: "", incomingHistory: [], incomingHistoryTotal: 0, incomingLocations: [], incomingLocationsLoading: false, incomingLocationsError: "", incomingReceiptLocations: [], incomingReceiptLocationsLoading: false, incomingReceiptLocationsError: "",
+            incomingTab: "pending", incomingPending: [], incomingPendingTotal: 0, incomingPendingLoading: false, incomingPendingError: "", incomingPendingAppliedPage: 1, incomingPendingRetryPage: 1, incomingReceived: [], incomingReceivedLoaded: false, incomingReceivedLoading: false, incomingReceivedError: "", incomingHistory: [], incomingHistoryTotal: 0, incomingLocations: [], incomingLocationsLoading: false, incomingLocationsError: "", incomingReceiptLocations: [], incomingReceiptLocationsLoading: false, incomingReceiptLocationsError: "",
             externalIncomingPending: [], externalIncomingLoading: false, externalIncomingError: "", externalIncomingDrafts: {}, externalIncomingSavingId: null,
             incomingHistoryFilters: { customer_id:"", document_keyword:"", product_code:"", product_name:"", supplier_name:"", date_from:"", date_to:"", receipt_status:"" },
             productionTab: "pending", productionPending: [], productionPendingTotal: 0, productionPendingLoading: false, productionPendingError: "", productionHistory: [], productionHistoryTotal: 0, productionLocations: [], productionLocationsLoading: false, productionLocationsError: "", productionSelected: {}, productionBusy: false,
@@ -7562,7 +7565,7 @@
             financeReportData: { monthly:[], yearly_summary:{}, selected_month_summary:{}, selected_month_customers:[], customer_balances:[], aging:[], as_of:"", included_through_statement_month:"" },
             financeReportState: { loading:false, error:"", loaded:false },
             statementsTotal: 0, financeCustomersTotal: 0, invoicesTotal: 0, pageSize: 25,
-            pages: { customers: 1, products: 1, orders: 1, requisitionPending: 1, requisitionHolds: 1, requisitionReported: 1, incomingHistory: 1, productionPending: 1, productionHistory: 1, deliveries: 1, statements: 1, invoices: 1, financeCurrent: 1, financeSettled: 1 },
+            pages: { customers: 1, products: 1, orders: 1, requisitionPending: 1, requisitionHolds: 1, requisitionReported: 1, incomingPending: 1, incomingHistory: 1, productionPending: 1, productionHistory: 1, deliveries: 1, statements: 1, invoices: 1, financeCurrent: 1, financeSettled: 1 },
             productTab: "products", modal: null,
             materialCandidateItems: [], materialCandidateLoading: false,
             materialCandidateFilter: { customer_id:null, q:"", include_inactive:false },
@@ -8355,7 +8358,7 @@
           menus() {
             const items = [
               { key: "dashboard", label: "首页" },
-              { key: "workbench", label: "订单与仓库", count: this.ordersUnfinishedTotal + this.requisitionPendingOverallTotal + this.incomingPending.length },
+              { key: "workbench", label: "订单与仓库", count: this.ordersUnfinishedTotal + this.requisitionPendingOverallTotal + this.incomingPendingTotal },
               { key: "production", label: "生产确认", count: this.productionPendingTotal },
               { key: "deliveries", label: "送货与回单", count: this.deliveriesTotal },
               { key: "finance", label: "对账开票收款" },
@@ -11362,6 +11365,31 @@
             this.deliveryDetailState = {};
             this.expandedDeliveryRows = {};
             this.supplierRequisitionPreviewLoading = false;
+            this.incomingPending = [];
+            this.incomingPendingTotal = 0;
+            this.incomingPendingLoading = false;
+            this.incomingPendingError = "";
+            this.incomingPendingAppliedPage = 1;
+            this.incomingPendingRetryPage = 1;
+            this.pages.incomingPending = 1;
+            this.incomingSelected = {};
+            this.incomingReceived = [];
+            this.incomingReceivedLoaded = false;
+            this.incomingReceivedLoading = false;
+            this.incomingReceivedError = "";
+            this.incomingHistory = [];
+            this.incomingHistoryTotal = 0;
+            this.incomingLocations = [];
+            this.incomingLocationsLoading = false;
+            this.incomingLocationsError = "";
+            this.incomingReceiptLocations = [];
+            this.incomingReceiptLocationsLoading = false;
+            this.incomingReceiptLocationsError = "";
+            this.externalIncomingPending = [];
+            this.externalIncomingDrafts = {};
+            this.externalIncomingLoading = false;
+            this.externalIncomingError = "";
+            this.externalIncomingSavingId = null;
             for (const timer of searchDebounceTimers.values()) clearTimeout(timer);
             searchDebounceTimers.clear();
             pageSearchGenerations.clear();
@@ -14834,26 +14862,89 @@
               this.showToast(`撤销生产确认失败：${this.errorMessage(error)}`, true);
             } finally { this.productionBusy = false; }
           },
-          async loadIncoming() {
-            const controller = this.beginLatestRequest("incoming:pending");
+          pendingIncomingRequestIsCurrent(controller, authGeneration, userId) {
+            return (
+              latestRequestControllers.get("incoming:pending") === controller
+              && !controller.signal.aborted
+              && authGeneration === this.authGeneration
+              && userId === (this.user?.id ?? null)
+            );
+          },
+          incomingPendingRequestParams(page) {
+            return {
+              page:Math.max(1, Number(page || 1)),
+              page_size:this.pageSize,
+            };
+          },
+          applyIncomingPendingResponse(data, {requestedPage=1, clearSelection=false}={}) {
+            const previousPage = this.incomingPendingAppliedPage;
+            this.incomingPending=(Array.isArray(data?.items) ? data.items : []).map(row=>({...row,incoming_quantity:Number(row.remaining_quantity ?? row.incoming_quantity ?? row.requisition_qty ?? row.quantity ?? 0),resolution_action:"",resolution_reason:"",receipt_location_id:Number(row.default_location_id)||null,surplus_location_id:null}));
+            this.incomingPendingTotal=Number(data?.total ?? this.incomingPending.length);
+            this.pages.incomingPending=Math.max(1, Number(data?.page || requestedPage || 1));
+            this.incomingPendingAppliedPage=this.pages.incomingPending;
+            this.incomingPendingRetryPage=this.incomingPendingAppliedPage;
+            if (this.incomingPending.some(row => row.source_type === "stock_replenishment")) this.ensureIncomingReceiptLocations();
+            if (clearSelection || previousPage !== this.incomingPendingAppliedPage) {
+              this.incomingSelected={};
+              return;
+            }
+            const pendingIds = new Set(this.incomingPending.map(row => String(row.item_id)));
+            Object.keys(this.incomingSelected).forEach(itemId => {
+              if (!pendingIds.has(String(itemId))) delete this.incomingSelected[itemId];
+            });
+          },
+          async loadIncomingPendingPage({page=null, clearSelection=false, markCache=true}={}) {
+            const requestedPage=Math.max(1, Number(page ?? this.incomingPendingAppliedPage ?? 1));
+            const controller=this.beginLatestRequest("incoming:pending");
+            const authGeneration=this.authGeneration;
+            const userId=this.user?.id ?? null;
+            this.incomingPendingLoading=true;
+            this.incomingPendingError="";
+            this.incomingPendingRetryPage=requestedPage;
+            this.invalidatePageCache("incoming");
             try {
-              const [pending, externalLoaded] = await Promise.all([
-                axios.get("/api/incoming/pending", {signal:controller.signal}),
-                this.loadExternalIncoming(),
-              ]);
-              this.incomingPending=(pending.data.items || []).map(row=>({...row,incoming_quantity:Number(row.remaining_quantity ?? row.incoming_quantity ?? row.requisition_qty ?? row.quantity ?? 0),resolution_action:"",resolution_reason:"",receipt_location_id:Number(row.default_location_id)||null,surplus_location_id:null}));
-              if (this.incomingPending.some(row => row.source_type === "stock_replenishment")) this.ensureIncomingReceiptLocations();
-              const pendingIds = new Set(this.incomingPending.map(row => row.item_id));
-              Object.keys(this.incomingSelected).forEach(itemId => {
-                if (!pendingIds.has(Number(itemId))) delete this.incomingSelected[itemId];
+              const {data}=await axios.get("/api/incoming/pending", {
+                params:this.incomingPendingRequestParams(requestedPage),
+                signal:controller.signal,
               });
-              return externalLoaded !== false;
+              if (!this.pendingIncomingRequestIsCurrent(controller, authGeneration, userId)) return false;
+              this.applyIncomingPendingResponse(data || {}, {requestedPage, clearSelection});
+              if (markCache && this.activePage === "incoming") this.markPageCache("incoming");
+              return true;
             } catch (error) {
-              if (!this.isCancelledRequest(error)) throw error;
+              if (this.isCancelledRequest(error) || !this.pendingIncomingRequestIsCurrent(controller, authGeneration, userId)) return false;
+              this.pages.incomingPending=this.incomingPendingAppliedPage;
+              this.incomingPendingError="待入库读取失败：" + this.errorMessage(error);
+              this.showToast(this.incomingPendingError, true);
               return false;
             } finally {
+              if (this.pendingIncomingRequestIsCurrent(controller, authGeneration, userId)) this.incomingPendingLoading=false;
               this.finishLatestRequest("incoming:pending", controller);
             }
+          },
+          async changeIncomingPendingPage(page) {
+            const requestedPage=Math.max(1, Number(page || 1));
+            if (requestedPage === this.incomingPendingAppliedPage && !this.incomingPendingError) return true;
+            return this.loadIncomingPendingPage({page:requestedPage, clearSelection:true});
+          },
+          async retryIncomingPendingPage() {
+            return this.loadIncomingPendingPage({
+              page:this.incomingPendingRetryPage,
+              clearSelection:this.incomingPendingRetryPage !== this.incomingPendingAppliedPage,
+            });
+          },
+          async loadIncoming() {
+            const [pendingLoaded, externalLoaded]=await Promise.all([
+              this.loadIncomingPendingPage({
+                page:this.incomingPendingAppliedPage,
+                clearSelection:false,
+                markCache:false,
+              }),
+              this.loadExternalIncoming(),
+            ]);
+            if (pendingLoaded === false) return false;
+            if (externalLoaded !== false && this.activePage === "incoming") this.markPageCache("incoming");
+            return externalLoaded !== false;
           },
           externalIncomingDraftKey(purchaseId, purchaseItemId) {
             return `${purchaseId}:${purchaseItemId}`;
@@ -14975,7 +15066,13 @@
             return this.loadIncoming();
           },
           async refreshIncomingAfterWrite() {
-            const tasks = [this.loadIncoming(), this.loadKpi()];
+            const tasks = [
+              this.loadIncomingPendingPage({
+                page:this.incomingPendingAppliedPage,
+                clearSelection:false,
+              }),
+              this.loadKpi(),
+            ];
             if (this.incomingReceivedLoaded) tasks.push(this.loadIncomingReceived({force:true}));
             await Promise.all(tasks);
           },
@@ -15099,12 +15196,16 @@
             try {
               const url=row.receipt_item_id ? `/api/incoming/receipt-items/${row.receipt_item_id}/revert` : `/api/incoming/revert/${row.item_id}`;
               await axios.put(url,{});
+              const pendingRefresh=this.loadIncomingPendingPage({
+                page:this.incomingPendingAppliedPage,
+                clearSelection:false,
+              });
               if (this.incomingTab === 'history') {
-                await Promise.all([this.loadIncomingHistory(), this.loadKpi()]);
+                await Promise.all([pendingRefresh, this.loadIncomingHistory(), this.loadKpi()]);
               } else if (this.incomingTab === 'received') {
-                await Promise.all([this.loadIncomingReceived({force:true}), this.loadKpi()]);
+                await Promise.all([pendingRefresh, this.loadIncomingReceived({force:true}), this.loadKpi()]);
               } else {
-                await Promise.all([this.loadIncoming(), this.loadKpi()]);
+                await Promise.all([pendingRefresh, this.loadKpi()]);
               }
               this.showToast("已撤回来料入库");
             } catch(error) { this.showToast(this.errorMessage(error),true); }

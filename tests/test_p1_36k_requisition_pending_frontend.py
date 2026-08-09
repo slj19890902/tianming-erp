@@ -48,7 +48,7 @@ def test_pending_page_uses_server_totals_and_current_page_selection() -> None:
     assert "changeRequisitionPendingPage" in page
     assert (
         "this.ordersUnfinishedTotal + this.requisitionPendingOverallTotal + "
-        "this.incomingPending.length"
+        "this.incomingPendingTotal"
     ) in INDEX
     assert "filteredRequisitionPending()" in INDEX
     assert "return this.requisitionPending;" in _method_body(

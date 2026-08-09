@@ -60,7 +60,10 @@ def test_older_pending_response_cannot_hide_or_replace_latest_request(
     tmp_path: Path,
 ) -> None:
     helpers = _between("function beginLatestRequest(key)", "function createIdempotencyKey()")
-    load_pending = _between("async function loadPending()", "async function loadReceived")
+    load_pending = _between(
+        "async function loadPending({page = state.pendingPage || 1} = {})",
+        "async function loadReceived",
+    )
     harness = f"""
 class FakeAbortController {{
   constructor() {{ this.signal = {{aborted:false}}; }}

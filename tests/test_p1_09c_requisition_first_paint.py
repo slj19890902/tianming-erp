@@ -20,7 +20,8 @@ def test_requisition_cold_entry_requests_only_pending_business_data() -> None:
     assert 'if (page === "requisition") await requirePageLoad(this.loadRequisition());' in load_page
     assert "loadCustomerOptions(force)" not in load_page.split('if (page === "requisition")')[1].split('if (page === "incoming")')[0]
     assert "loadMaterials()" not in load_page.split('if (page === "requisition")')[1].split('if (page === "incoming")')[0]
-    assert 'axios.get("/api/requisition/pending", { signal:controller.signal })' in requisition_load
+    assert 'axios.get("/api/requisition/pending", {' in requisition_load
+    assert "params:this.requisitionPendingRequestParams(requestedPage, requestedSupplier)" in requisition_load
     assert "/api/requisition/reported-documents" not in requisition_load
     assert "/api/requisition/merge-suggestions" not in requisition_load
     assert "/api/requisition/stock-policies" not in requisition_load

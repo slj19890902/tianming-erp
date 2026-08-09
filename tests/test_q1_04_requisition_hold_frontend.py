@@ -19,7 +19,7 @@ def _block(start: str, end: str) -> str:
 def test_requisition_has_three_clear_tabs_and_batch_hold_entry() -> None:
     page = _block("<template v-else-if=\"activePage === 'requisition'\">", "<template v-else-if=\"activePage === 'incoming'\">")
 
-    assert "待报料 {{ requisitionPending.length }}" in page
+    assert "待报料 {{ requisitionPendingOverallTotal }}" in page
     assert "等候报料 {{ requisitionHoldSummary.total }}" in page
     assert "（到期 {{ requisitionHoldSummary.due_count }}）" in page
     assert "已报料/已入库" in page
@@ -100,7 +100,7 @@ def test_hold_requests_keep_batch_failures_visible_and_use_versioned_actions() -
     assert "失败明细仍保留在待报料" in methods
     assert "await this.loadRequisition()" in methods
     assert "await Promise.all([this.loadRequisition(), this.loadRequisitionHolds()])" not in methods
-    save_modal = _block("async saveModal()", "async dispatchDelivery(row)")
+    save_modal = _block("async saveModal()", "async dispatchDelivery(row, options = {})")
     assert 'if (this.modal.type === "requisitionHold")' in save_modal
     assert "await this.saveRequisitionHold()" in save_modal
     assert "return true;" in save_modal

@@ -7,6 +7,7 @@ from contextlib import nullcontext
 from datetime import date, datetime
 from decimal import Decimal
 from threading import Lock
+from typing import Annotated
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -73,6 +74,7 @@ from app.models.warehouse_inventory import (
 )
 from app.services.history_orders import (
     build_display_registry,
+    build_display_registry_for_order_ids,
     display_order_number,
     is_history_order_number,
 )
@@ -6601,6 +6603,9 @@ def release_requisition_hold(
 def _pending_requisition_candidates(
     db: Session,
     user: User,
+    *,
+    merge_group_ids: set[int] | None = None,
+    order_item_ids: set[int] | None = None,
 ) -> tuple[list[Requisition], list[tuple[OrderItem, Order, Customer, Product]]]:
     allowed = _allowed_customer_ids(user, db)
     merge_group_query = (
@@ -6609,6 +6614,10 @@ def _pending_requisition_candidates(
         .where(Requisition.status == "merged_pending")
         .order_by(Requisition.created_at.desc(), Requisition.id.desc())
     )
+    if merge_group_ids is not None:
+        merge_group_query = merge_group_query.where(
+            Requisition.id.in_(merge_group_ids)
+        )
     merge_groups = db.scalars(
         _apply_requisition_scope(merge_group_query, user, db)
     ).all()
@@ -6646,6 +6655,8 @@ def _pending_requisition_candidates(
         base_query = base_query.where(~OrderItem.id.in_(merged_order_item_ids))
     if held_order_item_ids:
         base_query = base_query.where(~OrderItem.id.in_(held_order_item_ids))
+    if order_item_ids is not None:
+        base_query = base_query.where(OrderItem.id.in_(order_item_ids))
     if allowed is not None:
         base_query = base_query.where(Order.customer_id.in_(allowed))
     rows = db.execute(
@@ -6736,12 +6747,13 @@ def _dashboard_pending_requisition_item_is_eligible(
     )
 
 
-def dashboard_pending_requisition_rows(db: Session, user: User) -> list[dict]:
-    """Return the authoritative pending identities needed by the dashboard.
+def _pending_requisition_eligible_rows(db: Session, user: User) -> list[dict]:
+    """Return authoritative eligible identities before full row decoration.
 
-    This deliberately shares the public pending list's candidate scope and live
-    quantity gates, but does not build display materials, inventory previews,
-    location payloads, or the historical-order registry.
+    P1-36J uses the public subset for the dashboard. P1-36K also keeps the
+    canonical supplier label privately so filtering and pagination can happen
+    before display materials, inventory previews, locations, and BOM payloads
+    are constructed.
     """
 
     merge_groups, rows = _pending_requisition_candidates(db, user)
@@ -6819,6 +6831,10 @@ def dashboard_pending_requisition_rows(db: Session, user: User) -> list[dict]:
                 "product_code": " / ".join(_unique_text(product_codes)),
                 "delivery_date": None,
                 "created_at": None,
+                "_supplier_name": (
+                    str(group.supplier_name or "").strip()
+                    or "未设置供应商"
+                ),
             }
         )
 
@@ -6853,19 +6869,58 @@ def dashboard_pending_requisition_rows(db: Session, user: User) -> list[dict]:
                 # The public pending row does not expose created_at.  Keeping the
                 # same null fallback preserves dashboard todo ordering exactly.
                 "created_at": None,
+                "_supplier_name": str(
+                    item.snapshot_supplier_name or "未设置供应商"
+                ).strip(),
             }
         )
     return projected
 
 
-@router.get("/pending")
-def pending_requisitions(
-    db: Session = Depends(get_db),
-    _user: User = Depends(can_read),
+def dashboard_pending_requisition_rows(db: Session, user: User) -> list[dict]:
+    """Return the P1-36J dashboard contract without pagination-only metadata."""
+
+    return [
+        {key: value for key, value in row.items() if key != "_supplier_name"}
+        for row in _pending_requisition_eligible_rows(db, user)
+    ]
+
+
+def _pending_requisitions_full_payload(
+    db: Session,
+    user: User,
+    *,
+    merge_group_ids: set[int] | None = None,
+    order_item_ids: set[int] | None = None,
 ) -> dict:
-    user = _user
-    registry = build_display_registry(db)
-    merge_groups, rows = _pending_requisition_candidates(db, user)
+    merge_groups, rows = _pending_requisition_candidates(
+        db,
+        user,
+        merge_group_ids=merge_group_ids,
+        order_item_ids=order_item_ids,
+    )
+    if merge_group_ids is None and order_item_ids is None:
+        registry = build_display_registry(db)
+    else:
+        merge_rows_by_group = _pending_merge_member_rows(
+            db,
+            [int(group.id) for group in merge_groups],
+        )
+        history_order_ids = {
+            int(order.id)
+            for _requisition_item, _item, order, _customer, _product in (
+                group_row
+                for group_rows in merge_rows_by_group.values()
+                for group_row in group_rows
+            )
+            if is_history_order_number(order.order_number)
+        }
+        history_order_ids.update(
+            int(order.id)
+            for _item, order, _customer, _product in rows
+            if is_history_order_number(order.order_number)
+        )
+        registry = build_display_registry_for_order_ids(db, history_order_ids)
     reservation_map = active_finished_reservations_by_item_ids(
         db, [item.id for item, *_ in rows]
     )
@@ -7288,6 +7343,117 @@ def pending_requisitions(
                 supplier_counts.items(), key=lambda entry: (-entry[1], entry[0])
             )
         ],
+    }
+
+
+def _pending_supplier_name(row: dict) -> str:
+    if "_supplier_name" in row:
+        return str(row.get("_supplier_name") or "").strip()
+    value = (
+        row.get("supplier_name")
+        or row.get("snapshot_supplier_name")
+        or "未设置供应商"
+    )
+    return str(value).strip()
+
+
+def _pending_supplier_counts(rows: list[dict]) -> list[dict]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        supplier = _pending_supplier_name(row)
+        counts[supplier] = counts.get(supplier, 0) + 1
+    return [
+        {"supplier_name": supplier, "count": count}
+        for supplier, count in sorted(
+            counts.items(), key=lambda entry: (-entry[1], entry[0])
+        )
+    ]
+
+
+@router.get("/pending")
+def pending_requisitions(
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_read),
+    page: Annotated[int | None, Query(ge=1)] = None,
+    page_size: Annotated[int | None, Query(ge=1, le=200)] = None,
+    supplier_name: Annotated[str | None, Query(max_length=200)] = None,
+) -> dict:
+    user = _user
+    if page is None and page_size is None and supplier_name is None:
+        return _pending_requisitions_full_payload(db, user)
+
+    eligible_rows = _pending_requisition_eligible_rows(db, user)
+    overall_total = len(eligible_rows)
+    supplier_counts = _pending_supplier_counts(eligible_rows)
+    normalized_supplier_name = (
+        str(supplier_name).strip() if supplier_name is not None else None
+    )
+    filtered_rows = (
+        [
+            row
+            for row in eligible_rows
+            if _pending_supplier_name(row) == normalized_supplier_name
+        ]
+        if normalized_supplier_name is not None
+        else eligible_rows
+    )
+    total = len(filtered_rows)
+    resolved_page_size = min(max(int(page_size or 25), 1), 200)
+    requested_page = max(int(page or 1), 1)
+    last_page = max(1, (total + resolved_page_size - 1) // resolved_page_size)
+    resolved_page = min(requested_page, last_page)
+    start = (resolved_page - 1) * resolved_page_size
+    selected_rows = filtered_rows[start : start + resolved_page_size]
+
+    selected_merge_group_ids = {
+        int(row["merge_group_id"])
+        for row in selected_rows
+        if row.get("is_merge_group")
+    }
+    selected_order_item_ids = {
+        int(row["order_item_id"])
+        for row in selected_rows
+        if not row.get("is_merge_group")
+    }
+    if selected_rows:
+        page_payload = _pending_requisitions_full_payload(
+            db,
+            user,
+            merge_group_ids=selected_merge_group_ids,
+            order_item_ids=selected_order_item_ids,
+        )
+        decorated_by_identity = {
+            (
+                "merge",
+                int(row.get("merge_group_id") or row.get("id")),
+            )
+            if row.get("is_merge_group")
+            else ("item", int(row["item_id"])): row
+            for row in page_payload["items"]
+        }
+        items = [
+            decorated_by_identity[identity]
+            for row in selected_rows
+            if (
+                identity := (
+                    ("merge", int(row["merge_group_id"]))
+                    if row.get("is_merge_group")
+                    else ("item", int(row["order_item_id"]))
+                )
+            )
+            in decorated_by_identity
+        ]
+    else:
+        items = []
+
+    return {
+        "items": items,
+        "total": total,
+        "overall_total": overall_total,
+        "page": resolved_page,
+        "page_size": resolved_page_size,
+        "auto_released_hold_ids": [],
+        "supplier_counts": supplier_counts,
     }
 
 

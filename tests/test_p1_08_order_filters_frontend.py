@@ -31,14 +31,17 @@ def test_p1_08_orders_use_independent_scope_stage_and_order_customers() -> None:
 
 def test_p1_08_filter_changes_return_to_first_page_and_can_be_cleared() -> None:
     for marker in (
+        "async runExplicitPageListLoad(page, {resetPage=false, load=null} = {})",
+        "if (resetPage && this.pages[page] != null) this.pages[page] = 1;",
         "async refreshOrderFilters({ refreshCustomers=false } = {})",
-        "this.pages.orders = 1;",
+        'return this.runExplicitPageListLoad("orders", {',
+        "resetPage:true,",
         "async applyOrderScope(scope)",
         "async applyOrderStage()",
         "async removeOrderFilter(key)",
         'this.filters.orderScope = "active";',
         'this.filters.orderStage = "";',
-        "return Promise.all([this.loadOrderCustomerOptions(), this.loadOrders()]);",
+        "load:async() => Promise.all([this.loadOrderCustomerOptions(), this.loadOrders()]),",
     ):
         assert marker in INDEX
 

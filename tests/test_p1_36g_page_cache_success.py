@@ -36,14 +36,20 @@ def test_page_cache_is_written_only_after_required_loaders_succeed() -> None:
         "refreshCurrent() {",
     )
     search = _method_body("queuePageSearch(page) {", "async go(page) {")
+    explicit = _method_body(
+        "async runExplicitPageListLoad(page, {resetPage=false, load=null} = {}) {",
+        "queuePageSearch(page) {",
+    )
 
     assert "if (requestIsCurrent()) this.invalidatePageCache(page);" in page
     assert "if (await promise === false) pageSucceeded = false;" in page
-    assert "if (requestIsCurrent() && pageSucceeded) this.markPageCache(page);" in page
-    assert "return requestIsCurrent() && pageSucceeded;" in page
+    assert "if (requestIsCurrent() && searchGenerationIsCurrent() && pageSucceeded) this.markPageCache(page);" in page
+    assert "return requestIsCurrent() && searchGenerationIsCurrent() && pageSucceeded;" in page
     assert "return true;" in page.split("if (!force && this.pageCacheFresh(page))", 1)[1]
-    assert "if (result !== false && currentCachePage === cachePage)" in search
-    assert "this.markPageCache(" in search
+    assert "await this.runExplicitPageListLoad(page, {resetPage:true})" in search
+    assert "const succeeded = Array.isArray(result)" in explicit
+    assert "succeeded && this.pageSearchIsCurrent(" in explicit
+    assert "this.markPageCache(cachePage)" in explicit
 
 
 def test_top_level_loaders_expose_stable_success_and_failure_results() -> None:
@@ -140,12 +146,40 @@ function makeVm(loader) {{
 
 
 def test_debounced_search_does_not_cache_failed_or_replaced_results(tmp_path: Path) -> None:
+    cancel_body = _method_body("cancelQueuedPageSearch(page) {", "pageSearchCacheKey(page) {")
+    cache_key_body = _method_body("pageSearchCacheKey(page) {", "pageSearchGenerationKey(page) {")
+    generation_key_body = _method_body(
+        "pageSearchGenerationKey(page) {", "currentPageSearchGeneration(page) {"
+    )
+    current_generation_body = _method_body(
+        "currentPageSearchGeneration(page) {", "advancePageSearchGeneration(page) {"
+    )
+    advance_generation_body = _method_body(
+        "advancePageSearchGeneration(page) {", "pageSearchIsCurrent("
+    )
+    current_body = _method_body(
+        "pageSearchIsCurrent(page, cachePage, authGeneration, userId, generation, context={}) {",
+        "async runExplicitPageListLoad(",
+    )
+    explicit_body = _method_body(
+        "async runExplicitPageListLoad(page, {resetPage=false, load=null} = {}) {",
+        "queuePageSearch(page) {",
+    )
     search_body = _method_body("queuePageSearch(page) {", "async go(page) {")
     script = f"""
 const AsyncFunction = Object.getPrototypeOf(async function(){{}}).constructor;
+const FunctionCtor = Function;
 const expect = (value, message) => {{ if (!value) throw new Error(message); }};
+const cancelBody = {json.dumps(cancel_body, ensure_ascii=False)};
+const cacheKeyBody = {json.dumps(cache_key_body, ensure_ascii=False)};
+const generationKeyBody = {json.dumps(generation_key_body, ensure_ascii=False)};
+const currentGenerationBody = {json.dumps(current_generation_body, ensure_ascii=False)};
+const advanceGenerationBody = {json.dumps(advance_generation_body, ensure_ascii=False)};
+const currentBody = {json.dumps(current_body, ensure_ascii=False)};
+const explicitBody = {json.dumps(explicit_body, ensure_ascii=False)};
 const searchBody = {json.dumps(search_body, ensure_ascii=False)};
 globalThis.searchDebounceTimers = new Map();
+globalThis.pageSearchGenerations = new Map();
 let scheduled = null;
 globalThis.setTimeout = callback => {{ scheduled = callback; return 1; }};
 globalThis.clearTimeout = () => {{}};
@@ -154,23 +188,36 @@ globalThis.clearTimeout = () => {{}};
   let result = false;
   const vm = {{
     activePage: "customers",
+    authGeneration: 0,
+    user: {{id:1}},
     pages: {{customers: 2}},
     marks: [], invalidations: [], toasts: [],
     invalidatePageCache(page) {{ this.invalidations.push(page); }},
     markPageCache(page) {{ this.marks.push(page); }},
-    loadCustomers: async () => result,
-    loadProducts: async () => true,
-    loadOrders: async () => true,
+    loadCustomers: async function() {{ this.cancelQueuedPageSearch("customers"); return result; }},
+    loadProducts: async function() {{ this.cancelQueuedPageSearch("products"); return true; }},
+    loadOrders: async function() {{ this.cancelQueuedPageSearch("orders"); return result; }},
     isCancelledRequest: () => false,
     errorMessage: error => String(error?.message || error),
     showToast(message) {{ this.toasts.push(message); }},
   }};
+  vm.cancelQueuedPageSearch = new FunctionCtor("page", cancelBody).bind(vm);
+  vm.pageSearchCacheKey = new FunctionCtor("page", cacheKeyBody).bind(vm);
+  vm.pageSearchGenerationKey = new FunctionCtor("page", generationKeyBody).bind(vm);
+  vm.currentPageSearchGeneration = new FunctionCtor("page", currentGenerationBody).bind(vm);
+  vm.advancePageSearchGeneration = new FunctionCtor("page", advanceGenerationBody).bind(vm);
+  vm.pageSearchIsCurrent = new FunctionCtor(
+    "page", "cachePage", "authGeneration", "userId", "generation", "context={{}}", currentBody
+  ).bind(vm);
+  vm.runExplicitPageListLoad = new AsyncFunction(
+    "page", "{{resetPage=false, load=null}}={{}}", explicitBody
+  ).bind(vm);
   vm.queuePageSearch = new AsyncFunction("page", searchBody).bind(vm);
 
   vm.queuePageSearch("customers");
   await scheduled();
   expect(vm.marks.length === 0, "failed search was cached");
-  expect(vm.invalidations.join(",") === "customers", "search did not invalidate old cache");
+  expect(vm.invalidations.length >= 1 && vm.invalidations.every(page => page === "customers"), "search did not invalidate the correct old cache");
 
   result = true;
   vm.queuePageSearch("customers");
@@ -187,10 +234,9 @@ globalThis.clearTimeout = () => {{}};
   vm.pages.orders = 2;
   vm.invalidations = [];
   result = false;
-  vm.loadOrders = async () => result;
   vm.queuePageSearch("orders");
   await scheduled();
-  expect(vm.invalidations.join(",") === "orders_legacy", "legacy search cleared the wrong cache key");
+  expect(vm.invalidations.length >= 1 && vm.invalidations.every(page => page === "orders_legacy"), "legacy search cleared the wrong cache key");
   expect(vm.marks.length === 1, "failed legacy search restored its cache timestamp");
 }})().catch(error => {{ console.error(error); process.exit(1); }});
 """

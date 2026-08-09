@@ -94,7 +94,10 @@ def test_supplier_search_matches_historical_aliases(tmp_path: Path) -> None:
     node = shutil.which("node")
     if node is None:
         raise AssertionError("Node.js is required for the supplier alias search regression")
-    body = _method_body("filteredSuppliers() {", "materialSupplierSelectOptions() {")
+    body = _method_body(
+        "filteredSuppliers() {",
+        "activeExternalPackagingCategoryOptions() {",
+    )
     script = f"""
 const vm = {{
   supplierSearch: "旧供应商简称",

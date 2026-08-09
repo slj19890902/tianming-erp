@@ -111,13 +111,20 @@ def test_list_searches_are_debounced_and_old_requests_are_cancelled() -> None:
         "materials:list",
         "orders:list",
     ):
-        direct_call = f'beginLatestRequest("{request_key}")' in INDEX
-        named_call = re.search(
+        literal_begin = f'beginLatestRequest("{request_key}")'
+        variable_begin = re.search(
             rf'const requestKey = "{re.escape(request_key)}";\s*'
-            r'const controller = this\.beginLatestRequest\(requestKey\);',
+            r"const controller = this\.beginLatestRequest\(requestKey\)",
             INDEX,
         )
-        assert direct_call or named_call, f"missing latest-request guard: {request_key}"
+        assert literal_begin in INDEX or variable_begin is not None
+        assert (
+            f'finishLatestRequest("{request_key}", controller)' in INDEX
+            or (
+                variable_begin is not None
+                and "finishLatestRequest(requestKey, controller)" in INDEX
+            )
+        )
     assert "signal:controller.signal" in INDEX
 
 

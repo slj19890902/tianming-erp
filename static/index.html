@@ -7279,7 +7279,7 @@
       const app = createApp({
         data() {
           return {
-            user: null, loading: false, loginError: "", activePage: "dashboard", uiModeSaving: false, authGeneration: 0,
+            user: null, loading: false, loginError: "", activePage: "dashboard", uiModeSaving: false, authGeneration: 0, loginAttemptSequence: 0, pageLoadSequence: 0,
             orderNextStepGuide: {visible:false, orderNo:"", count:0, source:""},
             requisitionNextStepGuide: {visible:false, documentNo:"", count:0, source:""},
             incomingNextStepGuide: {visible:false, count:0, pendingBalance:false},
@@ -11215,14 +11215,19 @@
               const initialPage = this.initialPageFromLocation();
               this.activePage = initialPage;
               if (!this.pageAllowed(this.activePage)) this.activePage = this.firstAllowedPage();
-              await this.loadSuppliers();
-              await this.loadPage(this.activePage, { force:true });
-              if (this.user.must_change_password) this.openChangePassword(true);
+              if (!await this.loadInitialPageResources()) return;
+              if (this.user?.must_change_password) this.openChangePassword(true);
             } catch (error) {
               if (error?.response?.status !== 401) this.loginError = this.errorMessage(error);
             }
           },
           async login() {
+            const requestSequence = ++this.loginAttemptSequence;
+            const requestAuthGeneration = this.authGeneration;
+            const requestIsCurrent = () => (
+              requestSequence === this.loginAttemptSequence
+              && requestAuthGeneration === this.authGeneration
+            );
             this.loading = true; this.loginError = "";
             try {
               await axios.post("/api/auth/login", this.loginForm);
@@ -11237,11 +11242,14 @@
               const initialPage = this.initialPageFromLocation();
               this.activePage = initialPage;
               if (!this.pageAllowed(this.activePage)) this.activePage = this.firstAllowedPage();
-              await this.loadSuppliers();
-              await this.loadPage(this.activePage, { force:true });
-              if (this.user.must_change_password) this.openChangePassword(true, currentPassword);
-            } catch (error) { this.loginError = this.errorMessage(error); }
-            finally { this.loading = false; }
+              if (!await this.loadInitialPageResources()) return;
+              if (this.user?.must_change_password) this.openChangePassword(true, currentPassword);
+            } catch (error) {
+              if (requestIsCurrent()) this.loginError = this.errorMessage(error);
+            }
+            finally {
+              if (requestIsCurrent()) this.loading = false;
+            }
           },
           async logout() {
             this.authGeneration += 1;
@@ -11258,6 +11266,8 @@
             }
           },
           resetPagePerformanceState() {
+            this.loginAttemptSequence += 1;
+            this.pageLoadSequence += 1;
             this.pageCacheUpdatedAt = {};
             for (const controller of latestRequestControllers.values()) controller.abort();
             latestRequestControllers.clear();
@@ -11510,8 +11520,33 @@
             }
             return this.go(target);
           },
-          async loadPage(page, { force=false } = {}) {
-            if (!force && this.pageCacheFresh(page)) return;
+          async loadInitialPageResources() {
+            const requestAuthGeneration = this.authGeneration;
+            const requestUserId = this.user?.id ?? null;
+            const supplierPromise = this.loadSuppliers();
+            const pagePromise = this.loadPage(this.activePage, {
+              force:true,
+              supplierPromise,
+            });
+            await Promise.all([supplierPromise, pagePromise]);
+            return (
+              requestAuthGeneration === this.authGeneration
+              && requestUserId === (this.user?.id ?? null)
+            );
+          },
+          async loadPage(page, { force=false, supplierPromise=null } = {}) {
+            const requestSequence = ++this.pageLoadSequence;
+            const requestAuthGeneration = this.authGeneration;
+            const requestUserId = this.user?.id ?? null;
+            const requestIsCurrent = () => (
+              requestSequence === this.pageLoadSequence
+              && requestAuthGeneration === this.authGeneration
+              && requestUserId === (this.user?.id ?? null)
+            );
+            if (!force && this.pageCacheFresh(page)) {
+              if (requestIsCurrent()) this.loading = false;
+              return;
+            }
             this.loading = true;
             try {
               if (page === "dashboard") await this.loadOverview();
@@ -11525,7 +11560,9 @@
                 await this.loadCustomerOptions(force);
                 if (this.productTab === "products" && this.selectedProductCustomer) await this.loadProducts();
                 if (this.productTab === "materials") await this.loadMaterials();
-                if (this.productTab === "suppliers" && this.canAdmin) await this.loadSuppliers(true);
+                if (this.productTab === "suppliers" && this.canAdmin) {
+                  await (supplierPromise || this.loadSuppliers(true));
+                }
               }
               if (page === "orders") await Promise.all([this.loadCustomerOptions(force), this.loadOrderCustomerOptions(), this.loadOrders()]);
               if (page === "orders_legacy") await Promise.all([this.loadCustomerOptions(force), this.loadOrders()]);
@@ -11538,9 +11575,13 @@
               if (page === "audit") await this.loadAuditLogs();
               if (page === "system") await this.loadSystem({ force });
               if (page === "permissions") await this.loadPermissionUsers();
-              this.markPageCache(page);
-            } catch (error) { this.showToast(this.errorMessage(error), true); }
-            finally { this.loading = false; }
+              if (requestIsCurrent()) this.markPageCache(page);
+            } catch (error) {
+              if (requestIsCurrent()) this.showToast(this.errorMessage(error), true);
+            }
+            finally {
+              if (requestIsCurrent()) this.loading = false;
+            }
           },
           refreshCurrent() {
             if (this.activePage === "warehouse") return this.refreshWarehouseFrame();

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -33,9 +34,17 @@ def _run_node(source: str, tmp_path: Path, name: str) -> None:
 def test_supplier_save_uses_shared_lock_and_disables_both_footer_actions() -> None:
     footer_start = INDEX.index('<div class="modal-foot">')
     footer = INDEX[footer_start : INDEX.index('</div>\n        </div>\n      </div>', footer_start)]
-    save = _method_body("async saveModal() {", "async dispatchDelivery(row) {")
+    save = _method_body(
+        "async saveModal() {", "async dispatchDelivery(row, options = {}) {"
+    )
 
-    assert '<button v-if="!isForcedPassword" class="btn" :disabled="masterSavePending"' in footer
+    cancel_button = re.search(
+        r'<button v-if="!isForcedPassword" class="btn" :disabled="([^"]+)" '
+        r'@click="closeModal">',
+        footer,
+    )
+    assert cancel_button is not None
+    assert "masterSavePending" in cancel_button.group(1)
     assert "['customer','product','material','supplier'].includes(modal?.type) && masterSavePending ? '保存中…'" in footer
     assert 'const masterSaveEntity = ["customer","product","material","supplier"].includes(this.modal?.type)' in save
     assert 'masterSaveEntity === "supplier" ? "供应商"' in save
@@ -52,7 +61,9 @@ def test_supplier_list_returns_explicit_current_request_result() -> None:
 
 
 def test_supplier_save_runtime_blocks_duplicate_and_freezes_target(tmp_path: Path) -> None:
-    save_body = _method_body("async saveModal() {", "async dispatchDelivery(row) {")
+    save_body = _method_body(
+        "async saveModal() {", "async dispatchDelivery(row, options = {}) {"
+    )
     script = f"""
 const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
 const requests=[];let releaseBase;const notices=[];
@@ -92,9 +103,12 @@ const expect=(value,message)=>{{if(!value)throw new Error(message)}};
 
 def test_supplier_refresh_failure_reports_write_success_without_repeat(tmp_path: Path) -> None:
     refresh_body = _method_body(
-        "handleMasterSaveRefreshFailure(entity, error) {", "async saveModal() {"
+        "handleMasterSaveRefreshFailure(entity, error) {",
+        "async saveNewOrder(orderPayload) {",
     )
-    save_body = _method_body("async saveModal() {", "async dispatchDelivery(row) {")
+    save_body = _method_body(
+        "async saveModal() {", "async dispatchDelivery(row, options = {}) {"
+    )
     script = f"""
 const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
 let writes=0,closed=0;const notices=[];
@@ -120,7 +134,9 @@ const expect=(value,message)=>{{if(!value)throw new Error(message)}};
 
 
 def test_supplier_status_partial_failure_does_not_invite_duplicate_create(tmp_path: Path) -> None:
-    save_body = _method_body("async saveModal() {", "async dispatchDelivery(row) {")
+    save_body = _method_body(
+        "async saveModal() {", "async dispatchDelivery(row, options = {}) {"
+    )
     script = f"""
 const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
 let writes=0,closed=0,refreshes=0;const notices=[];

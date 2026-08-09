@@ -1840,7 +1840,8 @@ def _order_response(
             if frozen_estimated_cost is not None:
                 cost_reference.update(
                     serialize_order_item_estimated_cost_snapshot(
-                        frozen_estimated_cost
+                        frozen_estimated_cost,
+                        sale_amount=item.subtotal,
                     )
                 )
             else:
@@ -6171,7 +6172,10 @@ def update_order_item_estimated_cost(
         resource="OrderItemEstimatedCost",
     )
     db.commit()
-    return serialize_order_item_estimated_cost_snapshot(snapshot)
+    return serialize_order_item_estimated_cost_snapshot(
+        snapshot,
+        sale_amount=item.subtotal,
+    )
 
 
 @router.put("/items/{item_id}")

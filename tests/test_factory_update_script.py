@@ -36,9 +36,9 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.71"
-    assert APP_VERSION_NAME == "工厂家庭候选无损同步"
-    assert APP_BUILD_DATE == "2026-08-08"
+    assert APP_VERSION == "v0.22.72"
+    assert APP_VERSION_NAME == "订单到生产送货视觉引导与栈板循环"
+    assert APP_BUILD_DATE == "2026-08-09"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
     assert metadata["external_acceptance_required"] is True
@@ -50,27 +50,27 @@ def test_factory_update_reports_current_release_version() -> None:
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
     assert any(
-        "本次更新｜" in item and "跨客户通用" in item and "候选材质" in item
+        "本次更新｜" in item and "零散货整托合并" in item and "空栈板" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "已报料" in item and "同一条明细" in item
+        "本次更新｜" in item and "订单保存后" in item and "报料" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "受控整栈板移库" in item and "印刷挂板" in item
+        "本次更新｜" in item and "来料实收后" in item and "生产提示" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "价格历史" in item and "阶梯走势" in item
+        "本次更新｜" in item and "生产确认成功后" in item and "直接待送" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "无成本权限账号" in item
+        "如何验证｜" in item and "同客户同库存类型" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "v0.22.71" in item
+        "如何验证｜" in item and "v0.22.72" in item
         for item in current_release
     )
     assert any(

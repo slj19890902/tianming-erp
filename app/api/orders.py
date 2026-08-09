@@ -62,6 +62,9 @@ from app.models.order import Order, OrderItem
 from app.models.order_estimated_cost_snapshot import (
     SalesOrderItemEstimatedCostSnapshot,
 )
+from app.models.order_material_cost_snapshot import (
+    SalesOrderItemMaterialCostSnapshot,
+)
 from app.models.product import Product
 from app.models.production import ProductionCompletion
 from app.models.product_bom import (
@@ -100,7 +103,11 @@ from app.services.order_numbering import (
     reserve_next_order_number,
 )
 from app.services.order_document_trace import build_order_item_document_trace
-from app.services.order_material_cost import estimate_order_item_material_cost
+from app.services.order_material_cost import (
+    MaterialCostEstimateContext,
+    build_material_cost_estimate_context,
+    estimate_order_item_material_cost,
+)
 from app.services.order_material_cost_snapshot import (
     freeze_order_item_material_cost,
     get_latest_order_item_material_cost_snapshot,
@@ -178,7 +185,10 @@ from app.services.order_external_packaging import (
     freeze_order_item_external_components,
     get_order_item_external_components_by_item_ids,
 )
-from app.services.external_packaging_purchase import get_external_purchase_summary
+from app.services.external_packaging_purchase import (
+    get_external_purchase_summaries_by_order_ids,
+    get_external_purchase_summary,
+)
 from app.services.composite_bom_workflow import (
     CompositeBomWorkflowError,
     append_component_demand_adjustment,
@@ -1705,15 +1715,28 @@ def _order_response(
     external_components_by_item_id: dict[int, list[dict]] | None = None,
     business_projection: dict | None = None,
     active_holds_by_item_id: dict[int, RequisitionHold] | None = None,
+    finished_reservations_by_item_id: dict[int, int] | None = None,
+    external_purchase_summaries_by_order_id: dict[int, dict] | None = None,
+    frozen_material_costs_by_item_id: dict[
+        int, SalesOrderItemMaterialCostSnapshot
+    ]
+    | None = None,
+    frozen_estimated_costs_by_item_id: dict[
+        int, SalesOrderItemEstimatedCostSnapshot
+    ]
+    | None = None,
+    material_cost_context: MaterialCostEstimateContext | None = None,
 ) -> dict:
     item_ids = [item.id for item in order.items]
-    reservation_map = (
-        active_finished_reservations_by_item_ids(
-            db, item_ids
+    reservation_map = finished_reservations_by_item_id
+    if reservation_map is None:
+        reservation_map = (
+            active_finished_reservations_by_item_ids(
+                db, item_ids
+            )
+            if db is not None
+            else {}
         )
-        if db is not None
-        else {}
-    )
     active_hold_map = active_holds_by_item_id
     if active_hold_map is None:
         active_hold_map = (
@@ -1751,11 +1774,19 @@ def _order_response(
     has_external_requirements = any(
         external_components_by_item_id.get(item.id) for item in order.items
     )
-    external_purchase_summary = (
-        get_external_purchase_summary(db, int(order.id))
-        if db is not None and has_external_requirements
-        else None
-    )
+    if not has_external_requirements:
+        external_purchase_summary = None
+    elif external_purchase_summaries_by_order_id is not None:
+        external_purchase_summary = external_purchase_summaries_by_order_id.get(
+            int(order.id),
+            {"status": "pending", "purchase_numbers": []},
+        )
+    else:
+        external_purchase_summary = (
+            get_external_purchase_summary(db, int(order.id))
+            if db is not None
+            else None
+        )
     if business_projection is None and db is not None:
         business_projection = build_order_business_statuses(
             db,
@@ -1795,20 +1826,24 @@ def _order_response(
         "items": [],
     }
     may_view_cost = has_permission(user, "cost.view")
-    frozen_cost_by_item_id = (
-        get_latest_order_item_material_cost_snapshots_by_items(
-            db, list(order.items)
+    frozen_cost_by_item_id = frozen_material_costs_by_item_id
+    if frozen_cost_by_item_id is None:
+        frozen_cost_by_item_id = (
+            get_latest_order_item_material_cost_snapshots_by_items(
+                db, list(order.items)
+            )
+            if db is not None and may_view_cost
+            else {}
         )
-        if db is not None and may_view_cost
-        else {}
-    )
-    frozen_estimated_cost_by_item_id = (
-        get_latest_order_item_estimated_cost_snapshots_by_items(
-            db, list(order.items)
+    frozen_estimated_cost_by_item_id = frozen_estimated_costs_by_item_id
+    if frozen_estimated_cost_by_item_id is None:
+        frozen_estimated_cost_by_item_id = (
+            get_latest_order_item_estimated_cost_snapshots_by_items(
+                db, list(order.items)
+            )
+            if db is not None and may_view_cost
+            else {}
         )
-        if db is not None and may_view_cost
-        else {}
-    )
     for item in order.items:
         item_business_projection = business_projection.get("items", {}).get(
             int(item.id), {}
@@ -1843,6 +1878,7 @@ def _order_response(
                         db,
                         item,
                         bom_components=item_bom_components,
+                        context=material_cost_context,
                     )
                 )
             )
@@ -2408,10 +2444,12 @@ def list_orders(
         if customer_ids
         else {}
     )
+    page_items = [item for order in orders for item in order.items]
+    page_item_ids = [item.id for item in page_items]
     completion_dates = (
         _completion_dates_by_item(
             db,
-            [item.id for order in orders for item in order.items],
+            page_item_ids,
         )
         if detail_level == "full"
         else {}
@@ -2419,12 +2457,36 @@ def list_orders(
     bom_components_by_item_id = (
         get_order_item_bom_components_by_item_ids(
             db,
-            [item.id for order in orders for item in order.items],
+            page_item_ids,
         )
         if detail_level == "full"
         else {}
     )
-    page_item_ids = [item.id for order in orders for item in order.items]
+    external_components_by_item_id = (
+        get_order_item_external_components_by_item_ids(db, page_items)
+        if detail_level == "full"
+        else {}
+    )
+    orders_with_external_requirements = [
+        int(order.id)
+        for order in orders
+        if any(
+            external_components_by_item_id.get(int(item.id))
+            for item in order.items
+        )
+    ]
+    external_purchase_summaries_by_order_id = (
+        get_external_purchase_summaries_by_order_ids(
+            db, orders_with_external_requirements
+        )
+        if detail_level == "full" and orders_with_external_requirements
+        else {}
+    )
+    finished_reservations_by_item_id = (
+        active_finished_reservations_by_item_ids(db, page_item_ids)
+        if detail_level == "full"
+        else {}
+    )
     active_holds_by_item_id = (
         {
             int(hold.order_item_id): hold
@@ -2438,6 +2500,31 @@ def list_orders(
         }
         if page_item_ids and detail_level == "full"
         else {}
+    )
+    may_view_cost = has_permission(user, "cost.view")
+    frozen_material_costs_by_item_id = (
+        get_latest_order_item_material_cost_snapshots_by_items(db, page_items)
+        if detail_level == "full" and may_view_cost
+        else {}
+    )
+    frozen_estimated_costs_by_item_id = (
+        get_latest_order_item_estimated_cost_snapshots_by_items(db, page_items)
+        if detail_level == "full" and may_view_cost
+        else {}
+    )
+    current_estimate_items = [
+        item
+        for item in page_items
+        if int(item.id) not in frozen_material_costs_by_item_id
+    ]
+    material_cost_context = (
+        build_material_cost_estimate_context(
+            db,
+            current_estimate_items,
+            bom_components_by_item_id=bom_components_by_item_id,
+        )
+        if detail_level == "full" and may_view_cost and current_estimate_items
+        else None
     )
     business_projections = (
         {
@@ -2531,8 +2618,22 @@ def list_orders(
                     display_registry=display_registry,
                     completion_dates=completion_dates,
                     bom_components_by_item_id=bom_components_by_item_id,
+                    external_components_by_item_id=external_components_by_item_id,
                     business_projection=business_projections.get(int(order.id)),
                     active_holds_by_item_id=active_holds_by_item_id,
+                    finished_reservations_by_item_id=(
+                        finished_reservations_by_item_id
+                    ),
+                    external_purchase_summaries_by_order_id=(
+                        external_purchase_summaries_by_order_id
+                    ),
+                    frozen_material_costs_by_item_id=(
+                        frozen_material_costs_by_item_id
+                    ),
+                    frozen_estimated_costs_by_item_id=(
+                        frozen_estimated_costs_by_item_id
+                    ),
+                    material_cost_context=material_cost_context,
                 )
             )
             for order in orders

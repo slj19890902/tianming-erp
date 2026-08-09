@@ -5,7 +5,7 @@ from datetime import date
 from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_HALF_UP
 import hashlib
 import json
-from typing import Any
+from typing import Any, Iterable
 
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session, joinedload, selectinload
@@ -287,39 +287,33 @@ def _candidate_preview(
     }
 
 
-def get_external_purchase_summary(db: Session, order_id: int) -> dict[str, Any]:
-    batch = db.scalar(
-        select(ExternalPackagingPurchaseBatch)
-        .options(
-            selectinload(ExternalPackagingPurchaseBatch.purchase_orders).selectinload(
-                ExternalPackagingPurchaseOrder.items
+def _received_totals_by_purchase_item_ids(
+    db: Session,
+    purchase_item_ids: set[int],
+) -> dict[int, Decimal]:
+    if not purchase_item_ids:
+        return {}
+    return {
+        int(item_id): Decimal(quantity or 0)
+        for item_id, quantity in db.execute(
+            select(
+                ExternalPackagingReceiptItem.purchase_item_id,
+                func.sum(ExternalPackagingReceiptItem.received_quantity),
             )
-        )
-        .where(ExternalPackagingPurchaseBatch.sales_order_id == order_id)
-    )
-    if batch is None:
-        return {"status": "pending", "purchase_numbers": []}
-    purchase_item_ids = {
-        item.id for purchase in batch.purchase_orders for item in purchase.items
+            .where(
+                ExternalPackagingReceiptItem.purchase_item_id.in_(
+                    purchase_item_ids
+                )
+            )
+            .group_by(ExternalPackagingReceiptItem.purchase_item_id)
+        ).all()
     }
-    received_totals: dict[int, Decimal] = {}
-    if purchase_item_ids:
-        received_totals = {
-            int(item_id): Decimal(quantity or 0)
-            for item_id, quantity in db.execute(
-                select(
-                    ExternalPackagingReceiptItem.purchase_item_id,
-                    func.sum(ExternalPackagingReceiptItem.received_quantity),
-                )
-                .where(
-                    ExternalPackagingReceiptItem.purchase_item_id.in_(
-                        purchase_item_ids
-                    )
-                )
-                .group_by(ExternalPackagingReceiptItem.purchase_item_id)
-            ).all()
-        }
 
+
+def _external_purchase_summary_response(
+    batch: ExternalPackagingPurchaseBatch,
+    received_totals: dict[int, Decimal],
+) -> dict[str, Any]:
     def receipt_status(purchase: ExternalPackagingPurchaseOrder) -> str:
         if all(
             received_totals.get(item.id, Decimal("0"))
@@ -365,6 +359,71 @@ def get_external_purchase_summary(db: Session, order_id: int) -> dict[str, Any]:
         "confirmed_at": (
             batch.confirmed_at.isoformat() if batch.confirmed_at else None
         ),
+    }
+
+
+def get_external_purchase_summary(db: Session, order_id: int) -> dict[str, Any]:
+    batch = db.scalar(
+        select(ExternalPackagingPurchaseBatch)
+        .options(
+            selectinload(ExternalPackagingPurchaseBatch.purchase_orders).selectinload(
+                ExternalPackagingPurchaseOrder.items
+            )
+        )
+        .where(ExternalPackagingPurchaseBatch.sales_order_id == order_id)
+    )
+    if batch is None:
+        return {"status": "pending", "purchase_numbers": []}
+    purchase_item_ids = {
+        item.id for purchase in batch.purchase_orders for item in purchase.items
+    }
+    return _external_purchase_summary_response(
+        batch,
+        _received_totals_by_purchase_item_ids(db, purchase_item_ids),
+    )
+
+
+def get_external_purchase_summaries_by_order_ids(
+    db: Session,
+    order_ids: Iterable[int],
+) -> dict[int, dict[str, Any]]:
+    """Load list-page purchase summaries with a fixed number of queries."""
+
+    resolved_ids = sorted({int(order_id) for order_id in order_ids})
+    if not resolved_ids:
+        return {}
+    batches = list(
+        db.scalars(
+            select(ExternalPackagingPurchaseBatch)
+            .options(
+                selectinload(
+                    ExternalPackagingPurchaseBatch.purchase_orders
+                ).selectinload(ExternalPackagingPurchaseOrder.items)
+            )
+            .where(
+                ExternalPackagingPurchaseBatch.sales_order_id.in_(resolved_ids)
+            )
+        ).all()
+    )
+    purchase_item_ids = {
+        int(item.id)
+        for batch in batches
+        for purchase in batch.purchase_orders
+        for item in purchase.items
+    }
+    received_totals = _received_totals_by_purchase_item_ids(
+        db, purchase_item_ids
+    )
+    batch_by_order_id = {int(batch.sales_order_id): batch for batch in batches}
+    return {
+        order_id: (
+            _external_purchase_summary_response(
+                batch_by_order_id[order_id], received_totals
+            )
+            if order_id in batch_by_order_id
+            else {"status": "pending", "purchase_numbers": []}
+        )
+        for order_id in resolved_ids
     }
 
 

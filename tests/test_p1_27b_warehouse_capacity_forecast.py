@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Generator
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from decimal import Decimal
 import importlib.util
 from pathlib import Path
 import sqlite3
@@ -82,7 +83,13 @@ def forecast_app(tmp_path):
     from app.core.database import create_sqlite_engine
     from app.core.security import hash_password
     from app.models import Base
-    from app.models.supplier_requisition_order import SupplierRequisitionOrder
+    from app.models.customer import Customer
+    from app.models.order import Order, OrderItem
+    from app.models.product import Product
+    from app.models.supplier_requisition_order import (
+        SupplierRequisitionOrder,
+        SupplierRequisitionOrderItem,
+    )
     from app.models.user import User
     from app.models.warehouse_inventory import WarehouseArea, WarehouseFloor
 
@@ -106,6 +113,42 @@ def forecast_app(tmp_path):
             must_change_password=False,
         )
         db.add_all([admin, worker])
+        customer = Customer(name="预测测试客户")
+        db.add(customer)
+        db.flush()
+        product = Product(
+            customer_id=customer.id,
+            product_code="FORECAST-BOX",
+            customer_material_code="FORECAST-BOX",
+            product_name="预测测试纸箱",
+        )
+        db.add(product)
+        db.flush()
+        order = Order(
+            order_number="TM-FORECAST-001",
+            customer_id=customer.id,
+            order_date=today,
+            delivery_date=today + timedelta(days=2),
+            status="pending_production",
+            total_amount=Decimal("100"),
+        )
+        db.add(order)
+        db.flush()
+        order_items = [
+            OrderItem(
+                order_id=order.id,
+                product_id=product.id,
+                item_order_number=f"TM-FORECAST-001-{index:03d}",
+                quantity=quantity,
+                unit_price=Decimal("1"),
+                subtotal=Decimal(quantity),
+                snapshot_product_name=f"预测纸箱{index}",
+                requisition_qty=quantity,
+                requisition_status="供应商已排单",
+            )
+            for index, quantity in enumerate((60, 40), start=1)
+        ]
+        db.add_all(order_items)
         floor1 = WarehouseFloor(
             floor_code="1F",
             floor_name="一楼周转仓",
@@ -145,14 +188,38 @@ def forecast_app(tmp_path):
         source = SupplierRequisitionOrder(
             order_number="BL-FORECAST-001",
             supplier_name="鸣朋",
-            total_quantity=100,
+            total_quantity=120,
             requisition_qty=100,
-            stock_deduction_qty=0,
+            stock_deduction_qty=20,
             status="confirmed",
+            created_at=datetime.now() - timedelta(days=90),
         )
         db.add(source)
+        db.flush()
+        supplier_items = [
+            SupplierRequisitionOrderItem(
+                supplier_order_id=source.id,
+                order_item_id=order_item.id,
+                order_number=order_item.item_order_number,
+                product_code=product.product_code,
+                product_name=order_item.snapshot_product_name,
+                quantity=quantity + 10,
+                requisition_qty=quantity,
+                delivery_date=today + timedelta(days=index),
+            )
+            for index, (order_item, quantity) in enumerate(
+                zip(order_items, (60, 40), strict=True), start=1
+            )
+        ]
+        db.add_all(supplier_items)
         db.commit()
-        ids = {"source": source.id, "floor": floor1.id}
+        ids = {
+            "source": source.id,
+            "floor": floor1.id,
+            "supplier_items": [item.id for item in supplier_items],
+            "order_items": [item.id for item in order_items],
+            "order": order.id,
+        }
 
     app = FastAPI()
     app.include_router(auth_router, prefix="/api/auth")
@@ -164,7 +231,7 @@ def forecast_app(tmp_path):
 
     app.dependency_overrides[get_db] = override_get_db
     try:
-        yield app, ids, today
+        yield app, ids, today, factory
     finally:
         engine.dispose()
 
@@ -176,8 +243,70 @@ def _login(client: TestClient, username: str) -> None:
     assert response.status_code == 200, response.text
 
 
+def _post_supplier_receipt(
+    factory,
+    ids: dict,
+    *,
+    item_index: int,
+    quantity: int,
+    receipt_key: str,
+) -> tuple[int, int]:
+    from sqlalchemy import func, select
+
+    from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
+    from app.models.supplier_requisition_order import SupplierRequisitionOrderItem
+
+    with factory() as db:
+        supplier_item = db.get(
+            SupplierRequisitionOrderItem, ids["supplier_items"][item_index]
+        )
+        cumulative = int(
+            db.scalar(
+                select(func.coalesce(func.sum(IncomingReceiptItem.received_quantity), 0))
+                .where(
+                    IncomingReceiptItem.supplier_order_item_id == supplier_item.id,
+                    IncomingReceiptItem.status == "posted",
+                )
+            )
+            or 0
+        ) + int(quantity)
+        planned = int(supplier_item.requisition_qty)
+        variance = cumulative - planned
+        variance_type = "matched" if variance == 0 else "short" if variance < 0 else "over"
+        receipt = IncomingReceipt(
+            receipt_number=f"IR-{receipt_key}",
+            status="posted",
+            received_at=datetime.now(),
+            idempotency_key=receipt_key,
+        )
+        db.add(receipt)
+        db.flush()
+        fact = IncomingReceiptItem(
+            receipt_id=receipt.id,
+            order_id=ids["order"],
+            order_item_id=ids["order_items"][item_index],
+            supplier_order_id=ids["source"],
+            supplier_order_item_id=supplier_item.id,
+            planned_quantity=planned,
+            received_quantity=quantity,
+            cumulative_received_quantity=cumulative,
+            variance_quantity=variance,
+            variance_type=variance_type,
+            resolution_status="pending" if variance < 0 else "resolved",
+            resolution_action=(
+                "await_supplier"
+                if variance < 0
+                else "all_to_production" if variance > 0 else None
+            ),
+            status="posted",
+        )
+        db.add(fact)
+        db.commit()
+        return receipt.id, fact.id
+
+
 def test_missing_source_is_not_guessed_and_admin_plan_drives_forecast(forecast_app) -> None:
-    app, ids, today = forecast_app
+    app, ids, today, _factory = forecast_app
     with TestClient(app) as client:
         _login(client, "forecast-admin")
         initial = client.get("/api/warehouse/capacity/forecast?horizon=7")
@@ -219,7 +348,7 @@ def test_missing_source_is_not_guessed_and_admin_plan_drives_forecast(forecast_a
 
 
 def test_forecast_write_is_admin_only(forecast_app) -> None:
-    app, ids, today = forecast_app
+    app, ids, today, _factory = forecast_app
     with TestClient(app) as client:
         _login(client, "forecast-worker")
         response = client.post(
@@ -235,3 +364,131 @@ def test_forecast_write_is_admin_only(forecast_app) -> None:
             },
         )
     assert response.status_code == 403
+
+
+def test_supplier_receipts_reduce_candidates_and_stale_existing_plan(forecast_app) -> None:
+    from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
+    from app.services.warehouse_capacity_forecast import (
+        resolve_capacity_forecast_source,
+    )
+
+    app, ids, today, factory = forecast_app
+    with TestClient(app) as client:
+        _login(client, "forecast-admin")
+        initial = client.get("/api/warehouse/capacity/forecast?horizon=7").json()
+        source = initial["missing_sources"][0]
+        assert source["planned_quantity"] == 100
+        assert source["posted_received_quantity"] == 0
+        assert source["received_quantity"] == 0
+        assert source["remaining_quantity"] == 100
+
+        _post_supplier_receipt(
+            factory,
+            ids,
+            item_index=0,
+            quantity=30,
+            receipt_key="forecast-partial-30",
+        )
+        with factory() as db:
+            resolved = resolve_capacity_forecast_source(
+                db, "supplier_requisition", ids["source"]
+            )
+        assert resolved is not None
+        assert resolved["planned_quantity"] == 100
+        assert resolved["posted_received_quantity"] == 30
+        assert resolved["received_quantity"] == 30
+        assert resolved["remaining_quantity"] == 70
+        assert resolved["reference_date"] == today + timedelta(days=1)
+        assert resolved["valid"] is True
+
+        partial = client.get("/api/warehouse/capacity/forecast?horizon=7").json()
+        assert partial["missing_sources"][0]["remaining_quantity"] == 70
+        saved = client.post(
+            "/api/warehouse/capacity/forecast-plans",
+            json={
+                "source_type": "supplier_requisition",
+                "source_id": ids["source"],
+                "effect": "inflow",
+                "floor_id": ids["floor"],
+                "planned_date": (today + timedelta(days=1)).isoformat(),
+                "pallet_slots": 4,
+                "operation_key": "forecast-plan-for-remaining-70",
+            },
+        )
+        assert saved.status_code == 200, saved.text
+
+        _post_supplier_receipt(
+            factory,
+            ids,
+            item_index=0,
+            quantity=40,
+            receipt_key="forecast-over-first-line",
+        )
+        changed = client.get("/api/warehouse/capacity/forecast?horizon=7").json()
+        assert changed["missing_sources"][0]["posted_received_quantity"] == 70
+        assert changed["missing_sources"][0]["received_quantity"] == 60
+        assert changed["missing_sources"][0]["remaining_quantity"] == 40
+        assert changed["missing_sources"][0]["reference_date"] == (
+            today + timedelta(days=2)
+        ).isoformat()
+        assert changed["stale_plans"][0]["source_valid"] is True
+        assert changed["stale_plans"][0]["source_snapshot_current"] is False
+        assert (
+            changed["stale_plans"][0]["stale_reason"]
+            == "supplier_remaining_quantity_changed"
+        )
+        floor = next(row for row in changed["floors"] if row["floor_code"] == "1F")
+        assert floor["peak_occupied"] == 0
+
+        receipt_id, receipt_item_id = _post_supplier_receipt(
+            factory,
+            ids,
+            item_index=1,
+            quantity=40,
+            receipt_key="forecast-final-second-line",
+        )
+        fully_received = client.get(
+            "/api/warehouse/capacity/forecast?horizon=7"
+        ).json()
+        assert fully_received["missing_sources"] == []
+        assert fully_received["stale_plans"][0]["source_valid"] is False
+        assert fully_received["stale_plans"][0]["stale_reason"] == "source_invalid"
+        with factory() as db:
+            resolved = resolve_capacity_forecast_source(
+                db, "supplier_requisition", ids["source"]
+            )
+            assert resolved is not None
+            assert resolved["remaining_quantity"] == 0
+            assert resolved["valid"] is False
+
+            db.get(IncomingReceiptItem, receipt_item_id).status = "reversed"
+            db.get(IncomingReceipt, receipt_id).status = "reversed"
+            db.commit()
+
+        restored = client.get("/api/warehouse/capacity/forecast?horizon=7").json()
+        assert restored["missing_sources"][0]["remaining_quantity"] == 40
+        assert restored["stale_plans"][0]["source_valid"] is True
+        assert (
+            restored["stale_plans"][0]["stale_reason"]
+            == "supplier_remaining_quantity_changed"
+        )
+
+        refreshed = client.post(
+            "/api/warehouse/capacity/forecast-plans",
+            json={
+                "source_type": "supplier_requisition",
+                "source_id": ids["source"],
+                "effect": "inflow",
+                "floor_id": ids["floor"],
+                "planned_date": (today + timedelta(days=2)).isoformat(),
+                "pallet_slots": 2,
+                "expected_version": 1,
+                "operation_key": "forecast-refresh-for-remaining-40",
+            },
+        )
+        assert refreshed.status_code == 200, refreshed.text
+        current = client.get("/api/warehouse/capacity/forecast?horizon=7").json()
+        assert current["missing_sources"] == []
+        assert current["stale_plans"] == []
+        floor = next(row for row in current["floors"] if row["floor_code"] == "1F")
+        assert floor["peak_occupied"] == 2

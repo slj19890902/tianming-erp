@@ -4,13 +4,17 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.delivery import Delivery
+from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
 from app.models.order import Order, OrderItem
 from app.models.production import ProductionTask
-from app.models.supplier_requisition_order import SupplierRequisitionOrder
+from app.models.supplier_requisition_order import (
+    SupplierRequisitionOrder,
+    SupplierRequisitionOrderItem,
+)
 from app.models.warehouse_capacity import WarehouseCapacityForecastPlan
 from app.models.warehouse_inventory import (
     InventoryPallet,
@@ -38,19 +42,118 @@ def _as_date(value: date | datetime | None) -> date | None:
     return value
 
 
-def _supplier_source(row: SupplierRequisitionOrder) -> dict[str, Any]:
-    dates = [item.delivery_date for item in row.items if item.delivery_date]
+def _posted_supplier_receipts_by_item(
+    db: Session, supplier_item_ids: list[int]
+) -> dict[int, tuple[int, bool]]:
+    normalized_ids = sorted({int(item_id) for item_id in supplier_item_ids})
+    if not normalized_ids:
+        return {}
+    balances: dict[int, tuple[int, bool]] = {}
+    for offset in range(0, len(normalized_ids), 500):
+        item_id_chunk = normalized_ids[offset : offset + 500]
+        balances.update(
+            {
+                int(item_id): (int(received_quantity or 0), bool(accepted_short))
+                for item_id, received_quantity, accepted_short in db.execute(
+                    select(
+                        IncomingReceiptItem.supplier_order_item_id,
+                        func.coalesce(
+                            func.sum(IncomingReceiptItem.received_quantity), 0
+                        ),
+                        func.max(
+                            case(
+                                (
+                                    IncomingReceiptItem.resolution_action
+                                    == "accept_short",
+                                    1,
+                                ),
+                                else_=0,
+                            )
+                        ),
+                    )
+                    .join(
+                        IncomingReceipt,
+                        IncomingReceipt.id == IncomingReceiptItem.receipt_id,
+                    )
+                    .where(
+                        IncomingReceiptItem.supplier_order_item_id.in_(
+                            item_id_chunk
+                        ),
+                        IncomingReceiptItem.status == "posted",
+                        IncomingReceipt.status == "posted",
+                    )
+                    .group_by(IncomingReceiptItem.supplier_order_item_id)
+                )
+                if item_id is not None
+            }
+        )
+    return balances
+
+
+def _supplier_source(
+    row: SupplierRequisitionOrder,
+    received_by_item: dict[int, tuple[int, bool]] | None = None,
+) -> dict[str, Any]:
+    received_by_item = received_by_item or {}
+    item_balances = [
+        (
+            item,
+            # Only the quantity actually placed with the supplier can arrive.
+            # `quantity` is the pre-stock-deduction production demand.
+            max(int(item.requisition_qty or 0), 0),
+            max(int(received_by_item.get(int(item.id), (0, False))[0]), 0),
+            bool(received_by_item.get(int(item.id), (0, False))[1]),
+        )
+        for item in row.items
+        if item.id is not None
+    ]
+    if item_balances:
+        planned_quantity = sum(
+            planned for _item, planned, _received, _accepted_short in item_balances
+        )
+        posted_received_quantity = sum(
+            received
+            for _item, _planned, received, _accepted_short in item_balances
+        )
+        received_quantity = sum(
+            min(planned, received)
+            for _item, planned, received, _accepted_short in item_balances
+        )
+        remaining_quantity = sum(
+            0 if accepted_short else max(planned - received, 0)
+            for _item, planned, received, accepted_short in item_balances
+        )
+        dates = [
+            item.delivery_date
+            for item, planned, received, accepted_short in item_balances
+            if not accepted_short and planned > received and item.delivery_date
+        ]
+    else:
+        # Historical/header-only rows have no line that a receipt fact can safely
+        # target. Use the header's actual supplier quantity without guessing a
+        # receipt-to-line match.
+        planned_quantity = max(int(row.requisition_qty or 0), 0)
+        posted_received_quantity = 0
+        received_quantity = 0
+        remaining_quantity = planned_quantity
+        dates = []
     reference_date = min(dates) if dates else None
     return {
         "source_type": "supplier_requisition",
         "source_id": row.id,
         "source_number": row.order_number,
-        "source_label": f"{row.supplier_name or '供应商待补'} · {row.total_quantity} 张",
+        "source_label": (
+            f"{row.supplier_name or '供应商待补'} · {remaining_quantity} 张"
+        ),
         "reference_date": reference_date,
         "reference_label": "客户交期参考" if reference_date else "没有可靠到料日期",
         "created_date": _as_date(row.created_at),
         "suggested_effect": "inflow",
-        "valid": row.status == "confirmed" and int(row.total_quantity or 0) > 0,
+        "planned_quantity": planned_quantity,
+        "posted_received_quantity": posted_received_quantity,
+        "received_quantity": received_quantity,
+        "remaining_quantity": remaining_quantity,
+        "valid": row.status == "confirmed" and remaining_quantity > 0,
     }
 
 
@@ -93,7 +196,12 @@ def resolve_capacity_forecast_source(
             .options(selectinload(SupplierRequisitionOrder.items))
             .where(SupplierRequisitionOrder.id == source_id)
         )
-        return _supplier_source(row) if row is not None else None
+        if row is None:
+            return None
+        received_by_item = _posted_supplier_receipts_by_item(
+            db, [int(item.id) for item in row.items if item.id is not None]
+        )
+        return _supplier_source(row, received_by_item)
     if source_type == "production_task":
         result = db.execute(
             select(ProductionTask, Order)
@@ -113,17 +221,35 @@ def _candidate_sources(db: Session, *, as_of: date, horizon: int) -> list[dict[s
     recent = as_of - timedelta(days=30)
     sources: list[dict[str, Any]] = []
 
-    supplier_rows = db.scalars(
-        select(SupplierRequisitionOrder)
-        .options(selectinload(SupplierRequisitionOrder.items))
-        .where(
-            SupplierRequisitionOrder.status == "confirmed",
-            SupplierRequisitionOrder.total_quantity > 0,
-        )
-        .order_by(SupplierRequisitionOrder.id.desc())
-        .limit(100)
-    ).all()
-    sources.extend(_supplier_source(row) for row in supplier_rows)
+    supplier_rows = list(
+        db.scalars(
+            select(SupplierRequisitionOrder)
+            .options(selectinload(SupplierRequisitionOrder.items))
+            .where(
+                SupplierRequisitionOrder.status == "confirmed",
+                or_(
+                    SupplierRequisitionOrder.created_at.is_(None),
+                    SupplierRequisitionOrder.created_at
+                    >= datetime.combine(recent, datetime.min.time()),
+                    SupplierRequisitionOrder.items.any(
+                        and_(
+                            SupplierRequisitionOrderItem.delivery_date >= recent,
+                            SupplierRequisitionOrderItem.delivery_date <= cutoff,
+                        )
+                    ),
+                ),
+            )
+            .order_by(SupplierRequisitionOrder.id.desc())
+        ).all()
+    )
+    supplier_item_ids = [
+        int(item.id)
+        for row in supplier_rows
+        for item in row.items
+        if item.id is not None
+    ]
+    received_by_item = _posted_supplier_receipts_by_item(db, supplier_item_ids)
+    sources.extend(_supplier_source(row, received_by_item) for row in supplier_rows)
 
     production_rows = db.execute(
         select(ProductionTask, Order)
@@ -186,6 +312,8 @@ def serialize_capacity_forecast_plan(
     *,
     floor: WarehouseFloor | None = None,
     source_valid: bool | None = None,
+    source_snapshot_current: bool | None = None,
+    stale_reason: str | None = None,
 ) -> dict[str, Any]:
     return {
         "id": plan.id,
@@ -203,6 +331,8 @@ def serialize_capacity_forecast_plan(
         "status": plan.status,
         "version": plan.version,
         "source_valid": source_valid,
+        "source_snapshot_current": source_snapshot_current,
+        "stale_reason": stale_reason,
         "confidence": "operator_confirmed",
         "updated_at": plan.updated_at.isoformat() if plan.updated_at else None,
     }
@@ -262,14 +392,32 @@ def build_warehouse_capacity_forecast(
             db, plan.source_type, plan.source_id
         )
         source_valid = bool(source and source["valid"])
+        source_snapshot_current = bool(
+            source_valid
+            and (
+                plan.source_type != "supplier_requisition"
+                or plan.source_label_snapshot == source["source_label"]
+            )
+        )
+        stale_reason = (
+            None
+            if source_snapshot_current
+            else (
+                "supplier_remaining_quantity_changed"
+                if source_valid and plan.source_type == "supplier_requisition"
+                else "source_invalid"
+            )
+        )
         serialized_plans.append(
             serialize_capacity_forecast_plan(
                 plan,
                 floor=floor_by_id.get(plan.floor_id),
                 source_valid=source_valid,
+                source_snapshot_current=source_snapshot_current,
+                stale_reason=stale_reason,
             )
         )
-        if not source_valid:
+        if not source_snapshot_current:
             stale_plans.append(serialized_plans[-1])
             continue
         plan_keys.add(key)
@@ -386,7 +534,10 @@ def build_warehouse_capacity_forecast(
             {
                 "code": "stale_forecast_plan",
                 "level": "warning",
-                "message": f"有 {len(stale_plans)} 条预测对应单据已失效，已停止计入。",
+                "message": (
+                    f"有 {len(stale_plans)} 条预测对应单据已失效或待收数量已变化，"
+                    "已停止计入，请按当前剩余数量重新确认。"
+                ),
             }
         )
     if planning_basis:

@@ -86,6 +86,8 @@ def test_capacity_forecast_is_compact_and_requires_explicit_pallet_slots() -> No
     assert 'id="capacityForecastSlots" type="number" min="1"' in WAREHOUSE_HTML
     assert "直接使用/待送" in WAREHOUSE_HTML
     assert "/api/warehouse/capacity/forecast?horizon=${state.capacityForecast.days}" in WAREHOUSE_HTML
+    assert 'row.source_snapshot_current===false?"待收数量已变化"' in WAREHOUSE_HTML
+    assert 'row.source_valid===false||row.source_snapshot_current===false?"warn"' in WAREHOUSE_HTML
 
 
 def test_homepage_has_one_compact_read_only_capacity_card() -> None:

@@ -28,7 +28,9 @@ def test_operational_twin_reuses_formal_inventory_and_does_not_fake_rack_positio
     assert "/api/warehouse/twin-operations/locate?${params.toString()}" in SOURCE
     assert "库存只投影到已确认区域，不虚构货架层、格或箱体坐标" not in SOURCE
     assert "暂无已建空货位" in SOURCE
-    assert "/api/warehouse/pallets/${" not in SOURCE
+    # P1-16E-2 already uses the formal pallet endpoint for an explicit merge-all action;
+    # that accepted operation must not be mistaken for a fake map-only pallet position.
+    assert "/api/warehouse/pallets/${selectedLocation.pallet.pallet_id}/merge-all" in SOURCE
     assert "交换平面位置不改变库存" in SOURCE or "交换二维平面位置；库存和栈板绑定未改变" in SOURCE
     assert "/api/warehouse/twin-production/layouts/" in SOURCE
     assert "只保存隔离地图库的任务ID与位置关系" in SOURCE
@@ -200,8 +202,20 @@ def test_phase2c13_uses_2d_layout_mode_for_rack_and_area_spatial_modeling() -> N
     assert "货架＋栈板混合区" in SOURCE
     assert "/api/warehouse/twin-layout/floors/${floorCode}/racks" in SOURCE
     assert "/storage-policy" in SOURCE
-    assert "不会修改库存数量、栈板或正式库位身份" in SOURCE
+    assert "员工地图、库存数量、栈板和正式库位均不改变" in SOURCE
     assert "rackEditingEnabled?: boolean" in CANVAS
+
+
+def test_p1_34c_layout_edits_use_admin_draft_validation_and_explicit_publish() -> None:
+    assert "/api/warehouse/twin-layout/floors/${floorCode}/draft`" in SOURCE
+    assert "/draft/validate" in SOURCE
+    assert "/draft/publish" in SOURCE
+    assert "/draft/discard" in SOURCE
+    assert "保存到布局草稿" in SOURCE
+    assert "校验草稿" in SOURCE
+    assert "发布布局" in SOURCE
+    assert "员工仍只看到已发布地图" in SOURCE
+    assert "raw.revision || raw.source_sha256" in SOURCE
 
 
 def test_phase2c9_admin_operations_and_read_only_locating_share_the_measured_map() -> None:

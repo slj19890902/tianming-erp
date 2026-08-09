@@ -3219,6 +3219,7 @@ def test_phase2c13_layout_rack_writes_are_admin_only_and_audited(
     tmp_path,
     monkeypatch,
 ) -> None:
+    import hashlib
     import json
 
     from app.models.audit import OperationLog
@@ -3250,6 +3251,11 @@ def test_phase2c13_layout_rack_writes_are_admin_only_and_audited(
         encoding="utf-8",
     )
     monkeypatch.setattr(editor, "TWIN_LAYOUT_PATH", asset)
+    draft = tmp_path / "twin-layout.draft.json"
+    backups = tmp_path / "layout-backups"
+    monkeypatch.setattr(editor, "TWIN_LAYOUT_DRAFT_PATH", draft)
+    monkeypatch.setattr(editor, "TWIN_LAYOUT_BACKUP_DIR", backups)
+    published_before = hashlib.sha256(asset.read_bytes()).hexdigest()
     body = {
         "expected_revision": floor["revision"],
         "operation_key": "api-create-rack-0001",
@@ -3274,6 +3280,27 @@ def test_phase2c13_layout_rack_writes_are_admin_only_and_audited(
         _login(employee, "floor3-scoped")
         denied = employee.post("/api/warehouse/twin-layout/floors/3F/racks", json=body)
         assert denied.status_code == 403
+        denied_draft = employee.get("/api/warehouse/twin-layout/floors/3F/draft")
+        assert denied_draft.status_code == 403
+        denied_validate = employee.post(
+            "/api/warehouse/twin-layout/floors/3F/draft/validate",
+            json={"expected_revision": floor["revision"]},
+        )
+        assert denied_validate.status_code == 403
+        denied_publish = employee.post(
+            "/api/warehouse/twin-layout/floors/3F/draft/publish",
+            json={
+                "expected_published_revision": floor["revision"],
+                "expected_draft_revision": floor["revision"],
+                "operation_key": "employee-publish-denied",
+            },
+        )
+        assert denied_publish.status_code == 403
+        denied_discard = employee.post(
+            "/api/warehouse/twin-layout/floors/3F/draft/discard",
+            json={"expected_revision": floor["revision"]},
+        )
+        assert denied_discard.status_code == 403
     with TestClient(app) as admin:
         _login(admin, "floor3-admin")
         created = admin.post("/api/warehouse/twin-layout/floors/3F/racks", json=body)
@@ -3284,12 +3311,51 @@ def test_phase2c13_layout_rack_writes_are_admin_only_and_audited(
         repeated = admin.post("/api/warehouse/twin-layout/floors/3F/racks", json=body)
         assert repeated.status_code == 201, repeated.text
         assert repeated.json()["applied"] is False
+        assert hashlib.sha256(asset.read_bytes()).hexdigest() == published_before
+        assert json.loads(asset.read_text(encoding="utf-8"))["floors"]["3F"]["racks"] == []
+        draft_view = admin.get("/api/warehouse/twin-layout/floors/3F/draft")
+        assert draft_view.status_code == 200, draft_view.text
+        assert draft_view.json()["draft_control"]["status"] == "draft"
+        draft_revision = created.json()["revision"]
+        validated = admin.post(
+            "/api/warehouse/twin-layout/floors/3F/draft/validate",
+            json={"expected_revision": draft_revision},
+        )
+        assert validated.status_code == 200, validated.text
+        assert validated.json()["status"] == "validated"
+        published = admin.post(
+            "/api/warehouse/twin-layout/floors/3F/draft/publish",
+            json={
+                "expected_published_revision": floor["revision"],
+                "expected_draft_revision": draft_revision,
+                "operation_key": "api-publish-layout-0001",
+            },
+        )
+        assert published.status_code == 200, published.text
+        assert published.json()["inventory_changed"] is False
+        assert json.loads(asset.read_text(encoding="utf-8"))["floors"]["3F"]["racks"][0]["area_code"] == "F1"
+        replayed_publish = admin.post(
+            "/api/warehouse/twin-layout/floors/3F/draft/publish",
+            json={
+                "expected_published_revision": floor["revision"],
+                "expected_draft_revision": draft_revision,
+                "operation_key": "api-publish-layout-0001",
+            },
+        )
+        assert replayed_publish.status_code == 200
+        assert replayed_publish.json()["applied"] is False
+        assert len(list(backups.glob("*.json"))) == 1
     with factory() as db:
         logs = db.scalars(
             select(OperationLog).where(OperationLog.action == "TWIN_RACK_CREATE")
         ).all()
         assert len(logs) == 1
         assert "inventory_changed" in logs[0].details
+        publish_logs = db.scalars(
+            select(OperationLog).where(OperationLog.action == "TWIN_LAYOUT_PUBLISH")
+        ).all()
+        assert len(publish_logs) == 1
+        assert "backup_name" in publish_logs[0].details
 
 
 def test_phase2c9_non_admin_cannot_call_map_write_endpoints(floor3_app) -> None:

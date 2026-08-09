@@ -60,7 +60,7 @@ def test_p5_large_mode_has_zoom_safe_responsive_shell() -> None:
     assert ".ui-large .table-wrap { width: 100%; max-width: 100%; min-width: 0; overflow-x: auto; }" in INDEX
 
 
-def test_p5_large_mode_keeps_delivery_and_production_history_columns_readable() -> None:
+def test_p5_large_mode_keeps_delivery_and_production_history_columns_reachable() -> None:
     for marker in (
         '<div v-else class="panel delivery-list-panel">',
         '<table class="delivery-list-table">',
@@ -68,12 +68,117 @@ def test_p5_large_mode_keeps_delivery_and_production_history_columns_readable() 
         ".ui-large .delivery-list-panel .table-wrap {",
         ".ui-large .delivery-list-table { min-width: 1480px; }",
         ".ui-large .delivery-list-actions { min-width: 300px; white-space: normal; }",
+        ".delivery-list-table {\n          width: 100%; min-width: 0 !important; table-layout: fixed; white-space: normal;",
+        ".delivery-list-panel .table-wrap {\n          width: 100%; max-width: 100%; min-width: 0; overflow-x: hidden;",
+        ".delivery-list-table .delivery-col-actions { width: 21%; }",
+        'class="btn small delivery-list-detail-toggle"',
         '<th class="production-history-time">完工时间</th>',
         '<td class="production-history-time">{{ formatDateTime(row.completed_at) }}</td>',
         ".ui-large .production-history-time { width: 176px; white-space: nowrap; }",
         '<th class="production-history-actions">操作</th>',
         '<td class="production-history-actions"><div class="toolbar-group">',
         ".ui-large .production-history-actions { width: 280px; white-space: normal; }",
+    ):
+        assert marker in INDEX
+
+
+def test_p5_delivery_list_narrow_desktop_contract_keeps_every_column_and_action() -> None:
+    column_classes = re.findall(
+        r'<col class="(delivery-col-[^"]+)"\s*/>',
+        INDEX,
+    )
+    assert column_classes == [
+        "delivery-col-number",
+        "delivery-col-customer",
+        "delivery-col-date",
+        "delivery-col-vehicle",
+        "delivery-col-quantity",
+        "delivery-col-status",
+        "delivery-col-receipt",
+        "delivery-col-detail",
+        "delivery-col-actions",
+    ]
+    widths = {
+        name: int(width)
+        for name, width in re.findall(
+            r"\.delivery-list-table \.(delivery-col-[a-z]+) \{ width: (\d+)%; \}",
+            INDEX,
+        )
+    }
+    assert set(widths) == set(column_classes)
+    assert sum(widths.values()) == 100
+    for action in (
+        "拿货",
+        "管理员查看",
+        "打开手机拿货",
+        "打印拿货单",
+        "发货打印",
+        "直接发货打印",
+        "编辑",
+        "删除",
+        "编辑回单",
+        "取消回单",
+        "确认回单",
+        "补打",
+        "取消发货",
+    ):
+        assert action in INDEX
+    assert ".delivery-list-table .delivery-list-actions .select { width: min(130px, 100%); }" in INDEX
+    assert ".delivery-list-table .delivery-list-actions {\n          min-width: 0 !important; gap: 4px; align-items: flex-start;" in INDEX
+
+
+def test_p5_incoming_table_wraps_controls_inside_fixed_columns() -> None:
+    for marker in (
+        ".incoming-table { width: 100%; min-width: 0; table-layout: fixed; white-space: normal; }",
+        ".incoming-table .input, .incoming-table .select { min-width: 0 !important;",
+        ".incoming-table .incoming-board-cell { word-break: normal; overflow-wrap: normal; }",
+        ".incoming-decision-cell { width: 13%; }",
+        ".incoming-action-cell { width: 9%; }",
+        ".incoming-table .btn {\n        max-width: 100%; min-width: 0; padding-left: 6px; padding-right: 6px;",
+        "line-height: 1.3; white-space: normal; overflow-wrap: anywhere;",
+        ".incoming-table td:last-child .btn { display: block; width: 100%; margin: 0 0 4px; }",
+        '<input v-if="incomingTab===\'pending\' && hasPermission(\'incoming.execute\')" class="input compact-input" type="number"',
+        '<th class="incoming-board-cell">报料尺寸</th>',
+        '<td class="incoming-board-cell"><strong>{{ formatBoardSpec(row.cardboard_len,row.cardboard_width) }}</strong></td>',
+        'class="incoming-decision-cell"><template v-if="incomingTab===\'pending\'">',
+        'class="incoming-action-cell"><template v-if="incomingTab===\'pending\'">',
+        '<button class="btn small success" @click="receiveIncoming(row)">确认实收</button>',
+        '<button v-if="row.pending_receipt_item_id" class="btn small" @click="acceptShortIncoming(row)">不再补货，短收结单</button>',
+    ):
+        assert marker in INDEX
+
+
+def test_p5_customer_list_has_page_scoped_narrow_desktop_layout() -> None:
+    customer_columns = re.findall(
+        r'<col class="(customer-col-[^"]+)"\s*/>',
+        INDEX,
+    )
+    assert customer_columns == [
+        "customer-col-number",
+        "customer-col-code",
+        "customer-col-name",
+        "customer-col-contact",
+        "customer-col-phone",
+        "customer-col-term",
+        "customer-col-delivery",
+        "customer-col-status",
+        "customer-col-actions",
+    ]
+    widths = {
+        name: int(width)
+        for name, width in re.findall(
+            r"\.customer-list-table \.(customer-col-[a-z]+) \{ width: (\d+)%; \}",
+            INDEX,
+        )
+    }
+    assert set(widths) == set(customer_columns)
+    assert sum(widths.values()) == 100
+    for marker in (
+        ".table-wrap:has(> .customer-list-table) {",
+        "width: 100%; max-width: 100%; min-width: 0; overflow-x: hidden;",
+        ".customer-list-table {\n          width: 100%; min-width: 0; table-layout: fixed; white-space: normal;",
+        'class="toolbar-group customer-list-actions"',
+        ".customer-list-actions .btn {\n          max-width: 100%; min-width: 0; padding-left: 7px; padding-right: 7px;",
     ):
         assert marker in INDEX
 

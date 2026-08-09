@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import json
+import logging
+import re
 from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
+from urllib.parse import quote
+from uuid import uuid4
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
+from fastapi.responses import Response
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
@@ -20,9 +25,11 @@ from app.models.customer_contract import CustomerContract, CustomerContractItem
 from app.models.order import Order
 from app.models.product import Product
 from app.models.user import User
+from app.services.contract_pdf import ContractPdfFontError, render_contract_pdf
 
 
 router = APIRouter()
+contract_pdf_logger = logging.getLogger("erp.contract_pdf")
 can_read = PermissionChecker("contracts.view")
 can_edit = PermissionChecker("contracts.edit")
 can_convert = PermissionChecker("contracts.convert")
@@ -36,6 +43,7 @@ STATUS_LABELS = {
     "confirmed": "已确认",
     "converted": "已转订单",
 }
+_UNSAFE_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 
 class ContractItemPayload(BaseModel):
@@ -113,6 +121,29 @@ def _next_number(db: Session, contract_date: date) -> str:
 
 def _clean(value: str | None) -> str | None:
     return (value or "").strip() or None
+
+
+def _contract_pdf_filename(contract: CustomerContract) -> tuple[str, str]:
+    customer_name = _UNSAFE_FILENAME_CHARS.sub("_", contract.customer_name).strip(
+        " ._"
+    )
+    customer_name = customer_name[:60] or "customer"
+    contract_no = _UNSAFE_FILENAME_CHARS.sub("_", contract.contract_no).strip(
+        " ._"
+    )
+    contract_no = contract_no[:40] or f"contract-{contract.id}"
+    contract_date = contract.contract_date.strftime("%Y%m%d")
+    display_name = (
+        f"{contract_date}_{contract_no}_{customer_name}_v{contract.version}.pdf"
+    )
+    ascii_name = f"contract-{contract.id}-v{contract.version}.pdf"
+    return ascii_name, display_name
+
+
+def _contract_pdf_request_id(request: Request) -> str:
+    request_id = str(getattr(request.state, "request_id", "") or "").strip()
+    request_id = re.sub(r"[^A-Za-z0-9._:-]", "", request_id)[:64]
+    return request_id or uuid4().hex
 
 
 def _add_working_days(start: date, working_days: int = 7) -> date:
@@ -597,3 +628,72 @@ def contract_print(
             "contact_person": company.contact_person if company else None,
         },
     }
+
+
+@router.get("/{contract_id}/pdf")
+def contract_pdf(
+    contract_id: int,
+    request: Request,
+    expected_version: int = Query(..., ge=1),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> Response:
+    """Download an unsealed PDF without changing any contract or workflow fact."""
+
+    request_id = _contract_pdf_request_id(request)
+    contract = _contract_or_404(db, contract_id)
+    require_customer_access(contract.customer_id, current_user=user, db=db)
+    if contract.version != expected_version:
+        raise HTTPException(
+            status_code=409,
+            detail="合同版本已更新，请刷新后重新导出 PDF",
+        )
+    company = db.get(CompanyConfig, 1)
+    try:
+        document = render_contract_pdf(contract, company)
+    except ContractPdfFontError as error:
+        raise HTTPException(
+            status_code=503,
+            detail="合同 PDF 中文字体未配置或无法嵌入，请联系管理员",
+            headers={"X-Request-ID": request_id},
+        ) from error
+    except Exception as error:
+        contract_pdf_logger.error(
+            "contract_pdf_render_failed contract_id=%s contract_version=%s "
+            "actor_id=%s request_id=%s error_type=%s",
+            contract.id,
+            contract.version,
+            user.id,
+            request_id,
+            type(error).__name__,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": "合同 PDF 生成失败：服务器内部错误",
+                "code": "CONTRACT_PDF_RENDER_FAILED",
+                "request_id": request_id,
+            },
+            headers={"X-Request-ID": request_id},
+        ) from error
+    ascii_name, display_name = _contract_pdf_filename(contract)
+    encoded_name = quote(display_name, safe="")
+    return Response(
+        content=document.content,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{ascii_name}"; '
+                f"filename*=UTF-8''{encoded_name}"
+            ),
+            "Cache-Control": "private, no-store, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "X-Content-Type-Options": "nosniff",
+            "X-Contract-Version": str(contract.version),
+            "X-Contract-PDF-Template-Version": document.template_version,
+            "X-Contract-PDF-SHA256": document.sha256,
+            "X-Request-ID": request_id,
+            "ETag": f'"sha256-{document.sha256}"',
+        },
+    )

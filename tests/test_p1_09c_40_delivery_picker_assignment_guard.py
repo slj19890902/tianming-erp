@@ -49,6 +49,7 @@ def test_picker_assignment_is_single_flight_and_freezes_task_and_picker(
 const AsyncFunction = Object.getPrototypeOf(async function(){{}}).constructor;
 const pending = [];
 const messages = [];
+const invalidated = [];
 globalThis.axios = {{
   put(url, payload) {{ return new Promise((resolve, reject) => pending.push({{url,payload,resolve,reject}})); }},
 }};
@@ -58,6 +59,7 @@ const vm = {{
   deliveryListState:{{error:""}},
   normalizeDeliveryPickTask(row) {{ return row?.pick_task || null; }},
   async loadDeliveries() {{ return true; }},
+  invalidateDeliveryListDetail(id) {{ invalidated.push(Number(id)); return true; }},
   errorMessage(error) {{ return error?.message || String(error); }},
   showToast(message, danger=false) {{ messages.push({{message,danger}}); }},
 }};
@@ -74,6 +76,7 @@ vm.assignDeliveryPickTask = new AsyncFunction("row", "pickerUserId", {json.dumps
   if (await duplicate !== false) throw new Error("duplicate assignment was not rejected");
   pending[0].resolve({{data:{{id:101,assigned_to:7,assigned_to_name:"送货甲"}}}});
   if (await assigning !== true || vm.deliveryOperationState.action || staleRow.pick_task.id !== 999) throw new Error("stale row was overwritten or assignment did not unlock");
+  if (!invalidated.includes(11) || invalidated.includes(99)) throw new Error("assignment invalidated a mutable row instead of the frozen delivery");
 
   const currentRow = {{id:21,delivery_number:"TH021",pick_task:{{id:201,assigned_to:7}}}};
   const unassigning = vm.assignDeliveryPickTask(currentRow, "");
@@ -81,6 +84,7 @@ vm.assignDeliveryPickTask = new AsyncFunction("row", "pickerUserId", {json.dumps
   if (pending.length !== 2 || pending[1].payload.picker_user_id !== null) throw new Error("unassignment payload was not frozen as null");
   pending[1].resolve({{data:{{id:201,assigned_to:null,assigned_to_name:null,assignment_required:true}}}});
   if (await unassigning !== true || currentRow.pick_task.assigned_to !== null || vm.deliveryOperationState.action) throw new Error("current row was not updated after unassignment");
+  if (!invalidated.includes(21)) throw new Error("unassignment kept stale detail");
   if (!messages.some(row => !row.danger && row.message.includes("已取消分配"))) throw new Error("unassignment success message missing");
 }})().catch(error => {{ console.error(error); process.exit(1); }});
 """

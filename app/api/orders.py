@@ -59,6 +59,9 @@ from app.models.finance import (
 from app.models.incoming_receipt import IncomingReceiptItem
 from app.models.material import Material
 from app.models.order import Order, OrderItem
+from app.models.order_estimated_cost_snapshot import (
+    SalesOrderItemEstimatedCostSnapshot,
+)
 from app.models.product import Product
 from app.models.production import ProductionCompletion
 from app.models.product_bom import (
@@ -100,9 +103,22 @@ from app.services.order_document_trace import build_order_item_document_trace
 from app.services.order_material_cost import estimate_order_item_material_cost
 from app.services.order_material_cost_snapshot import (
     freeze_order_item_material_cost,
+    get_latest_order_item_material_cost_snapshot,
     get_latest_order_item_material_cost_snapshots_by_items,
     mark_current_estimate_as_non_historical,
     serialize_order_item_material_cost_snapshot,
+)
+from app.services.order_estimated_cost_snapshot import (
+    classify_estimated_cost_health,
+    freeze_order_item_estimated_cost,
+    get_latest_order_item_estimated_cost_snapshot,
+    get_latest_order_item_estimated_cost_snapshots_by_items,
+    serialize_order_item_estimated_cost_snapshot,
+)
+from app.services.order_cost_readiness import (
+    COST_GAP_CATEGORIES,
+    classify_cost_gaps,
+    load_cost_missing_items,
 )
 from app.services.audit_log import append_audit_event
 from app.services.order_business_status import (
@@ -567,6 +583,22 @@ class BomComponentDemandUpdate(BaseModel):
     required_piece_quantity: int = Field(gt=0, strict=True)
     expected_required_piece_quantity: int = Field(gt=0, strict=True)
     idempotency_key: str = Field(min_length=1, max_length=120)
+
+
+class EstimatedCostUpdate(BaseModel):
+    expected_snapshot_version: int = Field(ge=1)
+    loss_rate: Decimal = Decimal("0.03")
+    die_fee: Decimal = Field(default=Decimal("0"), ge=0)
+    plate_fee: Decimal = Field(default=Decimal("0"), ge=0)
+    freight_fee: Decimal = Field(default=Decimal("0"), ge=0)
+    other_fee: Decimal = Field(default=Decimal("0"), ge=0)
+
+    @field_validator("loss_rate")
+    @classmethod
+    def _validate_loss_rate(cls, value: Decimal) -> Decimal:
+        if value not in {Decimal("0.03"), Decimal("0.05")}:
+            raise ValueError("生产加报损耗只能选择 3% 或 5%")
+        return value
 
 
 class OrderCreate(BaseModel):
@@ -1769,6 +1801,13 @@ def _order_response(
         if db is not None and may_view_cost
         else {}
     )
+    frozen_estimated_cost_by_item_id = (
+        get_latest_order_item_estimated_cost_snapshots_by_items(
+            db, list(order.items)
+        )
+        if db is not None and may_view_cost
+        else {}
+    )
     for item in order.items:
         item_business_projection = business_projection.get("items", {}).get(
             int(item.id), {}
@@ -1806,6 +1845,24 @@ def _order_response(
                     )
                 )
             )
+            frozen_estimated_cost = frozen_estimated_cost_by_item_id.get(item.id)
+            if frozen_estimated_cost is not None:
+                cost_reference.update(
+                    serialize_order_item_estimated_cost_snapshot(
+                        frozen_estimated_cost,
+                        sale_amount=item.subtotal,
+                    )
+                )
+            else:
+                cost_reference.update(
+                    {
+                        "estimated_total_cost_status": "not_frozen",
+                        "estimated_total_cost_status_label": "预计总成本待冻结",
+                        "estimated_total_cost_scope_label": "预计成本，非实际成本",
+                        "cost_status": "pending",
+                        "estimated_cost": None,
+                    }
+                )
         item_data = {
                 "id": item.id,
                 "product_id": item.product_id,
@@ -2479,6 +2536,306 @@ def list_orders(
             )
             for order in orders
         ],
+    }
+
+
+@router.get("/cost-readiness")
+def list_order_cost_readiness(
+    limit: int = Query(default=100, ge=1, le=200),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+    _cost_user: User = Depends(can_view_cost),
+) -> dict:
+    """List current order items whose frozen estimated cost still has gaps.
+
+    This endpoint is advisory and read-only. It deliberately ignores legacy
+    orders without a P1-28C1 snapshot instead of backfilling current rules as
+    historical facts.
+    """
+
+    latest_versions = (
+        select(
+            SalesOrderItemEstimatedCostSnapshot.sales_order_item_id.label("item_id"),
+            func.max(
+                SalesOrderItemEstimatedCostSnapshot.snapshot_version
+            ).label("snapshot_version"),
+        )
+        .group_by(SalesOrderItemEstimatedCostSnapshot.sales_order_item_id)
+        .subquery()
+    )
+    query = (
+        select(
+            SalesOrderItemEstimatedCostSnapshot,
+            OrderItem,
+            Order,
+            Customer,
+        )
+        .join(
+            latest_versions,
+            and_(
+                latest_versions.c.item_id
+                == SalesOrderItemEstimatedCostSnapshot.sales_order_item_id,
+                latest_versions.c.snapshot_version
+                == SalesOrderItemEstimatedCostSnapshot.snapshot_version,
+            ),
+        )
+        .join(
+            OrderItem,
+            OrderItem.id
+            == SalesOrderItemEstimatedCostSnapshot.sales_order_item_id,
+        )
+        .join(Order, Order.id == OrderItem.order_id)
+        .join(Customer, Customer.id == Order.customer_id)
+        .where(
+            SalesOrderItemEstimatedCostSnapshot.calculation_status
+            != "calculated",
+            ~Order.order_number.like("RUIDA-%"),
+            Order.status.notin_(_BUSINESS_EXCLUDED_STATUSES),
+        )
+        .order_by(
+            Order.created_at.desc(),
+            Order.id.desc(),
+            OrderItem.item_sequence.asc(),
+            OrderItem.id.asc(),
+        )
+    )
+    if not has_unrestricted_customer_access(user, db):
+        query = query.where(Order.customer_id.in_(customer_scope_ids(user, db)))
+
+    candidates = list(db.execute(query).all())
+    order_ids = {int(row[2].id) for row in candidates}
+    orders = (
+        list(
+            db.scalars(
+                select(Order)
+                .options(selectinload(Order.items))
+                .where(Order.id.in_(order_ids))
+            ).all()
+        )
+        if order_ids
+        else []
+    )
+    business_projections = build_order_business_statuses(
+        db,
+        orders,
+        include_finance=False,
+    )
+
+    items: list[dict[str, object]] = []
+    category_counts = {item["code"]: 0 for item in COST_GAP_CATEGORIES}
+    for snapshot, item, order, customer in candidates:
+        if (
+            business_projections.get(int(order.id), {}).get("business_status")
+            == "completed"
+        ):
+            continue
+        expected_reference = (
+            (item.item_order_number or "").strip()
+            or f"order-{int(item.order_id)}-item-{int(item.id)}"
+        )
+        if snapshot.order_item_reference_snapshot != expected_reference:
+            continue
+        missing_items = load_cost_missing_items(snapshot.missing_items_json)
+        categories = classify_cost_gaps(missing_items)
+        for category in categories:
+            category_counts[category["code"]] += 1
+        items.append(
+            {
+                "order_id": int(order.id),
+                "customer_id": int(order.customer_id),
+                "customer_name": sanitize_user_text(customer.name),
+                "customer_po": sanitize_user_text(order.customer_po),
+                "order_date": order.order_date,
+                "item_id": int(item.id),
+                "item_sequence": item.item_sequence,
+                "product_code": sanitize_user_text(item.snapshot_product_code),
+                "product_name": sanitize_user_text(item.snapshot_product_name),
+                "snapshot_version": int(snapshot.snapshot_version),
+                "categories": [
+                    {"code": category["code"], "label": category["label"]}
+                    for category in categories
+                ],
+                "category_codes": [category["code"] for category in categories],
+                "missing_details": missing_items,
+            }
+        )
+
+    total_items = len(items)
+    visible_items = items[:limit]
+    return {
+        "scope_label": "仅统计已有预计成本快照的当前订单；旧订单不回填",
+        "total_items": total_items,
+        "returned_items": len(visible_items),
+        "truncated": total_items > len(visible_items),
+        "categories": [
+            {**category, "count": category_counts[category["code"]]}
+            for category in COST_GAP_CATEGORIES
+            if category_counts[category["code"]]
+        ],
+        "items": visible_items,
+    }
+
+
+@router.get("/cost-review")
+def list_order_cost_review(
+    limit: int = Query(default=100, ge=1, le=200),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+    _cost_user: User = Depends(can_view_cost),
+) -> dict:
+    """List current frozen estimates that need an internal margin review.
+
+    The result reuses the P1-28C2 health classifier. It is advisory and
+    read-only: healthy rows stay in the summary, while incomplete estimates
+    remain exclusively in the cost-readiness list.
+    """
+
+    latest_versions = (
+        select(
+            SalesOrderItemEstimatedCostSnapshot.sales_order_item_id.label("item_id"),
+            func.max(
+                SalesOrderItemEstimatedCostSnapshot.snapshot_version
+            ).label("snapshot_version"),
+        )
+        .group_by(SalesOrderItemEstimatedCostSnapshot.sales_order_item_id)
+        .subquery()
+    )
+    query = (
+        select(
+            SalesOrderItemEstimatedCostSnapshot,
+            OrderItem,
+            Order,
+            Customer,
+        )
+        .join(
+            latest_versions,
+            and_(
+                latest_versions.c.item_id
+                == SalesOrderItemEstimatedCostSnapshot.sales_order_item_id,
+                latest_versions.c.snapshot_version
+                == SalesOrderItemEstimatedCostSnapshot.snapshot_version,
+            ),
+        )
+        .join(
+            OrderItem,
+            OrderItem.id
+            == SalesOrderItemEstimatedCostSnapshot.sales_order_item_id,
+        )
+        .join(Order, Order.id == OrderItem.order_id)
+        .join(Customer, Customer.id == Order.customer_id)
+        .where(
+            SalesOrderItemEstimatedCostSnapshot.calculation_status
+            == "calculated",
+            ~Order.order_number.like("RUIDA-%"),
+            Order.status.notin_(_BUSINESS_EXCLUDED_STATUSES),
+        )
+        .order_by(
+            Order.created_at.desc(),
+            Order.id.desc(),
+            OrderItem.item_sequence.asc(),
+            OrderItem.id.asc(),
+        )
+    )
+    if not has_unrestricted_customer_access(user, db):
+        query = query.where(Order.customer_id.in_(customer_scope_ids(user, db)))
+
+    candidates = list(db.execute(query).all())
+    order_ids = {int(row[2].id) for row in candidates}
+    orders = (
+        list(
+            db.scalars(
+                select(Order)
+                .options(selectinload(Order.items))
+                .where(Order.id.in_(order_ids))
+            ).all()
+        )
+        if order_ids
+        else []
+    )
+    business_projections = build_order_business_statuses(
+        db,
+        orders,
+        include_finance=False,
+    )
+
+    summary_definitions = (
+        ("estimated_loss", "预计亏损", "red"),
+        ("very_low", "利润空间很低", "red"),
+        ("review", "建议复核", "orange"),
+        ("sale_missing", "售价待完善", "orange"),
+        ("healthy", "预计正常", "green"),
+    )
+    summary_counts = {code: 0 for code, _label, _tone in summary_definitions}
+    severity = {
+        "estimated_loss": 0,
+        "very_low": 1,
+        "review": 2,
+        "sale_missing": 3,
+    }
+    items: list[dict[str, object]] = []
+    for snapshot, item, order, customer in candidates:
+        if (
+            business_projections.get(int(order.id), {}).get("business_status")
+            == "completed"
+        ):
+            continue
+        expected_reference = (
+            (item.item_order_number or "").strip()
+            or f"order-{int(item.order_id)}-item-{int(item.id)}"
+        )
+        if snapshot.order_item_reference_snapshot != expected_reference:
+            continue
+        health = classify_estimated_cost_health(snapshot, item.subtotal)
+        health_code = str(health["estimated_cost_health_code"])
+        if health_code not in summary_counts:
+            continue
+        summary_counts[health_code] += 1
+        if health_code == "healthy":
+            continue
+        items.append(
+            {
+                "order_id": int(order.id),
+                "customer_id": int(order.customer_id),
+                "customer_name": sanitize_user_text(customer.name),
+                "customer_po": sanitize_user_text(order.customer_po),
+                "order_date": order.order_date,
+                "item_id": int(item.id),
+                "item_sequence": item.item_sequence,
+                "product_code": sanitize_user_text(item.snapshot_product_code),
+                "product_name": sanitize_user_text(item.snapshot_product_name),
+                "sale_amount": str(item.subtotal),
+                "estimated_order_total_cost": str(
+                    snapshot.estimated_order_total_cost
+                ),
+                "estimated_gross_profit": health["estimated_gross_profit"],
+                "estimated_margin_rate": health["estimated_margin_rate"],
+                "health_code": health_code,
+                "health_label": health["estimated_cost_health_label"],
+                "health_tone": health["estimated_cost_health_tone"],
+                "health_version": health["estimated_cost_health_version"],
+            }
+        )
+
+    # Python sorting is stable, preserving newest-order-first within one level.
+    items.sort(key=lambda row: severity[str(row["health_code"])])
+    total_items = len(items)
+    visible_items = items[:limit]
+    return {
+        "scope_label": "当前订单冻结预计成本，仅供内部复核，不是实际利润",
+        "evaluated_items": sum(summary_counts.values()),
+        "total_items": total_items,
+        "returned_items": len(visible_items),
+        "truncated": total_items > len(visible_items),
+        "summary": [
+            {
+                "code": code,
+                "label": label,
+                "tone": tone,
+                "count": summary_counts[code],
+            }
+            for code, label, tone in summary_definitions
+        ],
+        "items": visible_items,
     }
 
 
@@ -5767,9 +6124,15 @@ def _create_order_impl(
                 refresh_production_task(db, created_item.id)
         refresh_order_production_status(db, order.id)
         for created_item in created_items:
-            freeze_order_item_material_cost(
+            material_snapshot, _ = freeze_order_item_material_cost(
                 db,
                 created_item,
+                actor_id=user.id,
+            )
+            freeze_order_item_estimated_cost(
+                db,
+                created_item,
+                material_snapshot=material_snapshot,
                 actor_id=user.id,
             )
         _set_order_save_stage(observability, "build_response")
@@ -6035,6 +6398,13 @@ def update_order_item_bom_component_demand(
             return get_order_item_bom_preview(db, item.id)
         ensure_component_production_tasks(db, item.id)
         freeze_order_item_material_cost(db, item, actor_id=user.id)
+        material_snapshot = get_latest_order_item_material_cost_snapshot(db, item)
+        freeze_order_item_estimated_cost(
+            db,
+            item,
+            material_snapshot=material_snapshot,
+            actor_id=user.id,
+        )
         _log_component_demand_change(
             db,
             request=request,
@@ -6056,6 +6426,65 @@ def update_order_item_bom_component_demand(
     except IntegrityError as error:
         db.rollback()
         raise HTTPException(status_code=409, detail="组件需求调整已提交，请刷新查看") from error
+
+
+@router.post("/items/{item_id}/estimated-cost")
+def update_order_item_estimated_cost(
+    item_id: int,
+    payload: EstimatedCostUpdate,
+    request: Request = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_view_cost),
+) -> dict:
+    item = db.get(OrderItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="订单明细不存在")
+    order = db.get(Order, item.order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="订单不存在")
+    require_customer_access(order.customer_id, current_user=user, db=db)
+    latest = get_latest_order_item_estimated_cost_snapshot(db, item)
+    if latest is None:
+        raise HTTPException(status_code=409, detail="预计成本尚未冻结，请刷新订单后重试")
+    if latest.snapshot_version != payload.expected_snapshot_version:
+        raise HTTPException(
+            status_code=409,
+            detail="预计成本已被更新，请刷新后再修改",
+        )
+    material_snapshot, _ = freeze_order_item_material_cost(
+        db, item, actor_id=user.id
+    )
+    snapshot, created = freeze_order_item_estimated_cost(
+        db,
+        item,
+        material_snapshot=material_snapshot,
+        actor_id=user.id,
+        parameters=payload.model_dump(),
+    )
+    _append_order_audit(
+        db,
+        request=request,
+        user=user,
+        order=order,
+        action_code="order.item.estimated_cost.update",
+        legacy_action="UPDATE_ESTIMATED_COST",
+        description="调整当前订单预计损耗与一次性费用",
+        details={
+            "snapshot_version": snapshot.snapshot_version,
+            "created": created,
+            "loss_rate": str(snapshot.loss_rate),
+            "scope": "estimated_not_actual",
+        },
+        entity_type="order_item",
+        entity_id=item.id,
+        object_ref=item.item_order_number or str(item.id),
+        resource="OrderItemEstimatedCost",
+    )
+    db.commit()
+    return serialize_order_item_estimated_cost_snapshot(
+        snapshot,
+        sale_amount=item.subtotal,
+    )
 
 
 @router.put("/items/{item_id}")
@@ -6789,7 +7218,15 @@ def update_order_item(
         object_ref=item.item_order_number or f"{order.order_number}:{item.id}",
         resource="OrderItem",
     )
-    freeze_order_item_material_cost(db, item, actor_id=user.id)
+    material_snapshot, _ = freeze_order_item_material_cost(
+        db, item, actor_id=user.id
+    )
+    freeze_order_item_estimated_cost(
+        db,
+        item,
+        material_snapshot=material_snapshot,
+        actor_id=user.id,
+    )
     db.commit()
     db.refresh(item)
     return {

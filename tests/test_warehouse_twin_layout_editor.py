@@ -1,18 +1,24 @@
 from __future__ import annotations
 
 import json
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
 
+from app.services import warehouse_twin_layout_editor as editor
 from app.services.warehouse_twin_layout_editor import (
     WarehouseTwinLayoutEditConflictError,
     WarehouseTwinLayoutEditError,
     _floor_revision,
     create_warehouse_twin_rack,
     delete_warehouse_twin_rack,
+    discard_warehouse_twin_layout_draft,
+    load_warehouse_twin_layout_draft,
+    publish_warehouse_twin_layout_draft,
     update_warehouse_twin_rack,
     update_warehouse_twin_zone_policy,
+    validate_warehouse_twin_layout_draft,
 )
 from factory_twin.scripts.export_erp_twin_floor_maps import preserve_operator_layout_edits
 
@@ -181,6 +187,146 @@ def test_zone_policy_keeps_business_usage_separate_from_storage_layout(tmp_path:
     assert result.value["allowed_inventory_types"] == ["finished", "semi_finished", "raw_material"]
     assert result.value["storage_layout"] == "mixed"
     assert result.value["subtype"] == "rack_storage"
+
+
+def test_draft_edit_validate_and_publish_are_separate_versioned_steps(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    published = _asset(tmp_path / "published.json")
+    draft = tmp_path / "runtime" / "layout.draft.json"
+    backups = tmp_path / "backups"
+    monkeypatch.setattr(editor, "TWIN_LAYOUT_PATH", published)
+    monkeypatch.setattr(editor, "TWIN_LAYOUT_DRAFT_PATH", draft)
+    monkeypatch.setattr(editor, "TWIN_LAYOUT_BACKUP_DIR", backups)
+    before = sha256(published.read_bytes()).hexdigest()
+    revision = json.loads(published.read_text(encoding="utf-8"))["floors"]["3F"]["revision"]
+
+    created = create_warehouse_twin_rack(
+        "3F",
+        expected_revision=revision,
+        operation_key="draft-create-rack-0001",
+        area_feature_id="zone-f1",
+        values=_rack_values(level_cell_counts=[1, 2, 3]),
+    )
+    assert created.applied is True
+    assert draft.is_file()
+    assert sha256(published.read_bytes()).hexdigest() == before
+    assert json.loads(published.read_text(encoding="utf-8"))["floors"]["3F"]["racks"] == []
+
+    preview = load_warehouse_twin_layout_draft("3F")
+    assert preview["draft_control"]["status"] == "draft"
+    assert preview["draft_control"]["published_revision"] == revision
+    assert preview["racks"][0]["id"] == created.value["id"]
+
+    validated = validate_warehouse_twin_layout_draft(
+        "3F",
+        expected_revision=created.floor_revision,
+    )
+    assert validated.value["status"] == "validated"
+    assert validated.value["blockers"] == []
+
+    published_result = publish_warehouse_twin_layout_draft(
+        "3F",
+        expected_published_revision=revision,
+        expected_draft_revision=created.floor_revision,
+        operation_key="publish-layout-0001",
+    )
+    assert published_result.applied is True
+    assert published_result.value["inventory_changed"] is False
+    assert published_result.value["published_revision"] == created.floor_revision
+    final_document = json.loads(published.read_text(encoding="utf-8"))
+    assert final_document["floors"]["3F"]["racks"][0]["id"] == created.value["id"]
+    assert "draft_meta" not in final_document
+    backup = backups / published_result.value["backup_name"]
+    assert backup.is_file()
+    assert sha256(backup.read_bytes()).hexdigest() == before
+
+    repeated = publish_warehouse_twin_layout_draft(
+        "3F",
+        expected_published_revision=revision,
+        expected_draft_revision=created.floor_revision,
+        operation_key="publish-layout-0001",
+    )
+    assert repeated.applied is False
+    assert len(list(backups.glob("*.json"))) == 1
+
+
+def test_invalid_or_stale_draft_is_refused_and_never_changes_published(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    published = _asset(tmp_path / "published.json")
+    draft = tmp_path / "layout.draft.json"
+    monkeypatch.setattr(editor, "TWIN_LAYOUT_PATH", published)
+    monkeypatch.setattr(editor, "TWIN_LAYOUT_DRAFT_PATH", draft)
+    revision = json.loads(published.read_text(encoding="utf-8"))["floors"]["3F"]["revision"]
+    created = create_warehouse_twin_rack(
+        "3F",
+        expected_revision=revision,
+        operation_key="draft-create-invalid-0001",
+        area_feature_id="zone-f1",
+        values=_rack_values(),
+    )
+    before = sha256(published.read_bytes()).hexdigest()
+
+    document = json.loads(draft.read_text(encoding="utf-8"))
+    duplicate = dict(document["floors"]["3F"]["racks"][0])
+    duplicate["name"] = "重复编号货架"
+    document["floors"]["3F"]["racks"].append(duplicate)
+    document["floors"]["3F"]["revision"] = _floor_revision(document["floors"]["3F"])
+    draft.write_text(json.dumps(document, ensure_ascii=False), encoding="utf-8")
+    invalid_revision = document["floors"]["3F"]["revision"]
+
+    invalid = validate_warehouse_twin_layout_draft("3F", expected_revision=invalid_revision)
+    assert invalid.value["status"] == "draft"
+    assert any("重复货架" in item for item in invalid.value["blockers"])
+    with pytest.raises(WarehouseTwinLayoutEditConflictError):
+        publish_warehouse_twin_layout_draft(
+            "3F",
+            expected_published_revision=revision,
+            expected_draft_revision=invalid_revision,
+            operation_key="publish-invalid-0001",
+        )
+    assert sha256(published.read_bytes()).hexdigest() == before
+
+    published_document = json.loads(published.read_text(encoding="utf-8"))
+    published_document["generated_at"] = "externally-updated"
+    published.write_text(json.dumps(published_document, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(WarehouseTwinLayoutEditConflictError):
+        load_warehouse_twin_layout_draft("3F")
+
+
+def test_discard_draft_is_idempotent_and_leaves_published_unchanged(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    published = _asset(tmp_path / "published.json")
+    draft = tmp_path / "layout.draft.json"
+    monkeypatch.setattr(editor, "TWIN_LAYOUT_PATH", published)
+    monkeypatch.setattr(editor, "TWIN_LAYOUT_DRAFT_PATH", draft)
+    before = sha256(published.read_bytes()).hexdigest()
+    revision = json.loads(published.read_text(encoding="utf-8"))["floors"]["3F"]["revision"]
+    created = create_warehouse_twin_rack(
+        "3F",
+        expected_revision=revision,
+        operation_key="draft-create-discard-0001",
+        area_feature_id="zone-f1",
+        values=_rack_values(),
+    )
+
+    discarded = discard_warehouse_twin_layout_draft(
+        "3F",
+        expected_revision=created.floor_revision,
+    )
+    assert discarded.applied is True
+    assert not draft.exists()
+    repeated = discard_warehouse_twin_layout_draft(
+        "3F",
+        expected_revision=created.floor_revision,
+    )
+    assert repeated.applied is False
+    assert sha256(published.read_bytes()).hexdigest() == before
 
 
 def test_refresh_export_preserves_operator_racks_and_zone_policy(tmp_path: Path) -> None:

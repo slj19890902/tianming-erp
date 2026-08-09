@@ -556,6 +556,37 @@ body.warehouse-twin-page {
 .twin-cancel-location-layout:disabled { cursor: not-allowed; opacity: .45; }
 .twin-save-location-layout { border-color: #0f766e; color: #fff; background: #0f766e; }
 .twin-cancel-location-layout { color: #8a6418; background: #fff9e9; }
+.twin-layout-draft-workflow {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px;
+  border: 1px solid #c7d3d9;
+  border-radius: 4px;
+  background: #fff;
+  white-space: nowrap;
+}
+.twin-layout-draft-workflow .status {
+  padding: 4px 6px;
+  border-radius: 3px;
+  color: #7c5b16;
+  background: #fff7df;
+  font-size: 8px;
+  font-weight: 800;
+}
+.twin-layout-draft-workflow .status.validated { color: #0f665f; background: #e6f6f2; }
+.twin-layout-draft-workflow .status.none { color: #64748b; background: #eef2f4; }
+.twin-layout-draft-workflow button {
+  padding: 4px 6px;
+  border: 1px solid #c7d3d9;
+  border-radius: 3px;
+  color: #526b77;
+  background: #fff;
+  font-size: 8px;
+  font-weight: 800;
+}
+.twin-layout-draft-workflow button.publish { border-color: #0f766e; color: #fff; background: #0f766e; }
+.twin-layout-draft-workflow button:disabled { cursor: not-allowed; opacity: .4; }
 .twin-view-note { padding: 5px 7px; border: 1px solid #d3dde1; border-radius: 3px; color: #627783; background: #fff; font-size: 9px; white-space: nowrap; }
 .twin-toolbar-summary { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
 .twin-toolbar-summary span { padding: 4px 6px; border: 1px solid #d6e0e4; border-radius: 3px; color: #6b7f8b; background: #fff; font-size: 8px; }
@@ -827,6 +858,7 @@ body.warehouse-twin-page {
   .twin-command-bar.embedded { grid-template-columns: minmax(470px, 1fr) auto; }
   .twin-toolbar-summary span:nth-child(2),
   .twin-toolbar-summary span:nth-child(4) { display: none; }
+  .twin-layout-draft-workflow .status { display: none; }
   .twin-workspace.layers-open { grid-template-columns: 115px 190px minmax(360px, 1fr) 260px; }
   .twin-workspace.layers-collapsed { grid-template-columns: 190px minmax(390px, 1fr) 260px; }
 }

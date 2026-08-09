@@ -105,10 +105,26 @@ def test_list_searches_are_debounced_and_old_requests_are_cancelled() -> None:
     assert "queuePageSearch('products')" in INDEX
     assert "queuePageSearch('orders')" in INDEX
     assert "new AbortController()" in INDEX
-    assert 'beginLatestRequest("customers:list")' in INDEX
-    assert 'beginLatestRequest("products:list")' in INDEX
-    assert 'beginLatestRequest("materials:list")' in INDEX
-    assert 'beginLatestRequest("orders:list")' in INDEX
+    for request_key in (
+        "customers:list",
+        "products:list",
+        "materials:list",
+        "orders:list",
+    ):
+        literal_begin = f'beginLatestRequest("{request_key}")'
+        variable_begin = re.search(
+            rf'const requestKey = "{re.escape(request_key)}";\s*'
+            r"const controller = this\.beginLatestRequest\(requestKey\)",
+            INDEX,
+        )
+        assert literal_begin in INDEX or variable_begin is not None
+        assert (
+            f'finishLatestRequest("{request_key}", controller)' in INDEX
+            or (
+                variable_begin is not None
+                and "finishLatestRequest(requestKey, controller)" in INDEX
+            )
+        )
     assert "signal:controller.signal" in INDEX
 
 

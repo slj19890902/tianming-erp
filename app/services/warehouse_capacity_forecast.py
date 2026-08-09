@@ -90,11 +90,55 @@ def _posted_supplier_receipts_by_item(
     return balances
 
 
+def _legacy_completed_supplier_item_ids(
+    db: Session,
+    supplier_item_ids: list[int],
+    received_by_item: dict[int, tuple[int, bool]],
+) -> set[int]:
+    """Return old-workflow receipt completions without inventing receipt facts.
+
+    The modern incoming receipt ledger is authoritative as soon as it contains
+    any posted quantity for a supplier line.  Only lines with zero modern posted
+    quantity may fall back to the three matching legacy completion fields on the
+    linked order item.
+    """
+
+    candidate_ids = sorted(
+        {
+            int(item_id)
+            for item_id in supplier_item_ids
+            if max(int(received_by_item.get(int(item_id), (0, False))[0]), 0) == 0
+        }
+    )
+    completed: set[int] = set()
+    for offset in range(0, len(candidate_ids), 500):
+        item_id_chunk = candidate_ids[offset : offset + 500]
+        completed.update(
+            int(item_id)
+            for item_id in db.scalars(
+                select(SupplierRequisitionOrderItem.id)
+                .join(
+                    OrderItem,
+                    OrderItem.id == SupplierRequisitionOrderItem.order_item_id,
+                )
+                .where(
+                    SupplierRequisitionOrderItem.id.in_(item_id_chunk),
+                    OrderItem.material_status == "received",
+                    OrderItem.requisition_status == "已入库",
+                    OrderItem.material_received_at.is_not(None),
+                )
+            ).all()
+        )
+    return completed
+
+
 def _supplier_source(
     row: SupplierRequisitionOrder,
     received_by_item: dict[int, tuple[int, bool]] | None = None,
+    legacy_completed_item_ids: set[int] | None = None,
 ) -> dict[str, Any]:
     received_by_item = received_by_item or {}
+    legacy_completed_item_ids = legacy_completed_item_ids or set()
     item_balances = [
         (
             item,
@@ -119,14 +163,26 @@ def _supplier_source(
             min(planned, received)
             for _item, planned, received, _accepted_short in item_balances
         )
+        legacy_completed_quantity = sum(
+            planned
+            for item, planned, _received, _accepted_short in item_balances
+            if int(item.id) in legacy_completed_item_ids
+        )
         remaining_quantity = sum(
-            0 if accepted_short else max(planned - received, 0)
-            for _item, planned, received, accepted_short in item_balances
+            (
+                0
+                if accepted_short or int(item.id) in legacy_completed_item_ids
+                else max(planned - received, 0)
+            )
+            for item, planned, received, accepted_short in item_balances
         )
         dates = [
             item.delivery_date
             for item, planned, received, accepted_short in item_balances
-            if not accepted_short and planned > received and item.delivery_date
+            if not accepted_short
+            and int(item.id) not in legacy_completed_item_ids
+            and planned > received
+            and item.delivery_date
         ]
     else:
         # Historical/header-only rows have no line that a receipt fact can safely
@@ -135,16 +191,23 @@ def _supplier_source(
         planned_quantity = max(int(row.requisition_qty or 0), 0)
         posted_received_quantity = 0
         received_quantity = 0
+        legacy_completed_quantity = 0
         remaining_quantity = planned_quantity
         dates = []
     reference_date = min(dates) if dates else None
+    legacy_completion_label = (
+        f"旧流程已入库 {legacy_completed_quantity} 张"
+        if legacy_completed_quantity > 0
+        else None
+    )
+    source_label = f"{row.supplier_name or '供应商待补'} · {remaining_quantity} 张"
+    if legacy_completion_label:
+        source_label = f"{source_label} · {legacy_completion_label}"
     return {
         "source_type": "supplier_requisition",
         "source_id": row.id,
         "source_number": row.order_number,
-        "source_label": (
-            f"{row.supplier_name or '供应商待补'} · {remaining_quantity} 张"
-        ),
+        "source_label": source_label,
         "reference_date": reference_date,
         "reference_label": "客户交期参考" if reference_date else "没有可靠到料日期",
         "created_date": _as_date(row.created_at),
@@ -152,6 +215,9 @@ def _supplier_source(
         "planned_quantity": planned_quantity,
         "posted_received_quantity": posted_received_quantity,
         "received_quantity": received_quantity,
+        "legacy_completed": legacy_completed_quantity > 0,
+        "legacy_completed_quantity": legacy_completed_quantity,
+        "legacy_completion_label": legacy_completion_label,
         "remaining_quantity": remaining_quantity,
         "valid": row.status == "confirmed" and remaining_quantity > 0,
     }
@@ -198,10 +264,20 @@ def resolve_capacity_forecast_source(
         )
         if row is None:
             return None
+        supplier_item_ids = [
+            int(item.id) for item in row.items if item.id is not None
+        ]
         received_by_item = _posted_supplier_receipts_by_item(
-            db, [int(item.id) for item in row.items if item.id is not None]
+            db, supplier_item_ids
         )
-        return _supplier_source(row, received_by_item)
+        legacy_completed_item_ids = _legacy_completed_supplier_item_ids(
+            db, supplier_item_ids, received_by_item
+        )
+        return _supplier_source(
+            row,
+            received_by_item,
+            legacy_completed_item_ids,
+        )
     if source_type == "production_task":
         result = db.execute(
             select(ProductionTask, Order)
@@ -249,7 +325,13 @@ def _candidate_sources(db: Session, *, as_of: date, horizon: int) -> list[dict[s
         if item.id is not None
     ]
     received_by_item = _posted_supplier_receipts_by_item(db, supplier_item_ids)
-    sources.extend(_supplier_source(row, received_by_item) for row in supplier_rows)
+    legacy_completed_item_ids = _legacy_completed_supplier_item_ids(
+        db, supplier_item_ids, received_by_item
+    )
+    sources.extend(
+        _supplier_source(row, received_by_item, legacy_completed_item_ids)
+        for row in supplier_rows
+    )
 
     production_rows = db.execute(
         select(ProductionTask, Order)

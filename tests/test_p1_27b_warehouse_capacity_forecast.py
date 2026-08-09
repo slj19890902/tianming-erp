@@ -305,6 +305,18 @@ def _post_supplier_receipt(
         return receipt.id, fact.id
 
 
+def _mark_legacy_received(factory, ids: dict, *item_indexes: int) -> None:
+    from app.models.order import OrderItem
+
+    with factory() as db:
+        for item_index in item_indexes:
+            item = db.get(OrderItem, ids["order_items"][item_index])
+            item.material_status = "received"
+            item.requisition_status = "已入库"
+            item.material_received_at = datetime.now()
+        db.commit()
+
+
 def test_missing_source_is_not_guessed_and_admin_plan_drives_forecast(forecast_app) -> None:
     app, ids, today, _factory = forecast_app
     with TestClient(app) as client:
@@ -492,3 +504,141 @@ def test_supplier_receipts_reduce_candidates_and_stale_existing_plan(forecast_ap
         assert current["stale_plans"] == []
         floor = next(row for row in current["floors"] if row["floor_code"] == "1F")
         assert floor["peak_occupied"] == 2
+
+
+def test_legacy_completed_supplier_lines_are_excluded_without_fake_receipts(
+    forecast_app,
+) -> None:
+    from app.services.warehouse_capacity_forecast import (
+        resolve_capacity_forecast_source,
+    )
+
+    app, ids, _today, factory = forecast_app
+    _mark_legacy_received(factory, ids, 0, 1)
+
+    with factory() as db:
+        resolved = resolve_capacity_forecast_source(
+            db, "supplier_requisition", ids["source"]
+        )
+    assert resolved is not None
+    assert resolved["planned_quantity"] == 100
+    assert resolved["posted_received_quantity"] == 0
+    assert resolved["received_quantity"] == 0
+    assert resolved["legacy_completed"] is True
+    assert resolved["legacy_completed_quantity"] == 100
+    assert resolved["legacy_completion_label"] == "旧流程已入库 100 张"
+    assert resolved["remaining_quantity"] == 0
+    assert resolved["valid"] is False
+
+    with TestClient(app) as client:
+        _login(client, "forecast-admin")
+        payload = client.get("/api/warehouse/capacity/forecast?horizon=7").json()
+    assert payload["missing_sources"] == []
+
+
+def test_partially_legacy_completed_supplier_order_keeps_only_open_line(
+    forecast_app,
+) -> None:
+    from app.services.warehouse_capacity_forecast import (
+        resolve_capacity_forecast_source,
+    )
+
+    app, ids, today, factory = forecast_app
+    _mark_legacy_received(factory, ids, 0)
+
+    with factory() as db:
+        resolved = resolve_capacity_forecast_source(
+            db, "supplier_requisition", ids["source"]
+        )
+    assert resolved is not None
+    assert resolved["posted_received_quantity"] == 0
+    assert resolved["received_quantity"] == 0
+    assert resolved["legacy_completed_quantity"] == 60
+    assert resolved["remaining_quantity"] == 40
+    assert resolved["reference_date"] == today + timedelta(days=2)
+    assert resolved["source_label"].endswith("旧流程已入库 60 张")
+    assert resolved["valid"] is True
+
+    with TestClient(app) as client:
+        _login(client, "forecast-admin")
+        source = client.get(
+            "/api/warehouse/capacity/forecast?horizon=7"
+        ).json()["missing_sources"][0]
+    assert source["legacy_completed"] is True
+    assert source["legacy_completed_quantity"] == 60
+    assert source["legacy_completion_label"] == "旧流程已入库 60 张"
+    assert source["remaining_quantity"] == 40
+
+
+def test_modern_receipt_quantity_wins_and_reversal_restores_legacy_completion(
+    forecast_app,
+) -> None:
+    from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
+    from app.services.warehouse_capacity_forecast import (
+        resolve_capacity_forecast_source,
+    )
+
+    _app, ids, _today, factory = forecast_app
+    _mark_legacy_received(factory, ids, 0)
+    receipt_id, receipt_item_id = _post_supplier_receipt(
+        factory,
+        ids,
+        item_index=0,
+        quantity=30,
+        receipt_key="forecast-modern-priority",
+    )
+
+    with factory() as db:
+        modern = resolve_capacity_forecast_source(
+            db, "supplier_requisition", ids["source"]
+        )
+    assert modern is not None
+    assert modern["posted_received_quantity"] == 30
+    assert modern["received_quantity"] == 30
+    assert modern["legacy_completed"] is False
+    assert modern["legacy_completed_quantity"] == 0
+    assert modern["legacy_completion_label"] is None
+    assert modern["remaining_quantity"] == 70
+
+    with factory() as db:
+        db.get(IncomingReceiptItem, receipt_item_id).status = "reversed"
+        db.get(IncomingReceipt, receipt_id).status = "reversed"
+        db.commit()
+        restored = resolve_capacity_forecast_source(
+            db, "supplier_requisition", ids["source"]
+        )
+    assert restored is not None
+    assert restored["posted_received_quantity"] == 0
+    assert restored["received_quantity"] == 0
+    assert restored["legacy_completed"] is True
+    assert restored["legacy_completed_quantity"] == 60
+    assert restored["remaining_quantity"] == 40
+
+
+def test_legacy_completion_requires_all_three_order_item_fields(forecast_app) -> None:
+    from app.models.order import OrderItem
+    from app.services.warehouse_capacity_forecast import (
+        resolve_capacity_forecast_source,
+    )
+
+    _app, ids, _today, factory = forecast_app
+    with factory() as db:
+        item = db.get(OrderItem, ids["order_items"][0])
+        item.material_status = "received"
+        item.requisition_status = "已入库"
+        item.material_received_at = None
+        db.commit()
+        incomplete = resolve_capacity_forecast_source(
+            db, "supplier_requisition", ids["source"]
+        )
+        item.material_received_at = datetime.now()
+        db.commit()
+        complete = resolve_capacity_forecast_source(
+            db, "supplier_requisition", ids["source"]
+        )
+    assert incomplete is not None
+    assert incomplete["legacy_completed_quantity"] == 0
+    assert incomplete["remaining_quantity"] == 100
+    assert complete is not None
+    assert complete["legacy_completed_quantity"] == 60
+    assert complete["remaining_quantity"] == 40

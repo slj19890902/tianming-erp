@@ -270,6 +270,8 @@ def test_order_page_requests_summary_and_lazily_loads_group_details() -> None:
     assert "this.orderGroupDetails = {}" in loader
     assert "this.orderGroupDetailErrors = {}" in loader
     assert 'axios.get("/api/orders/group-detail"' in toggle
+    assert "orderGroupDetailRequests.get(key)" in toggle
+    assert "existing.promise" in toggle
     assert "this.orderGroupDetails[key]" in toggle
     assert "订单明细加载失败" in toggle
     assert 'typeof group === "string"' in toggle

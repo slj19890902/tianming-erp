@@ -7086,6 +7086,8 @@
       const PAGE_CACHE_TTL_MS = 30_000;
       const latestRequestControllers = new Map();
       const searchDebounceTimers = new Map();
+      const orderGroupDetailRequests = new Map();
+      let orderGroupDetailRequestSequence = 0;
       const today = () => TmTime.beijingToday();
       const plusDays = (days) => TmTime.addCalendarDays(TmTime.beijingToday(), days);
       const addWorkingDays = (startDate, workingDays=7) => TmTime.addWorkingDays(startDate, workingDays);
@@ -11257,6 +11259,10 @@
             this.pageCacheUpdatedAt = {};
             for (const controller of latestRequestControllers.values()) controller.abort();
             latestRequestControllers.clear();
+            this.cancelOrderGroupDetailRequests?.();
+            this.orderGroupDetails = {};
+            this.orderGroupDetailLoading = {};
+            this.orderGroupDetailErrors = {};
             this.supplierRequisitionPreviewLoading = false;
             for (const timer of searchDebounceTimers.values()) clearTimeout(timer);
             searchDebounceTimers.clear();
@@ -12978,15 +12984,19 @@
             const controller = this.beginLatestRequest("orders:list");
             try {
               const { data } = await axios.get("/api/orders", { params, signal:controller.signal });
+              if (latestRequestControllers.get("orders:list") !== controller) return false;
               this.orders = data.items; this.ordersTotal = data.total; this.ordersUnfinishedTotal = data.unfinished_total || 0;
+              this.cancelOrderGroupDetailRequests();
               this.orderListGeneration += 1;
               this.expandedOrders = {};
               this.orderGroupDetails = {};
               this.orderGroupDetailLoading = {};
               this.orderGroupDetailErrors = {};
               if (this.orderBomDemandSaveState?.outcomeUncertain) this.resetOrderBomDemandSaveState();
+              return true;
             } catch (error) {
-              if (!this.isCancelledRequest(error)) throw error;
+              if (!this.isCancelledRequest(error) && latestRequestControllers.get("orders:list") === controller) throw error;
+              return false;
             } finally {
               this.finishLatestRequest("orders:list", controller);
             }
@@ -20909,22 +20919,31 @@
             } finally { this.loading=false; }
           },
           async openOrderEditor(group) {
-            const detail = await this.ensureOrderGroupDetail(group);
-            const first = detail?.orders?.[0];
-            if (!first) return;
-            this.orderGroupSaveState = {saving:false,committed:false,outcomeUncertain:false,result:null};
-            this.orderEditForm = {
-              order_ids: detail.orders.map(row => row.id),
-              customer_name: group.customer_name || "",
-              customer_po: group.customer_po || "",
-              order_number: first.order_number || "",
-              order_date: first.order_date || "",
-              delivery_date: first.delivery_date || "",
-              remark: first.remark || "",
-            };
-            this.orderEditGroup = {...group,orders:detail.orders};
-            this.showOrderEditDanger = false;
-            this.modal = { type:"orderEdit", title:`编辑客户订单组 ${group.customer_po || first.order_number}` };
+            const requestKey = "orders:read-detail-modal";
+            this.cancelOrderTraceChildRequests();
+            const controller = this.beginLatestRequest(requestKey);
+            try {
+              const detail = await this.ensureOrderGroupDetail(group);
+              if (!detail || latestRequestControllers.get(requestKey) !== controller) return false;
+              const first = detail.orders?.[0];
+              if (!first) return false;
+              this.orderGroupSaveState = {saving:false,committed:false,outcomeUncertain:false,result:null};
+              this.orderEditForm = {
+                order_ids: detail.orders.map(row => row.id),
+                customer_name: group.customer_name || "",
+                customer_po: group.customer_po || "",
+                order_number: first.order_number || "",
+                order_date: first.order_date || "",
+                delivery_date: first.delivery_date || "",
+                remark: first.remark || "",
+              };
+              this.orderEditGroup = {...group,orders:detail.orders};
+              this.showOrderEditDanger = false;
+              this.modal = { type:"orderEdit", title:`编辑客户订单组 ${group.customer_po || first.order_number}` };
+              return true;
+            } finally {
+              if (latestRequestControllers.get(requestKey) === controller) this.finishLatestRequest(requestKey, controller);
+            }
           },
           async dangerRollbackOrderGroup() {
             const orders = (this.orderEditGroup?.orders || []).filter(o => !o.is_history_order);
@@ -21519,15 +21538,23 @@
           orderGroupExpandedOrders(group) {
             return this.orderGroupDetails[group?.key]?.orders || [];
           },
-          async ensureOrderGroupDetail(group, {force=false, signal=null}={}) {
+          cancelOrderGroupDetailRequests() {
+            for (const entry of orderGroupDetailRequests.values()) entry.controller?.abort();
+            orderGroupDetailRequests.clear();
+          },
+          async ensureOrderGroupDetail(group, {force=false}={}) {
             const anchor = group?.orders?.[0], key = group?.key;
             if (!anchor?.id || !group?.customer_id || !key) {
               this.showToast("订单汇总信息不完整，请刷新后重试", true);
               return null;
             }
             if (!force && this.orderGroupDetails[key]) return this.orderGroupDetails[key];
-            if (this.orderGroupDetailLoading[key] && !signal) return null;
             const generation = this.orderListGeneration;
+            const existing = orderGroupDetailRequests.get(key);
+            if (!force && existing?.generation === generation) return existing.promise;
+            existing?.controller?.abort();
+            const controller = new AbortController();
+            const token = ++orderGroupDetailRequestSequence;
             this.orderGroupDetailLoading = {...this.orderGroupDetailLoading,[key]:true};
             this.orderGroupDetailErrors = {...this.orderGroupDetailErrors,[key]:""};
             const params = {
@@ -21536,21 +21563,30 @@
               scope: this.filters.orderScope || "active",
             };
             if (String(group.customer_po || "").trim()) params.customer_po = String(group.customer_po).trim();
-            try {
-              const { data } = await axios.get("/api/orders/group-detail", { params, signal });
-              if (generation !== this.orderListGeneration) return null;
-              this.orderGroupDetails = {...this.orderGroupDetails,[key]:data};
-              return data;
-            } catch (error) {
-              if (this.isCancelledRequest(error) || signal?.aborted) return null;
-              if (generation !== this.orderListGeneration) return null;
-              const message = `订单明细加载失败（订单整组详情加载失败）：${this.errorMessage(error)}`;
-              this.orderGroupDetailErrors = {...this.orderGroupDetailErrors,[key]:message};
-              this.showToast(message, true);
-              return null;
-            } finally {
-              if (generation === this.orderListGeneration) this.orderGroupDetailLoading = {...this.orderGroupDetailLoading,[key]:false};
-            }
+            const promise = (async() => {
+              try {
+                const { data } = await axios.get("/api/orders/group-detail", { params, signal:controller.signal });
+                const current = orderGroupDetailRequests.get(key);
+                if (current?.token !== token || generation !== this.orderListGeneration) return null;
+                this.orderGroupDetails = {...this.orderGroupDetails,[key]:data};
+                return data;
+              } catch (error) {
+                const current = orderGroupDetailRequests.get(key);
+                if (this.isCancelledRequest(error) || current?.token !== token || generation !== this.orderListGeneration) return null;
+                const message = `订单明细加载失败（订单整组详情加载失败）：${this.errorMessage(error)}`;
+                this.orderGroupDetailErrors = {...this.orderGroupDetailErrors,[key]:message};
+                this.showToast(message, true);
+                return null;
+              } finally {
+                const current = orderGroupDetailRequests.get(key);
+                if (current?.token === token) {
+                  orderGroupDetailRequests.delete(key);
+                  if (generation === this.orderListGeneration) this.orderGroupDetailLoading = {...this.orderGroupDetailLoading,[key]:false};
+                }
+              }
+            })();
+            orderGroupDetailRequests.set(key, {generation, token, controller, promise});
+            return promise;
           },
           async toggleOrderGroup(group) {
             const key = typeof group === "string" ? group : group?.key;if (!key) return;
@@ -21587,7 +21623,7 @@
             this.cancelOrderTraceChildRequests();
             const controller = this.beginLatestRequest(requestKey);
             try {
-              const data = await this.ensureOrderGroupDetail(group, {signal:controller.signal});
+              const data = await this.ensureOrderGroupDetail(group);
               if (!data || latestRequestControllers.get(requestKey) !== controller) return false;
               this.orderGroupDetail = data;
               this.modal = {

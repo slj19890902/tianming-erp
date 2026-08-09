@@ -9,7 +9,9 @@ from sqlalchemy.orm import sessionmaker
 
 from app.api.deliveries import (
     _composite_inventory_sources_for_order_item,
+    _delivery_list_summary_context,
     _delivery_response,
+    _delivery_summary_response,
     _pick_task_response,
     get_delivery_print_data,
     pending_delivery_items,
@@ -62,6 +64,20 @@ def _active_direct_quantity(db, snapshot_id: int) -> int:
         )
         or 0
     )
+
+
+def _assert_summary_matches_full_total(
+    db: Session,
+    delivery_id: int,
+    expected_total: int,
+) -> None:
+    detail_payload = _delivery_response(db, delivery_id)
+    summary_payload = _delivery_summary_response(
+        delivery_id,
+        context=_delivery_list_summary_context(db, [delivery_id]),
+    )
+    assert detail_payload["total_actual_goods_quantity"] == expected_total
+    assert summary_payload["total_actual_goods_quantity"] == expected_total
 
 
 def _delivery(db, *, customer_id: int, order_item_id: int, number: str, quantity: int):
@@ -275,6 +291,15 @@ def test_order_component_override_caps_multi_delivery_and_cancel(
             ] == [3000, 2700]
             assert detail_payload["total_quantity"] == 3000
             assert detail_payload["total_actual_goods_quantity"] == 5700
+            summary_context = _delivery_list_summary_context(db, [preview.id])
+            summary_payload = _delivery_summary_response(
+                preview.id,
+                context=summary_context,
+            )
+            assert summary_payload["item_count"] == 1
+            assert summary_payload["total_quantity"] == 3000
+            assert summary_payload["total_actual_goods_quantity"] == 5700
+            assert "items" not in summary_payload
             detail_component = detail_payload["items"][0]["component_lines"][0]
             assert detail_component["pricing_included"] is False
             assert detail_component["independent_return_receipt"] is False
@@ -364,6 +389,7 @@ def test_order_component_override_caps_multi_delivery_and_cancel(
             order_item.delivered_quantity = 1000
             first.status = "dispatched"
             db.commit()
+            _assert_summary_matches_full_total(db, first.id, 2000)
 
             second, second_item = _delivery(
                 db,
@@ -384,6 +410,7 @@ def test_order_component_override_caps_multi_delivery_and_cancel(
             second.status = "dispatched"
             db.commit()
             assert _active_direct_quantity(db, snapshot.id) == 2700
+            _assert_summary_matches_full_total(db, second.id, 3700)
 
             reverse_delivery_component_allocations(
                 db,
@@ -396,6 +423,13 @@ def test_order_component_override_caps_multi_delivery_and_cancel(
             db.commit()
             assert _active_direct_quantity(db, snapshot.id) == 1000
             assert kit_availability(db, order_item.id)["available_sets"] == 2000
+            _assert_summary_matches_full_total(db, second.id, 3700)
+
+            second.status = "voided"
+            db.commit()
+            _assert_summary_matches_full_total(db, second.id, 2000)
+            second.status = "pending"
+            db.commit()
 
             third_plan = execute_delivery_component_consumption(
                 db,
@@ -409,5 +443,6 @@ def test_order_component_override_caps_multi_delivery_and_cancel(
             second.status = "dispatched"
             db.commit()
             assert _active_direct_quantity(db, snapshot.id) == 2700
+            _assert_summary_matches_full_total(db, second.id, 3700)
     finally:
         engine.dispose()

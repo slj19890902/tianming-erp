@@ -57,6 +57,7 @@ const vm = {{
   async loadDeliveries() {{ return true; }},
   async loadOrders() {{ return true; }},
   async loadKpi() {{ return true; }},
+  invalidateDeliveryListDetail() {{ return true; }},
   errorMessage(error) {{ return error?.message || String(error); }},
   showToast(message, danger=false) {{ messages.push({{message,danger}}); }},
 }};
@@ -103,6 +104,7 @@ def test_successful_delete_or_cancel_is_not_misreported_when_refresh_fails(
 const AsyncFunction = Object.getPrototypeOf(async function(){{}}).constructor;
 let mode = "refresh-fails";
 const messages = [];
+const invalidated = [];
 globalThis.confirm = () => true;
 globalThis.axios = {{
   async delete() {{ if (mode === "delete-fails") throw new Error("删除冲突"); return {{data:{{voided:false}}}}; }},
@@ -113,6 +115,7 @@ const vm = {{
   async loadDeliveries() {{ if (mode === "refresh-fails") throw new Error("刷新断开"); return true; }},
   async loadOrders() {{ return true; }},
   async loadKpi() {{ return true; }},
+  invalidateDeliveryListDetail(id) {{ invalidated.push(Number(id)); return true; }},
   errorMessage(error) {{ return error?.message || String(error); }},
   showToast(message, danger=false) {{ messages.push({{message,danger}}); }},
 }};
@@ -122,20 +125,24 @@ vm.cancelDelivery = new AsyncFunction("row", {json.dumps(cancel_body, ensure_asc
 (async () => {{
   const deleted = await vm.deleteDelivery({{id:41,delivery_number:"TH041"}});
   if (deleted !== true || vm.deliveryOperationState.action) throw new Error("successful delete was misreported");
+  if (!invalidated.includes(41)) throw new Error("successful delete kept stale detail");
   if (!messages.some(row => row.danger && row.message.includes("已经删除") && row.message.includes("刷新") && row.message.includes("不要重复"))) throw new Error("delete refresh failure lacked anti-repeat guidance");
 
   messages.length = 0;
   const cancelled = await vm.cancelDelivery({{id:42,delivery_number:"TH042"}});
   if (cancelled !== true || vm.deliveryOperationState.action) throw new Error("successful cancel was misreported");
+  if (!invalidated.includes(42)) throw new Error("successful cancel kept stale detail");
   if (!messages.some(row => row.danger && row.message.includes("取消发货已经完成") && row.message.includes("刷新") && row.message.includes("不要重复"))) throw new Error("cancel refresh failure lacked anti-repeat guidance");
 
   mode = "delete-fails"; messages.length = 0;
   const deleteFailed = await vm.deleteDelivery({{id:43,delivery_number:"TH043"}});
   if (deleteFailed !== false || vm.deliveryOperationState.action || !messages.some(row => row.danger && row.message.includes("删除冲突"))) throw new Error("delete failure lost real error or lock");
+  if (invalidated.includes(43)) throw new Error("failed delete invalidated detail");
 
   mode = "cancel-fails"; messages.length = 0;
   const cancelFailed = await vm.cancelDelivery({{id:44,delivery_number:"TH044"}});
   if (cancelFailed !== false || vm.deliveryOperationState.action || !messages.some(row => row.danger && row.message.includes("已有回单"))) throw new Error("cancel failure lost real error or lock");
+  if (invalidated.includes(44)) throw new Error("failed cancel invalidated detail");
 }})().catch(error => {{ console.error(error); process.exit(1); }});
 """
     _run_node(tmp_path, "delivery-delete-cancel-followup.js", script)

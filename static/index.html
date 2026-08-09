@@ -3284,7 +3284,7 @@
                     <td>{{ deliveryActualGoodsQuantity(row) }}</td>
                     <td><status-tag :value="row.status"></status-tag> <span v-if="row.pick_task && deliveryPickStatusLabel(row) !== statusText(row.status)" :class="['status', deliveryPickStatusClass(row)]">{{ deliveryPickStatusLabel(row) }}</span> <span v-if="row.is_printed" class="status green">已打印</span></td>
                     <td><status-tag :value="row.return_receipt_status === 'cancelled' ? 'receipt_cancelled' : (row.return_receipt_status || 'waiting_receipt')"></status-tag></td>
-                    <td><button class="btn small" @click="toggleDeliveryListDetail(row)">{{ expandedDeliveryRows[row.id] ? '收起明细' : `查看明细（${(row.items || []).length}）` }}</button></td>
+                    <td><button class="btn small" @click="toggleDeliveryListDetail(row)">{{ expandedDeliveryRows[row.id] ? '收起明细' : `查看明细（${row.item_count ?? (row.items || []).length}）` }}</button></td>
                     <td class="toolbar-group delivery-list-actions">
                       <button v-if="canDelivery && row.status==='pending' && !row.pick_task" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="createDeliveryPickTask(row)">{{ deliveryOperationState.action==='pick' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '推送中…' : '拿货' }}</button>
                       <select v-if="canDelivery && row.pick_task && row.status==='pending'" class="select" style="max-width:130px" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" :value="row.pick_task.assigned_to || ''" @change="assignDeliveryPickTask(row,$event.target.value)">
@@ -3306,7 +3306,9 @@
                   </tr>
                   <tr v-if="expandedDeliveryRows[row.id]" class="delivery-list-detail-row">
                     <td colspan="9">
-                      <div class="delivery-list-detail">
+                      <div v-if="deliveryDetailState[row.id]?.loading" class="empty">正在读取这张送货单的明细…</div>
+                      <div v-else-if="deliveryDetailState[row.id]?.error" class="notice warning">明细读取失败：{{ deliveryDetailState[row.id].error }} <button class="btn small" @click="loadDeliveryListDetail(row,{force:true})">重试</button></div>
+                      <div v-else class="delivery-list-detail">
                         <table>
                           <thead><tr><th class="delivery-detail-code">存货编码</th><th class="delivery-detail-name">产品名称</th><th class="delivery-detail-spec">产品尺寸</th><th class="delivery-detail-quantity">数量</th></tr></thead>
                           <tbody>
@@ -7289,7 +7291,7 @@
             // v0.19.2-B 楞型加价规则
             fluteRules: [], showFluteRuleModal: false, fluteRuleLoading: false, fluteRuleError: "", fluteRuleAction:{action:"",ruleId:null},
             fluteRuleForm: { id: null, supplier_name: "", layer_count: 3, flute_type: "A", price_delta: "0", effective_date: "", remark: "", is_active: true },
-            deliveries: [], pendingDeliveryItems: [], deliveryCustomerCandidates: [], deliveryPickTasks: [], deliveryPickers: [], expandedDeliveryRows: {}, deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false, request_token:0 }, deliveryPendingState:{loading:false,error:"",request_token:0}, deliveryCandidateLoading:false, deliveryCandidateError:"", deliveryCandidateRequestSequence:0, deliveryBatchRequestSequence:0, unorderedFinishedRequestSequence:0, deliveryOperationState:{action:"",deliveryId:null,deliveryNumber:""}, deliverySaveState:{saving:false,committed:false,outcomeUncertain:false,result:null}, receiptOperationState:{action:"",deliveryId:null,receiptId:null,deliveryNumber:""}, statements: [], invoices: [], moldTools: [], printingPlates: [],
+            deliveries: [], pendingDeliveryItems: [], deliveryCustomerCandidates: [], deliveryPickTasks: [], deliveryPickers: [], expandedDeliveryRows: {}, deliveryDetailState: {}, deliveryDetailRequestSequence:0, deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false, request_token:0 }, deliveryPendingState:{loading:false,error:"",request_token:0}, deliveryCandidateLoading:false, deliveryCandidateError:"", deliveryCandidateRequestSequence:0, deliveryBatchRequestSequence:0, unorderedFinishedRequestSequence:0, deliveryOperationState:{action:"",deliveryId:null,deliveryNumber:""}, deliverySaveState:{saving:false,committed:false,outcomeUncertain:false,result:null}, receiptOperationState:{action:"",deliveryId:null,receiptId:null,deliveryNumber:""}, statements: [], invoices: [], moldTools: [], printingPlates: [],
             invoiceTasks: [], invoiceTaskFilters:{customer_id:"",statement_month:"",status:""}, invoiceTaskState:{loading:false,error:""},
             invoiceTaskDetail:null, invoiceTaskResult:{task_id:null,status:"issued",invoice_number:"",invoice_date:"",failure_reason:"",expected_version:null},
             invoiceTaskOperationState:{detailLoading:false,detailError:"",detailTaskId:null,detailTaskNumber:"",confirmingTaskId:null,resultSaving:false},
@@ -14710,6 +14712,7 @@
             try {
               const { data } = await axios.post(`/api/deliveries/${deliveryId}/pick-task`);
               row.pick_task = data.pick_task || data;
+              this.invalidateDeliveryListDetail(deliveryId);
               this.showToast(row.pick_task.assignment_required ? "拿货任务已创建，请选择送货员" : `已分配给 ${row.pick_task.assigned_to_name}`);
               return row.pick_task;
             } catch (error) { this.showToast(this.errorMessage(error), true); return null; }
@@ -14782,6 +14785,7 @@
               }
               const currentTask = this.normalizeDeliveryPickTask(row);
               if (Number(row?.id) === deliveryId && Number(currentTask?.id) === taskId) row.pick_task = data;
+              this.invalidateDeliveryListDetail(deliveryId);
               this.showToast(data.assigned_to_name ? `已分配给 ${data.assigned_to_name}` : "已取消分配");
               return true;
             } finally {
@@ -14794,11 +14798,12 @@
             const task = this.normalizeDeliveryPickTask(row);
             if (!task?.id) return;
             await axios.post(`/api/delivery-picks/${task.id}/apply`);
+            this.invalidateDeliveryListDetail(row);
           },
           async loadDeliveries() {
             const requestToken = Number(this.deliveryListState.request_token || 0) + 1;
             this.deliveryListState.request_token = requestToken;
-            const params = { page: Number(this.pages.deliveries || 1), page_size: Number(this.pageSize) };
+            const params = { page: Number(this.pages.deliveries || 1), page_size: Number(this.pageSize), view:"summary" };
             Object.entries(this.deliveryListFilters || {}).forEach(([key,value]) => {
               if (value !== "" && value !== null && value !== undefined) params[key] = value;
             });
@@ -14811,6 +14816,8 @@
               if (requestToken !== this.deliveryListState.request_token) return false;
               this.deliveries = data.items || [];
               this.deliveriesTotal = Number(data.total || 0);
+              this.expandedDeliveryRows = {};
+              this.deliveryDetailState = {};
               this.deliveryListState.loaded = true;
               return true;
             } catch (error) {
@@ -19766,8 +19773,55 @@
           toggleStatementDeliveryExpanded(row) {
             this.expandedStatementDeliveries[row.delivery_id] = !this.expandedStatementDeliveries[row.delivery_id];
           },
-          toggleDeliveryListDetail(row) {
-            this.expandedDeliveryRows[row.id] = !this.expandedDeliveryRows[row.id];
+          async loadDeliveryListDetail(row, {force=false} = {}) {
+            const deliveryId = Number(row?.id || 0);
+            if (!deliveryId) return false;
+            const current = this.deliveryDetailState[deliveryId] || {};
+            if (!force && row.detail_loaded && Array.isArray(row.items)) return true;
+            if (current.loading) return false;
+            const requestToken = Number(this.deliveryDetailRequestSequence || 0) + 1;
+            this.deliveryDetailRequestSequence = requestToken;
+            this.deliveryDetailState[deliveryId] = {loading:true,error:"",request_token:requestToken};
+            try {
+              const { data } = await axios.get(`/api/deliveries/${deliveryId}`);
+              if (requestToken !== this.deliveryDetailState[deliveryId]?.request_token) return false;
+              Object.assign(row, data, {
+                detail_loaded:true,
+                item_count:Array.isArray(data?.items) ? data.items.length : Number(row.item_count || 0),
+              });
+              this.deliveryDetailState[deliveryId] = {loading:false,error:"",request_token:requestToken};
+              return true;
+            } catch (error) {
+              if (requestToken !== this.deliveryDetailState[deliveryId]?.request_token) return false;
+              this.deliveryDetailState[deliveryId] = {loading:false,error:this.errorMessage(error),request_token:requestToken};
+              return false;
+            }
+          },
+          invalidateDeliveryListDetail(deliveryOrId) {
+            const deliveryId = Number(deliveryOrId?.id ?? deliveryOrId ?? 0);
+            if (!deliveryId) return false;
+            this.deliveryDetailRequestSequence = Number(this.deliveryDetailRequestSequence || 0) + 1;
+            const requestToken = this.deliveryDetailRequestSequence;
+            const providedRow = deliveryOrId && typeof deliveryOrId === "object" ? deliveryOrId : null;
+            const listedRow = (this.deliveries || []).find(row => Number(row?.id) === deliveryId) || null;
+            [providedRow, listedRow].forEach(row => {
+              if (!row) return;
+              delete row.detail_loaded;
+              delete row.items;
+            });
+            this.deliveryDetailState[deliveryId] = {loading:false,error:"",request_token:requestToken};
+            this.expandedDeliveryRows[deliveryId] = false;
+            return true;
+          },
+          async toggleDeliveryListDetail(row) {
+            const deliveryId = Number(row?.id || 0);
+            if (!deliveryId) return false;
+            if (this.expandedDeliveryRows[deliveryId]) {
+              this.expandedDeliveryRows[deliveryId] = false;
+              return true;
+            }
+            this.expandedDeliveryRows[deliveryId] = true;
+            return this.loadDeliveryListDetail(row);
           },
           async sendVersionedMasterMutation({method,url,row,body={}}) {
             const expectedVersion = Number(row.version);
@@ -23012,6 +23066,7 @@
                 this.showToast(this.errorMessage(error), true);
                 return false;
               }
+              this.invalidateDeliveryListDetail(deliveryId);
               this.closeModal();
               try {
                 await Promise.all([this.loadDeliveries(), this.loadOrders(), this.loadKpi(), this.loadFinance()]);
@@ -23463,6 +23518,7 @@
             this.deliveryForm.delivery_number = data.delivery_number || this.deliveryForm.delivery_number || "";
             this.deliveryForm.pick_task = data.pick_task || this.deliveryForm.pick_task || null;
             this.deliveryForm.saved_signature = this.deliveryFormSignature();
+            this.invalidateDeliveryListDetail(Number(data.id));
             this.modal = {
               type:"delivery",
               title:`编辑送货单 ${this.deliveryForm.delivery_number || data.id}`,
@@ -23860,6 +23916,7 @@
               const updating = !!this.tianhuaPreimport.draft;
               const url = `/api/deliveries/tianhua-preimport/${this.tianhuaPreimport.batchId}/${updating ? "update-draft" : "create-draft"}`;
               const {data} = updating ? await axios.put(url, payload) : await axios.post(url, payload);
+              this.invalidateDeliveryListDetail(Number(data.delivery_id));
               this.tianhuaPreimport.draft = data;
               await this.loadTianhuaBatch();
               this.showToast(updating ? "天华预送货草稿修改已保存" : "天华预送货草稿已生成");
@@ -24898,6 +24955,7 @@
               if (!printSession) return false;
               await axios.put(`/api/deliveries/${deliveryId}/dispatch`);
               dispatchSucceeded = true;
+              this.invalidateDeliveryListDetail(deliveryId);
               printSession.activate();
               try {
                 await axios.put(`/api/deliveries/${deliveryId}/printed`);
@@ -24948,6 +25006,14 @@
             }
           },
           async editDelivery(row) {
+            if (!row?.detail_loaded || !Array.isArray(row?.items)) {
+              const detailLoaded = await this.loadDeliveryListDetail(row);
+              if (!detailLoaded) {
+                const detailError = this.deliveryDetailState[Number(row?.id || 0)]?.error || "请稍后重试";
+                this.showToast(`送货明细加载失败：${detailError}`, true);
+                return false;
+              }
+            }
             this.deliverySaveState = {saving:false,committed:false,outcomeUncertain:false,result:null};
             const sourceMode = row.source_mode || this.deliverySourceModeFromLines(row.items || []);
             const hasOrderLines = (row.items || []).some(item => item.source_type !== "unordered_finished");
@@ -25028,6 +25094,7 @@
               const successMessage = response.data?.voided
                 ? "该送货单已有发货或库存历史，已作废归档；库存流水和审计记录均已保留"
                 : "已删除未发货送货草稿";
+              this.invalidateDeliveryListDetail(deliveryId);
               try {
                 await Promise.all([this.loadDeliveries(), this.loadKpi()]);
               } catch (error) {
@@ -25062,6 +25129,7 @@
                 this.showToast(this.errorMessage(error), true);
                 return false;
               }
+              this.invalidateDeliveryListDetail(deliveryId);
               try {
                 await Promise.all([this.loadDeliveries(), this.loadOrders(), this.loadKpi()]);
               } catch (error) {
@@ -25094,6 +25162,7 @@
                 this.showToast(this.errorMessage(error), true);
                 return false;
               }
+              this.invalidateDeliveryListDetail(deliveryId);
               if (this.modal?.type === "receipt" && Number(this.receiptForm?.id) === receiptId) this.closeModal();
               try {
                 await Promise.all([this.loadDeliveries(), this.loadOrders(), this.loadKpi(), this.loadFinance()]);

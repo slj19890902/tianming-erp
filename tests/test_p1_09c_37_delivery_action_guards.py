@@ -61,6 +61,7 @@ const vm = {{
   async loadDeliveries() {{ return true; }},
   async loadOrders() {{ return true; }},
   async loadKpi() {{ return true; }},
+  invalidateDeliveryListDetail() {{ return true; }},
   errorMessage(error) {{ return error?.message || String(error); }},
   showToast(message, danger=false) {{ messages.push({{message,danger}}); }},
 }};
@@ -116,6 +117,7 @@ const AsyncFunction = Object.getPrototypeOf(async function(){{}}).constructor;
 let mode = "printed-fails";
 let putCalls = [];
 const messages = [];
+const invalidated = [];
 globalThis.confirm = () => true;
 globalThis.axios = {{
   async put(url) {{
@@ -134,6 +136,7 @@ const vm = {{
   async loadDeliveries() {{ if (mode === "refresh-fails") throw new Error("刷新断开"); }},
   async loadOrders() {{ return true; }},
   async loadKpi() {{ return true; }},
+  invalidateDeliveryListDetail(id) {{ invalidated.push(Number(id)); return true; }},
   errorMessage(error) {{ return error?.message || String(error); }},
   showToast(message, danger=false) {{ messages.push({{message,danger}}); }},
 }};
@@ -142,16 +145,19 @@ vm.dispatchDelivery = new AsyncFunction("row", "options", {json.dumps(dispatch_b
 (async () => {{
   const printedFailed = await vm.dispatchDelivery({{id:41,delivery_number:"TH041"}});
   if (printedFailed !== true || vm.deliveryOperationState.action || sessions[0].activated !== 1 || sessions[0].aborted) throw new Error("successful dispatch was misreported after printed failure");
+  if (!invalidated.includes(41)) throw new Error("printed followup failure kept stale delivery detail");
   if (!messages.some(row => row.danger && row.message.includes("发货已经完成") && row.message.includes("不要再次发货"))) throw new Error("printed failure lacked anti-repeat guidance");
 
   mode = "refresh-fails"; putCalls = []; messages.length = 0;
   const refreshFailed = await vm.dispatchDelivery({{id:42,delivery_number:"TH042"}});
   if (refreshFailed !== true || vm.deliveryOperationState.action || sessions[1].activated !== 1 || sessions[1].aborted) throw new Error("successful dispatch was misreported after refresh failure");
+  if (!invalidated.includes(42)) throw new Error("refresh failure kept stale delivery detail");
   if (!messages.some(row => row.danger && row.message.includes("发货已经完成") && row.message.includes("刷新") && row.message.includes("不要再次发货"))) throw new Error("refresh failure lacked anti-repeat guidance");
 
   mode = "dispatch-fails"; putCalls = []; messages.length = 0;
   const dispatchFailed = await vm.dispatchDelivery({{id:43,delivery_number:"TH043"}});
   if (dispatchFailed !== false || vm.deliveryOperationState.action || sessions[2].aborted !== 1 || sessions[2].activated) throw new Error("failed dispatch did not abort print and unlock");
+  if (invalidated.includes(43)) throw new Error("failed dispatch incorrectly invalidated detail");
   if (!messages.some(row => row.danger && row.message.includes("库存版本变化"))) throw new Error("dispatch failure lost the real error");
 }})().catch(error => {{ console.error(error); process.exit(1); }});
 """

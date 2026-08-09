@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import event
+from sqlalchemy import event, select
 from sqlalchemy.orm import Session, sessionmaker
 
 
@@ -273,6 +273,141 @@ def test_delivery_list_page_scales_without_per_row_sql_and_keeps_summary_contrac
         forbidden = client.get("/api/deliveries", params={"customer_id": ids["outside_customer_id"]})
     assert scoped.json()["total"] == 24
     assert forbidden.status_code == 403
+
+
+def test_delivery_summary_view_defers_heavy_items_and_shrinks_first_paint(delivery_scaling_app) -> None:
+    app, engine, _ids = delivery_scaling_app
+    with TestClient(app) as client:
+        _login(client, "p109b-admin")
+        small, small_sql = _read_with_sql_count(
+            client,
+            engine,
+            "/api/deliveries",
+            params={"page": 1, "page_size": 5, "view": "summary"},
+        )
+        large, large_sql = _read_with_sql_count(
+            client,
+            engine,
+            "/api/deliveries",
+            params={"page": 1, "page_size": 24, "view": "summary"},
+        )
+        full = client.get(
+            "/api/deliveries",
+            params={"page": 1, "page_size": 24},
+        )
+
+    assert full.status_code == 200, full.text
+    assert small.json()["view"] == large.json()["view"] == "summary"
+    assert small.json()["total"] == large.json()["total"] == 24
+    assert [row["id"] for row in small.json()["items"]] == [
+        row["id"] for row in large.json()["items"][:5]
+    ]
+    row = large.json()["items"][0]
+    assert {
+        "id",
+        "delivery_number",
+        "customer_id",
+        "customer_name",
+        "delivery_date",
+        "status",
+        "pick_task",
+        "return_receipt_status",
+        "item_count",
+        "total_actual_goods_quantity",
+    } <= set(row)
+    assert "items" not in row
+    assert row["item_count"] == 1
+    assert row["total_actual_goods_quantity"] == 5
+    assert full.json()["items"][0]["items"]
+    assert len(large.content) < len(full.content) * 0.45
+    assert _select_count(large_sql) <= _select_count(small_sql) + 2
+
+
+def test_composite_delivery_summary_keeps_fixed_query_families_and_full_quantity(
+    delivery_scaling_app,
+) -> None:
+    from app.models.customer import Customer
+    from app.models.delivery import Delivery, DeliveryItem
+    from app.models.order import OrderItem
+    from app.models.product import Product
+    from app.models.product_bom import SalesOrderItemBomComponent
+
+    app, engine, ids = delivery_scaling_app
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    with factory() as db:
+        customer = db.get(Customer, ids["customer_id"])
+        component = Product(
+            customer_id=customer.id,
+            product_code="P109-COMPONENT",
+            customer_material_code="P109-COMPONENT",
+            product_name="性能回归组合子件",
+            legacy_material_text="A=B",
+            box_category="die_cut",
+            box_style="模切内盒",
+            is_internal_component=True,
+        )
+        db.add(component)
+        db.flush()
+        rows = db.execute(
+            select(DeliveryItem, OrderItem)
+            .join(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
+            .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
+            .where(Delivery.customer_id == customer.id)
+            .order_by(Delivery.id)
+        ).all()
+        assert len(rows) == 24
+        for index, (_delivery_item, order_item) in enumerate(rows, start=1):
+            db.add(
+                SalesOrderItemBomComponent(
+                    sales_order_item_id=order_item.id,
+                    component_product_id=component.id,
+                    parent_product_version=1,
+                    component_product_version=1,
+                    snapshot_schema_version=3,
+                    order_set_quantity=20,
+                    quantity_per_set=Decimal("1"),
+                    required_piece_quantity=Decimal("20"),
+                    display_order=1,
+                    internal_component_code=f"P109-COMP-{index:03d}",
+                    is_die_cut=False,
+                    spare_sheet_quantity=0,
+                    display_mode="show_on_delivery",
+                    is_required=True,
+                    snapshot_component_product_code=component.product_code,
+                    snapshot_component_product_name=component.product_name,
+                    snapshot_component_spec="匿名组件规格",
+                    snapshot_component_box_category="die_cut_inner",
+                    snapshot_component_default_cutting_mode="一开一",
+                )
+            )
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client, "p109b-admin")
+        small, small_sql = _read_with_sql_count(
+            client,
+            engine,
+            "/api/deliveries",
+            params={"page": 1, "page_size": 5, "view": "summary"},
+        )
+        large, large_sql = _read_with_sql_count(
+            client,
+            engine,
+            "/api/deliveries",
+            params={"page": 1, "page_size": 24, "view": "summary"},
+        )
+        full = client.get("/api/deliveries", params={"page": 1, "page_size": 24})
+
+    assert full.status_code == 200, full.text
+    full_by_id = {row["id"]: row for row in full.json()["items"]}
+    assert _select_count(large_sql) <= _select_count(small_sql) + 2
+    for summary_row in large.json()["items"]:
+        full_row = full_by_id[summary_row["id"]]
+        assert summary_row["total_actual_goods_quantity"] == full_row["total_actual_goods_quantity"]
+        if summary_row["status"] == "pending":
+            assert summary_row["total_actual_goods_quantity"] == 10
+        else:
+            assert summary_row["total_actual_goods_quantity"] == 5
 
 
 def test_pending_delivery_search_scales_by_limit_without_writes_or_scope_leak(delivery_scaling_app) -> None:

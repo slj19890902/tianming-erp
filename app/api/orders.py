@@ -113,6 +113,7 @@ from app.services.order_estimated_cost_snapshot import (
     freeze_order_item_estimated_cost,
     get_latest_order_item_estimated_cost_snapshot,
     get_latest_order_item_estimated_cost_snapshots_by_items,
+    is_estimated_cost_snapshot_unique_conflict,
     serialize_order_item_estimated_cost_snapshot,
 )
 from app.services.order_cost_readiness import (
@@ -6451,36 +6452,45 @@ def update_order_item_estimated_cost(
             status_code=409,
             detail="预计成本已被更新，请刷新后再修改",
         )
-    material_snapshot, _ = freeze_order_item_material_cost(
-        db, item, actor_id=user.id
-    )
-    snapshot, created = freeze_order_item_estimated_cost(
-        db,
-        item,
-        material_snapshot=material_snapshot,
-        actor_id=user.id,
-        parameters=payload.model_dump(),
-    )
-    _append_order_audit(
-        db,
-        request=request,
-        user=user,
-        order=order,
-        action_code="order.item.estimated_cost.update",
-        legacy_action="UPDATE_ESTIMATED_COST",
-        description="调整当前订单预计损耗与一次性费用",
-        details={
-            "snapshot_version": snapshot.snapshot_version,
-            "created": created,
-            "loss_rate": str(snapshot.loss_rate),
-            "scope": "estimated_not_actual",
-        },
-        entity_type="order_item",
-        entity_id=item.id,
-        object_ref=item.item_order_number or str(item.id),
-        resource="OrderItemEstimatedCost",
-    )
-    db.commit()
+    try:
+        material_snapshot, _ = freeze_order_item_material_cost(
+            db, item, actor_id=user.id
+        )
+        snapshot, created = freeze_order_item_estimated_cost(
+            db,
+            item,
+            material_snapshot=material_snapshot,
+            actor_id=user.id,
+            parameters=payload.model_dump(),
+        )
+        _append_order_audit(
+            db,
+            request=request,
+            user=user,
+            order=order,
+            action_code="order.item.estimated_cost.update",
+            legacy_action="UPDATE_ESTIMATED_COST",
+            description="调整当前订单预计损耗与一次性费用",
+            details={
+                "snapshot_version": snapshot.snapshot_version,
+                "created": created,
+                "loss_rate": str(snapshot.loss_rate),
+                "scope": "estimated_not_actual",
+            },
+            entity_type="order_item",
+            entity_id=item.id,
+            object_ref=item.item_order_number or str(item.id),
+            resource="OrderItemEstimatedCost",
+        )
+        db.commit()
+    except IntegrityError as error:
+        db.rollback()
+        if is_estimated_cost_snapshot_unique_conflict(error):
+            raise HTTPException(
+                status_code=409,
+                detail="预计成本已被其他操作更新，请刷新后重试",
+            ) from error
+        raise
     return serialize_order_item_estimated_cost_snapshot(
         snapshot,
         sale_amount=item.subtotal,

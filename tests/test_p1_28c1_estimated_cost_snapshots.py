@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from pathlib import Path
+from threading import Barrier, Event
 from types import SimpleNamespace
 
+import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
+from sqlalchemy.exc import IntegrityError
 
 from app.models.order_estimated_cost_snapshot import SalesOrderItemEstimatedCostSnapshot
 from tests.test_phase5_orders import _login, _payload, order_api_app
@@ -166,3 +172,183 @@ def test_all_order_writers_freeze_estimate_and_ui_marks_it_non_actual() -> None:
     assert "/items/{item_id}/estimated-cost" in ORDERS_SOURCE
     assert "预计成本，非实际成本" in INDEX
     assert "调整预计成本" in INDEX
+
+
+def test_estimated_cost_unique_conflict_classifier_is_narrow() -> None:
+    from app.services.order_estimated_cost_snapshot import (
+        is_estimated_cost_snapshot_unique_conflict,
+    )
+
+    collision = IntegrityError(
+        "INSERT",
+        {},
+        sqlite3.IntegrityError(
+            "UNIQUE constraint failed: "
+            "sales_order_item_estimated_cost_snapshots.order_item_reference_snapshot, "
+            "sales_order_item_estimated_cost_snapshots.snapshot_version"
+        ),
+    )
+    unrelated = IntegrityError(
+        "INSERT",
+        {},
+        sqlite3.IntegrityError("CHECK constraint failed: unrelated_business_table"),
+    )
+    assert is_estimated_cost_snapshot_unique_conflict(collision) is True
+    assert is_estimated_cost_snapshot_unique_conflict(unrelated) is False
+
+
+def test_two_real_sessions_map_snapshot_race_to_409_then_retry_after_rollback(
+    order_api_app,
+) -> None:
+    from app.api.orders import EstimatedCostUpdate, update_order_item_estimated_cost
+    from app.models.user import User
+
+    app, session_factory = order_api_app
+    payload = _payload()
+    payload["items"] = [payload["items"][0]]
+    with TestClient(app) as client:
+        _login(client)
+        created = client.post("/api/orders", json=payload)
+    assert created.status_code == 201, created.text
+    item_id = int(created.json()["items"][0]["id"])
+
+    engine = session_factory.kw["bind"]
+
+    @event.listens_for(engine, "connect")
+    def _enable_wal_for_real_concurrency(dbapi_connection, _record) -> None:
+        dbapi_connection.execute("PRAGMA journal_mode = WAL")
+
+    engine.dispose()
+    warm_connections = [engine.connect(), engine.connect()]
+    try:
+        assert all(
+            connection.exec_driver_sql("PRAGMA journal_mode").scalar_one().lower()
+            == "wal"
+            for connection in warm_connections
+        )
+    finally:
+        for connection in warm_connections:
+            connection.close()
+
+    ready_to_flush = Barrier(2)
+    winner_committed = Event()
+
+    def worker(role: str, fee: str) -> tuple[str, int, int | None]:
+        with session_factory() as db:
+            user = db.scalar(select(User).where(User.username == "admin"))
+            assert user is not None
+            original_flush = db.flush
+            coordinated = False
+
+            def coordinated_flush(objects=None):
+                nonlocal coordinated
+                has_estimated_snapshot = any(
+                    isinstance(row, SalesOrderItemEstimatedCostSnapshot)
+                    for row in db.new
+                )
+                if not coordinated and has_estimated_snapshot:
+                    coordinated = True
+                    ready_to_flush.wait(timeout=10)
+                    if role == "loser":
+                        assert winner_committed.wait(timeout=10)
+                return original_flush(objects)
+
+            db.flush = coordinated_flush
+            update = EstimatedCostUpdate(
+                expected_snapshot_version=1,
+                loss_rate=Decimal("0.05"),
+                die_fee=Decimal(fee),
+            )
+            if role == "winner":
+                try:
+                    result = update_order_item_estimated_cost(
+                        item_id,
+                        update,
+                        request=None,
+                        db=db,
+                        user=user,
+                    )
+                    return role, 200, int(result["estimated_total_cost_snapshot_version"])
+                finally:
+                    winner_committed.set()
+
+            try:
+                update_order_item_estimated_cost(
+                    item_id,
+                    update,
+                    request=None,
+                    db=db,
+                    user=user,
+                )
+            except HTTPException as error:
+                assert error.status_code == 409
+                assert "预计成本已被其他操作更新" in str(error.detail)
+            else:
+                raise AssertionError("并发落后写入应命中唯一键冲突")
+
+            retried = update_order_item_estimated_cost(
+                item_id,
+                EstimatedCostUpdate(
+                    expected_snapshot_version=2,
+                    loss_rate=Decimal("0.05"),
+                    die_fee=Decimal(fee),
+                ),
+                request=None,
+                db=db,
+                user=user,
+            )
+            return role, 409, int(retried["estimated_total_cost_snapshot_version"])
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(
+            executor.map(
+                lambda pair: worker(*pair),
+                (("winner", "1"), ("loser", "2")),
+            )
+        )
+
+    assert sorted((role, status, version) for role, status, version in results) == [
+        ("loser", 409, 3),
+        ("winner", 200, 2),
+    ]
+    with session_factory() as db:
+        versions = list(
+            db.scalars(
+                select(SalesOrderItemEstimatedCostSnapshot.snapshot_version)
+                .where(SalesOrderItemEstimatedCostSnapshot.sales_order_item_id == item_id)
+                .order_by(SalesOrderItemEstimatedCostSnapshot.snapshot_version)
+            )
+        )
+    assert versions == [1, 2, 3]
+
+
+def test_unrelated_integrity_error_is_not_hidden_as_estimated_cost_conflict(
+    order_api_app,
+    monkeypatch,
+) -> None:
+    from app.api import orders
+
+    app, _session_factory = order_api_app
+    payload = _payload()
+    payload["items"] = [payload["items"][0]]
+    with TestClient(app) as client:
+        _login(client)
+        created = client.post("/api/orders", json=payload)
+        assert created.status_code == 201, created.text
+        item_id = int(created.json()["items"][0]["id"])
+
+        def raise_unrelated(*_args, **_kwargs):
+            raise IntegrityError(
+                "INSERT INTO unrelated_business_table",
+                {},
+                sqlite3.IntegrityError(
+                    "CHECK constraint failed: unrelated_business_table"
+                ),
+            )
+
+        monkeypatch.setattr(orders, "freeze_order_item_estimated_cost", raise_unrelated)
+        with pytest.raises(IntegrityError, match="unrelated_business_table"):
+            client.post(
+                f"/api/orders/items/{item_id}/estimated-cost",
+                json={"expected_snapshot_version": 1, "loss_rate": "0.05"},
+            )

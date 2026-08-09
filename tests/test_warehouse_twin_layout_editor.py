@@ -252,6 +252,93 @@ def test_draft_edit_validate_and_publish_are_separate_versioned_steps(
     assert len(list(backups.glob("*.json"))) == 1
 
 
+def test_default_publish_keeps_static_baseline_read_only_and_versions_runtime_backups(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    baseline = _asset(tmp_path / "static-baseline.json")
+    runtime = tmp_path / "data" / "layout_runtime" / "twin_layout_v1.json"
+    draft = tmp_path / "data" / "layout_drafts" / "twin_layout_v1.draft.json"
+    backups = tmp_path / "data" / "layout_backups"
+    monkeypatch.setattr(editor, "TWIN_LAYOUT_BASELINE_PATH", baseline)
+    monkeypatch.setattr(editor, "TWIN_LAYOUT_PATH", runtime)
+    monkeypatch.setattr(editor, "TWIN_LAYOUT_DRAFT_PATH", draft)
+    monkeypatch.setattr(editor, "TWIN_LAYOUT_BACKUP_DIR", backups)
+
+    baseline_sha256 = sha256(baseline.read_bytes()).hexdigest()
+    baseline_revision = json.loads(baseline.read_text(encoding="utf-8"))["floors"]["3F"]["revision"]
+    created = create_warehouse_twin_rack(
+        "3F",
+        expected_revision=baseline_revision,
+        operation_key="runtime-first-create-0001",
+        area_feature_id="zone-f1",
+        values=_rack_values(level_cell_counts=[1, 2, 3]),
+    )
+    validate_warehouse_twin_layout_draft(
+        "3F",
+        expected_revision=created.floor_revision,
+    )
+    first = publish_warehouse_twin_layout_draft(
+        "3F",
+        expected_published_revision=baseline_revision,
+        expected_draft_revision=created.floor_revision,
+        operation_key="runtime-first-publish-0001",
+    )
+    assert first.value["published_storage"] == "runtime"
+    assert runtime.is_file()
+    assert sha256(baseline.read_bytes()).hexdigest() == baseline_sha256
+    first_runtime_sha256 = sha256(runtime.read_bytes()).hexdigest()
+    assert first.value["published_sha256"] == first_runtime_sha256
+    first_backup = backups / first.value["backup_name"]
+    assert sha256(first_backup.read_bytes()).hexdigest() == baseline_sha256
+
+    updated = update_warehouse_twin_rack(
+        "3F",
+        created.value["id"],
+        expected_revision=created.floor_revision,
+        expected_version=1,
+        operation_key="runtime-second-update-0001",
+        values=_rack_values(name="运行态二次发布", level_cell_counts=[3, 3, 3]),
+    )
+    validate_warehouse_twin_layout_draft(
+        "3F",
+        expected_revision=updated.floor_revision,
+    )
+    second = publish_warehouse_twin_layout_draft(
+        "3F",
+        expected_published_revision=created.floor_revision,
+        expected_draft_revision=updated.floor_revision,
+        operation_key="runtime-second-publish-0001",
+    )
+    second_backup = backups / second.value["backup_name"]
+    assert sha256(second_backup.read_bytes()).hexdigest() == first_runtime_sha256
+    assert len(list(backups.glob("*.json"))) == 2
+    assert sha256(baseline.read_bytes()).hexdigest() == baseline_sha256
+    published = json.loads(runtime.read_text(encoding="utf-8"))
+    assert published["floors"]["3F"]["racks"][0]["name"] == "运行态二次发布"
+
+
+def test_damaged_runtime_layout_fails_closed_without_static_fallback(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from app.services import warehouse_twin_layout
+
+    baseline = _asset(tmp_path / "static-baseline.json")
+    runtime = tmp_path / "data" / "layout_runtime" / "twin_layout_v1.json"
+    runtime.parent.mkdir(parents=True)
+    runtime.write_text("{damaged-runtime", encoding="utf-8")
+    monkeypatch.setattr(editor, "TWIN_LAYOUT_BASELINE_PATH", baseline)
+    monkeypatch.setattr(editor, "TWIN_LAYOUT_PATH", runtime)
+    monkeypatch.setattr(warehouse_twin_layout, "TWIN_LAYOUT_PATH", baseline)
+    monkeypatch.setattr(warehouse_twin_layout, "TWIN_LAYOUT_RUNTIME_PATH", runtime)
+
+    with pytest.raises(WarehouseTwinLayoutEditError, match="无法读取"):
+        load_warehouse_twin_layout_draft("3F")
+    with pytest.raises(ValueError, match="运行地图损坏"):
+        warehouse_twin_layout.load_warehouse_twin_floor("3F")
+
+
 def test_invalid_or_stale_draft_is_refused_and_never_changes_published(
     tmp_path: Path,
     monkeypatch,

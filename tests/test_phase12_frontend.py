@@ -108,7 +108,9 @@ def test_desktop_spa_preserves_deep_link_and_defaults_root_to_dashboard() -> Non
     assert 'window.location.pathname.replace(/^\\/+|\\/+$/g, "")' in INDEX
     assert 'return pages.has(pathPage) ? pathPage : "dashboard"' in INDEX
     assert "if (!this.pageAllowed(this.activePage)) this.activePage = this.firstAllowedPage()" in INDEX
-    assert "await this.loadPage(this.activePage, { force:true })" in INDEX
+    assert "await this.loadInitialPageResources()" in INDEX
+    assert "this.loadPage(this.activePage" in INDEX
+    assert "supplierPromise," in INDEX
     assert "await this.loadBase()" not in INDEX
 
 

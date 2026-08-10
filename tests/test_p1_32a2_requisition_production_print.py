@@ -377,6 +377,19 @@ def test_package_api_is_read_only_scoped_and_fails_closed(
         )
         assert success.status_code == 200, success.text
         assert success.json()["card_count"] == 4
+        reported = client.get(
+            "/api/requisition/reported-documents",
+            params={"page": 1, "page_size": 20},
+        )
+        assert reported.status_code == 200, reported.text
+        reported_order = next(
+            row
+            for row in reported.json()["items"]
+            if row["source_type"] == "supplier_order" and row["id"] == order_id
+        )
+        assert reported_order["production_print_url"] == (
+            f"/requisition-production-print.html?id={order_id}"
+        )
         assert client.get(
             "/api/requisition/supplier-orders/999999/production-print-package"
         ).status_code == 404

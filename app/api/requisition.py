@@ -14499,6 +14499,9 @@ def _decorate_reported_document_candidates(candidates: list[dict]) -> list[dict]
                         "pdf_url": (
                             f"/api/requisition/supplier-orders/{candidate['id']}/pdf"
                         ),
+                        "production_print_url": (
+                            f"/requisition-production-print.html?id={candidate['id']}"
+                        ),
                         "line_items": line_items,
                     },
                     candidate,

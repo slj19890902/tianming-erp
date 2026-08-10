@@ -20,26 +20,25 @@ def _page_from(source: str, start_marker: str, end_marker: str) -> str:
     return source[start : source.index(end_marker, start)]
 
 
-def test_primary_workbench_tabs_are_fixed_order_permission_scoped_and_left_aligned() -> None:
+def test_business_flow_replaces_duplicate_order_workbench_tabs() -> None:
     navigation = _page("navigationGroups() {", "currentNavigationGroup() {")
     markers = [
         '{key:"orders",label:"订单"}',
         '{key:"requisition",label:"报料"}',
         '{key:"incoming",label:"来料入库"}',
-        '{key:"warehouse",label:"仓库地图"}',
     ]
     positions = [navigation.index(marker) for marker in markers]
     assert positions == sorted(positions)
+    assert '{key:"warehouse",label:"仓库地图"}' not in navigation
 
     shell = _page(
-        '<section v-if="currentNavigationGroup"',
+        '<section v-if="businessFlowCurrentStep"',
         '<section v-if="warehouseFrameUrl"',
     )
-    assert "'workbench-nav-primary':currentNavigationGroup.key==='workbench'" in shell
+    assert shell.index('class="business-flow-guide"') < shell.index('class="workbench-nav"')
+    assert "currentNavigationGroup && currentNavigationGroup.key!=='workbench'" in shell
     assert 'v-if="pageAllowed(page.key)"' in shell
     assert "active:activePage===page.key" in shell
-    assert ".workbench-nav-primary .workbench-tabs { order:-1" in INDEX
-    assert ".workbench-nav-primary .workbench-nav-title { flex:1 1 auto; text-align:right; }" in INDEX
 
 
 def test_order_second_row_keeps_creation_left_and_refresh_right() -> None:
@@ -64,7 +63,7 @@ def test_requisition_actions_are_separated_and_fixed_in_requested_order() -> Non
     )
     assert ">新建订单<" not in page
     assert ">识别PDF订单<" not in page
-    assert '>待报料 {{ requisitionPending.length }}<' in page
+    assert '>待报料 {{ requisitionPendingOverallTotal }}<' in page
     assert ">已报料/已入库<" in page
     assert '@click="openSupplierRequisitionDraft()"' in page
     assert 'supplierRequisitionPreviewLoading ? "正在生成草稿…" : "合并报料"' in page

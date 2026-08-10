@@ -1993,15 +1993,6 @@
           <main :class="['main', {'warehouse-main': activePage === 'warehouse'}]">
             <div v-if="loading" class="loading-bar"></div>
 
-            <section v-if="currentNavigationGroup" :class="['workbench-nav',{'workbench-nav-primary':currentNavigationGroup.key==='workbench'}]" :aria-label="`${currentNavigationGroup.label}工作台`">
-              <div class="workbench-nav-title"><strong>{{ currentNavigationGroup.label }}</strong><span>{{ currentNavigationGroup.description }}</span></div>
-              <div class="workbench-tabs">
-                <template v-for="page in (currentNavigationGroup ? currentNavigationGroup.pages : [])" :key="page.key">
-                  <button v-if="pageAllowed(page.key)" type="button" :class="['workbench-tab',{active:activePage===page.key}]" @click="go(page.key)">{{ page.label }}</button>
-                </template>
-              </div>
-            </section>
-
             <section v-if="businessFlowCurrentStep" class="business-flow-guide" aria-label="订单到对账操作顺序">
               <span class="business-flow-guide-label">按顺序做</span>
               <div class="business-flow-steps">
@@ -2015,6 +2006,15 @@
                   :title="step.hint"
                   @click="openBusinessFlowStep(step)"
                 >{{ index + 1 }}. {{ step.label }}</button>
+              </div>
+            </section>
+
+            <section v-if="currentNavigationGroup && currentNavigationGroup.key!=='workbench'" class="workbench-nav" :aria-label="`${currentNavigationGroup.label}工作台`">
+              <div class="workbench-nav-title"><strong>{{ currentNavigationGroup.label }}</strong><span>{{ currentNavigationGroup.description }}</span></div>
+              <div class="workbench-tabs">
+                <template v-for="page in (currentNavigationGroup ? currentNavigationGroup.pages : [])" :key="page.key">
+                  <button v-if="pageAllowed(page.key)" type="button" :class="['workbench-tab',{active:activePage===page.key}]" @click="go(page.key)">{{ page.label }}</button>
+                </template>
               </div>
             </section>
 
@@ -8341,9 +8341,9 @@
           },
           navigationGroups() {
             return [
-              { key:"workbench", label:"订单与仓库", description:"订单、报料、来料入库与仓库地图", pages:[
+              { key:"workbench", label:"订单主链", description:"订单、报料与来料入库", pages:[
                 {key:"orders",label:"订单"}, {key:"requisition",label:"报料"},
-                {key:"incoming",label:"来料入库"}, {key:"warehouse",label:"仓库地图"},
+                {key:"incoming",label:"来料入库"},
               ]},
               { key:"master", label:"主数据", description:"客户、常用箱与材质资料", pages:[
                 {key:"customers",label:"客户"}, {key:"products",label:"常用箱与材质"},
@@ -8360,7 +8360,8 @@
           menus() {
             const items = [
               { key: "dashboard", label: "首页" },
-              { key: "workbench", label: "订单与仓库", count: this.ordersUnfinishedTotal + this.requisitionPendingOverallTotal + this.incomingPendingTotal },
+              { key: "warehouse", label: "仓库地图" },
+              { key: "workbench", label: "订单主链", count: this.ordersUnfinishedTotal + this.requisitionPendingOverallTotal + this.incomingPendingTotal },
               { key: "production", label: "生产确认", count: this.productionPendingTotal },
               { key: "deliveries", label: "送货与回单", count: this.deliveriesTotal },
               { key: "finance", label: "对账开票收款" },

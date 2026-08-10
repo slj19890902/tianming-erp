@@ -4400,9 +4400,11 @@ def create_twin_temporary_finished_inbound(
     if customer is None or not customer.is_active:
         raise HTTPException(status_code=404, detail="客户不存在或已停用")
     inventory_code = clean_code(payload.inventory_code)
+    product_name = payload.product_name.strip()
     duplicate = db.scalar(
         select(Product).where(
             Product.customer_id == customer.id,
+            Product.product_name == product_name,
             or_(
                 func.lower(Product.product_code) == inventory_code.casefold(),
                 func.lower(Product.customer_material_code) == inventory_code.casefold(),
@@ -4412,7 +4414,7 @@ def create_twin_temporary_finished_inbound(
     if duplicate is not None:
         raise HTTPException(
             status_code=409,
-            detail="该客户已有相同存货编码，请返回“ERP 已有产品”选择现有档案",
+            detail="该客户已有相同存货编码和产品名称，请返回“ERP 已有产品”选择现有档案",
         )
 
     temporary_remark = f"[仓库临时建档] {payload.reason}"
@@ -4420,7 +4422,7 @@ def create_twin_temporary_finished_inbound(
         customer_id=customer.id,
         product_code=inventory_code,
         customer_material_code=inventory_code,
-        product_name=payload.product_name.strip(),
+        product_name=product_name,
         unit="只",
         box_category="normal",
         remark=temporary_remark,

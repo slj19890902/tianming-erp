@@ -134,8 +134,8 @@ def test_order_component_override_caps_multi_delivery_and_cancel(
             )
             component = Product(
                 customer_id=customer.id,
-                product_code="KIT-LINER",
-                customer_material_code="KIT-LINER",
+                product_code="KIT-PARENT",
+                customer_material_code="KIT-PARENT",
                 product_name="订单专用内衬",
                 box_style="模切内盒",
                 is_internal_component=True,
@@ -374,9 +374,16 @@ def test_order_component_override_caps_multi_delivery_and_cancel(
                 "生产区直接拿货"
             ]
             assert [
-                (line["product_code"], line["pick_quantity"])
+                (
+                    line["product_code"],
+                    line["product_name"],
+                    line["pick_quantity"],
+                )
                 for line in pick_payload["location_groups"][0]["lines"]
-            ] == [("KIT-LINER", 2700), ("KIT-PARENT", 3000)]
+            ] == [
+                ("KIT-PARENT", "订单专用内衬", 2700),
+                ("KIT-PARENT", "统一计价主产品", 3000),
+            ]
 
             first, first_item = _delivery(
                 db,

@@ -731,9 +731,11 @@ def convert_to_product(
     if item.converted_product_id is not None:
         raise HTTPException(status_code=409, detail="该报价明细已经转入常用箱")
     product_code = payload.product_code.strip()
+    product_name = (payload.product_name or item.product_name).strip()
     duplicate = db.scalar(
         select(Product.id).where(
             Product.customer_id == quotation.customer_id,
+            Product.product_name == product_name,
             or_(
                 Product.product_code == product_code,
                 Product.customer_material_code == product_code,
@@ -741,7 +743,10 @@ def convert_to_product(
         )
     )
     if duplicate is not None:
-        raise HTTPException(status_code=409, detail="该客户已存在相同存货编码")
+        raise HTTPException(
+            status_code=409,
+            detail="该客户已存在相同存货编码和产品名称",
+        )
     material = _material_or_none(db, item.material_id)
     if material is None:
         raise HTTPException(status_code=400, detail="请先在报价明细中选择材质")
@@ -779,7 +784,7 @@ def convert_to_product(
         customer_id=quotation.customer_id,
         product_code=product_code,
         customer_material_code=product_code,
-        product_name=(payload.product_name or item.product_name).strip(),
+        product_name=product_name,
         material_id=item.material_id,
         legacy_material_text=item.material_code,
         length_mm=item.length_mm,

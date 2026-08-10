@@ -195,10 +195,12 @@ def _product_conflict(
     customer_id: int,
     product_code: str,
     customer_material_code: str,
+    product_name: str,
     exclude_id: int | None = None,
 ) -> Product | None:
     statement = select(Product).where(
         Product.customer_id == customer_id,
+        Product.product_name == product_name.strip(),
         or_(
             Product.product_code == clean_code(product_code),
             Product.customer_material_code == clean_code(customer_material_code),
@@ -214,6 +216,7 @@ def _find_exact_product_for_import(
     *,
     customer_id: int,
     product_code: str,
+    product_name: str,
 ) -> Product | None:
     code = clean_code(product_code)
     rows = db.scalars(
@@ -226,12 +229,13 @@ def _find_exact_product_for_import(
             ),
         )
     ).all()
-    unique = {row.id: row for row in rows}
-    if len(unique) > 1:
+    target_name = product_name.strip()
+    exact = {row.id: row for row in rows if row.product_name == target_name}
+    if len(exact) > 1:
         raise ValueError(
-            f"存货编码 {code} 在当前客户命中多个常用箱，请先整理重复主档"
+            f"存货编码 {code} 与产品名称 {target_name} 命中多个常用箱，请先整理重复主档"
         )
-    return next(iter(unique.values()), None)
+    return next(iter(exact.values()), None)
 
 
 def _base_product_payload(customer_id: int, row: dict) -> dict:
@@ -422,6 +426,7 @@ def _validated_plan(
             db,
             customer_id=customer_id,
             product_code=row["product_code"],
+            product_name=row.get("product_name") or "",
         )
 
     normalized_row = dict(row)
@@ -449,6 +454,7 @@ def _validated_plan(
         customer_id=customer_id,
         product_code=normalized_row["product_code"],
         customer_material_code=normalized_row["customer_material_code"],
+        product_name=normalized_row["product_name"],
         exclude_id=product.id if product is not None else None,
     )
     if conflict is not None:
@@ -1412,8 +1418,8 @@ async def preview_product_import(
 
     product_items: list[dict] = []
     seen_ids: set[int] = set()
-    seen_codes: set[str] = set()
-    seen_customer_codes: set[str] = set()
+    seen_codes: set[tuple[str, str]] = set()
+    seen_customer_codes: set[tuple[str, str]] = set()
     for row in product_rows:
         try:
             if row["system_id"] is not None:
@@ -1422,12 +1428,15 @@ async def preview_product_import(
                 seen_ids.add(row["system_id"])
             normalized_product_code = clean_code(row["product_code"])
             normalized_customer_code = clean_code(row["customer_material_code"])
-            if normalized_product_code in seen_codes:
-                raise ValueError("存货编码在本批次重复")
-            if normalized_customer_code in seen_customer_codes:
-                raise ValueError("客户料号在本批次重复")
-            seen_codes.add(normalized_product_code)
-            seen_customer_codes.add(normalized_customer_code)
+            normalized_name = str(row.get("product_name") or "").strip()
+            product_identity = (normalized_product_code, normalized_name)
+            customer_identity = (normalized_customer_code, normalized_name)
+            if product_identity in seen_codes:
+                raise ValueError("存货编码与产品名称在本批次重复")
+            if customer_identity in seen_customer_codes:
+                raise ValueError("客户料号与产品名称在本批次重复")
+            seen_codes.add(product_identity)
+            seen_customer_codes.add(customer_identity)
             plan = _validated_plan(
                 db,
                 customer_id=customer_id,
@@ -1740,6 +1749,7 @@ def _revalidate_preview(db: Session, preview: ProductImportPreview) -> None:
             customer_id=preview.customer_id,
             product_code=payload["product_code"],
             customer_material_code=payload["customer_material_code"],
+            product_name=payload["product_name"],
             exclude_id=product.id if product is not None else None,
         )
         if conflict is not None:
@@ -1804,6 +1814,7 @@ def _revalidate_mixed_preview(
             customer_id=customer_id,
             product_code=payload["product_code"],
             customer_material_code=payload["customer_material_code"],
+            product_name=payload["product_name"],
             exclude_id=product.id if product is not None else None,
         )
         if conflict is not None:

@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session, sessionmaker
 def composite_requisition_app(tmp_path: Path):
     from app.api.auth import router as auth_router
     from app.api.deps import get_db
+    from app.api.incoming import router as incoming_router
     from app.api.orders import router as orders_router
     from app.api.production import router as production_router
     from app.api.requisition import router as requisition_router
@@ -196,6 +197,7 @@ def composite_requisition_app(tmp_path: Path):
 
     app = FastAPI()
     app.include_router(auth_router, prefix="/api/auth")
+    app.include_router(incoming_router, prefix="/api/incoming")
     app.include_router(orders_router, prefix="/api/orders")
     app.include_router(production_router, prefix="/api/production")
     app.include_router(requisition_router, prefix="/api/requisition")
@@ -408,6 +410,72 @@ def test_composite_pending_keeps_one_parent_with_two_component_requirements(
     assert [component["snapshot_id"] for component in row["component_requirements"]] == [1, 2]
     assert [component["required_piece_quantity"] for component in row["component_requirements"]] == [20, 30]
     assert all(component["can_requisition"] for component in row["component_requirements"])
+
+
+def test_same_code_component_stays_distinct_in_requisition_and_incoming(
+    composite_requisition_app,
+) -> None:
+    from app.models.product import Product
+    from app.models.product_bom import SalesOrderItemBomComponent
+
+    app, session_factory = composite_requisition_app
+    with session_factory() as session:
+        parent = session.scalar(
+            select(Product).where(Product.product_code == "KIT-001")
+        )
+        component = session.scalar(
+            select(Product).where(Product.product_name == "组件 A")
+        )
+        component.product_code = parent.product_code
+        component.customer_material_code = parent.customer_material_code
+        snapshot = session.scalar(
+            select(SalesOrderItemBomComponent).where(
+                SalesOrderItemBomComponent.sales_order_item_id == 1,
+                SalesOrderItemBomComponent.component_product_id == component.id,
+            )
+        )
+        snapshot.snapshot_component_product_code = parent.product_code
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client)
+        pending = client.get("/api/requisition/pending")
+        assert pending.status_code == 200, pending.text
+        parent_row = pending.json()["items"][0]
+        component_rows = parent_row["component_requirements"]
+        assert parent_row["product_code"] == "KIT-001"
+        assert [
+            (row["product_code"], row["product_name"])
+            for row in component_rows
+        ] == [
+            ("KIT-001", "组件 A"),
+            ("COMP-B", "组件 B"),
+        ]
+
+        created = client.post(
+            "/api/requisition/batches",
+            json={
+                "supplier_name": "N039 供应商",
+                "items": [
+                    _parent_payload(),
+                    _component_payload(component_rows[0]["snapshot_id"]),
+                    _component_payload(component_rows[1]["snapshot_id"]),
+                ],
+            },
+        )
+        assert created.status_code == 201, created.text
+        incoming = client.get("/api/incoming/pending")
+
+    assert incoming.status_code == 200, incoming.text
+    incoming_rows = incoming.json()["items"]
+    assert [
+        (row["product_code"], row["product_name"])
+        for row in incoming_rows
+    ] == [
+        ("KIT-001", "组合成品"),
+        ("KIT-001", "组件 A"),
+        ("COMP-B", "组件 B"),
+    ]
 
 
 def test_composite_requires_snapshot_and_creates_one_source_per_component(

@@ -243,7 +243,10 @@ def test_quotation_baseline_create_generate_accept_and_print(tmp_path):
         ).status_code == 422
         duplicate_history = client.post(
             f"/api/quotations/items/{first_item_id}/convert-to-product",
-            json={"product_code": "TH-HISTORY-1"},
+            json={
+                "product_code": "TH-HISTORY-1",
+                "product_name": "天华历史常用箱1",
+            },
         )
         assert duplicate_history.status_code == 409
         assert "相同存货编码" in duplicate_history.json()["detail"]
@@ -277,7 +280,7 @@ def test_quotation_baseline_create_generate_accept_and_print(tmp_path):
         ).status_code == 409
         assert client.post(
             f"/api/quotations/items/{second_item_id}/convert-to-product",
-            json={"product_code": "Q-001"},
+            json={"product_code": "Q-001", "product_name": "正式 A1 纸箱"},
         ).status_code == 409
         missing_manual_report_size = client.post(
             f"/api/quotations/items/{second_item_id}/convert-to-product",

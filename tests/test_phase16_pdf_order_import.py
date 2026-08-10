@@ -210,6 +210,105 @@ def test_match_import_draft_links_customer_and_products(tmp_path: Path) -> None:
         database_path.unlink(missing_ok=True)
 
 
+def test_pdf_match_hides_same_code_bom_child_but_keeps_distinct_code_child(
+    tmp_path: Path,
+) -> None:
+    from app.core.database import create_sqlite_engine
+    from app.models import Base
+    from app.models.customer import Customer
+    from app.models.product import Product
+    from app.models.product_bom import ProductBomComponent
+    from app.services.order_pdf_import import match_import_draft
+
+    engine = create_sqlite_engine(tmp_path / "pdf-bom-order-visibility.sqlite3")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    try:
+        with factory() as session:
+            customer = Customer(
+                customer_number=1,
+                customer_code="YL",
+                name="YL",
+            )
+            parent = Product(
+                customer_id=1,
+                product_code="Z.001.000093",
+                customer_material_code="Z.001.000093",
+                product_name="双路ECU新版纸盒",
+                box_category="normal",
+                is_composite=True,
+            )
+            same_code_child = Product(
+                customer_id=1,
+                product_code="Z.001.000093",
+                customer_material_code="Z.001.000093",
+                product_name="双路ECU新版纸盒内衬",
+                box_category="normal",
+                is_internal_component=True,
+            )
+            distinct_code_child = Product(
+                customer_id=1,
+                product_code="Z.001.000093-PART",
+                customer_material_code="Z.001.000093-PART",
+                product_name="双路ECU新版纸盒隔板",
+                box_category="normal",
+                is_internal_component=True,
+            )
+            session.add_all(
+                [customer, parent, same_code_child, distinct_code_child]
+            )
+            session.flush()
+            session.add_all(
+                [
+                    ProductBomComponent(
+                        parent_product_id=parent.id,
+                        component_product_id=same_code_child.id,
+                        quantity_per_set=1,
+                        display_order=1,
+                        internal_component_code="Z.001.000093-S01",
+                        display_mode="show_on_all_docs",
+                    ),
+                    ProductBomComponent(
+                        parent_product_id=parent.id,
+                        component_product_id=distinct_code_child.id,
+                        quantity_per_set=1,
+                        display_order=2,
+                        internal_component_code="Z.001.000093-S02",
+                        display_mode="internal_only",
+                    ),
+                ]
+            )
+            session.commit()
+
+            matched = match_import_draft(
+                session,
+                {
+                    "customer_name": "YL",
+                    "recognition_status": "recognized",
+                    "warnings": [],
+                    "items": [
+                        {
+                            "product_code": "Z.001.000093",
+                            "raw_product_name": "双路ECU新版纸盒内衬",
+                            "quantity": 10,
+                        },
+                        {
+                            "product_code": "Z.001.000093-PART",
+                            "raw_product_name": "双路ECU新版纸盒隔板",
+                            "quantity": 10,
+                        },
+                    ],
+                },
+                customer_id=customer.id,
+            )
+
+        assert [
+            row["matched_product_id"] for row in matched["items"]
+        ] == [parent.id, distinct_code_child.id]
+    finally:
+        engine.dispose()
+
+
 def test_pdf_material_candidates_keep_supplier_and_weight_for_same_code(
     tmp_path: Path,
 ) -> None:

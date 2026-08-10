@@ -596,7 +596,7 @@ def test_apply_detects_post_preview_conflict_and_writes_nothing(
                     customer_id=customer_id,
                     product_code="ERP-BOX-001",
                     customer_material_code="OTHER-CODE",
-                    product_name="并发新增占用编码",
+                    product_name="测试模切常用箱",
                     box_category="normal",
                 )
             )
@@ -614,6 +614,54 @@ def test_apply_detects_post_preview_conflict_and_writes_nothing(
                 Product.customer_material_code == "CUSTOMER-BOX-001"
             )
         ) == 0
+
+
+def test_import_allows_same_customer_code_when_product_name_is_distinct(
+    product_workbook_app: FastAPI,
+) -> None:
+    from app.models.product import Product
+
+    customer_id = product_workbook_app.state.customer_id
+    factory = product_workbook_app.state.session_factory
+    with TestClient(product_workbook_app) as client:
+        _login(client, "product-import-admin")
+        content = _filled_workbook(_download(client, customer_id))
+
+        with factory() as db:
+            db.add(
+                Product(
+                    customer_id=customer_id,
+                    product_code="ERP-BOX-001",
+                    customer_material_code="CUSTOMER-BOX-001",
+                    product_name="同码外箱",
+                    box_category="normal",
+                )
+            )
+            db.commit()
+
+        preview = client.post(
+            "/api/master/products/import/preview",
+            data={"customer_id": customer_id},
+            files={"file": ("常用箱.xlsx", content, EXCEL_MIME)},
+        )
+        assert preview.status_code == 200, preview.text
+        assert preview.json()["valid"] is True
+        applied = client.post(
+            "/api/master/products/import/apply",
+            json={"preview_token": preview.json()["preview_token"]},
+        )
+        assert applied.status_code == 200, applied.text
+
+    with factory() as db:
+        rows = db.scalars(
+            select(Product)
+            .where(
+                Product.customer_id == customer_id,
+                Product.product_code == "ERP-BOX-001",
+            )
+            .order_by(Product.id)
+        ).all()
+        assert [row.product_name for row in rows] == ["同码外箱", "测试模切常用箱"]
 
 
 def test_drawing_named_in_workbook_is_bound_to_imported_product(

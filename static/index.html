@@ -21156,6 +21156,7 @@
 	                  product_code:this.orderCommonBoxPicker.filters.product_code || "",
 	                  product_name:this.orderCommonBoxPicker.filters.product_name || "",
 	                  spec:this.orderCommonBoxPicker.filters.spec || "",
+	                  selection_context:"order",
 	                  page, page_size:this.orderCommonBoxPicker.page_size,
 	                },
 	              });
@@ -21257,7 +21258,7 @@
 	                this.addOrderItem(false, false);
 	                this.orderProductOptions[index] = [{
 	                  ...product,
-	                  _compact_label:product.product_code || product.product_name || "未命名常用箱",
+	                  _compact_label:[product.product_code, product.product_name].filter(Boolean).join("｜") || "未命名常用箱",
 	                  _label:`${product.product_code || "-"} · ${product.product_name || "-"} · ${this.spec(product)}`,
 	                }];
 	                this.orderForm.items[index].quantity = Number.isFinite(quantity) && quantity > 0 ? quantity : null;
@@ -22349,10 +22350,10 @@
 	              this.orderProductOptions[index] = [];
 	              return;
 	            }
-	            const { data } = await axios.get("/api/master/products", { params:{ customer_id:this.orderForm.customer_id, keyword, page_size:50 } });
+	            const { data } = await axios.get("/api/master/products", { params:{ customer_id:this.orderForm.customer_id, keyword, page_size:50, selection_context:"order" } });
 	            this.orderProductOptions[index] = data.items.map(p => ({
 	              ...p,
-	              _compact_label:p.product_code || p.product_name || "未命名常用箱",
+	              _compact_label:[p.product_code, p.product_name].filter(Boolean).join("｜") || "未命名常用箱",
 	              _label:`${p.product_code} · ${p.product_name} · ${this.spec(p)}`,
 	            }));
 	          },

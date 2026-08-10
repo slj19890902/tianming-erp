@@ -88,7 +88,7 @@
     @media(min-width:901px){
       body.floor3-mode{height:100vh;overflow:hidden}
       body.floor3-mode .wrap{max-width:none;width:100%;height:100vh;margin:0;padding:6px 10px;display:flex;flex-direction:column;overflow:hidden}
-      body.floor3-mode header,body.floor3-mode .wrap>.tabs,body.floor3-mode #locationViewTabs{display:none}
+      body.floor3-mode header,body.floor3-mode #locationViewTabs{display:none}
       body.floor3-mode .tabs{flex:0 0 auto;margin-bottom:8px}
       body.floor3-mode #floor3LocationSection{display:flex;flex:1;min-height:0;flex-direction:column}
       body.floor3-mode #floor3FilterPanel{flex:0 0 auto;margin-bottom:6px;padding:6px 8px}
@@ -148,8 +148,8 @@
       <button class="btn" data-tab="movements">库存流水</button>
       <button class="btn" data-tab="molds">模具位置</button>
       <button class="btn" data-tab="printing_plates">挂板位置</button>
-      <button class="btn admin-only inventory-ledger-tab" data-tab="finished">高级成品台账</button>
-      <button class="btn admin-only inventory-ledger-tab" data-tab="semi_finished">高级半成品台账</button>
+      <button class="btn inventory-ledger-tab" data-tab="finished">高级成品台账</button>
+      <button class="btn inventory-ledger-tab" data-tab="semi_finished">高级半成品台账</button>
       <button id="stocktakeReviewTab" class="btn stocktake-review-access hidden" data-tab="stocktake_review">盘点审核</button>
       <button id="inventoryOnboardingTab" class="btn inventory-onboarding-access hidden" data-tab="inventory_onboarding">首次盘点入库</button>
     </div>
@@ -157,7 +157,7 @@
     <div id="locationViewTabs" class="location-view-tabs hidden">
       <button class="btn active" data-location-view="floor3" type="button">数字孪生库位图</button>
       <button class="btn" data-location-view="twin" type="button">智慧仓储总览</button>
-      <button class="btn admin-only" data-location-view="ledger" type="button">全部库位台账</button>
+      <button class="btn" data-location-view="ledger" type="button">全部库位台账</button>
       <span class="muted">数字孪生平面是主视图；旧库位仅按区域编码提供库存数据，不再提供猜测位置。</span>
     </div>
 
@@ -402,7 +402,7 @@
       <div id="floor3FilterPanel" class="panel floor3-command-panel">
         <div class="floor3-command-title">
           <div><span id="factoryMapFloorEyebrow" class="floor3-command-eyebrow">三楼成品仓 · 真实货位数据</span><h2>仓库可视化库存</h2></div>
-          <div class="actions"><button class="btn twin-floor-breadcrumb" type="button" onclick="switchLocationView('twin')">仓库总览 ‹</button><button class="btn factory-floor-switch" data-factory-floor="1F" type="button">1F</button><button class="btn factory-floor-switch active" data-factory-floor="3F" type="button">3F</button><span id="floor3ModeBadge" class="tag floor3-mode-badge">浏览模式</span><button class="btn" type="button" onclick="switchTab('movements')">操作记录</button><button class="btn admin-only" type="button" onclick="switchTab('finished')">高级库存台账</button><button class="btn admin-only" type="button" onclick="switchLocationView('ledger')">库位结构维护</button></div>
+          <div class="actions"><button class="btn twin-floor-breadcrumb" type="button" onclick="switchLocationView('twin')">仓库总览 ‹</button><button class="btn factory-floor-switch" data-factory-floor="1F" type="button">1F</button><button class="btn factory-floor-switch active" data-factory-floor="3F" type="button">3F</button><span id="floor3ModeBadge" class="tag floor3-mode-badge">浏览模式</span><button class="btn" type="button" onclick="switchTab('movements')">操作记录</button><button class="btn" type="button" onclick="switchTab('finished')">高级库存台账</button><button class="btn" type="button" onclick="switchLocationView('ledger')">库位结构维护</button></div>
         </div>
         <div id="floor3ToolbarRow" class="floor3-toolbar-row">
           <button id="floor3AreaNavToggle" class="btn" type="button" aria-expanded="true">收起区域</button>

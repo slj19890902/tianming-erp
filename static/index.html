@@ -3401,7 +3401,7 @@
                       </select>
                       <span v-if="deliveryOperationState.action==='assign' && Number(deliveryOperationState.deliveryId)===Number(row.id) && Number(deliveryOperationState.taskId)===Number(row.pick_task?.id)" class="muted">分配中…</span>
                       <button v-if="row.pick_task" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="openDeliveryPickTask(row)">{{ row.pick_task.assignment_required ? '管理员查看' : '打开手机拿货' }}</button>
-                      <button v-if="row.pick_task" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="openDeliveryPickPrint(row)">打印拿货单</button>
+                      <button v-if="row.pick_task" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="openDeliveryPickPrint(row)">打印仓库找货单</button>
                       <button v-if="canDelivery && row.status==='pending'" class="btn small success" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="dispatchDelivery(row)">{{ deliveryOperationState.action==='dispatch' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '发货中…' : (row.pick_task ? '发货打印' : '直接发货打印') }}</button>
                       <button v-if="canDelivery && row.status==='pending'" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="editDelivery(row)">编辑</button>
                       <button v-if="canDelivery && row.status==='pending'" class="btn small danger" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="deleteDelivery(row)">{{ deliveryOperationState.action==='delete' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '删除中…' : '删除' }}</button>
@@ -6940,6 +6940,8 @@
               <button class="btn primary" :disabled="loading || pdfTemplateLoading" @click="savePdfTemplate">保存 draft</button>
             </template>
             <button v-if="modal?.type === 'delivery' && deliveryForm.editingId && !deliveryFormIsDirty()" class="btn success" :disabled="loading || deliverySaveState.saving || !!deliveryForm.pick_task || !!deliveryOperationState.action" @click="createCurrentDeliveryPickTask">{{ deliveryOperationState.action==='pick' && Number(deliveryOperationState.deliveryId)===Number(deliveryForm.editingId) ? '推送中…' : (deliveryForm.pick_task ? '已推送拿货' : '拿货') }}</button>
+            <button v-if="modal?.type === 'delivery' && deliveryForm.editingId && !deliveryFormIsDirty()" class="btn" :disabled="loading || deliverySaveState.saving || !deliveryForm.pick_task || !!deliveryOperationState.action" :title="deliveryForm.pick_task ? '打印款号、名称、尺寸、数量和具体位置' : '请先点拿货生成库位计划'" @click="openCurrentDeliveryPickPrint">打印仓库找货单</button>
+            <span v-if="modal?.type === 'delivery' && deliveryForm.editingId && !deliveryFormIsDirty() && !deliveryForm.pick_task" class="muted">先点“拿货”生成库位计划，再打印找货单</span>
             <button v-if="canSaveModal && modal?.type==='quotationConvert'" class="btn primary" :disabled="loading || quotationConversionState.saving || quotationConversionState.committed || quotationConversionState.outcomeUncertain || !!quotationConvertCreaseMismatch" @click="saveModal()">{{ quotationConversionState.saving ? '正在转入…' : (quotationConversionState.committed ? '已转入常用箱' : '保存') }}</button>
             <button v-if="canSaveModal && modal?.type==='order'" class="btn primary" :disabled="loading || orderCreateSaveState.saving || orderCreateSaveState.committed || orderCreateSaveState.outcomeUncertain" @click="saveModal()">{{ orderCreateSaveState.saving ? '正在保存订单…' : (orderCreateSaveState.committed ? '订单已保存' : '保存') }}</button>
             <button v-if="canSaveModal && modal?.type==='orderEdit'" class="btn primary" :disabled="loading || orderGroupSaveState.saving || orderGroupSaveState.committed || orderGroupSaveState.outcomeUncertain" @click="saveModal()">{{ orderGroupSaveState.saving ? '正在保存订单组…' : (orderGroupSaveState.committed ? '订单组已保存' : '保存') }}</button>
@@ -24513,6 +24515,20 @@
             const task = await this.createDeliveryPickTask(row);
             if (!task) return false;
             this.deliveryForm.pick_task = task;
+            return true;
+          },
+          openCurrentDeliveryPickPrint() {
+            if (!this.deliveryForm.editingId || this.deliveryFormIsDirty()) {
+              this.showToast("请先保存送货草稿，再打印仓库找货单", true);
+              return false;
+            }
+            const row = this.currentDeliveryDraftRow();
+            row.pick_task = this.deliveryForm.pick_task || row.pick_task || null;
+            if (!row.pick_task?.id) {
+              this.showToast("请先点“拿货”生成库位计划，再打印仓库找货单", true);
+              return false;
+            }
+            this.openDeliveryPickPrint(row);
             return true;
           },
           async dispatchCurrentDeliveryDraft() {

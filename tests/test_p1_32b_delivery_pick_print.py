@@ -18,14 +18,33 @@ MOBILE = (ROOT / "static" / "mobile_delivery_pick.html").read_text(
 
 def test_desktop_delivery_row_opens_independent_pick_print_page() -> None:
     assert "openDeliveryPickPrint(row)" in INDEX
-    assert "打印拿货单" in INDEX
+    assert "打印仓库找货单" in INDEX
     assert "/static/delivery-pick-print.html?task_id=" in INDEX
     assert '"_blank", "noopener"' in INDEX
+
+def test_saved_delivery_exposes_warehouse_pick_sheet_without_business_write() -> None:
+    assert '@click="openCurrentDeliveryPickPrint"' in INDEX
+    assert '!deliveryForm.pick_task' in INDEX
+    assert '先点“拿货”生成库位计划，再打印找货单' in INDEX
+    start = INDEX.index("openCurrentDeliveryPickPrint() {")
+    end = INDEX.index("async dispatchCurrentDeliveryDraft()", start)
+    body = INDEX[start:end]
+    assert "deliveryFormIsDirty" in body
+    assert "currentDeliveryDraftRow" in body
+    assert "this.deliveryForm.pick_task || row.pick_task || null" in body
+    assert "openDeliveryPickPrint(row)" in body
+    assert "createDeliveryPickTask" not in body
+    assert "dispatchDelivery" not in body
+    assert "axios." not in body
+    for forbidden in ("单价", "金额", "成本", "回单", "对账", "开票"):
+        assert forbidden not in PRINT
+
+
 
 
 def test_a4_pick_sheet_contains_required_readable_fields_and_pagination() -> None:
     for marker in (
-        "A4 预拿货单",
+        "仓库找货单（出库备货）",
         "客户：",
         "拿货单号：",
         "关联送货单：",
@@ -33,10 +52,10 @@ def test_a4_pick_sheet_contains_required_readable_fields_and_pagination() -> Non
         "打印版本：",
         "打印人/时间：",
         "第 ${pageIndex + 1}/${pageCount} 页",
-        "存货编码",
-        "产品名称 / 规格",
-        "位置",
-        "计划拿货",
+        "款号",
+        "名称 / 尺寸",
+        "具体位置",
+        "本次数量",
         "实际拿货",
         "差异",
         "本品合计",
@@ -68,6 +87,7 @@ def test_print_uses_existing_location_plan_and_never_writes_business_state() -> 
         'method: "DELETE"',
     ):
         assert forbidden not in PRINT
+    assert "本单只用于仓库找货备货，不代表已出库" in PRINT
     assert "纸面填写不改库存、不发货" in PRINT
 
 

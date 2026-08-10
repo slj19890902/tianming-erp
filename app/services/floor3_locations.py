@@ -113,6 +113,26 @@ def _location(db: Session, location_id: int) -> WarehouseLocation:
     return row
 
 
+def _operational_pallet_location(
+    db: Session,
+    location_id: int,
+) -> WarehouseLocation:
+    """Resolve any published finished-goods ground slot used by the map UI."""
+
+    row = db.get(WarehouseLocation, location_id)
+    if row is None:
+        raise Floor3LocationError("货位不存在", status_code=404)
+    issue = operational_location_issue(
+        db,
+        row,
+        warehouse_types={"finished", "shared"},
+        pallet_storage_only=True,
+    )
+    if issue:
+        raise Floor3LocationError(f"目标货位不可用：{issue}", status_code=409)
+    return row
+
+
 def _pallet(
     db: Session,
     pallet_id: int,
@@ -961,6 +981,7 @@ def bind_finished_lot_to_floor3_pallet(
     pallet_id: int | None = None,
     pallet_code: str | None = None,
     require_empty_pallet: bool = False,
+    allow_operational_location: bool = False,
 ) -> InventoryPallet:
     """Bind one official finished-goods lot to its physical floor-three slot.
 
@@ -969,7 +990,11 @@ def bind_finished_lot_to_floor3_pallet(
     """
     if lot.inventory_type != "finished" or lot.finished_detail is None:
         raise Floor3LocationError("只有正式成品库存可以绑定三楼货位")
-    location = _location(db, lot.warehouse_location_id)
+    location = (
+        _operational_pallet_location(db, lot.warehouse_location_id)
+        if allow_operational_location
+        else _location(db, lot.warehouse_location_id)
+    )
     if lot.pallet_item is not None:
         return _pallet(db, lot.pallet_item.pallet_id)
     if pallet_id is not None:
@@ -1014,6 +1039,7 @@ def bind_finished_lot_to_floor3_pallet(
             items=[item],
             remarks="成品入库自动绑定",
             operator_id=operator_id,
+            allow_operational_location=allow_operational_location,
         )
     return add_pallet_item(
         db,
@@ -1060,6 +1086,7 @@ def create_pallet(
     items: list[dict],
     remarks: str | None,
     operator_id: int | None,
+    allow_operational_location: bool = False,
 ) -> InventoryPallet:
     official_items = [
         item for item in items if item.get("create_finished_inventory") is True
@@ -1076,7 +1103,11 @@ def create_pallet(
             remarks=remarks,
             operator_id=operator_id,
         )
-    location = _location(db, location_id)
+    location = (
+        _operational_pallet_location(db, location_id)
+        if allow_operational_location
+        else _location(db, location_id)
+    )
     try:
         _claim_empty_active_location(db, location)
     except Floor3LocationError as error:

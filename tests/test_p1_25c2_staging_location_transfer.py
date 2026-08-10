@@ -19,7 +19,11 @@ from app.models.warehouse_inventory import (
     InventoryLot,
     InventoryLotTransfer,
     InventoryMovement,
+    InventoryPallet,
+    InventoryPalletItem,
     InventoryReservation,
+    WarehouseArea,
+    WarehouseFloor,
     WarehouseLocation,
 )
 from app.services.warehouse_inventory import (
@@ -255,6 +259,70 @@ def test_whole_transfer_keeps_same_lot_and_reservations(db: Session) -> None:
     assert reservation.released_stock_quantity == 0
     assert result.transfer.available_quantity == 6
     assert result.transfer.reserved_quantity == 50
+
+
+def test_transfer_to_published_floor_one_map_slot_creates_physical_pallet(
+    db: Session,
+) -> None:
+    source, _legacy_target, _ = _case(
+        db, available=8, reserved=12, suffix="OUTDOOR"
+    )
+    floor = WarehouseFloor(
+        floor_number=1,
+        floor_code="F1",
+        floor_name="一楼",
+        construction_status="enabled",
+    )
+    db.add(floor)
+    db.flush()
+    area = WarehouseArea(
+        floor_id=floor.id,
+        area_code="OUT-E1",
+        area_name="一楼厂外待送区·东侧①",
+        construction_status="enabled",
+    )
+    db.add(area)
+    db.flush()
+    target = WarehouseLocation(
+        location_code="F1-OUT-E1-P001",
+        location_name="一楼厂外待送位001",
+        warehouse_type="finished",
+        warehouse_floor=1,
+        area_code=area.area_code,
+        storage_type="ground",
+        placement_status="placed",
+        source_version="TWIN_V1",
+    )
+    db.add(target)
+    db.flush()
+
+    result = transfer_staging_finished_lot(
+        db,
+        lot_id=source.id,
+        expected_version=1,
+        quantity=20,
+        location_id=target.id,
+        operator_id=None,
+        idempotency_key="p1-37g-outdoor-pallet",
+    )
+    db.flush()
+
+    pallet_item = db.scalar(
+        select(InventoryPalletItem).where(
+            InventoryPalletItem.inventory_lot_id == result.target_lot.id
+        )
+    )
+    assert pallet_item is not None
+    pallet = db.get(InventoryPallet, pallet_item.pallet_id)
+    assert pallet is not None
+    assert pallet.is_current is True
+    assert pallet.location_id == target.id
+    assert pallet_item.quantity == Decimal("20")
+    assert result.target_lot.warehouse_location_id == target.id
+    assert (
+        int(result.target_lot.quantity_available or 0)
+        + int(result.target_lot.quantity_reserved or 0)
+    ) == 20
 
 
 def test_transfer_rejects_stale_version_and_non_staging_lot(db: Session) -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 
@@ -10,6 +11,7 @@ INDUSTRIAL = (ROOT / "factory_twin" / "frontend" / "src" / "industrialScene.ts")
 BUILT = (ROOT / "static" / "factory-twin-assets" / "warehouse-twin.html").read_text(encoding="utf-8")
 TWIN_CSS = (ROOT / "factory_twin" / "frontend" / "src" / "warehouseTwin.css").read_text(encoding="utf-8")
 ERP_INDEX = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+TWIN_LAYOUT = json.loads((ROOT / "static" / "factory_maps" / "twin_layout_v1.json").read_text(encoding="utf-8"))
 
 
 def test_operational_twin_reuses_the_editor_renderer_for_2d_and_25d() -> None:
@@ -266,6 +268,39 @@ def test_phase2c9_pallet_label_prioritizes_goods_and_collapses_secondary_locatio
     assert "地图状态" in SOURCE
     assert "实体栈板" in SOURCE
     assert "库存明细" in SOURCE
+
+
+def test_p1_37g_maps_confirmed_outdoor_dispatch_and_uses_thumbnail_targets() -> None:
+    floor_one_features = TWIN_LAYOUT["floors"]["1F"]["features"]
+    outdoor = {
+        item["feature_code"]: item
+        for item in floor_one_features
+        if item["feature_code"].startswith("ZONE-1F-OUT-")
+    }
+    assert set(outdoor) == {
+        "ZONE-1F-OUT-E-001",
+        "ZONE-1F-OUT-E-002",
+        "ZONE-1F-OUT-S-001",
+    }
+    assert all(item["subtype"] == "finished_wait_delivery" for item in outdoor.values())
+    assert all(item["temporary_only"] is True for item in outdoor.values())
+    assert all(item["weather_exposed"] is True for item in outdoor.values())
+    assert outdoor["ZONE-1F-OUT-E-001"]["points"][0] == [13704.0, -1903.0]
+    assert outdoor["ZONE-1F-OUT-S-001"]["points"][2] == [13704.0, -5478.0]
+
+    assert "一楼厂外待送区" in SOURCE
+    assert "散存待送 · 未绑定实体栈板" in SOURCE
+    assert "已绑定实体栈板会直接显示在对应地图位置" in SOURCE
+    assert "直接点选三楼空位缩略图" in SOURCE
+    assert "点选三楼目标栈板缩略图" in SOURCE
+    assert "/api/warehouse/twin-operations/staging-lots/${selectedDispatchStagingItem.lot_id}/place" in SOURCE
+    assert "/api/warehouse/twin-operations/pallets/${selectedLocation.pallet.pallet_id}/move" in SOURCE
+    assert "/api/warehouse/pallets/${selectedLocation.pallet.pallet_id}/merge-all" in SOURCE
+    assert '<select value={moveTargetLocationId}' not in SOURCE
+    assert '<select value={mergeTargetPalletId}' not in SOURCE
+    assert 'allowPalletSelection={viewMode === "25d" || locationEditMode || canEditLocations}' in SOURCE
+    assert ".twin-map-target-thumbnail" in TWIN_CSS
+    assert ".twin-dispatch-label-list" in TWIN_CSS
 
 
 def test_phase2c10_keeps_location_clicks_lightweight_and_focuses_search_hits() -> None:

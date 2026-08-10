@@ -6726,7 +6726,7 @@ def _dashboard_pending_requisition_item_is_eligible(
     finished_reserved_qty: int,
     active_requisition_qty: int,
 ) -> bool:
-    if context.is_ordinary(item):
+    if context.is_ordinary(item) and int(finished_reserved_qty or 0) <= 0:
         requirements = _ordinary_requisition_requirements(item)
         return (
             int(requirements.get("requisition_qty") or 0)
@@ -6950,7 +6950,10 @@ def _pending_requisitions_full_payload(
         if is_history_order_number(order.order_number):
             continue
         material = read_context.material_for(item)
-        if read_context.is_ordinary(item):
+        if (
+            read_context.is_ordinary(item)
+            and int(reservation_map.get(item.id, 0)) <= 0
+        ):
             requirements = _ordinary_requisition_requirements(item)
             cutting_mode = str(requirements["cutting_mode"])
             suggested_len, suggested_width = _purchase_dimensions(

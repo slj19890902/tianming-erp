@@ -8,12 +8,13 @@ INDEX = (PROJECT_ROOT / "static" / "index.html").read_text(encoding="utf-8")
 WAREHOUSE = (PROJECT_ROOT / "static" / "warehouse.html").read_text(encoding="utf-8")
 
 
-def test_p1_16b_keeps_order_pages_grouped_and_moves_map_to_sidebar() -> None:
+def test_p1_16b_keeps_order_pages_grouped_and_routes_map_from_topbar() -> None:
     assert 'key:"workbench", label:"订单主链"' in INDEX
     assert '{key:"orders",label:"订单"}' in INDEX
     assert '{key:"requisition",label:"报料"}' in INDEX
     assert '{key:"incoming",label:"来料入库"}' in INDEX
-    assert '{ key: "warehouse", label: "仓库地图" }' in INDEX
+    assert 'v-if="pageAllowed(\'warehouse\')"' in INDEX
+    assert '@click="goMenu(\'warehouse\')"' in INDEX
     navigation = INDEX.split("navigationGroups() {", 1)[1].split("currentNavigationGroup() {", 1)[0]
     assert '{key:"warehouse",label:"仓库地图"}' not in navigation
     assert "currentNavigationGroup && currentNavigationGroup.key!=='workbench'" in INDEX

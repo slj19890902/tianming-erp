@@ -159,7 +159,7 @@ def test_n029_production_requests_disable_duplicates_and_reuse_idempotency_keys(
     assert ':disabled="productionBusy"' in INDEX
 
 
-def test_n029_production_menu_follows_the_order_mainline_and_standalone_map() -> None:
+def test_n029_production_menu_follows_the_order_mainline_and_topbar_map() -> None:
     group_start = INDEX.index('{ key:"workbench", label:"订单主链"')
     group_end = INDEX.index("]}", group_start)
     group = INDEX[group_start:group_end]
@@ -168,7 +168,11 @@ def test_n029_production_menu_follows_the_order_mainline_and_standalone_map() ->
     menu_start = INDEX.index("menus() {")
     menu_end = INDEX.index("];", menu_start)
     menu = INDEX[menu_start:menu_end]
-    assert menu.index('key: "dashboard"') < menu.index('key: "warehouse"') < menu.index('key: "workbench"') < menu.index('key: "production"')
+    assert 'key: "warehouse"' not in menu
+    assert menu.index('key: "dashboard"') < menu.index('key: "workbench"') < menu.index('key: "production"')
+    topbar = INDEX[INDEX.index('<div class="top-actions">'):INDEX.index("</header>")]
+    assert '@click="goMenu(\'warehouse\')"' in topbar
+    assert topbar.index("topbar-warehouse-entry") < topbar.index("ui-mode-switch")
 
 
 def test_n029_production_tables_are_compact_and_do_not_require_horizontal_scroll() -> None:

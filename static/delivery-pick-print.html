@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>A4 预拿货单</title>
+  <title>仓库找货单（出库备货）</title>
   <style>
     * { box-sizing: border-box; }
     body { margin: 0; color: #111827; background: #e5e7eb; font-family: "Microsoft YaHei", "SimSun", sans-serif; }
@@ -49,7 +49,7 @@
 </head>
 <body>
   <nav class="toolbar">
-    <button id="printButton" disabled>打印 A4 拿货单</button>
+    <button id="printButton" disabled>打印仓库找货单</button>
     <a id="differenceButton" class="action secondary" href="#" hidden>回录差异</a>
     <button class="secondary" onclick="window.close()">关闭</button>
   </nav>
@@ -126,7 +126,7 @@
         : `本页 ${pageRows.length} 个位置行，整单合计见末页`;
       return `<section class="page">
         <div class="page-number">第 ${pageIndex + 1}/${pageCount} 页</div>
-        <h1>A4 预拿货单</h1>
+        <h1>仓库找货单（出库备货）</h1>
         <div class="meta">
           <div><strong>客户：</strong>${escapeHtml(task.customer_name || "-")}</div>
           <div><strong>拿货单号：</strong>NH-${escapeHtml(task.id)}</div>
@@ -136,13 +136,13 @@
           <div><strong>打印人/时间：</strong>${escapeHtml(printUser)} / ${escapeHtml(displayDateTime())}</div>
         </div>
         <table>
-          <thead><tr><th class="seq">序号</th><th class="code">存货编码</th><th class="product">产品名称 / 规格</th><th class="location">位置</th><th class="planned">计划拿货</th><th class="actual">实际拿货</th><th class="difference">差异</th></tr></thead>
+          <thead><tr><th class="seq">序号</th><th class="code">款号</th><th class="product">名称 / 尺寸</th><th class="location">具体位置</th><th class="planned">本次数量</th><th class="actual">实际拿货</th><th class="difference">差异</th></tr></thead>
           <tbody>${pageRows.map(rowHtml).join("")}</tbody>
         </table>
         <footer class="footer">
           <div class="summary"><span>${summaryText}</span><span>异常行数：________</span></div>
           <div class="signatures"><div>拿货人：<div class="signature"></div></div><div>复核人：<div class="signature"></div></div><div>异常处理：<div class="signature"></div></div></div>
-          <div class="notice">纸面填写不改库存、不发货。数量一致可在 ERP 一键按计划完成；只有少拿、没货或位置不符时回录差异。</div>
+          <div class="notice">本单只用于仓库找货备货，不代表已出库。纸面填写不改库存、不发货；只有少拿、没货或位置不符时回录差异。</div>
         </footer>
       </section>`;
     }

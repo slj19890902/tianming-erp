@@ -216,14 +216,15 @@ def test_cost_review_reuses_health_boundaries_and_stays_read_only(
 
 def test_cost_review_ui_is_one_lazy_read_only_cost_check_panel() -> None:
     for text in (
-        "成本检查",
+        "成本与利润提醒",
         "待补资料",
         "利润复核",
         "仅供内部复核，不是实际利润",
         'axios.get("/api/orders/cost-review"',
     ):
         assert text in INDEX
-    assert INDEX.count('@click="openCostGaps">成本检查</button>') == 1
+    assert INDEX.count('@click="openCostGaps">成本与利润提醒</button>') == 1
+    assert "Promise.all([" in INDEX
     assert "switchCostPanel('review')" in INDEX
     assert "loadCostReview" in INDEX
     assert "costReviewState.summary" in INDEX

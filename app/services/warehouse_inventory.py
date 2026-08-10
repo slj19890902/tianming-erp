@@ -872,6 +872,25 @@ def transfer_staging_finished_lot(
             )
         except Floor3LocationError as error:
             raise WarehouseInventoryError(str(error), error.status_code) from error
+    elif (
+        target_location.source_version == "TWIN_V1"
+        and target_location.storage_type != "rack"
+    ):
+        from app.services.floor3_locations import (
+            Floor3LocationError,
+            bind_finished_lot_to_floor3_pallet,
+        )
+
+        try:
+            bind_finished_lot_to_floor3_pallet(
+                db,
+                lot=target_lot,
+                operator_id=operator_id,
+                require_empty_pallet=True,
+                allow_operational_location=True,
+            )
+        except Floor3LocationError as error:
+            raise WarehouseInventoryError(str(error), error.status_code) from error
 
     transfer = InventoryLotTransfer(
         source_lot_id=lot_id,

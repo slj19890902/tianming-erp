@@ -2973,6 +2973,126 @@
           "erp_area_code": null
         },
         {
+          "id": "outdoor-dispatch-east-001",
+          "feature_code": "ZONE-1F-OUT-E-001",
+          "name": "一楼厂外待送区·东侧①",
+          "feature_kind": "zone",
+          "subtype": "finished_wait_delivery",
+          "points": [
+            [
+              13704.0,
+              -1903.0
+            ],
+            [
+              17704.0,
+              -1903.0
+            ],
+            [
+              17704.0,
+              9089.0
+            ],
+            [
+              13704.0,
+              9089.0
+            ]
+          ],
+          "width_mm": null,
+          "direction": null,
+          "no_stacking": false,
+          "storage_mode": "floor",
+          "elevation_mm": 0.0,
+          "storage_height_mm": 1000.0,
+          "color": "#f59e0b",
+          "area_mm2": 43968000.0,
+          "source": "confirmed_v4",
+          "status": "confirmed",
+          "is_locked": true,
+          "version": 1,
+          "erp_area_code": null,
+          "temporary_only": true,
+          "weather_exposed": true
+        },
+        {
+          "id": "outdoor-dispatch-east-002",
+          "feature_code": "ZONE-1F-OUT-E-002",
+          "name": "一楼厂外待送区·东侧②",
+          "feature_kind": "zone",
+          "subtype": "finished_wait_delivery",
+          "points": [
+            [
+              13704.0,
+              -7878.0
+            ],
+            [
+              17704.0,
+              -7878.0
+            ],
+            [
+              17704.0,
+              -4390.0
+            ],
+            [
+              13704.0,
+              -4390.0
+            ]
+          ],
+          "width_mm": null,
+          "direction": null,
+          "no_stacking": false,
+          "storage_mode": "floor",
+          "elevation_mm": 0.0,
+          "storage_height_mm": 1000.0,
+          "color": "#f59e0b",
+          "area_mm2": 13952000.0,
+          "source": "confirmed_v4",
+          "status": "confirmed",
+          "is_locked": true,
+          "version": 1,
+          "erp_area_code": null,
+          "temporary_only": true,
+          "weather_exposed": true
+        },
+        {
+          "id": "outdoor-dispatch-south-001",
+          "feature_code": "ZONE-1F-OUT-S-001",
+          "name": "一楼厂外待送区·南侧",
+          "feature_kind": "zone",
+          "subtype": "finished_wait_delivery",
+          "points": [
+            [
+              -10800.0,
+              -7878.0
+            ],
+            [
+              13704.0,
+              -7878.0
+            ],
+            [
+              13704.0,
+              -5478.0
+            ],
+            [
+              -10800.0,
+              -5478.0
+            ]
+          ],
+          "width_mm": null,
+          "direction": null,
+          "no_stacking": false,
+          "storage_mode": "floor",
+          "elevation_mm": 0.0,
+          "storage_height_mm": 1000.0,
+          "color": "#f59e0b",
+          "area_mm2": 58809600.0,
+          "source": "confirmed_v4",
+          "status": "confirmed",
+          "is_locked": true,
+          "version": 1,
+          "erp_area_code": null,
+          "temporary_only": true,
+          "weather_exposed": true
+        },
+        {
           "id": "21921d96-287d-4160-b7af-08ae76cf2a68",
           "feature_code": "ZONE-1F-MOLD-001",
           "name": "模具堆放区",

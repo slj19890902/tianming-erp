@@ -2156,7 +2156,7 @@ export function WarehouseTwinApp() {
         <button type="button" className={floorCode === "3F" ? "active" : ""} onClick={() => setFloorCode("3F")}><b>3F</b><span>成品仓库</span></button>
       </nav>{selectedAreaCode && <div className="twin-header-area-summary"><small>当前区域</small><b>{selectedAreaCode} · {selectedAreaFeature?.name || "仓储区域"}</b><span>{selectedAreaFeature?.area_mm2 ? `${(selectedAreaFeature.area_mm2 / 1_000_000).toFixed(1)} m²` : "面积待确认"} · {selectedAreaLocationCount} 库位 · {selectedArea?.lot_count || 0} 批次</span></div>}<p>{floorTitle} · 正式仓库作业层</p></div>
       <div className="twin-command-status"><span className="live">{canEditLocations ? "管理员作业" : "只读定位"}</span><b>{currentFloor?.active_lots || 0}</b><small>当前层有效批次</small></div>
-      <a className="twin-ledger-link" href="/warehouse-ledger.html">库存台账</a>
+      <a className="twin-ledger-link" href="/warehouse-ledger.html" target="_top">库存台账</a>
     </header>
 
     <section className="twin-toolbar">

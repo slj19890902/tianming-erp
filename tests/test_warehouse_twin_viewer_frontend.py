@@ -99,6 +99,10 @@ def test_operational_twin_uses_tianming_erp_compact_shell() -> None:
     assert "overflow-x: hidden" in TWIN_CSS
 
 
+def test_embedded_twin_opens_the_ledger_in_the_top_level_page() -> None:
+    assert '<a className="twin-ledger-link" href="/warehouse-ledger.html" target="_top">库存台账</a>' in SOURCE
+
+
 def test_operational_twin_keeps_fixed_objects_locked_and_only_adds_location_pallet_interaction() -> None:
     assert 'entity.kind === "equipment"' in SOURCE
     assert 'item.feature_kind === "zone"' in SOURCE

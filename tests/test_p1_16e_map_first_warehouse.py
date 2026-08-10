@@ -31,13 +31,29 @@ def test_warehouse_daily_navigation_defaults_to_measured_twin_floor() -> None:
     assert 'requestedLocationView==="floor3"' in WAREHOUSE
 
 
-def test_row_ledgers_are_admin_advanced_entries_not_daily_tabs() -> None:
-    assert 'class="btn admin-only inventory-ledger-tab" data-tab="finished">高级成品台账' in WAREHOUSE
-    assert 'class="btn admin-only inventory-ledger-tab" data-tab="semi_finished">高级半成品台账' in WAREHOUSE
-    assert 'onclick="switchTab(\'finished\')">高级库存台账' in WAREHOUSE
-    assert 'onclick="switchLocationView(\'ledger\')">库位结构维护' in WAREHOUSE
+def test_row_ledgers_are_visible_read_entries_while_mutations_stay_admin_only() -> None:
+    assert 'class="btn inventory-ledger-tab" data-tab="finished">高级成品台账' in WAREHOUSE
+    assert 'class="btn inventory-ledger-tab" data-tab="semi_finished">高级半成品台账' in WAREHOUSE
+    assert 'class="btn" data-location-view="ledger" type="button">全部库位台账' in WAREHOUSE
+    assert 'class="btn" type="button" onclick="switchTab(\'finished\')">高级库存台账' in WAREHOUSE
+    assert 'class="btn" type="button" onclick="switchLocationView(\'ledger\')">库位结构维护' in WAREHOUSE
+    assert '<form id="moldForm" class="panel admin-only">' in WAREHOUSE
+    assert '<form id="printingPlateForm" class="panel admin-only">' in WAREHOUSE
+    assert 'class="actions admin-only"' in WAREHOUSE
     assert 'state.user.role!=="admin"||state.readOnly' in WAREHOUSE
     assert 'document.querySelectorAll(".admin-only")' in WAREHOUSE
+
+
+def test_mold_plate_and_stocktake_entries_keep_permission_boundaries() -> None:
+    assert '<button class="btn" data-tab="molds">模具位置</button>' in WAREHOUSE
+    assert '<button class="btn" data-tab="printing_plates">挂板位置</button>' in WAREHOUSE
+    assert 'id="stocktakeReviewTab" class="btn stocktake-review-access hidden"' in WAREHOUSE
+    assert 'id="inventoryOnboardingTab" class="btn inventory-onboarding-access hidden"' in WAREHOUSE
+    assert 'function revealStocktakeReviewTab(){if(canViewStocktakes())' in WAREHOUSE
+    assert 'function revealInventoryOnboardingTab(){if(canViewInventoryOnboarding())' in WAREHOUSE
+    assert 'document.querySelectorAll(".onboarding-post-only")' in WAREHOUSE
+    assert 'body.floor3-mode header,body.floor3-mode #locationViewTabs{display:none}' in WAREHOUSE
+    assert 'body.floor3-mode header,body.floor3-mode .wrap>.tabs' not in WAREHOUSE
 
 
 def test_map_first_change_does_not_remove_authoritative_ledgers_or_actions() -> None:

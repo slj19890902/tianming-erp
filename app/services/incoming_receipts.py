@@ -71,6 +71,7 @@ class IncomingTarget:
     requisition_item: RequisitionItem | None
     planned_quantity: int
     component_type: str
+    bom_snapshot: SalesOrderItemBomComponent | None = None
 
 
 def _stock_item_id(item_key: int | str) -> int | None:
@@ -219,24 +220,6 @@ def _component_kind(name: str | None) -> str:
     if value.endswith("-盖"):
         return "cover"
     return "whole"
-
-
-def _requisition_component_kind(
-    db: Session,
-    requisition_item: RequisitionItem,
-) -> str:
-    source_type = db.scalar(
-        select(RequisitionItemBomSource.component_type).where(
-            RequisitionItemBomSource.requisition_item_id
-            == requisition_item.id
-        )
-    )
-    normalized = str(source_type or "").strip().lower()
-    return (
-        normalized
-        if normalized in {"whole", "cover", "base"}
-        else _component_kind(requisition_item.product_name_snapshot)
-    )
 
 
 def _is_telescoping_lid_box(box_style: str | None) -> bool:
@@ -491,6 +474,28 @@ def _target(
             raise IncomingReceiptError(
                 "该明细当前不可入库，可能已入库、已作废或状态已变化", 409
             )
+        source = db.scalar(
+            select(RequisitionItemBomSource).where(
+                RequisitionItemBomSource.requisition_item_id
+                == requisition_item.id
+            )
+        )
+        bom_snapshot = (
+            db.get(
+                SalesOrderItemBomComponent,
+                source.sales_order_item_bom_component_id,
+            )
+            if source is not None
+            else None
+        )
+        source_component = str(
+            source.component_type if source is not None else ""
+        ).strip().lower()
+        component_type = (
+            source_component
+            if source_component in {"whole", "cover", "base"}
+            else _component_kind(requisition_item.product_name_snapshot)
+        )
         planned = int(requisition_item.requisition_qty or 0)
         return IncomingTarget(
             item_key=text,
@@ -498,10 +503,8 @@ def _target(
             order_item=order_item,
             requisition_item=requisition_item,
             planned_quantity=planned,
-            component_type=_requisition_component_kind(
-                db,
-                requisition_item,
-            ),
+            component_type=component_type,
+            bom_snapshot=bom_snapshot,
         )
 
     try:
@@ -774,9 +777,26 @@ def _surplus_dimensions(target: IncomingTarget) -> tuple[int, int]:
     return int(round(Decimal(length))), int(round(Decimal(width)))
 
 
-def _surplus_crease(target: IncomingTarget) -> tuple[str, int | None, int | None, int | None]:
+def _surplus_crease(
+    target: IncomingTarget,
+) -> tuple[str | None, str, int | None, int | None, int | None]:
     item = target.order_item
-    if target.component_type == "base":
+    snapshot = getattr(target, "bom_snapshot", None)
+    if snapshot is not None and target.component_type == "base":
+        crease_type = snapshot.snapshot_component_base_crease_type
+        values = (
+            snapshot.snapshot_component_base_crease_left_mm,
+            snapshot.snapshot_component_base_crease_middle_mm,
+            snapshot.snapshot_component_base_crease_right_mm,
+        )
+    elif snapshot is not None:
+        crease_type = snapshot.snapshot_component_crease_type
+        values = (
+            snapshot.snapshot_component_crease_left_mm,
+            snapshot.snapshot_component_crease_middle_mm,
+            snapshot.snapshot_component_crease_right_mm,
+        )
+    elif target.component_type == "base":
         crease_type = item.snapshot_base_crease_type
         values = (
             item.snapshot_base_crease_left_mm,
@@ -791,8 +811,14 @@ def _surplus_crease(target: IncomingTarget) -> tuple[str, int | None, int | None
             item.snapshot_crease_right_mm,
         )
     normalized = (crease_type or "").strip()
-    sheet_type = "creased_sheet" if normalized == "压线" else "net_sheet" if normalized == "净" else "raw_board"
-    return sheet_type, *values
+    sheet_type = (
+        "creased_sheet"
+        if normalized == "压线"
+        else "net_sheet"
+        if normalized in {"净", "净料"}
+        else "raw_board"
+    )
+    return crease_type, sheet_type, *values
 
 
 def _create_surplus_lot(
@@ -806,10 +832,38 @@ def _create_surplus_lot(
     reason: str | None,
 ) -> InventoryLot:
     item = target.order_item
+    snapshot = getattr(target, "bom_snapshot", None)
     length, width = _surplus_dimensions(target)
-    sheet_type, crease_left, crease_middle, crease_right = _surplus_crease(target)
-    material_code = (item.snapshot_material or "").strip()
-    if not material_code or not item.layer_count or not item.flute_type:
+    crease_type, sheet_type, crease_left, crease_middle, crease_right = (
+        _surplus_crease(target)
+    )
+    material_code = (
+        snapshot.snapshot_component_material
+        if snapshot is not None
+        else item.snapshot_material
+    )
+    layer_count = (
+        snapshot.snapshot_component_layer_count
+        if snapshot is not None
+        else item.layer_count
+    )
+    flute_type = (
+        snapshot.snapshot_component_flute_type
+        if snapshot is not None
+        else item.flute_type
+    )
+    supplier_name = (
+        snapshot.snapshot_component_supplier_name
+        if snapshot is not None
+        else item.snapshot_supplier_name
+    )
+    material_id = (
+        snapshot.snapshot_component_material_id
+        if snapshot is not None
+        else item.material_id
+    )
+    material_code = (material_code or "").strip()
+    if not material_code or not layer_count or not flute_type:
         raise IncomingReceiptError("缺少材质、层数或楞型，不能把超收余量转库存")
     try:
         return manual_semi_finished_in(
@@ -819,8 +873,8 @@ def _create_surplus_lot(
             stock_date=utc_naive_to_beijing_date(receipt_item.receipt.received_at),
             source_type="purchase_surplus",
             material_code=material_code,
-            layer_count=int(item.layer_count),
-            flute_type=item.flute_type,
+            layer_count=int(layer_count),
+            flute_type=flute_type,
             board_length_mm=length,
             board_width_mm=width,
             sheet_type=sheet_type,
@@ -831,9 +885,9 @@ def _create_surplus_lot(
                 or 1
             ),
             stock_yield_per_sheet=1,
-            supplier_name=item.snapshot_supplier_name,
+            supplier_name=supplier_name,
             customer_id=target.order.customer_id,
-            crease_type=item.snapshot_base_crease_type if target.component_type == "base" else item.snapshot_crease_type,
+            crease_type=crease_type,
             crease_left_mm=crease_left,
             crease_middle_mm=crease_middle,
             crease_right_mm=crease_right,
@@ -843,7 +897,7 @@ def _create_surplus_lot(
             idempotency_key=f"incoming-surplus:{receipt_item.id}",
             source_ref_type="incoming_receipt_item",
             source_ref_id=receipt_item.id,
-            material_id=item.material_id,
+            material_id=material_id,
         )
     except WarehouseInventoryError as error:
         raise IncomingReceiptError(str(error), error.status_code) from error

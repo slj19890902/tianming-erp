@@ -330,7 +330,6 @@ class ReceiveRequest(BaseModel):
     received_quantity: int | None = None
     resolution_action: str | None = None
     resolution_reason: str | None = None
-    receipt_location_id: int | None = Field(default=None, gt=0)
     surplus_location_id: int | None = Field(default=None, gt=0)
     idempotency_key: str | None = Field(default=None, max_length=100)
 
@@ -347,7 +346,6 @@ class BatchReceiveLine(BaseModel):
     received_quantity: int
     resolution_action: str | None = None
     resolution_reason: str | None = None
-    receipt_location_id: int | None = Field(default=None, gt=0)
     surplus_location_id: int | None = Field(default=None, gt=0)
     idempotency_key: str | None = Field(default=None, max_length=100)
 
@@ -638,8 +636,6 @@ def _stock_replenishment_pending_rows(
                 "material_received_by": None,
                 "received_by_name": None,
                 "component_type": item.component_type,
-                "target_inventory_type": item.target_inventory_type,
-                "default_location_id": item.location_id,
                 "drawing_path": None,
                 "drawing_is_pdf": False,
                 "can_revert_receipt": False,
@@ -2382,40 +2378,6 @@ def surplus_inventory_locations(
     }
 
 
-@router.get("/replenishment-locations")
-def replenishment_receipt_locations(
-    db: Session = Depends(get_db),
-    _user: User = Depends(can_operate),
-) -> dict:
-    """Return operational locations selectable when replenishment arrives.
-
-    Replenishment requisition only records what should be purchased.  The
-    actual destination is selected later, after the material reaches the
-    factory, so both finished/semi-finished compatible locations are exposed.
-    """
-
-    rows = [
-        row.location
-        for row in list_operational_locations(
-            db,
-            warehouse_types={"finished", "semi_finished", "shared"},
-        )
-        if row.location.source_version != "V11"
-    ]
-    rows.sort(key=lambda row: (row.warehouse_type, row.location_code, row.id))
-    return {
-        "items": [
-            {
-                "id": row.id,
-                "location_code": row.location_code,
-                "location_name": row.location_name,
-                "warehouse_type": row.warehouse_type,
-            }
-            for row in rows
-        ]
-    }
-
-
 @router.get("/pending")
 def pending_items(
     db: Session = Depends(get_db),
@@ -2644,7 +2606,6 @@ def receive_item(
             ),
             resolution_action=(payload.resolution_action if payload else None),
             resolution_reason=(payload.resolution_reason if payload else None),
-            receipt_location_id=(payload.receipt_location_id if payload else None),
             surplus_location_id=(payload.surplus_location_id if payload else None),
             idempotency_key=(payload.idempotency_key if payload else None),
             audit_context={"request": request},
@@ -2697,7 +2658,6 @@ def batch_receive_items(
                     received_quantity=line.received_quantity,
                     resolution_action=line.resolution_action,
                     resolution_reason=line.resolution_reason,
-                    receipt_location_id=line.receipt_location_id,
                     surplus_location_id=line.surplus_location_id,
                     idempotency_key=(
                         line.idempotency_key

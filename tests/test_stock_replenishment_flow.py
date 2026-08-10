@@ -30,7 +30,11 @@ def stock_replenishment_app(tmp_path: Path):
     from app.models.product import Product
     from app.models.supplier import Supplier, SupplierAlias
     from app.models.user import User
-    from app.models.warehouse_inventory import WarehouseLocation
+    from app.models.warehouse_inventory import (
+        WarehouseArea,
+        WarehouseFloor,
+        WarehouseLocation,
+    )
     from app.services.supplier_master import normalize_supplier_identity
 
     engine = create_sqlite_engine(tmp_path / "stock-replenishment.sqlite3")
@@ -97,17 +101,49 @@ def stock_replenishment_app(tmp_path: Path):
             crease_middle_mm=160,
             crease_right_mm=335,
         )
+        floor1 = WarehouseFloor(
+            floor_code="F1",
+            floor_name="一楼",
+            floor_number=1,
+            construction_status="enabled",
+        )
+        session.add(floor1)
+        session.flush()
+        session.add_all(
+            [
+                WarehouseArea(
+                    floor_id=floor1.id,
+                    area_code="A1",
+                    area_name="A1原料暂存区",
+                    construction_status="enabled",
+                ),
+                WarehouseArea(
+                    floor_id=floor1.id,
+                    area_code="A2",
+                    area_name="A2正式库存区",
+                    construction_status="enabled",
+                ),
+            ]
+        )
         locations = [
             WarehouseLocation(
                 location_code="FG-A01",
                 location_name="成品A01",
                 warehouse_type="finished",
+                warehouse_floor=1,
+                area_code="A2",
+                storage_type="ground",
+                placement_status="placed",
                 is_active=True,
             ),
             WarehouseLocation(
                 location_code="SI-A01",
                 location_name="半成品A01",
                 warehouse_type="semi_finished",
+                warehouse_floor=1,
+                area_code="A2",
+                storage_type="ground",
+                placement_status="placed",
                 is_active=True,
             ),
             WarehouseLocation(
@@ -123,6 +159,16 @@ def stock_replenishment_app(tmp_path: Path):
                 location_name="待布局半成品库位",
                 warehouse_type="semi_finished",
                 placement_status="unplaced",
+                is_active=True,
+            ),
+            WarehouseLocation(
+                location_code="1FA",
+                location_name="一楼 A1 原料暂存区",
+                warehouse_type="shared",
+                warehouse_floor=1,
+                area_code="A1",
+                storage_type="ground",
+                placement_status="placed",
                 is_active=True,
             ),
         ]
@@ -236,7 +282,7 @@ def test_warning_policy_creates_prefilled_replenishment_draft(
         )
         assert draft.status_code == 200
         assert draft.json()["items"][0]["quantity"] == 50
-        assert draft.json()["items"][0]["location_id"] == 2
+        assert draft.json()["items"][0]["location_id"] is None
 
 
 def test_formal_replenishment_rejects_v11_locations_and_policies(
@@ -249,6 +295,7 @@ def test_formal_replenishment_rejects_v11_locations_and_policies(
         locations = client.get("/api/requisition/stock-replenishment/locations")
         assert locations.status_code == 200, locations.text
         assert {row["location_code"] for row in locations.json()["items"]} == {
+            "1FA",
             "FG-A01",
             "SI-A01",
         }
@@ -262,7 +309,7 @@ def test_formal_replenishment_rejects_v11_locations_and_policies(
         assert rejected_unplaced_policy.status_code == 409
         assert "尚未完成平面图布局" in rejected_unplaced_policy.json()["detail"]
 
-        rejected_unplaced_item = client.post(
+        ignored_unplaced_item = client.post(
             "/api/requisition/stock-replenishment/orders",
             json={
                 "source_type": "customer_request",
@@ -283,8 +330,8 @@ def test_formal_replenishment_rejects_v11_locations_and_policies(
                 ],
             },
         )
-        assert rejected_unplaced_item.status_code == 409
-        assert "尚未完成平面图布局" in rejected_unplaced_item.json()["detail"]
+        assert ignored_unplaced_item.status_code == 201
+        assert "location_id" not in ignored_unplaced_item.json()["items"][0]
 
         policy_payload = _semi_policy_payload()
         policy_payload["default_location_id"] = 3
@@ -307,7 +354,7 @@ def test_formal_replenishment_rejects_v11_locations_and_policies(
         assert rejected_update.status_code == 409, rejected_update.text
         assert "V11 三楼 Phase A" in rejected_update.json()["detail"]
 
-        rejected_item = client.post(
+        ignored_v11_item = client.post(
             "/api/requisition/stock-replenishment/orders",
             json={
                 "source_type": "customer_request",
@@ -328,8 +375,8 @@ def test_formal_replenishment_rejects_v11_locations_and_policies(
                 ],
             },
         )
-        assert rejected_item.status_code == 409, rejected_item.text
-        assert "V11 三楼 Phase A" in rejected_item.json()["detail"]
+        assert ignored_v11_item.status_code == 201, ignored_v11_item.text
+        assert "location_id" not in ignored_v11_item.json()["items"][0]
 
 
 def test_historical_replenishment_is_read_only_but_existing_order_can_close(
@@ -894,12 +941,16 @@ def _customer_replenishment_payload(quantity: int = 30) -> dict:
     }
 
 
-def test_replenishment_selects_actual_location_only_when_material_arrives(
+def test_replenishment_auto_stages_material_without_location_choice(
     stock_replenishment_app,
 ) -> None:
     app, session_factory = stock_replenishment_app
     from app.models.incoming_receipt import IncomingReceiptItem
-    from app.models.warehouse_inventory import InventoryLot, InventoryMovement
+    from app.models.warehouse_inventory import (
+        InventoryLot,
+        InventoryMovement,
+        WarehouseLocation,
+    )
 
     payload = _customer_replenishment_payload(quantity=100)
     payload["items"][0]["location_id"] = None
@@ -920,43 +971,17 @@ def test_replenishment_selects_actual_location_only_when_material_arrives(
             for item in pending.json()["items"]
             if item["item_id"] == f"sr{item_id}"
         )
-        assert row["default_location_id"] is None
-        assert row["target_inventory_type"] == "semi_finished"
+        assert "default_location_id" not in row
+        assert "target_inventory_type" not in row
 
         locations = client.get("/api/incoming/replenishment-locations")
-        assert locations.status_code == 200, locations.text
-        assert {item["location_code"] for item in locations.json()["items"]} == {
-            "FG-A01",
-            "SI-A01",
-        }
-
-        missing = client.put(
-            f"/api/incoming/receive/sr{item_id}",
-            json={
-                "received_quantity": 100,
-                "idempotency_key": "replenishment-arrival-location-missing",
-            },
-        )
-        assert missing.status_code == 400, missing.text
-        assert "选择本次入库库位" in missing.json()["detail"]
-
-        wrong_type = client.put(
-            f"/api/incoming/receive/sr{item_id}",
-            json={
-                "received_quantity": 100,
-                "receipt_location_id": 1,
-                "idempotency_key": "replenishment-arrival-location-wrong",
-            },
-        )
-        assert wrong_type.status_code == 400, wrong_type.text
-        assert "类型与本次补库不匹配" in wrong_type.json()["detail"]
+        assert locations.status_code == 404, locations.text
 
         received = client.put(
             f"/api/incoming/receive/sr{item_id}",
             json={
                 "received_quantity": 100,
-                "receipt_location_id": 2,
-                "idempotency_key": "replenishment-arrival-location-ok",
+                "idempotency_key": "replenishment-arrival-auto-staging",
             },
         )
         assert received.status_code == 200, received.text
@@ -964,8 +989,7 @@ def test_replenishment_selects_actual_location_only_when_material_arrives(
             f"/api/incoming/receive/sr{item_id}",
             json={
                 "received_quantity": 100,
-                "receipt_location_id": 2,
-                "idempotency_key": "replenishment-arrival-location-ok",
+                "idempotency_key": "replenishment-arrival-auto-staging",
             },
         )
         assert repeated.status_code == 200, repeated.text
@@ -973,10 +997,53 @@ def test_replenishment_selects_actual_location_only_when_material_arrives(
     with session_factory() as session:
         lot = session.scalar(select(InventoryLot))
         assert lot is not None
-        assert lot.warehouse_location_id == 2
+        staging = session.scalar(
+            select(WarehouseLocation).where(WarehouseLocation.location_code == "1FA")
+        )
+        assert staging is not None
+        assert lot.warehouse_location_id == staging.id
         assert session.scalar(select(func.count(InventoryLot.id))) == 1
         assert session.scalar(select(func.count(InventoryMovement.id))) == 1
         assert session.scalar(select(func.count(IncomingReceiptItem.id))) == 1
+
+
+def test_replenishment_receive_fails_closed_without_floor1_a1_staging(
+    stock_replenishment_app,
+) -> None:
+    app, session_factory = stock_replenishment_app
+    from app.models.incoming_receipt import IncomingReceiptItem
+    from app.models.warehouse_inventory import InventoryLot, WarehouseLocation
+
+    with session_factory() as session:
+        staging = session.scalar(
+            select(WarehouseLocation).where(WarehouseLocation.location_code == "1FA")
+        )
+        assert staging is not None
+        staging.is_active = False
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client)
+        created = client.post(
+            "/api/requisition/stock-replenishment/orders",
+            json=_customer_replenishment_payload(quantity=10),
+        )
+        assert created.status_code == 201, created.text
+        item_id = created.json()["items"][0]["id"]
+        received = client.put(
+            f"/api/incoming/receive/sr{item_id}",
+            json={
+                "received_quantity": 10,
+                "idempotency_key": "replenishment-no-floor1-a1-staging",
+            },
+        )
+        assert received.status_code == 409, received.text
+        assert "一楼 A1 原料暂存" in received.json()["detail"]
+        assert "待送区" in received.json()["detail"]
+
+    with session_factory() as session:
+        assert session.scalar(select(func.count(InventoryLot.id))) == 0
+        assert session.scalar(select(func.count(IncomingReceiptItem.id))) == 0
 
 
 def test_replenishment_stays_reported_routes_to_incoming_and_voids_only_before_receipt(

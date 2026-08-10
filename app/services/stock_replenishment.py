@@ -30,6 +30,7 @@ from app.services.location_candidates import operational_location_issue
 from app.services.warehouse_inventory import (
     SEMI_FINISHED_FLUTES_BY_LAYER,
     WarehouseInventoryError,
+    automatic_raw_material_staging_location,
     manual_finished_in,
     manual_semi_finished_in,
     normalize_material_code,
@@ -828,7 +829,6 @@ def receive_replenishment_item(
     quantity: int,
     operator_id: int | None,
     receipt_item_id: int,
-    location_id: int | None = None,
     source_ref_type: str = "stock_replenishment_receipt",
 ) -> InventoryLot:
     """Put one actually received replenishment line into inventory.
@@ -855,31 +855,36 @@ def receive_replenishment_item(
         raise StockReplenishmentError(
             "库存预警到料只能进入客户专用纸板备料，不能直接增加成品库存。"
         )
-    destination_location_id = location_id or item.location_id
-    if destination_location_id is None:
-        raise StockReplenishmentError(
-            f"请为“{item.product_name_snapshot}”选择本次入库库位。"
+    if item.target_inventory_type == "semi_finished":
+        try:
+            destination = automatic_raw_material_staging_location(db)
+        except WarehouseInventoryError as error:
+            raise StockReplenishmentError(str(error), error.status_code) from error
+    else:
+        # Finished replenishment is no longer creatable.  Keep existing legacy
+        # rows receivable only through the formal destination already saved on
+        # the row; do not silently route them to raw-material staging.
+        destination = (
+            db.get(WarehouseLocation, item.location_id)
+            if item.location_id
+            else None
         )
-    destination = db.get(WarehouseLocation, destination_location_id)
-    if destination is None or not destination.is_active:
-        raise StockReplenishmentError("所选入库库位不存在或已停用。")
-    if destination.source_version == "V11":
-        raise StockReplenishmentError(
-            "V11 三楼 Phase A 货位不能用于正式库存补库。", 409
+        if destination is None or not destination.is_active:
+            raise StockReplenishmentError("历史成品补库明细缺少可用入库库位。", 409)
+        if destination.source_version == "V11":
+            raise StockReplenishmentError(
+                "V11 三楼 Phase A 货位不能用于正式库存补库。", 409
+            )
+        location_issue = operational_location_issue(
+            db,
+            destination,
+            warehouse_types={"finished", "shared"},
         )
-    allowed_warehouse_types = {
-        "finished": {"finished", "shared"},
-        "semi_finished": {"semi_finished", "shared"},
-    }[item.target_inventory_type]
-    if destination.warehouse_type not in allowed_warehouse_types:
-        raise StockReplenishmentError("所选入库库位类型与本次补库不匹配。")
-    location_issue = operational_location_issue(
-        db,
-        destination,
-        warehouse_types=allowed_warehouse_types,
-    )
-    if location_issue:
-        raise StockReplenishmentError(f"所选入库库位不可使用：{location_issue}", 409)
+        if location_issue:
+            raise StockReplenishmentError(
+                f"历史成品补库库位不可使用：{location_issue}", 409
+            )
+    destination_location_id = destination.id
 
     customer_board_preparation = (
         item.target_inventory_type == "semi_finished"
@@ -952,6 +957,7 @@ def receive_replenishment_item(
                     if customer_board_preparation
                     else "补库来料转半成品库存"
                 ),
+                allow_raw_material_staging=True,
                 **common,
             )
             if customer_board_preparation:

@@ -380,7 +380,6 @@ def test_inline_javascript_is_valid_and_business_endpoints_are_unchanged(
         "/api/incoming/pending?page=${requestedPage}&page_size=${pageSize}",
         "/api/incoming/received",
         "/api/incoming/surplus-locations",
-        "/api/incoming/replenishment-locations",
         "/api/incoming/receive/${item.item_id}",
         "/api/incoming/receipt-items/${item.pending_receipt_item_id}/accept-short",
         "/api/incoming/receipt-items/${item.receipt_item_id}/revert",

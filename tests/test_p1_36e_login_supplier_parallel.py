@@ -195,6 +195,7 @@ globalThis.localStorage = {{setItem() {{}}, removeItem() {{}}}};
   const common = {{
     authGeneration: 0, loginAttemptSequence: 0, user: null, loginError: "", loading: false,
     loadProductBoxTypeRules: async () => true,
+    loadEffectiveUiLayout: async () => true,
     redirectAfterLogin: () => false,
     initialPageFromLocation: () => "dashboard",
     pageAllowed: () => true,
@@ -369,6 +370,7 @@ const authData = userId => ({{data:{{
   const sessionVm = {{
     authGeneration:0,user:null,loginError:"",activePage:"dashboard",
     loadProductBoxTypeRules:async () => {{ sessionRules += 1; }},
+    loadEffectiveUiLayout:async () => true,
     redirectAfterLogin:() => false,initialPageFromLocation:() => "dashboard",
     pageAllowed:() => true,firstAllowedPage:() => "dashboard",
     loadInitialPageResources:async () => {{ sessionResources += 1; return true; }},
@@ -400,6 +402,7 @@ const authData = userId => ({{data:{{
     authGeneration:0,loginAttemptSequence:0,user:null,loginError:"",loading:false,
     activePage:"dashboard",loginForm:{{remember_me:false,username:"old",password:"secret"}},
     loadProductBoxTypeRules:async () => {{ loginRules += 1; }},
+    loadEffectiveUiLayout:async () => true,
     redirectAfterLogin:() => false,initialPageFromLocation:() => "dashboard",
     pageAllowed:() => true,firstAllowedPage:() => "dashboard",
     loadInitialPageResources:async () => {{ loginResources += 1; return true; }},

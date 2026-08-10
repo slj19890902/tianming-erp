@@ -212,6 +212,93 @@ def test_paged_complex_bom_and_inventory_rows_are_deep_equal_to_legacy(
     assert paged["supplier_counts"] == legacy["supplier_counts"]
 
 
+def test_inventory_covered_rows_do_not_leave_supplier_count_ghosts(
+    tmp_path: Path,
+) -> None:
+    from app.api.requisition import pending_requisitions
+    from app.models.order import Order, OrderItem
+    from app.models.user import User
+    from app.models.warehouse_inventory import InventoryLot, InventoryReservation
+    from test_p1_09c_requisition_query_scaling import (
+        _add_visible_inventory_shape,
+        _fixture,
+    )
+
+    fixture_path = tmp_path / "inventory-covered"
+    fixture_path.mkdir()
+    _engine, factory, user_id = _fixture(fixture_path, visible_count=1)
+    with factory() as db:
+        item = db.scalar(
+            select(OrderItem)
+            .join(Order, Order.id == OrderItem.order_id)
+            .where(Order.order_number.like("P1-09C-V-%"))
+        )
+        assert item is not None
+        item.quantity = 10
+        item.snapshot_supplier_name = "鸣朋"
+        db.commit()
+    _add_visible_inventory_shape(factory, matching=True, include_finished=True)
+    with factory() as db:
+        item = db.scalar(
+            select(OrderItem)
+            .join(Order, Order.id == OrderItem.order_id)
+            .where(Order.order_number.like("P1-09C-V-%"))
+        )
+        lot = db.scalar(
+            select(InventoryLot).where(InventoryLot.inventory_type == "finished")
+        )
+        assert item is not None and lot is not None
+        lot.quantity_available = 10
+        lot.quantity_consumed = 10
+        db.add(
+            InventoryReservation(
+                reservation_number="P1-36K-CONSUMED",
+                inventory_lot_id=lot.id,
+                reservation_type="finished_order",
+                order_id=item.order_id,
+                order_item_id=item.id,
+                reserved_stock_quantity=10,
+                consumed_stock_quantity=10,
+                released_stock_quantity=0,
+                credited_requirement_quantity=10,
+                released_requirement_quantity=0,
+                status="consumed",
+                reserved_by=user_id,
+                reservation_group_key="p1-36k-consumed",
+                idempotency_key="p1-36k-consumed",
+            )
+        )
+        db.commit()
+
+    with factory() as db:
+        user = db.get(User, user_id)
+        assert user is not None
+        legacy = pending_requisitions(db, user)
+        paged = pending_requisitions(
+            db,
+            user,
+            page=1,
+            page_size=25,
+        )
+        filtered = pending_requisitions(
+            db,
+            user,
+            page=1,
+            page_size=25,
+            supplier_name="鸣朋",
+        )
+
+    assert legacy["items"] == []
+    assert legacy["total"] == 0
+    assert legacy["supplier_counts"] == []
+    assert paged["items"] == []
+    assert paged["total"] == paged["overall_total"] == 0
+    assert paged["supplier_counts"] == []
+    assert filtered["items"] == []
+    assert filtered["total"] == filtered["overall_total"] == 0
+    assert filtered["supplier_counts"] == []
+
+
 def test_fixed_page_has_bounded_queries_bytes_and_zero_writes(
     tmp_path: Path,
     monkeypatch,

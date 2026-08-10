@@ -63,6 +63,9 @@
     .searchbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-bottom: 10px; }
     .searchbar input { width: 100%; min-height: 46px; padding: 9px 11px; border: 1px solid #aabbb2; border-radius: 10px; background: #fff; }
     .search-btn { min-height: 46px; padding: 8px 14px; border: 0; border-radius: 10px; background: var(--green); color: #fff; font-weight: 900; }
+    .lookup-actions { display: flex; justify-content: flex-end; margin: -3px 0 9px; }
+    .lookup-summary { margin-bottom: 8px; color: var(--muted); font-size: 12px; font-weight: 800; }
+    .lookup-order { margin-bottom: 10px; border-left: 5px solid var(--green); }
     .search-options { display: flex; justify-content: flex-end; margin: -2px 0 9px; }
     .search-options label { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; color: var(--muted); font-size: 12px; }
     .search-options input { width: 18px; height: 18px; }
@@ -161,6 +164,13 @@
       <section id="productionPage" hidden>
         <h1 class="page-title">近期来料和生产资料</h1>
         <p class="page-help">只显示已经正式收料的订单。这里用于车间查看图纸、尺寸和模具位置，不能收料或确认完工。</p>
+        <div class="searchbar">
+          <input id="productionLookupInput" maxlength="100" autocomplete="off" inputmode="text" placeholder="扫码或输入存货编码、订单号、任务号">
+          <button id="productionLookupButton" class="search-btn" type="button">扫码反查</button>
+        </div>
+        <div class="lookup-actions"><button id="clearProductionLookup" class="small-btn" type="button" hidden>清空结果，返回近期生产</button></div>
+        <div id="productionLookupState" class="card status empty" hidden></div>
+        <div id="productionLookupList" hidden></div>
         <div class="periods" aria-label="来料日期范围">
           <button class="period-btn" type="button" data-period="today">今天</button>
           <button class="period-btn active" type="button" data-period="3d">近3天</button>
@@ -222,6 +232,10 @@
         productionItems: [],
         productionPeriod: "3d",
         productionController: null,
+        productionLookupItems: [],
+        productionLookupController: null,
+        productionLookupGeneration: 0,
+        productionLookupQuery: "",
         homeController: null,
         homeGeneration: 0,
         allowedPages: new Set(),
@@ -641,6 +655,90 @@
         return card;
       }
 
+      function setProductionLookupMode(active) {
+        document.querySelector("#productionPage .periods").hidden = active;
+        byId("customDates").hidden = active || state.productionPeriod !== "custom";
+        byId("clearProductionLookup").hidden = !active;
+        if (active) {
+          byId("productionState").hidden = true;
+          byId("productionList").hidden = true;
+        }
+      }
+
+      function renderProductionLookup(data) {
+        const container = byId("productionLookupList");
+        container.replaceChildren();
+        const items = Array.isArray(data.items) ? data.items : [];
+        state.productionLookupItems = items;
+        if (!items.length) {
+          container.hidden = true;
+          showStatus("productionLookupState", "没有找到仍待生产的订单，请核对编码或订单号。", "empty", runProductionLookup);
+          return;
+        }
+        const summary = node("div", "lookup-summary", `找到 ${Number(data.total || items.length)} 条待生产任务${Number(data.total || 0) > items.length ? `，当前显示前 ${items.length} 条` : ""}`);
+        container.append(summary);
+        items.forEach(task => {
+          const card = node("section", "card lookup-order");
+          const head = node("div", "production-head");
+          const title = node("div");
+          title.append(
+            node("h2", "", `${task.customer_name || "未填写客户"}｜订单 ${task.order_number || "-"}`),
+            node("p", "fact-line", [
+              task.customer_po ? `客户单号 ${task.customer_po}` : "",
+              task.delivery_date ? `交货 ${task.delivery_date}` : "",
+              `生产任务 ${task.task_id}`,
+            ].filter(Boolean).join("｜"))
+          );
+          head.append(title, node("span", "tag mapped", "待生产"));
+          card.append(head, productionTaskCard(task));
+          container.append(card);
+        });
+        byId("productionLookupState").hidden = true;
+        container.hidden = false;
+      }
+
+      async function runProductionLookup() {
+        const query = byId("productionLookupInput").value.trim();
+        if (!query) {
+          showStatus("productionLookupState", "请先扫码或输入存货编码、订单号、任务号。", "empty");
+          byId("productionLookupInput").focus();
+          return;
+        }
+        state.productionLookupController?.abort();
+        const controller = new AbortController();
+        state.productionLookupController = controller;
+        const generation = ++state.productionLookupGeneration;
+        state.productionLookupQuery = query;
+        setProductionLookupMode(true);
+        showStatus("productionLookupState", "正在反查待生产订单…", "");
+        try {
+          const data = await apiGet(`/api/mobile/erp/production/pending/lookup?q=${encodeURIComponent(query)}&limit=50`, {
+            signal: controller.signal,
+          });
+          if (generation !== state.productionLookupGeneration) return;
+          renderProductionLookup(data);
+        } catch (error) {
+          if (error.name === "AbortError" || generation !== state.productionLookupGeneration) return;
+          showStatus("productionLookupState", error.message || "待生产订单反查失败", "error", runProductionLookup);
+        }
+      }
+
+      function clearProductionLookup() {
+        state.productionLookupController?.abort();
+        state.productionLookupController = null;
+        state.productionLookupGeneration += 1;
+        state.productionLookupQuery = "";
+        state.productionLookupItems = [];
+        byId("productionLookupInput").value = "";
+        byId("productionLookupState").hidden = true;
+        byId("productionLookupList").replaceChildren();
+        byId("productionLookupList").hidden = true;
+        setProductionLookupMode(false);
+        renderProduction();
+        byId("productionLookupInput").focus();
+      }
+
+
       function renderProduction() {
         const container = byId("productionList");
         container.replaceChildren();
@@ -786,6 +884,20 @@
         });
       });
       byId("loadCustom").addEventListener("click", loadProduction);
+      byId("productionLookupInput").addEventListener("keydown", event => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          runProductionLookup();
+        }
+      });
+      byId("productionLookupInput").addEventListener("input", () => {
+        if (!byId("productionLookupInput").value.trim() && state.productionLookupQuery) {
+          clearProductionLookup();
+        }
+      });
+      byId("productionLookupButton").addEventListener("click", runProductionLookup);
+      byId("clearProductionLookup").addEventListener("click", clearProductionLookup);
+
       window.addEventListener("hashchange", () => {
         const requestedPage = safeRequestedPage();
         if (requestedPage) {

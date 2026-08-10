@@ -173,6 +173,70 @@ class WarehouseArea(Base):
     )
 
     floor: Mapped["WarehouseFloor"] = relationship(back_populates="areas")
+    storage_policy: Mapped["WarehouseAreaStoragePolicy | None"] = relationship(
+        back_populates="area",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+
+
+class WarehouseAreaStoragePolicy(Base):
+    """Formal link between one warehouse area and one published twin-map zone.
+
+    The map remains a spatial asset.  This row is the business-side authority
+    for which inventory usages are allowed in the area and whether its binding
+    is still a draft or has been published for operations.
+    """
+
+    __tablename__ = "warehouse_area_storage_policies"
+    __table_args__ = (
+        CheckConstraint(
+            "storage_layout IN ('rack','pallet_ground','mixed')",
+            name="ck_warehouse_area_storage_policies_layout",
+        ),
+        CheckConstraint(
+            "status IN ('draft','published')",
+            name="ck_warehouse_area_storage_policies_status",
+        ),
+        CheckConstraint(
+            "version > 0",
+            name="ck_warehouse_area_storage_policies_version",
+        ),
+        UniqueConstraint("area_id", name="uq_warehouse_area_storage_policies_area"),
+        UniqueConstraint(
+            "map_feature_id",
+            name="uq_warehouse_area_storage_policies_feature",
+        ),
+        Index(
+            "ix_warehouse_area_storage_policies_status",
+            "status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    area_id: Mapped[int] = mapped_column(
+        ForeignKey("warehouse_areas.id", ondelete="CASCADE"), nullable=False
+    )
+    map_feature_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    allowed_inventory_types_json: Mapped[str] = mapped_column(Text, nullable=False)
+    storage_layout: Mapped[str] = mapped_column(String(30), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), default="draft", server_default="draft", nullable=False
+    )
+    draft_map_revision: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    published_map_revision: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    version: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1", nullable=False
+    )
+    updated_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime, onupdate=func.current_timestamp(), nullable=True
+    )
+
+    area: Mapped["WarehouseArea"] = relationship(back_populates="storage_policy")
 
 
 class WarehouseLocation(Base):

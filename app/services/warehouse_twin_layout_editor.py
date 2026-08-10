@@ -499,6 +499,7 @@ def update_warehouse_twin_zone_policy(
     operation_key: str,
     allowed_inventory_types: list[str],
     storage_layout: str,
+    erp_area_code: str | None = None,
     path: Path | None = None,
 ) -> LayoutMutation:
     normalized_types = list(dict.fromkeys(str(value).strip() for value in allowed_inventory_types))
@@ -506,6 +507,9 @@ def update_warehouse_twin_zone_policy(
         raise WarehouseTwinLayoutEditError("区域至少选择一种有效存放类型")
     if storage_layout not in ALLOWED_STORAGE_LAYOUTS:
         raise WarehouseTwinLayoutEditError("区域展示形式必须是货架、栈板地堆或混合")
+    normalized_area_code = str(erp_area_code or "").strip().upper() or None
+    if normalized_area_code is not None and len(normalized_area_code) > 30:
+        raise WarehouseTwinLayoutEditError("正式区域编号最多 30 个字符")
 
     def mutate(floor: dict[str, Any]) -> dict[str, Any]:
         feature = _feature(floor, feature_id)
@@ -514,6 +518,24 @@ def update_warehouse_twin_zone_policy(
         _ensure_version(feature, expected_version, "区域")
         feature["allowed_inventory_types"] = normalized_types
         feature["storage_layout"] = storage_layout
+        if normalized_area_code is not None:
+            for other in floor.get("features") or []:
+                if (
+                    other is not feature
+                    and str(other.get("erp_area_code") or "").strip().upper()
+                    == normalized_area_code
+                ):
+                    raise WarehouseTwinLayoutEditError(
+                        f"正式区域编号 {normalized_area_code} 已绑定其他地图区域"
+                    )
+            feature["erp_area_code"] = normalized_area_code
+            floor["erp_area_codes"] = sorted(
+                {
+                    str(item.get("erp_area_code") or "").strip().upper()
+                    for item in floor.get("features") or []
+                    if str(item.get("erp_area_code") or "").strip()
+                }
+            )
         feature["version"] = int(feature.get("version") or 1) + 1
         return dict(feature)
 
@@ -590,6 +612,9 @@ def _validate_document_for_publish(document: dict[str, Any]) -> tuple[list[str],
             storage_layout = feature.get("storage_layout")
             if storage_layout is not None and storage_layout not in ALLOWED_STORAGE_LAYOUTS:
                 blockers.append(f"{code} 区域 {feature.get('name') or feature.get('id')} 的存储形式无效")
+
+        for value in _duplicate_values(list(zones.values()), "erp_area_code"):
+            blockers.append(f"{code} 存在重复正式区域绑定：{value}")
 
         for rack in racks:
             rack_label = str(rack.get("rack_code") or rack.get("name") or rack.get("id") or "未编号货架")

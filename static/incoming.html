@@ -6,12 +6,10 @@
   <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <title>车间来料入库</title>
-  <script src="https://cdn.tailwindcss.com"></script>
   <script src="/static/assets/time-utils.js?v=95c91f9ded41"></script>
   <style>
-    /* v0.23.0 P0-2：Tailwind CDN 在弱网/首次扫码时可能加载较慢，
-       这里手写一份最基础的兜底样式，避免出现"只看到裸文字、没有任何 UI"的情况。
-       Tailwind 加载完成后会覆盖/补齐这些样式，二者不冲突。 */
+    /* 本地 Tailwind 资产加载失败时仍保留最基础的可操作样式，
+       避免出现"只看到裸文字、没有任何 UI"的情况。 */
     [hidden] { display: none !important; }
     html, body { max-width: 100%; overflow-x: hidden; }
     body { -webkit-tap-highlight-color: transparent; margin: 0; background: #f1f5f9; color: #0f172a; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
@@ -24,6 +22,7 @@
     .btn-primary { background: #1d4ed8; color: #fff; border: none; border-radius: 10px; min-height: 44px; padding: 0 16px; font-weight: 700; }
     .btn-danger { background: #b91c1c; color: #fff; border: none; border-radius: 10px; min-height: 44px; padding: 0 16px; font-weight: 700; }
   </style>
+  <link rel="stylesheet" href="/static/vendor/tailwindcss-3.4.17-incoming.min.css?v=1abd48e53bef">
 </head>
 <body class="min-h-screen bg-slate-100 text-slate-900">
   <header class="sticky top-0 z-20 border-b border-slate-300 bg-slate-900 px-4 py-3 text-white shadow">

@@ -7,6 +7,7 @@ from contextlib import nullcontext
 from datetime import date, datetime
 from decimal import Decimal
 from threading import Lock
+from types import SimpleNamespace
 from typing import Annotated
 from uuid import uuid4
 
@@ -14,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import and_, exists, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, aliased, load_only, selectinload
 
 from app.api.deps import (
     PermissionChecker,
@@ -3925,8 +3926,7 @@ def _supplier_order_audit_customers(
     )
 
 
-def _apply_supplier_order_scope(query, user: User, db: Session):
-    allowed = _allowed_customer_ids(user, db)
+def _apply_supplier_order_scope_ids(query, allowed: set[int] | None):
     if allowed is None:
         return query
     visible_order_ids = (
@@ -3950,6 +3950,13 @@ def _apply_supplier_order_scope(query, user: User, db: Session):
     return query.where(
         SupplierRequisitionOrder.id.in_(visible_order_ids),
         ~SupplierRequisitionOrder.id.in_(inaccessible_order_ids),
+    )
+
+
+def _apply_supplier_order_scope(query, user: User, db: Session):
+    return _apply_supplier_order_scope_ids(
+        query,
+        _allowed_customer_ids(user, db),
     )
 
 
@@ -3978,8 +3985,7 @@ def _require_requisition_customer_access(
         raise HTTPException(status_code=403, detail="无客户访问权限")
 
 
-def _apply_requisition_scope(query, user: User, db: Session):
-    allowed = _allowed_customer_ids(user, db)
+def _apply_requisition_scope_ids(query, allowed: set[int] | None):
     if allowed is None:
         return query
     visible_group_ids = (
@@ -4003,6 +4009,13 @@ def _apply_requisition_scope(query, user: User, db: Session):
     return query.where(
         Requisition.id.in_(visible_group_ids),
         ~Requisition.id.in_(inaccessible_group_ids),
+    )
+
+
+def _apply_requisition_scope(query, user: User, db: Session):
+    return _apply_requisition_scope_ids(
+        query,
+        _allowed_customer_ids(user, db),
     )
 
 
@@ -13817,94 +13830,921 @@ def list_reported_customer_options(
     ]
 
 
-@router.get("/reported-documents")
-def list_reported_documents(
-    customer_id: int | None = None,
-    keyword: str | None = None,
-    document_number: str | None = None,
-    order_number: str | None = None,
-    product_code: str | None = None,
-    product_name: str | None = None,
-    material_code: str | None = None,
-    flute_type: str | None = None,
-    report_length_mm: int | None = Query(default=None, ge=1),
-    report_width_mm: int | None = Query(default=None, ge=1),
-    report_length_min: int | None = Query(default=None, ge=1),
-    report_length_max: int | None = Query(default=None, ge=1),
-    report_width_min: int | None = Query(default=None, ge=1),
-    report_width_max: int | None = Query(default=None, ge=1),
-    supplier_name: str | None = None,
-    status_filter: str | None = Query(default=None, alias="status"),
-    source_type: str | None = None,
-    date_from: date | None = None,
-    date_to: date | None = None,
-    page: int | None = Query(default=None, ge=1),
-    page_size: int | None = Query(default=None, ge=1, le=200),
-    db: Session = Depends(get_db),
-    _user: User = Depends(can_read),
-) -> dict:
-    """List reported documents after scope filtering, with optional paging.
+def _build_reported_document_candidates(db: Session, user: User) -> list[dict]:
+    """Build scope-safe filter projections without full response decoration."""
 
-    This endpoint deliberately keeps an unpaged default for existing clients.
-    Callers that opt into ``page`` or ``page_size`` receive one stable page only
-    after all source-specific customer-scope checks and summary filters run.
-    """
-    # Preserve the long-standing direct-call test contract.  FastAPI normally
-    # resolves Query defaults before entry; direct Python callers receive the
-    # Param objects themselves and should be treated as if the values were absent.
-    status_filter = status_filter if isinstance(status_filter, str) else None
-    report_length_mm = report_length_mm if isinstance(report_length_mm, int) else None
-    report_width_mm = report_width_mm if isinstance(report_width_mm, int) else None
-    report_length_min = report_length_min if isinstance(report_length_min, int) else None
-    report_length_max = report_length_max if isinstance(report_length_max, int) else None
-    report_width_min = report_width_min if isinstance(report_width_min, int) else None
-    report_width_max = report_width_max if isinstance(report_width_max, int) else None
-    page = page if isinstance(page, int) else None
-    page_size = page_size if isinstance(page_size, int) else None
-    user = _user
-    if customer_id is not None:
-        require_customer_access(customer_id, user, db)
-    allowed_source_types = {
-        "supplier_order",
-        "stock_replenishment",
-        "composite_bom_requisition",
-        "legacy_material_requisition",
-    }
-    if source_type and source_type not in allowed_source_types:
-        raise HTTPException(status_code=422, detail="不支持的报料来源类型")
-
-    normalized_filters = {
-        "keyword": (keyword or "").strip().casefold(),
-        "document_number": (document_number or "").strip().casefold(),
-        "order_number": (order_number or "").strip().casefold(),
-        "product_code": (product_code or "").strip().casefold(),
-        "product_name": (product_name or "").strip().casefold(),
-        "material_code": (material_code or "").strip().casefold(),
-        "flute_type": (flute_type or "").strip().casefold(),
-        "supplier_name": (supplier_name or "").strip().casefold(),
-        "status": (status_filter or "").strip(),
-    }
-    if (
-        report_length_min is not None
-        and report_length_max is not None
-        and report_length_min > report_length_max
-    ) or (
-        report_width_min is not None
-        and report_width_max is not None
-        and report_width_min > report_width_max
-    ):
-        raise HTTPException(status_code=422, detail="尺寸最小值不能大于最大值")
-    registry = build_display_registry(db)
     documents: list[dict] = []
+    allowed_customer_ids = _allowed_customer_ids(user, db)
+    supplier_header_material = aliased(Material)
+    supplier_item_material = aliased(Material)
+
+    supplier_header_query = select(
+        SupplierRequisitionOrder.id.label("document_id"),
+        SupplierRequisitionOrder.order_number.label("document_number"),
+        SupplierRequisitionOrder.supplier_name.label("supplier_name"),
+        SupplierRequisitionOrder.status.label("status"),
+        SupplierRequisitionOrder.created_at.label("created_at"),
+        SupplierRequisitionOrder.requisition_qty.label(
+            "document_requisition_qty"
+        ),
+        SupplierRequisitionOrder.material_id.label("document_material_id"),
+        supplier_header_material.code.label("document_material_code"),
+        SupplierRequisitionOrder.flute_type.label("document_flute_type"),
+        SupplierRequisitionOrder.report_length_mm.label(
+            "document_report_length_mm"
+        ),
+        SupplierRequisitionOrder.report_width_mm.label(
+            "document_report_width_mm"
+        ),
+        SupplierRequisitionOrder.crease_type.label("document_crease_type"),
+        SupplierRequisitionOrder.crease_left_mm.label(
+            "document_crease_left_mm"
+        ),
+        SupplierRequisitionOrder.crease_middle_mm.label(
+            "document_crease_middle_mm"
+        ),
+        SupplierRequisitionOrder.crease_right_mm.label(
+            "document_crease_right_mm"
+        ),
+    ).outerjoin(
+        supplier_header_material,
+        supplier_header_material.id == SupplierRequisitionOrder.material_id,
+    ).order_by(
+        SupplierRequisitionOrder.created_at.desc(),
+        SupplierRequisitionOrder.id.desc(),
+    )
+    supplier_headers = db.execute(
+        _apply_supplier_order_scope_ids(
+            supplier_header_query,
+            allowed_customer_ids,
+        )
+    ).mappings().all()
+    supplier_ids = [int(row["document_id"]) for row in supplier_headers]
+    supplier_items_by_order: dict[int, list] = {}
+    if supplier_ids:
+        supplier_item_rows = db.execute(
+            select(
+                SupplierRequisitionOrderItem.id.label("item_id"),
+                SupplierRequisitionOrderItem.supplier_order_id.label(
+                    "supplier_order_id"
+                ),
+                SupplierRequisitionOrderItem.order_number.label("order_number"),
+                SupplierRequisitionOrderItem.product_code.label("product_code"),
+                SupplierRequisitionOrderItem.product_name.label("product_name"),
+                SupplierRequisitionOrderItem.customer_name.label("customer_name"),
+                SupplierRequisitionOrderItem.report_length_mm.label(
+                    "report_length_mm"
+                ),
+                SupplierRequisitionOrderItem.report_width_mm.label(
+                    "report_width_mm"
+                ),
+                SupplierRequisitionOrderItem.material_id.label("material_id"),
+                supplier_item_material.code.label("item_material_code"),
+                SupplierRequisitionOrderItem.material_code_snapshot.label(
+                    "material_code_snapshot"
+                ),
+                SupplierRequisitionOrderItem.flute_type_snapshot.label(
+                    "flute_type_snapshot"
+                ),
+                SupplierRequisitionOrderItem.requisition_qty.label(
+                    "requisition_qty"
+                ),
+                Order.customer_id.label("customer_id"),
+            )
+            .outerjoin(
+                OrderItem,
+                OrderItem.id == SupplierRequisitionOrderItem.order_item_id,
+            )
+            .outerjoin(Order, Order.id == OrderItem.order_id)
+            .outerjoin(
+                supplier_item_material,
+                supplier_item_material.id
+                == SupplierRequisitionOrderItem.material_id,
+            )
+            .where(
+                SupplierRequisitionOrderItem.supplier_order_id.in_(supplier_ids)
+            )
+            .order_by(
+                SupplierRequisitionOrderItem.supplier_order_id,
+                SupplierRequisitionOrderItem.id,
+            )
+        ).mappings().all()
+        for item in supplier_item_rows:
+            supplier_items_by_order.setdefault(
+                int(item["supplier_order_id"]), []
+            ).append(item)
+    for header in supplier_headers:
+        document_id = int(header["document_id"])
+        lines = []
+        for item in supplier_items_by_order.get(document_id, []):
+            lines.append(
+                {
+                    "_item_id": int(item["item_id"]),
+                    "_requisition_qty": item["requisition_qty"],
+                    "customer_id": item["customer_id"],
+                    "customer_name": item["customer_name"],
+                    "order_number": item["order_number"],
+                    "product_code": item["product_code"],
+                    "product_name": item["product_name"],
+                    "report_length_mm": item["report_length_mm"]
+                    or header["document_report_length_mm"],
+                    "report_width_mm": item["report_width_mm"]
+                    or header["document_report_width_mm"],
+                    "material_code": item["material_code_snapshot"]
+                    or (
+                        item["item_material_code"]
+                        if item["material_id"]
+                        else header["document_material_code"]
+                    ),
+                    "flute_type": item["flute_type_snapshot"]
+                    or header["document_flute_type"],
+                }
+            )
+        documents.append(
+            {
+                "source_type": "supplier_order",
+                "id": document_id,
+                "document_number": header["document_number"],
+                "supplier_name": header["supplier_name"],
+                "status": header["status"],
+                "created_at": header["created_at"],
+                "_requisition_qty": header["document_requisition_qty"],
+                "_crease_type": header["document_crease_type"],
+                "_crease_left_mm": header["document_crease_left_mm"],
+                "_crease_middle_mm": header["document_crease_middle_mm"],
+                "_crease_right_mm": header["document_crease_right_mm"],
+                "line_items": lines,
+            }
+        )
+
+    stock_order_customer = aliased(Customer)
+    stock_item_customer = aliased(Customer)
+    stock_item_product = aliased(Product)
+    stock_policy = aliased(InventoryStockPolicy)
+    stock_policy_product = aliased(Product)
+    stock_headers = db.execute(
+        select(
+            StockReplenishmentOrder.id.label("document_id"),
+            StockReplenishmentOrder.order_number.label("document_number"),
+            StockReplenishmentOrder.supplier_name.label("supplier_name"),
+            StockReplenishmentOrder.customer_id.label("order_customer_id"),
+            StockReplenishmentOrder.status.label("status"),
+            StockReplenishmentOrder.created_at.label("created_at"),
+            stock_order_customer.id.label("resolved_order_customer_id"),
+            stock_order_customer.name.label("order_customer_name"),
+        )
+        .outerjoin(
+            stock_order_customer,
+            stock_order_customer.id == StockReplenishmentOrder.customer_id,
+        )
+        .order_by(
+            StockReplenishmentOrder.created_at.desc(),
+            StockReplenishmentOrder.id.desc(),
+        )
+    ).mappings().all()
+    stock_ids = [int(row["document_id"]) for row in stock_headers]
+    stock_items_by_order: dict[int, list] = {}
+    if stock_ids:
+        stock_item_rows = db.execute(
+            select(
+                StockReplenishmentOrderItem.id.label("item_id"),
+                StockReplenishmentOrderItem.replenishment_order_id.label(
+                    "document_id"
+                ),
+                StockReplenishmentOrderItem.stock_policy_id.label(
+                    "stock_policy_id"
+                ),
+                StockReplenishmentOrderItem.product_id.label("item_product_id"),
+                StockReplenishmentOrderItem.customer_id.label(
+                    "item_customer_id"
+                ),
+                StockReplenishmentOrderItem.product_code_snapshot.label(
+                    "product_code"
+                ),
+                StockReplenishmentOrderItem.product_name_snapshot.label(
+                    "product_name"
+                ),
+                StockReplenishmentOrderItem.material_code_snapshot.label(
+                    "material_code"
+                ),
+                StockReplenishmentOrderItem.flute_type.label("flute_type"),
+                StockReplenishmentOrderItem.report_length_mm.label(
+                    "report_length_mm"
+                ),
+                StockReplenishmentOrderItem.report_width_mm.label(
+                    "report_width_mm"
+                ),
+                StockReplenishmentOrderItem.crease_type.label("crease_type"),
+                StockReplenishmentOrderItem.crease_left_mm.label(
+                    "crease_left_mm"
+                ),
+                StockReplenishmentOrderItem.crease_middle_mm.label(
+                    "crease_middle_mm"
+                ),
+                StockReplenishmentOrderItem.crease_right_mm.label(
+                    "crease_right_mm"
+                ),
+                StockReplenishmentOrderItem.quantity.label("quantity"),
+                StockReplenishmentOrderItem.stocked_quantity.label(
+                    "stocked_quantity"
+                ),
+                stock_item_customer.id.label("resolved_item_customer_id"),
+                stock_item_customer.name.label("item_customer_name"),
+                stock_item_product.id.label("resolved_item_product_id"),
+                stock_item_product.customer_id.label("item_product_customer_id"),
+                stock_item_product.deleted_at.label("item_product_deleted_at"),
+                stock_policy.id.label("resolved_stock_policy_id"),
+                stock_policy.customer_id.label("policy_customer_id"),
+                stock_policy.product_id.label("policy_product_id"),
+                stock_policy_product.id.label("resolved_policy_product_id"),
+                stock_policy_product.customer_id.label(
+                    "policy_product_customer_id"
+                ),
+                stock_policy_product.deleted_at.label(
+                    "policy_product_deleted_at"
+                ),
+            )
+            .outerjoin(
+                stock_item_customer,
+                stock_item_customer.id == StockReplenishmentOrderItem.customer_id,
+            )
+            .outerjoin(
+                stock_item_product,
+                stock_item_product.id == StockReplenishmentOrderItem.product_id,
+            )
+            .outerjoin(
+                stock_policy,
+                stock_policy.id == StockReplenishmentOrderItem.stock_policy_id,
+            )
+            .outerjoin(
+                stock_policy_product,
+                stock_policy_product.id == stock_policy.product_id,
+            )
+            .where(
+                StockReplenishmentOrderItem.replenishment_order_id.in_(stock_ids)
+            )
+            .order_by(
+                StockReplenishmentOrderItem.replenishment_order_id,
+                StockReplenishmentOrderItem.id,
+            )
+        ).mappings().all()
+        for item in stock_item_rows:
+            stock_items_by_order.setdefault(int(item["document_id"]), []).append(
+                item
+            )
+
+    def projected_stock_item_customer_id(item) -> int | None:
+        customer_ids: set[int | None] = set()
+        if item["item_customer_id"] is not None:
+            customer_ids.add(item["item_customer_id"])
+        if item["item_product_id"] is not None:
+            if (
+                item["resolved_item_product_id"] is None
+                or item["item_product_deleted_at"] is not None
+            ):
+                return None
+            customer_ids.add(item["item_product_customer_id"])
+        if item["stock_policy_id"] is not None:
+            if (
+                item["resolved_stock_policy_id"] is None
+                or item["policy_customer_id"] is None
+            ):
+                return None
+            policy_customer_ids: set[int | None] = {item["policy_customer_id"]}
+            if item["policy_product_id"] is not None:
+                if (
+                    item["resolved_policy_product_id"] is None
+                    or item["policy_product_deleted_at"] is not None
+                ):
+                    return None
+                policy_customer_ids.add(item["policy_product_customer_id"])
+            if len(policy_customer_ids) != 1:
+                return None
+            customer_ids.update(policy_customer_ids)
+        return next(iter(customer_ids)) if len(customer_ids) == 1 else None
+
+    for header in stock_headers:
+        document_id = int(header["document_id"])
+        projected_items = stock_items_by_order.get(document_id, [])
+        item_customer_ids = {
+            projected_stock_item_customer_id(item) for item in projected_items
+        }
+        if allowed_customer_ids is not None:
+            if (
+                not projected_items
+                or None in item_customer_ids
+                or not item_customer_ids.issubset(allowed_customer_ids)
+            ):
+                continue
+            if header["order_customer_id"] is not None and (
+                header["order_customer_id"] not in allowed_customer_ids
+                or header["order_customer_id"] not in item_customer_ids
+            ):
+                continue
+        lines = []
+        for item in projected_items:
+            item_customer_name = (
+                item["item_customer_name"]
+                if item["resolved_item_customer_id"] is not None
+                else None
+            )
+            customer_name = (
+                item_customer_name
+                if item["resolved_item_customer_id"] is not None
+                else header["order_customer_name"]
+            )
+            lines.append(
+                {
+                    "_item_id": item["item_id"],
+                    "_quantity": item["quantity"],
+                    "_stocked_quantity": item["stocked_quantity"],
+                    "_crease_type": item["crease_type"],
+                    "_crease_left_mm": item["crease_left_mm"],
+                    "_crease_middle_mm": item["crease_middle_mm"],
+                    "_crease_right_mm": item["crease_right_mm"],
+                    "_item_customer_name": item_customer_name,
+                    "customer_id": projected_stock_item_customer_id(item),
+                    "customer_name": customer_name,
+                    "order_number": None,
+                    "product_code": item["product_code"],
+                    "product_name": item["product_name"],
+                    "report_length_mm": item["report_length_mm"],
+                    "report_width_mm": item["report_width_mm"],
+                    "material_code": item["material_code"],
+                    "flute_type": item["flute_type"],
+                }
+            )
+        documents.append(
+            {
+                "source_type": "stock_replenishment",
+                "id": document_id,
+                "document_number": header["document_number"],
+                "supplier_name": header["supplier_name"],
+                "status": header["status"],
+                "created_at": header["created_at"],
+                "_order_customer_name": (
+                    header["order_customer_name"]
+                    if header["resolved_order_customer_id"] is not None
+                    else None
+                ),
+                "line_items": lines,
+            }
+        )
+
+    legacy_query = (
+        select(Requisition)
+        .options(
+            load_only(
+                Requisition.id,
+                Requisition.requisition_number,
+                Requisition.supplier_name,
+                Requisition.status,
+                Requisition.created_at,
+            ),
+            selectinload(Requisition.items).load_only(
+                RequisitionItem.id,
+                RequisitionItem.requisition_id,
+                RequisitionItem.order_item_id,
+                RequisitionItem.cardboard_len,
+                RequisitionItem.cardboard_width,
+                RequisitionItem.material_snapshot,
+                RequisitionItem.product_code_snapshot,
+                RequisitionItem.product_name_snapshot,
+                RequisitionItem.requisition_qty,
+                RequisitionItem.required_piece_qty,
+                RequisitionItem.status,
+            ),
+        )
+        .where(Requisition.status.notin_(["merged_pending", "supplier_requisition_created"]))
+        .order_by(Requisition.created_at.desc(), Requisition.id.desc())
+    )
+    legacy_batches = db.scalars(
+        _apply_requisition_scope_ids(
+            legacy_query,
+            allowed_customer_ids,
+        )
+    ).all()
+    legacy_order_item_ids = {
+        item.order_item_id for batch in legacy_batches for item in batch.items
+    }
+    legacy_requisition_item_ids = {
+        item.id for batch in legacy_batches for item in batch.items
+    }
+    bom_sources_by_requisition_item_id = (
+        {
+            source.requisition_item_id: source
+            for source in db.scalars(
+                select(RequisitionItemBomSource).where(
+                    RequisitionItemBomSource.requisition_item_id.in_(
+                        legacy_requisition_item_ids
+                    )
+                )
+            ).all()
+        }
+        if legacy_requisition_item_ids
+        else {}
+    )
+    legacy_order_rows = (
+        {
+            int(row["order_item_id"]): row
+            for row in db.execute(
+                select(
+                    OrderItem.id.label("order_item_id"),
+                    Order.id.label("order_id"),
+                    Order.order_number.label("raw_order_number"),
+                    Order.order_date.label("order_date"),
+                    Order.created_at.label("order_created_at"),
+                    Order.customer_id.label("customer_id"),
+                    Customer.name.label("customer_name"),
+                    OrderItem.flute_type.label("flute_type"),
+                    OrderItem.snapshot_crease_type.label("crease_type"),
+                    OrderItem.snapshot_crease_left_mm.label("crease_left_mm"),
+                    OrderItem.snapshot_crease_middle_mm.label(
+                        "crease_middle_mm"
+                    ),
+                    OrderItem.snapshot_crease_right_mm.label(
+                        "crease_right_mm"
+                    ),
+                )
+                .join(Order, Order.id == OrderItem.order_id)
+                .join(Customer, Customer.id == Order.customer_id)
+                .where(OrderItem.id.in_(legacy_order_item_ids))
+            ).mappings().all()
+        }
+        if legacy_order_item_ids
+        else {}
+    )
+    registry = build_display_registry_for_order_ids(
+        db, {int(row["order_id"]) for row in legacy_order_rows.values()}
+    )
+    for batch in legacy_batches:
+        is_composite_bom = any(
+            item.id in bom_sources_by_requisition_item_id for item in batch.items
+        )
+        lines = []
+        for item in batch.items:
+            source = bom_sources_by_requisition_item_id.get(item.id)
+            order_row = legacy_order_rows.get(item.order_item_id)
+            display_number = None
+            if order_row is not None:
+                display_number = display_order_number(
+                    SimpleNamespace(
+                        id=order_row["order_id"],
+                        order_number=order_row["raw_order_number"],
+                        order_date=order_row["order_date"],
+                        created_at=order_row["order_created_at"],
+                    ),
+                    registry,
+                )
+            lines.append(
+                {
+                    "_item_id": item.id,
+                    "_has_bom_source": source is not None,
+                    "_component_type": source.component_type if source else None,
+                    "_bom_component_id": (
+                        source.sales_order_item_bom_component_id if source else None
+                    ),
+                    "_crease_type": (
+                        order_row["crease_type"] if order_row is not None else None
+                    ),
+                    "_crease_left_mm": (
+                        order_row["crease_left_mm"] if order_row is not None else None
+                    ),
+                    "_crease_middle_mm": (
+                        order_row["crease_middle_mm"]
+                        if order_row is not None
+                        else None
+                    ),
+                    "_crease_right_mm": (
+                        order_row["crease_right_mm"] if order_row is not None else None
+                    ),
+                    "_requisition_qty": item.requisition_qty,
+                    "_required_piece_qty": item.required_piece_qty,
+                    "_item_status": item.status,
+                    "customer_id": (
+                        order_row["customer_id"] if order_row is not None else None
+                    ),
+                    "customer_name": (
+                        order_row["customer_name"] if order_row is not None else None
+                    ),
+                    "order_number": display_number,
+                    "product_code": item.product_code_snapshot,
+                    "product_name": item.product_name_snapshot,
+                    "report_length_mm": int(item.cardboard_len),
+                    "report_width_mm": int(item.cardboard_width),
+                    "material_code": item.material_snapshot,
+                    "flute_type": (
+                        order_row["flute_type"] if order_row is not None else None
+                    ),
+                }
+            )
+        documents.append(
+            {
+                "source_type": (
+                    "composite_bom_requisition"
+                    if is_composite_bom
+                    else "legacy_material_requisition"
+                ),
+                "id": batch.id,
+                "document_number": batch.requisition_number,
+                "supplier_name": batch.supplier_name,
+                "status": batch.status,
+                "created_at": batch.created_at,
+                "_is_composite_bom": is_composite_bom,
+                "line_items": lines,
+            }
+        )
+
+    return documents
+
+
+def _load_reported_document_candidate_page_facts(
+    db: Session,
+    candidates: list[dict],
+) -> None:
+    """Load qualification facts that are needed only for visible legacy rows."""
+
+    requisition_item_ids = {
+        int(line["_item_id"])
+        for candidate in candidates
+        if candidate["source_type"]
+        in {"composite_bom_requisition", "legacy_material_requisition"}
+        for line in candidate.get("line_items") or []
+    }
+    received_ids = (
+        {
+            int(item_id)
+            for item_id in db.scalars(
+                select(IncomingReceiptItem.requisition_item_id).where(
+                    IncomingReceiptItem.requisition_item_id.in_(
+                        requisition_item_ids
+                    ),
+                    IncomingReceiptItem.status == "posted",
+                )
+            ).all()
+            if item_id is not None
+        }
+        if requisition_item_ids
+        else set()
+    )
+    for candidate in candidates:
+        if candidate["source_type"] not in {
+            "composite_bom_requisition",
+            "legacy_material_requisition",
+        }:
+            continue
+        for line in candidate.get("line_items") or []:
+            line["_received"] = int(line["_item_id"]) in received_ids
+
+
+def _decorate_reported_document_candidates(candidates: list[dict]) -> list[dict]:
+    """Expand already-loaded page candidates into the legacy response shape."""
+
+    def with_match_metadata(payload: dict, candidate_line: dict) -> dict:
+        payload["matched"] = bool(candidate_line.get("matched"))
+        payload["matched_fields"] = list(
+            candidate_line.get("matched_fields") or []
+        )
+        return payload
+
+    def finish_document(payload: dict, candidate: dict) -> dict:
+        payload["matched_line_count"] = int(
+            candidate.get("matched_line_count") or 0
+        )
+        payload["header_keyword_matched"] = bool(
+            candidate.get("header_keyword_matched")
+        )
+        return payload
+
+    documents: list[dict] = []
+    for candidate in candidates:
+        source_type = candidate["source_type"]
+        candidate_lines = candidate.get("line_items") or []
+
+        if source_type == "supplier_order":
+            crease_display = (
+                f"{candidate['_crease_left_mm']}+{candidate['_crease_middle_mm']}+{candidate['_crease_right_mm']}"
+                if candidate["_crease_type"] == "压线"
+                and candidate["_crease_middle_mm"] is not None
+                else candidate["_crease_type"] or "-"
+            )
+            line_items = [
+                with_match_metadata(
+                    {
+                        "id": line["_item_id"],
+                        "stable_id": (
+                            f"supplier_order:{candidate['id']}:{line['_item_id']}"
+                        ),
+                        "customer_id": line.get("customer_id"),
+                        "customer_name": line.get("customer_name"),
+                        "order_number": line.get("order_number"),
+                        "product_code": line.get("product_code"),
+                        "product_name": line.get("product_name"),
+                        "report_length_mm": line.get("report_length_mm"),
+                        "report_width_mm": line.get("report_width_mm"),
+                        "crease_display": crease_display,
+                        "material_code": line.get("material_code"),
+                        "flute_type": line.get("flute_type"),
+                        "requisition_qty": int(line.get("_requisition_qty") or 0),
+                        "unit": "张",
+                        "status": candidate["status"],
+                    },
+                    line,
+                )
+                for line in candidate_lines
+            ]
+            documents.append(
+                finish_document(
+                    {
+                        "source_type": source_type,
+                        "id": candidate["id"],
+                        "document_number": candidate["document_number"],
+                        "supplier_name": candidate.get("supplier_name"),
+                        "status": candidate["status"],
+                        "incoming_status": (
+                            "已作废" if candidate["status"] == "voided" else "待入库"
+                        ),
+                        "created_at": candidate.get("created_at"),
+                        "item_count": len(candidate_lines),
+                        "order_numbers": _unique_text(
+                            [line.get("order_number") for line in candidate_lines]
+                        ),
+                        "product_codes": _unique_text(
+                            [line.get("product_code") for line in candidate_lines]
+                        ),
+                        "customer_names": _unique_text(
+                            [line.get("customer_name") for line in candidate_lines]
+                        ),
+                        "requisition_qty": candidate.get("_requisition_qty"),
+                        "pdf_url": (
+                            f"/api/requisition/supplier-orders/{candidate['id']}/pdf"
+                        ),
+                        "line_items": line_items,
+                    },
+                    candidate,
+                )
+            )
+            continue
+
+        if source_type == "stock_replenishment":
+            line_items = []
+            for line in candidate_lines:
+                crease_display = (
+                    f"{line['_crease_left_mm']}+{line['_crease_middle_mm']}+{line['_crease_right_mm']}"
+                    if line["_crease_type"] == "压线"
+                    and line["_crease_middle_mm"] is not None
+                    else line["_crease_type"] or "-"
+                )
+                quantity = int(line.get("_quantity") or 0)
+                stocked_quantity = int(line.get("_stocked_quantity") or 0)
+                line_items.append(
+                    with_match_metadata(
+                        {
+                            "id": line["_item_id"],
+                            "stable_id": (
+                                f"stock_replenishment:{candidate['id']}:{line['_item_id']}"
+                            ),
+                            "customer_id": line.get("customer_id"),
+                            "customer_name": line.get("customer_name"),
+                            "order_number": None,
+                            "product_code": line.get("product_code"),
+                            "product_name": line.get("product_name"),
+                            "report_length_mm": line.get("report_length_mm"),
+                            "report_width_mm": line.get("report_width_mm"),
+                            "crease_display": crease_display,
+                            "material_code": line.get("material_code"),
+                            "flute_type": line.get("flute_type"),
+                            "requisition_qty": quantity,
+                            "received_qty": stocked_quantity,
+                            "remaining_qty": max(quantity - stocked_quantity, 0),
+                            "unit": "张",
+                            "status": candidate["status"],
+                        },
+                        line,
+                    )
+                )
+            incoming_status = {
+                "confirmed": "待入库",
+                "partially_stocked": "部分入库",
+                "stocked": "已入库",
+                "voided": "已作废",
+            }.get(candidate["status"], candidate["status"])
+            documents.append(
+                finish_document(
+                    {
+                        "source_type": source_type,
+                        "id": candidate["id"],
+                        "document_number": candidate["document_number"],
+                        "supplier_name": candidate.get("supplier_name"),
+                        "status": candidate["status"],
+                        "incoming_status": incoming_status,
+                        "created_at": candidate.get("created_at"),
+                        "item_count": len(candidate_lines),
+                        "order_numbers": [],
+                        "product_codes": _unique_text(
+                            [
+                                line.get("product_code") or line.get("product_name")
+                                for line in candidate_lines
+                            ]
+                        ),
+                        "customer_names": _unique_text(
+                            [
+                                line.get("_item_customer_name")
+                                for line in candidate_lines
+                            ]
+                            + [candidate.get("_order_customer_name")]
+                        ),
+                        "requisition_qty": sum(
+                            int(line.get("_quantity") or 0)
+                            for line in candidate_lines
+                        ),
+                        "pdf_url": (
+                            "/api/requisition/stock-replenishment/orders/"
+                            f"{candidate['id']}/print"
+                        ),
+                        "line_items": line_items,
+                        "can_void": (
+                            candidate["status"] == "confirmed"
+                            and all(
+                                int(line.get("_stocked_quantity") or 0) == 0
+                                for line in candidate_lines
+                            )
+                        ),
+                    },
+                    candidate,
+                )
+            )
+            continue
+
+        if source_type in {
+            "composite_bom_requisition",
+            "legacy_material_requisition",
+        }:
+            is_composite_bom = bool(candidate.get("_is_composite_bom"))
+            line_items = []
+            for line in candidate_lines:
+                has_source = bool(line.get("_has_bom_source"))
+                component_type = line.get("_component_type")
+                component_label = (
+                    {
+                        "cover": "盖",
+                        "base": "底",
+                        "whole": "整片",
+                    }.get(component_type, "组件")
+                    if has_source
+                    else None
+                )
+                source_key = (
+                    "component:"
+                    f"{line.get('_bom_component_id')}:"
+                    f"{component_type}"
+                    if has_source
+                    else None
+                )
+                crease_display = (
+                    f"{line['_crease_left_mm']}+{line['_crease_middle_mm']}+{line['_crease_right_mm']}"
+                    if line["_crease_type"] == "压线"
+                    and line["_crease_middle_mm"] is not None
+                    else line["_crease_type"] or "-"
+                )
+                line_items.append(
+                    with_match_metadata(
+                        {
+                            "id": line["_item_id"],
+                            "stable_id": (
+                                f"legacy_requisition:{candidate['id']}:{line['_item_id']}"
+                            ),
+                            "source_key": source_key,
+                            "component_type": component_type if has_source else None,
+                            "component_label": component_label,
+                            "customer_id": line.get("customer_id"),
+                            "customer_name": line.get("customer_name"),
+                            "order_number": line.get("order_number"),
+                            "product_code": line.get("product_code"),
+                            "product_name": line.get("product_name"),
+                            "report_length_mm": line.get("report_length_mm"),
+                            "report_width_mm": line.get("report_width_mm"),
+                            "crease_display": crease_display,
+                            "material_code": line.get("material_code"),
+                            "flute_type": line.get("flute_type"),
+                            "requisition_qty": int(
+                                line.get("_requisition_qty") or 0
+                            ),
+                            "required_piece_qty": int(
+                                line.get("_required_piece_qty") or 0
+                            ),
+                            "received_qty": None,
+                            "remaining_qty": None,
+                            "unit": "张",
+                            "status": (
+                                "已收料"
+                                if line.get("_received")
+                                else line.get("_item_status")
+                            ),
+                            "can_void": (
+                                is_composite_bom
+                                and candidate["status"] == "已报料"
+                                and line.get("_item_status") == "有效"
+                                and not line.get("_received")
+                            ),
+                        },
+                        line,
+                    )
+                )
+            can_void = (
+                is_composite_bom
+                and candidate["status"] == "已报料"
+                and all(
+                    line.get("_item_status") == "有效"
+                    for line in candidate_lines
+                )
+                and all(not line.get("_received") for line in candidate_lines)
+            )
+            documents.append(
+                finish_document(
+                    {
+                        "source_type": source_type,
+                        "id": candidate["id"],
+                        "document_number": candidate["document_number"],
+                        "supplier_name": candidate.get("supplier_name"),
+                        "status": candidate["status"],
+                        "incoming_status": (
+                            "已作废" if candidate["status"] == "已取消" else "待入库"
+                        ),
+                        "created_at": candidate.get("created_at"),
+                        "item_count": len(candidate_lines),
+                        "order_numbers": _unique_text(
+                            [line.get("order_number") for line in candidate_lines]
+                        ),
+                        "product_codes": _unique_text(
+                            [line.get("product_code") for line in candidate_lines]
+                        ),
+                        "customer_names": _unique_text(
+                            [line.get("customer_name") for line in candidate_lines]
+                        ),
+                        "requisition_qty": sum(
+                            int(line.get("_requisition_qty") or 0)
+                            for line in candidate_lines
+                        ),
+                        "pdf_url": f"/requisition-print.html?id={candidate['id']}",
+                        "is_composite_bom": is_composite_bom,
+                        "can_void": can_void,
+                        "line_items": line_items,
+                    },
+                    candidate,
+                )
+            )
+            continue
+
+        raise HTTPException(
+            status_code=409,
+            detail="已报料列表数据已变化，请刷新重试",
+        )
+
+    return documents
+
+
+def _build_reported_documents(
+    db: Session,
+    user: User,
+    *,
+    selected_identities: set[tuple[str, int]] | None = None,
+) -> list[dict]:
+    """Fully decorate reported documents, optionally for selected identities only."""
+
+    if selected_identities is not None and not selected_identities:
+        return []
+
+    def selected_ids(source: str) -> set[int] | None:
+        if selected_identities is None:
+            return None
+        return {
+            int(document_id)
+            for source_type, document_id in selected_identities
+            if source_type == source
+        }
+
+    registry = build_display_registry(db) if selected_identities is None else None
+    documents: list[dict] = []
+
+    supplier_ids = selected_ids("supplier_order")
     supplier_order_query = select(SupplierRequisitionOrder).options(
         selectinload(SupplierRequisitionOrder.items)
     )
-    supplier_orders = db.scalars(
-        _apply_supplier_order_scope(supplier_order_query, user, db).order_by(
-            SupplierRequisitionOrder.created_at.desc(),
-            SupplierRequisitionOrder.id.desc(),
+    if supplier_ids is not None:
+        supplier_order_query = supplier_order_query.where(
+            SupplierRequisitionOrder.id.in_(supplier_ids)
         )
-    ).all()
+    supplier_orders = (
+        db.scalars(
+            _apply_supplier_order_scope(supplier_order_query, user, db).order_by(
+                SupplierRequisitionOrder.created_at.desc(),
+                SupplierRequisitionOrder.id.desc(),
+            )
+        ).all()
+        if supplier_ids is None or supplier_ids
+        else []
+    )
     supplier_customer_ids: dict[int, set[int]] = {}
     supplier_item_customer_ids: dict[int, int] = {}
     supplier_order_ids = [order.id for order in supplier_orders if order.items]
@@ -13936,10 +14776,16 @@ def list_reported_documents(
         for material_id in [order.material_id, *[item.material_id for item in order.items]]
         if material_id is not None
     }
-    material_codes = {
-        material.id: material.code
-        for material in db.scalars(select(Material).where(Material.id.in_(material_ids))).all()
-    } if material_ids else {}
+    material_codes = (
+        {
+            material.id: material.code
+            for material in db.scalars(
+                select(Material).where(Material.id.in_(material_ids))
+            ).all()
+        }
+        if material_ids
+        else {}
+    )
     for order in supplier_orders:
         order_numbers = _unique_text([item.order_number for item in order.items])
         product_codes = _unique_text([item.product_code for item in order.items])
@@ -13990,12 +14836,16 @@ def list_reported_documents(
             }
         )
 
-    stock_orders = db.scalars(
-        _replenishment_order_query().order_by(
-            StockReplenishmentOrder.created_at.desc(),
-            StockReplenishmentOrder.id.desc(),
-        )
-    ).all()
+    stock_ids = selected_ids("stock_replenishment")
+    stock_query = _replenishment_order_query().order_by(
+        StockReplenishmentOrder.created_at.desc(),
+        StockReplenishmentOrder.id.desc(),
+    )
+    if stock_ids is not None:
+        stock_query = stock_query.where(StockReplenishmentOrder.id.in_(stock_ids))
+    stock_orders = (
+        db.scalars(stock_query).all() if stock_ids is None or stock_ids else []
+    )
     for order in stock_orders:
         if not _stock_replenishment_order_is_visible(
             db, order, user, relationships_loaded=True
@@ -14086,15 +14936,23 @@ def list_reported_documents(
             }
         )
 
+    legacy_ids = None
+    if selected_identities is not None:
+        legacy_ids = selected_ids("legacy_material_requisition") or set()
+        legacy_ids.update(selected_ids("composite_bom_requisition") or set())
     legacy_query = (
         select(Requisition)
         .options(selectinload(Requisition.items))
         .where(Requisition.status.notin_(["merged_pending", "supplier_requisition_created"]))
         .order_by(Requisition.created_at.desc(), Requisition.id.desc())
     )
-    legacy_batches = db.scalars(
-        _apply_requisition_scope(legacy_query, user, db)
-    ).all()
+    if legacy_ids is not None:
+        legacy_query = legacy_query.where(Requisition.id.in_(legacy_ids))
+    legacy_batches = (
+        db.scalars(_apply_requisition_scope(legacy_query, user, db)).all()
+        if legacy_ids is None or legacy_ids
+        else []
+    )
     legacy_order_item_ids = {
         item.order_item_id for batch in legacy_batches for item in batch.items
     }
@@ -14131,22 +14989,48 @@ def list_reported_documents(
         if legacy_requisition_item_ids
         else set()
     )
-    legacy_order_rows = {
-        item_id: (order, customer)
-        for item_id, order, customer in db.execute(
-            select(OrderItem.id, Order, Customer)
-            .join(Order, Order.id == OrderItem.order_id)
-            .join(Customer, Customer.id == Order.customer_id)
-            .where(OrderItem.id.in_(legacy_order_item_ids))
-        ).all()
-    } if legacy_order_item_ids else {}
-    legacy_order_items = {
-        item.id: item
-        for item in db.scalars(
-            select(OrderItem).where(OrderItem.id.in_(legacy_order_item_ids))
-        ).all()
-    } if legacy_order_item_ids else {}
+    legacy_order_rows = (
+        {
+            item_id: (order, customer)
+            for item_id, order, customer in db.execute(
+                select(OrderItem.id, Order, Customer)
+                .join(Order, Order.id == OrderItem.order_id)
+                .join(Customer, Customer.id == Order.customer_id)
+                .where(OrderItem.id.in_(legacy_order_item_ids))
+            ).all()
+        }
+        if legacy_order_item_ids
+        else {}
+    )
+    legacy_order_items = (
+        {
+            item.id: item
+            for item in db.scalars(
+                select(OrderItem).where(OrderItem.id.in_(legacy_order_item_ids))
+            ).all()
+        }
+        if legacy_order_item_ids
+        else {}
+    )
+    if registry is None:
+        registry = build_display_registry_for_order_ids(
+            db, {order.id for order, _customer in legacy_order_rows.values()}
+        )
     for batch in legacy_batches:
+        is_composite_bom = any(
+            item.id in bom_sources_by_requisition_item_id
+            for item in batch.items
+        )
+        batch_source_type = (
+            "composite_bom_requisition"
+            if is_composite_bom
+            else "legacy_material_requisition"
+        )
+        if (
+            selected_identities is not None
+            and (batch_source_type, batch.id) not in selected_identities
+        ):
+            continue
         order_numbers: list[str | None] = []
         product_codes: list[str | None] = []
         customer_names: list[str | None] = []
@@ -14162,10 +15046,6 @@ def list_reported_documents(
             order_numbers.append(display_order_number(order, registry))
             customer_names.append(customer.name)
             customer_ids.add(customer.id)
-        is_composite_bom = any(
-            item.id in bom_sources_by_requisition_item_id
-            for item in batch.items
-        )
         line_items = []
         for item in batch.items:
             source = bom_sources_by_requisition_item_id.get(item.id)
@@ -14235,11 +15115,7 @@ def list_reported_documents(
         )
         documents.append(
             {
-                "source_type": (
-                    "composite_bom_requisition"
-                    if is_composite_bom
-                    else "legacy_material_requisition"
-                ),
+                "source_type": batch_source_type,
                 "id": batch.id,
                 "document_number": batch.requisition_number,
                 "supplier_name": batch.supplier_name,
@@ -14260,6 +15136,87 @@ def list_reported_documents(
                 "_customer_ids": customer_ids,
             }
         )
+
+    return documents
+
+
+@router.get("/reported-documents")
+def list_reported_documents(
+    customer_id: int | None = None,
+    keyword: str | None = None,
+    document_number: str | None = None,
+    order_number: str | None = None,
+    product_code: str | None = None,
+    product_name: str | None = None,
+    material_code: str | None = None,
+    flute_type: str | None = None,
+    report_length_mm: int | None = Query(default=None, ge=1),
+    report_width_mm: int | None = Query(default=None, ge=1),
+    report_length_min: int | None = Query(default=None, ge=1),
+    report_length_max: int | None = Query(default=None, ge=1),
+    report_width_min: int | None = Query(default=None, ge=1),
+    report_width_max: int | None = Query(default=None, ge=1),
+    supplier_name: str | None = None,
+    status_filter: str | None = Query(default=None, alias="status"),
+    source_type: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    page: int | None = Query(default=None, ge=1),
+    page_size: int | None = Query(default=None, ge=1, le=200),
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_read),
+) -> dict:
+    """List reported documents after scope filtering, with optional paging.
+
+    This endpoint deliberately keeps an unpaged default for existing clients.
+    Callers that opt into ``page`` or ``page_size`` receive one stable page only
+    after all source-specific customer-scope checks and summary filters run.
+    """
+    # Preserve the long-standing direct-call test contract.  FastAPI normally
+    # resolves Query defaults before entry; direct Python callers receive the
+    # Param objects themselves and should be treated as if the values were absent.
+    status_filter = status_filter if isinstance(status_filter, str) else None
+    report_length_mm = report_length_mm if isinstance(report_length_mm, int) else None
+    report_width_mm = report_width_mm if isinstance(report_width_mm, int) else None
+    report_length_min = report_length_min if isinstance(report_length_min, int) else None
+    report_length_max = report_length_max if isinstance(report_length_max, int) else None
+    report_width_min = report_width_min if isinstance(report_width_min, int) else None
+    report_width_max = report_width_max if isinstance(report_width_max, int) else None
+    page = page if isinstance(page, int) else None
+    page_size = page_size if isinstance(page_size, int) else None
+    user = _user
+    if customer_id is not None:
+        require_customer_access(customer_id, user, db)
+    allowed_source_types = {
+        "supplier_order",
+        "stock_replenishment",
+        "composite_bom_requisition",
+        "legacy_material_requisition",
+    }
+    if source_type and source_type not in allowed_source_types:
+        raise HTTPException(status_code=422, detail="不支持的报料来源类型")
+
+    normalized_filters = {
+        "keyword": (keyword or "").strip().casefold(),
+        "document_number": (document_number or "").strip().casefold(),
+        "order_number": (order_number or "").strip().casefold(),
+        "product_code": (product_code or "").strip().casefold(),
+        "product_name": (product_name or "").strip().casefold(),
+        "material_code": (material_code or "").strip().casefold(),
+        "flute_type": (flute_type or "").strip().casefold(),
+        "supplier_name": (supplier_name or "").strip().casefold(),
+        "status": (status_filter or "").strip(),
+    }
+    if (
+        report_length_min is not None
+        and report_length_max is not None
+        and report_length_min > report_length_max
+    ) or (
+        report_width_min is not None
+        and report_width_max is not None
+        and report_width_min > report_width_max
+    ):
+        raise HTTPException(status_code=422, detail="尺寸最小值不能大于最大值")
 
     def _text_contains(value: object, needle: str) -> bool:
         return needle in str(value or "").casefold()
@@ -14309,7 +15266,10 @@ def list_reported_documents(
             report_length_max,
         ):
             return None
-        if any(value is not None for value in (report_length_mm, report_length_min, report_length_max)):
+        if any(
+            value is not None
+            for value in (report_length_mm, report_length_min, report_length_max)
+        ):
             matched_fields.append("report_length_mm")
         if not _dimension_matches(
             line.get("report_width_mm"),
@@ -14318,7 +15278,10 @@ def list_reported_documents(
             report_width_max,
         ):
             return None
-        if any(value is not None for value in (report_width_mm, report_width_min, report_width_max)):
+        if any(
+            value is not None
+            for value in (report_width_mm, report_width_min, report_width_max)
+        ):
             matched_fields.append("report_width_mm")
         if include_keyword and normalized_filters["keyword"]:
             keyword_fields = [
@@ -14402,7 +15365,9 @@ def list_reported_documents(
         for line in document.get("line_items", []):
             match_fields = _line_match_fields(
                 line,
-                include_keyword=bool(normalized_filters["keyword"] and not header_keyword_match),
+                include_keyword=bool(
+                    normalized_filters["keyword"] and not header_keyword_match
+                ),
             )
             if match_fields is None:
                 line["matched"] = False
@@ -14418,6 +15383,76 @@ def list_reported_documents(
         document["matched_line_count"] = len(matching_lines)
         document["header_keyword_matched"] = header_keyword_match
         return True
+
+    use_pagination = page is not None or page_size is not None
+    effective_page = page or 1
+    effective_page_size = page_size or 50
+    if use_pagination:
+        candidates = [
+            document
+            for document in _build_reported_document_candidates(db, user)
+            if matches_filters(document)
+        ]
+        candidates.sort(
+            key=lambda row: (
+                row["created_at"] or datetime.min,
+                row["id"],
+            ),
+            reverse=True,
+        )
+        total = len(candidates)
+        matched_line_count = sum(
+            int(document.get("matched_line_count") or 0)
+            for document in candidates
+        )
+        start = (effective_page - 1) * effective_page_size
+        page_candidates = candidates[start : start + effective_page_size]
+        expected_identities = [
+            (str(document["source_type"]), int(document["id"]))
+            for document in page_candidates
+        ]
+        _load_reported_document_candidate_page_facts(db, page_candidates)
+        full_documents = _decorate_reported_document_candidates(
+            page_candidates
+        )
+        actual_identities = [
+            (str(document["source_type"]), int(document["id"]))
+            for document in full_documents
+        ]
+        if actual_identities != expected_identities:
+            raise HTTPException(
+                status_code=409,
+                detail="已报料列表数据已变化，请刷新重试",
+            )
+        documents = full_documents
+        if any(not matches_filters(document) for document in documents):
+            raise HTTPException(
+                status_code=409,
+                detail="已报料列表数据已变化，请刷新重试",
+            )
+        return {
+            "total": total,
+            "matched_line_count": matched_line_count,
+            "page": effective_page,
+            "page_size": effective_page_size,
+            "items": [
+                {
+                    **{
+                        key: value
+                        for key, value in document.items()
+                        if key != "_customer_ids"
+                    },
+                    "created_at": (
+                        utc_naive_to_api(document["created_at"])
+                        if document["created_at"]
+                        else None
+                    ),
+                }
+                for document in documents
+            ],
+        }
+
+    documents = _build_reported_documents(db, user)
 
     documents = [document for document in documents if matches_filters(document)]
     documents.sort(

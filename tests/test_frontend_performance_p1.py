@@ -43,12 +43,12 @@ def _sha256(path: Path) -> str:
 def test_index_uses_only_versioned_local_runtime_dependencies() -> None:
     sources = re.findall(r'<script\s+src="([^"]+)"', INDEX)
     time_utils_hash = _sha256(ROOT / "static" / "assets" / "time-utils.js").lower()[:12]
-    assert sources[:4] == [
+    assert sources[:3] == [
         "/static/vendor/vue-3.5.40.global.prod.js",
         "/static/vendor/axios-1.18.1.min.js",
-        "/static/vendor/pinyin-pro-3.26.0.js",
         f"/static/assets/time-utils.js?v={time_utils_hash}",
     ]
+    assert "/static/vendor/pinyin-pro-3.26.0.js" not in sources
     assert not any(source.startswith(("http://", "https://")) for source in sources)
     for filename, expected_hash in EXPECTED_VENDOR.items():
         assert _sha256(VENDOR / filename) == expected_hash
@@ -105,10 +105,26 @@ def test_list_searches_are_debounced_and_old_requests_are_cancelled() -> None:
     assert "queuePageSearch('products')" in INDEX
     assert "queuePageSearch('orders')" in INDEX
     assert "new AbortController()" in INDEX
-    assert 'beginLatestRequest("customers:list")' in INDEX
-    assert 'beginLatestRequest("products:list")' in INDEX
-    assert 'beginLatestRequest("materials:list")' in INDEX
-    assert 'beginLatestRequest("orders:list")' in INDEX
+    for request_key in (
+        "customers:list",
+        "products:list",
+        "materials:list",
+        "orders:list",
+    ):
+        literal_begin = f'beginLatestRequest("{request_key}")'
+        variable_begin = re.search(
+            rf'const requestKey = "{re.escape(request_key)}";\s*'
+            r"const controller = this\.beginLatestRequest\(requestKey\)",
+            INDEX,
+        )
+        assert literal_begin in INDEX or variable_begin is not None
+        assert (
+            f'finishLatestRequest("{request_key}", controller)' in INDEX
+            or (
+                variable_begin is not None
+                and "finishLatestRequest(requestKey, controller)" in INDEX
+            )
+        )
     assert "signal:controller.signal" in INDEX
 
 
@@ -134,7 +150,11 @@ def test_performance_middleware_adds_timing_cache_and_slow_api_log(caplog) -> No
 
     assert api_response.status_code == 200
     assert api_response.headers["server-timing"].startswith("app;dur=")
+    assert ", db;dur=" in api_response.headers["server-timing"]
     assert "slow_api method=GET path=/api/demo status=200" in caplog.text
+    assert "query_count=0" in caplog.text
+    assert "db_duration_ms=0.0" in caplog.text
+    assert "response_bytes=" in caplog.text
     assert (
         vendor_response.headers["cache-control"]
         == "public, max-age=31536000, immutable"

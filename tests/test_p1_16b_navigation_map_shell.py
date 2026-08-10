@@ -32,4 +32,6 @@ def test_p1_16b_preserves_existing_warehouse_state_and_manual_refresh() -> None:
     assert "if (!this.warehouseFrameUrl)" in INDEX
     assert "refreshWarehouseFrame()" in INDEX
     assert "this.warehouseFrameRevision += 1" in INDEX
-    assert "if (!force && this.pageCacheFresh(page)) return;" in INDEX
+    load_page = INDEX.split("async loadPage(page", 1)[1].split("refreshCurrent()", 1)[0]
+    cache_guard = load_page.split("if (!force && this.pageCacheFresh(page)) {", 1)[1].split("}", 1)[0]
+    assert "return true;" in cache_guard

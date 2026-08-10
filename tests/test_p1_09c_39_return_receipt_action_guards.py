@@ -75,6 +75,7 @@ const vm = {{
   async loadOrders() {{ return true; }},
   async loadKpi() {{ return true; }},
   async loadFinance() {{ return true; }},
+  invalidateDeliveryListDetail() {{ return true; }},
   closeModal() {{ this.modal = null; }},
   errorMessage(error) {{ return error?.message || String(error); }},
   showToast(message, danger=false) {{ messages.push({{message,danger}}); }},
@@ -132,6 +133,7 @@ def test_receipt_success_is_not_misreported_when_refresh_fails(tmp_path: Path) -
 const AsyncFunction = Object.getPrototypeOf(async function(){{}}).constructor;
 let mode = "refresh-fails";
 const messages = [];
+const invalidated = [];
 globalThis.confirm = () => true;
 globalThis.axios = {{
   async post(url) {{ if (mode === "save-fails" && !url.endsWith("/cancel")) throw new Error("回单状态变化"); if (mode === "cancel-fails" && url.endsWith("/cancel")) throw new Error("已进入对账"); return {{data:{{id:301}}}}; }},
@@ -147,6 +149,7 @@ const vm = {{
   async loadOrders() {{ return true; }},
   async loadKpi() {{ return true; }},
   async loadFinance() {{ return true; }},
+  invalidateDeliveryListDetail(id) {{ invalidated.push(Number(id)); return true; }},
   closeModal() {{ this.modal = null; }},
   errorMessage(error) {{ return error?.message || String(error); }},
   showToast(message, danger=false) {{ messages.push({{message,danger}}); }},
@@ -157,11 +160,13 @@ vm.cancelReceipt = new AsyncFunction("row", {json.dumps(cancel_body, ensure_asci
 (async () => {{
   const saved = await vm.saveReceipt();
   if (saved !== true || vm.receiptOperationState.action || vm.modal !== null) throw new Error("successful receipt save was misreported");
+  if (!invalidated.includes(21)) throw new Error("successful receipt save kept stale detail");
   if (!messages.some(row => row.danger && row.message.includes("回单已经保存") && row.message.includes("刷新") && row.message.includes("不要重复"))) throw new Error("receipt save refresh failure lacked anti-repeat guidance");
 
   messages.length = 0; vm.modal = null;
   const cancelled = await vm.cancelReceipt({{id:22,delivery_number:"TH022",return_receipt_id:302}});
   if (cancelled !== true || vm.receiptOperationState.action) throw new Error("successful receipt cancel was misreported");
+  if (!invalidated.includes(22)) throw new Error("successful receipt cancel kept stale detail");
   if (!messages.some(row => row.danger && row.message.includes("回单已经取消") && row.message.includes("刷新") && row.message.includes("不要重复"))) throw new Error("receipt cancel refresh failure lacked anti-repeat guidance");
 
   mode = "save-fails"; messages.length = 0; vm.modal = {{type:"receipt"}};
@@ -171,6 +176,7 @@ vm.cancelReceipt = new AsyncFunction("row", {json.dumps(cancel_body, ensure_asci
   mode = "cancel-fails"; messages.length = 0;
   const cancelFailed = await vm.cancelReceipt({{id:23,delivery_number:"TH023",return_receipt_id:303}});
   if (cancelFailed !== false || vm.receiptOperationState.action || !messages.some(row => row.danger && row.message.includes("已进入对账"))) throw new Error("receipt cancel failure lost real error or lock");
+  if (invalidated.includes(23)) throw new Error("failed receipt cancel invalidated detail");
 }})().catch(error => {{ console.error(error); process.exit(1); }});
 """
     _run_node(tmp_path, "return-receipt-followup.js", script)

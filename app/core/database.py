@@ -7,12 +7,14 @@ from collections.abc import Generator
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
+from time import perf_counter
 
 from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.backup_retention import auto_cleanup_regular_backups
 from app.core.config import Settings, load_settings, normalize_path, settings
+from app.core.request_context import get_current_request_performance
 from app.core.time_contract import beijing_now_naive
 
 
@@ -60,6 +62,53 @@ def create_sqlite_engine(
             cursor.execute("PRAGMA journal_mode = DELETE")
         finally:
             cursor.close()
+
+    @event.listens_for(engine, "before_cursor_execute")
+    def start_query_timer(
+        _connection,
+        _cursor,
+        _statement,
+        _parameters,
+        execution_context,
+        _executemany,
+    ) -> None:
+        performance_stats = get_current_request_performance()
+        if performance_stats is None:
+            return
+        execution_context._erp_query_performance_stats = performance_stats
+        execution_context._erp_query_started_at = perf_counter()
+
+    def finish_query_timer(execution_context) -> None:
+        started_at = getattr(execution_context, "_erp_query_started_at", None)
+        performance_stats = getattr(
+            execution_context,
+            "_erp_query_performance_stats",
+            None,
+        )
+        if started_at is None or performance_stats is None:
+            return
+        execution_context._erp_query_started_at = None
+        execution_context._erp_query_performance_stats = None
+        performance_stats.record_database_query(
+            (perf_counter() - started_at) * 1000
+        )
+
+    @event.listens_for(engine, "after_cursor_execute")
+    def record_query_duration(
+        _connection,
+        _cursor,
+        _statement,
+        _parameters,
+        execution_context,
+        _executemany,
+    ) -> None:
+        finish_query_timer(execution_context)
+
+    @event.listens_for(engine, "handle_error")
+    def record_failed_query_duration(exception_context) -> None:
+        execution_context = exception_context.execution_context
+        if execution_context is not None:
+            finish_query_timer(execution_context)
 
     return engine
 

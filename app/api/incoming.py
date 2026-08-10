@@ -6,6 +6,7 @@ import socket
 from datetime import date, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
+from typing import Annotated
 from uuid import uuid4
 
 import qrcode
@@ -49,7 +50,12 @@ from app.models.supplier_requisition_order import (
 )
 from app.models.user import User
 from app.models.warehouse_inventory import WarehouseLocation
-from app.services.history_orders import build_display_registry, display_order_number
+from app.services.history_orders import (
+    build_display_registry,
+    build_display_registry_for_order_ids,
+    display_order_number,
+    is_history_order_number,
+)
 from app.services.location_candidates import list_operational_locations
 from app.services.incoming_receipts import (
     IncomingReceiptError,
@@ -455,6 +461,48 @@ def _visible_customer_ids(user: User, db: Session) -> set[int] | None:
     return customer_scope_ids(user, db)
 
 
+def _pending_order_item_query(query):
+    """Apply the authoritative pending-incoming eligibility and ordering."""
+    has_receivable_requisition_item = (
+        select(RequisitionItem.id)
+        .where(
+            RequisitionItem.order_item_id == OrderItem.id,
+            RequisitionItem.status.in_(["有效", "supplier_requisition_created"]),
+        )
+        .exists()
+    )
+    return query.where(
+        Order.status.notin_(["cancelled", "dead"]),
+        OrderItem.material_status == "pending",
+        or_(
+            OrderItem.requisition_status.in_(["已报料", "供应商已排单"]),
+            has_receivable_requisition_item,
+        ),
+    ).order_by(
+        OrderItem.requisition_date.desc(),
+        OrderItem.created_at.desc(),
+        OrderItem.id.desc(),
+    )
+
+
+def _stock_replenishment_pending_query(query, *, db: Session, user: User):
+    """Apply the authoritative stock-replenishment incoming eligibility."""
+    query = query.where(
+        StockReplenishmentOrder.status.in_(("confirmed", "partially_stocked")),
+        StockReplenishmentOrderItem.stocked_quantity
+        < StockReplenishmentOrderItem.quantity,
+    )
+    visible_customer_ids = _visible_customer_ids(user, db)
+    if visible_customer_ids is not None:
+        query = query.where(
+            StockReplenishmentOrderItem.customer_id.in_(visible_customer_ids)
+        )
+    return query.order_by(
+        StockReplenishmentOrder.created_at.desc(),
+        StockReplenishmentOrderItem.id.desc(),
+    )
+
+
 def _require_order_item_customer_access(
     db: Session,
     *,
@@ -508,7 +556,10 @@ def _stock_replenishment_pending_rows(
     db: Session,
     *,
     user: User,
+    stock_replenishment_item_ids: set[int] | None = None,
 ) -> list[dict]:
+    if stock_replenishment_item_ids is not None and not stock_replenishment_item_ids:
+        return []
     query = (
         select(StockReplenishmentOrderItem, StockReplenishmentOrder)
         .join(
@@ -520,21 +571,12 @@ def _stock_replenishment_pending_rows(
             selectinload(StockReplenishmentOrderItem.customer),
             selectinload(StockReplenishmentOrderItem.product),
         )
-        .where(
-            StockReplenishmentOrder.status.in_(("confirmed", "partially_stocked")),
-            StockReplenishmentOrderItem.stocked_quantity
-            < StockReplenishmentOrderItem.quantity,
-        )
-        .order_by(
-            StockReplenishmentOrder.created_at.desc(),
-            StockReplenishmentOrderItem.id.desc(),
-        )
     )
-    visible_customer_ids = _visible_customer_ids(user, db)
-    if visible_customer_ids is not None:
+    if stock_replenishment_item_ids is not None:
         query = query.where(
-            StockReplenishmentOrderItem.customer_id.in_(visible_customer_ids)
+            StockReplenishmentOrderItem.id.in_(stock_replenishment_item_ids)
         )
+    query = _stock_replenishment_pending_query(query, db=db, user=user)
     rows: list[dict] = []
     for item, order in db.execute(query):
         customer_name = item.customer.name if item.customer else ""
@@ -795,12 +837,166 @@ def _all_expected_bom_material_received(
     return parent_received is not None
 
 
+def dashboard_pending_incoming_rows(db: Session, user: User) -> list[dict]:
+    """Return the pending-incoming projection consumed by the dashboard.
+
+    This deliberately shares the page's eligibility, customer scope, and
+    requisition-route selection while omitting page-only material, drawing,
+    location, and receipt-summary decoration.
+    """
+    query = (
+        select(
+            OrderItem.id.label("item_id"),
+            Order.id.label("order_id"),
+            Customer.id.label("customer_id"),
+            Customer.name.label("customer_name"),
+            Order.order_number,
+            Order.created_at,
+            Order.delivery_date,
+            func.coalesce(
+                OrderItem.snapshot_product_code,
+                Product.product_code,
+            ).label("product_code"),
+        )
+        .join(Order, Order.id == OrderItem.order_id)
+        .join(Product, Product.id == OrderItem.product_id)
+        .join(Customer, Customer.id == Order.customer_id)
+    )
+    visible_customer_ids = _visible_customer_ids(user, db)
+    if visible_customer_ids is not None:
+        query = query.where(Order.customer_id.in_(visible_customer_ids))
+    query = _pending_order_item_query(query)
+
+    base_rows = [dict(row._mapping) for row in db.execute(query)]
+    order_item_ids = [row["item_id"] for row in base_rows]
+    order_items_with_requisitions: set[int] = set()
+    active_by_order_item: dict[int, list[RequisitionItem]] = {}
+    if order_item_ids:
+        order_items_with_requisitions = set(
+            db.scalars(
+                select(RequisitionItem.order_item_id).where(
+                    RequisitionItem.order_item_id.in_(order_item_ids)
+                )
+            ).all()
+        )
+        for requisition_item in _active_requisition_components(
+            db,
+            order_item_ids=order_item_ids,
+        ):
+            active_by_order_item.setdefault(
+                requisition_item.order_item_id, []
+            ).append(requisition_item)
+
+    rows: list[dict] = []
+    for data in base_rows:
+        requisition_rows = active_by_order_item.get(data["item_id"], [])
+        if requisition_rows:
+            for requisition_item in requisition_rows:
+                component_data = dict(data)
+                component_data["order_item_id"] = data["item_id"]
+                component_data["requisition_item_id"] = requisition_item.id
+                component_data["item_id"] = f"r{requisition_item.id}"
+                component_data["product_code"] = (
+                    requisition_item.product_code_snapshot
+                    or data.get("product_code")
+                )
+                rows.append(component_data)
+        elif data["item_id"] not in order_items_with_requisitions:
+            rows.append(data)
+
+    history_order_ids = {
+        int(row["order_id"])
+        for row in rows
+        if is_history_order_number(row.get("order_number"))
+    }
+    registry = build_display_registry_for_order_ids(
+        db,
+        history_order_ids,
+    )
+    for row in rows:
+        display = (
+            registry.by_order_id.get(row["order_id"], row.get("order_number"))
+            if history_order_ids
+            else row.get("order_number")
+        )
+        row["order_number"] = display
+        row.pop("order_id", None)
+
+    stock_query = (
+        select(
+            StockReplenishmentOrderItem.id.label(
+                "stock_replenishment_item_id"
+            ),
+            StockReplenishmentOrderItem.customer_id,
+            Customer.name.label("customer_name"),
+            StockReplenishmentOrder.order_number,
+            StockReplenishmentOrder.created_at,
+            StockReplenishmentOrderItem.product_code_snapshot.label(
+                "product_code"
+            ),
+        )
+        .join(
+            StockReplenishmentOrder,
+            StockReplenishmentOrder.id
+            == StockReplenishmentOrderItem.replenishment_order_id,
+        )
+        .outerjoin(Customer, Customer.id == StockReplenishmentOrderItem.customer_id)
+    )
+    stock_query = _stock_replenishment_pending_query(
+        stock_query,
+        db=db,
+        user=user,
+    )
+    for result in db.execute(stock_query):
+        stock_row = dict(result._mapping)
+        stock_row["item_id"] = (
+            f"sr{stock_row['stock_replenishment_item_id']}"
+        )
+        stock_row["customer_name"] = stock_row.get("customer_name") or ""
+        stock_row["delivery_date"] = None
+        rows.append(stock_row)
+    return rows
+
+
 def _rows(
     db: Session,
     *,
     user: User,
     received_since: datetime | None = None,
+    selected_pending_routes: list[dict] | None = None,
 ) -> list[dict]:
+    if received_since is not None and selected_pending_routes is not None:
+        raise ValueError("received rows cannot use pending-route selection")
+
+    selected_route_ids: list[int | str] | None = None
+    selected_order_item_ids: set[int] | None = None
+    selected_ordinary_item_ids: set[int] | None = None
+    selected_requisition_item_ids: set[int] | None = None
+    selected_stock_item_ids: set[int] | None = None
+    if selected_pending_routes is not None:
+        selected_route_ids = [row["item_id"] for row in selected_pending_routes]
+        selected_order_item_ids = {
+            int(row["order_item_id"])
+            for row in selected_pending_routes
+            if row.get("order_item_id") is not None
+        }
+        selected_ordinary_item_ids = {
+            int(row["item_id"])
+            for row in selected_pending_routes
+            if isinstance(row.get("item_id"), int)
+        }
+        selected_order_item_ids.update(selected_ordinary_item_ids)
+        selected_requisition_item_ids = {
+            int(row["requisition_item_id"])
+            for row in selected_pending_routes
+            if row.get("requisition_item_id") is not None
+        }
+        selected_stock_item_ids = {
+            int(row["stock_replenishment_item_id"])
+            for row in selected_pending_routes
+            if row.get("stock_replenishment_item_id") is not None
+        }
+
     receiver = aliased(User)
     query = (
         select(
@@ -856,31 +1052,10 @@ def _rows(
     visible_customer_ids = _visible_customer_ids(user, db)
     if visible_customer_ids is not None:
         query = query.where(Order.customer_id.in_(visible_customer_ids))
+    if selected_order_item_ids is not None:
+        query = query.where(OrderItem.id.in_(selected_order_item_ids))
     if received_since is None:
-        has_receivable_requisition_item = (
-            select(RequisitionItem.id)
-            .where(
-                RequisitionItem.order_item_id == OrderItem.id,
-                RequisitionItem.status.in_(
-                    ["有效", "supplier_requisition_created"]
-                ),
-            )
-            .exists()
-        )
-        query = query.where(
-            Order.status.notin_(["cancelled", "dead"]),
-            OrderItem.material_status == "pending",
-            or_(
-                OrderItem.requisition_status.in_(
-                    ["已报料", "供应商已排单"]
-                ),
-                has_receivable_requisition_item,
-            ),
-        ).order_by(
-            OrderItem.requisition_date.desc(),
-            OrderItem.created_at.desc(),
-            OrderItem.id.desc(),
-        )
+        query = _pending_order_item_query(query)
     else:
         query = query.where(
             OrderItem.material_status == "received",
@@ -889,7 +1064,11 @@ def _rows(
             OrderItem.material_received_at.desc(),
             OrderItem.id.desc(),
         )
-    registry = build_display_registry(db)
+    registry = (
+        build_display_registry(db)
+        if selected_pending_routes is None
+        else None
+    )
     base_rows = []
     for row in db.execute(query):
         data = dict(row._mapping)
@@ -899,6 +1078,14 @@ def _rows(
             else data["quantity"]
         )
         base_rows.append(data)
+    if selected_pending_routes is not None:
+        history_order_ids = {
+            int(row["order_id"])
+            for row in base_rows
+            if is_history_order_number(row.get("order_number"))
+        }
+        registry = build_display_registry_for_order_ids(db, history_order_ids)
+    assert registry is not None
 
     rows = []
     received_component_order_item_ids: set[int] = set()
@@ -1031,8 +1218,14 @@ def _rows(
                 .order_by(RequisitionItem.order_item_id, RequisitionItem.id)
             ).all()
         for req in req_rows:
-            if received_since is None or req.status == "已入库":
-                component_requisition_items.setdefault(req.order_item_id, []).append(req)
+            if received_since is not None and req.status != "已入库":
+                continue
+            if (
+                selected_requisition_item_ids is not None
+                and req.id not in selected_requisition_item_ids
+            ):
+                continue
+            component_requisition_items.setdefault(req.order_item_id, []).append(req)
     component_types_by_requisition_item.update(
         _source_component_types(
             db,
@@ -1050,6 +1243,11 @@ def _rows(
         req_rows = component_requisition_items.get(data["item_id"], [])
         if req_rows:
             for req in req_rows:
+                if (
+                    selected_requisition_item_ids is not None
+                    and req.id not in selected_requisition_item_ids
+                ):
+                    continue
                 component = component_types_by_requisition_item.get(
                     req.id,
                     _component_kind(req.product_name_snapshot),
@@ -1075,6 +1273,11 @@ def _rows(
                 _apply_component_crease(component_data, component)
                 rows.append(component_data)
         elif data["item_id"] in order_items_with_requisitions:
+            continue
+        elif (
+            selected_ordinary_item_ids is not None
+            and data["item_id"] not in selected_ordinary_item_ids
+        ):
             continue
         else:
             rows.append(data)
@@ -1139,7 +1342,11 @@ def _rows(
         for drawing in drawings:
             latest_drawings.setdefault(drawing.product_id, drawing)
     stock_replenishment_rows = (
-        _stock_replenishment_pending_rows(db, user=user)
+        _stock_replenishment_pending_rows(
+            db,
+            user=user,
+            stock_replenishment_item_ids=selected_stock_item_ids,
+        )
         if received_since is None
         else []
     )
@@ -1196,6 +1403,13 @@ def _rows(
         row.update(summary)
         row["incoming_quantity"] = summary["remaining_quantity"]
     rows.extend(stock_replenishment_rows)
+    if selected_route_ids is not None:
+        rows_by_id = {row["item_id"]: row for row in rows}
+        rows = [
+            rows_by_id[item_id]
+            for item_id in selected_route_ids
+            if item_id in rows_by_id
+        ]
     return rows
 
 
@@ -2206,12 +2420,37 @@ def replenishment_receipt_locations(
 def pending_items(
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
+    page: Annotated[int | None, Query(ge=1)] = None,
+    page_size: Annotated[int | None, Query(ge=1, le=200)] = None,
 ) -> dict:
+    if page is None and page_size is None:
+        return {
+            "items": [
+                _incoming_row_response(row)
+                for row in _rows(db, user=user)
+            ]
+        }
+
+    eligible_routes = dashboard_pending_incoming_rows(db, user)
+    total = len(eligible_routes)
+    resolved_page_size = min(max(int(page_size or 25), 1), 200)
+    requested_page = max(int(page or 1), 1)
+    last_page = max(1, (total + resolved_page_size - 1) // resolved_page_size)
+    resolved_page = min(requested_page, last_page)
+    start = (resolved_page - 1) * resolved_page_size
+    selected_routes = eligible_routes[start : start + resolved_page_size]
     return {
         "items": [
             _incoming_row_response(row)
-            for row in _rows(db, user=user)
-        ]
+            for row in _rows(
+                db,
+                user=user,
+                selected_pending_routes=selected_routes,
+            )
+        ],
+        "total": total,
+        "page": resolved_page,
+        "page_size": resolved_page_size,
     }
 
 

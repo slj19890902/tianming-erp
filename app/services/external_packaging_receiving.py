@@ -5,7 +5,7 @@ import hashlib
 import json
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.models.customer import Customer
@@ -69,22 +69,42 @@ def _request_fingerprint(
     ).hexdigest()
 
 
+def _received_quantity_aggregate(
+    purchase_item_ids: set[int] | None = None,
+):
+    statement = select(
+        ExternalPackagingReceiptItem.purchase_item_id.label("purchase_item_id"),
+        func.sum(ExternalPackagingReceiptItem.received_quantity).label(
+            "received_quantity"
+        ),
+    ).group_by(ExternalPackagingReceiptItem.purchase_item_id)
+    if purchase_item_ids is not None:
+        statement = statement.where(
+            ExternalPackagingReceiptItem.purchase_item_id.in_(purchase_item_ids)
+        )
+    return statement
+
+
+def _received_quantity_at_formal_precision(value):
+    return func.round(func.coalesce(value, 0), 6)
+
+
 def _received_totals(
     db: Session, purchase_item_ids: set[int]
 ) -> dict[int, Decimal]:
     if not purchase_item_ids:
         return {}
+    aggregate = _received_quantity_aggregate(purchase_item_ids).subquery()
     rows = db.execute(
         select(
-            ExternalPackagingReceiptItem.purchase_item_id,
-            func.sum(ExternalPackagingReceiptItem.received_quantity),
+            aggregate.c.purchase_item_id,
+            _received_quantity_at_formal_precision(aggregate.c.received_quantity),
         )
-        .where(
-            ExternalPackagingReceiptItem.purchase_item_id.in_(purchase_item_ids)
-        )
-        .group_by(ExternalPackagingReceiptItem.purchase_item_id)
     ).all()
-    return {int(item_id): Decimal(quantity or 0) for item_id, quantity in rows}
+    return {
+        int(item_id): Decimal(str(quantity or 0)).quantize(SIX_PLACES)
+        for item_id, quantity in rows
+    }
 
 
 def _purchase_status(
@@ -193,6 +213,34 @@ def build_external_receiving_overview(
     )
     if visible_customer_ids is not None:
         query = query.where(Order.customer_id.in_(visible_customer_ids))
+    if not include_completed:
+        received_by_item = _received_quantity_aggregate().subquery()
+        has_any_item = (
+            select(ExternalPackagingPurchaseItem.id)
+            .where(
+                ExternalPackagingPurchaseItem.purchase_order_id
+                == ExternalPackagingPurchaseOrder.id
+            )
+            .exists()
+        )
+        has_pending_item = (
+            select(ExternalPackagingPurchaseItem.id)
+            .outerjoin(
+                received_by_item,
+                received_by_item.c.purchase_item_id
+                == ExternalPackagingPurchaseItem.id,
+            )
+            .where(
+                ExternalPackagingPurchaseItem.purchase_order_id
+                == ExternalPackagingPurchaseOrder.id,
+                ExternalPackagingPurchaseItem.purchase_quantity
+                > _received_quantity_at_formal_precision(
+                    received_by_item.c.received_quantity
+                ),
+            )
+            .exists()
+        )
+        query = query.where(or_(~has_any_item, has_pending_item))
     purchases = list(db.scalars(query).unique().all())
     order_ids = {purchase.batch.sales_order_id for purchase in purchases}
     sales_orders = {

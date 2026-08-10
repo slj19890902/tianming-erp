@@ -6,12 +6,10 @@
   <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <title>车间来料入库</title>
-  <script src="https://cdn.tailwindcss.com"></script>
   <script src="/static/assets/time-utils.js?v=95c91f9ded41"></script>
   <style>
-    /* v0.23.0 P0-2：Tailwind CDN 在弱网/首次扫码时可能加载较慢，
-       这里手写一份最基础的兜底样式，避免出现"只看到裸文字、没有任何 UI"的情况。
-       Tailwind 加载完成后会覆盖/补齐这些样式，二者不冲突。 */
+    /* 本地 Tailwind 资产加载失败时仍保留最基础的可操作样式，
+       避免出现"只看到裸文字、没有任何 UI"的情况。 */
     [hidden] { display: none !important; }
     html, body { max-width: 100%; overflow-x: hidden; }
     body { -webkit-tap-highlight-color: transparent; margin: 0; background: #f1f5f9; color: #0f172a; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
@@ -24,6 +22,7 @@
     .btn-primary { background: #1d4ed8; color: #fff; border: none; border-radius: 10px; min-height: 44px; padding: 0 16px; font-weight: 700; }
     .btn-danger { background: #b91c1c; color: #fff; border: none; border-radius: 10px; min-height: 44px; padding: 0 16px; font-weight: 700; }
   </style>
+  <link rel="stylesheet" href="/static/vendor/tailwindcss-3.4.17-incoming.min.css?v=1abd48e53bef">
 </head>
 <body class="min-h-screen bg-slate-100 text-slate-900">
   <header class="sticky top-0 z-20 border-b border-slate-300 bg-slate-900 px-4 py-3 text-white shadow">
@@ -63,6 +62,11 @@
       <button id="errorRetryButton" class="mt-3 min-h-12 w-full rounded-lg bg-red-700 px-5 text-base font-bold text-white active:bg-red-800">重新加载</button>
     </div>
     <section id="cardList" class="space-y-2"></section>
+    <nav id="pendingPager" hidden class="mb-3 flex items-center justify-between gap-2 rounded-xl bg-white p-2 shadow-sm">
+      <button id="pendingPreviousPage" class="min-h-12 rounded-lg bg-slate-200 px-4 font-bold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50">上一页</button>
+      <span id="pendingPageInfo" class="text-center text-sm font-semibold text-slate-600">第 1 / 1 页 · 共 0 条</span>
+      <button id="pendingNextPage" class="min-h-12 rounded-lg bg-slate-200 px-4 font-bold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50">下一页</button>
+    </nav>
     <div id="emptyState" hidden class="rounded-xl bg-white p-8 text-center shadow-sm">
       <p class="text-xl font-bold text-slate-700">当前没有记录</p>
       <p class="mt-2 text-slate-500">点击右上角刷新重新检查。</p>
@@ -102,6 +106,12 @@
     const state = {
       activeTab: "pending",
       pending: [],
+      pendingTotal: 0,
+      pendingPage: 1,
+      pendingRetryPage: 1,
+      pendingPageSize: 25,
+      pendingLoading: false,
+      pendingError: "",
       received: [],
       receivedLoaded: false,
       receivedLoading: false,
@@ -117,12 +127,45 @@
       receiveIdempotencyKeys: new Map(),
       revertSubmitting: false,
       expandedIds: new Set(),
+      authGeneration: 0,
     };
 
     const $ = (id) => document.getElementById(id);
     const requestControllers = new Map();
     const hasPermission = (code) => state.user?.role === "admin" || state.permissions.includes(code);
     const canOperate = () => hasPermission("incoming.execute");
+
+    function resetAuthenticatedIncomingState({abortRequests = false} = {}) {
+      if (abortRequests) {
+        for (const controller of requestControllers.values()) controller.abort();
+        requestControllers.clear();
+      }
+      state.pending = [];
+      state.pendingTotal = 0;
+      state.pendingPage = 1;
+      state.pendingRetryPage = 1;
+      state.pendingLoading = false;
+      state.pendingError = "";
+      state.received = [];
+      state.receivedLoaded = false;
+      state.receivedLoading = false;
+      state.receivedError = "";
+      state.locations = [];
+      state.locationsLoading = false;
+      state.receiptLocations = [];
+      state.receiptLocationsLoading = false;
+      state.busyItemIds.clear();
+      state.receiveIdempotencyKeys.clear();
+      state.revertingItemId = null;
+      state.revertSubmitting = false;
+      state.expandedIds = new Set();
+      $("pendingCount").textContent = "0";
+      $("receivedCount").textContent = "0";
+      $("cardList").innerHTML = "";
+      $("pendingPager").hidden = true;
+      $("emptyState").hidden = true;
+      $("loadingState").hidden = true;
+    }
 
     function beginLatestRequest(key) {
       requestControllers.get(key)?.abort();
@@ -218,6 +261,8 @@
         }
       }
       if (response.status === 401) {
+        resetAuthenticatedIncomingState({abortRequests: true});
+        state.authGeneration += 1;
         state.user = null;
         state.permissions = [];
         $("authNotice").hidden = false;
@@ -239,10 +284,16 @@
 
     async function checkAuth() {
       try {
+        const previousUserId = state.user?.id ?? null;
         const data = await api("/api/auth/me");
+        if (previousUserId !== null && String(previousUserId) !== String(data.user?.id ?? "")) {
+          resetAuthenticatedIncomingState({abortRequests: true});
+        }
+        state.authGeneration += 1;
         state.user = data.user;
         state.permissions = data.permissions || [];
         if (!hasPermission("incoming.view")) {
+          resetAuthenticatedIncomingState({abortRequests: true});
           $("authNotice").textContent = "当前账号没有来料入库查看权限，请联系管理员。";
           $("authNotice").hidden = false;
           return false;
@@ -442,11 +493,26 @@
     }
     function render() {
       const items = state[state.activeTab];
-      $("pendingCount").textContent = state.pending.length;
+      const pendingPageCount = Math.max(1, Math.ceil(Number(state.pendingTotal || 0) / Number(state.pendingPageSize || 25)));
+      $("pendingCount").textContent = state.pendingTotal;
       $("receivedCount").textContent = state.received.length;
+      $("pendingPager").hidden = state.activeTab !== "pending";
+      $("pendingPageInfo").textContent = `第 ${state.pendingPage} / ${pendingPageCount} 页 · 共 ${state.pendingTotal} 条`;
+      $("pendingPreviousPage").disabled = state.pendingLoading || state.pendingPage <= 1;
+      $("pendingNextPage").disabled = state.pendingLoading || state.pendingPage >= pendingPageCount;
+      if (state.activeTab === "pending") {
+        $("loadingState").hidden = !state.pendingLoading || state.pending.length > 0;
+        $("errorState").hidden = !state.pendingError;
+        if (state.pendingError) $("errorMessage").textContent = state.pendingError;
+      } else {
+        $("loadingState").hidden = true;
+        if (state.user) $("errorState").hidden = true;
+      }
+      const pendingBusy = state.activeTab === "pending" && state.pendingLoading && !items.length;
+      const pendingFailed = state.activeTab === "pending" && state.pendingError && !items.length;
       const receivedPending = state.activeTab === "received" && state.receivedLoading && !items.length;
       const receivedFailed = state.activeTab === "received" && state.receivedError && !items.length;
-      $("emptyState").hidden = items.length !== 0 || receivedPending || receivedFailed;
+      $("emptyState").hidden = items.length !== 0 || pendingBusy || pendingFailed || receivedPending || receivedFailed;
       if (receivedPending) {
         $("cardList").innerHTML = '<div class="empty">正在读取今日已收记录…</div>';
       } else if (receivedFailed) {
@@ -457,34 +523,71 @@
       applyIncomingPrimarySpecLayout(items);
     }
 
-    async function loadPending() {
+    async function loadPending({page = state.pendingPage || 1} = {}) {
+      const requestedPage = Math.max(1, Number(page) || 1);
+      const pageSize = Math.max(1, Number(state.pendingPageSize) || 25);
+      const authGeneration = Number(state.authGeneration || 0);
+      const userId = String(state.user?.id ?? "");
       const controller = beginLatestRequest("incoming:pending");
-      $("loadingState").hidden = false;
+      state.pendingRetryPage = requestedPage;
+      state.pendingLoading = true;
+      state.pendingError = "";
       $("errorState").hidden = true;
-      $("cardList").innerHTML = "";
-      $("emptyState").hidden = true;
+      if (!state.pending.length) $("loadingState").hidden = false;
+      render();
       try {
-        const pending = await api("/api/incoming/pending", {signal: controller.signal});
+        const pending = await api(`/api/incoming/pending?page=${requestedPage}&page_size=${pageSize}`, {signal: controller.signal});
         if (!isLatestRequest("incoming:pending", controller)) return false;
-        state.pending = pending.items.map(item => ({...item,incoming_quantity:Number(item.remaining_quantity ?? item.incoming_quantity ?? item.requisition_qty ?? item.quantity ?? 0),resolution_action:"",resolution_reason:"",receipt_location_id:Number(item.default_location_id)||null,surplus_location_id:null}));
+        if (Number(state.authGeneration || 0) !== authGeneration || String(state.user?.id ?? "") !== userId) return false;
+        const previousPage = Number(state.pendingPage || 1);
+        const rows = Array.isArray(pending.items) ? pending.items : [];
+        const resolvedPage = Math.max(1, Number(pending.page) || requestedPage);
+        const resolvedPageSize = Math.max(1, Number(pending.page_size) || pageSize);
+        const total = Number.isFinite(Number(pending.total)) ? Math.max(0, Number(pending.total)) : rows.length;
+        state.pending = rows.map(item => ({...item,incoming_quantity:Number(item.remaining_quantity ?? item.incoming_quantity ?? item.requisition_qty ?? item.quantity ?? 0),resolution_action:"",resolution_reason:"",receipt_location_id:Number(item.default_location_id)||null,surplus_location_id:null}));
+        state.pendingTotal = total;
+        state.pendingPage = resolvedPage;
+        state.pendingRetryPage = resolvedPage;
+        state.pendingPageSize = resolvedPageSize;
         if (state.pending.some(item => item.source_type === "stock_replenishment")) ensureReceiptLocations();
-        state.expandedIds = new Set();
+        const currentIds = new Set(state.pending.map(item => String(item.history_key || item.item_id)));
+        state.expandedIds = resolvedPage === previousPage
+          ? new Set([...state.expandedIds].filter(itemId => currentIds.has(String(itemId))))
+          : new Set();
+        state.pendingError = "";
+        $("errorState").hidden = true;
         render();
         return true;
       } catch (error) {
         if (error?.name === "AbortError" || !isLatestRequest("incoming:pending", controller)) return false;
+        if (Number(state.authGeneration || 0) !== authGeneration || String(state.user?.id ?? "") !== userId) return false;
         if (error?.status === 401) {
+          state.pendingError = "";
           $("errorState").hidden = true;
           $("authNotice").hidden = false;
         } else {
-          $("errorMessage").textContent = toChineseMessage(error);
+          state.pendingError = toChineseMessage(error);
+          $("errorMessage").textContent = state.pendingError;
           $("errorState").hidden = false;
         }
+        render();
         return false;
       } finally {
-        if (isLatestRequest("incoming:pending", controller)) $("loadingState").hidden = true;
+        if (isLatestRequest("incoming:pending", controller)) {
+          state.pendingLoading = false;
+          $("loadingState").hidden = true;
+          render();
+        }
         finishLatestRequest("incoming:pending", controller);
       }
+    }
+
+    async function changePendingPage(nextPage) {
+      if (state.pendingLoading) return false;
+      const pageCount = Math.max(1, Math.ceil(Number(state.pendingTotal || 0) / Number(state.pendingPageSize || 25)));
+      const targetPage = Math.min(pageCount, Math.max(1, Number(nextPage) || 1));
+      if (targetPage === state.pendingPage) return true;
+      return loadPending({page: targetPage});
     }
 
     async function loadReceived({force = false} = {}) {
@@ -553,11 +656,11 @@
 
     async function loadData() {
       if (state.activeTab === "received") return loadReceived({force: true});
-      return loadPending();
+      return loadPending({page: state.pendingPage});
     }
 
     async function refreshAfterIncomingWrite() {
-      const tasks = [loadPending()];
+      const tasks = [loadPending({page: state.pendingPage})];
       if (state.receivedLoaded) tasks.push(loadReceived({force: true}));
       const results = await Promise.all(tasks);
       return results[0] === true;
@@ -793,7 +896,7 @@
           body: JSON.stringify({}),
         });
         showToast("已撤回，任务返回待收料");
-        await loadData();
+        await refreshAfterIncomingWrite();
       } catch (error) {
         showToast(toChineseMessage(error), true);
       } finally {
@@ -807,11 +910,16 @@
 
     async function retryCurrentView() {
       if (!state.user && !(await checkAuth())) return;
+      if (state.activeTab === "pending" && state.pendingError) {
+        return loadPending({page: state.pendingRetryPage});
+      }
       await loadData();
     }
 
     $("refreshButton").addEventListener("click", retryCurrentView);
     $("errorRetryButton").addEventListener("click", retryCurrentView);
+    $("pendingPreviousPage").addEventListener("click", () => changePendingPage(state.pendingPage - 1));
+    $("pendingNextPage").addEventListener("click", () => changePendingPage(state.pendingPage + 1));
     $("cancelRevert").addEventListener("click", () => {
       $("revertModal").hidden = true;
       state.revertingItemId = null;

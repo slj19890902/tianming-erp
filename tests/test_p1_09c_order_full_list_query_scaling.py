@@ -25,6 +25,7 @@ from app.services.requisition_quantities import DEFAULT_CUTTING_MODE
 
 
 PAGE_CONTEXT_KEYS = {
+    "active_holds_by_item_id",
     "finished_reservations_by_item_id",
     "external_purchase_summaries_by_order_id",
     "frozen_material_costs_by_item_id",
@@ -97,11 +98,17 @@ def full_list_app(tmp_path: Path):
         )
         db.add(product)
         db.flush()
+        order_ids: dict[int, int] = {}
         for order_index in range(30):
+            customer_po = f"PO-FULL-{order_index:03d}"
+            if order_index < 8:
+                customer_po = "PO-FULL-GROUP-LARGE"
+            elif order_index == 8:
+                customer_po = "PO-FULL-GROUP-SMALL"
             order = Order(
                 order_number=f"TM-FULL-{order_index:03d}",
                 customer_id=customer.id,
-                customer_po=f"PO-FULL-{order_index:03d}",
+                customer_po=customer_po,
                 order_date=date(2026, 8, 1),
                 delivery_date=date(2026, 8, 20),
                 status="pending_confirmation",
@@ -110,7 +117,9 @@ def full_list_app(tmp_path: Path):
             )
             db.add(order)
             db.flush()
-            for item_index in range(2):
+            order_ids[order_index] = int(order.id)
+            item_count = 20 if order_index == 9 else 2
+            for item_index in range(item_count):
                 db.add(
                     OrderItem(
                         order_id=order.id,
@@ -141,6 +150,8 @@ def full_list_app(tmp_path: Path):
         db.commit()
 
     app = FastAPI()
+    app.state.full_list_customer_id = int(customer.id)
+    app.state.full_list_order_ids = order_ids
     app.include_router(orders_api.router, prefix="/api/orders")
     current_user = {"value": _user("admin")}
 
@@ -241,3 +252,147 @@ def test_full_list_select_count_is_bounded_by_page_queries(full_list_app) -> Non
 
     assert counts[25] <= 45
     assert counts[25] <= counts[5] + 2
+
+
+def _count_selects(engine, request) -> tuple[int, object]:
+    selects = 0
+
+    def count_sql(
+        _connection,
+        _cursor,
+        statement,
+        _parameters,
+        _context,
+        _many,
+    ):
+        nonlocal selects
+        if statement.lstrip().upper().startswith(("SELECT", "WITH")):
+            selects += 1
+
+    event.listen(engine, "before_cursor_execute", count_sql)
+    try:
+        response = request()
+    finally:
+        event.remove(engine, "before_cursor_execute", count_sql)
+    return selects, response
+
+
+def _group_detail_request(client: TestClient, app: FastAPI, *, large: bool):
+    order_ids = app.state.full_list_order_ids
+    index = 0 if large else 8
+    return client.get(
+        "/api/orders/group-detail",
+        params={
+            "customer_id": app.state.full_list_customer_id,
+            "anchor_order_id": order_ids[index],
+            "customer_po": (
+                "PO-FULL-GROUP-LARGE" if large else "PO-FULL-GROUP-SMALL"
+            ),
+            "scope": "active",
+        },
+    )
+
+
+def test_group_detail_batch_context_is_byte_equivalent_to_legacy_fallbacks(
+    full_list_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, _engine, current_user = full_list_app
+    current_user["value"] = _user("admin")
+    original = orders_api._order_response
+
+    with TestClient(app) as client:
+        optimized = _group_detail_request(client, app, large=True)
+
+        def legacy_order_response(order, user, **kwargs):
+            for key in PAGE_CONTEXT_KEYS:
+                kwargs.pop(key, None)
+            return original(order, user, **kwargs)
+
+        monkeypatch.setattr(orders_api, "_order_response", legacy_order_response)
+        legacy = _group_detail_request(client, app, large=True)
+
+    assert optimized.status_code == legacy.status_code == 200
+    assert optimized.content == legacy.content
+    assert len(optimized.json()["orders"]) == 8
+
+
+def test_group_detail_select_count_does_not_scale_per_order(full_list_app) -> None:
+    app, engine, current_user = full_list_app
+    current_user["value"] = _user("admin")
+    with TestClient(app) as client:
+        small_count, small = _count_selects(
+            engine,
+            lambda: _group_detail_request(client, app, large=False),
+        )
+        large_count, large = _count_selects(
+            engine,
+            lambda: _group_detail_request(client, app, large=True),
+        )
+
+    assert small.status_code == large.status_code == 200
+    assert len(small.json()["orders"]) == 1
+    assert len(large.json()["orders"]) == 8
+    assert large_count <= small_count + 2
+
+
+def test_single_detail_select_count_does_not_scale_per_item(full_list_app) -> None:
+    app, engine, current_user = full_list_app
+    current_user["value"] = _user("admin")
+    order_ids = app.state.full_list_order_ids
+    with TestClient(app) as client:
+        small_count, small = _count_selects(
+            engine,
+            lambda: client.get(f"/api/orders/{order_ids[10]}"),
+        )
+        large_count, large = _count_selects(
+            engine,
+            lambda: client.get(f"/api/orders/{order_ids[9]}"),
+        )
+
+    assert small.status_code == large.status_code == 200
+    assert len(small.json()["items"]) == 2
+    assert len(large.json()["items"]) == 20
+    assert large_count <= small_count + 2
+
+
+def test_active_summary_reuses_candidate_order_rows(full_list_app) -> None:
+    app, engine, current_user = full_list_app
+    current_user["value"] = _user("admin")
+    statements: list[str] = []
+
+    def capture_sql(
+        _connection,
+        _cursor,
+        statement,
+        _parameters,
+        _context,
+        _many,
+    ):
+        if statement.lstrip().upper().startswith(("SELECT", "WITH")):
+            statements.append(" ".join(statement.split()))
+
+    event.listen(engine, "before_cursor_execute", capture_sql)
+    try:
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/orders",
+                params={
+                    "scope": "active",
+                    "detail_level": "summary",
+                    "page": 1,
+                    "page_size": 5,
+                },
+            )
+    finally:
+        event.remove(engine, "before_cursor_execute", capture_sql)
+
+    assert response.status_code == 200, response.text
+    order_row_loads = [
+        statement
+        for statement in statements
+        if "FROM sales_orders" in statement
+        and "WHERE sales_orders.id IN" in statement
+        and "sales_orders.order_number" in statement
+    ]
+    assert len(order_row_loads) == 1

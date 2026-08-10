@@ -7,7 +7,7 @@ import json
 from math import ceil
 from typing import Literal, Sequence
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import case, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -2253,6 +2253,86 @@ def _task_query(db: Session, allowed_customer_ids: set[int] | None):
     return query
 
 
+def _filtered_task_query(
+    db: Session,
+    *,
+    allowed_customer_ids: set[int] | None,
+    status: str | None,
+):
+    query = _task_query(db, allowed_customer_ids).where(
+        Order.status.in_(MUTABLE_ORDER_STATUSES),
+        OrderItem.is_force_closed.is_(False),
+    )
+    if status:
+        query = query.where(ProductionTask.status == status)
+    return query
+
+
+def list_production_task_dashboard_rows(
+    db: Session,
+    *,
+    allowed_customer_ids: set[int] | None,
+    status: str = PENDING,
+) -> list[dict]:
+    """Return the exact pending-task identities needed by the dashboard.
+
+    The production page deliberately keeps using :func:`list_production_tasks`.
+    This read-only projection shares that function's customer, mutable-order,
+    force-close and task-status filters, but avoids every BOM, material,
+    printing, inventory and location serializer used by the full page payload.
+
+    ``delivery_date`` and ``created_at`` remain ``None`` because the legacy full
+    task payload does not expose either field.  Keeping those values unchanged
+    preserves the dashboard todo ordering and message contract while the SQL
+    ordering continues to use the order delivery date exactly as before.
+    """
+
+    component_code = SalesOrderItemBomComponent.snapshot_component_product_code
+    parent_code = func.coalesce(
+        func.nullif(OrderItem.snapshot_product_code, ""),
+        Product.product_code,
+    )
+    product_code = case(
+        (
+            ProductionTask.sales_order_item_bom_component_id.is_not(None),
+            component_code,
+        ),
+        else_=parent_code,
+    ).label("product_code")
+    query = (
+        _filtered_task_query(
+            db,
+            allowed_customer_ids=allowed_customer_ids,
+            status=status,
+        )
+        .outerjoin(
+            SalesOrderItemBomComponent,
+            SalesOrderItemBomComponent.id
+            == ProductionTask.sales_order_item_bom_component_id,
+        )
+        .with_only_columns(
+            ProductionTask.id.label("id"),
+            Order.customer_id.label("customer_id"),
+            Customer.name.label("customer_name"),
+            Order.order_number.label("order_number"),
+            product_code,
+        )
+        .order_by(Order.delivery_date, Order.id, OrderItem.id, ProductionTask.id)
+    )
+    return [
+        {
+            "id": int(row.id),
+            "customer_id": int(row.customer_id),
+            "customer_name": row.customer_name,
+            "order_number": row.order_number,
+            "product_code": row.product_code,
+            "delivery_date": None,
+            "created_at": None,
+        }
+        for row in db.execute(query).mappings().all()
+    ]
+
+
 def _item_product_snapshot(item: OrderItem, product: Product) -> dict:
     is_die_cut = product.box_category == "die_cut"
     mold = product.mold_tool if is_die_cut else None
@@ -2588,14 +2668,17 @@ def list_production_tasks(
     *,
     allowed_customer_ids: set[int] | None,
     status: str | None = None,
+    page: int | None = None,
+    page_size: int | None = None,
 ) -> list[dict]:
-    query = _task_query(db, allowed_customer_ids).where(
-        Order.status.in_(MUTABLE_ORDER_STATUSES),
-        OrderItem.is_force_closed.is_(False),
-    )
-    if status:
-        query = query.where(ProductionTask.status == status)
-    rows = db.execute(query.order_by(Order.delivery_date, Order.id, OrderItem.id)).all()
+    query = _filtered_task_query(
+        db,
+        allowed_customer_ids=allowed_customer_ids,
+        status=status,
+    ).order_by(Order.delivery_date, Order.id, OrderItem.id, ProductionTask.id)
+    if page is not None and page_size is not None:
+        query = query.offset((page - 1) * page_size).limit(page_size)
+    rows = db.execute(query).all()
     pending_context = (
         _pending_production_read_context(db, rows)
         if status == PENDING
@@ -2735,6 +2818,25 @@ def list_production_tasks(
             ),
         })
     return result
+
+
+def count_production_tasks(
+    db: Session,
+    *,
+    allowed_customer_ids: set[int] | None,
+    status: str | None = None,
+) -> int:
+    task_ids = (
+        _filtered_task_query(
+            db,
+            allowed_customer_ids=allowed_customer_ids,
+            status=status,
+        )
+        .with_only_columns(ProductionTask.id)
+        .order_by(None)
+        .subquery()
+    )
+    return int(db.scalar(select(func.count()).select_from(task_ids)) or 0)
 
 
 def _completion_rows(

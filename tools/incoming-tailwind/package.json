@@ -1,0 +1,11 @@
+{
+  "name": "tianming-erp-incoming-tailwind",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "build": "tailwindcss -c ./tailwind.config.cjs -i ./src/incoming.css -o ../../static/vendor/tailwindcss-3.4.17-incoming.min.css --minify"
+  },
+  "devDependencies": {
+    "tailwindcss": "3.4.17"
+  }
+}

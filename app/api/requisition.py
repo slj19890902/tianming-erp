@@ -7,6 +7,7 @@ from contextlib import nullcontext
 from datetime import date, datetime
 from decimal import Decimal
 from threading import Lock
+from typing import Annotated
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -73,6 +74,7 @@ from app.models.warehouse_inventory import (
 )
 from app.services.history_orders import (
     build_display_registry,
+    build_display_registry_for_order_ids,
     display_order_number,
     is_history_order_number,
 )
@@ -1055,7 +1057,13 @@ class _PendingRequisitionReadContext:
     line.  This is deliberately request-local rather than a cross-request cache.
     """
 
-    def __init__(self, db: Session, rows: list[tuple]) -> None:
+    def __init__(
+        self,
+        db: Session,
+        rows: list[tuple],
+        *,
+        include_display_facts: bool = True,
+    ) -> None:
         item_ids = [item.id for item, *_ in rows]
         self.material_by_id: dict[int, Material] = {}
         self._bom_snapshots_by_item_id: dict[
@@ -1086,21 +1094,22 @@ class _PendingRequisitionReadContext:
         if not item_ids:
             return
 
-        material_ids = {
-            int(item.material_id) for item, *_ in rows if item.material_id
-        }
-        material_ids.update(
-            int(product.material_id)
-            for _item, _order, _customer, product in rows
-            if product.material_id
-        )
-        if material_ids:
-            self.material_by_id = {
-                material.id: material
-                for material in db.scalars(
-                    select(Material).where(Material.id.in_(material_ids))
-                ).all()
+        if include_display_facts:
+            material_ids = {
+                int(item.material_id) for item, *_ in rows if item.material_id
             }
+            material_ids.update(
+                int(product.material_id)
+                for _item, _order, _customer, product in rows
+                if product.material_id
+            )
+            if material_ids:
+                self.material_by_id = {
+                    material.id: material
+                    for material in db.scalars(
+                        select(Material).where(Material.id.in_(material_ids))
+                    ).all()
+                }
 
         bom_snapshots = db.scalars(
             select(SalesOrderItemBomComponent)
@@ -1320,114 +1329,115 @@ class _PendingRequisitionReadContext:
                 if order_item_id is not None
             )
 
-        self._posted_completion_item_ids = set(
-            int(item_id)
-            for item_id in db.scalars(
-                select(ProductionCompletion.order_item_id).where(
-                    ProductionCompletion.order_item_id.in_(item_ids),
-                    ProductionCompletion.status == "posted",
+        if include_display_facts:
+            self._posted_completion_item_ids = set(
+                int(item_id)
+                for item_id in db.scalars(
+                    select(ProductionCompletion.order_item_id).where(
+                        ProductionCompletion.order_item_id.in_(item_ids),
+                        ProductionCompletion.status == "posted",
+                    )
+                ).all()
+            )
+
+            customer_ids = {
+                int(order.customer_id) for _item, order, *_ in rows
+            }
+            product_ids = {
+                int(product.id) for _item, _order, _customer, product in rows
+            }
+            finished_lots = db.scalars(
+                select(InventoryLot)
+                .options(
+                    selectinload(InventoryLot.finished_detail),
+                    selectinload(InventoryLot.location),
+                )
+                .join(
+                    FinishedGoodsInventoryDetail,
+                    FinishedGoodsInventoryDetail.inventory_lot_id == InventoryLot.id,
+                )
+                .where(
+                    InventoryLot.inventory_type == "finished",
+                    InventoryLot.status == "active",
+                    InventoryLot.quantity_available > 0,
+                    FinishedGoodsInventoryDetail.product_id.in_(product_ids),
+                    FinishedGoodsInventoryDetail.owner_customer_id.in_(customer_ids),
+                    FinishedGoodsInventoryDetail.is_general.is_(False),
                 )
             ).all()
-        )
-
-        customer_ids = {
-            int(order.customer_id) for _item, order, *_ in rows
-        }
-        product_ids = {
-            int(product.id) for _item, _order, _customer, product in rows
-        }
-        finished_lots = db.scalars(
-            select(InventoryLot)
-            .options(
-                selectinload(InventoryLot.finished_detail),
-                selectinload(InventoryLot.location),
-            )
-            .join(
-                FinishedGoodsInventoryDetail,
-                FinishedGoodsInventoryDetail.inventory_lot_id == InventoryLot.id,
-            )
-            .where(
-                InventoryLot.inventory_type == "finished",
-                InventoryLot.status == "active",
-                InventoryLot.quantity_available > 0,
-                FinishedGoodsInventoryDetail.product_id.in_(product_ids),
-                FinishedGoodsInventoryDetail.owner_customer_id.in_(customer_ids),
-                FinishedGoodsInventoryDetail.is_general.is_(False),
-            )
-        ).all()
-        finished_by_key: dict[tuple[int, int, str], list[InventoryLot]] = {}
-        for lot in sorted(finished_lots, key=inventory_fifo_sort_key):
-            detail = lot.finished_detail
-            if detail is None or detail.owner_customer_id is None:
-                continue
-            key = (
-                int(detail.owner_customer_id),
-                int(detail.product_id),
-                (detail.inventory_code_snapshot or "").strip(),
-            )
-            finished_by_key.setdefault(key, []).append(lot)
-
-        semi_lots = db.scalars(
-            select(InventoryLot)
-            .options(
-                selectinload(InventoryLot.semi_finished_detail),
-                selectinload(InventoryLot.location),
-                selectinload(InventoryLot.allowed_products),
-            )
-            .join(
-                SemiFinishedInventoryDetail,
-                SemiFinishedInventoryDetail.inventory_lot_id == InventoryLot.id,
-            )
-            .where(
-                InventoryLot.inventory_type == "semi_finished",
-                InventoryLot.status == "active",
-                InventoryLot.quantity_available > 0,
-                SemiFinishedInventoryDetail.owner_customer_id.in_(customer_ids),
-            )
-        ).all()
-        semi_by_customer_component: dict[
-            tuple[int, str], list[InventoryLot]
-        ] = {}
-        for lot in sorted(semi_lots, key=inventory_fifo_sort_key):
-            detail = lot.semi_finished_detail
-            if detail is None or detail.owner_customer_id is None:
-                continue
-            semi_by_customer_component.setdefault(
-                (int(detail.owner_customer_id), detail.component_type), []
-            ).append(lot)
-
-        for item, order, _customer, product in rows:
-            expected_code = (
-                item.snapshot_product_code or product.product_code or ""
-            ).strip()
-            finished_candidates = finished_by_key.get(
-                (int(order.customer_id), int(product.id), expected_code), []
-            )
-            if (
-                item.requisition_status == "未报料"
-                and item.id not in self._posted_completion_item_ids
-                and finished_candidates
-            ):
-                self._finished_lots_by_item_id[item.id] = finished_candidates
-                complex_item_ids.add(item.id)
-
-            for spec in _semi_component_specs_for_requisition(item, product):
-                component = str(spec["component_type"])
-                safe_lots = self._safe_semi_lots(
-                    item=item,
-                    order=order,
-                    product=product,
-                    component=component,
-                    spec=spec,
-                    candidate_lots=semi_by_customer_component.get(
-                        (int(order.customer_id), component), []
-                    ),
+            finished_by_key: dict[tuple[int, int, str], list[InventoryLot]] = {}
+            for lot in sorted(finished_lots, key=inventory_fifo_sort_key):
+                detail = lot.finished_detail
+                if detail is None or detail.owner_customer_id is None:
+                    continue
+                key = (
+                    int(detail.owner_customer_id),
+                    int(detail.product_id),
+                    (detail.inventory_code_snapshot or "").strip(),
                 )
-                if safe_lots:
-                    self._safe_semi_lots_by_item_component[
-                        (item.id, component)
-                    ] = safe_lots
+                finished_by_key.setdefault(key, []).append(lot)
+
+            semi_lots = db.scalars(
+                select(InventoryLot)
+                .options(
+                    selectinload(InventoryLot.semi_finished_detail),
+                    selectinload(InventoryLot.location),
+                    selectinload(InventoryLot.allowed_products),
+                )
+                .join(
+                    SemiFinishedInventoryDetail,
+                    SemiFinishedInventoryDetail.inventory_lot_id == InventoryLot.id,
+                )
+                .where(
+                    InventoryLot.inventory_type == "semi_finished",
+                    InventoryLot.status == "active",
+                    InventoryLot.quantity_available > 0,
+                    SemiFinishedInventoryDetail.owner_customer_id.in_(customer_ids),
+                )
+            ).all()
+            semi_by_customer_component: dict[
+                tuple[int, str], list[InventoryLot]
+            ] = {}
+            for lot in sorted(semi_lots, key=inventory_fifo_sort_key):
+                detail = lot.semi_finished_detail
+                if detail is None or detail.owner_customer_id is None:
+                    continue
+                semi_by_customer_component.setdefault(
+                    (int(detail.owner_customer_id), detail.component_type), []
+                ).append(lot)
+
+            for item, order, _customer, product in rows:
+                expected_code = (
+                    item.snapshot_product_code or product.product_code or ""
+                ).strip()
+                finished_candidates = finished_by_key.get(
+                    (int(order.customer_id), int(product.id), expected_code), []
+                )
+                if (
+                    item.requisition_status == "未报料"
+                    and item.id not in self._posted_completion_item_ids
+                    and finished_candidates
+                ):
+                    self._finished_lots_by_item_id[item.id] = finished_candidates
                     complex_item_ids.add(item.id)
+
+                for spec in _semi_component_specs_for_requisition(item, product):
+                    component = str(spec["component_type"])
+                    safe_lots = self._safe_semi_lots(
+                        item=item,
+                        order=order,
+                        product=product,
+                        component=component,
+                        spec=spec,
+                        candidate_lots=semi_by_customer_component.get(
+                            (int(order.customer_id), component), []
+                        ),
+                    )
+                    if safe_lots:
+                        self._safe_semi_lots_by_item_component[
+                            (item.id, component)
+                        ] = safe_lots
+                        complex_item_ids.add(item.id)
 
         self._ordinary_item_ids = set(item_ids) - {
             int(item_id) for item_id in complex_item_ids if item_id is not None
@@ -1438,6 +1448,14 @@ class _PendingRequisitionReadContext:
 
     def material_for(self, item: OrderItem) -> Material | None:
         return self.material_by_id.get(int(item.material_id)) if item.material_id else None
+
+    def semi_reserved_piece_qty(self, item_id: int, component: str) -> int:
+        return int(
+            self._semi_reserved_by_item_component.get(
+                (int(item_id), (component or "whole").strip().lower()),
+                0,
+            )
+        )
 
     def bom_snapshots_for(
         self, item: OrderItem
@@ -6582,13 +6600,13 @@ def release_requisition_hold(
     return _requisition_hold_dict(db, hold)
 
 
-@router.get("/pending")
-def pending_requisitions(
-    db: Session = Depends(get_db),
-    _user: User = Depends(can_read),
-) -> dict:
-    user = _user
-    registry = build_display_registry(db)
+def _pending_requisition_candidates(
+    db: Session,
+    user: User,
+    *,
+    merge_group_ids: set[int] | None = None,
+    order_item_ids: set[int] | None = None,
+) -> tuple[list[Requisition], list[tuple[OrderItem, Order, Customer, Product]]]:
     allowed = _allowed_customer_ids(user, db)
     merge_group_query = (
         select(Requisition)
@@ -6596,6 +6614,10 @@ def pending_requisitions(
         .where(Requisition.status == "merged_pending")
         .order_by(Requisition.created_at.desc(), Requisition.id.desc())
     )
+    if merge_group_ids is not None:
+        merge_group_query = merge_group_query.where(
+            Requisition.id.in_(merge_group_ids)
+        )
     merge_groups = db.scalars(
         _apply_requisition_scope(merge_group_query, user, db)
     ).all()
@@ -6633,9 +6655,272 @@ def pending_requisitions(
         base_query = base_query.where(~OrderItem.id.in_(merged_order_item_ids))
     if held_order_item_ids:
         base_query = base_query.where(~OrderItem.id.in_(held_order_item_ids))
+    if order_item_ids is not None:
+        base_query = base_query.where(OrderItem.id.in_(order_item_ids))
     if allowed is not None:
         base_query = base_query.where(Order.customer_id.in_(allowed))
-    rows = db.execute(base_query.order_by(OrderItem.created_at.desc(), OrderItem.id.desc())).all()
+    rows = db.execute(
+        base_query.order_by(OrderItem.created_at.desc(), OrderItem.id.desc())
+    ).all()
+    return merge_groups, rows
+
+
+def _pending_merge_member_rows(
+    db: Session,
+    group_ids: list[int],
+) -> dict[int, list[tuple[RequisitionItem, OrderItem, Order, Customer, Product]]]:
+    if not group_ids:
+        return {}
+    grouped: dict[
+        int, list[tuple[RequisitionItem, OrderItem, Order, Customer, Product]]
+    ] = {}
+    rows = db.execute(
+        select(
+            RequisitionItem.requisition_id,
+            RequisitionItem,
+            OrderItem,
+            Order,
+            Customer,
+            Product,
+        )
+        .join(OrderItem, OrderItem.id == RequisitionItem.order_item_id)
+        .join(Order, Order.id == OrderItem.order_id)
+        .join(Customer, Customer.id == Order.customer_id)
+        .join(Product, Product.id == OrderItem.product_id)
+        .where(RequisitionItem.requisition_id.in_(group_ids))
+        .order_by(RequisitionItem.requisition_id, RequisitionItem.id)
+    ).all()
+    for group_id, requisition_item, item, order, customer, product in rows:
+        grouped.setdefault(int(group_id), []).append(
+            (requisition_item, item, order, customer, product)
+        )
+    return grouped
+
+
+def _dashboard_pending_requisition_item_is_eligible(
+    db: Session,
+    *,
+    item: OrderItem,
+    product: Product,
+    context: _PendingRequisitionReadContext,
+    finished_reserved_qty: int,
+    active_requisition_qty: int,
+) -> bool:
+    if context.is_ordinary(item):
+        requirements = _ordinary_requisition_requirements(item)
+        return (
+            int(requirements.get("requisition_qty") or 0)
+            - int(active_requisition_qty or 0)
+            > 0
+        )
+
+    bom_snapshots = context.bom_snapshots_for(item)
+    bom_components = context.bom_pending_component_requirements(
+        db,
+        item,
+        snapshots=bom_snapshots,
+    )
+    if bom_components:
+        parent_requirement = context.bom_pending_parent_requirement(
+            item,
+            finished_reserved_qty=finished_reserved_qty,
+        )
+        if _is_set_only_a3_surround_bom(bom_snapshots):
+            parent_requirement["already_requisitioned"] = True
+            parent_requirement["can_requisition"] = False
+        return any(
+            bool(requirement.get("can_requisition"))
+            for requirement in [parent_requirement, *bom_components]
+        )
+
+    requirements = context.current_requisition_summary(
+        item,
+        product=product,
+        finished_reserved_qty=finished_reserved_qty,
+    )
+    if not _requires_supplier_purchase(requirements):
+        return False
+    return (
+        int(requirements.get("requisition_qty") or 0)
+        - int(active_requisition_qty or 0)
+        > 0
+    )
+
+
+def _pending_requisition_eligible_rows(db: Session, user: User) -> list[dict]:
+    """Return authoritative eligible identities before full row decoration.
+
+    P1-36J uses the public subset for the dashboard. P1-36K also keeps the
+    canonical supplier label privately so filtering and pagination can happen
+    before display materials, inventory previews, locations, and BOM payloads
+    are constructed.
+    """
+
+    merge_groups, rows = _pending_requisition_candidates(db, user)
+    merge_rows_by_group = _pending_merge_member_rows(
+        db,
+        [int(group.id) for group in merge_groups],
+    )
+    context_rows = list(rows)
+    context_rows.extend(
+        (item, order, customer, product)
+        for group_rows in merge_rows_by_group.values()
+        for _requisition_item, item, order, customer, product in group_rows
+    )
+    item_ids = [int(item.id) for item, *_ in context_rows]
+    reservation_map = active_finished_reservations_by_item_ids(db, item_ids)
+    context = _PendingRequisitionReadContext(
+        db,
+        context_rows,
+        include_display_facts=False,
+    )
+    active_requisition_map = _active_requisition_facts_by_item_ids(
+        db,
+        [int(item.id) for item, *_ in rows],
+    )
+
+    projected: list[dict] = []
+    for group in merge_groups:
+        group_rows = merge_rows_by_group.get(int(group.id), [])
+        customer_names: list[str | None] = []
+        product_codes: list[str | None] = []
+        remaining_required_piece_qty = 0
+        requisition_qty = 0
+        for requisition_item, item, _order, customer, product in group_rows:
+            component = _requisition_item_component(requisition_item)
+            requirements = _current_requisition_requirements(
+                None,
+                item,
+                cutting_mode=requisition_item.special_process,
+                pieces_per_box=(
+                    requisition_item.pieces_per_box or _pieces_per_box(item)
+                ),
+                finished_reserved_qty=reservation_map.get(int(item.id), 0),
+                component_type=component,
+                semi_reserved_piece_qty=context.semi_reserved_piece_qty(
+                    int(item.id), component
+                ),
+            )
+            if not _requires_supplier_purchase(requirements):
+                continue
+            customer_names.append(customer.name)
+            product_codes.append(
+                requisition_item.product_code_snapshot
+                or item.snapshot_product_code
+                or product.product_code
+            )
+            remaining_required_piece_qty += int(
+                requirements.get("remaining_required_piece_qty") or 0
+            )
+            requisition_qty += int(requirements.get("requisition_qty") or 0)
+        if remaining_required_piece_qty <= 0 or requisition_qty <= 0:
+            continue
+        projected.append(
+            {
+                "is_merge_group": True,
+                "merge_group_id": int(group.id),
+                "requisition_id": int(group.id),
+                "item_id": f"mg{group.id}",
+                "order_item_id": None,
+                # The public merge row intentionally has no single customer ID;
+                # keep it out of customer-specific todos while counting its
+                # stable merge identity in the dashboard metric.
+                "customer_id": None,
+                "customer_name": " / ".join(_unique_text(customer_names)),
+                "order_number": "合并组",
+                "product_code": " / ".join(_unique_text(product_codes)),
+                "delivery_date": None,
+                "created_at": None,
+                "_supplier_name": (
+                    str(group.supplier_name or "").strip()
+                    or "未设置供应商"
+                ),
+            }
+        )
+
+    for item, order, customer, product in rows:
+        if is_history_order_number(order.order_number):
+            continue
+        active_requisition = active_requisition_map.get(
+            int(item.id),
+            {"quantity": 0},
+        )
+        if not _dashboard_pending_requisition_item_is_eligible(
+            db,
+            item=item,
+            product=product,
+            context=context,
+            finished_reserved_qty=reservation_map.get(int(item.id), 0),
+            active_requisition_qty=int(active_requisition.get("quantity") or 0),
+        ):
+            continue
+        projected.append(
+            {
+                "is_merge_group": False,
+                "merge_group_id": None,
+                "requisition_id": None,
+                "item_id": int(item.id),
+                "order_item_id": int(item.id),
+                "customer_id": int(customer.id),
+                "customer_name": customer.name,
+                "order_number": order.order_number,
+                "product_code": item.snapshot_product_code or product.product_code,
+                "delivery_date": order.delivery_date,
+                # The public pending row does not expose created_at.  Keeping the
+                # same null fallback preserves dashboard todo ordering exactly.
+                "created_at": None,
+                "_supplier_name": str(
+                    item.snapshot_supplier_name or "未设置供应商"
+                ).strip(),
+            }
+        )
+    return projected
+
+
+def dashboard_pending_requisition_rows(db: Session, user: User) -> list[dict]:
+    """Return the P1-36J dashboard contract without pagination-only metadata."""
+
+    return [
+        {key: value for key, value in row.items() if key != "_supplier_name"}
+        for row in _pending_requisition_eligible_rows(db, user)
+    ]
+
+
+def _pending_requisitions_full_payload(
+    db: Session,
+    user: User,
+    *,
+    merge_group_ids: set[int] | None = None,
+    order_item_ids: set[int] | None = None,
+) -> dict:
+    merge_groups, rows = _pending_requisition_candidates(
+        db,
+        user,
+        merge_group_ids=merge_group_ids,
+        order_item_ids=order_item_ids,
+    )
+    if merge_group_ids is None and order_item_ids is None:
+        registry = build_display_registry(db)
+    else:
+        merge_rows_by_group = _pending_merge_member_rows(
+            db,
+            [int(group.id) for group in merge_groups],
+        )
+        history_order_ids = {
+            int(order.id)
+            for _requisition_item, _item, order, _customer, _product in (
+                group_row
+                for group_rows in merge_rows_by_group.values()
+                for group_row in group_rows
+            )
+            if is_history_order_number(order.order_number)
+        }
+        history_order_ids.update(
+            int(order.id)
+            for _item, order, _customer, _product in rows
+            if is_history_order_number(order.order_number)
+        )
+        registry = build_display_registry_for_order_ids(db, history_order_ids)
     reservation_map = active_finished_reservations_by_item_ids(
         db, [item.id for item, *_ in rows]
     )
@@ -7058,6 +7343,117 @@ def pending_requisitions(
                 supplier_counts.items(), key=lambda entry: (-entry[1], entry[0])
             )
         ],
+    }
+
+
+def _pending_supplier_name(row: dict) -> str:
+    if "_supplier_name" in row:
+        return str(row.get("_supplier_name") or "").strip()
+    value = (
+        row.get("supplier_name")
+        or row.get("snapshot_supplier_name")
+        or "未设置供应商"
+    )
+    return str(value).strip()
+
+
+def _pending_supplier_counts(rows: list[dict]) -> list[dict]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        supplier = _pending_supplier_name(row)
+        counts[supplier] = counts.get(supplier, 0) + 1
+    return [
+        {"supplier_name": supplier, "count": count}
+        for supplier, count in sorted(
+            counts.items(), key=lambda entry: (-entry[1], entry[0])
+        )
+    ]
+
+
+@router.get("/pending")
+def pending_requisitions(
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_read),
+    page: Annotated[int | None, Query(ge=1)] = None,
+    page_size: Annotated[int | None, Query(ge=1, le=200)] = None,
+    supplier_name: Annotated[str | None, Query(max_length=200)] = None,
+) -> dict:
+    user = _user
+    if page is None and page_size is None and supplier_name is None:
+        return _pending_requisitions_full_payload(db, user)
+
+    eligible_rows = _pending_requisition_eligible_rows(db, user)
+    overall_total = len(eligible_rows)
+    supplier_counts = _pending_supplier_counts(eligible_rows)
+    normalized_supplier_name = (
+        str(supplier_name).strip() if supplier_name is not None else None
+    )
+    filtered_rows = (
+        [
+            row
+            for row in eligible_rows
+            if _pending_supplier_name(row) == normalized_supplier_name
+        ]
+        if normalized_supplier_name is not None
+        else eligible_rows
+    )
+    total = len(filtered_rows)
+    resolved_page_size = min(max(int(page_size or 25), 1), 200)
+    requested_page = max(int(page or 1), 1)
+    last_page = max(1, (total + resolved_page_size - 1) // resolved_page_size)
+    resolved_page = min(requested_page, last_page)
+    start = (resolved_page - 1) * resolved_page_size
+    selected_rows = filtered_rows[start : start + resolved_page_size]
+
+    selected_merge_group_ids = {
+        int(row["merge_group_id"])
+        for row in selected_rows
+        if row.get("is_merge_group")
+    }
+    selected_order_item_ids = {
+        int(row["order_item_id"])
+        for row in selected_rows
+        if not row.get("is_merge_group")
+    }
+    if selected_rows:
+        page_payload = _pending_requisitions_full_payload(
+            db,
+            user,
+            merge_group_ids=selected_merge_group_ids,
+            order_item_ids=selected_order_item_ids,
+        )
+        decorated_by_identity = {
+            (
+                "merge",
+                int(row.get("merge_group_id") or row.get("id")),
+            )
+            if row.get("is_merge_group")
+            else ("item", int(row["item_id"])): row
+            for row in page_payload["items"]
+        }
+        items = [
+            decorated_by_identity[identity]
+            for row in selected_rows
+            if (
+                identity := (
+                    ("merge", int(row["merge_group_id"]))
+                    if row.get("is_merge_group")
+                    else ("item", int(row["order_item_id"]))
+                )
+            )
+            in decorated_by_identity
+        ]
+    else:
+        items = []
+
+    return {
+        "items": items,
+        "total": total,
+        "overall_total": overall_total,
+        "page": resolved_page,
+        "page_size": resolved_page_size,
+        "auto_released_hold_ids": [],
+        "supplier_counts": supplier_counts,
     }
 
 

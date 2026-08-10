@@ -64,6 +64,7 @@ const vm={{
   deliveryForm:{{editingId:null,delivery_number:'',pick_task:null,saved_signature:''}},
   modal:{{type:'delivery',title:'新增送货单'}}, pages:{{deliveries:3}},
   deliveryFormSignature(){{return 'saved-signature';}}, async loadDeliveries(){{return true;}},
+  invalidated:[],invalidateDeliveryListDetail(id){{this.invalidated.push(Number(id));return true;}},
 }};
 const save=new AsyncFunction('editingId','deliveryPayload',{json.dumps(body, ensure_ascii=False)}).bind(vm);
 (async()=>{{
@@ -75,7 +76,7 @@ const save=new AsyncFunction('editingId','deliveryPayload',{json.dumps(body, ens
   if(requests[0].payload.items[0].delivered_quantity!==3 || requests[0].payload.items[0].allocations[0].quantity!==3) throw new Error('delivery payload was not frozen');
   finish({{data:{{id:81,delivery_number:'TH000081',pick_task:null}}}});
   const result=await first;
-  if(result.id!==81 || vm.deliveryForm.editingId!==81 || vm.deliverySaveState.saving) throw new Error('successful save did not commit and unlock');
+  if(result.id!==81 || vm.deliveryForm.editingId!==81 || vm.deliverySaveState.saving || !vm.invalidated.includes(81)) throw new Error('successful save did not commit, invalidate and unlock');
 }})().catch(error=>{{console.error(error);process.exit(1);}});
 """
     _run_node(script, tmp_path, "delivery-save-duplicate.js")
@@ -86,9 +87,9 @@ def test_delivery_save_refresh_failure_is_still_committed(tmp_path: Path) -> Non
     script = f"""
 const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
 globalThis.axios={{post:async()=>({{data:{{id:82,delivery_number:'TH000082'}}}})}};
-const vm={{deliverySaveState:{{saving:false,committed:false,outcomeUncertain:false,result:null}},deliveryForm:{{editingId:null,delivery_number:'',pick_task:null,saved_signature:''}},modal:{{type:'delivery'}},pages:{{deliveries:2}},deliveryFormSignature(){{return 'saved';}},async loadDeliveries(){{throw new Error('refresh down');}}}};
+const vm={{deliverySaveState:{{saving:false,committed:false,outcomeUncertain:false,result:null}},deliveryForm:{{editingId:null,delivery_number:'',pick_task:null,saved_signature:''}},modal:{{type:'delivery'}},pages:{{deliveries:2}},invalidated:[],deliveryFormSignature(){{return 'saved';}},invalidateDeliveryListDetail(id){{this.invalidated.push(Number(id));return true;}},async loadDeliveries(){{throw new Error('refresh down');}}}};
 const save=new AsyncFunction('editingId','deliveryPayload',{json.dumps(body, ensure_ascii=False)}).bind(vm);
-(async()=>{{const result=await save(null,{{customer_id:7,delivery_date:'2026-08-06',items:[]}});if(!result._refresh_failed || vm.deliveryForm.editingId!==82 || vm.modal?.type!=='delivery' || vm.deliverySaveState.saving) throw new Error('refresh failure erased committed delivery');}})().catch(error=>{{console.error(error);process.exit(1);}});
+(async()=>{{const result=await save(null,{{customer_id:7,delivery_date:'2026-08-06',items:[]}});if(!result._refresh_failed || vm.deliveryForm.editingId!==82 || vm.modal?.type!=='delivery' || vm.deliverySaveState.saving || !vm.invalidated.includes(82)) throw new Error('refresh failure erased committed delivery or kept stale detail');}})().catch(error=>{{console.error(error);process.exit(1);}});
 """
     _run_node(script, tmp_path, "delivery-save-refresh.js")
 
@@ -98,7 +99,7 @@ def test_delivery_save_distinguishes_unknown_and_explicit_failures(tmp_path: Pat
     script = f"""
 const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
 const saveBody={json.dumps(body, ensure_ascii=False)};
-function context(){{return {{deliverySaveState:{{saving:false,committed:false,outcomeUncertain:false,result:null}},deliveryForm:{{editingId:null,delivery_number:'',pick_task:null,saved_signature:''}},modal:{{type:'delivery'}},pages:{{deliveries:1}},deliveryFormSignature(){{return 'saved';}},async loadDeliveries(){{return true;}}}};}}
+function context(){{return {{deliverySaveState:{{saving:false,committed:false,outcomeUncertain:false,result:null}},deliveryForm:{{editingId:null,delivery_number:'',pick_task:null,saved_signature:''}},modal:{{type:'delivery'}},pages:{{deliveries:1}},deliveryFormSignature(){{return 'saved';}},invalidateDeliveryListDetail(){{return true;}},async loadDeliveries(){{return true;}}}};}}
 (async()=>{{
   globalThis.axios={{post:async()=>{{throw new Error('network down');}}}};
   const unknown=context(); const unknownSave=new AsyncFunction('editingId','deliveryPayload',saveBody).bind(unknown);

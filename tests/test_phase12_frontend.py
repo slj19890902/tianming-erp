@@ -108,7 +108,9 @@ def test_desktop_spa_preserves_deep_link_and_defaults_root_to_dashboard() -> Non
     assert 'window.location.pathname.replace(/^\\/+|\\/+$/g, "")' in INDEX
     assert 'return pages.has(pathPage) ? pathPage : "dashboard"' in INDEX
     assert "if (!this.pageAllowed(this.activePage)) this.activePage = this.firstAllowedPage()" in INDEX
-    assert "await this.loadPage(this.activePage, { force:true })" in INDEX
+    assert "await this.loadInitialPageResources()" in INDEX
+    assert "this.loadPage(this.activePage" in INDEX
+    assert "supplierPromise," in INDEX
     assert "await this.loadBase()" not in INDEX
 
 
@@ -140,7 +142,8 @@ def test_n029_production_requests_disable_duplicates_and_reuse_idempotency_keys(
     start = INDEX.index("async loadProduction()")
     end = INDEX.index("async loadIncoming()", start)
     logic = INDEX[start:end]
-    assert 'axios.get("/api/production/tasks", { params: { status: "pending" }, signal:controller.signal })' in logic
+    assert 'params: { status: "pending", page, page_size: this.pageSize }' in logic
+    assert 'latestRequestControllers.get("production:pending") !== controller' in logic
     assert 'axios.get("/api/production/completions", { params })' in logic
     assert 'axios.get("/api/production/temporary-locations", {signal:controller.signal})' in logic
     assert 'axios.post("/api/production/completion-batches"' in logic

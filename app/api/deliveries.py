@@ -3410,6 +3410,389 @@ def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
     return context
 
 
+def _delivery_list_summary_context(db: Session, delivery_ids: list[int]) -> dict:
+    """Build the collapsed desktop list without expanding delivery details.
+
+    The regular response intentionally remains available to existing callers.
+    This context is only used by ``view=summary`` and keeps its query families
+    fixed for ordinary deliveries, regardless of the number of documents or
+    detail rows on the current page.
+    """
+
+    if not delivery_ids:
+        return {
+            "deliveries": {},
+            "customers": {},
+            "receipts": {},
+            "item_counts": {},
+            "actual_goods_quantities": {},
+            "pick_tasks": {},
+        }
+
+    deliveries = {
+        delivery.id: delivery
+        for delivery in db.scalars(
+            select(Delivery).where(Delivery.id.in_(delivery_ids))
+        ).all()
+    }
+    customer_ids = {delivery.customer_id for delivery in deliveries.values()}
+    customers = {
+        customer.id: customer
+        for customer in db.scalars(
+            select(Customer).where(Customer.id.in_(customer_ids))
+        ).all()
+    } if customer_ids else {}
+
+    receipts: dict[int, ReturnReceipt] = {}
+    for receipt in db.scalars(
+        select(ReturnReceipt)
+        .where(ReturnReceipt.delivery_id.in_(delivery_ids))
+        .order_by(ReturnReceipt.delivery_id, ReturnReceipt.id)
+    ).all():
+        receipts[int(receipt.delivery_id)] = receipt
+
+    item_counts: dict[int, int] = {}
+    actual_goods_quantities: dict[int, int] = {}
+    for delivery_id, item_count, delivered_quantity in db.execute(
+        select(
+            DeliveryItem.delivery_id,
+            func.count(DeliveryItem.id),
+            func.coalesce(func.sum(DeliveryItem.delivered_quantity), 0),
+        )
+        .where(DeliveryItem.delivery_id.in_(delivery_ids))
+        .group_by(DeliveryItem.delivery_id)
+    ).all():
+        normalized_id = int(delivery_id)
+        item_counts[normalized_id] = int(item_count or 0)
+        actual_goods_quantities[normalized_id] = int(delivered_quantity or 0)
+
+    # Ordinary deliveries need no further work.  Composite orders are rare but
+    # their collapsed quantity must still include the physical component lines,
+    # so calculate only those exceptional rows using the established workflow.
+    composite_rows = db.execute(
+        select(
+            DeliveryItem.id,
+            DeliveryItem.delivery_id,
+            DeliveryItem.order_item_id,
+            DeliveryItem.delivered_quantity,
+            Delivery.status,
+            OrderItem.delivered_quantity.label("order_delivered_quantity"),
+        )
+        .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
+        .join(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
+        .where(
+            DeliveryItem.delivery_id.in_(delivery_ids),
+            DeliveryItem.order_item_id.in_(
+                select(SalesOrderItemBomComponent.sales_order_item_id).distinct()
+            ),
+        )
+        .order_by(DeliveryItem.delivery_id, DeliveryItem.id)
+    ).all()
+    component_quantities = _delivery_summary_component_quantities(
+        db, composite_rows
+    )
+    for delivery_id, component_quantity in component_quantities.items():
+        actual_goods_quantities[delivery_id] = (
+            actual_goods_quantities.get(delivery_id, 0) + component_quantity
+        )
+
+    pick_task_rows = db.scalars(
+        select(DeliveryPickTask)
+        .where(DeliveryPickTask.delivery_id.in_(delivery_ids))
+        .order_by(DeliveryPickTask.delivery_id, DeliveryPickTask.id.desc())
+    ).all()
+    latest_pick_tasks: dict[int, DeliveryPickTask] = {}
+    for task in pick_task_rows:
+        latest_pick_tasks.setdefault(int(task.delivery_id), task)
+    pick_tasks = {
+        int(summary["delivery_id"]): summary
+        for summary in _delivery_pick_task_list_summaries(
+            db, list(latest_pick_tasks.values())
+        )
+    }
+    return {
+        "deliveries": deliveries,
+        "customers": customers,
+        "receipts": receipts,
+        "item_counts": item_counts,
+        "actual_goods_quantities": actual_goods_quantities,
+        "pick_tasks": pick_tasks,
+    }
+
+
+def _delivery_summary_component_quantities(
+    db: Session,
+    composite_rows: list,
+) -> dict[int, int]:
+    """Return exact component pieces with a fixed set of aggregate queries."""
+
+    if not composite_rows:
+        return {}
+    pending_rows = [
+        row for row in composite_rows if row.status not in {"dispatched", "voided"}
+    ]
+    historical_rows = [
+        row for row in composite_rows if row.status in {"dispatched", "voided"}
+    ]
+    result: dict[int, int] = {}
+
+    if historical_rows:
+        historical_item_ids = [int(row.id) for row in historical_rows]
+        historical_by_item: dict[int, int] = {}
+        for delivery_item_id, quantity in db.execute(
+            select(
+                BomComponentDirectDeliveryAllocation.delivery_item_id,
+                func.coalesce(
+                    func.sum(
+                        BomComponentDirectDeliveryAllocation.consumed_quantity
+                        - BomComponentDirectDeliveryAllocation.reversed_quantity
+                    ),
+                    0,
+                ),
+            )
+            .where(
+                BomComponentDirectDeliveryAllocation.delivery_item_id.in_(
+                    historical_item_ids
+                ),
+                BomComponentDirectDeliveryAllocation.status.in_(
+                    ACTIVE_RESERVATION_STATUSES
+                ),
+            )
+            .group_by(BomComponentDirectDeliveryAllocation.delivery_item_id)
+        ).all():
+            historical_by_item[int(delivery_item_id)] = int(quantity or 0)
+        for delivery_item_id, quantity in db.execute(
+            select(
+                DeliveryInventoryAllocation.delivery_item_id,
+                func.coalesce(
+                    func.sum(
+                        DeliveryInventoryAllocation.credited_requirement_quantity
+                        - DeliveryInventoryAllocation.reversed_requirement_quantity
+                    ),
+                    0,
+                ),
+            )
+            .join(
+                InventoryReservation,
+                InventoryReservation.id == DeliveryInventoryAllocation.reservation_id,
+            )
+            .where(
+                DeliveryInventoryAllocation.delivery_item_id.in_(
+                    historical_item_ids
+                ),
+                InventoryReservation.sales_order_item_bom_component_id.is_not(None),
+                DeliveryInventoryAllocation.status.in_(
+                    ACTIVE_RESERVATION_STATUSES
+                ),
+            )
+            .group_by(DeliveryInventoryAllocation.delivery_item_id)
+        ).all():
+            normalized_id = int(delivery_item_id)
+            historical_by_item[normalized_id] = (
+                historical_by_item.get(normalized_id, 0) + int(quantity or 0)
+            )
+        for row in historical_rows:
+            delivery_id = int(row.delivery_id)
+            result[delivery_id] = (
+                result.get(delivery_id, 0)
+                + historical_by_item.get(int(row.id), 0)
+            )
+
+    if pending_rows:
+        order_item_ids = {int(row.order_item_id) for row in pending_rows}
+        snapshots = db.scalars(
+            select(SalesOrderItemBomComponent)
+            .where(
+                SalesOrderItemBomComponent.sales_order_item_id.in_(
+                    order_item_ids
+                )
+            )
+            .order_by(
+                SalesOrderItemBomComponent.sales_order_item_id,
+                SalesOrderItemBomComponent.display_order,
+                SalesOrderItemBomComponent.id,
+            )
+        ).all()
+        snapshot_ids = [int(snapshot.id) for snapshot in snapshots]
+        snapshots_by_order_item: dict[int, list[SalesOrderItemBomComponent]] = {}
+        for snapshot in snapshots:
+            snapshots_by_order_item.setdefault(
+                int(snapshot.sales_order_item_id), []
+            ).append(snapshot)
+
+        adjustment_totals = {
+            int(snapshot_id): (int(delta_sets or 0), int(delta_pieces or 0))
+            for snapshot_id, delta_sets, delta_pieces in db.execute(
+                select(
+                    SalesOrderItemBomDemandAdjustment.sales_order_item_bom_component_id,
+                    func.coalesce(
+                        func.sum(
+                            SalesOrderItemBomDemandAdjustment.delta_order_set_quantity
+                        ),
+                        0,
+                    ),
+                    func.coalesce(
+                        func.sum(
+                            SalesOrderItemBomDemandAdjustment.delta_required_piece_quantity
+                        ),
+                        0,
+                    ),
+                )
+                .where(
+                    SalesOrderItemBomDemandAdjustment.sales_order_item_bom_component_id.in_(
+                        snapshot_ids
+                    )
+                )
+                .group_by(
+                    SalesOrderItemBomDemandAdjustment.sales_order_item_bom_component_id
+                )
+            ).all()
+        } if snapshot_ids else {}
+        consumed_quantities: dict[int, int] = {}
+        if snapshot_ids:
+            for snapshot_id, quantity in db.execute(
+                select(
+                    BomComponentDirectDeliveryAllocation.sales_order_item_bom_component_id,
+                    func.coalesce(
+                        func.sum(
+                            BomComponentDirectDeliveryAllocation.consumed_quantity
+                            - BomComponentDirectDeliveryAllocation.reversed_quantity
+                        ),
+                        0,
+                    ),
+                )
+                .where(
+                    BomComponentDirectDeliveryAllocation.sales_order_item_bom_component_id.in_(
+                        snapshot_ids
+                    ),
+                    BomComponentDirectDeliveryAllocation.status.in_(
+                        ACTIVE_RESERVATION_STATUSES
+                    ),
+                )
+                .group_by(
+                    BomComponentDirectDeliveryAllocation.sales_order_item_bom_component_id
+                )
+            ).all():
+                consumed_quantities[int(snapshot_id)] = int(quantity or 0)
+            for snapshot_id, quantity in db.execute(
+                select(
+                    InventoryReservation.sales_order_item_bom_component_id,
+                    func.coalesce(
+                        func.sum(
+                            DeliveryInventoryAllocation.credited_requirement_quantity
+                            - DeliveryInventoryAllocation.reversed_requirement_quantity
+                        ),
+                        0,
+                    ),
+                )
+                .join(
+                    InventoryReservation,
+                    InventoryReservation.id
+                    == DeliveryInventoryAllocation.reservation_id,
+                )
+                .where(
+                    InventoryReservation.sales_order_item_bom_component_id.in_(
+                        snapshot_ids
+                    ),
+                    DeliveryInventoryAllocation.status.in_(
+                        ACTIVE_RESERVATION_STATUSES
+                    ),
+                )
+                .group_by(
+                    InventoryReservation.sales_order_item_bom_component_id
+                )
+            ).all():
+                normalized_id = int(snapshot_id)
+                consumed_quantities[normalized_id] = (
+                    consumed_quantities.get(normalized_id, 0) + int(quantity or 0)
+                )
+
+        for row in pending_rows:
+            component_quantity = 0
+            delivered_after = max(int(row.order_delivered_quantity or 0), 0) + max(
+                int(row.delivered_quantity or 0), 0
+            )
+            for snapshot in snapshots_by_order_item.get(
+                int(row.order_item_id), []
+            ):
+                snapshot_id = int(snapshot.id)
+                delta_sets, delta_pieces = adjustment_totals.get(
+                    snapshot_id, (0, 0)
+                )
+                if int(snapshot.order_set_quantity or 0) + delta_sets < 0:
+                    raise CompositeBomWorkflowError(
+                        "组件调整后的有效套数不能小于0"
+                    )
+                target = int(snapshot.required_piece_quantity or 0) + (
+                    delta_pieces
+                )
+                if target <= 0:
+                    raise CompositeBomWorkflowError(
+                        "组件调整后的需求件数必须大于0"
+                    )
+                target_after = min(
+                    delivered_after * int(snapshot.quantity_per_set or 0),
+                    target,
+                )
+                component_quantity += max(
+                    target_after - consumed_quantities.get(snapshot_id, 0), 0
+                )
+            delivery_id = int(row.delivery_id)
+            result[delivery_id] = result.get(delivery_id, 0) + component_quantity
+    return result
+
+
+def _delivery_summary_response(delivery_id: int, *, context: dict) -> dict:
+    """Serialize fields needed before a delivery row is expanded."""
+
+    delivery = context["deliveries"].get(delivery_id)
+    if delivery is None:
+        raise HTTPException(status_code=404, detail="送货单不存在")
+    customer = context["customers"].get(delivery.customer_id)
+    return_receipt = context["receipts"].get(delivery_id)
+    return {
+        "id": delivery.id,
+        "delivery_number": delivery.delivery_number,
+        "customer_id": delivery.customer_id,
+        "customer_name": customer.name if customer else None,
+        "delivery_date": delivery.delivery_date,
+        "vehicle_number": delivery.vehicle_number,
+        "source_mode": delivery.source_mode,
+        "status": delivery.status,
+        "total_quantity": delivery.total_quantity,
+        "total_actual_goods_quantity": context["actual_goods_quantities"].get(
+            delivery_id, 0
+        ),
+        "item_count": context["item_counts"].get(delivery_id, 0),
+        "dispatched_at": (
+            utc_naive_to_api(delivery.dispatched_at)
+            if delivery.dispatched_at
+            else None
+        ),
+        "ever_dispatched_at": (
+            utc_naive_to_api(delivery.ever_dispatched_at)
+            if delivery.ever_dispatched_at
+            else None
+        ),
+        "voided_at": (
+            utc_naive_to_api(delivery.voided_at)
+            if delivery.voided_at
+            else None
+        ),
+        "voided_by": delivery.voided_by,
+        "is_printed": delivery.printed_at is not None,
+        "printed_at": (
+            utc_naive_to_api(delivery.printed_at) if delivery.printed_at else None
+        ),
+        "printed_by": delivery.printed_by,
+        "return_receipt_id": return_receipt.id if return_receipt else None,
+        "return_receipt_status": (
+            return_receipt.status if return_receipt else None
+        ),
+        "pick_task": context["pick_tasks"].get(delivery_id),
+    }
+
+
 def _unordered_finished_allocation_response(
     db: Session,
     delivery_item_id: int,
@@ -5835,6 +6218,7 @@ def list_deliveries(
     date_from: date | None = None,
     date_to: date | None = None,
     return_status: list[str] | None = Query(default=None),
+    view: Literal["full", "summary"] = Query(default="full"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -6003,6 +6387,18 @@ def list_deliveries(
     delivery_ids = db.scalars(
         query.offset((page - 1) * page_size).limit(page_size)
     ).all()
+    if view == "summary":
+        summary_context = _delivery_list_summary_context(db, list(delivery_ids))
+        return {
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "view": "summary",
+            "items": [
+                _delivery_summary_response(delivery_id, context=summary_context)
+                for delivery_id in delivery_ids
+            ],
+        }
     list_context = _delivery_list_page_context(db, list(delivery_ids))
     return {
         "total": total,

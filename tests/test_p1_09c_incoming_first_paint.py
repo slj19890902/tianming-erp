@@ -13,13 +13,21 @@ def _block(source: str, start_marker: str, end_marker: str) -> str:
 
 def test_desktop_incoming_cold_entry_only_requests_pending() -> None:
     load_page = _block(INDEX, "async loadPage(page", "refreshCurrent()")
+    load_pending_page = _block(
+        INDEX,
+        "async loadIncomingPendingPage(",
+        "async changeIncomingPendingPage",
+    )
     load_incoming = _block(INDEX, "async loadIncoming()", "async loadIncomingReceived")
 
-    assert 'if (page === "incoming") await this.loadIncoming();' in load_page
-    assert 'axios.get("/api/incoming/pending", {signal:controller.signal})' in load_incoming
+    assert 'if (page === "incoming") await requirePageLoad(this.loadIncoming());' in load_page
+    assert 'axios.get("/api/incoming/pending"' in load_pending_page
+    assert "params:this.incomingPendingRequestParams(requestedPage)" in load_pending_page
+    assert "this.loadIncomingPendingPage" in load_incoming
+    assert "this.loadExternalIncoming()" in load_incoming
     assert "/api/incoming/received" not in load_incoming
     assert "/api/incoming/surplus-locations" not in load_incoming
-    assert 'beginLatestRequest("incoming:pending")' in load_incoming
+    assert 'beginLatestRequest("incoming:pending")' in load_pending_page
 
 
 def test_desktop_incoming_secondary_data_is_tab_or_action_driven() -> None:
@@ -41,7 +49,10 @@ def test_desktop_incoming_secondary_data_is_tab_or_action_driven() -> None:
 def test_desktop_incoming_writes_only_refresh_received_after_its_tab_was_loaded() -> None:
     refresh = _block(INDEX, "async refreshIncomingAfterWrite()", "incomingProjectedVariance")
 
-    assert "this.loadIncoming(), this.loadKpi()" in refresh
+    assert "this.loadIncomingPendingPage" in refresh
+    assert "page:this.incomingPendingAppliedPage" in refresh
+    assert "this.loadKpi()" in refresh
+    assert "this.loadExternalIncoming()" not in refresh
     assert "if (this.incomingReceivedLoaded)" in refresh
     assert "this.loadIncomingReceived({force:true})" in refresh
     for method, next_method in (
@@ -54,11 +65,15 @@ def test_desktop_incoming_writes_only_refresh_received_after_its_tab_was_loaded(
 
 
 def test_standalone_incoming_matches_deferred_loading_contract() -> None:
-    pending = _block(INCOMING, "async function loadPending()", "async function loadReceived")
+    pending = _block(
+        INCOMING,
+        "async function loadPending({page = state.pendingPage || 1} = {})",
+        "async function loadReceived",
+    )
     received = _block(INCOMING, "async function loadReceived", "async function ensureSurplusLocations")
     locations = _block(INCOMING, "async function ensureSurplusLocations", "async function loadData")
 
-    assert 'api("/api/incoming/pending", {signal: controller.signal})' in pending
+    assert "api(`/api/incoming/pending?page=${requestedPage}&page_size=${pageSize}`" in pending
     assert "/api/incoming/received" not in pending
     assert "/api/incoming/surplus-locations" not in pending
     assert 'api("/api/incoming/received", {signal: controller.signal})' in received
@@ -73,7 +88,7 @@ def test_standalone_incoming_writes_refresh_loaded_received_without_cold_request
     receive = _block(INCOMING, "async function receive(itemId)", "async function acceptShortNow")
     accept_short = _block(INCOMING, "async function acceptShortNow", "function openRevert")
 
-    assert "const tasks = [loadPending()];" in refresh
+    assert "const tasks = [loadPending({page: state.pendingPage})];" in refresh
     assert "if (state.receivedLoaded)" in refresh
     assert "loadReceived({force: true})" in refresh
     assert "await refreshAfterIncomingWrite();" in receive

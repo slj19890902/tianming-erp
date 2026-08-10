@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.77"
-    assert APP_VERSION_NAME == "低配电脑全链路性能与合同 PDF 导出"
+    assert APP_VERSION == "v0.22.78"
+    assert APP_VERSION_NAME == "仓库区域启用与来料报料可靠性"
     assert APP_BUILD_DATE == "2026-08-10"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -50,23 +50,23 @@ def test_factory_update_reports_current_release_version() -> None:
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
     assert any(
-        "本次更新｜" in item and "低配电脑" in item and "待入库" in item
+        "本次更新｜" in item and "库存台账" in item and "挂板" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "高频搜索" in item and "竞态保护" in item
+        "本次更新｜" in item and "待送区" in item and "活动库存" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "外购包装待收" in item and "Tailwind CSS" in item
+        "本次更新｜" in item and "仓库地图" in item and "dz08" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "合同无章 PDF" in item and "只读导出" in item
+        "本次更新｜" in item and "待报料总数" in item and "权威资格" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "dw05" in item and "正式数据库结构" in item
+        "本次更新｜" in item and "一楼 A1" in item and "待送区" in item
         for item in current_release
     )
     assert any(
@@ -94,8 +94,16 @@ def test_factory_update_reports_current_release_version() -> None:
         for item in APP_CHANGELOG
     )
     assert any(
-        "如何验证｜" in item and "v0.22.77" in item
+        "如何验证｜" in item and "sr2" in item and "100 张" in item
         for item in current_release
+    )
+    assert any(
+        item.startswith("v0.22.77：本次更新｜") and "低配电脑" in item
+        for item in APP_CHANGELOG
+    )
+    assert any(
+        item.startswith("v0.22.77：如何验证｜") and "v0.22.77" in item
+        for item in APP_CHANGELOG
     )
     assert any(
         item.startswith("v0.22.61：")

@@ -216,6 +216,20 @@ def list_operational_locations(
                         )
                         .limit(1)
                     )
+                    or db.scalar(
+                        select(InventoryLot.id)
+                        .where(
+                            InventoryLot.warehouse_location_id == location.id,
+                            InventoryLot.status.in_(("active", "frozen")),
+                            (
+                                InventoryLot.quantity_available
+                                + InventoryLot.quantity_reserved
+                                + InventoryLot.quantity_damaged
+                            )
+                            > 0,
+                        )
+                        .limit(1)
+                    )
                 ),
             )
             for location in locations

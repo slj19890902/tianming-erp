@@ -486,6 +486,16 @@ function featureAreaCode(feature: LayoutFeature | undefined) {
   return (feature as TwinFeature | undefined)?.erp_area_code || null;
 }
 
+function defaultInventoryUsages(feature: TwinFeature): InventoryUsage[] {
+  const subtype = String(feature.subtype || "").toLowerCase();
+  if (subtype.includes("semi")) return ["semi_finished"];
+  if (subtype.includes("raw")) return ["raw_material"];
+  if (subtype.includes("mold")) return ["mold"];
+  if (subtype.includes("plate") || subtype.includes("printing")) return ["print_plate"];
+  if (subtype.includes("temporary")) return ["temporary_turnover"];
+  return ["finished"];
+}
+
 function rackAreaCode(rack: Rack, features: LayoutFeature[]) {
   if (rack.area_code) return rack.area_code.toUpperCase();
   const zone = features.find((item) => item.feature_kind === "zone" && item.points.length > 2 && pointInPolygon(rack.x_mm, rack.y_mm, item.points));
@@ -646,6 +656,8 @@ export function WarehouseTwinApp() {
   const [locationEditMessage, setLocationEditMessage] = useState("");
   const [swapSourceLocationId, setSwapSourceLocationId] = useState<number | null>(null);
   const [targetAreaLocationCount, setTargetAreaLocationCount] = useState("");
+  const [formalAreaCodeDraft, setFormalAreaCodeDraft] = useState("");
+  const [formalAreaNameDraft, setFormalAreaNameDraft] = useState("");
   const [warehouseOperationBusy, setWarehouseOperationBusy] = useState(false);
   const [warehouseOperationMessage, setWarehouseOperationMessage] = useState("");
   const [locationDetailOpen, setLocationDetailOpen] = useState(false);
@@ -821,14 +833,14 @@ export function WarehouseTwinApp() {
     } : location;
   }), [dashboard?.locations, locationDrafts]);
   useEffect(() => {
-    if (!locationEditMode || floorCode !== "3F") return;
+    if (!locationEditMode) return;
     setLocationDrafts((current) => {
       const seeded = { ...current };
       let changed = false;
       for (const location of dashboard?.locations || []) {
         const proposal = location.layout_draft_position;
         if (
-          location.floor_code !== "3F"
+          location.floor_code !== floorCode
           || location.position_status !== "unplaced"
           || !proposal
           || seeded[location.location_id]
@@ -1061,10 +1073,13 @@ export function WarehouseTwinApp() {
   const selectedZonePolicy = selectedAreaFeature ? (zonePolicyDrafts[selectedAreaFeature.id] || {
     allowed_inventory_types: selectedAreaFeature.allowed_inventory_types?.length
       ? selectedAreaFeature.allowed_inventory_types
-      : inferredAreaInventoryTypes.length ? inferredAreaInventoryTypes : ["finished"],
+      : inferredAreaInventoryTypes.length ? inferredAreaInventoryTypes : defaultInventoryUsages(selectedAreaFeature),
     storage_layout: selectedAreaFeature.storage_layout
       || (selectedAreaFeature.subtype.includes("rack") ? "rack" : selectedAreaRacks.length ? "mixed" : "pallet_ground")
   }) : null;
+  const selectedAreaCreatesInventoryLocations = Boolean(
+    selectedZonePolicy?.allowed_inventory_types.some((value) => value === "finished" || value === "semi_finished")
+  );
   const selectedRackEditDraft = selectedRack
     ? (rackDrafts[selectedRack.id] || rackDraft(selectedRack))
     : null;
@@ -1075,6 +1090,21 @@ export function WarehouseTwinApp() {
   useEffect(() => {
     setTargetAreaLocationCount(selectedAreaCode ? String(selectedAreaLocationCount) : "");
   }, [selectedAreaCode, selectedAreaLocationCount]);
+  useEffect(() => {
+    if (!selectedAreaFeature) {
+      setFormalAreaCodeDraft("");
+      setFormalAreaNameDraft("");
+      return;
+    }
+    const suggested = selectedAreaFeature.feature_code
+      .replace(/^ZONE-(?:1F|3F)-/i, "")
+      .replace(/[^A-Z0-9-]+/gi, "-")
+      .replace(/^-+|-+$/g, "")
+      .toUpperCase()
+      .slice(0, 30);
+    setFormalAreaCodeDraft(selectedAreaFeature.erp_area_code || suggested);
+    setFormalAreaNameDraft(selectedAreaFeature.name || suggested);
+  }, [selectedAreaFeature?.id, selectedAreaFeature?.erp_area_code]);
   const focusedRack = rackFocusId ? layout?.racks.find((item) => item.id === rackFocusId) || null : null;
   const focusedRackAreaCode = focusedRack ? rackAreaCode(focusedRack, features) : null;
   const focusedAreaRacks = useMemo(() => {
@@ -1339,7 +1369,7 @@ export function WarehouseTwinApp() {
   };
 
   const moveLocationDraft = (palletId: string, xMm: number, yMm: number) => {
-    if (!locationEditMode || floorCode !== "3F") return;
+    if (!locationEditMode) return;
     const locationId = Number(palletId.replace("erp-location-", ""));
     const location = visualLocations.find((item) => item.location_id === locationId);
     const zone = features.find((item) => item.feature_kind === "zone" && item.erp_area_code === location?.area_code);
@@ -1383,7 +1413,10 @@ export function WarehouseTwinApp() {
         if (areaCode) grouped.set(areaCode, [...(grouped.get(areaCode) || []), draft]);
       });
       for (const [areaCode, slots] of grouped) {
-        await mutateJson(`/api/warehouse/floor3/layout/areas/${areaCode}`, "PATCH", { slots });
+        const endpoint = floorCode === "3F"
+          ? `/api/warehouse/floor3/layout/areas/${areaCode}`
+          : `/api/warehouse/spatial-layout/floors/${floorCode}/areas/${areaCode}`;
+        await mutateJson(endpoint, "PATCH", { slots });
       }
       setLocationDrafts({});
       setSwapSourceLocationId(null);
@@ -1441,7 +1474,10 @@ export function WarehouseTwinApp() {
     if (!window.confirm(`确认把 ${selectedAreaCode} 区有效库位从 ${selectedAreaLocationCount} 个${direction}到 ${targetCount} 个吗？\n\n新增库位会自动编号并先进入待布局草稿；减少时只停用无库存、无预占、无实体栈板的空库位。`)) return;
     setLocationEditBusy(true);
     try {
-      const result = await mutateJson<AreaLocationCountResponse>(`/api/warehouse/floor3/layout/areas/${selectedAreaCode}/location-count`, "POST", {
+      const endpoint = floorCode === "3F"
+        ? `/api/warehouse/floor3/layout/areas/${selectedAreaCode}/location-count`
+        : `/api/warehouse/spatial-layout/floors/${floorCode}/areas/${selectedAreaCode}/location-count`;
+      const result = await mutateJson<AreaLocationCountResponse>(endpoint, "POST", {
         target_count: targetCount,
         confirmed: true
       });
@@ -1477,7 +1513,10 @@ export function WarehouseTwinApp() {
     if (!window.confirm(`确认停用空库位 ${selectedLocation.location_code} 吗？历史身份和操作记录会保留。`)) return;
     setLocationEditBusy(true);
     try {
-      await mutateJson(`/api/warehouse/floor3/layout/slots/${selectedLocation.location_id}/disable`, "POST", {
+      const endpoint = floorCode === "3F"
+        ? `/api/warehouse/floor3/layout/slots/${selectedLocation.location_id}/disable`
+        : `/api/warehouse/spatial-layout/locations/${selectedLocation.location_id}/disable`;
+      await mutateJson(endpoint, "POST", {
         expected_version: selectedLocation.map_position.version
       });
       setSelected(null);
@@ -2086,6 +2125,10 @@ export function WarehouseTwinApp() {
       setLocationEditMessage("区域至少选择一种允许存放类型。");
       return;
     }
+    if (!formalAreaCodeDraft.trim()) {
+      setLocationEditMessage("请输入正式区域编号；保存后该地图区域才能生成正式库位。");
+      return;
+    }
     setSpatialEditBusy(true);
     try {
       const response = await mutateJson<LayoutMutationResponse<TwinFeature>>(
@@ -2095,6 +2138,8 @@ export function WarehouseTwinApp() {
           expected_revision: layout.source_sha256,
           expected_version: selectedAreaFeature.version,
           operation_key: operationKey("zone-policy"),
+          erp_area_code: formalAreaCodeDraft.trim().toUpperCase(),
+          area_name: formalAreaNameDraft.trim() || selectedAreaFeature.name,
           ...selectedZonePolicy
         }
       );
@@ -2110,7 +2155,7 @@ export function WarehouseTwinApp() {
         delete next[selectedAreaFeature.id];
         return next;
       });
-      setLocationEditMessage(`${selectedAreaCode || selectedAreaFeature.name} 的存放策略已保存到草稿；未自动搬动或转换库存。`);
+      setLocationEditMessage(`${formalAreaCodeDraft.trim().toUpperCase()} 已绑定正式区域；请设置库位数量、拖到实际位置后校验并发布。`);
     } catch (reason) {
       setLocationEditMessage(`保存区域策略失败：${(reason as Error).message}`);
     } finally {
@@ -2175,7 +2220,7 @@ export function WarehouseTwinApp() {
       <button type="button" className={`twin-warehouse-search-toggle ${searchPanelOpen || searchResponse ? "active" : ""}`} aria-expanded={searchPanelOpen} onClick={() => setSearchPanelOpen((value) => !value)}>全仓查找{searchResponse ? ` ${searchType === "finished" ? searchProductGroups.length : searchResponse.resource_result_count}` : ""}</button>
       {viewMode === "2d" ? <button type="button" className={`twin-location-edit-toggle ${locationEditMode ? "active" : ""}`} disabled={!canEditLocations || spatialEditBusy} title={!canEditLocations ? "仅管理员可以修改库位布局" : "二维编辑只保存到草稿，发布后员工才会看到"} onClick={toggleLayoutEditor}>{locationEditMode ? "退出草稿" : "库位布局"}</button> : <span className="twin-view-note">2.5D 流畅查看 · 详情见右侧</span>}
       {locationEditMode && <button type="button" className={`twin-area-policy-toggle ${areaPolicyEditMode ? "active" : ""}`} onClick={() => { setAreaPolicyEditMode((value) => !value); setLocationEditMessage("请选择一个区域，设置允许存放类型与货架/栈板地堆形式。"); }}>区域设置</button>}
-      {locationEditMode && floorCode === "3F" && <><button type="button" className="twin-save-location-layout" disabled={locationEditBusy || !Object.keys(locationDrafts).length} onClick={saveLocationDrafts}>保存库位位置 {Object.keys(locationDrafts).length || ""}</button><button type="button" className="twin-cancel-location-layout" disabled={locationEditBusy || !Object.keys(locationDrafts).length} onClick={() => { setLocationDrafts({}); setSwapSourceLocationId(null); setLocationEditMessage("已取消未保存的库位位置草稿。"); }}>取消位置草稿</button></>}
+      {locationEditMode && <><button type="button" className="twin-save-location-layout" disabled={locationEditBusy || !Object.keys(locationDrafts).length} onClick={saveLocationDrafts}>保存库位位置 {Object.keys(locationDrafts).length || ""}</button><button type="button" className="twin-cancel-location-layout" disabled={locationEditBusy || !Object.keys(locationDrafts).length} onClick={() => { setLocationDrafts({}); setSwapSourceLocationId(null); setLocationEditMessage("已取消未保存的库位位置草稿。"); }}>取消位置草稿</button></>}
       {locationEditMode && <div className="twin-layout-draft-workflow">
         <span className={`status ${layoutDraftControl?.status || "none"}`}>{layoutDraftControl?.status === "validated" ? "草稿已校验" : layoutDraftControl?.has_draft ? "草稿未发布" : "尚无草稿"}</span>
         <button type="button" disabled={spatialEditBusy || !layoutDraftControl?.has_draft} onClick={validateLayoutDraft}>校验草稿</button>
@@ -2416,19 +2461,24 @@ export function WarehouseTwinApp() {
             {focusedSearchProduct && focusedSearchProduct.items.some((item) => item.area_code === selectedAreaCode) && <div className="twin-search-focus-note product-focus"><b>已找到该产品</b><span>{focusedSearchProduct.inventory_code} · 本区域位置已高亮</span></div>}
             {locationEditMode && canEditLocations && <div className="twin-area-layout-summary"><div><b>区域布局</b><small>{selectedAreaRacks.length} 个货架 · {selectedAreaLocationCount} 个正式库位</small></div><button type="button" disabled={spatialEditBusy || !selectedAreaFeature} onClick={addRackToSelectedArea}>＋ 添加货架</button></div>}
             {locationEditMode && areaPolicyEditMode && canEditLocations && selectedAreaFeature && selectedZonePolicy && <div className="twin-zone-policy-editor">
+              <div><b>正式区域绑定</b><small>区域编号保存后不可与其他地图区域重复；发布前仍不会进入员工入库候选。</small></div>
+              <label><span>正式区域编号</span><input maxLength={30} value={formalAreaCodeDraft} onChange={(event) => setFormalAreaCodeDraft(event.target.value.toUpperCase())} placeholder="例如 FIN-001" /></label>
+              <label><span>区域名称</span><input maxLength={100} value={formalAreaNameDraft} onChange={(event) => setFormalAreaNameDraft(event.target.value)} placeholder="例如 一楼成品待送区" /></label>
               <div><b>区域允许存放类型</b><small>可多选；只保存区域策略，不自动转换现有库存</small></div>
               <div className="twin-zone-policy-options">{([[
                 "finished", "成品"
               ], ["semi_finished", "半成品"], ["raw_material", "原材料"], ["mold", "模具"], ["print_plate", "印刷版"], ["temporary_turnover", "临时周转"]] as Array<[InventoryUsage, string]>).map(([value, label]) => <label key={value}><input type="checkbox" checked={selectedZonePolicy.allowed_inventory_types.includes(value)} onChange={() => toggleAreaUsage(value)} /><span>{label}</span></label>)}</div>
               <label><span>空间存储形式</span><select value={selectedZonePolicy.storage_layout} onChange={(event) => setZonePolicyDrafts((current) => ({ ...current, [selectedAreaFeature.id]: { ...selectedZonePolicy, storage_layout: event.target.value as StorageLayout } }))}><option value="rack">货架区</option><option value="pallet_ground">栈板地堆区</option><option value="mixed">货架＋栈板混合区</option></select></label>
-              <button type="button" className="primary" disabled={spatialEditBusy || !selectedZonePolicy.allowed_inventory_types.length} onClick={saveSelectedZonePolicy}>保存策略到草稿</button>
+              <button type="button" className="primary" disabled={spatialEditBusy || !formalAreaCodeDraft.trim() || !selectedZonePolicy.allowed_inventory_types.length} onClick={saveSelectedZonePolicy}>绑定正式区域并保存策略</button>
             </div>}
-            {locationEditMode && floorCode === "3F" && canEditLocations && <div className="twin-location-create">
+            {locationEditMode && canEditLocations && selectedAreaCode && selectedAreaCreatesInventoryLocations && <div className="twin-location-create">
               <div><b>区域库位数量</b><small>当前 {selectedAreaLocationCount} 个{selectedAreaPendingLocationCount ? ` · ${selectedAreaPendingLocationCount} 个待布局` : ""}</small></div>
               <label><span>目标库位数</span><input type="number" min="0" max="500" step="1" value={targetAreaLocationCount} onChange={(event) => setTargetAreaLocationCount(event.target.value)} /></label>
               <button type="button" disabled={locationEditBusy || targetAreaLocationCount === "" || Number(targetAreaLocationCount) === selectedAreaLocationCount} onClick={applyAreaLocationCount}>确认调整</button>
               <p>系统按区域自动生成内部唯一编码和员工可读名称；减少时只逻辑停用空库位，不删除历史身份。</p>
             </div>}
+            {locationEditMode && canEditLocations && selectedAreaCode && !selectedAreaCreatesInventoryLocations && <div className="twin-location-create"><p>该区域使用原料、模具、印版或临时周转台账，不生成成品/半成品库存库位；发布后按对应台账定位。</p></div>}
+            {locationEditMode && canEditLocations && !selectedAreaCode && <div className="twin-location-create"><p>请先在“区域设置”中绑定正式区域编号，之后才能生成可投入使用的库位。</p></div>}
             <div className="twin-inventory-quantities">{selectedArea?.quantities.map((item) => <div className="twin-quantity-row" key={item.key}><span>{item.label}</span><b>{formatNumber(item.available)} {inventoryUnitLabel(item.unit)}</b></div>)}</div>
             <div className="twin-area-lot-list">
               {!selectedInventory.length && <div className="twin-area-empty"><b>当前区域没有有效库存</b><span>这是 ERP 当前真实空态，不生成模拟货物。</span></div>}

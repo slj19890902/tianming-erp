@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.79"
-    assert APP_VERSION_NAME == "仓库地图完整显示与厂外待送转库"
+    assert APP_VERSION == "v0.22.80"
+    assert APP_VERSION_NAME == "组合BOM子件来源与同码产品识别"
     assert APP_BUILD_DATE == "2026-08-10"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -50,23 +50,23 @@ def test_factory_update_reports_current_release_version() -> None:
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
     assert any(
-        "本次更新｜" in item and "完整工作区高度" in item and "库存台账" in item
+        "本次更新｜" in item and "组合 BOM" in item and "冻结快照" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "模具" in item and "挂板" in item
+        "本次更新｜" in item and "存货编码" in item and "产品名称" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "厂外" in item and "散存待送" in item
+        "本次更新｜" in item and "PDF" in item and "存货编码｜产品名称" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "缩略图" in item and "预占" in item
+        "本次更新｜" in item and "报料" in item and "送货" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "无数据库迁移" in item and "正式库位" in item
+        "本次更新｜" in item and "ea09" in item and "降级" in item
         for item in current_release
     )
     assert any(
@@ -94,8 +94,16 @@ def test_factory_update_reports_current_release_version() -> None:
         for item in APP_CHANGELOG
     )
     assert any(
-        "如何验证｜" in item and "v0.22.79" in item and "dz08" in item
+        "如何验证｜" in item and "v0.22.80" in item and "ea09" in item
         for item in current_release
+    )
+    assert any(
+        item.startswith("v0.22.79：本次更新｜") and "完整工作区高度" in item
+        for item in APP_CHANGELOG
+    )
+    assert any(
+        item.startswith("v0.22.79：如何验证｜") and "v0.22.79" in item
+        for item in APP_CHANGELOG
     )
     assert any(
         item.startswith("v0.22.78：本次更新｜") and "库存台账" in item

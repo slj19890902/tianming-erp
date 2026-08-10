@@ -19,8 +19,8 @@ import json
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy import exists, func, or_, select
+from sqlalchemy.orm import Session, aliased
 
 from app.models.audit import OperationLog
 from app.models.mold_tool import MoldTool
@@ -134,6 +134,53 @@ def validate_component_graph(
 
 def is_composite_product(product: Product | None) -> bool:
     return bool(product is not None and getattr(product, "is_composite", False))
+
+
+def order_selectable_product_condition():
+    """Return the authoritative product-picker visibility predicate.
+
+    A BOM child stays editable in customer master data.  It is hidden from the
+    order picker only when every active BOM parent uses the same inventory code,
+    because the parent is then the single selectable order line.  A child with
+    no active parent or at least one distinct-code parent remains selectable,
+    regardless of its document display mode or legacy internal-component flag.
+    Downstream workflows continue to use immutable order BOM snapshots and are
+    not filtered by this predicate.
+    """
+
+    bom_model, _snapshot_model = _models()
+    relation_parent = aliased(Product)
+    active_parent_relation = exists(
+        select(1)
+        .select_from(bom_model)
+        .join(
+            relation_parent,
+            relation_parent.id == bom_model.parent_product_id,
+        )
+        .where(
+            bom_model.component_product_id == Product.id,
+            relation_parent.is_active.is_(True),
+        )
+    )
+    distinct_parent = aliased(Product)
+    distinct_code_relation = exists(
+        select(1)
+        .select_from(bom_model)
+        .join(
+            distinct_parent,
+            distinct_parent.id == bom_model.parent_product_id,
+        )
+        .where(
+            bom_model.component_product_id == Product.id,
+            distinct_parent.is_active.is_(True),
+            func.lower(func.trim(distinct_parent.product_code))
+            != func.lower(func.trim(Product.product_code)),
+        )
+    )
+    return or_(
+        ~active_parent_relation,
+        distinct_code_relation,
+    )
 
 
 def _active_bom_rows(db: Session, parent_product_id: int | None = None) -> list[Any]:

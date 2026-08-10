@@ -61,7 +61,7 @@ class NewProductInput:
 def _dedup_key(customer_id: int, data: NewProductInput) -> str:
     code = _norm(data.inventory_code)
     if code:
-        return f"{customer_id}|code|{code}"
+        return f"{customer_id}|code|{code}|name|{_norm(data.product_name)}"
     dims = "x".join(
         format(value, "f").rstrip("0").rstrip(".")
         for value in (data.length_mm, data.width_mm, data.height_mm)
@@ -80,7 +80,7 @@ def _find_existing(
 ) -> Product | None:
     code = _clean(data.inventory_code)
     if code:
-        product = db.scalar(
+        products = db.scalars(
             select(Product)
             .where(
                 Product.customer_id == customer_id,
@@ -91,10 +91,17 @@ def _find_existing(
                 ),
             )
             .order_by(Product.id)
-            .limit(1)
-        )
-        if product is not None:
-            return product
+        ).all()
+        target_name = _norm(data.product_name)
+        exact = [
+            product
+            for product in products
+            if target_name and _norm(product.product_name) == target_name
+        ]
+        if len(exact) == 1:
+            return exact[0]
+        if len(exact) > 1:
+            raise NewProductError("同一存货编码和产品名称命中多个常用箱，请先整理主档")
 
     target_name = _norm(data.product_name)
     if not target_name:

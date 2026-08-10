@@ -277,6 +277,105 @@ def test_product_picker_filters_customer_code_name_and_full_specification(
     assert response.json()["items"][0]["product_code"] == "TH001"
 
 
+def test_same_customer_code_allows_distinct_names_but_rejects_same_name(
+    master_data_app: FastAPI,
+) -> None:
+    payload = {
+        "customer_id": 1,
+        "product_code": "TH001",
+        "customer_material_code": "TH001",
+        "product_name": "五层加强纸箱内衬",
+        "box_category": "normal",
+    }
+    with TestClient(master_data_app) as client:
+        _login(client, "admin")
+        created = client.post("/api/master/products", json=payload)
+        duplicate = client.post("/api/master/products", json=payload)
+
+    assert created.status_code == 201, created.text
+    assert created.json()["product_code"] == "TH001"
+    assert created.json()["product_name"] == "五层加强纸箱内衬"
+    assert duplicate.status_code == 409
+    assert duplicate.json()["detail"] == "同一客户下，存货编码与产品名称的组合不能重复"
+
+
+def test_order_product_selection_hides_same_code_child_but_keeps_distinct_code_child(
+    master_data_app: FastAPI,
+) -> None:
+    from app.models.product import Product
+    from app.models.product_bom import ProductBomComponent
+
+    factory = master_data_app.state.session_factory
+    with factory() as session:
+        parent = session.get(Product, 1)
+        parent.is_composite = True
+        hidden_child = Product(
+            customer_id=1,
+            product_code="TH001",
+            customer_material_code="TH001",
+            product_name="五层加强纸箱内衬",
+            box_category="normal",
+            is_internal_component=True,
+        )
+        visible_child = Product(
+            customer_id=1,
+            product_code="TH001-PART",
+            customer_material_code="TH001-PART",
+            product_name="可独立下单隔板",
+            box_category="normal",
+            is_internal_component=True,
+        )
+        session.add_all([hidden_child, visible_child])
+        session.flush()
+        session.add_all(
+            [
+                ProductBomComponent(
+                    parent_product_id=parent.id,
+                    component_product_id=hidden_child.id,
+                    quantity_per_set=1,
+                    display_order=1,
+                    internal_component_code="TH001-S01",
+                    display_mode="show_on_all_docs",
+                ),
+                ProductBomComponent(
+                    parent_product_id=parent.id,
+                    component_product_id=visible_child.id,
+                    quantity_per_set=1,
+                    display_order=2,
+                    internal_component_code="TH001-S02",
+                    display_mode="internal_only",
+                ),
+            ]
+        )
+        session.commit()
+
+    with TestClient(master_data_app) as client:
+        _login(client, "sales")
+        master_data = client.get(
+            "/api/master/products",
+            params={"customer_id": 1, "page_size": 50},
+        )
+        order_picker = client.get(
+            "/api/master/products",
+            params={
+                "customer_id": 1,
+                "page_size": 50,
+                "selection_context": "order",
+            },
+        )
+
+    assert master_data.status_code == 200
+    assert master_data.json()["total"] == 3
+    assert order_picker.status_code == 200
+    assert {
+        (row["product_code"], row["product_name"])
+        for row in order_picker.json()["items"]
+    } == {
+        ("TH001", "五层加强纸箱"),
+        ("TH001-PART", "可独立下单隔板"),
+    }
+
+
 def test_public_customer_alias_requires_login_and_hides_legacy_trace_fields(
     master_data_app: FastAPI,
 ) -> None:

@@ -37,12 +37,14 @@ class Product(Base):
         UniqueConstraint(
             "customer_id",
             "customer_material_code",
-            name="uq_products_customer_material_code",
+            "product_name",
+            name="uq_products_customer_material_code_name",
         ),
         UniqueConstraint(
             "customer_id",
             "product_code",
-            name="uq_products_customer_product_code",
+            "product_name",
+            name="uq_products_customer_product_code_name",
         ),
         CheckConstraint(
             "box_category IN ('normal', 'die_cut')",

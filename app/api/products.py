@@ -81,6 +81,7 @@ from app.services.master_data_versioning import (
 from app.services.composite_bom import (
     CompositeBOMError,
     get_product_bom,
+    order_selectable_product_condition,
     raise_http as raise_composite_bom_http,
     replace_product_bom,
 )
@@ -1066,6 +1067,9 @@ def list_products(
     material: str = "",
     include_inactive: bool = False,
     response_mode: Literal["full", "summary"] = Query(default="full"),
+    selection_context: Literal["master_data", "order"] = Query(
+        default="master_data"
+    ),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -1085,6 +1089,8 @@ def list_products(
         query = query.where(Product.customer_id == customer_id)
     if not include_inactive:
         query = query.where(Product.is_active.is_(True))
+    if selection_context == "order":
+        query = query.where(order_selectable_product_condition())
     for token in keyword.split():
         pattern = f"%{token}%"
         query = query.where(
@@ -1545,7 +1551,10 @@ def create_product(
         db.commit()
     except IntegrityError as error:
         db.rollback()
-        raise HTTPException(status_code=409, detail="同客户产品编码或客户料号重复") from error
+        raise HTTPException(
+            status_code=409,
+            detail="同一客户下，存货编码与产品名称的组合不能重复",
+        ) from error
     except Exception:
         db.rollback()
         raise
@@ -1587,7 +1596,10 @@ def update_product(
         db.commit()
     except IntegrityError as error:
         db.rollback()
-        raise HTTPException(status_code=409, detail="同客户产品编码或客户料号重复") from error
+        raise HTTPException(
+            status_code=409,
+            detail="同一客户下，存货编码与产品名称的组合不能重复",
+        ) from error
     except Exception:
         db.rollback()
         raise

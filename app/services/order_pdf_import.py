@@ -20,6 +20,7 @@ from app.models.product import Product
 from app.api.materials import _parse_layer_weights
 from app.services.pricing import PricingError, calculate_price
 from app.services.product_readiness import material_comparison, product_readiness
+from app.services.composite_bom import order_selectable_product_condition
 from app.services.template_regex import safe_regex_finditer, safe_regex_search
 
 
@@ -2785,6 +2786,7 @@ def rematch_draft_items(db: Session, draft: dict, customer_id: int | None) -> di
                 Product.customer_id == customer_id,
                 Product.is_active.is_(True),
                 Product.deleted_at.is_(None),
+                order_selectable_product_condition(),
             )
             .order_by(Product.id)
         ).unique().all()

@@ -2811,7 +2811,7 @@ def test_new_product_deduplicated_within_single_order(order_api_app) -> None:
         assert session.scalar(select(func.count()).select_from(Product)) == 3
 
 
-def test_new_product_reuses_existing_product_by_inventory_code(
+def test_new_product_same_code_with_distinct_name_creates_distinct_product(
     order_api_app,
 ) -> None:
     from app.models.product import Product
@@ -2835,9 +2835,41 @@ def test_new_product_reuses_existing_product_by_inventory_code(
         response = client.post("/api/orders", json=payload)
 
     assert response.status_code == 201, response.text
+    created_id = response.json()["items"][0]["product_id"]
+    assert created_id != 1
+    with session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(Product)) == 3
+        created = session.get(Product, created_id)
+        assert created is not None
+        assert created.product_code == "KH-001"
+        assert created.product_name == "随便填的名字"
+
+
+def test_new_product_same_code_and_same_name_reuses_existing_product(
+    order_api_app,
+) -> None:
+    from app.models.product import Product
+
+    app, session_factory = order_api_app
+    payload = _payload()
+    payload["items"] = [
+        {
+            "product_id": None,
+            "is_new_product": True,
+            "product_code": "KH-001",
+            "product_name": "五层加强纸箱",
+            "specification": "999×999×999mm",
+            "quantity": 25,
+            "unit_price": "5.00",
+        }
+    ]
+    with TestClient(app) as client:
+        _login(client)
+        response = client.post("/api/orders", json=payload)
+
+    assert response.status_code == 201, response.text
     assert response.json()["items"][0]["product_id"] == 1
     with session_factory() as session:
-        # no new product created — reused existing
         assert session.scalar(select(func.count()).select_from(Product)) == 2
 
 

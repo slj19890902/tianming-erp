@@ -34,15 +34,19 @@ def test_order_flow_is_first_and_duplicate_workbench_tabs_are_not_rendered() -> 
     assert "仓库地图" not in workbench
 
 
-def test_warehouse_map_is_a_permission_scoped_left_sidebar_item_after_dashboard() -> None:
+def test_warehouse_map_is_a_permission_scoped_topbar_item_and_not_in_sidebar() -> None:
     menu = _block("menus() {", "deliveryCustomers() {")
-    dashboard = menu.index('{ key: "dashboard", label: "首页" }')
-    warehouse = menu.index('{ key: "warehouse", label: "仓库地图" }')
-    workbench = menu.index('{ key: "workbench", label: "订单主链"')
-    assert dashboard < warehouse < workbench
+    assert '{ key: "dashboard", label: "首页" }' in menu
+    assert '{ key: "warehouse", label: "仓库地图" }' not in menu
+    assert '{ key: "workbench", label: "订单主链"' in menu
     assert "this.pageAllowed(item.key)" in menu
     assert 'warehouse:"warehouse.view"' in INDEX
     assert 'boss: ["dashboard", "customers", "products", "orders", "requisition", "incoming", "production", "warehouse"' in INDEX
+
+    topbar = _block('<div class="top-actions">', "</header>")
+    assert 'v-if="pageAllowed(\'warehouse\')"' in topbar
+    assert '@click="goMenu(\'warehouse\')"' in topbar
+    assert topbar.index("topbar-warehouse-entry") < topbar.index("ui-mode-switch")
 
     go_menu = _block("async goMenu(menuKey) {", "async openWarehouseMap() {")
     assert "if (!group) return this.go(menuKey)" in go_menu

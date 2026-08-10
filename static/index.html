@@ -240,7 +240,9 @@
         box-shadow: 0 2px 8px rgba(0,113,227,0.40);
       }
       .top-actions { display: flex; align-items: center; gap: 10px; }
-      .top-actions > span:first-child { font-weight: 600; color: var(--text); font-size: 13px; }
+      .top-user-name { font-weight: 600; color: var(--text); font-size: 13px; }
+      .topbar-warehouse-entry { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; font-weight: 800; }
+      .topbar-warehouse-entry svg { width: 16px; height: 16px; }
 
       /* Layout */
       .layout { display: grid; grid-template-columns: 248px 1fr; min-height: 0; overflow: hidden; }
@@ -1994,7 +1996,8 @@
         <header class="topbar">
           <div class="brand"><img class="brand-logo" src="/static/assets/logo.png" alt="天明包装ERP" /><span>天明包装ERP</span></div>
           <div class="top-actions">
-            <span>{{ user.real_name || user.username }}</span>
+            <button v-if="pageAllowed('warehouse')" type="button" :class="['btn','primary','topbar-warehouse-entry',{active:activePage==='warehouse'}]" :aria-current="activePage==='warehouse' ? 'page' : null" title="进入仓库页面" @click="goMenu('warehouse')"><span aria-hidden="true" v-html="navIcon('warehouse')"></span><span>仓库</span></button>
+            <span class="top-user-name">{{ user.real_name || user.username }}</span>
             <span class="status blue">{{ roleLabel(user.role) }}</span>
             <div class="ui-mode-switch" role="group" aria-label="界面显示大小">
               <span class="ui-mode-label">显示</span>
@@ -8489,7 +8492,6 @@
           menus() {
             const items = [
               { key: "dashboard", label: "首页" },
-              { key: "warehouse", label: "仓库地图" },
               { key: "workbench", label: "订单主链", count: this.ordersUnfinishedTotal + this.requisitionPendingOverallTotal + this.incomingPendingTotal },
               { key: "production", label: "生产确认", count: this.productionPendingTotal },
               { key: "deliveries", label: "送货与回单", count: this.deliveriesTotal },

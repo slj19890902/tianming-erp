@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.database import create_sqlite_engine
 from app.models import Base
 from app.models.warehouse_inventory import (
+    InventoryLot,
     InventoryPallet,
     WarehouseArea,
     WarehouseFloor,
@@ -20,7 +23,9 @@ from app.services.location_candidates import (
 )
 from app.services.production_workflow import (
     ProductionWorkflowError,
+    _production_direct_staging_location,
     _production_stock_location,
+    list_temporary_locations,
 )
 from app.services.stocktake import (
     StocktakeError,
@@ -275,6 +280,75 @@ def test_empty_pallet_candidates_exclude_occupied_and_rack(location_db: Session)
         empty_only=True,
     )
     assert {row.location.id for row in candidates} == {rows["valid_1f"].id}
+
+    location_db.add(
+        InventoryLot(
+            lot_number="P0-LIVE-LOT-WITHOUT-PALLET",
+            inventory_type="finished",
+            warehouse_location_id=rows["valid_1f"].id,
+            quantity_available=7,
+            quantity_reserved=2,
+            quantity_consumed=0,
+            quantity_damaged=1,
+            quantity_scrapped=0,
+            unit="boxes",
+            status="active",
+            source_type="manual",
+            stock_date=date(2026, 8, 10),
+            last_movement_at=datetime(2026, 8, 10, 9, 0, 0),
+            version=1,
+        )
+    )
+    location_db.flush()
+    candidates = list_operational_locations(
+        location_db,
+        warehouse_types={"finished", "shared"},
+        pallet_storage_only=True,
+        empty_only=True,
+    )
+    assert candidates == []
+    occupied = list_operational_locations(
+        location_db,
+        warehouse_types={"finished", "shared"},
+    )
+    assert {
+        row.location.id for row in occupied if row.occupied
+    } == {rows["valid_1f"].id, rows["valid_3f"].id}
+
+
+def test_general_production_excludes_dispatch_but_direct_delivery_keeps_it(
+    location_db: Session,
+) -> None:
+    rows = _seed_space(location_db)
+    floor1 = location_db.scalar(
+        select(WarehouseFloor).where(WarehouseFloor.floor_number == 1)
+    )
+    location_db.add(
+        WarehouseArea(
+            floor_id=floor1.id,
+            area_code="DISPATCH",
+            area_name="一楼待送区",
+            construction_status="enabled",
+        )
+    )
+    dispatch = _location(
+        "F1-DISPATCH-01",
+        floor=1,
+        area="DISPATCH",
+        storage_type="temporary_aisle",
+    )
+    dispatch.location_name = "一楼待送区"
+    location_db.add(dispatch)
+    location_db.flush()
+
+    general_codes = {row["location_code"] for row in list_temporary_locations(location_db)}
+    assert "F1-DISPATCH-01" not in general_codes
+    assert {rows["valid_1f"].location_code, rows["valid_3f"].location_code}.issubset(
+        general_codes
+    )
+    assert _production_direct_staging_location(location_db).id == dispatch.id
+    with pytest.raises(ProductionWorkflowError, match="只供直接待送"):
+        _production_stock_location(location_db, dispatch.id, pallet_id=None)
 
 
 def test_stage_c_frontends_use_floor_area_location_without_extra_migration() -> None:

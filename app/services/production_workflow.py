@@ -53,6 +53,7 @@ from app.services.composite_bom_workflow import (
 )
 from app.services.location_candidates import (
     has_space_ledger,
+    location_has_live_inventory,
     list_operational_locations,
     operational_location_issue,
 )
@@ -966,6 +967,13 @@ def _production_stock_location(
             f"{issue}，不能办理生产完工入库",
             409,
         )
+    if location.location_code == DIRECT_DELIVERY_STAGING_LOCATION_CODE:
+        raise ProductionWorkflowError(
+            "一楼待送区只供直接待送使用，不能作为一般生产入库库位",
+            409,
+        )
+    if location_has_live_inventory(db, location.id):
+        raise ProductionWorkflowError("所选库位已有活动库存，请选择空位", 409)
     pallet = _current_pallet(db, location.id)
     if pallet is not None:
         item_exists = db.scalar(
@@ -1006,6 +1014,12 @@ def list_temporary_locations(db: Session) -> list[dict]:
         db,
         warehouse_types={"finished", "shared"},
     )
+    locations = [
+        candidate
+        for candidate in locations
+        if candidate.location.location_code
+        != DIRECT_DELIVERY_STAGING_LOCATION_CODE
+    ]
     if not has_space_ledger(db):
         locations = [
             candidate

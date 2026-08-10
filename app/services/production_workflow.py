@@ -7,7 +7,7 @@ import json
 from math import ceil
 from typing import Literal, Sequence
 
-from sqlalchemy import case, func, or_, select, update
+from sqlalchemy import String, case, cast, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -2732,12 +2732,18 @@ def list_production_tasks(
     status: str | None = None,
     page: int | None = None,
     page_size: int | None = None,
+    task_ids: Sequence[int] | None = None,
 ) -> list[dict]:
     query = _filtered_task_query(
         db,
         allowed_customer_ids=allowed_customer_ids,
         status=status,
     ).order_by(Order.delivery_date, Order.id, OrderItem.id, ProductionTask.id)
+    if task_ids is not None:
+        normalized_task_ids = [int(task_id) for task_id in task_ids]
+        if not normalized_task_ids:
+            return []
+        query = query.where(ProductionTask.id.in_(normalized_task_ids))
     if page is not None and page_size is not None:
         query = query.offset((page - 1) * page_size).limit(page_size)
     rows = db.execute(query).all()
@@ -2880,6 +2886,112 @@ def list_production_tasks(
             ),
         })
     return result
+
+
+def find_pending_production_task_lookup_rows(
+    db: Session,
+    *,
+    allowed_customer_ids: set[int] | None,
+    keyword: str,
+    limit: int = 50,
+) -> tuple[list[dict], int]:
+    """Find active pending tasks from a scanner or a short manual query.
+
+    This is only an identity projection. The caller still obtains the
+    workshop-safe task payload through :func:`list_production_tasks`, keeping
+    existing production calculations and component snapshots authoritative.
+    """
+
+    normalized = keyword.strip()
+    if not normalized:
+        return [], 0
+    escaped = (
+        normalized.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    )
+    pattern = f"%{escaped}%"
+    lowered = normalized.casefold()
+    component_code = SalesOrderItemBomComponent.snapshot_component_product_code
+    component_name = SalesOrderItemBomComponent.snapshot_component_product_name
+    parent_code = func.coalesce(
+        func.nullif(OrderItem.snapshot_product_code, ""),
+        Product.product_code,
+    )
+    parent_name = func.coalesce(
+        func.nullif(OrderItem.snapshot_product_name, ""),
+        Product.product_name,
+    )
+    task_code = case(
+        (
+            ProductionTask.sales_order_item_bom_component_id.is_not(None),
+            component_code,
+        ),
+        else_=parent_code,
+    )
+    task_name = case(
+        (
+            ProductionTask.sales_order_item_bom_component_id.is_not(None),
+            component_name,
+        ),
+        else_=parent_name,
+    )
+    match_condition = or_(
+        cast(ProductionTask.id, String) == normalized,
+        Order.order_number.ilike(pattern, escape="\\"),
+        Order.customer_po.ilike(pattern, escape="\\"),
+        OrderItem.item_order_number.ilike(pattern, escape="\\"),
+        task_code.ilike(pattern, escape="\\"),
+        task_name.ilike(pattern, escape="\\"),
+        Product.product_code.ilike(pattern, escape="\\"),
+        Product.customer_material_code.ilike(pattern, escape="\\"),
+        Customer.name.ilike(pattern, escape="\\"),
+    )
+    exact_rank = case(
+        (func.lower(cast(ProductionTask.id, String)) == lowered, 0),
+        (func.lower(task_code) == lowered, 0),
+        (func.lower(Order.order_number) == lowered, 0),
+        (func.lower(OrderItem.item_order_number) == lowered, 0),
+        (func.lower(Order.customer_po) == lowered, 0),
+        else_=1,
+    )
+    base = (
+        _filtered_task_query(
+            db,
+            allowed_customer_ids=allowed_customer_ids,
+            status=PENDING,
+        )
+        .outerjoin(
+            SalesOrderItemBomComponent,
+            SalesOrderItemBomComponent.id
+            == ProductionTask.sales_order_item_bom_component_id,
+        )
+        .where(match_condition)
+    )
+    count_query = base.with_only_columns(ProductionTask.id).order_by(None).subquery()
+    total = int(db.scalar(select(func.count()).select_from(count_query)) or 0)
+    rows = db.execute(
+        base.with_only_columns(
+            ProductionTask.id.label("task_id"),
+            Order.customer_po.label("customer_po"),
+            Order.delivery_date.label("delivery_date"),
+        )
+        .order_by(
+            exact_rank,
+            Order.delivery_date.is_(None),
+            Order.delivery_date,
+            Order.id,
+            OrderItem.id,
+            ProductionTask.id,
+        )
+        .limit(max(1, min(int(limit), 50)))
+    ).mappings().all()
+    return [
+        {
+            "task_id": int(row.task_id),
+            "customer_po": row.customer_po,
+            "delivery_date": row.delivery_date,
+        }
+        for row in rows
+    ], total
 
 
 def count_production_tasks(

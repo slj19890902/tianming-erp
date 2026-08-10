@@ -28,7 +28,10 @@ from app.models.customer import Customer
 from app.models.order import OrderItem
 from app.models.product import Product
 from app.models.user import User
-from app.services.production_workflow import list_production_tasks
+from app.services.production_workflow import (
+    find_pending_production_task_lookup_rows,
+    list_production_tasks,
+)
 from app.models.warehouse_inventory import (
     FinishedGoodsInventoryDetail,
     InventoryLot,
@@ -641,6 +644,66 @@ def recent_production_materials(
         "date_from": start_date.isoformat(),
         "date_to": end_date.isoformat(),
         "count": len(items),
+        "items": items,
+        "as_of": datetime.now(_BEIJING).isoformat(timespec="seconds"),
+        "read_only": True,
+    }
+
+
+@router.get("/production/pending/lookup")
+def lookup_pending_production_tasks(
+    response: Response,
+    q: str = Query(min_length=1, max_length=100),
+    limit: int = Query(default=50, ge=1, le=50),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read_orders),
+) -> dict:
+    """Reverse lookup current pending production tasks without writing facts."""
+
+    _no_store(response)
+    if not has_permission(user, "incoming.view"):
+        raise HTTPException(status_code=403, detail="当前账号没有查看来料资料的权限")
+    keyword = q.strip()
+    if not keyword:
+        raise HTTPException(status_code=422, detail="请扫码或输入存货编码、订单号、任务号")
+    visible_customer_ids = _visible_customer_ids(user, db)
+    lookup_rows, total = find_pending_production_task_lookup_rows(
+        db,
+        allowed_customer_ids=visible_customer_ids,
+        keyword=keyword,
+        limit=limit,
+    )
+    task_ids = [row["task_id"] for row in lookup_rows]
+    full_rows = list_production_tasks(
+        db,
+        allowed_customer_ids=visible_customer_ids,
+        status="pending",
+        task_ids=task_ids,
+    )
+    tasks_by_id = {int(row["id"]): row for row in full_rows}
+    if set(tasks_by_id) != set(task_ids):
+        raise HTTPException(status_code=409, detail="生产任务状态已变化，请重新扫码")
+    items = []
+    for lookup_row in lookup_rows:
+        task = tasks_by_id[lookup_row["task_id"]]
+        safe_task = _safe_production_task(task, drawing_path=None)
+        safe_task.update(
+            {
+                "customer_name": task.get("customer_name"),
+                "customer_po": lookup_row.get("customer_po"),
+                "delivery_date": (
+                    lookup_row["delivery_date"].isoformat()
+                    if lookup_row.get("delivery_date")
+                    else None
+                ),
+            }
+        )
+        items.append(safe_task)
+    return {
+        "query": keyword,
+        "total": total,
+        "returned_count": len(items),
+        "limit": limit,
         "items": items,
         "as_of": datetime.now(_BEIJING).isoformat(timespec="seconds"),
         "read_only": True,

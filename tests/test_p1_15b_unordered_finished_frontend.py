@@ -59,7 +59,9 @@ def test_unordered_finished_payload_allows_pending_price_and_requires_allocation
 def test_order_and_inventory_pickers_both_keep_server_paging() -> None:
     assert "setDeliveryBatchSelection(item, checked)" in INDEX
     assert "Object.values(this.deliveryBatchPicker.selected || {})" in INDEX
-    assert "list_all: true" not in INDEX
+    assert INDEX.count("list_all: true") == 1
+    assert "page_size:10" in INDEX
+    assert "page_size:12" in INDEX
     assert "page: Math.max(1, Number(page || 1))" in INDEX
     assert "page_size: this.deliveryBatchPicker.page_size" in INDEX
     assert "requestToken !== this.deliveryBatchPicker.request_token" in INDEX

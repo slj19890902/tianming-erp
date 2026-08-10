@@ -6424,7 +6424,7 @@
                     <input class="input" style="width:260px" v-model.trim="deliveryBatchPicker.keyword" placeholder="搜索存货编码 / 客户单号 / 产品名称" @keyup.enter.prevent="loadDeliveryBatchItems(1)" />
                     <button class="btn small" type="button" @click="loadDeliveryBatchItems(1)">{{ deliveryBatchPicker.loading ? "查询中..." : "查询" }}</button>
                     <button class="btn small" type="button" @click="clearDeliveryBatchFilter">清空</button>
-                    <span class="muted">第 {{ deliveryBatchPicker.page }} / {{ deliveryBatchPicker.total_pages }} 页</span><button class="btn small" type="button" :disabled="deliveryBatchPicker.page <= 1" @click="loadDeliveryBatchItems(deliveryBatchPicker.page - 1)">上一页</button><button class="btn small" type="button" :disabled="deliveryBatchPicker.page >= deliveryBatchPicker.total_pages" @click="loadDeliveryBatchItems(deliveryBatchPicker.page + 1)">下一页</button>
+                    <span class="muted">每页 {{ deliveryBatchPicker.page_size }} 行 · 第 {{ deliveryBatchPicker.page }} / {{ deliveryBatchPicker.total_pages }} 页</span><button class="btn small" type="button" :disabled="deliveryBatchPicker.page <= 1" @click="loadDeliveryBatchItems(deliveryBatchPicker.page - 1)">上一页</button><button class="btn small" type="button" :disabled="deliveryBatchPicker.page >= deliveryBatchPicker.total_pages" @click="loadDeliveryBatchItems(deliveryBatchPicker.page + 1)">下一页</button>
                     <button class="btn small" type="button" :disabled="!deliveryBatchFilteredItems().some(item => !isDeliveryItemAlreadyInForm(item.order_item_id))" @click="toggleAllDeliveryBatchFiltered(true)">全选本页</button>
                     <button class="btn small" type="button" :disabled="!Object.keys(deliveryBatchPicker.selected).length" @click="toggleAllDeliveryBatchFiltered(false)">取消本页</button>
                     <button class="btn primary small" type="button" :disabled="!Object.keys(deliveryBatchPicker.selected).length" @click="importSelectedDeliveryBatchItems()">导入已选 {{ Object.keys(deliveryBatchPicker.selected).length }}</button>
@@ -7739,7 +7739,7 @@
             orderPdfImport: { file: null, draft: null, matchedCustomerLabel: "" },
             deliveryForm: { editingId: null, delivery_number: "", source_mode: "order", source_tab: "order", customer_id: null, delivery_date: today(), vehicle_number: "", lines: [], saved_signature: "", pick_task: null },
             deliveryRoutePlan: { origin_address:null, customer_count:0, groups:[], disclaimer:"" },
-            deliveryBatchPicker: { visible: false, loading: false, keyword: "", items: [], selected: {}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message: "", error: false },
+            deliveryBatchPicker: { visible: false, loading: false, keyword: "", items: [], selected: {}, page:1, page_size:10, total:0, total_pages:1, request_token:0, message: "", error: false },
             unorderedFinishedPicker: { visible: false, loading: false, keyword:"", items: [], selected:{}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message: "", error: false },
             tianhuaPreimport: { file:null, fileName:"", preDeliveryDate:plusDays(1), batchId:null, batchNumber:"", items:[], draft:null, mobileToken:null, remark:"天华邮件截图导入" },
             statementForm: { customer_id: null, statement_month: month(), selected: {} },
@@ -24249,6 +24249,7 @@
                 params: {
                   customer_id: customerId,
                   q: this.deliveryBatchPicker.keyword || undefined,
+                  list_all: true,
                   page: Math.max(1, Number(page || 1)),
                   page_size: this.deliveryBatchPicker.page_size,
                 },
@@ -24312,7 +24313,7 @@
             const inventoryOnly = !!candidate && !candidate.has_pending_orders && !!candidate.has_unordered_finished;
             this.deliveryForm.source_mode = inventoryOnly ? "unordered_finished" : "order";
             this.deliveryForm.source_tab = inventoryOnly ? "unordered_finished" : "order";
-            this.deliveryBatchPicker = { visible:false, loading:false, keyword:"", items:[], selected:{}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message:"", error:false };
+            this.deliveryBatchPicker = { visible:false, loading:false, keyword:"", items:[], selected:{}, page:1, page_size:10, total:0, total_pages:1, request_token:0, message:"", error:false };
             this.unorderedFinishedPicker = { visible:false, loading:false, keyword:"", items:[], selected:{}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message:"", error:false };
             if (this.deliveryForm.customer_id && this.deliveryForm.source_tab === "order") {
               this.loadDeliveryBatchItems(1);
@@ -24835,7 +24836,7 @@
             if (!Number.isInteger(Number(preferredCustomerId))) preferredCustomerId = null;
             this.deliverySaveState = {saving:false,committed:false,outcomeUncertain:false,result:null};
             this.deliveryForm = { editingId:null, delivery_number:"", source_mode:"order", source_tab:"order", customer_id:null, delivery_date:today(), vehicle_number:"", lines:[], saved_signature:"", pick_task:null };
-            this.deliveryBatchPicker = { visible:false, loading:false, keyword:"", items:[], selected:{}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message:"", error:false };
+            this.deliveryBatchPicker = { visible:false, loading:false, keyword:"", items:[], selected:{}, page:1, page_size:10, total:0, total_pages:1, request_token:0, message:"", error:false };
             this.unorderedFinishedPicker = { visible:false, loading:false, keyword:"", items:[], selected:{}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message:"", error:false };
             this.deliveryForm.saved_signature = this.deliveryFormSignature();
             this.modal = { type:"delivery", title:"新增送货单" };
@@ -26105,7 +26106,7 @@
             });
             this.deliveryForm = { editingId:row.id, delivery_number:row.delivery_number || "", source_mode:sourceMode, source_tab:hasOrderLines ? "order" : "unordered_finished", customer_id:row.customer_id, delivery_date:row.delivery_date, vehicle_number:row.vehicle_number || "", lines, saved_signature:"", pick_task:row.pick_task || null };
             this.deliveryForm.saved_signature = this.deliveryFormSignature();
-            this.deliveryBatchPicker = { visible:false, loading:false, keyword:"", items:[], selected:{}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message:"", error:false };
+            this.deliveryBatchPicker = { visible:false, loading:false, keyword:"", items:[], selected:{}, page:1, page_size:10, total:0, total_pages:1, request_token:0, message:"", error:false };
             this.unorderedFinishedPicker = { visible:false, loading:false, keyword:"", items:[], selected:{}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message:"", error:false };
             this.modal = { type:"delivery", title:`编辑送货单 ${row.delivery_number}` };
             return true;

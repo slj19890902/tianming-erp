@@ -60,7 +60,8 @@ def test_batch_picker_uses_fast_server_paging_with_clear_loading_state() -> None
     loader = _method_body("loadDeliveryBatchItems")
 
     assert 'axios.get("/api/deliveries/pending-items/search"' in loader
-    assert "list_all: true" not in loader
+    assert "list_all: true" in loader
+    assert "page_size:10" in INDEX
     assert "page: Math.max(1, Number(page || 1))" in loader
     assert "page_size: this.deliveryBatchPicker.page_size" in loader
     assert "正在载入待送货物，请稍候" in loader

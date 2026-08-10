@@ -9,6 +9,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -168,6 +169,7 @@ def a3_surround_app(tmp_path: Path):
             snapshot_supplier_name="匿名供应商",
             snapshot_report_length_mm=999,
             snapshot_report_width_mm=999,
+            snapshot_crease_type="净料",
             special_process="一开一",
         )
         db.add(item)
@@ -229,7 +231,8 @@ def a3_surround_app(tmp_path: Path):
                     snapshot_component_default_cutting_mode="一开一",
                     snapshot_component_report_length_mm=800,
                     snapshot_component_report_width_mm=300,
-                    snapshot_component_crease_type="净料",
+                    snapshot_component_crease_type="毛片",
+                    snapshot_component_report_notes="围板按毛片报料",
                     snapshot_component_splice_mode="double",
                     snapshot_component_pieces_per_box=2,
                 ),
@@ -310,6 +313,108 @@ def test_pending_expands_exactly_cover_base_and_double_surround(
         (source["report_length_mm"], source["report_width_mm"])
         for source in sources
     ] == [(610, 410), (590, 390), (800, 300)]
+
+
+def test_bom_component_print_and_reported_list_use_component_crease_snapshot(
+    a3_surround_app,
+) -> None:
+    app, _ = a3_surround_app
+    with TestClient(app) as client:
+        _login(client)
+        created = client.post(
+            "/api/requisition/batches",
+            json={
+                "supplier_name": "匿名供应商",
+                "items": [_source_payload(2, "whole")],
+            },
+        )
+        assert created.status_code == 201, created.text
+        batch_id = created.json()["id"]
+        printed = client.get(f"/api/requisition/batches/{batch_id}/print")
+        reported = client.get("/api/requisition/reported-documents")
+
+    assert printed.status_code == 200, printed.text
+    print_line = printed.json()["items"][0]
+    assert print_line["product_code"] == "SURROUND-COMPONENT"
+    assert print_line["crease_display"] == "毛"
+    assert print_line["flute_type"] == "AB"
+    assert "围板按毛片报料" in print_line["report_remark"]
+
+    assert reported.status_code == 200, reported.text
+    document = next(
+        row
+        for row in reported.json()["items"]
+        if row["id"] == batch_id
+        and row["source_type"] == "composite_bom_requisition"
+    )
+    line = document["line_items"][0]
+    assert line["component_type"] == "whole"
+    assert line["crease_display"] == "毛片"
+    assert line["flute_type"] == "AB"
+
+
+def test_bom_component_surplus_inventory_uses_component_physical_snapshot(
+    a3_surround_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.models.product_bom import RequisitionItemBomSource
+    from app.services import incoming_receipts
+
+    app, factory = a3_surround_app
+    with TestClient(app) as client:
+        _login(client)
+        created = client.post(
+            "/api/requisition/batches",
+            json={
+                "supplier_name": "匿名供应商",
+                "items": [_source_payload(2, "whole")],
+            },
+        )
+    assert created.status_code == 201, created.text
+
+    with factory() as db:
+        source = db.scalar(select(RequisitionItemBomSource))
+        assert source is not None
+        target = incoming_receipts._target(
+            db,
+            f"r{source.requisition_item_id}",
+        )
+        assert target.bom_snapshot is not None
+        assert target.bom_snapshot.id == 2
+
+    captured: dict[str, object] = {}
+    sentinel = object()
+
+    def fake_manual_semi_finished_in(_db, **kwargs):
+        captured.update(kwargs)
+        return sentinel
+
+    monkeypatch.setattr(
+        incoming_receipts,
+        "manual_semi_finished_in",
+        fake_manual_semi_finished_in,
+    )
+    receipt_item = SimpleNamespace(
+        id=1,
+        receipt=SimpleNamespace(received_at=datetime(2026, 8, 10, 1, 0)),
+    )
+
+    result = incoming_receipts._create_surplus_lot(
+        object(),
+        target=target,
+        receipt_item=receipt_item,
+        surplus=2,
+        location_id=1,
+        user_id=1,
+        reason="组合子件超收",
+    )
+
+    assert result is sentinel
+    assert captured["material_code"] == "A=A"
+    assert captured["layer_count"] == 5
+    assert captured["flute_type"] == "AB"
+    assert captured["crease_type"] == "毛片"
+    assert captured["sheet_type"] == "raw_board"
 
 
 @pytest.mark.parametrize(
@@ -835,8 +940,8 @@ def test_double_surround_auto_cover_reserves_twenty_physical_pieces(
                     component_type="whole",
                     pieces_per_box=2,
                     stock_yield_per_sheet=1,
-                    sheet_type="net_sheet",
-                    crease_type="净料",
+                    sheet_type="raw_board",
+                    crease_type="毛片",
                 ),
                 SemiFinishedLotAllowedProduct(
                     inventory_lot_id=lot.id,

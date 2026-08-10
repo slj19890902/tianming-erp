@@ -1040,6 +1040,39 @@ def _component_crease(item: OrderItem, component: str | None) -> tuple[str | Non
     )
 
 
+def _bom_snapshot_crease(
+    snapshot: SalesOrderItemBomComponent,
+    component: str | None,
+) -> tuple[str | None, int | None, int | None, int | None]:
+    """Return immutable physical-board crease facts for one BOM source."""
+    if component == "base":
+        base_values = (
+            snapshot.snapshot_component_base_crease_type,
+            snapshot.snapshot_component_base_crease_left_mm,
+            snapshot.snapshot_component_base_crease_middle_mm,
+            snapshot.snapshot_component_base_crease_right_mm,
+        )
+        if any(value is not None for value in base_values):
+            return base_values
+    return (
+        snapshot.snapshot_component_crease_type,
+        snapshot.snapshot_component_crease_left_mm,
+        snapshot.snapshot_component_crease_middle_mm,
+        snapshot.snapshot_component_crease_right_mm,
+    )
+
+
+def _bom_snapshot_report_notes(
+    snapshot: SalesOrderItemBomComponent,
+    component: str | None,
+) -> str | None:
+    return (
+        snapshot.snapshot_component_base_report_notes
+        if component == "base"
+        else snapshot.snapshot_component_report_notes
+    )
+
+
 def _cutting_factor(cutting_mode: str | None) -> int:
     return cutting_factor(cutting_mode)
 
@@ -12378,9 +12411,20 @@ def print_batch(
             RequisitionItem,
             OrderItem,
             Material,
+            RequisitionItemBomSource,
+            SalesOrderItemBomComponent,
         )
         .outerjoin(OrderItem, OrderItem.id == RequisitionItem.order_item_id)
         .outerjoin(Material, Material.id == OrderItem.material_id)
+        .outerjoin(
+            RequisitionItemBomSource,
+            RequisitionItemBomSource.requisition_item_id == RequisitionItem.id,
+        )
+        .outerjoin(
+            SalesOrderItemBomComponent,
+            SalesOrderItemBomComponent.id
+            == RequisitionItemBomSource.sales_order_item_bom_component_id,
+        )
         .where(
             RequisitionItem.requisition_id == batch.id,
             RequisitionItem.status == "有效",
@@ -12388,18 +12432,38 @@ def print_batch(
         .order_by(RequisitionItem.id)
     ).all()
     print_items = []
-    for row, order_item, material in rows:
-        order_layer_count = order_item.layer_count if order_item else None
-        order_flute_type = order_item.flute_type if order_item else None
-        material_code = material.code if material else None
+    for row, order_item, material, bom_source, bom_snapshot in rows:
+        order_layer_count = (
+            bom_snapshot.snapshot_component_layer_count
+            if bom_snapshot is not None
+            else order_item.layer_count if order_item else None
+        )
+        order_flute_type = (
+            bom_snapshot.snapshot_component_flute_type
+            if bom_snapshot is not None
+            else order_item.flute_type if order_item else None
+        )
+        material_code = (
+            bom_snapshot.snapshot_component_material
+            if bom_snapshot is not None
+            else material.code if material else None
+        )
         material_layer_count = material.layer_count if material else None
         material_flute_type = None
         component = (
-            "base"
-            if row.product_name_snapshot and row.product_name_snapshot.endswith("-底")
-            else "cover"
+            str(bom_source.component_type or "whole").strip().lower()
+            if bom_source is not None
+            else (
+                "base"
+                if row.product_name_snapshot and row.product_name_snapshot.endswith("-底")
+                else "cover"
+            )
         )
-        if order_item:
+        if bom_snapshot is not None:
+            crease_type, crease_left, crease_middle, crease_right = (
+                _bom_snapshot_crease(bom_snapshot, component)
+            )
+        elif order_item:
             crease_type, crease_left, crease_middle, crease_right = _component_crease(
                 order_item, component
             )
@@ -12423,7 +12487,12 @@ def print_batch(
         if row.remark:
             remarks.append(row.remark)
         component_report_notes = None
-        if order_item:
+        if bom_snapshot is not None:
+            component_report_notes = _bom_snapshot_report_notes(
+                bom_snapshot,
+                component,
+            )
+        elif order_item:
             component_report_notes = (
                 order_item.snapshot_base_report_notes
                 if component == "base"
@@ -12454,7 +12523,9 @@ def print_batch(
                 "special_process": row.special_process,
                 "cutting_mode": row.special_process,
                 "production_notes": (
-                    order_item.snapshot_production_notes if order_item else None
+                    bom_snapshot.snapshot_component_production_process
+                    if bom_snapshot is not None
+                    else order_item.snapshot_production_notes if order_item else None
                 ),
                 "report_remark": "；".join(dict.fromkeys(filter(None, remarks))),
             }
@@ -14275,6 +14346,22 @@ def _build_reported_document_candidates(db: Session, user: User) -> list[dict]:
         if legacy_requisition_item_ids
         else {}
     )
+    bom_snapshot_ids = {
+        int(source.sales_order_item_bom_component_id)
+        for source in bom_sources_by_requisition_item_id.values()
+    }
+    bom_snapshots_by_id = (
+        {
+            snapshot.id: snapshot
+            for snapshot in db.scalars(
+                select(SalesOrderItemBomComponent).where(
+                    SalesOrderItemBomComponent.id.in_(bom_snapshot_ids)
+                )
+            ).all()
+        }
+        if bom_snapshot_ids
+        else {}
+    )
     legacy_order_rows = (
         {
             int(row["order_item_id"]): row
@@ -14315,7 +14402,23 @@ def _build_reported_document_candidates(db: Session, user: User) -> list[dict]:
         lines = []
         for item in batch.items:
             source = bom_sources_by_requisition_item_id.get(item.id)
+            snapshot = (
+                bom_snapshots_by_id.get(source.sales_order_item_bom_component_id)
+                if source is not None
+                else None
+            )
             order_row = legacy_order_rows.get(item.order_item_id)
+            if snapshot is not None:
+                crease_type, crease_left, crease_middle, crease_right = (
+                    _bom_snapshot_crease(snapshot, source.component_type)
+                )
+                flute_type = snapshot.snapshot_component_flute_type
+            else:
+                crease_type = order_row["crease_type"] if order_row is not None else None
+                crease_left = order_row["crease_left_mm"] if order_row is not None else None
+                crease_middle = order_row["crease_middle_mm"] if order_row is not None else None
+                crease_right = order_row["crease_right_mm"] if order_row is not None else None
+                flute_type = order_row["flute_type"] if order_row is not None else None
             display_number = None
             if order_row is not None:
                 display_number = display_order_number(
@@ -14335,20 +14438,10 @@ def _build_reported_document_candidates(db: Session, user: User) -> list[dict]:
                     "_bom_component_id": (
                         source.sales_order_item_bom_component_id if source else None
                     ),
-                    "_crease_type": (
-                        order_row["crease_type"] if order_row is not None else None
-                    ),
-                    "_crease_left_mm": (
-                        order_row["crease_left_mm"] if order_row is not None else None
-                    ),
-                    "_crease_middle_mm": (
-                        order_row["crease_middle_mm"]
-                        if order_row is not None
-                        else None
-                    ),
-                    "_crease_right_mm": (
-                        order_row["crease_right_mm"] if order_row is not None else None
-                    ),
+                    "_crease_type": crease_type,
+                    "_crease_left_mm": crease_left,
+                    "_crease_middle_mm": crease_middle,
+                    "_crease_right_mm": crease_right,
                     "_requisition_qty": item.requisition_qty,
                     "_required_piece_qty": item.required_piece_qty,
                     "_item_status": item.status,
@@ -14364,9 +14457,7 @@ def _build_reported_document_candidates(db: Session, user: User) -> list[dict]:
                     "report_length_mm": int(item.cardboard_len),
                     "report_width_mm": int(item.cardboard_width),
                     "material_code": item.material_snapshot,
-                    "flute_type": (
-                        order_row["flute_type"] if order_row is not None else None
-                    ),
+                    "flute_type": flute_type,
                 }
             )
         documents.append(
@@ -15010,6 +15101,22 @@ def _build_reported_documents(
         if legacy_requisition_item_ids
         else {}
     )
+    bom_snapshot_ids = {
+        int(source.sales_order_item_bom_component_id)
+        for source in bom_sources_by_requisition_item_id.values()
+    }
+    bom_snapshots_by_id = (
+        {
+            snapshot.id: snapshot
+            for snapshot in db.scalars(
+                select(SalesOrderItemBomComponent).where(
+                    SalesOrderItemBomComponent.id.in_(bom_snapshot_ids)
+                )
+            ).all()
+        }
+        if bom_snapshot_ids
+        else {}
+    )
     received_requisition_item_ids = (
         {
             int(item_id)
@@ -15086,6 +15193,11 @@ def _build_reported_documents(
         line_items = []
         for item in batch.items:
             source = bom_sources_by_requisition_item_id.get(item.id)
+            snapshot = (
+                bom_snapshots_by_id.get(source.sales_order_item_bom_component_id)
+                if source is not None
+                else None
+            )
             component_label = None
             source_key = None
             if source is not None:
@@ -15103,10 +15215,19 @@ def _build_reported_documents(
             order_item = legacy_order_items.get(item.order_item_id)
             order = order_row[0] if order_row else None
             customer = order_row[1] if order_row else None
-            crease_type = order_item.snapshot_crease_type if order_item else None
-            crease_middle = order_item.snapshot_crease_middle_mm if order_item else None
+            if snapshot is not None:
+                crease_type, crease_left, crease_middle, crease_right = (
+                    _bom_snapshot_crease(snapshot, source.component_type)
+                )
+                flute_type = snapshot.snapshot_component_flute_type
+            else:
+                crease_type = order_item.snapshot_crease_type if order_item else None
+                crease_left = order_item.snapshot_crease_left_mm if order_item else None
+                crease_middle = order_item.snapshot_crease_middle_mm if order_item else None
+                crease_right = order_item.snapshot_crease_right_mm if order_item else None
+                flute_type = order_item.flute_type if order_item else None
             crease_display = (
-                f"{order_item.snapshot_crease_left_mm}+{crease_middle}+{order_item.snapshot_crease_right_mm}"
+                f"{crease_left}+{crease_middle}+{crease_right}"
                 if crease_type == "压线" and crease_middle is not None
                 else crease_type or "-"
             )
@@ -15126,7 +15247,7 @@ def _build_reported_documents(
                     "report_width_mm": int(item.cardboard_width),
                     "crease_display": crease_display,
                     "material_code": item.material_snapshot,
-                    "flute_type": order_item.flute_type if order_item else None,
+                    "flute_type": flute_type,
                     "requisition_qty": int(item.requisition_qty or 0),
                     "required_piece_qty": int(item.required_piece_qty or 0),
                     "received_qty": None,

@@ -6,6 +6,7 @@ from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.warehouse_inventory import (
+    InventoryLot,
     InventoryPallet,
     WarehouseArea,
     WarehouseFloor,
@@ -45,6 +46,40 @@ def _registered_enabled_space_exists():
             WarehouseArea.construction_status == "enabled",
             func.upper(WarehouseArea.area_code)
             == func.upper(WarehouseLocation.area_code),
+        )
+    )
+
+
+def _live_inventory_exists(location_id_expression):
+    return exists(
+        select(InventoryLot.id).where(
+            InventoryLot.warehouse_location_id == location_id_expression,
+            InventoryLot.status.in_(("active", "frozen")),
+            (
+                InventoryLot.quantity_available
+                + InventoryLot.quantity_reserved
+                + InventoryLot.quantity_damaged
+            )
+            > 0,
+        )
+    )
+
+
+def location_has_live_inventory(db: Session, location_id: int) -> bool:
+    return bool(
+        db.scalar(
+            select(InventoryLot.id)
+            .where(
+                InventoryLot.warehouse_location_id == location_id,
+                InventoryLot.status.in_(("active", "frozen")),
+                (
+                    InventoryLot.quantity_available
+                    + InventoryLot.quantity_reserved
+                    + InventoryLot.quantity_damaged
+                )
+                > 0,
+            )
+            .limit(1)
         )
     )
 
@@ -171,7 +206,8 @@ def list_operational_locations(
                 location=location,
                 floor=None,
                 area=None,
-                occupied=bool(
+                occupied=location_has_live_inventory(db, location.id)
+                or bool(
                     db.scalar(
                         select(InventoryPallet.id)
                         .where(
@@ -192,12 +228,14 @@ def list_operational_locations(
             InventoryPallet.is_current.is_(True),
         )
     )
+    live_inventory_exists = _live_inventory_exists(WarehouseLocation.id)
+    occupied_condition = or_(current_pallet_exists, live_inventory_exists)
     query = (
         select(
             WarehouseLocation,
             WarehouseFloor,
             WarehouseArea,
-            current_pallet_exists.label("occupied"),
+            occupied_condition.label("occupied"),
         )
         .join(
             WarehouseFloor,
@@ -217,7 +255,7 @@ def list_operational_locations(
         ))
     )
     if empty_only:
-        query = query.where(~current_pallet_exists)
+        query = query.where(~occupied_condition)
     rows = db.execute(
         query.order_by(
             WarehouseFloor.floor_number,

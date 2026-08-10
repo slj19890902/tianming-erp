@@ -554,14 +554,18 @@
     <section id="moldSection" class="hidden">
       <form id="moldForm" class="panel admin-only">
         <h2>新增 / 编辑生产模具</h2><input id="moldId" type="hidden">
-        <p class="muted">每套实体模具登记一个编号和固定货架位置；随后在“常用箱与材质”里绑定，可供多个常用箱共用。平放位置：3F-M-R02-L2-D03-P08；竖放大模具：3F-M-R01-L1-V-P12。</p>
+        <p class="muted">一楼已按真实布局登记 R01 左架、R02 中架、R03 右架和 R04 靠墙超大模具位。选择货架、层和从左到右的位置后，系统自动生成正式位置码；R04 为靠墙超大模具位。已有三楼位置仍保留，例如 3F-M-R02-L2-D03-P08。</p>
         <div class="grid">
           <div class="field"><label>模具编号</label><input id="moldCode" required placeholder="例如：MJ-A1-001"></div>
           <div class="field"><label>模具名称</label><input id="moldName" required placeholder="例如：天华 21301010 开槽模"></div>
-          <div class="field"><label>固定货架位置</label><input id="moldRackLocation" required placeholder="例如：二楼模具架 B-12"></div>
+          <div class="field"><label>一楼模具货架</label><select id="moldRackSelect"><option value="">正在读取已确认货架…</option></select></div>
+          <div class="field"><label>可用层 / 放置方式</label><select id="moldLevelSelect"><option value="">请先选择货架</option></select></div>
+          <div class="field"><label>从左到右第几位</label><input id="moldPositionNumber" type="number" min="1" step="1" value="1"></div>
+          <div class="field"><label>固定货架位置（自动生成，可扫码）</label><input id="moldRackLocation" required placeholder="例如：1F-M-R01-L2-D01-P01"></div>
           <div class="field"><label>备注</label><input id="moldRemarks" placeholder="适用范围或现场说明"></div>
           <div class="field"><label>&nbsp;</label><button class="btn primary" type="submit">保存模具</button></div>
         </div>
+        <div id="moldLocationBuilderHint" class="notice info" style="margin-top:10px">位置编号按已确认的一楼模具区规则生成，不会创建纸箱库存库位。</div>
       </form>
       <div class="panel">
         <h2>模具与位置查询</h2>
@@ -580,7 +584,10 @@
           <div class="field"><label>客户</label><select id="printingPlateCustomer" required></select></div>
           <div class="field"><label>挂板名称</label><input id="printingPlateName" required placeholder="例如：天华 22000008 红色版"></div>
           <div class="field"><label>印刷颜色</label><input id="printingPlateColor" required placeholder="例如：红色"></div>
-          <div class="field"><label>当前格位</label><input id="printingPlateLocation" required placeholder="1F-PL-R01-L1-P01"></div>
+          <div class="field"><label>挂板货架</label><select id="printingPlateRackSelect"><option value="R01">R01 · 一楼挂板架</option></select></div>
+          <div class="field"><label>层</label><select id="printingPlateLevelSelect"><option value="1">第 1 层</option><option value="2">第 2 层</option></select></div>
+          <div class="field"><label>从左到右第几格</label><input id="printingPlatePositionNumber" type="number" min="1" step="1" value="1"></div>
+          <div class="field"><label>当前格位（自动生成，可扫码）</label><input id="printingPlateLocation" required placeholder="1F-PL-R01-L1-P01"></div>
           <div class="field"><label>备注</label><input id="printingPlateRemarks" placeholder="可不填"></div>
           <div class="field"><label>&nbsp;</label><button class="btn primary" type="submit">保存挂板</button></div>
         </div>
@@ -762,7 +769,7 @@
     }
     // END IDEMPOTENCY_KEY_HELPER
 
-    const state={user:null,permissions:[],readOnly:warehouseReadonlyMode,tab:"locations",lotPage:1,lotPageSize:25,lotTotal:0,locationView:"floor3",locations:[],locationLabelSelection:new Set(),finishedLocationCandidates:[],locationsLoaded:false,locationsPromise:null,warehouseFloors:[],selectedWarehouseFloorId:null,customers:[],customersLoaded:false,customersPromise:null,lots:[],molds:[],moldSelection:new Set(),printingPlates:[],insights:null,loadRequests:{lots:0,locations:0,insights:0,movements:0,molds:0,printingPlates:0},operationPending:new Set(),finishedProductCandidates:[],finishedProductSearchTimer:null,finishedProductSearchRequestId:0,stocktakeReviews:[],stocktakeReviewDetail:null,stocktakeReviewSelectedId:null,stocktakeReviewAttempt:{signature:"",key:null},lotEdit:{lotId:null,version:null,candidates:[],selectedProduct:null,searchTimer:null,requestId:0,sessionId:0,saving:false},stagingTransfer:{lotId:null,version:null,total:0,saving:false,sessionId:0},semiLotEdit:null,assignment:{lotId:null,items:[],selected:new Set()},onboarding:{batches:[],batch:null,lines:[],selectedBatchId:null,editingLineId:null,busy:false,submitAttempt:{signature:"",key:null}},factoryMap:{activeFloor:"3F",floor1:null,selectedZoneCode:"",selectedRackId:"",selectedRackSlot:"",loading:false,twinFloors:{},selectedTwinFeatureId:"",selectedTwinLocationId:null,twinZoom:100,twinViewBox:null,pan:{active:false,startX:0,startY:0,viewBox:null}},twinDashboard:{data:null,days:30,loading:false,requestId:0,searchTimer:null,searchRequestId:0,search:null,lastError:null},capacityForecast:{data:null,days:7,loading:false,requestId:0},floor3:{locations:[],mapLocations:[],moveLocations:[],mergeLocations:[],mergeAttempt:{signature:"",key:null},detail:null,selectedLocationId:null,selectedAreaCode:"",planZoom:100,viewMode:"overview",mapPopoverLocationId:null,mapPopoverPoint:{left:50,top:50},pendingMove:null,moveMode:false,layoutEdit:false,layoutDrag:null,layoutDraft:{},areaNavCollapsed:false,legendVisible:true,searchFocusLocationId:null,deepLinkLotId:null,searchTimer:null,searchRequestId:0,loading:false,error:"",pan:{active:false,startX:0,startY:0,scrollLeft:0,scrollTop:0},bindPanelOpen:false,bindRows:[],addCandidates:[],addCandidate:null,addSearchTimer:null,addSearchRequestId:0,addSearchKey:"",addInventoryIdempotencyKey:null,promotionKeys:{},promotionPending:new Set()}};
+    const state={user:null,permissions:[],readOnly:warehouseReadonlyMode,tab:"locations",lotPage:1,lotPageSize:25,lotTotal:0,locationView:"floor3",locations:[],locationLabelSelection:new Set(),finishedLocationCandidates:[],locationsLoaded:false,locationsPromise:null,warehouseFloors:[],selectedWarehouseFloorId:null,customers:[],customersLoaded:false,customersPromise:null,lots:[],molds:[],moldSelection:new Set(),moldLocationOptions:[],moldLocationOptionsLoaded:false,printingPlates:[],insights:null,loadRequests:{lots:0,locations:0,insights:0,movements:0,molds:0,printingPlates:0},operationPending:new Set(),finishedProductCandidates:[],finishedProductSearchTimer:null,finishedProductSearchRequestId:0,stocktakeReviews:[],stocktakeReviewDetail:null,stocktakeReviewSelectedId:null,stocktakeReviewAttempt:{signature:"",key:null},lotEdit:{lotId:null,version:null,candidates:[],selectedProduct:null,searchTimer:null,requestId:0,sessionId:0,saving:false},stagingTransfer:{lotId:null,version:null,total:0,saving:false,sessionId:0},semiLotEdit:null,assignment:{lotId:null,items:[],selected:new Set()},onboarding:{batches:[],batch:null,lines:[],selectedBatchId:null,editingLineId:null,busy:false,submitAttempt:{signature:"",key:null}},factoryMap:{activeFloor:"3F",floor1:null,selectedZoneCode:"",selectedRackId:"",selectedRackSlot:"",loading:false,twinFloors:{},selectedTwinFeatureId:"",selectedTwinLocationId:null,twinZoom:100,twinViewBox:null,pan:{active:false,startX:0,startY:0,viewBox:null}},twinDashboard:{data:null,days:30,loading:false,requestId:0,searchTimer:null,searchRequestId:0,search:null,lastError:null},capacityForecast:{data:null,days:7,loading:false,requestId:0},floor3:{locations:[],mapLocations:[],moveLocations:[],mergeLocations:[],mergeAttempt:{signature:"",key:null},detail:null,selectedLocationId:null,selectedAreaCode:"",planZoom:100,viewMode:"overview",mapPopoverLocationId:null,mapPopoverPoint:{left:50,top:50},pendingMove:null,moveMode:false,layoutEdit:false,layoutDrag:null,layoutDraft:{},areaNavCollapsed:false,legendVisible:true,searchFocusLocationId:null,deepLinkLotId:null,searchTimer:null,searchRequestId:0,loading:false,error:"",pan:{active:false,startX:0,startY:0,scrollLeft:0,scrollTop:0},bindPanelOpen:false,bindRows:[],addCandidates:[],addCandidate:null,addSearchTimer:null,addSearchRequestId:0,addSearchKey:"",addInventoryIdempotencyKey:null,promotionKeys:{},promotionPending:new Set()}};
     const $=id=>document.getElementById(id);
     const hasPermission=code=>state.user?.role==="admin"||state.permissions.includes(code);
     const canReviewStocktakes=()=>!state.readOnly&&hasPermission("warehouse.stocktake.review");
@@ -846,11 +853,13 @@
       }
       $("fgDate").value=$("siDate").value=today();
       bind();
+      buildPrintingPlateLocation();
       window.setInterval(()=>{if(state.tab==="locations"&&state.locationView==="twin"&&document.visibilityState==="visible")loadTwinDashboard({silent:true})},60000);
       try{
         await Promise.all([
           loadWarehouseSpace().catch(error=>{throw new Error(`楼层区域台账加载失败：${error.message}`)}),
           loadCustomers().catch(error=>{throw new Error(`客户资料加载失败：${error.message}`)}),
+          loadMoldLocationOptions(),
         ]);
         await applyWarehouseDeepLink();
       }catch(error){
@@ -941,7 +950,9 @@
       ["finishedProductCodeFilter","finishedProductNameFilter","finishedSpecFilter","semiSupplierFilter","semiMaterialFilter","semiFluteFilter","semiLengthFilter","semiWidthFilter","semiAllowedProductFilter","locationKeywordFilter","palletKeywordFilter","keywordFilter"].forEach(id=>$(id).onkeydown=event=>{if(event.key==="Enter"){event.preventDefault();loadLotsFirstPage()}});
       $("refreshInsights").onclick=loadInsights;
       $("refreshMolds").onclick=loadMolds;$("moldKeyword").onkeydown=event=>{if(event.key==="Enter")loadMolds()};
+      $("moldRackSelect").onchange=renderMoldLocationLevels;$("moldLevelSelect").onchange=$("moldPositionNumber").oninput=buildMoldRackLocation;$("moldRackLocation").onchange=()=>syncMoldLocationBuilder($("moldRackLocation").value);
       $("refreshPrintingPlates").onclick=loadPrintingPlates;$("printingPlateKeyword").onkeydown=event=>{if(event.key==="Enter"){event.preventDefault();loadPrintingPlates()}};$("resetPrintingPlateForm").onclick=resetPrintingPlateForm;
+      $("printingPlateRackSelect").onchange=$("printingPlateLevelSelect").onchange=$("printingPlatePositionNumber").oninput=buildPrintingPlateLocation;$("printingPlateLocation").onchange=()=>syncPrintingPlateLocationBuilder($("printingPlateLocation").value);
       $("refreshStocktakeReviews").onclick=loadStocktakeReviews;$("stocktakeStatusFilter").onchange=renderStocktakeReviews;$("stocktakeDifferenceFilter").onchange=renderStocktakeReviews;
       $("onboardingStatusFilter").onchange=renderInventoryOnboardingBatches;$("downloadOnboardingXlsx").onclick=()=>downloadInventoryOnboardingTemplate("xlsx");$("onboardingUploadForm").onsubmit=uploadInventoryOnboardingFile;$("rematchOnboardingBatch").onclick=rematchInventoryOnboardingBatch;$("downloadOnboardingErrors").onclick=downloadInventoryOnboardingErrors;$("confirmOnboardingBatch").onclick=confirmInventoryOnboardingBatch;$("onboardingLineEditor").onsubmit=saveInventoryOnboardingLine;$("cancelOnboardingLineEdit").onclick=closeInventoryOnboardingLineEditor;$("onboardingEditInventoryType").onchange=updateInventoryOnboardingLineEditorVisibility;$("onboardingEditActionDecision").onchange=updateInventoryOnboardingLineEditorVisibility;
       $("assignmentKeyword").onkeydown=event=>{if(event.key==="Enter")searchAssignmentProducts()};
@@ -1695,6 +1706,42 @@
       const requestId=++state.loadRequests.movements;$("movementBody").innerHTML='<tr><td colspan="7" class="empty">正在加载库存流水…</td></tr>';
       try{const data=await api("/api/warehouse/movements?"+p);if(requestId!==state.loadRequests.movements||state.tab!=="movements"||p!==queryString({lot_number:$("movementLot").value,movement_type:$("movementType").value,page_size:"200"}))return false;$("movementBody").innerHTML=(data.items||[]).map(x=>`<tr><td>${formatDateTime(x.created_at)}</td><td>${x.movement_number}</td><td>${x.lot_number}</td><td>${labels[x.movement_type]||x.movement_type}</td><td>${x.quantity} ${labels[x.unit]}</td><td>${x.before_available} → <b>${x.after_available}</b></td><td>${x.reason||"-"}</td></tr>`).join("")||`<tr><td colspan="7" class="empty">暂无库存流水</td></tr>`;return true}catch(error){if(requestId!==state.loadRequests.movements||state.tab!=="movements")return false;$("movementBody").innerHTML=`<tr><td colspan="7" class="empty error-text">库存流水加载失败：${h(error.message)}</td></tr>`;toast(`库存流水加载失败：${error.message}`,true);return false}
     }
+    function positionCode(value){return String(Math.max(1,Number.parseInt(value,10)||1)).padStart(2,"0")}
+    function selectedMoldRack(){return state.moldLocationOptions.find(row=>row.rack_code===$("moldRackSelect").value)||null}
+    function setMoldLocationBuilderDisabled(disabled){["moldRackSelect","moldLevelSelect","moldPositionNumber"].forEach(id=>$(id).disabled=disabled)}
+    function buildMoldRackLocation(){
+      const rack=selectedMoldRack(),level=Number.parseInt($("moldLevelSelect").value,10),position=positionCode($("moldPositionNumber").value);if(!rack||!level)return;
+      const rule=(rack.levels||[]).find(row=>Number(row.level)===level);if(!rule)return;
+      const suffix=rule.kind==="vertical"?`V-P${position}`:`D01-P${position}`;
+      $("moldRackLocation").value=`1F-M-${rack.rack_code}-L${level}-${suffix}`;
+      $("moldLocationBuilderHint").textContent=`已选择：${rack.rack_code} ${rack.name} · 第 ${level} 层 · ${rule.kind==="vertical"?"竖放":"平放"} · 从左到右第 ${Number(position)} 位`;
+    }
+    function renderMoldLocationLevels(){
+      const rack=selectedMoldRack(),previous=$("moldLevelSelect").value,levels=rack?.levels||[];
+      $("moldLevelSelect").innerHTML=levels.map(row=>`<option value="${row.level}">第 ${row.level} 层 · ${row.kind==="vertical"?"竖放":"平放"}</option>`).join("")||'<option value="">该货架没有已确认可用层</option>';
+      if(levels.some(row=>String(row.level)===previous))$("moldLevelSelect").value=previous;
+      buildMoldRackLocation();
+    }
+    async function loadMoldLocationOptions(){
+      if(state.moldLocationOptionsLoaded){renderMoldLocationLevels();return true}
+      try{
+        const data=await api("/api/warehouse/molds/location-options");state.moldLocationOptions=data.racks||[];state.moldLocationOptionsLoaded=true;
+        $("moldRackSelect").innerHTML=state.moldLocationOptions.map(row=>`<option value="${h(row.rack_code)}">${h(row.rack_code)} · ${h(row.name)}</option>`).join("");renderMoldLocationLevels();return true;
+      }catch(error){$("moldLocationBuilderHint").textContent=`一楼模具货架读取失败：${error.message}；请刷新后重试，禁止猜测位置码。`;return false}
+    }
+    function syncMoldLocationBuilder(value){
+      const match=/^1F-M-(R0[1-4])-L([1-3])-(?:D01-|V-)P(\d+)$/i.exec(String(value||"").trim());if(!match)return false;
+      $("moldRackSelect").value=match[1].toUpperCase();renderMoldLocationLevels();$("moldLevelSelect").value=String(Number(match[2]));$("moldPositionNumber").value=String(Number(match[3]));buildMoldRackLocation();return true;
+    }
+    function setPrintingPlateLocationBuilderDisabled(disabled){["printingPlateRackSelect","printingPlateLevelSelect","printingPlatePositionNumber"].forEach(id=>$(id).disabled=disabled)}
+    function buildPrintingPlateLocation(){
+      const level=Number.parseInt($("printingPlateLevelSelect").value,10)||1,position=$("printingPlatePositionNumber").value;
+      $("printingPlateLocation").value=`1F-PL-R01-L${level}-P${positionCode(position)}`;
+    }
+    function syncPrintingPlateLocationBuilder(value){
+      const match=/^1F-PL-R0?1-L([12])-P(\d+)$/i.exec(String(value||"").trim());if(!match)return false;
+      $("printingPlateRackSelect").value="R01";$("printingPlateLevelSelect").value=String(Number(match[1]));$("printingPlatePositionNumber").value=String(Number(match[2]));return true;
+    }
     async function loadMolds(){
       const keyword=$("moldKeyword").value.trim(),requestId=++state.loadRequests.molds,hadRows=state.molds.length>0;if(!hadRows)$("moldBody").innerHTML='<tr><td colspan="6" class="empty">正在加载模具位置…</td></tr>';
       try{
@@ -1719,13 +1766,13 @@
     function openMoldBatchLabels(){const ids=state.molds.filter(row=>state.moldSelection.has(row.id)).map(row=>row.id);if(!ids.length){toast("请先选择要打印的模具",true);return}window.open(`/mold-label.html?mold_ids=${ids.join(",")}`,'_blank')}
     function editMold(id){
       const row=state.molds.find(value=>value.id===id);if(!row)return;
-      $("moldId").value=row.id;$("moldCode").value=row.mold_code;$("moldName").value=row.mold_name;$("moldRackLocation").value=row.rack_location;$("moldRemarks").value=row.remarks||"";
+      $("moldId").value=row.id;$("moldCode").value=row.mold_code;$("moldName").value=row.mold_name;$("moldRackLocation").value=row.rack_location;$("moldRemarks").value=row.remarks||"";syncMoldLocationBuilder(row.rack_location);setMoldLocationBuilderDisabled(true);$("moldRackLocation").readOnly=true;
       $("moldForm").scrollIntoView({behavior:"smooth",block:"start"});
     }
     async function saveMold(event){
       event.preventDefault();
       const id=$("moldId").value,payload={mold_code:$("moldCode").value,mold_name:$("moldName").value,rack_location:$("moldRackLocation").value,remarks:$("moldRemarks").value||null};
-      try{await api(`/api/warehouse/molds${id?"/"+id:""}`,{method:id?"PUT":"POST",body:JSON.stringify(payload)});toast("模具档案已保存");event.target.reset();$("moldId").value="";await loadMolds()}catch(err){toast(err.message,true)}
+      try{await api(`/api/warehouse/molds${id?"/"+id:""}`,{method:id?"PUT":"POST",body:JSON.stringify(payload)});toast("模具档案已保存");event.target.reset();$("moldId").value="";setMoldLocationBuilderDisabled(false);$("moldRackLocation").readOnly=false;renderMoldLocationLevels();await loadMolds()}catch(err){toast(err.message,true)}
     }
     async function toggleMold(id,active){try{await api(`/api/warehouse/molds/${id}/${active?"disable":"enable"}`,{method:"PUT"});await loadMolds()}catch(err){toast(err.message,true)}}
     function printingPlateStatusLabel(status){return status==="active"?"启用":status==="damaged"?"损坏":"停用"}
@@ -1749,11 +1796,11 @@
       $("printingPlateEmpty").classList.toggle("hidden",state.printingPlates.length>0);
     }
     function resetPrintingPlateForm(){
-      $("printingPlateForm").reset();$("printingPlateId").value="";$("printingPlateVersion").value="";$("printingPlateCustomer").disabled=false;$("printingPlateLocation").readOnly=false;$("printingPlateEditHint").classList.add("hidden");$("printingPlateForm").scrollIntoView({behavior:"smooth",block:"start"});
+      $("printingPlateForm").reset();$("printingPlateId").value="";$("printingPlateVersion").value="";$("printingPlateCustomer").disabled=false;$("printingPlateLocation").readOnly=false;setPrintingPlateLocationBuilderDisabled(false);buildPrintingPlateLocation();$("printingPlateEditHint").classList.add("hidden");$("printingPlateForm").scrollIntoView({behavior:"smooth",block:"start"});
     }
     function editPrintingPlate(id){
       const row=state.printingPlates.find(value=>Number(value.id)===Number(id));if(!row)return;
-      $("printingPlateId").value=row.id;$("printingPlateVersion").value=row.version;$("printingPlateCustomer").value=String(row.customer_id);$("printingPlateCustomer").disabled=true;$("printingPlateName").value=row.plate_name;$("printingPlateColor").value=row.color_name;$("printingPlateLocation").value=row.rack_location;$("printingPlateLocation").readOnly=true;$("printingPlateRemarks").value=row.remarks||"";$("printingPlateEditHint").classList.remove("hidden");$("printingPlateForm").scrollIntoView({behavior:"smooth",block:"start"});
+      $("printingPlateId").value=row.id;$("printingPlateVersion").value=row.version;$("printingPlateCustomer").value=String(row.customer_id);$("printingPlateCustomer").disabled=true;$("printingPlateName").value=row.plate_name;$("printingPlateColor").value=row.color_name;$("printingPlateLocation").value=row.rack_location;$("printingPlateLocation").readOnly=true;syncPrintingPlateLocationBuilder(row.rack_location);setPrintingPlateLocationBuilderDisabled(true);$("printingPlateRemarks").value=row.remarks||"";$("printingPlateEditHint").classList.remove("hidden");$("printingPlateForm").scrollIntoView({behavior:"smooth",block:"start"});
     }
     async function savePrintingPlate(event){
       event.preventDefault();const id=Number($("printingPlateId").value)||null;

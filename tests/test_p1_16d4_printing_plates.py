@@ -525,6 +525,19 @@ def test_printing_plate_frontend_and_migration_contract() -> None:
     assert 'down_revision: Union[str, Sequence[str], None] = "dl94v8x9z83"' in migration
 
 
+def test_desktop_printing_plate_form_builds_confirmed_one_floor_codes() -> None:
+    warehouse = Path("static/warehouse.html").read_text(encoding="utf-8")
+    for marker in (
+        'id="printingPlateRackSelect"',
+        'id="printingPlateLevelSelect"',
+        'id="printingPlatePositionNumber"',
+        "function buildPrintingPlateLocation()",
+        "1F-PL-R01-L${level}-P${positionCode(position)}",
+    ):
+        assert marker in warehouse
+    assert 'id="printingPlateLocation" required' in warehouse
+
+
 @pytest.mark.parametrize(
     "page_name",
     ("index.html", "mobile_erp.html", "warehouse.html"),

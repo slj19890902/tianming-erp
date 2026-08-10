@@ -99,6 +99,15 @@ def test_operational_twin_uses_tianming_erp_compact_shell() -> None:
     assert "overflow-x: hidden" in TWIN_CSS
 
 
+def test_embedded_warehouse_shell_has_a_definite_visible_height() -> None:
+    assert ".warehouse-shell { grid-row:2; height:100%; min-height:0; overflow:hidden; }" in ERP_INDEX
+    assert "height:auto; min-height:0" not in ERP_INDEX
+    assert (
+        ".warehouse-shell-frame {\n"
+        "        display:block; width:100%; height:100%; min-height:100%;"
+    ) in ERP_INDEX
+
+
 def test_embedded_twin_opens_the_ledger_in_the_top_level_page() -> None:
     assert '<a className="twin-ledger-link" href="/warehouse-ledger.html" target="_top">库存台账</a>' in SOURCE
 

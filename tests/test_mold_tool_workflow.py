@@ -552,6 +552,21 @@ def test_mold_frontend_connects_location_common_box_and_order_display() -> None:
     assert "模具：{{ moldLocationText(item) }}" in index
 
 
+def test_desktop_mold_form_builds_confirmed_one_floor_location_codes() -> None:
+    warehouse = Path("static/warehouse.html").read_text(encoding="utf-8")
+    for marker in (
+        'id="moldRackSelect"',
+        'id="moldLevelSelect"',
+        'id="moldPositionNumber"',
+        "/api/warehouse/molds/location-options",
+        "function buildMoldRackLocation()",
+        "1F-M-${rack.rack_code}-L${level}-${suffix}",
+        "R04 为靠墙超大模具位",
+    ):
+        assert marker in warehouse
+    assert 'id="moldRackLocation" required' in warehouse
+
+
 @pytest.mark.parametrize(
     ("target_location", "expected_kind", "expected_floor"),
     [

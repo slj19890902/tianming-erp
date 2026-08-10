@@ -10891,7 +10891,7 @@ def stock_policy_replenishment_draft(
                     "pieces_per_box": policy.pieces_per_box,
                     "stock_yield_per_sheet": policy.stock_yield_per_sheet,
                     "quantity": summary["suggested_replenishment_quantity"],
-                    "location_id": policy.default_location_id,
+                    "location_id": None,
                     "remark": policy.remark,
                     "cutting_mode": "一开一",
                     "output_per_sheet": 1,
@@ -11207,9 +11207,13 @@ def _build_replenishment_item(
         payload.report_width_mm,
         policy.report_width_mm if policy else None,
     )
-    location_id = _coalesce(
-        payload.location_id,
-        policy.default_location_id if policy else None,
+    location_id = (
+        None
+        if payload.target_inventory_type == "semi_finished"
+        else _coalesce(
+            payload.location_id,
+            policy.default_location_id if policy else None,
+        )
     )
     if location_id:
         location = db.get(WarehouseLocation, location_id)

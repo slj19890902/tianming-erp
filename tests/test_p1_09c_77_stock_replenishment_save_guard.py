@@ -39,7 +39,7 @@ def test_replenishment_form_and_button_have_dedicated_operation_state() -> None:
     )
     open_block = _method_body(
         "async openStockReplenishment(options={}) {",
-        "defaultStockLocation(type) {",
+        "addBlankStockReplenishmentLine() {",
     )
     assert "idempotency_key:createIdempotencyKey()" in open_block
     assert "stockReplenishmentSaveState = {saving:false, committed:false, uncertain:false, result:null}" in open_block

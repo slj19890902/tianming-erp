@@ -95,7 +95,6 @@ const vm={{
   isCancelledRequest(error){{return error?.name==="AbortError"||error?.code==="ERR_CANCELED";}},
   invalidatePageCache(page){{this.invalidations.push(page);}},markPageCache(page){{this.marks.push(page);}},
   showToast(message,isError){{toasts.push({{message:String(message),isError}});}},errorMessage(error){{return error?.message||String(error);}},
-  ensureIncomingReceiptLocations(){{this.locationLoads=(this.locationLoads||0)+1;}},
 }};
 vm.pendingIncomingRequestIsCurrent=new FunctionCtor("controller","authGeneration","userId",{json.dumps(current, ensure_ascii=False)}).bind(vm);
 vm.incomingPendingRequestParams=new FunctionCtor("page",{json.dumps(params, ensure_ascii=False)}).bind(vm);
@@ -117,7 +116,7 @@ const expect=(value,message)=>{{if(!value)throw new Error(message);}};
   expect(vm.pages.incomingPending===3&&vm.incomingPendingTotal===53,"server page/total were not applied");
   expect(vm.incomingPending[0].item_id==="sr3","latest rows were not applied");
   expect(Object.keys(vm.incomingSelected).length===0,"successful page change retained hidden selection");
-  expect(vm.locationLoads===1,"stock replenishment page did not load locations");
+  expect(vm.locationLoads===undefined,"stock replenishment page must not load exact locations");
   expect(vm.incomingPendingLoading===false,"latest request did not close loading");
 
   vm.incomingSelected={{sr3:true}};

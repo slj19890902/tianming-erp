@@ -194,5 +194,6 @@ def test_cost_gap_ui_is_lazy_compact_and_has_no_write_action() -> None:
     ):
         assert text in INDEX
     assert 'v-if="canViewCosts" class="btn" @click="openCostGaps"' in INDEX
+    assert "成本与利润提醒" in INDEX
     assert "/api/orders/cost-readiness" in INDEX
     assert "openCostGapOrder" in INDEX

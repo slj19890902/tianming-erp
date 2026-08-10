@@ -2868,7 +2868,7 @@
                       <button v-if="canCreateOrders" class="btn" @click="openOrderPdfImport">识别PDF订单</button>
                     </div>
                     <div class="toolbar-group">
-                      <button v-if="canViewCosts" class="btn" @click="openCostGaps">成本检查</button>
+                      <button v-if="canViewCosts" class="btn" @click="openCostGaps">成本与利润提醒</button>
                       <button class="btn" @click="runExplicitPageListLoad('orders')">刷新</button>
                     </div>
                   </div>
@@ -5889,6 +5889,8 @@
               <div class="field wide notice warning">预计成本，非实际成本。税率参考 13%，沿用材料价原口径，不重复加税；费用只影响当前订单快照。</div>
             </div>
             <div v-else-if="modal.type === 'costGaps'" class="cost-sensitive">
+              <div class="notice" style="margin-bottom:10px"><strong>最简单的用法：</strong>员工先看“待补资料”，补供应商价格、报料尺寸等基础资料；老板再看“利润复核”，只处理预计亏损或利润偏低的订单。</div>
+              <div class="muted" style="margin:-4px 0 10px">这里只列需要处理的订单，不是全部订单成本清单；预计正常的订单只计数量，不逐行显示。</div>
               <div class="tabs" style="margin-bottom:10px">
                 <button :class="['tab',{active:costPanelTab==='gaps'}]" @click="switchCostPanel('gaps')">待补资料 {{ costGapState.total_items || 0 }}</button>
                 <button :class="['tab',{active:costPanelTab==='review'}]" @click="switchCostPanel('review')">利润复核 {{ costReviewState.loaded ? costReviewState.total_items : '' }}</button>
@@ -5905,7 +5907,17 @@
                     <button :class="['btn','small',{primary:costGapState.filter==='all'}]" @click="costGapState.filter='all'">全部 {{ costGapState.total_items }}</button>
                     <button v-for="category in costGapState.categories" :key="category.code" :class="['btn','small',{primary:costGapState.filter===category.code}]" @click="costGapState.filter=category.code">{{ category.label }} {{ category.count }}</button>
                   </div>
-                  <div v-if="!costGapVisibleItems().length" class="empty">当前没有这类成本缺口</div>
+                  <div v-if="!costGapVisibleItems().length" class="empty">
+                    <template v-if="costGapState.filter==='all' && Number(costGapState.total_items || 0)===0">
+                      <strong>目前没有需要补资料的新订单。</strong>
+                      <div class="muted" style="margin-top:6px">这不是成本功能失效：旧订单不会自动补算；成本功能发布后新建或编辑、并成功冻结成本的订单才会进入检查。</div>
+                      <button class="btn small primary" style="margin-top:10px" @click="switchCostPanel('review')">查看利润复核</button>
+                    </template>
+                    <template v-else>
+                      <strong>这个分类没有待处理订单。</strong>
+                      <div><button class="btn small" style="margin-top:10px" @click="costGapState.filter='all'">返回全部</button></div>
+                    </template>
+                  </div>
                   <div v-else class="table-wrap">
                     <table class="cost-gap-table">
                       <thead><tr><th>客户 / 客户单号</th><th>序号</th><th>存货编码</th><th>产品名称</th><th>需要补齐</th><th>操作</th></tr></thead>
@@ -5933,7 +5945,17 @@
                   <div class="cost-gap-summary">
                     <span v-for="item in costReviewState.summary" :key="item.code" :class="['status',item.tone]">{{ item.label }} {{ item.count }}</span>
                   </div>
-                  <div v-if="!costReviewState.items.length" class="empty">当前没有需要复核的预计利润</div>
+                  <div v-if="!costReviewState.items.length" class="empty">
+                    <template v-if="Number(costReviewState.evaluated_items || 0)>0">
+                      <strong>已检查 {{ costReviewState.evaluated_items }} 条，全部预计正常，无需处理。</strong>
+                      <div class="muted" style="margin-top:6px">正常订单只显示在上方汇总里，不会铺满复核清单。</div>
+                    </template>
+                    <template v-else>
+                      <strong>目前还没有可检查的新订单。</strong>
+                      <div class="muted" style="margin-top:6px">旧订单不会自动补算；从成本功能发布后新建或编辑、并成功冻结预计成本的订单开始统计。</div>
+                      <div class="muted" style="margin-top:4px">查看单张订单：回到订单列表，打开“查看详情”，再看该明细的成本说明。</div>
+                    </template>
+                  </div>
                   <div v-else class="table-wrap">
                     <table class="cost-gap-table">
                       <thead><tr><th>客户 / 客户单号</th><th>序号</th><th>存货编码 / 产品</th><th>订单金额</th><th>预计成本</th><th>预计毛利</th><th>状态</th><th>操作</th></tr></thead>
@@ -22605,8 +22627,15 @@
             this.costPanelTab = "gaps";
             this.costGapState.filter = "all";
             this.costReviewState = {loading:false,loaded:false,error:"",scope_label:"",evaluated_items:0,total_items:0,returned_items:0,truncated:false,summary:[],items:[]};
-            this.modal = {type:"costGaps", title:"成本检查"};
-            return this.loadCostGaps();
+            this.modal = {type:"costGaps", title:"成本与利润提醒"};
+            const [gapsReady, reviewReady] = await Promise.all([
+              this.loadCostGaps(),
+              this.loadCostReview(),
+            ]);
+            if (reviewReady && (!gapsReady || Number(this.costGapState.total_items || 0) === 0)) {
+              this.costPanelTab = "review";
+            }
+            return gapsReady || reviewReady;
           },
           async loadCostGaps() {
             this.costGapState.loading = true;

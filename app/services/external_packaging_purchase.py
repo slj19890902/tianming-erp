@@ -1005,6 +1005,21 @@ def serialize_external_purchase_batch(
     return _serialize_batch(batch)
 
 
+def _order_drawing_print_facts(order_item: OrderItem | None) -> dict[str, Any]:
+    drawing_reference = str(order_item.drawing_file or "").strip() if order_item else ""
+    file_name = (
+        drawing_reference.replace("\\", "/").rsplit("/", 1)[-1]
+        if drawing_reference
+        else None
+    )
+    return {
+        "order_drawing_file_name": file_name,
+        "order_drawing_version_label": (
+            "订单下单图纸（冻结文件）" if file_name else "未随订单冻结图纸"
+        ),
+    }
+
+
 def build_external_purchase_print(
     db: Session,
     purchase_order_id: int,
@@ -1042,7 +1057,13 @@ def build_external_purchase_print(
         items.append(
             {
                 "id": row.id,
+                "sales_order_item_id": row.sales_order_item_id,
                 "item_sequence": order_item.item_sequence if order_item else None,
+                "source_item_order_number": (
+                    order_item.item_order_number if order_item else None
+                ),
+                "source_customer_name": customer.name if customer else "",
+                "source_order_number": sales_order.order_number,
                 "source_product_code": (
                     order_item.snapshot_product_code if order_item else None
                 ),
@@ -1050,6 +1071,7 @@ def build_external_purchase_print(
                     order_item.snapshot_product_name if order_item else None
                 ),
                 "purpose": row.purpose_snapshot,
+                **_order_drawing_print_facts(order_item),
                 "supplier_product_code": row.supplier_product_code_snapshot,
                 "product_name": row.product_name_snapshot,
                 "specification_summary": row.specification_summary_snapshot,

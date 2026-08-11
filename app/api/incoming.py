@@ -833,26 +833,55 @@ def _all_expected_bom_material_received(
     return parent_received is not None
 
 
-def dashboard_pending_incoming_rows(db: Session, user: User) -> list[dict]:
-    """Return the pending-incoming projection consumed by the dashboard.
+_DASHBOARD_PENDING_INCOMING_KEYS = (
+    "item_id",
+    "order_item_id",
+    "requisition_item_id",
+    "stock_replenishment_item_id",
+    "customer_id",
+    "customer_name",
+    "order_number",
+    "product_code",
+    "delivery_date",
+    "created_at",
+)
 
-    This deliberately shares the page's eligibility, customer scope, and
-    requisition-route selection while omitting page-only material, drawing,
-    location, and receipt-summary decoration.
+
+def _pending_incoming_route_rows(db: Session, user: User) -> list[dict]:
+    """Return final pending route identities plus lightweight search facts.
+
+    The route eligibility is shared by the dashboard, paged incoming list and
+    the mobile dimension search.  It deliberately does not enter drawing,
+    receipt-summary, material-master or location decoration.
     """
     query = (
         select(
             OrderItem.id.label("item_id"),
+            OrderItem.id.label("order_item_id"),
             Order.id.label("order_id"),
             Customer.id.label("customer_id"),
             Customer.name.label("customer_name"),
             Order.order_number,
+            Order.customer_po,
             Order.created_at,
             Order.delivery_date,
             func.coalesce(
                 OrderItem.snapshot_product_code,
                 Product.product_code,
             ).label("product_code"),
+            OrderItem.snapshot_product_name.label("product_name"),
+            OrderItem.snapshot_spec.label("specification"),
+            OrderItem.snapshot_material.label("material"),
+            OrderItem.flute_type,
+            OrderItem.cardboard_len,
+            OrderItem.cardboard_width,
+            OrderItem.snapshot_crease_type,
+            OrderItem.snapshot_crease_left_mm,
+            OrderItem.snapshot_crease_middle_mm,
+            OrderItem.snapshot_crease_right_mm,
+            OrderItem.snapshot_supplier_name,
+            OrderItem.requisition_qty,
+            OrderItem.quantity,
         )
         .join(Order, Order.id == OrderItem.order_id)
         .join(Product, Product.id == OrderItem.product_id)
@@ -896,6 +925,21 @@ def dashboard_pending_incoming_rows(db: Session, user: User) -> list[dict]:
                     requisition_item.product_code_snapshot
                     or data.get("product_code")
                 )
+                component_data["product_name"] = (
+                    requisition_item.product_name_snapshot
+                    or data.get("product_name")
+                )
+                component_data["specification"] = (
+                    requisition_item.specification_snapshot
+                    or data.get("specification")
+                )
+                component_data["material"] = (
+                    requisition_item.material_snapshot
+                    or data.get("material")
+                )
+                component_data["cardboard_len"] = requisition_item.cardboard_len
+                component_data["cardboard_width"] = requisition_item.cardboard_width
+                component_data["requisition_qty"] = requisition_item.requisition_qty
                 rows.append(component_data)
         elif data["item_id"] not in order_items_with_requisitions:
             rows.append(data)
@@ -926,10 +970,31 @@ def dashboard_pending_incoming_rows(db: Session, user: User) -> list[dict]:
             StockReplenishmentOrderItem.customer_id,
             Customer.name.label("customer_name"),
             StockReplenishmentOrder.order_number,
+            StockReplenishmentOrder.supplier_name.label("snapshot_supplier_name"),
             StockReplenishmentOrder.created_at,
             StockReplenishmentOrderItem.product_code_snapshot.label(
                 "product_code"
             ),
+            StockReplenishmentOrderItem.product_name_snapshot.label("product_name"),
+            StockReplenishmentOrderItem.material_code_snapshot.label("material"),
+            StockReplenishmentOrderItem.flute_type,
+            StockReplenishmentOrderItem.report_length_mm.label("cardboard_len"),
+            StockReplenishmentOrderItem.report_width_mm.label("cardboard_width"),
+            StockReplenishmentOrderItem.crease_type.label("snapshot_crease_type"),
+            StockReplenishmentOrderItem.crease_left_mm.label(
+                "snapshot_crease_left_mm"
+            ),
+            StockReplenishmentOrderItem.crease_middle_mm.label(
+                "snapshot_crease_middle_mm"
+            ),
+            StockReplenishmentOrderItem.crease_right_mm.label(
+                "snapshot_crease_right_mm"
+            ),
+            StockReplenishmentOrderItem.quantity,
+            (
+                StockReplenishmentOrderItem.quantity
+                - StockReplenishmentOrderItem.stocked_quantity
+            ).label("requisition_qty"),
         )
         .join(
             StockReplenishmentOrder,
@@ -952,6 +1017,22 @@ def dashboard_pending_incoming_rows(db: Session, user: User) -> list[dict]:
         stock_row["delivery_date"] = None
         rows.append(stock_row)
     return rows
+
+
+def dashboard_pending_incoming_rows(db: Session, user: User) -> list[dict]:
+    """Return the stable narrow projection consumed by the dashboard."""
+
+    projection = [
+        {key: row.get(key) for key in _DASHBOARD_PENDING_INCOMING_KEYS}
+        for row in _pending_incoming_route_rows(db, user)
+    ]
+    # Preserve the historical dashboard contract: ordinary order-item routes
+    # expose their identity through ``item_id`` only.  The internal route plan
+    # retains ``order_item_id`` for F1's exact production-detail navigation.
+    for row in projection:
+        if row.get("requisition_item_id") is None:
+            row["order_item_id"] = None
+    return projection
 
 
 def _rows(

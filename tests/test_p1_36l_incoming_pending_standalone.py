@@ -58,11 +58,12 @@ def test_standalone_pending_uses_server_total_and_current_page_contract() -> Non
         "pendingTotal: 0",
         "pendingPage: 1",
         "pendingRetryPage: 1",
-        "pendingPageSize: 25",
+        "pendingPageSize: 20",
         "state.pendingTotal",
     ):
         assert marker in INCOMING
-    assert "/api/incoming/pending?page=${requestedPage}&page_size=${pageSize}" in load_pending
+    assert 'endpoint = "/api/incoming/pending"' in load_pending
+    assert 'params.set("dimension_mode", requestedDimensionMode)' in load_pending
     assert "pending.total" in load_pending
     assert "pending.page" in load_pending
     assert "pending.page_size" in load_pending

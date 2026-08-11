@@ -224,8 +224,7 @@ def describe_mold_location(value: str) -> dict:
             "position": None,
             "prompt": (
                 f"前往{_floor_text(parts['floor'])}，{_rack_prompt(parts['floor'].upper(), rack)}，"
-                f"第{level}层、第{grid}格查找。格内左右顺序会随拿取变化，不作为系统位置。"
-                "拿取前请核对模具编号和存货编码。"
+                f"第{level}层、第{grid}排"
             ),
         }
     storage_level = _STORAGE_LEVEL_PATTERN.fullmatch(normalized)
@@ -245,8 +244,7 @@ def describe_mold_location(value: str) -> dict:
             "position": None,
             "prompt": (
                 f"前往{_floor_text(parts['floor'])}，{_rack_prompt(parts['floor'].upper(), rack)}，"
-                f"第{level}层查找。该层没有正式格号，左右顺序不作为系统位置。"
-                "拿取前请核对模具编号和存货编码。"
+                f"第{level}层"
             ),
         }
     storage_rack = _STORAGE_RACK_PATTERN.fullmatch(normalized)
@@ -264,9 +262,7 @@ def describe_mold_location(value: str) -> dict:
             "row": None,
             "position": None,
             "prompt": (
-                f"前往{_floor_text(parts['floor'])}，{_rack_prompt(parts['floor'].upper(), rack)}查找。"
-                "该货架没有正式层号或格号，左右顺序不作为系统位置。"
-                "拿取前请核对模具编号和存货编码。"
+                f"前往{_floor_text(parts['floor'])}，{_rack_prompt(parts['floor'].upper(), rack)}"
             ),
         }
     flat = _CANONICAL_FLAT_PATTERN.fullmatch(normalized)
@@ -275,9 +271,7 @@ def describe_mold_location(value: str) -> dict:
         rack = _number(parts["rack"])
         prompt = (
             f"前往{_floor_text(parts['floor'])}，{_rack_prompt(parts['floor'].upper(), rack)}，"
-            f"第{_number(parts['level'])}层、第{_number(parts['row'])}排，"
-            f"原档案 P{_number(parts['position']):02d} 仅作历史记录，不再代表从左到右固定顺序。"
-            "拿取前请核对模具编号和存货编码。"
+            f"第{_number(parts['level'])}层、第{_number(parts['row'])}排"
         )
         return {
             "kind": "flat",
@@ -297,9 +291,7 @@ def describe_mold_location(value: str) -> dict:
         level_text = "底层（第1层）" if _number(parts["level"]) == 1 else f"第{_number(parts['level'])}层"
         prompt = (
             f"前往{_floor_text(parts['floor'])}，{_rack_prompt(parts['floor'].upper(), rack)}，"
-            f"{level_text}竖放区查找；原档案 P{_number(parts['position']):02d} 仅作历史记录，"
-            "不再代表从左到右固定顺序。大模具较重，请按现场要求两人搬运；"
-            "拿取前核对模具编号和存货编码。"
+            f"{level_text}竖放区"
         )
         return {
             "kind": "vertical",
@@ -326,10 +318,7 @@ def describe_mold_location(value: str) -> dict:
             "position": _number(parts["position"]),
             "prompt": (
                 f"前往{_area_text(parts['area'])}第{_number(parts['rack'])}号模具架，"
-                f"第{_number(parts['level'])}层、第{_number(parts['row'])}排，"
-                f"原档案 P{_number(parts['position']):02d} 仅作历史记录，不再代表从左到右固定顺序。"
-                "该位置使用旧简写，建议现场复核后改为新货架/层/格位置码；"
-                "拿取前核对模具编号和存货编码。"
+                f"第{_number(parts['level'])}层、第{_number(parts['row'])}排"
             ),
         }
     vertical = _SHORT_VERTICAL_PATTERN.fullmatch(normalized)
@@ -346,9 +335,7 @@ def describe_mold_location(value: str) -> dict:
             "position": _number(parts["position"]),
             "prompt": (
                 f"前往{_area_text(parts['area'])}第{_number(parts['rack'])}号模具架，"
-                f"第{_number(parts['level'])}层竖放区查找；原档案 P{_number(parts['position']):02d} "
-                "仅作历史记录，不再代表从左到右固定顺序。"
-                "该位置使用旧简写，建议现场复核后改为新货架/层/格位置码；大模具请两人搬运。"
+                f"第{_number(parts['level'])}层竖放区"
             ),
         }
     return {
@@ -360,7 +347,7 @@ def describe_mold_location(value: str) -> dict:
         "level": None,
         "row": None,
         "position": None,
-        "prompt": f"请前往“{raw or '未登记位置'}”查找，拿取前核对模具编号和存货编码。",
+        "prompt": f"前往“{raw or '未登记位置'}”",
     }
 
 

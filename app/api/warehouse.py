@@ -7263,6 +7263,7 @@ def reference_customers(
                 "id": row.id,
                 "name": row.name,
                 "customer_code": row.customer_code,
+                "customer_number": row.customer_number,
             }
             for row in rows
         ]
@@ -7769,12 +7770,19 @@ def list_mold_tools(
     q: str | None = None,
     include_inactive: bool = False,
     limit: int = Query(default=200, ge=1, le=500),
+    page: int | None = Query(default=None, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
     allowed_customer_ids = _mold_customer_scope(user, db)
     if allowed_customer_ids == set():
-        return {"items": []}
+        return {
+            "items": [],
+            "total": 0,
+            "page": page or 1,
+            "page_size": page_size if page is not None else limit,
+        }
     query = select(MoldTool).options(
         selectinload(MoldTool.products).selectinload(Product.customer)
     )
@@ -7824,14 +7832,32 @@ def list_mold_tools(
                 MoldTool.id.in_(linked_molds),
             )
         )
-    rows = db.scalars(
-        query.order_by(MoldTool.rack_location, MoldTool.mold_code, MoldTool.id).limit(limit)
-    ).unique().all()
+    total = int(
+        db.scalar(
+            select(func.count()).select_from(query.order_by(None).subquery())
+        )
+        or 0
+    )
+    ordered_query = query.order_by(
+        MoldTool.rack_location,
+        MoldTool.mold_code,
+        MoldTool.id,
+    )
+    if page is not None:
+        ordered_query = ordered_query.offset((page - 1) * page_size).limit(
+            page_size
+        )
+    else:
+        ordered_query = ordered_query.limit(limit)
+    rows = db.scalars(ordered_query).unique().all()
     return {
         "items": [
             _mold_tool_dict(row, allowed_customer_ids)
             for row in rows
-        ]
+        ],
+        "total": total,
+        "page": page or 1,
+        "page_size": page_size if page is not None else limit,
     }
 
 
@@ -8253,6 +8279,15 @@ def _production_process_with_die_cut(value: str | None) -> str:
     return "、".join(dict.fromkeys(tokens))
 
 
+def _production_process_without_die_cut(value: str | None) -> str:
+    tokens = [
+        token.strip()
+        for token in re.split(r"[,，、]+", str(value or ""))
+        if token.strip() and token.strip() != "模切"
+    ]
+    return "、".join(dict.fromkeys(tokens))
+
+
 @router.post("/molds/{mold_id}/product-bindings")
 def bind_mold_products(
     mold_id: int,
@@ -8347,6 +8382,82 @@ def bind_mold_products(
     return {
         "message": "常用箱绑定成功",
         "bound_count": len(bound_ids),
+        "mold": _mold_tool_dict(mold),
+    }
+
+
+@router.delete("/molds/{mold_id}/product-bindings/{product_id}")
+def unbind_mold_product(
+    mold_id: int,
+    product_id: int,
+    expected_version: int = Query(gt=0),
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    mold = db.get(MoldTool, mold_id)
+    if mold is None:
+        raise HTTPException(status_code=404, detail="模具不存在")
+    product = db.scalar(
+        select(Product).where(
+            Product.id == product_id,
+            Product.is_active.is_(True),
+            Product.deleted_at.is_(None),
+        )
+    )
+    if product is None:
+        raise HTTPException(status_code=404, detail="常用箱不存在或已停用")
+    if product.mold_tool_id != mold.id:
+        raise HTTPException(status_code=409, detail="绑定关系已变化，请刷新后重新核对")
+
+    try:
+        apply_versioned_update(
+            db,
+            object_type="product",
+            entity=product,
+            updates={
+                "mold_tool_id": None,
+                "production_process": _production_process_without_die_cut(
+                    product.production_process
+                ),
+            },
+            expected_version=expected_version,
+            user=user,
+            reason="从模具档案明确解除常用箱绑定并移除模切工艺",
+            source="api.warehouse.mold_product_unbindings",
+            action="mold_unbinding",
+        )
+        audit_master_change(
+            db,
+            user=user,
+            action="UNBIND_PRODUCT",
+            resource="MOLD_TOOL",
+            resource_id=mold.id,
+            details={
+                "mold_code": mold.mold_code,
+                "product_id": product.id,
+            },
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    db.refresh(product)
+    mold = db.scalar(
+        select(MoldTool)
+        .options(selectinload(MoldTool.products).selectinload(Product.customer))
+        .where(MoldTool.id == mold_id)
+    )
+    return {
+        "message": "常用箱已解除模具绑定",
+        "unbound_product": {
+            "id": product.id,
+            "version": product.version,
+            "product_code": product.product_code,
+            "customer_material_code": product.customer_material_code,
+            "product_name": product.product_name,
+            "production_process": product.production_process,
+            "mold_tool_id": product.mold_tool_id,
+        },
         "mold": _mold_tool_dict(mold),
     }
 

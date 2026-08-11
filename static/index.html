@@ -4877,7 +4877,7 @@
 
               <div class="product-form-row product-final-row">
                 <div v-if="!isWorkshop" class="field sensitive-price"><label>{{ productForm.supply_mode==='external_purchase' ? `客户默认销售单价 / ${productForm.external_packaging_purchase_unit || '采购单位'}` : '默认单价' }}</label><input class="input" type="number" min="0" step="0.0001" v-model="productForm.sale_unit_price" /><div v-if="productForm.supply_mode==='external_purchase'" class="muted">这是给客户的销售单价，不是供应商采购成本。</div></div>
-                <div v-if="productForm.supply_mode!=='external_purchase' && productUsesMold(productForm)" class="field"><label>生产模具 / 货架位置（必选）</label><search-select v-model="productForm.mold_tool_id" :options="moldToolSelectOptions()" label-key="_label" value-key="id" placeholder="选择已登记模具" :allow-empty="false"></search-select><div class="muted" style="font-size:11px">仅模切工艺使用；请先在“仓库库存管理 → 模具位置”登记并绑定。</div><div v-if="productMoldError" class="status orange" style="display:block;margin-top:4px">{{ productMoldError }}</div></div>
+                <div v-if="productForm.supply_mode!=='external_purchase' && productUsesMold(productForm)" class="field"><label>生产模具 / 货架位置（必选）</label><search-select v-model="productForm.mold_tool_id" :options="moldToolSelectOptions()" label-key="_label" value-key="id" placeholder="输入模具编号、名称或位置" :allow-empty="false" @search="searchMoldTools"></search-select><div class="muted" style="font-size:11px">仅模切工艺使用；请先在“仓库库存管理 → 模具位置”登记并绑定。</div><div v-if="productMoldError" class="status orange" style="display:block;margin-top:4px">{{ productMoldError }}</div></div>
                 <div class="field compact-remark-field"><label>备注</label><textarea class="textarea" v-model="productForm.remark" rows="1" placeholder="内部备注，可选"></textarea></div>
               </div>
               </fieldset>
@@ -4921,7 +4921,7 @@
                       <div class="bom-component-fields">
                         <div class="field"><label>每套数量</label><input class="input" type="number" min="0.0001" step="0.0001" v-model.number="component.quantity_per_set" /></div>
                         <label class="remember-line"><input type="checkbox" v-model="component.is_die_cut" @change="onBomDieCutToggle(component)" /> 模切组件</label>
-                        <div class="field"><label>生产模具</label><search-select v-model="component.mold_tool_id" :options="moldToolSelectOptions()" label-key="_label" value-key="id" placeholder="选择已登记模具" :allow-empty="true" :disabled="!component.is_die_cut"></search-select></div>
+                        <div class="field"><label>生产模具</label><search-select v-model="component.mold_tool_id" :options="moldToolSelectOptions()" label-key="_label" value-key="id" placeholder="输入模具编号、名称或位置" :allow-empty="true" :disabled="!component.is_die_cut" @search="searchMoldTools"></search-select></div>
                         <div class="field"><label>模具最大产出</label><input class="input" type="number" min="0.0001" step="1" v-model.number="component.mold_max_yield_per_sheet" placeholder="可选" :disabled="!component.is_die_cut" /></div>
                         <div class="field"><label>备用纸张</label><input class="input" type="number" min="0" step="1" v-model.number="component.spare_sheet_quantity" /></div>
                         <div class="field"><label>单据显示方式</label><select class="select" v-model="component.display_mode"><option value="internal_only">仅内部</option><option value="show_on_delivery">显示在送货单</option><option value="show_on_all_docs">显示在全部内部单据</option></select></div>
@@ -12227,6 +12227,28 @@
               this.finishLatestRequest(requestKey, controller);
             }
           },
+          async searchMoldTools(value) {
+            if (this.isWorkshop) return false;
+            const keyword = String(value || "").trim();
+            if (!keyword) return this.loadMoldTools();
+            const requestKey = "product:molds-search";
+            const controller = this.beginLatestRequest(requestKey);
+            try {
+              const { data } = await axios.get("/api/warehouse/molds", {
+                params:{ q:keyword, limit:100 },
+                signal:controller.signal,
+              });
+              if (latestRequestControllers.get(requestKey) !== controller) return false;
+              this.moldTools = data.items || [];
+              return true;
+            } catch (error) {
+              if (this.isCancelledRequest(error)) return false;
+              this.showToast(`模具搜索失败：${this.errorMessage(error)}`,true);
+              return false;
+            } finally {
+              this.finishLatestRequest(requestKey, controller);
+            }
+          },
           async loadPrintingPlates() {
             if (this.isWorkshop) return true;
             const requestKey = "product:printing-plates";
@@ -12245,9 +12267,9 @@
               this.finishLatestRequest(requestKey, controller);
             }
           },
-          async ensureProductEditorOptions({force=false} = {}) {
+          async ensureProductEditorOptions({force=false,refreshMolds=false} = {}) {
             const needsMaterials = force || !this.allMaterials.length;
-            const needsMolds = !this.isWorkshop && (force || !this.moldTools.length);
+            const needsMolds = !this.isWorkshop && (force || refreshMolds || !this.moldTools.length);
             const needsPrintingPlates = !this.isWorkshop && (force || !this.printingPlates.length);
             if (!needsMaterials && !needsMolds && !needsPrintingPlates) return true;
             const requestKey = "product:editor-options";
@@ -18702,7 +18724,10 @@
                 latestRequestControllers.get(requestKey) !== controller
                 || (Number(this.productForm.id || 0) || null) !== openedId
               ) return false;
-              await this.ensureProductEditorOptions();
+              await this.ensureProductEditorOptions({refreshMolds:true});
+              if (detail?.mold_tool?.id && !this.moldTools.some(row=>Number(row.id)===Number(detail.mold_tool.id))) {
+                this.moldTools.push(detail.mold_tool);
+              }
               if (this.productForm.supply_mode === "external_purchase") await this.loadProductExternalSupplyCandidates();
               if (
                 latestRequestControllers.get(requestKey) !== controller

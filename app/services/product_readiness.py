@@ -29,6 +29,18 @@ def product_readiness(product: object) -> dict[str, object]:
     if not str(_value(product, "product_name") or "").strip():
         missing.append(("product_name", "产品名称未填写"))
 
+    if bool(_value(product, "is_virtual_composite_parent")):
+        if not bool(_value(product, "is_composite")):
+            missing.append(("bom_components", "虚拟组合套装尚未配置 BOM 组件"))
+        fields = [field for field, _label in missing]
+        labels = [label for _field, label in missing]
+        return {
+            "ready": not missing,
+            "status": "资料已完善" if not missing else "待完善",
+            "missing_fields": fields,
+            "missing_labels": labels,
+        }
+
     supply_mode = str(_value(product, "supply_mode") or "corrugated_production").strip()
     if supply_mode == "external_purchase":
         if not str(_value(product, "external_packaging_category_code") or "").strip():

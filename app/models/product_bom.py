@@ -123,6 +123,12 @@ class ProductBomComponent(Base):
         default="internal_only",
         nullable=False,
     )
+    show_on_delivery: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        server_default="1",
+        nullable=False,
+    )
     is_required: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -273,6 +279,12 @@ class SalesOrderItemBomComponent(Base):
     )
     spare_sheet_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     display_mode: Mapped[str] = mapped_column(String(30), nullable=False)
+    show_on_delivery: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        server_default="1",
+        nullable=False,
+    )
     is_required: Mapped[bool] = mapped_column(Boolean, nullable=False)
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
     snapshot_component_product_code: Mapped[str] = mapped_column(

@@ -104,7 +104,10 @@ def test_n039_constraints_and_indexes_protect_component_boundaries() -> None:
     assert "uq_production_completions_order_item" not in _constraint_names(
         "production_completions"
     )
-    assert "uq_production_completions_task" in _index_names("production_completions")
+    assert (
+        "uq_production_completions_task_primary_active"
+        in _index_names("production_completions")
+    )
     for table in (InventoryReservation, OrderItemSemiRequirement, ProductionTask):
         assert "sales_order_item_bom_component_id" in table.__table__.c
     assert "task_id" in ProductionCompletion.__table__.c

@@ -2036,6 +2036,9 @@ def _order_response(
                 "quantity": item.quantity,
                 "ordered_quantity": item.quantity,
                 "combination_mode_snapshot": item.combination_mode_snapshot,
+                "is_virtual_composite_parent_snapshot": bool(
+                    getattr(item, "is_virtual_composite_parent_snapshot", False)
+                ),
                 "combination_role": item.combination_role,
                 "combination_group_key": item.combination_group_key,
                 "combination_parent_product_id": item.combination_parent_product_id,
@@ -5839,6 +5842,18 @@ def _create_order_impl(
                     raise HTTPException(
                         status_code=400, detail=f"第{index}条明细{error}"
                     ) from error
+            if bool(getattr(product, "is_virtual_composite_parent", False)):
+                validated_layer_flutes[index] = (None, None, None, None)
+                resolved_products[index] = product
+                combination_provenances[index] = _validated_combination_provenance(
+                    db,
+                    customer=customer,
+                    item_payload=item_payload,
+                    product=product,
+                    item_index=index,
+                )
+                continue
+
             crease_error = product_crease_width_error(product)
             if crease_error:
                 raise HTTPException(
@@ -6080,7 +6095,16 @@ def _create_order_impl(
             )
             try:
                 product_box_configuration = (
-                    _order_snapshot_box_configuration(product)
+                    {
+                        "splice_mode": None,
+                        "pieces_per_box": None,
+                        "flap_mm": None,
+                        "default_cutting_mode": DEFAULT_CUTTING_MODE,
+                    }
+                    if bool(
+                        getattr(product, "is_virtual_composite_parent", False)
+                    )
+                    else _order_snapshot_box_configuration(product)
                 )
             except BoxTypeRuleError as error:
                 raise HTTPException(
@@ -6122,6 +6146,9 @@ def _create_order_impl(
                     else ((item_payload.production_notes or "").strip() or None)
                 ),  # v0.19.2-A: 生产/印刷说明
                 supply_mode_snapshot=product.supply_mode,
+                is_virtual_composite_parent_snapshot=bool(
+                    getattr(product, "is_virtual_composite_parent", False)
+                ),
                 external_packaging_category_code_snapshot=(
                     product.external_packaging_category_code
                     if product.supply_mode == "external_purchase"

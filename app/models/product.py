@@ -263,6 +263,12 @@ class Product(Base):
         default=False,
         nullable=False,
     )
+    is_virtual_composite_parent: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=false(),
+        nullable=False,
+    )
     combination_mode: Mapped[str] = mapped_column(
         String(30),
         default="parent_priced_set",

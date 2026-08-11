@@ -413,10 +413,18 @@ class ProductPayload(BaseModel):
     production_label_units_per_label: int | None = Field(default=None, gt=0)
     flap_mm: int | None = 30
     combination_mode: Literal["parent_priced_set", "component_priced"] = "parent_priced_set"
+    is_virtual_composite_parent: bool = False
 
     @model_validator(mode="after")
     def validate_flute_layer_consistency(self) -> "ProductPayload":
         """拒绝非法楞型/层数组合；七层写入必须明确 AAA/ABC。"""
+        if self.is_virtual_composite_parent:
+            if self.supply_mode != "corrugated_production":
+                raise ValueError("虚拟组合套装父件不能设置为外购包材或混合供货")
+            if self.combination_mode != "parent_priced_set":
+                raise ValueError("虚拟组合套装父件必须采用父件按套计价")
+            _clear_virtual_composite_parent_fields(self)
+            return self
         if self.supply_mode == "external_purchase":
             _clear_external_purchase_paper_fields(self)
         self.flute_type = normalize_flute_type(self.flute_type)
@@ -519,6 +527,7 @@ class ProductResponse(ProductPayload):
     purged_at: datetime | None = None
     version: int
     is_composite: bool = False
+    is_virtual_composite_parent: bool = False
     combination_mode: Literal["parent_priced_set", "component_priced"] = "parent_priced_set"
     is_internal_component: bool = False
     drawings: list[ProductDrawingResponse] = Field(default_factory=list)
@@ -534,6 +543,7 @@ class ProductBOMComponentPayload(BaseModel):
     display_mode: Literal[
         "internal_only", "show_on_delivery", "show_on_all_docs"
     ] = "internal_only"
+    show_on_delivery: bool = True
     is_required: bool = True
     remark: str | None = Field(default=None, max_length=1000)
 
@@ -657,6 +667,52 @@ _EXTERNAL_PURCHASE_PAPER_FIELDS = (
 _EXTERNAL_PURCHASE_SYNC_BLOCKED_FIELDS = frozenset(
     {*_EXTERNAL_PURCHASE_PAPER_FIELDS, "splice_mode", "pieces_per_box", "flap_mm", "box_style", "print_content"}
 )
+
+_VIRTUAL_COMPOSITE_PARENT_PHYSICAL_FIELDS = (
+    "material_id", "mold_tool_id", "legacy_material_text",
+    "length_mm", "width_mm", "height_mm", "box_style",
+    "print_content", "printing_colors", "production_process", "die_cut_path",
+    "flute_type", "layer_count", "surface_paper_type",
+    "report_length_mm", "report_width_mm", "crease_type",
+    "crease_left_mm", "crease_middle_mm", "crease_right_mm", "report_notes",
+    "base_report_length_mm", "base_report_width_mm", "base_crease_type",
+    "base_crease_left_mm", "base_crease_middle_mm", "base_crease_right_mm",
+    "base_report_notes", "flap_mm",
+)
+_VIRTUAL_COMPOSITE_PARENT_SYNC_BLOCKED_FIELDS = frozenset(
+    {*_VIRTUAL_COMPOSITE_PARENT_PHYSICAL_FIELDS, "splice_mode", "pieces_per_box"}
+)
+
+
+def _clear_virtual_composite_parent_fields(payload: ProductPayload) -> None:
+    """Keep a virtual set parent commercial-only; components own all facts."""
+
+    for field in _VIRTUAL_COMPOSITE_PARENT_PHYSICAL_FIELDS:
+        setattr(payload, field, None)
+    payload.box_category = "normal"
+    payload.supply_mode = "corrugated_production"
+    payload.external_packaging_category_code = None
+    payload.external_packaging_specification_summary = None
+    payload.external_packaging_purchase_unit = None
+    payload.external_supply = None
+    payload.splice_mode = "single"
+    payload.pieces_per_box = 1
+    payload.default_cutting_mode = DEFAULT_CUTTING_MODE
+    payload.printing_plate_mode = "no_plate"
+    payload.printing_plate_1_id = None
+    payload.printing_plate_2_id = None
+    payload.printing_plate_3_id = None
+    payload.plate_alignment_value_mm = None
+    payload.plate_mount_value_mm = None
+    payload.machine_set_length_mm = None
+    payload.machine_set_width_mm = None
+    payload.machine_set_height_mm = None
+    payload.production_label_enabled = False
+    payload.production_label_units_per_label = None
+    payload.cost_unit_price = None
+    payload.board_price = None
+    payload.suggested_price = None
+    payload.combination_mode = "parent_priced_set"
 
 
 def _external_candidate_is_available(row: ExternalPackagingProduct) -> bool:
@@ -851,6 +907,24 @@ def _validated_product_versioned_updates(
     payload: ProductPayload,
     user: User,
 ) -> dict:
+    virtual_marker_was_submitted = (
+        "is_virtual_composite_parent" in payload.model_fields_set
+    )
+    if not virtual_marker_was_submitted and bool(
+        getattr(product, "is_virtual_composite_parent", False)
+    ):
+        payload.is_virtual_composite_parent = True
+        _clear_virtual_composite_parent_fields(payload)
+    if (
+        virtual_marker_was_submitted
+        and bool(getattr(product, "is_virtual_composite_parent", False))
+        and not payload.is_virtual_composite_parent
+        and bool(getattr(product, "is_composite", False))
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="虚拟组合套装已有 BOM，不能直接改为实体产品；请保留虚拟父件标记",
+        )
     supply_updates = _normalize_product_external_supply(db, payload=payload, existing=product)
     _normalize_product_mold_binding(payload)
     _normalize_product_printing_plate_configuration(payload)
@@ -865,6 +939,8 @@ def _validated_product_versioned_updates(
     _validate_product_printing_plates(db, payload)
     _validate_changed_product_crease_widths(payload, product)
     updates = _product_write_data(payload, user)
+    if not virtual_marker_was_submitted:
+        updates.pop("is_virtual_composite_parent", None)
     if (
         not _external_supply_requested(payload)
         and not {
@@ -918,6 +994,9 @@ def _response(product: Product, user: User) -> dict:
         ),
         "version": product.version,
         "is_composite": bool(getattr(product, "is_composite", False)),
+        "is_virtual_composite_parent": bool(
+            getattr(product, "is_virtual_composite_parent", False)
+        ),
         "is_internal_component": bool(
             getattr(product, "is_internal_component", False)
         ),
@@ -1010,6 +1089,10 @@ def _summary_response(product: Product, user: User) -> dict:
         "manual_modified": product.manual_modified,
         "version": product.version,
         "is_active": product.is_active,
+        "is_composite": bool(getattr(product, "is_composite", False)),
+        "is_virtual_composite_parent": bool(
+            getattr(product, "is_virtual_composite_parent", False)
+        ),
         "readiness": product_readiness(product),
     }
     if user.role == "workshop":
@@ -2128,6 +2211,15 @@ def sync_product_fields(
             raise HTTPException(
                 status_code=409,
                 detail="外购包材常用箱不能从订单同步纸板材质、尺寸、报料或生产字段",
+            )
+    if bool(getattr(product, "is_virtual_composite_parent", False)):
+        blocked = sorted(
+            _VIRTUAL_COMPOSITE_PARENT_SYNC_BLOCKED_FIELDS.intersection(fields)
+        )
+        if blocked:
+            raise HTTPException(
+                status_code=409,
+                detail="虚拟组合套装父件不能从订单同步材质、尺寸、报料或生产字段",
             )
     if not fields:
         raise HTTPException(status_code=400, detail="没有可同步的字段")

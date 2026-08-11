@@ -1811,6 +1811,8 @@ def _delivery_component_lines(
                 0,
             ),
             "pricing_included": False,
+            "show_on_delivery": bool(demand.show_on_delivery),
+            "pricing_note": "套内组件，不单独计价",
             "independent_return_receipt": False,
             "independent_statement": False,
         }
@@ -1858,6 +1860,7 @@ def _actual_goods_lines(
         }
         for component in component_lines
         if int(component["planned_delivery_quantity"] or 0) > 0
+        and bool(component.get("show_on_delivery", True))
     )
     return lines
 
@@ -2310,6 +2313,9 @@ def _delivery_list_component_demands(
             is_required=bool(snapshot.is_required),
             effective_sets=effective_sets,
             required_piece_quantity=required_piece_quantity,
+            show_on_delivery=bool(
+                getattr(snapshot, "show_on_delivery", True)
+            ),
         )
         result.setdefault(demand.order_item_id, []).append(demand)
     return result
@@ -2503,6 +2509,8 @@ def _delivery_list_kit_metadata(
             ),
             "planned_delivery_quantity": document_quantities.get(demand.snapshot_id, 0),
             "pricing_included": False,
+            "show_on_delivery": bool(demand.show_on_delivery),
+            "pricing_note": "套内组件，不单独计价",
             "independent_return_receipt": False,
             "independent_statement": False,
         }

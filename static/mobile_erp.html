@@ -107,6 +107,20 @@
     .periods { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-bottom: 10px; }
     .period-btn { min-height: 38px; padding: 5px 3px; border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--muted); font-weight: 900; }
     .period-btn.active { border-color: var(--green); background: var(--green-soft); color: var(--green); }
+    .station-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin-bottom: 10px; }
+    .station-btn { min-height: 44px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--muted); font-weight: 900; }
+    .station-btn.active { border-color: var(--blue); background: var(--blue-soft); color: var(--blue); }
+    .station-task { border-left: 5px solid var(--blue); }
+    .station-task.die-cut { border-left-color: var(--orange); }
+    .station-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-top: 8px; }
+    .station-fact { padding: 8px; border-radius: 8px; background: #f3f6f4; overflow-wrap: anywhere; }
+    .station-fact strong { display: block; font-size: 14px; }
+    .station-fact span { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; }
+    .process-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+    .process-tags span { padding: 4px 8px; border-radius: 99px; background: #edf3ff; color: var(--blue); font-size: 11px; font-weight: 900; }
+    .warning-line { margin-top: 8px; padding: 8px; border-radius: 8px; background: #fff0e0; color: #9a4c00; font-weight: 900; }
+    .pager { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 10px 0; }
+    .pager span { min-width: 110px; color: var(--muted); text-align: center; font-size: 12px; }
     .production-card { border-left: 5px solid var(--blue); }
     .production-card.material-short { border-left-color: var(--orange); }
     .production-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
@@ -181,8 +195,19 @@
       </section>
 
       <section id="productionPage" hidden>
-        <h1 class="page-title">近期来料和生产资料</h1>
-        <p class="page-help">只显示已经正式收料的订单。这里用于车间查看图纸、尺寸和模具位置，不能收料或确认完工。</p>
+        <h1 class="page-title">生产工位</h1>
+        <p class="page-help">按当前账号授权显示印刷或模切待生产任务；每页 20 条，只能查看，不能收料或确认完工。</p>
+        <div id="productionStationTabs" class="station-tabs" aria-label="生产工位" hidden>
+          <button class="station-btn" type="button" data-station="printing">印刷工位</button>
+          <button class="station-btn" type="button" data-station="die_cut">模切工位</button>
+        </div>
+        <div id="productionStationState" class="card status">正在读取待生产任务…</div>
+        <div id="productionStationList" hidden></div>
+        <div id="productionStationPager" class="pager" hidden>
+          <button id="productionStationPrev" class="small-btn" type="button">上一页</button>
+          <span id="productionStationPageText">第 1 页</span>
+          <button id="productionStationNext" class="small-btn" type="button">下一页</button>
+        </div>
         <div class="searchbar">
           <input id="productionLookupInput" maxlength="100" autocomplete="off" inputmode="text" placeholder="扫码或输入存货编码、订单号、任务号">
           <button id="productionLookupButton" class="search-btn" type="button">扫码反查</button>
@@ -190,6 +215,8 @@
         <div class="lookup-actions"><button id="clearProductionLookup" class="small-btn" type="button" hidden>清空结果，返回近期生产</button></div>
         <div id="productionLookupState" class="card status empty" hidden></div>
         <div id="productionLookupList" hidden></div>
+        <h2>近期来料和生产资料（辅助）</h2>
+        <p class="muted">需要核对收料批次时，再按日期读取；不会随工位任务自动加载。</p>
         <div class="periods" aria-label="来料日期范围">
           <button class="period-btn" type="button" data-period="today">今天</button>
           <button class="period-btn active" type="button" data-period="3d">近3天</button>
@@ -201,7 +228,7 @@
           <label>结束日期 <input id="dateTo" type="date"></label>
           <button id="loadCustom" class="small-btn" type="button">查看</button>
         </div>
-        <div id="productionState" class="card status">正在读取近期来料…</div>
+        <div id="productionState" class="card status empty">请选择上方日期范围读取近期来料。</div>
         <div id="productionList" hidden></div>
       </section>
 
@@ -259,6 +286,14 @@
         productionItems: [],
         productionPeriod: "3d",
         productionController: null,
+        productionStation: "",
+        productionStations: [],
+        productionStationItems: [],
+        productionStationPage: 1,
+        productionStationTotal: 0,
+        productionStationAsOf: "",
+        productionStationController: null,
+        productionStationGeneration: 0,
         productionLookupItems: [],
         productionLookupController: null,
         productionLookupGeneration: 0,
@@ -320,6 +355,7 @@
         state.searchController?.abort();
         state.detailController?.abort();
         state.productionController?.abort();
+        state.productionStationController?.abort();
         state.productionLookupController?.abort();
         state.homeController?.abort();
         byId("logoutButton").disabled = true;
@@ -370,7 +406,7 @@
         }
         window.requestAnimationFrame(() => window.scrollTo(0, state.scrollByPage.get(page) || 0));
         if (isWarehouse) byId("searchInput").focus();
-        if (page === "production" && !state.productionItems.length) loadProduction();
+        if (page === "production" && !state.productionStationItems.length) loadProductionStation();
       }
 
       function showStatus(targetId, message, kind = "empty", retry = null) {
@@ -661,6 +697,130 @@
         // Search text, candidates and selected product remain in memory.
       }
 
+      function stationFact(label, value) {
+        const fact = node("div", "station-fact");
+        fact.append(node("strong", "", value || "-"), node("span", "", label));
+        return fact;
+      }
+
+      function openMoldMap(task) {
+        if (!task.mold_map_url) return;
+        byId("mapTitle").textContent = `${task.mold_code || task.mold_name || "当前模具"}｜模具位置`;
+        byId("mapFrame").src = task.mold_map_url;
+        byId("mapLayer").hidden = false;
+      }
+
+      function productionStationCard(task) {
+        const dieCut = state.productionStation === "die_cut";
+        const card = node("section", `card station-task ${dieCut ? "die-cut" : "printing"}`);
+        const head = node("div", "production-head");
+        const title = node("div");
+        title.append(
+          node("h2", "", `${task.product_code || "无存货编码"}｜${task.product_name || "未填写名称"}`),
+          node("p", "fact-line", `${task.customer_name || "未填写客户"}｜订单 ${task.order_number || "-"}｜任务 ${task.task_id}`)
+        );
+        head.append(title, node("span", `tag ${dieCut ? "unplaced" : "mapped"}`, dieCut ? "模切" : "印刷"));
+        card.append(head);
+        if (task.carton_specification) card.append(node("p", "fact-line", `规格：${task.carton_specification}`));
+        const facts = node("div", "station-facts");
+        if (dieCut) {
+          facts.append(
+            stationFact("订单数量", `${task.order_quantity || 0}只`),
+            stationFact("材质 / 楞型", [task.material, task.flute_type ? `${task.flute_type}楞` : ""].filter(Boolean).join(" / ")),
+            stationFact("模具编号", task.mold_code || "未绑定"),
+            stationFact("正式模具位置", task.mold_location || "未登记")
+          );
+        } else {
+          const cartonSize = [task.carton_length_mm, task.carton_width_mm, task.carton_height_mm].map(value => value ?? "-").join("×");
+          const reportSize = [task.report_length_mm, task.report_width_mm].map(value => value ?? "-").join("×");
+          facts.append(
+            stationFact("订单数量", `${task.order_quantity || 0}只`),
+            stationFact("纸箱长宽高", `${cartonSize}mm`),
+            stationFact("报料长宽", `${reportSize}mm`),
+            stationFact("压线", [task.crease_type, ...(task.crease_values_mm || [])].filter(Boolean).join(" / ") || "未填写")
+          );
+        }
+        card.append(facts);
+        if (!dieCut) {
+          card.append(node("p", "fact-line", `印刷内容：${task.print_content || "未填写"}`));
+          card.append(node("p", "fact-line", `颜色 / 方式：${(task.printing_colors || []).join(" / ") || "未填写"}｜${task.printing_instruction || task.printing_method || "未填写"}`));
+          if (task.cutting_mode) card.append(node("p", "fact-line", `开料方式：${task.cutting_mode}`));
+        } else {
+          card.append(node("p", "fact-line", `模具：${task.mold_name || "未命名"}`));
+          if (task.mold_warning) card.append(node("p", "warning-line", task.mold_warning));
+        }
+        if (Array.isArray(task.process_tags) && task.process_tags.length) {
+          const tags = node("div", "process-tags");
+          task.process_tags.forEach(tag => tags.append(node("span", "", tag)));
+          card.append(tags);
+        }
+        const actions = node("div", "lookup-actions");
+        if (task.drawing_path) {
+          const drawing = node("button", "drawing-btn", "查看图纸");
+          drawing.type = "button";
+          drawing.addEventListener("click", () => openDrawing(task));
+          actions.append(drawing);
+        }
+        if (dieCut && task.mold_map_url) {
+          const mapButton = node("button", "drawing-btn", "查看模具位置");
+          mapButton.type = "button";
+          mapButton.addEventListener("click", () => openMoldMap(task));
+          actions.append(mapButton);
+        }
+        if (actions.childElementCount) card.append(actions);
+        return card;
+      }
+
+      function renderProductionStation() {
+        const container = byId("productionStationList");
+        container.replaceChildren();
+        if (!state.productionStationItems.length) {
+          container.hidden = true;
+          byId("productionStationPager").hidden = true;
+          showStatus("productionStationState", "当前没有待生产任务。", "empty", loadProductionStation);
+          return;
+        }
+        state.productionStationItems.forEach(task => container.append(productionStationCard(task)));
+        const pageCount = Math.max(1, Math.ceil(state.productionStationTotal / 20));
+        byId("productionStationPageText").textContent = `第 ${state.productionStationPage} / ${pageCount} 页｜共 ${state.productionStationTotal} 条`;
+        byId("productionStationPrev").disabled = state.productionStationPage <= 1;
+        byId("productionStationNext").disabled = state.productionStationPage >= pageCount;
+        byId("productionStationPager").hidden = state.productionStationTotal <= 20;
+        byId("productionStationState").hidden = true;
+        container.hidden = false;
+      }
+
+      async function loadProductionStation(page = state.productionStationPage || 1) {
+        if (!state.productionStation) return;
+        state.productionStationController?.abort();
+        const controller = new AbortController();
+        state.productionStationController = controller;
+        const generation = ++state.productionStationGeneration;
+        showStatus("productionStationState", `正在读取${state.productionStation === "printing" ? "印刷" : "模切"}待生产任务…`, "");
+        try {
+          const params = new URLSearchParams({ station: state.productionStation, page: String(page), page_size: "20" });
+          const data = await apiGet(`/api/mobile/erp/production/tasks?${params}`, { signal: controller.signal });
+          if (generation !== state.productionStationGeneration) return;
+          state.productionStationItems = Array.isArray(data.items) ? data.items : [];
+          state.productionStationPage = Number(data.page || 1);
+          state.productionStationTotal = Number(data.total || 0);
+          state.productionStationAsOf = data.as_of || "";
+          renderProductionStation();
+        } catch (error) {
+          if (error.name === "AbortError" || generation !== state.productionStationGeneration) return;
+          showStatus("productionStationState", `${error.message || "工位任务读取失败"}${state.productionStationItems.length ? "；仍保留上次成功结果" : ""}`, "error", () => loadProductionStation(page));
+        }
+      }
+
+      function switchProductionStation(station) {
+        if (!state.productionStations.includes(station) || station === state.productionStation) return;
+        state.productionStation = station;
+        state.productionStationItems = [];
+        state.productionStationPage = 1;
+        document.querySelectorAll(".station-btn").forEach(button => button.classList.toggle("active", button.dataset.station === station));
+        loadProductionStation(1);
+      }
+
       function productionTaskCard(task) {
         const card = node("div", "task-card");
         const title = `${task.product_code || "无存货编码"}｜${task.product_name || "未填写产品名称"}`;
@@ -881,6 +1041,14 @@
           state.shell = await apiGet("/api/mobile/erp/shell");
           const user = state.shell.user || {};
           const entries = Array.isArray(state.shell.entries) ? state.shell.entries : [];
+          const productionEntry = entries.find(entry => entry.id === "production");
+          state.productionStations = Array.isArray(productionEntry?.stations) ? productionEntry.stations : [];
+          state.productionStation = state.productionStations[0] || "";
+          document.querySelectorAll(".station-btn").forEach(button => {
+            button.hidden = !state.productionStations.includes(button.dataset.station);
+            button.classList.toggle("active", button.dataset.station === state.productionStation);
+          });
+          byId("productionStationTabs").hidden = state.productionStations.length < 2;
           const canOperate = entries.some(entry => entry.can_execute === true);
           byId("userText").textContent = `${user.display_name || user.real_name || user.username || "当前账号"}｜${canOperate ? "现场作业" : "只读"}`;
           const navContainer = document.querySelector(".bottom-inner");
@@ -929,6 +1097,16 @@
       });
       byId("closeMap").addEventListener("click", closeMap);
       byId("closeDrawing").addEventListener("click", closeDrawing);
+      document.querySelectorAll(".station-btn").forEach(button => {
+        button.addEventListener("click", () => switchProductionStation(button.dataset.station));
+      });
+      byId("productionStationPrev").addEventListener("click", () => {
+        if (state.productionStationPage > 1) loadProductionStation(state.productionStationPage - 1);
+      });
+      byId("productionStationNext").addEventListener("click", () => {
+        const pageCount = Math.max(1, Math.ceil(state.productionStationTotal / 20));
+        if (state.productionStationPage < pageCount) loadProductionStation(state.productionStationPage + 1);
+      });
       document.querySelectorAll(".period-btn").forEach(button => {
         button.addEventListener("click", () => {
           state.productionPeriod = button.dataset.period;

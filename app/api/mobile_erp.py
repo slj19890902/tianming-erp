@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+import mimetypes
+from pathlib import PurePath
 import re
 from typing import Literal
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi.responses import FileResponse
 from sqlalchemy import String, and_, case, cast, exists, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -32,15 +35,22 @@ from app.core.time_contract import (
     utc_naive_to_api,
 )
 from app.models.customer import Customer
+from app.models.mold_tool import MoldTool
 from app.models.order import OrderItem
 from app.models.product import Product
+from app.models.product_drawing import ProductDrawing
 from app.models.production import ProductionTask
-from app.models.product_bom import RequisitionItemBomSource
+from app.models.product_bom import (
+    RequisitionItemBomSource,
+    SalesOrderItemBomComponent,
+)
 from app.models.user import User
 from app.services.production_workflow import (
+    count_production_tasks,
     find_pending_production_task_lookup_rows,
     list_production_tasks,
 )
+from app.services.secure_uploads import resolve_stored_reference, stored_file_metadata
 from app.services.ui_layout_settings import LAYOUT_ROLES, effective_layout
 from app.models.warehouse_inventory import (
     FinishedGoodsInventoryDetail,
@@ -181,6 +191,19 @@ def _require_mobile_production_station(user: User) -> None:
         raise HTTPException(status_code=403, detail="当前账号没有手机生产工位查看权限")
 
 
+def _require_exact_mobile_production_station(
+    user: User,
+    station: Literal["printing", "die_cut"],
+) -> None:
+    permission = {
+        "printing": "production.printing.view",
+        "die_cut": "production.die_cut.view",
+    }[station]
+    if not has_permission(user, permission):
+        label = "印刷" if station == "printing" else "模切"
+        raise HTTPException(status_code=403, detail=f"当前账号没有手机{label}工位查看权限")
+
+
 def _production_period_bounds(
     period: Literal["today", "3d", "7d", "custom"],
     *,
@@ -249,6 +272,259 @@ def _safe_production_task(task: dict, *, drawing_path: str | None) -> dict:
         "drawing_path": drawing_path,
         "is_component_task": task.get("is_component_task") is True,
     }
+
+
+def _drawing_suffix(value: str | None) -> str:
+    suffix = PurePath(str(value or "").replace("\\", "/")).suffix.lower()
+    return suffix if suffix in {".jpg", ".jpeg", ".png", ".webp", ".pdf"} else ".bin"
+
+
+def _production_station_process_tags(*values: object) -> list[str]:
+    text = " / ".join(str(value or "") for value in values)
+    tags: list[str] = []
+    for label, tokens in (
+        ("印刷", ("印刷", "水墨")),
+        ("粘贴", ("粘贴", "粘箱", "糊盒", "粘合")),
+        ("打钉", ("打钉", "钉箱", "钉合")),
+        ("模切", ("模切", "啤")),
+    ):
+        if any(token in text for token in tokens):
+            tags.append(label)
+    return tags
+
+
+def _production_station_task_payloads(
+    db: Session,
+    *,
+    tasks: list[dict],
+    station: Literal["printing", "die_cut"],
+    mold_map_allowed: bool,
+) -> list[dict]:
+    """Project one current page into station-safe, read-only task cards."""
+
+    if not tasks:
+        return []
+    order_item_ids = {int(task["order_item_id"]) for task in tasks}
+    product_ids = {
+        int(task["product_id"])
+        for task in tasks
+        if task.get("product_id") is not None
+    }
+    component_ids = {
+        int(task["bom_component_snapshot_id"])
+        for task in tasks
+        if task.get("bom_component_snapshot_id") is not None
+    }
+    order_items = {
+        int(row.id): row
+        for row in db.scalars(
+            select(OrderItem).where(OrderItem.id.in_(order_item_ids))
+        ).all()
+    }
+    products = {
+        int(row.id): row
+        for row in db.scalars(select(Product).where(Product.id.in_(product_ids))).all()
+    }
+    components = (
+        {
+            int(row.id): row
+            for row in db.scalars(
+                select(SalesOrderItemBomComponent).where(
+                    SalesOrderItemBomComponent.id.in_(component_ids)
+                )
+            ).all()
+        }
+        if component_ids
+        else {}
+    )
+    drawings: dict[int, ProductDrawing] = {}
+    if product_ids:
+        for drawing in db.scalars(
+            select(ProductDrawing)
+            .where(ProductDrawing.product_id.in_(product_ids))
+            .order_by(
+                ProductDrawing.product_id,
+                ProductDrawing.uploaded_at.desc(),
+                ProductDrawing.id.desc(),
+            )
+        ).all():
+            drawings.setdefault(int(drawing.product_id), drawing)
+
+    mold_ids: set[int] = set()
+    for task in tasks:
+        product = products.get(int(task.get("product_id") or 0))
+        component = components.get(int(task.get("bom_component_snapshot_id") or 0))
+        mold_id = (
+            component.snapshot_mold_tool_id
+            if component is not None
+            else product.mold_tool_id
+            if product is not None
+            else None
+        )
+        if mold_id is not None:
+            mold_ids.add(int(mold_id))
+    molds = (
+        {
+            int(row.id): row
+            for row in db.scalars(select(MoldTool).where(MoldTool.id.in_(mold_ids))).all()
+        }
+        if mold_ids
+        else {}
+    )
+
+    payloads: list[dict] = []
+    for task in tasks:
+        item = order_items.get(int(task["order_item_id"]))
+        product = products.get(int(task.get("product_id") or 0))
+        component = components.get(int(task.get("bom_component_snapshot_id") or 0))
+        mold_id = (
+            component.snapshot_mold_tool_id
+            if component is not None
+            else product.mold_tool_id
+            if product is not None
+            else None
+        )
+        mold = molds.get(int(mold_id or 0))
+        mold_code = (
+            component.snapshot_mold_tool_code
+            if component is not None
+            else mold.mold_code
+            if mold is not None
+            else None
+        )
+        mold_name = (
+            component.snapshot_mold_tool_name
+            if component is not None
+            else mold.mold_name
+            if mold is not None
+            else task.get("mold_name")
+        )
+        drawing_url = None
+        drawing_kind = None
+        drawing_reference = None
+        if component is None and item is not None and item.drawing_file:
+            drawing_reference = item.drawing_file
+            suffix = _drawing_suffix(drawing_reference)
+            drawing_kind = "pdf" if suffix == ".pdf" else "image"
+        else:
+            drawing = drawings.get(int(task.get("product_id") or 0))
+            if drawing is not None:
+                drawing_reference = drawing.image_path
+                suffix = _drawing_suffix(drawing_reference)
+                drawing_kind = "pdf" if suffix == ".pdf" else "image"
+            elif component is not None and component.snapshot_die_cut_path:
+                drawing_reference = component.snapshot_die_cut_path
+                suffix = _drawing_suffix(drawing_reference)
+                drawing_kind = "pdf" if suffix == ".pdf" else "image"
+        if drawing_reference:
+            drawing_url = f"/api/mobile/erp/production/tasks/{task['id']}/drawing"
+
+        if component is not None:
+            report_length = component.snapshot_component_report_length_mm
+            report_width = component.snapshot_component_report_width_mm
+            crease_type = component.snapshot_component_crease_type
+            crease_values = [
+                component.snapshot_component_crease_left_mm,
+                component.snapshot_component_crease_middle_mm,
+                component.snapshot_component_crease_right_mm,
+            ]
+        else:
+            report_length = (
+                item.snapshot_report_length_mm or item.cardboard_len
+                if item is not None
+                else None
+            )
+            report_width = (
+                item.snapshot_report_width_mm or item.cardboard_width
+                if item is not None
+                else None
+            )
+            crease_type = item.snapshot_crease_type if item is not None else None
+            crease_values = [
+                item.snapshot_crease_left_mm if item is not None else None,
+                item.snapshot_crease_middle_mm if item is not None else None,
+                item.snapshot_crease_right_mm if item is not None else None,
+            ]
+
+        common = {
+            "task_id": int(task["id"]),
+            "task_version": int(task.get("version") or 1),
+            "customer_name": task.get("customer_name"),
+            "order_number": task.get("order_number"),
+            "item_order_number": task.get("item_order_number"),
+            "product_code": task.get("product_code"),
+            "product_name": task.get("product_name"),
+            "carton_specification": task.get("specification"),
+            "order_quantity": int(task.get("ordered_quantity") or 0),
+            "drawing_path": drawing_url,
+            "drawing_kind": drawing_kind,
+            "is_component_task": task.get("is_component_task") is True,
+            "process_tags": _production_station_process_tags(
+                task.get("production_process"),
+                task.get("production_notes"),
+                task.get("special_process"),
+            ),
+        }
+        if station == "printing":
+            plate_colors = [
+                str(row.get("color_name") or "").strip()
+                for row in task.get("printing_plates") or []
+                if str(row.get("color_name") or "").strip()
+            ]
+            common.update(
+                {
+                    "carton_length_mm": _number_text(product.length_mm) if product else None,
+                    "carton_width_mm": _number_text(product.width_mm) if product else None,
+                    "carton_height_mm": _number_text(product.height_mm) if product else None,
+                    "report_length_mm": _number_text(report_length),
+                    "report_width_mm": _number_text(report_width),
+                    "crease_type": crease_type,
+                    "crease_values_mm": [
+                        _number_text(value) for value in crease_values if value is not None
+                    ],
+                    "print_content": task.get("print_content"),
+                    "printing_colors": plate_colors
+                    or [
+                        value.strip()
+                        for value in str(
+                            product.printing_colors if product else ""
+                        ).replace("，", ",").split(",")
+                        if value.strip()
+                    ],
+                    "printing_method": task.get("printing_plate_mode"),
+                    "printing_instruction": task.get("printing_instruction"),
+                    "printing_plate_codes": task.get("printing_plate_codes") or [],
+                    "printing_plates": task.get("printing_plates") or [],
+                    "cutting_mode": task.get("special_process"),
+                }
+            )
+        else:
+            mold_active = mold.is_active if mold is not None else None
+            common.update(
+                {
+                    "material": task.get("material"),
+                    "flute_type": task.get("flute"),
+                    "mold_code": mold_code,
+                    "mold_name": mold_name,
+                    "mold_location": mold.rack_location if mold is not None else None,
+                    "mold_is_active": mold_active,
+                    "mold_warning": (
+                        "模具已停用，禁止直接生产；请联系管理员受控启用"
+                        if mold_active is False
+                        else "模具主档未找到，请先核对模具"
+                        if mold_code and mold is None
+                        else None
+                    ),
+                    "mold_map_url": (
+                        f"/mobile/mold-lookup?q={mold_code}&readonly=1"
+                        if mold_map_allowed and mold_code
+                        else None
+                    ),
+                    "cutting_mode": task.get("special_process"),
+                }
+            )
+        payloads.append(common)
+    return payloads
 
 
 def _escaped_like(value: str) -> str:
@@ -876,6 +1152,116 @@ def pending_incoming_production_detail(
         "as_of": datetime.now(_BEIJING).isoformat(timespec="seconds"),
         "read_only": True,
     }
+
+
+@router.get("/production/tasks")
+def mobile_production_station_tasks(
+    response: Response,
+    station: Literal["printing", "die_cut"] = Query(...),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=20),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read_orders),
+) -> dict:
+    """Return one authorized station's current pending task page, read only."""
+
+    _no_store(response)
+    _require_exact_mobile_production_station(user, station)
+    visible_customer_ids = _visible_customer_ids(user, db)
+    total = count_production_tasks(
+        db,
+        allowed_customer_ids=visible_customer_ids,
+        status="pending",
+    )
+    last_page = max(1, (total + page_size - 1) // page_size)
+    resolved_page = min(page, last_page)
+    task_rows = list_production_tasks(
+        db,
+        allowed_customer_ids=visible_customer_ids,
+        status="pending",
+        page=resolved_page,
+        page_size=page_size,
+    )
+    return {
+        "station": station,
+        "items": _production_station_task_payloads(
+            db,
+            tasks=task_rows,
+            station=station,
+            mold_map_allowed=has_permission(user, "warehouse.view"),
+        ),
+        "total": total,
+        "page": resolved_page,
+        "page_size": page_size,
+        "as_of": datetime.now(_BEIJING).isoformat(timespec="seconds"),
+        "read_only": True,
+    }
+
+
+@router.get("/production/tasks/{task_id}/drawing")
+def mobile_production_task_drawing(
+    task_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read_orders),
+) -> FileResponse:
+    """Serve one still-pending task drawing after station and scope checks."""
+
+    _require_mobile_production_station(user)
+    visible_rows = list_production_tasks(
+        db,
+        allowed_customer_ids=_visible_customer_ids(user, db),
+        status="pending",
+        task_ids=[task_id],
+    )
+    if len(visible_rows) != 1:
+        raise HTTPException(status_code=404, detail="生产任务不存在、已完成或无权查看")
+    task_row = visible_rows[0]
+    task = db.get(ProductionTask, task_id)
+    item = db.get(OrderItem, int(task_row["order_item_id"]))
+    component = (
+        db.get(
+            SalesOrderItemBomComponent,
+            int(task_row["bom_component_snapshot_id"]),
+        )
+        if task_row.get("bom_component_snapshot_id") is not None
+        else None
+    )
+    reference = None
+    if component is None and item is not None and item.drawing_file:
+        reference = item.drawing_file
+    else:
+        drawing = db.scalar(
+            select(ProductDrawing)
+            .where(ProductDrawing.product_id == int(task_row["product_id"]))
+            .order_by(ProductDrawing.uploaded_at.desc(), ProductDrawing.id.desc())
+            .limit(1)
+        ) if task_row.get("product_id") is not None else None
+        reference = (
+            drawing.image_path
+            if drawing is not None
+            else component.snapshot_die_cut_path
+            if component is not None
+            else None
+        )
+    if task is None or not reference:
+        raise HTTPException(status_code=404, detail="当前生产任务没有可查看的图纸")
+    try:
+        path = resolve_stored_reference(reference)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail="生产图纸文件不存在") from error
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="生产图纸文件不存在")
+    metadata = stored_file_metadata(path)
+    content_type = str(
+        metadata.get("content_type")
+        or mimetypes.guess_type(path.name)[0]
+        or "application/octet-stream"
+    )
+    return FileResponse(
+        path,
+        media_type=content_type,
+        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
+    )
 
 
 @router.get("/production/recent")

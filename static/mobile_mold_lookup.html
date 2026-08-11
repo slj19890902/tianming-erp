@@ -20,7 +20,7 @@
     <div class="search"><input id="keyword" inputmode="search" placeholder="输入模具编号、存货编码、客户或产品名称"><button id="searchButton" type="button">查询</button></div>
   </header>
   <main>
-    <section class="move-panel">
+    <section id="movePanel" class="move-panel">
       <h2>模具双码移动确认</h2>
       <div class="muted">扫描结果可直接粘贴，也可手动输入。先预览当前与目标位置，再确认移动。</div>
       <div class="move-grid">
@@ -47,6 +47,7 @@
   <script>
     const $=id=>document.getElementById(id);
     const h=value=>String(value??"").replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[char]);
+    const readOnly=new URLSearchParams(location.search).get("readonly")==="1";
     let canMove=false,movePreview=null,moveIdempotencyKey=null,moveSource="manual_input",oneFloorLocationOptions=[];
     let searchRequestId=0,movePreviewRequestId=0;
     function errorMessage(body,status){const detail=body?.detail;if(typeof detail==="string"&&detail.trim())return detail;if(detail&&typeof detail==="object"&&!Array.isArray(detail)){const message=detail.message||detail.detail||detail.msg,code=detail.code;if(typeof message==="string"&&message.trim())return code?`${message}（${code}）`:message}if(Array.isArray(detail)&&detail[0]?.msg)return detail[0].msg;if(typeof body?.message==="string"&&body.message.trim())return body.message;return `请求失败（HTTP ${status}）`}
@@ -108,8 +109,8 @@
     }
     async function init(){
       let auth;try{auth=await api("/api/auth/me")}catch(error){if(error.status===401){loginNext();return}$("message").innerHTML=`<div class="error">${h(error.message)}</div>`;return}
-      const permissions=auth.permissions||[];canMove=permissions.includes("warehouse.execute");$("warehouseLink").style.display=permissions.includes("warehouse.view")?"inline-block":"none";$("productionLink").style.display=permissions.includes("orders.view")?"inline-block":"none";
-      await loadOneFloorLocationOptions();
+      const permissions=auth.permissions||[];canMove=!readOnly&&permissions.includes("warehouse.execute");$("warehouseLink").style.display=permissions.includes("warehouse.view")?"inline-block":"none";$("productionLink").style.display=permissions.includes("orders.view")?"inline-block":"none";$("movePanel").hidden=readOnly;
+      if(!readOnly)await loadOneFloorLocationOptions();
       const params=new URLSearchParams(location.search),preset=params.get("mold")||params.get("q")||"",target=params.get("location")||params.get("target")||params.get("to")||"";$("keyword").value=preset;$("moveMoldCode").value=params.get("move_mold")||preset;$("moveLocationCode").value=target;if(target)moveSource="url_parameter";if(preset)await search();if($("moveMoldCode").value&&target)await previewMove()
     }
     $("searchButton").onclick=search;$("keyword").oninput=invalidateSearch;$("keyword").onkeydown=event=>{if(event.key==="Enter")search()};$("previewButton").onclick=previewMove;$("confirmButton").onclick=confirmMove;$("moveMoldCode").onpaste=$("moveLocationCode").onpaste=()=>{moveSource="scanner_paste"};$("moveMoldCode").oninput=$("moveLocationCode").oninput=invalidateMovePreview;$("moveLocationCode").onkeydown=event=>{if(event.key==="Enter")previewMove()};$("oneFloorRack").onchange=renderOneFloorLevels;$("oneFloorLevel").onchange=renderOneFloorGrids;$("oneFloorGrid").onchange=buildOneFloorLocation;init();

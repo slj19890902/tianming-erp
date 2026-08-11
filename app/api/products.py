@@ -98,6 +98,7 @@ from app.services.box_type_rules import (
     normalize_box_configuration,
     recommend_box_type,
 )
+from app.services.requisition_quantities import DEFAULT_CUTTING_MODE
 
 
 router = APIRouter()
@@ -407,7 +408,7 @@ class ProductPayload(BaseModel):
     base_report_notes: str | None = None
     splice_mode: str | None = "single"
     pieces_per_box: int | None = None
-    default_cutting_mode: Literal["一开一", "一开二", "一开三", "一开四", "一开五", "一开六"] = "一开一"
+    default_cutting_mode: str | int = DEFAULT_CUTTING_MODE
     production_label_enabled: bool = False
     production_label_units_per_label: int | None = Field(default=None, gt=0)
     flap_mm: int | None = 30
@@ -690,7 +691,7 @@ def _clear_external_purchase_paper_fields(payload: ProductPayload) -> None:
         setattr(payload, field, None)
     payload.splice_mode = "single"
     payload.pieces_per_box = 1
-    payload.default_cutting_mode = "一开一"
+    payload.default_cutting_mode = DEFAULT_CUTTING_MODE
     payload.flap_mm = None
     payload.print_content = "无印刷"
     payload.printing_plate_mode = "no_plate"

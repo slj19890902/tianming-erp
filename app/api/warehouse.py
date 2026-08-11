@@ -175,6 +175,7 @@ from app.services.location_candidates import (
     operational_location_issue,
     operational_location_payload,
 )
+from app.services.requisition_quantities import cutting_factor
 from app.services.master_data_versioning import (
     apply_versioned_update,
     record_versioned_create,
@@ -220,14 +221,6 @@ VALID_SOURCE_TYPES = {
     "stocktake",
     "transfer",
     "replenishment",
-}
-COMPONENT_CUTTING_YIELDS = {
-    "一开一": 1,
-    "一开二": 2,
-    "一开三": 3,
-    "一开四": 4,
-    "一开五": 5,
-    "一开六": 6,
 }
 WAREHOUSE_CONSTRUCTION_STATUSES = {
     "not_started",
@@ -2255,12 +2248,8 @@ def auto_cover_bom_component_inventory(
                     OrderItemSemiRequirement.component_type == component_type,
                 )
             )
-            yield_per_sheet = COMPONENT_CUTTING_YIELDS.get(
-                str(
-                    snapshot.snapshot_component_default_cutting_mode
-                    or "一开一"
-                ),
-                1,
+            yield_per_sheet = cutting_factor(
+                snapshot.snapshot_component_default_cutting_mode
             )
             if requirement is None:
                 preview_candidates = semi_finished_candidates_for_product(

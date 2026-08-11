@@ -27,6 +27,7 @@ from app.services.product_import_workbook import (
     _preflight_product_xlsx_container,
 )
 from app.services.secure_uploads import discard_temporary_token
+from app.services.requisition_quantities import normalize_cutting_mode
 
 
 MIXED_TEMPLATE_VERSION = "P1-22-mixed-v1"
@@ -260,9 +261,9 @@ def _parse_dimensions(value: object) -> tuple[int | None, int | None, int | None
 
 def _cutting_mode(value: object) -> str:
     text = _text(value).replace("×", "*").replace("X", "*").replace("x", "*")
-    match = re.search(r"=\s*([1-6])\s*(?:PCS)?\s*$", text, re.IGNORECASE)
+    match = re.search(r"=\s*([1-9]\d*)\s*(?:PCS)?\s*$", text, re.IGNORECASE)
     count = int(match.group(1)) if match else 1
-    return {1: "一开一", 2: "一开二", 3: "一开三", 4: "一开四", 5: "一开五", 6: "一开六"}[count]
+    return normalize_cutting_mode(count, strict=True)
 
 
 def _crease_values(value: object, report_width: int | None) -> tuple[str | None, int | None, int | None, int | None]:

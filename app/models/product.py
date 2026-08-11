@@ -51,7 +51,12 @@ class Product(Base):
             name="ck_products_box_category",
         ),
         CheckConstraint(
-            "default_cutting_mode IN ('一开一', '一开二', '一开三', '一开四', '一开五', '一开六')",
+            "(default_cutting_mode IN ('一开一', '一开二', '一开三', '一开四', '一开五', '一开六') "
+            "OR (substr(default_cutting_mode, 1, 2) = '一开' "
+            "AND length(default_cutting_mode) BETWEEN 3 AND 20 "
+            "AND CAST(substr(default_cutting_mode, 3) AS BIGINT) > 0 "
+            "AND substr(default_cutting_mode, 3) = "
+            "CAST(CAST(substr(default_cutting_mode, 3) AS BIGINT) AS VARCHAR)))",
             name="ck_products_default_cutting_mode",
         ),
         CheckConstraint(

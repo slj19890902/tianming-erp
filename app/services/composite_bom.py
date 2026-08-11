@@ -28,6 +28,10 @@ from app.models.order import OrderItem
 from app.models.product import Product
 from app.models.user import User
 from app.services.master_data_versioning import apply_versioned_update
+from app.services.requisition_quantities import (
+    DEFAULT_CUTTING_MODE,
+    normalize_cutting_mode,
+)
 
 
 class CompositeBOMError(ValueError):
@@ -757,12 +761,10 @@ def _snapshot_kwargs(
         (
             ("snapshot_component_default_cutting_mode",),
             (
-                component.default_cutting_mode
+                normalize_cutting_mode(component.default_cutting_mode)
                 if (component.box_style or "").strip()
-                in {"平卡", "模切内盒", "隔板", "刀卡"}
-                and component.default_cutting_mode
-                in {"一开一", "一开二", "一开三", "一开四", "一开五", "一开六"}
-                else "一开一"
+                in {"衬板", "平卡", "模切内盒", "隔板", "刀卡"}
+                else DEFAULT_CUTTING_MODE
             ),
         ),
         (("snapshot_component_production_process", "snapshot_production_process", "component_process_snapshot"), component.production_process),

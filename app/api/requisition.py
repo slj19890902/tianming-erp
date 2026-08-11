@@ -159,9 +159,10 @@ from app.services.customer_material_candidates import (
 from app.services import material_pricing
 from app.services.requisition_quantities import (
     CUTTING_MODE_BOX_STYLES,
-    CUTTING_MODE_FACTORS,
     DEFAULT_CUTTING_MODE,
+    CuttingModeError,
     cutting_factor,
+    normalize_cutting_mode,
     purchase_sheet_quantity,
     required_piece_quantity,
 )
@@ -213,16 +214,6 @@ def _require_active_material_supplier(
         )
 
 
-CUTTING_MODE_FACTORS = {
-    "一开一": 1,
-    "一开二": 2,
-    "一开三": 3,
-    "一开四": 4,
-    "一开五": 5,
-    "一开六": 6,
-}
-DEFAULT_CUTTING_MODE = "一开一"
-CUTTING_MODE_BOX_STYLES = {"平卡", "模切内盒", "隔板", "刀卡"}
 INACTIVE_REQUISITION_ITEM_STATUSES = {
     "cancelled",
     "canceled",
@@ -242,6 +233,13 @@ NON_EFFECTIVE_LEGACY_REQUISITION_STATUSES = (
 )
 SPECIAL_PROCESSES = {"无", "大做小", "双拼", "多拼"}
 SUPPLIER_MATERIAL_FLUTES = {"AAA", "ABC", "AB", "E", "BE", "B", "C", "A"}
+
+
+def _validated_cutting_mode(value: object) -> str:
+    try:
+        return normalize_cutting_mode(value, strict=True)
+    except CuttingModeError as error:
+        raise ValueError(str(error)) from error
 
 
 def _business_flute_error(
@@ -328,10 +326,7 @@ class RequisitionLinePayload(BaseModel):
     @field_validator("special_process")
     @classmethod
     def validate_process(cls, value: str) -> str:
-        normalized = str(value or "").strip() or DEFAULT_CUTTING_MODE
-        if normalized not in CUTTING_MODE_FACTORS:
-            raise ValueError("开料方式仅允许：一开一、一开二、一开三、一开四、一开五、一开六")
-        return normalized
+        return _validated_cutting_mode(value)
 
     @field_validator("component_type")
     @classmethod
@@ -469,10 +464,7 @@ class RequisitionEdit(BaseModel):
     @field_validator("special_process")
     @classmethod
     def validate_process(cls, value: str) -> str:
-        normalized = str(value or "").strip() or DEFAULT_CUTTING_MODE
-        if normalized not in CUTTING_MODE_FACTORS:
-            raise ValueError("开料方式仅允许：一开一、一开二、一开三、一开四、一开五、一开六")
-        return normalized
+        return _validated_cutting_mode(value)
 
 
 class SupplierSchedulePayload(BaseModel):
@@ -503,10 +495,7 @@ class MergeGroupCreatePayload(BaseModel):
     @field_validator("cutting_mode")
     @classmethod
     def validate_cutting_mode(cls, value: str) -> str:
-        normalized = str(value or "").strip() or DEFAULT_CUTTING_MODE
-        if normalized not in CUTTING_MODE_FACTORS:
-            raise ValueError("开料方式仅允许：一开一、一开二、一开三、一开四、一开五、一开六")
-        return normalized
+        return _validated_cutting_mode(value)
 
 
 class MergeGroupUpdatePayload(BaseModel):
@@ -521,10 +510,7 @@ class MergeGroupUpdatePayload(BaseModel):
     def validate_cutting_mode(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        normalized = str(value or "").strip() or DEFAULT_CUTTING_MODE
-        if normalized not in CUTTING_MODE_FACTORS:
-            raise ValueError("开料方式仅允许：一开一、一开二、一开三、一开四、一开五、一开六")
-        return normalized
+        return _validated_cutting_mode(value)
 
 
 class PendingSupplierOrderSelection(BaseModel):
@@ -548,10 +534,7 @@ class PendingSupplierOrderSelection(BaseModel):
     @field_validator("cutting_mode")
     @classmethod
     def validate_cutting_mode(cls, value: str) -> str:
-        normalized = str(value or "").strip() or DEFAULT_CUTTING_MODE
-        if normalized not in CUTTING_MODE_FACTORS:
-            raise ValueError("开料方式仅允许：一开一、一开二、一开三、一开四、一开五、一开六")
-        return normalized
+        return _validated_cutting_mode(value)
 
 
 class PendingSupplierOrderCreatePayload(BaseModel):
@@ -839,10 +822,7 @@ class PendingSupplierOrderDraftItem(BaseModel):
     @field_validator("cutting_mode")
     @classmethod
     def validate_cutting_mode(cls, value: str) -> str:
-        normalized = str(value or "").strip() or DEFAULT_CUTTING_MODE
-        if normalized not in CUTTING_MODE_FACTORS:
-            raise ValueError("开料方式仅允许：一开一、一开二、一开三、一开四、一开五、一开六")
-        return normalized
+        return _validated_cutting_mode(value)
 
 
 class PendingSupplierOrderDraftSourceItem(BaseModel):
@@ -889,10 +869,7 @@ class PendingSupplierOrderDraftLine(BaseModel):
     @field_validator("cutting_mode")
     @classmethod
     def validate_cutting_mode(cls, value: str) -> str:
-        normalized = str(value or "").strip() or DEFAULT_CUTTING_MODE
-        if normalized not in CUTTING_MODE_FACTORS:
-            raise ValueError("开料方式仅允许：一开一、一开二、一开三、一开四、一开五、一开六")
-        return normalized
+        return _validated_cutting_mode(value)
 
 
 class PendingSupplierOrderDraftGroup(BaseModel):
@@ -1870,9 +1847,9 @@ def _ordinary_requisition_requirements(
     cutting_mode: str | None = None,
 ) -> dict[str, int | str | bool]:
     """Exact direct formula after request-local negative-fact verification."""
-    resolved_cutting_mode = cutting_mode or item.special_process
-    if resolved_cutting_mode not in CUTTING_MODE_FACTORS:
-        resolved_cutting_mode = DEFAULT_CUTTING_MODE
+    resolved_cutting_mode = normalize_cutting_mode(
+        cutting_mode or item.special_process
+    )
     pieces_per_box = _pieces_per_box(item)
     production_required_qty = max(int(item.quantity or 0), 0)
     required_piece_qty = _required_piece_qty(production_required_qty, pieces_per_box)
@@ -1978,8 +1955,7 @@ def _bom_snapshot_requirements(
         if allowed_cutting_mode
         else DEFAULT_CUTTING_MODE
     )
-    if resolved_cutting_mode not in CUTTING_MODE_FACTORS:
-        resolved_cutting_mode = DEFAULT_CUTTING_MODE
+    resolved_cutting_mode = normalize_cutting_mode(resolved_cutting_mode)
     cutting_factor = _cutting_factor(resolved_cutting_mode)
     if actual_yield_per_sheet is not None:
         yield_per_sheet = actual_yield_per_sheet
@@ -2301,9 +2277,9 @@ def _current_requisition_requirements(
     semi_reserved_piece_qty: int | None = None,
 ) -> dict[str, int | str | bool]:
     """Derive current purchase demand from active finished-stock reservations."""
-    resolved_cutting_mode = cutting_mode or item.special_process
-    if resolved_cutting_mode not in CUTTING_MODE_FACTORS:
-        resolved_cutting_mode = DEFAULT_CUTTING_MODE
+    resolved_cutting_mode = normalize_cutting_mode(
+        cutting_mode or item.special_process
+    )
     normalized_component = (component_type or "whole").strip().lower()
     resolved_pieces_per_box = max(
         int(
@@ -4061,7 +4037,7 @@ def _apply_requisition_scope(query, user: User, db: Session):
 
 def _item_response(item: OrderItem, db: Session | None = None) -> dict:
     pieces_per_box = _pieces_per_box(item)
-    cutting_mode = item.special_process if item.special_process in CUTTING_MODE_FACTORS else DEFAULT_CUTTING_MODE
+    cutting_mode = normalize_cutting_mode(item.special_process)
     requirements = (
         _current_requisition_summary(db, item, cutting_mode=cutting_mode)
         if db is not None
@@ -12482,8 +12458,6 @@ def print_batch(
         else:
             crease_display = crease_type or ""
         remarks = []
-        if row.special_process and row.special_process != DEFAULT_CUTTING_MODE:
-            remarks.append(row.special_process)
         if row.remark:
             remarks.append(row.remark)
         component_report_notes = None

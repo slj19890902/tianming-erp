@@ -205,6 +205,7 @@
           return [
             detailRow("成品尺寸", finishedSize(card)),
             detailRow("楞型", textList(flute)),
+            detailRow("开料方式", cutting),
             detailRow("总数量", `${card.planned_finished_quantity || 0} 张`),
             detailRow("每捆数量", perBundle),
             detailRow("预计捆数", bundleCount),

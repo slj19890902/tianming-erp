@@ -3,9 +3,14 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Literal
 
+from app.services.requisition_quantities import (
+    DEFAULT_CUTTING_MODE,
+    CuttingModeError,
+    normalize_cutting_mode,
+)
+
 
 DEFAULT_FLAP_MM = 30
-CUTTING_MODES = ("一开一", "一开二", "一开三", "一开四", "一开五", "一开六")
 SPLICE_MODES = ("single", "double")
 
 
@@ -39,10 +44,10 @@ class BoxTypeRule:
                 else {"single": 1}
             ),
             supported_cutting_modes=(
-                list(CUTTING_MODES)
-                if self.supports_cutting_mode
-                else ["一开一"]
+                [] if self.supports_cutting_mode else [DEFAULT_CUTTING_MODE]
             ),
+            cutting_mode_input=("positive_integer" if self.supports_cutting_mode else None),
+            cutting_mode_min=(1 if self.supports_cutting_mode else None),
         )
         for key in (
             "aliases",
@@ -315,11 +320,17 @@ def normalize_box_configuration(
     else:
         normalized_flap = None
 
-    normalized_cutting = str(default_cutting_mode or "一开一").strip()
+    normalized_cutting = normalize_cutting_mode(default_cutting_mode)
     if rule is not None and not rule.supports_cutting_mode:
-        normalized_cutting = "一开一"
-    elif normalized_cutting not in CUTTING_MODES:
-        raise BoxTypeRuleError("开料方式仅允许：一开一至一开六")
+        normalized_cutting = DEFAULT_CUTTING_MODE
+    else:
+        try:
+            normalized_cutting = normalize_cutting_mode(
+                default_cutting_mode,
+                strict=True,
+            )
+        except CuttingModeError as error:
+            raise BoxTypeRuleError(str(error)) from error
 
     normalized_crease = str(crease_type or "").strip() or None
     if (
@@ -396,7 +407,7 @@ def recommend_box_type(
         splice_mode=splice_mode,
         pieces_per_box=None,
         flap_mm=flap_mm,
-        default_cutting_mode="一开一",
+        default_cutting_mode=DEFAULT_CUTTING_MODE,
         crease_type=crease_type,
     )
     if rule is None:

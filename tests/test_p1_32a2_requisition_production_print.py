@@ -539,6 +539,10 @@ def test_print_page_and_erp_entry_keep_purchase_and_receipt_prints_separate():
     assert "A1 型纸箱生产任务单" in print_html
     assert "模切内盒生产任务单" in print_html
     assert "衬板生产任务单" in print_html
+    liner_layout = print_html.split('if (card.layout_kind === "liner") {', 1)[1].split(
+        'if (card.layout_kind === "die_cut") {', 1
+    )[0]
+    assert 'detailRow("开料方式", cutting)' in liner_layout
     assert "filter:grayscale(1)" in print_html
     assert "structure_reference" in print_html
     assert "计划已变化 / 请核对并重打" in print_html
@@ -617,11 +621,15 @@ def test_package_projects_explicit_box_layout_current_mold_and_secure_drawing(
         task.production_label_units_per_label_snapshot = 50
         task.production_label_total_quantity_snapshot = 200
         task.production_label_count_snapshot = 4
+        for supplier_line in order.items:
+            if supplier_line.order_item_id == production_print_app["order_item_id"]:
+                supplier_line.cutting_mode = "一开12"
         db.commit()
         liner = build_supplier_requisition_production_package(db, order)
         liner_card = liner["cards"][0]
 
         assert liner_card["layout_kind"] == "liner"
+        assert {row["cutting_mode"] for row in liner_card["components"]} == {"一开12"}
         assert liner_card["production_label_units_per_bundle"] == 50
         assert liner_card["estimated_bundle_count"] == 4
 

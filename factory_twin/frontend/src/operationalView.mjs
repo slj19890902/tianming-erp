@@ -7,6 +7,22 @@ function featureMinimumX(feature) {
   return xs.length ? Math.min(...xs) : Number.NEGATIVE_INFINITY;
 }
 
+function zoneInsideBounds(feature, bounds) {
+  const points = feature?.points || [];
+  if (points.length < 3) return false;
+  const minX = Number(bounds?.min_x);
+  const minY = Number(bounds?.min_y);
+  const maxX = Number(bounds?.max_x);
+  const maxY = Number(bounds?.max_y);
+  if (![minX, minY, maxX, maxY].every(Number.isFinite)) return false;
+  return points.every((point) => {
+    const x = Number(point?.[0]);
+    const y = Number(point?.[1]);
+    return Number.isFinite(x) && Number.isFinite(y)
+      && x >= minX && x <= maxX && y >= minY && y <= maxY;
+  });
+}
+
 export function filterOperationalFeatures(floorCode, bounds, features) {
   if (String(floorCode || "").toUpperCase() !== FLOOR_ONE) return [...features];
 
@@ -15,11 +31,14 @@ export function filterOperationalFeatures(floorCode, bounds, features) {
   const workshopSpanX = Math.max(0, maxX - minX);
   const workshopSouthEdgeX = maxX + Math.max(2500, workshopSpanX * 0.12);
 
-  return features.filter((feature) => !(
-    feature?.feature_kind === "structure"
-    && feature?.subtype === "custom_column"
-    && featureMinimumX(feature) > workshopSouthEdgeX
-  ));
+  return features.filter((feature) => {
+    if (feature?.feature_kind === "zone" && !zoneInsideBounds(feature, bounds)) return false;
+    return !(
+      feature?.feature_kind === "structure"
+      && feature?.subtype === "custom_column"
+      && featureMinimumX(feature) > workshopSouthEdgeX
+    );
+  });
 }
 
 export function warehouseFrustumDivisor(floorCode, visualTheme) {

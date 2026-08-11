@@ -13,28 +13,28 @@ WAREHOUSE_TWIN = (
 ).read_text(encoding="utf-8")
 
 
-def test_warehouse_daily_navigation_defaults_to_measured_twin_floor() -> None:
+def test_warehouse_ledger_has_one_measured_map_entry_and_defaults_to_rows() -> None:
     tabs = WAREHOUSE[
         WAREHOUSE.index('<div class="tabs">') : WAREHOUSE.index(
             '<div id="pageError"'
         )
     ]
-    assert tabs.index('data-tab="locations"') < tabs.index(
+    assert tabs.index('href="/warehouse.html"') < tabs.index(
         'data-tab="insights"'
     )
-    assert '<button class="btn active" data-tab="locations" aria-label="数字孪生库位管理">数字孪生库位</button>' in tabs
-    assert 'tab:"locations"' in WAREHOUSE
-    assert 'if(!requestedTab&&!locationId&&!lotId&&!keyword){await switchTab("locations");return}' in WAREHOUSE
-    assert 'if(requestedTab==="locations"&&!locationId){' in WAREHOUSE
-    assert 'await switchTab("locations");' in WAREHOUSE
-    assert 'locationView:"floor3"' in WAREHOUSE
-    assert 'requestedLocationView==="floor3"' in WAREHOUSE
+    assert '<a class="btn" href="/warehouse.html" target="_top">实测仓库地图</a>' in tabs
+    assert 'data-tab="locations"' not in tabs
+    assert 'tab:"finished"' in WAREHOUSE
+    assert 'if(!requestedTab&&!locationId&&!lotId&&!keyword){await switchTab("finished");return}' in WAREHOUSE
+    assert 'if(requestedTab==="locations"){openMeasuredWarehouseMap(params);return}' in WAREHOUSE
+    assert 'if(tab==="locations"){openMeasuredWarehouseMap();return}' in WAREHOUSE
+    assert 'locationView:"ledger"' in WAREHOUSE
 
 
 def test_row_ledgers_are_visible_read_entries_while_mutations_stay_admin_only() -> None:
-    assert 'class="btn inventory-ledger-tab" data-tab="finished">高级成品台账' in WAREHOUSE
+    assert 'class="btn active inventory-ledger-tab" data-tab="finished">高级成品台账' in WAREHOUSE
     assert 'class="btn inventory-ledger-tab" data-tab="semi_finished">高级半成品台账' in WAREHOUSE
-    assert 'class="btn" data-location-view="ledger" type="button">全部库位台账' in WAREHOUSE
+    assert '<a class="btn" href="/warehouse.html" target="_top">实测仓库地图</a>' in WAREHOUSE
     assert 'class="btn" type="button" onclick="switchTab(\'finished\')">高级库存台账' in WAREHOUSE
     assert 'class="btn" type="button" onclick="switchLocationView(\'ledger\')">库位结构维护' in WAREHOUSE
     assert '<form id="moldForm" class="panel admin-only">' in WAREHOUSE

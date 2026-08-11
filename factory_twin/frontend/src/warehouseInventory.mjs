@@ -125,10 +125,15 @@ export function buildMappedLocationPallets(features, locations, floorCode, layou
     const positions = ordered.map((location, index) => mappedLocationPoint(zone, location) || fallbackPositions[index]);
     const xs = zone.points.map((point) => Number(point[0]));
     const ys = zone.points.map((point) => Number(point[1]));
-    const rotation = Math.max(...ys) - Math.min(...ys) > Math.max(...xs) - Math.min(...xs) ? 90 : 0;
     ordered.forEach((location, index) => {
       const occupied = location.occupancy_status === "occupied";
       const actualPalletCode = location.pallet?.pallet_code || null;
+      const position = location.map_position;
+      const mappedWidthMm = position ? (Number(position.width_pct) / 100) * (Math.max(...xs) - Math.min(...xs)) : 0;
+      const mappedDepthMm = position ? (Number(position.height_pct) / 100) * (Math.max(...ys) - Math.min(...ys)) : 0;
+      const rotation = mappedWidthMm > 0 && mappedDepthMm > 0 && Math.abs(mappedWidthMm - mappedDepthMm) > 50
+        ? (mappedWidthMm < mappedDepthMm ? 90 : 0)
+        : Math.max(...ys) - Math.min(...ys) > Math.max(...xs) - Math.min(...xs) ? 90 : 0;
       pallets.push({
         id: `erp-location-${location.location_id}`,
         layout_id: layoutId,

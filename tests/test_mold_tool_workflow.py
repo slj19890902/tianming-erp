@@ -467,6 +467,34 @@ def test_mold_list_supports_server_pagination_and_preserves_search(mold_app) -> 
         assert searched.json()["total"] == 1
         assert searched.json()["items"][0]["mold_code"] == "PAGE-017"
 
+        mapped_area = client.get(
+            "/api/warehouse/molds/by-map-area",
+            params={
+                "floor_code": "1F",
+                "feature_code": "ZONE-1F-MOLD-002",
+                "page": 2,
+                "page_size": 10,
+            },
+        )
+        assert mapped_area.status_code == 200, mapped_area.text
+        assert mapped_area.json()["rack_codes"] == ["R01", "R02"]
+        assert mapped_area.json()["total"] == 25
+        assert mapped_area.json()["page"] == 2
+        assert mapped_area.json()["items"][0]["mold_code"] == "PAGE-011"
+
+        located = client.get(
+            "/api/warehouse/twin-operations/locate",
+            params={"search_type": "mold", "keyword": "PAGE-017"},
+        )
+        assert located.status_code == 200, located.text
+        resource = next(
+            row
+            for row in located.json()["resources"]
+            if row["primary_code"] == "PAGE-017"
+        )
+        assert resource["feature_codes"] == ["ZONE-1F-MOLD-002"]
+        assert resource["map_status"] == "mapped"
+
 
 def test_scoped_account_only_reads_allowed_mold_products_and_labels(mold_app) -> None:
     app, factory = mold_app
@@ -499,7 +527,7 @@ def test_scoped_account_only_reads_allowed_mold_products_and_labels(mold_app) ->
                 json={
                     "mold_code": code,
                     "mold_name": f"{code} 测试模具",
-                    "rack_location": f"测试货架 {code}",
+                    "rack_location": "1F-M-R01-L2-G01",
                 },
             )
             assert response.status_code == 201, response.text
@@ -551,6 +579,16 @@ def test_scoped_account_only_reads_allowed_mold_products_and_labels(mold_app) ->
         )
         assert denied_search.status_code == 200, denied_search.text
         assert denied_search.json()["items"] == []
+
+        mapped_area = scoped_client.get(
+            "/api/warehouse/molds/by-map-area",
+            params={"feature_code": "ZONE-1F-MOLD-002", "page_size": 100},
+        )
+        assert mapped_area.status_code == 200, mapped_area.text
+        assert {row["mold_code"] for row in mapped_area.json()["items"]} == {
+            "SCOPE-ALLOW",
+            "SCOPE-SHARED",
+        }
 
         allowed_label = scoped_client.get(
             f"/api/warehouse/molds/{allowed_mold_id}/label"
@@ -767,11 +805,119 @@ def test_one_floor_mold_location_options_are_read_only_and_employee_friendly(
         ]
         assert data["racks"][0]["location_depth"] == "grid"
         assert data["racks"][0]["levels"] == [
-            {"level": 2, "kind": "flat", "grids": [1]},
-            {"level": 3, "kind": "flat", "grids": [1]},
+            {"level": 2, "kind": "flat", "grid_count": 1, "grids": [1]},
+            {"level": 3, "kind": "flat", "grid_count": 1, "grids": [1]},
         ]
         assert data["racks"][3]["location_depth"] == "rack"
         assert data["racks"][3]["levels"] == []
+
+
+def test_admin_can_preview_then_once_confirm_floor1_formal_candidates(
+    mold_app,
+) -> None:
+    app, factory = mold_app
+    from sqlalchemy import func, select
+
+    from app.models.warehouse_inventory import (
+        WarehouseArea,
+        WarehouseFloor,
+        WarehouseLocation,
+    )
+
+    with factory() as db:
+        floor = WarehouseFloor(
+            floor_code="1F",
+            floor_name="一楼",
+            floor_number=1,
+            construction_status="enabled",
+            planning_reference_pallet_capacity=34,
+        )
+        db.add(floor)
+        db.flush()
+        legacy = WarehouseArea(
+            floor_id=floor.id,
+            area_code="DISPATCH",
+            area_name="未映射旧待发区",
+            planned_location_count=1,
+            planned_pallet_capacity=1,
+            construction_status="enabled",
+            capacity_review_status="pending",
+            capacity_eligible=False,
+        )
+        db.add(legacy)
+        db.add(
+            WarehouseLocation(
+                location_code="1F-DISPATCH-L001",
+                location_name="旧待发区 001 号位",
+                warehouse_type="finished",
+                warehouse_floor=1,
+                area_code="DISPATCH",
+                storage_type="ground",
+                sort_order=1,
+                source_version="TWIN_V1",
+                placement_status="placed",
+            )
+        )
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client, "sales")
+        denied = client.get("/api/warehouse/twin-layout/floors/1F/formal-candidates")
+        assert denied.status_code == 403
+
+    with TestClient(app) as client:
+        _login(client, "admin")
+        preview = client.get("/api/warehouse/twin-layout/floors/1F/formal-candidates")
+        assert preview.status_code == 200, preview.text
+        plan = preview.json()
+        assert plan["candidate_count"] == 19
+        assert plan["excluded_out_of_bounds_count"] == 3
+        assert plan["long_term_pallet_capacity"] == 70
+        assert plan["formal_location_count"] == 45
+        assert plan["formal_state"]["archivable_legacy_area_count"] == 1
+        with factory() as db:
+            assert db.scalar(select(func.count(WarehouseArea.id))) == 1
+            assert db.scalar(select(func.count(WarehouseLocation.id))) == 1
+
+        payload = {
+            "expected_map_revision": plan["map_revision"],
+            "expected_plan_fingerprint": plan["plan_fingerprint"],
+            "expected_formal_state_fingerprint": plan["formal_state"]["fingerprint"],
+            "operation_key": "api-floor1-candidates-confirm-0001",
+            "confirmed": True,
+        }
+        confirmed = client.post(
+            "/api/warehouse/twin-layout/floors/1F/formal-candidates/confirm",
+            json=payload,
+        )
+        assert confirmed.status_code == 200, confirmed.text
+        assert confirmed.json()["applied"] is True
+        assert confirmed.json()["created_location_count"] == 45
+        assert confirmed.json()["archived_legacy_area_count"] == 1
+        with factory() as db:
+            old_location = db.scalar(
+                select(WarehouseLocation).where(
+                    WarehouseLocation.location_code == "1F-DISPATCH-L001"
+                )
+            )
+            assert old_location is not None and old_location.is_active is False
+
+        replayed = client.post(
+            "/api/warehouse/twin-layout/floors/1F/formal-candidates/confirm",
+            json={**payload, "operation_key": "api-floor1-candidates-confirm-0002"},
+        )
+        assert replayed.status_code == 200, replayed.text
+        assert replayed.json()["applied"] is False
+
+        overlaid = client.get("/api/warehouse/twin-layout/floors/1F")
+        assert overlaid.status_code == 200, overlaid.text
+        by_code = {
+            row["feature_code"]: row
+            for row in overlaid.json()["features"]
+            if row.get("feature_kind") == "zone"
+        }
+        assert by_code["ZONE-1F-FIN-001"]["erp_area_code"] == "FIN-001"
+        assert by_code["ZONE-1F-FIN-001"]["formal_binding_status"] == "published"
 
 
 @pytest.mark.parametrize(
@@ -801,6 +947,25 @@ def test_new_one_floor_mold_locations_do_not_record_left_to_right_order(
         assert guide["prompt"].endswith(f"第{guide['level']}层、第{guide['grid']}排")
     assert "左右顺序" not in guide["prompt"]
     assert "拿取前" not in guide["prompt"]
+
+
+@pytest.mark.parametrize(
+    ("location", "feature_codes"),
+    [
+        ("1F-M-R01-L2-G01", ["ZONE-1F-MOLD-002"]),
+        ("1F-M-R02-L2-G01", ["ZONE-1F-MOLD-002"]),
+        ("1F-M-R03-L2-G01", ["ZONE-1F-MOLD-001"]),
+        ("3F-M-R01-L1-D01-P01", []),
+        ("旧模具架 A-03", []),
+    ],
+)
+def test_mold_location_resolves_to_measured_map_area(
+    location: str,
+    feature_codes: list[str],
+) -> None:
+    from app.services.mold_location import mold_location_feature_codes
+
+    assert mold_location_feature_codes(location) == feature_codes
 
 
 def test_mold_location_falls_back_from_grid_to_level_then_rack(monkeypatch) -> None:
@@ -836,6 +1001,45 @@ def test_mold_location_falls_back_from_grid_to_level_then_rack(monkeypatch) -> N
     assert mold_location.normalize_mold_location_code("1f-m-r04") == "1F-M-R04"
     with pytest.raises(mold_location.MoldLocationError, match="未配置格数"):
         mold_location.normalize_mold_location_code("1f-m-r01-l2-g01")
+
+
+def test_mold_location_options_use_each_published_level_cell_count(monkeypatch) -> None:
+    from app.services import mold_location
+
+    options = mold_location.one_floor_mold_location_options(
+        {
+            "racks": [
+                {
+                    "mold_rack_code": "R01",
+                    "name": "逐层分格测试架",
+                    "area_code": "ZONE-1F-MOLD-002",
+                    "levels": 3,
+                    "bays": 1,
+                    "level_cell_counts": [9, 3, 0],
+                }
+            ]
+        }
+    )
+    rack1 = next(row for row in options if row["rack_code"] == "R01")
+    assert rack1["grid_count"] == 3
+    assert rack1["levels"] == [
+        {"level": 2, "kind": "flat", "grid_count": 3, "grids": [1, 2, 3]},
+        {"level": 3, "kind": "flat", "grid_count": 0, "grids": []},
+    ]
+
+    monkeypatch.setattr(
+        mold_location,
+        "one_floor_mold_location_options",
+        lambda: [rack1],
+    )
+    assert mold_location.normalize_mold_location_code("1f-m-r01-l2-g03") == (
+        "1F-M-R01-L2-G03"
+    )
+    assert mold_location.normalize_mold_location_code("1f-m-r01-l3") == "1F-M-R01-L3"
+    with pytest.raises(mold_location.MoldLocationError, match="该层已配置格数"):
+        mold_location.normalize_mold_location_code("1f-m-r01-l2")
+    with pytest.raises(mold_location.MoldLocationError, match="该层未配置格数"):
+        mold_location.normalize_mold_location_code("1f-m-r01-l3-g01")
 
 
 def test_order_response_exposes_current_mold_location_to_workshop(mold_app) -> None:

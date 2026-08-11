@@ -58,14 +58,14 @@
     function buildOneFloorLocation(){
       const rack=selectedOneFloorRack();if(!rack)return;let code="",label="";
       if(rack.location_depth==="rack"){code=`1F-M-${rack.rack_code}`;label=`${rack.rack_code} ${rack.name}；该区域没有层号或格号`}
-      else{const level=selectedOneFloorLevel();if(!level)return;if(rack.location_depth==="grid"){const grid=Number.parseInt($("oneFloorGrid").value,10);if(!grid)return;code=`1F-M-${rack.rack_code}-L${level.level}-G${positionCode(grid)}`;label=`${rack.rack_code} ${rack.name} · 第${level.level}层 · 第${grid}格`}else{code=`1F-M-${rack.rack_code}-L${level.level}`;label=`${rack.rack_code} ${rack.name} · 第${level.level}层`}}
+      else{const level=selectedOneFloorLevel();if(!level)return;if((level.grids||[]).length){const grid=Number.parseInt($("oneFloorGrid").value,10);if(!grid)return;code=`1F-M-${rack.rack_code}-L${level.level}-G${positionCode(grid)}`;label=`${rack.rack_code} ${rack.name} · 第${level.level}层 · 第${grid}格`}else{code=`1F-M-${rack.rack_code}-L${level.level}`;label=`${rack.rack_code} ${rack.name} · 第${level.level}层`}}
       $("moveLocationCode").value=code;moveSource="manual_input";invalidateMovePreview();$("oneFloorBuilderHint").textContent=`已选择：${label}；左右顺序不记录`;
     }
     function renderOneFloorLevels(){
       const rack=selectedOneFloorRack(),levels=rack?.levels||[];$("oneFloorLevel").innerHTML=levels.map(row=>`<option value="${row.level}">第 ${row.level} 层 · ${row.kind==="vertical"?"竖放":"平放"}</option>`).join("");$("oneFloorLevelField").style.display=rack?.location_depth==="rack"?"none":"block";renderOneFloorGrids();
     }
     function renderOneFloorGrids(){
-      const rack=selectedOneFloorRack(),level=selectedOneFloorLevel(),grids=level?.grids||[];$("oneFloorGrid").innerHTML=grids.map(grid=>`<option value="${grid}">第 ${grid} 格</option>`).join("");$("oneFloorGridField").style.display=rack?.location_depth==="grid"?"block":"none";buildOneFloorLocation();
+      const rack=selectedOneFloorRack(),level=selectedOneFloorLevel(),grids=level?.grids||[];$("oneFloorGrid").innerHTML=grids.map(grid=>`<option value="${grid}">第 ${grid} 格</option>`).join("");$("oneFloorGridField").style.display=grids.length?"block":"none";buildOneFloorLocation();
     }
     async function loadOneFloorLocationOptions(){
       try{const data=await api("/api/warehouse/molds/location-options");oneFloorLocationOptions=data.racks||[];$("oneFloorRack").innerHTML=oneFloorLocationOptions.map(row=>`<option value="${h(row.rack_code)}">${h(row.rack_code)} · ${h(row.name)}</option>`).join("");renderOneFloorLevels()}catch(error){$("oneFloorBuilderHint").textContent=`一楼快捷位置读取失败：${error.message}`}

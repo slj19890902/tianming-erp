@@ -17,6 +17,59 @@ class WarehouseTwinLayoutNotFoundError(LookupError):
     pass
 
 
+def _zone_inside_measured_bounds(feature: dict, bounds: dict) -> bool:
+    points = feature.get("points") or []
+    if len(points) < 3:
+        return False
+    try:
+        min_x = float(bounds["min_x"])
+        min_y = float(bounds["min_y"])
+        max_x = float(bounds["max_x"])
+        max_y = float(bounds["max_y"])
+        return all(
+            min_x <= float(point[0]) <= max_x
+            and min_y <= float(point[1]) <= max_y
+            for point in points
+        )
+    except (KeyError, TypeError, ValueError, IndexError):
+        return False
+
+
+def keep_measured_floor_features(floor: dict) -> dict:
+    """Keep 1F operational zones inside the authoritative measured envelope.
+
+    Historical source files may retain superseded projected zones so their
+    identities are auditable. They must not become a second visible map or a
+    source of formal warehouse areas.
+    """
+
+    result = dict(floor)
+    features = list(floor.get("features") or [])
+    if str(floor.get("floor_code") or "").upper() != "1F":
+        result["features"] = features
+        return result
+    bounds = floor.get("bounds_mm") or {}
+    kept: list[dict] = []
+    excluded: list[dict] = []
+    for feature in features:
+        if feature.get("feature_kind") != "zone" or _zone_inside_measured_bounds(
+            feature, bounds
+        ):
+            kept.append(feature)
+            continue
+        excluded.append(
+            {
+                "id": str(feature.get("id") or ""),
+                "feature_code": str(feature.get("feature_code") or ""),
+                "name": str(feature.get("name") or ""),
+                "reason": "outside_measured_bounds",
+            }
+        )
+    result["features"] = kept
+    result["excluded_out_of_bounds_zones"] = excluded
+    return result
+
+
 def resolve_warehouse_twin_layout_path(path: Path | None = None) -> Path:
     """Use the published runtime copy when present; never mask a damaged copy."""
 
@@ -51,8 +104,9 @@ def load_warehouse_twin_floor(
     floor = (payload.get("floors") or {}).get(normalized)
     if floor is None or floor.get("floor_code") != normalized:
         raise WarehouseTwinLayoutNotFoundError(f"数字孪生平面缺少 {normalized}")
+    measured_floor = keep_measured_floor_features(floor)
     return {
-        **floor,
+        **measured_floor,
         "generated_at": payload.get("generated_at"),
         "projection_notice": "仅投影已确认或人工候选空间；正式库存数量仍以 ERP 库存账为准。",
     }

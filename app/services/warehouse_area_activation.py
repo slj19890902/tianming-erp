@@ -587,13 +587,24 @@ def publish_floor_area_policies(
     for policy in policies:
         area = policy.area
         feature = features.get(policy.map_feature_id)
+        feature_area_code = (
+            str((feature or {}).get("erp_area_code") or "").strip().upper()
+        )
+        feature_inventory_types = list(
+            (feature or {}).get("allowed_inventory_types") or []
+        )
+        feature_storage_layout = str((feature or {}).get("storage_layout") or "")
         if (
             feature is None
-            or str(feature.get("erp_area_code") or "").strip().upper()
-            != area.area_code.upper()
-            or list(feature.get("allowed_inventory_types") or [])
-            != policy_inventory_types(policy)
-            or str(feature.get("storage_layout") or "") != policy.storage_layout
+            or (feature_area_code and feature_area_code != area.area_code.upper())
+            or (
+                feature_inventory_types
+                and feature_inventory_types != policy_inventory_types(policy)
+            )
+            or (
+                feature_storage_layout
+                and feature_storage_layout != policy.storage_layout
+            )
         ):
             continue
         location_type = location_warehouse_type(policy)

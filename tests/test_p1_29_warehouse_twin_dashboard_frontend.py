@@ -12,11 +12,11 @@ WAREHOUSE_HTML = (ROOT / "static" / "warehouse.html").read_text(encoding="utf-8"
 INDEX_HTML = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
 
 
-def test_measured_twin_floor_is_the_operational_default() -> None:
-    assert 'data-location-view="floor3" type="button">数字孪生库位图' in WAREHOUSE_HTML
-    assert 'locationView:"floor3"' in WAREHOUSE_HTML
-    assert 'await switchLocationView("floor3");return' in WAREHOUSE_HTML
-    assert 'aria-label="数字孪生库位管理">数字孪生库位' in WAREHOUSE_HTML
+def test_measured_twin_floor_has_one_operational_entry() -> None:
+    assert '<a class="btn" href="/warehouse.html" target="_top">实测仓库地图</a>' in WAREHOUSE_HTML
+    assert 'data-tab="locations"' not in WAREHOUSE_HTML
+    assert 'if(tab==="locations"){openMeasuredWarehouseMap();return}' in WAREHOUSE_HTML
+    assert 'locationView:"ledger"' in WAREHOUSE_HTML
     assert 'id="twinDashboardSection"' in WAREHOUSE_HTML
     assert "数字孪生智慧仓储综合看板" in WAREHOUSE_HTML
     assert "ERP业务数字孪生，非传感器实时定位" in WAREHOUSE_HTML
@@ -29,7 +29,7 @@ def test_floor_drilldown_and_safe_return_preserve_existing_map_contract() -> Non
     assert "await switchLocationView(\"floor3\")" in WAREHOUSE_HTML
     assert "await focusTwinOperationalLocation(Number(locationId))" in WAREHOUSE_HTML
     assert "仓库总览 ‹" in WAREHOUSE_HTML
-    assert 'data-location-view="floor3" type="button">数字孪生库位图' in WAREHOUSE_HTML
+    assert '<a class="btn" href="/warehouse.html" target="_top">实测仓库地图</a>' in WAREHOUSE_HTML
     assert "浏览拖动不会移动货物" in WAREHOUSE_HTML
 
 

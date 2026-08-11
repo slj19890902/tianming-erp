@@ -165,21 +165,41 @@ def one_floor_mold_location_options(
             continue
 
         level_count = max(0, int(layout.get("levels") or 0))
-        grid_count = max(0, int(layout.get("bays") or 0))
+        fallback_grid_count = max(0, int(layout.get("bays") or 0))
+        raw_level_cell_counts = layout.get("level_cell_counts")
+        if (
+            isinstance(raw_level_cell_counts, list)
+            and len(raw_level_cell_counts) == level_count
+            and all(
+                isinstance(value, int)
+                and not isinstance(value, bool)
+                and 0 <= value <= 50
+                for value in raw_level_cell_counts
+            )
+        ):
+            level_cell_counts = raw_level_cell_counts
+        else:
+            # Older published layouts only recorded the uniform rack bay count.
+            level_cell_counts = [fallback_grid_count] * level_count
         blocked = set(confirmed.get("blocked_levels") or ())
         old_kinds = {
             int(row["level"]): str(row["kind"])
             for row in confirmed.get("levels") or ()
         }
-        levels = [
-            {
-                "level": level,
-                "kind": old_kinds.get(level, "flat"),
-                "grids": list(range(1, grid_count + 1)),
-            }
-            for level in range(1, level_count + 1)
-            if level not in blocked
-        ]
+        levels = []
+        for level in range(1, level_count + 1):
+            if level in blocked:
+                continue
+            grid_count = level_cell_counts[level - 1]
+            levels.append(
+                {
+                    "level": level,
+                    "kind": old_kinds.get(level, "flat"),
+                    "grid_count": grid_count,
+                    "grids": list(range(1, grid_count + 1)),
+                }
+            )
+        grid_count = max((row["grid_count"] for row in levels), default=0)
         options.append(
             {
                 "rack": confirmed["rack"],
@@ -351,6 +371,33 @@ def describe_mold_location(value: str) -> dict:
     }
 
 
+def mold_location_feature_codes(
+    value: str,
+    *,
+    floor_layout: dict | None = None,
+) -> list[str]:
+    """Resolve a confirmed mold rack position to its measured-map feature."""
+
+    guide = describe_mold_location(value)
+    if guide.get("floor") != "1F" or not guide.get("rack"):
+        return []
+    floor = floor_layout if floor_layout is not None else load_warehouse_twin_floor("1F")
+    rack_code = f"R{int(guide['rack']):02d}"
+    feature_codes = {
+        str(feature.get("feature_code") or "").strip().upper()
+        for feature in (floor.get("features") or [])
+        if str(feature.get("feature_code") or "").strip()
+    }
+    mapped_codes = []
+    for rack in floor.get("racks") or []:
+        if str(rack.get("mold_rack_code") or "").strip().upper() != rack_code:
+            continue
+        area_code = str(rack.get("area_code") or "").strip().upper()
+        if area_code and area_code in feature_codes and area_code not in mapped_codes:
+            mapped_codes.append(area_code)
+    return mapped_codes
+
+
 def normalize_mold_location_code(value: str) -> str:
     """Accept only canonical, physically addressable confirmed mold positions."""
 
@@ -370,13 +417,14 @@ def normalize_mold_location_code(value: str) -> str:
             level = levels.get(int(guide["level"] or 0))
             if level is None:
                 raise MoldLocationError("该层不是已发布布局中的可用模具层", status_code=422)
-            if rack["location_depth"] == "grid":
+            level_grids = set(level.get("grids") or [])
+            if level_grids:
                 if guide["kind"] != "storage_grid":
-                    raise MoldLocationError("该货架已配置格数，请选择具体格", status_code=422)
-                if int(guide["grid"] or 0) not in set(level.get("grids") or []):
+                    raise MoldLocationError("该层已配置格数，请选择具体格", status_code=422)
+                if int(guide["grid"] or 0) not in level_grids:
                     raise MoldLocationError("该格不是已发布布局中的可用模具格", status_code=422)
             elif guide["kind"] != "storage_level":
-                raise MoldLocationError("该货架未配置格数，请选择到具体层", status_code=422)
+                raise MoldLocationError("该层未配置格数，请选择到具体层", status_code=422)
         return str(guide["location_code"])
     if guide["kind"] not in {"flat", "vertical"} or guide["floor"] not in {"1F", "3F"}:
         raise MoldLocationError(

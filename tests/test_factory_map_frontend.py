@@ -6,8 +6,10 @@ WAREHOUSE_HTML = (
 ).read_text(encoding="utf-8")
 
 
-def test_warehouse_map_has_floor_switch_and_keeps_floor3_entry() -> None:
-    assert 'data-location-view="floor3" type="button">数字孪生库位图' in WAREHOUSE_HTML
+def test_warehouse_ledger_routes_map_access_to_the_single_measured_entry() -> None:
+    assert '<a class="btn" href="/warehouse.html" target="_top">实测仓库地图</a>' in WAREHOUSE_HTML
+    assert 'data-tab="locations"' not in WAREHOUSE_HTML
+    assert 'if(requestedTab==="locations"){openMeasuredWarehouseMap(params);return}' in WAREHOUSE_HTML
     assert 'data-factory-floor="1F"' in WAREHOUSE_HTML
     assert 'data-factory-floor="3F"' in WAREHOUSE_HTML
     assert 'id="factoryFloor1Content"' in WAREHOUSE_HTML

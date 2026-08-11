@@ -97,7 +97,7 @@ def test_warehouse_page_unauthenticated_and_initialization_failures_are_explicit
 
 
 def test_warehouse_page_has_required_sections_and_no_missing_assets() -> None:
-    for label in ("成品仓", "半成品仓", "库存经营看板", "库位管理", "库存流水"):
+    for label in ("成品仓", "半成品仓", "库存经营看板", "实测仓库地图", "库存流水"):
         assert label in WAREHOUSE_HTML
     assert '<script src="/static/assets/time-utils.js?v=95c91f9ded41"></script>' in WAREHOUSE_HTML
     assert WAREHOUSE_HTML.count("<script src=") == 1

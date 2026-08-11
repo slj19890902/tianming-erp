@@ -97,6 +97,13 @@ from app.services.warehouse_twin_layout import (
     WarehouseTwinLayoutNotFoundError,
     load_warehouse_twin_floor,
 )
+from app.services.warehouse_floor1_candidate_planner import (
+    Floor1CandidatePlanningError,
+    build_floor1_formal_candidate_plan,
+    confirm_floor1_formal_candidate_plan,
+    inspect_floor1_formal_candidate_state,
+    overlay_formal_area_bindings,
+)
 from app.services.warehouse_twin_layout_editor import (
     WarehouseTwinLayoutEditConflictError,
     WarehouseTwinLayoutEditError,
@@ -190,6 +197,7 @@ from app.services.mold_location import (
     MoldLocationPreview,
     confirm_mold_location_move,
     describe_mold_location,
+    mold_location_feature_codes,
     one_floor_mold_location_options,
     preview_mold_location_move,
 )
@@ -5338,10 +5346,15 @@ def get_factory_floor_map(
 @router.get("/twin-layout/floors/{floor_code}")
 def get_warehouse_twin_floor_layout(
     floor_code: str,
+    db: Session = Depends(get_db),
     _user: User = Depends(_can_locate_twin),
 ) -> dict:
     try:
-        return load_warehouse_twin_floor(floor_code)
+        return overlay_formal_area_bindings(
+            db,
+            floor_code=floor_code,
+            floor_layout=load_warehouse_twin_floor(floor_code),
+        )
     except WarehouseTwinLayoutNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
 
@@ -5349,10 +5362,15 @@ def get_warehouse_twin_floor_layout(
 @router.get("/twin-layout/floors/{floor_code}/draft")
 def get_warehouse_twin_floor_layout_draft(
     floor_code: str,
+    db: Session = Depends(get_db),
     _user: User = Depends(admin_only),
 ) -> dict:
     try:
-        return load_warehouse_twin_layout_draft(floor_code)
+        return overlay_formal_area_bindings(
+            db,
+            floor_code=floor_code,
+            floor_layout=load_warehouse_twin_layout_draft(floor_code),
+        )
     except WarehouseTwinLayoutEditError as error:
         _handle_twin_layout_edit_error(error)
 
@@ -5432,6 +5450,14 @@ class TwinLayoutDraftDiscardPayload(BaseModel):
     expected_revision: str = Field(min_length=1, max_length=64)
 
 
+class Floor1FormalCandidateConfirmPayload(BaseModel):
+    expected_map_revision: str = Field(min_length=1, max_length=64)
+    expected_plan_fingerprint: str = Field(min_length=64, max_length=64)
+    expected_formal_state_fingerprint: str = Field(min_length=64, max_length=64)
+    operation_key: str = Field(min_length=8, max_length=120)
+    confirmed: Literal[True]
+
+
 def _handle_twin_layout_edit_error(error: WarehouseTwinLayoutEditError) -> None:
     if isinstance(error, WarehouseTwinLayoutEditNotFoundError):
         raise HTTPException(status_code=404, detail=str(error)) from error
@@ -5466,6 +5492,88 @@ def _twin_layout_asset_log(
             user_agent=request.headers.get("user-agent"),
         )
     )
+
+
+@router.get("/twin-layout/floors/1F/formal-candidates")
+def preview_floor1_formal_candidates(
+    db: Session = Depends(get_db),
+    _user: User = Depends(admin_only),
+) -> dict:
+    try:
+        plan = build_floor1_formal_candidate_plan(load_warehouse_twin_floor("1F"))
+        return {
+            **plan,
+            "formal_state": inspect_floor1_formal_candidate_state(db, plan=plan),
+        }
+    except (Floor1CandidatePlanningError, WarehouseTwinLayoutNotFoundError) as error:
+        status_code = getattr(error, "status_code", 404)
+        raise HTTPException(status_code=status_code, detail=str(error)) from error
+
+
+@router.post("/twin-layout/floors/1F/formal-candidates/confirm")
+def confirm_floor1_formal_candidates(
+    payload: Floor1FormalCandidateConfirmPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    try:
+        result = confirm_floor1_formal_candidate_plan(
+            db,
+            floor_layout=load_warehouse_twin_floor("1F"),
+            expected_revision=payload.expected_map_revision,
+            expected_fingerprint=payload.expected_plan_fingerprint,
+            expected_formal_state_fingerprint=(
+                payload.expected_formal_state_fingerprint
+            ),
+            operator_id=user.id,
+            reviewer_name=_capacity_reviewer_name(user),
+        )
+        if result.applied:
+            _twin_layout_asset_log(
+                db,
+                request=request,
+                user=user,
+                action="FLOOR1_FORMAL_CANDIDATES_CONFIRM",
+                entity_type="floor1_formal_candidate_plan",
+                entity_id=result.plan["plan_fingerprint"],
+                description="管理员一次确认一楼实体区域、容量与正式库位候选",
+                details={
+                    "operation_key": payload.operation_key,
+                    "map_revision": result.plan["map_revision"],
+                    "plan_fingerprint": result.plan["plan_fingerprint"],
+                    "area_count": len(result.areas),
+                    "formal_location_count": len(result.locations),
+                    "archived_legacy_area_count": len(
+                        result.archived_legacy_areas
+                    ),
+                    "long_term_pallet_capacity": result.plan["long_term_pallet_capacity"],
+                    "inventory_changed": False,
+                },
+            )
+        db.commit()
+        return {
+            **result.plan,
+            "applied": result.applied,
+            "area_count": len(result.areas),
+            "created_location_count": len(result.locations),
+            "archived_legacy_area_count": len(result.archived_legacy_areas),
+            "message": (
+                "一楼实体区域、容量与适用正式库位已确认启用"
+                if result.applied
+                else "该版本的一楼区域候选已确认，无需重复生成"
+            ),
+        }
+    except (Floor1CandidatePlanningError, WarehouseTwinLayoutNotFoundError) as error:
+        db.rollback()
+        status_code = getattr(error, "status_code", 404)
+        raise HTTPException(status_code=status_code, detail=str(error)) from error
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="区域编号、地图绑定或正式库位已存在，请刷新候选并核对冲突",
+        ) from error
 
 
 def _rack_layout_values(payload: TwinRackLayoutFields) -> dict:
@@ -5534,12 +5642,16 @@ def _formal_area_publish_blockers(db: Session, floor_code: str) -> list[str]:
         area = policy.area
         feature = features.get(policy.map_feature_id)
         if feature is None:
+            blockers.append(f"{area.area_code} 区绑定的地图区域已不存在")
             continue
-        if str(feature.get("erp_area_code") or "").strip().upper() != area.area_code:
-            continue
-        if list(feature.get("allowed_inventory_types") or []) != policy_inventory_types(policy):
+        feature_area_code = str(feature.get("erp_area_code") or "").strip().upper()
+        feature_inventory_types = list(feature.get("allowed_inventory_types") or [])
+        feature_storage_layout = str(feature.get("storage_layout") or "")
+        if feature_area_code and feature_area_code != area.area_code:
+            blockers.append(f"{area.area_code} 区的地图正式区域编号不一致")
+        if feature_inventory_types and feature_inventory_types != policy_inventory_types(policy):
             blockers.append(f"{area.area_code} 区存放类型尚未同步到正式台账")
-        if str(feature.get("storage_layout") or "") != policy.storage_layout:
+        if feature_storage_layout and feature_storage_layout != policy.storage_layout:
             blockers.append(f"{area.area_code} 区存储形式尚未同步到正式台账")
         for message in policy_location_transition_blockers(
             db,
@@ -6588,10 +6700,16 @@ def _twin_mold_resources(
     keyword: str,
     visible_customer_ids: set[int] | None,
 ) -> list[dict]:
+    try:
+        floor1_layout = load_warehouse_twin_floor("1F")
+    except WarehouseTwinLayoutNotFoundError:
+        floor1_layout = None
     response = list_mold_tools(
         q=keyword,
         include_inactive=False,
         limit=100,
+        page=None,
+        page_size=100,
         db=db,
         user=user,
     )
@@ -6606,8 +6724,21 @@ def _twin_mold_resources(
         if visible_customer_ids is not None and not visible_products:
             continue
         guide = describe_mold_location(str(mold.get("rack_location") or ""))
-        feature_codes = _twin_reference_feature_codes(
-            "mold", str(mold.get("rack_location") or "")
+        location_text = str(mold.get("rack_location") or "")
+        feature_codes = list(
+            dict.fromkeys(
+                [
+                    *_twin_reference_feature_codes("mold", location_text),
+                    *(
+                        mold_location_feature_codes(
+                            location_text,
+                            floor_layout=floor1_layout,
+                        )
+                        if floor1_layout is not None
+                        else []
+                    ),
+                ]
+            )
         )
         product_summary = "、".join(
             str(item.get("product_code") or item.get("product_name") or "")
@@ -7754,24 +7885,14 @@ def _mold_tool_dict(
     }
 
 
-@router.get("/molds")
-def list_mold_tools(
-    q: str | None = None,
-    include_inactive: bool = False,
-    limit: int = Query(default=200, ge=1, le=500),
-    page: int | None = Query(default=None, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
-    db: Session = Depends(get_db),
-    user: User = Depends(can_read),
-) -> dict:
+def _mold_tools_query(
+    *,
+    db: Session,
+    user: User,
+    q: str | None,
+    include_inactive: bool,
+):
     allowed_customer_ids = _mold_customer_scope(user, db)
-    if allowed_customer_ids == set():
-        return {
-            "items": [],
-            "total": 0,
-            "page": page or 1,
-            "page_size": page_size if page is not None else limit,
-        }
     query = select(MoldTool).options(
         selectinload(MoldTool.products).selectinload(Product.customer)
     )
@@ -7821,6 +7942,32 @@ def list_mold_tools(
                 MoldTool.id.in_(linked_molds),
             )
         )
+    return query, allowed_customer_ids
+
+
+@router.get("/molds")
+def list_mold_tools(
+    q: str | None = None,
+    include_inactive: bool = False,
+    limit: int = Query(default=200, ge=1, le=500),
+    page: int | None = Query(default=None, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    query, allowed_customer_ids = _mold_tools_query(
+        db=db,
+        user=user,
+        q=q,
+        include_inactive=include_inactive,
+    )
+    if allowed_customer_ids == set():
+        return {
+            "items": [],
+            "total": 0,
+            "page": page or 1,
+            "page_size": page_size if page is not None else limit,
+        }
     total = int(
         db.scalar(
             select(func.count()).select_from(query.order_by(None).subquery())
@@ -7847,6 +7994,110 @@ def list_mold_tools(
         "total": total,
         "page": page or 1,
         "page_size": page_size if page is not None else limit,
+    }
+
+
+@router.get("/molds/by-map-area")
+def list_mold_tools_by_map_area(
+    floor_code: Literal["1F", "3F"] = Query(default="1F"),
+    feature_code: str = Query(min_length=1, max_length=100),
+    q: str | None = Query(default=None, max_length=150),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    user: User = Depends(_can_locate_twin),
+) -> dict:
+    """List real mold masters assigned to one measured-map mold area."""
+
+    try:
+        floor = load_warehouse_twin_floor(floor_code)
+    except WarehouseTwinLayoutNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    normalized_feature_code = feature_code.strip().upper()
+    feature = next(
+        (
+            row
+            for row in (floor.get("features") or [])
+            if str(row.get("feature_code") or "").strip().upper()
+            == normalized_feature_code
+        ),
+        None,
+    )
+    if feature is None:
+        raise HTTPException(status_code=404, detail="实测地图区域不存在")
+    if "mold" not in str(feature.get("subtype") or "").casefold():
+        raise HTTPException(status_code=422, detail="该实测地图区域不是模具区域")
+
+    rack_codes = sorted(
+        {
+            str(row.get("mold_rack_code") or "").strip().upper()
+            for row in (floor.get("racks") or [])
+            if str(row.get("area_code") or "").strip().upper()
+            == normalized_feature_code
+            and str(row.get("mold_rack_code") or "").strip()
+        }
+    )
+    family = str(feature.get("mold_location_family") or "").strip().upper()
+    family_match = re.search(r"-(R\d+)(?:-|$)", family)
+    if family_match:
+        rack_codes = sorted({*rack_codes, family_match.group(1)})
+
+    query, allowed_customer_ids = _mold_tools_query(
+        db=db,
+        user=user,
+        q=q,
+        include_inactive=False,
+    )
+    if allowed_customer_ids == set() or not rack_codes:
+        return {
+            "floor_code": floor_code,
+            "feature_code": normalized_feature_code,
+            "area_name": feature.get("name") or normalized_feature_code,
+            "rack_codes": rack_codes,
+            "items": [],
+            "total": 0,
+            "page": page,
+            "page_size": page_size,
+        }
+
+    location_filters = []
+    for rack_code in rack_codes:
+        prefix = f"{floor_code}-M-{rack_code}"
+        normalized_location = func.upper(func.trim(MoldTool.rack_location))
+        location_filters.extend(
+            (
+                normalized_location == prefix,
+                normalized_location.like(f"{prefix}-%"),
+            )
+        )
+    query = query.where(or_(*location_filters))
+    total = int(
+        db.scalar(
+            select(func.count()).select_from(query.order_by(None).subquery())
+        )
+        or 0
+    )
+    rows = db.scalars(
+        query.order_by(
+            MoldTool.rack_location,
+            MoldTool.mold_code,
+            MoldTool.id,
+        )
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    ).unique().all()
+    return {
+        "floor_code": floor_code,
+        "feature_code": normalized_feature_code,
+        "area_name": feature.get("name") or normalized_feature_code,
+        "rack_codes": rack_codes,
+        "items": [
+            _mold_tool_dict(row, allowed_customer_ids)
+            for row in rows
+        ],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
     }
 
 

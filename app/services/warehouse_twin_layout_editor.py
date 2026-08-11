@@ -16,6 +16,7 @@ from uuid import uuid4
 from app.services.warehouse_twin_layout import (
     TWIN_LAYOUT_PATH as TWIN_LAYOUT_BASELINE_PATH,
     TWIN_LAYOUT_RUNTIME_PATH as DEFAULT_TWIN_LAYOUT_RUNTIME_PATH,
+    keep_measured_floor_features,
 )
 
 
@@ -665,8 +666,9 @@ def load_warehouse_twin_layout_draft(
                 raise WarehouseTwinLayoutEditError(f"布局草稿缺少 {normalized}")
             floor = candidate
             meta = dict(draft.get("draft_meta") or {})
+        visible_floor = keep_measured_floor_features(deepcopy(floor))
         return {
-            **deepcopy(floor),
+            **visible_floor,
             "generated_at": (draft if draft is not None else published).get("generated_at"),
             "projection_notice": "当前为管理员布局草稿；正式库存数量仍以 ERP 库存账为准。",
             "draft_control": {

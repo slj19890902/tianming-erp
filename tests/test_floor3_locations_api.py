@@ -741,12 +741,13 @@ def test_floor3_customer_abbreviation_search_is_scoped_and_does_not_auto_select(
         scoped_references = client.get("/api/warehouse/references/customers")
         assert scoped_references.status_code == 200, scoped_references.text
         assert scoped_references.json()["items"] == [
-            {
-                "id": ids["tianhua"],
-                "name": "苏州天华超净科技股份有限公司",
-                "customer_code": "TH",
-            }
-        ]
+                {
+                    "id": ids["tianhua"],
+                    "name": "苏州天华超净科技股份有限公司",
+                    "customer_code": "TH",
+                    "customer_number": None,
+                }
+            ]
         allowed = client.get(
             "/api/warehouse/floor3/locations",
             params={"q": "TH"},

@@ -130,6 +130,17 @@ test("mapped locations use area-relative layout coordinates and convert 2D drags
   });
 });
 
+test("mapped pallet rotation follows each measured slot orientation", () => {
+  const zone = {id: "zone-fin", feature_kind: "zone", feature_code: "ZONE-1F-FIN", erp_area_code: "FIN", points: [[0, 0], [2400, 0], [2400, 5000], [0, 5000]]};
+  const base = {location_code: "FIN-L001", location_name: "成品位", floor_code: "1F", area_code: "FIN", position_status: "mapped", occupancy_status: "empty", pallet: null, loose_items: []};
+  const normal = {...base, location_id: 31, map_position: {left_pct: 0, top_pct: 0, width_pct: 50, height_pct: 20, version: 1, z_index: 0}};
+  const rotated = {...base, location_id: 32, location_code: "FIN-L002", map_position: {left_pct: 0, top_pct: 20, width_pct: 41.6667, height_pct: 24, version: 1, z_index: 0}};
+
+  const pallets = buildMappedLocationPallets([zone], [normal, rotated], "1F", "layout-1f");
+  assert.equal(pallets[0].rotation_deg, 0);
+  assert.equal(pallets[1].rotation_deg, 90);
+});
+
 test("mapped pallet locations detect column overlap without moving either object", () => {
   const pallets = [
     { id: "erp-location-1", x_mm: 0, y_mm: 0, width_mm: 1200, depth_mm: 1000, rotation_deg: 0 },

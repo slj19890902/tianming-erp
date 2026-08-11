@@ -85,7 +85,7 @@ def _location(
                 placement_status="placed",
                 layout=object(),
             ),
-            "unplaced",
+            "ledger_only",
         ),
     ],
 )
@@ -134,7 +134,7 @@ def test_readonly_locator_blocks_writes_and_hides_all_write_entry_points() -> No
     assert "if(state.readOnly){" in WAREHOUSE_HTML
     assert (
         'document.querySelectorAll("[data-tab]").forEach(button=>'
-        'button.classList.toggle("hidden",button.dataset.tab!=="locations"))'
+        'button.classList.toggle("hidden",button.dataset.tab!=="finished"))'
         in WAREHOUSE_HTML
     )
     assert (

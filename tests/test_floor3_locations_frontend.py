@@ -7,16 +7,15 @@ import subprocess
 WAREHOUSE_HTML = (Path(__file__).resolve().parents[1] / "static" / "warehouse.html").read_text(encoding="utf-8")
 
 
-def test_location_management_is_single_entry_with_floor3_and_ledger_views() -> None:
-    assert WAREHOUSE_HTML.count('data-tab="locations"') == 1
+def test_location_management_routes_all_maps_to_the_measured_twin() -> None:
+    assert WAREHOUSE_HTML.count('data-tab="locations"') == 0
     assert 'data-tab="floor3_locations"' not in WAREHOUSE_HTML
-    assert 'data-location-view="floor3"' in WAREHOUSE_HTML
-    assert 'data-location-view="ledger"' in WAREHOUSE_HTML
-    assert 'data-location-view="ledger" type="button">全部库位台账' in WAREHOUSE_HTML
+    assert '<a class="btn" href="/warehouse.html" target="_top">实测仓库地图</a>' in WAREHOUSE_HTML
+    assert 'if(requestedTab==="locations"){openMeasuredWarehouseMap(params);return}' in WAREHOUSE_HTML
+    assert 'if(tab==="locations"){openMeasuredWarehouseMap();return}' in WAREHOUSE_HTML
     assert 'async function switchLocationView(view)' in WAREHOUSE_HTML
     assert 'function canManageLocations(){return !state.readOnly&&state.user?.role==="admin"}' in WAREHOUSE_HTML
     assert 'if(view==="ledger"&&!canManageLocations())' in WAREHOUSE_HTML
-    assert 'if(tab==="locations"){\n        state.locationView="floor3"' in WAREHOUSE_HTML
     assert 'state.tab==="locations"&&state.locationView==="floor3"' in WAREHOUSE_HTML
     assert 'id="floor3LocationSection"' in WAREHOUSE_HTML
     assert 'id="locationSection"' in WAREHOUSE_HTML
@@ -484,7 +483,7 @@ def test_floor3_overview_uses_full_page_landscape_layout() -> None:
     assert 'id="floor3OverviewZones"' in WAREHOUSE_HTML
     assert "function renderFloor3OverviewRail(matched,searching)" in WAREHOUSE_HTML
     assert "body.floor3-mode{height:100vh;overflow:hidden}" in WAREHOUSE_HTML
-    assert "body.floor3-mode header,body.floor3-mode .wrap>.tabs,body.floor3-mode #locationViewTabs{display:none}" in WAREHOUSE_HTML
+    assert "body.floor3-mode header,body.floor3-mode #locationViewTabs{display:none}" in WAREHOUSE_HTML
     assert re.search(
         r"body\.floor3-mode \.wrap\{[^}]*max-width:none[^}]*height:100vh",
         WAREHOUSE_HTML,

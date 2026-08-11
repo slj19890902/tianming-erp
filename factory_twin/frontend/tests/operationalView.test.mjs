@@ -29,10 +29,22 @@ const outsideWall = {
   subtype: "custom_wall",
   points: [[8170, -12384], [12000, -12384]]
 };
+const measuredDispatchZone = {
+  id: "measured-dispatch",
+  feature_kind: "zone",
+  subtype: "finished_wait_delivery",
+  points: [[-1350, -13730], [1100, -13730], [1100, -7980], [-1350, -7980]]
+};
+const projectedOutdoorZone = {
+  id: "projected-outdoor",
+  feature_kind: "zone",
+  subtype: "finished_wait_delivery",
+  points: [[13704, -1903], [17704, -1903], [17704, 9089], [13704, 9089]]
+};
 
-test("1F operational view hides only projected columns south of the workshop envelope", () => {
-  const result = filterOperationalFeatures("1F", bounds, [insideColumn, projectedSouthColumn, outsideWall]);
-  assert.deepEqual(result.map((item) => item.id), ["inside", "wall"]);
+test("1F operational view keeps measured zones and hides projected zones outside the envelope", () => {
+  const result = filterOperationalFeatures("1F", bounds, [insideColumn, projectedSouthColumn, outsideWall, measuredDispatchZone, projectedOutdoorZone]);
+  assert.deepEqual(result.map((item) => item.id), ["inside", "wall", "measured-dispatch"]);
 });
 
 test("3F operational view preserves the measured feature set", () => {

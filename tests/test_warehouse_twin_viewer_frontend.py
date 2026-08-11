@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from app.services.warehouse_twin_layout import load_warehouse_twin_floor
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = (ROOT / "factory_twin" / "frontend" / "src" / "WarehouseTwinApp.tsx").read_text(encoding="utf-8")
@@ -28,6 +30,10 @@ def test_operational_twin_reuses_the_editor_renderer_for_2d_and_25d() -> None:
 def test_operational_twin_reuses_formal_inventory_and_does_not_fake_rack_positions() -> None:
     assert "/api/warehouse/twin-dashboard/overview?days=30" in SOURCE
     assert "/api/warehouse/twin-operations/locate?${params.toString()}" in SOURCE
+    assert "/api/warehouse/molds/by-map-area?${params.toString()}" in SOURCE
+    assert "当前区域模具筛选" in SOURCE
+    assert "件已登记模具" in SOURCE
+    assert "未填写位置或仍使用旧自由文本位置的模具" in SOURCE
     assert "库存只投影到已确认区域，不虚构货架层、格或箱体坐标" not in SOURCE
     assert "暂无已建空货位" in SOURCE
     # P1-16E-2 already uses the formal pallet endpoint for an explicit merge-all action;
@@ -111,7 +117,7 @@ def test_embedded_warehouse_shell_has_a_definite_visible_height() -> None:
 
 
 def test_embedded_twin_opens_the_ledger_in_the_top_level_page() -> None:
-    assert '<a className="twin-ledger-link" href="/warehouse-ledger.html" target="_top">库存台账</a>' in SOURCE
+    assert '<a className="twin-ledger-link" href="/warehouse-ledger.html?tab=finished" target="_top">库存台账</a>' in SOURCE
 
 
 def test_operational_twin_keeps_fixed_objects_locked_and_only_adds_location_pallet_interaction() -> None:
@@ -208,7 +214,7 @@ def test_phase2c13_uses_2d_layout_mode_for_rack_and_area_spatial_modeling() -> N
     assert "层格数" in SOURCE
     assert "本层尚未分格" in SOURCE
     assert "level_cell_counts" in SOURCE
-    assert "不生成正式库位" in SOURCE
+    assert "地图发布后同步为模具台账逐层格位" in SOURCE
     assert "添加货架" in SOURCE
     assert "删除货架" in SOURCE
     assert "区域设置" in SOURCE
@@ -270,25 +276,28 @@ def test_phase2c9_pallet_label_prioritizes_goods_and_collapses_secondary_locatio
     assert "库存明细" in SOURCE
 
 
-def test_p1_37g_maps_confirmed_outdoor_dispatch_and_uses_thumbnail_targets() -> None:
-    floor_one_features = TWIN_LAYOUT["floors"]["1F"]["features"]
-    outdoor = {
-        item["feature_code"]: item
-        for item in floor_one_features
-        if item["feature_code"].startswith("ZONE-1F-OUT-")
-    }
-    assert set(outdoor) == {
+def test_p1_42b_uses_only_measured_dispatch_zones_and_keeps_transfer_targets() -> None:
+    floor_one = load_warehouse_twin_floor("1F")
+    assert not any(
+        item["feature_code"].startswith("ZONE-1F-OUT-")
+        for item in floor_one["features"]
+    )
+    assert {
+        item["feature_code"] for item in floor_one["excluded_out_of_bounds_zones"]
+    } == {
         "ZONE-1F-OUT-E-001",
         "ZONE-1F-OUT-E-002",
         "ZONE-1F-OUT-S-001",
     }
-    assert all(item["subtype"] == "finished_wait_delivery" for item in outdoor.values())
-    assert all(item["temporary_only"] is True for item in outdoor.values())
-    assert all(item["weather_exposed"] is True for item in outdoor.values())
-    assert outdoor["ZONE-1F-OUT-E-001"]["points"][0] == [13704.0, -1903.0]
-    assert outdoor["ZONE-1F-OUT-S-001"]["points"][2] == [13704.0, -5478.0]
+    measured_dispatch = {
+        item["feature_code"] for item in floor_one["features"]
+        if item.get("subtype") == "finished_wait_delivery"
+    }
+    assert measured_dispatch == {"ZONE-1F-FIN-001", "ZONE-1F-FIN-002", "ZONE-1F-FIN-003"}
 
-    assert "一楼厂外待送区" in SOURCE
+    assert "isMeasuredDispatchFeature" in SOURCE
+    assert "只使用当前实测地图内已经确认的待送区域轮廓" in SOURCE
+    assert "不向图外补画或扩展区域" in SOURCE
     assert "散存待送 · 未绑定实体栈板" in SOURCE
     assert "已绑定实体栈板会直接显示在对应地图位置" in SOURCE
     assert "直接点选三楼空位缩略图" in SOURCE

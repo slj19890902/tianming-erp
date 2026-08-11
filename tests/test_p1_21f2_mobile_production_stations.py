@@ -179,7 +179,8 @@ def test_mobile_station_ui_is_paged_latest_wins_and_read_only() -> None:
     ):
         assert marker in MOBILE_HTML
     assert "generation !== state.productionStationGeneration" in MOBILE_HTML
-    assert MOBILE_HTML.count('method: "POST"') == 1
+    assert MOBILE_HTML.count('method: "POST"') == 2
+    assert "/api/mobile/erp/production/tasks/" not in MOBILE_HTML.split("apiPost", 1)[-1]
     assert 'fetch("/api/auth/logout"' in MOBILE_HTML
     assert 'method: "PUT"' not in MOBILE_HTML
     assert 'method: "DELETE"' not in MOBILE_HTML

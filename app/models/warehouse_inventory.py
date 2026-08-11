@@ -1234,6 +1234,85 @@ class InventoryLotTransfer(Base):
     )
 
 
+class WarehouseLocationDiscrepancy(Base):
+    """Employee-reported mismatch between the ledger and the physical map.
+
+    This is a review fact, not a second inventory ledger.  The registered
+    location remains authoritative until a separately authorized correction
+    creates an ``InventoryLotTransfer`` in the same transaction.
+    """
+
+    __tablename__ = "warehouse_location_discrepancies"
+    __table_args__ = (
+        CheckConstraint(
+            "reported_quantity > 0",
+            name="ck_warehouse_location_discrepancies_quantity",
+        ),
+        CheckConstraint(
+            "registered_location_id <> observed_location_id",
+            name="ck_warehouse_location_discrepancies_locations",
+        ),
+        CheckConstraint(
+            "status IN ('open','resolved','cancelled')",
+            name="ck_warehouse_location_discrepancies_status",
+        ),
+        CheckConstraint(
+            "version > 0",
+            name="ck_warehouse_location_discrepancies_version",
+        ),
+        UniqueConstraint(
+            "idempotency_key",
+            name="uq_warehouse_location_discrepancies_idempotency",
+        ),
+        Index(
+            "ix_warehouse_location_discrepancies_status_reported",
+            "status",
+            "reported_at",
+            "id",
+        ),
+        Index(
+            "ix_warehouse_location_discrepancies_lot_status",
+            "inventory_lot_id",
+            "status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    inventory_lot_id: Mapped[int] = mapped_column(
+        ForeignKey("inventory_lots.id", ondelete="RESTRICT"), nullable=False
+    )
+    registered_location_id: Mapped[int] = mapped_column(
+        ForeignKey("warehouse_locations.id", ondelete="RESTRICT"), nullable=False
+    )
+    observed_location_id: Mapped[int] = mapped_column(
+        ForeignKey("warehouse_locations.id", ondelete="RESTRICT"), nullable=False
+    )
+    reported_lot_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    reported_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), default="open", server_default="open", nullable=False
+    )
+    version: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1", nullable=False
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    reported_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    reported_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+    resolved_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    resolution_transfer_id: Mapped[int | None] = mapped_column(
+        ForeignKey("inventory_lot_transfers.id", ondelete="RESTRICT"), nullable=True
+    )
+    resolution_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class DeliveryInventoryAllocation(Base):
     __tablename__ = "delivery_inventory_allocations"
     __table_args__ = (

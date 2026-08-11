@@ -39,7 +39,7 @@ def test_mobile_shell_retries_without_parallel_initialization_or_home_requests()
 
 
 def test_mobile_shell_only_posts_for_explicit_logout() -> None:
-    assert MOBILE_HTML.count('method: "POST"') == 1
+    assert MOBILE_HTML.count('method: "POST"') == 2
     assert 'fetch("/api/auth/logout"' in MOBILE_HTML
     assert 'method: "PUT"' not in MOBILE_HTML
     assert 'method: "PATCH"' not in MOBILE_HTML

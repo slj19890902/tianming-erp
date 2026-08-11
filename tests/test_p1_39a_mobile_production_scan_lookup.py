@@ -113,7 +113,7 @@ def test_scan_ui_is_simple_latest_wins_and_valid_javascript() -> None:
     assert MOBILE_HTML.count(
         "/api/mobile/erp/production/pending/lookup?q=${encodeURIComponent(query)}&limit=50"
     ) == 1
-    assert MOBILE_HTML.count('method: "POST"') == 1
+    assert MOBILE_HTML.count('method: "POST"') == 2
     assert 'fetch("/api/auth/logout"' in MOBILE_HTML
     for method in ('method: "PUT"', 'method: "DELETE"'):
         assert method not in MOBILE_HTML

@@ -47,6 +47,7 @@ PERMISSION_CATALOG = frozenset(
         "incoming.execute",
         "warehouse.view",
         "warehouse.execute",
+        "warehouse.correct",
         "warehouse.reserve",
         "warehouse.stocktake.view",
         "warehouse.stocktake.submit",

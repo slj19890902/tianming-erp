@@ -621,7 +621,7 @@ def _lot_location_transfer_hash(
     ).hexdigest()
 
 
-def transfer_staging_finished_lot(
+def _transfer_finished_lot_location(
     db: Session,
     *,
     lot_id: int,
@@ -630,8 +630,9 @@ def transfer_staging_finished_lot(
     location_id: int,
     operator_id: int | None,
     idempotency_key: str,
+    require_staging_source: bool,
 ) -> FinishedLotLocationTransferResult:
-    """Move all or part of a floor-one staging lot without changing stock totals.
+    """Move all or part of a finished lot without changing stock totals.
 
     Available pieces move first.  When the selected quantity also includes
     reserved pieces, their reservations are split onto the destination lot so
@@ -665,9 +666,9 @@ def transfer_staging_finished_lot(
 
     lot = db.get(InventoryLot, lot_id)
     if lot is None or lot.finished_detail is None:
-        raise WarehouseInventoryError("一楼待送成品批次不存在", 404)
+        raise WarehouseInventoryError("成品库存批次不存在", 404)
     source_location = db.get(WarehouseLocation, lot.warehouse_location_id)
-    if (
+    staging_source = not bool(
         lot.inventory_type != "finished"
         or lot.status != "active"
         or lot.source_type not in {"production_completion", "transfer"}
@@ -675,27 +676,33 @@ def transfer_staging_finished_lot(
         or lot.source_ref_id is None
         or source_location is None
         or source_location.location_code != "F1-DISPATCH-01"
-    ):
+    )
+    if lot.inventory_type != "finished" or lot.status != "active" or source_location is None:
+        raise WarehouseInventoryError("只有有效成品库存批次可以移位", 409)
+    if require_staging_source and not staging_source:
         raise WarehouseInventoryError("只有一楼待送区的有效成品批次可以转入库位", 409)
-    if lot.pallet_item is not None:
+    if require_staging_source and lot.pallet_item is not None:
         raise WarehouseInventoryError("该待送批次已绑定物理栈板，请刷新后重试", 409)
+    if not require_staging_source:
+        source_issue = operational_location_issue(
+            db,
+            source_location,
+            warehouse_types={"finished", "shared"},
+        )
+        if source_issue:
+            raise WarehouseInventoryError(f"来源位置不可用：{source_issue}", 409)
     if int(lot.version) != expected_version:
         raise WarehouseInventoryError("库存已被其他人修改，请刷新后重试", 409)
     live_quantity = int(lot.quantity_available or 0) + int(lot.quantity_reserved or 0)
     if quantity > live_quantity:
-        raise WarehouseInventoryError(f"待送区当前只有 {live_quantity} 个可转入", 409)
-    if any(
-        int(value or 0) > 0
-        for value in (
-            lot.quantity_consumed,
-            lot.quantity_damaged,
-            lot.quantity_scrapped,
-        )
-    ):
-        raise WarehouseInventoryError("该批次已有出库、报损或报废记录，不能从待送区转入", 409)
+        raise WarehouseInventoryError(f"当前只有 {live_quantity} 个可移位", 409)
+    if int(lot.quantity_damaged or 0) > 0 or int(lot.quantity_scrapped or 0) > 0:
+        raise WarehouseInventoryError("该批次仍有报损或报废数量，不能直接移位", 409)
 
     target_location = _location(db, location_id, "finished")
-    if target_location.location_code == "F1-DISPATCH-01":
+    if target_location.id == source_location.id:
+        raise WarehouseInventoryError("目标位置不能与来源位置相同", 409)
+    if require_staging_source and target_location.location_code == "F1-DISPATCH-01":
         raise WarehouseInventoryError("目标库位不能仍是一楼待送区", 409)
 
     source_location_id = int(lot.warehouse_location_id)
@@ -704,7 +711,12 @@ def transfer_staging_finished_lot(
     source_before = _balances(lot)
     now = utc_now_naive()
 
-    if quantity == live_quantity:
+    split_full_pallet_lot = bool(
+        not require_staging_source
+        and quantity == live_quantity
+        and lot.pallet_item is not None
+    )
+    if quantity == live_quantity and not split_full_pallet_lot:
         updated = db.execute(
             update(InventoryLot)
             .where(
@@ -739,6 +751,7 @@ def transfer_staging_finished_lot(
             .values(
                 quantity_available=InventoryLot.quantity_available - available_take,
                 quantity_reserved=InventoryLot.quantity_reserved - reserved_take,
+                status=("closed" if quantity == live_quantity else lot.status),
                 version=InventoryLot.version + 1,
                 last_movement_at=now,
             )
@@ -765,7 +778,11 @@ def transfer_staging_finished_lot(
             stock_date_original_text=lot.stock_date_original_text,
             last_movement_at=now,
             created_by=operator_id,
-            remarks=f"由一楼待送批次 {lot.lot_number} 部分转入",
+            remarks=(
+                f"由批次 {lot.lot_number} 位置移位拆分"
+                if not require_staging_source
+                else f"由一楼待送批次 {lot.lot_number} 部分转入"
+            ),
             estimated_unit_cost_snapshot=lot.estimated_unit_cost_snapshot,
             estimated_square_price_snapshot=lot.estimated_square_price_snapshot,
             estimated_cost_area_m2_snapshot=lot.estimated_cost_area_m2_snapshot,
@@ -857,6 +874,47 @@ def transfer_staging_finished_lot(
         lot = db.get(InventoryLot, lot.id)
         assert lot is not None
 
+    if split_full_pallet_lot:
+        source_item = db.scalar(
+            select(InventoryPalletItem).where(
+                InventoryPalletItem.inventory_lot_id == lot_id
+            )
+        )
+        if source_item is not None:
+            source_pallet = db.get(InventoryPallet, source_item.pallet_id)
+            db.delete(source_item)
+            db.flush()
+            if source_pallet is not None:
+                if not _pallet_has_physical_goods(db, source_pallet.id):
+                    from app.services.floor3_locations import clear_pallet
+
+                    clear_pallet(
+                        db,
+                        pallet_id=source_pallet.id,
+                        expected_version=source_pallet.version,
+                        remarks="库存批次全部移出，释放空栈板",
+                        operator_id=operator_id,
+                        idempotency_key=_transfer_key(
+                            "location-transfer", key, "source-pallet-clear"
+                        ),
+                    )
+    elif target_lot.id != lot.id:
+        source_item = db.scalar(
+            select(InventoryPalletItem).where(
+                InventoryPalletItem.inventory_lot_id == lot_id
+            )
+        )
+        if source_item is not None:
+            source_item.quantity = (
+                int(lot.quantity_available or 0)
+                + int(lot.quantity_reserved or 0)
+                + int(lot.quantity_damaged or 0)
+            )
+            source_pallet = db.get(InventoryPallet, source_item.pallet_id)
+            if source_pallet is not None:
+                source_pallet.version = int(source_pallet.version or 0) + 1
+                source_pallet.updated_by = operator_id
+
     if target_location.source_version == "V11":
         from app.services.floor3_locations import (
             Floor3LocationError,
@@ -868,7 +926,7 @@ def transfer_staging_finished_lot(
                 db,
                 lot=target_lot,
                 operator_id=operator_id,
-                require_empty_pallet=True,
+                require_empty_pallet=require_staging_source,
             )
         except Floor3LocationError as error:
             raise WarehouseInventoryError(str(error), error.status_code) from error
@@ -886,7 +944,7 @@ def transfer_staging_finished_lot(
                 db,
                 lot=target_lot,
                 operator_id=operator_id,
-                require_empty_pallet=True,
+                require_empty_pallet=require_staging_source,
                 allow_operational_location=True,
             )
         except Floor3LocationError as error:
@@ -916,7 +974,11 @@ def transfer_staging_finished_lot(
         quantity=quantity,
         before=source_before,
         operator_id=operator_id,
-        reason="一楼待送区转入正式库位",
+        reason=(
+            "一楼待送区转入正式库位"
+            if require_staging_source
+            else "正式库存位置移位"
+        ),
         remarks=f"转入 {target_location.location_code}",
         idempotency_key=_transfer_key("location-transfer", key, "source"),
     )
@@ -934,12 +996,60 @@ def transfer_staging_finished_lot(
                 "scrapped": 0,
             },
             operator_id=operator_id,
-            reason="一楼待送区转入正式库位",
+            reason=(
+                "一楼待送区转入正式库位"
+                if require_staging_source
+                else "正式库存位置移位"
+            ),
             remarks=f"来自 {lot.lot_number}",
             idempotency_key=_transfer_key("location-transfer", key, "target"),
         )
     db.flush()
     return FinishedLotLocationTransferResult(transfer, lot, target_lot, False)
+
+
+def transfer_staging_finished_lot(
+    db: Session,
+    *,
+    lot_id: int,
+    expected_version: int,
+    quantity: int,
+    location_id: int,
+    operator_id: int | None,
+    idempotency_key: str,
+) -> FinishedLotLocationTransferResult:
+    return _transfer_finished_lot_location(
+        db,
+        lot_id=lot_id,
+        expected_version=expected_version,
+        quantity=quantity,
+        location_id=location_id,
+        operator_id=operator_id,
+        idempotency_key=idempotency_key,
+        require_staging_source=True,
+    )
+
+
+def transfer_finished_lot_between_locations(
+    db: Session,
+    *,
+    lot_id: int,
+    expected_version: int,
+    quantity: int,
+    location_id: int,
+    operator_id: int | None,
+    idempotency_key: str,
+) -> FinishedLotLocationTransferResult:
+    return _transfer_finished_lot_location(
+        db,
+        lot_id=lot_id,
+        expected_version=expected_version,
+        quantity=quantity,
+        location_id=location_id,
+        operator_id=operator_id,
+        idempotency_key=idempotency_key,
+        require_staging_source=False,
+    )
 
 
 def manual_finished_in(

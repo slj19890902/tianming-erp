@@ -536,7 +536,7 @@ def test_mobile_page_is_compact_read_only_and_keeps_map_return_state() -> None:
     assert 'await loadFloor3Locations(true)' in WAREHOUSE_HTML
     assert "Search text, candidates and selected product remain in memory" in MOBILE_HTML
     assert "readonly=1" not in MOBILE_HTML  # map URLs come only from the trusted API.
-    assert MOBILE_HTML.count('method: "POST"') == 1
+    assert MOBILE_HTML.count('method: "POST"') == 2
     assert 'fetch("/api/auth/logout"' in MOBILE_HTML
     assert 'method: "PUT"' not in MOBILE_HTML
     assert 'method: "DELETE"' not in MOBILE_HTML

@@ -61,7 +61,7 @@ def test_fast_task_switch_keeps_only_latest_detail(tmp_path: Path) -> None:
     harness = f"""
 class FakeAbortController {{ constructor() {{ this.signal={{aborted:false}}; }} abort() {{ this.signal.aborted=true; }} }}
 global.AbortController=FakeAbortController;
-let taskId=null,task=null,detailGeneration=0,detailController=null;
+let taskId=null,task=null,detailGeneration=0,detailController=null,expectedPrintVersion=null;
 const nodes={{taskChooser:{{hidden:false}},taskDetail:{{hidden:true}},taskMeta:{{textContent:""}},locationGroups:{{innerHTML:""}},groups:{{innerHTML:""}},error:{{textContent:""}}}};
 global.document={{getElementById:id=>nodes[id]}};
 global.location={{href:"http://erp/mobile/delivery-pick.html"}};
@@ -73,6 +73,7 @@ let rendered=0;
 function render(){{rendered+=1}}
 function showTaskLoading(){{nodes.taskMeta.textContent="正在读取"}}
 function showTaskFailure(){{nodes.error.textContent="failed"}}
+function handleAuthError(){{return false}}
 {select_source}
 (async()=>{{
   const first=selectTask(1);

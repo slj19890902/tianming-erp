@@ -61,8 +61,10 @@ def test_product_policy_participates_in_payload_hydration_and_dirty_tracking() -
         "production_label_units_per_label: f.production_label_units_per_label"
         in INDEX
     )
-    assert "只保存以后新生产任务的包装标签规则" in INDEX
-    assert "不会立即打印" in INDEX
+    label_panel = INDEX.split('class="product-production-label-config"', 1)[1]
+    assert "随生产任务打印包装标签" in label_panel
+    assert "每张标签代表只数" in label_panel
+    assert "product-production-label-note" not in label_panel
 
 
 def test_waiting_material_task_page_opens_separate_packaging_label_page() -> None:

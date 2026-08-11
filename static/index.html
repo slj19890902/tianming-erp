@@ -1065,39 +1065,62 @@
         padding-bottom: 10px;
         border-bottom: 1px solid #ededf0;
       }
-      .product-core-row { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .product-compact-editor { gap: 8px; }
+      .product-core-row {
+        grid-template-columns: minmax(190px, 1.35fr) minmax(135px, .75fr) minmax(180px, 1.15fr) minmax(155px, .8fr) minmax(165px, .8fr);
+      }
+      .product-supply-compact .select { max-width: 230px; }
       .product-size-report-row {
-        grid-template-columns: repeat(14, minmax(0, 1fr));
+        grid-template-columns: repeat(12, minmax(0, 1fr));
       }
       .product-dimension-field { grid-column: span 1; }
       .product-splice-field { grid-column: span 2; }
       .product-flap-field { grid-column: span 1; }
-      .product-report-field { grid-column: span 4; min-width: 0; }
-      .product-crease-type-field { grid-column: span 2; }
+      .product-report-field { grid-column: span 3; min-width: 0; }
+      .product-crease-type-field { grid-column: span 1; }
       .product-cutting-mode-field { grid-column: span 2; min-width: 0; }
       .product-crease-field { grid-column: span 3; min-width: 0; }
       .product-crease-warning { grid-column: 1 / -1; }
       .product-material-workbench {
         display: grid;
-        grid-template-columns: minmax(420px, 1.15fr) minmax(240px, .55fr) minmax(360px, .95fr);
-        gap: 12px;
-        margin: 0 0 10px;
-        padding-bottom: 10px;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 8px;
+        margin: 0 0 8px;
+        padding-bottom: 8px;
         border-bottom: 1px solid #ededf0;
         align-items: stretch;
       }
       .product-material-controls {
         display: grid;
-        grid-template-columns: minmax(140px, 1fr) minmax(90px, .55fr) minmax(110px, .65fr);
+        grid-template-columns: minmax(145px, .8fr) 86px 100px minmax(300px, 1.7fr);
         gap: 10px 12px;
         align-content: start;
         min-width: 0;
-        padding: 10px;
+        padding: 8px;
         border: 1px solid #d7e8fb;
         border-radius: 10px;
         background: #fff;
       }
-      .product-material-picker { grid-column: 1 / -1; }
+      .product-material-picker { grid-column: auto; }
+      .product-material-details {
+        min-width: 0;
+        border: 1px solid #d7e8fb;
+        border-radius: 8px;
+        background: #f8fbff;
+      }
+      .product-material-details > summary {
+        padding: 7px 9px;
+        color: #075985;
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .product-material-details-body {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+        padding: 0 8px 8px;
+      }
       .product-material-context-panel {
         min-width: 0;
         padding: 10px;
@@ -1186,7 +1209,7 @@
       }
       .product-material-comparison-card .sensitive-price { margin: 5px 0; color: #b45309; font-weight: 700; }
       .product-print-row {
-        grid-template-columns: minmax(310px, 1.25fr) minmax(180px, .7fr) minmax(250px, 1fr) minmax(330px, 1.35fr);
+        grid-template-columns: minmax(285px, 1.35fr) minmax(240px, 1.1fr) minmax(145px, .65fr) minmax(170px, .75fr);
       }
       .product-printing-plate-config {
         grid-column: 1 / -1;
@@ -1201,10 +1224,10 @@
       .product-production-label-config {
         grid-column: 1 / -1;
         display: grid;
-        grid-template-columns: minmax(260px, .8fr) minmax(180px, .55fr) minmax(280px, 1.4fr);
+        grid-template-columns: minmax(250px, .9fr) minmax(180px, .6fr);
         gap: 8px 12px;
         align-items: start;
-        padding: 10px;
+        padding: 8px 10px;
         border: 1px solid #bfdbfe;
         border-radius: 9px;
         background: #eff6ff;
@@ -1217,7 +1240,6 @@
         color: #1e3a8a;
         font-weight: 700;
       }
-      .product-production-label-note { color: #475569; font-size: 11px; line-height: 1.45; }
       .production-printing-setup {
         color: #7c2d12;
         font-size: 11px;
@@ -1228,9 +1250,16 @@
         white-space:nowrap;
       }
       .product-final-row {
-        grid-template-columns: minmax(150px, .3fr) minmax(220px, .6fr) minmax(260px, .8fr);
+        grid-template-columns: minmax(180px, 320px);
         border-bottom: 0;
         padding-bottom: 0;
+      }
+      .product-drawing-independent-section {
+        grid-column: 1 / -1;
+        display: grid;
+        grid-template-columns: minmax(260px, .7fr) minmax(320px, 1.3fr);
+        gap: 8px 12px;
+        padding-top: 2px;
       }
       .compact-remark-field .textarea { min-height: 34px; font-size: 12px; }
       .product-edit-grid .field { min-width: 0; }
@@ -1252,6 +1281,14 @@
         display: grid; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 9px;
         background: #fff; min-width: 0; box-shadow: 0 1px 2px rgba(15, 23, 42, .04);
       }
+      .bom-component-compact-row {
+        display: grid;
+        grid-template-columns: minmax(280px, 2fr) minmax(105px, .55fr) auto auto auto;
+        gap: 8px 10px;
+        align-items: end;
+      }
+      .bom-component-compact-row .bom-component-product { min-width: 0; }
+      .bom-component-compact-meta { align-self: center; }
       .bom-component-card-head {
         display: flex; justify-content: space-between; align-items: center; gap: 8px;
         flex-wrap: wrap; min-width: 0;
@@ -1286,10 +1323,14 @@
       .external-purchase-amount { color:#166534; font-weight:700; }
       @media (max-width: 900px) {
         .bom-component-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .bom-component-compact-row { grid-template-columns: minmax(0, 1fr) 120px auto; }
+        .bom-component-compact-row .bom-component-product { grid-column: 1 / -1; }
       }
       @media (max-width: 560px) {
         .bom-component-fields { grid-template-columns: minmax(0, 1fr); }
         .bom-component-fields .wide { grid-column: auto; }
+        .bom-component-compact-row { grid-template-columns: minmax(0, 1fr); }
+        .bom-component-compact-row .bom-component-product { grid-column: auto; }
       }
       .process-options {
         display: flex;
@@ -1374,8 +1415,11 @@
         color: var(--text);
       }
       @media (max-width: 1250px) {
-        .product-material-workbench { grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); }
-        .product-material-controls { grid-column: 1 / -1; }
+        .product-material-workbench { grid-template-columns: minmax(0, 1fr); }
+        .product-material-controls { grid-column: 1 / -1; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        .product-material-picker { grid-column: 1 / -1; }
+        .product-material-details-body { grid-template-columns: minmax(0, 1fr); }
+        .product-material-comparison-panel { grid-column: auto; }
       }
       @media (max-width: 1100px) {
         .product-core-row,
@@ -1390,7 +1434,6 @@
         .product-cutting-mode-field { grid-column: span 2; }
         .product-crease-field { grid-column: span 3; }
         .product-production-label-config { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-        .product-production-label-note { grid-column: 1 / -1; }
         .telescoping-component-grid { grid-template-columns: 1fr; }
       }
       @media (max-width: 680px) {
@@ -1407,7 +1450,7 @@
         .product-material-candidate-metrics { grid-template-columns: 1fr; }
         .product-material-history-row { grid-template-columns: 1fr; }
         .product-production-label-config { grid-template-columns: 1fr; }
-        .product-production-label-note { grid-column: auto; }
+        .product-drawing-independent-section { grid-template-columns: 1fr; }
       }
 
       /* Toast */
@@ -4519,7 +4562,7 @@
             </div>
             <div v-else-if="modal.type === 'product'">
               <div v-if="productForm.id && !canEditProducts" class="notice readonly-hint">当前为只读查看；常用箱资料控件已禁用。</div>
-              <fieldset class="product-edit-grid" :class="'readonly-fieldset'" :disabled="!!productForm.id && !canEditProducts">
+              <fieldset class="product-edit-grid product-compact-editor" :class="'readonly-fieldset'" :disabled="!!productForm.id && !canEditProducts">
               <div class="product-form-row product-core-row">
                 <div class="field"><label>客户</label><search-select v-model="productForm.customer_id" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="搜索客户" @change="onProductExternalCustomerChange"></search-select></div>
                 <div class="field"><label>存货编码</label><input class="input" v-model.trim="productForm.product_code" /></div>
@@ -4532,7 +4575,7 @@
                     <option v-if="productForm.box_style && !productBoxStyleOptions.includes(productForm.box_style)" :value="productForm.box_style">原记录：{{ productForm.box_style }}</option>
                   </select>
                 </div>
-                <div v-if="productForm.box_style!=='其他'" class="field"><label>供货方式</label><select class="select" v-model="productForm.supply_mode"><option value="corrugated_production">纸板报料＋本厂生产</option><option value="mixed_bom">纸板主件＋外购包材组件</option></select><div class="muted" style="font-size:11px">混合模式请在下方“外购包装组件”维护护角、EPE等组件。</div></div>
+                <div v-if="productForm.box_style!=='其他'" class="field product-supply-compact"><label>结构</label><select class="select" v-model="productForm.supply_mode"><option value="corrugated_production">纸板生产</option><option value="mixed_bom">纸板＋外购组件</option></select></div>
               </div>
 
               <div v-if="productForm.supply_mode==='external_purchase'" class="panel" style="margin:10px 0;border-color:#f59e0b">
@@ -4625,7 +4668,6 @@
                     </div>
                     <span v-else class="muted">{{ productForm.base_crease_type || "未设置" }}</span>
                   </div>
-                  <div class="field"><label>底料备注</label><input class="input" v-model.trim="productForm.base_report_notes" placeholder="底料特殊要求" /></div>
                 </div>
                 </template>
                 <template v-else>
@@ -4656,7 +4698,7 @@
                       <span class="crease-segment-plus" aria-hidden="true">+</span>
                       <input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_right_mm" @input="onCreaseRightInput" placeholder="下摇盖" aria-label="下摇盖" />
                     </div>
-                    <span v-else-if="productForm.crease_type" class="muted">{{ productForm.crease_type === '净料' ? '净' : productForm.crease_type === '毛片' ? '毛' : '请在报料备注中填写要求' }}</span>
+                    <span v-else-if="productForm.crease_type" class="muted">{{ productForm.crease_type === '净料' ? '净' : productForm.crease_type === '毛片' ? '毛' : '请人工填写要求' }}</span>
                     <span v-else class="muted">请人工选择</span>
                   </div>
                 </template>
@@ -4697,6 +4739,10 @@
                   <div v-else-if="!isWorkshop && productBoardCostText" class="muted" style="font-size:12px;color:#0369a1">纸板成本参考：{{ productBoardCostText }}</div>
                 </div>
                 </div>
+
+                <details class="product-material-details">
+                  <summary>材质候选、报料轨迹与价格对比</summary>
+                  <div class="product-material-details-body">
 
                 <section class="product-material-context-panel">
                   <div class="product-material-context-head">
@@ -4809,6 +4855,8 @@
                     </div>
                   </div>
                 </section>
+                  </div>
+                </details>
               </div>
 
               <div class="product-form-row product-print-row">
@@ -4820,6 +4868,7 @@
                     <label class="process-option"><input type="checkbox" value="其他" v-model="productForm._production_processes" @change="onProductProcessesChanged" />其他</label>
                   </div>
                 </div>
+                <div v-if="productForm.supply_mode!=='external_purchase' && productUsesMold(productForm)" class="field product-mold-adjacent"><label>生产模具 / 货架位置（必选）</label><search-select v-model="productForm.mold_tool_id" :options="moldToolSelectOptions()" label-key="_label" value-key="id" placeholder="输入模具编号、名称或位置" :allow-empty="false" @search="searchMoldTools"></search-select><div v-if="productMoldError" class="status orange" style="display:block;margin-top:4px">{{ productMoldError }}</div></div>
                 <div v-if="productForm.supply_mode!=='external_purchase'" class="field"><label>印刷情况</label>
                   <select class="select" v-model="productForm.print_content" @change="onProductPrintingChanged">
                     <option value="无印刷">无印刷</option>
@@ -4851,15 +4900,12 @@
                 <div v-if="productForm.supply_mode!=='external_purchase'" class="product-production-label-config">
                   <label class="product-production-label-switch"><input type="checkbox" v-model="productForm.production_label_enabled" @change="onProductProductionLabelToggle" />随生产任务打印包装标签</label>
                   <div class="field"><label>每张标签代表只数</label><input class="input" type="number" min="1" step="1" inputmode="numeric" v-model="productForm.production_label_units_per_label" :disabled="!productForm.production_label_enabled" placeholder="请输入正整数" /><div v-if="productProductionLabelError" class="status orange" style="display:block;margin-top:4px">{{ productProductionLabelError }}</div></div>
-                  <div class="product-production-label-note">只保存以后新生产任务的包装标签规则，不会立即打印，也不会改动旧订单、旧报料或旧生产任务。A1/0201 首次开启默认 5 只；模切内盒、衬板、刀卡、隔板默认 50 只。</div>
                 </div>
-                <div v-if="productForm.supply_mode!=='external_purchase'" class="field"><label>报料备注</label><input class="input" v-model.trim="productForm.report_notes" placeholder="供应商直发、特殊压线等" /></div>
                 <div class="product-drawing-independent-section">
-                  <div class="field"><label>上传产品图片/图纸</label>
+                  <div class="field"><label>图纸</label>
                     <input class="input" type="file" accept="image/png,image/jpeg,image/webp,application/pdf,.pdf" @change="drawingFile=$event.target.files[0] || null" />
-                    <div class="muted">图片/图纸与印刷情况相互独立。无印刷产品也可上传实物图、模切形状或模具核对图；支持 JPG、PNG、WEBP、PDF，最大 20MB。</div>
                   </div>
-                  <div class="field"><label>产品图片/图纸记录</label>
+                  <div class="field"><label>图纸记录</label>
                     <div v-if="!productForm.id" class="muted">先保存常用箱，图片/图纸会随保存一起上传。</div>
                     <div v-else-if="!(productForm.drawings || []).length" class="muted">暂无产品图片或图纸</div>
                     <div v-else class="drawing-history-list">
@@ -4881,15 +4927,13 @@
 
               <div class="product-form-row product-final-row">
                 <div v-if="!isWorkshop" class="field sensitive-price"><label>{{ productForm.supply_mode==='external_purchase' ? `客户默认销售单价 / ${productForm.external_packaging_purchase_unit || '采购单位'}` : '默认单价' }}</label><input class="input" type="number" min="0" step="0.0001" v-model="productForm.sale_unit_price" /><div v-if="productForm.supply_mode==='external_purchase'" class="muted">这是给客户的销售单价，不是供应商采购成本。</div></div>
-                <div v-if="productForm.supply_mode!=='external_purchase' && productUsesMold(productForm)" class="field"><label>生产模具 / 货架位置（必选）</label><search-select v-model="productForm.mold_tool_id" :options="moldToolSelectOptions()" label-key="_label" value-key="id" placeholder="输入模具编号、名称或位置" :allow-empty="false" @search="searchMoldTools"></search-select><div class="muted" style="font-size:11px">仅模切工艺使用；请先在“仓库库存管理 → 模具位置”登记并绑定。</div><div v-if="productMoldError" class="status orange" style="display:block;margin-top:4px">{{ productMoldError }}</div></div>
-                <div class="field compact-remark-field"><label>备注</label><textarea class="textarea" v-model="productForm.remark" rows="1" placeholder="内部备注，可选"></textarea></div>
               </div>
               </fieldset>
               <fieldset class="bom-editor-panel" :disabled="!!productForm.id && !canEditProducts">
                 <div class="bom-editor-heading">
                   <div>
-                    <h4>组合产品 / 内部 BOM（Phase A）</h4>
-                    <p class="bom-editor-note">客户订单仍只保留一个父产品，单位为“套”。下方组件仅供内部生产/领料，不生成子销售订单明细，也不改变送货、对账或生产数量。</p>
+                    <h4>组合产品 / 内部 BOM</h4>
+                    <p class="bom-editor-note">父件按套下单，组件用于内部生产。</p>
                   </div>
                   <label class="remember-line"><input type="checkbox" v-model="bomEditor.enabled" :disabled="!productForm.id" /> 启用组合产品</label>
                 </div>
@@ -4899,7 +4943,6 @@
                     <option value="parent_priced_set">整套统一计价（推荐）</option>
                     <option value="component_priced">组件分别计价</option>
                   </select>
-                  <div class="muted" style="font-size:11px">整套计价只给父件报价；组件分别计价会在后续订单中各自报价、送货和对账。</div>
                 </div>
                 <div v-if="!productForm.id" class="status blue" style="display:block;white-space:normal">请先保存父产品，再维护内部组件 BOM。</div>
                 <div v-else-if="bomEditor.error" class="status orange" style="display:block;white-space:normal">{{ bomEditor.error }}</div>
@@ -4907,31 +4950,21 @@
                 <template v-if="bomEditor.enabled && !bomEditor.error">
                   <div class="toolbar-group" style="margin-bottom:8px">
                     <button type="button" class="btn small" @click="addBomComponent">添加内部组件</button>
-                    <span class="muted">组件必须来自当前客户已有的常用箱。</span>
                   </div>
                   <div v-if="!bomEditor.components.length" class="muted">尚未添加内部组件。</div>
                   <div v-else class="bom-component-list">
                     <div v-for="(component,index) in bomEditor.components" :key="component._key || component.id || index" class="bom-component-card">
-                      <div class="bom-component-card-head">
-                        <strong>内部组件 {{ index + 1 }}</strong>
-                        <span class="bom-component-code">内部编码：{{ bomComponentInternalCode(component) }}</span>
+                      <div class="bom-component-compact-row">
+                        <div class="bom-component-product field">
+                          <label>内部组件 {{ index + 1 }} · 同客户常用箱</label>
+                          <search-select v-model="component.component_product_id" :options="bomEditor.componentOptions" label-key="_label" value-key="id" placeholder="搜索产品编码、名称或规格" :disabled="!productForm.customer_id" @search="searchBomProducts" @change="selectBomComponent(component,$event)"></search-select>
+                        </div>
+                        <div class="field"><label>每套数量</label><input class="input" type="number" min="0.0001" step="0.0001" v-model.number="component.quantity_per_set" /></div>
+                        <label class="remember-line bom-component-compact-meta"><input type="checkbox" v-model="component.is_required" /> 必需</label>
+                        <label class="remember-line bom-component-compact-meta"><input type="checkbox" v-model="component.show_on_delivery" /> 送货单显示</label>
                         <button type="button" class="btn small danger" @click="removeBomComponent(index)">移除</button>
                       </div>
-                      <div class="bom-component-product field">
-                        <label>选择同客户常用箱</label>
-                        <search-select v-model="component.component_product_id" :options="bomEditor.componentOptions" label-key="_label" value-key="id" placeholder="搜索产品编码、名称或规格" :disabled="!productForm.customer_id" @search="searchBomProducts" @change="selectBomComponent(component,$event)"></search-select>
-                        <div class="muted" v-if="component.product_name">{{ component.product_name }}｜产品编码：{{ component.product_code || "-" }}</div>
-                      </div>
-                      <div class="bom-component-fields">
-                        <div class="field"><label>每套数量</label><input class="input" type="number" min="0.0001" step="0.0001" v-model.number="component.quantity_per_set" /></div>
-                        <label class="remember-line"><input type="checkbox" v-model="component.is_die_cut" @change="onBomDieCutToggle(component)" /> 模切组件</label>
-                        <div class="field"><label>生产模具</label><search-select v-model="component.mold_tool_id" :options="moldToolSelectOptions()" label-key="_label" value-key="id" placeholder="输入模具编号、名称或位置" :allow-empty="true" :disabled="!component.is_die_cut" @search="searchMoldTools"></search-select></div>
-                        <div class="field"><label>模具最大产出</label><input class="input" type="number" min="0.0001" step="1" v-model.number="component.mold_max_yield_per_sheet" placeholder="可选" :disabled="!component.is_die_cut" /></div>
-                        <div class="field"><label>备用纸张</label><input class="input" type="number" min="0" step="1" v-model.number="component.spare_sheet_quantity" /></div>
-                        <div class="field"><label>单据显示方式</label><select class="select" v-model="component.display_mode"><option value="internal_only">仅内部</option><option value="show_on_delivery">显示在送货单</option><option value="show_on_all_docs">显示在全部内部单据</option></select></div>
-                        <label class="remember-line"><input type="checkbox" v-model="component.is_required" /> 必需组件</label>
-                        <div class="field wide"><label>组件备注</label><textarea class="textarea" rows="1" v-model.trim="component.remark" placeholder="内部生产/领料备注"></textarea></div>
-                      </div>
+                      <div class="bom-component-code">内部编码：{{ bomComponentInternalCode(component) }}<template v-if="component.product_name">｜{{ component.product_name }}｜{{ component.product_code || "-" }}</template></div>
                     </div>
                   </div>
                 </template>
@@ -4940,7 +4973,7 @@
                 <div class="bom-editor-heading">
                   <div>
                     <h4>外购包装组件</h4>
-                    <p class="bom-editor-note">维护纸护角、EPE、彩印内盒等外购件。这里只保存常用箱模板，不会自动下单、选最低价或改内部 BOM。</p>
+                    <p class="bom-editor-note">维护外购组件与默认供应商候选。</p>
                   </div>
                   <span class="status blue">版本 {{ externalComponentEditor.version || 0 }}</span>
                 </div>
@@ -4951,7 +4984,6 @@
                   <div class="toolbar-group" style="margin:8px 0">
                     <button type="button" class="btn small" @click="addExternalComponent">添加外购组件</button>
                     <button type="button" class="btn small primary" :disabled="externalComponentEditor.saving" @click="saveExternalComponents">{{ externalComponentEditor.saving ? '保存中…' : '保存外购组件' }}</button>
-                    <span class="muted">同一组件可选多家同规格供应商，但必须明确一个默认候选。</span>
                   </div>
                   <div v-if="!externalComponentEditor.components.length" class="muted">当前常用箱没有外购组件。</div>
                   <div v-for="(component,index) in externalComponentEditor.components" :key="component._key || component.id || index" class="bom-component-card" style="margin-bottom:10px">
@@ -4970,7 +5002,6 @@
                       </template>
                       <div class="field"><label>每采购单位可用数量</label><input class="input" type="number" min="0.000001" step="0.000001" v-model="component.units_per_purchase_unit" placeholder="单位不同时填写" /></div>
                       <div class="field wide"><label>换算依据</label><input class="input" v-model.trim="component.conversion_basis" placeholder="如：1箱=100件（供应商装箱单）" /></div>
-                      <div class="field wide"><label>备注</label><input class="input" v-model.trim="component.remarks" /></div>
                     </div>
                     <div class="panel" style="margin-top:8px;padding:8px">
                       <div class="toolbar-group">
@@ -7402,7 +7433,7 @@
         product_code: "", product_name: "", internal_code: "",
         quantity_per_set: 1, is_die_cut: false, mold_tool_id: null,
         mold_max_yield_per_sheet: null, spare_sheet_quantity: 0,
-        display_mode: "internal_only", is_required: true, remark: "",
+        display_mode: "internal_only", show_on_delivery: true, is_required: true, remark: "",
       });
       let externalComponentKeyCounter = 0;
       const blankExternalComponent = () => ({
@@ -18083,6 +18114,9 @@
             component.display_mode = ["internal_only", "show_on_delivery", "show_on_all_docs"].includes(source.display_mode)
               ? source.display_mode
               : "internal_only";
+            component.show_on_delivery = source.show_on_delivery !== undefined
+              ? source.show_on_delivery === true
+              : component.display_mode !== "internal_only";
             component.is_required = component.is_required !== false;
             return component;
           },
@@ -18226,6 +18260,7 @@
                 mold_max_yield_per_sheet: component.mold_max_yield_per_sheet === "" ? null : component.mold_max_yield_per_sheet,
                 spare_sheet_quantity: component.spare_sheet_quantity,
                 display_mode: component.display_mode || "internal_only",
+                show_on_delivery: component.show_on_delivery !== false,
                 is_required: component.is_required !== false,
                 remark: component.remark || "",
               })),

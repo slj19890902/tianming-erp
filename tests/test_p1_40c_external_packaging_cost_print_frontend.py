@@ -50,7 +50,7 @@ def test_product_and_order_ui_separate_purchase_cost_from_customer_sale_price() 
     assert "row.current_purchase_price" in INDEX
     assert "不会互相覆盖" in INDEX
     assert "EPE" in INDEX
-    assert "上传产品图片/图纸" in INDEX
+    assert "<label>图纸</label>" in INDEX
 
 
 def test_external_purchase_print_has_native_source_and_drawing_without_paper_fields() -> None:

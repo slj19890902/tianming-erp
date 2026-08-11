@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.84"
-    assert APP_VERSION_NAME == "三类生产任务单与65×45产品标签"
+    assert APP_VERSION == "v0.22.85"
+    assert APP_VERSION_NAME == "外购包材主档、报料分流与采购打印"
     assert APP_BUILD_DATE == "2026-08-11"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -50,24 +50,31 @@ def test_factory_update_reports_current_release_version() -> None:
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
     assert any(
-        "本次更新｜" in item and "A1 型纸箱" in item and "模切内盒" in item and "衬板" in item
+        "本次更新｜" in item and "纸板供应商" in item and "护角" in item and "中空板" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "上下合并两张" in item and "单独一张 A4" in item
+        "本次更新｜" in item and "报料工作台" in item and "纯外购" in item and "混合 BOM" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "已有图纸" in item and "客户随货版" in item
+        "本次更新｜" in item and "1.10 元/米" in item and "EPE" in item and "正式报价" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "65×45 mm" in item and "大面积黑底" in item
+        "本次更新｜" in item and "外购采购打印" in item and "冻结图纸" in item and "压线" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "只读打印" in item and "ea09" in item
+        "本次更新｜" in item and "ea09→eb10→ec11" in item and "不回填" in item
         for item in current_release
+    )
+    assert any(
+        item.startswith("v0.22.84：本次更新｜")
+        and "A1 型纸箱" in item
+        and "模切内盒" in item
+        and "衬板" in item
+        for item in APP_CHANGELOG
     )
     assert any(
         item.startswith("v0.22.83：本次更新｜")
@@ -129,7 +136,7 @@ def test_factory_update_reports_current_release_version() -> None:
         for item in APP_CHANGELOG
     )
     assert any(
-        "如何验证｜" in item and "v0.22.84" in item and "ea09" in item
+        "如何验证｜" in item and "v0.22.85" in item and "ec11" in item
         for item in current_release
     )
     assert any(

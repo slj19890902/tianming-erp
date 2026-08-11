@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
-  <title>送货拿货</title>
+  <title>预送货拿货</title>
   <style>
     :root { --ink:#17211b; --muted:#68736c; --paper:#f4f1e8; --green:#197447; --orange:#d8661f; --red:#be3d32; --line:#d9d5c9; }
     * { box-sizing:border-box; }
@@ -16,18 +16,19 @@
     .filters { position:sticky; top:57px; z-index:4; display:flex; gap:6px; overflow:auto; padding:5px 0 8px; scrollbar-width:none; } .filters::-webkit-scrollbar { display:none; } .filters button { flex:0 0 auto; min-width:62px; } .filters button.active { color:white; background:var(--green); }
     .customer { margin:12px 0 6px; font-size:15px; font-weight:800; } .card { margin-bottom:8px; padding:11px; background:#fffdf8; border:1px solid var(--line); border-left:5px solid var(--green); border-radius:11px; box-shadow:0 3px 12px #4b4b3518; } .card.partial { border-left-color:var(--orange); } .card.no_stock { border-left-color:var(--red); } .card.picked { opacity:.72; }
     .task-card { width:100%; margin-bottom:8px; padding:12px; text-align:left; background:#fffdf8; border-left:5px solid var(--green); } .task-card.exception { border-left-color:var(--orange); } .task-number { margin-top:4px; color:var(--muted); font-size:12px; font-weight:400; } .back-row { margin-bottom:8px; }
+    .task-list-footer { display:grid; gap:7px; margin:12px 0; text-align:center; } .task-list-footer button { width:100%; } .task-list-progress { color:var(--muted); font-size:12px; }
     .name { font-size:19px; font-weight:800; line-height:1.3; } .spec { margin-top:3px; color:#385545; font-size:15px; } .code { margin-top:3px; color:#8b958e; font-size:11px; } .pick-components { margin-top:8px; padding:7px 8px; border:1px solid #d5e1d7; border-radius:7px; background:#f5faf5; } .pick-components-title { color:#385545; font-size:12px; font-weight:800; } .pick-component-row { display:flex; justify-content:space-between; gap:8px; margin-top:3px; color:#385545; font-size:12px; } .pick-component-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .pick-component-quantity { flex:0 0 auto; color:#17211b; font-weight:800; } .qty-row { display:grid; grid-template-columns:1fr 100px; gap:8px; align-items:center; margin-top:9px; } .qty-label { color:var(--muted); font-size:13px; } .actions { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; margin-top:9px; } .task-actions { display:flex; gap:8px; margin-top:12px; } .task-actions button { flex:1; }
     .normal-action { margin-bottom:10px; padding:12px; background:#e9f5ec; border:1px solid #bdd9c5; border-radius:11px; } .normal-action button { width:100%; min-height:52px; font-size:18px; } .normal-action p { margin:7px 0 0; color:#45604f; font-size:12px; text-align:center; }
     .location-card { margin-bottom:9px; padding:12px; background:#fffdf8; border:1px solid var(--line); border-left:6px solid var(--green); border-radius:11px; box-shadow:0 3px 12px #4b4b3518; } .location-card.direct { border-left-color:#3974a7; } .location-card.relocation { border-left-color:var(--orange); } .location-card.attention { border-left-color:var(--red); background:#fff5f2; } .location-title { font-size:21px; font-weight:900; line-height:1.25; } .location-meta { margin-top:4px; color:var(--muted); font-size:12px; } .location-line { display:grid; grid-template-columns:1fr auto; gap:9px; align-items:center; padding:9px 0; border-top:1px dashed #ddd7ca; } .location-line:first-of-type { margin-top:8px; } .location-product { font-size:15px; font-weight:800; } .location-spec { margin-top:2px; color:var(--muted); font-size:12px; } .location-qty { color:#143d27; font-size:22px; font-weight:900; white-space:nowrap; }
     .location-heading { display:flex; gap:8px; align-items:center; justify-content:space-between; } .sequence { flex:0 0 auto; min-width:34px; padding:4px 7px; color:white; background:var(--green); border-radius:999px; font-size:12px; text-align:center; } .map-button { margin-top:8px; width:100%; }
-    [hidden] { display:none !important; } .map-overlay { position:fixed; inset:0; z-index:20; display:flex; flex-direction:column; background:#eef3ec; } .map-header { display:flex; gap:8px; align-items:center; padding:10px; color:white; background:#183f2c; } .map-header strong { flex:1; } .map-header button { color:white; border-color:#ffffff66; background:transparent; } .map-body { flex:1; overflow:auto; padding:10px; } .task-map { position:relative; width:100%; min-height:66vh; overflow:hidden; border:2px solid #8aa18f; border-radius:12px; background-color:#fffdf8; background-image:linear-gradient(#dce5dd 1px,transparent 1px),linear-gradient(90deg,#dce5dd 1px,transparent 1px); background-size:10% 10%; } .map-point { position:absolute; display:flex; align-items:center; justify-content:center; min-width:42px; min-height:36px; padding:4px; transform:translate(-1px,-1px); color:#153d27; background:#aee0bc; border:2px solid #287348; border-radius:7px; font-size:11px; font-weight:900; text-align:center; box-shadow:0 2px 7px #183f2c44; } .map-point.active { z-index:30 !important; color:white; background:#d8661f; border-color:#a53e0c; outline:4px solid #f3b18488; } .map-legend { margin-top:10px; padding:10px; background:white; border-radius:10px; } .map-legend-row { padding:7px 0; border-top:1px dashed var(--line); font-size:13px; } .map-legend-row:first-child { border-top:0; }
+    [hidden] { display:none !important; } .map-overlay { position:fixed; inset:0; z-index:20; display:flex; flex-direction:column; background:#eef3ec; } .map-header { display:flex; gap:8px; align-items:center; padding:10px; color:white; background:#183f2c; } .map-header strong { flex:1; } .map-header button { color:white; border-color:#ffffff66; background:transparent; } .map-body { flex:1; overflow:auto; padding:10px; } .map-floor-tabs { display:flex; gap:7px; overflow:auto; margin-bottom:9px; } .map-floor-tabs button { flex:0 0 auto; } .map-floor-tabs button.active { color:white; background:var(--green); border-color:var(--green); } .task-map { position:relative; width:100%; min-height:66vh; overflow:hidden; border:2px solid #8aa18f; border-radius:12px; background-color:#fffdf8; background-image:linear-gradient(#dce5dd 1px,transparent 1px),linear-gradient(90deg,#dce5dd 1px,transparent 1px); background-size:10% 10%; } .map-point { position:absolute; display:flex; align-items:center; justify-content:center; min-width:42px; min-height:36px; padding:4px; transform:translate(-1px,-1px); color:#153d27; background:#aee0bc; border:2px solid #287348; border-radius:7px; font-size:11px; font-weight:900; text-align:center; box-shadow:0 2px 7px #183f2c44; } .map-point.active { z-index:30 !important; color:white; background:#d8661f; border-color:#a53e0c; outline:4px solid #f3b18488; } .map-legend { margin-top:10px; padding:10px; background:white; border-radius:10px; } .map-legend-row { padding:7px 0; border-top:1px dashed var(--line); font-size:13px; } .map-legend-row:first-child { border-top:0; }
     .ready-banner { margin-bottom:10px; padding:13px; color:#145d36; background:#e1f4e8; border:1px solid #aad1b8; border-radius:10px; font-size:16px; font-weight:800; text-align:center; }
     details.exception-tools { margin-top:12px; padding:0 10px 10px; background:#fffdf8; border:1px solid var(--line); border-radius:11px; } details.exception-tools > summary { padding:13px 2px; color:#6c4631; font-weight:800; cursor:pointer; } .exception-help { margin:0 0 8px; color:var(--muted); font-size:12px; }
     .error { color:var(--red); margin-top:8px; font-size:13px; } .toast { position:fixed; left:50%; bottom:20px; z-index:10; transform:translateX(-50%); padding:10px 15px; color:white; background:#17211be8; border-radius:10px; }
   </style>
 </head>
 <body>
-  <header><h1>送货拿货</h1><p id="taskMeta">按客户分组，完成拿货后提交结果</p></header>
+  <header><h1>预送货拿货</h1><p id="taskMeta">只处理分配给本账号的任务；拿齐后仍需电脑端发货打印</p></header>
   <main>
     <section id="loginBox" class="message" hidden>
       <form class="login" onsubmit="login(event)">
@@ -47,7 +48,7 @@
         <div id="locationGroups"></div>
         <details id="exceptionTools" class="exception-tools">
           <summary>有缺货或数量不一致时再登记</summary>
-          <p class="exception-help">只有实际少拿、没货或多拿时才需要操作下面明细。</p>
+          <p class="exception-help">只有实际少拿、未找到或多拿时才需要操作下面明细。</p>
           <nav id="filters" class="filters" aria-label="拿货状态筛选"></nav>
           <div id="groups"></div>
           <div class="task-actions"><button id="submitTaskButton" class="partial" onclick="submitTask()">提交异常结果</button><button id="refreshTaskButton" onclick="loadTask()">刷新</button></div>
@@ -57,16 +58,17 @@
     </section>
   </main>
   <section id="mapOverlay" class="map-overlay" hidden aria-label="本次拿货位置地图">
-    <div class="map-header"><button onclick="closeTaskMap()">返回拿货任务</button><strong id="mapTitle">三楼拿货位置</strong></div>
-    <div class="map-body"><div id="taskMap" class="task-map"></div><div id="mapLegend" class="map-legend"></div></div>
+    <div class="map-header"><button onclick="closeTaskMap()">返回拿货任务</button><strong id="mapTitle">本任务拿货位置</strong></div>
+    <div class="map-body"><nav id="mapFloorTabs" class="map-floor-tabs" aria-label="本任务涉及楼层"></nav><div id="taskMap" class="task-map"></div><div id="mapLegend" class="map-legend"></div></div>
   </section>
   <div id="toast" class="toast" hidden></div>
   <script>
     const initialParams = new URLSearchParams(location.search);
     let taskId = initialParams.get("task_id");
     const expectedPrintVersion = initialParams.get("print_version");
-    let task = null; let activeFilter = "open"; let taskScrollY = 0; let activeMapGroupKey = "";
+    let task = null; let activeFilter = "open"; let taskScrollY = 0; let activeMapGroupKey = ""; let activeMapFloor = "";
     let listGeneration=0, listController=null, detailGeneration=0, detailController=null;
+    const listPageSize=20; let listPage=0, listTotal=0, listRows=[], listHasMore=false, listLoading=false, listAsOf="";
     const busyItems=new Set(); let taskActionBusy=false; let loginBusy=false;
     const statusOf = item => item.pick_status || "pending";
     const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]));
@@ -96,7 +98,7 @@
       return body;
     }
     function normalize(body) { const source=body.task || body; return { ...source, items: body.items || source.items || [] }; }
-    function filters() { return [["open","未完成",item=>statusOf(item)!=="picked"],["pending","待拿货",item=>statusOf(item)==="pending"],["partial","部分",item=>statusOf(item)==="partial"],["no_stock","没货",item=>statusOf(item)==="no_stock"],["picked","已拿货",item=>statusOf(item)==="picked"],["all","全部",()=>true]]; }
+    function filters() { return [["open","未完成",item=>statusOf(item)!=="picked"],["pending","待拿货",item=>statusOf(item)==="pending"],["partial","少拿",item=>statusOf(item)==="partial"],["no_stock","未找到",item=>statusOf(item)==="no_stock"],["picked","拿齐",item=>statusOf(item)==="picked"],["all","全部",()=>true]]; }
     function setFilter(key) { activeFilter=key; render(); }
     function taskStatusLabel(value) { return ({pushed:"待拿货",driver_confirmed:"可发货打印",exception:"有异常",applied:"可发货打印",dispatched:"已发货"}[value] || value || "待拿货"); }
     function showLogin() { document.getElementById("loginBox").hidden=false; document.getElementById("app").hidden=true; }
@@ -113,26 +115,31 @@
       document.getElementById("locationGroups").innerHTML=`<div class="message">${escapeHtml(message)}<div style="margin-top:10px"><button id="taskDetailRetryButton" class="primary">重试</button></div></div>`;
       document.getElementById("taskDetailRetryButton").addEventListener("click",loadTask);
     }
-    async function loadTaskList() {
+    function renderTaskChooser() {
+      const chooser=document.getElementById("taskChooser"); const groups=new Map();
+      listRows.forEach(row=>{const customer=row.customer_name||"未指定客户";if(!groups.has(customer))groups.set(customer,[]);groups.get(customer).push(row);});
+      document.getElementById("taskMeta").textContent=`待拿货任务 ${listTotal} 单${listAsOf?` · 更新 ${listAsOf}`:""}`; document.getElementById("taskDetail").hidden=true;
+      const cards=groups.size?[...groups.entries()].map(([customer,tasks])=>`<section><div class="customer">${escapeHtml(customer)}</div>${tasks.map(row=>`<button class="task-card ${row.has_exception||row.status==="exception"?"exception":""}" onclick="selectTask(${Number(row.id)})"><strong>${escapeHtml(taskStatusLabel(row.status))}</strong><div class="task-number">${escapeHtml(row.delivery_number||`任务 ${row.id}`)}${row.assigned_to_name?` · ${escapeHtml(row.assigned_to_name)}`:row.assignment_required?" · 未分配":""}</div></button>`).join("")}</section>`).join(""):'<div class="message">当前没有待拿货任务</div>';
+      const footer=listRows.length?`<div class="task-list-footer"><div class="task-list-progress">已显示 ${listRows.length} / ${listTotal} 单</div>${listHasMore?`<button id="loadMoreTasksButton" type="button" ${listLoading?"disabled":""}>${listLoading?"读取中…":"继续加载 20 单"}</button>`:""}</div>`:"";
+      chooser.innerHTML=cards+footer; const more=document.getElementById("loadMoreTasksButton"); if(more)more.addEventListener("click",()=>loadTaskList({append:true}));
+    }
+    async function loadTaskList({append=false}={}) {
+      if(append&&(!listHasMore||listLoading))return false;
       const generation=++listGeneration; listController?.abort(); const controller=new AbortController(); listController=controller;
-      const chooser=document.getElementById("taskChooser"); chooser.hidden=false; chooser.innerHTML='<div class="message">正在读取待拿货任务…</div>'; document.getElementById("error").textContent="";
+      const chooser=document.getElementById("taskChooser"); chooser.hidden=false; listLoading=true; if(append)renderTaskChooser(); else chooser.innerHTML='<div class="message">正在读取待拿货任务（前 20 单）…</div>'; document.getElementById("error").textContent="";
       try {
-        let page=1; let rows=[]; let totalPages=1;
-        do {
-          const body=await request(`/api/delivery-picks?response_mode=summary&include_dispatched=false&page=${page}&page_size=100`,{signal:controller.signal});
-          if(generation!==listGeneration) return false;
-          rows=rows.concat(body.items||[]); totalPages=Math.max(Number(body.total_pages||1),1); page+=1;
-        } while(page<=totalPages);
+        const requestedPage=append?listPage+1:1;
+        const body=await request(`/api/delivery-picks?response_mode=summary&include_dispatched=false&page=${requestedPage}&page_size=${listPageSize}`,{signal:controller.signal});
         if(generation!==listGeneration) return false;
-        const groups=new Map(); rows.forEach(row=>{const customer=row.customer_name||"未指定客户";if(!groups.has(customer))groups.set(customer,[]);groups.get(customer).push(row);});
-        document.getElementById("taskMeta").textContent="按客户查看待拿货任务"; document.getElementById("taskDetail").hidden=true;
-        chooser.innerHTML=groups.size?[...groups.entries()].map(([customer,tasks])=>`<section><div class="customer">${escapeHtml(customer)}</div>${tasks.map(row=>`<button class="task-card ${row.has_exception||row.status==="exception"?"exception":""}" onclick="selectTask(${Number(row.id)})"><strong>${escapeHtml(taskStatusLabel(row.status))}</strong><div class="task-number">${escapeHtml(row.delivery_number||`任务 ${row.id}`)}</div></button>`).join("")}</section>`).join(""):'<div class="message">当前没有待拿货任务</div>';
+        const incoming=body.items||[]; const combined=append?[...listRows,...incoming]:incoming; const seen=new Set(); listRows=combined.filter(row=>{const key=String(row.id);if(seen.has(key))return false;seen.add(key);return true;});
+        listPage=Number(body.page||requestedPage); listTotal=Number(body.total||listRows.length); listHasMore=listRows.length<listTotal; listAsOf=String(body.as_of||"");
+        listLoading=false; renderTaskChooser();
         return true;
       } catch(error) {
         if(error?.name==="AbortError"||generation!==listGeneration) return false; if(handleAuthError(error)) return false;
-        chooser.innerHTML=`<div class="message">${escapeHtml(error.message||"待拿货任务读取失败")}<div style="margin-top:10px"><button id="taskListRetryButton" class="primary">重试</button></div></div>`;
-        document.getElementById("taskListRetryButton").addEventListener("click",loadTaskList); document.getElementById("error").textContent=error.message; return false;
-      } finally { if(generation===listGeneration) listController=null; }
+        if(append&&listRows.length){renderTaskChooser();toast(error.message||"后续任务读取失败");}else{chooser.innerHTML=`<div class="message">${escapeHtml(error.message||"待拿货任务读取失败")}<div style="margin-top:10px"><button id="taskListRetryButton" class="primary">重试</button></div></div>`;document.getElementById("taskListRetryButton").addEventListener("click",()=>loadTaskList());}
+        document.getElementById("error").textContent=error.message; return false;
+      } finally { if(generation===listGeneration){listController=null;listLoading=false;if(append&&listRows.length)renderTaskChooser();} }
     }
     async function selectTask(id) {
       const selectedId=String(id); taskId=selectedId; const url=new URL(location.href); url.searchParams.set("task_id",taskId); history.replaceState(null,"",url);
@@ -154,7 +161,7 @@
     async function showTaskList() { if(taskActionBusy||busyItems.size) return; detailGeneration+=1; detailController?.abort(); detailController=null; task=null; taskId=null; const url=new URL(location.href); url.searchParams.delete("task_id"); history.replaceState(null,"",url); await loadTaskList(); }
     function render() {
       if(!task) return;
-      document.getElementById("taskMeta").textContent=`${task.delivery_number || "送货单"} · ${taskStatusLabel(task.status)}`;
+      document.getElementById("taskMeta").textContent=`${task.delivery_number || "送货单"} · ${taskStatusLabel(task.status)}${task.as_of?` · 更新 ${task.as_of}`:""}`;
       const ready=["driver_confirmed","applied"].includes(task.status);
       document.getElementById("normalAction").hidden=ready;
       document.getElementById("readyBanner").hidden=!ready;
@@ -180,16 +187,24 @@
       const mapAction=mapped ? `<button class="map-button" onclick="openTaskMap('${escapeHtml(group.key)}')">地图定位此位置</button>` : `<div class="location-meta">${group.map_status==="unmapped"?"此库位尚未录入地图，按上方位置文字拿货":"此项按文字位置拿货"}</div>`;
       return `<section class="${classes.join(" ")}"><div class="location-heading"><div class="location-title">${escapeHtml(group.label || "拿货位置")}</div>${sequence?`<span class="sequence">第${sequence}站</span>`:""}</div>${pallet ? `<div class="location-meta">${escapeHtml(pallet)}</div>` : ""}${lines}${mapAction}</section>`;
     }
+    function mapFloorKey(group) { return group.warehouse_floor==null?"仓库":String(Number(group.warehouse_floor)); }
+    function renderTaskMap() {
+      const mapped=(task?.location_groups || []).filter(group=>group.map_status==="mapped" && group.map_point);
+      const floors=[...new Set(mapped.map(mapFloorKey))].sort((a,b)=>Number(a||999)-Number(b||999)); if(!floors.includes(activeMapFloor))activeMapFloor=floors[0]||"";
+      document.getElementById("mapFloorTabs").innerHTML=floors.map(floor=>`<button class="${floor===activeMapFloor?"active":""}" type="button" onclick="showMapFloor('${escapeHtml(floor)}')">${floor==="仓库"?floor:`${floor}楼`}</button>`).join("");
+      const visible=mapped.filter(group=>mapFloorKey(group)===activeMapFloor); if(!visible.some(group=>group.key===activeMapGroupKey))activeMapGroupKey=visible[0]?.key||"";
+      document.getElementById("taskMap").innerHTML=visible.map(group=>{ const point=group.map_point; const active=group.key===activeMapGroupKey; return `<button class="map-point ${active?"active":""}" style="left:${Number(point.left_pct)}%;top:${Number(point.top_pct)}%;width:${Math.max(Number(point.width_pct),7)}%;height:${Math.max(Number(point.height_pct),6)}%;z-index:${active?30:Number(point.z_index||1)}" onclick="focusMapGroup('${escapeHtml(group.key)}')">${Number(group.recommended_sequence||0)}<br>${escapeHtml(group.location_code || "库位")}</button>`; }).join("");
+      document.getElementById("mapLegend").innerHTML=visible.map(group=>`<div class="map-legend-row"><strong>第${Number(group.recommended_sequence||0)}站 · ${escapeHtml(group.area_code||"未分区")} · ${escapeHtml(group.location_code || group.label)}</strong>　${Number(group.total_pick_quantity||0)} 个</div>`).join("");
+      const selected=visible.find(group=>group.key===activeMapGroupKey); document.getElementById("mapTitle").textContent=selected?`${activeMapFloor==="仓库"?"仓库":`${activeMapFloor}楼`} · ${selected.location_code}`:"本任务拿货位置";
+    }
     function openTaskMap(groupKey) {
       const mapped=(task?.location_groups || []).filter(group=>group.map_status==="mapped" && group.map_point);
       if(!mapped.length) return toast("本任务没有已录入地图的位置");
-      taskScrollY=window.scrollY; activeMapGroupKey=groupKey || mapped[0].key;
-      document.getElementById("taskMap").innerHTML=mapped.map(group=>{ const point=group.map_point; const active=group.key===activeMapGroupKey; return `<button class="map-point ${active?"active":""}" style="left:${Number(point.left_pct)}%;top:${Number(point.top_pct)}%;width:${Math.max(Number(point.width_pct),7)}%;height:${Math.max(Number(point.height_pct),6)}%;z-index:${active?30:Number(point.z_index||1)}" onclick="focusMapGroup('${escapeHtml(group.key)}')">${Number(group.recommended_sequence||0)}<br>${escapeHtml(group.location_code || "库位")}</button>`; }).join("");
-      document.getElementById("mapLegend").innerHTML=mapped.map(group=>`<div class="map-legend-row"><strong>第${Number(group.recommended_sequence||0)}站 · ${escapeHtml(group.location_code || group.label)}</strong>　${Number(group.total_pick_quantity||0)} 个${group.pallet_code?` · ${escapeHtml(group.pallet_code)}`:""}</div>`).join("");
-      const selected=mapped.find(group=>group.key===activeMapGroupKey); document.getElementById("mapTitle").textContent=selected?`三楼地图 · ${selected.location_code}`:"三楼拿货位置";
+      taskScrollY=window.scrollY; activeMapGroupKey=groupKey || mapped[0].key; const selected=mapped.find(group=>group.key===activeMapGroupKey)||mapped[0]; activeMapFloor=mapFloorKey(selected); renderTaskMap();
       document.getElementById("mapOverlay").hidden=false;
     }
-    function focusMapGroup(groupKey) { activeMapGroupKey=groupKey; openTaskMap(groupKey); }
+    function showMapFloor(floor) { activeMapFloor=String(floor); renderTaskMap(); }
+    function focusMapGroup(groupKey) { activeMapGroupKey=groupKey; renderTaskMap(); }
     function closeTaskMap() { document.getElementById("mapOverlay").hidden=true; requestAnimationFrame(()=>window.scrollTo(0,taskScrollY)); }
     function renderPickComponents(item) {
       const components=(item.component_lines || []).filter(component=>Number(component.planned_delivery_quantity ?? component.quantity ?? 0)>0);
@@ -198,7 +213,7 @@
     }
     function renderItem(item) {
       const status=statusOf(item); const id=Number(item.id); const planned=Number(item.planned_quantity ?? item.delivered_quantity ?? item.quantity ?? 0); const picked=item.picked_quantity ?? item.actual_quantity ?? (status==="picked"?planned:0); const disabled=taskActionBusy||busyItems.has(id)||!["pushed","driver_confirmed","exception"].includes(task.status);
-      return `<article class="card ${escapeHtml(status)}" data-item-id="${id}"><div class="name">${escapeHtml(item.product_name||"未命名产品")}</div><div class="spec">规格：${escapeHtml(item.specification||"-")}</div><div class="code">存货编码：${escapeHtml(item.product_code||"-")}</div>${renderPickComponents(item)}<div class="qty-row"><div class="qty-label">计划 ${planned} · 当前拿货</div><input class="picked-qty" type="number" min="0" value="${Number(picked)}" aria-label="实际拿货数量" ${disabled?"disabled":""}/></div><div class="actions"><button class="primary" onclick="updateItem(${id},'picked')" ${disabled?"disabled":""}>已拿货</button><button class="partial" onclick="updateItem(${id},'partial')" ${disabled?"disabled":""}>部分拿货</button><button class="no-stock" onclick="updateItem(${id},'no_stock')" ${disabled?"disabled":""}>没货</button></div></article>`;
+      return `<article class="card ${escapeHtml(status)}" data-item-id="${id}"><div class="name">${escapeHtml(item.product_name||"未命名产品")}</div><div class="spec">规格：${escapeHtml(item.specification||"-")}</div><div class="code">存货编码：${escapeHtml(item.product_code||"-")}</div>${renderPickComponents(item)}<div class="qty-row"><div class="qty-label">计划 ${planned} · 实际拿货</div><input class="picked-qty" type="number" min="0" value="${Number(picked)}" aria-label="实际拿货数量" ${disabled?"disabled":""}/></div><div class="actions"><button class="primary" onclick="updateItem(${id},'picked')" ${disabled?"disabled":""}>拿齐</button><button class="partial" onclick="updateItem(${id},'partial')" ${disabled?"disabled":""}>少拿</button><button class="no-stock" onclick="updateItem(${id},'no_stock')" ${disabled?"disabled":""}>未找到</button></div></article>`;
     }
     async function updateItem(itemId,status) {
       const id=Number(itemId); if(busyItems.has(id)||taskActionBusy) return; const currentTask=task; const card=document.querySelector(`[data-item-id="${id}"]`); const item=currentTask?.items.find(row=>Number(row.id)===id); if(!item||!card) return;

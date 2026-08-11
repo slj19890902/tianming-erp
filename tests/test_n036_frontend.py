@@ -71,7 +71,8 @@ def test_mobile_page_without_task_id_lists_and_selects_pending_tasks() -> None:
     assert "/api/delivery-picks?" in MOBILE
     assert "response_mode=summary" in MOBILE
     assert "include_dispatched=false" in MOBILE
-    assert "page_size=100" in MOBILE
+    assert "page_size=${listPageSize}" in MOBILE
+    assert "const listPageSize=20" in MOBILE
     assert "正在读取待拿货任务" in MOBILE
     for marker in ("loadTaskList", "selectTask", "taskChooser", "customer_name"):
         assert marker in MOBILE
@@ -84,12 +85,12 @@ def test_desktop_pick_status_maps_driver_confirmed_to_ready_to_dispatch() -> Non
 
 
 def test_mobile_page_hides_business_fields_and_keeps_pick_workflow() -> None:
-    for marker in ("product_name", "specification", "product_code", "已拿货", "部分拿货", "没货", "提交异常结果", "本单全部按计划拿齐", "customer_name"):
+    for marker in ("product_name", "specification", "product_code", "拿齐", "少拿", "未找到", "提交异常结果", "本单全部按计划拿齐", "customer_name"):
         assert marker in MOBILE
     for forbidden_label in ("客户单号", "内部备注", "单价", "财务"):
         assert forbidden_label not in MOBILE
     assert 'activeFilter = "open"' in MOBILE
-    assert '["picked","已拿货"' in MOBILE
+    assert '["picked","拿齐"' in MOBILE
 
 
 def test_n083_mobile_page_is_location_first_and_keeps_exceptions_collapsed() -> None:

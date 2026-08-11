@@ -1078,7 +1078,6 @@ def _pick_location_groups(db: Session, item_responses: list[dict]) -> list[dict]
         int(group["location_id"])
         for group in ordered
         if group.get("location_id") is not None
-        and int(group.get("warehouse_floor") or 0) == 3
         and not group.get("needs_relocation")
         and not group.get("requires_attention")
     }
@@ -1262,6 +1261,7 @@ def _pick_task_response(
             if include_location_plan
             else None
         ),
+        "as_of": utc_naive_to_api(_utc_now()),
     }
 
 
@@ -4502,6 +4502,7 @@ def list_delivery_pick_tasks(
             if page is not None and total
             else (1 if total else 0)
         ),
+        "as_of": utc_naive_to_api(_utc_now()),
     }
 
 

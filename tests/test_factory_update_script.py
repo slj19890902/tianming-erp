@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.83"
-    assert APP_VERSION_NAME == "模具自动编号、活动位置与常用箱绑定"
+    assert APP_VERSION == "v0.22.84"
+    assert APP_VERSION_NAME == "三类生产任务单与65×45产品标签"
     assert APP_BUILD_DATE == "2026-08-11"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -50,24 +50,30 @@ def test_factory_update_reports_current_release_version() -> None:
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
     assert any(
-        "本次更新｜" in item and "模具名称" in item and "拼音首字母" in item
+        "本次更新｜" in item and "A1 型纸箱" in item and "模切内盒" in item and "衬板" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "货架、层和格" in item and "从左到右" in item
+        "本次更新｜" in item and "上下合并两张" in item and "单独一张 A4" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "跨客户常用箱" in item and "一块模具" in item
+        "本次更新｜" in item and "已有图纸" in item and "客户随货版" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "模切" in item and "操作审计" in item
+        "本次更新｜" in item and "65×45 mm" in item and "大面积黑底" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "无数据库迁移" in item and "ea09" in item
+        "本次更新｜" in item and "只读打印" in item and "ea09" in item
         for item in current_release
+    )
+    assert any(
+        item.startswith("v0.22.83：本次更新｜")
+        and "模具名称" in item
+        and "拼音首字母" in item
+        for item in APP_CHANGELOG
     )
     assert any(
         item.startswith("v0.22.82：本次更新｜")
@@ -123,7 +129,7 @@ def test_factory_update_reports_current_release_version() -> None:
         for item in APP_CHANGELOG
     )
     assert any(
-        "如何验证｜" in item and "v0.22.83" in item and "ea09" in item
+        "如何验证｜" in item and "v0.22.84" in item and "ea09" in item
         for item in current_release
     )
     assert any(

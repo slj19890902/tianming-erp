@@ -8,7 +8,7 @@ INDEX = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
 
 
 def test_mixed_mode_and_external_routing_are_visible_without_replacing_paper_flow() -> None:
-    assert '<option value="mixed_bom">纸板主件＋外购包材组件</option>' in INDEX
+    assert '<option value="mixed_bom">纸板＋外购组件</option>' in INDEX
     assert "外购包材待确认" in INDEX
     assert "纯护角、EPE等不进入纸板报料" in INDEX
     assert "/api/external-packaging-purchases/pending-confirmations" in INDEX
@@ -44,4 +44,5 @@ def test_product_modal_keeps_external_other_and_mixed_non_other_boundaries() -> 
     assert "productForm.box_style!=='其他'" in modal
     assert "productForm.supply_mode==='external_purchase'" in modal
     assert "混合 BOM 必须保留纸板主件" in (ROOT / "app" / "api" / "products.py").read_text(encoding="utf-8")
-    assert "混合模式请在下方“外购包装组件”维护" in INDEX
+    assert 'class="field product-supply-compact"' in INDEX
+    assert "混合模式请在下方“外购包装组件”维护" not in INDEX

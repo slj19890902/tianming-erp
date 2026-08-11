@@ -78,7 +78,7 @@ def test_supplier_groups_and_external_product_editor_are_explicit() -> None:
 
     assert "v-if=\"productForm.supply_mode!=='external_purchase'\"" in product_modal
     assert product_modal.count("productForm.supply_mode!=='external_purchase'") >= 8
-    assert "上传产品图片/图纸" in product_modal
+    assert "<label>图纸</label>" in product_modal
     candidate_table = product_modal.split(
         'v-else-if="productExternalSupplyOptions.length"',
         1,

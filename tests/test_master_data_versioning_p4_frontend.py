@@ -387,7 +387,7 @@ def test_restore_preview_and_restore_are_admin_only_and_token_bound() -> None:
 
 def test_customer_and_product_readonly_views_disable_real_controls() -> None:
     assert '<fieldset class="form-grid" :class="\'readonly-fieldset\'" :disabled="!!customerForm.id && !canEditCustomers">' in INDEX
-    assert '<fieldset class="product-edit-grid" :class="\'readonly-fieldset\'" :disabled="!!productForm.id && !canEditProducts">' in INDEX
+    assert '<fieldset class="product-edit-grid product-compact-editor" :class="\'readonly-fieldset\'" :disabled="!!productForm.id && !canEditProducts">' in INDEX
     assert "客户资料控件已禁用" in INDEX
     assert "常用箱资料控件已禁用" in INDEX
 

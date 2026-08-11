@@ -26,10 +26,10 @@ def _run_node(source: str, tmp_path: Path, name: str) -> None:
 
 
 def test_product_editor_loaders_declare_latest_request_contract() -> None:
-    molds = _method_body("async loadMoldTools() {", "async ensureProductEditorOptions(")
-    options = _method_body("async ensureProductEditorOptions({force=false} = {}) {", "moldToolSelectOptions() {")
+    molds = _method_body("async loadMoldTools() {", "async searchMoldTools(")
+    options = _method_body("async ensureProductEditorOptions({force=false,refreshMolds=false} = {}) {", "moldToolSelectOptions() {")
     bom = _method_body("async loadProductBom(productId) {", "async searchBomProducts(")
-    editor = _method_body("async openProduct(row=null) {", "async loadProductMaterialContext(")
+    editor = _method_body("async openProduct(row=null) {", "async previewProductDrawing(")
 
     assert 'const requestKey = "product:molds"' in molds
     assert "latestRequestControllers.get(requestKey) !== controller) return false" in molds
@@ -43,18 +43,18 @@ def test_product_editor_loaders_declare_latest_request_contract() -> None:
 
 
 def test_open_product_runtime_discards_old_detail_response(tmp_path: Path) -> None:
-    body = _method_body("async openProduct(row=null) {", "async loadProductMaterialContext(")
+    body = _method_body("async openProduct(row=null) {", "async previewProductDrawing(")
     script = f"""
 const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
 global.latestRequestControllers=new Map();const pending=[];const notices=[];
 global.axios={{get(url,options){{return new Promise((resolve,reject)=>pending.push({{url,options,resolve,reject}}));}}}};
 const vm={{
   productForm:{{id:null}},selectedProductCustomer:null,activeCustomerOptions:[],productMaterialContext:{{}},drawingFile:null,
-  canEditProducts:true,bomEditor:{{}},productFormSnapshot:null,modal:null,
+  canEditProducts:true,canAdmin:false,bomEditor:{{}},productFormSnapshot:null,modal:null,moldTools:[],
   beginLatestRequest(key){{latestRequestControllers.get(key)?.abort();const controller=new AbortController();latestRequestControllers.set(key,controller);return controller;}},
   finishLatestRequest(key,controller){{if(latestRequestControllers.get(key)===controller)latestRequestControllers.delete(key);}},
   isCancelledRequest(error){{return error?.code==="ERR_CANCELED";}},errorMessage(error){{return error?.message||String(error);}},
-  loadProductBoxTypeRules:async()=>[],hydrateProductForm(row){{return {{...row}};}},resetBomEditor(){{}},
+  loadProductBoxTypeRules:async()=>[],hydrateProductForm(row){{return {{...row,supply_mode:row.supply_mode||"corrugated_production"}};}},resetBomEditor(){{}},resetExternalComponentEditor(){{}},
   _productFormSaveFields(){{return {{id:this.productForm.id}};}},beginMasterEdit(){{}},
   $nextTick(callback){{if(callback)callback();return Promise.resolve();}},ensureProductEditorOptions:async()=>true,
   loadProductBom:async()=>true,hasPermission(){{return false;}},autoApplyProductRecommendations(){{}},
@@ -99,7 +99,7 @@ const expect=(value,message)=>{{if(!value)throw new Error(message)}};
 
 
 def test_mold_loader_runtime_keeps_latest_response(tmp_path: Path) -> None:
-    body = _method_body("async loadMoldTools() {", "async ensureProductEditorOptions(")
+    body = _method_body("async loadMoldTools() {", "async searchMoldTools(")
     script = f"""
 const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
 global.latestRequestControllers=new Map();const pending=[];
@@ -123,17 +123,17 @@ const expect=(value,message)=>{{if(!value)throw new Error(message)}};
 
 
 def test_product_editor_options_reports_child_false_as_retryable_error(tmp_path: Path) -> None:
-    body = _method_body("async ensureProductEditorOptions({force=false} = {}) {", "moldToolSelectOptions() {")
+    body = _method_body("async ensureProductEditorOptions({force=false,refreshMolds=false} = {}) {", "moldToolSelectOptions() {")
     script = f"""
 const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
 global.latestRequestControllers=new Map();
 const vm={{
-  isWorkshop:false,allMaterials:[],moldTools:[],productEditorOptionsLoading:false,productEditorOptionsError:"",
+  isWorkshop:false,allMaterials:[],moldTools:[],printingPlates:[],productEditorOptionsLoading:false,productEditorOptionsError:"",
   beginLatestRequest(key){{latestRequestControllers.get(key)?.abort();const controller=new AbortController();latestRequestControllers.set(key,controller);return controller;}},
   finishLatestRequest(key,controller){{if(latestRequestControllers.get(key)===controller)latestRequestControllers.delete(key);}},
-  isCancelledRequest(){{return false;}},loadMaterials:async()=>false,loadMoldTools:async()=>true
+  isCancelledRequest(){{return false;}},loadMaterials:async()=>false,loadMoldTools:async()=>true,loadPrintingPlates:async()=>true
 }};
-vm.ensureProductEditorOptions=new AsyncFunction("{{force=false}}={{}}",{json.dumps(body, ensure_ascii=False)}).bind(vm);
+vm.ensureProductEditorOptions=new AsyncFunction("{{force=false,refreshMolds=false}}={{}}",{json.dumps(body, ensure_ascii=False)}).bind(vm);
 const expect=(value,message)=>{{if(!value)throw new Error(message)}};
 (async()=>{{
   expect(await vm.ensureProductEditorOptions()===false,"failed child load was treated as ready");

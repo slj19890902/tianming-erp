@@ -25,14 +25,14 @@
       <div class="muted">扫描结果可直接粘贴，也可手动输入。先预览当前与目标位置，再确认移动。</div>
       <div class="move-grid">
         <div class="field"><label for="moveMoldCode">模具码</label><input id="moveMoldCode" autocomplete="off" placeholder="例如 MJ-A1-001"></div>
-        <div class="field"><label for="moveLocationCode">模具位置码（1F / 3F）</label><input id="moveLocationCode" autocomplete="off" autocapitalize="characters" placeholder="例如 1F-M-R01-L2-D01-P01"></div>
+        <div class="field"><label for="moveLocationCode">模具位置码（1F / 3F）</label><input id="moveLocationCode" autocomplete="off" autocapitalize="characters" placeholder="例如 1F-M-R01-L2-G01"></div>
       </div>
       <div class="one-floor-builder">
-        <div class="muted">一楼位置快捷选择（位置号按现场从左到右）</div>
+        <div class="muted">一楼位置快捷选择（只记录货架、层、格，不记录会变化的左右顺序）</div>
         <div class="one-floor-grid">
           <div class="field"><label for="oneFloorRack">货架</label><select id="oneFloorRack"></select></div>
-          <div class="field"><label for="oneFloorLevel">层位</label><select id="oneFloorLevel"></select></div>
-          <div class="field"><label for="oneFloorPosition">从左第几位</label><input id="oneFloorPosition" type="number" min="1" step="1" value="1"></div>
+          <div id="oneFloorLevelField" class="field"><label for="oneFloorLevel">层</label><select id="oneFloorLevel"></select></div>
+          <div id="oneFloorGridField" class="field"><label for="oneFloorGrid">格</label><select id="oneFloorGrid"></select></div>
         </div>
         <div id="oneFloorBuilderHint" class="builder-hint">正在读取一楼模具位置…</div>
       </div>
@@ -54,14 +54,18 @@
     function createIdempotencyKey(){if(globalThis.crypto?.randomUUID)return crypto.randomUUID();if(globalThis.crypto?.getRandomValues){const bytes=new Uint8Array(16);crypto.getRandomValues(bytes);return [...bytes].map(value=>value.toString(16).padStart(2,"0")).join("")}return `${Date.now()}-${Math.random().toString(16).slice(2)}`}
     function positionCode(value){return String(Math.max(1,Number.parseInt(value,10)||1)).padStart(2,"0")}
     function selectedOneFloorRack(){return oneFloorLocationOptions.find(row=>row.rack_code===$("oneFloorRack").value)||null}
+    function selectedOneFloorLevel(){const rack=selectedOneFloorRack(),level=Number.parseInt($("oneFloorLevel").value,10);return(rack?.levels||[]).find(row=>Number(row.level)===level)||null}
     function buildOneFloorLocation(){
-      const rack=selectedOneFloorRack(),level=Number.parseInt($("oneFloorLevel").value,10),position=positionCode($("oneFloorPosition").value);if(!rack||!level)return;
-      const rule=(rack.levels||[]).find(row=>Number(row.level)===level);if(!rule)return;
-      const suffix=rule.kind==="vertical"?`V-P${position}`:`D01-P${position}`,code=`1F-M-${rack.rack_code}-L${level}-${suffix}`;
-      $("moveLocationCode").value=code;moveSource="manual_input";invalidateMovePreview();$("oneFloorBuilderHint").textContent=`已选择：${rack.rack_code} ${rack.name} · 第${level}层 · 从左第${Number(position)}位`;
+      const rack=selectedOneFloorRack();if(!rack)return;let code="",label="";
+      if(rack.location_depth==="rack"){code=`1F-M-${rack.rack_code}`;label=`${rack.rack_code} ${rack.name}；该区域没有层号或格号`}
+      else{const level=selectedOneFloorLevel();if(!level)return;if(rack.location_depth==="grid"){const grid=Number.parseInt($("oneFloorGrid").value,10);if(!grid)return;code=`1F-M-${rack.rack_code}-L${level.level}-G${positionCode(grid)}`;label=`${rack.rack_code} ${rack.name} · 第${level.level}层 · 第${grid}格`}else{code=`1F-M-${rack.rack_code}-L${level.level}`;label=`${rack.rack_code} ${rack.name} · 第${level.level}层`}}
+      $("moveLocationCode").value=code;moveSource="manual_input";invalidateMovePreview();$("oneFloorBuilderHint").textContent=`已选择：${label}；左右顺序不记录`;
     }
     function renderOneFloorLevels(){
-      const rack=selectedOneFloorRack(),levels=rack?.levels||[];$("oneFloorLevel").innerHTML=levels.map(row=>`<option value="${row.level}">第 ${row.level} 层 · ${row.kind==="vertical"?"竖放":"平放"}</option>`).join("");buildOneFloorLocation();
+      const rack=selectedOneFloorRack(),levels=rack?.levels||[];$("oneFloorLevel").innerHTML=levels.map(row=>`<option value="${row.level}">第 ${row.level} 层 · ${row.kind==="vertical"?"竖放":"平放"}</option>`).join("");$("oneFloorLevelField").style.display=rack?.location_depth==="rack"?"none":"block";renderOneFloorGrids();
+    }
+    function renderOneFloorGrids(){
+      const rack=selectedOneFloorRack(),level=selectedOneFloorLevel(),grids=level?.grids||[];$("oneFloorGrid").innerHTML=grids.map(grid=>`<option value="${grid}">第 ${grid} 格</option>`).join("");$("oneFloorGridField").style.display=rack?.location_depth==="grid"?"block":"none";buildOneFloorLocation();
     }
     async function loadOneFloorLocationOptions(){
       try{const data=await api("/api/warehouse/molds/location-options");oneFloorLocationOptions=data.racks||[];$("oneFloorRack").innerHTML=oneFloorLocationOptions.map(row=>`<option value="${h(row.rack_code)}">${h(row.rack_code)} · ${h(row.name)}</option>`).join("");renderOneFloorLevels()}catch(error){$("oneFloorBuilderHint").textContent=`一楼快捷位置读取失败：${error.message}`}
@@ -84,9 +88,9 @@
     }
     function renderMovePreview(){
       const row=movePreview;if(!row){$("movePreview").innerHTML="";$("confirmButton").disabled=true;return}
-      const conflict=row.occupancy_conflict?`<div class="conflict">目标位置已被模具 ${h(row.occupancy_conflict.mold_code)} 占用，不能确认。</div>`:"";
+      const colocated=row.co_located_count?`<div class="hint">该货架分类已有 ${h(row.co_located_count)} 块模具；系统不记录格内左右顺序，仍可确认归位。</div>`:"";
       const same=row.same_location?'<div class="muted">当前位置与目标位置相同；确认后不会新增移动流水。</div>':"";
-      $("movePreview").innerHTML=`<div class="preview"><div class="preview-line"><span>模具</span><span class="preview-code">${h(row.mold.mold_code)}｜${h(row.mold.mold_name)}</span></div><div class="preview-line"><span>当前位置</span><span class="preview-code">${h(row.mold.rack_location)}</span></div><div class="preview-line"><span>目标位置</span><span class="preview-code">${h(row.target_location)}</span></div><div class="preview-line"><span>位置版本</span><span>${h(row.expected_version)}</span></div>${conflict}${same}</div>`;
+      $("movePreview").innerHTML=`<div class="preview"><div class="preview-line"><span>模具</span><span class="preview-code">${h(row.mold.mold_code)}｜${h(row.mold.mold_name)}</span></div><div class="preview-line"><span>当前位置</span><span class="preview-code">${h(row.mold.rack_location)}</span></div><div class="preview-line"><span>目标位置</span><span class="preview-code">${h(row.target_location)}</span></div><div class="preview-line"><span>位置版本</span><span>${h(row.expected_version)}</span></div>${colocated}${same}</div>`;
       $("confirmButton").disabled=!canMove||!row.can_confirm;
       if(!canMove)$("moveMessage").innerHTML='<div class="hint">当前账号可预览，但没有仓库操作权限，不能确认移动。</div>';
     }
@@ -108,7 +112,7 @@
       await loadOneFloorLocationOptions();
       const params=new URLSearchParams(location.search),preset=params.get("mold")||params.get("q")||"",target=params.get("location")||params.get("target")||params.get("to")||"";$("keyword").value=preset;$("moveMoldCode").value=params.get("move_mold")||preset;$("moveLocationCode").value=target;if(target)moveSource="url_parameter";if(preset)await search();if($("moveMoldCode").value&&target)await previewMove()
     }
-    $("searchButton").onclick=search;$("keyword").oninput=invalidateSearch;$("keyword").onkeydown=event=>{if(event.key==="Enter")search()};$("previewButton").onclick=previewMove;$("confirmButton").onclick=confirmMove;$("moveMoldCode").onpaste=$("moveLocationCode").onpaste=()=>{moveSource="scanner_paste"};$("moveMoldCode").oninput=$("moveLocationCode").oninput=invalidateMovePreview;$("moveLocationCode").onkeydown=event=>{if(event.key==="Enter")previewMove()};$("oneFloorRack").onchange=renderOneFloorLevels;$("oneFloorLevel").onchange=$("oneFloorPosition").oninput=buildOneFloorLocation;init();
+    $("searchButton").onclick=search;$("keyword").oninput=invalidateSearch;$("keyword").onkeydown=event=>{if(event.key==="Enter")search()};$("previewButton").onclick=previewMove;$("confirmButton").onclick=confirmMove;$("moveMoldCode").onpaste=$("moveLocationCode").onpaste=()=>{moveSource="scanner_paste"};$("moveMoldCode").oninput=$("moveLocationCode").oninput=invalidateMovePreview;$("moveLocationCode").onkeydown=event=>{if(event.key==="Enter")previewMove()};$("oneFloorRack").onchange=renderOneFloorLevels;$("oneFloorLevel").onchange=renderOneFloorGrids;$("oneFloorGrid").onchange=buildOneFloorLocation;init();
   </script>
 </body>
 </html>

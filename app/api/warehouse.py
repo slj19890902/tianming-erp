@@ -6,7 +6,9 @@ from decimal import Decimal
 import hashlib
 from io import BytesIO
 import json
+import re
 import socket
+from threading import Lock
 from typing import Literal
 from urllib.parse import quote
 
@@ -173,7 +175,14 @@ from app.services.location_candidates import (
     operational_location_issue,
     operational_location_payload,
 )
-from app.services.master_data_versioning import record_versioned_create
+from app.services.master_data_versioning import (
+    apply_versioned_update,
+    record_versioned_create,
+)
+from app.services.mold_identity import (
+    MoldIdentityError,
+    next_available_mold_code,
+)
 from app.services.mold_location import (
     MoldLocationError,
     MoldLocationMoveResult,
@@ -195,6 +204,7 @@ from app.services.printing_plate_location import (
 
 
 router = APIRouter()
+_MOLD_CODE_WRITE_LOCK = Lock()
 # Configuration/master-data operations have no N028 permission equivalent and
 # intentionally retain their legacy admin-only boundary.
 admin_only = RoleChecker(["admin"])
@@ -801,15 +811,40 @@ class Floor3PalletRelocationPayload(BaseModel):
 
 
 class MoldToolPayload(BaseModel):
-    mold_code: str = Field(min_length=1, max_length=100)
+    # mold_code remains optional for compatibility with older API clients.
+    # The warehouse UI sends customer_initials and lets the server allocate it.
+    mold_code: str | None = Field(default=None, max_length=100)
+    customer_initials: str | None = Field(default=None, max_length=20)
     mold_name: str = Field(min_length=1, max_length=200)
     rack_location: str = Field(min_length=1, max_length=250)
     remarks: str | None = None
 
-    @field_validator("mold_code", "mold_name", "rack_location")
+    @field_validator("mold_name", "rack_location")
     @classmethod
     def strip_mold_fields(cls, value: str) -> str:
         return value.strip()
+
+    @field_validator("mold_code", "customer_initials")
+    @classmethod
+    def strip_optional_mold_fields(cls, value: str | None) -> str | None:
+        text = (value or "").strip()
+        return text or None
+
+
+class MoldProductBindingItem(BaseModel):
+    product_id: int = Field(gt=0)
+    expected_version: int = Field(gt=0)
+
+
+class MoldProductBindingPayload(BaseModel):
+    items: list[MoldProductBindingItem] = Field(min_length=1, max_length=20)
+
+    @model_validator(mode="after")
+    def reject_duplicate_products(self) -> "MoldProductBindingPayload":
+        ids = [item.product_id for item in self.items]
+        if len(ids) != len(set(ids)):
+            raise ValueError("同一款常用箱不能重复选择")
+        return self
 
 
 class MoldLocationPreviewPayload(BaseModel):
@@ -7804,34 +7839,31 @@ def _mold_location_preview_dict(
     preview: MoldLocationPreview,
     allowed_customer_ids: set[int] | None = None,
 ) -> dict:
-    occupant = preview.occupant
-    occupant_is_visible = (
-        occupant is not None
-        and (
-            allowed_customer_ids is None
-            or bool(_visible_mold_products(occupant, allowed_customer_ids))
-        )
-    )
+    visible_occupants = [
+        occupant
+        for occupant in preview.occupants
+        if allowed_customer_ids is None
+        or bool(_visible_mold_products(occupant, allowed_customer_ids))
+    ]
     return {
         "mold": _mold_tool_dict(preview.mold, allowed_customer_ids),
         "target_location": preview.target_location,
         "target_guide": preview.target_guide,
         "expected_version": preview.mold.location_version,
         "same_location": preview.same_location,
-        "can_confirm": occupant is None,
-        "occupancy_conflict": (
+        # A rack/level/grid is a storage category, not a fixed left-to-right
+        # slot. Multiple active molds may therefore share the same code.
+        "can_confirm": True,
+        "occupancy_conflict": None,
+        "co_located_count": len(visible_occupants),
+        "co_located_molds": [
             {
-                "mold_tool_id": occupant.id if occupant_is_visible else None,
-                "mold_code": occupant.mold_code if occupant_is_visible else "无权查看",
-                "mold_name": (
-                    occupant.mold_name
-                    if occupant_is_visible
-                    else "目标位置已被其他模具占用"
-                ),
+                "mold_tool_id": occupant.id,
+                "mold_code": occupant.mold_code,
+                "mold_name": occupant.mold_name,
             }
-            if occupant is not None
-            else None
-        ),
+            for occupant in visible_occupants
+        ],
     }
 
 
@@ -7879,8 +7911,9 @@ def get_mold_location_options(
 ) -> dict:
     return {
         "floor_code": "1F",
-        "position_order": "left_to_right",
-        "position_numbers_are_dynamic": True,
+        "position_order": None,
+        "position_numbers_are_dynamic": False,
+        "storage_rule": "rack_level_grid",
         "racks": one_floor_mold_location_options(),
     }
 
@@ -8061,19 +8094,120 @@ def get_mold_label(
     return _mold_label_dict(row, request, allowed_customer_ids)
 
 
+@router.get("/molds/code-preview")
+def preview_mold_code(
+    mold_name: str = Query(min_length=1, max_length=200),
+    customer_initials: str = Query(min_length=1, max_length=20),
+    db: Session = Depends(get_db),
+    _user: User = Depends(admin_only),
+) -> dict:
+    try:
+        mold_code, parts = next_available_mold_code(
+            db,
+            mold_name=mold_name,
+            customer_initials=customer_initials,
+        )
+    except MoldIdentityError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return {
+        "mold_code": mold_code,
+        "customer_label": parts.customer_label,
+        "customer_initials": parts.customer_initials,
+        "inventory_code": parts.inventory_code,
+    }
+
+
+@router.get("/molds/binding-products")
+def search_mold_binding_products(
+    customer_id: int = Query(gt=0),
+    q: str | None = None,
+    limit: int = Query(default=100, ge=1, le=200),
+    db: Session = Depends(get_db),
+    _user: User = Depends(admin_only),
+) -> dict:
+    customer = db.scalar(
+        select(Customer).where(
+            Customer.id == customer_id,
+            Customer.is_active.is_(True),
+        )
+    )
+    if customer is None:
+        raise HTTPException(status_code=404, detail="客户不存在或已停用")
+    query = (
+        select(Product, MoldTool)
+        .outerjoin(MoldTool, MoldTool.id == Product.mold_tool_id)
+        .where(
+            Product.customer_id == customer_id,
+            Product.is_active.is_(True),
+            Product.deleted_at.is_(None),
+        )
+    )
+    keyword = (q or "").strip()
+    if keyword:
+        pattern = f"%{keyword}%"
+        query = query.where(
+            or_(
+                Product.product_code.like(pattern),
+                Product.customer_material_code.like(pattern),
+                Product.product_name.like(pattern),
+            )
+        )
+    rows = db.execute(
+        query.order_by(
+            Product.customer_material_code,
+            Product.product_code,
+            Product.product_name,
+            Product.id,
+        ).limit(limit)
+    ).all()
+    return {
+        "customer": {"id": customer.id, "name": customer.name},
+        "items": [
+            {
+                "id": product.id,
+                "version": product.version,
+                "product_code": product.product_code,
+                "customer_material_code": product.customer_material_code,
+                "product_name": product.product_name,
+                "production_process": product.production_process,
+                "mold_tool_id": mold.id if mold is not None else None,
+                "mold_code": mold.mold_code if mold is not None else None,
+                "mold_name": mold.mold_name if mold is not None else None,
+            }
+            for product, mold in rows
+        ],
+    }
+
+
 @router.post("/molds", status_code=201)
 def create_mold_tool(
     payload: MoldToolPayload,
     db: Session = Depends(get_db),
     user: User = Depends(admin_only),
 ) -> dict:
-    row = MoldTool(**payload.model_dump(), created_by=user.id, updated_by=user.id)
-    db.add(row)
-    try:
-        db.commit()
-    except IntegrityError as error:
-        db.rollback()
-        raise HTTPException(status_code=409, detail="模具编号已存在") from error
+    with _MOLD_CODE_WRITE_LOCK:
+        values = payload.model_dump(exclude={"customer_initials"})
+        if payload.customer_initials:
+            try:
+                values["mold_code"], _parts = next_available_mold_code(
+                    db,
+                    mold_name=payload.mold_name,
+                    customer_initials=payload.customer_initials,
+                )
+            except MoldIdentityError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+        elif not payload.mold_code:
+            raise HTTPException(
+                status_code=422,
+                detail="模具名称生成编号所需的客户拼音缩写缺失",
+            )
+        row = MoldTool(**values, created_by=user.id, updated_by=user.id)
+        db.add(row)
+        try:
+            db.commit()
+        except IntegrityError as error:
+            db.rollback()
+            raise HTTPException(status_code=409, detail="模具编号已存在") from error
     db.refresh(row)
     return _mold_tool_dict(row)
 
@@ -8093,7 +8227,10 @@ def update_mold_tool(
             status_code=409,
             detail="模具位置不能在档案编辑中直接修改，请使用模具码 + 位置码双码移动确认",
         )
-    for key, value in payload.model_dump().items():
+    if payload.mold_code and payload.mold_code != row.mold_code:
+        raise HTTPException(status_code=409, detail="模具编号生成后不可在档案编辑中修改")
+    values = payload.model_dump(exclude={"customer_initials", "mold_code"})
+    for key, value in values.items():
         setattr(row, key, value)
     row.updated_by = user.id
     try:
@@ -8103,6 +8240,115 @@ def update_mold_tool(
         raise HTTPException(status_code=409, detail="模具编号已存在") from error
     db.refresh(row)
     return _mold_tool_dict(row)
+
+
+def _production_process_with_die_cut(value: str | None) -> str:
+    tokens = [
+        token.strip()
+        for token in re.split(r"[,，、]+", str(value or ""))
+        if token.strip()
+    ]
+    if "模切" not in tokens:
+        tokens.append("模切")
+    return "、".join(dict.fromkeys(tokens))
+
+
+@router.post("/molds/{mold_id}/product-bindings")
+def bind_mold_products(
+    mold_id: int,
+    payload: MoldProductBindingPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    mold = db.get(MoldTool, mold_id)
+    if mold is None:
+        raise HTTPException(status_code=404, detail="模具不存在")
+    if not mold.is_active:
+        raise HTTPException(status_code=409, detail="模具已停用，不能绑定常用箱")
+
+    expected_versions = {
+        item.product_id: item.expected_version for item in payload.items
+    }
+    products = db.scalars(
+        select(Product)
+        .where(
+            Product.id.in_(sorted(expected_versions)),
+            Product.is_active.is_(True),
+            Product.deleted_at.is_(None),
+        )
+        .order_by(Product.id)
+    ).all()
+    products_by_id = {product.id: product for product in products}
+    missing_ids = sorted(set(expected_versions) - set(products_by_id))
+    if missing_ids:
+        raise HTTPException(status_code=404, detail="所选常用箱不存在或已停用")
+
+    conflicts = [
+        product
+        for product in products
+        if product.mold_tool_id is not None and product.mold_tool_id != mold.id
+    ]
+    if conflicts:
+        conflict = conflicts[0]
+        current_mold = db.get(MoldTool, conflict.mold_tool_id)
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"存货编码 {conflict.customer_material_code or conflict.product_code} "
+                f"已绑定模具 {current_mold.mold_code if current_mold else conflict.mold_tool_id}；"
+                "当前规则一个存货编码只能绑定一块模具"
+            ),
+        )
+
+    bound_ids: list[int] = []
+    try:
+        for product in products:
+            if product.mold_tool_id == mold.id:
+                continue
+            apply_versioned_update(
+                db,
+                object_type="product",
+                entity=product,
+                updates={
+                    "mold_tool_id": mold.id,
+                    "production_process": _production_process_with_die_cut(
+                        product.production_process
+                    ),
+                },
+                expected_version=expected_versions[product.id],
+                user=user,
+                reason="从模具档案反向绑定常用箱并启用模切工艺",
+                source="api.warehouse.mold_product_bindings",
+                action="mold_binding",
+            )
+            bound_ids.append(product.id)
+        audit_master_change(
+            db,
+            user=user,
+            action="BIND_PRODUCTS",
+            resource="MOLD_TOOL",
+            resource_id=mold.id,
+            details={
+                "mold_code": mold.mold_code,
+                "product_ids": [product.id for product in products],
+                "newly_bound_product_ids": bound_ids,
+            },
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    mold = db.scalar(
+        select(MoldTool)
+        .options(selectinload(MoldTool.products).selectinload(Product.customer))
+        .where(MoldTool.id == mold_id)
+    )
+    return {
+        "message": "常用箱绑定成功",
+        "bound_count": len(bound_ids),
+        "mold": _mold_tool_dict(mold),
+    }
 
 
 @router.put("/molds/{mold_id}/enable")

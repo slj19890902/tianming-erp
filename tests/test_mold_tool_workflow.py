@@ -168,6 +168,183 @@ def test_admin_creates_mold_and_common_box_binding_is_searchable(mold_app) -> No
         assert legacy_lookup.json()["items"][0]["template_location"] == "二楼模具架 B-12"
 
 
+def test_mold_code_is_generated_from_customer_initials_and_inventory_code(
+    mold_app,
+) -> None:
+    app, _factory = mold_app
+    with TestClient(app) as client:
+        _login(client, "admin")
+        preview = client.get(
+            "/api/warehouse/molds/code-preview",
+            params={
+                "mold_name": "仪元 Z.001.000093",
+                "customer_initials": "YY",
+            },
+        )
+        assert preview.status_code == 200, preview.text
+        assert preview.json()["mold_code"] == "YY-Z.001.000093"
+
+        first = client.post(
+            "/api/warehouse/molds",
+            json={
+                "mold_name": "仪元 Z.001.000093",
+                "customer_initials": "YY",
+                "rack_location": "1F-M-R01-L2-G01",
+            },
+        )
+        assert first.status_code == 201, first.text
+        assert first.json()["mold_code"] == "YY-Z.001.000093"
+
+        second = client.post(
+            "/api/warehouse/molds",
+            json={
+                "mold_name": "仪元 Z.001.000093",
+                "customer_initials": "YY",
+                "rack_location": "1F-M-R01-L2-G01",
+            },
+        )
+        assert second.status_code == 201, second.text
+        assert second.json()["mold_code"] == "YY-Z.001.000093-02"
+
+
+def test_mold_reverse_binding_supports_multiple_customers_and_one_mold_per_product(
+    mold_app,
+) -> None:
+    from app.models.customer import Customer
+
+    app, factory = mold_app
+    with factory() as db:
+        second_customer = Customer(
+            customer_number=9902,
+            customer_code="MOLD-X",
+            name="跨客户模具测试",
+            payment_term_days=30,
+            credit_limit=Decimal("100000"),
+        )
+        db.add(second_customer)
+        db.commit()
+        second_customer_id = second_customer.id
+
+    with TestClient(app) as client:
+        _login(client, "admin")
+        first_mold = client.post(
+            "/api/warehouse/molds",
+            json={
+                "mold_name": "仪元 Z.001.000093",
+                "customer_initials": "YY",
+                "rack_location": "1F-M-R01-L2-G01",
+            },
+        ).json()
+        second_mold = client.post(
+            "/api/warehouse/molds",
+            json={
+                "mold_name": "跨客 C80010095",
+                "customer_initials": "KK",
+                "rack_location": "1F-M-R02-L2-G01",
+            },
+        ).json()
+
+        product_payloads = (
+            (1, "Z.001.000093", "仪元组合箱", "粘贴"),
+            (second_customer_id, "C80010095", "跨客户外箱", ""),
+            (second_customer_id, "LOCKED-001", "已绑定其他模具", "粘贴"),
+        )
+        products = []
+        for customer_id, code, name, process in product_payloads:
+            created = client.post(
+                "/api/master/products",
+                json={
+                    "customer_id": customer_id,
+                    "product_code": code,
+                    "customer_material_code": code,
+                    "product_name": name,
+                    "box_category": "normal",
+                    "production_process": process,
+                },
+            )
+            assert created.status_code == 201, created.text
+            products.append(created.json())
+
+        initial_lock = client.post(
+            f"/api/warehouse/molds/{second_mold['id']}/product-bindings",
+            json={
+                "items": [
+                    {
+                        "product_id": products[2]["id"],
+                        "expected_version": products[2]["version"],
+                    }
+                ]
+            },
+        )
+        assert initial_lock.status_code == 200, initial_lock.text
+
+        bound = client.post(
+            f"/api/warehouse/molds/{first_mold['id']}/product-bindings",
+            json={
+                "items": [
+                    {
+                        "product_id": product["id"],
+                        "expected_version": product["version"],
+                    }
+                    for product in products[:2]
+                ]
+            },
+        )
+        assert bound.status_code == 200, bound.text
+        assert bound.json()["bound_count"] == 2
+        assert {
+            item["customer_id"] for item in bound.json()["mold"]["products"]
+        } == {1, second_customer_id}
+        assert all(
+            "模切" in item["production_process"]
+            for item in bound.json()["mold"]["products"]
+        )
+
+        search = client.get(
+            "/api/warehouse/molds/binding-products",
+            params={"customer_id": second_customer_id, "q": "C80010095"},
+        )
+        assert search.status_code == 200, search.text
+        assert search.json()["items"][0]["mold_code"] == first_mold["mold_code"]
+
+        conflict = client.post(
+            f"/api/warehouse/molds/{first_mold['id']}/product-bindings",
+            json={
+                "items": [
+                    {
+                        "product_id": products[2]["id"],
+                        "expected_version": products[2]["version"] + 1,
+                    }
+                ]
+            },
+        )
+        assert conflict.status_code == 409, conflict.text
+        assert "一个存货编码只能绑定一块模具" in conflict.json()["detail"]
+
+    from sqlalchemy import func, select
+
+    from app.models.master_data_object_version import MasterDataObjectVersion
+    from app.models.product import Product
+
+    with factory() as db:
+        bound_products = db.scalars(
+            select(Product).where(Product.id.in_([row["id"] for row in products[:2]]))
+        ).all()
+        assert len(bound_products) == 2
+        assert all(row.mold_tool_id == first_mold["id"] for row in bound_products)
+        assert all("模切" in (row.production_process or "") for row in bound_products)
+        assert all(row.version == 2 for row in bound_products)
+        assert db.scalar(
+            select(func.count(MasterDataObjectVersion.id)).where(
+                MasterDataObjectVersion.object_type == "product",
+                MasterDataObjectVersion.object_id.in_(
+                    [row["id"] for row in products[:2]]
+                ),
+                MasterDataObjectVersion.action == "mold_binding",
+            )
+        ) == 2
+
+
 def test_scoped_account_only_reads_allowed_mold_products_and_labels(mold_app) -> None:
     app, factory = mold_app
     from app.models.access_control import UserCustomerScope
@@ -381,8 +558,8 @@ def test_workshop_can_open_structured_location_label_and_qr(
 @pytest.mark.parametrize(
     ("location", "kind", "expected"),
     [
-        ("3F-M-R02-L2-D03-P08", "flat", "第3排，从左到右第8块"),
-        ("3F-M-R01-L1-V-P12", "vertical", "底层（第1层）竖放区，从左到右第12块"),
+        ("3F-M-R02-L2-D03-P08", "flat", "P08 仅作历史记录"),
+        ("3F-M-R01-L1-V-P12", "vertical", "P12 仅作历史记录"),
         ("二楼模具架 B-12", "manual", "请前往“二楼模具架 B-12”查找"),
     ],
 )
@@ -420,7 +597,8 @@ def test_confirmed_one_floor_mold_locations_are_accepted(location: str) -> None:
     assert normalized == location
     assert "一楼模具区" in guide["prompt"]
     assert f"R{guide['rack']:02d}" in guide["prompt"]
-    assert f"从左到右第{guide['position']}块" in guide["prompt"]
+    assert f"P{guide['position']:02d} 仅作历史记录" in guide["prompt"]
+    assert "不再代表从左到右固定顺序" in guide["prompt"]
 
 
 @pytest.mark.parametrize(
@@ -453,20 +631,83 @@ def test_one_floor_mold_location_options_are_read_only_and_employee_friendly(
         response = client.get("/api/warehouse/molds/location-options")
         assert response.status_code == 200, response.text
         data = response.json()
-        assert data["position_order"] == "left_to_right"
+        assert data["position_order"] is None
+        assert data["position_numbers_are_dynamic"] is False
+        assert data["storage_rule"] == "rack_level_grid"
         assert [rack["rack_code"] for rack in data["racks"]] == [
             "R01",
             "R02",
             "R03",
             "R04",
         ]
+        assert data["racks"][0]["location_depth"] == "grid"
         assert data["racks"][0]["levels"] == [
-            {"level": 2, "kind": "flat"},
-            {"level": 3, "kind": "flat"},
+            {"level": 2, "kind": "flat", "grids": [1]},
+            {"level": 3, "kind": "flat", "grids": [1]},
         ]
-        assert data["racks"][3]["levels"] == [
-            {"level": 1, "kind": "vertical"}
-        ]
+        assert data["racks"][3]["location_depth"] == "rack"
+        assert data["racks"][3]["levels"] == []
+
+
+@pytest.mark.parametrize(
+    "location",
+    [
+        "1F-M-R01-L2-G01",
+        "1F-M-R01-L3-G01",
+        "1F-M-R02-L2-G01",
+        "1F-M-R03-L1-G01",
+        "1F-M-R03-L3-G01",
+        "1F-M-R04",
+    ],
+)
+def test_new_one_floor_mold_locations_do_not_record_left_to_right_order(
+    location: str,
+) -> None:
+    from app.services.mold_location import (
+        describe_mold_location,
+        normalize_mold_location_code,
+    )
+
+    normalized = normalize_mold_location_code(location.lower())
+    guide = describe_mold_location(normalized)
+    assert normalized == location
+    assert guide["position"] is None
+    assert "左右顺序" in guide["prompt"]
+
+
+def test_mold_location_falls_back_from_grid_to_level_then_rack(monkeypatch) -> None:
+    from app.services import mold_location
+
+    options = mold_location.one_floor_mold_location_options(
+        {
+            "racks": [
+                {
+                    "mold_rack_code": "R01",
+                    "name": "无格号测试架",
+                    "area_code": "ZONE-1F-MOLD-002",
+                    "levels": 3,
+                    "bays": 0,
+                }
+            ]
+        }
+    )
+    rack1 = next(row for row in options if row["rack_code"] == "R01")
+    rack4 = next(row for row in options if row["rack_code"] == "R04")
+    assert rack1["location_depth"] == "level"
+    assert [row["level"] for row in rack1["levels"]] == [2, 3]
+    assert rack4["location_depth"] == "rack"
+
+    monkeypatch.setattr(
+        mold_location,
+        "one_floor_mold_location_options",
+        lambda: [rack1, rack4],
+    )
+    assert mold_location.normalize_mold_location_code("1f-m-r01-l2") == (
+        "1F-M-R01-L2"
+    )
+    assert mold_location.normalize_mold_location_code("1f-m-r04") == "1F-M-R04"
+    with pytest.raises(mold_location.MoldLocationError, match="未配置格数"):
+        mold_location.normalize_mold_location_code("1f-m-r01-l2-g01")
 
 
 def test_order_response_exposes_current_mold_location_to_workshop(mold_app) -> None:
@@ -540,11 +781,16 @@ def test_mold_frontend_connects_location_common_box_and_order_display() -> None:
     index = Path("static/index.html").read_text(encoding="utf-8")
     for marker in (
         "新增 / 编辑生产模具",
-        "固定货架位置",
+        "模具编号（系统自动生成）",
         "/api/warehouse/molds",
         "已绑定常用箱",
+        "/api/warehouse/molds/code-preview",
+        "/api/warehouse/molds/binding-products",
+        "moldBindingPanel",
+        "pinyin-pro-3.26.0.js",
     ):
         assert marker in warehouse
+    assert "moldPositionNumber" not in warehouse
     assert 'v-model="productForm.mold_tool_id"' in index
     assert 'v-if="productUsesMold(productForm)"' in index
     assert "productMoldError" in index
@@ -557,14 +803,18 @@ def test_desktop_mold_form_builds_confirmed_one_floor_location_codes() -> None:
     for marker in (
         'id="moldRackSelect"',
         'id="moldLevelSelect"',
-        'id="moldPositionNumber"',
+        'id="moldGridSelect"',
         "/api/warehouse/molds/location-options",
         "function buildMoldRackLocation()",
-        "1F-M-${rack.rack_code}-L${level}-${suffix}",
-        "R04 为靠墙超大模具位",
+        "1F-M-${rack.rack_code}-L${level.level}-G${positionCode(grid)}",
+        "1F-M-${rack.rack_code}`",
+        "左右顺序不记录",
     ):
         assert marker in warehouse
-    assert 'id="moldRackLocation" required' in warehouse
+    assert 'id="moldRackLocation" required readonly' in warehouse
+    assert "从左到右第几位" not in warehouse.split(
+        '<section id="printingPlateSection"', 1
+    )[0].split('<section id="moldSection"', 1)[1]
 
 
 @pytest.mark.parametrize(
@@ -722,7 +972,7 @@ def test_double_code_move_is_versioned_idempotent_and_does_not_touch_business_da
         ) == 1
 
 
-def test_move_rejects_invalid_occupied_stale_and_reused_requests_without_noop_ledger(
+def test_move_allows_same_storage_category_but_rejects_invalid_stale_and_reused_requests(
     mold_app,
 ) -> None:
     app, factory = mold_app
@@ -763,8 +1013,10 @@ def test_move_rejects_invalid_occupied_stale_and_reused_requests_without_noop_le
             },
         )
         assert conflict_preview.status_code == 200, conflict_preview.text
-        assert conflict_preview.json()["can_confirm"] is False
-        assert conflict_preview.json()["occupancy_conflict"]["mold_code"] == "MJ-MOVE-B"
+        assert conflict_preview.json()["can_confirm"] is True
+        assert conflict_preview.json()["occupancy_conflict"] is None
+        assert conflict_preview.json()["co_located_count"] == 1
+        assert conflict_preview.json()["co_located_molds"][0]["mold_code"] == "MJ-MOVE-B"
         occupied = client.post(
             "/api/warehouse/molds/location-movement/confirm",
             json={
@@ -775,14 +1027,15 @@ def test_move_rejects_invalid_occupied_stale_and_reused_requests_without_noop_le
                 "source": "manual_input",
             },
         )
-        assert occupied.status_code == 409
+        assert occupied.status_code == 200, occupied.text
+        assert occupied.json()["mold"]["rack_location"] == "3F-M-R02-L1-D01-P01"
 
         stale = client.post(
             "/api/warehouse/molds/location-movement/confirm",
             json={
                 "mold_code": "MJ-MOVE-A",
                 "target_location": "3F-M-R03-L1-D01-P01",
-                "expected_version": 2,
+                "expected_version": 3,
                 "idempotency_key": "stale-version-001",
                 "source": "api",
             },
@@ -793,8 +1046,8 @@ def test_move_rejects_invalid_occupied_stale_and_reused_requests_without_noop_le
             "/api/warehouse/molds/location-movement/confirm",
             json={
                 "mold_code": "MJ-MOVE-A",
-                "target_location": "3f-m-r01-l1-d01-p01",
-                "expected_version": 1,
+                "target_location": "3f-m-r02-l1-d01-p01",
+                "expected_version": 2,
                 "idempotency_key": "same-location-001",
                 "source": "manual_input",
             },
@@ -806,7 +1059,7 @@ def test_move_rejects_invalid_occupied_stale_and_reused_requests_without_noop_le
         moved_payload = {
             "mold_code": "MJ-MOVE-A",
             "target_location": "3F-M-R03-L1-D01-P01",
-            "expected_version": 1,
+            "expected_version": 2,
             # A no-change request creates no business fact, so it does not
             # consume this key; the first real movement may use it.
             "idempotency_key": "same-location-001",
@@ -829,7 +1082,7 @@ def test_move_rejects_invalid_occupied_stale_and_reused_requests_without_noop_le
         changed_business_requests = (
             {"mold_code": "MJ-MOVE-B"},
             {"target_location": "3F-M-R04-L1-D01-P01"},
-            {"expected_version": 2},
+            {"expected_version": 3},
             {"source": "api"},
             {"note": "不同备注"},
         )
@@ -863,13 +1116,13 @@ def test_move_rejects_invalid_occupied_stale_and_reused_requests_without_noop_le
                 db,
                 mold_code="MJ-MOVE-A",
                 target_location="3F-M-R05-L1-D01-P01",
-                expected_version=2,
+                expected_version=3,
                 idempotency_key="        ",
                 actor_id=None,
                 source="api",
                 note=None,
             )
-        assert db.scalar(select(func.count(MoldLocationMovement.id))) == 1
+        assert db.scalar(select(func.count(MoldLocationMovement.id))) == 2
 
 
 def test_view_only_permission_can_preview_but_cannot_confirm_mold_move(mold_app) -> None:
@@ -920,14 +1173,16 @@ def test_mobile_mold_page_keeps_lookup_and_adds_double_code_confirmation() -> No
         "/api/warehouse/molds/location-options",
         "oneFloorRack",
         "oneFloorLevel",
-        "oneFloorPosition",
-        "1F-M-${rack.rack_code}-L${level}-${suffix}",
+        "oneFloorGrid",
+        "1F-M-${rack.rack_code}-L${level.level}-G${positionCode(grid)}",
+        "左右顺序不记录",
         "warehouse.execute",
         "idempotency_key",
         "/mold-label.html?mold_id=",
         "/api/warehouse/molds?q=",
     ):
         assert marker in mobile
+    assert "oneFloorPosition" not in mobile
 
 
 def test_mobile_mold_page_inline_javascript_is_valid(tmp_path: Path) -> None:
@@ -971,7 +1226,7 @@ def test_mobile_mold_lookup_and_print_label_are_local_and_auth_guarded() -> None
     assert "大模具请按现场要求两人搬运" in mobile
     assert "/api/warehouse/molds/${id}/label" in label
     assert "window.print()" in label
-    assert "3F-M-R02-L2-D03-P08" in warehouse
+    assert "1F-M-R01-L2-G01" in warehouse
     assert "打印标签" in warehouse
     assert "<script src=" not in mobile
     assert "print-recovery.js" in label

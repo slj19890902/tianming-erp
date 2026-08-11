@@ -554,24 +554,38 @@
     <section id="moldSection" class="hidden">
       <form id="moldForm" class="panel admin-only">
         <h2>新增 / 编辑生产模具</h2><input id="moldId" type="hidden">
-        <p class="muted">一楼已按真实布局登记 R01 左架、R02 中架、R03 右架和 R04 靠墙超大模具位。选择货架、层和从左到右的位置后，系统自动生成正式位置码；R04 为靠墙超大模具位。已有三楼位置仍保留，例如 3F-M-R02-L2-D03-P08。</p>
+        <p class="muted">只需按“客户中文简写 + 存货编码”填写模具名称，例如“仪元 Z.001.000093”。系统自动生成模具编号；位置只记录到货架、层、格，不记录会随拿取变化的左右顺序。</p>
         <div class="grid">
-          <div class="field"><label>模具编号</label><input id="moldCode" required placeholder="例如：MJ-A1-001"></div>
-          <div class="field"><label>模具名称</label><input id="moldName" required placeholder="例如：天华 21301010 开槽模"></div>
+          <div class="field"><label>模具名称（唯一手工输入项）</label><input id="moldName" required autocomplete="off" placeholder="例如：仪元 Z.001.000093"></div>
+          <div class="field"><label>模具编号（系统自动生成）</label><input id="moldCode" readonly placeholder="输入模具名称后自动生成"><input id="moldCustomerInitials" type="hidden"></div>
           <div class="field"><label>一楼模具货架</label><select id="moldRackSelect"><option value="">正在读取已确认货架…</option></select></div>
-          <div class="field"><label>可用层 / 放置方式</label><select id="moldLevelSelect"><option value="">请先选择货架</option></select></div>
-          <div class="field"><label>从左到右第几位</label><input id="moldPositionNumber" type="number" min="1" step="1" value="1"></div>
-          <div class="field"><label>固定货架位置（自动生成，可扫码）</label><input id="moldRackLocation" required placeholder="例如：1F-M-R01-L2-D01-P01"></div>
-          <div class="field"><label>备注</label><input id="moldRemarks" placeholder="适用范围或现场说明"></div>
-          <div class="field"><label>&nbsp;</label><button class="btn primary" type="submit">保存模具</button></div>
+          <div id="moldLevelField" class="field"><label>层</label><select id="moldLevelSelect"><option value="">请先选择货架</option></select></div>
+          <div id="moldGridField" class="field"><label>格</label><select id="moldGridSelect"><option value="">请先选择层</option></select></div>
+          <div class="field"><label>货架位置（系统自动生成）</label><input id="moldRackLocation" required readonly placeholder="例如：1F-M-R01-L2-G01"></div>
+          <div class="field"><label>备注（可不填）</label><input id="moldRemarks" placeholder="适用范围或现场说明"></div>
+          <div class="field"><label>&nbsp;</label><button id="moldSaveButton" class="btn primary" type="submit">保存模具</button></div>
+          <div class="field"><label>&nbsp;</label><button id="resetMoldForm" class="btn" type="button">新增模具</button></div>
         </div>
-        <div id="moldLocationBuilderHint" class="notice info" style="margin-top:10px">位置编号按已确认的一楼模具区规则生成，不会创建纸箱库存库位。</div>
+        <div id="moldCodeHint" class="notice info" style="margin-top:10px">输入模具名称后，系统会显示将要保存的模具编号。</div>
+        <div id="moldLocationBuilderHint" class="notice info" style="margin-top:10px">位置按已发布的一楼模具区货架、层、格生成，不会记录左右顺序，也不会创建纸箱库存库位。</div>
       </form>
+      <div id="moldBindingPanel" class="panel admin-only hidden">
+        <h2>绑定客户常用箱</h2>
+        <div class="notice info">一块模具可以跨客户绑定多款；当前一款常用箱只能绑定一块模具。绑定成功后，常用箱会自动增加“模切”工艺并显示模具号。</div>
+        <div class="grid" style="margin-top:10px">
+          <div class="field"><label>客户</label><select id="moldBindingCustomer"><option value="">请选择客户</option></select></div>
+          <div class="field"><label>搜索存货编码 / 产品名称</label><input id="moldBindingKeyword" autocomplete="off" placeholder="输入存货编码筛选"></div>
+          <div class="field"><label>&nbsp;</label><button id="searchMoldBindingProducts" class="btn primary" type="button">查询常用箱</button></div>
+        </div>
+        <div id="moldBindingCurrent" class="muted" style="margin:8px 0"></div>
+        <div class="table-wrap"><table><thead><tr><th>选择</th><th>存货编码 / 产品名称</th><th>生产工艺</th><th>当前模具</th></tr></thead><tbody id="moldBindingBody"><tr><td colspan="4" class="empty">请选择客户并搜索常用箱</td></tr></tbody></table></div>
+        <div class="toolbar" style="margin-top:10px"><button id="confirmMoldBinding" class="btn primary" type="button" disabled>确认绑定</button><button id="addMoldBinding" class="btn" type="button" disabled>新增一款</button><button id="closeMoldBinding" class="btn" type="button">完成</button><span id="moldBindingSelection" class="muted">尚未选择常用箱</span></div>
+      </div>
       <div class="panel">
         <h2>模具与位置查询</h2>
         <div class="toolbar"><input id="moldKeyword" style="width:420px" placeholder="模具编号 / 货架位置 / 客户 / 存货编码 / 产品"><button id="refreshMolds" class="btn primary" type="button">查询</button><button id="moldBatchPrint" class="btn primary" type="button" disabled onclick="openMoldBatchLabels()">批量打印标签</button><span id="moldBatchCount" class="muted">已选 0 件</span><button class="btn admin-only" type="button" onclick="window.open('/mold-label.html?prototype=1','_blank')">90×60 标签样式</button></div>
       </div>
-      <div class="panel table-wrap"><table><thead><tr><th style="width:42px"><input id="moldSelectAll" type="checkbox" aria-label="全选当前结果" onchange="toggleAllMolds(this.checked)"></th><th>模具编号 / 名称</th><th>固定货架位置</th><th>已绑定常用箱</th><th>状态</th><th>操作</th></tr></thead><tbody id="moldBody"></tbody></table><div id="moldEmpty" class="empty hidden">暂无模具，请先新增模具档案。</div></div>
+      <div class="panel table-wrap"><table><thead><tr><th style="width:42px"><input id="moldSelectAll" type="checkbox" aria-label="全选当前结果" onchange="toggleAllMolds(this.checked)"></th><th>模具编号 / 名称</th><th>货架 / 层 / 格位置</th><th>已绑定常用箱</th><th>状态</th><th>操作</th></tr></thead><tbody id="moldBody"></tbody></table><div id="moldEmpty" class="empty hidden">暂无模具，请先新增模具档案。</div></div>
     </section>
 
     <section id="printingPlateSection" class="hidden">
@@ -769,7 +783,7 @@
     }
     // END IDEMPOTENCY_KEY_HELPER
 
-    const state={user:null,permissions:[],readOnly:warehouseReadonlyMode,tab:"locations",lotPage:1,lotPageSize:25,lotTotal:0,locationView:"floor3",locations:[],locationLabelSelection:new Set(),finishedLocationCandidates:[],locationsLoaded:false,locationsPromise:null,warehouseFloors:[],selectedWarehouseFloorId:null,customers:[],customersLoaded:false,customersPromise:null,lots:[],molds:[],moldSelection:new Set(),moldLocationOptions:[],moldLocationOptionsLoaded:false,printingPlates:[],insights:null,loadRequests:{lots:0,locations:0,insights:0,movements:0,molds:0,printingPlates:0},operationPending:new Set(),finishedProductCandidates:[],finishedProductSearchTimer:null,finishedProductSearchRequestId:0,stocktakeReviews:[],stocktakeReviewDetail:null,stocktakeReviewSelectedId:null,stocktakeReviewAttempt:{signature:"",key:null},lotEdit:{lotId:null,version:null,candidates:[],selectedProduct:null,searchTimer:null,requestId:0,sessionId:0,saving:false},stagingTransfer:{lotId:null,version:null,total:0,saving:false,sessionId:0},semiLotEdit:null,assignment:{lotId:null,items:[],selected:new Set()},onboarding:{batches:[],batch:null,lines:[],selectedBatchId:null,editingLineId:null,busy:false,submitAttempt:{signature:"",key:null}},factoryMap:{activeFloor:"3F",floor1:null,selectedZoneCode:"",selectedRackId:"",selectedRackSlot:"",loading:false,twinFloors:{},selectedTwinFeatureId:"",selectedTwinLocationId:null,twinZoom:100,twinViewBox:null,pan:{active:false,startX:0,startY:0,viewBox:null}},twinDashboard:{data:null,days:30,loading:false,requestId:0,searchTimer:null,searchRequestId:0,search:null,lastError:null},capacityForecast:{data:null,days:7,loading:false,requestId:0},floor3:{locations:[],mapLocations:[],moveLocations:[],mergeLocations:[],mergeAttempt:{signature:"",key:null},detail:null,selectedLocationId:null,selectedAreaCode:"",planZoom:100,viewMode:"overview",mapPopoverLocationId:null,mapPopoverPoint:{left:50,top:50},pendingMove:null,moveMode:false,layoutEdit:false,layoutDrag:null,layoutDraft:{},areaNavCollapsed:false,legendVisible:true,searchFocusLocationId:null,deepLinkLotId:null,searchTimer:null,searchRequestId:0,loading:false,error:"",pan:{active:false,startX:0,startY:0,scrollLeft:0,scrollTop:0},bindPanelOpen:false,bindRows:[],addCandidates:[],addCandidate:null,addSearchTimer:null,addSearchRequestId:0,addSearchKey:"",addInventoryIdempotencyKey:null,promotionKeys:{},promotionPending:new Set()}};
+    const state={user:null,permissions:[],readOnly:warehouseReadonlyMode,tab:"locations",lotPage:1,lotPageSize:25,lotTotal:0,locationView:"floor3",locations:[],locationLabelSelection:new Set(),finishedLocationCandidates:[],locationsLoaded:false,locationsPromise:null,warehouseFloors:[],selectedWarehouseFloorId:null,customers:[],customersLoaded:false,customersPromise:null,lots:[],molds:[],moldSelection:new Set(),moldLocationOptions:[],moldLocationOptionsLoaded:false,moldSaving:false,moldCodePreviewRequestId:0,moldCodePreviewTimer:null,moldBinding:{moldId:null,items:[],selected:null,requestId:0,saving:false},printingPlates:[],insights:null,loadRequests:{lots:0,locations:0,insights:0,movements:0,molds:0,printingPlates:0},operationPending:new Set(),finishedProductCandidates:[],finishedProductSearchTimer:null,finishedProductSearchRequestId:0,stocktakeReviews:[],stocktakeReviewDetail:null,stocktakeReviewSelectedId:null,stocktakeReviewAttempt:{signature:"",key:null},lotEdit:{lotId:null,version:null,candidates:[],selectedProduct:null,searchTimer:null,requestId:0,sessionId:0,saving:false},stagingTransfer:{lotId:null,version:null,total:0,saving:false,sessionId:0},semiLotEdit:null,assignment:{lotId:null,items:[],selected:new Set()},onboarding:{batches:[],batch:null,lines:[],selectedBatchId:null,editingLineId:null,busy:false,submitAttempt:{signature:"",key:null}},factoryMap:{activeFloor:"3F",floor1:null,selectedZoneCode:"",selectedRackId:"",selectedRackSlot:"",loading:false,twinFloors:{},selectedTwinFeatureId:"",selectedTwinLocationId:null,twinZoom:100,twinViewBox:null,pan:{active:false,startX:0,startY:0,viewBox:null}},twinDashboard:{data:null,days:30,loading:false,requestId:0,searchTimer:null,searchRequestId:0,search:null,lastError:null},capacityForecast:{data:null,days:7,loading:false,requestId:0},floor3:{locations:[],mapLocations:[],moveLocations:[],mergeLocations:[],mergeAttempt:{signature:"",key:null},detail:null,selectedLocationId:null,selectedAreaCode:"",planZoom:100,viewMode:"overview",mapPopoverLocationId:null,mapPopoverPoint:{left:50,top:50},pendingMove:null,moveMode:false,layoutEdit:false,layoutDrag:null,layoutDraft:{},areaNavCollapsed:false,legendVisible:true,searchFocusLocationId:null,deepLinkLotId:null,searchTimer:null,searchRequestId:0,loading:false,error:"",pan:{active:false,startX:0,startY:0,scrollLeft:0,scrollTop:0},bindPanelOpen:false,bindRows:[],addCandidates:[],addCandidate:null,addSearchTimer:null,addSearchRequestId:0,addSearchKey:"",addInventoryIdempotencyKey:null,promotionKeys:{},promotionPending:new Set()}};
     const $=id=>document.getElementById(id);
     const hasPermission=code=>state.user?.role==="admin"||state.permissions.includes(code);
     const canReviewStocktakes=()=>!state.readOnly&&hasPermission("warehouse.stocktake.review");
@@ -950,7 +964,8 @@
       ["finishedProductCodeFilter","finishedProductNameFilter","finishedSpecFilter","semiSupplierFilter","semiMaterialFilter","semiFluteFilter","semiLengthFilter","semiWidthFilter","semiAllowedProductFilter","locationKeywordFilter","palletKeywordFilter","keywordFilter"].forEach(id=>$(id).onkeydown=event=>{if(event.key==="Enter"){event.preventDefault();loadLotsFirstPage()}});
       $("refreshInsights").onclick=loadInsights;
       $("refreshMolds").onclick=loadMolds;$("moldKeyword").onkeydown=event=>{if(event.key==="Enter")loadMolds()};
-      $("moldRackSelect").onchange=renderMoldLocationLevels;$("moldLevelSelect").onchange=$("moldPositionNumber").oninput=buildMoldRackLocation;$("moldRackLocation").onchange=()=>syncMoldLocationBuilder($("moldRackLocation").value);
+      $("moldName").oninput=scheduleMoldCodePreview;$("moldRackSelect").onchange=renderMoldLocationLevels;$("moldLevelSelect").onchange=renderMoldLocationGrids;$("moldGridSelect").onchange=buildMoldRackLocation;$("resetMoldForm").onclick=resetMoldForm;
+      $("moldBindingCustomer").onchange=searchMoldBindingProducts;$("moldBindingKeyword").onkeydown=event=>{if(event.key==="Enter"){event.preventDefault();searchMoldBindingProducts()}};$("searchMoldBindingProducts").onclick=searchMoldBindingProducts;$("confirmMoldBinding").onclick=()=>saveMoldBinding(false);$("addMoldBinding").onclick=()=>saveMoldBinding(true);$("closeMoldBinding").onclick=closeMoldBinding;
       $("refreshPrintingPlates").onclick=loadPrintingPlates;$("printingPlateKeyword").onkeydown=event=>{if(event.key==="Enter"){event.preventDefault();loadPrintingPlates()}};$("resetPrintingPlateForm").onclick=resetPrintingPlateForm;
       $("printingPlateRackSelect").onchange=$("printingPlateLevelSelect").onchange=$("printingPlatePositionNumber").oninput=buildPrintingPlateLocation;$("printingPlateLocation").onchange=()=>syncPrintingPlateLocationBuilder($("printingPlateLocation").value);
       $("refreshStocktakeReviews").onclick=loadStocktakeReviews;$("stocktakeStatusFilter").onchange=renderStocktakeReviews;$("stocktakeDifferenceFilter").onchange=renderStocktakeReviews;
@@ -1369,7 +1384,7 @@
     async function loadCustomers(){
       const data=await api("/api/warehouse/references/customers");state.customers=data.items;
       state.customersLoaded=true;
-      const rows=data.items.map(x=>({id:x.id,label:x.customer_code?`${x.customer_code} · ${x.name}`:x.name}));options($("fgCustomer"),rows,"请选择客户");options($("siCustomer"),rows,"不指定客户");options($("floor3CustomerFilter"),rows,"全部客户");options($("lotEditCustomer"),rows,"请选择客户");options($("lotCustomerFilter"),rows,"全部客户");options($("printingPlateCustomer"),rows,"请选择客户");
+      const rows=data.items.map(x=>({id:x.id,label:x.customer_code?`${x.customer_code} · ${x.name}`:x.name}));options($("fgCustomer"),rows,"请选择客户");options($("siCustomer"),rows,"不指定客户");options($("floor3CustomerFilter"),rows,"全部客户");options($("lotEditCustomer"),rows,"请选择客户");options($("lotCustomerFilter"),rows,"全部客户");options($("printingPlateCustomer"),rows,"请选择客户");options($("moldBindingCustomer"),rows,"请选择客户");
       if(state.floor3.bindRows.length){syncFloor3BindRows();renderFloor3BindRows()}
     }
     async function ensureCustomers(){
@@ -1708,19 +1723,32 @@
     }
     function positionCode(value){return String(Math.max(1,Number.parseInt(value,10)||1)).padStart(2,"0")}
     function selectedMoldRack(){return state.moldLocationOptions.find(row=>row.rack_code===$("moldRackSelect").value)||null}
-    function setMoldLocationBuilderDisabled(disabled){["moldRackSelect","moldLevelSelect","moldPositionNumber"].forEach(id=>$(id).disabled=disabled)}
+    function selectedMoldLevel(){const rack=selectedMoldRack(),level=Number.parseInt($("moldLevelSelect").value,10);return(rack?.levels||[]).find(row=>Number(row.level)===level)||null}
+    function setMoldLocationBuilderDisabled(disabled){["moldRackSelect","moldLevelSelect","moldGridSelect"].forEach(id=>$(id).disabled=disabled)}
     function buildMoldRackLocation(){
-      const rack=selectedMoldRack(),level=Number.parseInt($("moldLevelSelect").value,10),position=positionCode($("moldPositionNumber").value);if(!rack||!level)return;
-      const rule=(rack.levels||[]).find(row=>Number(row.level)===level);if(!rule)return;
-      const suffix=rule.kind==="vertical"?`V-P${position}`:`D01-P${position}`;
-      $("moldRackLocation").value=`1F-M-${rack.rack_code}-L${level}-${suffix}`;
-      $("moldLocationBuilderHint").textContent=`已选择：${rack.rack_code} ${rack.name} · 第 ${level} 层 · ${rule.kind==="vertical"?"竖放":"平放"} · 从左到右第 ${Number(position)} 位`;
+      const rack=selectedMoldRack();if(!rack)return;
+      if(rack.location_depth==="rack"){$("moldRackLocation").value=`1F-M-${rack.rack_code}`;$("moldLocationBuilderHint").textContent=`已选择：${rack.rack_code} ${rack.name}。该区域没有层号或格号，左右顺序不记录。`;return}
+      const level=selectedMoldLevel();if(!level)return;
+      if(rack.location_depth==="grid"){
+        const grid=Number.parseInt($("moldGridSelect").value,10);if(!grid)return;
+        $("moldRackLocation").value=`1F-M-${rack.rack_code}-L${level.level}-G${positionCode(grid)}`;
+        $("moldLocationBuilderHint").textContent=`已选择：${rack.rack_code} ${rack.name} · 第 ${level.level} 层 · 第 ${grid} 格。格内左右顺序不记录。`;
+      }else{
+        $("moldRackLocation").value=`1F-M-${rack.rack_code}-L${level.level}`;
+        $("moldLocationBuilderHint").textContent=`已选择：${rack.rack_code} ${rack.name} · 第 ${level.level} 层。该层没有格号，左右顺序不记录。`;
+      }
     }
     function renderMoldLocationLevels(){
       const rack=selectedMoldRack(),previous=$("moldLevelSelect").value,levels=rack?.levels||[];
       $("moldLevelSelect").innerHTML=levels.map(row=>`<option value="${row.level}">第 ${row.level} 层 · ${row.kind==="vertical"?"竖放":"平放"}</option>`).join("")||'<option value="">该货架没有已确认可用层</option>';
       if(levels.some(row=>String(row.level)===previous))$("moldLevelSelect").value=previous;
-      buildMoldRackLocation();
+      $("moldLevelField").classList.toggle("hidden",rack?.location_depth==="rack");renderMoldLocationGrids();
+    }
+    function renderMoldLocationGrids(){
+      const rack=selectedMoldRack(),level=selectedMoldLevel(),previous=$("moldGridSelect").value,grids=level?.grids||[];
+      $("moldGridSelect").innerHTML=grids.map(grid=>`<option value="${grid}">第 ${grid} 格</option>`).join("")||'<option value="">该层没有格号</option>';
+      if(grids.some(grid=>String(grid)===previous))$("moldGridSelect").value=previous;
+      $("moldGridField").classList.toggle("hidden",rack?.location_depth!=="grid");buildMoldRackLocation();
     }
     async function loadMoldLocationOptions(){
       if(state.moldLocationOptionsLoaded){renderMoldLocationLevels();return true}
@@ -1730,8 +1758,46 @@
       }catch(error){$("moldLocationBuilderHint").textContent=`一楼模具货架读取失败：${error.message}；请刷新后重试，禁止猜测位置码。`;return false}
     }
     function syncMoldLocationBuilder(value){
-      const match=/^1F-M-(R0[1-4])-L([1-3])-(?:D01-|V-)P(\d+)$/i.exec(String(value||"").trim());if(!match)return false;
-      $("moldRackSelect").value=match[1].toUpperCase();renderMoldLocationLevels();$("moldLevelSelect").value=String(Number(match[2]));$("moldPositionNumber").value=String(Number(match[3]));buildMoldRackLocation();return true;
+      const clean=String(value||"").trim().toUpperCase(),match=/^1F-M-(R0[1-4])(?:-L(\d+))?(?:-G(\d+))?$/.exec(clean);if(!match){$("moldLocationBuilderHint").textContent="这是历史模具位置；档案编辑时保留原值，需要移动时请使用模具双码移动确认。";return false}
+      $("moldRackSelect").value=match[1];renderMoldLocationLevels();if(match[2]){$("moldLevelSelect").value=String(Number(match[2]));renderMoldLocationGrids()}if(match[3]){$("moldGridSelect").value=String(Number(match[3]));buildMoldRackLocation()}return true;
+    }
+    let moldPinyinRuntimePromise=null;
+    async function ensureMoldPinyinRuntime(){
+      if(typeof window.pinyinPro?.pinyin==="function")return window.pinyinPro;
+      if(moldPinyinRuntimePromise)return moldPinyinRuntimePromise;
+      moldPinyinRuntimePromise=new Promise(resolve=>{const script=document.createElement("script");script.src="/static/vendor/pinyin-pro-3.26.0.js";script.async=true;script.dataset.erpMoldPinyinRuntime="1";script.onload=()=>resolve(typeof window.pinyinPro?.pinyin==="function"?window.pinyinPro:null);script.onerror=()=>resolve(null);document.head.appendChild(script)});return moldPinyinRuntimePromise;
+    }
+    function parseMoldName(value){const match=/^(.*?)[\s:：_-]*([A-Za-z0-9][A-Za-z0-9._/+\-]*)$/.exec(String(value||"").trim());return match&&match[1].trim()?{customer:match[1].trim(),inventory:match[2].toUpperCase()}:null}
+    async function updateMoldCodePreview(){
+      if($("moldId").value)return;
+      const requestId=++state.moldCodePreviewRequestId,parts=parseMoldName($("moldName").value);$("moldCode").value="";$("moldCustomerInitials").value="";
+      if(!parts){$("moldCodeHint").textContent="请按“客户中文简写 + 存货编码”填写，例如：仪元 Z.001.000093";return}
+      const runtime=await ensureMoldPinyinRuntime();if(requestId!==state.moldCodePreviewRequestId)return;
+      if(!runtime){$("moldCodeHint").textContent="拼音组件加载失败，请刷新页面后重试；系统不会保存猜测编号。";return}
+      let initials="";try{initials=runtime.pinyin(parts.customer,{pattern:"first",toneType:"none",type:"array"}).join("").replace(/[^A-Za-z0-9]/g,"").toUpperCase()}catch{}
+      if(!initials){$("moldCodeHint").textContent="客户中文简写无法生成拼音缩写，请检查名称。";return}
+      $("moldCustomerInitials").value=initials;
+      try{const data=await api(`/api/warehouse/molds/code-preview?mold_name=${encodeURIComponent($("moldName").value.trim())}&customer_initials=${encodeURIComponent(initials)}`);if(requestId!==state.moldCodePreviewRequestId)return;$("moldCode").value=data.mold_code;$("moldCodeHint").textContent=`系统将保存为：${data.mold_code}（${data.customer_label} / ${data.inventory_code}）`}catch(error){if(requestId===state.moldCodePreviewRequestId)$("moldCodeHint").textContent=error.message}
+    }
+    function scheduleMoldCodePreview(){clearTimeout(state.moldCodePreviewTimer);state.moldCodePreviewTimer=setTimeout(updateMoldCodePreview,180)}
+    function resetMoldForm(){
+      state.moldCodePreviewRequestId+=1;clearTimeout(state.moldCodePreviewTimer);$("moldForm").reset();$("moldId").value="";$("moldCode").value="";$("moldCustomerInitials").value="";setMoldLocationBuilderDisabled(false);$("moldCodeHint").textContent="输入模具名称后，系统会显示将要保存的模具编号。";closeMoldBinding();renderMoldLocationLevels();
+    }
+    function openMoldBinding(row){state.moldBinding={moldId:row.id,items:[],selected:null,requestId:state.moldBinding.requestId+1,saving:false};$("moldBindingPanel").classList.remove("hidden");$("moldBindingCurrent").innerHTML=`当前模具：<b>${h(row.mold_code)}</b> · ${h(row.mold_name)}；已绑定 ${Number(row.product_count||0)} 款`;$('moldBindingKeyword').value="";$("moldBindingBody").innerHTML='<tr><td colspan="4" class="empty">请选择客户并搜索常用箱</td></tr>';renderMoldBindingSelection()}
+    function closeMoldBinding(){$("moldBindingPanel").classList.add("hidden");state.moldBinding.items=[];state.moldBinding.selected=null;renderMoldBindingSelection()}
+    async function searchMoldBindingProducts(){
+      const customerId=Number($("moldBindingCustomer").value),requestId=++state.moldBinding.requestId;if(!state.moldBinding.moldId||!customerId){$("moldBindingBody").innerHTML='<tr><td colspan="4" class="empty">请先选择客户</td></tr>';return}
+      $("moldBindingBody").innerHTML='<tr><td colspan="4" class="empty">正在读取常用箱…</td></tr>';
+      try{const keyword=$("moldBindingKeyword").value.trim(),data=await api(`/api/warehouse/molds/binding-products?customer_id=${customerId}&limit=200${keyword?`&q=${encodeURIComponent(keyword)}`:""}`);if(requestId!==state.moldBinding.requestId)return;state.moldBinding.items=data.items||[];state.moldBinding.selected=null;renderMoldBindingProducts()}catch(error){if(requestId===state.moldBinding.requestId)$("moldBindingBody").innerHTML=`<tr><td colspan="4" class="empty error-text">${h(error.message)}</td></tr>`}
+    }
+    function renderMoldBindingProducts(){
+      const moldId=Number(state.moldBinding.moldId);$("moldBindingBody").innerHTML=state.moldBinding.items.map((row,index)=>{const current=row.mold_tool_id?(Number(row.mold_tool_id)===moldId?`<span class="tag">已绑定当前模具 ${h(row.mold_code)}</span>`:`<span class="tag warn">已绑定 ${h(row.mold_code)}，不可重复绑定</span>`):'<span class="muted">未绑定</span>';return `<tr><td><input type="radio" name="moldBindingProduct" ${row.mold_tool_id?"disabled":""} onchange="selectMoldBindingProduct(${index})"></td><td><b>${h(row.customer_material_code||row.product_code)}</b><br>${h(row.product_name)}</td><td>${h(row.production_process||"未填写")}</td><td>${current}</td></tr>`}).join("")||'<tr><td colspan="4" class="empty">没有找到该客户的常用箱</td></tr>';renderMoldBindingSelection()
+    }
+    function selectMoldBindingProduct(index){state.moldBinding.selected=state.moldBinding.items[index]||null;renderMoldBindingSelection()}
+    function renderMoldBindingSelection(){const row=state.moldBinding.selected,enabled=Boolean(row)&&!state.moldBinding.saving&&!row.mold_tool_id;$("confirmMoldBinding").disabled=!enabled;$("addMoldBinding").disabled=!enabled;$("moldBindingSelection").textContent=row?`已选：${row.customer_material_code||row.product_code} · ${row.product_name}`:"尚未选择常用箱"}
+    async function saveMoldBinding(keepOpen){
+      const row=state.moldBinding.selected;if(!row||state.moldBinding.saving)return;state.moldBinding.saving=true;renderMoldBindingSelection();
+      try{const data=await api(`/api/warehouse/molds/${state.moldBinding.moldId}/product-bindings`,{method:"POST",body:JSON.stringify({items:[{product_id:row.id,expected_version:row.version}]})});toast(`${row.customer_material_code||row.product_code} 已绑定 ${data.mold.mold_code}`);await loadMolds();if(keepOpen){const current=state.molds.find(item=>item.id===state.moldBinding.moldId)||data.mold;openMoldBinding(current);$("moldBindingCustomer").focus()}else closeMoldBinding()}catch(error){toast(error.message,true);await searchMoldBindingProducts()}finally{state.moldBinding.saving=false;renderMoldBindingSelection()}
     }
     function setPrintingPlateLocationBuilderDisabled(disabled){["printingPlateRackSelect","printingPlateLevelSelect","printingPlatePositionNumber"].forEach(id=>$(id).disabled=disabled)}
     function buildPrintingPlateLocation(){
@@ -1766,13 +1832,12 @@
     function openMoldBatchLabels(){const ids=state.molds.filter(row=>state.moldSelection.has(row.id)).map(row=>row.id);if(!ids.length){toast("请先选择要打印的模具",true);return}window.open(`/mold-label.html?mold_ids=${ids.join(",")}`,'_blank')}
     function editMold(id){
       const row=state.molds.find(value=>value.id===id);if(!row)return;
-      $("moldId").value=row.id;$("moldCode").value=row.mold_code;$("moldName").value=row.mold_name;$("moldRackLocation").value=row.rack_location;$("moldRemarks").value=row.remarks||"";syncMoldLocationBuilder(row.rack_location);setMoldLocationBuilderDisabled(true);$("moldRackLocation").readOnly=true;
+      state.moldCodePreviewRequestId+=1;$("moldId").value=row.id;$("moldCode").value=row.mold_code;$("moldName").value=row.mold_name;$("moldRackLocation").value=row.rack_location;$("moldRemarks").value=row.remarks||"";$("moldCustomerInitials").value="";$("moldCodeHint").textContent="模具编号已生成并锁定；编辑名称不会改写编号。";syncMoldLocationBuilder(row.rack_location);setMoldLocationBuilderDisabled(true);openMoldBinding(row);
       $("moldForm").scrollIntoView({behavior:"smooth",block:"start"});
     }
     async function saveMold(event){
-      event.preventDefault();
-      const id=$("moldId").value,payload={mold_code:$("moldCode").value,mold_name:$("moldName").value,rack_location:$("moldRackLocation").value,remarks:$("moldRemarks").value||null};
-      try{await api(`/api/warehouse/molds${id?"/"+id:""}`,{method:id?"PUT":"POST",body:JSON.stringify(payload)});toast("模具档案已保存");event.target.reset();$("moldId").value="";setMoldLocationBuilderDisabled(false);$("moldRackLocation").readOnly=false;renderMoldLocationLevels();await loadMolds()}catch(err){toast(err.message,true)}
+      event.preventDefault();if(state.moldSaving)return;state.moldSaving=true;$("moldSaveButton").disabled=true;
+      try{const id=$("moldId").value;if(!id&&!$("moldCustomerInitials").value){await updateMoldCodePreview();if(!$("moldCustomerInitials").value){toast($("moldCodeHint").textContent,true);return}}const payload={mold_name:$("moldName").value,rack_location:$("moldRackLocation").value,remarks:$("moldRemarks").value||null,...(id?{mold_code:$("moldCode").value}:{customer_initials:$("moldCustomerInitials").value})};const saved=await api(`/api/warehouse/molds${id?"/"+id:""}`,{method:id?"PUT":"POST",body:JSON.stringify(payload)});toast("模具档案已保存，可以继续绑定常用箱");await loadMolds();const row=state.molds.find(value=>value.id===saved.id)||saved;$("moldId").value=row.id;$("moldCode").value=row.mold_code;setMoldLocationBuilderDisabled(true);$("moldCodeHint").textContent="模具编号已生成并锁定；编辑名称不会改写编号。";openMoldBinding(row);$("moldBindingPanel").scrollIntoView({behavior:"smooth",block:"start"})}catch(err){toast(err.message,true)}finally{state.moldSaving=false;$("moldSaveButton").disabled=false}
     }
     async function toggleMold(id,active){try{await api(`/api/warehouse/molds/${id}/${active?"disable":"enable"}`,{method:"PUT"});await loadMolds()}catch(err){toast(err.message,true)}}
     function printingPlateStatusLabel(status){return status==="active"?"启用":status==="damaged"?"损坏":"停用"}

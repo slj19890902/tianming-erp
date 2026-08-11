@@ -5,10 +5,11 @@ import re
 
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, aliased
+from sqlalchemy.orm import Session
 
 from app.core.time_contract import utc_now_naive
 from app.models.mold_tool import MoldLocationMovement, MoldTool
+from app.services.warehouse_twin_layout import load_warehouse_twin_floor
 
 
 _CANONICAL_FLAT_PATTERN = re.compile(
@@ -17,6 +18,18 @@ _CANONICAL_FLAT_PATTERN = re.compile(
 )
 _CANONICAL_VERTICAL_PATTERN = re.compile(
     r"^(?P<floor>\d+F)-M-R(?P<rack>\d+)-L(?P<level>[1-3])-V-P(?P<position>\d+)$",
+    re.IGNORECASE,
+)
+_STORAGE_GRID_PATTERN = re.compile(
+    r"^(?P<floor>\d+F)-M-R(?P<rack>\d+)-L(?P<level>\d+)-G(?P<grid>\d+)$",
+    re.IGNORECASE,
+)
+_STORAGE_LEVEL_PATTERN = re.compile(
+    r"^(?P<floor>\d+F)-M-R(?P<rack>\d+)-L(?P<level>\d+)$",
+    re.IGNORECASE,
+)
+_STORAGE_RACK_PATTERN = re.compile(
+    r"^(?P<floor>\d+F)-M-R(?P<rack>\d+)$",
     re.IGNORECASE,
 )
 _SHORT_FLAT_PATTERN = re.compile(
@@ -32,15 +45,17 @@ MOLD_LOCATION_SOURCES = frozenset(
     {"manual_input", "scanner_paste", "url_parameter", "api"}
 )
 
-# Owner-confirmed 2026-08-08 left-to-right physical numbering.  These rules
-# only constrain mold location codes; they do not create warehouse inventory
-# locations or affect inventory quantities.
+# Owner-confirmed physical rack identities.  The 2026-08-11 rule removes the
+# unstable left-to-right P position from new mold locations.  Published rack
+# levels/bays are read from the warehouse layout; the constants below only
+# retain the confirmed rack identity and machine-blocked bottom levels.
 ONE_FLOOR_MOLD_RACKS = (
     {
         "rack": 1,
         "rack_code": "R01",
         "name": "左架（模具002）",
         "zone_code": "ZONE-1F-MOLD-002",
+        "blocked_levels": (1,),
         "levels": ({"level": 2, "kind": "flat"}, {"level": 3, "kind": "flat"}),
     },
     {
@@ -48,6 +63,7 @@ ONE_FLOOR_MOLD_RACKS = (
         "rack_code": "R02",
         "name": "中架（模具002）",
         "zone_code": "ZONE-1F-MOLD-002",
+        "blocked_levels": (1,),
         "levels": ({"level": 2, "kind": "flat"},),
     },
     {
@@ -55,6 +71,7 @@ ONE_FLOOR_MOLD_RACKS = (
         "rack_code": "R03",
         "name": "右架（模具001）",
         "zone_code": "ZONE-1F-MOLD-001",
+        "blocked_levels": (),
         "levels": (
             {"level": 1, "kind": "vertical"},
             {"level": 2, "kind": "flat"},
@@ -66,6 +83,7 @@ ONE_FLOOR_MOLD_RACKS = (
         "rack_code": "R04",
         "name": "靠墙特大模具区",
         "zone_code": "ZONE-1F-MOLD-R04",
+        "blocked_levels": (),
         "levels": ({"level": 1, "kind": "vertical"},),
     },
 )
@@ -89,7 +107,7 @@ class MoldLocationPreview:
     target_location: str
     target_guide: dict
     same_location: bool
-    occupant: MoldTool | None
+    occupants: tuple[MoldTool, ...]
 
 
 @dataclass(frozen=True)
@@ -115,19 +133,65 @@ def _floor_text(value: str) -> str:
     return f"{chinese.get(floor, floor)}楼模具区"
 
 
-def one_floor_mold_location_options() -> list[dict]:
-    """Return a JSON-safe copy of the confirmed 1F mold rack rules."""
+def one_floor_mold_location_options(
+    floor_layout: dict | None = None,
+) -> list[dict]:
+    """Return rack/level/grid choices from the published warehouse layout."""
 
-    return [
-        {
-            "rack": rack["rack"],
-            "rack_code": rack["rack_code"],
-            "name": rack["name"],
-            "zone_code": rack["zone_code"],
-            "levels": [dict(level) for level in rack["levels"]],
+    floor = floor_layout if floor_layout is not None else load_warehouse_twin_floor("1F")
+    layout_racks = {
+        str(row.get("mold_rack_code") or "").strip().upper(): row
+        for row in (floor.get("racks") or [])
+        if str(row.get("mold_rack_code") or "").strip()
+    }
+    options: list[dict] = []
+    for confirmed in ONE_FLOOR_MOLD_RACKS:
+        rack_code = str(confirmed["rack_code"])
+        layout = layout_racks.get(rack_code)
+        if layout is None:
+            if rack_code != "R04":
+                continue
+            options.append(
+                {
+                    "rack": confirmed["rack"],
+                    "rack_code": rack_code,
+                    "name": confirmed["name"],
+                    "zone_code": confirmed["zone_code"],
+                    "location_depth": "rack",
+                    "grid_count": 0,
+                    "levels": [],
+                }
+            )
+            continue
+
+        level_count = max(0, int(layout.get("levels") or 0))
+        grid_count = max(0, int(layout.get("bays") or 0))
+        blocked = set(confirmed.get("blocked_levels") or ())
+        old_kinds = {
+            int(row["level"]): str(row["kind"])
+            for row in confirmed.get("levels") or ()
         }
-        for rack in ONE_FLOOR_MOLD_RACKS
-    ]
+        levels = [
+            {
+                "level": level,
+                "kind": old_kinds.get(level, "flat"),
+                "grids": list(range(1, grid_count + 1)),
+            }
+            for level in range(1, level_count + 1)
+            if level not in blocked
+        ]
+        options.append(
+            {
+                "rack": confirmed["rack"],
+                "rack_code": rack_code,
+                "name": str(layout.get("name") or confirmed["name"]),
+                "zone_code": str(layout.get("area_code") or confirmed["zone_code"]),
+                "location_depth": "grid" if grid_count else ("level" if levels else "rack"),
+                "grid_count": grid_count,
+                "levels": levels,
+            }
+        )
+    return options
 
 
 def _rack_prompt(floor: str, rack: int) -> str:
@@ -142,6 +206,69 @@ def describe_mold_location(value: str) -> dict:
 
     raw = (value or "").strip()
     normalized = raw.upper()
+    storage_grid = _STORAGE_GRID_PATTERN.fullmatch(normalized)
+    if storage_grid:
+        parts = storage_grid.groupdict()
+        rack = _number(parts["rack"])
+        level = _number(parts["level"])
+        grid = _number(parts["grid"])
+        return {
+            "kind": "storage_grid",
+            "location_code": normalized,
+            "floor": parts["floor"].upper(),
+            "area": "M",
+            "rack": rack,
+            "level": level,
+            "grid": grid,
+            "row": None,
+            "position": None,
+            "prompt": (
+                f"前往{_floor_text(parts['floor'])}，{_rack_prompt(parts['floor'].upper(), rack)}，"
+                f"第{level}层、第{grid}格查找。格内左右顺序会随拿取变化，不作为系统位置。"
+                "拿取前请核对模具编号和存货编码。"
+            ),
+        }
+    storage_level = _STORAGE_LEVEL_PATTERN.fullmatch(normalized)
+    if storage_level:
+        parts = storage_level.groupdict()
+        rack = _number(parts["rack"])
+        level = _number(parts["level"])
+        return {
+            "kind": "storage_level",
+            "location_code": normalized,
+            "floor": parts["floor"].upper(),
+            "area": "M",
+            "rack": rack,
+            "level": level,
+            "grid": None,
+            "row": None,
+            "position": None,
+            "prompt": (
+                f"前往{_floor_text(parts['floor'])}，{_rack_prompt(parts['floor'].upper(), rack)}，"
+                f"第{level}层查找。该层没有正式格号，左右顺序不作为系统位置。"
+                "拿取前请核对模具编号和存货编码。"
+            ),
+        }
+    storage_rack = _STORAGE_RACK_PATTERN.fullmatch(normalized)
+    if storage_rack:
+        parts = storage_rack.groupdict()
+        rack = _number(parts["rack"])
+        return {
+            "kind": "storage_rack",
+            "location_code": normalized,
+            "floor": parts["floor"].upper(),
+            "area": "M",
+            "rack": rack,
+            "level": None,
+            "grid": None,
+            "row": None,
+            "position": None,
+            "prompt": (
+                f"前往{_floor_text(parts['floor'])}，{_rack_prompt(parts['floor'].upper(), rack)}查找。"
+                "该货架没有正式层号或格号，左右顺序不作为系统位置。"
+                "拿取前请核对模具编号和存货编码。"
+            ),
+        }
     flat = _CANONICAL_FLAT_PATTERN.fullmatch(normalized)
     if flat:
         parts = flat.groupdict()
@@ -149,7 +276,7 @@ def describe_mold_location(value: str) -> dict:
         prompt = (
             f"前往{_floor_text(parts['floor'])}，{_rack_prompt(parts['floor'].upper(), rack)}，"
             f"第{_number(parts['level'])}层、第{_number(parts['row'])}排，"
-            f"从左到右第{_number(parts['position'])}块。"
+            f"原档案 P{_number(parts['position']):02d} 仅作历史记录，不再代表从左到右固定顺序。"
             "拿取前请核对模具编号和存货编码。"
         )
         return {
@@ -170,8 +297,9 @@ def describe_mold_location(value: str) -> dict:
         level_text = "底层（第1层）" if _number(parts["level"]) == 1 else f"第{_number(parts['level'])}层"
         prompt = (
             f"前往{_floor_text(parts['floor'])}，{_rack_prompt(parts['floor'].upper(), rack)}，"
-            f"{level_text}竖放区，从左到右第{_number(parts['position'])}块。"
-            "大模具较重，请按现场要求两人搬运；拿取前核对模具编号和存货编码。"
+            f"{level_text}竖放区查找；原档案 P{_number(parts['position']):02d} 仅作历史记录，"
+            "不再代表从左到右固定顺序。大模具较重，请按现场要求两人搬运；"
+            "拿取前核对模具编号和存货编码。"
         )
         return {
             "kind": "vertical",
@@ -199,8 +327,9 @@ def describe_mold_location(value: str) -> dict:
             "prompt": (
                 f"前往{_area_text(parts['area'])}第{_number(parts['rack'])}号模具架，"
                 f"第{_number(parts['level'])}层、第{_number(parts['row'])}排，"
-                f"从左到右第{_number(parts['position'])}块。"
-                "该位置使用旧简写，建议现场复核后改为 3F-M 标准位置码；拿取前核对模具编号和存货编码。"
+                f"原档案 P{_number(parts['position']):02d} 仅作历史记录，不再代表从左到右固定顺序。"
+                "该位置使用旧简写，建议现场复核后改为新货架/层/格位置码；"
+                "拿取前核对模具编号和存货编码。"
             ),
         }
     vertical = _SHORT_VERTICAL_PATTERN.fullmatch(normalized)
@@ -217,8 +346,9 @@ def describe_mold_location(value: str) -> dict:
             "position": _number(parts["position"]),
             "prompt": (
                 f"前往{_area_text(parts['area'])}第{_number(parts['rack'])}号模具架，"
-                f"第{_number(parts['level'])}层竖放区，从左到右第{_number(parts['position'])}块。"
-                "该位置使用旧简写，建议现场复核后改为 3F-M 标准位置码；大模具请两人搬运。"
+                f"第{_number(parts['level'])}层竖放区查找；原档案 P{_number(parts['position']):02d} "
+                "仅作历史记录，不再代表从左到右固定顺序。"
+                "该位置使用旧简写，建议现场复核后改为新货架/层/格位置码；大模具请两人搬运。"
             ),
         }
     return {
@@ -238,6 +368,29 @@ def normalize_mold_location_code(value: str) -> str:
     """Accept only canonical, physically addressable confirmed mold positions."""
 
     guide = describe_mold_location(value)
+    if guide["kind"] in {"storage_grid", "storage_level", "storage_rack"}:
+        if guide["floor"] != "1F":
+            raise MoldLocationError("新的货架/层/格位置码当前只允许一楼模具区", status_code=422)
+        options = {row["rack"]: row for row in one_floor_mold_location_options()}
+        rack = options.get(int(guide["rack"] or 0))
+        if rack is None:
+            raise MoldLocationError("该一楼模具货架尚未在已发布布局中配置", status_code=422)
+        if rack["location_depth"] == "rack":
+            if guide["kind"] != "storage_rack":
+                raise MoldLocationError("该模具区没有正式层号或格号，请只选择货架", status_code=422)
+        else:
+            levels = {int(row["level"]): row for row in rack.get("levels") or []}
+            level = levels.get(int(guide["level"] or 0))
+            if level is None:
+                raise MoldLocationError("该层不是已发布布局中的可用模具层", status_code=422)
+            if rack["location_depth"] == "grid":
+                if guide["kind"] != "storage_grid":
+                    raise MoldLocationError("该货架已配置格数，请选择具体格", status_code=422)
+                if int(guide["grid"] or 0) not in set(level.get("grids") or []):
+                    raise MoldLocationError("该格不是已发布布局中的可用模具格", status_code=422)
+            elif guide["kind"] != "storage_level":
+                raise MoldLocationError("该货架未配置格数，请选择到具体层", status_code=422)
+        return str(guide["location_code"])
     if guide["kind"] not in {"flat", "vertical"} or guide["floor"] not in {"1F", "3F"}:
         raise MoldLocationError(
             "目标位置必须是合法的 1F-M 或 3F-M 平放/竖放位置码，旧自由文本不能用于移动确认",
@@ -296,19 +449,20 @@ def _mold_by_code(db: Session, mold_code: str) -> MoldTool:
     return row
 
 
-def _location_occupant(
+def _location_occupants(
     db: Session,
     *,
     target_location: str,
     exclude_mold_id: int,
-) -> MoldTool | None:
-    return db.scalar(
+) -> tuple[MoldTool, ...]:
+    return tuple(db.scalars(
         select(MoldTool).where(
             MoldTool.id != exclude_mold_id,
             MoldTool.is_active.is_(True),
             func.upper(func.trim(MoldTool.rack_location)) == target_location,
         )
-    )
+        .order_by(MoldTool.mold_code, MoldTool.id)
+    ).all())
 
 
 def preview_mold_location_move(
@@ -324,7 +478,7 @@ def preview_mold_location_move(
         target_location=target,
         target_guide=describe_mold_location(target),
         same_location=mold.rack_location.strip().upper() == target,
-        occupant=_location_occupant(
+        occupants=_location_occupants(
             db,
             target_location=target,
             exclude_mold_id=mold.id,
@@ -420,27 +574,6 @@ def confirm_mold_location_move(
             replayed=False,
             no_change=True,
         )
-    occupant = _location_occupant(
-        db,
-        target_location=target,
-        exclude_mold_id=mold.id,
-    )
-    if occupant is not None:
-        raise MoldLocationError(
-            f"目标位置已被启用模具 {occupant.mold_code} 占用",
-            status_code=409,
-        )
-
-    other_mold = aliased(MoldTool)
-    target_is_occupied = (
-        select(other_mold.id)
-        .where(
-            other_mold.id != mold.id,
-            other_mold.is_active.is_(True),
-            func.upper(func.trim(other_mold.rack_location)) == target,
-        )
-        .exists()
-    )
     moved_at = utc_now_naive()
     movement: MoldLocationMovement | None = None
     try:
@@ -451,7 +584,6 @@ def confirm_mold_location_move(
                     MoldTool.id == mold.id,
                     MoldTool.is_active.is_(True),
                     MoldTool.location_version == expected_version,
-                    ~target_is_occupied,
                 )
                 .values(
                     rack_location=target,
@@ -464,7 +596,7 @@ def confirm_mold_location_move(
             )
             if claimed.rowcount != 1:
                 raise MoldLocationError(
-                    "模具位置版本已变化或目标位置已被占用，请重新预览",
+                    "模具位置版本已变化，请重新预览",
                     status_code=409,
                 )
             movement = MoldLocationMovement(

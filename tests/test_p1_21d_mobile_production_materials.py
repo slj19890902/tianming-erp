@@ -316,7 +316,7 @@ def test_mobile_production_ui_is_strictly_read_only_and_preserves_context() -> N
     ):
         assert text in MOBILE_HTML
     assert "Production cards and scroll position remain untouched" in MOBILE_HTML
-    assert MOBILE_HTML.count('method: "POST"') == 1
+    assert MOBILE_HTML.count('method: "POST"') == 2
     assert 'fetch("/api/auth/logout"' in MOBILE_HTML
     assert 'method: "PUT"' not in MOBILE_HTML
     assert 'method: "DELETE"' not in MOBILE_HTML

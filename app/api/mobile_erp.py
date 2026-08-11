@@ -9,9 +9,11 @@ from typing import Literal
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import String, and_, case, cast, exists, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import (
@@ -32,6 +34,7 @@ from app.api.incoming import (
 from app.core.time_contract import (
     beijing_date_bounds_utc_naive,
     beijing_today,
+    utc_now_naive,
     utc_naive_to_api,
 )
 from app.models.customer import Customer
@@ -59,12 +62,31 @@ from app.models.warehouse_inventory import (
     InventoryReservation,
     SemiFinishedInventoryDetail,
     SemiFinishedLotAllowedProduct,
+    Floor3LocationLayout,
+    InventoryLotTransfer,
     WarehouseLocation,
+    WarehouseLocationDiscrepancy,
+)
+from app.services.audit_log import append_audit_event
+from app.services.location_candidates import (
+    list_operational_locations,
+    operational_location_issue,
+)
+from app.services.warehouse_floor1_candidate_planner import overlay_formal_area_bindings
+from app.services.warehouse_inventory import (
+    WarehouseInventoryError,
+    transfer_finished_lot_between_locations,
+)
+from app.services.warehouse_twin_layout import (
+    WarehouseTwinLayoutNotFoundError,
+    load_warehouse_twin_floor,
 )
 
 
 router = APIRouter()
 can_read_inventory = PermissionChecker("warehouse.view")
+can_execute_inventory = PermissionChecker("warehouse.execute")
+can_correct_inventory = PermissionChecker("warehouse.correct")
 can_read_orders = PermissionChecker("orders.view")
 can_read_incoming = PermissionChecker("incoming.view")
 _BEIJING = ZoneInfo("Asia/Shanghai")
@@ -125,6 +147,7 @@ def mobile_shell(
                 "label": "仓库",
                 "summary": "产品、库存与真实位置按需读取",
                 "can_execute": "warehouse.execute" in permissions,
+                "can_correct": "warehouse.correct" in permissions,
             }
         )
     if (
@@ -892,9 +915,7 @@ def _position_payload(lot: InventoryLot) -> dict:
     location = lot.location
     pallet_item = lot.pallet_item
     pallet = pallet_item.pallet if pallet_item is not None else None
-    is_mapped = (
-        location.warehouse_floor == 3 and location.floor3_layout is not None
-    )
+    is_mapped = location.floor3_layout is not None
     is_unplaced = (
         location.placement_status == "unplaced"
         or location.is_temporary
@@ -919,6 +940,7 @@ def _position_payload(lot: InventoryLot) -> dict:
     unit_label = "只" if lot.inventory_type == "finished" else "张"
     return {
         "lot_id": lot.id,
+        "lot_version": lot.version,
         "lot_number": lot.lot_number,
         "location_id": location.id,
         "location_code": location.location_code,
@@ -1656,3 +1678,698 @@ def product_inventory(
         "as_of": datetime.now(_BEIJING).isoformat(timespec="seconds"),
         "read_only": True,
     }
+
+
+class MobileWarehouseMovePayload(BaseModel):
+    expected_version: int = Field(gt=0)
+    quantity: int = Field(gt=0)
+    target_location_id: int = Field(gt=0)
+    idempotency_key: str = Field(min_length=1, max_length=100)
+    physical_move_confirmed: bool
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def strip_move_key(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("请求标识不能为空")
+        return text
+
+
+class MobileWarehouseDiscrepancyPayload(BaseModel):
+    inventory_lot_id: int = Field(gt=0)
+    expected_lot_version: int = Field(gt=0)
+    reported_quantity: int = Field(gt=0)
+    observed_location_id: int = Field(gt=0)
+    reason: str = Field(min_length=1, max_length=500)
+    idempotency_key: str = Field(min_length=1, max_length=120)
+
+    @field_validator("reason", "idempotency_key")
+    @classmethod
+    def strip_discrepancy_text(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("位置不符说明和请求标识不能为空")
+        return text
+
+
+class MobileWarehouseDiscrepancyResolvePayload(BaseModel):
+    expected_version: int = Field(gt=0)
+    expected_lot_version: int = Field(gt=0)
+    idempotency_key: str = Field(min_length=1, max_length=100)
+    resolution_note: str = Field(min_length=1, max_length=500)
+
+    @field_validator("idempotency_key", "resolution_note")
+    @classmethod
+    def strip_resolution_text(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("纠正说明和请求标识不能为空")
+        return text
+
+
+def _mobile_layout_payload(layout: Floor3LocationLayout) -> dict:
+    return {
+        "left_pct": float(layout.left_pct),
+        "top_pct": float(layout.top_pct),
+        "width_pct": float(layout.width_pct),
+        "height_pct": float(layout.height_pct),
+        "z_index": int(layout.z_index or 0),
+        "version": int(layout.version),
+    }
+
+
+def _mobile_lot_customer_id(lot: InventoryLot) -> int | None:
+    if lot.finished_detail is not None:
+        return lot.finished_detail.owner_customer_id
+    if lot.semi_finished_detail is not None:
+        return lot.semi_finished_detail.owner_customer_id
+    return None
+
+
+def _mobile_lot_options():
+    return (
+        selectinload(InventoryLot.location).selectinload(
+            WarehouseLocation.floor3_layout
+        ),
+        selectinload(InventoryLot.finished_detail),
+        selectinload(InventoryLot.semi_finished_detail),
+    )
+
+
+def _mobile_lot_is_visible(
+    lot: InventoryLot, visible_customer_ids: set[int] | None
+) -> bool:
+    if visible_customer_ids is None:
+        return True
+    customer_id = _mobile_lot_customer_id(lot)
+    return customer_id is not None and customer_id in visible_customer_ids
+
+
+def _require_mobile_lot(
+    db: Session,
+    *,
+    lot_id: int,
+    visible_customer_ids: set[int] | None,
+) -> InventoryLot:
+    lot = db.scalar(
+        select(InventoryLot)
+        .options(*_mobile_lot_options())
+        .where(InventoryLot.id == lot_id)
+    )
+    if lot is None or not _mobile_lot_is_visible(lot, visible_customer_ids):
+        raise HTTPException(status_code=404, detail="库存不存在或当前账号无权查看")
+    return lot
+
+
+def _mobile_location_is_published(db: Session, location: WarehouseLocation) -> bool:
+    return bool(
+        location.floor3_layout is not None
+        and operational_location_issue(
+            db,
+            location,
+            warehouse_types={"finished", "semi_finished", "shared"},
+        )
+        is None
+    )
+
+
+def _mobile_goods_payload(lot: InventoryLot) -> dict:
+    if lot.finished_detail is not None:
+        detail = lot.finished_detail
+        specification = "×".join(
+            str(value)
+            for value in (detail.length_mm, detail.width_mm, detail.height_mm)
+            if value is not None
+        )
+        customer_name = detail.owner_customer_name_snapshot
+        product_code = detail.inventory_code_snapshot
+        product_name = detail.product_name_snapshot
+    else:
+        detail = lot.semi_finished_detail
+        specification = (
+            f"{detail.board_length_mm}×{detail.board_width_mm}mm"
+            if detail is not None
+            else ""
+        )
+        customer_name = detail.owner_customer_name_snapshot if detail else None
+        product_code = detail.material_code if detail else None
+        product_name = "半成品纸板"
+    return {
+        "lot_id": int(lot.id),
+        "lot_version": int(lot.version),
+        "inventory_type": lot.inventory_type,
+        "customer_id": _mobile_lot_customer_id(lot),
+        "customer_name": customer_name,
+        "product_code": product_code,
+        "product_name": product_name,
+        "specification": specification,
+        "quantity_available": int(lot.quantity_available or 0),
+        "quantity_reserved": int(lot.quantity_reserved or 0),
+        "quantity_total": int(lot.quantity_available or 0)
+        + int(lot.quantity_reserved or 0),
+        "unit": "只" if lot.inventory_type == "finished" else "张",
+        "stock_date": lot.stock_date,
+        "last_movement_at": utc_naive_to_api(lot.last_movement_at),
+        "can_move": lot.inventory_type == "finished" and lot.status == "active",
+    }
+
+
+def _mobile_floor_code(row) -> str:
+    if row.floor is not None:
+        return str(row.floor.floor_code).upper()
+    return f"{int(row.location.warehouse_floor or 0)}F"
+
+
+@router.get("/warehouse/map/floors")
+def mobile_warehouse_map_floors(
+    response: Response,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read_inventory),
+) -> dict:
+    _no_store(response)
+    rows = list_operational_locations(db)
+    location_ids = [int(row.location.id) for row in rows]
+    placed_ids = set(
+        db.scalars(
+            select(Floor3LocationLayout.location_id).where(
+                Floor3LocationLayout.location_id.in_(location_ids or [-1])
+            )
+        ).all()
+    )
+    grouped: dict[str, dict] = {}
+    for row in rows:
+        floor_code = _mobile_floor_code(row)
+        floor = grouped.setdefault(
+            floor_code,
+            {
+                "floor_code": floor_code,
+                "floor_name": row.floor.floor_name if row.floor else f"{floor_code} 仓库",
+                "floor_number": row.location.warehouse_floor,
+                "areas": {},
+            },
+        )
+        area_code = str(row.location.area_code or "").strip().upper()
+        area = floor["areas"].setdefault(
+            area_code,
+            {
+                "area_code": area_code,
+                "area_name": row.area.area_name if row.area else area_code,
+                "published_location_count": 0,
+            },
+        )
+        if row.location.id in placed_ids:
+            area["published_location_count"] += 1
+    floors: list[dict] = []
+    for floor in sorted(
+        grouped.values(), key=lambda item: (item["floor_number"] or 0, item["floor_code"])
+    ):
+        areas = []
+        for area in sorted(floor.pop("areas").values(), key=lambda item: item["area_code"]):
+            area["map_status"] = (
+                "ready" if area["published_location_count"] else "area_pending_location"
+            )
+            area["map_status_text"] = (
+                "位置已发布" if area["published_location_count"] else "区域待定位"
+            )
+            areas.append(area)
+        floor["areas"] = areas
+        floors.append(floor)
+    return {
+        "floors": floors,
+        "can_execute": has_permission(user, "warehouse.execute"),
+        "can_correct": has_permission(user, "warehouse.correct"),
+        "as_of": datetime.now(_BEIJING).isoformat(timespec="seconds"),
+    }
+
+
+@router.get("/warehouse/map/floors/{floor_code}")
+def mobile_warehouse_map_area(
+    floor_code: str,
+    response: Response,
+    area_code: str = Query(min_length=1, max_length=30),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read_inventory),
+) -> dict:
+    _no_store(response)
+    normalized_floor = floor_code.strip().upper()
+    normalized_area = area_code.strip().upper()
+    rows = [
+        row
+        for row in list_operational_locations(db)
+        if _mobile_floor_code(row) == normalized_floor
+        and str(row.location.area_code or "").strip().upper() == normalized_area
+    ]
+    if not rows:
+        raise HTTPException(status_code=404, detail="仓库楼层或区域不存在或尚未启用")
+    locations = [row.location for row in rows]
+    location_ids = [int(location.id) for location in locations]
+    layouts = {
+        int(layout.location_id): layout
+        for layout in db.scalars(
+            select(Floor3LocationLayout).where(
+                Floor3LocationLayout.location_id.in_(location_ids)
+            )
+        ).all()
+    }
+    lots = list(
+        db.scalars(
+            select(InventoryLot)
+            .options(*_mobile_lot_options())
+            .where(
+                InventoryLot.warehouse_location_id.in_(location_ids),
+                InventoryLot.status.in_(("active", "frozen")),
+                (
+                    InventoryLot.quantity_available
+                    + InventoryLot.quantity_reserved
+                    + InventoryLot.quantity_damaged
+                )
+                > 0,
+            )
+            .order_by(InventoryLot.stock_date, InventoryLot.id)
+        ).all()
+    )
+    visible_customer_ids = _visible_customer_ids(user, db)
+    goods_by_location: dict[int, list[dict]] = {}
+    for lot in lots:
+        if _mobile_lot_is_visible(lot, visible_customer_ids):
+            goods_by_location.setdefault(int(lot.warehouse_location_id), []).append(
+                _mobile_goods_payload(lot)
+            )
+    map_floor: dict | None = None
+    try:
+        map_floor = overlay_formal_area_bindings(
+            db,
+            floor_code=normalized_floor,
+            floor_layout=load_warehouse_twin_floor(normalized_floor),
+        )
+    except (WarehouseTwinLayoutNotFoundError, ValueError):
+        map_floor = None
+    features: list[dict] = []
+    if map_floor is not None:
+        for raw in map_floor.get("features") or []:
+            kind = str(raw.get("feature_kind") or "")
+            bound_area = str(raw.get("erp_area_code") or "").strip().upper()
+            if kind == "aisle" or (kind == "zone" and bound_area == normalized_area):
+                features.append(
+                    {
+                        "id": raw.get("id"),
+                        "feature_kind": kind,
+                        "name": raw.get("name"),
+                        "points": raw.get("points") or [],
+                    }
+                )
+    unrestricted = visible_customer_ids is None
+    location_payloads = []
+    for row in rows:
+        location = row.location
+        layout = layouts.get(int(location.id))
+        goods = goods_by_location.get(int(location.id), [])
+        location_payloads.append(
+            {
+                "location_id": int(location.id),
+                "location_code": location.location_code,
+                "location_name": location.location_name,
+                "area_code": normalized_area,
+                "geometry": _mobile_layout_payload(layout) if layout else None,
+                "map_status": "ready" if layout else "area_pending_location",
+                "map_status_text": "位置已发布" if layout else "区域待定位",
+                "occupancy_state": (
+                    "occupied" if goods else "empty"
+                )
+                if unrestricted
+                else ("visible_goods" if goods else "not_disclosed"),
+                "goods": goods,
+                "can_select_target": layout is not None,
+            }
+        )
+    has_geometry = any(item["geometry"] is not None for item in location_payloads)
+    return {
+        "floor_code": normalized_floor,
+        "floor_name": rows[0].floor.floor_name if rows[0].floor else normalized_floor,
+        "area_code": normalized_area,
+        "area_name": rows[0].area.area_name if rows[0].area else normalized_area,
+        "map_status": "ready" if has_geometry else "area_pending_location",
+        "map_status_text": "位置已发布" if has_geometry else "区域待定位",
+        "guidance": (
+            f"{normalized_floor} {normalized_area}区，以地图高亮位置为准；到现场后核对相邻位置。"
+            if has_geometry
+            else "该区域尚未发布位置几何，只能查看区域，不能猜测具体货位。"
+        ),
+        "bounds_mm": map_floor.get("bounds_mm") if map_floor else None,
+        "features": features,
+        "locations": location_payloads,
+        "can_execute": has_permission(user, "warehouse.execute"),
+        "can_correct": has_permission(user, "warehouse.correct"),
+        "as_of": datetime.now(_BEIJING).isoformat(timespec="seconds"),
+    }
+
+
+@router.post("/warehouse/lots/{lot_id}/moves")
+def mobile_move_warehouse_lot(
+    lot_id: int,
+    payload: MobileWarehouseMovePayload,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_execute_inventory),
+) -> dict:
+    _no_store(response)
+    if not payload.physical_move_confirmed:
+        raise HTTPException(status_code=409, detail="请先完成现场搬运并最终确认")
+    visible_customer_ids = _visible_customer_ids(user, db)
+    source_lot = _require_mobile_lot(
+        db, lot_id=lot_id, visible_customer_ids=visible_customer_ids
+    )
+    customer_id = _mobile_lot_customer_id(source_lot)
+    target = db.scalar(
+        select(WarehouseLocation)
+        .options(selectinload(WarehouseLocation.floor3_layout))
+        .where(WarehouseLocation.id == payload.target_location_id)
+    )
+    if target is None or not _mobile_location_is_published(db, target):
+        raise HTTPException(status_code=409, detail="目标位置尚未正式发布，不能执行搬运")
+    try:
+        result = transfer_finished_lot_between_locations(
+            db,
+            lot_id=lot_id,
+            expected_version=payload.expected_version,
+            quantity=payload.quantity,
+            location_id=payload.target_location_id,
+            operator_id=user.id,
+            idempotency_key=payload.idempotency_key,
+        )
+        if not result.replayed:
+            append_audit_event(
+                db,
+                request=request,
+                actor=user,
+                event_category="business",
+                result="success",
+                source="mobile",
+                module_code="warehouse",
+                action_code="warehouse.mobile_lot.location_move",
+                resource="InventoryLotTransfer",
+                entity_type="inventory_lot_transfer",
+                entity_id=result.transfer.id,
+                object_ref=f"inventory_lot_transfer:{result.transfer.id}",
+                customer_id=customer_id,
+                description="手机实测仓库地图确认实际搬运",
+                details={
+                    "source_lot_id": lot_id,
+                    "target_lot_id": result.target_lot.id,
+                    "source_location_id": result.transfer.source_location_id,
+                    "target_location_id": result.transfer.target_location_id,
+                    "quantity": payload.quantity,
+                    "idempotency_key": payload.idempotency_key,
+                },
+            )
+        db.commit()
+        return {
+            "message": "实际搬运已登记，库存总数未改变",
+            "idempotent_replay": result.replayed,
+            "transfer_id": result.transfer.id,
+            "source_lot": _mobile_goods_payload(result.source_lot),
+            "target_lot": _mobile_goods_payload(result.target_lot),
+        }
+    except WarehouseInventoryError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="库存位置或请求标识已变化，请刷新重试") from error
+
+
+def _mobile_discrepancy_payload(
+    row: WarehouseLocationDiscrepancy,
+    *,
+    lot: InventoryLot,
+    registered: WarehouseLocation,
+    observed: WarehouseLocation,
+) -> dict:
+    return {
+        "id": row.id,
+        "version": row.version,
+        "status": row.status,
+        "lot": _mobile_goods_payload(lot),
+        "registered_location": {
+            "location_id": registered.id,
+            "location_code": registered.location_code,
+            "location_name": registered.location_name,
+        },
+        "observed_location": {
+            "location_id": observed.id,
+            "location_code": observed.location_code,
+            "location_name": observed.location_name,
+        },
+        "reported_quantity": row.reported_quantity,
+        "reason": row.reason,
+        "reported_at": utc_naive_to_api(row.reported_at),
+        "resolution_note": row.resolution_note,
+    }
+
+
+@router.post("/warehouse/location-discrepancies", status_code=201)
+def report_mobile_warehouse_location_discrepancy(
+    payload: MobileWarehouseDiscrepancyPayload,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read_inventory),
+) -> dict:
+    _no_store(response)
+    visible_customer_ids = _visible_customer_ids(user, db)
+    lot = _require_mobile_lot(
+        db, lot_id=payload.inventory_lot_id, visible_customer_ids=visible_customer_ids
+    )
+    if lot.inventory_type != "finished" or lot.status != "active":
+        raise HTTPException(status_code=409, detail="当前只允许上报有效成品库存的位置不符")
+    if int(lot.version) != payload.expected_lot_version:
+        raise HTTPException(status_code=409, detail="库存已变化，请刷新后重试")
+    live_quantity = int(lot.quantity_available or 0) + int(lot.quantity_reserved or 0)
+    if payload.reported_quantity > live_quantity:
+        raise HTTPException(status_code=409, detail=f"当前位置仅登记 {live_quantity} 只")
+    observed = db.scalar(
+        select(WarehouseLocation)
+        .options(selectinload(WarehouseLocation.floor3_layout))
+        .where(WarehouseLocation.id == payload.observed_location_id)
+    )
+    registered = lot.location
+    if observed is None or not _mobile_location_is_published(db, observed):
+        raise HTTPException(status_code=409, detail="现场观察位置尚未正式发布")
+    if observed.id == registered.id:
+        raise HTTPException(status_code=409, detail="观察位置与系统登记位置相同")
+    existing = db.scalar(
+        select(WarehouseLocationDiscrepancy).where(
+            WarehouseLocationDiscrepancy.idempotency_key == payload.idempotency_key
+        )
+    )
+    if existing is not None:
+        if (
+            existing.inventory_lot_id != lot.id
+            or existing.observed_location_id != observed.id
+            or existing.reported_quantity != payload.reported_quantity
+        ):
+            raise HTTPException(status_code=409, detail="同一请求标识已用于其他位置不符上报")
+        existing_registered = db.get(
+            WarehouseLocation, existing.registered_location_id
+        )
+        existing_observed = db.get(WarehouseLocation, existing.observed_location_id)
+        if existing_registered is None or existing_observed is None:
+            raise HTTPException(status_code=409, detail="位置不符报告关联的位置已失效")
+        return {
+            "message": "位置不符已上报，尚未改变库存位置",
+            "idempotent_replay": True,
+            "report": _mobile_discrepancy_payload(
+                existing,
+                lot=lot,
+                registered=existing_registered,
+                observed=existing_observed,
+            ),
+        }
+    row = WarehouseLocationDiscrepancy(
+        inventory_lot_id=lot.id,
+        registered_location_id=registered.id,
+        observed_location_id=observed.id,
+        reported_lot_version=lot.version,
+        reported_quantity=payload.reported_quantity,
+        reason=payload.reason,
+        idempotency_key=payload.idempotency_key,
+        reported_by=user.id,
+    )
+    db.add(row)
+    try:
+        db.flush()
+        append_audit_event(
+            db,
+            request=request,
+            actor=user,
+            event_category="business",
+            result="success",
+            source="mobile",
+            module_code="warehouse",
+            action_code="warehouse.location_discrepancy.report",
+            resource="WarehouseLocationDiscrepancy",
+            entity_type="warehouse_location_discrepancy",
+            entity_id=row.id,
+            object_ref=f"warehouse_location_discrepancy:{row.id}",
+            customer_id=_mobile_lot_customer_id(lot),
+            description="员工上报仓库现场位置与系统登记不符",
+            details={
+                "inventory_lot_id": lot.id,
+                "registered_location_id": registered.id,
+                "observed_location_id": observed.id,
+                "reported_quantity": payload.reported_quantity,
+            },
+        )
+        db.commit()
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="位置不符已被提交，请刷新重试") from error
+    return {
+        "message": "位置不符已上报，尚未改变库存位置",
+        "idempotent_replay": False,
+        "report": _mobile_discrepancy_payload(
+            row, lot=lot, registered=registered, observed=observed
+        ),
+    }
+
+
+@router.get("/warehouse/location-discrepancies")
+def list_mobile_warehouse_location_discrepancies(
+    response: Response,
+    status: Literal["open", "resolved", "cancelled"] = "open",
+    limit: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_correct_inventory),
+) -> dict:
+    _no_store(response)
+    visible_customer_ids = _visible_customer_ids(user, db)
+    rows = list(
+        db.scalars(
+            select(WarehouseLocationDiscrepancy)
+            .where(WarehouseLocationDiscrepancy.status == status)
+            .order_by(
+                WarehouseLocationDiscrepancy.reported_at.desc(),
+                WarehouseLocationDiscrepancy.id.desc(),
+            )
+            .limit(limit * 3)
+        ).all()
+    )
+    items = []
+    for row in rows:
+        lot = db.scalar(
+            select(InventoryLot)
+            .options(*_mobile_lot_options())
+            .where(InventoryLot.id == row.inventory_lot_id)
+        )
+        if lot is None or not _mobile_lot_is_visible(lot, visible_customer_ids):
+            continue
+        registered = db.get(WarehouseLocation, row.registered_location_id)
+        observed = db.get(WarehouseLocation, row.observed_location_id)
+        if registered is None or observed is None:
+            continue
+        items.append(
+            _mobile_discrepancy_payload(
+                row, lot=lot, registered=registered, observed=observed
+            )
+        )
+        if len(items) >= limit:
+            break
+    return {"items": items, "count": len(items), "status": status}
+
+
+@router.post("/warehouse/location-discrepancies/{report_id}/resolve")
+def resolve_mobile_warehouse_location_discrepancy(
+    report_id: int,
+    payload: MobileWarehouseDiscrepancyResolvePayload,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_correct_inventory),
+) -> dict:
+    _no_store(response)
+    row = db.get(WarehouseLocationDiscrepancy, report_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="位置不符报告不存在")
+    visible_customer_ids = _visible_customer_ids(user, db)
+    lot = _require_mobile_lot(
+        db, lot_id=row.inventory_lot_id, visible_customer_ids=visible_customer_ids
+    )
+    correction_key = f"correction:{payload.idempotency_key}"
+    if row.status == "resolved" and row.resolution_transfer_id is not None:
+        transfer = db.get(InventoryLotTransfer, row.resolution_transfer_id)
+        if transfer is not None and transfer.idempotency_key == correction_key:
+            return {
+                "message": "位置登记已纠正，库存总数未改变",
+                "idempotent_replay": True,
+                "report_id": row.id,
+                "transfer_id": transfer.id,
+            }
+        raise HTTPException(status_code=409, detail="该位置不符报告已经处理")
+    if row.status != "open" or int(row.version) != payload.expected_version:
+        raise HTTPException(status_code=409, detail="位置不符报告状态已变化，请刷新重试")
+    if lot.warehouse_location_id != row.registered_location_id:
+        raise HTTPException(status_code=409, detail="库存登记位置已变化，请刷新后重新核对")
+    observed = db.scalar(
+        select(WarehouseLocation)
+        .options(selectinload(WarehouseLocation.floor3_layout))
+        .where(WarehouseLocation.id == row.observed_location_id)
+    )
+    if observed is None or not _mobile_location_is_published(db, observed):
+        raise HTTPException(status_code=409, detail="现场观察位置已失效或尚未正式发布")
+    try:
+        result = transfer_finished_lot_between_locations(
+            db,
+            lot_id=lot.id,
+            expected_version=payload.expected_lot_version,
+            quantity=row.reported_quantity,
+            location_id=observed.id,
+            operator_id=user.id,
+            idempotency_key=correction_key,
+        )
+        row.status = "resolved"
+        row.version = int(row.version) + 1
+        row.resolved_by = user.id
+        row.resolved_at = utc_now_naive()
+        row.resolution_transfer_id = result.transfer.id
+        row.resolution_note = payload.resolution_note
+        append_audit_event(
+            db,
+            request=request,
+            actor=user,
+            event_category="business",
+            result="success",
+            source="mobile",
+            module_code="warehouse",
+            action_code="warehouse.location_discrepancy.resolve",
+            resource="WarehouseLocationDiscrepancy",
+            entity_type="warehouse_location_discrepancy",
+            entity_id=row.id,
+            object_ref=f"warehouse_location_discrepancy:{row.id}",
+            customer_id=_mobile_lot_customer_id(lot),
+            description="授权人员确认仓库位置登记纠正",
+            details={
+                "inventory_lot_id": lot.id,
+                "registered_location_id": row.registered_location_id,
+                "observed_location_id": row.observed_location_id,
+                "quantity": row.reported_quantity,
+                "transfer_id": result.transfer.id,
+            },
+        )
+        db.commit()
+        return {
+            "message": "位置登记已纠正，库存总数未改变",
+            "idempotent_replay": result.replayed,
+            "report_id": row.id,
+            "report_version": row.version,
+            "transfer_id": result.transfer.id,
+            "source_lot": _mobile_goods_payload(result.source_lot),
+            "target_lot": _mobile_goods_payload(result.target_lot),
+        }
+    except WarehouseInventoryError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="库存位置或纠正请求已变化，请刷新重试") from error

@@ -36,6 +36,7 @@ EXTERNAL_PACKAGING_CATEGORIES = {
     "coated_board",
     "printed_folding_carton",
     "epe_cushion",
+    "hollow_board",
     "other_packaging",
 }
 PURCHASE_UNITS = {"根", "米", "件", "张", "令", "kg", "吨", "只", "个", "套", "片", "卷", "箱"}
@@ -644,6 +645,30 @@ def _clean_external_product_payload(
         }
         density_text = f"，{density:g}kg/m³" if density is not None else ""
         summary = f"{shape} {length:g}×{width:g}×{thickness:g}mm，{layers}层{density_text}"
+    elif category == "hollow_board":
+        length = _positive_number(specification, "length_mm", "中空板长度")
+        width = _positive_number(specification, "width_mm", "中空板宽度")
+        thickness = _positive_number(specification, "thickness_mm", "中空板厚度")
+        color = str(specification.get("color") or "").strip()
+        if not color:
+            raise HTTPException(status_code=422, detail="请填写中空板颜色")
+        basis_weight = _optional_positive_number(
+            specification, "basis_weight_gsm", "中空板克重"
+        )
+        density = _optional_positive_number(
+            specification, "density_kg_m3", "中空板密度"
+        )
+        specification = {
+            "length_mm": length,
+            "width_mm": width,
+            "thickness_mm": thickness,
+            "color": color,
+            "basis_weight_gsm": basis_weight,
+            "density_kg_m3": density,
+        }
+        optional = f"，{basis_weight:g}g/㎡" if basis_weight is not None else ""
+        optional += f"，{density:g}kg/m³" if density is not None else ""
+        summary = f"{color} {length:g}×{width:g}×{thickness:g}mm{optional}"
     else:
         summary = str(specification.get("summary") or "").strip()
         if not summary:

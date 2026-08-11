@@ -123,6 +123,11 @@ from app.services.warehouse_twin_production import (
     delete_production_projection_mapping,
     save_production_projection_mapping,
 )
+from app.services.asset_time_archive import (
+    build_inventory_lot_time_archives,
+    build_mold_time_archives,
+    build_printing_plate_time_archives,
+)
 from app.services.production_workflow import PENDING, list_production_tasks
 from app.services.semi_finished_inventory import (
     SemiFinishedCandidate,
@@ -1747,7 +1752,7 @@ def _require_lot_customer_access(
     return lot
 
 
-def _lot_dict(row: InventoryLot) -> dict:
+def _lot_dict(row: InventoryLot, time_archive: dict | None = None) -> dict:
     warning = inventory_age_warning(row)
     pallet_item = row.pallet_item
     pallet = pallet_item.pallet if pallet_item is not None else None
@@ -1823,6 +1828,7 @@ def _lot_dict(row: InventoryLot) -> dict:
         "stock_date_accuracy": row.stock_date_accuracy,
         "stock_date_original_text": row.stock_date_original_text,
         "last_movement_at": utc_naive_to_api(row.last_movement_at),
+        "time_archive": time_archive,
         "version": row.version,
         "remarks": row.remarks,
         "floor3_binding": (
@@ -7452,12 +7458,48 @@ def _printing_plate_products(
     return list(db.scalars(query.order_by(Product.product_code, Product.id)).all())
 
 
+def _printing_plate_products_by_plate(
+    db: Session,
+    plate_ids: list[int],
+    allowed_customer_ids: set[int] | None,
+) -> dict[int, list[Product]]:
+    result = {plate_id: [] for plate_id in plate_ids}
+    if not plate_ids:
+        return result
+    query = select(Product).where(
+        or_(
+            Product.printing_plate_1_id.in_(plate_ids),
+            Product.printing_plate_2_id.in_(plate_ids),
+            Product.printing_plate_3_id.in_(plate_ids),
+        ),
+        Product.deleted_at.is_(None),
+        Product.is_active.is_(True),
+    )
+    if allowed_customer_ids is not None:
+        query = query.where(Product.customer_id.in_(allowed_customer_ids))
+    products = db.scalars(query.order_by(Product.product_code, Product.id)).all()
+    for product in products:
+        for plate_id in {
+            product.printing_plate_1_id,
+            product.printing_plate_2_id,
+            product.printing_plate_3_id,
+        }:
+            if plate_id in result:
+                result[plate_id].append(product)
+    return result
+
+
 def _printing_plate_dict(
     db: Session,
     row: PrintingPlate,
     allowed_customer_ids: set[int] | None = None,
+    *,
+    time_archive: dict | None = None,
+    products: list[Product] | None = None,
 ) -> dict:
-    products = _printing_plate_products(db, row.id, allowed_customer_ids)
+    products = products if products is not None else _printing_plate_products(
+        db, row.id, allowed_customer_ids
+    )
     return {
         "id": row.id,
         "plate_code": row.plate_code,
@@ -7489,6 +7531,7 @@ def _printing_plate_dict(
         ],
         "created_at": utc_naive_to_api(row.created_at),
         "updated_at": utc_naive_to_api(row.updated_at) if row.updated_at else None,
+        "time_archive": time_archive,
     }
 
 
@@ -7564,9 +7607,25 @@ def list_printing_plates(
             PrintingPlate.plate_code,
         ).limit(limit)
     ).all()
+    products_by_plate = _printing_plate_products_by_plate(
+        db, [row.id for row in rows], allowed_customer_ids
+    )
+    archives = build_printing_plate_time_archives(
+        db,
+        rows,
+        products_by_plate=products_by_plate,
+        allowed_customer_ids=allowed_customer_ids,
+    )
     return {
         "items": [
-            _printing_plate_dict(db, row, allowed_customer_ids) for row in rows
+            _printing_plate_dict(
+                db,
+                row,
+                allowed_customer_ids,
+                time_archive=archives.get(row.id),
+                products=products_by_plate.get(row.id, []),
+            )
+            for row in rows
         ]
     }
 
@@ -7839,6 +7898,8 @@ def _require_mold_customer_scope(
 def _mold_tool_dict(
     row: MoldTool,
     allowed_customer_ids: set[int] | None = None,
+    *,
+    time_archive: dict | None = None,
 ) -> dict:
     products = _visible_mold_products(row, allowed_customer_ids)
     return {
@@ -7882,7 +7943,32 @@ def _mold_tool_dict(
         ],
         "created_at": utc_naive_to_api(row.created_at),
         "updated_at": utc_naive_to_api(row.updated_at) if row.updated_at else None,
+        "time_archive": time_archive,
     }
+
+
+def _mold_tool_dicts_with_time_archive(
+    db: Session,
+    rows: list[MoldTool],
+    allowed_customer_ids: set[int] | None,
+) -> list[dict]:
+    products_by_mold = {
+        row.id: _visible_mold_products(row, allowed_customer_ids) for row in rows
+    }
+    archives = build_mold_time_archives(
+        db,
+        rows,
+        products_by_mold=products_by_mold,
+        allowed_customer_ids=allowed_customer_ids,
+    )
+    return [
+        _mold_tool_dict(
+            row,
+            allowed_customer_ids,
+            time_archive=archives.get(row.id),
+        )
+        for row in rows
+    ]
 
 
 def _mold_tools_query(
@@ -7987,10 +8073,9 @@ def list_mold_tools(
         ordered_query = ordered_query.limit(limit)
     rows = db.scalars(ordered_query).unique().all()
     return {
-        "items": [
-            _mold_tool_dict(row, allowed_customer_ids)
-            for row in rows
-        ],
+        "items": _mold_tool_dicts_with_time_archive(
+            db, rows, allowed_customer_ids
+        ),
         "total": total,
         "page": page or 1,
         "page_size": page_size if page is not None else limit,
@@ -8091,10 +8176,9 @@ def list_mold_tools_by_map_area(
         "feature_code": normalized_feature_code,
         "area_name": feature.get("name") or normalized_feature_code,
         "rack_codes": rack_codes,
-        "items": [
-            _mold_tool_dict(row, allowed_customer_ids)
-            for row in rows
-        ],
+        "items": _mold_tool_dicts_with_time_archive(
+            db, rows, allowed_customer_ids
+        ),
         "total": total,
         "page": page,
         "page_size": page_size,
@@ -9183,8 +9267,11 @@ def list_lots(
         .offset((page - 1) * page_size)
         .limit(page_size)
     ).all()
+    time_archives = build_inventory_lot_time_archives(db, rows)
     return {
-        "items": [_lot_dict(row) for row in rows],
+        "items": [
+            _lot_dict(row, time_archive=time_archives.get(row.id)) for row in rows
+        ],
         "total": total,
         "page": page,
         "page_size": page_size,
@@ -9423,7 +9510,10 @@ def get_lot(
     row = db.scalar(_lot_query().where(InventoryLot.id == lot_id))
     if row is None:
         raise HTTPException(status_code=404, detail="库存批次不存在")
-    result = _lot_dict(row)
+    result = _lot_dict(
+        row,
+        time_archive=build_inventory_lot_time_archives(db, [row]).get(row.id),
+    )
     result["movements"] = [
         _movement_dict(item)
         for item in db.scalars(

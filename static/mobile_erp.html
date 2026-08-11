@@ -37,7 +37,9 @@
     }
     .brand strong { display: block; font-size: 19px; }
     .brand span { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
-    .desktop-link { color: var(--blue); font-size: 12px; font-weight: 800; text-decoration: none; }
+    .top-actions { display: flex; align-items: center; gap: 8px; }
+    .desktop-link, .logout-btn { color: var(--blue); font-size: 12px; font-weight: 800; text-decoration: none; }
+    .logout-btn { padding: 4px 7px; border: 1px solid var(--line); border-radius: 7px; background: #fff; }
     main { padding: 12px 13px 20px; }
     .page-title { margin: 0 0 4px; font-size: 20px; }
     .page-help { margin: 0 0 12px; color: var(--muted); font-size: 12px; line-height: 1.55; }
@@ -60,6 +62,12 @@
     .metric { padding: 10px; border-radius: 10px; background: #f3f6f4; }
     .metric strong { display: block; color: var(--green); font-size: 22px; }
     .metric span { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
+    .entry-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+    .entry-card { min-height: 112px; padding: 13px; border: 1px solid var(--line); border-radius: 13px; background: #fff; color: var(--ink); text-align: left; }
+    .entry-card strong { display: block; color: var(--green); font-size: 19px; }
+    .entry-card span { display: block; margin-top: 7px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+    .entry-card em { display: block; margin-top: 7px; color: var(--blue); font-size: 11px; font-style: normal; font-weight: 900; }
+    .embedded-entry { width: 100%; min-height: calc(100vh - 150px); border: 0; border-radius: 12px; background: #fff; }
     .searchbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-bottom: 10px; }
     .searchbar input { width: 100%; min-height: 46px; padding: 9px 11px; border: 1px solid #aabbb2; border-radius: 10px; background: #fff; }
     .search-btn { min-height: 46px; padding: 8px 14px; border: 0; border-radius: 10px; background: var(--green); color: #fff; font-weight: 900; }
@@ -135,19 +143,30 @@
   <div class="app">
     <header class="topbar">
       <div class="brand"><strong>天明 ERP 手机版</strong><span id="userText">正在核对账号…</span></div>
-      <a class="desktop-link" href="/">电脑版</a>
+      <div class="top-actions"><a class="desktop-link" href="/">电脑版</a><button id="logoutButton" class="logout-btn" type="button">退出</button></div>
     </header>
 
     <main>
       <section id="homePage">
         <h1 class="page-title">今天先做什么</h1>
-        <p class="page-help">按当前账号权限只读显示待办；所有数字仍来自正式 ERP 接口。</p>
-        <div id="homeState" class="card status">正在读取首页…</div>
-        <div id="homeCards" class="metric-grid" hidden></div>
+        <p class="page-help">这里只显示当前账号获准使用的现场入口；进入后才读取对应业务数据。</p>
+        <div id="homeState" class="card status">正在核对手机入口…</div>
+        <div id="entryCards" class="entry-grid" hidden></div>
+        <section id="managementSummary" class="card" hidden>
+          <div class="result-head"><div><h2>老板 / 财务只读摘要</h2><p class="muted">沿用原有权限，点击后才读取桌面权威待办。</p></div><button id="loadManagementSummary" class="small-btn" type="button">读取摘要</button></div>
+          <div id="managementState" class="status empty" hidden></div>
+          <div id="homeCards" class="metric-grid" hidden></div>
+        </section>
+      </section>
+
+      <section id="incomingPage" hidden>
+        <h1 class="page-title">收料</h1>
+        <p class="page-help">复用正式收料权限和受控确认动作；页面只在进入后加载。</p>
+        <iframe id="incomingFrame" class="embedded-entry" title="手机收料" src="about:blank"></iframe>
       </section>
 
       <section id="searchPage" hidden>
-        <h1 class="page-title">查产品和库存位置</h1>
+        <h1 class="page-title">仓库</h1>
         <p class="page-help">先按客户、存货编码、产品名称或规格找到货物，再看真实库存位置；有多个结果时必须自己点选。原料仓尚未建立时不会显示虚假数量。</p>
         <div class="searchbar">
           <input id="searchInput" maxlength="100" autocomplete="off" placeholder="输入客户、存货编码、产品名称或规格">
@@ -185,14 +204,22 @@
         <div id="productionState" class="card status">正在读取近期来料…</div>
         <div id="productionList" hidden></div>
       </section>
+
+      <section id="preDeliveryPage" hidden>
+        <h1 class="page-title">预送货</h1>
+        <p class="page-help">只显示当前账号有权查看的拿货任务；页面只在进入后加载。</p>
+        <iframe id="preDeliveryFrame" class="embedded-entry" title="手机预送货拿货" src="about:blank"></iframe>
+      </section>
     </main>
   </div>
 
   <nav id="bottomNav" class="bottom-nav" aria-label="手机主导航" hidden>
     <div class="bottom-inner">
       <button class="nav-btn active" type="button" data-page="home">首页</button>
-      <button class="nav-btn" type="button" data-page="search">查产品</button>
-      <button class="nav-btn" type="button" data-page="production">近期生产</button>
+      <button class="nav-btn" type="button" data-page="incoming">收料</button>
+      <button class="nav-btn" type="button" data-page="warehouse">仓库</button>
+      <button class="nav-btn" type="button" data-page="production">生产</button>
+      <button class="nav-btn" type="button" data-page="pre_delivery">预送货</button>
     </div>
   </nav>
 
@@ -217,7 +244,7 @@
       "use strict";
 
       const state = {
-        auth: null,
+        shell: null,
         dashboard: null,
         query: "",
         candidates: [],
@@ -240,14 +267,11 @@
         homeGeneration: 0,
         allowedPages: new Set(),
         activePage: "",
+        scrollByPage: new Map(),
+        loadedFrames: new Set(),
         initializing: false,
       };
-      const mobilePages = new Set(["home", "search", "production"]);
-      const mobileLayoutPageIds = {
-        mobile_home: "home",
-        mobile_search: "search",
-        mobile_production: "production",
-      };
+      const mobilePages = new Set(["home", "incoming", "warehouse", "production", "pre_delivery"]);
       const byId = id => document.getElementById(id);
 
       function node(tag, className, text) {
@@ -292,8 +316,27 @@
         return payload;
       }
 
+      async function logout() {
+        state.searchController?.abort();
+        state.detailController?.abort();
+        state.productionController?.abort();
+        state.productionLookupController?.abort();
+        state.homeController?.abort();
+        byId("logoutButton").disabled = true;
+        try {
+          await fetch("/api/auth/logout", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { Accept: "application/json" },
+          });
+        } finally {
+          window.location.replace("/?redirect=/mobile/erp.html");
+        }
+      }
+
       function safeRequestedPage() {
-        const requested = window.location.hash.replace(/^#/, "").trim();
+        const raw = window.location.hash.replace(/^#/, "").trim();
+        const requested = raw === "search" ? "warehouse" : raw;
         return mobilePages.has(requested) ? requested : "";
       }
 
@@ -302,19 +345,31 @@
           page = document.querySelector(".nav-btn:not([hidden])")?.dataset.page || "";
         }
         if (!page || !state.allowedPages.has(page)) return;
+        if (state.activePage) state.scrollByPage.set(state.activePage, window.scrollY);
         state.activePage = page;
         const isHome = page === "home";
-        const isSearch = page === "search";
+        const isWarehouse = page === "warehouse";
         byId("homePage").hidden = !isHome;
-        byId("searchPage").hidden = !isSearch;
+        byId("incomingPage").hidden = page !== "incoming";
+        byId("searchPage").hidden = !isWarehouse;
         byId("productionPage").hidden = page !== "production";
+        byId("preDeliveryPage").hidden = page !== "pre_delivery";
         document.querySelectorAll(".nav-btn").forEach(button => {
           button.classList.toggle("active", button.dataset.page === page);
         });
         if (updateLocation && window.location.hash !== `#${page}`) {
           window.history.replaceState(null, "", `#${page}`);
         }
-        if (isSearch) byId("searchInput").focus();
+        if (page === "incoming" && !state.loadedFrames.has(page)) {
+          byId("incomingFrame").src = "/incoming.html?embedded=1";
+          state.loadedFrames.add(page);
+        }
+        if (page === "pre_delivery" && !state.loadedFrames.has(page)) {
+          byId("preDeliveryFrame").src = "/mobile/delivery-pick.html?embedded=1";
+          state.loadedFrames.add(page);
+        }
+        window.requestAnimationFrame(() => window.scrollTo(0, state.scrollByPage.get(page) || 0));
+        if (isWarehouse) byId("searchInput").focus();
         if (page === "production" && !state.productionItems.length) loadProduction();
       }
 
@@ -331,12 +386,38 @@
         }
       }
 
+      function renderEntryHome() {
+        const entries = Array.isArray(state.shell?.entries) ? state.shell.entries : [];
+        const container = byId("entryCards");
+        container.replaceChildren();
+        entries.forEach(entry => {
+          const button = node("button", "entry-card");
+          button.type = "button";
+          button.dataset.entry = entry.id;
+          const accessText = entry.can_execute ? "可执行已授权现场动作" : "只读查看";
+          button.append(
+            node("strong", "", entry.label),
+            node("span", "", entry.summary || "进入后按需读取"),
+            node("em", "", accessText),
+          );
+          button.addEventListener("click", () => setPage(entry.id));
+          container.append(button);
+        });
+        container.hidden = !entries.length;
+        byId("managementSummary").hidden = state.shell?.management_summary_allowed !== true;
+        if (entries.length || state.shell?.management_summary_allowed === true) {
+          byId("homeState").hidden = true;
+        } else {
+          showStatus("homeState", "当前账号没有可用的手机现场入口，请联系管理员。", "error", initialize);
+        }
+      }
+
       async function loadHome() {
         state.homeController?.abort();
         const controller = new AbortController();
         state.homeController = controller;
         const generation = ++state.homeGeneration;
-        showStatus("homeState", "正在读取首页…", "");
+        showStatus("managementState", "正在读取老板 / 财务摘要…", "");
         try {
           state.dashboard = await apiGet("/api/dashboard/overview", { signal: controller.signal });
           if (generation !== state.homeGeneration) return;
@@ -352,15 +433,15 @@
             container.append(card);
           });
           if (!cards.length) {
-            showStatus("homeState", "当前没有需要显示的待办。", "empty", loadHome);
+            showStatus("managementState", "当前没有需要显示的待办。", "empty", loadHome);
             container.hidden = true;
             return;
           }
-          byId("homeState").hidden = true;
+          byId("managementState").hidden = true;
           container.hidden = false;
         } catch (error) {
           if (error.name === "AbortError" || generation !== state.homeGeneration) return;
-          showStatus("homeState", error.message || "首页读取失败", "error", loadHome);
+          showStatus("managementState", error.message || "摘要读取失败", "error", loadHome);
         }
       }
 
@@ -797,55 +878,27 @@
         state.initializing = true;
         byId("bottomNav").hidden = true;
         try {
-          state.auth = await apiGet("/api/auth/me");
-          const user = state.auth.user || {};
-          byId("userText").textContent = `${user.display_name || user.real_name || user.username || "当前账号"}｜只读`;
-          const permissions = Array.isArray(state.auth.permissions) ? state.auth.permissions : [];
-          const canSearch = permissions.includes("warehouse.view");
-          const canProduction = permissions.includes("orders.view") && permissions.includes("incoming.view");
-          const canHome = permissions.includes("dashboard.view");
+          state.shell = await apiGet("/api/mobile/erp/shell");
+          const user = state.shell.user || {};
+          const entries = Array.isArray(state.shell.entries) ? state.shell.entries : [];
+          const canOperate = entries.some(entry => entry.can_execute === true);
+          byId("userText").textContent = `${user.display_name || user.real_name || user.username || "当前账号"}｜${canOperate ? "现场作业" : "只读"}`;
           const navContainer = document.querySelector(".bottom-inner");
-          ["home", "search", "production"].forEach(page => {
+          const allowedEntryIds = new Set(entries.map(entry => entry.id));
+          ["home", "incoming", "warehouse", "production", "pre_delivery"].forEach(page => {
             const button = document.querySelector(`[data-page="${page}"]`);
-            button.hidden = false;
+            button.hidden = page !== "home" && !allowedEntryIds.has(page);
             navContainer.append(button);
           });
-          document.querySelector('[data-page="home"]').hidden = !canHome;
-          document.querySelector('[data-page="search"]').hidden = !canSearch;
-          byId("zeroStockControl").hidden = !canSearch || user.role !== "admin";
-          document.querySelector('[data-page="production"]').hidden = !canProduction;
-          let configuredMenus = null;
-          try {
-            const configured = await apiGet("/api/system/ui-layout/effective?display_mode=mobile");
-            configuredMenus = configured?.layout?.menus;
-          } catch (_error) {
-            configuredMenus = null;
-          }
+          byId("zeroStockControl").hidden = !allowedEntryIds.has("warehouse") || user.role !== "admin";
           let visibleNav = [...document.querySelectorAll(".nav-btn")].filter(button => !button.hidden);
-          if (Array.isArray(configuredMenus)) {
-            const permittedByPage = new Map(visibleNav.map(button => [button.dataset.page, button]));
-            visibleNav = configuredMenus
-              .map(item => permittedByPage.get(mobileLayoutPageIds[item.id]))
-              .filter(Boolean);
-            document.querySelectorAll(".nav-btn").forEach(button => {
-              button.hidden = !visibleNav.includes(button);
-            });
-            visibleNav.forEach(button => navContainer.append(button));
-          }
           state.allowedPages = new Set(visibleNav.map(button => button.dataset.page));
           document.querySelector(".bottom-inner").style.setProperty("--nav-count", visibleNav.length || 1);
-          if (!visibleNav.length) {
-            document.querySelector("main").replaceChildren(
-              node("div", "card status error", "当前账号没有可用的手机只读入口，请联系管理员。")
-            );
-            byId("bottomNav").hidden = true;
-            return;
-          }
           byId("bottomNav").hidden = false;
+          renderEntryHome();
           const requestedPage = safeRequestedPage();
-          const firstPage = state.allowedPages.has(requestedPage) ? requestedPage : visibleNav[0].dataset.page;
+          const firstPage = state.allowedPages.has(requestedPage) ? requestedPage : "home";
           setPage(firstPage);
-          if (firstPage === "home") await loadHome();
         } catch (error) {
           byId("bottomNav").hidden = true;
           showStatus("homeState", error.message || "手机版初始化失败", "error", initialize);
@@ -857,6 +910,8 @@
       document.querySelectorAll(".nav-btn").forEach(button => {
         button.addEventListener("click", () => setPage(button.dataset.page));
       });
+      byId("loadManagementSummary").addEventListener("click", loadHome);
+      byId("logoutButton").addEventListener("click", logout);
       byId("searchInput").addEventListener("input", queueSearch);
       byId("searchInput").addEventListener("keydown", event => {
         if (event.key === "Enter") {

@@ -307,7 +307,7 @@ def test_recent_production_permission_and_custom_period_fail_closed(
 def test_mobile_production_ui_is_strictly_read_only_and_preserves_context() -> None:
     for text in (
         "近期来料和生产资料",
-        "近期生产",
+        "生产",
         "材料未齐",
         "现在可生产",
         "查看图纸",
@@ -316,6 +316,7 @@ def test_mobile_production_ui_is_strictly_read_only_and_preserves_context() -> N
     ):
         assert text in MOBILE_HTML
     assert "Production cards and scroll position remain untouched" in MOBILE_HTML
-    assert 'method: "POST"' not in MOBILE_HTML
+    assert MOBILE_HTML.count('method: "POST"') == 1
+    assert 'fetch("/api/auth/logout"' in MOBILE_HTML
     assert 'method: "PUT"' not in MOBILE_HTML
     assert 'method: "DELETE"' not in MOBILE_HTML

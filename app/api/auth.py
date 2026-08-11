@@ -68,6 +68,8 @@ PERMISSION_LABELS: dict[str, tuple[str, str]] = {
     "orders.status": ("orders", "订单状态操作"),
     "orders.delete": ("orders", "订单删除"),
     "orders.rollback": ("orders", "订单回滚"),
+    "production.printing.view": ("production", "手机印刷工位查看"),
+    "production.die_cut.view": ("production", "手机模切工位查看"),
     "requisition.view": ("requisition", "报料查看"),
     "requisition.execute": ("requisition", "报料执行"),
     "dashboard.view": ("dashboard", "首页仪表盘查看"),

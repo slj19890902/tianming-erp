@@ -8,10 +8,11 @@ DEPS = (ROOT / "app" / "api" / "deps.py").read_text(encoding="utf-8")
 
 
 def test_mobile_home_uses_effective_dashboard_permission_not_role_name() -> None:
-    assert 'const canHome = permissions.includes("dashboard.view");' in MOBILE
+    assert "state.shell?.management_summary_allowed === true" in MOBILE
     assert '&& ["admin", "boss"].includes(user.role)' not in MOBILE
-    assert 'if (!(state.allowedPages.has("home")))' not in MOBILE
-    assert "按当前账号权限只读显示" in MOBILE
+    assert 'state.dashboard = await apiGet("/api/dashboard/overview"' in MOBILE
+    assert 'byId("loadManagementSummary").addEventListener("click", loadHome)' in MOBILE
+    assert "这里只显示当前账号获准使用的现场入口" in MOBILE
 
 
 def test_mobile_home_shows_all_authorized_workflow_cards_without_recalculation() -> None:
@@ -21,6 +22,8 @@ def test_mobile_home_shows_all_authorized_workflow_cards_without_recalculation()
     assert "pending_payment" not in MOBILE
     assert "pending_invoice" not in MOBILE
     assert "pending_reconciliation" not in MOBILE
+    initialize_block = MOBILE.split("async function initialize()", 1)[1].split("document.querySelectorAll", 1)[0]
+    assert "await loadHome()" not in initialize_block
 
 
 def test_dashboard_backend_remains_permission_and_customer_scoped() -> None:
@@ -40,8 +43,9 @@ def test_dashboard_backend_remains_permission_and_customer_scoped() -> None:
     assert not has_permission(finance_user, "warehouse.view")
 
 
-def test_mobile_finance_scope_stays_read_only() -> None:
-    assert 'method: "POST"' not in MOBILE
+def test_mobile_finance_scope_only_adds_explicit_logout_post() -> None:
+    assert MOBILE.count('method: "POST"') == 1
+    assert 'fetch("/api/auth/logout"' in MOBILE
     assert 'method: "PUT"' not in MOBILE
     assert 'method: "PATCH"' not in MOBILE
     assert 'method: "DELETE"' not in MOBILE

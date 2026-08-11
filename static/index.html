@@ -11544,8 +11544,9 @@
             if (["/incoming.html", "/warehouse.html"].includes(target)) return target;
             if (target === "/mobile/erp.html") {
               const mobilePage = new URLSearchParams(window.location.search).get("mobile_page") || "";
-              return ["home", "search", "production"].includes(mobilePage)
-                ? `${target}#${mobilePage}`
+              const safeMobilePage = mobilePage === "search" ? "warehouse" : mobilePage;
+              return ["home", "incoming", "warehouse", "production", "pre_delivery"].includes(safeMobilePage)
+                ? `${target}#${safeMobilePage}`
                 : target;
             }
             return "";
@@ -16785,6 +16786,7 @@
               ["products", "产品查看", "products.view"], ["products", "产品新增", "products.create"], ["products", "产品编辑", "products.edit"], ["products", "产品停用", "products.deactivate"], ["products", "产品删除", "products.delete"],
               ["quotations", "报价查看", "quotations.view"], ["quotations", "报价编辑", "quotations.edit"], ["contracts", "合同查看", "contracts.view"], ["contracts", "合同编辑", "contracts.edit"], ["contracts", "合同转订单", "contracts.convert"], ["orders", "订单查看", "orders.view"], ["orders", "订单新增", "orders.create"], ["orders", "订单编辑", "orders.edit"], ["orders", "订单状态操作", "orders.status"], ["orders", "订单删除", "orders.delete"], ["orders", "订单回滚", "orders.rollback"],
               ["requisition", "报料查看", "requisition.view"], ["requisition", "报料执行", "requisition.execute"], ["sensitive", "成本/毛利查看", "cost.view"], ["system", "系统备份", "system.backup"], ["system", "用户权限管理", "users.manage"],
+              ["production", "手机印刷工位查看", "production.printing.view"], ["production", "手机模切工位查看", "production.die_cut.view"],
               ["dashboard", "首页仪表盘查看", "dashboard.view"], ["audit", "操作记录查看", "audit.view"], ["incoming", "来料入库查看", "incoming.view"], ["incoming", "来料入库操作", "incoming.execute"],
               ["warehouse", "仓库库存查看", "warehouse.view"], ["warehouse", "仓库库存操作", "warehouse.execute"], ["warehouse", "订单库存预占", "warehouse.reserve"], ["warehouse", "库存盘点查看", "warehouse.stocktake.view"], ["warehouse", "库存盘点提交", "warehouse.stocktake.submit"], ["warehouse", "库存盘点审核", "warehouse.stocktake.review"],
               ["deliveries", "送货查看", "deliveries.view"], ["deliveries", "送货操作", "deliveries.execute"], ["deliveries", "超量送货确认", "deliveries.over_delivery"], ["deliveries", "手机拿货", "deliveries.pick"], ["finance", "财务查看", "finance.view"], ["finance", "财务操作", "finance.execute"],
@@ -16799,7 +16801,7 @@
               boss: this.permissionCatalogSeed().map(row => row.code).filter(code => !["system.backup","users.manage","audit.view","warehouse.stocktake.review","deliveries.over_delivery"].includes(code)),
               sales: ["customers.view","customers.edit","products.view","products.edit","quotations.view","quotations.edit","orders.view","orders.create","orders.edit","dashboard.view"].concat(["contracts.view","contracts.edit","contracts.convert"]),
               finance: ["customers.view","quotations.view","contracts.view","orders.view","dashboard.view","deliveries.view","finance.view","finance.execute","cost.view"],
-              workshop: ["customers.view","products.view","orders.view","dashboard.view","incoming.view","incoming.execute","warehouse.view","warehouse.execute","warehouse.stocktake.view","warehouse.stocktake.submit","deliveries.view"],
+              workshop: ["customers.view","products.view","orders.view","production.printing.view","production.die_cut.view","dashboard.view","incoming.view","incoming.execute","warehouse.view","warehouse.execute","warehouse.stocktake.view","warehouse.stocktake.submit","deliveries.view"],
               delivery_picker: ["orders.view", "deliveries.pick"],
             };
             return (defaults[role] || []).includes(item.code);

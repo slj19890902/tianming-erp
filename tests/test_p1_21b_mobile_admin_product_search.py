@@ -511,7 +511,7 @@ def test_mobile_page_is_compact_read_only_and_keeps_map_return_state() -> None:
     for text in (
         "天明 ERP 手机版",
         "今天先做什么",
-        "查产品和库存位置",
+        "仓库",
         "成品库存",
         "客户专用纸板备料",
         "原料仓尚未建立",
@@ -536,7 +536,8 @@ def test_mobile_page_is_compact_read_only_and_keeps_map_return_state() -> None:
     assert 'await loadFloor3Locations(true)' in WAREHOUSE_HTML
     assert "Search text, candidates and selected product remain in memory" in MOBILE_HTML
     assert "readonly=1" not in MOBILE_HTML  # map URLs come only from the trusted API.
-    assert 'method: "POST"' not in MOBILE_HTML
+    assert MOBILE_HTML.count('method: "POST"') == 1
+    assert 'fetch("/api/auth/logout"' in MOBILE_HTML
     assert 'method: "PUT"' not in MOBILE_HTML
     assert 'method: "DELETE"' not in MOBILE_HTML
 

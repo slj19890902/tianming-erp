@@ -24,6 +24,7 @@ from app.services.external_packaging_purchase import (
     build_external_purchase_print,
     build_external_purchase_preview,
     confirm_external_purchase,
+    list_external_purchase_routing_rows,
     serialize_external_purchase_batch,
 )
 from app.services.external_packaging_receiving import (
@@ -38,6 +39,7 @@ admin_only = RoleChecker(["admin"])
 can_cost = PermissionChecker("cost.view")
 can_incoming_read = PermissionChecker("incoming.view")
 can_incoming_execute = PermissionChecker("incoming.execute")
+can_requisition_read = PermissionChecker("requisition.view")
 
 
 class ExternalPurchaseLinePayload(BaseModel):
@@ -79,6 +81,18 @@ def _visible_customer_ids(user: User, db: Session) -> set[int] | None:
     if has_unrestricted_customer_access(user, db):
         return None
     return customer_scope_ids(user, db)
+
+
+@router.get("/external-packaging-purchases/pending-confirmations")
+def get_external_packaging_pending_confirmations(
+    db: Session = Depends(get_db),
+    user: User = Depends(can_requisition_read),
+) -> dict[str, Any]:
+    items = list_external_purchase_routing_rows(
+        db,
+        visible_customer_ids=_visible_customer_ids(user, db),
+    )
+    return {"items": items, "total": len(items)}
 
 
 @router.get("/external-packaging-purchases/pending-receipts")

@@ -3110,6 +3110,13 @@
                   <button class="btn" :disabled="!!requisitionInventoryActionState.action || !!requisitionVoidActionState.action || requisitionPendingLoading" @click="requisitionInventoryActionBlocked() ? refreshRequisitionInventoryState() : (requisitionVoidActionBlocked() ? refreshRequisitionVoidState() : refreshRequisitionTab())">{{ requisitionInventoryActionBlocked() ? '核对待报料库存状态' : (requisitionVoidActionBlocked() ? '核对报料状态' : (requisitionPendingLoading ? '读取中…' : '刷新')) }}</button>
                 </div>
               </div>
+              <div v-if="requisitionTab==='pending'" class="panel" style="margin:8px 0;border-color:#f59e0b">
+                <div class="toolbar"><div><strong>外购包材待确认 {{ externalPurchaseRouting.length }}</strong><div class="muted">纯护角、EPE等不进入纸板报料；混合BOM的外购组件也在这里核对，确认后生成EP采购单。</div></div><button v-if="externalPurchaseRoutingError" class="btn small" @click="loadRequisition({skipAutoRelease:true})">重试</button></div>
+                <div v-if="externalPurchaseRoutingLoading" class="muted">正在读取外购包材需求…</div>
+                <div v-else-if="externalPurchaseRoutingError" class="status orange">{{ externalPurchaseRoutingError }}</div>
+                <div v-else-if="!externalPurchaseRouting.length" class="muted">当前没有待确认的外购包材需求。</div>
+                <div v-else class="table-wrap"><table class="compact-table"><thead><tr><th>客户 / 订单</th><th>品号 / 名称</th><th>供货方式</th><th>规格</th><th>数量</th><th>下一步</th></tr></thead><tbody><tr v-for="row in externalPurchaseRouting" :key="'external-route-'+row.order_item_id"><td>{{ row.customer_name }}<div class="muted">{{ row.order_number }}｜交期 {{ row.delivery_date || '-' }}</div></td><td>{{ row.product_code || '-' }}｜{{ row.product_name || '-' }}</td><td>{{ row.supply_mode==='external_purchase' ? '纯外购包材' : '纸板主件＋外购组件' }}</td><td>{{ row.specification_summary || (row.component_count + '项外购组件') }}<div class="muted">{{ row.purchase_unit || '' }}</div></td><td>{{ row.quantity }}</td><td><button v-if="canAdmin && canViewCosts" class="btn small primary" @click="openExternalPurchase(row)">核对并确认采购</button><span v-else class="muted">请管理员在成本权限下确认采购</span></td></tr></tbody></table></div>
+              </div>
               <div v-if="requisitionInventoryActionBlocked()" class="status orange" style="display:flex;align-items:center;gap:8px;white-space:normal;margin:8px 0">
                 <span>{{ requisitionInventoryActionState.action ? requisitionInventoryActionLabel() : (requisitionInventoryActionState.committed ? '库存已经使用，但页面刷新失败，请先核对状态，不要重复操作。' : '上次库存操作结果暂不确定，请先核对状态，不要重复操作。') }}</span>
                 <button class="btn small" type="button" :disabled="!!requisitionInventoryActionState.action" @click="refreshRequisitionInventoryState">核对待报料库存状态</button>
@@ -4525,6 +4532,7 @@
                     <option v-if="productForm.box_style && !productBoxStyleOptions.includes(productForm.box_style)" :value="productForm.box_style">原记录：{{ productForm.box_style }}</option>
                   </select>
                 </div>
+                <div v-if="productForm.box_style!=='其他'" class="field"><label>供货方式</label><select class="select" v-model="productForm.supply_mode"><option value="corrugated_production">纸板报料＋本厂生产</option><option value="mixed_bom">纸板主件＋外购包材组件</option></select><div class="muted" style="font-size:11px">混合模式请在下方“外购包装组件”维护护角、EPE等组件。</div></div>
               </div>
 
               <div v-if="productForm.supply_mode==='external_purchase'" class="panel" style="margin:10px 0;border-color:#f59e0b">
@@ -7674,6 +7682,7 @@
             costReviewState:{loading:false,loaded:false,error:"",scope_label:"",evaluated_items:0,total_items:0,returned_items:0,truncated:false,summary:[],items:[]},
             orderDetail:null, orderGroupDetail:null, orderTrace:null, orderTraceEventDetail:null, orderTraceEventDetailLoadingKey:"", orderTraceReturnContext:null, traceRollbackBusy:false, drawingFile:null,
             externalPurchase:{loading:false,saving:false,error:"",submitError:"",status:"",orderId:null,items:[],confirmation:null,idempotencyKey:""},
+            externalPurchaseRouting:[], externalPurchaseRoutingLoading:false, externalPurchaseRoutingError:"",
             orderItemSaveState:{saving:false,committed:false,outcomeUncertain:false,result:null},
             finishedInventoryCandidates: [], finishedInventoryCandidatesLoaded: false,
             finishedInventoryReservations: [],
@@ -11626,6 +11635,9 @@
             this.externalIncomingLoading = false;
             this.externalIncomingError = "";
             this.externalIncomingSavingId = null;
+            this.externalPurchaseRouting = [];
+            this.externalPurchaseRoutingLoading = false;
+            this.externalPurchaseRoutingError = "";
             for (const timer of searchDebounceTimers.values()) clearTimeout(timer);
             searchDebounceTimers.clear();
             pageSearchGenerations.clear();
@@ -13746,13 +13758,18 @@
               const autoReleasedIds = skipAutoRelease
                 ? []
                 : await this.autoReleaseReadyRequisitionHolds(controller.signal);
-              const [holds, pending] = await Promise.all([
+              this.externalPurchaseRoutingLoading = true;
+              this.externalPurchaseRoutingError = "";
+              const [holds, pending, externalRouting] = await Promise.all([
                 axios.get("/api/requisition/holds", {
                   params:{page:1, page_size:this.pageSize},
                   signal:controller.signal,
                 }),
                 axios.get("/api/requisition/pending", {
                   params:this.requisitionPendingRequestParams(requestedPage, requestedSupplier),
+                  signal:controller.signal,
+                }),
+                axios.get("/api/external-packaging-purchases/pending-confirmations", {
                   signal:controller.signal,
                 }),
               ]);
@@ -13765,6 +13782,7 @@
                 ...(holds.data || {}),
                 auto_released_hold_ids:autoReleasedIds,
               });
+              this.externalPurchaseRouting = Array.isArray(externalRouting.data?.items) ? externalRouting.data.items : [];
               if (this.activePage === "requisition") this.markPageCache("requisition");
               return true;
             } catch (error) {
@@ -13772,10 +13790,12 @@
               this.pages.requisitionPending = this.requisitionPendingAppliedPage;
               this.requisitionSupplierFilter = this.requisitionPendingAppliedSupplierFilter;
               this.requisitionPendingError = "待报料读取失败：" + this.errorMessage(error);
+              this.externalPurchaseRoutingError = "外购包材待确认读取失败：" + this.errorMessage(error);
               throw error;
             } finally {
               if (this.pendingRequisitionRequestIsCurrent(controller, authGeneration, userId)) {
                 this.requisitionPendingLoading = false;
+                this.externalPurchaseRoutingLoading = false;
               }
               this.finishLatestRequest("requisition:pending", controller);
             }
@@ -18193,6 +18213,7 @@
               const detail = await axios.get(`/api/orders/${this.externalPurchase.orderId}`);
               this.orderDetail = detail.data;
               await this.loadOrders();
+              if (this.activePage === "requisition") await this.loadRequisition({skipAutoRelease:true});
               this.showToast(data.created ? "外购包装已按供应商确认采购" : "该采购已确认，本次未重复创建");
             } catch (error) {
               this.externalPurchase.submitError = this.errorMessage(error);
@@ -19003,7 +19024,7 @@
           },
           hydrateProductForm(detail) {
             const form = { ...blankProduct(), ...JSON.parse(JSON.stringify(detail || {})) };
-            form.supply_mode = form.supply_mode === "external_purchase" ? "external_purchase" : "corrugated_production";
+            form.supply_mode = ["external_purchase","mixed_bom"].includes(form.supply_mode) ? form.supply_mode : "corrugated_production";
             const externalSupply = detail?.external_supply || {};
             const snapshots = Array.isArray(externalSupply.candidates) ? externalSupply.candidates : [];
             form.external_supply = {candidates:snapshots};

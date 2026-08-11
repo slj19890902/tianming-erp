@@ -182,6 +182,7 @@ from app.services.composite_bom import (
     raise_http as raise_composite_bom_http,
 )
 from app.services.order_external_packaging import (
+    OrderExternalPackagingSnapshotError,
     freeze_order_item_external_components,
     get_order_item_external_components_by_item_ids,
 )
@@ -2093,6 +2094,10 @@ def _order_response(
                 "snapshot_original_material_code": item.snapshot_original_material_code,
                 "snapshot_customer_model": item.snapshot_customer_model,  # v0.19.1
                 "snapshot_production_notes": item.snapshot_production_notes,  # v0.19.2-A
+                "supply_mode_snapshot": item.supply_mode_snapshot,
+                "external_packaging_category_code_snapshot": item.external_packaging_category_code_snapshot,
+                "external_packaging_specification_summary_snapshot": item.external_packaging_specification_summary_snapshot,
+                "external_packaging_purchase_unit_snapshot": item.external_packaging_purchase_unit_snapshot,
                 "display_material": _display_material(item.snapshot_material),
                 # v0.19.2-B: 常用箱层数/楞型/供应商/克重/图纸
                 "layer_count": item.layer_count,
@@ -5849,12 +5854,16 @@ def _create_order_impl(
                 and not item_payload.is_new_product
             )
             selected_material_id = (
-                product.material_id
-                if is_pdf_matched_product
+                None
+                if product.supply_mode == "external_purchase"
                 else (
-                    item_payload.material_id
-                    if item_payload.material_id is not None
-                    else product.material_id
+                    product.material_id
+                    if is_pdf_matched_product
+                    else (
+                        item_payload.material_id
+                        if item_payload.material_id is not None
+                        else product.material_id
+                    )
                 )
             )
             selected_material = (
@@ -6054,14 +6063,20 @@ def _create_order_impl(
                     )
                 )
             )
+            if product.supply_mode == "external_purchase":
+                initial_material_code = None
             original_material_code = (
-                (item_payload.original_material_code or "").strip()
-                or (
-                    (item_payload.material or "").strip()
-                    if payload.pdf_import_confirmation is not None
-                    else ""
+                None
+                if product.supply_mode == "external_purchase"
+                else (
+                    (item_payload.original_material_code or "").strip()
+                    or (
+                        (item_payload.material or "").strip()
+                        if payload.pdf_import_confirmation is not None
+                        else ""
+                    )
+                    or initial_material_code
                 )
-                or initial_material_code
             )
             try:
                 product_box_configuration = (
@@ -6102,8 +6117,41 @@ def _create_order_impl(
                     (item_payload.customer_model or "").strip() or None
                 ),  # v0.19.1: TH型号 / 客户型号
                 snapshot_production_notes=(
-                    (item_payload.production_notes or "").strip() or None
+                    None
+                    if product.supply_mode == "external_purchase"
+                    else ((item_payload.production_notes or "").strip() or None)
                 ),  # v0.19.2-A: 生产/印刷说明
+                supply_mode_snapshot=product.supply_mode,
+                external_packaging_category_code_snapshot=(
+                    product.external_packaging_category_code
+                    if product.supply_mode == "external_purchase"
+                    else None
+                ),
+                external_packaging_specification_json_snapshot=(
+                    product.external_packaging_specification_json
+                    if product.supply_mode == "external_purchase"
+                    else None
+                ),
+                external_packaging_specification_summary_snapshot=(
+                    product.external_packaging_specification_summary
+                    if product.supply_mode == "external_purchase"
+                    else None
+                ),
+                external_packaging_purchase_unit_snapshot=(
+                    product.external_packaging_purchase_unit
+                    if product.supply_mode == "external_purchase"
+                    else None
+                ),
+                external_packaging_candidate_snapshot_json=(
+                    product.external_packaging_candidate_snapshot_json
+                    if product.supply_mode == "external_purchase"
+                    else None
+                ),
+                external_packaging_product_version_snapshot=(
+                    int(product.version)
+                    if product.supply_mode == "external_purchase"
+                    else None
+                ),
                 # v0.19.2-B: 常用箱层数/楞型/材质/供应商/克重 — 优先前端传值，否则从product取
                 layer_count=snapshot_layer_count,
                 flute_type=snapshot_flute_type,
@@ -6141,7 +6189,11 @@ def _create_order_impl(
                 special_process=product_box_configuration[
                     "default_cutting_mode"
                 ],
-                requisition_status="未报料",
+                requisition_status=(
+                    "外购包材待确认"
+                    if product.supply_mode == "external_purchase"
+                    else "未报料"
+                ),
                 **combination_provenances[index],
             )
             # P0-B: the client can submit only a short-lived, owner-bound token.
@@ -6227,7 +6279,10 @@ def _create_order_impl(
         db.flush()  # 获取 item.id 以便处理图纸
         for index, created_item in enumerate(created_items, start=1):
             product = resolved_products[index]
-            freeze_order_item_external_components(db, order_item=created_item)
+            try:
+                freeze_order_item_external_components(db, order_item=created_item)
+            except OrderExternalPackagingSnapshotError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
             if created_item.combination_role == "set_parent":
                 create_order_item_bom_snapshots(
                     db,
@@ -6242,9 +6297,11 @@ def _create_order_impl(
                     order=order,
                     request=request,
                 )
-                create_or_refresh_production_task(db, created_item.id)
+                if created_item.supply_mode_snapshot != "external_purchase":
+                    create_or_refresh_production_task(db, created_item.id)
                 continue
-            create_or_refresh_production_task(db, created_item.id)
+            if created_item.supply_mode_snapshot != "external_purchase":
+                create_or_refresh_production_task(db, created_item.id)
         # v0.19.2-B: 图纸保存到常用箱
         for i, item in enumerate(created_items):
             opt = payload.items[i].drawing_save_option if i < len(payload.items) else None

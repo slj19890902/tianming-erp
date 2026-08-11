@@ -133,6 +133,27 @@ class OrderItem(Base):
             name="ck_sales_order_items_material_status",
         ),
         CheckConstraint(
+            "supply_mode_snapshot IN ('corrugated_production','external_purchase','mixed_bom')",
+            name="ck_sales_order_items_supply_mode_snapshot",
+        ),
+        CheckConstraint(
+            "((supply_mode_snapshot = 'external_purchase' "
+            "AND external_packaging_category_code_snapshot IS NOT NULL "
+            "AND external_packaging_specification_json_snapshot IS NOT NULL "
+            "AND external_packaging_specification_summary_snapshot IS NOT NULL "
+            "AND external_packaging_purchase_unit_snapshot IS NOT NULL "
+            "AND external_packaging_candidate_snapshot_json IS NOT NULL "
+            "AND external_packaging_product_version_snapshot IS NOT NULL) OR "
+            "(supply_mode_snapshot <> 'external_purchase' "
+            "AND external_packaging_category_code_snapshot IS NULL "
+            "AND external_packaging_specification_json_snapshot IS NULL "
+            "AND external_packaging_specification_summary_snapshot IS NULL "
+            "AND external_packaging_purchase_unit_snapshot IS NULL "
+            "AND external_packaging_candidate_snapshot_json IS NULL "
+            "AND external_packaging_product_version_snapshot IS NULL))",
+            name="ck_sales_order_items_external_profile_snapshot",
+        ),
+        CheckConstraint(
             "combination_mode_snapshot IS NULL OR "
             "combination_mode_snapshot IN ('parent_priced_set', 'component_priced')",
             name="ck_sales_order_items_combination_mode_snapshot",
@@ -233,6 +254,30 @@ class OrderItem(Base):
     )
     snapshot_customer_model: Mapped[str | None] = mapped_column(Text, nullable=True)
     snapshot_production_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    supply_mode_snapshot: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="corrugated_production",
+        server_default="corrugated_production",
+    )
+    external_packaging_category_code_snapshot: Mapped[str | None] = mapped_column(
+        String(50), nullable=True
+    )
+    external_packaging_specification_json_snapshot: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )
+    external_packaging_specification_summary_snapshot: Mapped[str | None] = mapped_column(
+        String(500), nullable=True
+    )
+    external_packaging_purchase_unit_snapshot: Mapped[str | None] = mapped_column(
+        String(20), nullable=True
+    )
+    external_packaging_candidate_snapshot_json: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )
+    external_packaging_product_version_snapshot: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
     inventory_deducted_qty: Mapped[int] = mapped_column(
         Integer,
         default=0,

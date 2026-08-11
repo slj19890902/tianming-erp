@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.85"
-    assert APP_VERSION_NAME == "外购包材主档、报料分流与采购打印"
+    assert APP_VERSION == "v0.22.86"
+    assert APP_VERSION_NAME == "模具即时搜索、解绑与分页"
     assert APP_BUILD_DATE == "2026-08-11"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -50,23 +50,23 @@ def test_factory_update_reports_current_release_version() -> None:
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
     assert any(
-        "本次更新｜" in item and "纸板供应商" in item and "护角" in item and "中空板" in item
+        "本次更新｜" in item and "常用箱" in item and "即时搜索" in item and "旧缓存" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "报料工作台" in item and "纯外购" in item and "混合 BOM" in item
+        "本次更新｜" in item and "客户简写" in item and "编码" in item and "名称" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "1.10 元/米" in item and "EPE" in item and "正式报价" in item
+        "本次更新｜" in item and "解除" in item and "事务" in item and "审计" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "外购采购打印" in item and "冻结图纸" in item and "压线" in item
+        "本次更新｜" in item and "每页 20 件" in item and "横向滚动" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "ea09→eb10→ec11" in item and "不回填" in item
+        "本次更新｜" in item and "不自动绑定" in item and "ec11" in item
         for item in current_release
     )
     assert any(
@@ -136,7 +136,7 @@ def test_factory_update_reports_current_release_version() -> None:
         for item in APP_CHANGELOG
     )
     assert any(
-        "如何验证｜" in item and "v0.22.85" in item and "ec11" in item
+        "如何验证｜" in item and "v0.22.86" in item and "ec11" in item
         for item in current_release
     )
     assert any(

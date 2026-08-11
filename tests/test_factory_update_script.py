@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.87"
-    assert APP_VERSION_NAME == "开料方式数字输入与生产任务显示"
+    assert APP_VERSION == "v0.22.88"
+    assert APP_VERSION_NAME == "一楼实测地图、库位与模具联动"
     assert APP_BUILD_DATE == "2026-08-11"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -50,23 +50,23 @@ def test_factory_update_reports_current_release_version() -> None:
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
     assert any(
-        "本次更新｜" in item and "正整数" in item and "输入 12" in item
+        "本次更新｜" in item and "一张天明实测仓库地图" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "组合 BOM" in item and "单双拼" in item
+        "本次更新｜" in item and "19 个区域" in item and "排除 3 个" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "供应商采购报料单" in item and "备注" in item
+        "本次更新｜" in item and "一次建立" in item and "库存数量" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "衬板" in item and "随料生产任务单" in item
+        "本次更新｜" in item and "逐层格数" in item and "R01/R02/R03" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "ec11→ed12" in item and "不批量改写" in item
+        "本次更新｜" in item and "没有数据库迁移" in item and "追溯" in item
         for item in current_release
     )
     assert any(
@@ -143,7 +143,7 @@ def test_factory_update_reports_current_release_version() -> None:
         for item in APP_CHANGELOG
     )
     assert any(
-        "如何验证｜" in item and "v0.22.87" in item and "ed12" in item
+        "如何验证｜" in item and "v0.22.88" in item and "ed12" in item
         for item in current_release
     )
     assert any(

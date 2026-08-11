@@ -6,7 +6,7 @@ import mimetypes
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from fastapi import (
     APIRouter,
     Depends,
@@ -73,6 +73,13 @@ from app.services.product_readiness import product_readiness
 from app.services.production_label_strategy import (
     ProductionLabelStrategyError,
     normalize_production_label_strategy,
+)
+from app.services.corner_guard_pricing import (
+    CATEGORY_CODE as CORNER_GUARD_CATEGORY_CODE,
+    ROOT_UNITS as CORNER_GUARD_ROOT_UNITS,
+    CornerGuardPricingError,
+    corner_guard_sections_match,
+    normalize_customer_corner_guard_specification,
 )
 from app.services.supplier_master import SupplierLookupError, resolve_supplier
 from app.services.master_data_versioning import (
@@ -346,6 +353,7 @@ class ProductExternalSupplyCandidatePayload(BaseModel):
 
 class ProductExternalSupplyPayload(BaseModel):
     candidates: list[ProductExternalSupplyCandidatePayload] = Field(default_factory=list, max_length=20)
+    customer_specification: dict[str, Any] | None = None
 
 
 class ProductPayload(BaseModel):
@@ -810,13 +818,74 @@ def _normalize_product_external_supply(
         if row.customer_scope_id not in (None, payload.customer_id):
             raise HTTPException(status_code=409, detail=f"{row.supplier_product_code}是其他客户专用产品")
     first = rows[0]
-    if any(
-        row.category_code != first.category_code
-        or row.specification_json != first.specification_json
-        or row.purchase_unit != first.purchase_unit
-        for row in rows[1:]
-    ):
-        raise HTTPException(status_code=422, detail="候选供应商必须属于同一包材类别、规格和采购单位")
+    customer_specification: dict[str, Any]
+    specification_summary: str
+    purchase_unit = first.purchase_unit
+    if first.category_code == CORNER_GUARD_CATEGORY_CODE:
+        raw_customer_specification = (
+            payload.external_supply.customer_specification
+            if payload.external_supply is not None
+            else None
+        )
+        if raw_customer_specification is None and existing is not None:
+            try:
+                raw_customer_specification = json.loads(
+                    existing.external_packaging_specification_json or "{}"
+                )
+            except (TypeError, json.JSONDecodeError):
+                raw_customer_specification = None
+        if raw_customer_specification is None:
+            raise HTTPException(
+                status_code=422,
+                detail="纸护角必须填写客户单根长度、边宽和厚度，不能直接复制供应商长度",
+            )
+        try:
+            customer_specification, specification_summary = (
+                normalize_customer_corner_guard_specification(
+                    raw_customer_specification
+                )
+            )
+        except CornerGuardPricingError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        for row in rows:
+            try:
+                supplier_specification = json.loads(row.specification_json or "{}")
+            except (TypeError, json.JSONDecodeError) as error:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"{row.supplier_product_code}的纸护角截面规格无效",
+                ) from error
+            if row.category_code != CORNER_GUARD_CATEGORY_CODE or not corner_guard_sections_match(
+                customer_specification, supplier_specification
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"{row.supplier_product_code}与客户护角截面不兼容",
+                )
+            if row.purchase_unit not in CORNER_GUARD_ROOT_UNITS:
+                raise HTTPException(
+                    status_code=422,
+                    detail="纸护角客户订单必须按根/支保存，供应商产品采购单位请先完善",
+                )
+        purchase_unit = "根"
+    else:
+        if payload.external_supply and payload.external_supply.customer_specification:
+            raise HTTPException(
+                status_code=422,
+                detail="本阶段只有纸护角支持独立客户规格",
+            )
+        if any(
+            row.category_code != first.category_code
+            or row.specification_json != first.specification_json
+            or row.purchase_unit != first.purchase_unit
+            for row in rows[1:]
+        ):
+            raise HTTPException(status_code=422, detail="候选供应商必须属于同一包材类别、规格和采购单位")
+        try:
+            customer_specification = json.loads(first.specification_json or "{}")
+        except (TypeError, json.JSONDecodeError) as error:
+            raise HTTPException(status_code=422, detail="候选供应商结构化规格无效") from error
+        specification_summary = first.specification_summary
     default_ids = [item.external_product_id for item in candidates if item.is_default]
     if len(candidates) == 1:
         default_ids = [candidates[0].external_product_id]
@@ -831,6 +900,7 @@ def _normalize_product_external_supply(
             "supplier_product_code": row.supplier_product_code,
             "product_name": row.product_name,
             "purchase_unit": row.purchase_unit,
+            "supplier_specification": json.loads(row.specification_json or "{}"),
             "customer_scope_id": row.customer_scope_id,
             "external_product_version": row.version,
         }
@@ -838,14 +908,18 @@ def _normalize_product_external_supply(
     ]
     _clear_external_purchase_paper_fields(payload)
     payload.external_packaging_category_code = first.category_code
-    payload.external_packaging_specification_summary = first.specification_summary
-    payload.external_packaging_purchase_unit = first.purchase_unit
+    payload.external_packaging_specification_summary = specification_summary
+    payload.external_packaging_purchase_unit = purchase_unit
+    if first.category_code == CORNER_GUARD_CATEGORY_CODE:
+        payload.unit = "根"
     return {
         "supply_mode": "external_purchase",
         "external_packaging_category_code": first.category_code,
-        "external_packaging_specification_json": first.specification_json,
-        "external_packaging_specification_summary": first.specification_summary,
-        "external_packaging_purchase_unit": first.purchase_unit,
+        "external_packaging_specification_json": json.dumps(
+            customer_specification, ensure_ascii=False, sort_keys=True
+        ),
+        "external_packaging_specification_summary": specification_summary,
+        "external_packaging_purchase_unit": purchase_unit,
         "external_packaging_candidate_snapshot_json": json.dumps(snapshots, ensure_ascii=False, sort_keys=True),
     }
 
@@ -1376,7 +1450,12 @@ def _current_external_candidate_prices(
         product = product_by_id.get(price.external_product_id)
         if product is None:
             continue
-        if price.product_version != product.version or price.quote_unit != product.purchase_unit:
+        expected_quote_unit = (
+            "米"
+            if product.category_code == CORNER_GUARD_CATEGORY_CODE
+            else product.purchase_unit
+        )
+        if price.product_version != product.version or price.quote_unit != expected_quote_unit:
             continue
         current.setdefault(price.external_product_id, price)
     return current

@@ -21,6 +21,13 @@ from app.models.product import Product
 from app.models.supplier import ExternalPackagingProduct, Supplier
 from app.models.user import User
 from app.services.supplier_master import SUPPLIER_CATEGORY_LABELS
+from app.services.corner_guard_pricing import (
+    CATEGORY_CODE as CORNER_GUARD_CATEGORY_CODE,
+    ROOT_UNITS as CORNER_GUARD_ROOT_UNITS,
+    CornerGuardPricingError,
+    corner_guard_sections_match,
+    normalize_customer_corner_guard_specification,
+)
 
 
 router = APIRouter()
@@ -44,6 +51,7 @@ class ExternalComponentPayload(BaseModel):
     conversion_basis: str | None = Field(default=None, max_length=500)
     is_required: bool = True
     remarks: str | None = None
+    customer_specification: dict[str, Any] | None = None
     candidates: list[ExternalCandidatePayload] = Field(min_length=1, max_length=20)
 
     @field_validator("purpose", "consumption_unit", "conversion_basis", "remarks", mode="before")
@@ -256,7 +264,14 @@ def list_external_component_candidates(
 
 def _validate_components(
     db: Session, product: Product, payload: ExternalComponentSetPayload
-) -> list[tuple[ExternalComponentPayload, list[ExternalPackagingProduct]]]:
+) -> list[
+    tuple[
+        ExternalComponentPayload,
+        list[ExternalPackagingProduct],
+        dict[str, Any],
+        str,
+    ]
+]:
     purposes: set[str] = set()
     all_ids: list[int] = []
     for component in payload.components:
@@ -276,7 +291,14 @@ def _validate_components(
         raise HTTPException(status_code=422, detail="同一个供应商产品不能重复绑定到多个组件")
 
     products = _live_products(db, set(all_ids))
-    validated: list[tuple[ExternalComponentPayload, list[ExternalPackagingProduct]]] = []
+    validated: list[
+        tuple[
+            ExternalComponentPayload,
+            list[ExternalPackagingProduct],
+            dict[str, Any],
+            str,
+        ]
+    ] = []
     for component in payload.components:
         rows = [products.get(item.external_product_id) for item in component.candidates]
         if any(row is None for row in rows):
@@ -294,15 +316,72 @@ def _validate_components(
                     detail=f"{row.supplier_product_code}是其他客户专用产品，不能绑定当前常用箱",
                 )
         first = typed_rows[0]
-        if any(
-            row.category_code != first.category_code
-            or row.specification_json != first.specification_json
-            for row in typed_rows[1:]
-        ):
-            raise HTTPException(
-                status_code=422,
-                detail=f"{component.purpose}的候选类别或结构化规格不一致",
-            )
+        if first.category_code == CORNER_GUARD_CATEGORY_CODE:
+            raw_customer_specification = component.customer_specification
+            if raw_customer_specification is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"{component.purpose}必须填写客户单根长度、边宽和厚度，"
+                        "不能直接复制供应商长度"
+                    ),
+                )
+            try:
+                customer_specification, specification_summary = (
+                    normalize_customer_corner_guard_specification(
+                        raw_customer_specification
+                    )
+                )
+            except CornerGuardPricingError as error:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"{component.purpose}：{error}",
+                ) from error
+            for row in typed_rows:
+                try:
+                    supplier_specification = json.loads(
+                        row.specification_json or "{}"
+                    )
+                except (TypeError, json.JSONDecodeError) as error:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"{row.supplier_product_code}的护角截面规格无效",
+                    ) from error
+                if row.category_code != CORNER_GUARD_CATEGORY_CODE or not corner_guard_sections_match(
+                    customer_specification, supplier_specification
+                ):
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"{row.supplier_product_code}与客户护角截面不兼容",
+                    )
+                if row.purchase_unit not in CORNER_GUARD_ROOT_UNITS:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"{component.purpose}候选必须按根/支采购",
+                    )
+            if component.consumption_unit not in CORNER_GUARD_ROOT_UNITS:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"{component.purpose}用量必须按根/支表达",
+                )
+        else:
+            if any(
+                row.category_code != first.category_code
+                or row.specification_json != first.specification_json
+                for row in typed_rows[1:]
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"{component.purpose}的候选类别或结构化规格不一致",
+                )
+            try:
+                customer_specification = json.loads(first.specification_json or "{}")
+            except (TypeError, json.JSONDecodeError) as error:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"{component.purpose}的结构化规格无效",
+                ) from error
+            specification_summary = first.specification_summary
         purchase_units = {row.purchase_unit for row in typed_rows}
         if len(purchase_units) != 1:
             raise HTTPException(
@@ -321,7 +400,9 @@ def _validate_components(
                     "必须填写每采购单位可用数量和换算依据"
                 ),
             )
-        validated.append((component, typed_rows))
+        validated.append(
+            (component, typed_rows, customer_specification, specification_summary)
+        )
     return validated
 
 
@@ -362,7 +443,12 @@ def replace_external_components(
         )
         db.add(new_set)
         db.flush()
-        for display_order, (component_payload, rows) in enumerate(validated, start=1):
+        for display_order, (
+            component_payload,
+            rows,
+            customer_specification,
+            specification_summary,
+        ) in enumerate(validated, start=1):
             first = rows[0]
             component = ProductExternalComponent(
                 component_set_id=new_set.id,
@@ -376,8 +462,10 @@ def replace_external_components(
                 is_required=component_payload.is_required,
                 remarks=component_payload.remarks,
                 category_code=first.category_code,
-                specification_json=first.specification_json,
-                specification_summary=first.specification_summary,
+                specification_json=json.dumps(
+                    customer_specification, ensure_ascii=False, sort_keys=True
+                ),
+                specification_summary=specification_summary,
             )
             db.add(component)
             db.flush()

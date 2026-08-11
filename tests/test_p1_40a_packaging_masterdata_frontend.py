@@ -103,6 +103,7 @@ const vm = {{
     external_packaging_category_code:"paper_corner_guard",
     external_packaging_specification_summary:"",
     external_packaging_purchase_unit:"",
+    _external_specification:{{shape:"L",length_mm:780,side_a_mm:50,side_b_mm:50,thickness_mm:5}},
     _external_selected_ids:[],
     _external_default_product_id:null,
     material_id:99, layer_count:5, flute_type:"AB",
@@ -151,6 +152,8 @@ if (payload.report_length_mm !== null || payload.report_width_mm !== null) throw
 if (payload.production_process !== "" || payload.print_content !== "无印刷") throw new Error("paper production fields were retained");
 if (payload.production_label_enabled !== false) throw new Error("production label policy was retained");
 if (payload.external_supply.candidates.length !== 1 || payload.external_supply.candidates[0].is_default !== true) throw new Error("external supply snapshot is invalid");
+if (payload.external_supply.customer_specification.length_mm !== 780) throw new Error("customer length was not saved separately");
+if (payload.unit !== "根") throw new Error("corner guard customer unit must be roots");
 """
     _run_node(tmp_path, source)
 

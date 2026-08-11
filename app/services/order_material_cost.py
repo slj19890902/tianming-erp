@@ -11,6 +11,10 @@ from app.models.material import Material
 from app.models.order import OrderItem
 from app.models.supplier_flute_price_rule import SupplierFlutePriceRule
 from app.services.material_pricing import get_effective_material_price
+from app.core.time_contract import beijing_today
+from app.services.corner_guard_pricing import (
+    estimate_order_item_external_packaging_cost,
+)
 from app.services.requisition_quantities import (
     DEFAULT_CUTTING_MODE,
     cutting_factor,
@@ -267,7 +271,11 @@ def build_material_cost_estimate_context(
     sources_by_item_id: dict[int, list[dict[str, Any]]] = {}
     material_ids: set[int] = set()
     for item in items:
-        sources = _main_sources(item)
+        sources = (
+            []
+            if item.supply_mode_snapshot == "external_purchase"
+            else _main_sources(item)
+        )
         sources.extend(
             _bom_sources(bom_components_by_item_id.get(int(item.id), ()))
         )
@@ -375,7 +383,11 @@ def estimate_order_item_material_cost(
     order and never derives report dimensions from a box-style name.
     """
 
-    sources = _main_sources(item)
+    sources = (
+        []
+        if item.supply_mode_snapshot == "external_purchase"
+        else _main_sources(item)
+    )
     sources.extend(_bom_sources(bom_components))
     calculated: list[dict[str, Any]] = []
     missing: list[str] = []
@@ -384,6 +396,18 @@ def estimate_order_item_material_cost(
         if component is not None:
             calculated.append(component)
         missing.extend(component_missing)
+
+    external = (
+        estimate_order_item_external_packaging_cost(
+            db,
+            item,
+            as_of=beijing_today(),
+        )
+        if item.supply_mode_snapshot in {"external_purchase", "mixed_bom"}
+        else {"components": [], "missing_items": []}
+    )
+    calculated.extend(external["components"])
+    missing.extend(external["missing_items"])
 
     # Preserve source order while avoiding repeated noise for the operator.
     missing = list(dict.fromkeys(missing))
@@ -410,7 +434,11 @@ def estimate_order_item_material_cost(
         "material_cost_status_label": status_label,
         "material_cost_scope_label": "当前材料成本（未计生产损耗和加工费）",
         "material_cost_is_current_estimate": True,
-        "material_cost_formula_version": "p1-28a-material-v1",
+        "material_cost_formula_version": (
+            "p1-43b-material-external-v1"
+            if item.supply_mode_snapshot in {"external_purchase", "mixed_bom"}
+            else "p1-28a-material-v1"
+        ),
         "estimated_material_unit_cost": str(unit_cost) if unit_cost is not None else None,
         "estimated_material_total_cost": str(total_cost) if total_cost is not None else None,
         "known_material_subtotal": str(

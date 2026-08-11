@@ -28,6 +28,12 @@ from app.models.order_external_packaging import (
 from app.models.supplier import ExternalPackagingProduct, Supplier
 from app.models.user import User
 from app.services.order_external_packaging import DISCRETE_PURCHASE_UNITS
+from app.services.corner_guard_pricing import (
+    CATEGORY_CODE as CORNER_GUARD_CATEGORY_CODE,
+    CornerGuardPricingError,
+    calculate_corner_guard_cost,
+    current_corner_guard_meter_price,
+)
 
 
 MONEY = Decimal("0.01")
@@ -82,8 +88,16 @@ def _current_price(
     db: Session,
     candidate: SalesOrderItemExternalComponentCandidate,
     *,
+    component: SalesOrderItemExternalComponent,
     as_of: date,
 ) -> ExternalPackagingPriceVersion | None:
+    if component.category_code == CORNER_GUARD_CATEGORY_CODE:
+        return current_corner_guard_meter_price(
+            db,
+            external_product_id=candidate.external_product_id_snapshot,
+            product_version=candidate.external_product_version_snapshot,
+            as_of=as_of,
+        )
     return db.scalar(
         select(ExternalPackagingPriceVersion)
         .where(
@@ -189,6 +203,57 @@ def _quantity_error(
     return None
 
 
+def _purchase_quantity_error(quantity: Decimal, *, unit: str) -> str | None:
+    if quantity <= 0:
+        return "采购数量必须大于 0"
+    if quantity.quantize(SIX_PLACES) != quantity:
+        return "采购数量最多保留 6 位小数"
+    if unit in DISCRETE_PURCHASE_UNITS and quantity != quantity.to_integral_value():
+        return f"采购单位为“{unit}”，数量必须是整数"
+    return None
+
+
+def _resolved_purchase_pricing(
+    component: SalesOrderItemExternalComponent,
+    price: ExternalPackagingPriceVersion,
+    *,
+    purchase_quantity: Decimal,
+) -> dict[str, Any]:
+    if component.category_code != CORNER_GUARD_CATEGORY_CODE:
+        effective, tiers = _effective_unit_price(price, purchase_quantity)
+        return {
+            "purchase_unit_price": effective,
+            "pricing_quantity": purchase_quantity,
+            "tier_prices": tiers,
+            "conversion": None,
+            "tax_amount_per_purchase_unit": price.tax_amount_per_unit,
+        }
+    try:
+        specification = json.loads(component.specification_json or "{}")
+        conversion = calculate_corner_guard_cost(
+            customer_specification=specification,
+            root_quantity=purchase_quantity,
+            price=price,
+        )
+    except (TypeError, json.JSONDecodeError, CornerGuardPricingError) as error:
+        raise ExternalPurchaseContractError(
+            f"组件“{component.purpose}”客户定长规格或每米报价无效：{error}"
+        ) from error
+    length_m = Decimal(conversion["length_m_per_root"])
+    tax_per_purchase = (
+        Decimal(price.tax_amount_per_unit) * length_m
+        if price.tax_amount_per_unit is not None
+        else None
+    )
+    return {
+        "purchase_unit_price": Decimal(conversion["unit_cost_per_root"]),
+        "pricing_quantity": Decimal(conversion["pricing_quantity_m"]),
+        "tier_prices": _tier_rows(price),
+        "conversion": conversion,
+        "tax_amount_per_purchase_unit": tax_per_purchase,
+    }
+
+
 def _price_snapshot(
     price: ExternalPackagingPriceVersion,
     *,
@@ -255,22 +320,60 @@ def _candidate_preview(
     db: Session,
     candidate: SalesOrderItemExternalComponentCandidate,
     *,
+    component: SalesOrderItemExternalComponent,
     quantity: Decimal,
     as_of: date,
 ) -> dict[str, Any]:
     _, blocked_reason = _product_availability(db, candidate)
-    price = None if blocked_reason else _current_price(db, candidate, as_of=as_of)
+    price = None if blocked_reason else _current_price(
+        db, candidate, component=component, as_of=as_of
+    )
     if price is None and blocked_reason is None:
-        blocked_reason = "当前没有匹配冻结规格和采购单位的有效价格"
-    quantity_error = (
-        _quantity_error(
-            price,
-            quantity,
-            unit=candidate.purchase_unit_snapshot,
+        blocked_reason = (
+            "当前没有有效价格：纸护角必须维护每米正式报价"
+            if component.category_code == CORNER_GUARD_CATEGORY_CODE
+            else "当前没有匹配冻结规格和采购单位的有效价格"
         )
-        if price is not None
+    pricing = None
+    quantity_error = _purchase_quantity_error(
+        quantity, unit=candidate.purchase_unit_snapshot
+    )
+    if price is not None and quantity_error is None:
+        try:
+            pricing = _resolved_purchase_pricing(
+                component, price, purchase_quantity=quantity
+            )
+            quantity_error = _quantity_error(
+                price,
+                Decimal(pricing["pricing_quantity"]),
+                unit=price.quote_unit,
+            )
+        except ExternalPurchaseContractError as error:
+            blocked_reason = error.message
+    price_payload = (
+        _price_snapshot(
+            price,
+            quantity=(
+                Decimal(pricing["pricing_quantity"])
+                if pricing is not None
+                else quantity
+            ),
+        )
+        if price
         else None
     )
+    if price_payload is not None and pricing is not None:
+        price_payload["purchase_unit_price"] = _decimal_text(
+            Decimal(pricing["purchase_unit_price"])
+        )
+        price_payload["purchase_unit"] = candidate.purchase_unit_snapshot
+        if pricing["conversion"] is not None:
+            price_payload["length_m_per_root"] = _decimal_text(
+                Decimal(pricing["conversion"]["length_m_per_root"])
+            )
+            price_payload["pricing_quantity_m"] = _decimal_text(
+                Decimal(pricing["conversion"]["pricing_quantity_m"])
+            )
     return {
         "id": candidate.id,
         "external_product_id": candidate.external_product_id_snapshot,
@@ -281,7 +384,7 @@ def _candidate_preview(
         "supplier_product_code": candidate.supplier_product_code_snapshot,
         "product_name": candidate.product_name_snapshot,
         "purchase_unit": candidate.purchase_unit_snapshot,
-        "price": _price_snapshot(price, quantity=quantity) if price else None,
+        "price": price_payload,
         "blocked_reason": blocked_reason,
         "suggested_quantity_warning": quantity_error,
     }
@@ -560,6 +663,7 @@ def build_external_purchase_preview(
             _candidate_preview(
                 db,
                 candidate,
+                component=component,
                 quantity=suggested_quantity,
                 as_of=as_of,
             )
@@ -674,12 +778,18 @@ def _amounts(
     *,
     quantity: Decimal,
     unit_price: Decimal,
+    tax_amount_per_purchase_unit: Decimal | None = None,
 ) -> tuple[Decimal, Decimal, Decimal]:
     line_amount = (quantity * unit_price).quantize(MONEY, rounding=ROUND_HALF_UP)
     rate = Decimal(price.tax_rate)
-    if price.tax_amount_per_unit is not None:
+    effective_tax_per_unit = (
+        tax_amount_per_purchase_unit
+        if tax_amount_per_purchase_unit is not None
+        else price.tax_amount_per_unit
+    )
+    if effective_tax_per_unit is not None:
         tax_amount = (
-            quantity * Decimal(price.tax_amount_per_unit)
+            quantity * Decimal(effective_tax_per_unit)
         ).quantize(MONEY, rounding=ROUND_HALF_UP)
     elif rate <= 0:
         tax_amount = Decimal("0.00")
@@ -780,21 +890,45 @@ def confirm_external_purchase(
             raise ExternalPurchaseContractError(
                 f"组件“{component.purpose}”：{blocked_reason}"
             )
-        price = _current_price(db, candidate, as_of=as_of)
+        price = _current_price(
+            db, candidate, component=component, as_of=as_of
+        )
         if price is None:
             raise ExternalPurchaseContractError(
-                f"组件“{component.purpose}”当前没有匹配冻结规格和采购单位的有效价格；请先维护报价版本"
+                (
+                    f"组件“{component.purpose}”当前没有有效价格：纸护角必须维护每米正式报价；请先维护报价版本"
+                    if component.category_code == CORNER_GUARD_CATEGORY_CODE
+                    else f"组件“{component.purpose}”当前没有匹配冻结规格和采购单位的有效价格；请先维护报价版本"
+                )
             )
-        quantity_error = _quantity_error(
-            price, quantity, unit=candidate.purchase_unit_snapshot
+        quantity_error = _purchase_quantity_error(
+            quantity, unit=candidate.purchase_unit_snapshot
         )
         if quantity_error:
             raise ExternalPurchaseContractError(
                 f"组件“{component.purpose}”：{quantity_error}", status_code=422
             )
-        unit_price, tiers = _effective_unit_price(price, quantity)
+        pricing = _resolved_purchase_pricing(
+            component, price, purchase_quantity=quantity
+        )
+        quantity_error = _quantity_error(
+            price,
+            Decimal(pricing["pricing_quantity"]),
+            unit=price.quote_unit,
+        )
+        if quantity_error:
+            raise ExternalPurchaseContractError(
+                f"组件“{component.purpose}”：{quantity_error}", status_code=422
+            )
+        unit_price = Decimal(pricing["purchase_unit_price"])
+        tiers = pricing["tier_prices"]
         line_amount, tax_amount, total_amount = _amounts(
-            price, quantity=quantity, unit_price=unit_price
+            price,
+            quantity=quantity,
+            unit_price=unit_price,
+            tax_amount_per_purchase_unit=pricing[
+                "tax_amount_per_purchase_unit"
+            ],
         )
         order_item = db.get(OrderItem, component.sales_order_item_id)
         if order_item is None or order_item.order_id != order.id:
@@ -809,6 +943,7 @@ def confirm_external_purchase(
                 "quantity": quantity,
                 "unit_price": unit_price,
                 "tiers": tiers,
+                "pricing": pricing,
                 "line_amount": line_amount,
                 "tax_amount": tax_amount,
                 "total_amount": total_amount,
@@ -886,7 +1021,9 @@ def confirm_external_purchase(
                     currency=price.currency,
                     tax_mode=price.tax_mode,
                     tax_rate=price.tax_rate,
-                    tax_amount_per_unit=price.tax_amount_per_unit,
+                    tax_amount_per_unit=row["pricing"][
+                        "tax_amount_per_purchase_unit"
+                    ],
                     line_amount=row["line_amount"],
                     tax_amount=row["tax_amount"],
                     total_amount=row["total_amount"],

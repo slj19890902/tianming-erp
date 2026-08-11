@@ -27,8 +27,8 @@ MENU_CATALOG = (
 )
 MOBILE_MENU_CATALOG = (
     ("mobile_home", "首页", ("dashboard.view",)),
-    ("mobile_search", "查产品", ("warehouse.view",)),
-    ("mobile_production", "近期生产", ("orders.view", "incoming.view")),
+    ("mobile_search", "仓库", ("warehouse.view",)),
+    ("mobile_production", "生产", ("orders.view", "incoming.view")),
 )
 ROLE_MENU_IDS = {
     "admin": ("dashboard", "workbench", "production", "deliveries", "finance", "master", "system_hub"),

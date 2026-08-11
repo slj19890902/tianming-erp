@@ -54,10 +54,9 @@ def test_layout_loads_on_login_and_mode_switch_without_blocking_login() -> None:
     assert "this.uiLayoutEffective = null" in INDEX
     assert 'option value="mobile">手机</option>' in INDEX
     assert 'setUiMode("mobile")' not in INDEX
-    assert "/api/system/ui-layout/effective?display_mode=mobile" in MOBILE
-    assert "mobileLayoutPageIds" in MOBILE
-    assert "permittedByPage" in MOBILE
-    assert '["home", "search", "production"].forEach(page =>' in MOBILE
+    assert 'state.shell = await apiGet("/api/mobile/erp/shell")' in MOBILE
+    assert '"layout_version": layout_version' in (ROOT / "app/api/mobile_erp.py").read_text(encoding="utf-8")
+    assert '["home", "incoming", "warehouse", "production", "pre_delivery"].forEach(page =>' in MOBILE
     assert "navContainer.append(button)" in MOBILE
 
 

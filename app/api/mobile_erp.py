@@ -14,7 +14,9 @@ from sqlalchemy.orm import Session, selectinload
 from app.api.deps import (
     PermissionChecker,
     customer_scope_ids,
+    effective_permissions,
     get_db,
+    get_current_user,
     has_permission,
     has_unrestricted_customer_access,
 )
@@ -32,6 +34,7 @@ from app.services.production_workflow import (
     find_pending_production_task_lookup_rows,
     list_production_tasks,
 )
+from app.services.ui_layout_settings import LAYOUT_ROLES, effective_layout
 from app.models.warehouse_inventory import (
     FinishedGoodsInventoryDetail,
     InventoryLot,
@@ -53,10 +56,121 @@ def _no_store(response: Response) -> None:
     response.headers["Cache-Control"] = "private, no-store"
 
 
+@router.get("/shell")
+def mobile_shell(
+    response: Response,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Return the small, permission-derived mobile entry contract.
+
+    This endpoint deliberately returns no business list.  Each operational
+    entry loads its own data only after the employee opens it.
+    """
+
+    _no_store(response)
+    permissions = effective_permissions(user)
+    if user.role in LAYOUT_ROLES:
+        layout = effective_layout(
+            db,
+            role_code=user.role,
+            display_mode="mobile",
+            permissions=permissions,
+        )
+        visible_layout_ids = {
+            item["id"] for item in layout["layout"].get("menus", [])
+        }
+        layout_version = layout["version"]
+    else:
+        visible_layout_ids = {"mobile_home", "mobile_search", "mobile_production"}
+        layout_version = 0
+    printing_allowed = "production.printing.view" in permissions
+    die_cut_allowed = "production.die_cut.view" in permissions
+    entries: list[dict] = []
+
+    if "incoming.view" in permissions:
+        entries.append(
+            {
+                "id": "incoming",
+                "label": "收料",
+                "summary": "待收明细进入后按需读取",
+                "can_execute": "incoming.execute" in permissions,
+            }
+        )
+    if (
+        "warehouse.view" in permissions
+        and "mobile_search" in visible_layout_ids
+    ):
+        entries.append(
+            {
+                "id": "warehouse",
+                "label": "仓库",
+                "summary": "产品、库存与真实位置按需读取",
+                "can_execute": "warehouse.execute" in permissions,
+            }
+        )
+    if (
+        (printing_allowed or die_cut_allowed)
+        and "mobile_production" in visible_layout_ids
+    ):
+        stations = [
+            station
+            for station, allowed in (
+                ("printing", printing_allowed),
+                ("die_cut", die_cut_allowed),
+            )
+            if allowed
+        ]
+        entries.append(
+            {
+                "id": "production",
+                "label": "生产",
+                "summary": "、".join(
+                    "印刷工位" if station == "printing" else "模切工位"
+                    for station in stations
+                ),
+                "stations": stations,
+                "can_execute": False,
+            }
+        )
+    if "deliveries.pick" in permissions or "deliveries.execute" in permissions:
+        entries.append(
+            {
+                "id": "pre_delivery",
+                "label": "预送货",
+                "summary": "本人拿货任务进入后按需读取",
+                "can_execute": "deliveries.pick" in permissions,
+                "can_manage": "deliveries.execute" in permissions,
+            }
+        )
+
+    return {
+        "user": {
+            "id": user.id,
+            "username": user.username,
+            "display_name": user.display_name or user.real_name or user.username,
+            "role": user.role,
+        },
+        "entries": entries,
+        "management_summary_allowed": "dashboard.view" in permissions,
+        "layout_version": layout_version,
+        "as_of": datetime.now(_BEIJING).isoformat(timespec="seconds"),
+        "read_only": True,
+    }
+
+
 def _visible_customer_ids(user: User, db: Session) -> set[int] | None:
     if has_unrestricted_customer_access(user, db):
         return None
     return customer_scope_ids(user, db)
+
+
+def _require_mobile_production_station(user: User) -> None:
+    if not (
+        has_permission(user, "production.printing.view")
+        or has_permission(user, "production.die_cut.view")
+    ):
+        raise HTTPException(status_code=403, detail="当前账号没有手机生产工位查看权限")
 
 
 def _production_period_bounds(
@@ -532,6 +646,7 @@ def recent_production_materials(
     """Return formally received material and linked production facts, read only."""
 
     _no_store(response)
+    _require_mobile_production_station(user)
     if not has_permission(user, "incoming.view"):
         raise HTTPException(status_code=403, detail="当前账号没有查看来料资料的权限")
     start_date, end_date, start_utc, end_utc = _production_period_bounds(
@@ -661,6 +776,7 @@ def lookup_pending_production_tasks(
     """Reverse lookup current pending production tasks without writing facts."""
 
     _no_store(response)
+    _require_mobile_production_station(user)
     if not has_permission(user, "incoming.view"):
         raise HTTPException(status_code=403, detail="当前账号没有查看来料资料的权限")
     keyword = q.strip()

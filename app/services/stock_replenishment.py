@@ -27,6 +27,10 @@ from app.models.warehouse_inventory import (
 )
 from app.services.flute_mapping import seven_layer_code_error
 from app.services.location_candidates import operational_location_issue
+from app.services.requisition_quantities import (
+    cutting_factor,
+    normalize_cutting_mode,
+)
 from app.services.warehouse_inventory import (
     SEMI_FINISHED_FLUTES_BY_LAYER,
     WarehouseInventoryError,
@@ -79,16 +83,6 @@ def _lot_primary_replenishment_product_id(
     return source_item.product_id if source_item is not None else None
 
 
-STOCK_REPLENISHMENT_CUTTING_FACTORS = {
-    "一开一": 1,
-    "一开二": 2,
-    "一开三": 3,
-    "一开四": 4,
-    "一开五": 5,
-    "一开六": 6,
-}
-
-
 def product_replenishment_defaults(product: Product) -> dict:
     """Return common-box facts used to prepare a replenishment draft.
 
@@ -111,11 +105,7 @@ def product_replenishment_defaults(product: Product) -> dict:
         product.flute_type
         or (material.flute_type if material is not None else None)
     )
-    cutting_mode = (
-        product.default_cutting_mode
-        if product.default_cutting_mode in STOCK_REPLENISHMENT_CUTTING_FACTORS
-        else "一开一"
-    )
+    cutting_mode = normalize_cutting_mode(product.default_cutting_mode)
     crease_aliases = {"净": "净料", "毛": "毛片"}
     crease_type = crease_aliases.get(
         str(product.crease_type or "").strip(),
@@ -134,7 +124,7 @@ def product_replenishment_defaults(product: Product) -> dict:
         "crease_middle_mm": product.crease_middle_mm,
         "crease_right_mm": product.crease_right_mm,
         "cutting_mode": cutting_mode,
-        "output_per_sheet": STOCK_REPLENISHMENT_CUTTING_FACTORS[cutting_mode],
+        "output_per_sheet": cutting_factor(cutting_mode),
         "pieces_per_box": int(product.pieces_per_box or 1),
     }
     required = {
@@ -192,10 +182,7 @@ def theoretical_requisition_quantity(
     finished_quantity: int,
     cutting_mode: str | None,
 ) -> int:
-    factor = STOCK_REPLENISHMENT_CUTTING_FACTORS.get(
-        str(cutting_mode or "").strip(),
-        1,
-    )
+    factor = cutting_factor(cutting_mode)
     return ceil(max(int(finished_quantity or 0), 0) / factor)
 
 

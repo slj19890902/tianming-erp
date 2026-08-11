@@ -61,6 +61,7 @@ from app.services.production_label_strategy import (
     ProductionLabelStrategyError,
     build_new_task_production_label_snapshot,
 )
+from app.services.requisition_quantities import cutting_factor
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     active_finished_reserved_qty,
@@ -277,19 +278,9 @@ def _canonical_hash(payload: dict) -> str:
     return sha256(encoded).hexdigest()
 
 
-CUTTING_OUTPUT_FACTORS = {
-    "一开一": 1,
-    "一开二": 2,
-    "一开三": 3,
-    "一开四": 4,
-    "一开五": 5,
-    "一开六": 6,
-}
-
-
 def cutting_output_factor(value: str | None) -> int:
     """Return the immutable order-line sheet-to-product output factor."""
-    return CUTTING_OUTPUT_FACTORS.get((value or "").strip(), 1)
+    return cutting_factor(value)
 
 
 def production_pieces_per_box(item: OrderItem) -> int:

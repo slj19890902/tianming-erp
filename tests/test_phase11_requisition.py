@@ -2490,7 +2490,11 @@ def test_requisition_print_contract_has_no_financial_fields(requisition_app) -> 
         session.commit()
     with TestClient(app) as client:
         _login(client, "admin")
-        created = client.post("/api/requisition/batches", json=_batch_payload())
+        payload = _batch_payload()
+        payload["items"][0]["special_process"] = "一开12"
+        payload["items"][0]["requisition_qty"] = 9
+        payload["items"][0]["remark"] = "供应商只看人工备注"
+        created = client.post("/api/requisition/batches", json=payload)
         response = client.get(
             f"/api/requisition/batches/{created.json()['id']}/print"
         )
@@ -2501,6 +2505,10 @@ def test_requisition_print_contract_has_no_financial_fields(requisition_app) -> 
         "address": "测试路88号",
         "phone": "0512-12345678",
     }
+    print_line = response.json()["items"][0]
+    assert print_line["special_process"] == "一开12"
+    assert print_line["report_remark"] == "供应商只看人工备注"
+    assert "一开12" not in print_line["report_remark"]
     serialized = str(response.json()).lower()
     for forbidden in ("unit_price", "subtotal", "cost", "amount"):
         assert forbidden not in serialized

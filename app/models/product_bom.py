@@ -197,8 +197,13 @@ class SalesOrderItemBomComponent(Base):
             name="ck_sales_order_item_bom_components_die_cut_mold_required",
         ),
         CheckConstraint(
-            "snapshot_component_default_cutting_mode IN "
-            "('一开一','一开二','一开三','一开四','一开五','一开六')",
+            "(snapshot_component_default_cutting_mode IN "
+            "('一开一','一开二','一开三','一开四','一开五','一开六') "
+            "OR (substr(snapshot_component_default_cutting_mode, 1, 2) = '一开' "
+            "AND length(snapshot_component_default_cutting_mode) BETWEEN 3 AND 20 "
+            "AND CAST(substr(snapshot_component_default_cutting_mode, 3) AS BIGINT) > 0 "
+            "AND substr(snapshot_component_default_cutting_mode, 3) = "
+            "CAST(CAST(substr(snapshot_component_default_cutting_mode, 3) AS BIGINT) AS VARCHAR)))",
             name="ck_sales_order_item_bom_components_default_cutting_mode",
         ),
         UniqueConstraint(

@@ -101,6 +101,7 @@ def test_supplier_search_matches_historical_aliases(tmp_path: Path) -> None:
     script = f"""
 const vm = {{
   supplierSearch: "旧供应商简称",
+  supplierGroupFilter: "all",
   suppliers: [{{
     id: 1,
     standard_name: "供应商正式全称",

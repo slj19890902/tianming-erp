@@ -132,6 +132,7 @@ _PRODUCT_FIELDS = (
     "production_label_units_per_label",
     "flap_mm",
     "combination_mode",
+    "is_virtual_composite_parent",
     "is_active",
 ) + tuple(
     field

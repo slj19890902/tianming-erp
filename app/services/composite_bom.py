@@ -30,6 +30,7 @@ from app.models.user import User
 from app.services.master_data_versioning import apply_versioned_update
 from app.services.requisition_quantities import (
     DEFAULT_CUTTING_MODE,
+    cutting_factor,
     normalize_cutting_mode,
 )
 
@@ -264,6 +265,9 @@ def _bom_row_values(row: Any, *, parent_code: str, fallback_position: int) -> di
         "display_mode": _mapped_value(
             row, "display_mode", default="internal_only"
         ),
+        "show_on_delivery": bool(
+            _mapped_value(row, "show_on_delivery", default=True)
+        ),
         "is_required": bool(_mapped_value(row, "is_required", default=True)),
         "remark": _mapped_value(row, "remark"),
     }
@@ -288,6 +292,9 @@ def _component_product_summary(product: Product) -> dict[str, Any]:
         "version": product.version,
         "is_active": product.is_active,
         "is_composite": bool(getattr(product, "is_composite", False)),
+        "is_virtual_composite_parent": bool(
+            getattr(product, "is_virtual_composite_parent", False)
+        ),
         "is_internal_component": bool(
             getattr(product, "is_internal_component", False)
         ),
@@ -330,6 +337,9 @@ def get_product_bom(db: Session, parent_product_id: int) -> dict[str, Any]:
         "parent_product_code": parent.product_code,
         "version": parent.version,
         "is_composite": bool(getattr(parent, "is_composite", bool(components))),
+        "is_virtual_composite_parent": bool(
+            getattr(parent, "is_virtual_composite_parent", False)
+        ),
         "components": components,
     }
 
@@ -385,6 +395,7 @@ def _relation_kwargs(
         (("mold_max_yield_per_sheet",), relation["mold_max_yield_per_sheet"]),
         (("spare_sheet_quantity",), relation["spare_sheet_quantity"]),
         (("display_mode",), relation.get("display_mode", "internal_only")),
+        (("show_on_delivery",), bool(relation.get("show_on_delivery", True))),
         (("is_required",), bool(relation.get("is_required", True))),
         (("remark",), relation["remark"]),
         (("is_active",), True),
@@ -438,6 +449,17 @@ def replace_product_bom(
     if len(components) > 99:
         raise CompositeBOMError("一个组合品最多允许99个组件")
 
+    virtual_parent = bool(
+        getattr(parent, "is_virtual_composite_parent", False)
+    )
+    if virtual_parent and not components:
+        raise CompositeBOMError("虚拟组合套装至少需要一个真实组件")
+    existing_rows = _active_bom_rows(db, parent.id)
+    existing_by_component_id = {
+        int(_mapped_value(row, "component_product_id")): row
+        for row in existing_rows
+    }
+
     normalized: list[dict[str, Any]] = []
     for position, component in enumerate(components, start=1):
         try:
@@ -456,15 +478,26 @@ def replace_product_bom(
                 "internal_component_code": internal_component_code(
                     parent.product_code, position
                 ),
-                "is_die_cut": bool(component.get("is_die_cut", False)),
-                "mold_tool_id": component.get("mold_tool_id"),
-                "mold_max_yield_per_sheet": component.get(
-                    "mold_max_yield_per_sheet"
+                "is_die_cut": (
+                    False if virtual_parent else bool(component.get("is_die_cut", False))
                 ),
-                "spare_sheet_quantity": int(
-                    component.get("spare_sheet_quantity", 0) or 0
+                "mold_tool_id": (
+                    None if virtual_parent else component.get("mold_tool_id")
+                ),
+                "mold_max_yield_per_sheet": (
+                    None
+                    if virtual_parent
+                    else component.get("mold_max_yield_per_sheet")
+                ),
+                "spare_sheet_quantity": (
+                    0
+                    if virtual_parent
+                    else int(component.get("spare_sheet_quantity", 0) or 0)
                 ),
                 "display_mode": component.get("display_mode", "internal_only"),
+                "show_on_delivery": bool(
+                    component.get("show_on_delivery", True)
+                ),
                 "is_required": bool(component.get("is_required", True)),
                 "remark": (str(component.get("remark") or "").strip() or None),
             }
@@ -541,9 +574,42 @@ def replace_product_bom(
             or component.purged_at is not None
         ):
             raise CompositeBOMError(f"第{position}个组件必须是启用中的产品")
-        if bool(getattr(component, "is_composite", False)):
+        if bool(getattr(component, "is_composite", False)) or bool(
+            getattr(component, "is_virtual_composite_parent", False)
+        ):
             raise CompositeBOMError("BOM 组件不能再是组合品（禁止嵌套 BOM）")
         relation = normalized[position - 1]
+        if virtual_parent:
+            is_die_cut = bool(
+                component.box_category == "die_cut"
+                or component.mold_tool_id is not None
+                or (component.die_cut_path or "").strip()
+            )
+            relation.update(
+                {
+                    "is_die_cut": is_die_cut,
+                    "mold_tool_id": component.mold_tool_id if is_die_cut else None,
+                    "mold_max_yield_per_sheet": (
+                        cutting_factor(component.default_cutting_mode)
+                        if is_die_cut
+                        else None
+                    ),
+                    "spare_sheet_quantity": int(
+                        _mapped_value(
+                            existing_by_component_id.get(component_id),
+                            "spare_sheet_quantity",
+                            default=0,
+                        )
+                        or 0
+                    ),
+                    "display_mode": (
+                        "show_on_delivery"
+                        if relation["show_on_delivery"]
+                        else "internal_only"
+                    ),
+                    "remark": None,
+                }
+            )
         mold = _validate_die_cut_mold(
             db,
             component,
@@ -572,6 +638,7 @@ def replace_product_bom(
         "mold_max_yield_per_sheet",
         "spare_sheet_quantity",
         "display_mode",
+        "show_on_delivery",
         "is_required",
         "remark",
     )
@@ -586,11 +653,6 @@ def replace_product_bom(
     ):
         return before
 
-    existing_rows = _active_bom_rows(db, parent.id)
-    existing_by_component_id = {
-        int(_mapped_value(row, "component_product_id")): row
-        for row in existing_rows
-    }
     old_component_ids = set(existing_by_component_id)
     removed_rows = [
         row
@@ -731,7 +793,7 @@ def _snapshot_kwargs(
         (("component_product_id",), component.id),
         (("parent_product_version",), parent.version),
         (("component_product_version", "snapshot_product_version", "product_version"), component.version),
-        (("snapshot_schema_version",), 3),
+        (("snapshot_schema_version",), 4),
         (("quantity_per_set", "component_quantity", "qty_per_set"), relation["quantity_per_set"]),
         (("required_piece_quantity", "required_quantity", "total_component_quantity", "snapshot_quantity"), required_quantity),
         (("display_order", "sort_order", "sequence", "sequence_no", "component_sequence"), relation["display_order"]),
@@ -746,6 +808,7 @@ def _snapshot_kwargs(
         (("mold_max_yield_per_sheet",), relation["mold_max_yield_per_sheet"]),
         (("spare_sheet_quantity",), relation["spare_sheet_quantity"]),
         (("display_mode",), relation.get("display_mode", "internal_only")),
+        (("show_on_delivery",), bool(relation.get("show_on_delivery", True))),
         (("is_required",), bool(relation.get("is_required", True))),
         (("remark",), relation["remark"]),
         (("snapshot_component_product_code", "snapshot_product_code", "component_product_code_snapshot", "snapshot_component_code"), component.product_code),
@@ -948,6 +1011,9 @@ def _snapshot_response(row: Any, *, fallback_position: int) -> dict[str, Any]:
         "display_mode": _mapped_value(
             row, "display_mode", default="internal_only"
         ),
+        "show_on_delivery": bool(
+            _mapped_value(row, "show_on_delivery", default=True)
+        ),
         "is_required": bool(_mapped_value(row, "is_required", default=True)),
         "remark": _mapped_value(row, "remark"),
         "snapshot_component_supplier_name": _mapped_value(
@@ -1089,6 +1155,7 @@ def create_order_item_bom_snapshots(
             or component.deleted_at is not None
             or component.purged_at is not None
             or is_composite_product(component)
+            or bool(getattr(component, "is_virtual_composite_parent", False))
         ):
             raise CompositeBOMError(
                 f"组合品第{position}个组件已失效，不能创建订单",

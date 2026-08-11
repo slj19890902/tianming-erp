@@ -6754,7 +6754,9 @@ def _dashboard_pending_requisition_item_is_eligible(
             item,
             finished_reserved_qty=finished_reserved_qty,
         )
-        if _is_set_only_a3_surround_bom(bom_snapshots):
+        if bool(
+            getattr(item, "is_virtual_composite_parent_snapshot", False)
+        ) or _is_set_only_a3_surround_bom(bom_snapshots):
             parent_requirement["already_requisitioned"] = True
             parent_requirement["can_requisition"] = False
         return any(
@@ -7084,9 +7086,9 @@ def _pending_requisitions_full_payload(
                 item,
                 finished_reserved_qty=reservation_map.get(item.id, 0),
             )
-            suppress_parent_requisition = _is_set_only_a3_surround_bom(
-                bom_snapshots
-            )
+            suppress_parent_requisition = bool(
+                getattr(item, "is_virtual_composite_parent_snapshot", False)
+            ) or _is_set_only_a3_surround_bom(bom_snapshots)
             if suppress_parent_requisition:
                 parent_requirement["already_requisitioned"] = True
                 parent_requirement["can_requisition"] = False

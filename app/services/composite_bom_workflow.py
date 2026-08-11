@@ -64,6 +64,9 @@ class ComponentDemand:
     is_required: bool
     effective_sets: int
     required_piece_quantity: int
+    # Keep this trailing default for compatibility with older internal callers
+    # that construct ComponentDemand positionally.
+    show_on_delivery: bool = True
 
 
 @dataclass(frozen=True)
@@ -204,6 +207,9 @@ def effective_component_demands(
                 specification=snapshot.snapshot_component_spec,
                 quantity_per_set=per_set,
                 is_required=bool(snapshot.is_required),
+                show_on_delivery=bool(
+                    getattr(snapshot, "show_on_delivery", True)
+                ),
                 effective_sets=effective_sets,
                 required_piece_quantity=required_piece_quantity,
             )

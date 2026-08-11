@@ -274,7 +274,7 @@ def test_n034_order_snapshot_keeps_parent_sets_and_captures_component_material()
     assert values["snapshot_component_flute_type"] == "BC"
     assert values["snapshot_component_material"] == "K=A"
     assert values["snapshot_component_default_cutting_mode"] == "一开二"
-    assert values["snapshot_schema_version"] == 3
+    assert values["snapshot_schema_version"] == 4
     assert values["snapshot_mold_tool_id"] == requested_mold.id
     assert values["snapshot_mold_tool_code"] == requested_mold.mold_code
     assert values["snapshot_mold_tool_name"] == requested_mold.mold_name
@@ -366,13 +366,15 @@ def test_n034_unlinked_snapshot_facts_serialize_independently_and_bulk_once() ->
 def test_n034_order_responses_bulk_attach_snapshots_and_phase_a_has_no_fact_writes() -> None:
     response_source = inspect.getsource(orders._order_response)
     list_source = inspect.getsource(orders.list_orders)
+    context_source = inspect.getsource(orders._build_full_order_response_context)
     phase_a_source = inspect.getsource(create_order_item_bom_snapshots)
     create_order_source = inspect.getsource(orders._create_order_impl)
 
     assert "item_bom_components = bom_components_by_item_id.get(item.id, [])" in response_source
     assert '"bom_components": item_bom_components' in response_source
-    assert "get_order_item_bom_components_by_item_ids" in list_source
-    assert "bom_components_by_item_id=bom_components_by_item_id" in list_source
+    assert "_build_full_order_response_context" in list_source
+    assert "get_order_item_bom_components_by_item_ids" in context_source
+    assert '"bom_components_by_item_id": bom_components_by_item_id' in context_source
     assert "db.add(OrderItem(" not in phase_a_source
     for forbidden_write in (
         "Requisition(",
@@ -393,4 +395,9 @@ def test_n034_order_responses_bulk_attach_snapshots_and_phase_a_has_no_fact_writ
     ) < create_order_source.index(
         "create_or_refresh_production_task(db, created_item.id)"
     )
-    assert "continue\n            create_or_refresh_production_task" in create_order_source
+    assert (
+        'if created_item.supply_mode_snapshot != "external_purchase":\n'
+        "                    create_or_refresh_production_task(db, created_item.id)\n"
+        "                continue"
+        in create_order_source
+    )

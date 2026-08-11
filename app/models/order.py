@@ -347,6 +347,12 @@ class OrderItem(Base):
     combination_mode_snapshot: Mapped[str | None] = mapped_column(
         String(30), nullable=True
     )
+    is_virtual_composite_parent_snapshot: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default="0",
+        nullable=False,
+    )
     combination_role: Mapped[str] = mapped_column(
         String(30), default="standalone", server_default="standalone", nullable=False
     )

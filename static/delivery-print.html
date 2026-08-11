@@ -394,14 +394,16 @@
           pricing_included: item.pricing_included !== false,
           is_component_line: item.is_component_line === true,
         });
-        const components = Array.isArray(item.component_lines) ? item.component_lines : [];
+        const components = Array.isArray(item.component_lines)
+          ? item.component_lines.filter(component => component?.show_on_delivery !== false)
+          : [];
         if (components.length) hasNestedComponents = true;
         components.forEach((component) => {
           normalized.push(normalizeComponentPrintLine(component, item));
         });
       });
       if (!hasNestedComponents && Array.isArray(data.component_lines)) {
-        data.component_lines.forEach((component) => {
+        data.component_lines.filter(component => component?.show_on_delivery !== false).forEach((component) => {
           normalized.push(normalizeComponentPrintLine(component));
         });
       }

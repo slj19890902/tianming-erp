@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.82"
-    assert APP_VERSION_NAME == "仓库快捷入口、找货单、生产扫码与成本提醒"
+    assert APP_VERSION == "v0.22.83"
+    assert APP_VERSION_NAME == "模具自动编号、活动位置与常用箱绑定"
     assert APP_BUILD_DATE == "2026-08-11"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -50,24 +50,36 @@ def test_factory_update_reports_current_release_version() -> None:
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
     assert any(
-        "本次更新｜" in item and "顶部显示模式行" in item and "仓库" in item
+        "本次更新｜" in item and "模具名称" in item and "拼音首字母" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "仓库找货单" in item and "不扣库存" in item
+        "本次更新｜" in item and "货架、层和格" in item and "从左到右" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "扫码" in item and "pending" in item
+        "本次更新｜" in item and "跨客户常用箱" in item and "一块模具" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "成本与利润提醒" in item and "旧订单不回填" in item
+        "本次更新｜" in item and "模切" in item and "操作审计" in item
         for item in current_release
     )
     assert any(
         "本次更新｜" in item and "无数据库迁移" in item and "ea09" in item
         for item in current_release
+    )
+    assert any(
+        item.startswith("v0.22.82：本次更新｜")
+        and "顶部显示模式行" in item
+        and "仓库" in item
+        for item in APP_CHANGELOG
+    )
+    assert any(
+        item.startswith("v0.22.82：如何验证｜")
+        and "v0.22.82" in item
+        and "ea09" in item
+        for item in APP_CHANGELOG
     )
     assert any(
         item.startswith("v0.22.81：本次更新｜")
@@ -111,7 +123,7 @@ def test_factory_update_reports_current_release_version() -> None:
         for item in APP_CHANGELOG
     )
     assert any(
-        "如何验证｜" in item and "v0.22.82" in item and "ea09" in item
+        "如何验证｜" in item and "v0.22.83" in item and "ea09" in item
         for item in current_release
     )
     assert any(

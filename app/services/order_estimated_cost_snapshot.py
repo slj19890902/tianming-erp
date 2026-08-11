@@ -111,6 +111,8 @@ def _processing_rule(
     item: OrderItem,
     material: SalesOrderItemMaterialCostSnapshot | None,
 ) -> tuple[str | None, Decimal, Decimal, list[str]]:
+    if getattr(item, "supply_mode_snapshot", None) == "external_purchase":
+        return "external_purchase", Decimal("0"), Decimal("0"), []
     code = box_type_code(item.product.box_style if item.product else None)
     if code == "a1_0201":
         return "a1", Decimal("20"), Decimal("0.13"), []

@@ -14,14 +14,14 @@ PRINT_PAGE = (ROOT / "static" / "external-purchase-print.html").read_text(
 )
 
 
-def test_corner_guard_reference_calculation_is_exact_and_not_persisted(
+def test_corner_guard_formal_meter_price_conversion_is_exact_and_not_persisted(
     tmp_path: Path,
 ) -> None:
     node = shutil.which("node")
-    assert node, "Node.js is required for the reference calculation contract"
-    start = INDEX.index("const CORNER_GUARD_REFERENCE_COST_PER_METER")
+    assert node, "Node.js is required for the formal-price calculation contract"
+    start = INDEX.index("const calculateCornerGuardFormalCost")
     end = INDEX.index("const blankProduct", start)
-    source = INDEX[start:end] + "\nconsole.log(JSON.stringify(calculateCornerGuardReferenceCost(870,1000)));\n"
+    source = INDEX[start:end] + "\nconsole.log(JSON.stringify(calculateCornerGuardFormalCost(780,1000,1.10)));\n"
     target = tmp_path / "p1-40c-corner-reference.js"
     target.write_text(source, encoding="utf-8")
     result = subprocess.run(
@@ -30,12 +30,13 @@ def test_corner_guard_reference_calculation_is_exact_and_not_persisted(
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {
         "rate_per_meter": 1.1,
-        "length_mm": 870,
+        "length_mm": 780,
         "quantity": 1000,
-        "unit_cost": 0.957,
-        "total_cost": 957,
+        "unit_cost": 0.858,
+        "total_cost": 858,
     }
-    assert "护角经营参考（不是正式供应商报价）" in INDEX
+    assert "护角采购参考成本（正式报价）" in INDEX
+    assert "CORNER_GUARD_REFERENCE_COST_PER_METER" not in INDEX
     assert "delete payload._corner_reference_quantity" in INDEX
     assert "external_packaging_price_versions" not in INDEX
 

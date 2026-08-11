@@ -4539,17 +4539,23 @@
                 <div class="toolbar"><div><strong>外购包材资料</strong><div class="muted">只选择供应商已登记的真实产品；单一候选自动设为默认，多候选必须人工指定一个默认，不会按最低价自动选择。</div></div><span class="status orange">不走纸板材质与生产工艺</span></div>
                 <div class="form-grid" style="margin-top:8px">
                   <div class="field"><label>包材类别（必选）</label><select class="select" v-model="productForm.external_packaging_category_code" @change="onProductExternalCategoryChange"><option value="">请选择</option><option v-for="option in productExternalPackagingCategoryOptions" :key="option.value" :value="option.value">{{ option.label }}</option></select></div>
-                  <div class="field"><label>规格</label><input class="input" :value="productForm.external_packaging_specification_summary || '选择候选后自动带出'" readonly /></div>
+                  <template v-if="productForm.external_packaging_category_code==='paper_corner_guard'">
+                    <div class="field"><label>单根长度(mm)</label><input class="input" type="number" min="0.000001" step="1" v-model.number="productForm._external_specification.length_mm" @input="syncProductExternalProfile" /></div>
+                    <div class="field"><label>边宽A(mm)</label><input class="input" type="number" min="0.000001" step="1" v-model.number="productForm._external_specification.side_a_mm" @input="syncProductExternalProfile" /></div>
+                    <div class="field"><label>边宽B(mm)</label><input class="input" type="number" min="0.000001" step="1" v-model.number="productForm._external_specification.side_b_mm" @input="syncProductExternalProfile" /></div>
+                    <div class="field"><label>厚度(mm)</label><input class="input" type="number" min="0.000001" step="0.1" v-model.number="productForm._external_specification.thickness_mm" @input="syncProductExternalProfile" /></div>
+                  </template>
+                  <div class="field"><label>客户规格</label><input class="input" :value="productForm.external_packaging_specification_summary || '请填写客户规格'" readonly /></div>
                   <div class="field"><label>采购单位</label><input class="input" :value="productForm.external_packaging_purchase_unit || '自动带出'" readonly /></div>
                 </div>
                 <div v-if="productExternalSupplyLoading" class="muted" style="margin-top:8px">正在读取候选供应商产品…</div>
                 <div v-else-if="productExternalSupplyError" class="notice danger" style="margin-top:8px">{{ productExternalSupplyError }} <button type="button" class="btn small" @click="loadProductExternalSupplyCandidates({force:true})">重试</button></div>
                 <div v-else-if="productForm.external_packaging_category_code && !productExternalSupplyOptions.length" class="notice" style="margin-top:8px">当前客户和类别没有可用供应商产品。请先到“供应商 → 外购产品”维护真实产品、规格与采购单位后再保存。</div>
                 <div v-else-if="productExternalSupplyOptions.length" class="table-wrap" style="margin-top:8px"><table class="compact-table"><thead><tr><th>采用</th><th>默认</th><th>供应商</th><th>产品型号 / 供应商代码</th><th>结构规格</th><th>采购单位</th><th v-if="canViewCosts" class="sensitive-price">供应商采购成本（正式报价）</th></tr></thead><tbody><tr v-for="row in productExternalSupplyOptions" :key="row.external_product_id"><td><input type="checkbox" :checked="productExternalCandidateSelected(row.external_product_id)" @change="setProductExternalCandidate(row,$event.target.checked)" /></td><td><input type="radio" name="product-external-default" :value="row.external_product_id" v-model="productForm._external_default_product_id" :disabled="!productExternalCandidateSelected(row.external_product_id)" /></td><td>{{ row.supplier_name }}</td><td><strong>{{ row.product_name }}</strong><div class="muted">{{ row.supplier_product_code }}</div></td><td>{{ row.specification_summary || productForm.external_packaging_specification_summary }}</td><td>{{ row.purchase_unit }}</td><td v-if="canViewCosts" class="sensitive-price"><template v-if="row.current_purchase_price"><strong>{{ row.current_purchase_price.currency }} {{ row.current_purchase_price.unit_price }} / {{ row.current_purchase_price.quote_unit }}</strong><div class="muted">正式报价 v{{ row.current_purchase_price.version_number }} · {{ row.current_purchase_price.tax_mode==='tax_inclusive' ? '含税' : '未税' }}</div></template><span v-else class="muted">暂无当前有效正式报价</span></td></tr></tbody></table></div>
-                <div v-if="canViewCosts && productForm.external_packaging_category_code==='paper_corner_guard'" class="notice warning" style="margin-top:8px">
-                  <strong>护角经营参考（不是正式供应商报价）：</strong>按 1.10 元/米换算。
-                  <template v-if="cornerGuardReferenceCost()">当前长度 {{ cornerGuardReferenceCost().length_mm }}mm，单支参考成本 {{ externalReferenceMoney(cornerGuardReferenceCost().unit_cost) }} 元；<label style="display:inline-flex;align-items:center;gap:4px">参考数量 <input class="input" style="width:100px" type="number" min="1" step="1" v-model.number="productForm._corner_reference_quantity" /></label>，合计 {{ externalReferenceMoney(cornerGuardReferenceCost().total_cost) }} 元。</template>
-                  <span v-else>选择含长度的护角产品后显示单支与合计参考。</span>
+                <div v-if="canViewCosts && productForm.external_packaging_category_code==='paper_corner_guard'" class="notice warning sensitive-price" style="margin-top:8px">
+                  <strong>护角采购参考成本（正式报价）：</strong>
+                  <template v-if="cornerGuardReferenceCost()">{{ cornerGuardReferenceCost().rate_per_meter }} 元/米 × {{ cornerGuardReferenceCost().length_mm }}mm = 单根 {{ externalReferenceMoney(cornerGuardReferenceCost().unit_cost) }} 元；<label style="display:inline-flex;align-items:center;gap:4px">参考根数 <input class="input" style="width:100px" type="number" min="1" step="1" v-model.number="productForm._corner_reference_quantity" /></label>，合计 {{ externalReferenceMoney(cornerGuardReferenceCost().total_cost) }} 元。</template>
+                  <span v-else>请填写客户长度，并为默认候选维护当前有效的每米正式报价。</span>
                 </div>
                 <div v-if="canViewCosts && productForm.supply_mode==='external_purchase'" class="muted sensitive-price" style="margin-top:6px">上表是供应商采购成本；下方“客户默认销售单价”是对客户报价，两者独立，系统不会互相覆盖。</div>
               </div>
@@ -4956,6 +4962,12 @@
                       <div class="field"><label>用量单位</label><select class="select" v-model="component.consumption_unit"><option v-for="unit in externalPackagingUnits" :key="unit" :value="unit">{{ unit }}</option></select></div>
                       <div class="field"><label>建议损耗率</label><input class="input" type="number" min="0" max="1" step="0.001" v-model="component.waste_rate" placeholder="0.02 表示 2%" /></div>
                       <label class="remember-line"><input type="checkbox" v-model="component.is_required" /> 必需</label>
+                      <template v-if="component.category_code==='paper_corner_guard'">
+                        <div class="field"><label>护角单根长度(mm)</label><input class="input" type="number" min="0.000001" step="1" v-model.number="component.specification.length_mm" /></div>
+                        <div class="field"><label>边宽A(mm)</label><input class="input" type="number" min="0.000001" step="1" v-model.number="component.specification.side_a_mm" /></div>
+                        <div class="field"><label>边宽B(mm)</label><input class="input" type="number" min="0.000001" step="1" v-model.number="component.specification.side_b_mm" /></div>
+                        <div class="field"><label>厚度(mm)</label><input class="input" type="number" min="0.000001" step="0.1" v-model.number="component.specification.thickness_mm" /></div>
+                      </template>
                       <div class="field"><label>每采购单位可用数量</label><input class="input" type="number" min="0.000001" step="0.000001" v-model="component.units_per_purchase_unit" placeholder="单位不同时填写" /></div>
                       <div class="field wide"><label>换算依据</label><input class="input" v-model.trim="component.conversion_basis" placeholder="如：1箱=100件（供应商装箱单）" /></div>
                       <div class="field wide"><label>备注</label><input class="input" v-model.trim="component.remarks" /></div>
@@ -6115,7 +6127,7 @@
                     <td><input class="input" type="number" min="0.000001" step="0.001" v-model="row.purchase_quantity" /><div class="muted" style="margin-top:4px">单位：{{ selectedExternalPurchaseCandidate(row)?.purchase_unit || row.purchase_unit || '-' }}</div></td>
                     <td><select class="input" v-model.number="row.selected_candidate_id"><option v-for="candidate in row.candidates" :key="candidate.id" :value="candidate.id" :disabled="!!candidate.blocked_reason">{{ externalPackagingCandidateText(candidate) }}{{ candidate.blocked_reason ? `（${candidate.blocked_reason}）` : '' }}</option></select></td>
                     <td>
-                      <template v-if="selectedExternalPurchaseCandidate(row)?.price"><strong>{{ selectedExternalPurchaseCandidate(row).price.currency }} {{ selectedExternalPurchaseCandidate(row).price.unit_price }} / {{ selectedExternalPurchaseCandidate(row).price.quote_unit }}</strong><div class="muted">价格版本 {{ selectedExternalPurchaseCandidate(row).price.version_number }}；{{ selectedExternalPurchaseCandidate(row).price.tax_mode==='tax_inclusive' ? '含税' : '未税' }}</div><div v-if="selectedExternalPurchaseCandidate(row).suggested_quantity_warning" class="status orange" style="margin-top:4px;white-space:normal">{{ selectedExternalPurchaseCandidate(row).suggested_quantity_warning }}，可修改数量后提交</div></template>
+                      <template v-if="selectedExternalPurchaseCandidate(row)?.price"><strong>{{ selectedExternalPurchaseCandidate(row).price.currency }} {{ selectedExternalPurchaseCandidate(row).price.unit_price }} / {{ selectedExternalPurchaseCandidate(row).price.quote_unit }}</strong><div v-if="selectedExternalPurchaseCandidate(row).price.purchase_unit_price" class="sensitive-price">按客户定长换算：{{ selectedExternalPurchaseCandidate(row).price.purchase_unit_price }} 元/{{ selectedExternalPurchaseCandidate(row).price.purchase_unit }}</div><div class="muted">价格版本 {{ selectedExternalPurchaseCandidate(row).price.version_number }}；{{ selectedExternalPurchaseCandidate(row).price.tax_mode==='tax_inclusive' ? '含税' : '未税' }}</div><div v-if="selectedExternalPurchaseCandidate(row).suggested_quantity_warning" class="status orange" style="margin-top:4px;white-space:normal">{{ selectedExternalPurchaseCandidate(row).suggested_quantity_warning }}，可修改数量后提交</div></template>
                       <span v-else class="status red">{{ selectedExternalPurchaseCandidate(row)?.blocked_reason || '缺少有效价格' }}</span>
                     </td>
                   </tr>
@@ -7338,18 +7350,18 @@
         shipping_fee_mode:"not_provided", shipping_fee:"",
         sample_fee:"", plate_fee:"", die_fee:"", evidence_reference:"", remarks:"",
       });
-      const CORNER_GUARD_REFERENCE_COST_PER_METER = 1.10;
-      const calculateCornerGuardReferenceCost = (lengthMm, quantity) => {
+      const calculateCornerGuardFormalCost = (lengthMm, quantity, ratePerMeter) => {
         const length = Number(lengthMm);
         const count = Number(quantity);
-        if (!(length > 0) || !(count > 0)) return null;
-        const unitCost = (length / 1000) * CORNER_GUARD_REFERENCE_COST_PER_METER;
+        const rate = Number(ratePerMeter);
+        if (!(length > 0) || !(count > 0) || !(rate > 0)) return null;
+        const unitCost = (length / 1000) * rate;
         return {
-          rate_per_meter: CORNER_GUARD_REFERENCE_COST_PER_METER,
+          rate_per_meter: rate,
           length_mm: length,
           quantity: count,
-          unit_cost: Number(unitCost.toFixed(3)),
-          total_cost: Number((unitCost * count).toFixed(3)),
+          unit_cost: Number(unitCost.toFixed(6)),
+          total_cost: Number((unitCost * count).toFixed(2)),
         };
       };
       const blankProduct = () => ({
@@ -7359,7 +7371,9 @@
         box_style: "", print_content: "无印刷", printing_colors: "",
         supply_mode: "corrugated_production", external_packaging_category_code: "",
         external_packaging_specification_summary: "", external_packaging_purchase_unit: "",
-        external_supply: { candidates: [] }, _external_selected_ids: [], _external_default_product_id: null, _corner_reference_quantity: 1000,
+        external_supply: { candidates: [], customer_specification:null },
+        _external_specification: {shape:"L",length_mm:null,side_a_mm:50,side_b_mm:50,thickness_mm:5},
+        _external_selected_ids: [], _external_default_product_id: null, _corner_reference_quantity: 1000,
         printing_plate_mode: "no_plate", printing_plate_1_id: null, printing_plate_2_id: null, printing_plate_3_id: null,
         printing_plates: [], plate_alignment_value_mm: null, plate_mount_value_mm: null,
         machine_set_length_mm: null, machine_set_width_mm: null, machine_set_height_mm: null,
@@ -9215,7 +9229,15 @@
               let defaultId = Number(payload._external_default_product_id || 0);
               if (selectedIds.length === 1) defaultId = selectedIds[0];
               if (!selectedIds.includes(defaultId)) throw new Error("多个候选供应商时必须人工指定一个默认供应商");
-              payload.external_supply = {candidates:selectedIds.map(external_product_id=>({external_product_id,is_default:external_product_id===defaultId}))};
+              let customerSpecification = null;
+              if (payload.external_packaging_category_code === "paper_corner_guard") {
+                const source = payload._external_specification || {};
+                const values = [source.length_mm,source.side_a_mm,source.side_b_mm,source.thickness_mm].map(Number);
+                if (!values.every(value=>Number.isFinite(value)&&value>0)) throw new Error("请完整填写护角单根长度、边宽A、边宽B和厚度");
+                customerSpecification = {shape:String(source.shape||"L"),length_mm:values[0],side_a_mm:values[1],side_b_mm:values[2],thickness_mm:values[3]};
+                payload.unit = "根";
+              }
+              payload.external_supply = {candidates:selectedIds.map(external_product_id=>({external_product_id,is_default:external_product_id===defaultId})),customer_specification:customerSpecification};
               payload.material_id=null; payload.layer_count=null; payload.flute_type=null; payload.surface_paper_type=null;
               payload.length_mm=null; payload.width_mm=null; payload.height_mm=null; payload.die_cut_path=null;
               payload.report_length_mm=null; payload.report_width_mm=null; payload.crease_type=null;
@@ -9233,6 +9255,7 @@
             delete payload._external_selected_ids;
             delete payload._external_default_product_id;
             delete payload._corner_reference_quantity;
+            delete payload._external_specification;
             delete payload.id;
             payload.production_process = this.serializeProductionProcesses(
               payload._production_processes,
@@ -12402,9 +12425,12 @@
           cornerGuardReferenceCost() {
             if (this.productForm?.external_packaging_category_code !== "paper_corner_guard") return null;
             const candidate = this.productExternalDefaultCandidate();
-            return calculateCornerGuardReferenceCost(
-              candidate?.specification?.length_mm,
+            const price = candidate?.current_purchase_price;
+            if (price?.quote_unit !== "米") return null;
+            return calculateCornerGuardFormalCost(
+              this.productForm?._external_specification?.length_mm,
               this.productForm?._corner_reference_quantity || 1000,
+              price?.unit_price,
             );
           },
           externalReferenceMoney(value) {
@@ -12416,6 +12442,15 @@
             return (this.productForm?._external_selected_ids || []).map(Number).includes(Number(externalProductId));
           },
           syncProductExternalProfile() {
+            if (this.productForm?.external_packaging_category_code === "paper_corner_guard") {
+              const spec = this.productForm._external_specification || {};
+              const numbers = [spec.length_mm,spec.side_a_mm,spec.side_b_mm,spec.thickness_mm].map(Number);
+              this.productForm.external_packaging_specification_summary = numbers.every(value=>value>0)
+                ? `${numbers[0]}×${numbers[1]}×${numbers[2]}×${numbers[3]}mm`
+                : "";
+              this.productForm.external_packaging_purchase_unit = "根";
+              return;
+            }
             const selected = (this.productForm?._external_selected_ids || []).map(Number);
             const row = (this.productExternalSupplyOptions || []).find(item=>selected.includes(Number(item.external_product_id)));
             if (!row) {
@@ -12473,6 +12508,10 @@
             this.productForm._external_default_product_id = null;
             this.productForm.external_packaging_specification_summary = "";
             this.productForm.external_packaging_purchase_unit = "";
+            this.productForm._external_specification = this.productForm.external_packaging_category_code === "paper_corner_guard"
+              ? {shape:"L",length_mm:null,side_a_mm:50,side_b_mm:50,thickness_mm:5}
+              : {};
+            this.syncProductExternalProfile();
             await this.loadProductExternalSupplyCandidates();
           },
           async onProductExternalCustomerChange() {
@@ -12588,7 +12627,12 @@
             this.supplierPriceCurrent = null;
             this.supplierPriceItems = [];
             this.supplierPriceComparison = null;
-            this.supplierPriceForm = blankSupplierPrice(row.purchase_unit);
+            this.supplierPriceForm = blankSupplierPrice(
+              row.category_code === "paper_corner_guard" ? "米" : row.purchase_unit
+            );
+            if (row.category_code === "paper_corner_guard") {
+              this.supplierPriceForm.unit_conversion_basis = "客户单根长度mm÷1000换算";
+            }
             this.modal = {type:"supplierPackagingPrices",title:`采购报价｜${row.supplier_product_code}`};
             try {
               await this.loadSupplierPriceVersions();
@@ -12655,7 +12699,14 @@
               const {data} = await axios.post(`/api/master/external-packaging/products/${productId}/prices`,this.supplierPricePayload());
               await this.loadSupplierPriceVersions();
               await this.loadSupplierPriceComparison();
-              this.supplierPriceForm = blankSupplierPrice(this.supplierPriceProduct?.purchase_unit);
+              this.supplierPriceForm = blankSupplierPrice(
+                this.supplierPriceProduct?.category_code === "paper_corner_guard"
+                  ? "米"
+                  : this.supplierPriceProduct?.purchase_unit
+              );
+              if (this.supplierPriceProduct?.category_code === "paper_corner_guard") {
+                this.supplierPriceForm.unit_conversion_basis = "客户单根长度mm÷1000换算";
+              }
               this.showToast(data?.created === false ? "报价事实未变化，沿用原版本" : `报价版本 v${data?.item?.version_number || ""} 已保存`);
               return true;
             } catch (error) {
@@ -18566,6 +18617,10 @@
             };
             return JSON.stringify(normalize(specification || {}));
           },
+          externalCornerSectionKey(specification) {
+            const source = specification || {};
+            return JSON.stringify({shape:String(source.shape||"").toUpperCase(),side_a_mm:Number(source.side_a_mm),side_b_mm:Number(source.side_b_mm),thickness_mm:Number(source.thickness_mm)});
+          },
           async loadExternalComponents(productId) {
             const requestedId = Number(productId || 0);
             if (!this.canAdmin || !requestedId) return false;
@@ -18604,12 +18659,16 @@
             const catalog = this.externalComponentEditor.catalog || [];
             if (!(component.candidates || []).length) return catalog.filter(item=>!selected.has(Number(item.id)));
             const category = component.category_code;
-            const specKey = this.externalSpecificationKey(component.specification);
+            const specKey = category === "paper_corner_guard"
+              ? this.externalCornerSectionKey(component.specification)
+              : this.externalSpecificationKey(component.specification);
             const purchaseUnit = component.candidates[0]?.purchase_unit;
             return catalog.filter(item=>
               !selected.has(Number(item.id))
               && item.category_code === category
-              && this.externalSpecificationKey(item.specification) === specKey
+              && (category === "paper_corner_guard"
+                ? this.externalCornerSectionKey(item.specification) === specKey
+                : this.externalSpecificationKey(item.specification) === specKey)
               && item.purchase_unit === purchaseUnit
             );
           },
@@ -18620,7 +18679,8 @@
             if (!(component.candidates || []).length) {
               component.category_code = row.category_code;
               component.specification = JSON.parse(JSON.stringify(row.specification || {}));
-              component.specification_summary = row.specification_summary;
+              if (row.category_code === "paper_corner_guard") component.specification.length_mm = null;
+              component.specification_summary = row.category_code === "paper_corner_guard" ? "请填写客户定长" : row.specification_summary;
               component.consumption_unit = row.purchase_unit;
             }
             component.candidates.push({external_product_id:row.id,is_default:component.candidates.length===0,supplier_id:row.supplier_id,supplier_name:row.supplier_name,supplier_product_code:row.supplier_product_code,product_name:row.product_name,purchase_unit:row.purchase_unit,customer_scope_id:row.customer_scope_id,currently_available:true});
@@ -18650,6 +18710,12 @@
                 if (!(waste>=0 && waste<=1)) throw new Error(`${label}损耗率必须在0到1之间`);
                 if (!(component.candidates || []).length) throw new Error(`${label}至少选择一个供应商产品`);
                 if ((component.candidates || []).filter(item=>item.is_default).length!==1) throw new Error(`${label}必须选择一个默认候选`);
+                if (component.category_code === "paper_corner_guard") {
+                  const spec = component.specification || {};
+                  const values = [spec.length_mm,spec.side_a_mm,spec.side_b_mm,spec.thickness_mm].map(Number);
+                  if (!values.every(value=>Number.isFinite(value)&&value>0)) throw new Error(`${label}请完整填写护角单根长度、边宽A、边宽B和厚度`);
+                  if (!["根","支"].includes(component.consumption_unit)) throw new Error(`${label}用量必须按根/支表达`);
+                }
                 const purchaseUnit = component.candidates[0]?.purchase_unit;
                 if (purchaseUnit !== component.consumption_unit && (!(Number(component.units_per_purchase_unit)>0) || !String(component.conversion_basis || "").trim())) throw new Error(`${label}用量单位与采购单位不同时必须填写换算数量和依据`);
                 return {
@@ -18661,6 +18727,7 @@
                   conversion_basis:String(component.conversion_basis || "").trim() || null,
                   is_required:component.is_required !== false,
                   remarks:String(component.remarks || "").trim() || null,
+                  customer_specification:component.category_code === "paper_corner_guard" ? JSON.parse(JSON.stringify(component.specification || {})) : null,
                   candidates:component.candidates.map(candidate=>({external_product_id:Number(candidate.external_product_id),is_default:!!candidate.is_default})),
                 };
               }),
@@ -19095,6 +19162,11 @@
             form.external_packaging_category_code = externalSupply.category_code || form.external_packaging_category_code || "";
             form.external_packaging_specification_summary = externalSupply.specification_summary || form.external_packaging_specification_summary || "";
             form.external_packaging_purchase_unit = externalSupply.purchase_unit || form.external_packaging_purchase_unit || "";
+            form._external_specification = JSON.parse(JSON.stringify(
+              externalSupply.specification
+              || form._external_specification
+              || {shape:"L",length_mm:null,side_a_mm:50,side_b_mm:50,thickness_mm:5}
+            ));
             form._external_selected_ids = snapshots.map(row=>Number(row.external_product_id)).filter(value=>value>0);
             form._external_default_product_id = Number(snapshots.find(row=>row.is_default)?.external_product_id || 0) || null;
             form._corner_reference_quantity = 1000;
@@ -19172,6 +19244,7 @@
               external_packaging_category_code: f.external_packaging_category_code,
               external_packaging_specification_summary: f.external_packaging_specification_summary,
               external_packaging_purchase_unit: f.external_packaging_purchase_unit,
+              external_packaging_customer_specification: f._external_specification,
               external_supply_candidates: (f._external_selected_ids || []).map(Number).sort((a,b)=>a-b),
               external_supply_default: Number(f._external_default_product_id || 0) || null,
               length_mm: f.length_mm, width_mm: f.width_mm, height_mm: f.height_mm,

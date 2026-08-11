@@ -30,8 +30,12 @@ def _price_row(product, *, version: int, value: str, created_by: int):
         version_number=version,
         product_version=product.version,
         specification_snapshot_json=product.specification_json,
-        quote_unit=product.purchase_unit,
-        unit_conversion_basis=None,
+        quote_unit=("米" if product.category_code == "paper_corner_guard" else product.purchase_unit),
+        unit_conversion_basis=(
+            "客户单根长度mm÷1000换算"
+            if product.category_code == "paper_corner_guard"
+            else None
+        ),
         currency="CNY",
         tax_mode="tax_inclusive",
         tax_rate=Decimal("0.13"),
@@ -40,8 +44,12 @@ def _price_row(product, *, version: int, value: str, created_by: int):
         effective_from=date(2026, 1, 1) if version == 1 else date(2026, 8, 11),
         effective_to=None,
         moq_quantity=Decimal("1"),
-        moq_unit=product.purchase_unit,
-        packaging_multiple=Decimal("1"),
+        moq_unit=("米" if product.category_code == "paper_corner_guard" else product.purchase_unit),
+        packaging_multiple=(
+            None
+            if product.category_code == "paper_corner_guard"
+            else Decimal("1")
+        ),
         tier_prices_json="[]",
         shipping_fee_mode="not_provided",
         shipping_fee=None,
@@ -100,7 +108,7 @@ def test_product_external_candidates_show_formal_price_only_with_cost_permission
             "id": priced["current_purchase_price"]["id"],
             "version_number": 1,
             "product_version": 1,
-            "quote_unit": "根",
+            "quote_unit": "米",
             "unit_price": "1.1",
             "currency": "CNY",
             "tax_mode": "tax_inclusive",

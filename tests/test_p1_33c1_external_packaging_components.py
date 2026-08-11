@@ -14,11 +14,11 @@ def _spec(kind: str, variant: int = 1) -> tuple[str, str]:
         data = {
             "length_mm": 1200.0 if variant == 1 else 1000.0,
             "shape": "L",
-            "side_a_mm": 50.0,
+            "side_a_mm": 50.0 if variant == 1 else 60.0,
             "side_b_mm": 50.0,
             "thickness_mm": 5.0,
         }
-        summary = "L型 50×50×5mm，长1200mm" if variant == 1 else "L型 50×50×5mm，长1000mm"
+        summary = "L型 50×50×5mm，长1200mm" if variant == 1 else "L型 60×50×5mm，长1000mm"
     elif kind == "epe_cushion":
         data = {
             "density_kg_m3": None,
@@ -159,6 +159,13 @@ def _three_component_payload(ids: dict[str, int], version: int = 0) -> dict:
                 "quantity_per_finished_unit": "4",
                 "waste_rate": "0.02",
                 "consumption_unit": "根",
+                "customer_specification": {
+                    "shape": "L",
+                    "length_mm": 780,
+                    "side_a_mm": 50,
+                    "side_b_mm": 50,
+                    "thickness_mm": 5,
+                },
                 "is_required": True,
                 "candidates": [
                     {"external_product_id": ids["G-CORNER-1"], "is_default": True},
@@ -266,7 +273,7 @@ def test_rejects_other_customer_and_mixed_specifications(component_app: FastAPI)
         mixed["components"][0]["candidates"][1]["external_product_id"] = ids["G-CORNER-DIFF"]
         response = client.put(f"/api/master/products/{ids['product_a']}/external-components", json=mixed)
         assert response.status_code == 422
-        assert "结构化规格不一致" in response.json()["detail"]
+        assert "截面不兼容" in response.json()["detail"]
 
 
 def test_inactive_candidate_history_readable_but_cannot_be_resaved(component_app: FastAPI) -> None:
@@ -297,14 +304,14 @@ def test_inactive_candidate_history_readable_but_cannot_be_resaved(component_app
 def test_unit_conversion_requires_evidence(component_app: FastAPI) -> None:
     ids = component_app.state.fixture
     payload = _three_component_payload(ids)
-    payload["components"][0]["consumption_unit"] = "件"
+    payload["components"][1]["consumption_unit"] = "件"
     with TestClient(component_app) as client:
         _login(client)
         blocked = client.put(f"/api/master/products/{ids['product_a']}/external-components", json=payload)
         assert blocked.status_code == 422
         assert "换算依据" in blocked.json()["detail"]
-        payload["components"][0]["units_per_purchase_unit"] = "1"
-        payload["components"][0]["conversion_basis"] = "供应商规格书：1根=1件"
+        payload["components"][1]["units_per_purchase_unit"] = "1"
+        payload["components"][1]["conversion_basis"] = "供应商规格书：1套=1件"
         assert client.put(f"/api/master/products/{ids['product_a']}/external-components", json=payload).status_code == 200
 
 

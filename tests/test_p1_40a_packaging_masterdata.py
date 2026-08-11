@@ -131,6 +131,13 @@ def _external_payload(ids: dict[str, int], candidates: list[dict] | None = None)
         "production_label_enabled": True,
         "production_label_units_per_label": 50,
         "external_supply": {
+            "customer_specification": {
+                "shape": "L",
+                "length_mm": 870,
+                "side_a_mm": 50,
+                "side_b_mm": 50,
+                "thickness_mm": 5,
+            },
             "candidates": candidates
             or [{"external_product_id": ids["CG-870-A"], "is_default": False}]
         },
@@ -175,7 +182,7 @@ def test_external_product_candidates_scope_and_single_default(p1_40a_app: FastAP
         assert summary.status_code == 200
         summary_item = summary.json()["items"][0]
         assert summary_item["supply_mode"] == "external_purchase"
-        assert summary_item["external_packaging_specification_summary"] == "L型 50×50×5mm，长870mm"
+        assert summary_item["external_packaging_specification_summary"] == "870×50×50×5mm"
         assert summary_item["external_packaging_purchase_unit"] == "根"
 
         blocked_sync = client.post(
@@ -205,7 +212,11 @@ def test_multiple_candidates_require_one_default_and_old_client_preserves(p1_40a
                 {"external_product_id": ids["CG-1000"], "is_default": False},
             ],
         )
-        assert client.post("/api/master/products", json=mismatched).status_code == 422
+        mismatched["product_code"] = "EXT-CG-MULTI-LENGTH"
+        mismatched["customer_material_code"] = "EXT-CG-MULTI-LENGTH"
+        accepted = client.post("/api/master/products", json=mismatched)
+        assert accepted.status_code == 201, accepted.text
+        assert accepted.json()["external_supply"]["specification"]["length_mm"] == 870
 
         payload = _external_payload(
             ids,

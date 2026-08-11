@@ -22,8 +22,12 @@ def _price(product, *, unit_price: str, created_by: int | None = None):
         version_number=1,
         product_version=product.version,
         specification_snapshot_json=product.specification_json,
-        quote_unit=product.purchase_unit,
-        unit_conversion_basis=None,
+        quote_unit=("米" if product.category_code == "paper_corner_guard" else product.purchase_unit),
+        unit_conversion_basis=(
+            "客户单根长度mm÷1000换算"
+            if product.category_code == "paper_corner_guard"
+            else None
+        ),
         currency="CNY",
         tax_mode="tax_inclusive",
         tax_rate=Decimal("0.13"),
@@ -32,8 +36,12 @@ def _price(product, *, unit_price: str, created_by: int | None = None):
         effective_from=date(2026, 1, 1),
         effective_to=None,
         moq_quantity=Decimal("1"),
-        moq_unit=product.purchase_unit,
-        packaging_multiple=Decimal("1"),
+        moq_unit=("米" if product.category_code == "paper_corner_guard" else product.purchase_unit),
+        packaging_multiple=(
+            None
+            if product.category_code == "paper_corner_guard"
+            else Decimal("1")
+        ),
         tier_prices_json="[]",
         shipping_fee_mode="not_provided",
         shipping_fee=None,
@@ -135,6 +143,17 @@ def purchase_app(tmp_path: Path):
         )
         external = {}
         for supplier, code, name, category, unit, price in definitions:
+            specification = (
+                {
+                    "shape": "L",
+                    "length_mm": 1000 if code == "CORNER-B" else 870,
+                    "side_a_mm": 50,
+                    "side_b_mm": 50,
+                    "thickness_mm": 5,
+                }
+                if category == "paper_corner_guard"
+                else {"code": code}
+            )
             row = ExternalPackagingProduct(
                 supplier_id=supplier.id,
                 category_code=category,
@@ -143,7 +162,9 @@ def purchase_app(tmp_path: Path):
                 product_name=name,
                 purchase_unit=unit,
                 specification_summary=f"匿名规格 {code}",
-                specification_json=json.dumps({"code": code}, sort_keys=True),
+                specification_json=json.dumps(
+                    specification, ensure_ascii=False, sort_keys=True
+                ),
                 is_active=True,
                 version=1,
             )
@@ -161,6 +182,21 @@ def purchase_app(tmp_path: Path):
             (3, "彩印内盒", "1", "0.01", "只", external["CARTON-A"], None),
         )
         for display_order, purpose, quantity, waste, unit, default, alternative in specs:
+            component_specification_json = (
+                json.dumps(
+                    {
+                        "shape": "L",
+                        "length_mm": 780,
+                        "side_a_mm": 50,
+                        "side_b_mm": 50,
+                        "thickness_mm": 5,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+                if default.category_code == "paper_corner_guard"
+                else default.specification_json
+            )
             component = ProductExternalComponent(
                 display_order=display_order,
                 purpose=purpose,
@@ -169,8 +205,12 @@ def purchase_app(tmp_path: Path):
                 consumption_unit=unit,
                 is_required=True,
                 category_code=default.category_code,
-                specification_json=default.specification_json,
-                specification_summary=default.specification_summary,
+                specification_json=component_specification_json,
+                specification_summary=(
+                    "780×50×50×5mm"
+                    if default.category_code == "paper_corner_guard"
+                    else default.specification_summary
+                ),
             )
             candidates = [(default, True)]
             if alternative is not None:

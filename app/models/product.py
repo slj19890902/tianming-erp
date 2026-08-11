@@ -75,6 +75,21 @@ class Product(Base):
             "AND production_label_units_per_label > 0))",
             name="ck_products_production_label_policy",
         ),
+        CheckConstraint(
+            "supply_mode IN ('corrugated_production','external_purchase','mixed_bom')",
+            name="ck_products_supply_mode",
+        ),
+        CheckConstraint(
+            "((supply_mode = 'external_purchase' AND external_packaging_category_code IS NOT NULL "
+            "AND external_packaging_specification_json IS NOT NULL "
+            "AND external_packaging_specification_summary IS NOT NULL "
+            "AND external_packaging_purchase_unit IS NOT NULL "
+            "AND external_packaging_candidate_snapshot_json IS NOT NULL) OR "
+            "(supply_mode <> 'external_purchase' AND external_packaging_category_code IS NULL "
+            "AND external_packaging_specification_json IS NULL AND external_packaging_specification_summary IS NULL "
+            "AND external_packaging_purchase_unit IS NULL AND external_packaging_candidate_snapshot_json IS NULL))",
+            name="ck_products_external_supply_profile",
+        ),
         CheckConstraint("version >= 1", name="ck_products_version"),
         Index("ix_products_customer_id", "customer_id"),
         Index("ix_products_material_id", "material_id"),
@@ -110,6 +125,24 @@ class Product(Base):
         nullable=False,
     )
     box_style: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    supply_mode: Mapped[str] = mapped_column(
+        String(30), default="corrugated_production", server_default="corrugated_production", nullable=False
+    )
+    external_packaging_category_code: Mapped[str | None] = mapped_column(
+        String(50), nullable=True
+    )
+    external_packaging_specification_json: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )
+    external_packaging_specification_summary: Mapped[str | None] = mapped_column(
+        String(500), nullable=True
+    )
+    external_packaging_purchase_unit: Mapped[str | None] = mapped_column(
+        String(20), nullable=True
+    )
+    external_packaging_candidate_snapshot_json: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )
     print_content: Mapped[str | None] = mapped_column(Text, nullable=True)
     printing_colors: Mapped[str | None] = mapped_column(String(150), nullable=True)
     printing_plate_mode: Mapped[str] = mapped_column(

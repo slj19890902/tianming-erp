@@ -136,7 +136,7 @@ class SupplierSupplyCategory(Base):
             name="uq_supplier_supply_categories_supplier_category",
         ),
         CheckConstraint(
-            "category_code IN ('corrugated_board','paper_corner_guard','coated_board','printed_folding_carton','epe_cushion','other_packaging')",
+            "category_code IN ('corrugated_board','paper_corner_guard','coated_board','printed_folding_carton','epe_cushion','hollow_board','other_packaging')",
             name="ck_supplier_supply_categories_code",
         ),
     )
@@ -182,7 +182,7 @@ class ExternalPackagingProduct(Base):
             name="ck_external_packaging_products_lead_time",
         ),
         CheckConstraint(
-            "category_code IN ('paper_corner_guard','coated_board','printed_folding_carton','epe_cushion','other_packaging')",
+            "category_code IN ('paper_corner_guard','coated_board','printed_folding_carton','epe_cushion','hollow_board','other_packaging')",
             name="ck_external_packaging_products_category",
         ),
     )

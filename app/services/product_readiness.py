@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -28,6 +29,31 @@ def product_readiness(product: object) -> dict[str, object]:
     if not str(_value(product, "product_name") or "").strip():
         missing.append(("product_name", "产品名称未填写"))
 
+    supply_mode = str(_value(product, "supply_mode") or "corrugated_production").strip()
+    if supply_mode == "external_purchase":
+        if not str(_value(product, "external_packaging_category_code") or "").strip():
+            missing.append(("external_packaging_category_code", "包材类别未填写"))
+        if not str(_value(product, "external_packaging_specification_summary") or "").strip():
+            missing.append(("external_packaging_specification_summary", "包材规格未填写"))
+        if not str(_value(product, "external_packaging_purchase_unit") or "").strip():
+            missing.append(("external_packaging_purchase_unit", "采购单位未填写"))
+        raw_candidates = _value(product, "external_packaging_candidate_snapshot_json")
+        try:
+            candidates = json.loads(str(raw_candidates or "[]"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            candidates = []
+        if not isinstance(candidates, list) or not candidates:
+            missing.append(("external_supply", "候选供应商产品未选择"))
+        elif sum(1 for row in candidates if isinstance(row, dict) and row.get("is_default") is True) != 1:
+            missing.append(("external_supply_default", "默认供应商产品未明确"))
+        fields = [field for field, _label in missing]
+        labels = [label for _field, label in missing]
+        return {
+            "ready": not missing,
+            "status": "资料已完善" if not missing else "待完善",
+            "missing_fields": fields,
+            "missing_labels": labels,
+        }
     material = _value(product, "material")
     material_code = str(_value(material, "code") or "").strip()
     supplier = str(_value(material, "supplier_name") or "").strip()

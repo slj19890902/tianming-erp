@@ -2503,6 +2503,11 @@
               <data-panel v-else-if="productTab === 'suppliers'" :empty="false">
                 <div class="toolbar" style="margin-bottom:8px">
                   <div class="toolbar-group">
+                    <div class="order-status-tabs">
+                      <button :class="['status-tab-btn',{active:supplierGroupFilter==='all'}]" @click="supplierGroupFilter='all'">全部</button>
+                      <button :class="['status-tab-btn',{active:supplierGroupFilter==='corrugated'}]" @click="supplierGroupFilter='corrugated'">纸板供应商</button>
+                      <button :class="['status-tab-btn',{active:supplierGroupFilter==='packaging'}]" @click="supplierGroupFilter='packaging'">包材供应商</button>
+                    </div>
                     <input class="input" style="width:220px" v-model.trim="supplierSearch" placeholder="供应商名称 / 简称 / 业务代码" />
                     <button class="btn primary" @click="openSupplier()">新增供应商</button>
                   </div>
@@ -2512,10 +2517,11 @@
                 <div v-else-if="!filteredSuppliers.length" class="empty">暂无符合条件的供应商</div>
                 <div v-else class="table-wrap">
                   <table class="compact-table">
-                    <thead><tr><th>供应商全称</th><th>显示简称</th><th>供货类别</th><th>业务代码</th><th>状态</th><th>联系人 / 电话</th><th>操作</th></tr></thead>
+                    <thead><tr><th>供应商全称</th><th>显示简称</th><th>供应商大类</th><th>供货类别</th><th>业务代码</th><th>状态</th><th>联系人 / 电话</th><th>操作</th></tr></thead>
                     <tbody><tr v-for="row in filteredSuppliers" :key="row.id">
                       <td><strong>{{ row.standard_name }}</strong></td>
                       <td>{{ row.display_name || row.standard_name }}</td>
+                      <td><span :class="['status',supplierBusinessGroup(row)==='packaging' ? 'orange' : 'blue']">{{ supplierBusinessGroup(row)==='packaging' ? '包材供应商' : '纸板供应商' }}</span></td>
                       <td><span v-for="code in (row.supply_categories || ['corrugated_board'])" :key="code" class="status blue" style="margin:2px">{{ supplierCategoryLabel(code) }}</span></td>
                       <td>{{ row.business_code || "-" }}</td>
                       <td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td>
@@ -4428,6 +4434,7 @@
                 <div v-else-if="supplierPackagingForm.category_code==='coated_board'" class="form-grid" style="margin-top:8px"><div class="field"><label>实际材质</label><input class="input" v-model.trim="supplierPackagingForm.specification.material_type" placeholder="白卡/灰底白等" /></div><div class="field"><label>克重(g/㎡)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.basis_weight_gsm" /></div><div class="field"><label>厚度(mm)</label><input class="input" type="number" min="0.01" step="0.01" v-model.number="supplierPackagingForm.specification.thickness_mm" /></div><div class="field"><label>单张长(mm)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.sheet_length_mm" /></div><div class="field"><label>单张宽(mm)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.sheet_width_mm" /></div></div>
                 <div v-else-if="supplierPackagingForm.category_code==='printed_folding_carton'" class="form-grid" style="margin-top:8px"><div class="field"><label>结构</label><input class="input" v-model.trim="supplierPackagingForm.specification.structure" /></div><div class="field"><label>基材</label><input class="input" v-model.trim="supplierPackagingForm.specification.substrate" /></div><div class="field"><label>成品长(mm)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.finished_length_mm" /></div><div class="field"><label>成品宽(mm)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.finished_width_mm" /></div><div class="field"><label>成品高(mm)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.finished_height_mm" /></div><div class="field"><label>展开长(mm)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.unfolded_length_mm" /></div><div class="field"><label>展开宽(mm)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.unfolded_width_mm" /></div><div class="field"><label>印刷色数</label><input class="input" type="number" min="1" max="12" v-model.number="supplierPackagingForm.specification.print_color_count" /></div><div class="field wide"><label>后道工艺（按顺序）</label><input class="input" v-model="supplierPackagingForm.specification.ordered_processes" placeholder="覆膜→烫金→模切" /></div></div>
                 <div v-else-if="supplierPackagingForm.category_code==='epe_cushion'" class="form-grid" style="margin-top:8px"><div class="field"><label>形态</label><input class="input" v-model.trim="supplierPackagingForm.specification.shape" placeholder="内衬/护角/片材等" /></div><div class="field"><label>长(mm)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.length_mm" /></div><div class="field"><label>宽(mm)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.width_mm" /></div><div class="field"><label>厚度(mm)</label><input class="input" type="number" min="0.1" step="0.1" v-model.number="supplierPackagingForm.specification.thickness_mm" /></div><div class="field"><label>复合层数</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.layers" /></div><div class="field"><label>密度(kg/m³，可选)</label><input class="input" type="number" min="0.1" step="0.1" v-model.number="supplierPackagingForm.specification.density_kg_m3" /></div><div class="field wide"><label>性能依据（有资料才填）</label><input class="input" v-model.trim="supplierPackagingForm.specification.performance" placeholder="供应商检测资料/合同要求" /></div></div>
+                <div v-else-if="supplierPackagingForm.category_code==='hollow_board'" class="form-grid" style="margin-top:8px"><div class="field"><label>长(mm)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.length_mm" /></div><div class="field"><label>宽(mm)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.width_mm" /></div><div class="field"><label>厚度(mm)</label><input class="input" type="number" min="0.1" step="0.1" v-model.number="supplierPackagingForm.specification.thickness_mm" /></div><div class="field"><label>颜色</label><input class="input" v-model.trim="supplierPackagingForm.specification.color" /></div><div class="field"><label>克重(g/㎡，可选)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.basis_weight_gsm" /></div><div class="field"><label>密度(kg/m³，可选)</label><input class="input" type="number" min="0.1" step="0.1" v-model.number="supplierPackagingForm.specification.density_kg_m3" /></div></div>
                 <div v-else-if="supplierPackagingForm.category_code==='other_packaging'" class="field" style="margin-top:8px"><label>规格摘要</label><input class="input" v-model.trim="supplierPackagingForm.specification.summary" /></div>
                 <div v-else class="muted" style="margin-top:8px">请先选择产品类别。</div>
               </div>
@@ -4507,7 +4514,7 @@
               <div v-if="productForm.id && !canEditProducts" class="notice readonly-hint">当前为只读查看；常用箱资料控件已禁用。</div>
               <fieldset class="product-edit-grid" :class="'readonly-fieldset'" :disabled="!!productForm.id && !canEditProducts">
               <div class="product-form-row product-core-row">
-                <div class="field"><label>客户</label><search-select v-model="productForm.customer_id" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="搜索客户"></search-select></div>
+                <div class="field"><label>客户</label><search-select v-model="productForm.customer_id" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="搜索客户" @change="onProductExternalCustomerChange"></search-select></div>
                 <div class="field"><label>存货编码</label><input class="input" v-model.trim="productForm.product_code" /></div>
                 <input type="hidden" v-model.trim="productForm.customer_material_code" />
                 <div class="field"><label>产品名称</label><input class="input" v-model.trim="productForm.product_name" /></div>
@@ -4520,7 +4527,20 @@
                 </div>
               </div>
 
-              <div class="product-form-row product-size-report-row">
+              <div v-if="productForm.supply_mode==='external_purchase'" class="panel" style="margin:10px 0;border-color:#f59e0b">
+                <div class="toolbar"><div><strong>外购包材资料</strong><div class="muted">只选择供应商已登记的真实产品；单一候选自动设为默认，多候选必须人工指定一个默认，不会按最低价自动选择。</div></div><span class="status orange">不走纸板材质与生产工艺</span></div>
+                <div class="form-grid" style="margin-top:8px">
+                  <div class="field"><label>包材类别（必选）</label><select class="select" v-model="productForm.external_packaging_category_code" @change="onProductExternalCategoryChange"><option value="">请选择</option><option v-for="option in productExternalPackagingCategoryOptions" :key="option.value" :value="option.value">{{ option.label }}</option></select></div>
+                  <div class="field"><label>规格</label><input class="input" :value="productForm.external_packaging_specification_summary || '选择候选后自动带出'" readonly /></div>
+                  <div class="field"><label>采购单位</label><input class="input" :value="productForm.external_packaging_purchase_unit || '自动带出'" readonly /></div>
+                </div>
+                <div v-if="productExternalSupplyLoading" class="muted" style="margin-top:8px">正在读取候选供应商产品…</div>
+                <div v-else-if="productExternalSupplyError" class="notice danger" style="margin-top:8px">{{ productExternalSupplyError }} <button type="button" class="btn small" @click="loadProductExternalSupplyCandidates({force:true})">重试</button></div>
+                <div v-else-if="productForm.external_packaging_category_code && !productExternalSupplyOptions.length" class="notice" style="margin-top:8px">当前客户和类别没有可用供应商产品。请先到“供应商 → 外购产品”维护真实产品、规格与采购单位后再保存。</div>
+                <div v-else-if="productExternalSupplyOptions.length" class="table-wrap" style="margin-top:8px"><table class="compact-table"><thead><tr><th>采用</th><th>默认</th><th>供应商</th><th>产品代码</th><th>产品名称</th><th>规格</th><th>单位</th></tr></thead><tbody><tr v-for="row in productExternalSupplyOptions" :key="row.external_product_id"><td><input type="checkbox" :checked="productExternalCandidateSelected(row.external_product_id)" @change="setProductExternalCandidate(row,$event.target.checked)" /></td><td><input type="radio" name="product-external-default" :value="row.external_product_id" v-model="productForm._external_default_product_id" :disabled="!productExternalCandidateSelected(row.external_product_id)" /></td><td>{{ row.supplier_name }}</td><td>{{ row.supplier_product_code }}</td><td>{{ row.product_name }}</td><td>{{ row.specification_summary || productForm.external_packaging_specification_summary }}</td><td>{{ row.purchase_unit }}</td></tr></tbody></table></div>
+              </div>
+
+              <div v-if="productForm.supply_mode!=='external_purchase'" class="product-form-row product-size-report-row">
                 <div v-if="productRequiresDimension(productForm.box_style,'length_mm')" class="field product-dimension-field"><label>长(mm)</label><input class="input" type="number" min="0" step="1" v-model.number="productForm.length_mm" /></div>
                 <div v-if="productRequiresDimension(productForm.box_style,'width_mm')" class="field product-dimension-field"><label>宽(mm)</label><input class="input" type="number" min="0" step="1" v-model.number="productForm.width_mm" /></div>
                 <div v-if="productRequiresDimension(productForm.box_style,'height_mm')" class="field product-dimension-field"><label>高(mm)</label><input class="input" type="number" min="0" step="1" v-model.number="productForm.height_mm" /></div>
@@ -4625,7 +4645,7 @@
                 <div v-if="productCreaseMismatch" class="field wide product-crease-warning status orange" style="display:block">{{ productCreaseMismatch }}</div>
               </div>
 
-              <div class="product-material-workbench">
+              <div v-if="productForm.supply_mode!=='external_purchase'" class="product-material-workbench">
                 <div v-if="productEditorOptionsLoading" class="muted" style="margin-bottom:8px">正在读取材质与模具选择数据…</div>
                 <div v-else-if="productEditorOptionsError" class="notice error" style="margin-bottom:8px">{{ productEditorOptionsError }} <button type="button" class="btn small" @click="ensureProductEditorOptions({force:true})">重试</button></div>
                 <div class="product-material-controls">
@@ -4774,7 +4794,7 @@
               </div>
 
               <div class="product-form-row product-print-row">
-                <div class="field"><label>生产工艺（可多选）</label>
+                <div v-if="productForm.supply_mode!=='external_purchase'" class="field"><label>生产工艺（可多选）</label>
                   <div class="process-options">
                     <label class="process-option"><input type="checkbox" value="粘贴" v-model="productForm._production_processes" @change="onProductProcessesChanged" />粘贴</label>
                     <label class="process-option"><input type="checkbox" value="打钉" v-model="productForm._production_processes" @change="onProductProcessesChanged" />打钉</label>
@@ -4782,7 +4802,7 @@
                     <label class="process-option"><input type="checkbox" value="其他" v-model="productForm._production_processes" @change="onProductProcessesChanged" />其他</label>
                   </div>
                 </div>
-                <div class="field"><label>印刷情况</label>
+                <div v-if="productForm.supply_mode!=='external_purchase'" class="field"><label>印刷情况</label>
                   <select class="select" v-model="productForm.print_content" @change="onProductPrintingChanged">
                     <option value="无印刷">无印刷</option>
                     <option value="单色印刷">单色印刷</option>
@@ -4791,14 +4811,14 @@
                     <option v-if="productForm.print_content && !['无印刷','单色印刷','双色印刷','三色印刷'].includes(productForm.print_content)" :value="productForm.print_content">原记录：{{ productForm.print_content }}</option>
                   </select>
                 </div>
-                <div v-if="productHasPrinting(productForm)" class="field"><label>印刷方式</label>
+                <div v-if="productForm.supply_mode!=='external_purchase' && productHasPrinting(productForm)" class="field"><label>印刷方式</label>
                   <select class="select" v-model="productForm.printing_plate_mode" @change="onProductPrintingChanged">
                     <option value="no_plate">不挂板（默认）</option>
                     <option value="plate">挂板</option>
                   </select>
                   <div v-if="productForm.printing_plate_mode==='no_plate'" class="status orange" style="display:block;margin-top:4px">按图纸核对印刷内容，可能有印刷尺寸偏差</div>
                 </div>
-                <div v-if="productHasPrinting(productForm) && productForm.printing_plate_mode==='plate'" class="product-printing-plate-config">
+                <div v-if="productForm.supply_mode!=='external_purchase' && productHasPrinting(productForm) && productForm.printing_plate_mode==='plate'" class="product-printing-plate-config">
                   <div class="field" v-for="index in productPrintingPlateCount(productForm)" :key="`printing-plate-${index}`">
                     <label>第{{ index }}色挂板</label>
                     <search-select v-model="productForm[`printing_plate_${index}_id`]" :options="printingPlateSelectOptions()" label-key="_label" value-key="id" :placeholder="`选择第${index}色挂板`" :allow-empty="false"></search-select>
@@ -4810,12 +4830,12 @@
                   <div class="field"><label>机器设定箱高(mm)</label><input class="input" type="number" min="0" step="0.01" v-model="productForm.machine_set_height_mm" /></div>
                   <div v-if="productPrintingPlateError" class="status orange" style="grid-column:1/-1">{{ productPrintingPlateError }}</div>
                 </div>
-                <div class="product-production-label-config">
+                <div v-if="productForm.supply_mode!=='external_purchase'" class="product-production-label-config">
                   <label class="product-production-label-switch"><input type="checkbox" v-model="productForm.production_label_enabled" @change="onProductProductionLabelToggle" />随生产任务打印包装标签</label>
                   <div class="field"><label>每张标签代表只数</label><input class="input" type="number" min="1" step="1" inputmode="numeric" v-model="productForm.production_label_units_per_label" :disabled="!productForm.production_label_enabled" placeholder="请输入正整数" /><div v-if="productProductionLabelError" class="status orange" style="display:block;margin-top:4px">{{ productProductionLabelError }}</div></div>
                   <div class="product-production-label-note">只保存以后新生产任务的包装标签规则，不会立即打印，也不会改动旧订单、旧报料或旧生产任务。A1/0201 首次开启默认 5 只；模切内盒、衬板、刀卡、隔板默认 50 只。</div>
                 </div>
-                <div class="field"><label>报料备注</label><input class="input" v-model.trim="productForm.report_notes" placeholder="供应商直发、特殊压线等" /></div>
+                <div v-if="productForm.supply_mode!=='external_purchase'" class="field"><label>报料备注</label><input class="input" v-model.trim="productForm.report_notes" placeholder="供应商直发、特殊压线等" /></div>
                 <div class="product-drawing-independent-section">
                   <div class="field"><label>上传产品图片/图纸</label>
                     <input class="input" type="file" accept="image/png,image/jpeg,image/webp,application/pdf,.pdf" @change="drawingFile=$event.target.files[0] || null" />
@@ -4843,7 +4863,7 @@
 
               <div class="product-form-row product-final-row">
                 <div v-if="!isWorkshop" class="field sensitive-price"><label>默认单价</label><input class="input" type="number" min="0" step="0.0001" v-model="productForm.sale_unit_price" /></div>
-                <div v-if="productUsesMold(productForm)" class="field"><label>生产模具 / 货架位置（必选）</label><search-select v-model="productForm.mold_tool_id" :options="moldToolSelectOptions()" label-key="_label" value-key="id" placeholder="选择已登记模具" :allow-empty="false"></search-select><div class="muted" style="font-size:11px">仅模切工艺使用；请先在“仓库库存管理 → 模具位置”登记并绑定。</div><div v-if="productMoldError" class="status orange" style="display:block;margin-top:4px">{{ productMoldError }}</div></div>
+                <div v-if="productForm.supply_mode!=='external_purchase' && productUsesMold(productForm)" class="field"><label>生产模具 / 货架位置（必选）</label><search-select v-model="productForm.mold_tool_id" :options="moldToolSelectOptions()" label-key="_label" value-key="id" placeholder="选择已登记模具" :allow-empty="false"></search-select><div class="muted" style="font-size:11px">仅模切工艺使用；请先在“仓库库存管理 → 模具位置”登记并绑定。</div><div v-if="productMoldError" class="status orange" style="display:block;margin-top:4px">{{ productMoldError }}</div></div>
                 <div class="field compact-remark-field"><label>备注</label><textarea class="textarea" v-model="productForm.remark" rows="1" placeholder="内部备注，可选"></textarea></div>
               </div>
               </fieldset>
@@ -7311,6 +7331,9 @@
         product_name: "", material_id: null, legacy_material_text: null,
         length_mm: null, width_mm: null, height_mm: null, box_category: "normal",
         box_style: "", print_content: "无印刷", printing_colors: "",
+        supply_mode: "corrugated_production", external_packaging_category_code: "",
+        external_packaging_specification_summary: "", external_packaging_purchase_unit: "",
+        external_supply: { candidates: [] }, _external_selected_ids: [], _external_default_product_id: null,
         printing_plate_mode: "no_plate", printing_plate_1_id: null, printing_plate_2_id: null, printing_plate_3_id: null,
         printing_plates: [], plate_alignment_value_mm: null, plate_mount_value_mm: null,
         machine_set_length_mm: null, machine_set_width_mm: null, machine_set_height_mm: null,
@@ -7487,6 +7510,7 @@
             supplierLoading: false,
             supplierError: "",
             supplierSearch: "",
+            supplierGroupFilter:"all",
             supplierForm: blankSupplier(),
             supplierCategoryOptions: [
               {value:"corrugated_board",label:"瓦楞纸板"},
@@ -7494,6 +7518,7 @@
               {value:"coated_board",label:"涂布白板/灰底白"},
               {value:"printed_folding_carton",label:"印刷折叠彩盒"},
               {value:"epe_cushion",label:"EPE缓冲包装"},
+              {value:"hollow_board",label:"中空板"},
               {value:"other_packaging",label:"其他外购包装"},
             ],
             externalPackagingUnits:["根","米","件","张","令","kg","吨","只","个","套","片","卷","箱"],
@@ -7505,6 +7530,10 @@
             supplierPackagingSaving:false,
             supplierPackagingForm:blankSupplierPackagingProduct(),
             externalComponentEditor:{product_id:null,version:0,components:[],catalog:[],loading:false,saving:false,error:""},
+            productExternalSupplyOptions:[],
+            productExternalSupplyLoading:false,
+            productExternalSupplyError:"",
+            productExternalSupplySequence:0,
             supplierPriceLoading:false,
             supplierPriceSaving:false,
             supplierPriceProduct:null,
@@ -7954,7 +7983,9 @@
           },
           filteredSuppliers() {
             const keyword = String(this.supplierSearch || "").trim().toLowerCase();
-            const rows = (this.suppliers || []).slice().sort((a,b) =>
+            const rows = (this.suppliers || []).filter(row =>
+              this.supplierGroupFilter === "all" || this.supplierBusinessGroup(row) === this.supplierGroupFilter
+            ).slice().sort((a,b) =>
               Number(a.sort_order || 0) - Number(b.sort_order || 0)
               || String(a.standard_name || "").localeCompare(String(b.standard_name || ""), "zh-CN")
             );
@@ -7967,6 +7998,9 @@
           activeExternalPackagingCategoryOptions() {
             const active = new Set(this.supplierPackagingSupplier?.supply_categories || []);
             return this.supplierCategoryOptions.filter(option => option.value !== "corrugated_board" && active.has(option.value));
+          },
+          productExternalPackagingCategoryOptions() {
+            return this.supplierCategoryOptions.filter(option => option.value !== "corrugated_board");
           },
           // 新业务只允许选择供应商主数据中启用的标准名称。
           materialSupplierSelectOptions() {
@@ -9140,12 +9174,37 @@
             }
           },
           buildProductWritePayload(options = null) {
-            const productCreaseError = this.validateProductCreaseAndReport(this.productForm);
+            const isExternal = this.productForm.supply_mode === "external_purchase";
+            const productCreaseError = isExternal ? null : this.validateProductCreaseAndReport(this.productForm);
             if (productCreaseError) throw new Error(productCreaseError);
-            if (this.productMoldError) throw new Error(this.productMoldError);
-            if (this.productPrintingPlateError) throw new Error(this.productPrintingPlateError);
-            if (this.productProductionLabelError) throw new Error(this.productProductionLabelError);
+            if (!isExternal && this.productMoldError) throw new Error(this.productMoldError);
+            if (!isExternal && this.productPrintingPlateError) throw new Error(this.productPrintingPlateError);
+            if (!isExternal && this.productProductionLabelError) throw new Error(this.productProductionLabelError);
             const payload = { ...this.productForm };
+            if (isExternal) {
+              const selectedIds = [...new Set((payload._external_selected_ids || []).map(Number).filter(value=>value>0))];
+              if (!payload.external_packaging_category_code) throw new Error("请选择外购包材类别");
+              if (!selectedIds.length) throw new Error("请至少选择一个候选供应商产品");
+              let defaultId = Number(payload._external_default_product_id || 0);
+              if (selectedIds.length === 1) defaultId = selectedIds[0];
+              if (!selectedIds.includes(defaultId)) throw new Error("多个候选供应商时必须人工指定一个默认供应商");
+              payload.external_supply = {candidates:selectedIds.map(external_product_id=>({external_product_id,is_default:external_product_id===defaultId}))};
+              payload.material_id=null; payload.layer_count=null; payload.flute_type=null; payload.surface_paper_type=null;
+              payload.length_mm=null; payload.width_mm=null; payload.height_mm=null; payload.die_cut_path=null;
+              payload.report_length_mm=null; payload.report_width_mm=null; payload.crease_type=null;
+              payload.crease_left_mm=null; payload.crease_middle_mm=null; payload.crease_right_mm=null;
+              payload.base_report_length_mm=null; payload.base_report_width_mm=null; payload.base_crease_type=null;
+              payload.base_crease_left_mm=null; payload.base_crease_middle_mm=null; payload.base_crease_right_mm=null;
+              payload.production_process=""; payload._production_processes=[]; payload.print_content="无印刷";
+              payload.production_label_enabled=false; payload.production_label_units_per_label=null; payload.mold_tool_id=null;
+            } else {
+              payload.external_packaging_category_code=null;
+              payload.external_packaging_specification_summary=null;
+              payload.external_packaging_purchase_unit=null;
+              payload.external_supply=null;
+            }
+            delete payload._external_selected_ids;
+            delete payload._external_default_product_id;
             delete payload.id;
             payload.production_process = this.serializeProductionProcesses(
               payload._production_processes,
@@ -9689,6 +9748,7 @@
           // 产品列表材质列：压缩格式「供应商标准名｜材质代码/实际楞型｜纯克重结构」
           // 实际楞型以常用箱(products.flute_type)为准，而非材质报价适用楞型(B/E)。
           productMaterialCell(row) {
+            if (row?.supply_mode === "external_purchase") return {text:`外购包材｜${row.external_packaging_purchase_unit || "单位待完善"}`,muted:false};
             const m = this._findMaterial(row.material_id);
             if (m) {
               const code = this.materialBaseCode(m);
@@ -10002,6 +10062,7 @@
             return String(drawing?.image_path || "").toLowerCase().endsWith(".pdf");
           },
           spec(row) {
+            if (row?.supply_mode === "external_purchase") return row.external_packaging_specification_summary || "外购包材规格待完善";
             if (![row.length_mm,row.width_mm,row.height_mm].every(v => v !== null && v !== undefined)) return "-";
             const fmt = v => { const n = parseFloat(v); return Number.isInteger(n) ? String(n) : n.toFixed(1).replace(/\.0$/,""); };
             return `${fmt(row.length_mm)}×${fmt(row.width_mm)}×${fmt(row.height_mm)}mm`;
@@ -12273,6 +12334,78 @@
           },
           supplierCategoryLabel(code) {
             return this.supplierCategoryOptions.find(option => option.value === code)?.label || code || "-";
+          },
+          supplierBusinessGroup(row) {
+            return (row?.supply_categories || []).some(code=>code !== "corrugated_board") ? "packaging" : "corrugated";
+          },
+          productExternalCandidateSelected(externalProductId) {
+            return (this.productForm?._external_selected_ids || []).map(Number).includes(Number(externalProductId));
+          },
+          syncProductExternalProfile() {
+            const selected = (this.productForm?._external_selected_ids || []).map(Number);
+            const row = (this.productExternalSupplyOptions || []).find(item=>selected.includes(Number(item.external_product_id)));
+            if (!row) {
+              this.productForm.external_packaging_specification_summary = "";
+              this.productForm.external_packaging_purchase_unit = "";
+              return;
+            }
+            this.productForm.external_packaging_specification_summary = row.specification_summary || "";
+            this.productForm.external_packaging_purchase_unit = row.purchase_unit || "";
+          },
+          setProductExternalCandidate(row, checked) {
+            const id = Number(row?.external_product_id || 0);
+            if (!id) return;
+            const selected = new Set((this.productForm._external_selected_ids || []).map(Number));
+            if (checked) selected.add(id); else selected.delete(id);
+            this.productForm._external_selected_ids = [...selected];
+            if (!selected.has(Number(this.productForm._external_default_product_id || 0))) this.productForm._external_default_product_id = null;
+            if (selected.size === 1) this.productForm._external_default_product_id = [...selected][0];
+            this.syncProductExternalProfile();
+          },
+          async loadProductExternalSupplyCandidates() {
+            const form = this.productForm || {};
+            const customerId = Number(form.customer_id || 0);
+            const category = String(form.external_packaging_category_code || "").trim();
+            if (form.supply_mode !== "external_purchase" || !customerId || !category) {
+              this.productExternalSupplyOptions = [];
+              this.productExternalSupplyError = "";
+              return true;
+            }
+            const sequence = ++this.productExternalSupplySequence;
+            this.productExternalSupplyLoading = true;
+            this.productExternalSupplyError = "";
+            try {
+              const {data} = await axios.get("/api/master/products/external-supply-candidates",{params:{customer_id:customerId,category_code:category}});
+              if (sequence !== this.productExternalSupplySequence || Number(this.productForm.customer_id||0)!==customerId || String(this.productForm.external_packaging_category_code||"")!==category) return false;
+              const live = Array.isArray(data.items) ? data.items : [];
+              const historical = (form.external_supply?.candidates || []).filter(snapshot=>!live.some(item=>Number(item.external_product_id)===Number(snapshot.external_product_id))).map(snapshot=>({...snapshot,currently_available:false,specification_summary:form.external_packaging_specification_summary,purchase_unit:form.external_packaging_purchase_unit}));
+              this.productExternalSupplyOptions = [...live,...historical];
+              if (!(form._external_selected_ids || []).length && live.length === 1) {
+                form._external_selected_ids = [Number(live[0].external_product_id)];
+                form._external_default_product_id = Number(live[0].external_product_id);
+              }
+              this.syncProductExternalProfile();
+              return true;
+            } catch(error) {
+              if (sequence !== this.productExternalSupplySequence) return false;
+              this.productExternalSupplyError = this.errorMessage(error);
+              return false;
+            } finally {
+              if (sequence === this.productExternalSupplySequence) this.productExternalSupplyLoading = false;
+            }
+          },
+          async onProductExternalCategoryChange() {
+            this.productForm._external_selected_ids = [];
+            this.productForm._external_default_product_id = null;
+            this.productForm.external_packaging_specification_summary = "";
+            this.productForm.external_packaging_purchase_unit = "";
+            await this.loadProductExternalSupplyCandidates();
+          },
+          async onProductExternalCustomerChange() {
+            if (this.productForm.supply_mode !== "external_purchase") return;
+            this.productForm._external_selected_ids = [];
+            this.productForm._external_default_product_id = null;
+            await this.loadProductExternalSupplyCandidates();
           },
           async openSupplierPackagingCatalog(row) {
             if (!this.canAdmin || !row?.id) return;
@@ -18506,6 +18639,7 @@
                 || (Number(this.productForm.id || 0) || null) !== openedId
               ) return false;
               await this.ensureProductEditorOptions();
+              if (this.productForm.supply_mode === "external_purchase") await this.loadProductExternalSupplyCandidates();
               if (
                 latestRequestControllers.get(requestKey) !== controller
                 || (Number(this.productForm.id || 0) || null) !== openedId
@@ -18869,6 +19003,15 @@
           },
           hydrateProductForm(detail) {
             const form = { ...blankProduct(), ...JSON.parse(JSON.stringify(detail || {})) };
+            form.supply_mode = form.supply_mode === "external_purchase" ? "external_purchase" : "corrugated_production";
+            const externalSupply = detail?.external_supply || {};
+            const snapshots = Array.isArray(externalSupply.candidates) ? externalSupply.candidates : [];
+            form.external_supply = {candidates:snapshots};
+            form.external_packaging_category_code = externalSupply.category_code || form.external_packaging_category_code || "";
+            form.external_packaging_specification_summary = externalSupply.specification_summary || form.external_packaging_specification_summary || "";
+            form.external_packaging_purchase_unit = externalSupply.purchase_unit || form.external_packaging_purchase_unit || "";
+            form._external_selected_ids = snapshots.map(row=>Number(row.external_product_id)).filter(value=>value>0);
+            form._external_default_product_id = Number(snapshots.find(row=>row.is_default)?.external_product_id || 0) || null;
             form.box_style = this.normalizeBoxTypeDisplay(form.box_style || "");
             form.print_content = form.print_content || "无印刷";
             form.printing_plate_mode = form.printing_plate_mode === "plate" ? "plate" : "no_plate";
@@ -18941,6 +19084,12 @@
               customer_id: f.customer_id, product_code: f.product_code,
               customer_material_code: f.customer_material_code, product_name: f.product_name,
               material_id: f.material_id, box_category: f.box_category, box_style: f.box_style,
+              supply_mode: f.supply_mode,
+              external_packaging_category_code: f.external_packaging_category_code,
+              external_packaging_specification_summary: f.external_packaging_specification_summary,
+              external_packaging_purchase_unit: f.external_packaging_purchase_unit,
+              external_supply_candidates: (f._external_selected_ids || []).map(Number).sort((a,b)=>a-b),
+              external_supply_default: Number(f._external_default_product_id || 0) || null,
               length_mm: f.length_mm, width_mm: f.width_mm, height_mm: f.height_mm,
               print_content: f.print_content, production_processes: f._production_processes,
               printing_plate_mode: f.printing_plate_mode,
@@ -20526,6 +20675,18 @@
           onProductBoxStyleChange() {
             this.productForm.box_style = this.normalizeBoxTypeDisplay(this.productForm.box_style);
             const selected = this.productForm.box_style;
+            if (selected === "其他") {
+              this.productForm.supply_mode = "external_purchase";
+              this.$nextTick(()=>this.loadProductExternalSupplyCandidates());
+            } else if (this.productForm.supply_mode === "external_purchase") {
+              this.productForm.supply_mode = "corrugated_production";
+              this.productForm.external_packaging_category_code = "";
+              this.productForm.external_packaging_specification_summary = "";
+              this.productForm.external_packaging_purchase_unit = "";
+              this.productForm._external_selected_ids = [];
+              this.productForm._external_default_product_id = null;
+              this.productExternalSupplyOptions = [];
+            }
             if (this.productBoxStyleOptions.includes(selected)) {
               this.productForm.box_category = selected === "异形箱" ? "die_cut" : "normal";
             }

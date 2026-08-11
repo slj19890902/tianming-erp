@@ -38,7 +38,7 @@ def test_product_and_material_save_button_exposes_shared_single_flight_state() -
 
 
 def test_product_and_material_save_guard_starts_before_master_preflight() -> None:
-    save = _method_body("async saveModal() {", "async dispatchDelivery(row) {")
+    save = _method_body("async saveModal() {", "async dispatchDelivery(row, options = {}) {")
     guard = save.index("if (masterSaveEntity && this.masterSavePending)")
     lock = save.index("this.masterSavePending = true")
     preflight = save.index("await this.prepareProductOneClickSave()")
@@ -48,7 +48,7 @@ def test_product_and_material_save_guard_starts_before_master_preflight() -> Non
 
 
 def test_product_save_runtime_blocks_duplicate_before_preflight(tmp_path: Path) -> None:
-    save_body = _method_body("async saveModal() {", "async dispatchDelivery(row) {")
+    save_body = _method_body("async saveModal() {", "async dispatchDelivery(row, options = {}) {")
     script = f"""
 const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
 let preflightCalls=0,releasePreflight;
@@ -80,9 +80,9 @@ def test_successful_product_write_with_refresh_failure_is_not_reported_as_save_f
     tmp_path: Path,
 ) -> None:
     refresh_body = _method_body(
-        "handleMasterSaveRefreshFailure(entity, error) {", "async saveModal() {"
+        "handleMasterSaveRefreshFailure(entity, error) {", "async saveNewOrder(orderPayload) {"
     )
-    save_body = _method_body("async saveModal() {", "async dispatchDelivery(row) {")
+    save_body = _method_body("async saveModal() {", "async dispatchDelivery(row, options = {}) {")
     script = f"""
 const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
 const FunctionCtor=Function;
@@ -113,9 +113,9 @@ def test_successful_material_write_with_refresh_failure_uses_same_contract(
     tmp_path: Path,
 ) -> None:
     refresh_body = _method_body(
-        "handleMasterSaveRefreshFailure(entity, error) {", "async saveModal() {"
+        "handleMasterSaveRefreshFailure(entity, error) {", "async saveNewOrder(orderPayload) {"
     )
-    save_body = _method_body("async saveModal() {", "async dispatchDelivery(row) {")
+    save_body = _method_body("async saveModal() {", "async dispatchDelivery(row, options = {}) {")
     script = f"""
 const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
 let writes=0,closed=0;const notices=[];

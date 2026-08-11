@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import mimetypes
 from datetime import datetime, timedelta
@@ -43,6 +44,7 @@ from app.models.mold_tool import MoldTool
 from app.models.printing_plate import PrintingPlate
 from app.models.product import Product
 from app.models.product_drawing import ProductDrawing
+from app.models.supplier import ExternalPackagingProduct, Supplier
 from app.models.user import User
 from app.services.flute_mapping import (
     normalize_flute_type,
@@ -334,6 +336,15 @@ def _validate_changed_product_crease_widths(
             raise HTTPException(status_code=400, detail=error)
 
 
+class ProductExternalSupplyCandidatePayload(BaseModel):
+    external_product_id: int = Field(gt=0)
+    is_default: bool = False
+
+
+class ProductExternalSupplyPayload(BaseModel):
+    candidates: list[ProductExternalSupplyCandidatePayload] = Field(default_factory=list, max_length=20)
+
+
 class ProductPayload(BaseModel):
     customer_id: int
     product_code: str = Field(min_length=1, max_length=150)
@@ -347,6 +358,11 @@ class ProductPayload(BaseModel):
     height_mm: int | None = Field(default=None, gt=0)
     box_category: str = Field(pattern="^(normal|die_cut)$")
     box_style: str | None = None
+    supply_mode: Literal["corrugated_production", "external_purchase", "mixed_bom"] = "corrugated_production"
+    external_packaging_category_code: str | None = None
+    external_packaging_specification_summary: str | None = None
+    external_packaging_purchase_unit: str | None = None
+    external_supply: ProductExternalSupplyPayload | None = None
     print_content: str | None = None
     printing_colors: str | None = None
     printing_plate_mode: Literal["no_plate", "plate"] = "no_plate"
@@ -398,6 +414,8 @@ class ProductPayload(BaseModel):
     @model_validator(mode="after")
     def validate_flute_layer_consistency(self) -> "ProductPayload":
         """拒绝非法楞型/层数组合；七层写入必须明确 AAA/ABC。"""
+        if self.supply_mode == "external_purchase":
+            _clear_external_purchase_paper_fields(self)
         self.flute_type = normalize_flute_type(self.flute_type)
         # When a material is selected and layer_count is omitted, the endpoint
         # validates against Material.layer_count after loading the real row.
@@ -614,6 +632,170 @@ PRICE_FIELDS = {
 _COST_SENSITIVE_PRODUCT_FIELDS = frozenset(
     {"cost_unit_price", "board_price", "suggested_price"}
 )
+_PRODUCT_EXTERNAL_SUPPLY_FIELDS = frozenset({
+    "supply_mode", "external_packaging_category_code",
+    "external_packaging_specification_summary", "external_packaging_purchase_unit",
+    "external_supply",
+})
+_PRODUCT_EXTERNAL_PROFILE_COLUMNS = (
+    "supply_mode", "external_packaging_category_code",
+    "external_packaging_specification_json", "external_packaging_specification_summary",
+    "external_packaging_purchase_unit", "external_packaging_candidate_snapshot_json",
+)
+_EXTERNAL_PURCHASE_PAPER_FIELDS = (
+    "material_id", "legacy_material_text", "length_mm", "width_mm", "height_mm",
+    "flute_type", "layer_count", "surface_paper_type", "report_length_mm",
+    "report_width_mm", "crease_type", "crease_left_mm", "crease_middle_mm",
+    "crease_right_mm", "report_notes", "base_report_length_mm",
+    "base_report_width_mm", "base_crease_type", "base_crease_left_mm",
+    "base_crease_middle_mm", "base_crease_right_mm", "base_report_notes",
+    "production_process", "printing_colors", "mold_tool_id", "die_cut_path",
+)
+_EXTERNAL_PURCHASE_SYNC_BLOCKED_FIELDS = frozenset(
+    {*_EXTERNAL_PURCHASE_PAPER_FIELDS, "splice_mode", "pieces_per_box", "flap_mm", "box_style", "print_content"}
+)
+
+
+def _external_candidate_is_available(row: ExternalPackagingProduct) -> bool:
+    if not row.is_active or row.supplier is None or not row.supplier.is_active:
+        return False
+    return any(
+        item.is_active and item.category_code == row.category_code
+        for item in row.supplier.supply_categories
+    )
+
+
+def _load_external_products(db: Session, ids: set[int]) -> dict[int, ExternalPackagingProduct]:
+    if not ids:
+        return {}
+    rows = db.scalars(
+        select(ExternalPackagingProduct)
+        .options(
+            selectinload(ExternalPackagingProduct.supplier).selectinload(Supplier.supply_categories),
+            selectinload(ExternalPackagingProduct.customer_scope),
+        )
+        .where(ExternalPackagingProduct.id.in_(ids))
+    ).all()
+    return {row.id: row for row in rows}
+
+
+def _external_supply_requested(payload: ProductPayload) -> bool:
+    return bool(_PRODUCT_EXTERNAL_SUPPLY_FIELDS.intersection(payload.model_fields_set))
+
+
+def _clear_external_purchase_paper_fields(payload: ProductPayload) -> None:
+    for field in _EXTERNAL_PURCHASE_PAPER_FIELDS:
+        setattr(payload, field, None)
+    payload.splice_mode = "single"
+    payload.pieces_per_box = 1
+    payload.default_cutting_mode = "一开一"
+    payload.flap_mm = None
+    payload.print_content = "无印刷"
+    payload.printing_plate_mode = "no_plate"
+    for field in (
+        "printing_plate_1_id", "printing_plate_2_id", "printing_plate_3_id",
+        "plate_alignment_value_mm", "plate_mount_value_mm", "machine_set_length_mm",
+        "machine_set_width_mm", "machine_set_height_mm",
+    ):
+        setattr(payload, field, None)
+    payload.production_label_enabled = False
+    payload.production_label_units_per_label = None
+
+
+def _normalize_product_external_supply(
+    db: Session, *, payload: ProductPayload, existing: Product | None = None
+) -> dict[str, object]:
+    if existing is not None and not _external_supply_requested(payload):
+        if existing.supply_mode == "external_purchase":
+            _clear_external_purchase_paper_fields(payload)
+        return {}
+    if payload.supply_mode == "mixed_bom":
+        raise HTTPException(status_code=422, detail="混合 BOM 供货方式将在 P1-40B 单独开放")
+    if payload.supply_mode != "external_purchase":
+        if payload.external_supply and payload.external_supply.candidates:
+            raise HTTPException(status_code=422, detail="纸板生产常用箱不能绑定外购包材候选")
+        return {
+            "supply_mode": "corrugated_production",
+            "external_packaging_category_code": None,
+            "external_packaging_specification_json": None,
+            "external_packaging_specification_summary": None,
+            "external_packaging_purchase_unit": None,
+            "external_packaging_candidate_snapshot_json": None,
+        }
+    if (payload.box_style or "").strip() != "其他":
+        raise HTTPException(status_code=422, detail="只有箱型选择“其他”才能使用外购包材供货")
+    candidates = list(payload.external_supply.candidates if payload.external_supply else [])
+    if not candidates:
+        raise HTTPException(status_code=422, detail="当前外购包材没有候选供应商产品，不能保存")
+    ids = [item.external_product_id for item in candidates]
+    if len(ids) != len(set(ids)):
+        raise HTTPException(status_code=422, detail="外购包材候选供应商产品不能重复")
+    rows_by_id = _load_external_products(db, set(ids))
+    if len(rows_by_id) != len(ids):
+        raise HTTPException(status_code=422, detail="外购包材候选中包含不存在的供应商产品")
+    rows = [rows_by_id[item_id] for item_id in ids]
+    for row in rows:
+        if not _external_candidate_is_available(row):
+            raise HTTPException(status_code=409, detail=f"{row.supplier_product_code}或其供应商已停用")
+        if row.customer_scope_id not in (None, payload.customer_id):
+            raise HTTPException(status_code=409, detail=f"{row.supplier_product_code}是其他客户专用产品")
+    first = rows[0]
+    if any(
+        row.category_code != first.category_code
+        or row.specification_json != first.specification_json
+        or row.purchase_unit != first.purchase_unit
+        for row in rows[1:]
+    ):
+        raise HTTPException(status_code=422, detail="候选供应商必须属于同一包材类别、规格和采购单位")
+    default_ids = [item.external_product_id for item in candidates if item.is_default]
+    if len(candidates) == 1:
+        default_ids = [candidates[0].external_product_id]
+    if len(default_ids) != 1:
+        raise HTTPException(status_code=422, detail="多个候选供应商时必须且只能明确一个默认供应商")
+    snapshots = [
+        {
+            "external_product_id": row.id,
+            "is_default": row.id == default_ids[0],
+            "supplier_id": row.supplier_id,
+            "supplier_name": row.supplier.display_name or row.supplier.standard_name,
+            "supplier_product_code": row.supplier_product_code,
+            "product_name": row.product_name,
+            "purchase_unit": row.purchase_unit,
+            "customer_scope_id": row.customer_scope_id,
+            "external_product_version": row.version,
+        }
+        for row in rows
+    ]
+    _clear_external_purchase_paper_fields(payload)
+    payload.external_packaging_category_code = first.category_code
+    payload.external_packaging_specification_summary = first.specification_summary
+    payload.external_packaging_purchase_unit = first.purchase_unit
+    return {
+        "supply_mode": "external_purchase",
+        "external_packaging_category_code": first.category_code,
+        "external_packaging_specification_json": first.specification_json,
+        "external_packaging_specification_summary": first.specification_summary,
+        "external_packaging_purchase_unit": first.purchase_unit,
+        "external_packaging_candidate_snapshot_json": json.dumps(snapshots, ensure_ascii=False, sort_keys=True),
+    }
+
+
+def _external_supply_snapshot(product: Product) -> dict[str, object]:
+    try:
+        candidates = json.loads(product.external_packaging_candidate_snapshot_json or "[]")
+    except (TypeError, json.JSONDecodeError):
+        candidates = []
+    try:
+        specification = json.loads(product.external_packaging_specification_json or "{}")
+    except (TypeError, json.JSONDecodeError):
+        specification = {}
+    return {
+        "category_code": product.external_packaging_category_code,
+        "specification": specification,
+        "specification_summary": product.external_packaging_specification_summary,
+        "purchase_unit": product.external_packaging_purchase_unit,
+        "candidates": candidates,
+    }
 
 
 def _product_payload_snapshot(product: Product) -> dict:
@@ -623,10 +805,13 @@ def _product_payload_snapshot(product: Product) -> dict:
     Reads must remain available so an operator can inspect and correct them;
     create/update requests still use ProductPayload and its strict validators.
     """
-    return {
+    data = {
         field_name: getattr(product, field_name, None)
         for field_name in ProductPayload.model_fields
+        if field_name != "external_supply"
     }
+    data["external_supply"] = _external_supply_snapshot(product)
+    return data
 
 
 def _product_write_data(payload: ProductPayload, user: User) -> dict:
@@ -638,6 +823,7 @@ def _product_write_data(payload: ProductPayload, user: User) -> dict:
     retained; on creates they keep the model defaults.
     """
     data = payload.model_dump(include=set(ProductPayload.model_fields))
+    data.pop("external_supply", None)
     if not has_permission(user, "cost.view"):
         for field in _COST_SENSITIVE_PRODUCT_FIELDS:
             data.pop(field, None)
@@ -651,6 +837,7 @@ def _validated_product_versioned_updates(
     payload: ProductPayload,
     user: User,
 ) -> dict:
+    supply_updates = _normalize_product_external_supply(db, payload=payload, existing=product)
     _normalize_product_mold_binding(payload)
     _normalize_product_printing_plate_configuration(payload)
     _validate_references(
@@ -664,14 +851,20 @@ def _validated_product_versioned_updates(
     _validate_product_printing_plates(db, payload)
     _validate_changed_product_crease_widths(payload, product)
     updates = _product_write_data(payload, user)
-    if not {
+    if (
+        not _external_supply_requested(payload)
+        and not {
         "production_label_enabled",
         "production_label_units_per_label",
-    }.intersection(payload.model_fields_set):
+        }.intersection(payload.model_fields_set)
+    ):
         # Legacy full-update clients do not know these fields and must not
         # silently disable a strategy configured by a newer client.
         updates.pop("production_label_enabled", None)
         updates.pop("production_label_units_per_label", None)
+    if not _external_supply_requested(payload):
+        for field in _PRODUCT_EXTERNAL_PROFILE_COLUMNS:
+            updates.pop(field, None)
     versioned_fields = set(serialize_versioned_entity("product", product))
     updates = {
         key: value for key, value in updates.items() if key in versioned_fields
@@ -681,6 +874,7 @@ def _validated_product_versioned_updates(
         customer_material_code=clean_code(payload.customer_material_code),
         product_name=payload.product_name.strip(),
     )
+    updates.update(supply_updates)
     return updates
 
 
@@ -783,6 +977,10 @@ def _summary_response(product: Product, user: User) -> dict:
         "product_code": product.product_code,
         "customer_material_code": product.customer_material_code,
         "product_name": product.product_name,
+        "supply_mode": product.supply_mode,
+        "external_packaging_category_code": product.external_packaging_category_code,
+        "external_packaging_specification_summary": product.external_packaging_specification_summary,
+        "external_packaging_purchase_unit": product.external_packaging_purchase_unit,
         "length_mm": product.length_mm,
         "width_mm": product.width_mm,
         "height_mm": product.height_mm,
@@ -1042,6 +1240,44 @@ def list_box_type_rules(
 ) -> dict:
     """Stable read-only source for product forms and other UI consumers."""
     return {"rules": [rule.public_dict() for rule in BOX_TYPE_RULES]}
+
+
+@router.get("/external-supply-candidates")
+def list_product_external_supply_candidates(
+    customer_id: int = Query(gt=0),
+    category_code: str = Query(min_length=1, max_length=50),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    require_customer_access(customer_id, current_user=user, db=db)
+    rows = db.scalars(
+        select(ExternalPackagingProduct)
+        .options(selectinload(ExternalPackagingProduct.supplier).selectinload(Supplier.supply_categories))
+        .where(
+            ExternalPackagingProduct.category_code == category_code,
+            ExternalPackagingProduct.is_active.is_(True),
+            or_(ExternalPackagingProduct.customer_scope_id.is_(None), ExternalPackagingProduct.customer_scope_id == customer_id),
+        )
+        .order_by(ExternalPackagingProduct.supplier_id, ExternalPackagingProduct.supplier_product_code)
+    ).all()
+    items = []
+    for row in rows:
+        if not _external_candidate_is_available(row):
+            continue
+        items.append({
+            "external_product_id": row.id,
+            "supplier_id": row.supplier_id,
+            "supplier_name": row.supplier.display_name or row.supplier.standard_name,
+            "supplier_product_code": row.supplier_product_code,
+            "product_name": row.product_name,
+            "category_code": row.category_code,
+            "specification_summary": row.specification_summary,
+            "specification": json.loads(row.specification_json or "{}"),
+            "purchase_unit": row.purchase_unit,
+            "customer_scope_id": row.customer_scope_id,
+            "version": row.version,
+        })
+    return {"customer_id": customer_id, "category_code": category_code, "items": items}
 
 
 @router.post("/box-type-recommendation")
@@ -1509,6 +1745,7 @@ def create_product(
     user: User = Depends(can_create),
 ) -> dict:
     require_customer_access(payload.customer_id, current_user=user, db=db)
+    supply_updates = _normalize_product_external_supply(db, payload=payload)
     _normalize_product_mold_binding(payload)
     _normalize_product_printing_plate_configuration(payload)
     _validate_references(
@@ -1528,6 +1765,7 @@ def create_product(
         manual_modified=True,
         manual_modified_at=beijing_now_naive(),
     )
+    data.update(supply_updates)
     product = Product(**data)
     try:
         db.add(product)
@@ -1803,6 +2041,13 @@ def sync_product_fields(
         and field_name in Product.__table__.columns
         and field_name in versioned_fields
     }
+    if product.supply_mode == "external_purchase":
+        blocked = sorted(_EXTERNAL_PURCHASE_SYNC_BLOCKED_FIELDS.intersection(fields))
+        if blocked:
+            raise HTTPException(
+                status_code=409,
+                detail="外购包材常用箱不能从订单同步纸板材质、尺寸、报料或生产字段",
+            )
     if not fields:
         raise HTTPException(status_code=400, detail="没有可同步的字段")
     changed = _changed_updates(product, fields)

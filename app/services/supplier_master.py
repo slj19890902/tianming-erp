@@ -14,6 +14,7 @@ SUPPLIER_CATEGORY_LABELS = {
     "coated_board": "涂布白板/灰底白",
     "printed_folding_carton": "印刷折叠彩盒",
     "epe_cushion": "EPE缓冲包装",
+    "hollow_board": "中空板",
     "other_packaging": "其他外购包装",
 }
 

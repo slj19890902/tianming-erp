@@ -1610,6 +1610,27 @@
         };
       });
     }
+    function archiveTime(value){
+      if(!value)return "历史未建立/待确认";
+      const text=String(value);return text.length<=10?text:formatDateTime(text);
+    }
+    function timeArchiveTimelineHtml(archive){
+      const events=archive?.timeline||[];
+      if(!events.length)return '<span class="muted">历史未建立/待确认</span>';
+      return `<details style="margin-top:4px"><summary>查看时间线</summary><ol style="margin:5px 0 0;padding-left:18px">${events.map(event=>`<li>${h(event.label||event.event_type||"时间事件")} · ${h(archiveTime(event.occurred_at))}${event.order_number?` · ${h(event.order_number)}`:""}</li>`).join("")}</ol></details>`;
+    }
+    function inventoryTimeArchiveHtml(row){
+      const archive=row.time_archive||{},formed=archive.formed_on||"历史未建立/待确认",entered=archive.entered_current_location_at?archiveTime(archive.entered_current_location_at):"历史未建立/待确认",moved=archive.latest_location_transfer_at?archiveTime(archive.latest_location_transfer_at):"尚无移位记录",stocktake=archive.latest_stocktake_at?archiveTime(archive.latest_stocktake_at):"尚无盘点记录";
+      return `<div class="muted" style="margin-top:4px;white-space:normal">形成：${h(formed)}<br>入当前位置：${h(entered)}<br>最近移位：${h(moved)}<br>最近盘点：${h(stocktake)}${timeArchiveTimelineHtml(archive)}</div>`;
+    }
+    function assetUsageText(usage){
+      if(!usage)return "历史未建立/待确认";
+      return `${archiveTime(usage.occurred_at)} · ${h(usage.order_number||"-")} · ${h(usage.customer_name||"")} ${h(usage.product_code||"")}`;
+    }
+    function assetTimeArchiveHtml(row){
+      const archive=row.time_archive||{},idle=archive.idle_days==null?"历史未建立/待确认":`${archive.idle_days} 天`;
+      return `<div class="muted" style="margin-top:4px;white-space:normal">登记：${h(archiveTime(archive.registered_at))}<br>入当前位置：${h(archiveTime(archive.entered_current_location_at))}<br>最近移动：${h(archive.latest_location_move_at?archiveTime(archive.latest_location_move_at):"尚无移动记录")}<br>最近下单：${assetUsageText(archive.latest_customer_order_use)}<br>最近实际生产：${assetUsageText(archive.latest_actual_production_use)}<br>距实际生产：${h(idle)}${timeArchiveTimelineHtml(archive)}</div>`;
+    }
     function renderLots(){
       const finished=state.tab==="finished";
       $("lotTable").classList.toggle("finished-lot-table",finished);$("lotTable").closest(".table-wrap").classList.toggle("finished-lot-wrap",finished);
@@ -1622,7 +1643,7 @@
         const detail=finished?`<td><span class="lot-customer" title="${h(d.is_general?"通用库存":(d.owner_customer_name||"-"))}">${h(d.is_general?"通用库存":(d.owner_customer_name||"-"))}</span></td><td>${h(d.inventory_code||"-")}<br>${h(d.product_name||"-")}</td><td>${[d.length_mm,d.width_mm,d.height_mm].filter(x=>x!=null).join(" × ")||"-"} mm</td><td><span class="lot-material">${h(d.material_code||"-")}</span><span class="lot-flute">${h(d.flute_type||"-")}</span></td>`:`<td><strong>${h(d.inventory_display_name||"半成品片料")}</strong><br>${h(d.supplier_name||"-")}<br>${h(d.owner_customer_name||"未指定客户")}</td><td>${h(d.material_code||"-")} / ${h(d.flute_type||"-")}</td><td>${h(d.board_length_mm)} × ${h(d.board_width_mm)} mm</td><td>${h(d.sheet_type||"-")}<br><span class="muted">${allowedProductCodes.length?`可供：${h(allowedProductCodes.join("、"))}`:h(d.cutting_note||"-")}</span></td>`;
         const balances=finished?`<td><b>${row.quantity_available}</b> 个</td><td><button class="btn" onclick="showLotReservations(${row.id},'${row.lot_number}')">${row.quantity_reserved} 个</button></td><td>${row.quantity_consumed} 个</td>`:`<td><b>${row.quantity_available}</b> ${labels[row.unit]}</td>`;
         const locationText=`${row.location.location_code}${row.floor3_binding?`<br><span class="tag blue">三楼已绑定</span><br><span class="muted">${h(row.floor3_binding.pallet_code)}</span>`:""}`;
-        return `<tr>${common}${detail}<td>${locationText}</td>${balances}<td>${w}</td><td class="lot-actions">${actionButtons(row)}</td></tr>`}).join("");
+        return `<tr>${common}${detail}<td>${locationText}</td>${balances}<td>${w}${inventoryTimeArchiveHtml(row)}</td><td class="lot-actions">${actionButtons(row)}</td></tr>`}).join("");
       $("lotEmpty").classList.toggle("hidden",state.lots.length>0);
       const available=state.lots.reduce((n,x)=>n+x.quantity_available,0),frozen=state.lots.filter(x=>x.status==="frozen").length;
       $("lotSummary").innerHTML=`<span>符合条件 <strong>${state.lotTotal}</strong> 批，本页 <strong>${state.lots.length}</strong></span><span>本页可用 <strong>${available}</strong> ${finished?"个":"张/片"}</span><span>本页冻结 <strong>${frozen}</strong></span>`;
@@ -1844,7 +1865,7 @@
         const linked=(row.products||[]).map(product=>`<span class="tag" title="${h(product.customer_name||"")}">${h(product.product_code)} · ${h(product.product_name)}</span>`).join(" ")||'<span class="muted">尚未绑定常用箱</span>';
         const label=`<button class="btn" onclick="window.open('/mold-label.html?mold_id=${row.id}','_blank')">打印标签</button>`;
         const actions=state.user.role==="admin"?`${label}<button class="btn" onclick="editMold(${row.id})">编辑</button><button class="btn ${row.is_active?"danger":""}" onclick="toggleMold(${row.id},${row.is_active})">${row.is_active?"停用":"启用"}</button>`:label;
-        return `<tr><td><input type="checkbox" aria-label="选择模具 ${h(row.mold_code)}" ${state.moldSelection.has(row.id)?"checked":""} onchange="toggleMoldSelection(${row.id},this.checked)"></td><td><b>${h(row.mold_code)}</b><br>${h(row.mold_name)}</td><td><b>${h(row.rack_location)}</b><br><span class="muted">${h(row.location_guide?.prompt||row.remarks||"")}</span></td><td>${linked}</td><td>${row.is_active?"启用":"停用"}</td><td><div class="mold-table-actions">${actions}</div></td></tr>`;
+        return `<tr><td><input type="checkbox" aria-label="选择模具 ${h(row.mold_code)}" ${state.moldSelection.has(row.id)?"checked":""} onchange="toggleMoldSelection(${row.id},this.checked)"></td><td><b>${h(row.mold_code)}</b><br>${h(row.mold_name)}</td><td><b>${h(row.rack_location)}</b><br><span class="muted">${h(row.location_guide?.prompt||row.remarks||"")}</span></td><td>${linked}</td><td>${row.is_active?"启用":"停用"}${assetTimeArchiveHtml(row)}</td><td><div class="mold-table-actions">${actions}</div></td></tr>`;
       }).join("");
       $("moldEmpty").classList.toggle("hidden",state.molds.length>0);updateMoldBatchControls();
     }
@@ -1879,7 +1900,7 @@
         const edit=state.user.role==="admin"?`<button class="btn" onclick="editPrintingPlate(${row.id})">编辑</button>`:"";
         const statusActions=state.user.role!=="admin"?"":row.status==="active"?`<button class="btn" onclick="setPrintingPlateStatus(${row.id},'inactive')">停用</button><button class="btn danger" onclick="setPrintingPlateStatus(${row.id},'damaged')">报损</button>`:`<button class="btn" onclick="setPrintingPlateStatus(${row.id},'active')">重新启用</button>`;
         const move=canOperate()&&row.status==="active"?`<button class="btn primary" onclick="movePrintingPlate(${row.id})">移动</button>`:"";
-        return `<tr><td><b>${h(row.plate_code)}</b><br>${h(row.plate_name)}</td><td><b>${h(row.customer_name||"-")}</b><br>${h(row.color_name)}</td><td><b>${h(row.rack_location)}</b><br><span class="muted">${h(row.location_guide?.prompt||"")}</span></td><td style="white-space:normal;min-width:260px">${linked}</td><td><span class="tag ${row.status==="active"?"":row.status==="damaged"?"danger":"warn"}">${h(printingPlateStatusLabel(row.status))}</span><br><span class="muted">位置版本 ${row.location_version}</span></td><td>${move}${edit}${statusActions}</td></tr>`;
+        return `<tr><td><b>${h(row.plate_code)}</b><br>${h(row.plate_name)}</td><td><b>${h(row.customer_name||"-")}</b><br>${h(row.color_name)}</td><td><b>${h(row.rack_location)}</b><br><span class="muted">${h(row.location_guide?.prompt||"")}</span></td><td style="white-space:normal;min-width:260px">${linked}</td><td><span class="tag ${row.status==="active"?"":row.status==="damaged"?"danger":"warn"}">${h(printingPlateStatusLabel(row.status))}</span><br><span class="muted">位置版本 ${row.location_version}</span>${assetTimeArchiveHtml(row)}</td><td>${move}${edit}${statusActions}</td></tr>`;
       }).join("");
       $("printingPlateEmpty").classList.toggle("hidden",state.printingPlates.length>0);
     }

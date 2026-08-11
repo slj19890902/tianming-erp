@@ -53,6 +53,23 @@
       </button>
     </nav>
 
+    <section id="pendingSearchPanel" class="mb-3 rounded-xl bg-white p-3 shadow-sm">
+      <label for="pendingSearchInput" class="text-sm font-bold text-slate-700">查待收料：客户、款号、名称、订单号或单边尺寸</label>
+      <div class="mt-2 grid grid-cols-2 gap-2">
+        <input id="pendingSearchInput" class="min-h-12 rounded-lg border-2 border-slate-300 bg-white p-2 text-base" maxlength="100" placeholder="例如：天华、款号、870">
+        <select id="pendingDimensionMode" class="min-h-12 rounded-lg border-2 border-slate-300 bg-white p-2 text-base">
+          <option value="any">任意边/普通搜索</option>
+          <option value="length">只查报料长</option>
+          <option value="width">只查报料宽</option>
+        </select>
+      </div>
+      <div class="mt-2 grid grid-cols-2 gap-2">
+        <button id="pendingSearchButton" class="min-h-12 rounded-lg bg-blue-700 px-4 font-bold text-white active:bg-blue-700">查询待收料</button>
+        <button id="pendingSearchClear" class="min-h-12 rounded-lg bg-slate-200 px-4 font-bold text-slate-700">清除并显示全部</button>
+      </div>
+      <p id="pendingSearchStatus" class="mt-2 text-sm text-slate-500">当前显示全部待收料，每页 20 条。</p>
+    </section>
+
     <div id="loadingState" class="rounded-xl bg-white p-8 text-center text-lg font-semibold text-slate-500 shadow-sm">
       正在读取来料任务...
     </div>
@@ -100,6 +117,17 @@
     </div>
   </div>
 
+  <div id="productionDetailViewer" hidden class="fixed inset-0 z-50 flex flex-col bg-black text-white">
+    <div class="flex items-center justify-between bg-slate-900 px-4 py-3 text-white shadow">
+      <div>
+        <p class="font-bold">对应生产明细</p>
+        <p class="text-sm text-slate-300">按当前待收料明细精确关联，不按款号跨订单猜测</p>
+      </div>
+      <button id="closeProductionDetail" class="min-h-12 rounded-lg bg-blue-600 px-5 text-base font-bold active:bg-blue-700">返回待收料</button>
+    </div>
+    <div id="productionDetailBody" class="flex-1 overflow-auto bg-slate-100 p-3 text-slate-900"></div>
+  </div>
+
   <div id="toast" hidden class="fixed bottom-5 left-1/2 z-50 w-[calc(100%-2rem)] max-w-md -translate-x-1/2 rounded-xl bg-slate-900 px-5 py-4 text-center text-lg font-bold text-white shadow-xl"></div>
 
   <script>
@@ -109,9 +137,12 @@
       pendingTotal: 0,
       pendingPage: 1,
       pendingRetryPage: 1,
-      pendingPageSize: 25,
+      pendingPageSize: 20,
       pendingLoading: false,
       pendingError: "",
+      pendingAppliedQuery: "",
+      pendingAppliedDimensionMode: "any",
+      pendingAsOf: "",
       received: [],
       receivedLoaded: false,
       receivedLoading: false,
@@ -126,6 +157,7 @@
       revertSubmitting: false,
       expandedIds: new Set(),
       authGeneration: 0,
+      productionDetailRouteId: null,
     };
 
     const $ = (id) => document.getElementById(id);
@@ -144,6 +176,10 @@
       state.pendingRetryPage = 1;
       state.pendingLoading = false;
       state.pendingError = "";
+      state.pendingAppliedQuery = "";
+      state.pendingAppliedDimensionMode = "any";
+      state.pendingAsOf = "";
+      state.productionDetailRouteId = null;
       state.received = [];
       state.receivedLoaded = false;
       state.receivedLoading = false;
@@ -161,6 +197,10 @@
       $("pendingPager").hidden = true;
       $("emptyState").hidden = true;
       $("loadingState").hidden = true;
+      if ($("productionDetailViewer")) $("productionDetailViewer").hidden = true;
+      if ($("productionDetailBody")) $("productionDetailBody").innerHTML = "";
+      if ($("pendingSearchInput")) $("pendingSearchInput").value = "";
+      if ($("pendingDimensionMode")) $("pendingDimensionMode").value = "any";
     }
 
     function beginLatestRequest(key) {
@@ -396,6 +436,13 @@
         ? `<button data-drawing="${key}" class="min-h-12 w-full rounded-lg bg-indigo-700 px-2 text-sm font-bold text-white active:bg-indigo-800">打开图纸</button>`
         : `<button disabled class="min-h-12 w-full rounded-lg bg-slate-300 px-2 text-sm font-bold text-slate-500">无图纸</button>`;
 
+      const searchMatchBlock = item.search_match?.summary
+        ? `<div class="mt-2 rounded-lg bg-blue-50 p-2 text-sm font-bold text-blue-700">搜索命中：${escapeHtml(item.search_match.summary)}</div>`
+        : "";
+      const productionDetailButton = isPending && item.production_detail_url
+        ? `<button data-production-detail="${key}" class="min-h-12 w-full rounded-xl bg-indigo-700 px-4 text-base font-bold text-white active:bg-indigo-800">查看对应生产明细</button>`
+        : "";
+
       const quantityBlock = isPending && canOperate()
         ? `<input data-quantity="${key}" ${disabled ? "disabled" : ""} class="mt-1 w-full rounded-lg border-2 border-slate-300 bg-white p-2 text-xl font-black disabled:bg-slate-200" type="number" min="1" step="1" value="${escapeHtml(item.incoming_quantity)}">`
         : `<p class="mt-1 text-xl font-black">${escapeHtml(item.incoming_quantity)}</p>`;
@@ -437,6 +484,7 @@
                 <div><p class="text-slate-500">订单号</p><p class="font-bold break-words">${escapeHtml(item.order_number)}</p></div>
                 <div class="col-span-2"><p class="text-slate-500">备注</p><p class="font-bold break-words">${escapeHtml(item.requisition_remark || "无")}</p></div>
               </div>
+              ${productionDetailButton}
               ${!isPending && state.user?.role === "admin" && item.can_revert_receipt !== false
                 ? `<button data-revert="${key}" ${disabled ? "disabled" : ""} class="min-h-12 w-full rounded-xl bg-red-700 px-4 text-base font-bold text-white disabled:bg-slate-400">撤回</button>`
                 : ""}
@@ -456,6 +504,7 @@
             </div>
             <p class="mt-1.5 break-words text-xs text-slate-500">${escapeHtml(item.customer_name)} · ${escapeHtml(item.product_code || "未填写")} · ${escapeHtml(item.product_name)}</p>
             <p class="mt-1 text-xs text-slate-600">计划 ${planned}｜已收 ${cumulative}｜待收 ${Math.max(planned-cumulative,0)}</p>
+            ${searchMatchBlock}
             ${decisionBlock}
             ${receiptLocationBlock}
             ${primaryAction ? `<div class="mt-1.5">${primaryAction}</div>` : ""}
@@ -482,7 +531,11 @@
     }
     function render() {
       const items = state[state.activeTab];
-      const pendingPageCount = Math.max(1, Math.ceil(Number(state.pendingTotal || 0) / Number(state.pendingPageSize || 25)));
+      const pendingPageCount = Math.max(1, Math.ceil(Number(state.pendingTotal || 0) / Number(state.pendingPageSize || 20)));
+      $("pendingSearchPanel").hidden = state.activeTab !== "pending";
+      $("pendingSearchStatus").textContent = state.pendingAppliedQuery
+        ? `当前条件：${state.pendingAppliedQuery}（${state.pendingAppliedDimensionMode === "length" ? "报料长" : state.pendingAppliedDimensionMode === "width" ? "报料宽" : "任意边/普通搜索"}），共 ${state.pendingTotal} 条${state.pendingAsOf ? ` · ${state.pendingAsOf}` : ""}`
+        : `当前显示全部待收料，每页 ${state.pendingPageSize} 条。`;
       $("pendingCount").textContent = state.pendingTotal;
       $("receivedCount").textContent = state.received.length;
       $("pendingPager").hidden = state.activeTab !== "pending";
@@ -512,9 +565,34 @@
       applyIncomingPrimarySpecLayout(items);
     }
 
+    async function applyPendingSearch() {
+      const query = String($("pendingSearchInput").value || "").trim();
+      const dimensionMode = String($("pendingDimensionMode").value || "any");
+      if (!query) {
+        showToast("请输入客户、款号、名称、订单号或报料尺寸", true);
+        return false;
+      }
+      return loadPending({page: 1, query, dimensionMode});
+    }
+
+    async function clearPendingSearch() {
+      $("pendingSearchInput").value = "";
+      $("pendingDimensionMode").value = "any";
+      return loadPending({page: 1, query: "", dimensionMode: "any"});
+    }
+
     async function loadPending({page = state.pendingPage || 1} = {}) {
+      const options = arguments[0] || {};
+      const query = Object.prototype.hasOwnProperty.call(options, "query")
+        ? options.query
+        : state.pendingAppliedQuery;
+      const dimensionMode = Object.prototype.hasOwnProperty.call(options, "dimensionMode")
+        ? options.dimensionMode
+        : state.pendingAppliedDimensionMode;
       const requestedPage = Math.max(1, Number(page) || 1);
-      const pageSize = Math.max(1, Number(state.pendingPageSize) || 25);
+      const pageSize = Math.max(1, Number(state.pendingPageSize) || 20);
+      const requestedQuery = String(query || "").trim();
+      const requestedDimensionMode = ["any", "length", "width"].includes(dimensionMode) ? dimensionMode : "any";
       const authGeneration = Number(state.authGeneration || 0);
       const userId = String(state.user?.id ?? "");
       const controller = beginLatestRequest("incoming:pending");
@@ -525,7 +603,17 @@
       if (!state.pending.length) $("loadingState").hidden = false;
       render();
       try {
-        const pending = await api(`/api/incoming/pending?page=${requestedPage}&page_size=${pageSize}`, {signal: controller.signal});
+        const params = new URLSearchParams({
+          page: String(requestedPage),
+          page_size: String(pageSize),
+        });
+        let endpoint = "/api/incoming/pending";
+        if (requestedQuery) {
+          endpoint = "/api/mobile/erp/incoming/search";
+          params.set("q", requestedQuery);
+          params.set("dimension_mode", requestedDimensionMode);
+        }
+        const pending = await api(`${endpoint}?${params.toString()}`, {signal: controller.signal});
         if (!isLatestRequest("incoming:pending", controller)) return false;
         if (Number(state.authGeneration || 0) !== authGeneration || String(state.user?.id ?? "") !== userId) return false;
         const previousPage = Number(state.pendingPage || 1);
@@ -538,6 +626,9 @@
         state.pendingPage = resolvedPage;
         state.pendingRetryPage = resolvedPage;
         state.pendingPageSize = resolvedPageSize;
+        state.pendingAppliedQuery = requestedQuery;
+        state.pendingAppliedDimensionMode = requestedQuery ? requestedDimensionMode : "any";
+        state.pendingAsOf = String(pending.as_of || "");
         const currentIds = new Set(state.pending.map(item => String(item.history_key || item.item_id)));
         state.expandedIds = resolvedPage === previousPage
           ? new Set([...state.expandedIds].filter(itemId => currentIds.has(String(itemId))))
@@ -572,7 +663,7 @@
 
     async function changePendingPage(nextPage) {
       if (state.pendingLoading) return false;
-      const pageCount = Math.max(1, Math.ceil(Number(state.pendingTotal || 0) / Number(state.pendingPageSize || 25)));
+      const pageCount = Math.max(1, Math.ceil(Number(state.pendingTotal || 0) / Number(state.pendingPageSize || 20)));
       const targetPage = Math.min(pageCount, Math.max(1, Number(nextPage) || 1));
       if (targetPage === state.pendingPage) return true;
       return loadPending({page: targetPage});
@@ -667,6 +758,68 @@
       $("drawingViewer").hidden = true;
       $("drawingViewerFrame").removeAttribute("src");
       $("drawingViewerImage").removeAttribute("src");
+    }
+
+    function renderProductionDetail(payload) {
+      const item = payload.incoming_item || {};
+      const tasks = Array.isArray(payload.production_tasks) ? payload.production_tasks : [];
+      const taskCards = tasks.length
+        ? tasks.map(task => `
+            <article class="rounded-xl bg-white p-3 shadow-sm">
+              <div class="flex items-start justify-between gap-2">
+                <div><p class="text-sm text-slate-500">生产任务 #${escapeHtml(task.task_id)}</p><p class="text-lg font-black">${escapeHtml(task.product_code || "未填款号")} · ${escapeHtml(task.product_name || "未填名称")}</p></div>
+                <span class="rounded-full bg-blue-50 px-2 py-1 text-sm font-bold text-blue-700">${escapeHtml(task.status_text || task.status)}</span>
+              </div>
+              <div class="mt-2 grid grid-cols-2 gap-2 text-sm">
+                <div><p class="text-slate-500">订单号</p><p class="font-bold">${escapeHtml(task.order_number || "-")}</p></div>
+                <div><p class="text-slate-500">计划生产</p><p class="font-bold">${escapeHtml(task.planned_output_quantity ?? task.order_quantity ?? 0)} 只</p></div>
+                <div><p class="text-slate-500">当前可生产</p><p class="font-bold">${escapeHtml(task.current_producible_quantity ?? 0)} 只</p></div>
+                <div><p class="text-slate-500">工艺</p><p class="font-bold">${escapeHtml(task.production_process || task.cutting_mode || "-")}</p></div>
+              </div>
+            </article>`).join("")
+        : `<div class="rounded-xl bg-white p-5 text-center font-bold text-slate-600">${escapeHtml(payload.message || "未生成生产任务")}</div>`;
+      $("productionDetailBody").innerHTML = `
+        <div class="mb-3 rounded-xl bg-white p-3 shadow-sm">
+          <p class="text-sm text-slate-500">本次精确关联的待收料</p>
+          <p class="text-lg font-black">${escapeHtml(item.customer_name)} · ${escapeHtml(item.product_code || "未填款号")}</p>
+          <p class="mt-1 text-sm">${escapeHtml(item.product_name)} · 报料 ${escapeHtml(formatBoardSpec(item.cardboard_len, item.cardboard_width))} · 订单 ${escapeHtml(item.order_number)}</p>
+        </div>
+        <div class="space-y-2">${taskCards}</div>`;
+    }
+
+    async function openProductionDetail(itemId) {
+      const item = findItem(itemId);
+      if (!item?.production_detail_url) return false;
+      const routeId = String(item.item_id);
+      const authGeneration = Number(state.authGeneration || 0);
+      const userId = String(state.user?.id ?? "");
+      const controller = beginLatestRequest("incoming:production-detail");
+      state.productionDetailRouteId = routeId;
+      $("productionDetailBody").innerHTML = '<div class="rounded-xl bg-white p-5 text-center font-bold text-slate-600">正在读取对应生产明细...</div>';
+      $("productionDetailViewer").hidden = false;
+      try {
+        const payload = await api(item.production_detail_url, {signal: controller.signal});
+        if (!isLatestRequest("incoming:production-detail", controller)) return false;
+        if (Number(state.authGeneration || 0) !== authGeneration || String(state.user?.id ?? "") !== userId) return false;
+        if (String(state.productionDetailRouteId || "") !== routeId) return false;
+        renderProductionDetail(payload);
+        return true;
+      } catch (error) {
+        if (error?.name !== "AbortError" && isLatestRequest("incoming:production-detail", controller)) {
+          $("productionDetailBody").innerHTML = `<div class="rounded-xl bg-white p-5 text-center font-bold text-red-700">${escapeHtml(toChineseMessage(error))}</div>`;
+        }
+        return false;
+      } finally {
+        finishLatestRequest("incoming:production-detail", controller);
+      }
+    }
+
+    function closeProductionDetail() {
+      requestControllers.get("incoming:production-detail")?.abort();
+      requestControllers.delete("incoming:production-detail");
+      state.productionDetailRouteId = null;
+      $("productionDetailViewer").hidden = true;
+      $("productionDetailBody").innerHTML = "";
     }
 
     async function receive(itemId) {
@@ -775,6 +928,7 @@
       const receiveButton = event.target.closest("[data-receive]");
       const acceptShortButton = event.target.closest("[data-accept-short]");
       const revertButton = event.target.closest("[data-revert]");
+      const productionDetailButton = event.target.closest("[data-production-detail]");
       if (drawingButton) {
         event.stopPropagation();
         openDrawing(drawingButton.dataset.drawing);
@@ -793,6 +947,11 @@
       if (revertButton) {
         event.stopPropagation();
         openRevert(revertButton.dataset.revert);
+        return;
+      }
+      if (productionDetailButton) {
+        event.stopPropagation();
+        openProductionDetail(productionDetailButton.dataset.productionDetail);
         return;
       }
       const card = event.target.closest("[data-detail]");
@@ -874,6 +1033,14 @@
 
     $("refreshButton").addEventListener("click", retryCurrentView);
     $("errorRetryButton").addEventListener("click", retryCurrentView);
+    $("pendingSearchButton").addEventListener("click", applyPendingSearch);
+    $("pendingSearchClear").addEventListener("click", clearPendingSearch);
+    $("pendingSearchInput").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        applyPendingSearch();
+      }
+    });
     $("pendingPreviousPage").addEventListener("click", () => changePendingPage(state.pendingPage - 1));
     $("pendingNextPage").addEventListener("click", () => changePendingPage(state.pendingPage + 1));
     $("cancelRevert").addEventListener("click", () => {
@@ -882,6 +1049,7 @@
     });
     $("closeDrawingViewer").addEventListener("click", closeDrawing);
     $("closeDrawingViewerBottom").addEventListener("click", closeDrawing);
+    $("closeProductionDetail").addEventListener("click", closeProductionDetail);
 
     // v0.23.0 P0-2：初始加载统一走 init()，扫码/刷新/重新打开都强制重新校验登录 +
     // 重新拉取数据，不依赖任何上一次渲染留下的 DOM/状态。

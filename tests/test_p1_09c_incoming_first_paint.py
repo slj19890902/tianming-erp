@@ -73,7 +73,8 @@ def test_standalone_incoming_matches_deferred_loading_contract() -> None:
     received = _block(INCOMING, "async function loadReceived", "async function ensureSurplusLocations")
     locations = _block(INCOMING, "async function ensureSurplusLocations", "async function loadData")
 
-    assert "api(`/api/incoming/pending?page=${requestedPage}&page_size=${pageSize}`" in pending
+    assert 'endpoint = "/api/incoming/pending"' in pending
+    assert 'endpoint = "/api/mobile/erp/incoming/search"' in pending
     assert "/api/incoming/received" not in pending
     assert "/api/incoming/surplus-locations" not in pending
     assert 'api("/api/incoming/received", {signal: controller.signal})' in received

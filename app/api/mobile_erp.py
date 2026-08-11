@@ -20,7 +20,12 @@ from app.api.deps import (
     has_permission,
     has_unrestricted_customer_access,
 )
-from app.api.incoming import _received_rows
+from app.api.incoming import (
+    _incoming_row_response,
+    _pending_incoming_route_rows,
+    _received_rows,
+    _rows as _incoming_rows,
+)
 from app.core.time_contract import (
     beijing_date_bounds_utc_naive,
     beijing_today,
@@ -29,6 +34,8 @@ from app.core.time_contract import (
 from app.models.customer import Customer
 from app.models.order import OrderItem
 from app.models.product import Product
+from app.models.production import ProductionTask
+from app.models.product_bom import RequisitionItemBomSource
 from app.models.user import User
 from app.services.production_workflow import (
     find_pending_production_task_lookup_rows,
@@ -49,6 +56,7 @@ from app.models.warehouse_inventory import (
 router = APIRouter()
 can_read_inventory = PermissionChecker("warehouse.view")
 can_read_orders = PermissionChecker("orders.view")
+can_read_incoming = PermissionChecker("incoming.view")
 _BEIJING = ZoneInfo("Asia/Shanghai")
 
 
@@ -253,6 +261,83 @@ def _number_text(value) -> str | None:
         return None
     number = float(value)
     return str(int(number)) if number.is_integer() else f"{number:g}"
+
+
+def _dimension_decimal(value) -> Decimal | None:
+    if value is None:
+        return None
+    try:
+        return Decimal(str(value)).quantize(Decimal("0.01"))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+
+
+def _incoming_search_match(
+    row: dict,
+    *,
+    keyword: str,
+    dimension_mode: Literal["any", "length", "width"],
+) -> dict | None:
+    normalized = keyword.strip().casefold()
+    requested_dimension = _dimension_decimal(keyword.strip())
+    length = _dimension_decimal(row.get("cardboard_len"))
+    width = _dimension_decimal(row.get("cardboard_width"))
+    dimension_hits: list[str] = []
+    if requested_dimension is not None:
+        if length == requested_dimension and dimension_mode in {"any", "length"}:
+            dimension_hits.append("length")
+        if width == requested_dimension and dimension_mode in {"any", "width"}:
+            dimension_hits.append("width")
+
+    if dimension_mode in {"length", "width"}:
+        if requested_dimension is None:
+            return None
+        text_hits: list[str] = []
+        matched = bool(dimension_hits)
+    else:
+        searchable = (
+            ("customer_name", row.get("customer_name")),
+            ("product_code", row.get("product_code")),
+            ("product_name", row.get("product_name")),
+            ("order_number", row.get("order_number")),
+            ("customer_po", row.get("customer_po")),
+        )
+        text_hits = [
+            field
+            for field, value in searchable
+            if normalized and normalized in str(value or "").casefold()
+        ]
+        compact_spec = "x".join(
+            value
+            for value in (_number_text(length), _number_text(width))
+            if value is not None
+        )
+        if compact_spec and normalized.replace("×", "x") in {
+            compact_spec.casefold(),
+            compact_spec.replace("x", "*").casefold(),
+        }:
+            text_hits.append("reported_dimensions")
+        matched = bool(text_hits or dimension_hits)
+    if not matched:
+        return None
+
+    side_labels = {
+        "length": "报料长",
+        "width": "报料宽",
+    }
+    summaries = [
+        f"{side_labels[side]} {_number_text(row.get('cardboard_len') if side == 'length' else row.get('cardboard_width'))}mm"
+        for side in dimension_hits
+    ]
+    if not summaries:
+        summaries.append("客户、款号、名称或订单号命中")
+    return {
+        "query": keyword,
+        "dimension_mode": dimension_mode,
+        "dimension_sides": dimension_hits,
+        "text_fields": text_hits,
+        "summary": "；".join(summaries),
+    }
 
 
 def _product_specification(product: Product) -> str:
@@ -631,6 +716,165 @@ def _inventory_group(
         ),
         "position_count": len(positions),
         "positions": positions,
+    }
+
+
+@router.get("/incoming/search")
+def search_pending_incoming(
+    response: Response,
+    q: str = Query(min_length=1, max_length=100),
+    dimension_mode: Literal["any", "length", "width"] = Query(default="any"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=20),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read_incoming),
+) -> dict:
+    """Search final pending incoming routes without changing receipt facts."""
+
+    _no_store(response)
+    keyword = q.strip()
+    if not keyword:
+        raise HTTPException(status_code=422, detail="请输入客户、款号、名称、订单号或报料尺寸")
+    if dimension_mode in {"length", "width"} and _dimension_decimal(keyword) is None:
+        raise HTTPException(status_code=422, detail="按报料长或报料宽查询时，请输入一个毫米数值")
+
+    matches: list[tuple[dict, dict]] = []
+    for route in _pending_incoming_route_rows(db, user):
+        match = _incoming_search_match(
+            route,
+            keyword=keyword,
+            dimension_mode=dimension_mode,
+        )
+        if match is not None:
+            matches.append((route, match))
+
+    total = len(matches)
+    last_page = max(1, (total + page_size - 1) // page_size)
+    resolved_page = min(page, last_page)
+    start = (resolved_page - 1) * page_size
+    selected = matches[start : start + page_size]
+    selected_routes = [route for route, _match in selected]
+    detailed_rows = _incoming_rows(
+        db,
+        user=user,
+        selected_pending_routes=selected_routes,
+    )
+    detailed_by_id = {str(row.get("item_id")): row for row in detailed_rows}
+    if set(detailed_by_id) != {str(route.get("item_id")) for route in selected_routes}:
+        raise HTTPException(status_code=409, detail="待收料状态已变化，请刷新后重新查询")
+
+    items: list[dict] = []
+    for route, match in selected:
+        route_key = str(route["item_id"])
+        item = _incoming_row_response(detailed_by_id[route_key])
+        item["search_match"] = match
+        item["production_detail_url"] = (
+            f"/api/mobile/erp/incoming/{route_key}/production-detail"
+        )
+        items.append(item)
+    return {
+        "query": keyword,
+        "dimension_mode": dimension_mode,
+        "items": items,
+        "total": total,
+        "page": resolved_page,
+        "page_size": page_size,
+        "as_of": datetime.now(_BEIJING).isoformat(timespec="seconds"),
+        "read_only": True,
+    }
+
+
+@router.get("/incoming/{route_id}/production-detail")
+def pending_incoming_production_detail(
+    route_id: str,
+    response: Response,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read_orders),
+) -> dict:
+    """Return production facts for one exact still-pending incoming route."""
+
+    _no_store(response)
+    if not has_permission(user, "incoming.view"):
+        raise HTTPException(status_code=403, detail="当前账号没有查看待收料明细的权限")
+    normalized_route_id = route_id.strip()
+    if not re.fullmatch(r"(?:r|sr)?\d+", normalized_route_id):
+        raise HTTPException(status_code=422, detail="待收料明细标识无效")
+    route = next(
+        (
+            row
+            for row in _pending_incoming_route_rows(db, user)
+            if str(row.get("item_id")) == normalized_route_id
+        ),
+        None,
+    )
+    if route is None:
+        raise HTTPException(status_code=404, detail="待收料明细不存在、已收齐或无权查看")
+    incoming_rows = _incoming_rows(
+        db,
+        user=user,
+        selected_pending_routes=[route],
+    )
+    if len(incoming_rows) != 1 or str(incoming_rows[0].get("item_id")) != normalized_route_id:
+        raise HTTPException(status_code=409, detail="待收料状态已变化，请刷新后重新打开生产明细")
+
+    order_item_id = route.get("order_item_id")
+    task_rows: list[dict] = []
+    if order_item_id is not None:
+        task_query = select(ProductionTask.id).where(
+            ProductionTask.order_item_id == int(order_item_id)
+        )
+        requisition_item_id = route.get("requisition_item_id")
+        if requisition_item_id is not None:
+            source = db.scalar(
+                select(RequisitionItemBomSource)
+                .where(
+                    RequisitionItemBomSource.requisition_item_id
+                    == int(requisition_item_id),
+                    RequisitionItemBomSource.active_guard == 1,
+                )
+                .order_by(RequisitionItemBomSource.id.asc())
+            )
+            component_id = (
+                source.sales_order_item_bom_component_id if source is not None else None
+            )
+            if component_id is None:
+                task_query = task_query.where(
+                    ProductionTask.sales_order_item_bom_component_id.is_(None)
+                )
+            else:
+                task_query = task_query.where(
+                    ProductionTask.sales_order_item_bom_component_id == component_id
+                )
+        else:
+            task_query = task_query.where(
+                ProductionTask.sales_order_item_bom_component_id.is_(None)
+            )
+        task_ids = list(db.scalars(task_query.order_by(ProductionTask.id.asc())).all())
+        if task_ids:
+            task_rows = list_production_tasks(
+                db,
+                allowed_customer_ids=_visible_customer_ids(user, db),
+                task_ids=task_ids,
+            )
+
+    incoming_item = _incoming_row_response(incoming_rows[0])
+    return {
+        "route_id": normalized_route_id,
+        "order_item_id": order_item_id,
+        "requisition_item_id": route.get("requisition_item_id"),
+        "stock_replenishment_item_id": route.get("stock_replenishment_item_id"),
+        "incoming_item": incoming_item,
+        "production_tasks": [
+            _safe_production_task(task, drawing_path=incoming_item.get("drawing_path"))
+            for task in task_rows
+        ],
+        "message": (
+            "补库待收料没有订单生产任务"
+            if order_item_id is None
+            else ("未生成生产任务" if not task_rows else None)
+        ),
+        "as_of": datetime.now(_BEIJING).isoformat(timespec="seconds"),
+        "read_only": True,
     }
 
 

@@ -64,3 +64,85 @@ Fixes made:
 - P3: after formal rack-level inventory binding is approved, shelf tags can be introduced only inside the rack elevation view, keeping the global 2.5D view uncluttered.
 
 final result: passed
+
+# P1-34B3 65×45 mm 生产包装标签实尺寸极简版视觉验收
+
+## Comparison target
+
+- source visual truth path: `D:\.codex\visualizations\2026\08\11\019fee7c-7117-7761-871b-98acfc9f9c8d\production-label-real-size\source-65x45-1.png`
+- implementation URL: `http://127.0.0.1:18112/production-packaging-label.html?id=1`
+- implementation full-view screenshot: `D:\.codex\visualizations\2026\08\11\019fee7c-7117-7761-871b-98acfc9f9c8d\production-label-real-size\implementation-65x45-screen.png`
+- implementation focused screenshot: `D:\.codex\visualizations\2026\08\11\019fee7c-7117-7761-871b-98acfc9f9c8d\production-label-real-size\implementation-65x45-first-label.png`
+- normalized comparison board: `D:\.codex\visualizations\2026\08\11\019fee7c-7117-7761-871b-98acfc9f9c8d\production-label-real-size\comparison-65x45-source-vs-implementation.png`
+- browser viewport: default in-app browser viewport, screenshot output 1280 × 720 px.
+- source pixels: 563 × 390 px; implementation focused crop: 248 × 172 px. Both have the 65:45 physical aspect ratio and were normalized to the same 258 px comparison height.
+- measured implementation label box: 245.656 × 170.078 CSS px, matching 65 × 45 mm at 96 CSS px/in within sub-pixel rounding.
+- state: three realistic product labels loaded from the read-only production packaging label package; third label is the remainder bundle.
+
+## Full-view comparison evidence
+
+The browser full view shows all three labels at one consistent physical size. The source hierarchy is retained: customer first, product code as the strongest identifier, product name and specification in the middle, and bundle quantity as the bottom focus. The large black customer and quantity bands from the source are intentionally removed under the owner's latest requirement; the ERP version uses white paper, black text and thin rules only.
+
+## Focused region comparison evidence
+
+The side-by-side board compares one full 65 × 45 mm source label with one full ERP label at the same normalized physical ratio. After the first pass, the left-side field names were widened from 9 mm to 11 mm and forced to one line. The second browser measurement reports no horizontal overflow for any of the five field groups.
+
+## Required fidelity surfaces
+
+- Fonts and typography: Microsoft YaHei/SimHei with a clear black-and-white hierarchy; the inventory code and bundle count remain the fastest scanning targets.
+- Spacing and layout rhythm: five compact rows fit inside the exact 65 × 45 mm border without overall scroll or clipping.
+- Colors and visual tokens: label content uses white or transparent backgrounds only. Browser computed styles found no filled label region; no large black background is present.
+- Image quality and assets: this label contains no decorative image or generated asset, which matches the requirement for a simple label-printer output.
+- Copy and content: the printed label contains only 客户名称、存货编码、产品名称、规格、每捆数量. It omits barcode, production task number, order number, stock, location, cost and internal process facts.
+
+## Comparison history
+
+### Pass 1 — fixed
+
+- P2: 客户名称 and 产品名称 could wrap into two lines in the 9 mm label-name column, weakening scanability.
+
+Fix made:
+
+- Increased the left label-name column to 11 mm and added `white-space: nowrap`.
+
+### Pass 2 — passed
+
+- Label box remains exactly 65 × 45 mm.
+- All five labels stay on one line in the tested realistic sample set.
+- Browser computed audit found zero horizontally overflowing label descendants, zero warning/error console messages, and no non-transparent background inside the label.
+- No actionable P0, P1 or P2 visual issue remains.
+
+## Primary interactions tested
+
+- `重新加载` refetched the same GET-only preview and restored three labels without changing the URL.
+- `打印包装标签` and `关闭` were enabled after successful loading.
+- The print action was not invoked because it opens the operating-system printer dialog; CSSOM inspection confirmed `@page { size: 65mm 45mm; margin: 0; }`.
+- Raw browser PDF printing is unavailable on this surface, so physical printer direction, gap/black-mark detection and 100% scale remain external human acceptance items.
+- Browser console warning/error count: 0.
+
+final result: passed
+
+---
+
+# Production task sheet design QA
+
+- Source: `D:\纸箱厂erp软件搭建\output\pdf\生产任务单_内部生产版_三方案_A5.pdf`
+- Source render used for A1 comparison: `D:\纸箱厂erp软件搭建\tmp\pdfs\render_internal\page-1.png`
+- Combined source and implementation screenshot: `D:\tm-worktrees\erp-production-task-form-20260811\docs\qa\production-task-a1-comparison.png`
+- Batch first-page screenshot: `D:\tm-worktrees\erp-production-task-form-20260811\docs\qa\production-task-batch-a4.png`
+- Batch odd-last-page screenshot: `D:\tm-worktrees\erp-production-task-form-20260811\docs\qa\production-task-batch-last-page.png`
+- Browser viewport: 1200 × 800. The comparison harness renders the ERP page in a 1200 × 1400 iframe scaled to 50% so the complete A4 state and the source render are visible together.
+
+## Comparison
+
+- Preserved the source hierarchy: title and status, three headline metrics, product and size row, ordered process route, technical details, and structure-reference column.
+- Removed the source colors intentionally because the approved ERP output is black-and-white. Borders, type weights, and grayscale structure images retain the visual hierarchy without relying on color.
+- The single-task state uses one full A4 page with enlarged type and a detail panel that fills the available height.
+- The batch state places two fixed half-page cards on each A4 page. Three cards produce two pages and the final lower half remains blank.
+- A1, die-cut inner box, and liner states were checked with realistic data. No text clipping, overlapping, broken borders, or layout-overflow marker was present.
+- A real provided source image was loaded through the structure-reference image slot; the formal implementation uses the existing authenticated product/order drawing routes.
+- The customer-safe state hides elements marked as internal and shows its safe-mode footer. The mode switch was exercised in the browser and restored successfully.
+
+## Final result
+
+passed

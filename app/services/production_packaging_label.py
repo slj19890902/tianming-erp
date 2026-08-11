@@ -7,6 +7,7 @@ from math import ceil
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.customer import Customer
 from app.models.production import ProductionTask
 from app.models.supplier_requisition_order import SupplierRequisitionOrder
 from app.services.requisition_production_print import (
@@ -63,6 +64,20 @@ def build_supplier_requisition_packaging_label_package(
                 continue
             task_sources.setdefault(int(task_id), (card, component))
 
+    customer_ids = {
+        int(card["customer_id"])
+        for card, _component in task_sources.values()
+        if card.get("customer_id") is not None
+    }
+    customer_codes = {
+        int(customer.id): customer.customer_code
+        for customer in (
+            db.scalars(select(Customer).where(Customer.id.in_(customer_ids))).all()
+            if customer_ids
+            else []
+        )
+    }
+
     plans: list[dict] = []
     package_review_messages = list(production_package.get("review_messages") or [])
     for task_id in sorted(task_sources):
@@ -99,6 +114,9 @@ def build_supplier_requisition_packaging_label_package(
                 "production_task_version": int(task.version or 1),
                 "customer_id": card.get("customer_id"),
                 "customer_name": card.get("customer_name"),
+                "customer_code": customer_codes.get(int(card["customer_id"]))
+                if card.get("customer_id") is not None
+                else None,
                 "product_code": component.get("product_code") or card.get("product_code"),
                 "product_name": component.get("product_name") or card.get("product_name"),
                 "specification": component.get("specification")
@@ -121,6 +139,7 @@ def build_supplier_requisition_packaging_label_package(
                     "production_task_version": plan["production_task_version"],
                     "customer_id": plan["customer_id"],
                     "customer_name": plan["customer_name"],
+                    "customer_code": plan["customer_code"],
                     "product_code": plan["product_code"],
                     "product_name": plan["product_name"],
                     "specification": plan["specification"],

@@ -3,44 +3,82 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>待来料生产任务单</title>
+  <title>生产任务单</title>
   <style>
-    :root { color-scheme: light; font-family: "Microsoft YaHei", "SimSun", sans-serif; color:#111827; }
+    :root { color-scheme:light; font-family:"Microsoft YaHei","SimSun",sans-serif; color:#111; }
     * { box-sizing:border-box; }
-    body { margin:0; background:#eef2f7; }
-    .toolbar { position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:10px; padding:10px 16px; background:#fff; border-bottom:1px solid #d9e0e8; }
-    button { border:1px solid #b8c3d1; border-radius:6px; background:#fff; padding:7px 14px; cursor:pointer; font-size:14px; }
-    button.primary { background:#0b72e7; border-color:#0b72e7; color:#fff; }
-    button.label-action { background:#0f766e; border-color:#0f766e; color:#fff; }
+    body { margin:0; background:#ececec; }
+    .toolbar { position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:10px; padding:10px 16px; background:#fff; border-bottom:1px solid #aaa; }
+    button { border:1px solid #222; border-radius:4px; background:#fff; color:#111; padding:7px 14px; cursor:pointer; font-size:14px; }
+    button.primary { background:#111; color:#fff; }
     button:disabled { opacity:.45; cursor:not-allowed; }
-    .toolbar-note { margin-left:auto; color:#5b6574; font-size:13px; }
-    .message { max-width:980px; margin:16px auto; padding:14px 16px; border-radius:8px; background:#fff; border:1px solid #d9e0e8; }
-    .message.error { color:#a41414; background:#fff5f5; border-color:#efb1b1; }
+    .toolbar-note { margin-left:auto; color:#444; font-size:13px; }
+    .message { max-width:980px; margin:16px auto; padding:14px 16px; border-radius:4px; background:#fff; border:1px solid #aaa; }
+    .message.error { color:#111; border:2px solid #111; font-weight:700; }
     .pages { display:flex; flex-direction:column; align-items:center; gap:12px; padding:14px; }
-    .page { width:210mm; height:297mm; padding:8mm 10mm; background:#fff; box-shadow:0 2px 12px rgba(15,23,42,.12); display:grid; grid-template-rows:140.5mm 140.5mm; overflow:hidden; break-after:page; page-break-after:always; }
+    .page { width:210mm; height:297mm; padding:8mm 10mm; background:#fff; box-shadow:0 2px 12px rgba(0,0,0,.16); overflow:hidden; break-after:page; page-break-after:always; }
     .page:last-child { break-after:auto; page-break-after:auto; }
-    .half-card { min-height:0; padding:4mm 1.5mm 3mm; border-bottom:1px dashed #7b8796; overflow:hidden; break-inside:avoid; page-break-inside:avoid; }
-    .half-card:nth-child(2) { border-bottom:0; }
-    .half-card.blank { visibility:hidden; }
-    .half-card.dense table { font-size:8px; }
-    .half-card.dense th,.half-card.dense td { padding:.7mm .9mm; line-height:1.15; }
-    .half-card.layout-overflow { overflow:auto; outline:2px solid #d92d20; outline-offset:-2px; }
-    .card-head { display:grid; grid-template-columns:1fr auto; gap:5mm; align-items:start; border-bottom:1.5px solid #1f2937; padding-bottom:2mm; }
-    h1 { margin:0; font-size:18px; text-align:center; letter-spacing:2px; }
-    .status { display:inline-block; padding:2px 8px; border:1px solid #0b72e7; border-radius:12px; color:#0759b4; font-size:12px; font-weight:700; }
-    .status.warn { color:#b42318; border-color:#d92d20; background:#fff4f2; }
-    .meta { display:grid; grid-template-columns:1.25fr 1fr 1fr; gap:1.5mm 4mm; margin:2.5mm 0; font-size:11px; line-height:1.35; }
-    .meta strong { font-weight:700; }
-    .summary { display:grid; grid-template-columns:1fr 1fr; gap:3mm; margin:2mm 0; }
-    .metric { border:1px solid #9aa6b2; padding:1.6mm 2.4mm; font-size:12px; }
-    .metric strong { font-size:17px; margin-left:5px; }
-    table { width:100%; border-collapse:collapse; table-layout:fixed; font-size:9.5px; }
-    th,td { border:1px solid #6f7b88; padding:1.1mm 1.2mm; text-align:left; vertical-align:top; line-height:1.25; overflow-wrap:anywhere; }
-    th { background:#edf2f7; text-align:center; font-weight:700; }
-    .c-part { width:10%; }.c-size { width:15%; }.c-qty { width:12%; }.c-material { width:17%; }.c-crease { width:12%; }.c-work { width:34%; }
-    .work-line { display:block; }
-    .warning { margin-top:1.5mm; padding:1.3mm 2mm; border:1px solid #d92d20; color:#b42318; background:#fff4f2; font-size:10px; font-weight:700; }
-    .foot { display:flex; justify-content:space-between; gap:4mm; margin-top:1.2mm; color:#5b6574; font-size:8.5px; }
+    .batch-page { display:grid; grid-template-rows:140.5mm 140.5mm; }
+    .single-page { display:grid; grid-template-rows:1fr; }
+    .task-card { min-height:0; padding:4mm 2mm 3mm; overflow:hidden; break-inside:avoid; page-break-inside:avoid; }
+    .batch-page .task-card:first-child { border-bottom:.35mm dashed #555; }
+    .task-card.blank { visibility:hidden; }
+    .task-card.dense { font-size:8px; }
+    .task-card.layout-overflow { overflow:auto; outline:.7mm solid #111; outline-offset:-.7mm; }
+    .card-head { display:grid; grid-template-columns:1fr auto; gap:4mm; align-items:start; border-bottom:.55mm solid #111; padding-bottom:1.5mm; }
+    .brand { font-size:8pt; font-weight:800; letter-spacing:.3mm; }
+    h1 { margin:.8mm 0 0; font-size:15pt; line-height:1.15; letter-spacing:.5mm; }
+    .status { display:inline-block; min-width:18mm; padding:1mm 2mm; border:.3mm solid #111; border-radius:3mm; text-align:center; color:#111; font-size:8pt; font-weight:800; }
+    .status.warn { border-width:.55mm; }
+    .headline-metrics { display:grid; grid-template-columns:1.1fr .9fr .9fr; gap:2mm; margin:2.3mm 0; }
+    .headline-metric { border:.28mm solid #777; border-radius:2mm; padding:1.4mm 2mm; min-width:0; }
+    .headline-metric span { display:block; color:#444; font-size:7pt; }
+    .headline-metric strong { display:block; margin-top:.5mm; font-size:12pt; line-height:1.15; overflow-wrap:anywhere; }
+    .product-strip { display:grid; grid-template-columns:1.2fr .8fr; gap:4mm; padding:1.5mm 0 1.8mm; border-bottom:.28mm solid #888; }
+    .field-label { display:block; color:#444; font-size:7pt; }
+    .field-value { display:block; margin-top:.5mm; font-weight:800; font-size:9.5pt; overflow-wrap:anywhere; }
+    .process-title { margin:1.6mm 0 .8mm; color:#333; font-size:7.5pt; font-weight:700; }
+    .process-route { display:flex; gap:1.2mm; margin:0; padding:0; list-style:none; }
+    .process-route li { flex:1 1 0; min-width:0; border:.3mm solid #111; border-radius:3mm; padding:1.1mm 1.5mm; text-align:center; font-size:8pt; font-weight:700; overflow-wrap:anywhere; }
+    .detail-grid { display:grid; grid-template-columns:1.08fr .92fr; margin-top:2mm; border:.3mm solid #555; border-radius:2mm; overflow:hidden; min-height:42mm; }
+    .detail-list { padding:2mm 2.5mm; }
+    .detail-row { display:grid; grid-template-columns:23mm 1fr; gap:2mm; padding:.8mm 0; font-size:8pt; line-height:1.25; }
+    .detail-row .label { color:#444; }
+    .detail-row .value { font-weight:750; overflow-wrap:anywhere; }
+    .structure { border-left:.28mm solid #777; padding:2mm; min-width:0; min-height:0; display:flex; flex-direction:column; }
+    .structure-title { display:flex; justify-content:space-between; gap:2mm; color:#333; font-size:7.5pt; font-weight:700; }
+    .structure-source { color:#555; font-weight:400; }
+    .structure-body { flex:1 1 auto; min-height:0; margin-top:1mm; display:flex; align-items:center; justify-content:center; overflow:hidden; }
+    .structure-body img,.structure-body object { display:block; max-width:100%; width:100%; height:100%; max-height:37mm; object-fit:contain; filter:grayscale(1) contrast(1.08); }
+    .structure-empty { width:100%; padding:3mm; border-top:.28mm solid #999; border-bottom:.28mm solid #999; color:#444; text-align:center; font-size:8pt; line-height:1.5; }
+    .warning { margin-top:1.5mm; padding:1.2mm 2mm; border:.55mm solid #111; color:#111; font-size:7.5pt; font-weight:800; }
+    .foot { display:flex; justify-content:space-between; align-items:flex-end; gap:3mm; margin-top:1.2mm; color:#444; font-size:6.5pt; }
+    .safe-only { display:none !important; }
+    body.customer-safe .internal-only { display:none !important; }
+    body.customer-safe .safe-only { display:inline !important; }
+    .single-page .task-card { padding:8mm 7mm 6mm; display:flex; flex-direction:column; }
+    .single-page .brand { font-size:10pt; }
+    .single-page h1 { margin-top:1.5mm; font-size:25pt; }
+    .single-page .status { padding:1.6mm 4mm; font-size:11pt; }
+    .single-page .headline-metrics { gap:4mm; margin:6mm 0; }
+    .single-page .headline-metric { padding:4mm 5mm; border-radius:3mm; }
+    .single-page .headline-metric span,.single-page .field-label { font-size:10pt; }
+    .single-page .headline-metric strong { margin-top:1.5mm; font-size:20pt; }
+    .single-page .product-strip { gap:8mm; padding:3mm 0 4mm; }
+    .single-page .field-value { margin-top:1.5mm; font-size:15pt; }
+    .single-page .process-title { margin:5mm 0 2mm; font-size:10pt; }
+    .single-page .process-route { gap:3mm; }
+    .single-page .process-route li { padding:3mm; border-radius:5mm; font-size:12pt; }
+    .single-page .detail-grid { flex:1 1 auto; margin-top:5mm; min-height:102mm; border-radius:3mm; }
+    .single-page .detail-list { padding:7mm 8mm; }
+    .single-page .detail-row { grid-template-columns:34mm 1fr; gap:5mm; padding:2.4mm 0; font-size:12pt; }
+    .single-page .structure { padding:7mm; }
+    .single-page .structure-title { font-size:10pt; }
+    .single-page .structure-body { margin-top:4mm; }
+    .single-page .structure-body img,.single-page .structure-body object { max-height:122mm; }
+    .single-page .structure-empty { padding:8mm; font-size:11pt; }
+    .single-page .warning { margin-top:4mm; padding:3mm 4mm; font-size:10pt; }
+    .single-page .foot { margin-top:4mm; font-size:8pt; }
     @page { size:A4 portrait; margin:0; }
     @media print {
       body { background:#fff; }
@@ -54,9 +92,10 @@
   <div class="toolbar">
     <button id="retryButton" type="button">重新加载</button>
     <button id="printButton" class="primary" type="button" disabled>打印</button>
-    <button id="labelButton" class="label-action" type="button" disabled>生产包装标签</button>
+    <button id="modeButton" type="button">切换客户随货版</button>
+    <button id="labelButton" type="button" disabled>生产包装标签</button>
     <button id="closeButton" type="button">关闭</button>
-    <span class="toolbar-note">A4 纵向 · 每页上下两款</span>
+    <span id="toolbarNote" class="toolbar-note">黑白打印 · 批量每张 A4 上下两款</span>
   </div>
   <div id="message" class="message">正在读取正式报料快照…</div>
   <main id="pages" class="pages" aria-live="polite"></main>
@@ -67,10 +106,13 @@
       const pagesHost = document.getElementById("pages");
       const retryButton = document.getElementById("retryButton");
       const printButton = document.getElementById("printButton");
+      const modeButton = document.getElementById("modeButton");
       const labelButton = document.getElementById("labelButton");
       const closeButton = document.getElementById("closeButton");
+      const toolbarNote = document.getElementById("toolbarNote");
       const params = new URLSearchParams(window.location.search);
       const orderId = Number(params.get("id"));
+      let customerSafe = params.get("mode") === "customer";
       let loadGeneration = 0;
       let activeController = null;
       let loadedPackage = null;
@@ -84,6 +126,8 @@
       const textList = (value) => Array.isArray(value) && value.length
         ? value.map((item) => String(item)).join(" / ") : "-";
       const dateText = (value) => value ? String(value).slice(0, 10) : "-";
+      const unique = (values) => Array.from(new Set(values.filter((value) => value !== null && value !== undefined && String(value).trim()).map((value) => String(value).trim())));
+      const numberText = (value) => value === null || value === undefined || value === "" ? "-" : String(value).replace(/\.0+$/, "");
 
       function errorMessage(status, payload) {
         const detail = payload && typeof payload === "object" ? payload.detail : null;
@@ -91,83 +135,174 @@
         if (detail && typeof detail === "object" && typeof detail.message === "string") {
           return detail.code ? `${detail.message}（${detail.code}）` : detail.message;
         }
-        if (Array.isArray(detail) && detail.length) {
-          return detail.map((item) => item && item.msg ? item.msg : String(item)).join("；");
-        }
+        if (Array.isArray(detail) && detail.length) return detail.map((item) => item && item.msg ? item.msg : String(item)).join("；");
         if (status === 401) return "登录已失效，请回到 ERP 重新登录后再试";
         if (status === 403) return "没有查看该报料单的权限";
         if (status === 404) return "报料单不存在";
         return `加载失败（HTTP ${status || "网络连接失败"}）`;
       }
 
-      function componentRows(card) {
-        return (card.components || []).map((line) => {
-          const printing = line.printing_instruction || "-";
-          const plates = textList(line.printing_plate_codes);
-          const notes = textList(line.production_notes);
-          const printContent = line.print_content || "-";
-          const drawing = line.drawing_reference || "-";
-          const mold = [line.mold_code, line.mold_name].filter(Boolean).join(" ") || "-";
-          const machineSet = [
-            line.machine_set_length_mm,
-            line.machine_set_width_mm,
-            line.machine_set_height_mm,
-          ].map((value) => value ?? "-").join(" × ");
-          const plateValues = `对版 ${line.plate_alignment_value_mm ?? "-"} / 挂版 ${line.plate_mount_value_mm ?? "-"}`;
-          const taskVersion = line.production_task_version
-            ? `任务 #${line.production_task_id || "-"} / v${line.production_task_version}`
-            : "任务待生成/核对";
-          return `<tr>
-            <td>${escapeHtml(line.component_label || "整片")}<br>${escapeHtml(line.product_name || "-")}</td>
-            <td>${escapeHtml(line.report_length_mm)} × ${escapeHtml(line.report_width_mm)}<br>${escapeHtml(line.specification || "-")}</td>
-            <td><strong>${escapeHtml(line.requisition_quantity || 0)} ${escapeHtml(line.requisition_unit || "张")}</strong><br>需件 ${escapeHtml(line.required_piece_quantity || 0)}</td>
-            <td>${escapeHtml(line.material_code || "-")}<br>${escapeHtml(line.layer_count || "-")}层 / ${escapeHtml(line.flute_type || "-")}</td>
-            <td>${escapeHtml(line.crease_display || "-")}<br>${escapeHtml(line.cutting_mode || "-")}</td>
-            <td><span class="work-line">印刷：${escapeHtml(printContent)} / ${escapeHtml(printing)}${plates !== "-" ? ` / ${escapeHtml(plates)}` : ""}</span><span class="work-line">机器：${escapeHtml(machineSet)}；${escapeHtml(plateValues)}</span><span class="work-line">图纸：${escapeHtml(drawing)}　模具：${escapeHtml(mold)}</span><span class="work-line">工艺：${escapeHtml(notes)}</span><span class="work-line">${escapeHtml(taskVersion)}</span></td>
-          </tr>`;
-        }).join("");
+      function titleFor(card) {
+        if (card.layout_kind === "die_cut") return "模切内盒生产任务单";
+        if (card.layout_kind === "liner") return "衬板生产任务单";
+        if (card.box_type_code === "a1_0201") return "A1 型纸箱生产任务单";
+        return `${card.box_style || "纸箱"}生产任务单`;
       }
 
-      function cardHtml(card, packageData) {
-        if (!card) return '<section class="half-card blank" aria-hidden="true"></section>';
+      function componentSizes(card) {
+        return unique((card.components || []).map((line) => {
+          if (!line.report_length_mm || !line.report_width_mm) return null;
+          const label = (card.components || []).length > 1 ? `${line.component_label || "整片"} ` : "";
+          return `${label}${numberText(line.report_length_mm)} × ${numberText(line.report_width_mm)} mm`;
+        }));
+      }
+
+      function finishedSize(card) {
+        const values = [card.finished_length_mm, card.finished_width_mm];
+        if (card.layout_kind !== "liner") values.push(card.finished_height_mm);
+        if (values.some((value) => value === null || value === undefined || value === "")) return textList(card.specifications);
+        return `${values.map(numberText).join(" × ")} mm`;
+      }
+
+      function firstValues(card, key) {
+        return unique((card.components || []).map((line) => line[key]));
+      }
+
+      function processSteps(card) {
+        if (card.layout_kind === "liner") return ["无需后加工", "计数", "捆扎"];
+        const text = textList(card.production_steps || []);
+        const steps = [];
+        const add = (value) => { if (!steps.includes(value)) steps.push(value); };
+        if (text.includes("印刷") || firstValues(card, "print_content").some((value) => !["无印刷", "无", "否", "不印刷"].includes(value))) add("印刷");
+        if (text.includes("开槽")) add("开槽");
+        if (text.includes("压线")) add("压线");
+        if (card.layout_kind === "die_cut" || text.includes("模切")) add("模切");
+        if (text.includes("清废")) add("清废");
+        if (card.joining_method) card.joining_method.split(" / ").forEach(add);
+        return steps.length ? steps.slice(0, 4) : ["工艺待确认"];
+      }
+
+      function processHtml(card) {
+        return `<div class="process-title">工艺路线</div><ol class="process-route">${processSteps(card).map((step) => `<li>${escapeHtml(step)}</li>`).join("")}</ol>`;
+      }
+
+      function detailRow(label, value, extraClass = "") {
+        return `<div class="detail-row ${extraClass}"><span class="label">${escapeHtml(label)}</span><span class="value">${escapeHtml(value || "-")}</span></div>`;
+      }
+
+      function detailHtml(card) {
+        const sizes = textList(componentSizes(card));
+        const flute = unique((card.components || []).map((line) => [line.flute_type, line.layer_count ? `${line.layer_count}层` : null].filter(Boolean).join(" / ")));
+        const crease = textList(firstValues(card, "crease_display"));
+        const cutting = textList(firstValues(card, "cutting_mode"));
+        const printContent = textList(firstValues(card, "print_content"));
+        const colors = textList(card.printing_colors || []);
+        const mold = unique((card.components || []).map((line) => [line.mold_code, line.mold_name].filter(Boolean).join(" ")));
+        const locations = firstValues(card, "mold_location");
+        if (card.layout_kind === "liner") {
+          const perBundle = card.production_label_units_per_bundle ? `${card.production_label_units_per_bundle} 张` : "未设置";
+          const bundleCount = card.estimated_bundle_count ? `${card.estimated_bundle_count} 捆` : "待核对";
+          return [
+            detailRow("成品尺寸", finishedSize(card)),
+            detailRow("楞型", textList(flute)),
+            detailRow("总数量", `${card.planned_finished_quantity || 0} 张`),
+            detailRow("每捆数量", perBundle),
+            detailRow("预计捆数", bundleCount),
+            detailRow("加工要求", "无需加工，齐边捆扎"),
+          ].join("");
+        }
+        if (card.layout_kind === "die_cut") {
+          return [
+            detailRow("纸板尺寸", sizes),
+            detailRow("楞型", textList(flute)),
+            detailRow("开料方式", cutting),
+            detailRow("印刷内容", printContent),
+            detailRow("是否粘贴", card.joining_method && card.joining_method.includes("粘贴") ? "需要" : "不需要 / 待确认"),
+            detailRow("模具编号", textList(mold), "internal-only"),
+            detailRow("模具位置", textList(locations), "internal-only"),
+          ].join("");
+        }
+        return [
+          detailRow("纸板尺寸", sizes),
+          detailRow("楞型", textList(flute)),
+          detailRow("压线尺寸", crease),
+          detailRow("印刷内容", printContent),
+          detailRow("印刷颜色", colors),
+          detailRow("结合方式", card.joining_method || "待确认"),
+        ].join("");
+      }
+
+      function structureHtml(card) {
+        const drawing = card.structure_reference;
+        let body = '<div class="structure-empty">未登记结构图纸<br>请按文字尺寸与工艺要求生产</div>';
+        if (drawing && drawing.url && drawing.kind === "image") {
+          body = `<img src="${escapeHtml(drawing.url)}" alt="${escapeHtml(drawing.name || "产品结构图纸")}">`;
+        } else if (drawing && drawing.url && drawing.kind === "pdf") {
+          body = `<object data="${escapeHtml(drawing.url)}" type="application/pdf" aria-label="${escapeHtml(drawing.name || "产品结构图纸 PDF")}"><a href="${escapeHtml(drawing.url)}" target="_blank" rel="noopener">打开 PDF 图纸</a></object>`;
+        } else if (drawing && drawing.name) {
+          body = `<div class="structure-empty">已登记图纸：${escapeHtml(drawing.name)}<br>当前文件暂无可打印预览</div>`;
+        }
+        return `<section class="structure"><div class="structure-title"><span>结构参考</span><span class="structure-source">${escapeHtml(drawing && drawing.source ? drawing.source : "")}</span></div><div class="structure-body">${body}</div></section>`;
+      }
+
+      function thirdMetric(card) {
+        if (card.layout_kind === "liner") {
+          return { label:"包装", value:card.production_label_units_per_bundle ? `${card.production_label_units_per_bundle} 张 / 捆` : "每捆数待设置" };
+        }
+        if (card.layout_kind === "die_cut") {
+          return { label:"粘贴", value:card.joining_method && card.joining_method.includes("粘贴") ? "需要" : "不需要 / 待确认" };
+        }
+        return { label:"交期", value:textList((card.delivery_dates || []).map(dateText)) };
+      }
+
+      function cardHtml(card, packageData, fullPage = false) {
+        if (!card) return '<section class="task-card half-card blank" aria-hidden="true"></section>';
         const statusClass = card.review_required ? "status warn" : "status";
-        const warnings = card.review_required
-          ? `<div class="warning">计划已变化/请核对并重打：${escapeHtml(textList(card.review_messages))}</div>`
-          : "";
-        const denseClass = (card.components || []).length > 3 ? "half-card dense" : "half-card";
-        return `<section class="${denseClass}">
-          <header class="card-head"><div><h1>待来料生产任务单</h1></div><span class="${statusClass}">${escapeHtml(card.status_label || "待来料")}</span></header>
-          <div class="meta">
-            <div>客户：<strong>${escapeHtml(card.customer_name || "-")}</strong></div>
-            <div>存货编码：<strong>${escapeHtml(card.product_code || "-")}</strong></div>
-            <div>产品：<strong>${escapeHtml(card.product_name || "-")}</strong></div>
-            <div>规格：${escapeHtml(textList(card.specifications))}</div>
-            <div>系统订单：${escapeHtml(textList(card.order_numbers))}</div>
-            <div>客户单号：${escapeHtml(textList(card.customer_pos))}</div>
-            <div>报料单：${escapeHtml(packageData.supplier_order_number || "-")}</div>
-            <div>明细编号：${escapeHtml(textList(card.item_order_numbers))}</div>
-            <div>交期：${escapeHtml(textList((card.delivery_dates || []).map(dateText)))}</div>
+        const warnings = card.review_required ? `<div class="warning">计划已变化 / 请核对并重打：${escapeHtml(textList(card.review_messages))}</div>` : "";
+        const denseClass = (card.components || []).length > 3 ? " dense" : "";
+        const metric = thirdMetric(card);
+        const productLine = [card.product_name, card.product_code].filter(Boolean).join(" / ") || "-";
+        const quantityUnit = card.layout_kind === "liner" ? "张" : "只";
+        const safeNote = '<span class="safe-only">客户随货版 · 已隐藏内部任务及资产定位信息</span>';
+        return `<section class="task-card half-card${fullPage ? " full-card" : ""}${denseClass}" data-layout="${escapeHtml(card.layout_kind || "carton")}">
+          <header class="card-head"><div><div class="brand">TM 天明包装</div><h1>${escapeHtml(titleFor(card))}</h1></div><span class="${statusClass}">${escapeHtml(card.status_label || "待来料")}</span></header>
+          <div class="headline-metrics">
+            <div class="headline-metric"><span>客户</span><strong>${escapeHtml(card.customer_name || "-")}</strong></div>
+            <div class="headline-metric"><span>${card.layout_kind === "liner" ? "总数量" : "生产数量"}</span><strong>${escapeHtml(card.planned_finished_quantity || 0)} ${quantityUnit}</strong></div>
+            <div class="headline-metric"><span>${escapeHtml(metric.label)}</span><strong>${escapeHtml(metric.value)}</strong></div>
           </div>
-          <div class="summary">
-            <div class="metric">计划成品<strong>${escapeHtml(card.planned_finished_quantity || 0)} 只</strong></div>
-            <div class="metric">采购纸板<strong>${escapeHtml(card.requisition_quantity || 0)} 张</strong></div>
-          </div>
-          <table><thead><tr><th class="c-part">部件</th><th class="c-size">报料尺寸</th><th class="c-qty">采购数</th><th class="c-material">材质 / 楞型</th><th class="c-crease">压线 / 开料</th><th class="c-work">印刷 / 图纸 / 工艺</th></tr></thead><tbody>${componentRows(card)}</tbody></table>
+          <div class="product-strip"><div><span class="field-label">产品 / 存货编码</span><span class="field-value">${escapeHtml(productLine)}</span></div><div><span class="field-label">${card.layout_kind === "liner" ? "衬板尺寸" : card.layout_kind === "die_cut" ? "纸板净片尺寸" : "成品内尺寸"}</span><span class="field-value">${escapeHtml(card.layout_kind === "die_cut" ? textList(componentSizes(card)) : finishedSize(card))}</span></div></div>
+          ${processHtml(card)}
+          <div class="detail-grid"><div class="detail-list">${detailHtml(card)}</div>${structureHtml(card)}</div>
           ${warnings}
-          <footer class="foot"><span>版本指纹：${escapeHtml(String(packageData.plan_fingerprint || "").slice(0, 12))}</span><span>生成：${escapeHtml(packageData.created_at || "-")}</span></footer>
+          <footer class="foot internal-only"><span>报料单 ${escapeHtml(packageData.supplier_order_number || "-")} · 版本 ${escapeHtml(String(packageData.plan_fingerprint || "").slice(0, 12))}</span><span>生成 ${escapeHtml(packageData.created_at || "-")}</span></footer>
+          <footer class="foot safe-only">${safeNote}<span>尺寸单位：mm</span></footer>
         </section>`;
       }
 
+      function applyMode() {
+        document.body.classList.toggle("customer-safe", customerSafe);
+        modeButton.textContent = customerSafe ? "切换内部生产版" : "切换客户随货版";
+        const next = new URL(window.location.href);
+        if (customerSafe) next.searchParams.set("mode", "customer"); else next.searchParams.delete("mode");
+        window.history.replaceState(null, "", next);
+      }
+
       function render(packageData) {
-        pagesHost.innerHTML = (packageData.pages || []).map((page) => `<article class="page" data-page="${escapeHtml(page.page_number)}">${cardHtml(page.top, packageData)}${cardHtml(page.bottom, packageData)}</article>`).join("");
-        const overflowingCards = Array.from(
-          pagesHost.querySelectorAll(".half-card:not(.blank)")
-        ).filter((card) => card.scrollHeight > card.clientHeight + 1);
+        if (packageData.card_count === 1 && packageData.cards && packageData.cards[0]) {
+          pagesHost.innerHTML = `<article class="page single-page" data-page="1">${cardHtml(packageData.cards[0], packageData, true)}</article>`;
+          toolbarNote.textContent = "黑白打印 · 单张任务单独占一张 A4";
+        } else {
+          pagesHost.innerHTML = (packageData.pages || []).map((page) => `<article class="page batch-page" data-page="${escapeHtml(page.page_number)}">${cardHtml(page.top, packageData)}${cardHtml(page.bottom, packageData)}</article>`).join("");
+          toolbarNote.textContent = "黑白打印 · 批量每张 A4 上下两款";
+        }
+        applyMode();
+        const overflowingCards = Array.from(pagesHost.querySelectorAll(".task-card:not(.blank)")).filter((card) => card.scrollHeight > card.clientHeight + 1);
         if (overflowingCards.length) {
           overflowingCards.forEach((card) => card.classList.add("layout-overflow"));
           message.hidden = false;
           message.className = "message error";
-          message.textContent = "任务内容超过半页容量，已停止打印。请核对过长工艺说明或拆分报料。";
+          message.textContent = "任务内容超过页面容量，已停止打印。请核对过长工艺说明或拆分报料。";
           printButton.disabled = true;
           return;
         }
@@ -196,40 +331,29 @@
         }
         try {
           const response = await fetch(`/api/requisition/supplier-orders/${orderId}/production-print-package`, {
-            method: "GET",
-            credentials: "include",
-            cache: "no-store",
-            headers: { "Accept": "application/json" },
-            signal: activeController.signal,
+            method:"GET", credentials:"include", cache:"no-store", headers:{"Accept":"application/json"}, signal:activeController.signal,
           });
           let payload = null;
           try { payload = await response.json(); } catch (_error) { payload = null; }
-          if (!response.ok) throw Object.assign(new Error(errorMessage(response.status, payload)), { status: response.status });
+          if (!response.ok) throw Object.assign(new Error(errorMessage(response.status, payload)), {status:response.status});
           if (generation !== loadGeneration) return;
-          if (!payload || typeof payload !== "object" || !Array.isArray(payload.pages)) {
-            throw new Error("服务器返回的任务单数据不完整，请重试");
-          }
+          if (!payload || typeof payload !== "object" || !Array.isArray(payload.pages) || !Array.isArray(payload.cards)) throw new Error("服务器返回的任务单数据不完整，请重试");
           loadedPackage = payload;
           render(payload);
         } catch (error) {
           if (error && error.name === "AbortError") return;
           if (generation !== loadGeneration) return;
           message.className = "message error";
-          message.textContent = error instanceof TypeError
-            ? "无法连接 ERP 服务，请检查网络后重试"
-            : error && error.message
-            ? error.message
-            : "连接 ERP 失败，请重试";
+          message.textContent = error instanceof TypeError ? "无法连接 ERP 服务，请检查网络后重试" : error && error.message ? error.message : "连接 ERP 失败，请重试";
         }
       }
 
       retryButton.addEventListener("click", loadPackage);
       printButton.addEventListener("click", () => { if (loadedPackage) window.print(); });
-      labelButton.addEventListener("click", () => {
-        if (!loadedPackage) return;
-        window.open(`/production-packaging-label.html?id=${encodeURIComponent(orderId)}`, "_blank", "noopener");
-      });
+      modeButton.addEventListener("click", () => { customerSafe = !customerSafe; applyMode(); });
+      labelButton.addEventListener("click", () => { if (loadedPackage) window.open(`/production-packaging-label.html?id=${encodeURIComponent(orderId)}`, "_blank", "noopener"); });
       closeButton.addEventListener("click", () => window.close());
+      applyMode();
       loadPackage();
     })();
   </script>

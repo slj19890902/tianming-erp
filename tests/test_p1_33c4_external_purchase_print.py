@@ -39,7 +39,7 @@ def test_print_layout_repeats_header_and_avoids_broken_rows() -> None:
     assert "break-inside:avoid" in PAGE
     assert "page-break-inside:avoid" in PAGE
     assert "size:A4 landscape" in PAGE
-    assert "供应商货号" in PAGE
+    assert "供应商产品代码" in PAGE
     assert "冻结报价条款" in PAGE
     assert "客户单号" in PAGE
 

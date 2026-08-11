@@ -32,12 +32,14 @@ from app.api.deps import (
     require_customer_access,
 )
 from app.core.time_contract import (
+    beijing_today,
     beijing_naive_to_api,
     beijing_now_naive,
     utc_naive_to_api,
 )
 from app.api.master_data_common import audit_master_change, clean_code
 from app.models.customer import Customer
+from app.models.external_packaging_price import ExternalPackagingPriceVersion
 from app.models.material import Material
 from app.models.master_data_object_version import MasterDataObjectVersion
 from app.models.mold_tool import MoldTool
@@ -1253,6 +1255,48 @@ def list_box_type_rules(
     return {"rules": [rule.public_dict() for rule in BOX_TYPE_RULES]}
 
 
+def _external_price_text(value: Decimal | None) -> str | None:
+    if value is None:
+        return None
+    rendered = format(Decimal(value), "f")
+    if "." in rendered:
+        rendered = rendered.rstrip("0").rstrip(".")
+    return rendered or "0"
+
+
+def _current_external_candidate_prices(
+    db: Session, rows: list[ExternalPackagingProduct]
+) -> dict[int, ExternalPackagingPriceVersion]:
+    if not rows:
+        return {}
+    product_by_id = {row.id: row for row in rows}
+    as_of = beijing_today()
+    prices = db.scalars(
+        select(ExternalPackagingPriceVersion)
+        .where(
+            ExternalPackagingPriceVersion.external_product_id.in_(product_by_id),
+            ExternalPackagingPriceVersion.effective_from <= as_of,
+            or_(
+                ExternalPackagingPriceVersion.effective_to.is_(None),
+                ExternalPackagingPriceVersion.effective_to >= as_of,
+            ),
+        )
+        .order_by(
+            ExternalPackagingPriceVersion.external_product_id,
+            ExternalPackagingPriceVersion.effective_from.desc(),
+            ExternalPackagingPriceVersion.version_number.desc(),
+        )
+    ).all()
+    current: dict[int, ExternalPackagingPriceVersion] = {}
+    for price in prices:
+        product = product_by_id.get(price.external_product_id)
+        if product is None:
+            continue
+        if price.product_version != product.version or price.quote_unit != product.purchase_unit:
+            continue
+        current.setdefault(price.external_product_id, price)
+    return current
+
 @router.get("/external-supply-candidates")
 def list_product_external_supply_candidates(
     customer_id: int = Query(gt=0),
@@ -1271,11 +1315,16 @@ def list_product_external_supply_candidates(
         )
         .order_by(ExternalPackagingProduct.supplier_id, ExternalPackagingProduct.supplier_product_code)
     ).all()
+    available_rows = [row for row in rows if _external_candidate_is_available(row)]
+    can_view_costs = has_permission(user, "cost.view")
+    current_prices = (
+        _current_external_candidate_prices(db, available_rows)
+        if can_view_costs
+        else {}
+    )
     items = []
-    for row in rows:
-        if not _external_candidate_is_available(row):
-            continue
-        items.append({
+    for row in available_rows:
+        item = {
             "external_product_id": row.id,
             "supplier_id": row.supplier_id,
             "supplier_name": row.supplier.display_name or row.supplier.standard_name,
@@ -1287,7 +1336,27 @@ def list_product_external_supply_candidates(
             "purchase_unit": row.purchase_unit,
             "customer_scope_id": row.customer_scope_id,
             "version": row.version,
-        })
+        }
+        if can_view_costs:
+            price = current_prices.get(row.id)
+            item["current_purchase_price"] = (
+                {
+                    "id": price.id,
+                    "version_number": price.version_number,
+                    "product_version": price.product_version,
+                    "quote_unit": price.quote_unit,
+                    "unit_price": _external_price_text(price.unit_price),
+                    "currency": price.currency,
+                    "tax_mode": price.tax_mode,
+                    "tax_rate": _external_price_text(price.tax_rate),
+                    "effective_from": price.effective_from.isoformat(),
+                    "effective_to": price.effective_to.isoformat() if price.effective_to else None,
+                    "evidence_reference": price.evidence_reference,
+                }
+                if price is not None
+                else None
+            )
+        items.append(item)
     return {"customer_id": customer_id, "category_code": category_code, "items": items}
 
 

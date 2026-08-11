@@ -3047,7 +3047,7 @@
                 <table><thead><tr><th>主操作</th><th></th><th>旧版系统列</th><th>客户单号</th><th>客户</th><th>下单日期</th><th>交货日期</th><th>明细数</th><th>订单数量</th><th>已送数量</th><th>来料</th><th>状态</th><th v-if="!isWorkshop" class="sensitive-price">金额</th></tr></thead>
                 <tbody v-if="filters.orderView === 'plain'"><template v-for="row in orders" :key="row.id">
                   <tr><td><div class="toolbar-group"><button class="btn small" @click="openOrderDetail(row)">查看详情</button><button v-if="canSales && row.items.length" class="btn primary small" @click="openOrderItem(row,row.items[0])">编辑订单</button></div></td><td><button class="btn small" @click="toggleOrder(row)">{{ expandedOrders[row.id] ? "收起" : "展开" }}</button></td><td><div><strong>{{ displayOrderNumber(row) }}</strong><div v-if="row.is_history_order" class="status blue" style="margin-top:4px">历史订单</div></div></td><td>{{ row.customer_po || "-" }}</td><td>{{ row.customer_name }}</td><td>{{ row.order_date }}</td><td>{{ row.delivery_date || "-" }}</td><td>{{ row.items.length }}</td><td>{{ sum(row.items,'quantity') }}</td><td>{{ row.business_delivery_progress?.delivered_quantity || 0 }}</td><td><status-tag :value="row.items.every(i=>i.material_status==='received') ? 'received' : 'pending'"></status-tag></td><td><div v-if="row.is_history_order" class="status blue">历史归档</div><status-tag v-else :value="orderDisplayStatusKey(row)"></status-tag></td><td v-if="!isWorkshop" class="sensitive-price">¥ {{ money(row.total_amount) }}</td></tr>
-                  <tr v-if="expandedOrders[row.id]" class="order-detail-row"><td :colspan="isWorkshop ? 13 : 14"><div class="order-detail-box"><table><thead><tr><th class="col-order-item-sequence">序号</th><th>存货编码</th><th>名称</th><th>材质</th><th>规格</th><th>数量 / 送货</th><th>状态</th><th>报料状态</th><th v-if="!isWorkshop" class="sensitive-price">单价</th><th class="cost-sensitive">预计成本</th><th class="cost-sensitive">预计利润</th><th>操作</th></tr></thead><tbody><tr v-for="(item,itemIndex) in row.items" :key="item.id"><td class="col-order-item-sequence">{{ item.item_sequence || itemIndex + 1 }}</td><td>{{ plainProductText(item.snapshot_product_code) }}</td><td>{{ plainProductText(item.snapshot_product_name) }}<div v-if="hasBomComponents(item)" class="bom-preview-box"><div class="bom-preview-title">本订单 BOM 明细 / 组件需求（只改本订单）</div><div v-if="orderBomDemandSaveState.outcomeUncertain && Number(orderBomDemandSaveState.itemId)===Number(item.id)" class="notice warning" style="margin:6px 0">上次组件数量保存结果暂不确定，请点击上方“刷新”核对后再操作。</div><div class="bom-preview-list"><div v-for="component in item.bom_components" :key="component.id || component.component_product_id || component.internal_code" class="bom-preview-item"><div>{{ bomPreviewComponentLabel(component) }}</div><div v-if="canSales" class="toolbar-group" style="margin-top:4px"><input class="input" style="width:110px" type="number" min="1" :disabled="orderBomDemandSaveState.saving || orderBomDemandSaveState.outcomeUncertain" :value="component._demand_quantity ?? component.effective_required_piece_quantity ?? component.required_piece_quantity" @input="component._demand_quantity=Number($event.target.value)" /><button class="btn small" :disabled="orderBomDemandSaveState.saving || orderBomDemandSaveState.outcomeUncertain" @click="saveOrderBomComponentDemand(item,component)">{{ orderBomDemandSaveState.saving && Number(orderBomDemandSaveState.itemId)===Number(item.id) && Number(orderBomDemandSaveState.componentId)===Number(component.id) ? "保存中…" : "保存本订单需求" }}</button></div></div></div></div></td><td style="white-space:normal;word-break:break-all;max-width:130px;font-size:12px">{{ orderItemMaterialText(item, false) }}</td><td>{{ item.snapshot_spec || "-" }}</td><td>{{ item.quantity }}<div v-if="Number(item.business_delivered_quantity || 0) > 0" class="order-delivery-compact">已送 {{ item.business_delivered_quantity }}/{{ item.quantity }}</div></td><td><status-tag :value="itemBusinessStatusKey(item)"></status-tag></td><td><status-tag :value="item.requisition_status"></status-tag></td><td v-if="!isWorkshop" class="sensitive-price">{{ money(item.unit_price) }}</td><td class="cost-sensitive"><strong>{{ item.total_estimated_cost ? money(item.total_estimated_cost) : "-" }}</strong><div v-if="item.estimated_cost_health_label" :class="['status',item.estimated_cost_health_tone]" style="margin-top:3px">{{ item.estimated_cost_health_label }}</div></td><td class="cost-sensitive"><strong>{{ item.total_estimated_gross_profit !== null && item.total_estimated_gross_profit !== undefined ? money(item.total_estimated_gross_profit) : "-" }}</strong><div v-if="item.estimated_margin_rate !== null && item.estimated_margin_rate !== undefined" class="muted">{{ (Number(item.estimated_margin_rate) * 100).toFixed(1) }}%</div></td><td class="toolbar-group"><button class="btn small primary" @click="openOrderTrace(row,item)">追溯</button><button v-if="canSales" class="btn small" @click="openOrderItem(row,item)">编辑</button><a v-if="item.drawing_file || item.product_drawing_file" href="#" class="btn small" @click.prevent="previewDrawingFile(item.drawing_file || item.product_drawing_file)" title="查看图纸">图纸</a></td></tr></tbody></table></div></td></tr>
+                  <tr v-if="expandedOrders[row.id]" class="order-detail-row"><td :colspan="isWorkshop ? 13 : 14"><div class="order-detail-box"><table><thead><tr><th class="col-order-item-sequence">序号</th><th>存货编码</th><th>名称</th><th>材质</th><th>规格</th><th>数量 / 送货</th><th>状态</th><th>报料状态</th><th v-if="!isWorkshop" class="sensitive-price">客户销售单价</th><th class="cost-sensitive">预计成本</th><th class="cost-sensitive">预计利润</th><th>操作</th></tr></thead><tbody><tr v-for="(item,itemIndex) in row.items" :key="item.id"><td class="col-order-item-sequence">{{ item.item_sequence || itemIndex + 1 }}</td><td>{{ plainProductText(item.snapshot_product_code) }}</td><td>{{ plainProductText(item.snapshot_product_name) }}<div v-if="hasBomComponents(item)" class="bom-preview-box"><div class="bom-preview-title">本订单 BOM 明细 / 组件需求（只改本订单）</div><div v-if="orderBomDemandSaveState.outcomeUncertain && Number(orderBomDemandSaveState.itemId)===Number(item.id)" class="notice warning" style="margin:6px 0">上次组件数量保存结果暂不确定，请点击上方“刷新”核对后再操作。</div><div class="bom-preview-list"><div v-for="component in item.bom_components" :key="component.id || component.component_product_id || component.internal_code" class="bom-preview-item"><div>{{ bomPreviewComponentLabel(component) }}</div><div v-if="canSales" class="toolbar-group" style="margin-top:4px"><input class="input" style="width:110px" type="number" min="1" :disabled="orderBomDemandSaveState.saving || orderBomDemandSaveState.outcomeUncertain" :value="component._demand_quantity ?? component.effective_required_piece_quantity ?? component.required_piece_quantity" @input="component._demand_quantity=Number($event.target.value)" /><button class="btn small" :disabled="orderBomDemandSaveState.saving || orderBomDemandSaveState.outcomeUncertain" @click="saveOrderBomComponentDemand(item,component)">{{ orderBomDemandSaveState.saving && Number(orderBomDemandSaveState.itemId)===Number(item.id) && Number(orderBomDemandSaveState.componentId)===Number(component.id) ? "保存中…" : "保存本订单需求" }}</button></div></div></div></div></td><td style="white-space:normal;word-break:break-all;max-width:130px;font-size:12px">{{ orderItemMaterialText(item, false) }}</td><td>{{ item.snapshot_spec || "-" }}</td><td>{{ item.quantity }}<div v-if="Number(item.business_delivered_quantity || 0) > 0" class="order-delivery-compact">已送 {{ item.business_delivered_quantity }}/{{ item.quantity }}</div></td><td><status-tag :value="itemBusinessStatusKey(item)"></status-tag></td><td><status-tag :value="item.requisition_status"></status-tag></td><td v-if="!isWorkshop" class="sensitive-price">{{ money(item.unit_price) }}</td><td class="cost-sensitive"><strong>{{ item.total_estimated_cost ? money(item.total_estimated_cost) : "-" }}</strong><div v-if="item.estimated_cost_health_label" :class="['status',item.estimated_cost_health_tone]" style="margin-top:3px">{{ item.estimated_cost_health_label }}</div></td><td class="cost-sensitive"><strong>{{ item.total_estimated_gross_profit !== null && item.total_estimated_gross_profit !== undefined ? money(item.total_estimated_gross_profit) : "-" }}</strong><div v-if="item.estimated_margin_rate !== null && item.estimated_margin_rate !== undefined" class="muted">{{ (Number(item.estimated_margin_rate) * 100).toFixed(1) }}%</div></td><td class="toolbar-group"><button class="btn small primary" @click="openOrderTrace(row,item)">追溯</button><button v-if="canSales" class="btn small" @click="openOrderItem(row,item)">编辑</button><a v-if="item.drawing_file || item.product_drawing_file" href="#" class="btn small" @click.prevent="previewDrawingFile(item.drawing_file || item.product_drawing_file)" title="查看图纸">图纸</a></td></tr></tbody></table></div></td></tr>
                 </template></tbody>
                 <tbody v-else><template v-for="group in groupedOrderRows" :key="group.key">
                   <tr>
@@ -4545,7 +4545,13 @@
                 <div v-if="productExternalSupplyLoading" class="muted" style="margin-top:8px">正在读取候选供应商产品…</div>
                 <div v-else-if="productExternalSupplyError" class="notice danger" style="margin-top:8px">{{ productExternalSupplyError }} <button type="button" class="btn small" @click="loadProductExternalSupplyCandidates({force:true})">重试</button></div>
                 <div v-else-if="productForm.external_packaging_category_code && !productExternalSupplyOptions.length" class="notice" style="margin-top:8px">当前客户和类别没有可用供应商产品。请先到“供应商 → 外购产品”维护真实产品、规格与采购单位后再保存。</div>
-                <div v-else-if="productExternalSupplyOptions.length" class="table-wrap" style="margin-top:8px"><table class="compact-table"><thead><tr><th>采用</th><th>默认</th><th>供应商</th><th>产品代码</th><th>产品名称</th><th>规格</th><th>单位</th></tr></thead><tbody><tr v-for="row in productExternalSupplyOptions" :key="row.external_product_id"><td><input type="checkbox" :checked="productExternalCandidateSelected(row.external_product_id)" @change="setProductExternalCandidate(row,$event.target.checked)" /></td><td><input type="radio" name="product-external-default" :value="row.external_product_id" v-model="productForm._external_default_product_id" :disabled="!productExternalCandidateSelected(row.external_product_id)" /></td><td>{{ row.supplier_name }}</td><td>{{ row.supplier_product_code }}</td><td>{{ row.product_name }}</td><td>{{ row.specification_summary || productForm.external_packaging_specification_summary }}</td><td>{{ row.purchase_unit }}</td></tr></tbody></table></div>
+                <div v-else-if="productExternalSupplyOptions.length" class="table-wrap" style="margin-top:8px"><table class="compact-table"><thead><tr><th>采用</th><th>默认</th><th>供应商</th><th>产品型号 / 供应商代码</th><th>结构规格</th><th>采购单位</th><th v-if="canViewCosts" class="sensitive-price">供应商采购成本（正式报价）</th></tr></thead><tbody><tr v-for="row in productExternalSupplyOptions" :key="row.external_product_id"><td><input type="checkbox" :checked="productExternalCandidateSelected(row.external_product_id)" @change="setProductExternalCandidate(row,$event.target.checked)" /></td><td><input type="radio" name="product-external-default" :value="row.external_product_id" v-model="productForm._external_default_product_id" :disabled="!productExternalCandidateSelected(row.external_product_id)" /></td><td>{{ row.supplier_name }}</td><td><strong>{{ row.product_name }}</strong><div class="muted">{{ row.supplier_product_code }}</div></td><td>{{ row.specification_summary || productForm.external_packaging_specification_summary }}</td><td>{{ row.purchase_unit }}</td><td v-if="canViewCosts" class="sensitive-price"><template v-if="row.current_purchase_price"><strong>{{ row.current_purchase_price.currency }} {{ row.current_purchase_price.unit_price }} / {{ row.current_purchase_price.quote_unit }}</strong><div class="muted">正式报价 v{{ row.current_purchase_price.version_number }} · {{ row.current_purchase_price.tax_mode==='tax_inclusive' ? '含税' : '未税' }}</div></template><span v-else class="muted">暂无当前有效正式报价</span></td></tr></tbody></table></div>
+                <div v-if="canViewCosts && productForm.external_packaging_category_code==='paper_corner_guard'" class="notice warning" style="margin-top:8px">
+                  <strong>护角经营参考（不是正式供应商报价）：</strong>按 1.10 元/米换算。
+                  <template v-if="cornerGuardReferenceCost()">当前长度 {{ cornerGuardReferenceCost().length_mm }}mm，单支参考成本 {{ externalReferenceMoney(cornerGuardReferenceCost().unit_cost) }} 元；<label style="display:inline-flex;align-items:center;gap:4px">参考数量 <input class="input" style="width:100px" type="number" min="1" step="1" v-model.number="productForm._corner_reference_quantity" /></label>，合计 {{ externalReferenceMoney(cornerGuardReferenceCost().total_cost) }} 元。</template>
+                  <span v-else>选择含长度的护角产品后显示单支与合计参考。</span>
+                </div>
+                <div v-if="canViewCosts && productForm.supply_mode==='external_purchase'" class="muted sensitive-price" style="margin-top:6px">上表是供应商采购成本；下方“客户默认销售单价”是对客户报价，两者独立，系统不会互相覆盖。</div>
               </div>
 
               <div v-if="productForm.supply_mode!=='external_purchase'" class="product-form-row product-size-report-row">
@@ -4870,7 +4876,7 @@
               </div>
 
               <div class="product-form-row product-final-row">
-                <div v-if="!isWorkshop" class="field sensitive-price"><label>默认单价</label><input class="input" type="number" min="0" step="0.0001" v-model="productForm.sale_unit_price" /></div>
+                <div v-if="!isWorkshop" class="field sensitive-price"><label>{{ productForm.supply_mode==='external_purchase' ? `客户默认销售单价 / ${productForm.external_packaging_purchase_unit || '采购单位'}` : '默认单价' }}</label><input class="input" type="number" min="0" step="0.0001" v-model="productForm.sale_unit_price" /><div v-if="productForm.supply_mode==='external_purchase'" class="muted">这是给客户的销售单价，不是供应商采购成本。</div></div>
                 <div v-if="productForm.supply_mode!=='external_purchase' && productUsesMold(productForm)" class="field"><label>生产模具 / 货架位置（必选）</label><search-select v-model="productForm.mold_tool_id" :options="moldToolSelectOptions()" label-key="_label" value-key="id" placeholder="选择已登记模具" :allow-empty="false"></search-select><div class="muted" style="font-size:11px">仅模切工艺使用；请先在“仓库库存管理 → 模具位置”登记并绑定。</div><div v-if="productMoldError" class="status orange" style="display:block;margin-top:4px">{{ productMoldError }}</div></div>
                 <div class="field compact-remark-field"><label>备注</label><textarea class="textarea" v-model="productForm.remark" rows="1" placeholder="内部备注，可选"></textarea></div>
               </div>
@@ -5867,7 +5873,7 @@
                     <th>存货编码</th><th>产品名称</th><th>规格</th><th>材质</th>
                     <th>生产说明</th><th>订单数量</th><th>成品抵扣</th><th>需生产</th>
                     <th>报料尺寸</th><th>压线</th>
-                    <th v-if="!isWorkshop" class="sensitive-price">单价</th>
+                    <th v-if="!isWorkshop" class="sensitive-price">客户销售单价</th>
                     <th v-if="!isWorkshop" class="sensitive-price">金额</th>
                     <th>状态</th><th>图纸</th>
                   </tr></thead>
@@ -6022,7 +6028,7 @@
                 <th>明细系统单号</th><th>存货编码</th><th>产品名称</th><th>规格</th>
                 <th>材质</th><th>生产说明</th><th>订单数量</th><th>成品抵扣</th><th>需生产</th>
                 <th>报料尺寸</th><th>压线</th>
-                <th v-if="!isWorkshop" class="sensitive-price">单价</th>
+                <th v-if="!isWorkshop" class="sensitive-price">客户销售单价</th>
                 <th v-if="!isWorkshop" class="sensitive-price">金额</th>
                 <th>图纸</th>
               </tr></thead>
@@ -6075,7 +6081,7 @@
                   <button v-if="canAdmin && canViewCosts" class="btn primary" @click="openExternalPurchase(orderDetail)">{{ orderDetail.external_packaging_purchase_summary?.status==='confirmed' ? '查看采购确认' : '核对并确认采购' }}</button>
                 </div>
                 <div v-for="item in orderDetail.items.filter(hasExternalPackagingRequirements)" :key="`external-${item.id}`" class="external-packaging-order-item">
-                  <div><strong>{{ item.item_sequence || '-' }}. {{ item.snapshot_product_code || '-' }}｜{{ item.snapshot_product_name || '-' }}</strong> · 订单 {{ item.quantity }} 个</div>
+                  <div><strong>{{ item.item_sequence || '-' }}. {{ item.snapshot_product_code || '-' }}｜{{ item.snapshot_product_name || '-' }}</strong> · 订单 {{ item.quantity }} 个<div class="external-packaging-order-meta">供货：{{ item.supply_mode_snapshot==='external_purchase' ? '纯外购包材' : '纸板主件＋外购组件' }}<span v-if="!isWorkshop" class="sensitive-price"> · 客户销售单价 {{ money(item.unit_price) }} 元/{{ item.external_packaging_purchase_unit_snapshot || '只' }}</span></div></div>
                   <div class="external-packaging-order-grid">
                     <div v-for="component in item.external_packaging_requirements" :key="component.id" class="external-packaging-order-card">
                       <strong>{{ component.purpose }}</strong>
@@ -6097,14 +6103,14 @@
                 <div class="notice success">已确认采购；这里只查看冻结结果，不会自动收货或增加库存。</div>
                 <div v-for="purchase in externalPurchase.confirmation.purchase_orders" :key="purchase.id" class="external-purchase-confirmed">
                   <div class="toolbar" style="margin-bottom:6px"><strong>{{ purchase.purchase_number }}｜{{ purchase.supplier_name }}</strong><div class="toolbar-group"><span class="external-purchase-amount">合计 {{ purchase.currency }} {{ money(purchase.total_amount) }}</span><a class="btn small" :href="`/external-purchase-print.html?id=${purchase.id}`" target="_blank" rel="noopener">打印采购单</a></div></div>
-                  <table><thead><tr><th>用途 / 产品</th><th>数量</th><th>单价</th><th>货品金额</th><th>税额</th></tr></thead><tbody>
+                  <table><thead><tr><th>用途 / 产品</th><th>数量</th><th>供应商采购成本</th><th>货品金额</th><th>税额</th></tr></thead><tbody>
                     <tr v-for="item in purchase.items" :key="item.id"><td><strong>{{ item.purpose }}</strong><br>{{ item.supplier_product_code }}｜{{ item.product_name }}<br><span class="muted">{{ item.specification_summary }}</span></td><td>{{ item.purchase_quantity }} {{ item.purchase_unit }}</td><td>{{ item.currency }} {{ item.unit_price }}</td><td>{{ item.line_amount }}</td><td>{{ item.tax_amount }}</td></tr>
                   </tbody></table>
                 </div>
               </template>
               <template v-else>
                 <div class="notice">一次核对全部外购组件；同一供应商自动合并为一张采购单。附加费按价格版本保留为条款，本阶段不自动收货入库。</div>
-                <div class="table-wrap"><table class="external-purchase-table"><thead><tr><th>订单明细</th><th>外购组件</th><th>采购数量</th><th>供应商候选</th><th>当前有效价格</th></tr></thead><tbody>
+                <div class="table-wrap"><table class="external-purchase-table"><thead><tr><th>订单明细</th><th>外购组件</th><th>采购数量</th><th>供应商候选</th><th>供应商采购成本（正式报价）</th></tr></thead><tbody>
                   <tr v-for="row in externalPurchase.items" :key="row.order_component_id">
                     <td>序号 {{ row.item_sequence || '-' }}<br>{{ row.product_code || '-' }}<br><span class="muted">{{ row.product_name || '-' }}</span></td>
                     <td><strong>{{ row.purpose }}</strong><br><span class="muted">{{ row.specification_summary }}</span></td>
@@ -7334,6 +7340,20 @@
         shipping_fee_mode:"not_provided", shipping_fee:"",
         sample_fee:"", plate_fee:"", die_fee:"", evidence_reference:"", remarks:"",
       });
+      const CORNER_GUARD_REFERENCE_COST_PER_METER = 1.10;
+      const calculateCornerGuardReferenceCost = (lengthMm, quantity) => {
+        const length = Number(lengthMm);
+        const count = Number(quantity);
+        if (!(length > 0) || !(count > 0)) return null;
+        const unitCost = (length / 1000) * CORNER_GUARD_REFERENCE_COST_PER_METER;
+        return {
+          rate_per_meter: CORNER_GUARD_REFERENCE_COST_PER_METER,
+          length_mm: length,
+          quantity: count,
+          unit_cost: Number(unitCost.toFixed(3)),
+          total_cost: Number((unitCost * count).toFixed(3)),
+        };
+      };
       const blankProduct = () => ({
         id: null, version: null, customer_id: null, product_code: "", customer_material_code: "",
         product_name: "", material_id: null, legacy_material_text: null,
@@ -7341,7 +7361,7 @@
         box_style: "", print_content: "无印刷", printing_colors: "",
         supply_mode: "corrugated_production", external_packaging_category_code: "",
         external_packaging_specification_summary: "", external_packaging_purchase_unit: "",
-        external_supply: { candidates: [] }, _external_selected_ids: [], _external_default_product_id: null,
+        external_supply: { candidates: [] }, _external_selected_ids: [], _external_default_product_id: null, _corner_reference_quantity: 1000,
         printing_plate_mode: "no_plate", printing_plate_1_id: null, printing_plate_2_id: null, printing_plate_3_id: null,
         printing_plates: [], plate_alignment_value_mm: null, plate_mount_value_mm: null,
         machine_set_length_mm: null, machine_set_width_mm: null, machine_set_height_mm: null,
@@ -9214,6 +9234,7 @@
             }
             delete payload._external_selected_ids;
             delete payload._external_default_product_id;
+            delete payload._corner_reference_quantity;
             delete payload.id;
             payload.production_process = this.serializeProductionProcesses(
               payload._production_processes,
@@ -12349,6 +12370,28 @@
           },
           supplierBusinessGroup(row) {
             return (row?.supply_categories || []).some(code=>code !== "corrugated_board") ? "packaging" : "corrugated";
+          },
+          productExternalDefaultCandidate() {
+            const form = this.productForm || {};
+            const rows = this.productExternalSupplyOptions || [];
+            const defaultId = Number(form._external_default_product_id || 0);
+            const selected = new Set((form._external_selected_ids || []).map(Number));
+            return rows.find(row=>Number(row.external_product_id)===defaultId)
+              || rows.find(row=>selected.has(Number(row.external_product_id)))
+              || null;
+          },
+          cornerGuardReferenceCost() {
+            if (this.productForm?.external_packaging_category_code !== "paper_corner_guard") return null;
+            const candidate = this.productExternalDefaultCandidate();
+            return calculateCornerGuardReferenceCost(
+              candidate?.specification?.length_mm,
+              this.productForm?._corner_reference_quantity || 1000,
+            );
+          },
+          externalReferenceMoney(value) {
+            const number = Number(value);
+            if (!Number.isFinite(number)) return "-";
+            return number.toFixed(3).replace(/\.000$/, "").replace(/(\.\d*?)0+$/, "$1");
           },
           productExternalCandidateSelected(externalProductId) {
             return (this.productForm?._external_selected_ids || []).map(Number).includes(Number(externalProductId));
@@ -19033,6 +19076,7 @@
             form.external_packaging_purchase_unit = externalSupply.purchase_unit || form.external_packaging_purchase_unit || "";
             form._external_selected_ids = snapshots.map(row=>Number(row.external_product_id)).filter(value=>value>0);
             form._external_default_product_id = Number(snapshots.find(row=>row.is_default)?.external_product_id || 0) || null;
+            form._corner_reference_quantity = 1000;
             form.box_style = this.normalizeBoxTypeDisplay(form.box_style || "");
             form.print_content = form.print_content || "无印刷";
             form.printing_plate_mode = form.printing_plate_mode === "plate" ? "plate" : "no_plate";

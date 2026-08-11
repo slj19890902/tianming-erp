@@ -11,6 +11,8 @@ import pytest
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import sessionmaker
 
+from app.core.time_contract import beijing_today
+
 
 def _price(product, *, unit_price: str, created_by: int | None = None):
     from app.models.external_packaging_price import ExternalPackagingPriceVersion
@@ -281,7 +283,10 @@ def test_one_confirmation_groups_three_components_into_two_supplier_orders(
         orders = data["confirmation"]["purchase_orders"]
         assert len(orders) == 2
         assert sorted(len(row["items"]) for row in orders) == [1, 2]
-        assert all(row["purchase_number"].startswith("EP-20260809-") for row in orders)
+        assert all(
+            row["purchase_number"].startswith(f"EP-{beijing_today():%Y%m%d}-")
+            for row in orders
+        )
 
         reread = client.get(
             f"/api/orders/{order_id}/external-packaging-purchase"
@@ -496,7 +501,7 @@ def test_external_purchase_print_is_cost_protected_read_only_and_uses_frozen_fac
         assert response.status_code == 200, response.text
         data = response.json()
         assert data["id"] == purchase_id
-        assert data["purchase_number"].startswith("EP-20260809-")
+        assert data["purchase_number"].startswith(f"EP-{beijing_today():%Y%m%d}-")
         assert data["supplier"]["name"] in {"供应商甲", "供应商乙"}
         assert data["source"] == {
             "order_id": order_id,

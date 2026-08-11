@@ -345,6 +345,129 @@ def test_mold_reverse_binding_supports_multiple_customers_and_one_mold_per_produ
         ) == 2
 
 
+def test_mold_binding_can_be_removed_with_version_guard_and_audit(mold_app) -> None:
+    app, factory = mold_app
+    with TestClient(app) as client:
+        _login(client, "admin")
+        mold = client.post(
+            "/api/warehouse/molds",
+            json={
+                "mold_code": "JSD-61494052",
+                "mold_name": "聚晟达 61494052",
+                "rack_location": "1F-M-R01-L2-G01",
+            },
+        ).json()
+        product = client.post(
+            "/api/master/products",
+            json={
+                "customer_id": 1,
+                "product_code": "61494052R1F",
+                "customer_material_code": "61494052R1F",
+                "product_name": "350*110",
+                "box_category": "normal",
+                "production_process": "粘贴",
+            },
+        ).json()
+        bound = client.post(
+            f"/api/warehouse/molds/{mold['id']}/product-bindings",
+            json={
+                "items": [
+                    {
+                        "product_id": product["id"],
+                        "expected_version": product["version"],
+                    }
+                ]
+            },
+        )
+        assert bound.status_code == 200, bound.text
+
+        stale = client.delete(
+            f"/api/warehouse/molds/{mold['id']}/product-bindings/{product['id']}",
+            params={"expected_version": product["version"]},
+        )
+        assert stale.status_code == 409, stale.text
+
+        still_bound = client.get(f"/api/master/products/{product['id']}").json()
+        assert still_bound["mold_tool_id"] == mold["id"]
+        assert "模切" in still_bound["production_process"]
+
+        removed = client.delete(
+            f"/api/warehouse/molds/{mold['id']}/product-bindings/{product['id']}",
+            params={"expected_version": still_bound["version"]},
+        )
+        assert removed.status_code == 200, removed.text
+        assert removed.json()["unbound_product"]["mold_tool_id"] is None
+        assert removed.json()["unbound_product"]["version"] == 3
+
+        refreshed = client.get(f"/api/master/products/{product['id']}").json()
+        assert refreshed["mold_tool_id"] is None
+        assert refreshed["production_process"] == "粘贴"
+        assert refreshed["version"] == 3
+
+    from sqlalchemy import func, select
+
+    from app.models.audit import OperationLog
+    from app.models.master_data_object_version import MasterDataObjectVersion
+
+    with factory() as db:
+        assert db.scalar(
+            select(func.count(MasterDataObjectVersion.id)).where(
+                MasterDataObjectVersion.object_type == "product",
+                MasterDataObjectVersion.object_id == product["id"],
+                MasterDataObjectVersion.action == "mold_unbinding",
+            )
+        ) == 1
+        assert db.scalar(
+            select(func.count(OperationLog.id)).where(
+                OperationLog.action == "UNBIND_PRODUCT",
+                OperationLog.resource == "MOLD_TOOL",
+                OperationLog.entity_id == mold["id"],
+            )
+        ) == 1
+
+
+def test_mold_list_supports_server_pagination_and_preserves_search(mold_app) -> None:
+    app, factory = mold_app
+    from app.models.mold_tool import MoldTool
+
+    with factory() as db:
+        db.add_all(
+            [
+                MoldTool(
+                    mold_code=f"PAGE-{number:03d}",
+                    mold_name=(
+                        "聚晟达分页目标" if number == 17 else f"分页模具 {number:03d}"
+                    ),
+                    rack_location="1F-M-R01-L2-G01",
+                    created_by=1,
+                )
+                for number in range(1, 26)
+            ]
+        )
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client, "admin")
+        second_page = client.get(
+            "/api/warehouse/molds",
+            params={"page": 2, "page_size": 10},
+        )
+        assert second_page.status_code == 200, second_page.text
+        assert second_page.json()["total"] == 25
+        assert second_page.json()["page"] == 2
+        assert second_page.json()["page_size"] == 10
+        assert len(second_page.json()["items"]) == 10
+        assert second_page.json()["items"][0]["mold_code"] == "PAGE-011"
+
+        searched = client.get(
+            "/api/warehouse/molds",
+            params={"q": "聚晟达", "page": 1, "page_size": 10},
+        )
+        assert searched.status_code == 200, searched.text
+        assert searched.json()["total"] == 1
+        assert searched.json()["items"][0]["mold_code"] == "PAGE-017"
+
+
 def test_scoped_account_only_reads_allowed_mold_products_and_labels(mold_app) -> None:
     app, factory = mold_app
     from app.models.access_control import UserCustomerScope
@@ -558,9 +681,9 @@ def test_workshop_can_open_structured_location_label_and_qr(
 @pytest.mark.parametrize(
     ("location", "kind", "expected"),
     [
-        ("3F-M-R02-L2-D03-P08", "flat", "P08 仅作历史记录"),
-        ("3F-M-R01-L1-V-P12", "vertical", "P12 仅作历史记录"),
-        ("二楼模具架 B-12", "manual", "请前往“二楼模具架 B-12”查找"),
+        ("3F-M-R02-L2-D03-P08", "flat", "前往三楼模具区，第2号货架，第2层、第3排"),
+        ("3F-M-R01-L1-V-P12", "vertical", "前往三楼模具区，第1号货架，底层（第1层）竖放区"),
+        ("二楼模具架 B-12", "manual", "前往“二楼模具架 B-12”"),
     ],
 )
 def test_mold_location_prompt_is_immediately_readable(
@@ -570,8 +693,9 @@ def test_mold_location_prompt_is_immediately_readable(
 
     result = describe_mold_location(location)
     assert result["kind"] == kind
-    assert expected in result["prompt"]
-    assert "核对模具编号和存货编码" in result["prompt"]
+    assert result["prompt"] == expected
+    assert "原档案" not in result["prompt"]
+    assert "核对模具编号和存货编码" not in result["prompt"]
 
 
 @pytest.mark.parametrize(
@@ -597,8 +721,9 @@ def test_confirmed_one_floor_mold_locations_are_accepted(location: str) -> None:
     assert normalized == location
     assert "一楼模具区" in guide["prompt"]
     assert f"R{guide['rack']:02d}" in guide["prompt"]
-    assert f"P{guide['position']:02d} 仅作历史记录" in guide["prompt"]
-    assert "不再代表从左到右固定顺序" in guide["prompt"]
+    assert f"第{guide['level']}层" in guide["prompt"]
+    assert "P" not in guide["prompt"]
+    assert "不再代表从左到右固定顺序" not in guide["prompt"]
 
 
 @pytest.mark.parametrize(
@@ -672,7 +797,10 @@ def test_new_one_floor_mold_locations_do_not_record_left_to_right_order(
     guide = describe_mold_location(normalized)
     assert normalized == location
     assert guide["position"] is None
-    assert "左右顺序" in guide["prompt"]
+    if guide["kind"] == "storage_grid":
+        assert guide["prompt"].endswith(f"第{guide['level']}层、第{guide['grid']}排")
+    assert "左右顺序" not in guide["prompt"]
+    assert "拿取前" not in guide["prompt"]
 
 
 def test_mold_location_falls_back_from_grid_to_level_then_rack(monkeypatch) -> None:
@@ -792,7 +920,7 @@ def test_mold_frontend_connects_location_common_box_and_order_display() -> None:
         assert marker in warehouse
     assert "moldPositionNumber" not in warehouse
     assert 'v-model="productForm.mold_tool_id"' in index
-    assert 'v-if="productUsesMold(productForm)"' in index
+    assert "productUsesMold(productForm)" in index
     assert "productMoldError" in index
     assert "moldLocationText(item)" in index
     assert "模具：{{ moldLocationText(item) }}" in index
@@ -1198,6 +1326,51 @@ def test_mobile_mold_page_inline_javascript_is_valid(tmp_path: Path) -> None:
     ]
     assert len(scripts) == 1
     target = tmp_path / "mobile-mold-location-movement-inline.js"
+    target.write_text(scripts[0], encoding="utf-8")
+    result = subprocess.run(
+        [node, "--check", str(target)],
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_mold_management_frontend_has_live_refresh_search_unbind_and_paging(
+    tmp_path: Path,
+) -> None:
+    root = Path(__file__).resolve().parents[1]
+    warehouse = (root / "static" / "warehouse.html").read_text(encoding="utf-8")
+    index = (root / "static" / "index.html").read_text(encoding="utf-8")
+
+    for marker in (
+        'id="moldBindingCustomerKeyword"',
+        'id="moldBindingCustomerCandidates"',
+        'id="moldPrevPage"',
+        'id="moldNextPage"',
+        'id="moldPageLabel"',
+        "removeMoldBinding(",
+        "expected_version=${row.version}",
+        "page_size=${state.moldPageSize}",
+    ):
+        assert marker in warehouse
+    assert "min-width:320px" not in warehouse
+    assert "await this.ensureProductEditorOptions({refreshMolds:true})" in index
+    assert '@search="searchMoldTools"' in index
+    assert "params:{ q:keyword, limit:100 }" in index
+
+    node = shutil.which("node")
+    assert node, "Node.js is required for frontend syntax validation"
+    scripts = [
+        script
+        for script in re.findall(
+            r"<script(?:\s[^>]*)?>(.*?)</script>", warehouse, flags=re.DOTALL
+        )
+        if script.strip()
+    ]
+    assert len(scripts) == 1
+    target = tmp_path / "warehouse-inline.js"
     target.write_text(scripts[0], encoding="utf-8")
     result = subprocess.run(
         [node, "--check", str(target)],

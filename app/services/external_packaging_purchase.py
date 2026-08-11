@@ -427,6 +427,99 @@ def get_external_purchase_summaries_by_order_ids(
     }
 
 
+def list_external_purchase_routing_rows(
+    db: Session,
+    *,
+    visible_customer_ids: set[int] | None,
+) -> list[dict[str, Any]]:
+    if visible_customer_ids is not None and not visible_customer_ids:
+        return []
+    statement = (
+        select(
+            Order.id.label("order_id"),
+            Order.order_number,
+            Order.customer_id,
+            Customer.name.label("customer_name"),
+            Order.delivery_date,
+            OrderItem.id.label("order_item_id"),
+            OrderItem.item_sequence,
+            OrderItem.snapshot_product_code,
+            OrderItem.snapshot_product_name,
+            OrderItem.quantity,
+            OrderItem.supply_mode_snapshot,
+            OrderItem.external_packaging_category_code_snapshot,
+            OrderItem.external_packaging_specification_summary_snapshot,
+            OrderItem.external_packaging_purchase_unit_snapshot,
+            func.count(SalesOrderItemExternalComponent.id).label("component_count"),
+        )
+        .join(OrderItem, OrderItem.order_id == Order.id)
+        .join(
+            SalesOrderItemExternalComponent,
+            SalesOrderItemExternalComponent.sales_order_item_id == OrderItem.id,
+        )
+        .join(Customer, Customer.id == Order.customer_id)
+        .outerjoin(
+            ExternalPackagingPurchaseBatch,
+            ExternalPackagingPurchaseBatch.sales_order_id == Order.id,
+        )
+        .where(
+            ExternalPackagingPurchaseBatch.id.is_(None),
+            Order.status.notin_(("cancelled", "dead")),
+        )
+        .group_by(
+            Order.id,
+            Order.order_number,
+            Order.customer_id,
+            Customer.name,
+            Order.delivery_date,
+            OrderItem.id,
+            OrderItem.item_sequence,
+            OrderItem.snapshot_product_code,
+            OrderItem.snapshot_product_name,
+            OrderItem.quantity,
+            OrderItem.supply_mode_snapshot,
+            OrderItem.external_packaging_category_code_snapshot,
+            OrderItem.external_packaging_specification_summary_snapshot,
+            OrderItem.external_packaging_purchase_unit_snapshot,
+        )
+        .order_by(
+            Order.delivery_date.is_(None),
+            Order.delivery_date,
+            Order.id,
+            OrderItem.item_sequence,
+            OrderItem.id,
+        )
+    )
+    if visible_customer_ids is not None:
+        statement = statement.where(Order.customer_id.in_(visible_customer_ids))
+    return [
+        {
+            "id": int(row.order_id),
+            "order_id": int(row.order_id),
+            "order_number": row.order_number,
+            "customer_id": int(row.customer_id),
+            "customer_name": row.customer_name,
+            "delivery_date": (
+                row.delivery_date.isoformat() if row.delivery_date else None
+            ),
+            "order_item_id": int(row.order_item_id),
+            "item_sequence": row.item_sequence,
+            "product_code": row.snapshot_product_code,
+            "product_name": row.snapshot_product_name,
+            "quantity": int(row.quantity),
+            "supply_mode": row.supply_mode_snapshot,
+            "category_code": row.external_packaging_category_code_snapshot,
+            "specification_summary": (
+                row.external_packaging_specification_summary_snapshot
+            ),
+            "purchase_unit": row.external_packaging_purchase_unit_snapshot,
+            "component_count": int(row.component_count),
+            "status": "pending_confirmation",
+        }
+        for row in db.execute(statement).all()
+    ]
+
+
 def build_external_purchase_preview(
     db: Session,
     order_id: int,
@@ -810,6 +903,16 @@ def confirm_external_purchase(
                     price_evidence_reference_snapshot=price.evidence_reference,
                 )
             )
+    confirmed_external_item_ids = {
+        int(row["order_item"].id)
+        for rows in prepared_by_supplier.values()
+        for row in rows
+        if row["order_item"].supply_mode_snapshot == "external_purchase"
+    }
+    for order_item_id in confirmed_external_item_ids:
+        order_item = db.get(OrderItem, order_item_id)
+        if order_item is not None:
+            order_item.requisition_status = "外购包材已采购"
     db.flush()
     return _load_batch(db, batch.id), True
 

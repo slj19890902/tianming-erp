@@ -38,6 +38,17 @@ class SalesOrderItemExternalComponent(Base):
             name="uq_sales_order_item_external_component_order",
         ),
         CheckConstraint(
+            "source_kind IN ('bound_component','direct_product')",
+            name="ck_sales_order_item_external_component_source_kind",
+        ),
+        CheckConstraint(
+            "((source_kind = 'bound_component' AND source_component_set_id IS NOT NULL "
+            "AND source_component_id IS NOT NULL) OR "
+            "(source_kind = 'direct_product' AND source_component_set_id IS NULL "
+            "AND source_component_id IS NULL))",
+            name="ck_sales_order_item_external_component_source",
+        ),
+        CheckConstraint(
             "source_component_set_version >= 1",
             name="ck_sales_order_item_external_component_set_version",
         ),
@@ -63,13 +74,19 @@ class SalesOrderItemExternalComponent(Base):
     sales_order_item_id: Mapped[int] = mapped_column(
         ForeignKey("sales_order_items.id", ondelete="CASCADE"), nullable=False
     )
-    source_component_set_id: Mapped[int] = mapped_column(
-        ForeignKey("product_external_component_sets.id", ondelete="RESTRICT"),
+    source_kind: Mapped[str] = mapped_column(
+        String(30),
         nullable=False,
+        default="bound_component",
+        server_default="bound_component",
     )
-    source_component_id: Mapped[int] = mapped_column(
+    source_component_set_id: Mapped[int | None] = mapped_column(
+        ForeignKey("product_external_component_sets.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    source_component_id: Mapped[int | None] = mapped_column(
         ForeignKey("product_external_components.id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
     )
     source_component_set_version: Mapped[int] = mapped_column(Integer, nullable=False)
     display_order: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -130,9 +147,9 @@ class SalesOrderItemExternalComponentCandidate(Base):
         ForeignKey("sales_order_item_external_components.id", ondelete="CASCADE"),
         nullable=False,
     )
-    source_candidate_id: Mapped[int] = mapped_column(
+    source_candidate_id: Mapped[int | None] = mapped_column(
         ForeignKey("product_external_component_candidates.id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
     )
     external_product_id_snapshot: Mapped[int] = mapped_column(Integer, nullable=False)
     is_default: Mapped[bool] = mapped_column(

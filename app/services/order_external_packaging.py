@@ -27,6 +27,10 @@ SIX_PLACES = Decimal("0.000001")
 THREE_PLACES = Decimal("0.001")
 
 
+class OrderExternalPackagingSnapshotError(ValueError):
+    pass
+
+
 def _decimal_text(value: Decimal) -> str:
     text = format(value, "f")
     if "." in text:
@@ -102,6 +106,7 @@ def _component_response(
     )
     return {
         "id": row.id,
+        "source_kind": row.source_kind,
         "source_component_set_id": row.source_component_set_id,
         "source_component_id": row.source_component_id,
         "source_component_set_version": row.source_component_set_version,
@@ -143,6 +148,104 @@ def _component_response(
     }
 
 
+def _freeze_direct_product_component(
+    db: Session,
+    *,
+    order_item: OrderItem,
+) -> list[dict[str, Any]]:
+    category = str(order_item.external_packaging_category_code_snapshot or "").strip()
+    specification_json = str(
+        order_item.external_packaging_specification_json_snapshot or ""
+    ).strip()
+    specification_summary = str(
+        order_item.external_packaging_specification_summary_snapshot or ""
+    ).strip()
+    purchase_unit = str(
+        order_item.external_packaging_purchase_unit_snapshot or ""
+    ).strip()
+    source_version = int(order_item.external_packaging_product_version_snapshot or 0)
+    try:
+        candidate_rows = json.loads(
+            order_item.external_packaging_candidate_snapshot_json or "[]"
+        )
+    except (TypeError, json.JSONDecodeError) as error:
+        raise OrderExternalPackagingSnapshotError(
+            "纯外购产品的供应商候选快照无效，请重新核对常用箱后下单"
+        ) from error
+    if (
+        not category
+        or not specification_json
+        or not specification_summary
+        or not purchase_unit
+        or source_version < 1
+        or not isinstance(candidate_rows, list)
+        or not candidate_rows
+    ):
+        raise OrderExternalPackagingSnapshotError(
+            "纯外购产品资料不完整，请先补齐类别、规格、单位和供应商候选"
+        )
+    defaults = [row for row in candidate_rows if bool(row.get("is_default"))]
+    if len(defaults) != 1:
+        raise OrderExternalPackagingSnapshotError(
+            "纯外购产品必须冻结且只能冻结一个默认供应商候选"
+        )
+    component = SalesOrderItemExternalComponent(
+        sales_order_item_id=order_item.id,
+        source_kind="direct_product",
+        source_component_set_id=None,
+        source_component_id=None,
+        source_component_set_version=source_version,
+        display_order=1,
+        purpose=order_item.snapshot_product_name,
+        quantity_per_finished_unit=Decimal("1"),
+        waste_rate=Decimal("0"),
+        consumption_unit=purchase_unit,
+        units_per_purchase_unit=None,
+        conversion_basis=None,
+        is_required=True,
+        remarks="P1-40B 纯外购产品下单快照",
+        category_code=category,
+        specification_json=specification_json,
+        specification_summary=specification_summary,
+    )
+    db.add(component)
+    db.flush()
+    for raw in candidate_rows:
+        candidate_unit = str(raw.get("purchase_unit") or "").strip()
+        if candidate_unit != purchase_unit:
+            raise OrderExternalPackagingSnapshotError(
+                "纯外购产品候选采购单位与常用箱冻结单位不一致"
+            )
+        try:
+            external_product_id = int(raw["external_product_id"])
+            supplier_id = int(raw["supplier_id"])
+            external_product_version = int(raw["external_product_version"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise OrderExternalPackagingSnapshotError(
+                "纯外购产品供应商候选快照缺少稳定标识"
+            ) from error
+        db.add(
+            SalesOrderItemExternalComponentCandidate(
+                order_component_id=component.id,
+                source_candidate_id=None,
+                external_product_id_snapshot=external_product_id,
+                is_default=bool(raw.get("is_default")),
+                supplier_id_snapshot=supplier_id,
+                supplier_name_snapshot=str(raw.get("supplier_name") or "").strip(),
+                supplier_product_code_snapshot=str(
+                    raw.get("supplier_product_code") or ""
+                ).strip(),
+                product_name_snapshot=str(raw.get("product_name") or "").strip(),
+                purchase_unit_snapshot=candidate_unit,
+                customer_scope_id_snapshot=raw.get("customer_scope_id"),
+                external_product_version_snapshot=external_product_version,
+            )
+        )
+    db.flush()
+    db.refresh(component, attribute_names=["candidates"])
+    return [_component_response(component, order_quantity=int(order_item.quantity))]
+
+
 def freeze_order_item_external_components(
     db: Session,
     *,
@@ -167,6 +270,8 @@ def freeze_order_item_external_components(
             _component_response(row, order_quantity=int(order_item.quantity))
             for row in existing
         ]
+    if order_item.supply_mode_snapshot == "external_purchase":
+        return _freeze_direct_product_component(db, order_item=order_item)
 
     component_set = db.scalar(
         select(ProductExternalComponentSet)
@@ -181,12 +286,17 @@ def freeze_order_item_external_components(
         )
     )
     if component_set is None:
+        if order_item.supply_mode_snapshot == "mixed_bom":
+            raise OrderExternalPackagingSnapshotError(
+                "混合 BOM 产品尚未配置外购包装组件，不能下单"
+            )
         return []
 
     frozen: list[SalesOrderItemExternalComponent] = []
     for component in component_set.components:
         order_component = SalesOrderItemExternalComponent(
             sales_order_item_id=order_item.id,
+            source_kind="bound_component",
             source_component_set_id=component_set.id,
             source_component_id=component.id,
             source_component_set_version=component_set.version,

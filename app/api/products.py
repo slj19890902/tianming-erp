@@ -710,7 +710,18 @@ def _normalize_product_external_supply(
             _clear_external_purchase_paper_fields(payload)
         return {}
     if payload.supply_mode == "mixed_bom":
-        raise HTTPException(status_code=422, detail="混合 BOM 供货方式将在 P1-40B 单独开放")
+        if (payload.box_style or "").strip() == "其他":
+            raise HTTPException(status_code=422, detail="混合 BOM 必须保留纸板主件，不能使用“其他”箱型")
+        if payload.external_supply and payload.external_supply.candidates:
+            raise HTTPException(status_code=422, detail="混合 BOM 的外购组件请在组件区维护，不能绑定纯外购候选")
+        return {
+            "supply_mode": "mixed_bom",
+            "external_packaging_category_code": None,
+            "external_packaging_specification_json": None,
+            "external_packaging_specification_summary": None,
+            "external_packaging_purchase_unit": None,
+            "external_packaging_candidate_snapshot_json": None,
+        }
     if payload.supply_mode != "external_purchase":
         if payload.external_supply and payload.external_supply.candidates:
             raise HTTPException(status_code=422, detail="纸板生产常用箱不能绑定外购包材候选")

@@ -681,6 +681,13 @@ def refresh_production_task(
     item = db.get(OrderItem, order_item_id)
     if item is None:
         raise ProductionWorkflowError("订单明细不存在", 404)
+    if item.supply_mode_snapshot == "external_purchase":
+        return db.scalar(
+            select(ProductionTask).where(
+                ProductionTask.order_item_id == item.id,
+                ProductionTask.sales_order_item_bom_component_id.is_(None),
+            )
+        )
     if is_composite_order_item(db, item.id):
         tasks = _refresh_composite_production_tasks(
             db,
@@ -814,10 +821,8 @@ def refresh_production_task(
 def create_or_refresh_production_task(
     db: Session,
     order_item_id: int,
-) -> ProductionTask:
-    task = refresh_production_task(db, order_item_id, create_if_missing=True)
-    assert task is not None
-    return task
+) -> ProductionTask | None:
+    return refresh_production_task(db, order_item_id, create_if_missing=True)
 
 
 def refresh_existing_production_task(
@@ -897,6 +902,13 @@ def production_ready_quantity(db: Session, order_item: OrderItem | int) -> int:
     item = db.get(OrderItem, order_item) if isinstance(order_item, int) else order_item
     if item is None:
         raise ProductionWorkflowError("订单明细不存在", 404)
+    if item.supply_mode_snapshot == "external_purchase":
+        return db.scalar(
+            select(ProductionTask).where(
+                ProductionTask.order_item_id == item.id,
+                ProductionTask.sales_order_item_bom_component_id.is_(None),
+            )
+        )
     if is_composite_order_item(db, item.id):
         try:
             return int(kit_availability(db, item.id)["available_sets"])

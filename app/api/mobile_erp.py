@@ -574,6 +574,20 @@ def _dimension_decimal(value) -> Decimal | None:
         return None
 
 
+def _incoming_dimension_pair(value: str) -> tuple[str, str] | None:
+    match = re.fullmatch(
+        r"\s*([0-9]+(?:\.[0-9]+)?)\s*[xX×*]\s*([0-9]+(?:\.[0-9]+)?)\s*",
+        value,
+    )
+    if match is None:
+        return None
+    length = _dimension_decimal(match.group(1))
+    width = _dimension_decimal(match.group(2))
+    if length is None or width is None:
+        return None
+    return _number_text(length), _number_text(width)
+
+
 def _incoming_search_match(
     row: dict,
     *,
@@ -582,13 +596,34 @@ def _incoming_search_match(
 ) -> dict | None:
     normalized = keyword.strip().casefold()
     requested_dimension = _dimension_decimal(keyword.strip())
-    length = _dimension_decimal(row.get("cardboard_len"))
-    width = _dimension_decimal(row.get("cardboard_width"))
+    requested_pair = _incoming_dimension_pair(keyword)
+    dimension_fragment = (
+        _number_text(requested_dimension) if requested_dimension is not None else None
+    )
+    length_text = _number_text(row.get("cardboard_len"))
+    width_text = _number_text(row.get("cardboard_width"))
     dimension_hits: list[str] = []
-    if requested_dimension is not None:
-        if length == requested_dimension and dimension_mode in {"any", "length"}:
+    if requested_pair is not None and dimension_mode == "any":
+        requested_length, requested_width = requested_pair
+        if (
+            length_text is not None
+            and width_text is not None
+            and requested_length in length_text.casefold()
+            and requested_width in width_text.casefold()
+        ):
+            dimension_hits.extend(("length", "width"))
+    elif requested_dimension is not None:
+        if (
+            length_text is not None
+            and dimension_fragment in length_text.casefold()
+            and dimension_mode in {"any", "length"}
+        ):
             dimension_hits.append("length")
-        if width == requested_dimension and dimension_mode in {"any", "width"}:
+        if (
+            width_text is not None
+            and dimension_fragment in width_text.casefold()
+            and dimension_mode in {"any", "width"}
+        ):
             dimension_hits.append("width")
 
     if dimension_mode in {"length", "width"}:
@@ -597,28 +632,17 @@ def _incoming_search_match(
         text_hits: list[str] = []
         matched = bool(dimension_hits)
     else:
-        searchable = (
-            ("customer_name", row.get("customer_name")),
-            ("product_code", row.get("product_code")),
-            ("product_name", row.get("product_name")),
-            ("order_number", row.get("order_number")),
-            ("customer_po", row.get("customer_po")),
-        )
-        text_hits = [
-            field
-            for field, value in searchable
-            if normalized and normalized in str(value or "").casefold()
-        ]
-        compact_spec = "x".join(
-            value
-            for value in (_number_text(length), _number_text(width))
-            if value is not None
-        )
-        if compact_spec and normalized.replace("×", "x") in {
-            compact_spec.casefold(),
-            compact_spec.replace("x", "*").casefold(),
-        }:
-            text_hits.append("reported_dimensions")
+        text_hits = []
+        if requested_dimension is None and requested_pair is None:
+            customer_fields = (
+                ("customer_name", row.get("customer_name")),
+                ("customer_code", row.get("customer_code")),
+            )
+            text_hits.extend(
+                field
+                for field, value in customer_fields
+                if normalized in str(value or "").casefold()
+            )
         matched = bool(text_hits or dimension_hits)
     if not matched:
         return None
@@ -632,7 +656,7 @@ def _incoming_search_match(
         for side in dimension_hits
     ]
     if not summaries:
-        summaries.append("客户、款号、名称或订单号命中")
+        summaries.append("客户筛选命中")
     return {
         "query": keyword,
         "dimension_mode": dimension_mode,
@@ -1035,9 +1059,9 @@ def search_pending_incoming(
     _no_store(response)
     keyword = q.strip()
     if not keyword:
-        raise HTTPException(status_code=422, detail="请输入客户、款号、名称、订单号或报料尺寸")
+        raise HTTPException(status_code=422, detail="请输入客户名称或报料尺寸")
     if dimension_mode in {"length", "width"} and _dimension_decimal(keyword) is None:
-        raise HTTPException(status_code=422, detail="按报料长或报料宽查询时，请输入一个毫米数值")
+        raise HTTPException(status_code=422, detail="按报料长或报料宽查询时，请输入尺寸数字")
 
     matches: list[tuple[dict, dict]] = []
     for route in _pending_incoming_route_rows(db, user):

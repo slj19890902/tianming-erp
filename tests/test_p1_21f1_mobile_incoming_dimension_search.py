@@ -75,6 +75,7 @@ def mobile_incoming_search_app(tmp_path):
             product_name: str,
             length: int,
             width: int,
+            snapshot_product_code: str = "SAME-CODE",
         ) -> tuple[int, int]:
             order = Order(
                 order_number=order_number,
@@ -98,7 +99,7 @@ def mobile_incoming_search_app(tmp_path):
                 material_status="pending",
                 requisition_status="已报料",
                 requisition_qty=1000,
-                snapshot_product_code="SAME-CODE",
+                snapshot_product_code=snapshot_product_code,
                 snapshot_product_name=product_name,
                 snapshot_spec="870×50×50×5",
                 snapshot_material="K=A",
@@ -142,6 +143,23 @@ def mobile_incoming_search_app(tmp_path):
             product_name="护角外箱二",
             length=50,
             width=870,
+            snapshot_product_code="CUSTOMER-MODEL-14",
+        )
+        substring_item, substring_task = add_pending(
+            customer=visible,
+            product=visible_product,
+            order_number="F1-ORDER-SUBSTRING",
+            product_name="1430纸板候选",
+            length=1430,
+            width=516,
+        )
+        partial_width_item, partial_width_task = add_pending(
+            customer=visible,
+            product=visible_product,
+            order_number="F1-ORDER-PARTIAL-WIDTH",
+            product_name="宽度片段候选",
+            length=600,
+            width=614,
         )
         add_pending(
             customer=hidden,
@@ -157,6 +175,10 @@ def mobile_incoming_search_app(tmp_path):
             "first_task": first_task,
             "second_item": second_item,
             "second_task": second_task,
+            "substring_item": substring_item,
+            "substring_task": substring_task,
+            "partial_width_item": partial_width_item,
+            "partial_width_task": partial_width_task,
         }
 
     app = FastAPI()
@@ -214,6 +236,57 @@ def test_search_dimensions_text_scope_and_read_only(mobile_incoming_search_app) 
         assert all("production_detail_url" in row for row in payload["items"])
         assert "F1-HIDDEN" not in any_side.text
 
+        partial_dimension = client.get(
+            "/api/mobile/erp/incoming/search", params={"q": "14"}
+        ).json()
+        assert partial_dimension["total"] == 2
+        assert {
+            row["order_number"]: row["search_match"]["dimension_sides"]
+            for row in partial_dimension["items"]
+        } == {
+            "F1-ORDER-SUBSTRING": ["length"],
+            "F1-ORDER-PARTIAL-WIDTH": ["width"],
+        }
+        assert all(
+            row["search_match"]["text_fields"] == []
+            for row in partial_dimension["items"]
+        )
+
+        partial_length = client.get(
+            "/api/mobile/erp/incoming/search",
+            params={"q": "14", "dimension_mode": "length"},
+        ).json()
+        assert [row["order_number"] for row in partial_length["items"]] == [
+            "F1-ORDER-SUBSTRING"
+        ]
+        partial_width = client.get(
+            "/api/mobile/erp/incoming/search",
+            params={"q": "14", "dimension_mode": "width"},
+        ).json()
+        assert [row["order_number"] for row in partial_width["items"]] == [
+            "F1-ORDER-PARTIAL-WIDTH"
+        ]
+        precise_dimension = client.get(
+            "/api/mobile/erp/incoming/search", params={"q": "1430"}
+        ).json()
+        assert precise_dimension["total"] == 1
+        normalized_dimension = client.get(
+            "/api/mobile/erp/incoming/search", params={"q": "014.0"}
+        ).json()
+        assert {
+            row["order_number"] for row in normalized_dimension["items"]
+        } == {"F1-ORDER-SUBSTRING", "F1-ORDER-PARTIAL-WIDTH"}
+        full_dimension = client.get(
+            "/api/mobile/erp/incoming/search", params={"q": "1430*516"}
+        ).json()
+        assert [row["order_number"] for row in full_dimension["items"]] == [
+            "F1-ORDER-SUBSTRING"
+        ]
+        assert full_dimension["items"][0]["search_match"]["dimension_sides"] == [
+            "length",
+            "width",
+        ]
+
         by_length = client.get(
             "/api/mobile/erp/incoming/search",
             params={"q": "870", "dimension_mode": "length"},
@@ -228,11 +301,30 @@ def test_search_dimensions_text_scope_and_read_only(mobile_incoming_search_app) 
         assert [row["order_number"] for row in by_width["items"]] == [
             "F1-ORDER-WIDTH"
         ]
+        by_customer = client.get(
+            "/api/mobile/erp/incoming/search", params={"q": "天华"}
+        ).json()
+        assert by_customer["total"] == 4
+        assert all(
+            row["search_match"]["text_fields"] == ["customer_name"]
+            for row in by_customer["items"]
+        )
+        by_customer_code = client.get(
+            "/api/mobile/erp/incoming/search", params={"q": "TH"}
+        ).json()
+        assert by_customer_code["total"] == 4
+        assert all(
+            row["search_match"]["text_fields"] == ["customer_code"]
+            for row in by_customer_code["items"]
+        )
         by_name = client.get(
             "/api/mobile/erp/incoming/search", params={"q": "护角外箱二"}
         ).json()
-        assert by_name["total"] == 1
-        assert by_name["items"][0]["product_name"] == "护角外箱二"
+        assert by_name["total"] == 0
+        by_customer_model = client.get(
+            "/api/mobile/erp/incoming/search", params={"q": "CUSTOMER-MODEL-14"}
+        ).json()
+        assert by_customer_model["total"] == 0
         invalid = client.get(
             "/api/mobile/erp/incoming/search",
             params={"q": "护角", "dimension_mode": "length"},
@@ -287,6 +379,8 @@ def test_mobile_incoming_search_ui_is_paged_latest_wins_and_read_only_detail(
 ) -> None:
     html = (ROOT / "static/incoming.html").read_text(encoding="utf-8")
     for marker in (
+        "查待收料：客户名称或报料长宽尺寸",
+        '<option value="any">任意报料边</option>',
         'id="pendingSearchInput"',
         'id="pendingDimensionMode"',
         'value="any"',
@@ -302,6 +396,8 @@ def test_mobile_incoming_search_ui_is_paged_latest_wins_and_read_only_detail(
         "按当前待收料明细精确关联，不按款号跨订单猜测",
     ):
         assert marker in html
+    assert "客户、款号、名称、订单号或单边尺寸" not in html
+    assert "任意边/普通搜索" not in html
     load_pending = html.split("async function loadPending", 1)[1].split(
         "async function changePendingPage", 1
     )[0]

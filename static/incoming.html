@@ -54,11 +54,11 @@
     </nav>
 
     <section id="pendingSearchPanel" class="mb-3 rounded-xl bg-white p-3 shadow-sm">
-      <label for="pendingSearchInput" class="text-sm font-bold text-slate-700">查待收料：客户、款号、名称、订单号或单边尺寸</label>
+      <label for="pendingSearchInput" class="text-sm font-bold text-slate-700">查待收料：客户名称或报料长宽尺寸</label>
       <div class="mt-2 grid grid-cols-2 gap-2">
-        <input id="pendingSearchInput" class="min-h-12 rounded-lg border-2 border-slate-300 bg-white p-2 text-base" maxlength="100" placeholder="例如：天华、款号、870">
+        <input id="pendingSearchInput" class="min-h-12 rounded-lg border-2 border-slate-300 bg-white p-2 text-base" maxlength="100" placeholder="例如：天华、14、1430×516">
         <select id="pendingDimensionMode" class="min-h-12 rounded-lg border-2 border-slate-300 bg-white p-2 text-base">
-          <option value="any">任意边/普通搜索</option>
+          <option value="any">任意报料边</option>
           <option value="length">只查报料长</option>
           <option value="width">只查报料宽</option>
         </select>
@@ -534,7 +534,7 @@
       const pendingPageCount = Math.max(1, Math.ceil(Number(state.pendingTotal || 0) / Number(state.pendingPageSize || 20)));
       $("pendingSearchPanel").hidden = state.activeTab !== "pending";
       $("pendingSearchStatus").textContent = state.pendingAppliedQuery
-        ? `当前条件：${state.pendingAppliedQuery}（${state.pendingAppliedDimensionMode === "length" ? "报料长" : state.pendingAppliedDimensionMode === "width" ? "报料宽" : "任意边/普通搜索"}），共 ${state.pendingTotal} 条${state.pendingAsOf ? ` · ${state.pendingAsOf}` : ""}`
+        ? `当前条件：${state.pendingAppliedQuery}（${state.pendingAppliedDimensionMode === "length" ? "报料长" : state.pendingAppliedDimensionMode === "width" ? "报料宽" : "任意报料边/客户"}），共 ${state.pendingTotal} 条${state.pendingAsOf ? ` · ${state.pendingAsOf}` : ""}`
         : `当前显示全部待收料，每页 ${state.pendingPageSize} 条。`;
       $("pendingCount").textContent = state.pendingTotal;
       $("receivedCount").textContent = state.received.length;
@@ -569,7 +569,7 @@
       const query = String($("pendingSearchInput").value || "").trim();
       const dimensionMode = String($("pendingDimensionMode").value || "any");
       if (!query) {
-        showToast("请输入客户、款号、名称、订单号或报料尺寸", true);
+        showToast("请输入客户名称或报料尺寸", true);
         return false;
       }
       return loadPending({page: 1, query, dimensionMode});

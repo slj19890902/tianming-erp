@@ -135,7 +135,7 @@ def test_product_external_candidates_show_formal_price_only_with_cost_permission
         ) == price_count
 
 
-def test_purchase_print_uses_frozen_price_and_order_drawing_source(
+def test_supplier_purchase_print_does_not_expose_internal_source_or_price(
     purchase_app: FastAPI,
 ) -> None:
     from app.models.external_packaging_purchase import ExternalPackagingPurchaseItem
@@ -165,14 +165,29 @@ def test_purchase_print_uses_frozen_price_and_order_drawing_source(
             f"/api/external-packaging-purchases/{purchase_id}/print"
         )
         assert before.status_code == 200, before.text
-        before_rows = before.json()["items"]
+        before_data = before.json()
+        before_rows = before_data["items"]
         assert before_rows
-        assert all(row["source_order_number"] == "TM20260809001" for row in before_rows)
-        assert all(row["source_item_order_number"] == "TM20260809001-001" for row in before_rows)
-        assert all(row["source_customer_name"] == "匿名采购客户" for row in before_rows)
-        assert all(row["order_drawing_file_name"] == "匿名订单图纸_v2.pdf" for row in before_rows)
-        assert all(row["order_drawing_version_label"] == "订单下单图纸（冻结文件）" for row in before_rows)
-        frozen_prices = [row["unit_price"] for row in before_rows]
+        assert all(
+            set(row) == {
+                "specification_summary",
+                "purchase_quantity",
+                "purchase_unit",
+            }
+            for row in before_rows
+        )
+        for secret in (
+            "source",
+            "currency",
+            "goods_amount",
+            "tax_amount",
+            "total_amount",
+            "terms_note",
+            "匿名订单图纸_v2.pdf",
+            "匿名采购客户",
+            "TM20260809001",
+        ):
+            assert secret not in before.text
 
         with purchase_app.state.session_factory() as db:
             frozen_item = db.scalar(
@@ -203,12 +218,4 @@ def test_purchase_print_uses_frozen_price_and_order_drawing_source(
             f"/api/external-packaging-purchases/{purchase_id}/print"
         )
         assert after.status_code == 200, after.text
-        assert [row["unit_price"] for row in after.json()["items"]] == frozen_prices
-        forbidden = {
-            "material_code",
-            "flute_type",
-            "report_length_mm",
-            "report_width_mm",
-            "crease_type",
-        }
-        assert all(not forbidden.intersection(row) for row in after.json()["items"])
+        assert after.json() == before_data

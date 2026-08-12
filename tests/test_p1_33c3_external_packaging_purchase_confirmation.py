@@ -507,7 +507,7 @@ def test_frontend_has_one_click_supplier_split_confirmation() -> None:
     assert "selectedExternalPurchaseCandidate" in source
 
 
-def test_external_purchase_print_is_cost_protected_read_only_and_uses_frozen_facts(
+def test_external_purchase_print_is_cost_protected_read_only_and_redacted(
     purchase_app: FastAPI,
 ) -> None:
     order_id = purchase_app.state.fixture["order_id"]
@@ -540,22 +540,42 @@ def test_external_purchase_print_is_cost_protected_read_only_and_uses_frozen_fac
         )
         assert response.status_code == 200, response.text
         data = response.json()
-        assert data["id"] == purchase_id
-        assert data["purchase_number"].startswith(f"EP-{beijing_today():%Y%m%d}-")
-        assert data["supplier"]["name"] in {"供应商甲", "供应商乙"}
-        assert data["source"] == {
-            "order_id": order_id,
-            "order_number": "TM20260809001",
-            "customer_po": "PO-UAT-PURCHASE",
-            "customer_name": "匿名采购客户",
-            "order_date": "2026-08-09",
-            "delivery_date": None,
+        assert set(data) == {
+            "purchase_number",
+            "confirmed_at",
+            "supplier",
+            "buyer",
+            "items",
         }
+        assert data["purchase_number"].startswith(f"EP-{beijing_today():%Y%m%d}-")
+        assert set(data["supplier"]) == {"name"}
+        assert set(data["buyer"]) == {"company_name"}
         assert data["items"]
-        assert all(row["unit_price"] for row in data["items"])
+        assert all(
+            set(row) == {
+                "specification_summary",
+                "purchase_quantity",
+                "purchase_unit",
+            }
+            for row in data["items"]
+        )
+        assert all(row["specification_summary"] for row in data["items"])
         assert all(row["purchase_quantity"] for row in data["items"])
-        assert all(row["price_evidence_reference"].startswith("UAT-") for row in data["items"])
-        assert "未计入采购单合计" in data["terms_note"]
+        serialized = response.text
+        for secret in (
+            "匿名采购客户",
+            "PO-UAT-PURCHASE",
+            "TM20260809001",
+            "unit_price",
+            "currency",
+            "tax_rate",
+            "line_amount",
+            "total_amount",
+            "price_evidence_reference",
+            "moq_quantity",
+            "shipping_fee",
+        ):
+            assert secret not in serialized
 
         reread = client.get(
             f"/api/orders/{order_id}/external-packaging-purchase"

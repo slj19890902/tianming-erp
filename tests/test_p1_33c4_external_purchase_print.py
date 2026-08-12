@@ -23,7 +23,6 @@ def test_external_purchase_print_page_is_registered_and_read_only() -> None:
     for write_method in ('method:"POST"', 'method:"PUT"', 'method:"PATCH"', 'method:"DELETE"'):
         assert write_method not in PAGE
     assert "自动发送" not in PAGE
-    assert "未计入采购单合计" in PAGE
 
 
 def test_order_detail_and_confirmation_open_the_same_existing_purchase() -> None:
@@ -38,10 +37,28 @@ def test_print_layout_repeats_header_and_avoids_broken_rows() -> None:
     assert "thead{display:table-header-group}" in PAGE
     assert "break-inside:avoid" in PAGE
     assert "page-break-inside:avoid" in PAGE
-    assert "size:A4 landscape" in PAGE
-    assert "供应商产品代码" in PAGE
-    assert "冻结报价条款" in PAGE
-    assert "客户单号" in PAGE
+    assert "size:A4 portrait" in PAGE
+    for allowed_label in ("供应商", "采购单号", "确认日期", "规格", "数量"):
+        assert allowed_label in PAGE
+    for forbidden_label in (
+        "客户",
+        "客户单号",
+        "订单号",
+        "交货日期",
+        "供应商产品代码",
+        "供应商采购成本",
+        "货品金额",
+        "税额",
+        "含税合计",
+        "冻结报价条款",
+        "MOQ",
+        "运费",
+        "打样费",
+        "版费",
+        "刀模费",
+        "图纸",
+    ):
+        assert forbidden_label not in PAGE
 
 
 def test_external_purchase_print_inline_javascript_passes_node_check(

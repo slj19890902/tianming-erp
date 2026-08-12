@@ -26,6 +26,14 @@ import {
   upsertMoveDraft
 } from "./warehouseMoveDraft.mjs";
 import type { MoveCandidate, WarehouseMoveDraft } from "./warehouseMoveDraft.mjs";
+import {
+  buildPalletMergeBatchPayload,
+  normalizePalletMergeCandidate,
+  palletMergeCompatibility,
+  palletMergeTargetChoices,
+  togglePalletMergeSource
+} from "./warehousePalletMergeDraft.mjs";
+import type { PalletMergeCandidate } from "./warehousePalletMergeDraft.mjs";
 import type {
   AssetTemplate,
   CameraPreset,
@@ -57,7 +65,7 @@ type WarehouseMapMode = "lookup" | "move" | "planning";
 type InboundInventoryType = "finished" | "semi_finished";
 type RackDraft = Rack & { level_clear_heights_mm: number[]; level_cell_counts: number[] };
 const P1_47D_ENABLED = false;
-const P1_49C_ENABLED = false;
+const P1_49C_ENABLED = true;
 
 interface LayoutMutationResponse<T> {
   item: T;
@@ -95,7 +103,9 @@ interface InventoryItem {
   quantity?: number;
   available_quantity?: number;
   reserved_quantity?: number;
+  damaged_quantity?: number;
   unit?: string;
+  status?: "active" | "frozen" | string;
   age_days?: number | null;
   version?: number;
   specification?: string | null;
@@ -532,19 +542,6 @@ function movableLotQuantity(item: InventoryItem) {
   return Number(item.quantity || 0);
 }
 
-function palletMergeSignature(location: DashboardLocation | undefined) {
-  const items = (location?.pallet?.items || []).filter((item) => inventoryLabelQuantity(item) > 0);
-  const customerIds = [...new Set(items.map((item) => Number(item.customer_id || 0)).filter((value) => value > 0))];
-  const inventoryTypes = [...new Set(items.map((item) => item.inventory_type).filter(Boolean))];
-  if (!location?.pallet || !items.length || customerIds.length !== 1 || inventoryTypes.length !== 1) return null;
-  return {
-    customerId: customerIds[0],
-    customerName: items.find((item) => Number(item.customer_id || 0) === customerIds[0])?.customer_name || "客户待确认",
-    inventoryType: inventoryTypes[0],
-    totalQuantity: items.reduce((total, item) => total + Number(inventoryLabelQuantity(item)), 0)
-  };
-}
-
 function searchProductKey(item: InventoryItem) {
   return warehouseSearchProductKey(item);
 }
@@ -853,6 +850,11 @@ export function WarehouseTwinApp() {
   const [moveDrafts, setMoveDrafts] = useState<WarehouseMoveDraft[]>([]);
   const [moveBatchIdempotencyKey, setMoveBatchIdempotencyKey] = useState(() => operationKey("warehouse-move-batch"));
   const [moveBatchBusy, setMoveBatchBusy] = useState(false);
+  const [moveAction, setMoveAction] = useState<"relocate" | "merge">("relocate");
+  const [mergeSources, setMergeSources] = useState<PalletMergeCandidate[]>([]);
+  const [mergeTarget, setMergeTarget] = useState<PalletMergeCandidate | null>(null);
+  const [mergeBatchIdempotencyKey, setMergeBatchIdempotencyKey] = useState(() => operationKey("warehouse-pallet-merge-batch"));
+  const [mergeBatchBusy, setMergeBatchBusy] = useState(false);
   const [locationDetailOpen, setLocationDetailOpen] = useState(false);
   const [inboundMode, setInboundMode] = useState<"staging" | "catalog" | "temporary">("staging");
   const [inboundInventoryType, setInboundInventoryType] = useState<InboundInventoryType>("finished");
@@ -879,8 +881,6 @@ export function WarehouseTwinApp() {
   const [temporaryIdempotencyKey, setTemporaryIdempotencyKey] = useState(() => operationKey("map-temporary-inbound"));
   const [moveTargetLocationId, setMoveTargetLocationId] = useState("");
   const [moveIdempotencyKey, setMoveIdempotencyKey] = useState(() => operationKey("map-move"));
-  const [mergeTargetPalletId, setMergeTargetPalletId] = useState("");
-  const [mergeIdempotencyKey, setMergeIdempotencyKey] = useState(() => operationKey("map-merge"));
   const [dispatchTransferLotId, setDispatchTransferLotId] = useState<number | null>(null);
   const [dispatchTransferQuantity, setDispatchTransferQuantity] = useState("");
   const [dispatchTransferTargetId, setDispatchTransferTargetId] = useState("");
@@ -1039,7 +1039,7 @@ export function WarehouseTwinApp() {
   }, [layout, pendingAreaCode]);
 
   const features = (layout?.features || []) as TwinFeature[];
-  const warehouseMoveModeActive = mapMode === "move" && canExecuteWarehouse && viewMode === "2d";
+  const warehouseMoveModeActive = mapMode === "move" && moveAction === "relocate" && canExecuteWarehouse && viewMode === "2d";
   const currentFloor = dashboard?.floors.find((item) => item.floor_code === floorCode);
   const visualLocations = useMemo<DashboardLocation[]>(() => (dashboard?.locations || []).map((location) => {
     const draft = locationDrafts[location.location_id];
@@ -1120,6 +1120,7 @@ export function WarehouseTwinApp() {
   const selectedMoveTarget = moveTargetLocations.find(
     (item) => String(item.location_id) === moveDraftTargetLocationId
   ) || null;
+  const mergeTargetChoices = useMemo(() => palletMergeTargetChoices(mergeSources), [mergeSources]);
   const movablePalletIds = useMemo(
     () => visualLocations
       .filter((item) => item.floor_code === floorCode
@@ -1368,20 +1369,6 @@ export function WarehouseTwinApp() {
       && ["finished", "shared"].includes(item.warehouse_type)
       && item.location_id !== selectedLocation?.location_id
   );
-  const selectedMergeSignature = palletMergeSignature(selectedLocation);
-  const compatibleMergeTargets = selectedMergeSignature ? visualLocations.filter((item) => {
-    if (
-      item.floor_code !== "3F"
-      || item.occupancy_status !== "occupied"
-      || item.position_status !== "mapped"
-      || item.storage_type === "rack"
-      || !item.pallet
-      || item.pallet.pallet_id === selectedLocation?.pallet?.pallet_id
-    ) return false;
-    const signature = palletMergeSignature(item);
-    return signature?.customerId === selectedMergeSignature.customerId
-      && signature.inventoryType === selectedMergeSignature.inventoryType;
-  }).sort((left, right) => left.location_code.localeCompare(right.location_code, "zh-CN", { numeric: true })) : [];
   const selectedInboundProduct = productCandidates.find(
     (item) => String(item.product_id) === inboundProductId
   );
@@ -1597,8 +1584,6 @@ export function WarehouseTwinApp() {
     setCorrectionQuantity("");
     setCorrectionReason("");
     setMoveTargetLocationId("");
-    setMergeTargetPalletId("");
-    setMergeIdempotencyKey(operationKey("map-merge"));
     setWarehouseOperationMessage("");
   }, [selected?.kind, selected?.id, selectedLocation?.occupancy_status, selectedLocationCanReceiveStaging]);
   useEffect(() => {
@@ -1947,6 +1932,74 @@ export function WarehouseTwinApp() {
     setMoveDrafts([]);
     setMoveBatchIdempotencyKey(operationKey("warehouse-move-batch"));
     setWarehouseOperationMessage("已清空页面草稿，正式库存未改变。");
+  };
+
+  const toggleMergeSource = (location: DashboardLocation, pallet: DashboardPallet) => {
+    const normalized = normalizePalletMergeCandidate(location, pallet);
+    if (!normalized.candidate) {
+      setWarehouseOperationMessage(normalized.error || "该系统栈板不能作为合并来源。");
+      return;
+    }
+    const normalizedCandidate = normalized.candidate;
+    const candidate = mergeSources.some((item) => item.pallet_id === normalizedCandidate.pallet_id)
+      ? normalizedCandidate
+      : { ...normalizedCandidate, client_item_id: operationKey("pallet-merge-source") };
+    const result = togglePalletMergeSource(mergeSources, candidate);
+    if (result.error) {
+      setWarehouseOperationMessage(result.error);
+      return;
+    }
+    setMergeSources(result.items);
+    if (mergeTarget && !result.items.some((item) => item.pallet_id === mergeTarget.pallet_id)) setMergeTarget(null);
+    setMergeBatchIdempotencyKey(operationKey("warehouse-pallet-merge-batch"));
+    setWarehouseOperationMessage(result.items.some((item) => item.pallet_id === normalizedCandidate.pallet_id)
+      ? `已加入合并集合：${normalizedCandidate.pallet_code}；可跨楼层继续选择。`
+      : `已移出合并集合：${normalizedCandidate.pallet_code}；正式库存未改变。`);
+  };
+
+  const chooseMergeTarget = (candidate: PalletMergeCandidate) => {
+    if (!mergeSources.some((item) => item.pallet_id === candidate.pallet_id)) {
+      setWarehouseOperationMessage("目标栈板必须从已选集合中明确指定。");
+      return;
+    }
+    setMergeTarget(candidate);
+    setMergeBatchIdempotencyKey(operationKey("warehouse-pallet-merge-batch"));
+    setWarehouseOperationMessage(`已选目标：${candidate.floor_code} · ${candidate.location_name} · ${candidate.pallet_code}；尚未写入。`);
+  };
+
+  const clearMergeDraft = () => {
+    setMergeSources([]);
+    setMergeTarget(null);
+    setMergeBatchIdempotencyKey(operationKey("warehouse-pallet-merge-batch"));
+    setWarehouseOperationMessage("已清空多栈合并草稿，正式库存未改变。");
+  };
+
+  const confirmPalletMergeBatch = async () => {
+    if (mergeSources.length < 2 || !mergeTarget || mergeBatchBusy) return;
+    const submittedSources = mergeSources.filter((item) => item.pallet_id !== mergeTarget.pallet_id);
+    const sourcePreview = submittedSources.map((item) => `${item.floor_code}/${item.location_code} · ${item.pallet_code}`).join("\n");
+    if (!window.confirm(`确认一次把 ${submittedSources.length} 块源栈的全部库存批次并入目标栈吗？\n\n来源：\n${sourcePreview}\n\n目标：${mergeTarget.floor_code}/${mergeTarget.location_code} · ${mergeTarget.pallet_code}\n\n源栈将逻辑释放；库存数量、批次、预占和库龄不变。`)) return;
+    setMergeBatchBusy(true);
+    setWarehouseOperationMessage("");
+    try {
+      await mutateJson(
+        "/api/warehouse/pallets/merge-batches",
+        "POST",
+        buildPalletMergeBatchPayload(mergeBatchIdempotencyKey, mergeSources, mergeTarget)
+      );
+      await refreshDashboard();
+      const target = mergeTarget;
+      setMergeSources([]);
+      setMergeTarget(null);
+      setMergeBatchIdempotencyKey(operationKey("warehouse-pallet-merge-batch"));
+      setFloorCode(target.floor_code);
+      setSelected({ kind: "pallet", id: `erp-location-${target.location_id}` });
+      setWarehouseOperationMessage(`${submittedSources.length} 块源栈已一次并入 ${target.pallet_code}；源栈已逻辑释放。`);
+    } catch (reason) {
+      setWarehouseOperationMessage(`多栈合并失败：${(reason as Error).message}。来源、目标和本次幂等键已保留，可核对后重试。`);
+    } finally {
+      setMergeBatchBusy(false);
+    }
   };
 
   const confirmMoveDrafts = async () => {
@@ -2373,39 +2426,6 @@ export function WarehouseTwinApp() {
       setMoveTargetLocationId("");
       setMoveIdempotencyKey(operationKey("map-move"));
       setWarehouseOperationMessage(`${selectedLocation.pallet.pallet_code} 已移到 ${target.location_code}，关联正式库存位置已同步更新。`);
-    } catch (reason) {
-      setWarehouseOperationMessage((reason as Error).message);
-    } finally {
-      setWarehouseOperationBusy(false);
-    }
-  };
-
-  const confirmPalletMergeAll = async () => {
-    if (!selectedLocation?.pallet || !selectedMergeSignature || !mergeTargetPalletId) return;
-    const target = compatibleMergeTargets.find((item) => String(item.pallet?.pallet_id) === mergeTargetPalletId);
-    if (!target?.pallet) {
-      setWarehouseOperationMessage("请选择同客户、同库存类型的目标栈板。");
-      return;
-    }
-    const sourcePalletCode = selectedLocation.pallet.pallet_code;
-    const sourceLocationCode = selectedLocation.location_code;
-    if (!window.confirm(`确认把 ${sourceLocationCode} · ${sourcePalletCode} 的全部剩余货物合并到 ${target.location_code} · ${target.pallet.pallet_code} 吗？\n\n不拆数量；合并后源栈板清空并释放回生产区复用。`)) return;
-    setWarehouseOperationBusy(true);
-    setWarehouseOperationMessage("");
-    try {
-      await mutateJson(`/api/warehouse/pallets/${selectedLocation.pallet.pallet_id}/merge-all`, "POST", {
-        expected_version: selectedLocation.pallet.version,
-        target_pallet_id: target.pallet.pallet_id,
-        expected_target_version: target.pallet.version,
-        confirmed: true,
-        idempotency_key: mergeIdempotencyKey
-      });
-      await refreshDashboard();
-      setFloorCode("3F");
-      setSelected({ kind: "pallet", id: `erp-location-${target.location_id}` });
-      setMergeTargetPalletId("");
-      setMergeIdempotencyKey(operationKey("map-merge"));
-      setWarehouseOperationMessage(`${sourcePalletCode} 的剩余货物已全部并入 ${target.pallet.pallet_code}；源栈板已释放。`);
     } catch (reason) {
       setWarehouseOperationMessage((reason as Error).message);
     } finally {
@@ -2997,7 +3017,7 @@ export function WarehouseTwinApp() {
         <button type="button" className={floorCode === "1F" ? "active" : ""} onClick={() => setFloorCode("1F")}><b>1F</b><span>生产车间</span></button>
         <button type="button" className={floorCode === "3F" ? "active" : ""} onClick={() => setFloorCode("3F")}><b>3F</b><span>成品仓库</span></button>
       </nav>{selectedAreaCode && <div className="twin-header-area-summary"><small>当前区域</small><b>{selectedAreaCode} · {selectedAreaFeature?.name || "仓储区域"}</b><span>{selectedAreaFeature?.area_mm2 ? `${(selectedAreaFeature.area_mm2 / 1_000_000).toFixed(1)} m²` : "面积待确认"} · {selectedAreaLocationCount} 库位 · {selectedArea?.lot_count || 0} 批次</span></div>}<p>{floorTitle} · 正式仓库作业层</p></div>
-      <div className="twin-command-status"><span className="live">{mapMode === "planning" ? "区域规划 · 管理员草稿" : mapMode === "move" ? `移货 / 盘点 · ${moveDrafts.length} 条页面草稿` : "查货模式 · 只读"}</span><b>{currentFloor?.active_lots || 0}</b><small>当前层有效批次</small></div>
+      <div className="twin-command-status"><span className="live">{mapMode === "planning" ? "区域规划 · 管理员草稿" : mapMode === "move" ? moveAction === "merge" ? `移货 · 合并栈板 · ${mergeSources.length} 块已选` : `移货 · ${moveDrafts.length} 条页面草稿` : "查货模式 · 只读"}</span><b>{currentFloor?.active_lots || 0}</b><small>当前层有效批次</small></div>
       <a className="twin-ledger-link" href="/warehouse-ledger.html?tab=finished" target="_top">库存台账</a>
     </header>
 
@@ -3041,7 +3061,7 @@ export function WarehouseTwinApp() {
           ["zones", "区域"], ["aisles", "通道"], ["racks", "货架"], ["equipment", "设备"],
           ["structures", "原始墙柱"], ["customStructures", "补充墙柱门窗"], ["noGo", "禁放区"], ["pallets", "栈板"], ["production", "生产投影"]
         ] as Array<[keyof LayerVisibility, string]>).map(([key, label]) => <button type="button" key={key} className={layers[key] ? "active" : ""} onClick={() => toggleLayer(key)}><i /><span>{label}</span></button>)}
-        <div className="twin-rail-safety"><b>数据边界</b><p>{mapMode === "move" ? "拖动和选择只形成页面草稿；不提供建档、入仓、增减、移除或合并。底部一次确认后才提交整批移货。" : "当前是查货模式，只读真实库存和地图位置，不执行入库、移货、盘点或布局写入。"}</p></div>
+        <div className="twin-rail-safety"><b>数据边界</b><p>{mapMode === "move" ? moveAction === "merge" ? "多选只形成页面草稿；不建档、不入仓、不增减、不盘点。明确目标后底部一次提交整批合并。" : "拖动和选择只形成页面草稿；不提供建档、入仓、增减、移除或盘点。底部一次确认后才提交整批移货。" : "当前是查货模式，只读真实库存和地图位置，不执行入库、移货、盘点或布局写入。"}</p></div>
       </aside>}
 
       {searchPanelOpen && <aside className="twin-context-rail">
@@ -3149,8 +3169,26 @@ export function WarehouseTwinApp() {
         </section>}
         {locationEditMessage && <div className={`twin-location-message ${locationEditMessage.includes("失败") || locationEditMessage.includes("缺失") ? "error" : ""}`}>{locationEditMessage}</div>}
         {canExecuteWarehouse && mapMode === "move" && <section className="twin-move-control-panel">
-          <div className="twin-formal-operation-title"><b>移货页面草稿</b><span>楼层切换不丢来源与草稿</span></div>
-          {!moveSource ? <p>先点地图上的有货位置选择整栈板或批次；一楼待送区的散存标签也可作为来源。</p> : <>
+          <div className="twin-formal-operation-title"><b>{moveAction === "merge" ? "多栈合并草稿" : "移货页面草稿"}</b><span>楼层切换不丢来源与草稿</span></div>
+          {P1_49C_ENABLED && <div className="twin-move-action-tabs" role="tablist" aria-label="移货操作类型">
+            <button type="button" role="tab" aria-selected={moveAction === "relocate"} className={moveAction === "relocate" ? "active" : ""} onClick={() => { setMoveAction("relocate"); setWarehouseOperationMessage(moveDrafts.length ? `已切回移动位置；保留 ${moveDrafts.length} 条移货草稿。` : "已切回移动位置。"); }}>移动位置</button>
+            <button type="button" role="tab" aria-selected={moveAction === "merge"} className={moveAction === "merge" ? "active" : ""} onClick={() => { setMoveAction("merge"); setMoveSource(null); setWarehouseOperationMessage(mergeSources.length ? `已切到合并栈板；保留 ${mergeSources.length} 块来源。` : "请从真实位置逐块选择至少两块兼容系统栈板。"); }}>合并栈板</button>
+          </div>}
+          {moveAction === "merge" ? <>
+            <p>合并集合已选 {mergeSources.length} 块；可切楼层和位置继续选择，再从集合内明确一块目标。合并不拆批次、不改数量，失败会保留本页选择与重试键。</p>
+            {mergeSources.length > 0 && <div className="twin-merge-source-chips">{mergeSources.map((item) => <button type="button" key={item.pallet_id} disabled={mergeBatchBusy} onClick={() => {
+              const result = togglePalletMergeSource(mergeSources, item);
+              setMergeSources(result.items);
+              if (mergeTarget?.pallet_id === item.pallet_id) setMergeTarget(null);
+              setMergeBatchIdempotencyKey(operationKey("warehouse-pallet-merge-batch"));
+              setWarehouseOperationMessage(`已移除来源 ${item.pallet_code}；正式库存未改变。`);
+            }}><b>{item.pallet_code}</b><span>{item.floor_code} / {item.location_name}</span><em>移除</em></button>)}</div>}
+            {mergeSources.length < 2 ? <small className="twin-merge-compatibility-note">还需选择 {2 - mergeSources.length} 块兼容系统栈板；选满两块后从集合中明确指定目标。</small> : <div className="twin-move-target-cascade">
+              <div className="twin-formal-operation-title"><b>明确选择目标栈板</b><span>目标必须是上方已选集合中的一块</span></div>
+              <div className="twin-merge-target-list" role="radiogroup" aria-label="目标系统栈板">{mergeTargetChoices.map((item) => <button type="button" role="radio" aria-checked={mergeTarget?.pallet_id === item.pallet_id} className={mergeTarget?.pallet_id === item.pallet_id ? "selected" : ""} key={item.pallet_id} onClick={() => chooseMergeTarget(item)}><b>{item.pallet_code}</b><span>{item.floor_code} / {item.location_name} · {item.customer_name}</span><small>合计 {formatNumber(item.total_quantity)} {inventoryUnitLabel(item.unit)} · 设为目标后其余 {mergeSources.length - 1} 块作为来源</small></button>)}</div>
+              {!mergeTargetChoices.length && <small className="error">已选集合中没有通过位置门禁的目标栈板；请移除不可作为目标的栈板后重选。</small>}
+            </div>}
+          </> : !moveSource ? <p>先点地图上的有货位置选择整栈板或批次；一楼待送区的散存标签也可作为来源。</p> : <>
             <div className="twin-move-source-summary"><small>当前来源 · {moveSource.operation === "pallet_move" ? "系统栈板整板" : "库存批次"}</small><b>{moveSource.inventory_code} · {moveSource.product_name}</b><span>{moveSource.source_floor_code} / {moveSource.source_area_code || "未分区"} / {moveSource.source_location_name}</span><button type="button" onClick={() => { setMoveSource(null); setMoveQuantity(""); setMoveDraftTargetLocationId(""); setWarehouseOperationMessage("已取消当前来源；已加入的页面草稿仍保留。"); }}>取消来源</button></div>
             <div className="twin-move-target-cascade">
               <div className="twin-formal-operation-title"><b>选择目标空货位</b><span>楼层 → 区域 → 具体货位</span></div>
@@ -3245,26 +3283,34 @@ export function WarehouseTwinApp() {
           {viewMode === "25d" && <p className="twin-location-readonly-note">2.5D 仅查看库位与货物标签；调整请切换二维平面。</p>}
           {warehouseOperationMessage && <div className="twin-location-message">{warehouseOperationMessage}</div>}
           {canExecuteWarehouse && mapMode === "move" && viewMode === "2d" && <section className="twin-move-source-panel">
-            <div className="twin-formal-operation-title"><b>① 选择要移动的货物</b><span>只建页面草稿</span></div>
-            {selectedLocation.occupancy_status === "empty" ? <p>当前是空货位。请先点有货位置选择来源，或将已绑定实体栈板的货物卡拖到此处。</p> : <>
+            <div className="twin-formal-operation-title"><b>① {moveAction === "merge" ? "多选兼容系统栈板" : "选择要移动的货物"}</b><span>只建页面草稿</span></div>
+            {selectedLocation.occupancy_status === "empty" ? <p>{moveAction === "merge" ? "当前是空货位，没有可加入合并集合的系统栈板。" : "当前是空货位。请先点有货位置选择来源，或将已绑定实体栈板的货物卡拖到此处。"}</p> : <>
               {selectedLocationPallets.length > 1 && <p className="twin-shared-pallet-note">该实际位置共有 {selectedLocationPallets.length} 块系统栈板。地图只显示一个真实位置，不伪造重叠坐标；请在下方逐块选择。</p>}
               <div className="twin-move-pallet-list">
                 {selectedLocationPallets.map((pallet) => {
                   const firstItem = pallet.items[0];
                   const totalQuantity = pallet.items.reduce((total, item) => total + Number(inventoryLabelQuantity(item)), 0);
                   const productCount = new Set(pallet.items.map((item) => item.product_id || item.inventory_code || item.lot_id)).size;
-                  return <button type="button" className={moveSource?.source_key === `pallet:${pallet.pallet_id}` ? "selected" : ""} disabled={!pallet.version} key={`move-pallet-${pallet.pallet_id}`} onClick={() => chooseMoveSource(palletMoveSource(selectedLocation, pallet))}>
-                    <b>整栈板移动 · {pallet.pallet_code}</b>
+                  const mergeCandidate = normalizePalletMergeCandidate(selectedLocation, pallet);
+                  const mergeSelected = mergeSources.some((item) => item.pallet_id === pallet.pallet_id);
+                  const mergeCompatibility = mergeSources.length && mergeCandidate.candidate
+                    ? palletMergeCompatibility(mergeSources[0], mergeCandidate.candidate)
+                    : { compatible: true, error: null };
+                  const disabled = moveAction === "merge"
+                    ? !mergeCandidate.candidate || (!mergeSelected && !mergeCompatibility.compatible) || mergeBatchBusy
+                    : !pallet.version;
+                  return <button type="button" aria-pressed={moveAction === "merge" ? mergeSelected : undefined} title={moveAction === "merge" ? mergeCandidate.error || mergeCompatibility.error || "" : ""} className={moveAction === "merge" ? mergeSelected ? "selected merge-selected" : disabled ? "merge-ineligible" : "" : moveSource?.source_key === `pallet:${pallet.pallet_id}` ? "selected" : ""} disabled={disabled} key={`move-pallet-${pallet.pallet_id}`} onClick={() => moveAction === "merge" ? toggleMergeSource(selectedLocation, pallet) : chooseMoveSource(palletMoveSource(selectedLocation, pallet))}>
+                    <b>{moveAction === "merge" ? mergeSelected ? "已选合并栈板" : "加入合并集合" : "整栈板移动"} · {pallet.pallet_code}</b>
                     <span>{firstItem?.customer_name || "客户待确认"} · {firstItem?.product_name || "产品名称待补充"}{productCount > 1 ? ` 等 ${productCount} 款` : ""}</span>
-                    <small>{pallet.item_count ?? pallet.items.length} 条库存明细 · 合计 {formatNumber(totalQuantity)} {inventoryUnitLabel(firstItem?.unit)} · 不改变数量</small>
+                    <small>{mergeCandidate.candidate ? `${mergeCandidate.candidate.lot_count} 个正式批次 · 合计 ${formatNumber(mergeCandidate.candidate.total_quantity)} ${inventoryUnitLabel(mergeCandidate.candidate.unit)} · ${mergeCandidate.candidate.inventory_status === "frozen" ? "冻结" : "可用"}` : mergeCandidate.error || `${pallet.item_count ?? pallet.items.length} 条库存明细 · 合计 ${formatNumber(totalQuantity)} ${inventoryUnitLabel(firstItem?.unit)}`}</small>
                   </button>;
                 })}
               </div>
-              <div className="twin-move-lot-list">
+              {moveAction === "relocate" && <div className="twin-move-lot-list">
                 {selectedLocationItems.map((item) => <button type="button" className={moveSource?.source_key === `lot:${item.lot_id}` ? "selected" : ""} disabled={!item.version || movableLotQuantity(item) <= 0} key={`move-lot-${item.lot_id}`} onClick={() => chooseMoveSource(lotMoveSource(selectedLocation, item))}>
                   <b>{item.inventory_code || item.lot_number || `批次 ${item.lot_id}`}</b><span>{item.product_name || "产品名称待补充"}</span><small>可移动 {formatNumber(movableLotQuantity(item))} {inventoryUnitLabel(item.unit)}</small>
                 </button>)}
-              </div>
+              </div>}
             </>}
           </section>}
           {P1_47D_ENABLED && canEditLocations && mapMode === "move" && viewMode === "2d" && !locationEditMode && (selectedLocationCanReceiveFinished || selectedLocationCanReceiveSemiFinished) && <section className="twin-formal-operation">
@@ -3331,21 +3377,6 @@ export function WarehouseTwinApp() {
               <small className="twin-formal-selected">本次会同步移动实体栈板及其关联正式库存位置，不改变库存数量。</small>
               <button type="button" className="twin-primary-action" disabled={warehouseOperationBusy || !moveTargetLocationId || !selectedLocation.pallet} onClick={confirmMapPalletMove}>确认正式栈板移位</button>
             </>}
-            {P1_49C_ENABLED && selectedLocation.occupancy_status === "occupied" && selectedLocationSupportsPallet && <div className="twin-formal-divider"><span>合并零散货</span></div>}
-            {P1_49C_ENABLED && selectedLocation.occupancy_status === "occupied" && selectedLocationSupportsPallet && <div className="twin-pallet-merge-form">
-              <small className="twin-formal-selected">整托合并：只显示同客户、同库存类型的目标栈板；不拆数量。</small>
-              {selectedMergeSignature ? <>
-                <span className="twin-map-target-title">点选三楼目标栈板缩略图</span>
-                <div className="twin-map-target-grid" role="listbox" aria-label="三楼整托合并目标">
-                  {compatibleMergeTargets.map((item) => <button type="button" role="option" aria-selected={mergeTargetPalletId === String(item.pallet!.pallet_id)} className={mergeTargetPalletId === String(item.pallet!.pallet_id) ? "selected occupied" : "occupied"} key={item.pallet!.pallet_id} onClick={() => { setMergeTargetPalletId(String(item.pallet!.pallet_id)); setMergeIdempotencyKey(operationKey("map-merge")); }}>
-                    <span className="twin-map-target-thumbnail"><i style={{ left: `${Math.max(4, Math.min(88, Number(item.map_position?.left_pct || 50)))}%`, top: `${Math.max(4, Math.min(82, Number(item.map_position?.top_pct || 50)))}%` }} /></span>
-                    <b>{item.pallet!.pallet_code}</b><small>{item.location_name} · {formatNumber(palletMergeSignature(item)?.totalQuantity)} {inventoryUnitLabel(item.pallet!.items[0]?.unit)}</small>
-                  </button>)}
-                </div>
-                {compatibleMergeTargets.length === 0 && <p className="twin-correction-hint">当前没有可合并的同客户、同库存类型目标栈板。</p>}
-                <button type="button" className="twin-primary-action" disabled={warehouseOperationBusy || !mergeTargetPalletId} onClick={confirmPalletMergeAll}>合并全部剩余货物</button>
-              </> : <p className="twin-correction-hint">当前栈板混有不同客户或不同库存类型，系统不会允许直接合并。</p>}
-            </div>}
           </section>}
           {P1_47D_ENABLED && canEditLocations && mapMode === "move" && viewMode === "2d" && !locationEditMode && !selectedLocationCanReceiveFinished && !selectedLocationCanReceiveSemiFinished && <p className="twin-location-readonly-note">该位置尚未启用、未完成布局、库存类型不匹配或与柱子冲突，暂不能办理入仓；请直接在地图上改选兼容位置。</p>}
           {locationEditMode && canEditLocations && <div className="twin-location-edit-actions">
@@ -3425,17 +3456,33 @@ export function WarehouseTwinApp() {
         {selectedPlacement && <section className="twin-object-card twin-equipment-card"><span className="twin-object-kind">生产设备</span><h3>{selectedPlacement.name}</h3><dl><div><dt>长 × 宽</dt><dd>{formatNumber(selectedPlacement.width_mm)} × {formatNumber(selectedPlacement.depth_mm)} mm</dd></div><div><dt>高度</dt><dd>{formatNumber(selectedPlacement.height_mm)} mm</dd></div><div><dt>坐标</dt><dd>X {formatNumber(selectedPlacement.x_mm)} / Y {formatNumber(selectedPlacement.y_mm)}</dd></div></dl></section>}
       </aside>
     </section>
-    {mapMode === "move" && canExecuteWarehouse && <section className="twin-move-draft-bar" aria-label="移货页面草稿汇总">
-      <div className="twin-move-draft-heading"><div><small>PAGE DRAFT · 尚未写入</small><b>{moveDrafts.length ? `${moveDrafts.length} 条待确认移货` : "尚无移货草稿"}</b></div><span>{moveDrafts.length ? "可继续跨楼层选择；失败后草稿与重试键都会保留。" : "拖动整栈板，或在右侧按楼层、区域、具体货位加入。"}</span></div>
-      <div className="twin-move-draft-list">
-        {moveDrafts.map((item) => <article key={item.client_item_id}>
-          <div><b>{item.inventory_code}</b><span>{item.customer_name} · {item.product_name}</span></div>
-          <strong>{item.source_floor_code} / {item.source_area_code || "未分区"} / {item.source_location_name}<i>→</i>{item.target_floor_code} / {item.target_area_code || "未分区"} / {item.target_location_name}</strong>
-          <small>{item.operation === "pallet_move" ? "整栈板" : `${formatNumber(item.quantity)} ${inventoryUnitLabel(item.unit)}`}</small>
-          <button type="button" disabled={moveBatchBusy} onClick={() => removeMoveDraft(item.client_item_id)}>撤销</button>
-        </article>)}
-      </div>
-      <div className="twin-move-draft-actions"><button type="button" disabled={!moveDrafts.length || moveBatchBusy} onClick={clearMoveDrafts}>清空草稿</button><button type="button" className="confirm" disabled={!moveDrafts.length || moveBatchBusy} onClick={confirmMoveDrafts}>{moveBatchBusy ? "正在整批提交…" : `一次确认 ${moveDrafts.length || ""} 条`}</button></div>
+    {mapMode === "move" && canExecuteWarehouse && <section className={`twin-move-draft-bar ${moveAction === "merge" ? "merge-mode" : ""}`} aria-label={moveAction === "merge" ? "多栈合并页面草稿汇总" : "移货页面草稿汇总"}>
+      {moveAction === "merge" ? <>
+        <div className="twin-move-draft-heading"><div><small>MERGE DRAFT · 尚未写入</small><b>{mergeSources.length ? `${mergeSources.length} 块已选系统栈板` : "尚无合并草稿"}</b></div><span>{mergeSources.length ? "从集合内明确一块目标；失败后选择、目标和重试键都会保留。" : "在真实地图位置右侧逐块选择，不生成栈板假坐标。"}</span></div>
+        <div className="twin-move-draft-list">{mergeSources.map((item) => <article className={mergeTarget?.pallet_id === item.pallet_id ? "merge-target" : ""} key={item.client_item_id || item.pallet_id}>
+          <div><b>{item.pallet_code}</b><span>{item.customer_name} · {item.product_count} 款 / {item.lot_count} 批次</span></div>
+          <strong>{item.floor_code} / {item.area_code || "未分区"} / {item.location_name}{mergeTarget?.pallet_id === item.pallet_id && <i>目标</i>}</strong>
+          <small>{formatNumber(item.total_quantity)} {inventoryUnitLabel(item.unit)} · {item.inventory_status === "frozen" ? "冻结" : "可用"}</small>
+          <button type="button" disabled={mergeBatchBusy} onClick={() => {
+            const result = togglePalletMergeSource(mergeSources, item);
+            setMergeSources(result.items);
+            if (mergeTarget?.pallet_id === item.pallet_id) setMergeTarget(null);
+            setMergeBatchIdempotencyKey(operationKey("warehouse-pallet-merge-batch"));
+          }}>撤销</button>
+        </article>)}</div>
+        <div className="twin-move-draft-actions"><button type="button" disabled={!mergeSources.length || mergeBatchBusy} onClick={clearMergeDraft}>清空草稿</button><button type="button" className="confirm" disabled={mergeSources.length < 2 || !mergeTarget || mergeBatchBusy} onClick={confirmPalletMergeBatch}>{mergeBatchBusy ? "正在一次提交…" : mergeTarget ? `一次确认 ${mergeSources.length - 1} 源 → 1 目标` : "请明确目标栈板"}</button></div>
+      </> : <>
+        <div className="twin-move-draft-heading"><div><small>PAGE DRAFT · 尚未写入</small><b>{moveDrafts.length ? `${moveDrafts.length} 条待确认移货` : "尚无移货草稿"}</b></div><span>{moveDrafts.length ? "可继续跨楼层选择；失败后草稿与重试键都会保留。" : "拖动整栈板，或在右侧按楼层、区域、具体货位加入。"}</span></div>
+        <div className="twin-move-draft-list">
+          {moveDrafts.map((item) => <article key={item.client_item_id}>
+            <div><b>{item.inventory_code}</b><span>{item.customer_name} · {item.product_name}</span></div>
+            <strong>{item.source_floor_code} / {item.source_area_code || "未分区"} / {item.source_location_name}<i>→</i>{item.target_floor_code} / {item.target_area_code || "未分区"} / {item.target_location_name}</strong>
+            <small>{item.operation === "pallet_move" ? "整栈板" : `${formatNumber(item.quantity)} ${inventoryUnitLabel(item.unit)}`}</small>
+            <button type="button" disabled={moveBatchBusy} onClick={() => removeMoveDraft(item.client_item_id)}>撤销</button>
+          </article>)}
+        </div>
+        <div className="twin-move-draft-actions"><button type="button" disabled={!moveDrafts.length || moveBatchBusy} onClick={clearMoveDrafts}>清空草稿</button><button type="button" className="confirm" disabled={!moveDrafts.length || moveBatchBusy} onClick={confirmMoveDrafts}>{moveBatchBusy ? "正在整批提交…" : `一次确认 ${moveDrafts.length || ""} 条`}</button></div>
+      </>}
     </section>}
   </main>;
 }

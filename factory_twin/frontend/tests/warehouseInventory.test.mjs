@@ -24,6 +24,13 @@ import {
   resolveMoveDropTarget,
   upsertMoveDraft
 } from "../src/warehouseMoveDraft.mjs";
+import {
+  buildPalletMergeBatchPayload,
+  normalizePalletMergeCandidate,
+  palletMergeCompatibility,
+  palletMergeTargetChoices,
+  togglePalletMergeSource
+} from "../src/warehousePalletMergeDraft.mjs";
 
 const locations = [
   {
@@ -312,4 +319,110 @@ test("move drafts replace one source, reject target collision, and build one con
       { client_item_id: "client-2", operation: "lot_transfer", lot_id: 20, quantity: 6, expected_version: 2, target_location_id: 4 }
     ]
   });
+});
+
+function mergeLocation(overrides = {}) {
+  return {
+    location_id: 49,
+    location_code: "F1-DISPATCH-01",
+    location_name: "一楼成品待送区",
+    floor_code: "1F",
+    area_code: "DISPATCH",
+    warehouse_type: "finished",
+    storage_type: "pallet_ground",
+    is_active: true,
+    position_status: "mapped",
+    map_position: { left_pct: 10, top_pct: 20, width_pct: 20, height_pct: 30 },
+    ...overrides
+  };
+}
+
+function mergePallet(palletId, overrides = {}) {
+  return {
+    pallet_id: palletId,
+    pallet_code: `PLT-${palletId}`,
+    version: palletId,
+    items: [{
+      lot_id: 100 + palletId,
+      version: 2,
+      product_id: palletId,
+      inventory_code: `CP-${palletId}`,
+      customer_id: 7,
+      customer_name: "苏州思迈尔包装有限公司",
+      inventory_type: "finished",
+      unit: "boxes",
+      status: "active",
+      available_quantity: 40,
+      reserved_quantity: 10,
+      damaged_quantity: 0
+    }],
+    ...overrides
+  };
+}
+
+test("pallet merge candidates keep real locations, native units, and different inventory codes", () => {
+  const first = normalizePalletMergeCandidate(mergeLocation(), mergePallet(11));
+  const second = normalizePalletMergeCandidate(mergeLocation({ location_id: 50, location_code: "F1-DISPATCH-02" }), mergePallet(22));
+  assert.equal(first.error, null);
+  assert.equal(first.candidate.location_id, 49);
+  assert.equal(first.candidate.total_quantity, 50);
+  assert.equal(second.candidate.location_id, 50);
+  assert.equal(palletMergeCompatibility(first.candidate, second.candidate).compatible, true);
+  const selected = togglePalletMergeSource(togglePalletMergeSource([], first.candidate).items, second.candidate);
+  assert.deepEqual(selected.items.map((item) => item.pallet_id), [11, 22]);
+  assert.deepEqual(togglePalletMergeSource(selected.items, first.candidate).items.map((item) => item.pallet_id), [22]);
+});
+
+test("pallet merge candidates fail closed for snapshots, mixed units, frozen state, and quality", () => {
+  const source = normalizePalletMergeCandidate(mergeLocation(), mergePallet(11)).candidate;
+  const snapshot = mergePallet(12, { items: [{ customer_id: 7, inventory_type: "finished", unit: "boxes", status: "active", quantity: 8 }] });
+  assert.match(normalizePalletMergeCandidate(mergeLocation(), snapshot).error, /正式批次/);
+
+  const mixedUnit = mergePallet(13, { items: [
+    mergePallet(13).items[0],
+    { ...mergePallet(14).items[0], lot_id: 114, unit: "sheets" }
+  ] });
+  assert.match(normalizePalletMergeCandidate(mergeLocation(), mixedUnit).error, /原生单位/);
+
+  const missingOwner = mergePallet(16, { items: [
+    mergePallet(16).items[0],
+    { ...mergePallet(17).items[0], lot_id: 117, customer_id: null }
+  ] });
+  assert.match(normalizePalletMergeCandidate(mergeLocation(), missingOwner).error, /客户归属/);
+
+  const frozen = normalizePalletMergeCandidate(mergeLocation(), mergePallet(14, { items: [{ ...mergePallet(14).items[0], status: "frozen" }] })).candidate;
+  assert.match(palletMergeCompatibility(source, frozen).error, /冻结/);
+  const damaged = normalizePalletMergeCandidate(mergeLocation(), mergePallet(15, { items: [{ ...mergePallet(15).items[0], damaged_quantity: 2 }] }));
+  assert.match(damaged.error, /质量/);
+  assert.deepEqual(togglePalletMergeSource([source], frozen).items, [source]);
+});
+
+test("pallet merge target is chosen from the selected set and omitted from batch sources", () => {
+  const sourceOne = normalizePalletMergeCandidate(mergeLocation(), mergePallet(11)).candidate;
+  const sourceTwo = normalizePalletMergeCandidate(mergeLocation(), mergePallet(22)).candidate;
+  const target = normalizePalletMergeCandidate(
+    mergeLocation({ location_id: 70, location_code: "3F-A1-01", location_name: "三楼 A1-01", floor_code: "3F", area_code: "A1" }),
+    mergePallet(33)
+  ).candidate;
+  assert.deepEqual(palletMergeTargetChoices([sourceOne, sourceTwo, target]).map((item) => item.pallet_id), [11, 22, 33]);
+  assert.deepEqual(buildPalletMergeBatchPayload("merge-batch-key", [
+    { ...sourceOne, client_item_id: "merge-source-11" },
+    { ...sourceTwo, client_item_id: "merge-source-22" },
+    { ...target, client_item_id: "merge-target-33" }
+  ], target), {
+    idempotency_key: "merge-batch-key",
+    confirmed: true,
+    target_pallet_id: 33,
+    expected_target_version: 33,
+    sources: [
+      { client_item_id: "merge-source-11", pallet_id: 11, expected_version: 11 },
+      { client_item_id: "merge-source-22", pallet_id: 22, expected_version: 22 }
+    ]
+  });
+  assert.deepEqual(buildPalletMergeBatchPayload("two-pallet-key", [
+    { ...sourceOne, client_item_id: "merge-source-11" },
+    { ...target, client_item_id: "merge-target-33" }
+  ], target).sources, [
+    { client_item_id: "merge-source-11", pallet_id: 11, expected_version: 11 }
+  ]);
 });

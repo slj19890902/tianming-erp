@@ -36,9 +36,9 @@ def test_operational_twin_reuses_formal_inventory_and_does_not_fake_rack_positio
     assert "未填写位置或仍使用旧自由文本位置的模具" in SOURCE
     assert "库存只投影到已确认区域，不虚构货架层、格或箱体坐标" not in SOURCE
     assert "暂无已建空货位" in SOURCE
-    # P1-16E-2 already uses the formal pallet endpoint for an explicit merge-all action;
-    # that accepted operation must not be mistaken for a fake map-only pallet position.
-    assert "/api/warehouse/pallets/${selectedLocation.pallet.pallet_id}/merge-all" in SOURCE
+    # P1-49C reuses the formal pallet merge capability through one batch endpoint;
+    # the selected pallets still come from real ERP locations, not fake map positions.
+    assert '"/api/warehouse/pallets/merge-batches"' in SOURCE
     assert "交换平面位置不改变库存" in SOURCE or "交换二维平面位置；库存和栈板绑定未改变" in SOURCE
     assert "/api/warehouse/twin-production/layouts/" in SOURCE
     assert "只保存隔离地图库的任务ID与位置关系" in SOURCE
@@ -322,12 +322,12 @@ def test_p1_42b_uses_only_measured_dispatch_zones_and_keeps_transfer_targets() -
     assert "散存待送 · 未绑定实体栈板" in SOURCE
     assert "已绑定实体栈板会直接显示在对应地图位置" in SOURCE
     assert "直接点选三楼空位缩略图" in SOURCE
-    assert "点选三楼目标栈板缩略图" in SOURCE
+    assert "目标必须是上方已选集合中的一块" in SOURCE
     assert "/api/warehouse/twin-operations/staging-lots/${selectedDispatchStagingItem.lot_id}/place" in SOURCE
     assert "/api/warehouse/twin-operations/pallets/${selectedLocation.pallet.pallet_id}/move" in SOURCE
-    assert "/api/warehouse/pallets/${selectedLocation.pallet.pallet_id}/merge-all" in SOURCE
+    assert '"/api/warehouse/pallets/merge-batches"' in SOURCE
     assert '<select value={moveTargetLocationId}' not in SOURCE
-    assert '<select value={mergeTargetPalletId}' not in SOURCE
+    assert 'role="radiogroup" aria-label="目标系统栈板"' in SOURCE
     assert "const P1_47D_ENABLED = false;" in SOURCE
     assert 'canChooseProducts={P1_47D_ENABLED && canEditLocations && mapMode === "move"}' in SOURCE
     assert 'canChooseProducts={canEditLocations && mapMode === "move"}' not in SOURCE

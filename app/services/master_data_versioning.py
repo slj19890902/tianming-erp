@@ -1194,6 +1194,7 @@ def preview_versioned_restore(
     revision: MasterDataObjectVersion,
     expected_version: int,
     user: User,
+    updates: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     spec = _validate_entity(object_type, entity)
     object_id = int(entity.id)
@@ -1217,11 +1218,18 @@ def preview_versioned_restore(
         target_version=target_version,
     )
 
-    updates = snapshot_updates(object_type, revision)
+    restore_updates = (
+        dict(updates)
+        if updates is not None
+        else snapshot_updates(object_type, revision)
+    )
     before = serialize_versioned_entity(object_type, entity)
     proposed = dict(before)
     proposed.update(
-        {field: normalize_json_value(value) for field, value in updates.items()}
+        {
+            field: normalize_json_value(value)
+            for field, value in restore_updates.items()
+        }
     )
     changed = _diff(before, proposed, numeric_fields=spec.numeric_fields)
     warnings = _change_warnings(

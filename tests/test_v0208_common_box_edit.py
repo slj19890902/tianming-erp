@@ -195,8 +195,20 @@ def test_common_box_processes_remove_double_and_drawings_are_independent_of_prin
     assert 'value="双拼"' not in source
     assert 'v-model="productForm._production_processes"' in source
 
-    for print_type in ("无印刷", "单色印刷", "双色印刷", "多色印刷"):
+    for print_type in ("无印刷", "单色印刷", "双色印刷", "三色印刷", "挂板印刷"):
         assert f'<option value="{print_type}">{print_type}</option>' in source
+    print_row = source.split('class="product-form-row product-print-row"', 1)[1].split(
+        'class="product-form-row product-final-row"', 1
+    )[0]
+    assert '<option value="多色印刷">多色印刷</option>' not in print_row
+    assert 'v-model="productForm._printing_situation"' in print_row
+    assert 'v-model="productForm._printing_colors[index-1]"' in print_row
+    assert 'maxlength="40"' in print_row
+    assert "join('＋')" in source
+    for preset in ("黑＋红", "黑＋绿", "黑＋蓝"):
+        assert preset in source
+    assert "颜色待完善" in source
+    assert "PANTONE" not in source  # ordinary spaces remain editable input, not a guessed preset
     assert 'v-if="productForm.print_content !== \'无印刷\'"' not in source
     final_row = source.split('class="product-form-row product-final-row"', 1)[1].split(
         "</fieldset>", 1

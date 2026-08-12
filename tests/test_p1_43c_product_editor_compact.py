@@ -173,6 +173,22 @@ if (saved.remark !== "历史生产备注") throw new Error("hidden remark was cl
 def test_open_save_with_hidden_product_notes_is_not_a_false_version_change(
     tmp_path: Path,
 ) -> None:
+    printing_methods = (
+        "productHasPrinting",
+        "productDirectPrintingColorCount",
+        "productPrintingColorsForWrite",
+        "productPrintingColorSummary",
+        "productPrintingOriginalSnapshot",
+        "productPrintingConfigurationChanged",
+        "productPrintingWriteFields",
+    )
+    printing_bindings = []
+    for name in printing_methods:
+        params, body = _method(name)
+        printing_bindings.append(
+            f"vm.{name}=new Function({json.dumps(params)},"
+            f"{json.dumps(body, ensure_ascii=False)}).bind(vm);"
+        )
     fields_params, fields_body = _method("_productFormSaveFields")
     dirty_params, dirty_body = _method("_productFormDirty")
     source = f"""
@@ -184,6 +200,7 @@ const vm={{
     _production_processes:[],_external_specification:{{}},_external_selected_ids:[]
   }}
 }};
+{chr(10).join(printing_bindings)}
 vm._productFormSaveFields=new Function(
   {json.dumps(fields_params)},
   {json.dumps(fields_body, ensure_ascii=False)}

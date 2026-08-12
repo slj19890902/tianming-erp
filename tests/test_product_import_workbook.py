@@ -1274,7 +1274,9 @@ def test_secondary_gluing_requires_die_cut_category_in_all_payload_writes() -> N
         print_content="无印刷",
     )
     assert printed.print_content == "单色印刷"
-    assert printed.printing_colors == "黑色"
+    # P1-51A keeps black as an explicit editor suggestion only.  The backend
+    # must not invent a formal colour when an old/direct payload omitted it.
+    assert printed.printing_colors is None
 
 
 def test_sync_fields_rejects_secondary_gluing_for_normal_product(

@@ -226,6 +226,7 @@ def test_no_plate_is_default_and_clears_plate_only_settings(plate_app) -> None:
         created = client.post(
             "/api/master/products",
             json=_product_payload(
+                printing_colors="黑色",
                 printing_plate_mode="no_plate",
                 printing_plate_1_id=red["id"],
                 plate_alignment_value_mm=3,
@@ -504,7 +505,11 @@ def test_printing_plate_frontend_and_migration_contract() -> None:
     ).read_text(encoding="utf-8")
 
     for marker in (
-        'v-model="productForm.printing_plate_mode"',
+        '<option value="挂板印刷">挂板印刷</option>',
+        "productForm.printing_plate_mode==='plate'",
+        "printing_plate_1_id",
+        "printing_plate_2_id",
+        "printing_plate_3_id",
         "productPrintingPlateError",
         "对版值(mm)",
         "挂版值(mm)",

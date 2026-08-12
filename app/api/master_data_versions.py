@@ -30,6 +30,10 @@ from app.services.master_data_versioning import (
     serialize_revision,
     snapshot_updates,
 )
+from app.services.printing_colors import (
+    PrintingColorError,
+    normalize_printing_colors,
+)
 
 
 router = APIRouter()
@@ -187,6 +191,7 @@ def _validate_product_printing_plate_restore(
         for field in (
             "customer_id",
             "print_content",
+            "printing_colors",
             "printing_plate_mode",
             "printing_plate_1_id",
             "printing_plate_2_id",
@@ -202,6 +207,13 @@ def _validate_product_printing_plate_restore(
     if mode == "no_plate":
         if any(value is not None for value in ids):
             raise ValueError("历史版本中的不挂板配置仍包含挂板绑定，禁止恢复")
+        try:
+            updates["printing_colors"] = normalize_printing_colors(
+                values["print_content"],
+                values["printing_colors"],
+            )
+        except PrintingColorError as error:
+            raise ValueError(f"历史版本印刷颜色无效：{error}") from error
         return
     if mode != "plate":
         raise ValueError("历史版本中的印刷挂板方式无效，禁止恢复")
@@ -389,11 +401,12 @@ def restore_preview(
         version=version,
     )
     try:
+        updates = snapshot_updates(object_type, revision)
         if object_type == "product":
             _validate_product_printing_plate_restore(
                 db,
                 product=entity,
-                updates=snapshot_updates(object_type, revision),
+                updates=updates,
             )
         return preview_versioned_restore(
             db,
@@ -402,6 +415,7 @@ def restore_preview(
             revision=revision,
             expected_version=payload.expected_version,
             user=user,
+            updates=updates,
         )
     except ValueError as error:
         raise HTTPException(

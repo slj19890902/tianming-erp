@@ -63,6 +63,15 @@ def test_product_editor_uses_compact_rows_and_keeps_mold_next_to_process() -> No
     assert ".bom-component-compact-row" in css
     assert "@media (max-width: 680px)" in css
     assert ".product-drawing-independent-section { grid-template-columns: 1fr; }" in css
+    assert ".product-dimension-field .input { width: 5ch; min-width: 5ch; max-width: 100%; }" in css
+    assert ".product-cutting-mode-field .inline-input .input { width: 2ch; min-width: 2ch; flex: 0 0 2ch; }" in css
+    assert ".product-splice-field .select { width: 6em; min-width: 6em; max-width: 100%; }" in css
+    assert ".product-flap-field .input { width: 2ch; min-width: 2ch; max-width: 100%; }" in css
+    assert ".product-crease-field { grid-column: span 3; min-width: 0; }" in css
+    assert "grid-template-columns: minmax(6em, .8fr) 86px 100px minmax(150px, .85fr);" in css
+    assert ".product-material-picker .search-select { width: 150px; min-width: 0; max-width: 100%; }" in css
+    assert ".product-production-label-config {\n        grid-column: span 1;" in css
+    assert ".product-drawing-independent-section {\n        grid-column: span 3;" in css
     assert "minmax(0, 1fr)" in css
 
 

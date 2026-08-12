@@ -1073,12 +1073,17 @@
       .product-size-report-row {
         grid-template-columns: repeat(12, minmax(0, 1fr));
       }
-      .product-dimension-field { grid-column: span 1; }
-      .product-splice-field { grid-column: span 2; }
-      .product-flap-field { grid-column: span 1; }
+      .product-dimension-field { grid-column: span 1; min-width: 0; }
+      .product-dimension-field .input { width: 5ch; min-width: 5ch; max-width: 100%; }
+      .product-splice-field { grid-column: span 2; min-width: 0; }
+      .product-splice-field .select { width: 6em; min-width: 6em; max-width: 100%; }
+      .product-flap-field { grid-column: span 1; min-width: 0; }
+      .product-flap-field .input { width: 2ch; min-width: 2ch; max-width: 100%; }
       .product-report-field { grid-column: span 3; min-width: 0; }
       .product-crease-type-field { grid-column: span 1; }
       .product-cutting-mode-field { grid-column: span 2; min-width: 0; }
+      .product-cutting-mode-field .inline-input { justify-content: flex-start; }
+      .product-cutting-mode-field .inline-input .input { width: 2ch; min-width: 2ch; flex: 0 0 2ch; }
       .product-crease-field { grid-column: span 3; min-width: 0; }
       .product-crease-warning { grid-column: 1 / -1; }
       .product-material-workbench {
@@ -1092,7 +1097,7 @@
       }
       .product-material-controls {
         display: grid;
-        grid-template-columns: minmax(145px, .8fr) 86px 100px minmax(300px, 1.7fr);
+        grid-template-columns: minmax(6em, .8fr) 86px 100px minmax(150px, .85fr);
         gap: 10px 12px;
         align-content: start;
         min-width: 0;
@@ -1102,6 +1107,8 @@
         background: #fff;
       }
       .product-material-picker { grid-column: auto; }
+      .product-material-controls > .field:first-child .select { width: 6em; min-width: 6em; max-width: 100%; }
+      .product-material-picker .search-select { width: 150px; min-width: 0; max-width: 100%; }
       .product-material-details {
         min-width: 0;
         border: 1px solid #d7e8fb;
@@ -1212,7 +1219,7 @@
         grid-template-columns: minmax(285px, 1.35fr) minmax(240px, 1.1fr) minmax(145px, .65fr) minmax(170px, .75fr);
       }
       .product-printing-plate-config {
-        grid-column: 1 / -1;
+        grid-column: span 1;
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
         gap: 8px 10px;
@@ -1222,9 +1229,9 @@
         background: #fff7ed;
       }
       .product-production-label-config {
-        grid-column: 1 / -1;
+        grid-column: span 1;
         display: grid;
-        grid-template-columns: minmax(250px, .9fr) minmax(180px, .6fr);
+        grid-template-columns: 1fr;
         gap: 8px 12px;
         align-items: start;
         padding: 8px 10px;
@@ -1255,7 +1262,7 @@
         padding-bottom: 0;
       }
       .product-drawing-independent-section {
-        grid-column: 1 / -1;
+        grid-column: span 3;
         display: grid;
         grid-template-columns: minmax(260px, .7fr) minmax(320px, 1.3fr);
         gap: 8px 12px;
@@ -1433,7 +1440,8 @@
         .product-crease-type-field { grid-column: span 1; }
         .product-cutting-mode-field { grid-column: span 2; }
         .product-crease-field { grid-column: span 3; }
-        .product-production-label-config { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .product-production-label-config { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-column: 1 / -1; }
+        .product-drawing-independent-section { grid-column: 1 / -1; }
         .telescoping-component-grid { grid-template-columns: 1fr; }
       }
       @media (max-width: 680px) {
@@ -1449,7 +1457,7 @@
         .product-material-comparison-panel { grid-column: auto; }
         .product-material-candidate-metrics { grid-template-columns: 1fr; }
         .product-material-history-row { grid-template-columns: 1fr; }
-        .product-production-label-config { grid-template-columns: 1fr; }
+        .product-production-label-config { grid-template-columns: 1fr; grid-column: 1 / -1; }
         .product-drawing-independent-section { grid-template-columns: 1fr; }
       }
 

@@ -31,6 +31,20 @@ class MoldTool(Base):
     __table_args__ = (
         UniqueConstraint("mold_code", name="uq_mold_tools_code"),
         Index("ix_mold_tools_active_location", "is_active", "rack_location"),
+        Index("ix_mold_tools_archive_status", "archive_status", "rack_location"),
+        CheckConstraint(
+            "archive_status IN ('active', 'archived')",
+            name="ck_mold_tools_archive_status",
+        ),
+        CheckConstraint(
+            "((archive_status = 'active' AND archived_at IS NULL "
+            "AND archived_by IS NULL AND archive_reason IS NULL "
+            "AND pre_archive_location IS NULL) OR "
+            "(archive_status = 'archived' AND is_active = false "
+            "AND archived_at IS NOT NULL AND archived_by IS NOT NULL "
+            "AND archive_reason IS NOT NULL AND pre_archive_location IS NOT NULL))",
+            name="ck_mold_tools_archive_state",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -53,6 +67,19 @@ class MoldTool(Base):
     )
     remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    archive_status: Mapped[str] = mapped_column(
+        String(20), default="active", server_default="active", nullable=False
+    )
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    archived_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
+    )
+    archive_reason: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    pre_archive_location: Mapped[str | None] = mapped_column(String(250), nullable=True)
+    restored_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    restored_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     created_by: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
@@ -78,6 +105,8 @@ class MoldTool(Base):
     last_location_confirmer: Mapped["User | None"] = relationship(
         foreign_keys=[last_location_confirmed_by],
     )
+    archiver: Mapped["User | None"] = relationship(foreign_keys=[archived_by])
+    restorer: Mapped["User | None"] = relationship(foreign_keys=[restored_by])
 
 
 class MoldLocationMovement(Base):

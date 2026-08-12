@@ -44,6 +44,8 @@ _SHORT_VERTICAL_PATTERN = re.compile(
 MOLD_LOCATION_SOURCES = frozenset(
     {"manual_input", "scanner_paste", "url_parameter", "api"}
 )
+MOLD_ARCHIVE_AREA_CODE = "3F-M-ARCHIVE-AB2-N"
+MOLD_ARCHIVE_AREA_PROMPT = "三楼 AB2 北侧模具封存区（区域内待定位）"
 
 # Owner-confirmed physical rack identities.  The 2026-08-11 rule removes the
 # unstable left-to-right P position from new mold locations.  Published rack
@@ -226,6 +228,20 @@ def describe_mold_location(value: str) -> dict:
 
     raw = (value or "").strip()
     normalized = raw.upper()
+    if normalized == MOLD_ARCHIVE_AREA_CODE:
+        return {
+            "kind": "archive_area",
+            "location_code": MOLD_ARCHIVE_AREA_CODE,
+            "floor": "3F",
+            "area": "AB2-N",
+            "rack": None,
+            "level": None,
+            "grid": None,
+            "row": None,
+            "position": None,
+            "prompt": MOLD_ARCHIVE_AREA_PROMPT,
+            "map_status": "area_pending_location",
+        }
     storage_grid = _STORAGE_GRID_PATTERN.fullmatch(normalized)
     if storage_grid:
         parts = storage_grid.groupdict()

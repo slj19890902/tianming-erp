@@ -197,6 +197,7 @@ from app.services.mold_identity import (
     next_available_mold_code,
 )
 from app.services.mold_location import (
+    MOLD_ARCHIVE_AREA_CODE,
     MoldLocationError,
     MoldLocationMoveResult,
     MoldLocationPreview,
@@ -205,6 +206,12 @@ from app.services.mold_location import (
     mold_location_feature_codes,
     one_floor_mold_location_options,
     preview_mold_location_move,
+)
+from app.services.mold_archive import (
+    MoldArchiveResult,
+    archive_mold_tool,
+    mold_archive_candidate,
+    restore_mold_tool,
 )
 from app.services.printing_plate_location import (
     PrintingPlateLocationError,
@@ -224,6 +231,7 @@ _MOLD_CODE_WRITE_LOCK = Lock()
 admin_only = RoleChecker(["admin"])
 can_read = PermissionChecker("warehouse.view")
 can_operate = PermissionChecker("warehouse.execute")
+can_archive = PermissionChecker("warehouse.archive")
 can_read_orders = PermissionChecker("orders.view")
 can_reserve = PermissionChecker("warehouse.reserve")
 can_view_reservations = PermissionChecker("warehouse.view")
@@ -884,6 +892,33 @@ class MoldLocationConfirmPayload(MoldLocationPreviewPayload):
     def strip_mold_location_note(cls, value: str | None) -> str | None:
         text = (value or "").strip()
         return text or None
+
+
+class MoldArchiveConfirmPayload(BaseModel):
+    expected_version: int = Field(gt=0)
+    idempotency_key: str = Field(min_length=8, max_length=120)
+    reason: Literal["unbound", "all_products_inactive"]
+    physical_move_confirmed: Literal[True]
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def strip_archive_idempotency_key(cls, value: str) -> str:
+        text = value.strip()
+        if len(text) < 8:
+            raise ValueError("幂等键去除首尾空白后至少需要 8 个字符")
+        return text
+
+
+class MoldRestoreConfirmPayload(BaseModel):
+    target_location: str = Field(min_length=1, max_length=250)
+    expected_version: int = Field(gt=0)
+    idempotency_key: str = Field(min_length=8, max_length=120)
+    physical_move_confirmed: Literal[True]
+
+    @field_validator("target_location", "idempotency_key")
+    @classmethod
+    def strip_restore_fields(cls, value: str) -> str:
+        return value.strip()
 
 
 class PrintingPlateCreatePayload(BaseModel):
@@ -6723,7 +6758,11 @@ def _twin_mold_resources(
     for mold in response.get("items") or []:
         visible_products = [
             item
-            for item in (mold.get("products") or [])
+            for item in (
+                mold.get("binding_history")
+                if mold.get("archive_status") == "archived"
+                else mold.get("products")
+            ) or []
             if visible_customer_ids is None
             or item.get("customer_id") in visible_customer_ids
         ]
@@ -6756,7 +6795,11 @@ def _twin_mold_resources(
                 "kind": "mold",
                 "primary_code": mold.get("mold_code"),
                 "title": mold.get("mold_name") or "模具",
-                "subtitle": product_summary or "未关联产品",
+                "subtitle": (
+                    f"封存待复用 · {product_summary or '无历史绑定'}"
+                    if mold.get("archive_status") == "archived"
+                    else product_summary or "未关联产品"
+                ),
                 "floor_code": guide.get("floor") or "TEXT",
                 "area_code": guide.get("area"),
                 "location_id": None,
@@ -7902,6 +7945,21 @@ def _mold_tool_dict(
     time_archive: dict | None = None,
 ) -> dict:
     products = _visible_mold_products(row, allowed_customer_ids)
+    historical_products = (
+        sorted(
+            row.products,
+            key=lambda product: (
+                product.customer.name if product.customer else "",
+                product.product_code,
+                product.id,
+            ),
+        )
+        if allowed_customer_ids is None
+        else products
+    )
+    archive_candidate = (
+        mold_archive_candidate(row) if allowed_customer_ids is None else None
+    )
     return {
         "id": row.id,
         "mold_code": row.mold_code,
@@ -7917,6 +7975,15 @@ def _mold_tool_dict(
         "last_location_confirmed_by": row.last_location_confirmed_by,
         "remarks": row.remarks,
         "is_active": row.is_active,
+        "archive_status": row.archive_status,
+        "archived_at": utc_naive_to_api(row.archived_at) if row.archived_at else None,
+        "archived_by": row.archived_by,
+        "archive_reason": row.archive_reason,
+        "pre_archive_location": row.pre_archive_location,
+        "restored_at": utc_naive_to_api(row.restored_at) if row.restored_at else None,
+        "restored_by": row.restored_by,
+        "archive_candidate": archive_candidate,
+        "archive_area_code": MOLD_ARCHIVE_AREA_CODE,
         "product_count": len(products),
         "products": [
             {
@@ -7940,6 +8007,18 @@ def _mold_tool_dict(
                 "direction_note": product.report_notes,
             }
             for product in products
+        ],
+        "binding_history": [
+            {
+                "id": product.id,
+                "customer_id": product.customer_id,
+                "customer_name": product.customer.name if product.customer else None,
+                "product_code": product.product_code,
+                "product_name": product.product_name,
+                "is_active": bool(product.is_active and product.deleted_at is None),
+                "deleted_at": utc_naive_to_api(product.deleted_at) if product.deleted_at else None,
+            }
+            for product in historical_products
         ],
         "created_at": utc_naive_to_api(row.created_at),
         "updated_at": utc_naive_to_api(row.updated_at) if row.updated_at else None,
@@ -7994,7 +8073,12 @@ def _mold_tools_query(
             )
         )
     if not include_inactive:
-        query = query.where(MoldTool.is_active.is_(True))
+        query = query.where(
+            or_(
+                MoldTool.is_active.is_(True),
+                MoldTool.archive_status == "archived",
+            )
+        )
     keyword = (q or "").strip()
     if keyword:
         pattern = f"%{keyword}%"
@@ -8003,13 +8087,17 @@ def _mold_tools_query(
             linked_scope_filters.append(
                 Product.customer_id.in_(allowed_customer_ids)
             )
+        product_state_filters = (
+            [Product.deleted_at.is_(None), Product.is_active.is_(True)]
+            if allowed_customer_ids is not None
+            else []
+        )
         linked_molds = (
             select(Product.mold_tool_id)
             .join(Customer, Customer.id == Product.customer_id)
             .where(
                 Product.mold_tool_id.is_not(None),
-                Product.deleted_at.is_(None),
-                Product.is_active.is_(True),
+                *product_state_filters,
                 *linked_scope_filters,
                 or_(
                     Product.product_code.like(pattern),
@@ -8253,6 +8341,117 @@ def _mold_location_move_response(
         "idempotent_replay": result.replayed,
         "no_change": result.no_change,
     }
+
+
+def _require_mold_archive_operator(user: User) -> None:
+    if user.role not in {"admin", "boss"}:
+        raise HTTPException(status_code=403, detail="只有管理员或老板可以封存和恢复模具")
+
+
+def _mold_archive_response(result: MoldArchiveResult) -> dict:
+    return {
+        "message": "模具已封存待复用" if result.action == "archive" else "模具已恢复启用",
+        "mold": _mold_tool_dict(result.mold),
+        "movement": _mold_location_movement_dict(result.movement),
+        "idempotent_replay": result.replayed,
+    }
+
+
+def _append_mold_archive_log(
+    db: Session,
+    *,
+    request: Request,
+    user: User,
+    result: MoldArchiveResult,
+) -> None:
+    if result.replayed:
+        return
+    movement = result.movement
+    db.add(
+        OperationLog(
+            user_id=user.id,
+            username=user.username,
+            role=user.role,
+            action="ARCHIVE" if result.action == "archive" else "RESTORE",
+            resource=f"warehouse/molds/{result.mold.id}/{result.action}",
+            entity_type="mold_tool",
+            entity_id=result.mold.id,
+            description="模具封存待复用" if result.action == "archive" else "模具恢复启用",
+            details=json.dumps(
+                {
+                    "movement_id": movement.id,
+                    "mold_code": movement.mold_code_snapshot,
+                    "from_location": movement.from_location,
+                    "to_location": movement.to_location,
+                    "expected_version": movement.expected_version,
+                    "resulting_version": movement.resulting_version,
+                    "idempotency_key": movement.idempotency_key,
+                    "reason": movement.note,
+                },
+                ensure_ascii=False,
+            ),
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    )
+
+
+@router.post("/molds/{mold_id}/archive")
+def archive_mold(
+    mold_id: int,
+    payload: MoldArchiveConfirmPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_archive),
+) -> dict:
+    _require_mold_archive_operator(user)
+    try:
+        result = archive_mold_tool(
+            db,
+            mold_id=mold_id,
+            expected_version=payload.expected_version,
+            idempotency_key=payload.idempotency_key,
+            actor_id=user.id,
+            reason=payload.reason,
+        )
+        _append_mold_archive_log(db, request=request, user=user, result=result)
+        db.commit()
+        return _mold_archive_response(result)
+    except MoldLocationError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="模具封存事实已变化，请刷新后重试") from error
+
+
+@router.post("/molds/{mold_id}/restore")
+def restore_mold(
+    mold_id: int,
+    payload: MoldRestoreConfirmPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_archive),
+) -> dict:
+    _require_mold_archive_operator(user)
+    try:
+        result = restore_mold_tool(
+            db,
+            mold_id=mold_id,
+            target_location=payload.target_location,
+            expected_version=payload.expected_version,
+            idempotency_key=payload.idempotency_key,
+            actor_id=user.id,
+        )
+        _append_mold_archive_log(db, request=request, user=user, result=result)
+        db.commit()
+        return _mold_archive_response(result)
+    except MoldLocationError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="模具恢复事实已变化，请刷新后重试") from error
 
 
 @router.get("/molds/location-options")
@@ -8572,6 +8771,8 @@ def update_mold_tool(
     row = db.get(MoldTool, mold_id)
     if row is None:
         raise HTTPException(status_code=404, detail="模具不存在")
+    if row.archive_status == "archived":
+        raise HTTPException(status_code=409, detail="封存模具不能直接编辑，请先按现场搬回后恢复启用")
     if payload.rack_location.strip() != row.rack_location.strip():
         raise HTTPException(
             status_code=409,
@@ -8795,6 +8996,8 @@ def enable_mold_tool(
     row = db.get(MoldTool, mold_id)
     if row is None:
         raise HTTPException(status_code=404, detail="模具不存在")
+    if row.archive_status == "archived":
+        raise HTTPException(status_code=409, detail="封存模具不能普通启用，请先搬回一楼正式模具位并恢复")
     row.is_active = True
     row.updated_by = user.id
     db.commit()
@@ -8810,6 +9013,8 @@ def disable_mold_tool(
     row = db.get(MoldTool, mold_id)
     if row is None:
         raise HTTPException(status_code=404, detail="模具不存在")
+    if row.archive_status == "archived":
+        raise HTTPException(status_code=409, detail="模具已经处于封存待复用状态")
     row.is_active = False
     row.updated_by = user.id
     db.commit()

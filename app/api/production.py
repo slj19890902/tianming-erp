@@ -22,6 +22,11 @@ from app.models.customer import Customer
 from app.models.order import Order, OrderItem
 from app.models.production import ProductionCompletion, ProductionTask
 from app.models.user import User
+from app.models.warehouse_inventory import (
+    InventoryLot,
+    InventoryPallet,
+    InventoryPalletItem,
+)
 from app.services.audit_log import append_audit_event
 from app.services.production_workflow import (
     COMPLETED,
@@ -186,6 +191,31 @@ def _append_production_completion_audit(
 ) -> None:
     customer_id, customer_name = customer_snapshot or (None, None)
     is_supplemental = completion.completion_type == "supplemental"
+    pallet_rows = list(
+        db.execute(
+            select(InventoryPallet, InventoryPalletItem, InventoryLot)
+            .join(
+                InventoryPalletItem,
+                InventoryPalletItem.pallet_id == InventoryPallet.id,
+            )
+            .join(InventoryLot, InventoryLot.id == InventoryPalletItem.inventory_lot_id)
+            .where(
+                InventoryLot.source_ref_type == "production_completion",
+                InventoryLot.source_ref_id == completion.id,
+                InventoryPallet.is_current.is_(True),
+            )
+            .order_by(InventoryPallet.id, InventoryLot.id)
+        )
+    )
+    pallet_ids = sorted({int(pallet.id) for pallet, _item, _lot in pallet_rows})
+    pallet_codes = sorted({pallet.pallet_code for pallet, _item, _lot in pallet_rows})
+    pallet_lot_ids = [int(lot.id) for _pallet, _item, lot in pallet_rows]
+    pallet_quantity = sum(
+        int(lot.quantity_available or 0)
+        + int(lot.quantity_reserved or 0)
+        + int(lot.quantity_damaged or 0)
+        for _pallet, _item, lot in pallet_rows
+    )
     append_audit_event(
         db,
         event_category="business",
@@ -222,6 +252,11 @@ def _append_production_completion_audit(
             "surplus_finished_quantity": completion.surplus_finished_quantity,
             "inventory_lot_id": completion.inventory_lot_id,
             "warehouse_location_id": completion.warehouse_location_id,
+            "system_pallet_id": pallet_ids[0] if len(pallet_ids) == 1 else None,
+            "system_pallet_code": pallet_codes[0] if len(pallet_codes) == 1 else None,
+            "system_pallet_ids": pallet_ids,
+            "system_pallet_inventory_lot_ids": pallet_lot_ids,
+            "system_pallet_quantity": pallet_quantity,
         },
     )
 

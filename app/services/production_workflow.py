@@ -92,6 +92,7 @@ TEMPORARY_LOCATION_CODES = frozenset(
     + [*(f"F34-P{number:02d}" for number in range(1, 4))]
 )
 DIRECT_DELIVERY_STAGING_LOCATION_CODE = "F1-DISPATCH-01"
+DIRECT_DISPATCH_PALLET_KEY_PREFIX = "PRODUCTION_COMPLETION"
 
 
 class ProductionWorkflowError(ValueError):
@@ -1009,7 +1010,142 @@ def _production_direct_staging_location(db: Session) -> WarehouseLocation:
     )
     if issue:
         raise ProductionWorkflowError(f"一楼待送区不可用：{issue}", 409)
+    if (
+        location.warehouse_floor != 1
+        or str(location.area_code or "").strip().upper() != "DISPATCH"
+        or location.storage_type != "temporary_aisle"
+        or location.source_version != "P1-25C"
+    ):
+        raise ProductionWorkflowError(
+            "一楼待送区与正式 F1-DISPATCH-01 定义不一致，请先核对仓库台账",
+            409,
+        )
     return location
+
+
+def _direct_dispatch_pallet_occupancy_key(completion_id: int) -> str:
+    return f"{DIRECT_DISPATCH_PALLET_KEY_PREFIX}:{completion_id}"
+
+
+def _direct_dispatch_pallet_code(completion_id: int) -> str:
+    return f"PLT-F1-PC-{completion_id:010d}"
+
+
+def _bind_direct_completion_lots_to_system_pallet(
+    db: Session,
+    *,
+    completion: ProductionCompletion,
+    order: Order,
+    lots: Sequence[InventoryLot],
+    location: WarehouseLocation,
+    operator_id: int | None,
+) -> InventoryPallet:
+    """Bind one direct-production detail to one formal ERP system pallet.
+
+    The first-floor dispatch area is an area-level staging location rather than
+    a one-pallet physical slot.  ``location_occupancy_key`` keeps the existing
+    one-pallet-per-location rule for ordinary locations while allowing one
+    independently traceable pallet for each direct completion in this area.
+    """
+
+    if location.location_code != DIRECT_DELIVERY_STAGING_LOCATION_CODE:
+        raise ProductionWorkflowError("直接待送系统栈板只能建立在一楼待送区", 409)
+    occupancy_key = _direct_dispatch_pallet_occupancy_key(completion.id)
+    existing = db.scalar(
+        select(InventoryPallet).where(
+            InventoryPallet.location_id == location.id,
+            InventoryPallet.location_occupancy_key == occupancy_key,
+            InventoryPallet.is_current.is_(True),
+        )
+    )
+    normalized_lots = sorted({lot.id: lot for lot in lots}.values(), key=lambda row: row.id)
+    if not normalized_lots:
+        raise ProductionWorkflowError("直接待送完工未生成成品库存批次，不能建立系统栈板", 409)
+    for lot in normalized_lots:
+        if (
+            lot.inventory_type != "finished"
+            or lot.status != "active"
+            or lot.warehouse_location_id != location.id
+            or lot.source_ref_type != "production_completion"
+            or int(lot.source_ref_id or 0) != completion.id
+            or lot.finished_detail is None
+        ):
+            raise ProductionWorkflowError("直接待送库存批次与本次完工事实不一致", 409)
+
+    if existing is not None:
+        linked_ids = {
+            int(row.inventory_lot_id)
+            for row in existing.items
+            if row.inventory_lot_id is not None
+        }
+        expected_ids = {int(lot.id) for lot in normalized_lots}
+        if linked_ids != expected_ids:
+            raise ProductionWorkflowError("直接待送系统栈板幂等事实不一致", 409)
+        return existing
+    if any(lot.pallet_item is not None for lot in normalized_lots):
+        raise ProductionWorkflowError("直接待送库存批次已绑定其他栈板", 409)
+
+    pallet = InventoryPallet(
+        pallet_code=_direct_dispatch_pallet_code(completion.id),
+        location_id=location.id,
+        location_occupancy_key=occupancy_key,
+        status="active",
+        is_current=True,
+        needs_relocation=True,
+        remarks=f"生产完工明细 {completion.id} 直接待送系统栈板",
+        created_by=operator_id,
+        updated_by=operator_id,
+    )
+    db.add(pallet)
+    db.flush()
+    for lot in normalized_lots:
+        detail = lot.finished_detail
+        assert detail is not None
+        physical_quantity = (
+            int(lot.quantity_available or 0)
+            + int(lot.quantity_reserved or 0)
+            + int(lot.quantity_damaged or 0)
+        )
+        if physical_quantity <= 0:
+            raise ProductionWorkflowError("直接待送系统栈板数量必须大于0", 409)
+        db.add(
+            InventoryPalletItem(
+                pallet_id=pallet.id,
+                inventory_lot_id=lot.id,
+                customer_id=detail.owner_customer_id,
+                product_id=detail.product_id,
+                inventory_code=detail.inventory_code_snapshot,
+                order_no=order.order_number,
+                customer_name_snapshot=detail.owner_customer_name_snapshot,
+                product_name=detail.product_name_snapshot,
+                item_type="finished",
+                quantity=physical_quantity,
+                unit=lot.unit,
+                match_status="matched",
+                remarks=f"生产完工明细 {completion.id} 自动归栈",
+                created_by=operator_id,
+            )
+        )
+    now = utc_now_naive()
+    db.add(
+        InventoryLocationMovement(
+            pallet_id=pallet.id,
+            from_location_id=None,
+            to_location_id=location.id,
+            movement_type="create",
+            operator_id=operator_id,
+            moved_at=now,
+            idempotency_key=_stable_key(
+                "production-completion", completion.id, "direct-pallet"
+            ),
+            confirmed_at=now,
+            pallet_version_before=None,
+            pallet_version_after=1,
+            remarks=f"生产完工明细 {completion.id} 直接待送自动建立系统栈板",
+        )
+    )
+    db.flush()
+    return pallet
 
 
 def list_temporary_locations(db: Session) -> list[dict]:
@@ -1789,6 +1925,15 @@ def complete_production_batch(
                 ),
             )
             completion.inventory_lot_id = lot.id
+            if is_direct_staging:
+                _bind_direct_completion_lots_to_system_pallet(
+                    db,
+                    completion=completion,
+                    order=order,
+                    lots=[lot],
+                    location=location,
+                    operator_id=operator_id,
+                )
         _consume_completion_semi_reservations(
             db,
             completion=completion,
@@ -1941,8 +2086,20 @@ def transfer_direct_completion_to_stock(
             or int(lot.source_ref_id or 0) != completion.id
         ):
             raise ProductionWorkflowError("一楼待送区成品批次已失效，不能转库存", 409)
-        if lot.pallet_item is not None:
-            raise ProductionWorkflowError("该待送批次已绑定物理栈板，不能重复转库存", 409)
+        direct_pallet_item = lot.pallet_item
+        direct_pallet = (
+            direct_pallet_item.pallet if direct_pallet_item is not None else None
+        )
+        expected_occupancy_key = _direct_dispatch_pallet_occupancy_key(
+            completion.id
+        )
+        if direct_pallet_item is not None and (
+            direct_pallet is None
+            or not direct_pallet.is_current
+            or direct_pallet.location_id != lot.warehouse_location_id
+            or direct_pallet.location_occupancy_key != expected_occupancy_key
+        ):
+            raise ProductionWorkflowError("一楼待送系统栈板状态异常，不能转库存", 409)
         if lot.warehouse_location_id == target_location.id:
             raise ProductionWorkflowError("目标库位与当前库位相同", 409)
         before = _balances(lot)
@@ -1964,6 +2121,21 @@ def transfer_direct_completion_to_stock(
         db.expire(lot)
         lot = db.get(InventoryLot, completion.inventory_lot_id)
         assert lot is not None
+        if direct_pallet_item is not None and direct_pallet is not None:
+            from app.services.floor3_locations import clear_pallet
+
+            db.delete(direct_pallet_item)
+            db.flush()
+            clear_pallet(
+                db,
+                pallet_id=direct_pallet.id,
+                expected_version=int(direct_pallet.version),
+                remarks="一楼直接待送完工整批转入正式库存位",
+                operator_id=operator_id,
+                idempotency_key=_stable_key(
+                    "production-transfer", completion.id, key, "clear-direct-pallet"
+                ),
+            )
         if target_location.source_version == "V11":
             from app.services.floor3_locations import bind_finished_lot_to_floor3_pallet
 
@@ -3200,6 +3372,16 @@ def _production_completion_dicts(db: Session, rows: Sequence[tuple]) -> list[dic
         effective_lot_id = (
             transfer.inventory_lot_id if transfer is not None else completion.inventory_lot_id
         )
+        effective_lot = (
+            db.get(InventoryLot, effective_lot_id)
+            if effective_lot_id is not None
+            else None
+        )
+        effective_pallet = (
+            effective_lot.pallet_item.pallet
+            if effective_lot is not None and effective_lot.pallet_item is not None
+            else None
+        )
         location = (
             db.get(WarehouseLocation, effective_location_id)
             if effective_location_id is not None
@@ -3256,6 +3438,14 @@ def _production_completion_dicts(db: Session, rows: Sequence[tuple]) -> list[dic
                 "warehouse_location_id": effective_location_id,
                 "warehouse_location_code": location.location_code if location else None,
                 "inventory_lot_id": effective_lot_id,
+                "system_pallet_id": (
+                    effective_pallet.id if effective_pallet is not None else None
+                ),
+                "system_pallet_code": (
+                    effective_pallet.pallet_code
+                    if effective_pallet is not None
+                    else None
+                ),
                 "remarks": completion.remarks,
                 "completed_by": completion.completed_by,
                 "completed_by_name": user.real_name if user is not None else None,

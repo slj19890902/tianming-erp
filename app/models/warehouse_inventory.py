@@ -286,8 +286,11 @@ class WarehouseLocation(Base):
         DateTime, onupdate=func.current_timestamp(), nullable=True
     )
     current_pallet: Mapped["InventoryPallet | None"] = relationship(
-        primaryjoin=lambda: (WarehouseLocation.id == InventoryPallet.location_id)
-        & InventoryPallet.is_current.is_(True),
+        primaryjoin=lambda: (
+            (WarehouseLocation.id == InventoryPallet.location_id)
+            & InventoryPallet.is_current.is_(True)
+            & (InventoryPallet.location_occupancy_key == "PRIMARY")
+        ),
         viewonly=True,
         uselist=False,
     )
@@ -383,6 +386,7 @@ class InventoryPallet(Base):
         Index(
             "uq_inventory_pallets_current_location",
             "location_id",
+            "location_occupancy_key",
             unique=True,
             sqlite_where=text("is_current = 1"),
             postgresql_where=text("is_current = true"),
@@ -393,6 +397,13 @@ class InventoryPallet(Base):
     pallet_code: Mapped[str] = mapped_column(String(100), nullable=False)
     location_id: Mapped[int | None] = mapped_column(
         ForeignKey("warehouse_locations.id", ondelete="SET NULL"), nullable=True
+    )
+    # Ordinary physical locations retain one current pallet through the
+    # ``PRIMARY`` key.  The formal first-floor dispatch area is an area-level
+    # staging location, so each direct-production completion receives its own
+    # stable key while still sharing the same authoritative location_id.
+    location_occupancy_key: Mapped[str] = mapped_column(
+        String(100), default="PRIMARY", server_default="PRIMARY", nullable=False
     )
     status: Mapped[str] = mapped_column(
         String(20), default="active", server_default="active", nullable=False

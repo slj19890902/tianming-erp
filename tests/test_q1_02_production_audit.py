@@ -87,7 +87,19 @@ def production_audit_db(tmp_path: Path):
             is_temporary=True,
             source_version="V11",
         )
-        db.add_all([product, location, stock_location])
+        direct_staging = WarehouseLocation(
+            location_code="F1-DISPATCH-01",
+            location_name="一楼待送区",
+            warehouse_type="finished",
+            is_active=True,
+            warehouse_floor=1,
+            area_code="DISPATCH",
+            storage_type="temporary_aisle",
+            placement_status="placed",
+            is_temporary=True,
+            source_version="P1-25C",
+        )
+        db.add_all([product, location, stock_location, direct_staging])
         db.flush()
 
         ids: dict[str, int] = {}

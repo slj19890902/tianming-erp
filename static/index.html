@@ -1291,13 +1291,26 @@
       .product-printing-plate-config {
         flex:1 0 100%;
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        grid-template-columns: 1fr;
         gap: 8px 10px;
         padding: 10px;
         border: 1px solid #fed7aa;
         border-radius: 9px;
         background: #fff7ed;
       }
+      .product-printing-plate-actions { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+      .product-printing-plate-row {
+        display:grid;
+        grid-template-columns:72px minmax(240px,1.35fr) minmax(120px,.7fr) minmax(180px,1fr) minmax(140px,.8fr) auto;
+        gap:8px;
+        align-items:end;
+        padding:8px;
+        border:1px solid #fed7aa;
+        border-radius:8px;
+        background:#fff;
+      }
+      .product-printing-plate-row-order { align-self:center; font-weight:700; color:#9a3412; white-space:nowrap; }
+      .product-printing-plate-parameters { display:grid; grid-template-columns:repeat(5,minmax(140px,1fr)); gap:8px 10px; }
       .product-printing-color-config {
         flex:1 0 100%;
         display:grid;
@@ -5030,17 +5043,26 @@
                   <div v-if="productPrintingColorError" class="status red product-printing-color-message">{{ productPrintingColorError }}</div>
                 </div>
                 <div v-if="productForm.supply_mode!=='external_purchase' && productHasPrinting(productForm) && productForm.printing_plate_mode==='plate'" class="product-printing-plate-config">
-                  <div class="muted" style="grid-column:1/-1">当前沿用原挂板选择；P1-51B 将在此处升级为动态挂板行。</div>
-                  <div class="field" v-for="index in productPrintingPlateCount(productForm)" :key="`printing-plate-${index}`">
-                    <label>第{{ index }}色挂板</label>
-                    <search-select v-model="productForm[`printing_plate_${index}_id`]" :options="printingPlateSelectOptions()" label-key="_label" value-key="id" :placeholder="`选择第${index}色挂板`" :allow-empty="false"></search-select>
+                  <div class="product-printing-plate-actions">
+                    <div><strong>{{ productPrintingPlateContent(productPrintingPlateCount(productForm)) }}</strong><span class="muted">　行顺序就是印刷颜色顺序</span></div>
+                    <button type="button" class="btn small primary" :disabled="productPrintingPlateCount(productForm)>=3" @click="addProductPrintingPlateRow">添加挂板</button>
                   </div>
-                  <div class="field"><label>对版值(mm)</label><input class="input" type="number" min="0" step="0.01" v-model="productForm.plate_alignment_value_mm" /></div>
-                  <div class="field"><label>挂版值(mm)</label><input class="input" type="number" min="0" step="0.01" v-model="productForm.plate_mount_value_mm" /></div>
-                  <div class="field"><label>机器设定箱长(mm)</label><input class="input" type="number" min="0" step="0.01" v-model="productForm.machine_set_length_mm" /></div>
-                  <div class="field"><label>机器设定箱宽(mm)</label><input class="input" type="number" min="0" step="0.01" v-model="productForm.machine_set_width_mm" /></div>
-                  <div class="field"><label>机器设定箱高(mm)</label><input class="input" type="number" min="0" step="0.01" v-model="productForm.machine_set_height_mm" /></div>
-                  <div v-if="productPrintingPlateError" class="status orange" style="grid-column:1/-1">{{ productPrintingPlateError }}</div>
+                  <div class="product-printing-plate-row" v-for="index in productPrintingPlateCount(productForm)" :key="`printing-plate-${index}`">
+                    <div class="product-printing-plate-row-order">第{{ index }}色</div>
+                    <div class="field"><label>正式挂板</label><search-select v-model="productForm[`printing_plate_${index}_id`]" :options="printingPlateSelectOptions()" label-key="_label" value-key="id" placeholder="输入挂板编号、内容或颜色" :allow-empty="false" @search="searchPrintingPlates"></search-select></div>
+                    <div class="field"><label>颜色</label><input class="input" readonly :value="productPrintingPlateRow(productForm,index)?.color_name || ''" /></div>
+                    <div class="field"><label>挂板内容</label><input class="input" readonly :value="productPrintingPlateRow(productForm,index)?.plate_name || ''" /></div>
+                    <div class="field"><label>挂板编号</label><input class="input" readonly :value="productPrintingPlateRow(productForm,index)?.plate_code || ''" /></div>
+                    <button v-if="productPrintingPlateCount(productForm)>1" type="button" class="btn small danger" @click="removeProductPrintingPlateRow(index)">删除</button>
+                  </div>
+                  <div class="product-printing-plate-parameters">
+                    <div class="field"><label>对版值(mm)</label><input class="input" type="number" min="0" step="0.01" v-model="productForm.plate_alignment_value_mm" /></div>
+                    <div class="field"><label>挂版值(mm)</label><input class="input" type="number" min="0" step="0.01" v-model="productForm.plate_mount_value_mm" /></div>
+                    <div class="field"><label>机器设定箱长(mm)</label><input class="input" type="number" min="0" step="0.01" v-model="productForm.machine_set_length_mm" /></div>
+                    <div class="field"><label>机器设定箱宽(mm)</label><input class="input" type="number" min="0" step="0.01" v-model="productForm.machine_set_width_mm" /></div>
+                    <div class="field"><label>机器设定箱高(mm)</label><input class="input" type="number" min="0" step="0.01" v-model="productForm.machine_set_height_mm" /></div>
+                  </div>
+                  <div v-if="productPrintingPlateError" class="status orange">{{ productPrintingPlateError }}</div>
                 </div>
                 <div v-if="productForm.supply_mode!=='external_purchase'" class="product-production-label-config">
                   <label class="product-production-label-switch"><input type="checkbox" v-model="productForm.production_label_enabled" @change="onProductProductionLabelToggle" />打印标签</label>
@@ -7542,6 +7564,7 @@
         length_mm: null, width_mm: null, height_mm: null, box_category: "normal",
         box_style: "", print_content: "无印刷", printing_colors:"",
         _printing_situation: "无印刷", _printing_colors: [], _printing_colors_original_count: 0, _printing_colors_touched: false,
+        _printing_plate_count: 0,
         _printing_original: null,
         supply_mode: "corrugated_production", external_packaging_category_code: "",
         external_packaging_specification_summary: "", external_packaging_purchase_unit: "",
@@ -8644,10 +8667,11 @@
             if (!this.modal || this.modal.type !== "product") return "";
             if (!this.productHasPrinting(this.productForm) || this.productForm.printing_plate_mode !== "plate") return "";
             const count = this.productPrintingPlateCount(this.productForm);
-            if (!count) return "挂板印刷只支持单色、双色或三色";
+            if (!count) return "挂板印刷至少保留一行";
+            if (count > 3) return "挂板印刷最多支持三行";
             const ids = [1,2,3].map(index=>Number(this.productForm[`printing_plate_${index}_id`]||0));
             const selected = ids.slice(0,count);
-            if (selected.some(value=>!value)) return `${this.productForm.print_content}必须选择 ${count} 块挂板`;
+            if (selected.some(value=>!value)) return `${this.productPrintingPlateContent(count)}必须选择 ${count} 块正式挂板`;
             if (new Set(selected).size !== selected.length) return "同一块挂板不能重复绑定";
             return "";
           },
@@ -9466,6 +9490,7 @@
             delete payload._printing_colors;
             delete payload._printing_colors_original_count;
             delete payload._printing_colors_touched;
+            delete payload._printing_plate_count;
             delete payload._printing_original;
             delete payload._material_supplier;
             delete payload._report_dims_manual;
@@ -12486,13 +12511,52 @@
                 params:{ limit:500 }, signal:controller.signal,
               });
               if (latestRequestControllers.get(requestKey) !== controller) return false;
-              this.printingPlates = data.items || [];
+              this.mergePrintingPlateOptions(data.items || []);
               return true;
             } catch (error) {
               if (this.isCancelledRequest(error)) return false;
               throw error;
             } finally {
               this.finishLatestRequest(requestKey, controller);
+            }
+          },
+          mergePrintingPlateOptions(rows, customerId=null) {
+            const fallbackCustomerId = Number(customerId || this.productForm?.customer_id || 0);
+            const merged = new Map((this.printingPlates || []).map(row=>[Number(row.id),row]));
+            (rows || []).forEach(row=>{
+              const id = Number(row?.id || 0);
+              if (!id) return;
+              merged.set(id,{
+                ...(merged.get(id) || {}),
+                ...row,
+                customer_id:Number(row.customer_id || fallbackCustomerId || 0),
+              });
+            });
+            this.printingPlates = [...merged.values()];
+            return this.printingPlates;
+          },
+          async searchPrintingPlates(value) {
+            if (this.isWorkshop) return false;
+            const keyword = String(value || "").trim();
+            if (!keyword) return true;
+            const customerId = Number(this.productForm?.customer_id || 0);
+            if (!customerId) return false;
+            const requestKey = "product:printing-plates-search";
+            const controller = this.beginLatestRequest(requestKey);
+            try {
+              const { data } = await axios.get("/api/warehouse/printing-plates", {
+                params:{ q:keyword, customer_id:customerId, limit:100 },
+                signal:controller.signal,
+              });
+              if (latestRequestControllers.get(requestKey) !== controller) return false;
+              this.mergePrintingPlateOptions(data.items || [],customerId);
+              return true;
+            } catch (error) {
+              if (this.isCancelledRequest(error)) return false;
+              this.showToast(`挂板搜索失败：${this.errorMessage(error)}`,true);
+              return false;
+            } finally {
+              this.finishLatestRequest(requestKey,controller);
             }
           },
           async ensureProductEditorOptions({force=false,refreshMolds=false} = {}) {
@@ -12538,7 +12602,7 @@
             const customerId = Number(this.productForm?.customer_id || 0);
             return (this.printingPlates || []).filter(row=>row.status==="active" && Number(row.customer_id)===customerId).map(row=>({
               ...row,
-              _label:`${row.plate_code}｜${row.color_name}｜${row.plate_name}｜${row.rack_location}`,
+              _label:`${row.plate_code}｜${row.plate_name}｜${row.color_name}`,
             }));
           },
           // 分页拉取材质：后端限制 page_size<=200，因此用 page 翻页拉全部，
@@ -19563,6 +19627,12 @@
               printing_plate_1_id: originalValue("printing_plate_1_id",form?.printing_plate_1_id ?? null),
               printing_plate_2_id: originalValue("printing_plate_2_id",form?.printing_plate_2_id ?? null),
               printing_plate_3_id: originalValue("printing_plate_3_id",form?.printing_plate_3_id ?? null),
+              plate_alignment_value_mm: originalValue("plate_alignment_value_mm",form?.plate_alignment_value_mm ?? null),
+              plate_mount_value_mm: originalValue("plate_mount_value_mm",form?.plate_mount_value_mm ?? null),
+              machine_set_length_mm: originalValue("machine_set_length_mm",form?.machine_set_length_mm ?? null),
+              machine_set_width_mm: originalValue("machine_set_width_mm",form?.machine_set_width_mm ?? null),
+              machine_set_height_mm: originalValue("machine_set_height_mm",form?.machine_set_height_mm ?? null),
+              _printing_plate_count: originalValue("_printing_plate_count",form?._printing_plate_count ?? 0),
             };
           },
           productPrintingConfigurationChanged(form) {
@@ -19571,6 +19641,7 @@
             const original = this.productPrintingOriginalSnapshot(form);
             const normalizeColors = values => (Array.isArray(values) ? values : [])
               .map(value=>String(value || "").trim().replace(/\s+/g," "));
+            const normalizeOptionalNumber = value => value === null || value === undefined || value === "" ? null : Number(value);
             const originalSituation = Object.prototype.hasOwnProperty.call(source,"_printing_situation")
               ? source._printing_situation
               : form._printing_situation;
@@ -19578,14 +19649,21 @@
               ? source._printing_colors
               : form._printing_colors;
             return String(form._printing_situation || "") !== String(originalSituation || "")
+              || String(form.print_content || "") !== String(original.print_content || "")
               || JSON.stringify(normalizeColors(form._printing_colors)) !== JSON.stringify(normalizeColors(originalColors))
               || String(form.printing_plate_mode === "plate" ? "plate" : "no_plate") !== String(original.printing_plate_mode === "plate" ? "plate" : "no_plate")
-              || [1,2,3].some(index=>Number(form[`printing_plate_${index}_id`] || 0) !== Number(original[`printing_plate_${index}_id`] || 0));
+              || Number(form._printing_plate_count || 0) !== Number(original._printing_plate_count || 0)
+              || [1,2,3].some(index=>Number(form[`printing_plate_${index}_id`] || 0) !== Number(original[`printing_plate_${index}_id`] || 0))
+              || ["plate_alignment_value_mm","plate_mount_value_mm","machine_set_length_mm","machine_set_width_mm","machine_set_height_mm"]
+                .some(key=>!Object.is(normalizeOptionalNumber(form[key]),normalizeOptionalNumber(original[key])));
           },
           productPrintingWriteFields(form) {
             if (form?.id && !this.productPrintingConfigurationChanged(form)) return this.productPrintingOriginalSnapshot(form);
             const mode = form?.printing_plate_mode === "plate" ? "plate" : "no_plate";
-            const printContent = this.productHasPrinting(form) ? (form.print_content || "单色印刷") : "无印刷";
+            const plateCount = mode === "plate" ? this.productPrintingPlateCount(form) : 0;
+            const printContent = mode === "plate"
+              ? (plateCount===3 ? "三色印刷" : (plateCount===2 ? "双色印刷" : "单色印刷"))
+              : (this.productHasPrinting(form) ? (form.print_content || "单色印刷") : "无印刷");
             return {
               print_content: printContent,
               printing_colors: mode === "plate" || !this.productHasPrinting(form) ? null : (this.productPrintingColorSummary(form) || null),
@@ -19625,15 +19703,58 @@
             if (this.productForm.print_content !== this.productForm._printing_situation) this.productForm.print_content = this.productForm._printing_situation;
           },
           productPrintingPlateCount(form) {
+            if (!form || form.printing_plate_mode !== "plate") return 0;
+            const explicit = Number(form._printing_plate_count);
+            if (Number.isInteger(explicit) && explicit >= 0) return Math.min(explicit,3);
             const value = String(form?.print_content || "").trim();
             if (value === "单色印刷" || value.includes("单色")) return 1;
             if (value === "双色印刷" || value.includes("双色")) return 2;
             if (["三色印刷", "多色印刷"].includes(value) || value.includes("三色") || value.includes("多色")) return 3;
-            if (form?.printing_plate_mode === "plate") {
-              const selected = [1,2,3].filter(index=>Number(form[`printing_plate_${index}_id`] || 0));
-              if (selected.length) return selected.length;
-            }
             return 0;
+          },
+          productPrintingPlateContent(count) {
+            return ({1:"挂板印刷（单色）",2:"挂板印刷（双色）",3:"挂板印刷（三色）"})[Number(count)] || "挂板印刷";
+          },
+          hydrateProductPrintingPlateRows(form) {
+            if (!form || form.printing_plate_mode !== "plate") {
+              if (form) form._printing_plate_count = 0;
+              return 0;
+            }
+            const boundIndexes = [1,2,3].filter(index=>Number(form[`printing_plate_${index}_id`] || 0));
+            let count = boundIndexes.length ? Math.max(...boundIndexes) : 0;
+            if (!count) {
+              const value = String(form.print_content || "");
+              count = value.includes("三色") || value.includes("多色") ? 3 : (value.includes("双色") ? 2 : 1);
+            }
+            form._printing_plate_count = Math.max(1,Math.min(count,3));
+            return form._printing_plate_count;
+          },
+          productPrintingPlateRow(form,index) {
+            const plateId = Number(form?.[`printing_plate_${index}_id`] || 0);
+            return (this.printingPlates || []).find(row=>Number(row.id)===plateId) || null;
+          },
+          addProductPrintingPlateRow() {
+            const form = this.productForm;
+            if (!form || form.printing_plate_mode !== "plate") return false;
+            const count = this.productPrintingPlateCount(form);
+            if (count >= 3) return false;
+            form._printing_plate_count = count + 1;
+            form[`printing_plate_${form._printing_plate_count}_id`] = null;
+            form.print_content = form._printing_plate_count===3 ? "三色印刷" : (form._printing_plate_count===2 ? "双色印刷" : "单色印刷");
+            return true;
+          },
+          removeProductPrintingPlateRow(index) {
+            const form = this.productForm;
+            const count = this.productPrintingPlateCount(form);
+            const target = Number(index);
+            if (!form || count <= 1 || !Number.isInteger(target) || target < 1 || target > count) return false;
+            for (let current=target; current<count; current+=1) {
+              form[`printing_plate_${current}_id`] = form[`printing_plate_${current+1}_id`] || null;
+            }
+            form[`printing_plate_${count}_id`] = null;
+            form._printing_plate_count = count - 1;
+            form.print_content = form._printing_plate_count===2 ? "双色印刷" : "单色印刷";
+            return true;
           },
           onProductPrintingSituationChanged() {
             const form = this.productForm;
@@ -19641,16 +19762,21 @@
             const wasPlate = form.printing_plate_mode === "plate";
             form._printing_colors_touched = true;
             if (situation === "挂板印刷") {
-              // P1-51A→B 线性兼容：A 阶段只收拢入口，继续映射到旧挂板 UI；B 再替换为动态挂板行。
               form.printing_plate_mode = "plate";
-              form.print_content = this.productPrintingPlateCount(form) ? form.print_content : "单色印刷";
               form.printing_colors = null;
-              const count = this.productPrintingPlateCount(form);
-              for (let index=count+1; index<=3; index+=1) form[`printing_plate_${index}_id`]=null;
+              form._printing_colors = [];
+              if (!wasPlate) {
+                form._printing_plate_count = 1;
+                form.print_content = "单色印刷";
+                [1,2,3].forEach(index=>form[`printing_plate_${index}_id`]=null);
+              } else {
+                this.hydrateProductPrintingPlateRows(form);
+              }
               return;
             }
             form.print_content = situation;
             form.printing_plate_mode = "no_plate";
+            form._printing_plate_count = 0;
             [1,2,3].forEach(index=>form[`printing_plate_${index}_id`]=null);
             form.plate_alignment_value_mm=null;
             form.plate_mount_value_mm=null;
@@ -19718,6 +19844,11 @@
               printing_plate_1_id: detail?.printing_plate_1_id ?? null,
               printing_plate_2_id: detail?.printing_plate_2_id ?? null,
               printing_plate_3_id: detail?.printing_plate_3_id ?? null,
+              plate_alignment_value_mm: detail?.plate_alignment_value_mm ?? null,
+              plate_mount_value_mm: detail?.plate_mount_value_mm ?? null,
+              machine_set_length_mm: detail?.machine_set_length_mm ?? null,
+              machine_set_width_mm: detail?.machine_set_width_mm ?? null,
+              machine_set_height_mm: detail?.machine_set_height_mm ?? null,
             };
             form.supply_mode = ["external_purchase","mixed_bom"].includes(form.supply_mode) ? form.supply_mode : "corrugated_production";
             const externalSupply = detail?.external_supply || {};
@@ -19733,6 +19864,7 @@
             ));
             form._external_selected_ids = snapshots.map(row=>Number(row.external_product_id)).filter(value=>value>0);
             form._external_default_product_id = Number(snapshots.find(row=>row.is_default)?.external_product_id || 0) || null;
+            this.mergePrintingPlateOptions(detail?.printing_plates || [],form.customer_id);
             form._corner_reference_quantity = 1000;
             form.box_style = this.normalizeBoxTypeDisplay(form.box_style || "");
             form.print_content = form.print_content || "无印刷";
@@ -19747,10 +19879,12 @@
             else if (["三色印刷","多色印刷"].some(value=>String(form.print_content || "").includes(value.replace("印刷","")))) form._printing_situation = "三色印刷";
             else if (String(form.print_content || "").includes("单色")) form._printing_situation = "单色印刷";
             else form._printing_situation = "无印刷";
+            this.hydrateProductPrintingPlateRows(form);
             form._printing_original = {
               ...printingOriginal,
               _printing_situation: form._printing_situation,
               _printing_colors: [...parsedPrintingColors],
+              _printing_plate_count: form._printing_plate_count,
             };
             form.production_label_enabled = form.production_label_enabled === true;
             const productionLabelUnits = Number(form.production_label_units_per_label);

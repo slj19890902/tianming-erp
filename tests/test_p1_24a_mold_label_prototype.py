@@ -24,18 +24,26 @@ def test_mold_label_is_fixed_to_real_40x30_paper() -> None:
     assert 'id="customWidth"' not in LABEL
     assert 'id="customHeight"' not in LABEL
     assert "window.print()" in LABEL
+    assert "body,html{width:40mm;height:auto" in LABEL
+    assert "body>*:not(#previewContent){display:none!important}" in LABEL
+    assert "#previewContent,#labels{display:block!important" in LABEL
+    assert ".label{display:flex!important" in LABEL
     assert "40×30 标签样式" in WAREHOUSE
     assert "90×60 标签样式" not in WAREHOUSE
     assert "/mold-label.html?prototype=1" in WAREHOUSE
 
 
 def test_mold_label_keeps_only_complete_on_label_identification_fields() -> None:
+    assert "customer_short_name" in LABEL
+    assert "customer_name" in LABEL
     assert "customer_code" in LABEL
     assert "product_code" in LABEL
     assert "product_name" in LABEL
     assert "report_specification" in LABEL
+    assert "specification" in LABEL
     assert "shortLocation" in LABEL
-    assert "模具号、客户、存货、位置和首款产品片料" in LABEL
+    assert "模具号、客户、存货、位置、产品尺寸和片料尺寸" in LABEL
+    assert "产品尺寸待完善" in LABEL
     assert "片料待完善" in LABEL
     assert "另 ${total-1} 款" in LABEL
     assert "未绑定常用箱 / 存货编码" in LABEL
@@ -48,6 +56,7 @@ def test_mold_label_keeps_only_complete_on_label_identification_fields() -> None
     assert 'split("-")[0]' not in LABEL
     assert 'textClass(moldCode,12,16)' in LABEL
     assert "topline.with-status" in LABEL
+    assert "customer=product?.customer_short_name||product?.customer_name||product?.customer_code" in LABEL
     for marker in (
         "JSD-61494052",
         "SME-CPN087075",

@@ -1194,14 +1194,18 @@ body.warehouse-twin-page {
 .twin-move-source-summary button { justify-self: start; padding: 3px 7px; border: 1px solid #9aadb5; border-radius: 3px; color: #4b616b; background: #fff; font-size: 8px; }
 .twin-move-source-panel > p { margin: 0; color: #6b5a2a; font-size: 9px; line-height: 1.5; }
 .twin-move-source-panel > button,
+.twin-move-pallet-list button,
 .twin-move-lot-list button { min-width: 0; padding: 7px; display: grid; gap: 3px; border: 1px solid #d8c992; border-radius: 3px; color: #3d4f57; background: #fff; text-align: left; }
 .twin-move-source-panel button.selected,
+.twin-move-pallet-list button.selected,
 .twin-move-lot-list button.selected { border-color: #0f766e; box-shadow: 0 0 0 2px #0f766e24; background: #ecfdf5; }
 .twin-move-source-panel button:disabled { cursor: not-allowed; opacity: .5; }
 .twin-move-source-panel button b { color: #0f766e; font-size: 10px; }
 .twin-move-source-panel button span { color: #304e5a; font-size: 9px; }
 .twin-move-source-panel button small { color: #788990; font-size: 8px; }
+.twin-move-pallet-list,
 .twin-move-lot-list { max-height: 190px; display: grid; gap: 5px; overflow-y: auto; }
+.twin-shared-pallet-note { margin: 0; padding: 6px; border-left: 3px solid #b7791f; color: #6b4f12; background: #fff8df; font-size: 8px; line-height: 1.5; }
 .twin-move-target-cascade { padding-top: 8px; display: grid; gap: 7px; border-top: 1px dashed #c7a34c; }
 .twin-move-target-cascade label { min-width: 0; display: grid; gap: 3px; color: #4c616a; font-size: 9px; }
 .twin-move-target-cascade input,

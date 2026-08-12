@@ -12,6 +12,14 @@ export interface InventoryProjectionItem {
   age_days?: number | null;
 }
 
+export interface InventoryProjectionPallet {
+  pallet_id: number;
+  pallet_code: string;
+  version?: number;
+  item_count?: number;
+  items: InventoryProjectionItem[];
+}
+
 export interface InventoryProjectionLocation {
   location_id?: number;
   location_code: string;
@@ -28,7 +36,8 @@ export interface InventoryProjectionLocation {
     version?: number;
     z_index?: number;
   } | null;
-  pallet: { pallet_code: string; items: InventoryProjectionItem[] } | null;
+  pallet: InventoryProjectionPallet | null;
+  pallets?: InventoryProjectionPallet[];
   loose_items: InventoryProjectionItem[];
 }
 
@@ -95,6 +104,18 @@ export function warehouseSearchLocationSummaries(items: Array<{
   position_status: string;
   quantity: number;
 }>;
+
+export function inventoryLocationPallets(
+  location?: InventoryProjectionLocation | null
+): InventoryProjectionPallet[];
+
+export function inventoryLocationItems(
+  location?: InventoryProjectionLocation | null
+): InventoryProjectionItem[];
+
+export function singleLocationPallet(
+  location?: InventoryProjectionLocation | null
+): InventoryProjectionPallet | null;
 
 export function buildMappedLocationPallets(
   features: Array<{ id: string; feature_kind: string; feature_code: string; erp_area_code?: string | null; points: number[][] }>,

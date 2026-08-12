@@ -163,6 +163,47 @@ export function warehouseSearchLocationSummaries(items) {
   );
 }
 
+export function inventoryLocationPallets(location) {
+  const listed = Array.isArray(location?.pallets) ? location.pallets : [];
+  const candidates = listed.length ? listed : location?.pallet ? [location.pallet] : [];
+  const seen = new Set();
+  return candidates
+    .filter((pallet, index) => {
+      const palletId = Number(pallet?.pallet_id);
+      const identity = Number.isFinite(palletId) && palletId > 0 ? `id:${palletId}` : `legacy:${index}`;
+      if (seen.has(identity)) return false;
+      seen.add(identity);
+      return true;
+    })
+    .sort((left, right) => {
+      const leftId = Number(left.pallet_id);
+      const rightId = Number(right.pallet_id);
+      if (Number.isFinite(leftId) && Number.isFinite(rightId)) return leftId - rightId;
+      if (Number.isFinite(leftId)) return -1;
+      if (Number.isFinite(rightId)) return 1;
+      return String(left.pallet_code || "").localeCompare(String(right.pallet_code || ""), "zh-CN", { numeric: true });
+    });
+}
+
+export function inventoryLocationItems(location) {
+  const seenLotIds = new Set();
+  return [
+    ...inventoryLocationPallets(location).flatMap((pallet) => pallet.items || []),
+    ...(location?.loose_items || [])
+  ].filter((item) => {
+    const lotId = Number(item?.lot_id);
+    if (!Number.isFinite(lotId) || lotId <= 0) return true;
+    if (seenLotIds.has(lotId)) return false;
+    seenLotIds.add(lotId);
+    return true;
+  });
+}
+
+export function singleLocationPallet(location) {
+  const pallets = inventoryLocationPallets(location);
+  return pallets.length === 1 ? pallets[0] : null;
+}
+
 export function buildMappedLocationPallets(features, locations, floorCode, layoutId = "erp-twin") {
   const zoneByArea = new Map(
     features
@@ -187,7 +228,9 @@ export function buildMappedLocationPallets(features, locations, floorCode, layou
     const ys = zone.points.map((point) => Number(point[1]));
     ordered.forEach((location, index) => {
       const occupied = location.occupancy_status === "occupied";
-      const actualPalletCode = location.pallet?.pallet_code || null;
+      const locationPallets = inventoryLocationPallets(location);
+      const actualPalletCode = locationPallets.length === 1 ? locationPallets[0].pallet_code : null;
+      const palletSummary = locationPallets.length > 1 ? `${locationPallets.length} 块系统栈板` : null;
       const position = location.map_position;
       const mappedWidthMm = position ? (Number(position.width_pct) / 100) * (Math.max(...xs) - Math.min(...xs)) : 0;
       const mappedDepthMm = position ? (Number(position.height_pct) / 100) * (Math.max(...ys) - Math.min(...ys)) : 0;
@@ -198,7 +241,11 @@ export function buildMappedLocationPallets(features, locations, floorCode, layou
         id: `erp-location-${location.location_id}`,
         layout_id: layoutId,
         pallet_code: location.location_code,
-        name: actualPalletCode ? `${location.location_name} · ${actualPalletCode}` : location.location_name,
+        name: actualPalletCode
+          ? `${location.location_name} · ${actualPalletCode}`
+          : palletSummary
+            ? `${location.location_name} · ${palletSummary}`
+            : location.location_name,
         zone_id: zone.id,
         zone_code: zone.feature_code,
         x_mm: positions[index][0],
@@ -210,7 +257,11 @@ export function buildMappedLocationPallets(features, locations, floorCode, layou
         rotation_deg: rotation,
         color: occupied ? "#0f766e" : "#a16207",
         visual_status: occupied ? "waiting" : "empty",
-        status_note: actualPalletCode ? `ERP正式库位 · ${actualPalletCode}` : "ERP正式空库位",
+        status_note: actualPalletCode
+          ? `ERP正式库位 · ${actualPalletCode}`
+          : palletSummary
+            ? `ERP正式共享位置 · ${palletSummary} · 请在右侧逐块选择`
+            : "ERP正式空库位",
         is_simulated: true,
         version: 1,
         snapped: false
@@ -306,15 +357,16 @@ export function findPalletColumnConflicts(pallets, structures = [], features = [
 
 export function expandAreaInventory(locations, floorCode, areaCode) {
   if (!areaCode) return [];
+  const seenLotIds = new Set();
   return locations
     .filter((location) => location.floor_code === floorCode && location.area_code === areaCode)
     .flatMap((location) => [
-      ...(location.pallet?.items || []).map((item) => ({
+      ...inventoryLocationPallets(location).flatMap((pallet) => (pallet.items || []).map((item) => ({
         ...item,
         location_code: location.location_code,
         location_name: location.location_name,
-        pallet_code: location.pallet?.pallet_code || null
-      })),
+        pallet_code: pallet.pallet_code || null
+      }))),
       ...(location.loose_items || []).map((item) => ({
         ...item,
         location_code: location.location_code,
@@ -322,6 +374,13 @@ export function expandAreaInventory(locations, floorCode, areaCode) {
         pallet_code: null
       }))
     ])
+    .filter((item) => {
+      const lotId = Number(item?.lot_id);
+      if (!Number.isFinite(lotId) || lotId <= 0) return true;
+      if (seenLotIds.has(lotId)) return false;
+      seenLotIds.add(lotId);
+      return true;
+    })
     .sort((left, right) => {
       const leftAge = Number.isFinite(left.age_days) ? left.age_days : -1;
       const rightAge = Number.isFinite(right.age_days) ? right.age_days : -1;

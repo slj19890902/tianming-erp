@@ -7,12 +7,15 @@ import {
   filterAreaInventory,
   inventoryAgeLabel,
   inventoryAgeTone,
+  inventoryLocationItems,
+  inventoryLocationPallets,
   inventoryUnitLabel,
   locationLayoutGeometry,
   searchHighlightAreaCodes,
   warehouseSearchFloorSummaries,
   warehouseSearchLocationSummaries,
-  warehouseSearchProductKey
+  warehouseSearchProductKey,
+  singleLocationPallet
 } from "../src/warehouseInventory.mjs";
 import {
   buildMoveBatchPayload,
@@ -229,6 +232,50 @@ test("location move source list keeps pallet order, appends loose lots, and de-d
   ]);
   assert.deepEqual(palletItems, [{ lot_id: 10, label: "pallet-a" }, { lot_id: 11, label: "pallet-b" }]);
   assert.deepEqual(looseItems, [{ lot_id: 11, label: "duplicate" }, { lot_id: 12, label: "loose-c" }, { label: "legacy-without-id" }]);
+});
+
+test("shared dispatch location keeps every system pallet without fabricating map positions", () => {
+  const zone = { id: "zone-dispatch", feature_kind: "zone", feature_code: "ZONE-DISPATCH", erp_area_code: "DISPATCH", points: [[0, 0], [10000, 0], [10000, 5000], [0, 5000]] };
+  const shared = {
+    location_id: 49,
+    location_code: "F1-DISPATCH-01",
+    location_name: "一楼成品待送区",
+    floor_code: "1F",
+    area_code: "DISPATCH",
+    position_status: "mapped",
+    occupancy_status: "occupied",
+    map_position: { left_pct: 10, top_pct: 20, width_pct: 20, height_pct: 30, version: 4, z_index: 0 },
+    pallet: null,
+    pallets: [
+      { pallet_id: 22, pallet_code: "PLT-F1-PC-22", version: 1, items: [{ lot_id: 202, product_name: "五层加强纸箱" }] },
+      { pallet_id: 11, pallet_code: "PLT-F1-PC-11", version: 2, items: [{ lot_id: 101, product_name: "三层瓦楞外箱" }] }
+    ],
+    loose_items: [{ lot_id: 202, product_name: "重复投影" }, { lot_id: 303, product_name: "历史散存" }]
+  };
+
+  assert.deepEqual(inventoryLocationPallets(shared).map((item) => item.pallet_id), [11, 22]);
+  assert.equal(singleLocationPallet(shared), null);
+  assert.deepEqual(inventoryLocationItems(shared).map((item) => item.lot_id), [101, 202, 303]);
+
+  const mapped = buildMappedLocationPallets([zone], [shared], "1F", "layout-1f");
+  assert.equal(mapped.length, 1);
+  assert.equal(mapped[0].id, "erp-location-49");
+  assert.match(mapped[0].name, /2 块系统栈板/);
+  assert.match(mapped[0].status_note, /右侧逐块选择/);
+
+  const expanded = expandAreaInventory([shared], "1F", "DISPATCH");
+  assert.deepEqual(expanded.map((item) => [item.lot_id, item.pallet_code]), [
+    [101, "PLT-F1-PC-11"],
+    [202, "PLT-F1-PC-22"],
+    [303, null]
+  ]);
+});
+
+test("ordinary single-pallet location keeps the legacy one-card move path", () => {
+  const pallet = { pallet_id: 7, pallet_code: "PLT-3F-007", version: 3, items: [{ lot_id: 70 }] };
+  const location = { pallet, pallets: [pallet], loose_items: [] };
+  assert.equal(singleLocationPallet(location)?.pallet_id, 7);
+  assert.deepEqual(inventoryLocationPallets(location), [pallet]);
 });
 
 test("same-floor drag resolves one published empty location without changing geometry", () => {

@@ -146,11 +146,23 @@ def _lot_payload(row: InventoryLot, as_of: date) -> dict:
 def _pallet_visible(
     pallet: InventoryPallet,
     visible_customer_ids: set[int] | None,
+    *,
+    visible_lot_ids: set[int] | None = None,
 ) -> bool:
     if visible_customer_ids is None:
         return True
-    customer_ids = {item.customer_id for item in pallet.items if item.customer_id is not None}
-    return bool(customer_ids) and customer_ids.issubset(visible_customer_ids)
+    # A pallet is one physical handling unit. Customer-scoped accounts must
+    # never receive a partial projection of a mixed or unidentified pallet.
+    # Snapshot-only rows are not backed by the scoped lot/product authority,
+    # so they are intentionally admin-only in this dashboard projection.
+    return bool(pallet.items) and all(
+        item.customer_id is not None
+        and item.customer_id in visible_customer_ids
+        and item.inventory_lot_id is not None
+        and visible_lot_ids is not None
+        and item.inventory_lot_id in visible_lot_ids
+        for item in pallet.items
+    )
 
 
 def _location_position(row: WarehouseLocation) -> tuple[str, dict | None]:
@@ -322,13 +334,18 @@ def _location_payload(
     row: WarehouseLocation,
     *,
     lots: list[InventoryLot],
-    pallet: InventoryPallet | None,
+    pallets: list[InventoryPallet],
     as_of: date,
 ) -> dict:
     position_status, map_position = _location_position(row)
-    pallet_payload = None
-    if pallet is not None:
-        items = [_lot_payload(lot, as_of) for lot in lots if lot.pallet_item is not None]
+    pallet_payloads = []
+    for pallet in sorted(pallets, key=lambda item: item.id):
+        items = [
+            _lot_payload(lot, as_of)
+            for lot in lots
+            if lot.pallet_item is not None
+            and lot.pallet_item.pallet_id == pallet.id
+        ]
         if not items:
             items = [
                 {
@@ -349,20 +366,22 @@ def _location_payload(
                 for item in pallet.items
                 if item.inventory_lot_id is None
             ]
-        pallet_payload = {
-            "pallet_id": pallet.id,
-            "pallet_code": pallet.pallet_code,
-            "version": pallet.version,
-            "needs_relocation": pallet.needs_relocation,
-            "item_count": len(items),
-            "items": items,
-        }
+        pallet_payloads.append(
+            {
+                "pallet_id": pallet.id,
+                "pallet_code": pallet.pallet_code,
+                "version": pallet.version,
+                "needs_relocation": pallet.needs_relocation,
+                "item_count": len(items),
+                "items": items,
+            }
+        )
     loose_items = [
         _lot_payload(lot, as_of)
         for lot in lots
-        if lot.pallet_item is None or pallet is None
+        if lot.pallet_item is None
     ]
-    occupied = pallet is not None or any(_physical_quantity(lot) > 0 for lot in lots)
+    occupied = bool(pallet_payloads) or any(_physical_quantity(lot) > 0 for lot in lots)
     return {
         "location_id": row.id,
         "location_code": row.location_code,
@@ -389,7 +408,11 @@ def _location_payload(
             else None
         ),
         "occupancy_status": "occupied" if occupied else "empty",
-        "pallet": pallet_payload,
+        # Keep the legacy singular field unambiguous for old consumers. Shared
+        # dispatch staging locations must use ``pallets`` to address each ERP
+        # system pallet independently.
+        "pallet": pallet_payloads[0] if len(pallet_payloads) == 1 else None,
+        "pallets": pallet_payloads,
         "loose_items": loose_items,
     }
 
@@ -530,24 +553,39 @@ def build_warehouse_twin_dashboard(
 ) -> dict:
     """Build one read-only projection from formal lots, pallets, locations and movements."""
 
-    current_lots = [
+    visible_lot_ids = {row.id for row in lots} if visible_customer_ids is not None else None
+    visible_pallets = [
+        row
+        for row in pallets
+        if row.is_current
+        and _pallet_visible(
+            row,
+            visible_customer_ids,
+            visible_lot_ids=visible_lot_ids,
+        )
+    ]
+    visible_pallet_ids = {row.id for row in visible_pallets}
+    projection_lots = [
         row
         for row in lots
+        if visible_customer_ids is None
+        or row.pallet_item is None
+        or row.pallet_item.pallet_id in visible_pallet_ids
+    ]
+    current_lots = [
+        row
+        for row in projection_lots
         if row.status in {"active", "frozen"} and _physical_quantity(row) > 0
     ]
     lots_by_location: dict[int, list[InventoryLot]] = defaultdict(list)
     for row in current_lots:
         lots_by_location[row.warehouse_location_id].append(row)
 
-    visible_pallets = [
-        row
-        for row in pallets
-        if row.is_current and _pallet_visible(row, visible_customer_ids)
-    ]
-    pallet_by_location = {
-        row.location_id: row for row in visible_pallets if row.location_id is not None
-    }
-    visible_location_ids = set(lots_by_location) | set(pallet_by_location)
+    pallets_by_location: dict[int, list[InventoryPallet]] = defaultdict(list)
+    for row in sorted(visible_pallets, key=lambda item: item.id):
+        if row.location_id is not None:
+            pallets_by_location[row.location_id].append(row)
+    visible_location_ids = set(lots_by_location) | set(pallets_by_location)
     location_rows = []
     for location in locations:
         if visible_customer_ids is not None and location.id not in visible_location_ids:
@@ -556,7 +594,7 @@ def build_warehouse_twin_dashboard(
             _location_payload(
                 location,
                 lots=lots_by_location.get(location.id, []),
-                pallet=pallet_by_location.get(location.id),
+                pallets=pallets_by_location.get(location.id, []),
                 as_of=as_of,
             )
         )
@@ -581,9 +619,9 @@ def build_warehouse_twin_dashboard(
         ]
         occupied_pallets = len(
             {
-                row["pallet"]["pallet_id"]
+                pallet["pallet_id"]
                 for row in occupied
-                if row["pallet"] is not None
+                for pallet in row["pallets"]
             }
         )
         capacity = warehouse_capacity_summary(
@@ -639,7 +677,7 @@ def build_warehouse_twin_dashboard(
 
     trend, throughput = _trend_and_throughput(
         db,
-        all_lots=lots,
+        all_lots=projection_lots,
         current_lots=current_lots,
         days=days,
         as_of=as_of,

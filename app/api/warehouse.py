@@ -177,6 +177,7 @@ from app.services.warehouse_twin_dashboard import (
     build_inventory_code_search_results,
     build_warehouse_twin_dashboard,
     inventory_search_matches,
+    suppress_capacity_metrics_until_all_confirmed,
     warehouse_capacity_summary,
 )
 from app.services.warehouse_capacity_forecast import (
@@ -6388,6 +6389,14 @@ def get_warehouse_capacity_summary(
                 "capacity": capacity,
             }
         )
+    all_confirmed = bool(floor_items) and all(
+        row["capacity"]["confirmed"] for row in floor_items
+    )
+    if not all_confirmed:
+        for row in floor_items:
+            row["capacity"] = suppress_capacity_metrics_until_all_confirmed(
+                row["capacity"]
+            )
     reference_total = sum(
         int(row["capacity"]["reference_pallet_capacity"] or 0) for row in floor_items
     )
@@ -6401,15 +6410,15 @@ def get_warehouse_capacity_summary(
         key=lambda row: float(row["capacity"]["utilization_percent"]),
         default=None,
     )
-    forecast = build_warehouse_capacity_forecast(
-        db,
-        horizon=7,
-        as_of=beijing_today(),
+    forecast = (
+        build_warehouse_capacity_forecast(db, horizon=7, as_of=beijing_today())
+        if all_confirmed
+        else None
     )
     forecast_tightest = max(
         (
             row
-            for row in forecast["floors"]
+            for row in (forecast or {}).get("floors", [])
             if row["peak_utilization_percent"] is not None
         ),
         key=lambda row: float(row["peak_utilization_percent"]),
@@ -6417,11 +6426,16 @@ def get_warehouse_capacity_summary(
     )
     return {
         "visible": True,
-        "reference_pallet_capacity": reference_total,
+        "confirmed": all_confirmed,
+        "planned_pallet_capacity": sum(
+            int(row["capacity"]["planned_pallet_capacity"] or 0) for row in floor_items
+        ),
+        "reference_pallet_capacity": reference_total or None,
         "occupied_pallets": occupied_total,
-        "empty_pallet_slots": max(reference_total - occupied_total, 0),
+        "empty_pallet_slots": max(reference_total - occupied_total, 0) if all_confirmed else None,
         "utilization_percent": (
-            round(occupied_total * 100 / reference_total, 1) if reference_total else None
+            round(occupied_total * 100 / reference_total, 1)
+            if all_confirmed and reference_total else None
         ),
         "tightest_floor_code": tightest["floor_code"] if tightest else None,
         "tightest_floor_utilization_percent": (
@@ -6430,18 +6444,22 @@ def get_warehouse_capacity_summary(
         "alert_count": sum(
             row["capacity"]["alert_level"] not in {"normal", "unknown"}
             for row in floor_items
-        ),
-        "forecast_7d_complete": forecast["forecast_complete"],
-        "forecast_7d_status_label": forecast["forecast_status_label"],
+        ) if all_confirmed else 0,
+        "forecast_7d_complete": forecast["forecast_complete"] if forecast else False,
+        "forecast_7d_status_label": forecast["forecast_status_label"] if forecast else "现场安全容量待确认",
         "forecast_7d_peak_floor_code": (
             forecast_tightest["floor_code"] if forecast_tightest else None
         ),
         "forecast_7d_peak_utilization_percent": (
             forecast_tightest["peak_utilization_percent"] if forecast_tightest else None
         ),
-        "forecast_7d_action_count": len(forecast["actions"]),
+        "forecast_7d_action_count": len(forecast["actions"]) if forecast else 0,
         "floors": floor_items,
-        "notice": "只读取正式栈板和库位；规划预警不会移动货物或修改库存。",
+        "notice": (
+            "只读取正式栈板和已确认安全容量。"
+            if all_confirmed
+            else "现场安全容量待确认；规划值仅供整理参考，不参与满载率、空位、阈值或预测。"
+        ),
     }
 
 
@@ -6496,6 +6514,31 @@ def get_warehouse_capacity_forecast(
             "visible": False,
             "notice": "当前账号按客户范围查看库存，不显示全仓容量预测。",
             "horizon_days": horizon,
+            "floors": [],
+            "plans": [],
+            "missing_sources": [],
+            "stale_plans": [],
+            "actions": [],
+        }
+    floors = list(
+        db.scalars(
+            select(WarehouseFloor)
+            .options(selectinload(WarehouseFloor.areas))
+            .where(WarehouseFloor.floor_number.in_((1, 3)))
+            .order_by(WarehouseFloor.floor_number)
+        ).all()
+    )
+    if not floors or any(
+        not warehouse_capacity_summary(floor, occupied_pallets=0, visible=True)["confirmed"]
+        for floor in floors
+    ):
+        return {
+            "visible": True,
+            "confirmed": False,
+            "notice": "现场安全容量尚未全部确认；预测暂不发布。",
+            "horizon_days": horizon,
+            "forecast_complete": False,
+            "forecast_status_label": "现场安全容量待确认",
             "floors": [],
             "plans": [],
             "missing_sources": [],
@@ -7090,7 +7133,13 @@ def list_warehouse_floors(
         )
         .order_by(WarehouseFloor.floor_number, WarehouseFloor.id)
     ).all()
-    return {"items": [_warehouse_floor_dict(db, row) for row in rows]}
+    items = [_warehouse_floor_dict(db, row) for row in rows]
+    if items and not all(item["capacity"]["confirmed"] for item in items):
+        for item in items:
+            item["capacity"] = suppress_capacity_metrics_until_all_confirmed(
+                item["capacity"]
+            )
+    return {"items": items}
 
 
 @router.post("/space/floors", status_code=201)

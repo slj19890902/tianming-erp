@@ -12,6 +12,7 @@ from alembic.config import Config
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 
@@ -174,6 +175,11 @@ def forecast_app(tmp_path):
                     planned_location_count=10,
                     planned_pallet_capacity=10,
                     construction_status="enabled",
+                    capacity_review_status="confirmed",
+                    capacity_eligible=True,
+                    confirmed_pallet_capacity=10,
+                    capacity_reviewed_by="forecast-admin",
+                    capacity_reviewed_at=datetime(2026, 8, 10, 8, 0, 0),
                 ),
                 WarehouseArea(
                     floor_id=floor3.id,
@@ -182,6 +188,11 @@ def forecast_app(tmp_path):
                     planned_location_count=20,
                     planned_pallet_capacity=20,
                     construction_status="enabled",
+                    capacity_review_status="confirmed",
+                    capacity_eligible=True,
+                    confirmed_pallet_capacity=20,
+                    capacity_reviewed_by="forecast-admin",
+                    capacity_reviewed_at=datetime(2026, 8, 10, 8, 0, 0),
                 ),
             ]
         )
@@ -352,11 +363,49 @@ def test_missing_source_is_not_guessed_and_admin_plan_drives_forecast(forecast_a
         assert floor["threshold_crossings"]["80"] == (today + timedelta(days=1)).isoformat()
         assert floor["threshold_crossings"]["90"] == (today + timedelta(days=1)).isoformat()
         assert projected["missing_sources"] == []
-        assert projected["forecast_complete"] is False  # field capacity is still planning-only
+        assert projected["forecast_complete"] is True
         home = client.get("/api/warehouse/capacity/summary").json()
         assert home["forecast_7d_peak_floor_code"] == "1F"
         assert home["forecast_7d_peak_utilization_percent"] == 90.0
         assert home["forecast_7d_action_count"] >= 1
+
+
+def test_forecast_and_home_metrics_wait_until_every_area_is_confirmed(
+    forecast_app,
+) -> None:
+    from app.models.warehouse_inventory import WarehouseArea
+
+    app, _ids, _today, factory = forecast_app
+    with factory() as db:
+        area = db.scalar(
+            select(WarehouseArea).where(WarehouseArea.area_code == "A1")
+        )
+        area.capacity_review_status = "pending"
+        area.capacity_eligible = False
+        area.confirmed_pallet_capacity = None
+        area.capacity_reviewed_by = None
+        area.capacity_reviewed_at = None
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client, "forecast-admin")
+        forecast = client.get("/api/warehouse/capacity/forecast?horizon=7").json()
+        home = client.get("/api/warehouse/capacity/summary").json()
+
+    assert forecast["confirmed"] is False
+    assert forecast["floors"] == []
+    assert forecast["plans"] == []
+    assert forecast["missing_sources"] == []
+    assert forecast["actions"] == []
+    assert "预测暂不发布" in forecast["notice"]
+    assert home["confirmed"] is False
+    assert home["planned_pallet_capacity"] == 30
+    assert home["reference_pallet_capacity"] is None
+    assert home["empty_pallet_slots"] is None
+    assert home["utilization_percent"] is None
+    assert home["forecast_7d_peak_floor_code"] is None
+    assert home["forecast_7d_peak_utilization_percent"] is None
+    assert home["forecast_7d_action_count"] == 0
 
 
 def test_forecast_write_is_admin_only(forecast_app) -> None:

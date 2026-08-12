@@ -185,8 +185,8 @@ def warehouse_capacity_summary(
 ) -> dict:
     """Return the single capacity projection used by ledgers and dashboards.
 
-    A planning reference may drive an explicitly labelled planning alert while
-    field review is incomplete.  It never becomes the confirmed safe capacity.
+    Planning capacity is a reference only.  Until every enabled area is field
+    reviewed, it must never drive utilization, free-slot or threshold alerts.
     """
 
     if not visible:
@@ -238,14 +238,16 @@ def warehouse_capacity_summary(
         (floor.planning_reference_pallet_capacity if floor is not None else 0)
         or sum(int(area.planned_pallet_capacity or 0) for area in areas)
     )
-    reference_capacity = safe_capacity or planned_capacity or None
+    reference_capacity = safe_capacity if confirmed else None
     utilization = (
         round(occupied_pallets * 100 / reference_capacity, 1)
         if reference_capacity
         else None
     )
-    if utilization is None:
-        alert_level, alert_label = "unknown", "容量资料待补"
+    if not confirmed:
+        alert_level, alert_label = "awaiting_confirmation", "现场安全容量待确认"
+    elif utilization is None:
+        alert_level, alert_label = "unknown", "安全容量资料待补"
     elif utilization > 100:
         alert_level, alert_label = "over_capacity", "已超过容量"
     elif utilization >= 95:
@@ -260,7 +262,7 @@ def warehouse_capacity_summary(
     return {
         "visible": True,
         "confirmed": confirmed,
-        "basis": "confirmed" if confirmed else ("planning" if reference_capacity else "missing"),
+        "basis": "confirmed" if confirmed else "planning_reference",
         "safe_pallet_capacity": safe_capacity,
         "confirmed_area_capacity": confirmed_area_capacity,
         "planned_pallet_capacity": planned_capacity,
@@ -280,7 +282,7 @@ def warehouse_capacity_summary(
         "alert_level": alert_level,
         "alert_label": alert_label,
         "status": "confirmed" if confirmed else "awaiting_field_confirmation",
-        "label": "现场安全容量已确认" if confirmed else "规划容量预警（现场待复核）",
+        "label": "现场安全容量已确认" if confirmed else "规划参考，不参与满载率",
         "thresholds": (
             {
                 key: ceil(reference_capacity * ratio)
@@ -289,6 +291,27 @@ def warehouse_capacity_summary(
             if reference_capacity
             else None
         ),
+    }
+
+
+def suppress_capacity_metrics_until_all_confirmed(capacity: dict) -> dict:
+    """Keep review progress visible without publishing partial capacity math."""
+
+    if not capacity.get("visible"):
+        return capacity
+    return {
+        **capacity,
+        "confirmed": False,
+        "safe_pallet_capacity": None,
+        "confirmed_area_capacity": None,
+        "reference_pallet_capacity": None,
+        "empty_pallet_slots": None,
+        "utilization_percent": None,
+        "alert_level": "awaiting_confirmation",
+        "alert_label": "现场安全容量待确认",
+        "status": "awaiting_field_confirmation",
+        "label": "规划参考，不参与满载率",
+        "thresholds": None,
     }
 
 
@@ -638,11 +661,20 @@ def build_warehouse_twin_dashboard(
     visible_capacities = [
         floor["capacity"]
         for floor in floor_summaries
-        if floor["capacity"]["visible"] and floor["capacity"]["reference_pallet_capacity"]
+        if floor["capacity"]["visible"]
     ]
+    capacities_confirmed = bool(visible_capacities) and all(
+        row["confirmed"] for row in visible_capacities
+    )
+    if visible_customer_ids is None and not capacities_confirmed:
+        for floor in floor_summaries:
+            floor["capacity"] = suppress_capacity_metrics_until_all_confirmed(
+                floor["capacity"]
+            )
+        visible_capacities = [floor["capacity"] for floor in floor_summaries]
     capacity_reference_total = sum(
         int(row["reference_pallet_capacity"] or 0) for row in visible_capacities
-    )
+    ) if capacities_confirmed else 0
     capacity_occupied_total = sum(int(row["occupied_pallets"] or 0) for row in visible_capacities)
     tightest_floor = max(
         (
@@ -656,21 +688,23 @@ def build_warehouse_twin_dashboard(
     )
     capacity_alerts = []
     if visible_customer_ids is None:
-        planning_floors = [
-            floor for floor in floor_summaries if floor["capacity"]["basis"] == "planning"
+        pending_confirmation_floors = [
+            floor for floor in floor_summaries if not floor["capacity"]["confirmed"]
         ]
-        if planning_floors:
+        if pending_confirmation_floors:
             capacity_alerts.append(
                 {
-                    "code": "capacity_planning_basis",
+                    "code": "capacity_field_confirmation_pending",
                     "level": "warning",
-                    "message": "当前按规划容量预警；区域现场复核完成后自动切换为安全容量。",
+                    "message": "现场安全容量尚未全部确认；规划值仅供整理参考，不显示满载率、空位或阈值告警。",
                 }
             )
         for floor in floor_summaries:
             capacity = floor["capacity"]
             alert_level = capacity["alert_level"]
-            if alert_level == "unknown":
+            if alert_level in {"unknown", "awaiting_confirmation"}:
+                if alert_level == "awaiting_confirmation":
+                    continue
                 capacity_alerts.append(
                     {
                         "code": f"capacity_missing_{floor['floor_code'].lower()}",
@@ -746,12 +780,21 @@ def build_warehouse_twin_dashboard(
             "capacity": (
                 {
                     "visible": True,
-                    "reference_pallet_capacity": capacity_reference_total,
+                    "confirmed": capacities_confirmed,
+                    "reference_pallet_capacity": capacity_reference_total or None,
                     "occupied_pallets": capacity_occupied_total,
-                    "empty_pallet_slots": max(capacity_reference_total - capacity_occupied_total, 0),
+                    "planned_pallet_capacity": sum(
+                        int(floor["capacity"].get("planned_pallet_capacity") or 0)
+                        for floor in floor_summaries if floor["capacity"]["visible"]
+                    ),
+                    "empty_pallet_slots": (
+                        max(capacity_reference_total - capacity_occupied_total, 0)
+                        if capacities_confirmed
+                        else None
+                    ),
                     "utilization_percent": (
                         round(capacity_occupied_total * 100 / capacity_reference_total, 1)
-                        if capacity_reference_total
+                        if capacities_confirmed and capacity_reference_total
                         else None
                     ),
                     "tightest_floor_code": tightest_floor["floor_code"] if tightest_floor else None,

@@ -548,6 +548,7 @@
     </section>
 
     <section id="moldSection" class="hidden">
+      <div class="panel notice info"><b>模具封存待复用：</b>仅无绑定或所有绑定常用箱均已停用/删除的启用模具可人工封存。实物先搬到“三楼 AB2 北侧模具封存区（区域内待定位）”再确认；恢复时必须先搬回一楼已发布正式模具位。系统不会自动封存，也不会虚构 AB2 北侧货架、层、格或地图坐标。</div>
       <form id="moldForm" class="panel admin-only">
         <h2>新增 / 编辑生产模具</h2><input id="moldId" type="hidden">
         <p class="muted">只需按“客户中文简写 + 存货编码”填写模具名称，例如“仪元 Z.001.000093”。系统自动生成模具编号；位置只记录到货架、层、格，不记录会随拿取变化的左右顺序。</p>
@@ -793,6 +794,7 @@
     function revealInventoryOnboardingTab(){if(canViewInventoryOnboarding())$("inventoryOnboardingTab").classList.remove("hidden")}
     function setInventoryOnboardingSectionVisibility(tab){$("inventoryOnboardingSection").classList.toggle("hidden",tab!=="inventory_onboarding")}
     const canOperate=()=>!state.readOnly&&hasPermission("warehouse.execute");
+    const canArchiveMolds=()=>!state.readOnly&&["admin","boss"].includes(state.user?.role)&&hasPermission("warehouse.archive");
     const labels={active:"正常",frozen:"冻结",closed:"关闭",finished:"成品",semi_finished:"半成品",shared:"共用",boxes:"个",sheets:"张",manual_in:"手工入库",reserve:"成品预占",release_reserve:"释放预占",released:"已释放",consumed:"已消耗",adjust:"调整",freeze:"冻结",unfreeze:"解冻",damage:"报损",scrap:"报废",transfer_to_general:"转通用"};
     const FINISHED_LOT_COLUMN_WIDTHS_KEY="warehouseFinishedLotColumnWidthsV1",FINISHED_LOT_DEFAULT_WIDTHS=[10.5,10,16,10,8,12,6,6.5,6.5,5,9.5];
     function apiErrorMessage(body,status,url){
@@ -1862,10 +1864,13 @@
     }
     function renderMolds(){
       $("moldBody").innerHTML=state.molds.map(row=>{
-        const linked=(row.products||[]).map(product=>`<span class="tag" title="${h(product.customer_name||"")}">${h(product.product_code)} · ${h(product.product_name)}</span>`).join(" ")||'<span class="muted">尚未绑定常用箱</span>';
+        const visibleProducts=row.archive_status==="archived"?(row.binding_history||[]):(row.products||[]),linked=visibleProducts.map(product=>`<span class="tag ${product.is_active===false?"warn":""}" title="${h(product.customer_name||"")}">${h(product.product_code)} · ${h(product.product_name)}${product.is_active===false?"（历史）":""}</span>`).join(" ")||'<span class="muted">尚未绑定常用箱</span>';
         const label=`<button class="btn" onclick="window.open('/mold-label.html?mold_id=${row.id}','_blank')">打印标签</button>`;
-        const actions=state.user.role==="admin"?`${label}<button class="btn" onclick="editMold(${row.id})">编辑</button><button class="btn ${row.is_active?"danger":""}" onclick="toggleMold(${row.id},${row.is_active})">${row.is_active?"停用":"启用"}</button>`:label;
-        return `<tr><td><input type="checkbox" aria-label="选择模具 ${h(row.mold_code)}" ${state.moldSelection.has(row.id)?"checked":""} onchange="toggleMoldSelection(${row.id},this.checked)"></td><td><b>${h(row.mold_code)}</b><br>${h(row.mold_name)}</td><td><b>${h(row.rack_location)}</b><br><span class="muted">${h(row.location_guide?.prompt||row.remarks||"")}</span></td><td>${linked}</td><td>${row.is_active?"启用":"停用"}${assetTimeArchiveHtml(row)}</td><td><div class="mold-table-actions">${actions}</div></td></tr>`;
+        const archiveAction=canArchiveMolds()&&row.archive_status==="archived"?`<button class="btn primary" onclick="restoreArchivedMold(${row.id})">搬回并恢复</button>`:canArchiveMolds()&&row.archive_candidate?.eligible?`<button class="btn warn" onclick="archiveMold(${row.id})">封存待复用</button>`:"";
+        const adminActions=state.user.role==="admin"&&row.archive_status!=="archived"?`<button class="btn" onclick="editMold(${row.id})">编辑</button><button class="btn ${row.is_active?"danger":""}" onclick="toggleMold(${row.id},${row.is_active})">${row.is_active?"停用":"启用"}</button>`:"";
+        const status=row.archive_status==="archived"?'<span class="tag warn">封存待复用</span>':row.is_active?"启用":"停用";
+        const archiveMeta=row.archive_status==="archived"?`<br><span class="muted">原位置 ${h(row.pre_archive_location||"待确认")} · ${h(row.archive_reason==="unbound"?"无绑定":"绑定产品均已停用/删除")}</span>`:row.archive_candidate?.eligible?'<br><span class="muted">可人工封存（不会自动执行）</span>':"";
+        return `<tr><td><input type="checkbox" aria-label="选择模具 ${h(row.mold_code)}" ${state.moldSelection.has(row.id)?"checked":""} onchange="toggleMoldSelection(${row.id},this.checked)"></td><td><b>${h(row.mold_code)}</b><br>${h(row.mold_name)}</td><td><b>${h(row.rack_location)}</b><br><span class="muted">${h(row.location_guide?.prompt||row.remarks||"")}</span></td><td>${linked}</td><td>${status}${archiveMeta}${assetTimeArchiveHtml(row)}</td><td><div class="mold-table-actions">${label}${adminActions}${archiveAction}</div></td></tr>`;
       }).join("");
       $("moldEmpty").classList.toggle("hidden",state.molds.length>0);updateMoldBatchControls();
     }
@@ -1884,6 +1889,19 @@
       try{const id=$("moldId").value;if(!id&&!$("moldCustomerInitials").value){await updateMoldCodePreview();if(!$("moldCustomerInitials").value){toast($("moldCodeHint").textContent,true);return}}const payload={mold_name:$("moldName").value,rack_location:$("moldRackLocation").value,remarks:$("moldRemarks").value||null,...(id?{mold_code:$("moldCode").value}:{customer_initials:$("moldCustomerInitials").value})};const saved=await api(`/api/warehouse/molds${id?"/"+id:""}`,{method:id?"PUT":"POST",body:JSON.stringify(payload)});toast("模具档案已保存，可以继续绑定常用箱");await loadMolds();const row=state.molds.find(value=>value.id===saved.id)||saved;$("moldId").value=row.id;$("moldCode").value=row.mold_code;setMoldLocationBuilderDisabled(true);$("moldCodeHint").textContent="模具编号已生成并锁定；编辑名称不会改写编号。";openMoldBinding(row);$("moldBindingPanel").scrollIntoView({behavior:"smooth",block:"start"})}catch(err){toast(err.message,true)}finally{state.moldSaving=false;$("moldSaveButton").disabled=false}
     }
     async function toggleMold(id,active){try{await api(`/api/warehouse/molds/${id}/${active?"disable":"enable"}`,{method:"PUT"});await loadMolds()}catch(err){toast(err.message,true)}}
+    async function archiveMold(id){
+      const row=state.molds.find(item=>item.id===id);if(!row||!row.archive_candidate?.eligible)return;
+      if(!window.confirm(`请先确认实物已经搬到三楼 AB2 北侧模具封存区（区域内待定位）。\n\n确认封存 ${row.mold_code}？系统不会删除历史绑定。`))return;
+      const payload={expected_version:row.location_version,idempotency_key:createIdempotencyKey(),reason:row.archive_candidate.reason,physical_move_confirmed:true};
+      try{await api(`/api/warehouse/molds/${id}/archive`,{method:"POST",body:JSON.stringify(payload)});toast(`${row.mold_code} 已封存待复用`);await loadMolds()}catch(error){toast(error.message,true)}
+    }
+    async function restoreArchivedMold(id){
+      const row=state.molds.find(item=>item.id===id);if(!row||row.archive_status!=="archived")return;
+      const target=window.prompt("请先把实物搬回一楼已发布正式模具位，再输入位置码（例如 1F-M-R01-L2-G01）",row.pre_archive_location||"");if(!target)return;
+      if(!window.confirm(`确认 ${row.mold_code} 的实物已经搬到 ${target.trim()}，并恢复生产可用？`))return;
+      const payload={target_location:target.trim(),expected_version:row.location_version,idempotency_key:createIdempotencyKey(),physical_move_confirmed:true};
+      try{await api(`/api/warehouse/molds/${id}/restore`,{method:"POST",body:JSON.stringify(payload)});toast(`${row.mold_code} 已搬回并恢复启用`);await loadMolds()}catch(error){toast(error.message,true)}
+    }
     function printingPlateStatusLabel(status){return status==="active"?"启用":status==="damaged"?"损坏":"停用"}
     async function loadPrintingPlates(){
       const keyword=$("printingPlateKeyword").value.trim(),requestId=++state.loadRequests.printingPlates,hadRows=state.printingPlates.length>0;

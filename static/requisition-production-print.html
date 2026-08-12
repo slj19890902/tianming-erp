@@ -37,6 +37,7 @@
     .product-strip { display:grid; grid-template-columns:1.2fr .8fr; gap:4mm; padding:1.5mm 0 1.8mm; border-bottom:.28mm solid #888; }
     .field-label { display:block; color:#444; font-size:7pt; }
     .field-value { display:block; margin-top:.5mm; font-weight:800; font-size:9.5pt; overflow-wrap:anywhere; }
+    .production-key-value,.detail-row.production-key-fact .value { font-size:12pt; line-height:1.15; font-weight:800; }
     .process-title { margin:1.6mm 0 .8mm; color:#333; font-size:7.5pt; font-weight:700; }
     .process-route { display:flex; gap:1.2mm; margin:0; padding:0; list-style:none; }
     .process-route li { flex:1 1 0; min-width:0; border:.3mm solid #111; border-radius:3mm; padding:1.1mm 1.5mm; text-align:center; font-size:8pt; font-weight:700; overflow-wrap:anywhere; }
@@ -66,6 +67,7 @@
     .single-page .headline-metric strong { margin-top:1.5mm; font-size:20pt; }
     .single-page .product-strip { gap:8mm; padding:3mm 0 4mm; }
     .single-page .field-value { margin-top:1.5mm; font-size:15pt; }
+    .single-page .production-key-value,.single-page .detail-row.production-key-fact .value { font-size:20pt; line-height:1.15; }
     .single-page .process-title { margin:5mm 0 2mm; font-size:10pt; }
     .single-page .process-route { gap:3mm; }
     .single-page .process-route li { padding:3mm; border-radius:5mm; font-size:12pt; }
@@ -226,10 +228,10 @@
         return [
           detailRow("纸板尺寸", sizes),
           detailRow("楞型", textList(flute)),
-          detailRow("压线尺寸", crease),
+          detailRow("压线尺寸", crease, "production-key-fact"),
           detailRow("印刷内容", printContent),
           detailRow("印刷颜色", colors),
-          detailRow("结合方式", card.joining_method || "待确认"),
+          detailRow("结合方式", card.joining_method || "待确认", "production-key-fact"),
         ].join("");
       }
 
@@ -272,7 +274,7 @@
             <div class="headline-metric"><span>${card.layout_kind === "liner" ? "总数量" : "生产数量"}</span><strong>${escapeHtml(card.planned_finished_quantity || 0)} ${quantityUnit}</strong></div>
             <div class="headline-metric"><span>${escapeHtml(metric.label)}</span><strong>${escapeHtml(metric.value)}</strong></div>
           </div>
-          <div class="product-strip"><div><span class="field-label">产品 / 存货编码</span><span class="field-value">${escapeHtml(productLine)}</span></div><div><span class="field-label">${card.layout_kind === "liner" ? "衬板尺寸" : card.layout_kind === "die_cut" ? "纸板净片尺寸" : "成品内尺寸"}</span><span class="field-value">${escapeHtml(card.layout_kind === "die_cut" ? textList(componentSizes(card)) : finishedSize(card))}</span></div></div>
+          <div class="product-strip"><div><span class="field-label">产品 / 存货编码</span><span class="field-value">${escapeHtml(productLine)}</span></div><div><span class="field-label">${card.layout_kind === "liner" ? "衬板尺寸" : card.layout_kind === "die_cut" ? "纸板净片尺寸" : "成品内尺寸"}</span><span class="field-value${card.layout_kind === "carton" ? " production-key-value" : ""}">${escapeHtml(card.layout_kind === "die_cut" ? textList(componentSizes(card)) : finishedSize(card))}</span></div></div>
           ${processHtml(card)}
           <div class="detail-grid"><div class="detail-list">${detailHtml(card)}</div>${structureHtml(card)}</div>
           ${warnings}

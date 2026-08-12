@@ -142,7 +142,7 @@ def test_capacity_migration_downgrade_fails_closed_after_review(
     assert _checks(path) == ("ok", 0)
 
 
-def test_planning_thresholds_match_confirmed_factory_reference() -> None:
+def test_planning_reference_does_not_publish_thresholds_before_confirmation() -> None:
     floor = WarehouseFloor(
         floor_code="1F",
         floor_name="一楼",
@@ -151,9 +151,13 @@ def test_planning_thresholds_match_confirmed_factory_reference() -> None:
         construction_status="enabled",
     )
     planning = warehouse_capacity_summary(floor, occupied_pallets=28, visible=True)
-    assert planning["basis"] == "planning"
-    assert planning["thresholds"] == {"attention": 28, "warning": 31, "critical": 33}
-    assert planning["alert_level"] == "attention"
+    assert planning["basis"] == "planning_reference"
+    assert planning["planned_pallet_capacity"] == 34
+    assert planning["reference_pallet_capacity"] is None
+    assert planning["empty_pallet_slots"] is None
+    assert planning["utilization_percent"] is None
+    assert planning["thresholds"] is None
+    assert planning["alert_level"] == "awaiting_confirmation"
     assert planning["safe_pallet_capacity"] is None
 
     area = WarehouseArea(

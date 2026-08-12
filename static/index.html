@@ -8323,9 +8323,11 @@
               const utilization = capacity.utilization_percent;
               cards.push({
                 key:"warehouse_capacity", title:"仓储容量",
-                count:utilization == null ? 0 : utilization,
-                count_unit:utilization == null ? "待补" : "%",
-                description:capacity.tightest_floor_code
+                count:capacity.confirmed ? (utilization ?? 0) : Number(capacity.occupied_pallets || 0),
+                count_unit:capacity.confirmed ? "%" : "已占栈板",
+                description:!capacity.confirmed
+                  ? `现场安全容量待确认 · 规划参考 ${capacity.planned_pallet_capacity || 0} 栈板，不参与满载率`
+                  : capacity.tightest_floor_code
                   ? `现在 ${capacity.tightest_floor_code} ${capacity.tightest_floor_utilization_percent}% · 7天峰值 ${capacity.forecast_7d_peak_floor_code || "-"} ${capacity.forecast_7d_peak_utilization_percent ?? "-"}% · ${capacity.forecast_7d_action_count || 0}项需核对`
                   : "尚无可用容量资料",
                 button_label:"看仓库", target:"warehouse",

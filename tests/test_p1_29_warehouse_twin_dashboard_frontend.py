@@ -64,15 +64,17 @@ def test_dashboard_write_paths_are_limited_to_non_inventory_forecast_plans() -> 
     for inventory_write_path in ("/manual-in", "/pallets/", "/lots/", "/relocate"):
         assert inventory_write_path not in dashboard_script
     assert "不会自动入库、移库或发货" in WAREHOUSE_HTML
-    assert "未完成现场复核时按规划容量" in WAREHOUSE_HTML
-    assert "全部区域复核后自动切换为安全容量" in WAREHOUSE_HTML
+    assert "规划值只作参考，不计算满载率、空位、阈值预警或未来峰值" in WAREHOUSE_HTML
+    assert "全部区域确认后才按安全容量计算" in WAREHOUSE_HTML
     assert "warehouseAreaCapacityReview" in WAREHOUSE_HTML
     assert "warehouseAreaConfirmedCapacity" in WAREHOUSE_HTML
     assert 'capacity_eligible:review==="confirmed"' in WAREHOUSE_HTML
 
 
 def test_capacity_cards_show_compact_operational_values() -> None:
-    assert "已占 / ${h(basis)}" in WAREHOUSE_HTML
+    assert "已占 · 规划参考${h(planned||0)}" in WAREHOUSE_HTML
+    assert "不计算满载率" in WAREHOUSE_HTML
+    assert "现场安全容量待确认" in WAREHOUSE_HTML
     assert "利用率" in WAREHOUSE_HTML
     assert "空闲 · 覆盖" in WAREHOUSE_HTML
     assert "twin-capacity-progress" in WAREHOUSE_HTML
@@ -88,6 +90,8 @@ def test_capacity_forecast_is_compact_and_requires_explicit_pallet_slots() -> No
     assert "/api/warehouse/capacity/forecast?horizon=${state.capacityForecast.days}" in WAREHOUSE_HTML
     assert 'row.source_snapshot_current===false?"待收数量已变化"' in WAREHOUSE_HTML
     assert 'row.source_valid===false||row.source_snapshot_current===false?"warn"' in WAREHOUSE_HTML
+    assert "data.confirmed!==false" in WAREHOUSE_HTML
+    assert "现场安全容量待确认；不显示峰值、利用率或阈值预测" in WAREHOUSE_HTML
 
 
 def test_homepage_has_one_compact_read_only_capacity_card() -> None:
@@ -95,6 +99,8 @@ def test_homepage_has_one_compact_read_only_capacity_card() -> None:
     assert 'axios.get("/api/warehouse/capacity/summary")' in INDEX_HTML
     assert 'key:"warehouse_capacity", title:"仓储容量"' in INDEX_HTML
     assert 'button_label:"看仓库", target:"warehouse"' in INDEX_HTML
+    assert "现场安全容量待确认 · 规划参考" in INDEX_HTML
+    assert "不参与满载率" in INDEX_HTML
     assert "现在 ${capacity.tightest_floor_code}" in INDEX_HTML
     assert "7天峰值 ${capacity.forecast_7d_peak_floor_code" in INDEX_HTML
     assert "${capacity.forecast_7d_action_count || 0}项需核对" in INDEX_HTML

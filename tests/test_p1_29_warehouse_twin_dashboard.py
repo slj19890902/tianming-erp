@@ -385,7 +385,7 @@ def _login(client: TestClient, username: str) -> None:
     assert response.status_code == 200, response.text
 
 
-def test_dashboard_keeps_native_units_and_uses_labelled_planning_capacity(
+def test_dashboard_keeps_native_units_and_hides_unconfirmed_capacity_metrics(
     twin_dashboard_app,
 ) -> None:
     app, _ids = twin_dashboard_app
@@ -403,14 +403,13 @@ def test_dashboard_keeps_native_units_and_uses_labelled_planning_capacity(
     assert payload["summary"]["unlocated_lots"] == 1
     assert payload["floors"][1]["capacity"]["confirmed"] is False
     assert payload["floors"][1]["capacity"]["safe_pallet_capacity"] is None
-    assert payload["floors"][1]["capacity"]["basis"] == "planning"
-    assert payload["floors"][1]["capacity"]["reference_pallet_capacity"] == 20
-    assert payload["floors"][1]["capacity"]["thresholds"] == {
-        "attention": 16,
-        "warning": 18,
-        "critical": 19,
-    }
-    assert payload["alerts"][0]["code"] == "capacity_planning_basis"
+    assert payload["floors"][1]["capacity"]["basis"] == "planning_reference"
+    assert payload["floors"][1]["capacity"]["planned_pallet_capacity"] == 20
+    assert payload["floors"][1]["capacity"]["reference_pallet_capacity"] is None
+    assert payload["floors"][1]["capacity"]["empty_pallet_slots"] is None
+    assert payload["floors"][1]["capacity"]["utilization_percent"] is None
+    assert payload["floors"][1]["capacity"]["thresholds"] is None
+    assert payload["alerts"][0]["code"] == "capacity_field_confirmation_pending"
     assert payload["read_only"] is True
     assert payload["generated_at"].endswith("Z")
     mapped = next(row for row in payload["locations"] if row["location_code"] == "A1-L01")
@@ -418,7 +417,7 @@ def test_dashboard_keeps_native_units_and_uses_labelled_planning_capacity(
     assert mapped["map_position"]["z_index"] == 0
 
 
-def test_homepage_capacity_summary_uses_the_same_authoritative_projection(
+def test_homepage_capacity_summary_waits_for_all_field_confirmations(
     twin_dashboard_app,
 ) -> None:
     app, _ids = twin_dashboard_app
@@ -428,13 +427,19 @@ def test_homepage_capacity_summary_uses_the_same_authoritative_projection(
     assert response.status_code == 200, response.text
     payload = response.json()
     assert payload["visible"] is True
-    assert payload["reference_pallet_capacity"] == 30
+    assert payload["confirmed"] is False
+    assert payload["planned_pallet_capacity"] == 30
+    assert payload["reference_pallet_capacity"] is None
     assert payload["occupied_pallets"] == 2
-    assert payload["empty_pallet_slots"] == 28
-    assert payload["utilization_percent"] == 6.7
-    assert payload["tightest_floor_code"] == "3F"
-    assert payload["tightest_floor_utilization_percent"] == 10.0
+    assert payload["empty_pallet_slots"] is None
+    assert payload["utilization_percent"] is None
+    assert payload["tightest_floor_code"] is None
+    assert payload["tightest_floor_utilization_percent"] is None
     assert payload["alert_count"] == 0
+    assert payload["forecast_7d_peak_floor_code"] is None
+    assert payload["forecast_7d_peak_utilization_percent"] is None
+    assert payload["forecast_7d_action_count"] == 0
+    assert "不参与满载率、空位、阈值或预测" in payload["notice"]
     assert {row["floor_code"] for row in payload["floors"]} == {"1F", "3F"}
 
 
@@ -453,7 +458,7 @@ def test_homepage_capacity_summary_is_hidden_for_customer_scoped_accounts(
     }
 
 
-def test_admin_can_confirm_area_capacity_and_switch_floor_to_safe_capacity(
+def test_partial_confirmation_stays_hidden_until_all_floors_are_confirmed(
     twin_dashboard_app,
 ) -> None:
     app, _ids = twin_dashboard_app
@@ -484,12 +489,49 @@ def test_admin_can_confirm_area_capacity_and_switch_floor_to_safe_capacity(
         assert confirmed["capacity_reviewed_by"] == "智慧仓储管理员"
         assert confirmed["capacity_reviewed_at"].endswith("+08:00")
 
+        partial = client.get("/api/warehouse/twin-dashboard/overview").json()
+        floor3 = next(row for row in partial["floors"] if row["floor_code"] == "3F")
+        assert floor3["capacity"]["confirmed"] is False
+        assert floor3["capacity"]["reference_pallet_capacity"] is None
+        assert floor3["capacity"]["utilization_percent"] is None
+        assert floor3["capacity"]["thresholds"] is None
+
+        floors = client.get("/api/warehouse/space/floors").json()["items"]
+        floor1 = next(row for row in floors if row["floor_code"] == "1F")
+        area1 = floor1["areas"][0]
+        response = client.put(
+            f"/api/warehouse/space/areas/{area1['id']}",
+            json={
+                "floor_id": floor1["id"],
+                "area_code": area1["area_code"],
+                "area_name": area1["area_name"],
+                "planned_location_count": area1["planned_location_count"],
+                "planned_pallet_capacity": area1["planned_pallet_capacity"],
+                "capacity_review_status": "confirmed",
+                "capacity_eligible": True,
+                "confirmed_pallet_capacity": 10,
+                "construction_status": "enabled",
+                "remarks": "现场已复核",
+            },
+        )
+        assert response.status_code == 200, response.text
         overview = client.get("/api/warehouse/twin-dashboard/overview").json()
+        home = client.get("/api/warehouse/capacity/summary").json()
+
     floor3 = next(row for row in overview["floors"] if row["floor_code"] == "3F")
     assert floor3["capacity"]["confirmed"] is True
     assert floor3["capacity"]["basis"] == "confirmed"
     assert floor3["capacity"]["safe_pallet_capacity"] == 20
     assert floor3["capacity"]["coverage_percent"] == 100.0
+    assert floor3["capacity"]["thresholds"] == {
+        "attention": 16,
+        "warning": 18,
+        "critical": 19,
+    }
+    assert home["confirmed"] is True
+    assert home["reference_pallet_capacity"] == 30
+    assert home["empty_pallet_slots"] == 28
+    assert home["utilization_percent"] == 6.7
 
 
 def test_scoped_dashboard_hides_other_customer_capacity_and_empty_locations(

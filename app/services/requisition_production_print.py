@@ -544,6 +544,7 @@ def build_supplier_requisition_production_package(
                 ),
                 "printing_colors": [],
                 "joining_methods": [],
+                "joining_method_sources": [],
                 "production_label_units_per_bundle": None,
                 "review_required": False,
                 "review_messages": [],
@@ -581,6 +582,15 @@ def build_supplier_requisition_production_package(
             ]
         )
         joining_method = _explicit_joining_method(production_notes)
+        joining_method_source = "frozen_snapshot" if joining_method else None
+        if (
+            joining_method is None
+            and component_snapshot is None
+            and product is not None
+        ):
+            joining_method = _explicit_joining_method([product.production_process])
+            if joining_method:
+                joining_method_source = "current_common_box_fallback"
         component_printing_colors = printing_snapshot[
             "printing_colors"
         ] or _unique_text([product.printing_colors if product is not None else None])
@@ -632,6 +642,7 @@ def build_supplier_requisition_production_package(
                 current_mold.rack_location if current_mold is not None else None
             ),
             "joining_method": joining_method,
+            "joining_method_source": joining_method_source,
             "production_task_id": task.id if task is not None else None,
             "production_task_version": task.version if task is not None else None,
             "production_label_units_per_bundle": (
@@ -653,6 +664,9 @@ def build_supplier_requisition_production_package(
         )
         card["joining_methods"] = _unique_text(
             [*card["joining_methods"], joining_method]
+        )
+        card["joining_method_sources"] = _unique_text(
+            [*card["joining_method_sources"], joining_method_source]
         )
         bundle_quantity = component["production_label_units_per_bundle"]
         if (
@@ -749,6 +763,9 @@ def build_supplier_requisition_production_package(
                 [*card["review_messages"], "同码组件箱型版式不一致，请人工核对"]
             )
         card["joining_method"] = " / ".join(card["joining_methods"]) or None
+        card["joining_method_source"] = (
+            " / ".join(card["joining_method_sources"]) or None
+        )
         card["production_steps"] = _unique_text(
             [
                 note

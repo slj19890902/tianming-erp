@@ -71,6 +71,7 @@ def order_api_app(tmp_path: Path):
                     width_mm=Decimal("350"),
                     height_mm=Decimal("300"),
                     box_category="normal",
+                    production_process="粘贴",
                 ),
                 Product(
                     customer_id=customer.id,
@@ -144,6 +145,7 @@ def test_create_multi_item_order_is_atomic_and_snapshots_products(
     assert body["items"][0]["snapshot_product_name"] == "五层加强纸箱"
     assert body["items"][0]["snapshot_spec"] == "520脳350脳300mm"
     assert body["items"][0]["snapshot_material"] == "K=A-BC"
+    assert body["items"][0]["snapshot_production_notes"] == "粘贴"
     assert body["items"][0]["material_status"] == "pending"
 
     with session_factory() as session:

@@ -6143,7 +6143,11 @@ def _create_order_impl(
                 snapshot_production_notes=(
                     None
                     if product.supply_mode == "external_purchase"
-                    else ((item_payload.production_notes or "").strip() or None)
+                    else (
+                        (item_payload.production_notes or "").strip()
+                        or (product.production_process or "").strip()
+                        or None
+                    )
                 ),  # v0.19.2-A: 生产/印刷说明
                 supply_mode_snapshot=product.supply_mode,
                 is_virtual_composite_parent_snapshot=bool(

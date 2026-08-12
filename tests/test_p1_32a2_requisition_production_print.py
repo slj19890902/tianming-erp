@@ -445,6 +445,48 @@ def test_package_api_is_read_only_scoped_and_fails_closed(
         ).status_code == 409
 
 
+def test_legacy_missing_process_snapshot_uses_current_common_box_joining_method(
+    production_print_app,
+):
+    from app.models.order import OrderItem
+    from app.models.product import Product
+    from app.models.supplier_requisition_order import SupplierRequisitionOrder
+    from app.services.requisition_production_print import (
+        build_supplier_requisition_production_package,
+    )
+
+    with production_print_app["session_factory"]() as db:
+        order = db.get(
+            SupplierRequisitionOrder,
+            production_print_app["supplier_order_id"],
+        )
+        assert order is not None
+        product = db.get(Product, production_print_app["product_id"])
+        item = db.get(OrderItem, production_print_app["order_item_id"])
+        assert product is not None
+        assert item is not None
+        product.production_process = "粘贴"
+        item.snapshot_production_notes = None
+        db.flush()
+
+        fallback = build_supplier_requisition_production_package(db, order)
+        fallback_card = fallback["cards"][0]
+        assert fallback_card["joining_method"] == "粘贴"
+        assert fallback_card["joining_method_source"] == (
+            "current_common_box_fallback"
+        )
+        assert {
+            row["joining_method_source"] for row in fallback_card["components"]
+        } == {"current_common_box_fallback"}
+
+        item.snapshot_production_notes = "打钉"
+        db.flush()
+        frozen = build_supplier_requisition_production_package(db, order)
+        frozen_card = frozen["cards"][0]
+        assert frozen_card["joining_method"] == "打钉"
+        assert frozen_card["joining_method_source"] == "frozen_snapshot"
+
+
 def test_task_version_change_marks_preprint_for_review(production_print_app):
     from app.models.production import ProductionTask
     from app.models.supplier_requisition_order import SupplierRequisitionOrder
@@ -539,6 +581,19 @@ def test_print_page_and_erp_entry_keep_purchase_and_receipt_prints_separate():
     assert "A1 型纸箱生产任务单" in print_html
     assert "模切内盒生产任务单" in print_html
     assert "衬板生产任务单" in print_html
+    assert (
+        ".production-key-value,.detail-row.production-key-fact .value { font-size:12pt;"
+        in print_html
+    )
+    assert (
+        ".single-page .production-key-value,.single-page .detail-row.production-key-fact .value { font-size:20pt;"
+        in print_html
+    )
+    assert 'detailRow("压线尺寸", crease, "production-key-fact")' in print_html
+    assert (
+        'detailRow("结合方式", card.joining_method || "待确认", "production-key-fact")'
+        in print_html
+    )
     liner_layout = print_html.split('if (card.layout_kind === "liner") {', 1)[1].split(
         'if (card.layout_kind === "die_cut") {', 1
     )[0]

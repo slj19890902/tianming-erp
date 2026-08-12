@@ -89,9 +89,12 @@ from app.services.warehouse_area_activation import (
     AREA_LOCATION_SOURCE_VERSION,
     WarehouseAreaActivationError,
     adjust_area_location_count as adjust_activated_area_location_count,
+    area_location_management_payload,
     policy_location_transition_blockers,
     policy_inventory_types,
     publish_floor_area_policies,
+    resolve_area_location_management,
+    resolve_location_management,
     set_area_location_active,
     update_area_location_layout,
     warehouse_floor_for_code,
@@ -3316,19 +3319,25 @@ def set_activated_area_location_count(
     db: Session = Depends(get_db),
     user: User = Depends(admin_only),
 ) -> dict:
-    if floor_code.strip().upper() == "3F":
-        raise HTTPException(
-            status_code=409,
-            detail="三楼既有正式库位请继续使用三楼库位数量入口",
-        )
     try:
-        result = adjust_activated_area_location_count(
-            db,
-            floor_code=floor_code,
-            area_code=area_code,
-            target_count=payload.target_count,
-            operator_id=user.id,
+        route = resolve_area_location_management(
+            db, floor_code=floor_code, area_code=area_code
         )
+        if route.management_mode == "floor3_v11":
+            result = adjust_area_location_count(
+                db,
+                area_code=route.area_code,
+                target_count=payload.target_count,
+                operator_id=user.id,
+            )
+        else:
+            result = adjust_activated_area_location_count(
+                db,
+                floor_code=route.floor_code,
+                area_code=route.area_code,
+                target_count=payload.target_count,
+                operator_id=user.id,
+            )
         actions: list[dict] = []
         for action, rows in (
             ("created", result.created),
@@ -3342,9 +3351,9 @@ def set_activated_area_location_count(
                     user=user,
                     action="CREATE" if action == "created" else "UPDATE",
                     location=location,
-                    description="按正式区域目标数量维护一楼库存库位",
+                    description="按权威区域管理路径维护库存库位数量",
                     details={
-                        "floor_code": result.floor_code,
+                        "floor_code": route.floor_code,
                         "area_code": result.area_code,
                         "target_count": result.target_count,
                         "location_code": location.location_code,
@@ -3360,7 +3369,7 @@ def set_activated_area_location_count(
                 )
         db.commit()
         return {
-            "floor_code": result.floor_code,
+            **area_location_management_payload(route),
             "area_code": result.area_code,
             "target_count": result.target_count,
             "active_count": result.active_count,
@@ -3374,7 +3383,7 @@ def set_activated_area_location_count(
                 else "区域库位数量已更新；重新发布前不会改变员工入库候选。"
             ),
         }
-    except WarehouseAreaActivationError as error:
+    except (WarehouseAreaActivationError, Floor3LocationError) as error:
         db.rollback()
         raise HTTPException(status_code=error.status_code, detail=str(error)) from error
     except IntegrityError as error:
@@ -3382,6 +3391,23 @@ def set_activated_area_location_count(
         raise HTTPException(
             status_code=409, detail="区域库位编号或布局发生冲突，请刷新后重试"
         ) from error
+
+
+@router.get("/spatial-layout/floors/{floor_code}/areas/{area_code}/management")
+def get_area_location_management(
+    floor_code: str,
+    area_code: str,
+    db: Session = Depends(get_db),
+    _user: User = Depends(admin_only),
+) -> dict:
+    try:
+        return area_location_management_payload(
+            resolve_area_location_management(
+                db, floor_code=floor_code, area_code=area_code
+            )
+        )
+    except WarehouseAreaActivationError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
 
 
 @router.patch("/spatial-layout/floors/{floor_code}/areas/{area_code}")
@@ -3393,19 +3419,25 @@ def patch_activated_area_location_layout(
     db: Session = Depends(get_db),
     user: User = Depends(admin_only),
 ) -> dict:
-    if floor_code.strip().upper() == "3F":
-        raise HTTPException(
-            status_code=409,
-            detail="三楼既有正式库位请继续使用三楼布局入口",
-        )
     try:
-        layouts = update_area_location_layout(
-            db,
-            floor_code=floor_code,
-            area_code=area_code,
-            slots=[slot.model_dump() for slot in payload.slots],
-            operator_id=user.id,
+        route = resolve_area_location_management(
+            db, floor_code=floor_code, area_code=area_code
         )
+        if route.management_mode == "floor3_v11":
+            layouts = update_layout_area(
+                db,
+                area_code=route.area_code,
+                slots=[slot.model_dump() for slot in payload.slots],
+                operator_id=user.id,
+            )
+        else:
+            layouts = update_area_location_layout(
+                db,
+                floor_code=route.floor_code,
+                area_code=route.area_code,
+                slots=[slot.model_dump() for slot in payload.slots],
+                operator_id=user.id,
+            )
         locations = {
             layout.location_id: db.get(WarehouseLocation, layout.location_id)
             for layout in layouts
@@ -3427,8 +3459,11 @@ def patch_activated_area_location_layout(
                 },
             )
         db.commit()
-        return {"items": [_floor3_layout_dict(layout) for layout in layouts]}
-    except WarehouseAreaActivationError as error:
+        return {
+            **area_location_management_payload(route),
+            "items": [_floor3_layout_dict(layout) for layout in layouts],
+        }
+    except (WarehouseAreaActivationError, Floor3LocationError) as error:
         db.rollback()
         raise HTTPException(status_code=error.status_code, detail=str(error)) from error
     except IntegrityError as error:
@@ -3447,13 +3482,23 @@ def disable_activated_area_location(
     user: User = Depends(admin_only),
 ) -> dict:
     try:
-        location = set_area_location_active(
-            db,
-            location_id=location_id,
-            is_active=False,
-            expected_version=payload.expected_version,
-            operator_id=user.id,
-        )
+        _existing, route = resolve_location_management(db, location_id=location_id)
+        if route.management_mode == "floor3_v11":
+            location = set_layout_slot_active(
+                db,
+                location_id=location_id,
+                is_active=False,
+                expected_version=payload.expected_version,
+                operator_id=user.id,
+            )
+        else:
+            location = set_area_location_active(
+                db,
+                location_id=location_id,
+                is_active=False,
+                expected_version=payload.expected_version,
+                operator_id=user.id,
+            )
         _floor3_layout_log(
             db,
             request=request,
@@ -3461,14 +3506,61 @@ def disable_activated_area_location(
             action="UPDATE",
             location=location,
             description="逻辑停用正式区域空库位",
-            details={"is_active": False, "source_version": AREA_LOCATION_SOURCE_VERSION},
+            details={"is_active": False, "source_version": route.source_version},
         )
         db.commit()
         return {
+            **area_location_management_payload(route),
             "location": _location_dict(location),
             "layout": _floor3_layout_dict(location.floor3_layout),
         }
-    except WarehouseAreaActivationError as error:
+    except (WarehouseAreaActivationError, Floor3LocationError) as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+
+
+@router.post("/spatial-layout/locations/{location_id}/enable")
+def enable_activated_area_location(
+    location_id: int,
+    payload: Floor3LayoutSlotStatePayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    try:
+        _existing, route = resolve_location_management(db, location_id=location_id)
+        if route.management_mode == "floor3_v11":
+            location = set_layout_slot_active(
+                db,
+                location_id=location_id,
+                is_active=True,
+                expected_version=payload.expected_version,
+                operator_id=user.id,
+            )
+        else:
+            location = set_area_location_active(
+                db,
+                location_id=location_id,
+                is_active=True,
+                expected_version=payload.expected_version,
+                operator_id=user.id,
+            )
+        _floor3_layout_log(
+            db,
+            request=request,
+            user=user,
+            action="UPDATE",
+            location=location,
+            description="逻辑启用正式区域空库位",
+            details={"is_active": True, "source_version": route.source_version},
+        )
+        db.commit()
+        return {
+            **area_location_management_payload(route),
+            "location": _location_dict(location),
+            "layout": _floor3_layout_dict(location.floor3_layout),
+        }
+    except (WarehouseAreaActivationError, Floor3LocationError) as error:
         db.rollback()
         raise HTTPException(status_code=error.status_code, detail=str(error)) from error
 
@@ -5738,9 +5830,16 @@ def _formal_area_publish_blockers(db: Session, floor_code: str) -> list[str]:
         ):
             blockers.append(f"{area.area_code} 区{message}")
         if area.planned_location_count:
-            source_version = (
-                "V11" if floor.floor_number == 3 else AREA_LOCATION_SOURCE_VERSION
-            )
+            try:
+                route = resolve_area_location_management(
+                    db,
+                    floor_code=floor.floor_code,
+                    area_code=area.area_code,
+                )
+            except WarehouseAreaActivationError as error:
+                blockers.append(str(error))
+                continue
+            source_version = route.source_version
             active_rows = list(
                 db.scalars(
                     select(WarehouseLocation).where(

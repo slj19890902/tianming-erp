@@ -190,6 +190,8 @@ def restore_auto_released_pallets_after_delivery_cancel(
             .where(
                 InventoryPallet.location_id == target_location_id,
                 InventoryPallet.is_current.is_(True),
+                InventoryPallet.location_occupancy_key
+                == pallet.location_occupancy_key,
                 InventoryPallet.id != pallet.id,
             )
             .limit(1)

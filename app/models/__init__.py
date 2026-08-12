@@ -166,6 +166,11 @@ from app.models.customer_contract import (  # noqa: E402,F401
     CustomerContract,
     CustomerContractItem,
 )
+from app.models.contract_seal import (  # noqa: E402,F401
+    ContractSealAssetVersion,
+    ContractSealSelection,
+    ContractSealedPdfArchive,
+)
 from app.models.production import (  # noqa: E402,F401
     ProductionCompletion,
     ProductionCompletionBatch,

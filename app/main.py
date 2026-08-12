@@ -50,6 +50,7 @@ from app.api.product_import import router as product_import_router
 from app.api.requisition import router as requisition_router
 from app.api.quotations import router as quotations_router
 from app.api.contracts import router as contracts_router
+from app.api.contract_seals import router as contract_seals_router
 from app.api.pdf_training import router as pdf_training_router
 from app.api.production import router as production_router
 from app.api.system import router as system_router
@@ -661,6 +662,12 @@ def create_app() -> FastAPI:
             contracts_router,
             prefix="/api/contracts",
             tags=["contracts"],
+        )
+    if not any(route.path == "/api/contract-seals/status" for route in application.routes):
+        application.include_router(
+            contract_seals_router,
+            prefix="/api/contract-seals",
+            tags=["contract-seals"],
         )
     if not any(route.path == "/api/system/backups" for route in application.routes):
         application.include_router(

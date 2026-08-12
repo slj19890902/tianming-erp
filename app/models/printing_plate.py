@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -95,6 +96,11 @@ class PrintingPlate(Base):
         passive_deletes=True,
         order_by="PrintingPlateLocationMovement.id",
     )
+    resin_reuses: Mapped[list["PrintingPlateResinReuse"]] = relationship(
+        back_populates="printing_plate",
+        passive_deletes=True,
+        order_by="PrintingPlateResinReuse.id",
+    )
 
 
 class PrintingPlateLocationMovement(Base):
@@ -148,5 +154,76 @@ class PrintingPlateLocationMovement(Base):
 
     printing_plate: Mapped["PrintingPlate"] = relationship(
         back_populates="location_movements"
+    )
+    actor: Mapped["User | None"] = relationship(foreign_keys=[actor_id])
+
+
+class PrintingPlateResinReuse(Base):
+    """Immutable transition from one resin application to the next physical reuse."""
+
+    __tablename__ = "printing_plate_resin_reuses"
+    __table_args__ = (
+        UniqueConstraint(
+            "idempotency_key",
+            name="uq_printing_plate_resin_reuses_idempotency",
+        ),
+        CheckConstraint(
+            "expected_version >= 1",
+            name="ck_printing_plate_resin_reuses_expected_version",
+        ),
+        CheckConstraint(
+            "resulting_version = expected_version + 1",
+            name="ck_printing_plate_resin_reuses_resulting_version",
+        ),
+        CheckConstraint(
+            "old_resin_removed = true AND new_resin_mounted = true",
+            name="ck_printing_plate_resin_reuses_physical_confirmations",
+        ),
+        Index(
+            "ix_printing_plate_resin_reuses_plate_time",
+            "printing_plate_id",
+            "reused_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    printing_plate_id: Mapped[int] = mapped_column(
+        ForeignKey("printing_plates.id", ondelete="RESTRICT"), nullable=False
+    )
+    plate_code_snapshot: Mapped[str] = mapped_column(String(30), nullable=False)
+    from_customer_id: Mapped[int] = mapped_column(
+        ForeignKey("customers.id", ondelete="RESTRICT"), nullable=False
+    )
+    from_customer_name_snapshot: Mapped[str] = mapped_column(
+        String(200), nullable=False
+    )
+    from_plate_name_snapshot: Mapped[str] = mapped_column(String(200), nullable=False)
+    from_color_name_snapshot: Mapped[str] = mapped_column(String(100), nullable=False)
+    to_customer_id: Mapped[int] = mapped_column(
+        ForeignKey("customers.id", ondelete="RESTRICT"), nullable=False
+    )
+    to_customer_name_snapshot: Mapped[str] = mapped_column(String(200), nullable=False)
+    to_plate_name_snapshot: Mapped[str] = mapped_column(String(200), nullable=False)
+    to_color_name_snapshot: Mapped[str] = mapped_column(String(100), nullable=False)
+    rack_location_snapshot: Mapped[str] = mapped_column(String(100), nullable=False)
+    actor_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    actor_username_snapshot: Mapped[str] = mapped_column(String(100), nullable=False)
+    reused_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    expected_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    resulting_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    old_resin_removed: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=text("1"), nullable=False
+    )
+    new_resin_mounted: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=text("1"), nullable=False
+    )
+
+    printing_plate: Mapped["PrintingPlate"] = relationship(
+        back_populates="resin_reuses"
     )
     actor: Mapped["User | None"] = relationship(foreign_keys=[actor_id])

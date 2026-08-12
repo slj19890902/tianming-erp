@@ -592,7 +592,7 @@
         <h2>新增 / 编辑印刷挂板</h2>
         <input id="printingPlateId" type="hidden">
         <input id="printingPlateVersion" type="hidden">
-        <p class="muted">每块实体挂板只登记一种颜色。编号由系统自动生成；位置统一使用 1F-PL-R01-L1-P01 或 1F-PL-R01-L2-P01，P 位可按现场继续增加。</p>
+        <p class="muted">每块实体挂板当前只登记一种颜色。编号由系统自动生成；位置统一使用 1F-PL-R01-L1-P01 或 1F-PL-R01-L2-P01，P 位可按现场继续增加。这里的第 2 层专指挂板区货架层。</p>
         <div class="grid">
           <div class="field"><label>客户</label><select id="printingPlateCustomer" required></select></div>
           <div class="field"><label>挂板名称</label><input id="printingPlateName" required placeholder="例如：天华 22000008 红色版"></div>
@@ -605,6 +605,22 @@
           <div class="field"><label>&nbsp;</label><button class="btn primary" type="submit">保存挂板</button></div>
         </div>
         <div id="printingPlateEditHint" class="notice info hidden" style="margin-top:10px">编辑档案不能直接改格位；需要换位置时，请在下方点击“移动”。</div>
+      </form>
+      <form id="printingPlateReuseForm" class="panel admin-only hidden">
+        <h2>挂板换版复用</h2>
+        <input id="printingPlateReuseId" type="hidden">
+        <input id="printingPlateReuseExpectedVersion" type="hidden">
+        <div class="notice info">实体挂板编号保持不变。请先把暂时不用的挂板移动到挂板架第 2 层，并在产品资料中解除全部常用箱绑定；现场撕除旧树脂版、贴好新树脂版后再确认。旧客户、名称、颜色和操作时间会永久保留，实体挂板继续复用。</div>
+        <p id="printingPlateReuseCurrent" class="muted"></p>
+        <div class="grid">
+          <div class="field"><label>新树脂版客户</label><select id="printingPlateReuseCustomer" required></select></div>
+          <div class="field"><label>新挂板名称</label><input id="printingPlateReuseName" required placeholder="例如：新客户 款号 红色版"></div>
+          <div class="field"><label>新印刷颜色</label><input id="printingPlateReuseColor" required placeholder="例如：红色"></div>
+          <div class="field"><label><input id="printingPlateOldResinRemoved" type="checkbox"> 现场已撕除旧树脂版</label></div>
+          <div class="field"><label><input id="printingPlateNewResinMounted" type="checkbox"> 现场已贴好新树脂版</label></div>
+        </div>
+        <div id="printingPlateReusePreview" class="notice hidden" style="margin-top:10px"></div>
+        <div class="toolbar" style="margin-top:10px"><button id="previewPrintingPlateReuse" class="btn" type="button">核对换版资格</button><button id="confirmPrintingPlateReuse" class="btn primary" type="submit" disabled>确认换版复用</button><button id="cancelPrintingPlateReuse" class="btn" type="button">取消</button></div>
       </form>
       <div class="panel">
         <h2>挂板与位置查询</h2>
@@ -975,6 +991,7 @@
       $("moldBindingCustomerKeyword").oninput=renderMoldBindingCustomerCandidates;$("moldBindingCustomerKeyword").onkeydown=event=>{if(event.key==="Enter"){event.preventDefault();renderMoldBindingCustomerCandidates()}};$("moldBindingKeyword").onkeydown=event=>{if(event.key==="Enter"){event.preventDefault();searchMoldBindingProducts()}};$("searchMoldBindingProducts").onclick=searchMoldBindingProducts;$("confirmMoldBinding").onclick=()=>saveMoldBinding(false);$("addMoldBinding").onclick=()=>saveMoldBinding(true);$("closeMoldBinding").onclick=closeMoldBinding;
       $("refreshPrintingPlates").onclick=loadPrintingPlates;$("printingPlateKeyword").onkeydown=event=>{if(event.key==="Enter"){event.preventDefault();loadPrintingPlates()}};$("resetPrintingPlateForm").onclick=resetPrintingPlateForm;
       $("printingPlateRackSelect").onchange=$("printingPlateLevelSelect").onchange=$("printingPlatePositionNumber").oninput=buildPrintingPlateLocation;$("printingPlateLocation").onchange=()=>syncPrintingPlateLocationBuilder($("printingPlateLocation").value);
+      $("previewPrintingPlateReuse").onclick=previewPrintingPlateResinReuse;$("printingPlateReuseForm").onsubmit=confirmPrintingPlateResinReuse;$("cancelPrintingPlateReuse").onclick=closePrintingPlateResinReuse;["printingPlateReuseCustomer","printingPlateReuseName","printingPlateReuseColor"].forEach(id=>{$(id).onchange=invalidatePrintingPlateResinReusePreview;$(id).oninput=invalidatePrintingPlateResinReusePreview});["printingPlateOldResinRemoved","printingPlateNewResinMounted"].forEach(id=>$(id).onchange=updatePrintingPlateResinReuseConfirmState);
       $("refreshStocktakeReviews").onclick=loadStocktakeReviews;$("stocktakeStatusFilter").onchange=renderStocktakeReviews;$("stocktakeDifferenceFilter").onchange=renderStocktakeReviews;
       $("onboardingStatusFilter").onchange=renderInventoryOnboardingBatches;$("downloadOnboardingXlsx").onclick=()=>downloadInventoryOnboardingTemplate("xlsx");$("onboardingUploadForm").onsubmit=uploadInventoryOnboardingFile;$("rematchOnboardingBatch").onclick=rematchInventoryOnboardingBatch;$("downloadOnboardingErrors").onclick=downloadInventoryOnboardingErrors;$("confirmOnboardingBatch").onclick=confirmInventoryOnboardingBatch;$("onboardingLineEditor").onsubmit=saveInventoryOnboardingLine;$("cancelOnboardingLineEdit").onclick=closeInventoryOnboardingLineEditor;$("onboardingEditInventoryType").onchange=updateInventoryOnboardingLineEditorVisibility;$("onboardingEditActionDecision").onchange=updateInventoryOnboardingLineEditorVisibility;
       $("assignmentKeyword").onkeydown=event=>{if(event.key==="Enter")searchAssignmentProducts()};
@@ -1392,7 +1409,7 @@
     async function loadCustomers(){
       const data=await api("/api/warehouse/references/customers");state.customers=data.items;
       state.customersLoaded=true;
-      const rows=data.items.map(x=>({id:x.id,label:x.customer_code?`${x.customer_code} · ${x.name}`:x.name}));options($("fgCustomer"),rows,"请选择客户");options($("siCustomer"),rows,"不指定客户");options($("floor3CustomerFilter"),rows,"全部客户");options($("lotEditCustomer"),rows,"请选择客户");options($("lotCustomerFilter"),rows,"全部客户");options($("printingPlateCustomer"),rows,"请选择客户");
+      const rows=data.items.map(x=>({id:x.id,label:x.customer_code?`${x.customer_code} · ${x.name}`:x.name}));options($("fgCustomer"),rows,"请选择客户");options($("siCustomer"),rows,"不指定客户");options($("floor3CustomerFilter"),rows,"全部客户");options($("lotEditCustomer"),rows,"请选择客户");options($("lotCustomerFilter"),rows,"全部客户");options($("printingPlateCustomer"),rows,"请选择客户");options($("printingPlateReuseCustomer"),rows,"请选择新树脂版客户");
       if(state.floor3.bindRows.length){syncFloor3BindRows();renderFloor3BindRows()}
     }
     async function ensureCustomers(){
@@ -1914,11 +1931,16 @@
     }
     function renderPrintingPlates(){
       $("printingPlateBody").innerHTML=state.printingPlates.map(row=>{
-        const linked=(row.products||[]).map(product=>`<span class="tag">${h(product.product_code)} · ${h(product.product_name)}</span>`).join(" ")||'<span class="muted">尚未绑定常用箱</span>';
+        const visibleBindings=(row.products||[]),hiddenBindingCount=Math.max(0,Number(row.binding_count||0)-visibleBindings.length);
+        const linked=(visibleBindings.map(product=>`<span class="tag">${h(product.product_code)} · ${h(product.product_name)}</span>`).join(" ")||'<span class="muted">尚未绑定当前常用箱</span>')+(hiddenBindingCount?`<br><span class="tag warn">另有 ${hiddenBindingCount} 个停用或历史常用箱仍绑定，需先解除</span>`:"");
         const edit=state.user.role==="admin"?`<button class="btn" onclick="editPrintingPlate(${row.id})">编辑</button>`:"";
         const statusActions=state.user.role!=="admin"?"":row.status==="active"?`<button class="btn" onclick="setPrintingPlateStatus(${row.id},'inactive')">停用</button><button class="btn danger" onclick="setPrintingPlateStatus(${row.id},'damaged')">报损</button>`:`<button class="btn" onclick="setPrintingPlateStatus(${row.id},'active')">重新启用</button>`;
         const move=canOperate()&&row.status==="active"?`<button class="btn primary" onclick="movePrintingPlate(${row.id})">移动</button>`:"";
-        return `<tr><td><b>${h(row.plate_code)}</b><br>${h(row.plate_name)}</td><td><b>${h(row.customer_name||"-")}</b><br>${h(row.color_name)}</td><td><b>${h(row.rack_location)}</b><br><span class="muted">${h(row.location_guide?.prompt||"")}</span></td><td style="white-space:normal;min-width:260px">${linked}</td><td><span class="tag ${row.status==="active"?"":row.status==="damaged"?"danger":"warn"}">${h(printingPlateStatusLabel(row.status))}</span><br><span class="muted">位置版本 ${row.location_version}</span>${assetTimeArchiveHtml(row)}</td><td>${move}${edit}${statusActions}</td></tr>`;
+        const blockers=(row.resin_reuse_candidate?.blockers||[]).join("；");
+        const reuse=state.user.role!=="admin"?"":row.resin_reuse_candidate?.eligible?`<button class="btn primary" onclick="startPrintingPlateResinReuse(${row.id})">换版复用</button>`:`<button class="btn" disabled title="${h(blockers||"当前不符合换版条件")}">换版复用</button>`;
+        const history=Number(row.resin_reuse_count||0)>0?`<button class="btn" onclick="viewPrintingPlateResinReuseHistory(${row.id})">换版历史 ${Number(row.resin_reuse_count)}</button>`:"";
+        const latest=row.latest_resin_reuse?`<br><span class="muted">最近换版 ${h(formatDateTime(row.latest_resin_reuse.reused_at))}</span>`:"";
+        return `<tr><td><b>${h(row.plate_code)}</b><br>${h(row.plate_name)}</td><td><b>${h(row.customer_name||"-")}</b><br>${h(row.color_name)}</td><td><b>${h(row.rack_location)}</b><br><span class="muted">${h(row.location_guide?.prompt||"")}</span></td><td style="white-space:normal;min-width:260px">${linked}</td><td><span class="tag ${row.status==="active"?"":row.status==="damaged"?"danger":"warn"}">${h(printingPlateStatusLabel(row.status))}</span><br><span class="muted">资料版本 ${row.version} · 位置版本 ${row.location_version}</span>${latest}${assetTimeArchiveHtml(row)}</td><td>${move}${reuse}${history}${edit}${statusActions}</td></tr>`;
       }).join("");
       $("printingPlateEmpty").classList.toggle("hidden",state.printingPlates.length>0);
     }
@@ -1953,6 +1975,45 @@
         const result=await api("/api/warehouse/printing-plates/location-movement/confirm",{method:"POST",body:JSON.stringify({plate_code:row.plate_code,target_location:preview.target_location,expected_version:preview.expected_version,idempotency_key:createIdempotencyKey(),source:"manual_input",note:null})});
         toast(result.message||"挂板位置移动已确认");await loadPrintingPlates();
       }catch(err){toast(err.message,true)}
+    }
+    function printingPlateResinReusePayload(){
+      return {target_customer_id:Number($("printingPlateReuseCustomer").value),target_plate_name:$("printingPlateReuseName").value.trim(),target_color_name:$("printingPlateReuseColor").value.trim()};
+    }
+    function updatePrintingPlateResinReuseConfirmState(){
+      const preview=$("printingPlateReusePreview"),eligible=preview.dataset.eligible==="true",confirmed=$("printingPlateOldResinRemoved").checked&&$("printingPlateNewResinMounted").checked;
+      $("confirmPrintingPlateReuse").disabled=!eligible||!confirmed;
+    }
+    function invalidatePrintingPlateResinReusePreview(){
+      $("printingPlateReuseExpectedVersion").value="";const preview=$("printingPlateReusePreview");preview.dataset.eligible="false";preview.className="notice hidden";preview.textContent="";updatePrintingPlateResinReuseConfirmState();
+    }
+    async function startPrintingPlateResinReuse(id){
+      const row=state.printingPlates.find(value=>Number(value.id)===Number(id));if(!row)return;
+      if(!row.resin_reuse_candidate?.eligible){toast((row.resin_reuse_candidate?.blockers||["当前不符合换版条件"]).join("；"),true);return}
+      try{await ensureCustomers()}catch(error){toast(`客户资料加载失败：${error.message}`,true);return}
+      $("printingPlateReuseForm").reset();$("printingPlateReuseId").value=row.id;$("printingPlateReuseCustomer").value=String(row.customer_id);$("printingPlateReuseName").value="";$("printingPlateReuseColor").value="";$("printingPlateReuseCurrent").textContent=`实体挂板 ${row.plate_code} · 当前 ${row.customer_name||"-"} / ${row.plate_name} / ${row.color_name} · ${row.rack_location}`;invalidatePrintingPlateResinReusePreview();$("printingPlateReuseForm").classList.remove("hidden");$("printingPlateReuseForm").scrollIntoView({behavior:"smooth",block:"start"});
+    }
+    function closePrintingPlateResinReuse(){
+      $("printingPlateReuseForm").reset();$("printingPlateReuseId").value="";$("printingPlateReuseCurrent").textContent="";invalidatePrintingPlateResinReusePreview();$("printingPlateReuseForm").classList.add("hidden");
+    }
+    async function previewPrintingPlateResinReuse(){
+      const id=Number($("printingPlateReuseId").value),payload=printingPlateResinReusePayload();
+      if(!id||!payload.target_customer_id||!payload.target_plate_name||!payload.target_color_name){toast("请先填写新客户、新挂板名称和新印刷颜色",true);return}
+      try{
+        const data=await api(`/api/warehouse/printing-plates/${id}/resin-reuse/preview`,{method:"POST",body:JSON.stringify(payload)}),preview=$("printingPlateReusePreview");
+        $("printingPlateReuseExpectedVersion").value=String(data.expected_version||"");preview.dataset.eligible=data.eligible?"true":"false";preview.className=`notice ${data.eligible?"success":"danger"}`;preview.innerHTML=data.eligible?`<b>可以换版复用。</b>实体编号与第 2 层格位保持不变；请勾选两项现场确认后提交。`:`<b>暂不能换版：</b>${h((data.blockers||[]).join("；")||"请重新核对挂板状态")}`;updatePrintingPlateResinReuseConfirmState();
+      }catch(error){invalidatePrintingPlateResinReusePreview();toast(error.message,true)}
+    }
+    async function confirmPrintingPlateResinReuse(event){
+      event.preventDefault();const id=Number($("printingPlateReuseId").value),expectedVersion=Number($("printingPlateReuseExpectedVersion").value),common=printingPlateResinReusePayload();
+      if(!id||!expectedVersion||$("printingPlateReusePreview").dataset.eligible!=="true"){toast("请先重新核对换版资格",true);return}
+      if(!$("printingPlateOldResinRemoved").checked||!$("printingPlateNewResinMounted").checked){toast("必须确认旧树脂版已撕除且新树脂版已贴好",true);return}
+      const row=state.printingPlates.find(value=>Number(value.id)===id);if(!window.confirm(`确认实体挂板 ${row?.plate_code||id} 已完成现场换版？\n挂板编号和第 2 层格位保持不变，旧用途会永久保留。`))return;
+      const submit=$("confirmPrintingPlateReuse");submit.disabled=true;
+      try{const result=await api(`/api/warehouse/printing-plates/${id}/resin-reuse/confirm`,{method:"POST",body:JSON.stringify({...common,expected_version:expectedVersion,idempotency_key:createIdempotencyKey(),old_resin_removed:true,new_resin_mounted:true})});toast(result.message||"挂板换版复用已确认");closePrintingPlateResinReuse();await loadPrintingPlates()}catch(error){toast(error.message,true);updatePrintingPlateResinReuseConfirmState()}
+    }
+    async function viewPrintingPlateResinReuseHistory(id){
+      const row=state.printingPlates.find(value=>Number(value.id)===Number(id));
+      try{const data=await api(`/api/warehouse/printing-plates/${id}/resin-reuses?page=1&page_size=100`),lines=(data.items||[]).map(item=>`${formatDateTime(item.reused_at)}\n${item.from_customer_name} / ${item.from_plate_name} / ${item.from_color_name}\n→ ${item.to_customer_name} / ${item.to_plate_name} / ${item.to_color_name}\n操作员：${item.actor_username} · 格位：${item.rack_location}`);window.alert(`${row?.plate_code||"实体挂板"} 换版历史（${data.total||0} 次）\n\n${lines.join("\n\n")||"暂无换版历史"}`)}catch(error){toast(error.message,true)}
     }
     function locationLabelEligible(row){return row.is_active!==false&&row.placement_status!=="unplaced"&&!row.is_temporary&&row.storage_type!=="temporary_aisle"&&row.map_status==="floor3_mapped"}
     function renderLocations(){

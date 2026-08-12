@@ -34,6 +34,7 @@ from app.models.mold_tool import MoldLocationMovement, MoldTool  # noqa: E402,F4
 from app.models.printing_plate import (  # noqa: E402,F401
     PrintingPlate,
     PrintingPlateLocationMovement,
+    PrintingPlateResinReuse,
 )
 from app.models.product import Product  # noqa: E402,F401
 from app.models.product_bom import (  # noqa: E402,F401

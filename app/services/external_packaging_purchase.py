@@ -1142,21 +1142,6 @@ def serialize_external_purchase_batch(
     return _serialize_batch(batch)
 
 
-def _order_drawing_print_facts(order_item: OrderItem | None) -> dict[str, Any]:
-    drawing_reference = str(order_item.drawing_file or "").strip() if order_item else ""
-    file_name = (
-        drawing_reference.replace("\\", "/").rsplit("/", 1)[-1]
-        if drawing_reference
-        else None
-    )
-    return {
-        "order_drawing_file_name": file_name,
-        "order_drawing_version_label": (
-            "订单下单图纸（冻结文件）" if file_name else "未随订单冻结图纸"
-        ),
-    }
-
-
 def build_external_purchase_print(
     db: Session,
     purchase_order_id: int,
@@ -1177,123 +1162,30 @@ def build_external_purchase_print(
         raise ExternalPurchaseContractError(
             "采购单关联订单不存在，禁止猜测打印来源", status_code=409
         )
-    customer = db.get(Customer, sales_order.customer_id)
-    supplier = db.get(Supplier, purchase.supplier_id)
     company = db.get(CompanyConfig, 1)
-    order_item_ids = {row.sales_order_item_id for row in purchase.items}
-    order_items = {
-        row.id: row
-        for row in db.scalars(
-            select(OrderItem).where(OrderItem.id.in_(order_item_ids))
-        ).all()
-    }
 
     items: list[dict[str, Any]] = []
     for row in purchase.items:
-        order_item = order_items.get(row.sales_order_item_id)
         items.append(
             {
-                "id": row.id,
-                "sales_order_item_id": row.sales_order_item_id,
-                "item_sequence": order_item.item_sequence if order_item else None,
-                "source_item_order_number": (
-                    order_item.item_order_number if order_item else None
-                ),
-                "source_customer_name": customer.name if customer else "",
-                "source_order_number": sales_order.order_number,
-                "source_product_code": (
-                    order_item.snapshot_product_code if order_item else None
-                ),
-                "source_product_name": (
-                    order_item.snapshot_product_name if order_item else None
-                ),
-                "purpose": row.purpose_snapshot,
-                **_order_drawing_print_facts(order_item),
-                "supplier_product_code": row.supplier_product_code_snapshot,
-                "product_name": row.product_name_snapshot,
                 "specification_summary": row.specification_summary_snapshot,
                 "purchase_quantity": _decimal_text(
                     Decimal(row.purchase_quantity)
                 ),
                 "purchase_unit": row.purchase_unit,
-                "unit_price": _decimal_text(Decimal(row.unit_price)),
-                "currency": row.currency,
-                "tax_mode": row.tax_mode,
-                "tax_rate": _decimal_text(Decimal(row.tax_rate)),
-                "line_amount": _decimal_text(Decimal(row.line_amount)),
-                "tax_amount": _decimal_text(Decimal(row.tax_amount)),
-                "total_amount": _decimal_text(Decimal(row.total_amount)),
-                "moq_quantity": (
-                    _decimal_text(Decimal(row.moq_quantity_snapshot))
-                    if row.moq_quantity_snapshot is not None
-                    else None
-                ),
-                "packaging_multiple": (
-                    _decimal_text(Decimal(row.packaging_multiple_snapshot))
-                    if row.packaging_multiple_snapshot is not None
-                    else None
-                ),
-                "shipping_fee_mode": row.shipping_fee_mode,
-                "shipping_fee": (
-                    _decimal_text(Decimal(row.shipping_fee_snapshot))
-                    if row.shipping_fee_snapshot is not None
-                    else None
-                ),
-                "sample_fee": (
-                    _decimal_text(Decimal(row.sample_fee_snapshot))
-                    if row.sample_fee_snapshot is not None
-                    else None
-                ),
-                "plate_fee": (
-                    _decimal_text(Decimal(row.plate_fee_snapshot))
-                    if row.plate_fee_snapshot is not None
-                    else None
-                ),
-                "die_fee": (
-                    _decimal_text(Decimal(row.die_fee_snapshot))
-                    if row.die_fee_snapshot is not None
-                    else None
-                ),
-                "price_evidence_reference": row.price_evidence_reference_snapshot,
             }
         )
 
     return {
-        "id": purchase.id,
         "purchase_number": purchase.purchase_number,
-        "status": purchase.status,
         "confirmed_at": (
             purchase.confirmed_at.isoformat() if purchase.confirmed_at else None
         ),
-        "currency": purchase.currency,
-        "goods_amount": _decimal_text(Decimal(purchase.goods_amount)),
-        "tax_amount": _decimal_text(Decimal(purchase.tax_amount)),
-        "total_amount": _decimal_text(Decimal(purchase.total_amount)),
         "supplier": {
             "name": purchase.supplier_name_snapshot,
-            "business_code": purchase.supplier_business_code_snapshot,
-            "contact_name": supplier.contact_name if supplier else None,
-            "phone": supplier.phone if supplier else None,
         },
         "buyer": {
             "company_name": company.company_name if company else "",
-            "address": company.address if company else None,
-            "phone": company.phone if company else None,
-        },
-        "source": {
-            "order_id": sales_order.id,
-            "order_number": sales_order.order_number,
-            "customer_po": sales_order.customer_po,
-            "customer_name": customer.name if customer else "",
-            "order_date": (
-                sales_order.order_date.isoformat() if sales_order.order_date else None
-            ),
-            "delivery_date": (
-                sales_order.delivery_date.isoformat()
-                if sales_order.delivery_date
-                else None
-            ),
         },
         "items": items,
-        "terms_note": "运费、打样费、版费、刀模费等为冻结报价条款，不代表本单必然发生，未计入采购单合计。",
     }

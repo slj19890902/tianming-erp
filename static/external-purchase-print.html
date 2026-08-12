@@ -7,12 +7,12 @@
   <style>
     *{box-sizing:border-box}body{margin:0;background:#edf1f5;color:#111;font:13px/1.35 "Microsoft YaHei",sans-serif}
     .actions{display:flex;justify-content:center;gap:8px;margin:14px}.actions button,.return-link{padding:8px 18px;border:0;border-radius:5px;background:#1769aa;color:#fff;font-weight:700;text-decoration:none;cursor:pointer}.actions button:disabled{opacity:.5;cursor:not-allowed}.actions .secondary{background:#64748b}
-    .load-state{width:1100px;max-width:calc(100% - 24px);margin:0 auto 10px;padding:9px 12px;border:1px solid #bfdbfe;border-radius:6px;background:#eff6ff;color:#1e3a8a}.load-state.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}.hidden{display:none!important}
-    .sheet{width:1100px;max-width:calc(100% - 24px);margin:0 auto 18px;padding:18px 22px;background:#fff;box-shadow:0 4px 18px #0002}.title{text-align:center}.title h1{margin:0;font-size:22px}.title div{margin-top:2px;font-size:20px;letter-spacing:7px}
+    .load-state{width:800px;max-width:calc(100% - 24px);margin:0 auto 10px;padding:9px 12px;border:1px solid #bfdbfe;border-radius:6px;background:#eff6ff;color:#1e3a8a}.load-state.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}.hidden{display:none!important}
+    .sheet{width:800px;max-width:calc(100% - 24px);margin:0 auto 18px;padding:18px 22px;background:#fff;box-shadow:0 4px 18px #0002}.title{text-align:center}.title h1{margin:0;font-size:22px}.title div{margin-top:2px;font-size:20px;letter-spacing:7px}
     .head{display:grid;grid-template-columns:1fr 1fr;gap:6px 24px;margin:10px 0}.head-card{border:1px solid #111;padding:7px 9px;line-height:1.65}.head-card strong{display:inline-block;min-width:68px}
-    table{width:100%;border-collapse:collapse;table-layout:fixed}thead{display:table-header-group}th,td{border:1px solid #111;padding:5px;text-align:center;vertical-align:middle;overflow-wrap:anywhere}th{background:#f3f4f6}.left{text-align:left}.muted{color:#555;font-size:11px}.amount{text-align:right;font-variant-numeric:tabular-nums}.terms{font-size:11px;line-height:1.45}.summary{display:flex;justify-content:flex-end;gap:18px;margin-top:8px;font-size:14px}.summary strong{font-size:16px}.note{margin-top:8px;padding:7px 9px;border:1px solid #ddd;background:#fafafa;font-size:11px}.footer{display:flex;justify-content:space-between;margin-top:12px;font-size:12px}
+    table{width:100%;border-collapse:collapse;table-layout:fixed}thead{display:table-header-group}th,td{border:1px solid #111;padding:8px;text-align:center;vertical-align:middle;overflow-wrap:anywhere}th{background:#f3f4f6}.left{text-align:left}.footer{display:flex;justify-content:flex-end;margin-top:12px;font-size:12px}
     tr{break-inside:avoid;page-break-inside:avoid}
-    @media print{body{background:#fff}.actions,.load-state{display:none}.sheet{width:auto;max-width:none;margin:0;padding:0;box-shadow:none}@page{size:A4 landscape;margin:9mm}}
+    @media print{body{background:#fff}.actions,.load-state{display:none}.sheet{width:auto;max-width:none;margin:0;padding:0;box-shadow:none}@page{size:A4 portrait;margin:12mm}}
   </style>
 </head>
 <body>
@@ -21,19 +21,15 @@
   <main id="sheet" class="sheet">
     <div class="title"><h1 id="companyName">苏州天明包装有限公司</h1><div>外购包装采购单</div></div>
     <div class="head">
-      <div class="head-card"><div><strong>供应商</strong><span id="supplierName">-</span></div><div><strong>联系人</strong><span id="supplierContact">-</span></div><div><strong>电话</strong><span id="supplierPhone">-</span></div></div>
-      <div class="head-card"><div><strong>采购单号</strong><span id="purchaseNumber">-</span></div><div><strong>确认日期</strong><span id="confirmedDate">-</span></div><div><strong>币种</strong><span id="currency">-</span></div></div>
-      <div class="head-card"><div><strong>客户</strong><span id="customerName">-</span></div><div><strong>客户单号</strong><span id="customerPo">-</span></div></div>
-      <div class="head-card"><div><strong>订单号</strong><span id="orderNumber">-</span></div><div><strong>交货日期</strong><span id="deliveryDate">-</span></div></div>
+      <div class="head-card"><div><strong>供应商</strong><span id="supplierName">-</span></div></div>
+      <div class="head-card"><div><strong>采购单号</strong><span id="purchaseNumber">-</span></div><div><strong>确认日期</strong><span id="confirmedDate">-</span></div></div>
     </div>
     <table>
-      <colgroup><col style="width:5%"><col style="width:13%"><col style="width:20%"><col style="width:9%"><col style="width:9%"><col style="width:9%"><col style="width:9%"><col style="width:10%"><col style="width:16%"></colgroup>
-      <thead><tr><th>序号</th><th>供应商产品代码</th><th>型号 / 结构规格 / 订单来源</th><th>数量 / 原生单位</th><th>供应商采购成本</th><th>货品金额</th><th>税额</th><th>含税合计</th><th>冻结报价条款</th></tr></thead>
+      <colgroup><col style="width:10%"><col style="width:65%"><col style="width:25%"></colgroup>
+      <thead><tr><th>序号</th><th>规格</th><th>数量</th></tr></thead>
       <tbody id="rows"></tbody>
     </table>
-    <div class="summary"><span>货品金额：<strong id="goodsAmount">-</strong></span><span>税额：<strong id="taxAmount">-</strong></span><span>合计：<strong id="totalAmount">-</strong></span></div>
-    <div id="termsNote" class="note"></div>
-    <div class="footer"><span id="buyerContact"></span><span>制单：ERP 人工确认采购记录</span></div>
+    <div class="footer"><span>制单：ERP 人工确认采购记录</span></div>
   </main>
   <script src="/static/assets/time-utils.js?v=95c91f9ded41"></script>
   <script>
@@ -56,23 +52,6 @@
       return "";
     }
     function isAbortError(error){return error?.name==="AbortError"||error?.code==="ABORT_ERR";}
-    function amount(currency,value){return `${escapeHtml(currency||"")} ${escapeHtml(value??"-")}`.trim();}
-    function percent(value){const number=Number(value);if(!Number.isFinite(number))return "-";return `${(number*100).toFixed(4).replace(/\.?0+$/,"")}%`;}
-    function shippingText(item){
-      const labels={not_provided:"运费未提供",included:"运费已含",per_order:"每单运费",per_unit:"每单位运费"};
-      const label=labels[item.shipping_fee_mode]||"运费口径未知";
-      return item.shipping_fee?`${label} ${item.currency} ${item.shipping_fee}`:label;
-    }
-    function termLines(item){
-      const lines=[];
-      if(item.moq_quantity)lines.push(`MOQ ${item.moq_quantity} ${item.purchase_unit}`);
-      if(item.packaging_multiple)lines.push(`包装倍数 ${item.packaging_multiple} ${item.purchase_unit}`);
-      lines.push(shippingText(item));
-      if(item.sample_fee)lines.push(`打样费 ${item.currency} ${item.sample_fee}`);
-      if(item.plate_fee)lines.push(`版费 ${item.currency} ${item.plate_fee}`);
-      if(item.die_fee)lines.push(`刀模费 ${item.currency} ${item.die_fee}`);
-      return lines;
-    }
     async function requestPrintData(id,signal){
       let response;
       try{response=await fetch(`/api/external-packaging-purchases/${encodeURIComponent(id)}/print`,{credentials:"include",signal});}
@@ -84,26 +63,14 @@
       return body;
     }
     function setLoading(){printButton.disabled=true;retryButton.classList.add("hidden");loadState.classList.remove("hidden","error");loadState.textContent="正在读取外购包装采购单，请稍候…";}
-    function renderError(error,allowRetry=true){printButton.disabled=true;loadState.classList.remove("hidden");loadState.classList.add("error");loadState.textContent=error?.status===401?"登录已失效，请返回 ERP 登录后重新打印。":(error?.status===403?"当前账号没有查看采购成本和打印该采购单的权限。":(error?.message||"无法读取采购单，请重试"));retryButton.classList.toggle("hidden",!allowRetry);}
+    function renderError(error,allowRetry=true){printButton.disabled=true;loadState.classList.remove("hidden");loadState.classList.add("error");loadState.textContent=error?.status===401?"登录已失效，请返回 ERP 登录后重新打印。":(error?.status===403?"当前账号没有打印该采购单的权限。":(error?.message||"无法读取采购单，请重试"));retryButton.classList.toggle("hidden",!allowRetry);}
     function renderPurchase(data){
       document.getElementById("companyName").textContent=data.buyer?.company_name||"苏州天明包装有限公司";
       document.getElementById("supplierName").textContent=data.supplier?.name||"-";
-      document.getElementById("supplierContact").textContent=data.supplier?.contact_name||"-";
-      document.getElementById("supplierPhone").textContent=data.supplier?.phone||"-";
       document.getElementById("purchaseNumber").textContent=data.purchase_number||"-";
       document.getElementById("confirmedDate").textContent=displayDate(data.confirmed_at);
-      document.getElementById("currency").textContent=data.currency||"-";
-      document.getElementById("customerName").textContent=data.source?.customer_name||"-";
-      document.getElementById("customerPo").textContent=data.source?.customer_po||"-";
-      document.getElementById("orderNumber").textContent=data.source?.order_number||"-";
-      document.getElementById("deliveryDate").textContent=displayDate(data.source?.delivery_date);
       const items=Array.isArray(data.items)?data.items:[];
-      rowsNode.innerHTML=items.length?items.map((item,index)=>`<tr><td>${index+1}</td><td>${escapeHtml(item.supplier_product_code||"-")}</td><td class="left"><strong>${escapeHtml(item.product_name||"-")}</strong><div>${escapeHtml(item.specification_summary||"-")}</div><div class="muted">用途：${escapeHtml(item.purpose||"-")}｜客户：${escapeHtml(item.source_customer_name||"-")}｜订单：${escapeHtml(item.source_order_number||"-")}｜明细：${escapeHtml(item.source_item_order_number||item.item_sequence||"-")}</div><div class="muted">订单产品：${escapeHtml(item.source_product_code||"-")} ${escapeHtml(item.source_product_name||"")}｜图纸：${escapeHtml(item.order_drawing_file_name||"未随订单冻结")}｜${escapeHtml(item.order_drawing_version_label||"未随订单冻结图纸")}</div></td><td>${escapeHtml(item.purchase_quantity)} ${escapeHtml(item.purchase_unit)}</td><td class="amount">${amount(item.currency,item.unit_price)}<div class="muted">${item.tax_mode==="tax_inclusive"?"含税价":"未税价"} ${percent(item.tax_rate)}</div></td><td class="amount">${amount(item.currency,item.line_amount)}</td><td class="amount">${amount(item.currency,item.tax_amount)}</td><td class="amount">${amount(item.currency,item.total_amount)}</td><td class="left terms">${termLines(item).map(escapeHtml).join("<br>")}</td></tr>`).join(""):'<tr><td colspan="9">该采购单暂无明细</td></tr>';
-      document.getElementById("goodsAmount").innerHTML=amount(data.currency,data.goods_amount);
-      document.getElementById("taxAmount").innerHTML=amount(data.currency,data.tax_amount);
-      document.getElementById("totalAmount").innerHTML=amount(data.currency,data.total_amount);
-      document.getElementById("termsNote").textContent=data.terms_note||"附加费为冻结报价条款，未计入采购单合计。";
-      const contacts=[];if(data.buyer?.address)contacts.push(`地址：${data.buyer.address}`);if(data.buyer?.phone)contacts.push(`电话：${data.buyer.phone}`);document.getElementById("buyerContact").textContent=contacts.join("　");
+      rowsNode.innerHTML=items.length?items.map((item,index)=>`<tr><td>${index+1}</td><td class="left">${escapeHtml(item.specification_summary||"-")}</td><td>${escapeHtml(item.purchase_quantity)} ${escapeHtml(item.purchase_unit)}</td></tr>`).join(""):'<tr><td colspan="3">该采购单暂无明细</td></tr>';
       loadState.classList.add("hidden");loadState.classList.remove("error");retryButton.classList.add("hidden");printButton.disabled=false;
     }
     async function loadPurchase(){

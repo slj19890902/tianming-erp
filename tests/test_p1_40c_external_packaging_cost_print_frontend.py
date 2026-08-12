@@ -53,21 +53,32 @@ def test_product_and_order_ui_separate_purchase_cost_from_customer_sale_price() 
     assert "<label>图纸</label>" in INDEX
 
 
-def test_external_purchase_print_has_native_source_and_drawing_without_paper_fields() -> None:
-    for label in (
+def test_external_purchase_print_only_shows_specification_and_quantity() -> None:
+    for label in ("规格", "数量", "specification_summary", "purchase_quantity", "purchase_unit"):
+        assert label in PRINT_PAGE
+    for forbidden in (
+        "客户",
+        "订单来源",
         "供应商产品代码",
-        "型号 / 结构规格 / 订单来源",
-        "数量 / 原生单位",
         "供应商采购成本",
         "source_customer_name",
         "source_order_number",
         "source_item_order_number",
         "order_drawing_file_name",
         "order_drawing_version_label",
+        "unit_price",
+        "currency",
+        "tax_rate",
+        "line_amount",
+        "total_amount",
+        "MOQ",
+        "运费",
+        "纸板材质",
+        "楞型",
+        "开料",
+        "压线",
     ):
-        assert label in PRINT_PAGE
-    for paper_only in ("纸板材质", "楞型", "开料", "压线"):
-        assert paper_only not in PRINT_PAGE
+        assert forbidden not in PRINT_PAGE
     for write_method in ('method:"POST"', 'method:"PUT"', 'method:"PATCH"', 'method:"DELETE"'):
         assert write_method not in PRINT_PAGE
 

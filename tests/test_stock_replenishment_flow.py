@@ -1007,6 +1007,181 @@ def test_replenishment_auto_stages_material_without_location_choice(
         assert session.scalar(select(func.count(IncomingReceiptItem.id))) == 1
 
 
+def test_replenishment_accepts_explicit_floor1_a1_marker_during_layout_transition(
+    stock_replenishment_app,
+) -> None:
+    app, session_factory = stock_replenishment_app
+    from app.models.incoming_receipt import IncomingReceiptItem
+    from app.models.warehouse_inventory import (
+        InventoryLot,
+        WarehouseArea,
+        WarehouseFloor,
+        WarehouseLocation,
+    )
+
+    with session_factory() as session:
+        staging = session.scalar(
+            select(WarehouseLocation).where(WarehouseLocation.location_code == "1FA")
+        )
+        floor = session.scalar(
+            select(WarehouseFloor).where(WarehouseFloor.floor_number == 1)
+        )
+        area = session.scalar(
+            select(WarehouseArea).where(
+                WarehouseArea.floor_id == floor.id,
+                WarehouseArea.area_code == "A1",
+            )
+        )
+        assert staging is not None and area is not None
+        staging.placement_status = "unplaced"
+        area.construction_status = "ledger_building"
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client)
+        created = client.post(
+            "/api/requisition/stock-replenishment/orders",
+            json=_customer_replenishment_payload(quantity=10),
+        )
+        assert created.status_code == 201, created.text
+        item_id = created.json()["items"][0]["id"]
+        received = client.put(
+            f"/api/incoming/receive/sr{item_id}",
+            json={
+                "received_quantity": 10,
+                "idempotency_key": "replenishment-transitional-floor1-a1-staging",
+            },
+        )
+        assert received.status_code == 200, received.text
+
+    with session_factory() as session:
+        staging = session.scalar(
+            select(WarehouseLocation).where(WarehouseLocation.location_code == "1FA")
+        )
+        lot = session.scalar(select(InventoryLot))
+        assert lot is not None and staging is not None
+        assert lot.warehouse_location_id == staging.id
+        assert session.scalar(select(func.count(IncomingReceiptItem.id))) == 1
+
+
+def test_replenishment_does_not_broaden_transition_to_other_unplaced_markers(
+    stock_replenishment_app,
+) -> None:
+    app, session_factory = stock_replenishment_app
+    from app.models.incoming_receipt import IncomingReceiptItem
+    from app.models.warehouse_inventory import (
+        InventoryLot,
+        WarehouseArea,
+        WarehouseFloor,
+        WarehouseLocation,
+    )
+
+    with session_factory() as session:
+        staging = session.scalar(
+            select(WarehouseLocation).where(WarehouseLocation.location_code == "1FA")
+        )
+        floor = session.scalar(
+            select(WarehouseFloor).where(WarehouseFloor.floor_number == 1)
+        )
+        area = session.scalar(
+            select(WarehouseArea).where(
+                WarehouseArea.floor_id == floor.id,
+                WarehouseArea.area_code == "A1",
+            )
+        )
+        assert staging is not None and area is not None
+        staging.location_code = "A1-UNPLACED"
+        staging.placement_status = "unplaced"
+        area.construction_status = "ledger_building"
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client)
+        created = client.post(
+            "/api/requisition/stock-replenishment/orders",
+            json=_customer_replenishment_payload(quantity=10),
+        )
+        assert created.status_code == 201, created.text
+        item_id = created.json()["items"][0]["id"]
+        received = client.put(
+            f"/api/incoming/receive/sr{item_id}",
+            json={
+                "received_quantity": 10,
+                "idempotency_key": "replenishment-other-unplaced-staging-blocked",
+            },
+        )
+        assert received.status_code == 409, received.text
+
+    with session_factory() as session:
+        assert session.scalar(select(func.count(InventoryLot.id))) == 0
+        assert session.scalar(select(func.count(IncomingReceiptItem.id))) == 0
+
+
+def test_transitional_floor1_a1_marker_rejects_non_receipt_service_calls(
+    stock_replenishment_app,
+) -> None:
+    _app, session_factory = stock_replenishment_app
+    from app.models.warehouse_inventory import (
+        InventoryLot,
+        WarehouseArea,
+        WarehouseFloor,
+        WarehouseLocation,
+    )
+    from app.services.warehouse_inventory import (
+        WarehouseInventoryError,
+        manual_semi_finished_in,
+    )
+
+    with session_factory() as session:
+        staging = session.scalar(
+            select(WarehouseLocation).where(WarehouseLocation.location_code == "1FA")
+        )
+        floor = session.scalar(
+            select(WarehouseFloor).where(WarehouseFloor.floor_number == 1)
+        )
+        area = session.scalar(
+            select(WarehouseArea).where(
+                WarehouseArea.floor_id == floor.id,
+                WarehouseArea.area_code == "A1",
+            )
+        )
+        assert staging is not None and area is not None
+        staging.placement_status = "unplaced"
+        area.construction_status = "ledger_building"
+        session.commit()
+
+        with pytest.raises(
+            WarehouseInventoryError,
+            match="只允许补库来料实收使用",
+        ):
+            manual_semi_finished_in(
+                session,
+                location_id=staging.id,
+                quantity=10,
+                stock_date=date.today(),
+                source_type="manual",
+                material_code="A416D",
+                layer_count=5,
+                flute_type="AB",
+                board_length_mm=1865,
+                board_width_mm=830,
+                sheet_type="raw_board",
+                supplier_name="苏州佳丰",
+                customer_id=None,
+                crease_type=None,
+                crease_left_mm=None,
+                crease_middle_mm=None,
+                crease_right_mm=None,
+                cutting_note=None,
+                remarks=None,
+                operator_id=None,
+                idempotency_key="transitional-a1-manual-service-blocked",
+                allow_raw_material_staging=True,
+            )
+        session.rollback()
+        assert session.scalar(select(func.count(InventoryLot.id))) == 0
+
+
 def test_replenishment_receive_fails_closed_without_floor1_a1_staging(
     stock_replenishment_app,
 ) -> None:

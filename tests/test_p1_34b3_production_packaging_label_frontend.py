@@ -29,8 +29,8 @@ def _inline_scripts(source: str) -> list[str]:
 
 def test_product_editor_exposes_disabled_by_default_label_policy() -> None:
     for marker in (
-        "随生产任务打印包装标签",
-        "每张标签代表只数",
+        "打印标签",
+        'aria-label="每张标签代表只数"',
         'v-model="productForm.production_label_enabled"',
         'v-model="productForm.production_label_units_per_label"',
         "production_label_enabled: false",
@@ -62,7 +62,8 @@ def test_product_policy_participates_in_payload_hydration_and_dirty_tracking() -
         in INDEX
     )
     label_panel = INDEX.split('class="product-production-label-config"', 1)[1]
-    assert "随生产任务打印包装标签" in label_panel
+    assert "打印标签" in label_panel
+    assert 'aria-label="每张标签代表只数"' in label_panel
     assert "每张标签代表只数" in label_panel
     assert "product-production-label-note" not in label_panel
 

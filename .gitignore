@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 .test-tmp/
 .codex-tmp/
+.tmp-layout-uat/
 node_modules/
 dist/
 *.tsbuildinfo

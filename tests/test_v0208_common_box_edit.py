@@ -36,11 +36,11 @@ def test_common_box_edit_uses_five_compact_business_rows() -> None:
 
 def test_common_box_size_grid_reserves_report_and_crease_areas() -> None:
     source = _source()
-    assert "grid-template-columns: repeat(14, minmax(0, 1fr))" in source
+    assert "grid-template-columns: repeat(3, 84px) 96px 72px minmax(315px, 1fr) 100px 112px 268px" in source
     assert 'class="field product-report-field"' in source
     assert 'class="field product-crease-type-field"' in source
     assert 'class="field product-crease-field"' in source
-    assert ".product-report-field { grid-column: span 4" in source
+    assert ".product-report-field .report-size-line .input { width: 104px" in source
 
 
 def test_common_box_dimensions_are_integer_inputs_but_price_keeps_decimals() -> None:
@@ -198,8 +198,11 @@ def test_common_box_processes_remove_double_and_drawings_are_independent_of_prin
     for print_type in ("无印刷", "单色印刷", "双色印刷", "多色印刷"):
         assert f'<option value="{print_type}">{print_type}</option>' in source
     assert 'v-if="productForm.print_content !== \'无印刷\'"' not in source
-    assert "图片/图纸与印刷情况相互独立" in source
-    assert "无印刷产品也可上传实物图、模切形状或模具核对图" in source
+    final_row = source.split('class="product-form-row product-final-row"', 1)[1].split(
+        "</fieldset>", 1
+    )[0]
+    assert '<label>图纸</label>' in final_row
+    assert 'v-if="productHasPrinting(productForm)"' not in final_row
     assert '@click="previewProductDrawing(row)"' in source
     assert "serializeProductionProcesses" in source
 
@@ -222,7 +225,6 @@ def test_common_box_second_row_contains_splice_flap_report_and_crease() -> None:
         "报料长宽",
         "压线类型",
         "压线尺寸",
-        "报料备注",
         "重新推荐",
     ):
         assert marker in row
@@ -350,8 +352,9 @@ def test_telescoping_lid_edit_layout_separates_cover_and_base_rows() -> None:
     print_row_start = source.index('class="product-form-row product-print-row"')
     final_row_start = source.index('class="product-form-row product-final-row"')
     print_row = source[print_row_start:final_row_start]
-    assert "报料备注" in print_row
-    assert "v-model.trim=\"productForm.report_notes\"" in print_row
+    assert "报料备注" not in print_row
+    assert "v-model.trim=\"productForm.report_notes\"" not in print_row
+    assert "report_notes: f.report_notes" in source
     assert "compact-remark-field" in source
     assert "/api/products/box-type-recommendation" in source
     assert "productSupportedCreaseTypes" in source
@@ -411,11 +414,15 @@ def test_common_box_form_save_keeps_splice_and_serializes_processes() -> None:
     assert "productFormSnapshot" in source
 
 
-def test_common_box_fifth_row_contains_price_and_remark() -> None:
+def test_common_box_fifth_row_contains_price_drawing_history_and_save() -> None:
     source = _source()
 
     row_start = source.index('class="product-form-row product-final-row"')
     row_end = source.index('<div v-else-if="modal.type === \'material\'"', row_start)
     row = source[row_start:row_end]
     assert "默认单价" in row
-    assert "备注" in row
+    assert "图纸" in row
+    assert "图纸记录" in row
+    assert "product-inline-save" in row
+    assert 'v-model="productForm.remark"' not in row
+    assert "remark: f.remark" in source

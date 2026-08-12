@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.89"
-    assert APP_VERSION_NAME == "虚拟组合套装、纸护角与手机仓储协同"
+    assert APP_VERSION == "v0.22.92"
+    assert APP_VERSION_NAME == "编辑常用箱紧凑布局与字段一致性"
     assert APP_BUILD_DATE == "2026-08-12"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -50,23 +50,23 @@ def test_factory_update_reports_current_release_version() -> None:
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
     assert any(
-        "本次更新｜" in item and "虚拟组合套装父件" in item and "真实组件任务" in item
+        "本次更新｜" in item and "5 位数字" in item and "6 位数字" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "纸护角" in item and "元/米" in item
+        "本次更新｜" in item and "材质候选" in item and "后端 ID" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "紧凑业务布局" in item and "无损保留" in item
+        "本次更新｜" in item and "保存接口" in item and "不新增影子字段" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "手机 ERP" in item and "实测仓库地图" in item
+        "本次更新｜" in item and "紧凑色带" in item and "产品名称" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "ed12→ee13→ff14" in item and "时间投影" in item
+        "本次更新｜" in item and "没有数据库迁移" in item and "hh16" in item
         for item in current_release
     )
     assert any(
@@ -148,7 +148,7 @@ def test_factory_update_reports_current_release_version() -> None:
         for item in APP_CHANGELOG
     )
     assert any(
-        "如何验证｜" in item and "v0.22.89" in item and "ff14" in item
+        "如何验证｜" in item and "v0.22.92" in item and "hh16" in item
         for item in current_release
     )
     assert any(

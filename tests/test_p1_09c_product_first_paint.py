@@ -61,16 +61,16 @@ def test_product_material_cell_uses_list_snapshot_before_full_material_cache() -
 
 
 def test_product_editor_loads_materials_and_molds_only_when_opened() -> None:
-    options = _block("async ensureProductEditorOptions({force=false} = {})", "moldToolSelectOptions()")
+    options = _block("async ensureProductEditorOptions({force=false,refreshMolds=false} = {})", "moldToolSelectOptions()")
     open_product = _block("async openProduct(row=null)", "async loadProductMaterialContext")
 
     assert "const needsMaterials = force || !this.allMaterials.length;" in options
-    assert "const needsMolds = !this.isWorkshop && (force || !this.moldTools.length);" in options
+    assert "const needsMolds = !this.isWorkshop && (force || refreshMolds || !this.moldTools.length);" in options
     assert "if (needsMaterials) tasks.push(this.loadMaterials());" in options
     assert "if (needsMolds) tasks.push(this.loadMoldTools());" in options
     assert "productEditorOptionsLoading = true" in options
     assert 'this.productEditorOptionsError = "";' in options
     assert 'this.productEditorOptionsError = "材质、模具与挂板选择数据读取失败，请重试";' in options
-    assert "await this.ensureProductEditorOptions();" in open_product
+    assert "await this.ensureProductEditorOptions({refreshMolds:true});" in open_product
     assert "正在读取材质与模具选择数据" in INDEX
     assert "ensureProductEditorOptions({force:true})" in INDEX

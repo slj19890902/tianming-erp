@@ -57,7 +57,9 @@ def test_product_fields_follow_rule_capabilities() -> None:
     assert "productSupportedSpliceModes(productForm.box_style)" in product_form
     assert "usesProductTongue(productForm.box_style)" in product_form
     assert "productSupportedCreaseTypes(productForm.box_style)" in product_form
-    assert "productSupportedCuttingModes(productForm.box_style)" in product_form
+    assert "usesProductDefaultCuttingMode(productForm.box_style)" in product_form
+    assert "cuttingModeFactor(productForm.default_cutting_mode)" in product_form
+    assert "normalizeCuttingMode($event.target.value)" in product_form
     assert "productSupportsCreaseSegments(productForm.box_style)" in product_form
 
 
@@ -91,7 +93,8 @@ def test_order_item_editor_reuses_box_type_capabilities_and_explicit_recommendat
     assert 'v-if="usesProductSplice(orderItemForm.box_style)"' in order_item
     assert 'v-if="usesProductTongue(orderItemForm.box_style)"' in order_item
     assert 'v-if="usesProductDefaultCuttingMode(orderItemForm.box_style)"' in order_item
-    assert 'productSupportedCuttingModes(orderItemForm.box_style)' in order_item
+    assert 'cuttingModeFactor(orderItemForm.special_process)' in order_item
+    assert 'normalizeCuttingMode($event.target.value)' in order_item
     assert 'productSupportedCreaseTypes(orderItemForm.box_style)' in order_item
     assert 'v-if="productSupportsCreaseSegments(orderItemForm.box_style)"' in order_item
     assert '@click="reapplyOrderItemRecommendations"' in order_item

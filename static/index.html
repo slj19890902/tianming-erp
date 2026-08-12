@@ -896,6 +896,8 @@
         border: 1px solid var(--line); border-radius: 16px;
         background: var(--panel); box-shadow: var(--shadow-modal);
       }
+      .modal.product-editor-modal { width: min(1580px, 98vw); }
+      .modal.product-editor-modal .modal-body { padding: 14px; }
       .modal table { table-layout: fixed; white-space: normal; }
       .modal th, .modal td { padding: 6px 8px; overflow-wrap: anywhere; }
       .modal-head, .modal-foot {
@@ -1062,78 +1064,114 @@
         display: grid;
         gap: 10px 12px;
         align-items: start;
-        padding-bottom: 10px;
-        border-bottom: 1px solid #ededf0;
+        padding: 10px;
+        border: 1px solid #dce8f5;
+        border-radius: 10px;
+        background: #f8fbff;
       }
       .product-compact-editor { gap: 8px; }
       .product-core-row {
-        grid-template-columns: minmax(190px, 1.35fr) minmax(135px, .75fr) minmax(180px, 1.15fr) minmax(155px, .8fr) minmax(165px, .8fr);
+        grid-template-columns: minmax(360px, 1.15fr) 155px minmax(360px, 1.35fr) 250px 150px;
+        background: #f7fbff;
       }
-      .product-supply-compact .select { max-width: 230px; }
+      .product-supply-compact .select { width: 100%; max-width: 150px; }
       .product-size-report-row {
-        grid-template-columns: repeat(12, minmax(0, 1fr));
+        grid-template-columns: repeat(3, 84px) 96px 72px minmax(315px, 1fr) 100px 112px 268px;
+        justify-content: start;
+        align-items: end;
+        background: #f5f9ff;
       }
-      .product-dimension-field { grid-column: span 1; min-width: 0; }
-      .product-dimension-field .input { width: 5ch; min-width: 5ch; max-width: 100%; }
-      .product-splice-field { grid-column: span 2; min-width: 0; }
-      .product-splice-field .select { width: 6em; min-width: 6em; max-width: 100%; }
-      .product-flap-field { grid-column: span 1; min-width: 0; }
-      .product-flap-field .input { width: 2ch; min-width: 2ch; max-width: 100%; }
-      .product-report-field { grid-column: span 3; min-width: 0; }
-      .product-crease-type-field { grid-column: span 1; }
-      .product-cutting-mode-field { grid-column: span 2; min-width: 0; }
+      .product-dimension-field { min-width: 0; }
+      .product-dimension-field .input { width: 84px; min-width: 84px; max-width: 84px; background:#f8fcf6; }
+      .product-splice-field { min-width: 0; }
+      .product-splice-field .select { width: 96px; min-width: 96px; max-width: 96px; }
+      .product-flap-field { min-width: 0; }
+      .product-flap-field .input { width: 66px; min-width: 66px; max-width: 66px; background:#f8fcf6; }
+      .product-report-field { min-width: 0; }
+      .product-report-field .report-size-line .input { width: 104px; min-width: 104px; max-width: 104px; background:#f8fcf6; }
+      .product-crease-type-field { min-width: 0; }
+      .product-crease-type-field .select { width: 112px; min-width:112px; }
+      .product-cutting-mode-field { min-width: 0; }
       .product-cutting-mode-field .inline-input { justify-content: flex-start; }
-      .product-cutting-mode-field .inline-input .input { width: 2ch; min-width: 2ch; flex: 0 0 2ch; }
-      .product-crease-field { grid-column: span 3; min-width: 0; }
+      .product-cutting-mode-field .inline-input .input { width: 62px; min-width: 62px; max-width:62px; flex: 0 0 62px; background:#f8fcf6; }
+      .product-cutting-mode-field.is-fixed .inline-input {
+        min-height:34px;
+        align-items:center;
+        padding:0 10px;
+        border:1px solid #d6e4f4;
+        border-radius:8px;
+        background:#f8fcf6;
+        color:#334155;
+        white-space:nowrap;
+      }
+      .product-crease-field { min-width: 0; }
       .product-crease-warning { grid-column: 1 / -1; }
       .product-material-workbench {
         display: grid;
-        grid-template-columns: minmax(0, 1fr);
-        gap: 8px;
+        grid-template-columns: minmax(560px, .93fr) minmax(620px, 1.07fr);
+        gap: 10px;
         margin: 0 0 8px;
-        padding-bottom: 8px;
-        border-bottom: 1px solid #ededf0;
+        padding: 10px;
+        border: 1px solid #cfe7ea;
+        border-radius: 10px;
+        background: #f4fbfb;
         align-items: stretch;
       }
+      .product-material-workbench > .muted,
+      .product-material-workbench > .notice { grid-column: 1 / -1; }
       .product-material-controls {
         display: grid;
-        grid-template-columns: minmax(6em, .8fr) 86px 100px minmax(150px, .85fr);
+        grid-template-columns: 142px 84px 100px minmax(200px, 1fr);
         gap: 10px 12px;
         align-content: start;
         min-width: 0;
-        padding: 8px;
-        border: 1px solid #d7e8fb;
-        border-radius: 10px;
-        background: #fff;
+        padding: 2px 0;
       }
       .product-material-picker { grid-column: auto; }
-      .product-material-controls > .field:first-child .select { width: 6em; min-width: 6em; max-width: 100%; }
-      .product-material-picker .search-select { width: 150px; min-width: 0; max-width: 100%; }
+      .product-material-controls > .field:first-child .select { width: 142px; min-width: 142px; max-width: 142px; }
+      .product-material-picker .search-select { width: 100%; min-width: 200px; max-width: 100%; }
       .product-material-details {
         min-width: 0;
-        border: 1px solid #d7e8fb;
+        border: 1px solid #b9dfe4;
         border-radius: 8px;
-        background: #f8fbff;
+        background: #fff;
+        overflow: hidden;
       }
-      .product-material-details > summary {
-        padding: 7px 9px;
-        color: #075985;
-        font-size: 12px;
-        font-weight: 700;
-        cursor: pointer;
+      .product-material-tabs {
+        display:flex;
+        align-items:center;
+        gap:2px;
+        min-height:34px;
+        padding:4px 6px 0;
+        border-bottom:1px solid #d8ecef;
+        background:#f3fbfc;
+      }
+      .product-material-tab {
+        padding:6px 12px;
+        border:0;
+        border-bottom:2px solid transparent;
+        color:#47727a;
+        background:transparent;
+        font-weight:700;
+        cursor:pointer;
+      }
+      .product-material-tab.active {
+        color:#087b8d;
+        border-bottom-color:#17a2b8;
+        background:#fff;
       }
       .product-material-details-body {
         display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-columns: minmax(0, 1fr);
         gap: 8px;
-        padding: 0 8px 8px;
+        padding: 8px;
       }
       .product-material-context-panel {
         min-width: 0;
-        padding: 10px;
-        border: 1px solid #d7e8fb;
-        border-radius: 10px;
-        background: #f8fbff;
+        padding: 0;
+        border: 0;
+        border-radius: 0;
+        background: #fff;
       }
       .product-material-context-head {
         display: flex;
@@ -1143,7 +1181,7 @@
         margin-bottom: 8px;
       }
       .product-material-context-head strong { color: #075985; font-size: 13px; }
-      .product-material-context-list { display: grid; gap: 6px; max-height: 210px; overflow-y: auto; }
+      .product-material-context-list { display: grid; gap: 6px; max-height: 126px; overflow-y: auto; }
       .product-material-candidate-row,
       .product-material-history-row {
         display: grid;
@@ -1155,7 +1193,7 @@
         background: #fff;
         font-size: 12px;
       }
-      .product-material-candidate-row { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
+      .product-material-candidate-row { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
       .product-material-history-row { grid-template-columns: 88px minmax(0, 1fr) minmax(100px, .75fr); }
       .product-material-context-main { min-width: 0; font-weight: 700; color: #334155; overflow-wrap: anywhere; }
       .product-material-context-meta { min-width: 0; color: var(--muted); overflow-wrap: anywhere; }
@@ -1200,7 +1238,7 @@
         border-radius: 7px;
         background: #f8fafc;
       }
-      .product-material-comparison-panel { grid-column: 2 / -1; }
+      .product-material-comparison-panel { grid-column: 1 / -1; padding-top:8px; border-top:1px solid #e2eef0; }
       .product-material-comparison-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -1216,10 +1254,24 @@
       }
       .product-material-comparison-card .sensitive-price { margin: 5px 0; color: #b45309; font-weight: 700; }
       .product-print-row {
-        grid-template-columns: minmax(285px, 1.35fr) minmax(240px, 1.1fr) minmax(145px, .65fr) minmax(170px, .75fr);
+        display:flex;
+        flex-wrap:wrap;
+        align-items:flex-start;
+        gap:10px 12px;
+        background:#faf8ff;
+        border-color:#e5ddf6;
+      }
+      .product-process-field { flex:0 0 430px; }
+      .product-mold-adjacent { flex:1 1 360px; min-width:320px; }
+      .product-print-status-field { flex:0 0 148px; margin-left:auto; }
+      .product-print-method-field { flex:0 0 172px; }
+      .product-print-method-note {
+        overflow:hidden;
+        text-overflow:ellipsis;
+        white-space:nowrap;
       }
       .product-printing-plate-config {
-        grid-column: span 1;
+        flex:1 0 100%;
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
         gap: 8px 10px;
@@ -1229,12 +1281,12 @@
         background: #fff7ed;
       }
       .product-production-label-config {
-        grid-column: span 1;
+        flex:0 0 142px;
         display: grid;
         grid-template-columns: 1fr;
-        gap: 8px 12px;
+        gap: 5px;
         align-items: start;
-        padding: 8px 10px;
+        padding: 7px 9px;
         border: 1px solid #bfdbfe;
         border-radius: 9px;
         background: #eff6ff;
@@ -1243,10 +1295,13 @@
         display: flex;
         align-items: center;
         gap: 8px;
-        min-height: 34px;
+        min-height: 26px;
         color: #1e3a8a;
         font-weight: 700;
       }
+      .product-production-label-quantity { display:flex; align-items:center; gap:6px; }
+      .product-production-label-quantity > label { margin:0 !important; }
+      .product-production-label-quantity .input { width:68px; min-width:68px; max-width:68px; }
       .production-printing-setup {
         color: #7c2d12;
         font-size: 11px;
@@ -1257,25 +1312,38 @@
         white-space:nowrap;
       }
       .product-final-row {
-        grid-template-columns: minmax(180px, 320px);
-        border-bottom: 0;
-        padding-bottom: 0;
+        grid-template-columns: 245px 360px minmax(360px, 1fr) 92px;
+        align-items:end;
+        border-color:#eee2c8;
+        background:#fffcf5;
       }
-      .product-drawing-independent-section {
-        grid-column: span 3;
-        display: grid;
-        grid-template-columns: minmax(260px, .7fr) minmax(320px, 1.3fr);
-        gap: 8px 12px;
-        padding-top: 2px;
-      }
+      .product-inline-price { display:grid; grid-template-columns:auto minmax(135px,1fr); align-items:center; gap:8px; }
+      .product-inline-price > label { margin:0 !important; }
+      .product-inline-price > .muted { grid-column:1 / -1; }
+      .product-drawing-history .drawing-history-list { max-height:88px; overflow:auto; }
+      .product-inline-save { min-width:92px; min-height:34px; align-self:end; }
       .compact-remark-field .textarea { min-height: 34px; font-size: 12px; }
       .product-edit-grid .field { min-width: 0; }
       .product-edit-grid .field label { margin-bottom: 5px; white-space: nowrap; }
       .product-edit-grid .input,
       .product-edit-grid .select { min-height: 34px; }
       .bom-editor-panel {
-        margin-top: 12px; padding: 12px; border: 1px solid #cfe4f7; border-radius: 10px;
+        margin: 0; padding: 12px; border: 0; border-radius: 0 0 10px 10px;
         background: #f7fbff; min-width: 0;
+      }
+      .product-secondary-disclosure {
+        margin-top:8px;
+        border:1px solid #cfe4f7;
+        border-radius:10px;
+        background:#f7fbff;
+        overflow:hidden;
+      }
+      .product-secondary-disclosure > summary {
+        padding:10px 12px;
+        color:#075985;
+        font-weight:700;
+        cursor:pointer;
+        list-style-position:inside;
       }
       .bom-editor-heading {
         display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;
@@ -1397,7 +1465,14 @@
         line-height: 1;
         flex: 0 0 auto;
       }
-      .product-recommendation-hint { margin-top: 4px; font-size: 11px; line-height: 1.3; }
+      .product-recommendation-hint {
+        margin-top: 4px;
+        font-size: 11px;
+        line-height: 1.3;
+        overflow:hidden;
+        text-overflow:ellipsis;
+        white-space:nowrap;
+      }
       .drawing-history-list {
         display: grid;
         gap: 6px;
@@ -1430,7 +1505,6 @@
       }
       @media (max-width: 1100px) {
         .product-core-row,
-        .product-print-row,
         .product-final-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .product-size-report-row { grid-template-columns: repeat(6, minmax(0, 1fr)); }
         .product-dimension-field { grid-column: span 1; }
@@ -1440,14 +1514,18 @@
         .product-crease-type-field { grid-column: span 1; }
         .product-cutting-mode-field { grid-column: span 2; }
         .product-crease-field { grid-column: span 3; }
+        .product-print-row { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); }
+        .product-process-field,
+        .product-mold-adjacent,
+        .product-print-status-field,
+        .product-print-method-field,
+        .product-production-label-config { min-width:0; width:auto; margin-left:0; }
         .product-production-label-config { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-column: 1 / -1; }
-        .product-drawing-independent-section { grid-column: 1 / -1; }
         .telescoping-component-grid { grid-template-columns: 1fr; }
       }
       @media (max-width: 680px) {
         .product-core-row,
         .product-size-report-row,
-        .product-print-row,
         .product-final-row { grid-template-columns: 1fr; }
         .product-size-report-row > .field { grid-column: 1 / -1; }
         .product-material-workbench,
@@ -1457,8 +1535,8 @@
         .product-material-comparison-panel { grid-column: auto; }
         .product-material-candidate-metrics { grid-template-columns: 1fr; }
         .product-material-history-row { grid-template-columns: 1fr; }
+        .product-print-row { grid-template-columns:1fr; }
         .product-production-label-config { grid-template-columns: 1fr; grid-column: 1 / -1; }
-        .product-drawing-independent-section { grid-template-columns: 1fr; }
       }
 
       /* Toast */
@@ -4353,7 +4431,7 @@
       </div>
 
       <div v-if="modal" class="modal-mask" @click.self="onModalMaskClick">
-        <div class="modal" :class="{'order-entry-modal': modal.type === 'order', 'order-entry-large': modal.type === 'order' && isLargeUi, 'pdf-order-import-modal': modal.type === 'orderPdfImport'}">
+        <div class="modal" :class="{'order-entry-modal': modal.type === 'order', 'order-entry-large': modal.type === 'order' && isLargeUi, 'pdf-order-import-modal': modal.type === 'orderPdfImport', 'product-editor-modal': modal.type === 'product'}">
           <div class="modal-head"><strong>{{ modal.title }}</strong><button v-if="!isForcedPassword" class="btn small" @click="closeModal">关闭</button></div>
           <div class="modal-body">
             <div v-if="masterVersionConflict && masterVersionConflict.entity === modal.type" class="notice danger" style="margin-bottom:12px">
@@ -4687,16 +4765,17 @@
                       <span class="muted">mm</span>
                       <button type="button" class="btn small" @click="reapplyProductRecommendations">重新推荐</button>
                     </div>
-                    <div v-if="productForm._recommendation_message" class="product-recommendation-hint muted">{{ productForm._recommendation_message }}</div>
+                    <div v-if="productForm._recommendation_message" class="product-recommendation-hint muted" :title="productForm._recommendation_message">{{ productForm._recommendation_message }}</div>
+                  </div>
+                  <div :class="['field','product-cutting-mode-field',{'is-fixed':!usesProductDefaultCuttingMode(productForm.box_style)}]"><label>开料方式</label>
+                    <div v-if="usesProductDefaultCuttingMode(productForm.box_style)" class="inline-input"><span>一开</span><input class="input" type="number" min="1" step="1" :value="cuttingModeFactor(productForm.default_cutting_mode)" @change="productForm.default_cutting_mode=normalizeCuttingMode($event.target.value)" /></div>
+                    <div v-else class="inline-input"><span>一开一</span></div>
                   </div>
                   <div class="field product-crease-type-field"><label>压线类型</label>
                     <select class="select" v-model="productForm.crease_type" @change="markProductCreaseTypeManual">
                       <option :value="null">未设置</option>
                       <option v-for="creaseType in productSupportedCreaseTypes(productForm.box_style)" :key="creaseType" :value="creaseType">{{ creaseTypeLabel(creaseType) }}</option>
                     </select>
-                  </div>
-                  <div v-if="usesProductDefaultCuttingMode(productForm.box_style)" class="field product-cutting-mode-field"><label>开料方式</label>
-                    <div class="inline-input"><span>一开</span><input class="input" type="number" min="1" step="1" :value="cuttingModeFactor(productForm.default_cutting_mode)" @change="productForm.default_cutting_mode=normalizeCuttingMode($event.target.value)" /></div>
                   </div>
                   <div v-if="productSupportsCreaseSegments(productForm.box_style)" class="field product-crease-field"><label>压线尺寸</label>
                     <div v-if="productForm.crease_type === '压线'" class="crease-segments">
@@ -4748,11 +4827,14 @@
                 </div>
                 </div>
 
-                <details class="product-material-details">
-                  <summary>材质候选、报料轨迹与价格对比</summary>
+                <div class="product-material-details">
+                  <div class="product-material-tabs" role="tablist" aria-label="材质核对">
+                    <button type="button" :class="['product-material-tab',{active:productMaterialActiveTab==='candidates'}]" role="tab" :aria-selected="productMaterialActiveTab==='candidates'" @click="productMaterialActiveTab='candidates'">材质候选</button>
+                    <button type="button" :class="['product-material-tab',{active:productMaterialActiveTab==='history'}]" role="tab" :aria-selected="productMaterialActiveTab==='history'" @click="productMaterialActiveTab='history'">报料轨迹</button>
+                  </div>
                   <div class="product-material-details-body">
 
-                <section class="product-material-context-panel">
+                <section v-show="productMaterialActiveTab==='candidates'" class="product-material-context-panel" role="tabpanel">
                   <div class="product-material-context-head">
                     <div>
                       <strong>这款常用箱的候选材质</strong>
@@ -4804,7 +4886,7 @@
                   </div>
                 </section>
 
-                <section class="product-material-context-panel">
+                <section v-show="productMaterialActiveTab==='history'" class="product-material-context-panel" role="tabpanel">
                   <div class="product-material-context-head">
                     <div>
                       <strong>这款常用箱的报料材质轨迹</strong>
@@ -4841,7 +4923,7 @@
                   </div>
                 </section>
 
-                <section v-if="productMaterialComparedCandidates.length" class="product-material-context-panel product-material-comparison-panel">
+                <section v-if="productMaterialActiveTab==='candidates' && productMaterialComparedCandidates.length" class="product-material-context-panel product-material-comparison-panel">
                   <div class="product-material-context-head">
                     <div>
                       <strong>候选材质对比（{{ productMaterialComparedCandidates.length }}/4）</strong>
@@ -4864,11 +4946,11 @@
                   </div>
                 </section>
                   </div>
-                </details>
+                </div>
               </div>
 
               <div class="product-form-row product-print-row">
-                <div v-if="productForm.supply_mode!=='external_purchase'" class="field"><label>生产工艺（可多选）</label>
+                <div v-if="productForm.supply_mode!=='external_purchase'" class="field product-process-field"><label>生产工艺（可多选）</label>
                   <div class="process-options">
                     <label class="process-option"><input type="checkbox" value="粘贴" v-model="productForm._production_processes" @change="onProductProcessesChanged" />粘贴</label>
                     <label class="process-option"><input type="checkbox" value="打钉" v-model="productForm._production_processes" @change="onProductProcessesChanged" />打钉</label>
@@ -4877,7 +4959,7 @@
                   </div>
                 </div>
                 <div v-if="productForm.supply_mode!=='external_purchase' && productUsesMold(productForm)" class="field product-mold-adjacent"><label>生产模具 / 货架位置（必选）</label><search-select v-model="productForm.mold_tool_id" :options="moldToolSelectOptions()" label-key="_label" value-key="id" placeholder="输入模具编号、名称或位置" :allow-empty="false" @search="searchMoldTools"></search-select><div v-if="productMoldError" class="status orange" style="display:block;margin-top:4px">{{ productMoldError }}</div></div>
-                <div v-if="productForm.supply_mode!=='external_purchase'" class="field"><label>印刷情况</label>
+                <div v-if="productForm.supply_mode!=='external_purchase'" class="field product-print-status-field"><label>印刷情况</label>
                   <select class="select" v-model="productForm.print_content" @change="onProductPrintingChanged">
                     <option value="无印刷">无印刷</option>
                     <option value="单色印刷">单色印刷</option>
@@ -4886,12 +4968,12 @@
                     <option v-if="productForm.print_content && !['无印刷','单色印刷','双色印刷','三色印刷'].includes(productForm.print_content)" :value="productForm.print_content">原记录：{{ productForm.print_content }}</option>
                   </select>
                 </div>
-                <div v-if="productForm.supply_mode!=='external_purchase' && productHasPrinting(productForm)" class="field"><label>印刷方式</label>
+                <div v-if="productForm.supply_mode!=='external_purchase' && productHasPrinting(productForm)" class="field product-print-method-field"><label>印刷方式</label>
                   <select class="select" v-model="productForm.printing_plate_mode" @change="onProductPrintingChanged">
-                    <option value="no_plate">不挂板（默认）</option>
+                    <option value="no_plate">不挂板</option>
                     <option value="plate">挂板</option>
                   </select>
-                  <div v-if="productForm.printing_plate_mode==='no_plate'" class="status orange" style="display:block;margin-top:4px">按图纸核对印刷内容，可能有印刷尺寸偏差</div>
+                  <div v-if="productForm.printing_plate_mode==='no_plate'" class="status orange product-print-method-note" style="display:block;margin-top:4px" title="按图纸核对印刷内容，可能有印刷尺寸偏差">按图纸核对</div>
                 </div>
                 <div v-if="productForm.supply_mode!=='external_purchase' && productHasPrinting(productForm) && productForm.printing_plate_mode==='plate'" class="product-printing-plate-config">
                   <div class="field" v-for="index in productPrintingPlateCount(productForm)" :key="`printing-plate-${index}`">
@@ -4906,37 +4988,32 @@
                   <div v-if="productPrintingPlateError" class="status orange" style="grid-column:1/-1">{{ productPrintingPlateError }}</div>
                 </div>
                 <div v-if="productForm.supply_mode!=='external_purchase'" class="product-production-label-config">
-                  <label class="product-production-label-switch"><input type="checkbox" v-model="productForm.production_label_enabled" @change="onProductProductionLabelToggle" />随生产任务打印包装标签</label>
-                  <div class="field"><label>每张标签代表只数</label><input class="input" type="number" min="1" step="1" inputmode="numeric" v-model="productForm.production_label_units_per_label" :disabled="!productForm.production_label_enabled" placeholder="请输入正整数" /><div v-if="productProductionLabelError" class="status orange" style="display:block;margin-top:4px">{{ productProductionLabelError }}</div></div>
-                </div>
-                <div class="product-drawing-independent-section">
-                  <div class="field"><label>图纸</label>
-                    <input class="input" type="file" accept="image/png,image/jpeg,image/webp,application/pdf,.pdf" @change="drawingFile=$event.target.files[0] || null" />
-                  </div>
-                  <div class="field"><label>图纸记录</label>
-                    <div v-if="!productForm.id" class="muted">先保存常用箱，图片/图纸会随保存一起上传。</div>
-                    <div v-else-if="!(productForm.drawings || []).length" class="muted">暂无产品图片或图纸</div>
-                    <div v-else class="drawing-history-list">
-                      <div v-for="(drawing,index) in productForm.drawings" :key="drawing.id" class="drawing-history-row">
-                        <span :class="['drawing-version',{current:index===0}]">{{ index===0 ? "最近上传" : `记录 ${productForm.drawings.length-index}` }}</span>
-                        <div>
-                          <div class="drawing-history-name" :title="drawingDisplayName(drawing)">{{ drawingDisplayName(drawing) }}</div>
-                          <div class="muted">{{ formatDateTime(drawing.uploaded_at) }}</div>
-                        </div>
-                        <div style="display:flex;gap:4px">
-                          <a class="btn small" :href="drawing.image_path" target="_blank">查看/下载</a>
-                          <button v-if="user.role==='admin'" class="btn small danger" @click.prevent="deleteProductDrawing(drawing)">删除</button>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
+                  <label class="product-production-label-switch"><input type="checkbox" v-model="productForm.production_label_enabled" @change="onProductProductionLabelToggle" />打印标签</label>
+                  <div class="field product-production-label-quantity"><label>数量</label><input class="input" type="number" min="1" max="999" step="1" inputmode="numeric" v-model="productForm.production_label_units_per_label" :disabled="!productForm.production_label_enabled" aria-label="每张标签代表只数" /><div v-if="productProductionLabelError" class="status orange" style="display:block;margin-top:4px">{{ productProductionLabelError }}</div></div>
                 </div>
               </div>
 
               <div class="product-form-row product-final-row">
-                <div v-if="!isWorkshop" class="field sensitive-price"><label>{{ productForm.supply_mode==='external_purchase' ? `客户默认销售单价 / ${productForm.external_packaging_purchase_unit || '采购单位'}` : '默认单价' }}</label><input class="input" type="number" min="0" step="0.0001" v-model="productForm.sale_unit_price" /><div v-if="productForm.supply_mode==='external_purchase'" class="muted">这是给客户的销售单价，不是供应商采购成本。</div></div>
+                <div v-if="!isWorkshop" class="field sensitive-price product-inline-price"><label>{{ productForm.supply_mode==='external_purchase' ? `客户默认销售单价 / ${productForm.external_packaging_purchase_unit || '采购单位'}` : '默认单价' }}</label><input class="input" type="number" min="0" step="0.0001" v-model="productForm.sale_unit_price" /><div v-if="productForm.supply_mode==='external_purchase'" class="muted">这是给客户的销售单价，不是供应商采购成本。</div></div>
+                <div class="field"><label>图纸</label>
+                  <input class="input" type="file" accept="image/png,image/jpeg,image/webp,application/pdf,.pdf" @change="drawingFile=$event.target.files[0] || null" />
+                </div>
+                <div class="field product-drawing-history"><label>图纸记录</label>
+                  <div v-if="!productForm.id" class="muted">先保存常用箱，图片/图纸会随保存一起上传。</div>
+                  <div v-else-if="!(productForm.drawings || []).length" class="muted">暂无产品图片或图纸</div>
+                  <div v-else class="drawing-history-list">
+                    <div v-for="(drawing,index) in productForm.drawings" :key="drawing.id" class="drawing-history-row">
+                      <span :class="['drawing-version',{current:index===0}]">{{ index===0 ? "最近上传" : `记录 ${productForm.drawings.length-index}` }}</span>
+                      <div><div class="drawing-history-name" :title="drawingDisplayName(drawing)">{{ drawingDisplayName(drawing) }}</div><div class="muted">{{ formatDateTime(drawing.uploaded_at) }}</div></div>
+                      <div style="display:flex;gap:4px"><a class="btn small" :href="drawing.image_path" target="_blank">查看/下载</a><button v-if="user.role==='admin'" class="btn small danger" @click.prevent="deleteProductDrawing(drawing)">删除</button></div>
+                    </div>
+                  </div>
+                </div>
+                <button type="button" class="btn primary product-inline-save" :disabled="loading || masterSavePending || !!productCreaseMismatch || !!productMoldError || !!productPrintingPlateError || !!productProductionLabelError" @click="saveModal()">{{ masterSavePending ? '保存中…' : '保存' }}</button>
               </div>
               </fieldset>
+              <details class="product-secondary-disclosure">
+              <summary>组合产品 / 内部 BOM（不常用）</summary>
               <fieldset class="bom-editor-panel" :disabled="!!productForm.id && !canEditProducts">
                 <div class="bom-editor-heading">
                   <div>
@@ -5026,6 +5103,7 @@
                   </div>
                 </template>
               </fieldset>
+              </details>
             </div>
             <div v-else-if="modal.type === 'finishedStockPolicy'" class="form-grid">
               <div class="field wide"><label>常用箱</label><div class="notice">{{ quickStockPolicyForm.customer_name }}｜{{ quickStockPolicyForm.product_code }}｜{{ quickStockPolicyForm.product_name }}</div></div>
@@ -7037,7 +7115,7 @@
               </div>
             </div>
           </div>
-          <div class="modal-foot">
+          <div v-if="modal?.type !== 'product'" class="modal-foot">
             <button v-if="!isForcedPassword" class="btn" :disabled="masterSavePending || (modal?.type==='stockReplenishment' && stockReplenishmentSaveState.saving) || (modal?.type==='quotationConvert' && quotationConversionState.saving) || (modal?.type==='order' && orderCreateSaveState.saving) || (modal?.type==='orderEdit' && orderGroupSaveState.saving) || (modal?.type==='orderItem' && orderItemSaveState.saving) || (modal?.type==='orderItem' && finishedReservationActionBlocked()) || (['supplierRequisitionDraft','requisition'].includes(modal?.type) && requisitionInventoryActionBlocked()) || (modal?.type==='delivery' && deliverySaveState.saving)" @click="closeModal">{{ canSaveModal ? "取消" : "关闭" }}</button>
             <template v-if="modal?.type === 'orderPdfImport' && orderImportDrafts.length">
               <button class="btn" :disabled="loading || !confirmableImportDraftCount" @click="toggleConfirmableImportDrafts">{{ confirmedImportDraftCount ? "取消加入批量保存" : "加入批量保存" }}</button>
@@ -7736,6 +7814,7 @@
             productFormSnapshot: null, productBomSnapshot: null,
             productEditReturnContext: null,
             productMaterialContext: { product_id:null, candidates:[], requisition_history:[], material_history:[], manual_selection_history:[], loading:false, error:"" },
+            productMaterialActiveTab: "candidates",
             productMaterialCandidateDetailKeys: [], productMaterialCompareKeys: [],
             productMaterialAdoption: { product_id:null, candidate_key:"", loading:false },
             bomEditor: blankBomEditor(),
@@ -18818,6 +18897,7 @@
               );
               const openedId = Number(this.productForm.id || 0) || null;
               this.productMaterialContext = { product_id:openedId, candidates:[], requisition_history:[], material_history:[], manual_selection_history:[], loading:false, error:"" };
+              this.productMaterialActiveTab = "candidates";
               this.productMaterialCandidateDetailKeys = [];
               this.productMaterialCompareKeys = [];
               this.drawingFile = null;
@@ -27596,6 +27676,7 @@
         },
         watch: {
           modelValue() { if (!this.open) this.query=this.selectedLabel; },
+          options() { if (!this.open) this.query=this.selectedLabel; },
           disabled(value) { if (value) this.open = false; }
         },
         mounted() { this.componentMounted=true; this.query=this.selectedLabel; },

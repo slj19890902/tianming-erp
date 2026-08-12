@@ -395,6 +395,118 @@ def test_product_default_cutting_mode_is_saved_and_frozen_into_new_order(
     assert _purchase_qty(100, 0, "一开一") == 100
 
 
+def test_common_box_compact_editor_fields_round_trip_without_contract_drift(
+    order_api_app,
+) -> None:
+    """The compact UI rearranges fields but must not create a second data contract."""
+    app, _ = order_api_app
+    with TestClient(app) as client:
+        _login(client)
+        created = client.post(
+            "/api/master/products",
+            json={
+                "customer_id": 1,
+                "product_code": "COMPACT-001",
+                "customer_material_code": "COMPACT-001",
+                "product_name": "紧凑编辑契约纸箱",
+                "material_id": None,
+                "length_mm": 12345,
+                "width_mm": 23456,
+                "height_mm": 34567,
+                "box_category": "normal",
+                "box_style": "A1/0201 普通开槽箱",
+                "supply_mode": "corrugated_production",
+                "splice_mode": "single",
+                "flap_mm": 99,
+                "report_length_mm": 123456,
+                "report_width_mm": 920,
+                "crease_type": "压线",
+                "crease_left_mm": 225,
+                "crease_middle_mm": 470,
+                "crease_right_mm": 225,
+                "default_cutting_mode": "一开一",
+                "print_content": "单色印刷",
+                "printing_plate_mode": "no_plate",
+                "production_process": "粘贴",
+                "sale_unit_price": "7.3500",
+                "production_label_enabled": True,
+                "production_label_units_per_label": 125,
+                "layer_count": 5,
+                "flute_type": "AB",
+            },
+        )
+        assert created.status_code == 201, created.text
+        first = created.json()
+
+        updated_payload = {
+            key: first[key]
+            for key in (
+                "customer_id",
+                "product_code",
+                "customer_material_code",
+                "product_name",
+                "material_id",
+                "length_mm",
+                "width_mm",
+                "height_mm",
+                "box_category",
+                "box_style",
+                "supply_mode",
+                "splice_mode",
+                "flap_mm",
+                "report_length_mm",
+                "report_width_mm",
+                "crease_type",
+                "crease_left_mm",
+                "crease_middle_mm",
+                "crease_right_mm",
+                "default_cutting_mode",
+                "print_content",
+                "printing_plate_mode",
+                "production_process",
+                "sale_unit_price",
+                "production_label_enabled",
+                "production_label_units_per_label",
+                "layer_count",
+                "flute_type",
+            )
+        }
+        updated_payload.update(
+            expected_version=first["version"],
+            change_reason="验证紧凑页面保存后重新打开字段一致",
+            product_name="紧凑编辑契约纸箱-重开",
+            length_mm=54321,
+            report_length_mm=223456,
+            default_cutting_mode="一开一",
+            sale_unit_price="8.1250",
+            production_label_units_per_label=321,
+        )
+        updated = client.put(
+            f"/api/master/products/{first['id']}",
+            json=updated_payload,
+        )
+        assert updated.status_code == 200, updated.text
+
+        reopened = client.get(f"/api/master/products/{first['id']}")
+        assert reopened.status_code == 200, reopened.text
+        body = reopened.json()
+        assert body["product_name"] == "紧凑编辑契约纸箱-重开"
+        assert Decimal(body["length_mm"]) == Decimal("54321")
+        assert body["width_mm"] == first["width_mm"]
+        assert body["height_mm"] == first["height_mm"]
+        assert body["report_length_mm"] == 223456
+        assert body["report_width_mm"] == 920
+        assert body["default_cutting_mode"] == "一开一"
+        assert body["crease_left_mm"] == 225
+        assert body["crease_middle_mm"] == 470
+        assert body["crease_right_mm"] == 225
+        assert body["print_content"] == "单色印刷"
+        assert body["printing_plate_mode"] == "no_plate"
+        assert body["production_label_enabled"] is True
+        assert body["production_label_units_per_label"] == 321
+        assert body["sale_unit_price"] == "8.1250"
+
+
 def test_half_slotted_odd_width_preview_freezes_into_order_and_requisition(
     order_api_app,
 ) -> None:

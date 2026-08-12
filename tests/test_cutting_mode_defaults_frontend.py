@@ -15,9 +15,9 @@ def test_product_form_exposes_independent_default_cutting_mode() -> None:
     )[0]
     report_row = product_form.split('class="product-form-row product-size-report-row"', 1)[1]
     assert "<label>开料方式</label>" in report_row
-    assert 'v-if="usesProductDefaultCuttingMode(productForm.box_style)"' in report_row
-    cutting_field = report_row.split('class="field product-cutting-mode-field"', 1)[1].split(
-        "</div>", 2
+    assert "{'is-fixed':!usesProductDefaultCuttingMode(productForm.box_style)}" in report_row
+    cutting_field = report_row.split("'product-cutting-mode-field'", 1)[1].split(
+        "</div>", 3
     )[0]
     assert '<span>一开</span>' in cutting_field
     assert 'type="number" min="1" step="1"' in cutting_field

@@ -146,3 +146,56 @@ final result: passed
 ## Final result
 
 passed
+
+---
+
+# 编辑常用箱最终紧凑布局 Design QA（2026-08-12）
+
+## Comparison target
+
+- source visual truth path: `D:\.codex\generated_images\019ff0a2-2505-76a3-be8b-d306cec3ed09\exec-fdfb8836-104f-4692-b1f1-ee943abde736.png`
+- implementation URL: `http://127.0.0.1:18128/`
+- implementation screenshot: `D:\.codex\visualizations\2026\08\12\common-box-final-layout\implementation-final.png`
+- combined comparison board: `D:\.codex\visualizations\2026\08\12\common-box-final-layout\comparison-board.png`
+- browser viewport and state: Codex in-app browser, 1606 x 979; isolated local UAT; A1/0201 product with material, die-cut mold/location, single-color printing, packaging label and price facts loaded.
+
+## Required fidelity surfaces
+
+- Fonts and typography: retained the ERP's existing Microsoft YaHei system stack and compact form hierarchy; labels remain readable without adding decorative typography.
+- Spacing and layout rhythm: all ordinary A1 fields fit in one viewport. Customer and product name own the widest spaces; dimensions, report size, cutting mode, crease, material, production, drawing and price form five compact functional bands.
+- Colors and visual tokens: light blue, cyan, lavender and warm-cream backgrounds separate structure, material, production and commercial/drawing facts while preserving the existing ERP component styles.
+- Input capacity: box length/width/height visibly fit five digits, report length/width fit six digits, tongue fits two digits, and label quantity fits three digits without allowing native number-control chrome to hide entered values.
+- Copy and content: A1 cutting mode is displayed as fixed text `一开一`; packaging label copy is shortened to `打印标签` and `数量`; internal BOM is retained inside a collapsed secondary disclosure.
+- Backend fidelity: every visible editor field remains bound to the existing `productForm` save payload. Async material and mold options now repaint existing backend ids when they arrive, preventing stored values from appearing blank.
+
+## Comparison history
+
+### Pass 1 - fixed
+
+- P1: the selected reference showed A1 cutting mode, but the implementation hid it because A1 has a fixed backend cutting mode rather than a configurable one.
+- P1: an existing mold id could be stored by the backend while its search input remained visibly blank after asynchronous options loaded.
+- P1: an existing material id had the same asynchronous label-repaint risk.
+- P2: the long printing warning and recommendation hint consumed horizontal space and weakened the compact production row.
+
+Fixes made:
+
+- Always show the cutting-mode field; fixed-mode box types render read-only `一开一`, configurable types retain the existing normalized numeric input.
+- Added an options watcher to the shared SearchSelect so existing backend ids repaint their labels after material or mold options load.
+- Reduced the printing warning to `按图纸核对` while retaining the full warning in the title tooltip, and clamped the recommendation hint to one line.
+
+### Pass 2 - passed
+
+- The combined reference/implementation board preserves the approved information architecture and functional grouping.
+- Browser save/reopen verified that a five-digit length, six-digit report length and three-digit label quantity remain visible and are returned by the backend.
+- Material and mold/location labels are visible after a clean reload from saved backend ids.
+- No actionable P0, P1 or P2 visual mismatch remains. The reference's example values and drawing-history sample differ from the isolated UAT fixture by design and do not alter the layout contract.
+
+## Primary interactions tested
+
+- Opened the common-box editor through the real master-data navigation and selected a real isolated UAT product.
+- Switched through the full modal state with material candidates, mold-required production, printing method, label strategy and collapsed BOM present.
+- Saved and reopened the product after entering length `54321`, report length `123456` and label quantity `321`; all three values returned visibly from the backend.
+- Verified the material summary and `M-0201-08 | 模具008 | 1F-M-R01-L2-G01` binding repaint on a clean load.
+- Automated frontend contract/regression suite and API round-trip test passed.
+
+final result: passed

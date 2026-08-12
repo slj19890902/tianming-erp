@@ -47,8 +47,10 @@ def _run_node(tmp_path: Path, source: str) -> None:
 def test_product_editor_uses_compact_rows_and_keeps_mold_next_to_process() -> None:
     assert 'class="product-edit-grid product-compact-editor"' in PRODUCT_MODAL
     assert 'class="field product-supply-compact"' in PRODUCT_MODAL
-    assert "材质候选、报料轨迹与价格对比" in PRODUCT_MODAL
-    assert '<details class="product-material-details">' in PRODUCT_MODAL
+    assert "材质候选" in PRODUCT_MODAL
+    assert "报料轨迹" in PRODUCT_MODAL
+    assert 'class="product-material-details"' in PRODUCT_MODAL
+    assert 'class="product-secondary-disclosure"' in PRODUCT_MODAL
 
     process = PRODUCT_MODAL.index("生产工艺（可多选）")
     mold = PRODUCT_MODAL.index("生产模具 / 货架位置（必选）")
@@ -62,16 +64,15 @@ def test_product_editor_uses_compact_rows_and_keeps_mold_next_to_process() -> No
     assert ".product-material-controls" in css
     assert ".bom-component-compact-row" in css
     assert "@media (max-width: 680px)" in css
-    assert ".product-drawing-independent-section { grid-template-columns: 1fr; }" in css
-    assert ".product-dimension-field .input { width: 5ch; min-width: 5ch; max-width: 100%; }" in css
-    assert ".product-cutting-mode-field .inline-input .input { width: 2ch; min-width: 2ch; flex: 0 0 2ch; }" in css
-    assert ".product-splice-field .select { width: 6em; min-width: 6em; max-width: 100%; }" in css
-    assert ".product-flap-field .input { width: 2ch; min-width: 2ch; max-width: 100%; }" in css
-    assert ".product-crease-field { grid-column: span 3; min-width: 0; }" in css
-    assert "grid-template-columns: minmax(6em, .8fr) 86px 100px minmax(150px, .85fr);" in css
-    assert ".product-material-picker .search-select { width: 150px; min-width: 0; max-width: 100%; }" in css
-    assert ".product-production-label-config {\n        grid-column: span 1;" in css
-    assert ".product-drawing-independent-section {\n        grid-column: span 3;" in css
+    assert ".product-dimension-field .input { width: 84px; min-width: 84px; max-width: 84px;" in css
+    assert ".product-cutting-mode-field .inline-input .input { width: 62px; min-width: 62px; max-width:62px;" in css
+    assert ".product-splice-field .select { width: 96px; min-width: 96px; max-width: 96px; }" in css
+    assert ".product-flap-field .input { width: 66px; min-width: 66px; max-width: 66px;" in css
+    assert ".product-report-field .report-size-line .input { width: 104px; min-width: 104px; max-width: 104px;" in css
+    assert "grid-template-columns: 142px 84px 100px minmax(200px, 1fr);" in css
+    assert ".product-material-picker .search-select { width: 100%; min-width: 200px; max-width: 100%; }" in css
+    assert ".product-production-label-config {\n        flex:0 0 142px;" in css
+    assert ".product-inline-save" in css
     assert "minmax(0, 1fr)" in css
 
 
@@ -79,8 +80,9 @@ def test_label_drawing_and_remarks_are_reduced_without_deleting_saved_fields() -
     label_panel = PRODUCT_MODAL.split(
         'class="product-production-label-config"', 1
     )[1].split("</div>", 3)[0]
-    assert "随生产任务打印包装标签" in label_panel
-    assert "每张标签代表只数" in label_panel
+    assert "打印标签" in label_panel
+    assert "数量" in label_panel
+    assert 'aria-label="每张标签代表只数"' in PRODUCT_MODAL
     assert "product-production-label-note" not in PRODUCT_MODAL
     assert "只保存以后新生产任务的包装标签规则" not in PRODUCT_MODAL
 

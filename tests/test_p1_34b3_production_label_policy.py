@@ -26,6 +26,7 @@ from app.models.production import ProductionTask
 from app.models.user import User
 from app.services.composite_bom_workflow import ensure_component_production_tasks
 from app.services.production_label_strategy import (
+    CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION,
     build_new_task_production_label_snapshot,
     production_label_quantities,
 )
@@ -208,6 +209,11 @@ def test_regular_task_freezes_only_uncovered_finished_quantity(
     assert task.production_label_units_per_label_snapshot == 5
     assert task.production_label_total_quantity_snapshot == 20
     assert task.production_label_count_snapshot == 4
+    assert (
+        task.production_label_template_version_snapshot
+        == CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION
+    )
+    assert task.production_label_product_version_snapshot == product.version
 
 
 def test_fully_covered_regular_task_freezes_disabled_zero(
@@ -232,6 +238,11 @@ def test_fully_covered_regular_task_freezes_disabled_zero(
     assert task.production_label_units_per_label_snapshot is None
     assert task.production_label_total_quantity_snapshot == 0
     assert task.production_label_count_snapshot == 0
+    assert (
+        task.production_label_template_version_snapshot
+        == CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION
+    )
+    assert task.production_label_product_version_snapshot == _product.version
 
 
 def test_composite_task_freezes_adjusted_2700_minus_component_coverage(
@@ -302,6 +313,11 @@ def test_composite_task_freezes_adjusted_2700_minus_component_coverage(
     assert task.production_label_units_per_label_snapshot == 50
     assert task.production_label_total_quantity_snapshot == 2500
     assert task.production_label_count_snapshot == 50
+    assert (
+        task.production_label_template_version_snapshot
+        == CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION
+    )
+    assert task.production_label_product_version_snapshot == component.version
 
 
 def test_legacy_product_update_omission_preserves_label_strategy(

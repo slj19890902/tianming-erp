@@ -14,6 +14,10 @@ DEFAULT_UNITS_PER_LABEL_BY_BOX_TYPE = {
 }
 
 
+LEGACY_PRODUCTION_LABEL_TEMPLATE_VERSION = "legacy_65x45_v1"
+CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION = "current_40x30_v1"
+
+
 class ProductionLabelStrategyError(ValueError):
     """Raised when a production packaging-label strategy is incomplete."""
 
@@ -71,6 +75,7 @@ def build_new_task_production_label_snapshot(
     """Freeze product strategy only when a new ProductionTask is created."""
 
     frozen_total = _nonnegative_integer(total_quantity, field="标签成品总数")
+    product_version = int(product.version or 1) if product is not None else None
     if (
         product is None
         or not bool(product.production_label_enabled)
@@ -81,6 +86,10 @@ def build_new_task_production_label_snapshot(
             "production_label_units_per_label_snapshot": None,
             "production_label_total_quantity_snapshot": 0,
             "production_label_count_snapshot": 0,
+            "production_label_template_version_snapshot": (
+                CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION
+            ),
+            "production_label_product_version_snapshot": product_version,
         }
     enabled, units_per_label = normalize_production_label_strategy(
         box_style=product.box_style,
@@ -96,6 +105,10 @@ def build_new_task_production_label_snapshot(
             frozen_total + units_per_label - 1
         )
         // units_per_label,
+        "production_label_template_version_snapshot": (
+            CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION
+        ),
+        "production_label_product_version_snapshot": product_version,
     }
 
 

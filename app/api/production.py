@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import date
 from typing import Annotated, Literal
 
@@ -46,6 +47,12 @@ from app.services.production_workflow import (
     list_temporary_locations,
     reverse_production_completion,
     transfer_direct_completion_to_stock,
+)
+from app.services.production_label_operations import (
+    ProductionLabelOperationError,
+    annotate_task_label_plans,
+    production_label_write_guard,
+    refresh_task_label_plan,
 )
 from app.services.warehouse_inventory import WarehouseInventoryError
 
@@ -131,6 +138,22 @@ class StockTransferRequest(BaseModel):
 
 class CompletionReversalRequest(BaseModel):
     reason: str | None = Field(default=None, max_length=500)
+
+
+class LabelPlanRefreshRequest(BaseModel):
+    idempotency_key: str = Field(min_length=1, max_length=120)
+    expected_task_version: int = Field(gt=0)
+    expected_product_version: int = Field(gt=0)
+    confirmed_not_started: Literal[True]
+    confirmed_no_prior_print: Literal[True]
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def trim_idempotency_key(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("幂等键不能为空")
+        return normalized
 
 
 def _allowed_customer_ids(user: User, db: Session) -> set[int] | None:
@@ -274,24 +297,24 @@ def get_production_tasks(
 ) -> dict:
     allowed_customer_ids = _allowed_customer_ids(user, db)
     if page is None and page_size is None:
-        return {
-            "items": list_production_tasks(
+        items = list_production_tasks(
                 db,
                 allowed_customer_ids=allowed_customer_ids,
                 status=task_status,
             )
-        }
+        return {"items": annotate_task_label_plans(db, items, hydrate=False)}
 
     resolved_page = page or 1
     resolved_page_size = page_size or 25
-    return {
-        "items": list_production_tasks(
+    items = list_production_tasks(
             db,
             allowed_customer_ids=allowed_customer_ids,
             status=task_status,
             page=resolved_page,
             page_size=resolved_page_size,
-        ),
+        )
+    return {
+        "items": annotate_task_label_plans(db, items, hydrate=False),
         "total": count_production_tasks(
             db,
             allowed_customer_ids=allowed_customer_ids,
@@ -300,6 +323,97 @@ def get_production_tasks(
         "page": resolved_page,
         "page_size": resolved_page_size,
     }
+
+
+@router.post("/tasks/{task_id}/label-plan-refresh")
+def post_production_task_label_plan_refresh(
+    task_id: int,
+    payload: LabelPlanRefreshRequest,
+    user: User = Depends(can_complete),
+    _write_guard: None = Depends(production_label_write_guard),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Explicitly refresh one eligible task; never mutate production facts."""
+
+    try:
+        _require_task_customer_access(db, task_ids=[task_id], user=user)
+        result = refresh_task_label_plan(
+            db,
+            task_id=task_id,
+            expected_task_version=payload.expected_task_version,
+            expected_product_version=payload.expected_product_version,
+            idempotency_key=payload.idempotency_key,
+            operator_id=user.id,
+        )
+        # A replay has already persisted its audit in the original transaction.
+        if not result.replayed:
+            order_row = db.execute(
+                select(Order.customer_id, Customer.name)
+                .join(OrderItem, OrderItem.order_id == Order.id)
+                .join(Customer, Customer.id == Order.customer_id)
+                .where(OrderItem.id == result.task.order_item_id)
+            ).first()
+            before = json.loads(result.receipt.before_snapshot_json)
+            after = json.loads(result.receipt.after_snapshot_json)
+            append_audit_event(
+                db,
+                event_category="business",
+                result="success",
+                source="web",
+                module_code="production",
+                action_code="production.label_plan.refreshed",
+                legacy_action="REFRESH_PRODUCTION_LABEL_PLAN",
+                resource="ProductionLabelPlanRefresh",
+                actor=user,
+                entity_type="production_label_plan_refresh",
+                entity_id=result.receipt.id,
+                object_ref=f"production_label_plan_refresh:{result.receipt.id}",
+                customer_id=order_row.customer_id if order_row else None,
+                customer_name=order_row.name if order_row else None,
+                batch_id=payload.idempotency_key,
+                description="按当前常用箱刷新生产任务标签计划",
+                details={
+                    "task_id": result.task.id,
+                    "product_id": result.product.id,
+                    "operator_id": user.id,
+                    "expected_task_version": payload.expected_task_version,
+                    "expected_product_version": payload.expected_product_version,
+                    "before": before,
+                    "after": after,
+                },
+            )
+        db.commit()
+        frozen_plan = json.loads(result.receipt.after_snapshot_json)
+        return {
+            "refresh_id": int(result.receipt.id),
+            "idempotency_key": result.receipt.idempotency_key,
+            "request_hash": result.receipt.request_hash,
+            # Idempotent replay returns the exact original receipt payload.
+            "replayed": False,
+            "task_id": int(result.receipt.task_id),
+            "task_version": int(result.receipt.after_task_version),
+            "product_id": int(result.receipt.product_id),
+            "product_version": int(result.receipt.after_product_version),
+            "production_label_plan": frozen_plan,
+        }
+    except HTTPException:
+        db.rollback()
+        raise
+    except ProductionLabelOperationError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=error.status_code,
+            detail=str(error),
+        ) from error
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="标签计划已被其他请求修改，请刷新后重试",
+        ) from error
+    except Exception:
+        db.rollback()
+        raise
 
 
 @router.get("/completions")

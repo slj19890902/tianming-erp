@@ -9,89 +9,136 @@
       color-scheme:light;
       font-family:"Microsoft YaHei","SimHei","SimSun",sans-serif;
       color:#000;
-      --label-width:65mm;
-      --label-height:45mm;
+      --label-width:40mm;
+      --label-height:30mm;
     }
     * { box-sizing:border-box; }
     html,body { margin:0; min-height:100%; }
     body { background:#f3f4f6; }
-    .toolbar { position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:10px; padding:10px 16px; background:#fff; border-bottom:1px solid #cbd5e1; }
-    button { border:1px solid #64748b; border-radius:5px; background:#fff; color:#111827; padding:8px 15px; cursor:pointer; font-size:14px; }
+    .toolbar { position:sticky; top:0; z-index:5; display:flex; align-items:center; flex-wrap:wrap; gap:8px; padding:10px 16px; background:#fff; border-bottom:1px solid #cbd5e1; }
+    button,.button-link { border:1px solid #64748b; border-radius:5px; background:#fff; color:#111827; padding:8px 13px; cursor:pointer; font:14px/1.2 inherit; text-decoration:none; }
     button.primary { border-width:2px; border-color:#111827; font-weight:700; }
+    button.confirm { border-color:#166534; background:#166534; color:#fff; font-weight:700; }
     button:disabled { opacity:.45; cursor:not-allowed; }
-    .toolbar-note { margin-left:auto; color:#475569; font-size:12px; }
-    .message { max-width:680px; margin:18px auto; padding:12px 16px; border:1px solid #94a3b8; border-radius:6px; color:#334155; background:#fff; text-align:center; }
+    .toolbar-note { margin-left:auto; max-width:520px; color:#475569; font-size:12px; text-align:right; }
+    .message { max-width:760px; margin:18px auto; padding:12px 16px; border:1px solid #94a3b8; border-radius:6px; color:#334155; background:#fff; text-align:center; }
     .message.error { color:#7f1d1d; border-color:#991b1b; }
+    .message.success { color:#14532d; border-color:#15803d; }
     .label-list { display:grid; gap:14px; justify-items:center; padding:18px; }
     .label-card {
       width:var(--label-width);
       height:var(--label-height);
       display:grid;
-      grid-template-rows:6.4mm 9.8mm 6.3mm 6.3mm 1fr;
-      overflow:hidden;
-      border:.35mm solid #000;
-      border-radius:1.4mm;
+      grid-template-rows:5.4mm 7mm 5mm 5mm 7mm;
+      border:.3mm solid #000;
+      border-radius:.8mm;
       background:#fff;
       box-shadow:0 2px 10px rgb(15 23 42 / 14%);
       break-inside:avoid;
       page-break-inside:avoid;
     }
-    .customer-row { display:grid; grid-template-columns:11mm 1fr; align-items:center; padding:0 1.5mm; border-bottom:.35mm solid #000; }
-    .field-name { color:#374151; font-size:2.45mm; font-weight:700; line-height:1; white-space:nowrap; }
-    .customer-name { min-width:0; overflow:hidden; font-size:4.35mm; font-weight:900; line-height:1.05; text-align:center; white-space:nowrap; text-overflow:ellipsis; }
-    .code-row { display:flex; flex-direction:column; justify-content:center; padding:.7mm 1.5mm .55mm; border-bottom:.25mm solid #000; text-align:center; }
-    .code-row .field-name { align-self:flex-start; margin-bottom:.4mm; }
-    .product-code { min-width:0; overflow:hidden; font-family:"Arial","Microsoft YaHei",sans-serif; font-size:5.2mm; font-weight:900; letter-spacing:.08mm; line-height:1; white-space:nowrap; text-overflow:ellipsis; }
-    .detail-row { display:grid; grid-template-columns:11mm 1fr; align-items:center; padding:0 1.5mm; border-bottom:.2mm solid #9ca3af; }
-    .detail-value { min-width:0; overflow:hidden; font-size:3.3mm; font-weight:700; line-height:1.1; text-align:right; white-space:nowrap; text-overflow:ellipsis; }
-    .quantity-row { display:flex; align-items:baseline; justify-content:center; gap:1.2mm; padding:.75mm 1.5mm .55mm; }
-    .quantity-row .field-name { color:#000; font-size:3mm; }
-    .quantity-number { font-family:"Arial","Microsoft YaHei",sans-serif; font-size:7.2mm; font-weight:900; line-height:1; }
-    .quantity-unit { font-size:3.6mm; font-weight:900; }
+    .customer-row,.detail-row { display:grid; grid-template-columns:8.2mm 1fr; align-items:center; min-width:0; padding:0 .65mm; }
+    .customer-row { border-bottom:.25mm solid #000; }
+    .detail-row { border-bottom:.2mm solid #6b7280; }
+    .field-name { color:#111827; font-size:2.15mm; font-weight:700; line-height:1; white-space:nowrap; }
+    .fit-cell { display:flex; align-items:center; justify-content:center; min-width:0; min-height:0; width:100%; height:100%; padding:.25mm .2mm; }
+    .fit-value {
+      display:block;
+      max-width:100%;
+      color:#000;
+      font-weight:800;
+      line-height:1.02;
+      text-align:center;
+      white-space:normal;
+      overflow-wrap:anywhere;
+      word-break:break-word;
+    }
+    .customer-name { font-size:3.15mm; }
+    .code-row { display:grid; grid-template-columns:8.2mm 1fr; align-items:center; min-width:0; padding:0 .65mm; border-bottom:.25mm solid #000; }
+    .product-code { font-family:"Arial","Microsoft YaHei",sans-serif; font-size:3.45mm; font-weight:900; word-break:break-all; }
+    .detail-value { font-size:2.75mm; }
+    .quantity-row { display:flex; align-items:baseline; justify-content:center; gap:.75mm; min-width:0; padding:.5mm .65mm .3mm; }
+    .quantity-row .field-name { color:#000; font-size:2.35mm; }
+    .quantity-number { font-family:"Arial","Microsoft YaHei",sans-serif; font-size:5.3mm; font-weight:900; line-height:1; }
+    .quantity-unit { font-size:2.8mm; font-weight:900; }
+    html[data-template="legacy_65x45_v1"] .label-card { grid-template-rows:6.4mm 9.8mm 6.3mm 6.3mm 1fr; border-width:.35mm; border-radius:1.4mm; }
+    html[data-template="legacy_65x45_v1"] .customer-row,
+    html[data-template="legacy_65x45_v1"] .code-row,
+    html[data-template="legacy_65x45_v1"] .detail-row { grid-template-columns:11mm 1fr; padding:0 1.5mm; }
+    html[data-template="legacy_65x45_v1"] .field-name { font-size:2.45mm; }
+    html[data-template="legacy_65x45_v1"] .customer-name { font-size:4.35mm; }
+    html[data-template="legacy_65x45_v1"] .product-code { font-size:5.2mm; }
+    html[data-template="legacy_65x45_v1"] .detail-value { font-size:3.3mm; }
+    html[data-template="legacy_65x45_v1"] .quantity-row .field-name { font-size:3mm; }
+    html[data-template="legacy_65x45_v1"] .quantity-number { font-size:7.2mm; }
+    html[data-template="legacy_65x45_v1"] .quantity-unit { font-size:3.6mm; }
     [hidden] { display:none !important; }
-    @page { size:65mm 45mm; margin:0; }
-    @media (max-width:520px) {
-      .toolbar-note { display:none; }
+    @page { size: 40mm 30mm; margin: 0; }
+    @media (max-width:680px) {
+      .toolbar-note { width:100%; margin-left:0; text-align:left; }
     }
     @media print {
-      html,body { width:var(--label-width); min-height:var(--label-height); background:#fff; }
+      html,body { width:var(--label-width); min-height:0; background:#fff; }
       .toolbar,.message { display:none !important; }
       .label-list { display:block; padding:0; }
       .label-card { width:var(--label-width); height:var(--label-height); margin:0; box-shadow:none; break-after:page; page-break-after:always; }
       .label-card:last-child { break-after:auto; page-break-after:auto; }
     }
   </style>
+  <style id="legacyPageSize"></style>
 </head>
 <body>
   <nav class="toolbar">
     <button id="retryButton" type="button">重新加载</button>
     <button id="printButton" class="primary" type="button" disabled>打印包装标签</button>
+    <button id="confirmPrintedButton" class="confirm" type="button" hidden>确认已实际打印</button>
+    <a id="latestJobLink" class="button-link" href="#" hidden>补打最近已登记作业</a>
     <button id="closeButton" type="button">关闭</button>
-    <span class="toolbar-note">65 × 45 mm｜100% 实际大小｜黑白打印</span>
+    <span id="toolbarNote" class="toolbar-note">40 × 30 mm｜缩放选 100%“实际大小”｜关闭“适合页面”、自动旋转和页眉页脚</span>
   </nav>
   <div id="message" class="message">正在读取冻结的生产包装标签计划……</div>
   <main id="labelList" class="label-list" aria-live="polite"></main>
   <script>
     (() => {
       "use strict";
+
+      const TEMPLATE_DEFINITIONS = Object.freeze({
+        current_40x30_v1: Object.freeze({ widthMm:40, heightMm:30, label:"40 × 30 mm" }),
+        legacy_65x45_v1: Object.freeze({ widthMm:65, heightMm:45, label:"65 × 45 mm（历史作业）" }),
+      });
+      const CURRENT_TEMPLATE_VERSION = "current_40x30_v1";
+      const LEGACY_TEMPLATE_VERSION = "legacy_65x45_v1";
+      const MIN_TEXT_SIZE_PX = 5;
+
       const message = document.getElementById("message");
       const labelList = document.getElementById("labelList");
       const retryButton = document.getElementById("retryButton");
       const printButton = document.getElementById("printButton");
+      const confirmPrintedButton = document.getElementById("confirmPrintedButton");
+      const latestJobLink = document.getElementById("latestJobLink");
       const closeButton = document.getElementById("closeButton");
+      const toolbarNote = document.getElementById("toolbarNote");
+      const legacyPageSize = document.getElementById("legacyPageSize");
       const params = new URLSearchParams(window.location.search);
       const supplierOrderId = Number(params.get("id"));
+      const requestedJobId = Number(params.get("job_id"));
       let loadGeneration = 0;
       let activeController = null;
       let loadedPackage = null;
+      let loadedJob = null;
+      let prepareAttempt = null;
+      let confirmationAttempt = null;
+      let printing = false;
 
-      const escapeHtml = (value) => String(value ?? "-")
+      const escapeHtml = (value) => String(value ?? "")
         .replaceAll("&", "&amp;")
         .replaceAll("<", "&lt;")
         .replaceAll(">", "&gt;")
         .replaceAll('"', "&quot;")
         .replaceAll("'", "&#039;");
       const positiveInteger = (value) => Number.isInteger(Number(value)) && Number(value) > 0;
+      const requiredText = (value) => typeof value === "string" && value.trim() ? value.trim() : "";
+      const newIdempotencyKey = (prefix) => `${prefix}-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
 
       function errorMessage(status, payload) {
         const detail = payload && typeof payload === "object" ? payload.detail : null;
@@ -106,17 +153,62 @@
           return detail.map((item) => item && item.msg ? item.msg : String(item)).join("；");
         }
         if (status === 401) return "登录已失效，请回到 ERP 重新登录后再试";
-        if (status === 403) return "没有查看该报料单包装标签的权限";
-        if (status === 404) return "报料单不存在";
-        return `加载失败（HTTP ${status || "网络连接失败"}）`;
+        if (status === 403) return "没有查看或打印该报料单包装标签的权限";
+        if (status === 404) return "报料单或打印作业不存在";
+        if (status === 409) return "标签计划已变化，请重新加载并核对后再打印";
+        return `请求失败（HTTP ${status || "网络连接失败"}）`;
+      }
+
+      async function requestJson(url, options = {}) {
+        const response = await fetch(url, {
+          credentials:"include",
+          cache:"no-store",
+          headers:{"Accept":"application/json", ...(options.body ? {"Content-Type":"application/json"} : {}), ...(options.headers || {})},
+          ...options,
+        });
+        let payload = null;
+        try { payload = await response.json(); } catch (_error) { payload = null; }
+        if (!response.ok) throw Object.assign(new Error(errorMessage(response.status, payload)), {status:response.status});
+        return payload;
+      }
+
+      function parseMaybeJson(value) {
+        if (typeof value !== "string") return value;
+        try { return JSON.parse(value); } catch (_error) { return null; }
+      }
+
+      function normalizeResponse(payload) {
+        const root = payload && typeof payload === "object" ? payload : {};
+        const job = root.job || root.print_job || (root.job_id || root.id && root.status ? root : null);
+        const nested = root.package || root.label_package || root.frozen_package || root.frozen_payload || root.payload
+          || job?.package || job?.label_package || job?.frozen_package || job?.frozen_payload || job?.payload;
+        const packageData = parseMaybeJson(nested) || (Array.isArray(root.labels) ? root : null);
+        if (!packageData || typeof packageData !== "object") throw new Error("服务器返回的冻结标签数据不完整，请重试");
+        const templateVersion = String(job?.template_version || root.template_version || packageData.template_version || "").trim();
+        const normalizedJob = job ? {
+          ...job,
+          id:Number(job.id || job.job_id || root.job_id || 0),
+          status:String(job.status || root.status || "").trim(),
+          printed_at:job.printed_at || root.printed_at || null,
+          template_version:templateVersion,
+        } : null;
+        return {
+          packageData:{...packageData, template_version:templateVersion},
+          job:normalizedJob,
+          latestPrintedJob:root.latest_printed_job || root.latest_print_job || packageData.latest_printed_job || null,
+          latestPrintedJobId:Number(root.latest_printed_job_id || packageData.latest_printed_job_id || 0),
+        };
       }
 
       function validatePackage(packageData) {
         if (!packageData || typeof packageData !== "object" || !Array.isArray(packageData.labels)) {
           throw new Error("服务器返回的包装标签数据不完整，请重试");
         }
+        if (!TEMPLATE_DEFINITIONS[packageData.template_version]) {
+          throw new Error("标签作业缺少受支持的模板版本，已停止打印");
+        }
         if (packageData.review_required || packageData.printable === false) {
-          throw new Error("生产计划已变化或标签快照不完整，请先核对并重新报料");
+          throw new Error("生产计划已变化或标签快照不完整，请先核对标签计划");
         }
         if (!packageData.labels.length || Number(packageData.label_count) !== packageData.labels.length) {
           throw new Error("该报料单没有可打印的生产包装标签");
@@ -128,73 +220,227 @@
           if (Number(label.label_number) > Number(label.label_count) || Number(label.quantity) > Number(label.units_per_label)) {
             throw new Error("包装标签序号或数量异常，已停止打印");
           }
+          const missing = [
+            ["客户名称", label.customer_name],
+            ["存货编码", label.product_code],
+            ["产品名称", label.product_name],
+            ["规格", label.specification],
+          ].filter(([, value]) => !requiredText(value)).map(([name]) => name);
+          if (missing.length) throw new Error(`包装标签缺少${missing.join("、")}，已停止打印`);
         });
       }
 
+      function applyTemplate(templateVersion) {
+        const template = TEMPLATE_DEFINITIONS[templateVersion];
+        if (!template) throw new Error("标签模板版本不受支持，已停止打印");
+        document.documentElement.dataset.template = templateVersion;
+        document.documentElement.style.setProperty("--label-width", `${template.widthMm}mm`);
+        document.documentElement.style.setProperty("--label-height", `${template.heightMm}mm`);
+        legacyPageSize.textContent = templateVersion === LEGACY_TEMPLATE_VERSION
+          ? "@page { size: 65mm 45mm; margin: 0; }"
+          : "";
+        toolbarNote.textContent = `${template.label}｜缩放选 100%“实际大小”｜关闭“适合页面”、自动旋转和页眉页脚`;
+      }
+
       function labelHtml(label) {
-        const customer = label.customer_code || label.customer_name || "客户待确认";
-        const productCode = label.product_code || "存货编码待确认";
-        const productName = label.product_name || "产品名称待确认";
-        const specification = label.specification || "规格待确认";
-        return `<article class="label-card" aria-label="生产包装标签">
-          <div class="customer-row"><span class="field-name">客户名称</span><strong class="customer-name" title="${escapeHtml(customer)}">${escapeHtml(customer)}</strong></div>
-          <div class="code-row"><span class="field-name">存货编码</span><strong class="product-code" title="${escapeHtml(productCode)}">${escapeHtml(productCode)}</strong></div>
-          <div class="detail-row"><span class="field-name">产品名称</span><strong class="detail-value" title="${escapeHtml(productName)}">${escapeHtml(productName)}</strong></div>
-          <div class="detail-row"><span class="field-name">规格</span><strong class="detail-value" title="${escapeHtml(specification)}">${escapeHtml(specification)}</strong></div>
-          <div class="quantity-row"><span class="field-name">每捆数量</span><strong class="quantity-number">${escapeHtml(label.quantity)}</strong><span class="quantity-unit">只</span></div>
+        return `<article class="label-card" aria-label="生产包装标签 ${escapeHtml(label.label_number)}/${escapeHtml(label.label_count)}">
+          <div class="customer-row"><span class="field-name">客户名称</span><span class="fit-cell"><strong class="fit-value customer-name" title="${escapeHtml(label.customer_name)}">${escapeHtml(label.customer_name)}</strong></span></div>
+          <div class="code-row"><span class="field-name">存货编码</span><span class="fit-cell"><strong class="fit-value product-code" title="${escapeHtml(label.product_code)}">${escapeHtml(label.product_code)}</strong></span></div>
+          <div class="detail-row"><span class="field-name">产品名称</span><span class="fit-cell"><strong class="fit-value detail-value" title="${escapeHtml(label.product_name)}">${escapeHtml(label.product_name)}</strong></span></div>
+          <div class="detail-row"><span class="field-name">规格</span><span class="fit-cell"><strong class="fit-value detail-value" title="${escapeHtml(label.specification)}">${escapeHtml(label.specification)}</strong></span></div>
+          <div class="quantity-row"><span class="field-name">本标签数量</span><strong class="quantity-number">${escapeHtml(label.quantity)}</strong><span class="quantity-unit">只</span></div>
         </article>`;
       }
 
-      function render(packageData) {
+      function fitElement(element) {
+        const container = element.parentElement;
+        let fontSize = Number.parseFloat(getComputedStyle(element).fontSize);
+        while (fontSize > MIN_TEXT_SIZE_PX && (element.scrollWidth > container.clientWidth + 1 || element.scrollHeight > container.clientHeight + 1)) {
+          fontSize = Math.max(MIN_TEXT_SIZE_PX, fontSize - .25);
+          element.style.fontSize = `${fontSize}px`;
+        }
+        return element.scrollWidth <= container.clientWidth + 1 && element.scrollHeight <= container.clientHeight + 1;
+      }
+
+      function validateRenderedLabels() {
+        const textFits = [...labelList.querySelectorAll(".fit-value")].every(fitElement);
+        const cardsFit = [...labelList.querySelectorAll(".label-card")].every((card) =>
+          card.scrollWidth <= card.clientWidth + 1 && card.scrollHeight <= card.clientHeight + 1
+        );
+        if (!textFits || !cardsFit) {
+          throw new Error("核心字段过长，无法在当前纸型完整显示；已停止打印，请先缩短主档字段或联系管理员调整模板");
+        }
+      }
+
+      function showMessage(text, className = "message") {
+        message.hidden = false;
+        message.className = className;
+        message.textContent = text;
+      }
+
+      function latestJobMetadata(normalized) {
+        const raw = normalized.latestPrintedJob || {};
+        const id = Number(raw.id || raw.job_id || normalized.latestPrintedJobId || 0);
+        return id > 0 ? {id, template_version:String(raw.template_version || "").trim()} : null;
+      }
+
+      function updateLatestJobLink(normalized) {
+        const latest = latestJobMetadata(normalized);
+        latestJobLink.hidden = !latest;
+        if (!latest) return;
+        const linkParams = new URLSearchParams({job_id:String(latest.id)});
+        if (Number.isInteger(supplierOrderId) && supplierOrderId > 0) linkParams.set("id", String(supplierOrderId));
+        latestJobLink.href = `${window.location.pathname}?${linkParams.toString()}`;
+        latestJobLink.textContent = latest.template_version === LEGACY_TEMPLATE_VERSION
+          ? "补打最近 65 × 45 mm 历史作业"
+          : "补打最近已登记作业";
+      }
+
+      async function render(normalized, {isPrepared=false, showPrintConfirmation=false} = {}) {
+        const packageData = normalized.packageData;
         validatePackage(packageData);
+        applyTemplate(packageData.template_version);
         labelList.innerHTML = packageData.labels.map((label) => labelHtml(label)).join("");
+        if (document.fonts?.ready) await document.fonts.ready;
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        validateRenderedLabels();
         loadedPackage = packageData;
-        message.hidden = true;
+        loadedJob = normalized.job || null;
+        updateLatestJobLink(normalized);
+        printButton.textContent = Number.isInteger(requestedJobId) && requestedJobId > 0 ? "补打冻结作业" : "打印包装标签";
         printButton.disabled = false;
+        confirmPrintedButton.hidden = !(showPrintConfirmation && isPrepared && loadedJob && !loadedJob.printed_at && loadedJob.status !== "printed");
+        if (isPrepared && !showPrintConfirmation) {
+          showMessage("已载入冻结打印作业；本次补打不会改写原标签计划。", "message");
+        } else {
+          message.hidden = true;
+        }
+      }
+
+      function resetView() {
+        loadedPackage = null;
+        loadedJob = null;
+        printButton.disabled = true;
+        confirmPrintedButton.hidden = true;
+        latestJobLink.hidden = true;
+        labelList.innerHTML = "";
+        showMessage("正在读取冻结的生产包装标签计划……");
       }
 
       async function loadPackage() {
         const generation = ++loadGeneration;
         if (activeController) activeController.abort();
         activeController = new AbortController();
-        loadedPackage = null;
-        printButton.disabled = true;
-        labelList.innerHTML = "";
-        message.hidden = false;
-        message.className = "message";
-        message.textContent = "正在读取冻结的生产包装标签计划……";
-        if (!Number.isInteger(supplierOrderId) || supplierOrderId <= 0) {
-          message.className = "message error";
-          message.textContent = "报料单编号无效";
+        resetView();
+        const loadingJob = Number.isInteger(requestedJobId) && requestedJobId > 0;
+        if (!loadingJob && (!Number.isInteger(supplierOrderId) || supplierOrderId <= 0)) {
+          showMessage("报料单编号无效", "message error");
           return;
         }
         try {
-          const response = await fetch(`/api/requisition/supplier-orders/${supplierOrderId}/production-packaging-label-package`, {
-            method:"GET",
-            credentials:"include",
-            cache:"no-store",
-            headers:{"Accept":"application/json"},
-            signal:activeController.signal,
-          });
-          let payload = null;
-          try { payload = await response.json(); } catch (_error) { payload = null; }
-          if (!response.ok) throw Object.assign(new Error(errorMessage(response.status, payload)), {status:response.status});
+          const url = loadingJob
+            ? `/api/requisition/production-packaging-label-jobs/${requestedJobId}`
+            : `/api/requisition/supplier-orders/${supplierOrderId}/production-packaging-label-package`;
+          const payload = await requestJson(url, {method:"GET", signal:activeController.signal});
           if (generation !== loadGeneration) return;
-          render(payload);
+          const normalized = normalizeResponse(payload);
+          await render(normalized, {isPrepared:loadingJob, showPrintConfirmation:false});
         } catch (error) {
           if (error && error.name === "AbortError") return;
           if (generation !== loadGeneration) return;
-          message.className = "message error";
-          message.textContent = error instanceof TypeError
+          showMessage(error instanceof TypeError
             ? "无法连接 ERP 服务，请检查网络后重试"
-            : error && error.message
-            ? error.message
-            : "连接 ERP 失败，请重试";
+            : error?.message || "连接 ERP 失败，请重试", "message error");
+        }
+      }
+
+      function planFingerprint(packageData) {
+        return requiredText(packageData?.plan_fingerprint || packageData?.fingerprint || packageData?.label_plan_fingerprint);
+      }
+
+      async function preparePrintJob() {
+        const fingerprint = planFingerprint(loadedPackage);
+        if (!fingerprint) throw new Error("标签计划缺少校验指纹，已停止创建打印作业；请重新加载");
+        const signature = `${supplierOrderId}|${loadedPackage.template_version}|${fingerprint}`;
+        if (!prepareAttempt || prepareAttempt.signature !== signature) {
+          prepareAttempt = {signature, idempotencyKey:newIdempotencyKey("p150c-label-job")};
+        }
+        const payload = await requestJson(`/api/requisition/supplier-orders/${supplierOrderId}/production-packaging-label-jobs`, {
+          method:"POST",
+          body:JSON.stringify({
+            idempotency_key:prepareAttempt.idempotencyKey,
+            confirmed:true,
+            plan_fingerprint:fingerprint,
+          }),
+        });
+        const normalized = normalizeResponse(payload);
+        if (!normalized.job || !positiveInteger(normalized.job.id)) throw new Error("服务器未返回冻结打印作业编号，已停止打印");
+        prepareAttempt = null;
+        return normalized;
+      }
+
+      async function startPrint() {
+        if (printing || !loadedPackage) return;
+        printing = true;
+        printButton.disabled = true;
+        confirmPrintedButton.hidden = true;
+        try {
+          validateRenderedLabels();
+          const hasFrozenJob = positiveInteger(loadedJob?.id);
+          if (!hasFrozenJob) {
+            showMessage("正在冻结本次打印作业……");
+            const normalized = await preparePrintJob();
+            await render(normalized, {isPrepared:true, showPrintConfirmation:false});
+          }
+          validateRenderedLabels();
+          window.print();
+          if (loadedJob?.status === "printed" || loadedJob?.printed_at) {
+            showMessage("已打开历史作业打印对话框；补打沿用原作业的冻结内容和纸型。", "message");
+          } else {
+            confirmPrintedButton.hidden = false;
+            showMessage("若打印机已经实际出纸，请点“确认已实际打印”；取消或仅预览时不要确认。", "message");
+          }
+        } catch (error) {
+          showMessage(error instanceof TypeError
+            ? "无法连接 ERP 服务；本次未登记实际打印，可直接重试"
+            : `${error?.message || "打印准备失败"}；本次未登记实际打印`, "message error");
+        } finally {
+          printing = false;
+          printButton.disabled = !loadedPackage;
+        }
+      }
+
+      async function confirmPrinted() {
+        const jobId = Number(loadedJob?.id || 0);
+        if (!positiveInteger(jobId) || confirmationAttempt?.submitting) return;
+        const signature = String(jobId);
+        if (!confirmationAttempt || confirmationAttempt.signature !== signature) {
+          confirmationAttempt = {signature, idempotencyKey:newIdempotencyKey("p150c-label-printed"), submitting:false};
+        }
+        confirmationAttempt.submitting = true;
+        confirmPrintedButton.disabled = true;
+        try {
+          await requestJson(`/api/requisition/production-packaging-label-jobs/${jobId}/confirm`, {
+            method:"POST",
+            body:JSON.stringify({idempotency_key:confirmationAttempt.idempotencyKey, confirmed:true}),
+          });
+          confirmationAttempt = null;
+          loadedJob.status = "printed";
+          loadedJob.printed_at = new Date().toISOString();
+          confirmPrintedButton.hidden = true;
+          showMessage(`打印作业 #${jobId} 已登记为“实际打印”；标签计划与生产状态均未改变。`, "message success");
+        } catch (error) {
+          confirmationAttempt.submitting = false;
+          confirmPrintedButton.disabled = false;
+          showMessage(error instanceof TypeError
+            ? "无法连接 ERP 服务，尚未登记实际打印；重试会复用同一幂等键"
+            : `${error?.message || "登记失败"}；尚未登记实际打印，重试会复用同一幂等键`, "message error");
         }
       }
 
       retryButton.addEventListener("click", loadPackage);
-      printButton.addEventListener("click", () => { if (loadedPackage) window.print(); });
+      printButton.addEventListener("click", startPrint);
+      confirmPrintedButton.addEventListener("click", confirmPrinted);
       closeButton.addEventListener("click", () => window.close());
       loadPackage();
     })();

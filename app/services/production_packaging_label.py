@@ -8,6 +8,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.customer import Customer
+from app.models.order import OrderItem
+from app.models.product import Product
+from app.models.product_bom import SalesOrderItemBomComponent
 from app.models.production import ProductionTask
 from app.models.supplier_requisition_order import SupplierRequisitionOrder
 from app.services.requisition_production_print import (
@@ -17,6 +20,19 @@ from app.services.requisition_production_print import (
 
 class ProductionPackagingLabelError(ValueError):
     pass
+
+
+ALLOWED_TEMPLATE_VERSIONS = frozenset(
+    {"legacy_65x45_v1", "current_40x30_v1"}
+)
+
+
+def template_dimensions(template_version: str) -> dict[str, int]:
+    if template_version == "legacy_65x45_v1":
+        return {"width_mm": 65, "height_mm": 45}
+    if template_version == "current_40x30_v1":
+        return {"width_mm": 40, "height_mm": 30}
+    raise ProductionPackagingLabelError("生产包装标签模板版本不受支持")
 
 
 def _positive_int(value: object) -> int:
@@ -79,14 +95,62 @@ def build_supplier_requisition_packaging_label_package(
     }
 
     plans: list[dict] = []
-    package_review_messages = list(production_package.get("review_messages") or [])
+    template_versions: set[str] = set()
+    # An explicitly refreshed label snapshot is allowed to be newer than the
+    # requisition card.  That production-card warning must not make the frozen
+    # label plan unprintable; every other review reason remains fail-closed.
+    package_review_messages = [
+        message
+        for message in (production_package.get("review_messages") or [])
+        if str(message) != "生产任务版本已变化，请核对并重打"
+    ]
     for task_id in sorted(task_sources):
         task = tasks.get(task_id)
         if task is None:
             package_review_messages.append(f"生产任务 #{task_id} 不存在，请核对")
             continue
         if not bool(task.production_label_enabled_snapshot):
+            item = db.get(OrderItem, task.order_item_id)
+            component_snapshot = (
+                db.get(
+                    SalesOrderItemBomComponent,
+                    task.sales_order_item_bom_component_id,
+                )
+                if task.sales_order_item_bom_component_id is not None
+                else None
+            )
+            product_id = (
+                int(component_snapshot.component_product_id)
+                if component_snapshot is not None
+                else int(item.product_id)
+                if item is not None
+                else None
+            )
+            product = db.get(Product, product_id) if product_id is not None else None
+            if (
+                product is not None
+                and bool(product.production_label_enabled)
+                and task.status in {"waiting_material", "pending"}
+                and task.production_label_template_version_snapshot
+                == "current_40x30_v1"
+                and task.production_label_product_version_snapshot
+                == int(product.version)
+            ):
+                package_review_messages.append(
+                    f"生产任务 #{task_id} 的当前产品已启用标签策略，"
+                    "但任务快照未启用；请停止打印并核对任务创建链路"
+                )
             continue
+
+        template_version = str(
+            task.production_label_template_version_snapshot or ""
+        ).strip()
+        if template_version not in ALLOWED_TEMPLATE_VERSIONS:
+            package_review_messages.append(
+                f"生产任务 #{task_id} 的包装标签模板版本不受支持，请核对"
+            )
+            continue
+        template_versions.add(template_version)
 
         units_per_label = _positive_int(task.production_label_units_per_label_snapshot)
         total_quantity = _positive_int(task.production_label_total_quantity_snapshot)
@@ -99,6 +163,22 @@ def build_supplier_requisition_packaging_label_package(
             continue
 
         card, component = task_sources[task_id]
+        item = db.get(OrderItem, task.order_item_id)
+        component_snapshot = (
+            db.get(
+                SalesOrderItemBomComponent,
+                task.sales_order_item_bom_component_id,
+            )
+            if task.sales_order_item_bom_component_id is not None
+            else None
+        )
+        product_id = (
+            int(component_snapshot.component_product_id)
+            if component_snapshot is not None
+            else int(item.product_id)
+            if item is not None
+            else None
+        )
         quantities = [
             min(units_per_label, total_quantity - index * units_per_label)
             for index in range(frozen_count)
@@ -112,6 +192,9 @@ def build_supplier_requisition_packaging_label_package(
             {
                 "production_task_id": task_id,
                 "production_task_version": int(task.version or 1),
+                "product_id": product_id,
+                "product_version": task.production_label_product_version_snapshot,
+                "template_version": template_version,
                 "customer_id": card.get("customer_id"),
                 "customer_name": card.get("customer_name"),
                 "customer_code": customer_codes.get(int(card["customer_id"]))
@@ -130,6 +213,14 @@ def build_supplier_requisition_packaging_label_package(
             }
         )
 
+    if len(template_versions) > 1:
+        package_review_messages.append(
+            "同一报料单包含不同尺寸的包装标签模板，请分别创建打印作业"
+        )
+    template_version = (
+        next(iter(template_versions)) if len(template_versions) == 1 else None
+    )
+
     labels: list[dict] = []
     for plan in plans:
         for index, quantity in enumerate(plan["label_quantities"], start=1):
@@ -137,6 +228,7 @@ def build_supplier_requisition_packaging_label_package(
                 {
                     "production_task_id": plan["production_task_id"],
                     "production_task_version": plan["production_task_version"],
+                    "template_version": plan["template_version"],
                     "customer_id": plan["customer_id"],
                     "customer_name": plan["customer_name"],
                     "customer_code": plan["customer_code"],
@@ -173,6 +265,10 @@ def build_supplier_requisition_packaging_label_package(
         "supplier_order_number": order.order_number,
         "status": order.status,
         "status_label": "生产包装标签｜非库存标签",
+        "template_version": template_version,
+        "template_dimensions": (
+            template_dimensions(template_version) if template_version else None
+        ),
         "plan_fingerprint": fingerprint,
         "production_task_count": len(plans),
         "label_count": len(labels),

@@ -2601,6 +2601,13 @@ def _task_product_snapshot(
         return {
             **_item_product_snapshot(item, parent_product),
             **_task_printing_snapshot(task),
+            "current_product_version": int(parent_product.version),
+            "current_product_production_label_enabled": bool(
+                parent_product.production_label_enabled
+            ),
+            "current_product_production_label_units_per_label": (
+                parent_product.production_label_units_per_label
+            ),
             "is_component_task": False,
             "bom_component_snapshot_id": None,
             "production_quantity_unit": "sets",
@@ -2659,6 +2666,19 @@ def _task_product_snapshot(
         ),
         "production_quantity_unit": "pieces",
         "component_product_found": component is not None,
+        "current_product_version": (
+            int(component.version) if component is not None else None
+        ),
+        "current_product_production_label_enabled": (
+            bool(component.production_label_enabled)
+            if component is not None
+            else None
+        ),
+        "current_product_production_label_units_per_label": (
+            component.production_label_units_per_label
+            if component is not None
+            else None
+        ),
     }
 
 
@@ -2895,6 +2915,31 @@ def _ordinary_pending_task_fast_payload(
         "readiness_basis": task.readiness_basis,
         "ready_at": utc_naive_to_api(task.ready_at) if task.ready_at else None,
         "version": int(task.version),
+        "production_label_enabled_snapshot": bool(
+            task.production_label_enabled_snapshot
+        ),
+        "production_label_units_per_label_snapshot": (
+            task.production_label_units_per_label_snapshot
+        ),
+        "production_label_total_quantity_snapshot": int(
+            task.production_label_total_quantity_snapshot or 0
+        ),
+        "production_label_count_snapshot": int(
+            task.production_label_count_snapshot or 0
+        ),
+        "production_label_template_version_snapshot": (
+            task.production_label_template_version_snapshot
+        ),
+        "production_label_product_version_snapshot": (
+            task.production_label_product_version_snapshot
+        ),
+        "current_product_version": int(product.version),
+        "current_product_production_label_enabled": bool(
+            product.production_label_enabled
+        ),
+        "current_product_production_label_units_per_label": (
+            product.production_label_units_per_label
+        ),
         "production_ready_quantity": 0,
         "customer_board_preparation_sources": [],
     }
@@ -3051,6 +3096,24 @@ def list_production_tasks(
             "readiness_basis": task.readiness_basis,
             "ready_at": utc_naive_to_api(task.ready_at) if task.ready_at else None,
             "version": int(task.version),
+            "production_label_enabled_snapshot": bool(
+                task.production_label_enabled_snapshot
+            ),
+            "production_label_units_per_label_snapshot": (
+                task.production_label_units_per_label_snapshot
+            ),
+            "production_label_total_quantity_snapshot": int(
+                task.production_label_total_quantity_snapshot or 0
+            ),
+            "production_label_count_snapshot": int(
+                task.production_label_count_snapshot or 0
+            ),
+            "production_label_template_version_snapshot": (
+                task.production_label_template_version_snapshot
+            ),
+            "production_label_product_version_snapshot": (
+                task.production_label_product_version_snapshot
+            ),
             "production_ready_quantity": production_ready_quantity(db, item),
             "customer_board_preparation_sources": (
                 _active_customer_board_preparation_sources(

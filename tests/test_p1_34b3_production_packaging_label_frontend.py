@@ -76,29 +76,48 @@ def test_waiting_material_task_page_opens_separate_packaging_label_page() -> Non
     assert "window.opener" not in TASK_PRINT
 
 
-def test_packaging_label_page_is_real_size_minimal_and_get_only() -> None:
+def test_packaging_label_page_uses_current_size_and_audited_print_jobs() -> None:
+    compact = re.sub(r"\s+", "", LABEL_PRINT)
     for marker in (
         "生产包装标签",
         "客户名称",
         "存货编码",
         "产品名称",
         "规格",
-        "每捆数量",
-        "65 × 45 mm",
-        "@page { size:65mm 45mm; margin:0; }",
-        "--label-width:65mm",
-        "--label-height:45mm",
+        "本标签数量",
+        "current_40x30_v1",
+        "legacy_65x45_v1",
+        "40 × 30 mm",
+        "65 × 45 mm（历史作业）",
+        "--label-width:40mm",
+        "--label-height:30mm",
         "width:var(--label-width)",
         "height:var(--label-height)",
-        "label.customer_code || label.customer_name",
+        "label.customer_name",
+        "label.product_code",
+        "label.product_name",
+        "label.specification",
         "/production-packaging-label-package",
+        "/production-packaging-label-jobs",
         'method:"GET"',
+        'method:"POST"',
         'credentials:"include"',
         'cache:"no-store"',
         "detail.reasons",
         "生产计划已变化或标签快照不完整",
+        "确认已实际打印",
+        "scrollHeight",
+        "clientHeight",
+        "scrollWidth",
+        "clientWidth",
     ):
         assert marker in LABEL_PRINT
+
+    assert "@page{size:40mm30mm;margin:0" in compact
+    assert "@page{size:65mm45mm;margin:0" in compact
+    assert LABEL_PRINT.count("window.print()") == 1
+    assert 'label.customer_code || label.customer_name' not in LABEL_PRINT
+    assert "text-overflow:ellipsis" not in LABEL_PRINT
 
     for forbidden in (
         "计划总数：",
@@ -110,7 +129,6 @@ def test_packaging_label_page_is_real_size_minimal_and_get_only() -> None:
         "计划指纹：",
         "background:#000",
         "background:black",
-        "color:#fff",
         "库存批次",
         "库位",
         "可用库存",
@@ -118,8 +136,8 @@ def test_packaging_label_page_is_real_size_minimal_and_get_only() -> None:
         "单价",
         "成本",
         "价格",
-        'method:"POST"',
         'method:"PUT"',
+        'method:"PATCH"',
         'method:"DELETE"',
         "window.opener",
         "finished-goods-label",

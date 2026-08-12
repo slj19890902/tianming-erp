@@ -28,6 +28,16 @@ from app.services.floor3_locations import (
 
 AREA_LOCATION_SOURCE_VERSION = "TWIN_V1"
 FORMAL_INVENTORY_USAGES = frozenset({"finished", "semi_finished"})
+AREA_POLICY_INVENTORY_USAGES = frozenset(
+    {
+        "finished",
+        "semi_finished",
+        "raw_material",
+        "mold",
+        "print_plate",
+        "temporary_turnover",
+    }
+)
 AREA_LOCATION_MANAGEMENT_ACTIONS = (
     "location_count",
     "layout",
@@ -200,8 +210,8 @@ def policy_inventory_types(policy: WarehouseAreaStoragePolicy) -> list[str]:
     return list(dict.fromkeys(value.strip() for value in values if value.strip()))
 
 
-def location_warehouse_type(policy: WarehouseAreaStoragePolicy) -> str | None:
-    values = set(policy_inventory_types(policy)) & FORMAL_INVENTORY_USAGES
+def location_warehouse_type_for_inventory_types(values: list[str]) -> str | None:
+    values = set(values) & FORMAL_INVENTORY_USAGES
     if values == FORMAL_INVENTORY_USAGES:
         return "shared"
     if "finished" in values:
@@ -211,12 +221,20 @@ def location_warehouse_type(policy: WarehouseAreaStoragePolicy) -> str | None:
     return None
 
 
-def location_storage_type(policy: WarehouseAreaStoragePolicy) -> str:
-    if policy.storage_layout == "rack":
+def location_warehouse_type(policy: WarehouseAreaStoragePolicy) -> str | None:
+    return location_warehouse_type_for_inventory_types(policy_inventory_types(policy))
+
+
+def location_storage_type_for_layout(storage_layout: str) -> str:
+    if storage_layout == 'rack':
         return "rack"
     # A mixed area can contain separately modelled racks; automatically
     # generated positions are ground/pallet positions and never fake rack bays.
     return "ground"
+
+
+def location_storage_type(policy: WarehouseAreaStoragePolicy) -> str:
+    return location_storage_type_for_layout(policy.storage_layout)
 
 
 def formal_area_location_rows(
@@ -244,12 +262,22 @@ def policy_location_transition_blockers(
     floor: WarehouseFloor,
     area: WarehouseArea,
     policy: WarehouseAreaStoragePolicy,
+    requested_inventory_types: list[str] | None = None,
+    requested_storage_layout: str | None = None,
 ) -> list[str]:
     rows = formal_area_location_rows(db, floor=floor, area=area)
     if not rows:
         return []
     location_ids = [row.id for row in rows]
-    desired_type = location_warehouse_type(policy)
+    current_type = location_warehouse_type(policy)
+    desired_type = (
+        location_warehouse_type_for_inventory_types(requested_inventory_types)
+        if requested_inventory_types is not None else current_type
+    )
+    current_storage = location_storage_type(policy)
+    desired_storage = location_storage_type_for_layout(
+        requested_storage_layout or policy.storage_layout
+    )
     live_lot_types = set(
         db.scalars(
             select(InventoryLot.inventory_type)
@@ -275,6 +303,11 @@ def policy_location_transition_blockers(
         ).all()
     )
     blockers: list[str] = []
+    active_rows = [row for row in rows if row.is_active]
+    if desired_type != current_type and active_rows:
+        blockers.append('仍有启用中的正式库位，请先停用空库位后再改变区域用途')
+    if desired_storage != current_storage and active_rows:
+        blockers.append('仍有启用中的正式库位，请先停用空库位后再改变存储形式')
     if desired_type is None:
         if live_lot_types or current_pallet_location_ids:
             blockers.append("仍有库存或实体栈板，不能改为原料/资产/临时周转用途")
@@ -693,90 +726,248 @@ def publish_floor_area_policies(
     floor = warehouse_floor_for_code(db, floor_code)
     if floor is None:
         return []
-    policies = list(
+    if not str(published_revision or "").strip() or len(str(published_revision)) > 64:
+        raise WarehouseAreaActivationError("正式地图修订号无效", status_code=409)
+    areas = list(
         db.scalars(
-            select(WarehouseAreaStoragePolicy)
-            .join(WarehouseArea)
+            select(WarehouseArea)
             .where(WarehouseArea.floor_id == floor.id)
-            .options(selectinload(WarehouseAreaStoragePolicy.area))
+            .options(selectinload(WarehouseArea.storage_policy))
         ).all()
     )
-    features = {
-        str(item.get("id") or ""): item
+    areas_by_code = {area.area_code.upper(): area for area in areas}
+    requested_feature_ids = {
+        str(item.get("id") or "").strip()
         for item in published_features
-        if item.get("feature_kind") == "zone" and item.get("id")
+        if item.get("feature_kind") == "zone" and str(item.get("id") or "").strip()
     }
-    published: list[WarehouseAreaStoragePolicy] = []
-    for policy in policies:
-        area = policy.area
-        route = resolve_area_location_management(
-            db,
-            floor_code=floor.floor_code,
-            area_code=area.area_code,
-        )
-        feature = features.get(policy.map_feature_id)
-        feature_area_code = (
-            str((feature or {}).get("erp_area_code") or "").strip().upper()
-        )
-        feature_inventory_types = list(
-            (feature or {}).get("allowed_inventory_types") or []
-        )
-        feature_storage_layout = str((feature or {}).get("storage_layout") or "")
-        if (
-            feature is None
-            or (feature_area_code and feature_area_code != area.area_code.upper())
-            or (
-                feature_inventory_types
-                and feature_inventory_types != policy_inventory_types(policy)
-            )
-            or (
-                feature_storage_layout
-                and feature_storage_layout != policy.storage_layout
-            )
-        ):
+    policies_by_feature = {
+        policy.map_feature_id: policy
+        for policy in db.scalars(
+            select(WarehouseAreaStoragePolicy)
+            .where(WarehouseAreaStoragePolicy.map_feature_id.in_(requested_feature_ids))
+            .options(selectinload(WarehouseAreaStoragePolicy.area))
+        ).all()
+    }
+    proposals: list[
+        tuple[dict, str, str, list[str], str, WarehouseArea | None,
+              WarehouseAreaStoragePolicy | None]
+    ] = []
+    proposal_area_codes: set[str] = set()
+    proposal_feature_ids: set[str] = set()
+    for feature in published_features:
+        if feature.get("feature_kind") != "zone" or not feature.get("id"):
             continue
-        location_type = location_warehouse_type(policy)
-        transition_blockers = policy_location_transition_blockers(
-            db,
-            floor=floor,
-            area=area,
-            policy=policy,
-        )
-        if transition_blockers:
-            raise WarehouseAreaActivationError(
-                f"{area.area_code} 区" + "；".join(transition_blockers),
-                status_code=409,
+        feature_id = str(feature["id"]).strip()
+        if not feature_id or len(feature_id) > 80:
+            raise WarehouseAreaActivationError("地图区域标识无效", status_code=409)
+        feature_policy = policies_by_feature.get(feature_id)
+        area_code = str(feature.get("erp_area_code") or "").strip().upper()
+        if not area_code:
+            has_partial_json_policy = any(
+                feature.get(key) is not None
+                for key in (
+                    "erp_area_code",
+                    "allowed_inventory_types",
+                    "storage_layout",
+                    "formal_area_name",
+                )
             )
-        if location_type is not None and area.planned_location_count > 0:
-            source_version = route.source_version
-            active_rows = list(
-                db.scalars(
-                    select(WarehouseLocation).where(
-                        WarehouseLocation.warehouse_floor == floor.floor_number,
-                        WarehouseLocation.area_code == area.area_code,
-                        WarehouseLocation.source_version == source_version,
-                        WarehouseLocation.is_active.is_(True),
-                    )
-                ).all()
-            )
-            if len(active_rows) != area.planned_location_count or any(
-                row.placement_status != "placed" for row in active_rows
-            ):
+            if has_partial_json_policy:
                 raise WarehouseAreaActivationError(
-                    f"{area.area_code} 区仍有库位未完成布局，不能发布投入使用",
+                    "地图区域的正式编号与策略不完整",
                     status_code=409,
                 )
+            if feature_policy is None:
+                continue
+            if (
+                feature_policy.status != "published"
+                or feature_policy.area.floor_id != floor.id
+            ):
+                raise WarehouseAreaActivationError(
+                    "地图区域的历史正式绑定不可用于当前楼层",
+                    status_code=409,
+                )
+            feature = {
+                **feature,
+                "erp_area_code": feature_policy.area.area_code,
+                "allowed_inventory_types": policy_inventory_types(feature_policy),
+                "storage_layout": feature_policy.storage_layout,
+                "formal_area_name": feature_policy.area.area_name,
+            }
+            area_code = feature_policy.area.area_code.upper()
+        if area_code in proposal_area_codes or feature_id in proposal_feature_ids:
+            raise WarehouseAreaActivationError(
+                f"{area_code} 区发布草稿存在重复区域或地图标识", status_code=409
+            )
+        proposal_area_codes.add(area_code)
+        proposal_feature_ids.add(feature_id)
+        inventory_types = list(
+            dict.fromkeys(
+                str(value).strip()
+                for value in feature.get("allowed_inventory_types") or []
+                if str(value).strip()
+            )
+        )
+        storage_layout = str(feature.get("storage_layout") or "").strip()
+        if (
+            not inventory_types
+            or any(value not in AREA_POLICY_INVENTORY_USAGES for value in inventory_types)
+            or storage_layout not in {"rack", "pallet_ground", "mixed"}
+        ):
+            raise WarehouseAreaActivationError(
+                f"{area_code} 区发布策略不完整，请返回区域规划补充后重试",
+                status_code=409,
+            )
+        area_name = (
+            str(feature.get("formal_area_name") or "").strip()
+            or str(feature.get("name") or "").strip()
+            or area_code
+        )
+        if len(area_name) > 100:
+            raise WarehouseAreaActivationError(
+                f"{area_code} 区名称过长，请返回区域规划缩短后重试",
+                status_code=409,
+            )
+        area = areas_by_code.get(area_code)
+        policy = area.storage_policy if area is not None else None
+        if feature_policy is not None and (
+            area is None or feature_policy.area_id != area.id
+        ):
+            raise WarehouseAreaActivationError(
+                f"{area_code} 地图区域已绑定其他正式区域", status_code=409
+            )
+        if policy is not None and policy.map_feature_id != feature_id:
+            raise WarehouseAreaActivationError(
+                f"{area_code} 正式区域已绑定其他地图区域", status_code=409
+            )
+        if area is None:
+            orphaned = db.scalar(
+                select(WarehouseLocation.id).where(
+                    WarehouseLocation.warehouse_floor == floor.floor_number,
+                    func.upper(WarehouseLocation.area_code) == area_code,
+                ).limit(1)
+            )
+            if orphaned is not None:
+                raise WarehouseAreaActivationError(
+                    f"{area_code} 区仍有未纳入正式区域台账的历史库位",
+                    status_code=409,
+                )
+        elif policy is None:
+            if formal_area_location_rows(db, floor=floor, area=area):
+                raise WarehouseAreaActivationError(
+                    f"{area_code} 区已有正式库位但尚未建立正式策略",
+                    status_code=409,
+                )
+        else:
+            transition_blockers = policy_location_transition_blockers(
+                db,
+                floor=floor,
+                area=area,
+                policy=policy,
+                requested_inventory_types=inventory_types,
+                requested_storage_layout=storage_layout,
+            )
+            if transition_blockers:
+                raise WarehouseAreaActivationError(
+                    f"{area_code} 区" + "；".join(transition_blockers),
+                    status_code=409,
+                )
+            route = resolve_area_location_management(
+                db,
+                floor_code=floor.floor_code,
+                area_code=area.area_code,
+            )
+            desired_type = location_warehouse_type_for_inventory_types(inventory_types)
+            if desired_type is not None and area.planned_location_count > 0:
+                active_rows = list(
+                    db.scalars(
+                        select(WarehouseLocation).where(
+                            WarehouseLocation.warehouse_floor == floor.floor_number,
+                            func.upper(WarehouseLocation.area_code) == area_code,
+                            WarehouseLocation.source_version == route.source_version,
+                            WarehouseLocation.is_active.is_(True),
+                        )
+                    ).all()
+                )
+                if len(active_rows) != area.planned_location_count or any(
+                    row.placement_status != "placed" for row in active_rows
+                ):
+                    raise WarehouseAreaActivationError(
+                        f"{area_code} 区仍有库位未完成布局，不能发布投入使用",
+                        status_code=409,
+                    )
+        proposals.append(
+            (feature, feature_id, area_code, inventory_types, storage_layout, area, policy)
+        )
+
+    published: list[WarehouseAreaStoragePolicy] = []
+    for feature, feature_id, area_code, inventory_types, storage_layout, area, policy in proposals:
+        area_name = (
+            str(feature.get("formal_area_name") or "").strip()
+            or str(feature.get("name") or "").strip()
+            or area_code
+        )
+        if area is None:
+            area = WarehouseArea(
+                floor_id=floor.id,
+                area_code=area_code,
+                area_name=area_name,
+                planned_location_count=0,
+                planned_pallet_capacity=0,
+                construction_status="layout_building",
+                capacity_review_status="pending",
+                capacity_eligible=False,
+            )
+            db.add(area)
+            db.flush()
+        desired_types_json = json.dumps(
+            inventory_types, ensure_ascii=False, separators=(",", ":")
+        )
+        if policy is None:
+            policy = WarehouseAreaStoragePolicy(
+                area_id=area.id,
+                map_feature_id=feature_id,
+                allowed_inventory_types_json=desired_types_json,
+                storage_layout=storage_layout,
+                status="draft",
+                draft_map_revision=published_revision,
+                version=1,
+                updated_by=operator_id,
+            )
+            db.add(policy)
+            was_persistent = False
+        else:
+            was_persistent = True
+        if (
+            policy.status == "published"
+            and policy.published_map_revision == published_revision
+            and policy.map_feature_id == feature_id
+            and policy_inventory_types(policy) == inventory_types
+            and policy.storage_layout == storage_layout
+            and area.area_name == area_name
+        ):
+            continue
+        location_type = location_warehouse_type_for_inventory_types(inventory_types)
         area_rows = formal_area_location_rows(db, floor=floor, area=area)
         if location_type is None:
             for row in area_rows:
                 row.is_active = False
             area.planned_location_count = 0
         else:
+            storage_type = location_storage_type_for_layout(storage_layout)
             for row in area_rows:
                 row.warehouse_type = location_type
+                row.storage_type = storage_type
+        area.area_name = area_name
+        policy.map_feature_id = feature_id
+        policy.allowed_inventory_types_json = desired_types_json
+        policy.storage_layout = storage_layout
         policy.status = "published"
+        policy.draft_map_revision = None
         policy.published_map_revision = published_revision
-        policy.version += 1
+        if was_persistent:
+            policy.version += 1
         policy.updated_by = operator_id
         area.construction_status = "enabled"
         published.append(policy)

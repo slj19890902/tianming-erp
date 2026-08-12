@@ -877,6 +877,7 @@ def overlay_formal_area_bindings(
     *,
     floor_code: str,
     floor_layout: dict,
+    include_draft: bool = False,
 ) -> dict:
     floor = db.scalar(
         select(WarehouseFloor).where(
@@ -891,25 +892,59 @@ def overlay_formal_area_bindings(
         )
     if floor is None:
         return floor_layout
+    policy_query = (
+        select(WarehouseAreaStoragePolicy)
+        .join(WarehouseArea)
+        .options(selectinload(WarehouseAreaStoragePolicy.area))
+        .where(WarehouseArea.floor_id == floor.id)
+    )
+    if not include_draft:
+        policy_query = policy_query.where(
+            WarehouseAreaStoragePolicy.status == "published"
+        )
     policies = list(
         db.scalars(
-            select(WarehouseAreaStoragePolicy)
-            .join(WarehouseArea)
-            .options(selectinload(WarehouseAreaStoragePolicy.area))
-            .where(WarehouseArea.floor_id == floor.id)
+            policy_query
         ).all()
     )
+    has_draft = bool((floor_layout.get("draft_control") or {}).get("has_draft"))
     by_feature = {policy.map_feature_id: policy for policy in policies}
     features: list[dict] = []
     for raw in floor_layout.get("features") or []:
         feature = dict(raw)
         policy = by_feature.get(str(feature.get("id") or ""))
         if policy is not None:
-            feature["erp_area_code"] = policy.area.area_code
-            feature["allowed_inventory_types"] = json.loads(
-                policy.allowed_inventory_types_json
+            policy_types = json.loads(policy.allowed_inventory_types_json)
+            if include_draft:
+                feature.setdefault("erp_area_code", policy.area.area_code)
+                feature.setdefault("allowed_inventory_types", policy_types)
+                feature.setdefault("storage_layout", policy.storage_layout)
+                feature.setdefault("formal_area_name", policy.area.area_name)
+                feature["formal_binding_status"] = (
+                    "draft" if has_draft else policy.status
+                )
+            else:
+                feature["erp_area_code"] = policy.area.area_code
+                feature["allowed_inventory_types"] = policy_types
+                feature["storage_layout"] = policy.storage_layout
+                feature["formal_binding_status"] = policy.status
+                feature['formal_area_name'] = policy.area.area_name
+            feature['formal_construction_status'] = policy.area.construction_status
+            feature['planned_location_count'] = policy.area.planned_location_count
+            feature['planned_pallet_capacity'] = policy.area.planned_pallet_capacity
+            feature['capacity_review_status'] = policy.area.capacity_review_status
+            feature['capacity_eligible'] = policy.area.capacity_eligible
+            feature['confirmed_pallet_capacity'] = policy.area.confirmed_pallet_capacity
+            feature['capacity_reviewed_by'] = policy.area.capacity_reviewed_by
+            feature['capacity_reviewed_at'] = (
+                policy.area.capacity_reviewed_at.isoformat()
+                if policy.area.capacity_reviewed_at else None
             )
-            feature["storage_layout"] = policy.storage_layout
-            feature["formal_binding_status"] = policy.status
+        elif (
+            include_draft
+            and has_draft
+            and str(feature.get("erp_area_code") or "").strip()
+        ):
+            feature["formal_binding_status"] = "draft"
         features.append(feature)
     return {**floor_layout, "features": features}

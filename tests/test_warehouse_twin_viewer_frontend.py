@@ -182,7 +182,8 @@ def test_p1_47a_uses_typed_map_search_and_one_unified_read_only_entry() -> None:
     assert 'const [mapMode, setMapMode] = useState<WarehouseMapMode>("lookup")' in SOURCE
     assert "查货模式 · 只读" in SOURCE
     assert "P1-47C 独立阶段启用" in SOURCE
-    assert "P1-47B 独立阶段启用" in SOURCE
+    assert "区域规划" in SOURCE
+    assert "P1-47B 独立阶段启用" not in SOURCE
     assert 'mapMode === "move"' in SOURCE
     assert 'mapMode === "planning"' in SOURCE
     assert "warehouseSearchFloorSummaries(current.items)" in SOURCE

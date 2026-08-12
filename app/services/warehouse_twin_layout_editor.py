@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import shutil
 import tempfile
@@ -9,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import sha256
 from pathlib import Path
-from threading import Lock
+from threading import RLock
 from typing import Any, Callable
 from uuid import uuid4
 
@@ -30,7 +31,8 @@ ALLOWED_INVENTORY_TYPES = {
 }
 ALLOWED_STORAGE_LAYOUTS = {"rack", "pallet_ground", "mixed"}
 ALLOWED_ACCESS_SIDES = {"north", "south", "east", "west", "both"}
-_LAYOUT_EDIT_LOCK = Lock()
+_LAYOUT_EDIT_LOCK = RLock()
+WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK = _LAYOUT_EDIT_LOCK
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 TWIN_LAYOUT_PATH = DEFAULT_TWIN_LAYOUT_RUNTIME_PATH
 TWIN_LAYOUT_DRAFT_PATH = _PROJECT_ROOT / "data" / "layout_drafts" / "twin_layout_v1.draft.json"
@@ -60,6 +62,22 @@ class LayoutMutation:
 class LayoutDraftAction:
     value: dict[str, Any]
     applied: bool
+
+
+@dataclass(frozen=True)
+class LayoutDraftSnapshot:
+    existed: bool
+    content: bytes | None
+
+
+@dataclass(frozen=True)
+class LayoutPublishSnapshot:
+    published_target: Path
+    published_existed: bool
+    published_content: bytes | None
+    draft_target: Path
+    draft_existed: bool
+    draft_content: bytes | None
 
 
 @dataclass(frozen=True)
@@ -121,6 +139,105 @@ def _write_document(path: Path, payload: dict[str, Any]) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def snapshot_warehouse_twin_layout_draft(
+    *, draft_path: Path | None = None,
+) -> LayoutDraftSnapshot:
+    target = draft_path or TWIN_LAYOUT_DRAFT_PATH
+    with _LAYOUT_EDIT_LOCK:
+        if not target.is_file():
+            return LayoutDraftSnapshot(existed=False, content=None)
+        return LayoutDraftSnapshot(existed=True, content=target.read_bytes())
+
+
+def restore_warehouse_twin_layout_draft(
+    snapshot: LayoutDraftSnapshot,
+    *, draft_path: Path | None = None,
+) -> None:
+    target = draft_path or TWIN_LAYOUT_DRAFT_PATH
+    with _LAYOUT_EDIT_LOCK:
+        if not snapshot.existed:
+            target.unlink(missing_ok=True)
+            return
+        if snapshot.content is None:
+            raise WarehouseTwinLayoutEditError('地图草稿快照内容缺失')
+        target.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f'.{target.name}.', suffix='.tmp', dir=target.parent
+        )
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, 'wb') as handle:
+                handle.write(snapshot.content)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, target)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
+def snapshot_warehouse_twin_publish_state(
+    *,
+    published_path: Path | None = None,
+    draft_path: Path | None = None,
+) -> LayoutPublishSnapshot:
+    published_target = _published_layout_paths(published_path).target
+    draft_target = draft_path or TWIN_LAYOUT_DRAFT_PATH
+    with _LAYOUT_EDIT_LOCK:
+        return LayoutPublishSnapshot(
+            published_target=published_target,
+            published_existed=published_target.is_file(),
+            published_content=(published_target.read_bytes() if published_target.is_file() else None),
+            draft_target=draft_target,
+            draft_existed=draft_target.is_file(),
+            draft_content=(draft_target.read_bytes() if draft_target.is_file() else None),
+        )
+
+
+def _restore_file_bytes_unlocked(path: Path, *, existed: bool, content: bytes | None) -> None:
+    if not existed:
+        path.unlink(missing_ok=True)
+        return
+    if content is None:
+        raise WarehouseTwinLayoutEditError('地图文件快照内容缺失')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f'.{path.name}.', suffix='.tmp', dir=path.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, 'wb') as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def restore_warehouse_twin_publish_state(
+    snapshot: LayoutPublishSnapshot,
+    *,
+    backup_name: str | None = None,
+    backup_dir: Path | None = None,
+) -> None:
+    with _LAYOUT_EDIT_LOCK:
+        _restore_file_bytes_unlocked(
+            snapshot.published_target,
+            existed=snapshot.published_existed,
+            content=snapshot.published_content,
+        )
+        _restore_file_bytes_unlocked(
+            snapshot.draft_target,
+            existed=snapshot.draft_existed,
+            content=snapshot.draft_content,
+        )
+        normalized_backup_name = Path(str(backup_name or '')).name
+        if normalized_backup_name and normalized_backup_name == str(backup_name):
+            (backup_dir or TWIN_LAYOUT_BACKUP_DIR).joinpath(normalized_backup_name).unlink(
+                missing_ok=True
+            )
+
+
 def _path_sha256(path: Path) -> str:
     if not path.is_file():
         raise WarehouseTwinLayoutEditNotFoundError("正式仓库地图尚未生成")
@@ -162,9 +279,7 @@ def _active_draft_document_unlocked(
             return draft
     if not create:
         return None
-    draft = _new_draft_document(published_path)
-    _write_document(draft_path, draft)
-    return draft
+    return _new_draft_document(published_path)
 
 
 def _mark_draft_changed(document: dict[str, Any]) -> None:
@@ -255,6 +370,21 @@ def _apply_mutation(
         current_revision = str(floor.get("revision") or "")
         if not expected_revision or expected_revision != current_revision:
             raise WarehouseTwinLayoutEditConflictError("布局已被其他操作更新，请刷新后重试")
+        if path is None:
+            meta = document.get("draft_meta") or {}
+            base_floor_revisions = meta.get("base_floor_revisions") or {}
+            changed_other_floors = [
+                code
+                for code, other_floor in (document.get("floors") or {}).items()
+                if code != normalized
+                and isinstance(other_floor, dict)
+                and str(other_floor.get("revision") or "")
+                != str(base_floor_revisions.get(code) or "")
+            ]
+            if changed_other_floors:
+                raise WarehouseTwinLayoutEditConflictError(
+                    "同一地图草稿只能规划一个楼层；请先发布或放弃其他楼层草稿"
+                )
         result = mutate(floor)
         _remember_receipt(
             floor,
@@ -365,8 +495,15 @@ def _feature_area_code(feature: dict[str, Any]) -> str:
     if explicit:
         return explicit
     code = str(feature.get("feature_code") or "").strip().upper()
-    marker = "ZONE-3F-ERP-"
-    return code[len(marker):] if code.startswith(marker) else code.replace("ZONE-", "", 1)
+    floor_code = str(feature.get("floor_code") or "").strip().upper()
+    for marker in (
+        f"ZONE-{floor_code}-ERP-" if floor_code else "",
+        f"ZONE-{floor_code}-" if floor_code else "",
+        "ZONE-",
+    ):
+        if marker and code.startswith(marker):
+            return code[len(marker):]
+    return code
 
 
 def _next_rack_code(floor: dict[str, Any], area_code: str) -> str:
@@ -501,6 +638,7 @@ def update_warehouse_twin_zone_policy(
     allowed_inventory_types: list[str],
     storage_layout: str,
     erp_area_code: str | None = None,
+    area_name: str | None = None,
     path: Path | None = None,
 ) -> LayoutMutation:
     normalized_types = list(dict.fromkeys(str(value).strip() for value in allowed_inventory_types))
@@ -509,6 +647,7 @@ def update_warehouse_twin_zone_policy(
     if storage_layout not in ALLOWED_STORAGE_LAYOUTS:
         raise WarehouseTwinLayoutEditError("区域展示形式必须是货架、栈板地堆或混合")
     normalized_area_code = str(erp_area_code or "").strip().upper() or None
+    normalized_area_name = str(area_name or "").strip() or None
     if normalized_area_code is not None and len(normalized_area_code) > 30:
         raise WarehouseTwinLayoutEditError("正式区域编号最多 30 个字符")
 
@@ -537,10 +676,12 @@ def update_warehouse_twin_zone_policy(
                     if str(item.get("erp_area_code") or "").strip()
                 }
             )
+        if normalized_area_name is not None:
+            feature["formal_area_name"] = normalized_area_name
         feature["version"] = int(feature.get("version") or 1) + 1
         return dict(feature)
 
-    return _apply_mutation(
+    mutation = _apply_mutation(
         floor_code,
         expected_revision=expected_revision,
         operation_key=operation_key,
@@ -548,6 +689,124 @@ def update_warehouse_twin_zone_policy(
         mutate=mutate,
         path=path,
     )
+    if not mutation.applied:
+        same_types = set(mutation.value.get('allowed_inventory_types') or []) == set(normalized_types)
+        same_layout = mutation.value.get('storage_layout') == storage_layout
+        same_area = normalized_area_code is None or mutation.value.get('erp_area_code') == normalized_area_code
+        same_name = normalized_area_name is None or mutation.value.get('formal_area_name') == normalized_area_name
+        if not (same_types and same_layout and same_area and same_name):
+            raise WarehouseTwinLayoutEditConflictError('该操作键已用于不同的区域策略')
+    return mutation
+
+
+def _normalize_zone_points(points: list[list[float]]) -> list[list[float]]:
+    if len(points) < 3 or len(points) > 64:
+        raise WarehouseTwinLayoutEditError('区域边界点数量无效')
+    normalized: list[list[float]] = []
+    for point in points:
+        if not isinstance(point, (list, tuple)) or len(point) != 2:
+            raise WarehouseTwinLayoutEditError('区域边界点必须是二维坐标')
+        try:
+            x_mm, y_mm = float(point[0]), float(point[1])
+        except (TypeError, ValueError, OverflowError) as error:
+            raise WarehouseTwinLayoutEditError('区域边界坐标必须是数值') from error
+        if not math.isfinite(x_mm) or not math.isfinite(y_mm):
+            raise WarehouseTwinLayoutEditError('区域边界坐标必须是有限数值')
+        if abs(x_mm) > 10_000_000 or abs(y_mm) > 10_000_000:
+            raise WarehouseTwinLayoutEditError('区域边界坐标超出允许范围')
+        normalized.append([round(x_mm, 3), round(y_mm, 3)])
+    if len({tuple(point) for point in normalized}) != len(normalized):
+        raise WarehouseTwinLayoutEditError('区域边界点不能重复')
+    area_mm2 = abs(sum(
+        normalized[index][0] * normalized[(index + 1) % len(normalized)][1]
+        - normalized[(index + 1) % len(normalized)][0] * normalized[index][1]
+        for index in range(len(normalized))
+    )) / 2
+    if area_mm2 <= 0:
+        raise WarehouseTwinLayoutEditError('区域边界必须形成有效面积')
+    return normalized
+
+
+def _zone_area_mm2(points: list[list[float]]) -> float:
+    return round(abs(sum(
+        points[index][0] * points[(index + 1) % len(points)][1]
+        - points[(index + 1) % len(points)][0] * points[index][1]
+        for index in range(len(points))
+    )) / 2, 3)
+
+
+def _segments_intersect(a: list[float], b: list[float], c: list[float], d: list[float]) -> bool:
+    def cross(p: list[float], q: list[float], r: list[float]) -> float:
+        return (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+    def on_segment(p: list[float], q: list[float], r: list[float]) -> bool:
+        return min(p[0], r[0]) <= q[0] <= max(p[0], r[0]) and min(p[1], r[1]) <= q[1] <= max(p[1], r[1])
+    values = (cross(a, b, c), cross(a, b, d), cross(c, d, a), cross(c, d, b))
+    if values[0] * values[1] < 0 and values[2] * values[3] < 0:
+        return True
+    return ((values[0] == 0 and on_segment(a, c, b))
+            or (values[1] == 0 and on_segment(a, d, b))
+            or (values[2] == 0 and on_segment(c, a, d))
+            or (values[3] == 0 and on_segment(c, b, d)))
+
+
+def _reject_self_intersection(points: list[list[float]]) -> None:
+    count = len(points)
+    for left in range(count):
+        for right in range(left + 1, count):
+            if right in {left, left + 1} or (left == 0 and right == count - 1):
+                continue
+            if _segments_intersect(points[left], points[(left + 1) % count], points[right], points[(right + 1) % count]):
+                raise WarehouseTwinLayoutEditError('区域边界不能自相交')
+
+
+def update_warehouse_twin_zone_geometry(
+    floor_code: str,
+    feature_id: str,
+    *,
+    expected_revision: str,
+    expected_version: int,
+    operation_key: str,
+    points: list[list[float]],
+    path: Path | None = None,
+) -> LayoutMutation:
+    normalized_points = _normalize_zone_points(points)
+    _reject_self_intersection(normalized_points)
+
+    def mutate(floor: dict[str, Any]) -> dict[str, Any]:
+        feature = _feature(floor, feature_id)
+        if feature.get('feature_kind') != 'zone':
+            raise WarehouseTwinLayoutEditError('只有仓储区域可以修改实测边界')
+        _ensure_version(feature, expected_version, '区域')
+        if feature.get('is_locked'):
+            raise WarehouseTwinLayoutEditConflictError('区域已确认并锁定，必须先解除锁定')
+        bounds = floor.get('bounds_mm') or {}
+        if not all(key in bounds for key in ('min_x', 'min_y', 'max_x', 'max_y')):
+            raise WarehouseTwinLayoutEditError('楼层实测边界不完整，不能修改区域')
+        if any(
+            point[0] < float(bounds.get('min_x', point[0]))
+            or point[0] > float(bounds.get('max_x', point[0]))
+            or point[1] < float(bounds.get('min_y', point[1]))
+            or point[1] > float(bounds.get('max_y', point[1]))
+            for point in normalized_points
+        ):
+            raise WarehouseTwinLayoutEditError('区域边界不能超出本楼层实测地图范围')
+        feature['points'] = normalized_points
+        feature['area_mm2'] = _zone_area_mm2(normalized_points)
+        feature['status'] = 'candidate'
+        feature['version'] = int(feature.get('version') or 1) + 1
+        return dict(feature)
+
+    mutation = _apply_mutation(
+        floor_code,
+        expected_revision=expected_revision,
+        operation_key=operation_key,
+        action='zone.geometry.update',
+        mutate=mutate,
+        path=path,
+    )
+    if not mutation.applied and mutation.value.get('points') != normalized_points:
+        raise WarehouseTwinLayoutEditConflictError('该操作键已用于不同的区域边界')
+    return mutation
 
 
 def _duplicate_values(items: list[dict[str, Any]], key: str) -> list[str]:
@@ -686,6 +945,19 @@ def load_warehouse_twin_layout_draft(
         }
 
 
+def load_effective_warehouse_twin_floor_for_edit(
+    floor_code: str,
+    *,
+    published_path: Path | None = None,
+    draft_path: Path | None = None,
+) -> dict[str, Any]:
+    return load_warehouse_twin_layout_draft(
+        floor_code,
+        published_path=published_path,
+        draft_path=draft_path,
+    )
+
+
 def validate_warehouse_twin_layout_draft(
     floor_code: str,
     *,
@@ -786,6 +1058,18 @@ def publish_warehouse_twin_layout_draft(
         if str(draft_floor.get("revision") or "") != str(expected_draft_revision or ""):
             raise WarehouseTwinLayoutEditConflictError("布局草稿已更新，请重新校验后发布")
         meta = draft["draft_meta"]
+        base_floor_revisions = meta.get("base_floor_revisions") or {}
+        dirty_floors = [
+            code
+            for code, item in draft["floors"].items()
+            if isinstance(item, dict)
+            and str(item.get("revision") or "")
+            != str(base_floor_revisions.get(code) or "")
+        ]
+        if dirty_floors != [normalized]:
+            raise WarehouseTwinLayoutEditConflictError(
+                "每次只能发布一个楼层的地图草稿；请刷新并重新核对草稿范围"
+            )
         validated_revisions = meta.get("validated_floor_revisions") or {}
         current_revisions = {
             code: str(item.get("revision") or "")
@@ -813,6 +1097,7 @@ def publish_warehouse_twin_layout_draft(
 
         candidate = deepcopy(draft)
         candidate.pop("draft_meta", None)
+        draft_before_publish = draft_target.read_bytes()
         try:
             _write_document(published_target, candidate)
             written = _read_document(published_target)
@@ -821,6 +1106,23 @@ def publish_warehouse_twin_layout_draft(
                 raise WarehouseTwinLayoutEditError("运行地图发布后内容校验失败")
             if published_source != published_target and _path_sha256(published_source) != old_sha256:
                 raise WarehouseTwinLayoutEditError("静态地图基线发生变化，已停止发布")
+            published_sha256 = _path_sha256(published_target)
+            result = {
+                "status": "published",
+                "floor_code": normalized,
+                "published_revision": str(draft_floor.get("revision") or ""),
+                "published_sha256": published_sha256,
+                "backup_name": backup_path.name,
+                "backup_sha256": old_sha256,
+                "published_storage": "runtime",
+                "warnings": warnings,
+                "inventory_changed": False,
+                "published_at": _utc_iso(),
+            }
+            meta["status"] = "published"
+            meta["published_at"] = result["published_at"]
+            meta["last_publish"] = {"operation_key": normalized_key, "result": result}
+            _write_document(draft_target, draft)
         except Exception as error:
             try:
                 if published_source == published_target:
@@ -829,6 +1131,12 @@ def publish_warehouse_twin_layout_draft(
                         raise WarehouseTwinLayoutEditError("运行地图发布失败且备份恢复校验失败")
                 else:
                     published_target.unlink(missing_ok=True)
+                _restore_file_bytes_unlocked(
+                    draft_target,
+                    existed=True,
+                    content=draft_before_publish,
+                )
+                backup_path.unlink(missing_ok=True)
             except Exception as restore_error:
                 raise WarehouseTwinLayoutEditError(
                     "运行地图发布失败且自动恢复失败，请停止编辑并人工恢复备份"
@@ -836,23 +1144,6 @@ def publish_warehouse_twin_layout_draft(
             if isinstance(error, WarehouseTwinLayoutEditError):
                 raise
             raise WarehouseTwinLayoutEditError("运行地图发布后校验失败，已恢复发布前版本") from error
-        published_sha256 = _path_sha256(published_target)
-        result = {
-            "status": "published",
-            "floor_code": normalized,
-            "published_revision": str(draft_floor.get("revision") or ""),
-            "published_sha256": published_sha256,
-            "backup_name": backup_path.name,
-            "backup_sha256": old_sha256,
-            "published_storage": "runtime",
-            "warnings": warnings,
-            "inventory_changed": False,
-            "published_at": _utc_iso(),
-        }
-        meta["status"] = "published"
-        meta["published_at"] = result["published_at"]
-        meta["last_publish"] = {"operation_key": normalized_key, "result": result}
-        _write_document(draft_target, draft)
         return LayoutDraftAction(value=result, applied=True)
 
 

@@ -52,6 +52,7 @@ interface Props {
   focusTarget?: CanvasFocusTarget | null;
   palletEditingOnly?: boolean;
   rackEditingEnabled?: boolean;
+  featureEditingEnabled?: boolean;
   allowPalletSelection?: boolean;
   palletSnapEnabled: boolean;
   palletSnapThresholdMm: number;
@@ -358,6 +359,7 @@ export function EditorCanvas({
   focusTarget = null,
   palletEditingOnly = false,
   rackEditingEnabled = false,
+  featureEditingEnabled = true,
   allowPalletSelection = false,
   palletSnapEnabled,
   palletSnapThresholdMm,
@@ -691,7 +693,7 @@ export function EditorCanvas({
       group.userData = {
         entityKind: "feature",
         entityId: feature.id,
-        draggable: !readOnly && !palletEditingOnly && editorFeatureInteraction.draggable
+        draggable: !readOnly && featureEditingEnabled && feature.feature_kind === 'zone' && editorFeatureInteraction.draggable
       };
       if (feature.feature_kind === "structure") {
         for (let index = 0; index < feature.points.length - 1; index += 1) {
@@ -1406,7 +1408,7 @@ export function EditorCanvas({
       });
       renderer.dispose();
     };
-  }, [layout, assets, viewMode, cameraPreset, viewResetToken, layers, referenceLayout, referenceOverlay, productionProjections, palletEditingOnly, rackEditingEnabled, allowPalletSelection, palletSnapEnabled, palletSnapThresholdMm, drawMode, drawPoints, measureMode, measurePoints, readOnly, visualTheme]);
+  }, [layout, assets, viewMode, cameraPreset, viewResetToken, layers, referenceLayout, referenceOverlay, productionProjections, palletEditingOnly, rackEditingEnabled, featureEditingEnabled, allowPalletSelection, palletSnapEnabled, palletSnapThresholdMm, drawMode, drawPoints, measureMode, measurePoints, readOnly, visualTheme]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;

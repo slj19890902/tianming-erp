@@ -14,32 +14,43 @@ WAREHOUSE = (ROOT / "static" / "warehouse.html").read_text(encoding="utf-8")
 MOBILE = (ROOT / "static" / "mobile_mold_lookup.html").read_text(encoding="utf-8")
 
 
-def test_p1_24a_exposes_90x60_orientation_and_custom_preview() -> None:
-    assert '<option value="90x60">90 × 60 mm</option>' in LABEL
-    assert '<option value="custom">自定义尺寸</option>' in LABEL
-    assert '<option value="landscape">横向</option>' in LABEL
-    assert '<option value="portrait">竖向</option>' in LABEL
-    assert "--paper-width:90mm" in LABEL
-    assert "--paper-height:60mm" in LABEL
-    assert '@page{size:${width}mm ${height}mm;margin:0}' in LABEL
+def test_mold_label_is_fixed_to_real_40x30_paper() -> None:
+    assert "40 × 30 mm（固定）" in LABEL
+    assert "--paper-width:40mm" in LABEL
+    assert "--paper-height:30mm" in LABEL
+    assert "@page{size:40mm 30mm;margin:0}" in LABEL
+    assert 'id="paperPreset"' not in LABEL
+    assert 'id="orientation"' not in LABEL
+    assert 'id="customWidth"' not in LABEL
+    assert 'id="customHeight"' not in LABEL
     assert "window.print()" in LABEL
-    assert "90×60 标签样式" in WAREHOUSE
+    assert "40×30 标签样式" in WAREHOUSE
+    assert "90×60 标签样式" not in WAREHOUSE
     assert "/mold-label.html?prototype=1" in WAREHOUSE
 
 
-def test_p1_24a_uses_board_size_and_honest_overflow_states() -> None:
-    assert "row.report_specification" in LABEL
+def test_mold_label_keeps_only_complete_on_label_identification_fields() -> None:
+    assert "customer_code" in LABEL
+    assert "product_code" in LABEL
+    assert "product_name" in LABEL
+    assert "report_specification" in LABEL
+    assert "shortLocation" in LABEL
+    assert "模具号、客户、存货、位置和首款产品片料" in LABEL
     assert "片料待完善" in LABEL
-    assert "共 ${total} 款，扫码查看全部" in LABEL
-    assert "已停用" in LABEL
+    assert "另 ${total-1} 款" in LABEL
+    assert "未绑定常用箱 / 存货编码" in LABEL
+    assert "停用" in LABEL
     assert "lookupUrl" not in LABEL
     assert "客户名称" not in LABEL
     assert "客户价格" not in LABEL
-    assert "匿名占位码，不可扫码" in LABEL
+    assert "扫码查模具" not in LABEL
+    assert "qr_data_url" not in LABEL
+    assert 'split("-")[0]' not in LABEL
+    assert 'textClass(moldCode,12,16)' in LABEL
+    assert "topline.with-status" in LABEL
     for marker in (
-        "单款模具",
-        "一模多款",
-        "多片料尺寸",
+        "JSD-61494052",
+        "SME-CPN087075",
         "资料待完善",
         "已停用模具",
     ):
@@ -50,7 +61,7 @@ def test_p1_24a_keeps_authentication_and_role_based_return_links() -> None:
     assert 'prototypeMode?"/api/auth/me"' in LABEL
     assert "onUnauthorized:loginNext" in LABEL
     assert "/api/warehouse/molds/${id}/label" in LABEL
-    assert "正式标签二维码仍进入登录后的模具查询" in LABEL
+    assert "完整资料仍在 ERP 模具档案查询" in LABEL
     assert 'permissions.includes("warehouse.view")' in MOBILE
     assert 'permissions.includes("orders.view")' in MOBILE
     assert 'href="/warehouse.html"' in MOBILE

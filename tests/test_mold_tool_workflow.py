@@ -713,6 +713,7 @@ def test_workshop_can_open_structured_location_label_and_qr(
             "http://192.168.3.80:18045/mobile/mold-lookup?mold=MJ-MOBILE-001"
         )
         assert data["qr_data_url"].startswith("data:image/png;base64,")
+        assert data["products"][0]["customer_code"] == "MOLD-C"
         assert data["products"][0]["product_code"] == "MOBILE-P001"
 
 
@@ -1733,6 +1734,8 @@ def test_batch_mold_label_frontend_has_selection_sort_and_copy_controls() -> Non
     assert 'id="batchSort"' in label
     assert 'id="copyCount"' in label
     assert 'value="location"' in label
+    assert "@page{size:40mm 30mm;margin:0}" in label
+    assert "40×30 标签样式" in warehouse
     assert "一次最多打印 100 件模具" in Path(
         root / "app" / "api" / "warehouse.py"
     ).read_text(encoding="utf-8")

@@ -64,7 +64,8 @@ def test_mold_label_keeps_formal_and_prototype_sources() -> None:
     assert "sourceRows=prototypeRows()" in LABEL
     assert "sourceRows=batchMode?(data.items||[]):[data]" in LABEL
     assert "打印匿名测试标签" in LABEL
-    assert "正式标签二维码仍进入登录后的模具查询" in LABEL
+    assert "40×30 mm 匿名样例" in LABEL
+    assert "完整资料仍在 ERP 模具档案查询" in LABEL
 
 
 def test_shared_recovery_redirects_unauthorized_and_labels_render_failures(

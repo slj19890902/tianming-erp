@@ -8389,6 +8389,7 @@ def _mold_tool_dict(
             {
                 "id": product.id,
                 "customer_id": product.customer_id,
+                "customer_code": product.customer.customer_code if product.customer else None,
                 "customer_name": product.customer.name if product.customer else None,
                 "product_code": product.product_code,
                 "product_name": product.product_name,

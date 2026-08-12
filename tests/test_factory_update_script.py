@@ -50,19 +50,23 @@ def test_factory_update_reports_current_release_version() -> None:
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
     assert any(
-        "本次更新｜" in item and "40×30 mm" in item and "实际大小" not in item
+        "本次更新｜" in item and "统一只读查货" in item and "真实库存" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "客户简写" in item and "片料尺寸" in item
+        "本次更新｜" in item and "详情" in item and "封存待复用" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "超长模具编号" in item and "停用章" in item
+        "本次更新｜" in item and "系统栈板" in item and "A1" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "去除二维码" in item and "无数据库迁移" in item
+        "本次更新｜" in item and "手机来料" in item and "结合方式" in item
+        for item in current_release
+    )
+    assert any(
+        "本次更新｜" in item and "外购包材" in item and "不自动收料" in item
         for item in current_release
     )
     assert any(item.startswith("v0.22.94：本次更新｜") for item in APP_CHANGELOG)

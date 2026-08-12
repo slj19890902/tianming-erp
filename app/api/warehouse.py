@@ -196,6 +196,15 @@ from app.services.warehouse_movement_batch import (
     movement_batch_replay,
     movement_batch_request_hash,
 )
+from app.services.warehouse_pallet_merge_batch import (
+    PALLET_MERGE_BATCH_ACTION_CODE,
+    PALLET_MERGE_BATCH_LOCK,
+    PalletMergeBatchError,
+    PalletMergeBatchSource,
+    execute_pallet_merge_batch,
+    pallet_merge_batch_replay,
+    pallet_merge_batch_request_hash,
+)
 from app.services.inventory_insights import build_inventory_insights
 from app.services.warehouse_twin_dashboard import (
     build_inventory_code_search_results,
@@ -674,6 +683,43 @@ class Floor3PalletMergePayload(BaseModel):
         if not text:
             raise ValueError("幂等键不能为空")
         return text
+
+
+class PalletMergeBatchSourcePayload(BaseModel):
+    client_item_id: str = Field(min_length=1, max_length=80)
+    pallet_id: int = Field(gt=0)
+    expected_version: int = Field(gt=0)
+
+    @field_validator("client_item_id")
+    @classmethod
+    def strip_pallet_merge_client_item_id(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("合并草稿来源标识不能为空")
+        return text
+
+
+class PalletMergeBatchPayload(BaseModel):
+    idempotency_key: str = Field(min_length=1, max_length=64)
+    confirmed: Literal[True]
+    target_pallet_id: int = Field(gt=0)
+    expected_target_version: int = Field(gt=0)
+    sources: list[PalletMergeBatchSourcePayload] = Field(min_length=1, max_length=19)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def strip_pallet_merge_batch_key(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("幂等键不能为空")
+        return text
+
+    @model_validator(mode="after")
+    def reject_invalid_pallet_merge_selection(self) -> "PalletMergeBatchPayload":
+        client_ids = [source.client_item_id for source in self.sources]
+        if len(client_ids) != len(set(client_ids)):
+            raise ValueError("合并草稿来源标识不能重复")
+        return self
 
 
 class TwinFinishedInboundPayload(BaseModel):
@@ -5284,6 +5330,123 @@ def move_floor3_pallet(
     except IntegrityError as error:
         db.rollback()
         raise HTTPException(status_code=409, detail="目标货位已被占用，请刷新后重试") from error
+
+
+@router.post("/pallets/merge-batches")
+def merge_warehouse_pallet_batch(
+    payload: PalletMergeBatchPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    """Merge the selected system pallets in one atomic stock transaction."""
+
+    sources = [
+        PalletMergeBatchSource(
+            client_item_id=source.client_item_id,
+            pallet_id=source.pallet_id,
+            expected_version=source.expected_version,
+        )
+        for source in payload.sources
+    ]
+    request_hash = pallet_merge_batch_request_hash(
+        batch_id=payload.idempotency_key,
+        target_pallet_id=payload.target_pallet_id,
+        expected_target_version=payload.expected_target_version,
+        sources=sources,
+    )
+    with PALLET_MERGE_BATCH_LOCK:
+        try:
+            replay = pallet_merge_batch_replay(
+                db,
+                batch_id=payload.idempotency_key,
+                request_hash=request_hash,
+                actor_user_id=user.id,
+            )
+
+            # Scope checks intentionally precede strict inventory validation so
+            # a scoped account cannot probe another customer's pallet state.
+            # They also run before returning an exact replay: actor ownership
+            # does not replace the user's current customer authorization.
+            selected_ids = [
+                payload.target_pallet_id,
+                *(source.pallet_id for source in payload.sources),
+            ]
+            selected_pallets = list(
+                db.scalars(
+                    _floor3_pallet_query().where(
+                        InventoryPallet.id.in_(selected_ids)
+                    )
+                ).all()
+            )
+            by_id = {int(pallet.id): pallet for pallet in selected_pallets}
+            for pallet_id in selected_ids:
+                pallet = by_id.get(int(pallet_id))
+                if pallet is None:
+                    raise HTTPException(status_code=404, detail="栈板不存在")
+                _require_floor3_pallet_customer_access(db, pallet, user)
+
+            if replay is not None:
+                require_customer_access(int(replay["customer_id"]), user, db)
+                return {
+                    **replay,
+                    "idempotent_replay": True,
+                    "request_hash": request_hash,
+                }
+
+            result = execute_pallet_merge_batch(
+                db,
+                batch_id=payload.idempotency_key,
+                target_pallet_id=payload.target_pallet_id,
+                expected_target_version=payload.expected_target_version,
+                sources=sources,
+                operator_id=user.id,
+            )
+            audit_result = {**result, "request_hash": request_hash}
+            append_audit_event(
+                db,
+                request=request,
+                actor=user,
+                event_category="business",
+                result="success",
+                source="web",
+                module_code="warehouse",
+                action_code=PALLET_MERGE_BATCH_ACTION_CODE,
+                legacy_action="MERGE_BATCH",
+                resource="warehouse/pallets/merge-batches",
+                entity_type="inventory_pallet_merge_batch",
+                entity_id=payload.target_pallet_id,
+                object_ref=payload.idempotency_key,
+                batch_id=payload.idempotency_key,
+                description="多块系统栈板已一次确认并原子合并",
+                details={
+                    "request_hash": request_hash,
+                    "result": audit_result,
+                },
+            )
+            db.commit()
+            return {
+                **audit_result,
+                "idempotent_replay": False,
+            }
+        except PalletMergeBatchError as error:
+            db.rollback()
+            raise HTTPException(
+                status_code=error.status_code,
+                detail=str(error),
+            ) from error
+        except IntegrityError as error:
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="栈板、批次、版本或幂等记录已被其他请求更新，请刷新后重试",
+            ) from error
+        except HTTPException:
+            db.rollback()
+            raise
+        except Exception:
+            db.rollback()
+            raise
 
 
 @router.post("/pallets/{pallet_id}/merge-all")

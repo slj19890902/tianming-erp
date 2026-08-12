@@ -984,7 +984,7 @@ def test_each_dispatch_pallet_moves_independently_and_preserves_delivery_facts(
         )
 
 
-def test_p1_49b_uses_one_move_mode_and_does_not_mount_merge_or_count_controls() -> None:
+def test_p1_49b_move_mode_now_mounts_p1_49c_merge_without_enabling_count_controls() -> None:
     source = FRONTEND.read_text(encoding="utf-8")
     inventory_source = WAREHOUSE_INVENTORY.read_text(encoding="utf-8")
     assert 'value.permissions.includes("warehouse.execute")' in source
@@ -1000,9 +1000,9 @@ def test_p1_49b_uses_one_move_mode_and_does_not_mount_merge_or_count_controls() 
     assert "pallet_move" in source
     assert "楼层" in source and "区域" in source and "具体货位" in source
     assert "const P1_47D_ENABLED = false;" in source
-    assert "const P1_49C_ENABLED = true;" not in source
+    assert "const P1_49C_ENABLED = true;" in source
     assert "selectedMergePalletIds" not in source
-    assert '"/api/warehouse/pallets/merge-batches"' not in source
+    assert source.count('"/api/warehouse/pallets/merge-batches"') == 1
 
 
 def test_p1_49b_fixture_never_uses_the_formal_database(dispatch_pallet_app) -> None:

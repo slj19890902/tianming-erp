@@ -8,7 +8,7 @@ import re
 from uuid import uuid4
 
 from sqlalchemy import delete, func, or_, select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.orm.attributes import set_committed_value
 
@@ -56,6 +56,14 @@ class Floor3MergeResult:
     target_movement: InventoryLocationMovement
     moved_item_count: int
     replayed: bool
+
+
+@dataclass(frozen=True)
+class PalletMergeProfile:
+    customer_id: int
+    inventory_type: str
+    unit: str
+    lot_status: str
 
 
 @dataclass(frozen=True)
@@ -116,17 +124,51 @@ def _location(db: Session, location_id: int) -> WarehouseLocation:
 def _operational_pallet_location(
     db: Session,
     location_id: int,
+    *,
+    require_published: bool = False,
+    required_inventory_type: str | None = None,
 ) -> WarehouseLocation:
     """Resolve any published finished-goods ground slot used by the map UI."""
 
     row = db.get(WarehouseLocation, location_id)
     if row is None:
         raise Floor3LocationError("货位不存在", status_code=404)
+    is_direct_dispatch = bool(
+        row.location_code == "F1-DISPATCH-01"
+        and row.source_version == "P1-25C"
+        and row.warehouse_floor == 1
+        and str(row.area_code or "").strip().upper() == "DISPATCH"
+        and row.warehouse_type in {"finished", "shared"}
+        and row.storage_type == "temporary_aisle"
+        and row.is_active
+        and (row.placement_status or "placed") == "placed"
+        and required_inventory_type in {None, "finished"}
+    )
+    if require_published and is_direct_dispatch:
+        dispatch_issue = operational_location_issue(
+            db,
+            row,
+            warehouse_types={"finished", "shared"},
+            pallet_storage_only=True,
+        )
+        if dispatch_issue:
+            raise Floor3LocationError(
+                f"一楼待送共享位置不可用：{dispatch_issue}",
+                status_code=409,
+            )
+        return row
     issue = operational_location_issue(
         db,
         row,
-        warehouse_types={"finished", "shared"},
+        warehouse_types={required_inventory_type or "finished", "shared"},
         pallet_storage_only=True,
+        require_published=require_published,
+        require_map_geometry=require_published,
+        required_inventory_type=required_inventory_type,
+        # A merge does not add a pallet to the area; it always removes at least
+        # one source pallet.  Capacity therefore must not reject an otherwise
+        # valid target simply because the area is already at its reviewed cap.
+        capacity_source_location_id=row.id,
     )
     if issue:
         raise Floor3LocationError(f"目标货位不可用：{issue}", status_code=409)
@@ -145,7 +187,10 @@ def _pallet(
         .options(
             selectinload(InventoryPallet.items).selectinload(
                 InventoryPalletItem.inventory_lot
-            )
+            ).selectinload(InventoryLot.finished_detail),
+            selectinload(InventoryPallet.items).selectinload(
+                InventoryPalletItem.product
+            ),
         )
         .where(InventoryPallet.id == pallet_id)
     )
@@ -1486,6 +1531,230 @@ def _pallet_merge_signature(
     return int(next(iter(customer_ids))), next(iter(inventory_types)), items
 
 
+def strict_pallet_merge_profile(pallet: InventoryPallet) -> PalletMergeProfile:
+    """Return the compatibility key for one fully authoritative pallet.
+
+    P1-49C deliberately keeps every lot distinct.  This profile only proves
+    that changing the container is safe; it never combines quantity or lot
+    history.
+    """
+
+    if (
+        pallet.status != "active"
+        or not pallet.is_current
+        or pallet.location_id is None
+    ):
+        raise Floor3LocationError("栈板当前不是可合并的在用系统栈板", status_code=409)
+    items = _remaining_pallet_items(pallet)
+    if not items or len(items) != len(pallet.items):
+        raise Floor3LocationError("栈板含空明细或已失效明细，不能合并", status_code=409)
+
+    customer_ids: set[int] = set()
+    inventory_types: set[str] = set()
+    units: set[str] = set()
+    lot_statuses: set[str] = set()
+    for item in items:
+        lot = item.inventory_lot
+        detail = lot.finished_detail if lot is not None else None
+        product = item.product
+        if (
+            item.item_type != "finished"
+            or item.match_status != "matched"
+            or item.inventory_lot_id is None
+            or lot is None
+            or lot.inventory_type != "finished"
+            or lot.status not in {"active", "frozen"}
+            or detail is None
+            or product is None
+            or lot.warehouse_location_id != pallet.location_id
+            or int(lot.quantity_available or 0) + int(lot.quantity_reserved or 0) <= 0
+            or int(lot.quantity_damaged or 0) > 0
+            or int(lot.quantity_scrapped or 0) > 0
+            or item.customer_id is None
+            or item.product_id is None
+            or item.customer_id != detail.owner_customer_id
+            or item.product_id != detail.product_id
+            or product.customer_id != detail.owner_customer_id
+            or item.unit != lot.unit
+        ):
+            raise Floor3LocationError(
+                "整板合并只允许客户、产品、位置与质量状态一致的正式成品批次",
+                status_code=409,
+            )
+        customer_ids.add(int(item.customer_id))
+        inventory_types.add(str(lot.inventory_type))
+        units.add(str(lot.unit))
+        lot_statuses.add(str(lot.status))
+
+    if len(customer_ids) != 1:
+        raise Floor3LocationError("栈板客户归属不唯一，不能合并", status_code=409)
+    if len(inventory_types) != 1:
+        raise Floor3LocationError("栈板库存类型不唯一，不能合并", status_code=409)
+    if len(units) != 1:
+        raise Floor3LocationError("栈板原生单位不唯一，不能合并", status_code=409)
+    if len(lot_statuses) != 1:
+        raise Floor3LocationError("栈板质量状态不一致，不能合并", status_code=409)
+    return PalletMergeProfile(
+        customer_id=next(iter(customer_ids)),
+        inventory_type=next(iter(inventory_types)),
+        unit=next(iter(units)),
+        lot_status=next(iter(lot_statuses)),
+    )
+
+
+def lock_pallet_inventory_lots(
+    db: Session,
+    pallet_ids: list[int] | tuple[int, ...],
+    *,
+    expected_pallets: dict[int, tuple[int, int]],
+    expected_lots: dict[int, tuple],
+) -> list[InventoryLot]:
+    """Claim every authoritative lot before a deterministic pallet write.
+
+    PostgreSQL honours ``FOR UPDATE`` here, while SQLite does not.  The
+    version-preserving CAS update is therefore intentional: on SQLite the
+    first statement acquires the database write lock, and on every backend it
+    proves that no reservation/release changed the lot after preflight.
+    """
+
+    normalized = sorted({int(value) for value in pallet_ids})
+    if not normalized:
+        return []
+    try:
+        for pallet_id in sorted(expected_pallets):
+            expected_version, expected_location_id = expected_pallets[pallet_id]
+            claimed = db.execute(
+                update(InventoryPallet)
+                .where(
+                    InventoryPallet.id == pallet_id,
+                    InventoryPallet.version == expected_version,
+                    InventoryPallet.status == "active",
+                    InventoryPallet.is_current.is_(True),
+                    InventoryPallet.location_id == expected_location_id,
+                )
+                .values(
+                    version=InventoryPallet.version,
+                    updated_at=InventoryPallet.updated_at,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if claimed.rowcount != 1:
+                raise Floor3LocationError(
+                    "栈板在合并预检期间发生变化，请刷新后重试",
+                    status_code=409,
+                )
+
+        for lot_id in sorted(expected_lots):
+            (
+                expected_version,
+                expected_location_id,
+                expected_inventory_type,
+                expected_status,
+                expected_unit,
+                expected_available,
+                expected_reserved,
+                expected_consumed,
+                expected_damaged,
+                expected_scrapped,
+                expected_last_movement_at,
+            ) = expected_lots[lot_id]
+            claimed = db.execute(
+                update(InventoryLot)
+                .where(
+                    InventoryLot.id == lot_id,
+                    InventoryLot.version == expected_version,
+                    InventoryLot.warehouse_location_id == expected_location_id,
+                    InventoryLot.inventory_type == expected_inventory_type,
+                    InventoryLot.status == expected_status,
+                    InventoryLot.unit == expected_unit,
+                    InventoryLot.quantity_available == expected_available,
+                    InventoryLot.quantity_reserved == expected_reserved,
+                    InventoryLot.quantity_consumed == expected_consumed,
+                    InventoryLot.quantity_damaged == expected_damaged,
+                    InventoryLot.quantity_scrapped == expected_scrapped,
+                    InventoryLot.last_movement_at == expected_last_movement_at,
+                )
+                .values(
+                    version=InventoryLot.version,
+                    updated_at=InventoryLot.updated_at,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if claimed.rowcount != 1:
+                raise Floor3LocationError(
+                    "库存批次在合并预检期间发生变化，请刷新后重试",
+                    status_code=409,
+                )
+    except OperationalError as error:
+        original = getattr(error, "orig", None)
+        sqlite_code = getattr(original, "sqlite_errorcode", None)
+        message = str(original or error).lower()
+        if sqlite_code not in {5, 6} and not any(
+            marker in message for marker in ("locked", "busy")
+        ):
+            raise
+        raise Floor3LocationError(
+            "库存批次正被其他操作处理，请稍后刷新重试",
+            status_code=409,
+        ) from error
+
+    db.expire_all()
+    return list(
+        db.scalars(
+            select(InventoryLot)
+            .join(
+                InventoryPalletItem,
+                InventoryPalletItem.inventory_lot_id == InventoryLot.id,
+            )
+            .where(InventoryPalletItem.pallet_id.in_(normalized))
+            .order_by(InventoryLot.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).all()
+    )
+
+
+def load_mergeable_pallet(
+    db: Session,
+    pallet_id: int,
+    *,
+    require_published_location: bool = True,
+) -> tuple[InventoryPallet, PalletMergeProfile]:
+    """Load one authoritative pallet and prove its current map location is usable."""
+
+    pallet = _pallet(
+        db,
+        pallet_id,
+        allow_non_operational_source=True,
+    )
+    profile = strict_pallet_merge_profile(pallet)
+    assert pallet.location_id is not None
+    location = _operational_pallet_location(
+        db,
+        pallet.location_id,
+        require_published=require_published_location,
+        required_inventory_type=profile.inventory_type,
+    )
+    supported_source = bool(
+        (location.source_version == "V11" and location.warehouse_floor == 3)
+        or (
+            location.source_version == "TWIN_V1"
+            and location.warehouse_floor in {1, 3}
+        )
+        or (
+            location.source_version == "P1-25C"
+            and location.warehouse_floor == 1
+            and location.location_code == "F1-DISPATCH-01"
+        )
+    )
+    if not supported_source:
+        raise Floor3LocationError(
+            "栈板来源不属于已接入的一楼或三楼正式地图库位",
+            status_code=409,
+        )
+    return pallet, profile
+
+
 def _idempotent_merge_result(
     db: Session,
     source_movement: InventoryLocationMovement,
@@ -1529,6 +1798,8 @@ def merge_pallet_remaining_goods(
     expected_target_version: int,
     operator_id: int | None,
     idempotency_key: str,
+    expected_profile: PalletMergeProfile | None = None,
+    require_published_locations: bool = False,
 ) -> Floor3MergeResult:
     """Move every remaining item to one compatible pallet and release the source."""
     existing = _movement_by_idempotency_key(db, idempotency_key)
@@ -1551,13 +1822,32 @@ def merge_pallet_remaining_goods(
         raise Floor3LocationError("源栈板已释放，不能再次合并", status_code=409)
     if not target.is_current or target.location_id is None:
         raise Floor3LocationError("目标栈板已释放，不能接收货物", status_code=409)
-    source_location = _location(db, source.location_id)
-    target_location = _location(db, target.location_id)
+    source_location = _operational_pallet_location(
+        db,
+        source.location_id,
+        require_published=require_published_locations,
+        required_inventory_type=(expected_profile.inventory_type if expected_profile else None),
+    )
+    target_location = _operational_pallet_location(
+        db,
+        target.location_id,
+        require_published=require_published_locations,
+        required_inventory_type=(expected_profile.inventory_type if expected_profile else None),
+    )
     if source_location.storage_type == "rack" or target_location.storage_type == "rack":
         raise Floor3LocationError("零散货合并只适用于真实木栈板", status_code=409)
 
     source_customer, source_type, moved_items = _pallet_merge_signature(source)
     target_customer, target_type, target_items = _pallet_merge_signature(target)
+    if expected_profile is not None:
+        if strict_pallet_merge_profile(source) != expected_profile:
+            raise Floor3LocationError(
+                "源栈板内容已变化或与本次合并条件不兼容", status_code=409
+            )
+        if strict_pallet_merge_profile(target) != expected_profile:
+            raise Floor3LocationError(
+                "目标栈板内容已变化或与本次合并条件不兼容", status_code=409
+            )
     if source_customer != target_customer:
         raise Floor3LocationError("只能合并同一客户的零散货", status_code=409)
     if source_type != target_type:
@@ -1610,6 +1900,11 @@ def merge_pallet_remaining_goods(
                     idempotency_key=f"{idempotency_key}:lot:{lot.id}",
                     remarks=system_note,
                 )
+
+        # The item relationship is authoritative.  Flush it before any
+        # downstream helper can query the pallet/lot projection in this same
+        # transaction (for example a deliberately injected second-step check).
+        db.flush()
 
         source.location_id = None
         source.status = "closed"

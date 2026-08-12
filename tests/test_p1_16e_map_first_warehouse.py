@@ -159,31 +159,23 @@ def test_p1_16e2_merge_action_is_available_in_both_map_details() -> None:
     assert "mergePanel" in twin
 
 
-def test_p1_16e2_current_twin_entry_exposes_single_confirm_merge() -> None:
+def test_p1_16e2_current_twin_entry_reuses_one_confirm_for_p1_49c_batch_merge() -> None:
     merger = WAREHOUSE_TWIN.split(
-        "const confirmPalletMergeAll = async () => {", 1
-    )[1].split("const correctSelectedInventoryLot", 1)[0]
-    form = WAREHOUSE_TWIN.split(
-        '<div className="twin-pallet-merge-form">', 1
-    )[1].split("</div>}", 1)[0]
-    assert "/api/warehouse/pallets/${selectedLocation.pallet.pallet_id}/merge-all" in merger
+        "const confirmPalletMergeBatch = async () => {", 1
+    )[1].split("const confirmMoveDrafts", 1)[0]
+    assert '"/api/warehouse/pallets/merge-batches"' in merger
     assert merger.count("window.confirm(") == 1
-    assert "target_pallet_id: target.pallet.pallet_id" in merger
-    assert "expected_target_version: target.pallet.version" in merger
-    assert "confirmed: true" in merger
-    assert "idempotency_key: mergeIdempotencyKey" in merger
-    assert "数量" not in form.replace("不拆数量", "")
-    assert "原因" not in form
-    assert "合并全部剩余货物" in form
+    assert "buildPalletMergeBatchPayload(mergeBatchIdempotencyKey, mergeSources, mergeTarget)" in merger
+    assert "submittedSources" in merger
+    assert "来源、目标和本次幂等键已保留" in merger
 
 
 def test_p1_16e2_current_twin_only_lists_compatible_target_pallets() -> None:
-    assert "const selectedMergeSignature = palletMergeSignature(selectedLocation);" in WAREHOUSE_TWIN
-    assert 'item.occupancy_status !== "occupied"' in WAREHOUSE_TWIN
-    assert 'item.storage_type === "rack"' in WAREHOUSE_TWIN
-    assert "signature?.customerId === selectedMergeSignature.customerId" in WAREHOUSE_TWIN
-    assert "signature.inventoryType === selectedMergeSignature.inventoryType" in WAREHOUSE_TWIN
-    assert "同客户、同库存类型" in WAREHOUSE_TWIN
+    assert "normalizePalletMergeCandidate(selectedLocation, pallet)" in WAREHOUSE_TWIN
+    assert "palletMergeCompatibility(mergeSources[0], mergeCandidate.candidate)" in WAREHOUSE_TWIN
+    assert "palletMergeTargetChoices(mergeSources)" in WAREHOUSE_TWIN
+    assert "目标必须是上方已选集合中的一块" in WAREHOUSE_TWIN
+    assert "原生单位" in WAREHOUSE_TWIN or "warehousePalletMergeDraft" in WAREHOUSE_TWIN
 
 
 def test_map_lot_card_shows_authoritative_quantity_breakdown() -> None:

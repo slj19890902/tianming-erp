@@ -531,8 +531,11 @@ def _production_station_task_payloads(
                     "mold_name": mold_name,
                     "mold_location": mold.rack_location if mold is not None else None,
                     "mold_is_active": mold_active,
+                    "mold_archive_status": mold.archive_status if mold is not None else None,
                     "mold_warning": (
-                        "模具已停用，禁止直接生产；请联系管理员受控启用"
+                        "模具已封存待复用；必须先搬回一楼正式模具位并由管理员或老板恢复启用"
+                        if mold is not None and mold.archive_status == "archived"
+                        else "模具已停用，禁止直接生产；请联系管理员受控启用"
                         if mold_active is False
                         else "模具主档未找到，请先核对模具"
                         if mold_code and mold is None

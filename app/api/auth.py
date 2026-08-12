@@ -77,6 +77,7 @@ PERMISSION_LABELS: dict[str, tuple[str, str]] = {
     "incoming.execute": ("incoming", "来料入库操作"),
     "warehouse.view": ("warehouse", "仓库库存查看"),
     "warehouse.execute": ("warehouse", "仓库库存操作"),
+    "warehouse.archive": ("warehouse", "模具封存与恢复"),
     "warehouse.correct": ("warehouse", "仓库位置登记纠正"),
     "warehouse.reserve": ("warehouse", "订单库存预占"),
     "warehouse.stocktake.view": ("warehouse", "库存盘点查看"),

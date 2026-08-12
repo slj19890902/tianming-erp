@@ -6258,7 +6258,7 @@
                     <td><select class="input" v-model.number="row.selected_candidate_id"><option v-for="candidate in row.candidates" :key="candidate.id" :value="candidate.id" :disabled="!!candidate.blocked_reason">{{ externalPackagingCandidateText(candidate) }}{{ candidate.blocked_reason ? `（${candidate.blocked_reason}）` : '' }}</option></select></td>
                     <td>
                       <template v-if="selectedExternalPurchaseCandidate(row)?.price"><strong>{{ selectedExternalPurchaseCandidate(row).price.currency }} {{ selectedExternalPurchaseCandidate(row).price.unit_price }} / {{ selectedExternalPurchaseCandidate(row).price.quote_unit }}</strong><div v-if="selectedExternalPurchaseCandidate(row).price.purchase_unit_price" class="sensitive-price">按客户定长换算：{{ selectedExternalPurchaseCandidate(row).price.purchase_unit_price }} 元/{{ selectedExternalPurchaseCandidate(row).price.purchase_unit }}</div><div class="muted">价格版本 {{ selectedExternalPurchaseCandidate(row).price.version_number }}；{{ selectedExternalPurchaseCandidate(row).price.tax_mode==='tax_inclusive' ? '含税' : '未税' }}</div><div v-if="selectedExternalPurchaseCandidate(row).suggested_quantity_warning" class="status orange" style="margin-top:4px;white-space:normal">{{ selectedExternalPurchaseCandidate(row).suggested_quantity_warning }}，可修改数量后提交</div></template>
-                      <div v-else><span class="status red">{{ selectedExternalPurchaseCandidate(row)?.blocked_reason || '缺少有效价格' }}</span><button v-if="selectedExternalPurchaseCandidate(row)?.external_product_id" class="btn small" style="margin-top:6px" @click="openExternalPurchasePriceMaintenance(row)">去维护正式报价</button></div>
+                      <div v-else><span class="status red">{{ selectedExternalPurchaseCandidate(row)?.blocked_reason || '缺少有效价格' }}</span><button v-if="externalPurchaseCandidateNeedsPrice(row)" class="btn small" style="margin-top:6px" @click="openExternalPurchasePriceMaintenance(row)">去维护正式报价</button></div>
                     </td>
                   </tr>
                 </tbody></table></div>
@@ -12547,7 +12547,9 @@
             return this.supplierCategoryOptions.find(option => option.value === code)?.label || code || "-";
           },
           supplierHasCorrugated(row) {
-            const categories = row?.supply_categories || ["corrugated_board"];
+            const categories = Array.isArray(row?.supply_categories) && row.supply_categories.length
+              ? row.supply_categories
+              : ["corrugated_board"];
             return categories.includes("corrugated_board");
           },
           supplierHasPackaging(row) {
@@ -18433,6 +18435,11 @@
           },
           selectedExternalPurchaseCandidate(row) {
             return (row?.candidates || []).find(candidate => Number(candidate.id) === Number(row?.selected_candidate_id)) || null;
+          },
+          externalPurchaseCandidateNeedsPrice(row) {
+            const candidate = this.selectedExternalPurchaseCandidate(row);
+            return !!candidate?.external_product_id
+              && String(candidate.blocked_reason || "").includes("有效价格");
           },
           async openExternalPurchasePriceMaintenance(row) {
             const candidate = this.selectedExternalPurchaseCandidate(row);

@@ -89,6 +89,7 @@ def test_supplier_groups_and_external_product_editor_are_explicit() -> None:
     assert "维护正式报价" in INDEX
     assert "不进入材质字典、组合材质或材质规则" in INDEX
     assert "去维护正式报价" in INDEX
+    assert "externalPurchaseCandidateNeedsPrice(row)" in INDEX
     assert "openExternalPurchasePriceMaintenance" in INDEX
     assert "supplierPriceProduct?.category_code==='paper_corner_guard'" in INDEX
 
@@ -189,6 +190,7 @@ const vm = {{
     {{id:1,standard_name:"纸板兼包材",sort_order:1,supply_categories:["corrugated_board","paper_corner_guard"]}},
     {{id:2,standard_name:"仅纸板",sort_order:2,supply_categories:["corrugated_board"]}},
     {{id:3,standard_name:"仅包材",sort_order:3,supply_categories:["epe"]}},
+    {{id:4,standard_name:"历史纸板",sort_order:4,supply_categories:[]}},
   ],
 }};
 vm.supplierHasCorrugated = new Function(
@@ -205,10 +207,34 @@ vm.filteredSuppliers = new Function(
 ).bind(vm);
 
 const paperboardIds = vm.filteredSuppliers().map(row=>row.id).join(",");
-if (paperboardIds !== "1,2") throw new Error(`paperboard group mismatch: ${{paperboardIds}}`);
+if (paperboardIds !== "1,2,4") throw new Error(`paperboard group mismatch: ${{paperboardIds}}`);
 vm.supplierGroupFilter = "packaging";
 const packagingIds = vm.filteredSuppliers().map(row=>row.id).join(",");
 if (packagingIds !== "1,3") throw new Error(`packaging group mismatch: ${{packagingIds}}`);
+"""
+    _run_node(tmp_path, source)
+
+
+def test_purchase_price_shortcut_is_only_shown_for_missing_price(
+    tmp_path: Path,
+) -> None:
+    params, body = _method("externalPurchaseCandidateNeedsPrice")
+    source = f"""
+const vm = {{
+  candidate:null,
+  selectedExternalPurchaseCandidate(){{return this.candidate;}},
+}};
+vm.externalPurchaseCandidateNeedsPrice = new Function(
+  {json.dumps(params)},
+  {json.dumps(body, ensure_ascii=False)}
+).bind(vm);
+
+vm.candidate={{external_product_id:9,blocked_reason:"当前没有有效价格：请维护正式报价"}};
+if (!vm.externalPurchaseCandidateNeedsPrice({{}})) throw new Error("missing-price shortcut was hidden");
+vm.candidate={{external_product_id:9,blocked_reason:"供应商或外购产品已停用"}};
+if (vm.externalPurchaseCandidateNeedsPrice({{}})) throw new Error("inactive product was routed to price maintenance");
+vm.candidate={{external_product_id:null,blocked_reason:"当前没有有效价格"}};
+if (vm.externalPurchaseCandidateNeedsPrice({{}})) throw new Error("missing product was routed to price maintenance");
 """
     _run_node(tmp_path, source)
 

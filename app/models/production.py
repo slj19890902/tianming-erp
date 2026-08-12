@@ -63,6 +63,20 @@ class ProductionTask(Base):
             "AND production_label_count_snapshot > 0))",
             name="ck_production_tasks_production_label_snapshot",
         ),
+        CheckConstraint(
+            "production_label_template_version_snapshot IN "
+            "('legacy_65x45_v1','current_40x30_v1')",
+            name="ck_production_tasks_label_template_version",
+        ),
+        CheckConstraint(
+            "((production_label_template_version_snapshot = 'legacy_65x45_v1' "
+            "AND (production_label_product_version_snapshot IS NULL OR "
+            "production_label_product_version_snapshot >= 1)) OR "
+            "(production_label_template_version_snapshot = 'current_40x30_v1' "
+            "AND production_label_product_version_snapshot IS NOT NULL "
+            "AND production_label_product_version_snapshot >= 1))",
+            name="ck_production_tasks_label_product_version",
+        ),
         CheckConstraint("version >= 1", name="ck_production_tasks_version"),
         CheckConstraint(
             "((status IN ('waiting_material','not_required') AND planned_quantity = 0) "
@@ -147,6 +161,18 @@ class ProductionTask(Base):
         default=0,
         server_default="0",
         nullable=False,
+    )
+    production_label_template_version_snapshot: Mapped[str] = mapped_column(
+        String(30),
+        # Direct/legacy task writers that do not call the authoritative label
+        # strategy must never masquerade as a current-template snapshot.
+        default="legacy_65x45_v1",
+        server_default="legacy_65x45_v1",
+        nullable=False,
+    )
+    production_label_product_version_snapshot: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
     )
     ready_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     version: Mapped[int] = mapped_column(

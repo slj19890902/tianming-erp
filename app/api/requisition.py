@@ -8,7 +8,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from threading import Lock
 from types import SimpleNamespace
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -172,6 +172,15 @@ from app.services.requisition_production_print import (
 from app.services.production_packaging_label import (
     build_supplier_requisition_packaging_label_package,
 )
+from app.services.production_label_operations import (
+    ProductionLabelOperationError,
+    confirm_packaging_label_job_printed,
+    get_packaging_label_job,
+    latest_printed_job_metadata,
+    packaging_label_job_response,
+    prepare_packaging_label_job,
+    production_label_write_guard,
+)
 
 
 router = APIRouter()
@@ -182,6 +191,27 @@ can_read_production_labels = PermissionChecker("orders.view")
 admin_rollback = RoleChecker(["admin"])
 _FINISHED_STOCK_POLICY_WRITE_LOCK = Lock()
 _SUPPLIER_ORDER_CREATE_WRITE_LOCK = Lock()
+
+
+class ProductionPackagingLabelJobRequest(BaseModel):
+    idempotency_key: str = Field(min_length=1, max_length=120)
+    plan_fingerprint: str = Field(min_length=64, max_length=64)
+    confirmed: Literal[True]
+
+    @field_validator("idempotency_key", "plan_fingerprint")
+    @classmethod
+    def trim_label_job_values(cls, value: str) -> str:
+        return value.strip()
+
+
+class ProductionPackagingLabelPrintConfirmationRequest(BaseModel):
+    idempotency_key: str = Field(min_length=1, max_length=120)
+    confirmed: Literal[True]
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def trim_label_confirmation_key(cls, value: str) -> str:
+        return value.strip()
 
 
 def _require_active_supplier(
@@ -15694,11 +15724,6 @@ def get_supplier_order_production_packaging_label_package(
             detail="只有正式有效的报料单可以打印生产包装标签",
         )
     package = build_supplier_requisition_packaging_label_package(db, order)
-    if not package["label_count"]:
-        raise HTTPException(
-            status_code=409,
-            detail="该报料单没有启用生产包装标签的任务",
-        )
     if package["review_required"]:
         raise HTTPException(
             status_code=409,
@@ -15708,7 +15733,170 @@ def get_supplier_order_production_packaging_label_package(
                 "reasons": package["review_messages"],
             },
         )
+    if not package["label_count"]:
+        raise HTTPException(
+            status_code=409,
+            detail="该报料单没有启用生产包装标签的任务",
+        )
+    package["latest_printed_job"] = latest_printed_job_metadata(db, order.id)
     return package
+
+
+@router.post("/supplier-orders/{order_id}/production-packaging-label-jobs")
+def post_supplier_order_production_packaging_label_job(
+    order_id: int,
+    payload: ProductionPackagingLabelJobRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read_production_labels),
+    _write_guard: None = Depends(production_label_write_guard),
+) -> dict:
+    """Freeze a label package.  Preparing it is not an actual-print fact."""
+
+    order = db.get(SupplierRequisitionOrder, order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="供应商报料单不存在")
+    _require_supplier_order_customer_access(order, user, db)
+    if order.status != "confirmed":
+        raise HTTPException(status_code=409, detail="只有正式有效的报料单可创建标签打印作业")
+    try:
+        result = prepare_packaging_label_job(
+            db,
+            order=order,
+            idempotency_key=payload.idempotency_key,
+            expected_plan_fingerprint=payload.plan_fingerprint,
+            operator_id=user.id,
+        )
+        # Persist the job and its exact task links atomically.  A prepared job
+        # deliberately does not block a qualified task refresh.
+        if not result.replayed:
+            append_audit_event(
+                db,
+                event_category="business",
+                result="success",
+                source="web",
+                module_code="production",
+                action_code="production.packaging_label_job.prepared",
+                legacy_action="PREPARE_PRODUCTION_LABEL_JOB",
+                resource="ProductionPackagingLabelPrintJob",
+                actor=user,
+                entity_type="production_packaging_label_print_job",
+                entity_id=result.job.id,
+                object_ref=f"production_packaging_label_print_job:{result.job.id}",
+                batch_id=result.job.idempotency_key,
+                description="冻结生产包装标签打印作业",
+                details={
+                    "supplier_order_id": order.id,
+                    "template_version": result.job.template_version,
+                    "plan_fingerprint": result.job.plan_fingerprint,
+                    "payload_hash": result.job.payload_hash,
+                    "label_count": result.package.get("label_count"),
+                },
+            )
+        db.commit()
+        return packaging_label_job_response(
+            result.job,
+            result.package,
+            replayed=result.replayed,
+        )
+    except ProductionLabelOperationError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="标签打印作业已被其他请求创建，请刷新后重试",
+        ) from error
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.get("/production-packaging-label-jobs/{job_id}")
+def get_production_packaging_label_job_endpoint(
+    job_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read_production_labels),
+) -> dict:
+    """Read the exact frozen payload so a historical reprint keeps its size."""
+
+    try:
+        result = get_packaging_label_job(db, job_id)
+        order = db.get(SupplierRequisitionOrder, result.job.supplier_order_id)
+        if order is None:
+            raise ProductionLabelOperationError("打印作业关联的报料单不存在", 404)
+        _require_supplier_order_customer_access(order, user, db)
+        return packaging_label_job_response(result.job, result.package)
+    except ProductionLabelOperationError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+
+
+@router.post("/production-packaging-label-jobs/{job_id}/confirm")
+def confirm_production_packaging_label_job_endpoint(
+    job_id: int,
+    payload: ProductionPackagingLabelPrintConfirmationRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read_production_labels),
+    _write_guard: None = Depends(production_label_write_guard),
+) -> dict:
+    """Record an actual print only after the operator explicitly confirms it."""
+
+    try:
+        existing = get_packaging_label_job(db, job_id)
+        order = db.get(SupplierRequisitionOrder, existing.job.supplier_order_id)
+        if order is None:
+            raise ProductionLabelOperationError("打印作业关联的报料单不存在", 404)
+        _require_supplier_order_customer_access(order, user, db)
+        result = confirm_packaging_label_job_printed(
+            db,
+            job_id=job_id,
+            confirmation_key=payload.idempotency_key,
+            operator_id=user.id,
+        )
+        if not result.replayed:
+            append_audit_event(
+                db,
+                event_category="business",
+                result="success",
+                source="web",
+                module_code="production",
+                action_code="production.packaging_label_job.printed",
+                legacy_action="CONFIRM_PRODUCTION_LABEL_PRINT",
+                resource="ProductionPackagingLabelPrintJob",
+                actor=user,
+                entity_type="production_packaging_label_print_job",
+                entity_id=result.job.id,
+                object_ref=f"production_packaging_label_print_job:{result.job.id}",
+                batch_id=payload.idempotency_key,
+                description="人工确认生产包装标签已实际打印",
+                details={
+                    "supplier_order_id": result.job.supplier_order_id,
+                    "template_version": result.job.template_version,
+                    "plan_fingerprint": result.job.plan_fingerprint,
+                    "payload_hash": result.job.payload_hash,
+                },
+            )
+        db.commit()
+        return packaging_label_job_response(
+            result.job,
+            result.package,
+            replayed=result.replayed,
+        )
+    except HTTPException:
+        db.rollback()
+        raise
+    except ProductionLabelOperationError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="打印确认已被其他请求登记，请刷新后重试",
+        ) from error
+    except Exception:
+        db.rollback()
+        raise
 
 
 @router.put("/supplier-orders/{order_id}/void")

@@ -172,6 +172,11 @@ from app.models.production import (  # noqa: E402,F401
     ProductionStockTransfer,
     ProductionTask,
 )
+from app.models.production_label_print import (  # noqa: E402,F401
+    ProductionLabelPlanRefresh,
+    ProductionPackagingLabelPrintJob,
+    ProductionPackagingLabelPrintJobTask,
+)
 from app.models.warehouse_inventory import (  # noqa: E402,F401
     DeliveryInventoryAllocation,
     Floor3LocationLayout,

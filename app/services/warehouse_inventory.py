@@ -633,6 +633,7 @@ def _transfer_finished_lot_location(
     operator_id: int | None,
     idempotency_key: str,
     require_staging_source: bool,
+    require_empty_target: bool = False,
 ) -> FinishedLotLocationTransferResult:
     """Move all or part of a finished lot without changing stock totals.
 
@@ -928,7 +929,8 @@ def _transfer_finished_lot_location(
                 db,
                 lot=target_lot,
                 operator_id=operator_id,
-                require_empty_pallet=require_staging_source,
+                require_empty_pallet=require_staging_source or require_empty_target,
+                require_no_live_inventory=require_empty_target,
             )
         except Floor3LocationError as error:
             raise WarehouseInventoryError(str(error), error.status_code) from error
@@ -946,8 +948,9 @@ def _transfer_finished_lot_location(
                 db,
                 lot=target_lot,
                 operator_id=operator_id,
-                require_empty_pallet=require_staging_source,
+                require_empty_pallet=require_staging_source or require_empty_target,
                 allow_operational_location=True,
+                require_no_live_inventory=require_empty_target,
             )
         except Floor3LocationError as error:
             raise WarehouseInventoryError(str(error), error.status_code) from error
@@ -1041,6 +1044,7 @@ def transfer_finished_lot_between_locations(
     location_id: int,
     operator_id: int | None,
     idempotency_key: str,
+    require_empty_target: bool = False,
 ) -> FinishedLotLocationTransferResult:
     return _transfer_finished_lot_location(
         db,
@@ -1051,6 +1055,7 @@ def transfer_finished_lot_between_locations(
         operator_id=operator_id,
         idempotency_key=idempotency_key,
         require_staging_source=False,
+        require_empty_target=require_empty_target,
     )
 
 

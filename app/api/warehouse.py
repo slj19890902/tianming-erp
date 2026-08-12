@@ -185,6 +185,16 @@ from app.services.warehouse_inventory import (
     transfer_staging_finished_lot,
     void_semi_finished_lot,
 )
+from app.services.warehouse_movement_batch import (
+    BATCH_AUDIT_ACTION_CODE,
+    WAREHOUSE_MOVEMENT_BATCH_LOCK,
+    WarehouseMovementBatchError,
+    WarehouseMovementBatchItem,
+    execute_warehouse_movement_batch,
+    load_movable_pallet,
+    movement_batch_replay,
+    movement_batch_request_hash,
+)
 from app.services.inventory_insights import build_inventory_insights
 from app.services.warehouse_twin_dashboard import (
     build_inventory_code_search_results,
@@ -788,6 +798,61 @@ class TwinPalletMovePayload(BaseModel):
     def strip_twin_move_remarks(cls, value: str | None) -> str | None:
         text = (value or "").strip()
         return text or None
+
+
+class TwinMovementBatchItemPayload(BaseModel):
+    client_item_id: str = Field(min_length=1, max_length=80)
+    operation: Literal["pallet_move", "lot_transfer"]
+    pallet_id: int | None = Field(default=None, gt=0)
+    lot_id: int | None = Field(default=None, gt=0)
+    expected_version: int = Field(gt=0)
+    quantity: int | None = Field(default=None, gt=0)
+    target_location_id: int = Field(gt=0)
+    remarks: str | None = Field(default=None, max_length=500)
+
+    @field_validator("client_item_id")
+    @classmethod
+    def strip_movement_batch_client_item_id(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("页面草稿标识不能为空")
+        return text
+
+    @field_validator("remarks")
+    @classmethod
+    def strip_movement_batch_remarks(cls, value: str | None) -> str | None:
+        text = (value or "").strip()
+        return text or None
+
+    @model_validator(mode="after")
+    def validate_operation_fields(self) -> "TwinMovementBatchItemPayload":
+        if self.operation == "pallet_move":
+            if self.pallet_id is None or self.lot_id is not None or self.quantity is not None:
+                raise ValueError("整板移动只能填写 pallet_id，不能填写 lot_id 或 quantity")
+        elif self.lot_id is None or self.pallet_id is not None or self.quantity is None:
+            raise ValueError("部分移货必须填写 lot_id 和 quantity，不能填写 pallet_id")
+        return self
+
+
+class TwinMovementBatchPayload(BaseModel):
+    idempotency_key: str = Field(min_length=1, max_length=64)
+    confirmed: Literal[True]
+    items: list[TwinMovementBatchItemPayload] = Field(min_length=1, max_length=50)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def strip_movement_batch_key(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("幂等键不能为空")
+        return text
+
+    @model_validator(mode="after")
+    def reject_duplicate_client_item_ids(self) -> "TwinMovementBatchPayload":
+        ids = [str(item.client_item_id) for item in self.items]
+        if len(ids) != len(set(ids)):
+            raise ValueError("批次内 client_item_id 不能重复")
+        return self
 
 
 class Floor3LayoutGeometryPayload(BaseModel):
@@ -4729,6 +4794,107 @@ def create_twin_temporary_finished_inbound(
         ) from error
 
 
+@router.post("/twin-operations/move-batches")
+def confirm_twin_movement_batch(
+    payload: TwinMovementBatchPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    """Atomically confirm the page movement draft without a second stock ledger."""
+
+    items = [
+        WarehouseMovementBatchItem(
+            client_item_id=str(item.client_item_id),
+            operation=item.operation,
+            target_location_id=item.target_location_id,
+            expected_version=item.expected_version,
+            pallet_id=item.pallet_id,
+            lot_id=item.lot_id,
+            quantity=item.quantity,
+            remarks=item.remarks,
+        )
+        for item in payload.items
+    ]
+    request_hash = movement_batch_request_hash(
+        batch_id=payload.idempotency_key,
+        items=items,
+    )
+    with WAREHOUSE_MOVEMENT_BATCH_LOCK:
+        try:
+            replay = movement_batch_replay(
+                db,
+                batch_id=payload.idempotency_key,
+                request_hash=request_hash,
+                actor_user_id=user.id,
+            )
+            if replay is not None:
+                return {
+                    **replay,
+                    "idempotent_replay": True,
+                    "request_hash": request_hash,
+                }
+
+            # Scope checks intentionally run before any quantity or location write.
+            for item in payload.items:
+                if item.operation == "pallet_move":
+                    pallet = load_movable_pallet(db, int(item.pallet_id))
+                    _require_floor3_pallet_customer_access(db, pallet, user)
+                else:
+                    _require_lot_customer_access(db, int(item.lot_id), user)
+
+            result = execute_warehouse_movement_batch(
+                db,
+                batch_id=payload.idempotency_key,
+                items=items,
+                operator_id=user.id,
+            )
+            audit_result = {**result, "request_hash": request_hash}
+            append_audit_event(
+                db,
+                request=request,
+                actor=user,
+                event_category="business",
+                result="success",
+                source="web",
+                module_code="warehouse",
+                action_code=BATCH_AUDIT_ACTION_CODE,
+                legacy_action="MOVE_BATCH",
+                resource="warehouse/twin-operations/move-batches",
+                entity_type="warehouse_movement_batch",
+                object_ref=payload.idempotency_key,
+                batch_id=payload.idempotency_key,
+                description="仓库移货页面草稿已一次确认并原子提交",
+                details={
+                    "request_hash": request_hash,
+                    "result": audit_result,
+                },
+            )
+            db.commit()
+            return {
+                **audit_result,
+                "idempotent_replay": False,
+            }
+        except WarehouseMovementBatchError as error:
+            db.rollback()
+            raise HTTPException(
+                status_code=error.status_code,
+                detail=str(error),
+            ) from error
+        except IntegrityError as error:
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="移货目标、版本或幂等记录已被其他请求更新，请刷新后重试",
+            ) from error
+        except HTTPException:
+            db.rollback()
+            raise
+        except Exception:
+            db.rollback()
+            raise
+
+
 @router.post("/twin-operations/pallets/{pallet_id}/move")
 def move_twin_formal_pallet(
     pallet_id: int,
@@ -7958,6 +8124,7 @@ def list_location_candidates(
     empty_only: bool = False,
     pallet_storage_only: bool = False,
     include_hierarchy: bool = True,
+    published_only: bool = False,
     db: Session = Depends(get_db),
     _user: User = Depends(can_read),
 ) -> dict:
@@ -7972,6 +8139,22 @@ def list_location_candidates(
         empty_only=empty_only,
         pallet_storage_only=pallet_storage_only,
     )
+    if published_only:
+        rows = [
+            row
+            for row in rows
+            if operational_location_issue(
+                db,
+                row.location,
+                warehouse_types=warehouse_types,
+                pallet_storage_only=pallet_storage_only,
+                require_published=True,
+                require_map_geometry=True,
+                required_inventory_type=inventory_type,
+                require_empty=empty_only,
+            )
+            is None
+        ]
     items = [operational_location_payload(row) for row in rows]
     if not include_hierarchy:
         return {"items": items}

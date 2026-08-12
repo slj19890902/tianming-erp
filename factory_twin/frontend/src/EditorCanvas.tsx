@@ -49,6 +49,7 @@ interface Props {
   productionProjections?: ProductionTaskProjection[];
   highlightFeatureIds?: string[];
   highlightedPalletIds?: string[];
+  draggablePalletIds?: string[];
   focusTarget?: CanvasFocusTarget | null;
   palletEditingOnly?: boolean;
   rackEditingEnabled?: boolean;
@@ -356,6 +357,7 @@ export function EditorCanvas({
   productionProjections = [],
   highlightFeatureIds = [],
   highlightedPalletIds = [],
+  draggablePalletIds,
   focusTarget = null,
   palletEditingOnly = false,
   rackEditingEnabled = false,
@@ -892,6 +894,7 @@ export function EditorCanvas({
     }
 
     if (layers.pallets) {
+      const draggablePalletIdSet = draggablePalletIds ? new Set(draggablePalletIds) : null;
       const warehousePalletInstances: WarehousePalletInstance[] = [];
       for (const pallet of layout.pallets) {
         const violated = violationIds.has(pallet.id);
@@ -900,7 +903,9 @@ export function EditorCanvas({
         group.userData = {
           entityKind: "pallet",
           entityId: pallet.id,
-          draggable: !readOnly && (!palletEditingOnly || pallet.id.startsWith("erp-location-"))
+          draggable: !readOnly
+            && (!palletEditingOnly || pallet.id.startsWith("erp-location-"))
+            && (!draggablePalletIdSet || draggablePalletIdSet.has(pallet.id))
         };
         if (warehouseTheme) {
           group.add(warehousePalletPickProxy(pallet, viewMode, violated));
@@ -1278,7 +1283,14 @@ export function EditorCanvas({
       const yMm = Math.round(centerY - current.object.position.z);
       if (current.kind === "equipment") handlersRef.current.onMoveEquipment(current.id, xMm, yMm);
       else if (current.kind === "rack") handlersRef.current.onMoveRack(current.id, xMm, yMm);
-      else handlersRef.current.onMovePallet(current.id, xMm, yMm);
+      else {
+        // ERP pallet/location drags are controlled page-draft gestures. Restore
+        // the rendered object before dispatching the drop coordinates so an
+        // invalid target can never look like a completed inventory move.
+        current.object.position.copy(current.startPosition);
+        requestRender();
+        handlersRef.current.onMovePallet(current.id, xMm, yMm);
+      }
     };
     const onPointerCancel = (event: PointerEvent) => {
       if (pointerMoveFrame !== null) cancelAnimationFrame(pointerMoveFrame);
@@ -1408,7 +1420,7 @@ export function EditorCanvas({
       });
       renderer.dispose();
     };
-  }, [layout, assets, viewMode, cameraPreset, viewResetToken, layers, referenceLayout, referenceOverlay, productionProjections, palletEditingOnly, rackEditingEnabled, featureEditingEnabled, allowPalletSelection, palletSnapEnabled, palletSnapThresholdMm, drawMode, drawPoints, measureMode, measurePoints, readOnly, visualTheme]);
+  }, [layout, assets, viewMode, cameraPreset, viewResetToken, layers, referenceLayout, referenceOverlay, productionProjections, palletEditingOnly, rackEditingEnabled, featureEditingEnabled, allowPalletSelection, draggablePalletIds, palletSnapEnabled, palletSnapThresholdMm, drawMode, drawPoints, measureMode, measurePoints, readOnly, visualTheme]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;

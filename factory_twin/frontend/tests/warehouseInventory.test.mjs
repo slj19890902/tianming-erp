@@ -14,6 +14,13 @@ import {
   warehouseSearchLocationSummaries,
   warehouseSearchProductKey
 } from "../src/warehouseInventory.mjs";
+import {
+  buildMoveBatchPayload,
+  intersectMappedMoveTargets,
+  mergeLocationInventoryItems,
+  resolveMoveDropTarget,
+  upsertMoveDraft
+} from "../src/warehouseMoveDraft.mjs";
 
 const locations = [
   {
@@ -192,4 +199,70 @@ test("mapped pallet locations detect column overlap without moving either object
   ]);
   assert.equal(pallets[0].x_mm, 0);
   assert.equal(columns[0].points[0][0], -325);
+});
+
+test("move targets are the intersection of empty API candidates and mapped dashboard locations", () => {
+  const candidates = [
+    { id: 1, is_empty: true },
+    { id: 2, is_empty: true },
+    { id: 3, is_empty: true },
+    { id: 4, is_empty: false }
+  ];
+  const dashboard = [
+    { location_id: 1, floor_code: "1F", area_code: "FIN", location_code: "FIN-01", is_active: true, occupancy_status: "empty", position_status: "mapped", map_position: { left_pct: 0, top_pct: 0, width_pct: 20, height_pct: 20 } },
+    { location_id: 2, floor_code: "3F", area_code: "A1", location_code: "A1-01", is_active: true, occupancy_status: "empty", position_status: "unplaced", map_position: null },
+    { location_id: 3, floor_code: "3F", area_code: "A1", location_code: "A1-02", is_active: true, occupancy_status: "occupied", position_status: "mapped", map_position: { left_pct: 20, top_pct: 0, width_pct: 20, height_pct: 20 } },
+    { location_id: 4, floor_code: "3F", area_code: "A1", location_code: "A1-03", is_active: true, occupancy_status: "empty", position_status: "mapped", map_position: { left_pct: 40, top_pct: 0, width_pct: 20, height_pct: 20 } }
+  ];
+  assert.deepEqual(intersectMappedMoveTargets(candidates, dashboard).map((item) => item.location_id), [1]);
+  assert.deepEqual(intersectMappedMoveTargets(candidates, dashboard, [1]), []);
+});
+
+test("location move source list keeps pallet order, appends loose lots, and de-duplicates lot ids", () => {
+  const palletItems = [{ lot_id: 10, label: "pallet-a" }, { lot_id: 11, label: "pallet-b" }];
+  const looseItems = [{ lot_id: 11, label: "duplicate" }, { lot_id: 12, label: "loose-c" }, { label: "legacy-without-id" }];
+  assert.deepEqual(mergeLocationInventoryItems(palletItems, looseItems), [
+    { lot_id: 10, label: "pallet-a" },
+    { lot_id: 11, label: "pallet-b" },
+    { lot_id: 12, label: "loose-c" },
+    { label: "legacy-without-id" }
+  ]);
+  assert.deepEqual(palletItems, [{ lot_id: 10, label: "pallet-a" }, { lot_id: 11, label: "pallet-b" }]);
+  assert.deepEqual(looseItems, [{ lot_id: 11, label: "duplicate" }, { lot_id: 12, label: "loose-c" }, { label: "legacy-without-id" }]);
+});
+
+test("same-floor drag resolves one published empty location without changing geometry", () => {
+  const features = [{ feature_kind: "zone", erp_area_code: "A1", points: [[0, 0], [10000, 0], [10000, 5000], [0, 5000]] }];
+  const target = { location_id: 8, floor_code: "3F", area_code: "A1", occupancy_status: "empty", position_status: "mapped", map_position: { left_pct: 10, top_pct: 20, width_pct: 20, height_pct: 30 } };
+  const before = structuredClone(target);
+  assert.equal(resolveMoveDropTarget(features, [target], "3F", 2000, 3250).target?.location_id, 8);
+  assert.match(resolveMoveDropTarget(features, [target], "3F", 9000, 1000).error, /空货位|三级选择/);
+  assert.deepEqual(target, before);
+});
+
+test("move drafts replace one source, reject target collision, and build one confirmed batch", () => {
+  const base = {
+    client_item_id: "client-1", source_key: "pallet:10", operation: "pallet_move", pallet_id: 10,
+    expected_version: 2, source_location_id: 1, source_floor_code: "1F", source_area_code: "FIN", source_location_code: "FIN-01", source_location_name: "成品位 1",
+    target_location_id: 2, target_floor_code: "3F", target_area_code: "A1", target_location_code: "A1-01", target_location_name: "三楼 A1-01",
+    inventory_code: "PAL-10", product_name: "整栈板", customer_name: "天华", unit: "boxes"
+  };
+  const first = upsertMoveDraft([], base);
+  const replacement = upsertMoveDraft(first.items, { ...base, client_item_id: "must-not-replace-stable-id", target_location_id: 3, target_location_code: "A1-02" });
+  assert.equal(replacement.items.length, 1);
+  assert.equal(replacement.items[0].client_item_id, "client-1");
+  assert.equal(replacement.items[0].target_location_id, 3);
+  const collision = upsertMoveDraft(replacement.items, { ...base, client_item_id: "client-2", source_key: "lot:20", operation: "lot_transfer", pallet_id: undefined, lot_id: 20, quantity: 6, target_location_id: 3 });
+  assert.match(collision.error, /占用/);
+  assert.deepEqual(buildMoveBatchPayload("batch-key-123", [
+    replacement.items[0],
+    { ...base, client_item_id: "client-2", source_key: "lot:20", operation: "lot_transfer", pallet_id: undefined, lot_id: 20, quantity: 6, target_location_id: 4 }
+  ]), {
+    idempotency_key: "batch-key-123",
+    confirmed: true,
+    items: [
+      { client_item_id: "client-1", operation: "pallet_move", pallet_id: 10, expected_version: 2, target_location_id: 3 },
+      { client_item_id: "client-2", operation: "lot_transfer", lot_id: 20, quantity: 6, expected_version: 2, target_location_id: 4 }
+    ]
+  });
 });

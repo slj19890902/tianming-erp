@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 
 from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.warehouse_inventory import (
+    Floor3LocationLayout,
     InventoryLot,
     InventoryPallet,
     WarehouseArea,
+    WarehouseAreaStoragePolicy,
     WarehouseFloor,
     WarehouseLocation,
 )
@@ -111,10 +114,17 @@ def operational_location_issue(
     *,
     warehouse_types: set[str] | tuple[str, ...] | None = None,
     pallet_storage_only: bool = False,
+    require_published: bool = False,
+    require_map_geometry: bool = False,
+    required_inventory_type: str | None = None,
+    require_empty: bool = False,
+    capacity_source_location_id: int | None = None,
 ) -> str | None:
     if not location.is_active:
         return "该库位已停用"
-    if (location.placement_status or "placed") != "placed":
+    if require_published and location.placement_status != "placed":
+        return "该库位尚未完成正式平面图布局"
+    if not require_published and (location.placement_status or "placed") != "placed":
         return "该库位尚未完成平面图布局"
     if warehouse_types and location.warehouse_type not in set(warehouse_types):
         return "所选库位类型与当前业务不匹配"
@@ -128,6 +138,8 @@ def operational_location_issue(
     # active/placed gate.  Once the space ledger exists, every formal write
     # must also pass its enabled floor and area gates.
     if not has_space_ledger(db):
+        if require_published or require_map_geometry:
+            return "该库位缺少正式楼层、区域和发布台账"
         return None
     if location.warehouse_floor is None or not (location.area_code or "").strip():
         return "该库位尚未登记楼层和区域"
@@ -152,6 +164,86 @@ def operational_location_issue(
         return "该库位所属区域尚未建立台账"
     if area.construction_status != "enabled":
         return "该库位所属区域尚未启用"
+    if require_published:
+        policy = db.scalar(
+            select(WarehouseAreaStoragePolicy).where(
+                WarehouseAreaStoragePolicy.area_id == area.id
+            )
+        )
+        if policy is None or policy.status != "published":
+            return "该库位所属区域尚未发布"
+        if not (policy.published_map_revision or "").strip():
+            return "该库位所属区域缺少已发布地图版本"
+        try:
+            allowed_types = json.loads(policy.allowed_inventory_types_json)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return "该库位所属区域的存放策略已损坏"
+        if (
+            not isinstance(allowed_types, list)
+            or not all(isinstance(value, str) for value in allowed_types)
+        ):
+            return "该库位所属区域的存放策略已损坏"
+        if required_inventory_type and required_inventory_type not in {
+            value.strip() for value in allowed_types
+        }:
+            return "该库位所属区域不允许当前库存类型"
+        if (
+            pallet_storage_only
+            and policy.storage_layout not in {"pallet_ground", "mixed"}
+        ):
+            return "该库位所属区域的正式存储布局不允许地面栈板"
+    if require_map_geometry:
+        geometry_id = db.scalar(
+            select(Floor3LocationLayout.id)
+            .where(Floor3LocationLayout.location_id == location.id)
+            .limit(1)
+        )
+        if geometry_id is None:
+            return "该库位缺少已确认的地图几何位置"
+    if require_empty:
+        occupied_pallet = db.scalar(
+            select(InventoryPallet.id)
+            .where(
+                InventoryPallet.location_id == location.id,
+                InventoryPallet.is_current.is_(True),
+            )
+            .limit(1)
+        )
+        if occupied_pallet is not None or location_has_live_inventory(db, location.id):
+            return "该库位已有活动库存或当前栈板"
+    if (
+        require_published
+        and area.capacity_review_status == "confirmed"
+        and area.capacity_eligible
+        and area.confirmed_pallet_capacity is not None
+    ):
+        occupied_count = int(
+            db.scalar(
+                select(func.count(InventoryPallet.id))
+                .join(
+                    WarehouseLocation,
+                    WarehouseLocation.id == InventoryPallet.location_id,
+                )
+                .where(
+                    InventoryPallet.is_current.is_(True),
+                    WarehouseLocation.warehouse_floor == floor.floor_number,
+                    func.upper(WarehouseLocation.area_code)
+                    == str(area.area_code).strip().upper(),
+                )
+            )
+            or 0
+        )
+        source_in_same_area = False
+        if capacity_source_location_id is not None:
+            source_location = db.get(WarehouseLocation, capacity_source_location_id)
+            source_in_same_area = bool(
+                source_location is not None
+                and source_location.warehouse_floor == floor.floor_number
+                and str(source_location.area_code or "").strip().upper()
+                == str(area.area_code).strip().upper()
+            )
+        if occupied_count >= int(area.confirmed_pallet_capacity) and not source_in_same_area:
+            return "该区域已达到现场确认的栈板容量"
     return None
 
 

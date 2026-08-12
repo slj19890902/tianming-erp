@@ -9156,6 +9156,7 @@
                   ["printing_plate_1_id","第1色挂板"], ["printing_plate_2_id","第2色挂板"], ["printing_plate_3_id","第3色挂板"],
                   ["plate_alignment_value_mm","对版值"], ["plate_mount_value_mm","挂版值"],
                   ["machine_set_length_mm","机器设定箱长"], ["machine_set_width_mm","机器设定箱宽"], ["machine_set_height_mm","机器设定箱高"],
+                  ["production_label_enabled","随生产任务打印包装标签"], ["production_label_units_per_label","每张标签代表只数"],
                   ["report_notes","报料备注"], ["sale_unit_price","默认单价"],
                   ["mold_tool_id","生产模具"], ["remark","备注"]
                 ]
@@ -9197,7 +9198,7 @@
               "crease_middle_mm","crease_right_mm","base_report_length_mm","base_report_width_mm","base_crease_left_mm",
               "base_crease_middle_mm","base_crease_right_mm","layer_count","material_id","sale_unit_price","mold_tool_id","quote_price",
               "printing_plate_1_id","printing_plate_2_id","printing_plate_3_id","plate_alignment_value_mm","plate_mount_value_mm",
-              "machine_set_length_mm","machine_set_width_mm","machine_set_height_mm"
+              "machine_set_length_mm","machine_set_width_mm","machine_set_height_mm","production_label_units_per_label"
             ]);
             if (numericFields.has(field) && Number.isFinite(Number(value))) return Number(value);
             return String(value).trim();
@@ -26204,7 +26205,12 @@
                 let saved;
                 if (this.productForm.id) {
                   saved = { id: this.productForm.id };
-                  if (productDirty) saved=(await axios.put(`/api/master/products/${this.productForm.id}`, payload)).data;
+                  if (productDirty) {
+                    saved=(await axios.put(`/api/master/products/${this.productForm.id}`, payload)).data;
+                    this.productForm = this.hydrateProductForm(saved);
+                    this.beginMasterEdit("product",this.productForm);
+                    this.productFormSnapshot = JSON.stringify(this._productFormSaveFields());
+                  }
                 }
                 else saved=(await axios.post("/api/master/products", payload)).data;
                 if (this.drawingFile) {

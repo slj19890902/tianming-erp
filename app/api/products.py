@@ -423,6 +423,13 @@ class ProductPayload(BaseModel):
     combination_mode: Literal["parent_priced_set", "component_priced"] = "parent_priced_set"
     is_virtual_composite_parent: bool = False
 
+    @field_validator("production_label_units_per_label", mode="before")
+    @classmethod
+    def reject_boolean_production_label_units(cls, value: Any) -> Any:
+        if isinstance(value, bool):
+            raise ValueError("每张标签数量必须是正整数")
+        return value
+
     @model_validator(mode="after")
     def validate_flute_layer_consistency(self) -> "ProductPayload":
         """拒绝非法楞型/层数组合；七层写入必须明确 AAA/ABC。"""
@@ -1015,13 +1022,10 @@ def _validated_product_versioned_updates(
     updates = _product_write_data(payload, user)
     if not virtual_marker_was_submitted:
         updates.pop("is_virtual_composite_parent", None)
-    if (
-        not _external_supply_requested(payload)
-        and not {
+    if not {
         "production_label_enabled",
         "production_label_units_per_label",
-        }.intersection(payload.model_fields_set)
-    ):
+    }.intersection(payload.model_fields_set):
         # Legacy full-update clients do not know these fields and must not
         # silently disable a strategy configured by a newer client.
         updates.pop("production_label_enabled", None)

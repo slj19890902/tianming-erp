@@ -162,7 +162,10 @@ def test_operational_twin_uses_cross_floor_search_highlights_and_mapped_location
     assert "highlightFeatureIds={searchHighlightFeatureIds}" in SOURCE
     assert "highlightedPalletIds={searchHighlightPalletIds}" in SOURCE
     assert "buildMappedLocationPallets(features, visualLocations, floorCode, layout?.id)" in SOURCE
-    assert "pallets: [...layout.pallets, ...mappedLocationPallets]" in SOURCE
+    assert "const mappedLocationPallets = useMemo(" in SOURCE
+    assert "const movePreviewPallets = useMemo(() =>" in SOURCE
+    assert "if (mapMode !== \"move\" || !moveDrafts.length) return mappedLocationPallets" in SOURCE
+    assert "pallets: [...layout.pallets, ...movePreviewPallets]" in SOURCE
     assert '<aside className="twin-context-rail">' in SOURCE
     assert "库存与库位" in SOURCE
     assert "twin-stage-footer" not in SOURCE
@@ -181,7 +184,9 @@ def test_p1_47a_uses_typed_map_search_and_one_unified_read_only_entry() -> None:
     assert 'type WarehouseMapMode = "lookup" | "move" | "planning"' in SOURCE
     assert 'const [mapMode, setMapMode] = useState<WarehouseMapMode>("lookup")' in SOURCE
     assert "查货模式 · 只读" in SOURCE
-    assert "P1-47C 独立阶段启用" in SOURCE
+    assert "P1-47C 独立阶段启用" not in SOURCE
+    assert 'setCanExecuteWarehouse(value.permissions.includes("warehouse.execute"))' in SOURCE
+    assert '{canExecuteWarehouse && <button type="button" className={mapMode === "move" ? "active" : ""} disabled={spatialEditBusy} onClick={enterWarehouseMoveMode}>移货 / 盘点</button>}' in SOURCE
     assert "区域规划" in SOURCE
     assert "P1-47B 独立阶段启用" not in SOURCE
     assert 'mapMode === "move"' in SOURCE
@@ -213,7 +218,9 @@ def test_phase2c8_keeps_location_layout_editing_in_2d_and_25d_read_only() -> Non
     assert "available_actions" in SOURCE
     assert "系统按区域自动生成内部唯一编码" in SOURCE
     assert "/api/warehouse/spatial-layout/locations/${selectedLocation.location_id}/disable" in SOURCE
-    assert "palletEditingOnly={locationEditMode}" in SOURCE
+    assert "palletEditingOnly={locationEditMode || warehouseMoveModeActive}" in SOURCE
+    assert "rackEditingEnabled={locationEditMode}" in SOURCE
+    assert "featureEditingEnabled={locationEditMode && areaPolicyEditMode}" in SOURCE
     assert "选择区域或设备" not in SOURCE
 
 
@@ -321,7 +328,9 @@ def test_p1_42b_uses_only_measured_dispatch_zones_and_keeps_transfer_targets() -
     assert "/api/warehouse/pallets/${selectedLocation.pallet.pallet_id}/merge-all" in SOURCE
     assert '<select value={moveTargetLocationId}' not in SOURCE
     assert '<select value={mergeTargetPalletId}' not in SOURCE
-    assert 'canChooseProducts={canEditLocations && mapMode === "move"}' in SOURCE
+    assert "const P1_47D_ENABLED = false;" in SOURCE
+    assert 'canChooseProducts={P1_47D_ENABLED && canEditLocations && mapMode === "move"}' in SOURCE
+    assert 'canChooseProducts={canEditLocations && mapMode === "move"}' not in SOURCE
     assert ".twin-map-target-thumbnail" in TWIN_CSS
     assert ".twin-dispatch-label-list" in TWIN_CSS
 

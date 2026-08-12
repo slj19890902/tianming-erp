@@ -214,30 +214,54 @@ def _active_pallet_exists(location_id: int):
     )
 
 
-def _active_inventory_exists(location_id: int):
-    return select(InventoryLot.id).where(
+def _active_inventory_exists(
+    location_id: int,
+    *,
+    excluded_lot_id: int | None = None,
+):
+    query = select(InventoryLot.id).where(
         InventoryLot.warehouse_location_id == location_id,
         InventoryLot.status.in_(("active", "frozen")),
-    ).exists()
+        (
+            InventoryLot.quantity_available
+            + InventoryLot.quantity_reserved
+            + InventoryLot.quantity_damaged
+        )
+        > 0,
+    )
+    if excluded_lot_id is not None:
+        query = query.where(InventoryLot.id != excluded_lot_id)
+    return query.exists()
 
 
 def _claim_empty_active_location(
     db: Session,
     location: WarehouseLocation,
+    *,
+    allowed_inventory_lot_id: int | None = None,
+    require_no_live_inventory: bool = False,
 ) -> None:
     """Serialize occupancy with slot disabling using the SQLite writer lock."""
+    claim_conditions = [
+        WarehouseLocation.id == location.id,
+        WarehouseLocation.is_active.is_(True),
+        or_(
+            WarehouseLocation.placement_status == "placed",
+            WarehouseLocation.placement_status.is_(None),
+        ),
+        WarehouseLocation.warehouse_type.in_(("finished", "shared")),
+        ~_active_pallet_exists(location.id),
+    ]
+    if require_no_live_inventory:
+        claim_conditions.append(
+            ~_active_inventory_exists(
+                location.id,
+                excluded_lot_id=allowed_inventory_lot_id,
+            )
+        )
     result = db.execute(
         update(WarehouseLocation)
-        .where(
-            WarehouseLocation.id == location.id,
-            WarehouseLocation.is_active.is_(True),
-            or_(
-                WarehouseLocation.placement_status == "placed",
-                WarehouseLocation.placement_status.is_(None),
-            ),
-            WarehouseLocation.warehouse_type.in_(("finished", "shared")),
-            ~_active_pallet_exists(location.id),
-        )
+        .where(*claim_conditions)
         .values(
             # This guarded no-op is the first write in an occupancy operation.
             # It acquires SQLite's single-writer lock without changing timestamps.
@@ -257,6 +281,17 @@ def _claim_empty_active_location(
         raise Floor3LocationError("货位已停用，不能绑定或移入栈板", status_code=409)
     if _active_pallet_at(db, location.id) is not None:
         raise Floor3LocationError("目标货位已有当前栈板", status_code=409)
+    if require_no_live_inventory and bool(
+        db.scalar(
+            select(
+                _active_inventory_exists(
+                    location.id,
+                    excluded_lot_id=allowed_inventory_lot_id,
+                )
+            )
+        )
+    ):
+        raise Floor3LocationError("目标货位已有活动库存", status_code=409)
     raise Floor3LocationError("货位状态已变化，请刷新后重试", status_code=409)
 
 
@@ -982,6 +1017,7 @@ def bind_finished_lot_to_floor3_pallet(
     pallet_code: str | None = None,
     require_empty_pallet: bool = False,
     allow_operational_location: bool = False,
+    require_no_live_inventory: bool = False,
 ) -> InventoryPallet:
     """Bind one official finished-goods lot to its physical floor-three slot.
 
@@ -1040,6 +1076,8 @@ def bind_finished_lot_to_floor3_pallet(
             remarks="成品入库自动绑定",
             operator_id=operator_id,
             allow_operational_location=allow_operational_location,
+            allowed_inventory_lot_id=int(lot.id),
+            require_no_live_inventory=require_no_live_inventory,
         )
     return add_pallet_item(
         db,
@@ -1087,6 +1125,8 @@ def create_pallet(
     remarks: str | None,
     operator_id: int | None,
     allow_operational_location: bool = False,
+    allowed_inventory_lot_id: int | None = None,
+    require_no_live_inventory: bool = False,
 ) -> InventoryPallet:
     official_items = [
         item for item in items if item.get("create_finished_inventory") is True
@@ -1109,7 +1149,12 @@ def create_pallet(
         else _location(db, location_id)
     )
     try:
-        _claim_empty_active_location(db, location)
+        _claim_empty_active_location(
+            db,
+            location,
+            allowed_inventory_lot_id=allowed_inventory_lot_id,
+            require_no_live_inventory=require_no_live_inventory,
+        )
     except Floor3LocationError as error:
         if str(error) == "目标货位已有当前栈板":
             raise Floor3LocationError(
@@ -1639,6 +1684,7 @@ def move_pallet(
     remarks: str | None,
     operator_id: int | None,
     idempotency_key: str,
+    require_published_target: bool = False,
 ) -> Floor3MoveResult:
     existing = _movement_by_idempotency_key(db, idempotency_key)
     if existing is not None:
@@ -1678,12 +1724,23 @@ def move_pallet(
             target,
             warehouse_types={"finished", "shared"},
             pallet_storage_only=True,
+            require_published=require_published_target,
+            require_map_geometry=require_published_target,
+            required_inventory_type=("finished" if require_published_target else None),
+            require_empty=require_published_target,
+            capacity_source_location_id=(
+                int(row.location_id) if require_published_target else None
+            ),
         )
         if issue:
             raise Floor3LocationError(f"目标货位不可用：{issue}", status_code=409)
         # Acquire SQLite's writer lock before opening a savepoint. Two deferred
         # read transactions cannot reliably upgrade to writers concurrently.
-        _claim_empty_active_location(db, target)
+        _claim_empty_active_location(
+            db,
+            target,
+            require_no_live_inventory=require_published_target,
+        )
 
         # A duplicate may have committed while this request waited for that
         # writer lock. Recheck before claiming the pallet version.
@@ -1703,6 +1760,8 @@ def move_pallet(
             _claim_pallet_version(db, row, expected_version=expected_version)
             from_location_id = row.location_id
             row.location_id = target.id
+            if row.location_occupancy_key != "PRIMARY":
+                row.location_occupancy_key = "PRIMARY"
             row.status = "active"
             row.needs_relocation = _needs_relocation(target, row.items)
             row.updated_by = operator_id

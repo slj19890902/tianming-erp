@@ -128,8 +128,9 @@ from app.services.warehouse_twin_production import (
     save_production_projection_mapping,
 )
 from app.services.asset_time_archive import (
+    build_inventory_lot_detail_timeline,
     build_inventory_lot_time_archives,
-    build_mold_time_archives,
+    build_mold_detail_timeline,
     build_printing_plate_time_archives,
 )
 from app.services.production_workflow import PENDING, list_production_tasks
@@ -1919,7 +1920,11 @@ def _lot_dict(row: InventoryLot, time_archive: dict | None = None) -> dict:
     }
 
 
-def _movement_dict(row: InventoryMovement) -> dict:
+def _movement_dict(
+    row: InventoryMovement,
+    *,
+    include_sensitive_details: bool = True,
+) -> dict:
     return {
         "id": row.id,
         "movement_number": row.movement_number,
@@ -1939,7 +1944,7 @@ def _movement_dict(row: InventoryMovement) -> dict:
         "after_damaged": row.after_damaged,
         "before_scrapped": row.before_scrapped,
         "after_scrapped": row.after_scrapped,
-        "reason": row.reason,
+        "reason": row.reason if include_sensitive_details else None,
         "operator_id": row.operator_id,
         "created_at": utc_naive_to_api(row.created_at),
     }
@@ -1948,6 +1953,8 @@ def _movement_dict(row: InventoryMovement) -> dict:
 def _reservation_dict(
     row: InventoryReservation,
     db: Session,
+    *,
+    include_sensitive_details: bool = True,
 ) -> dict:
     item = db.get(OrderItem, row.order_item_id) if row.order_item_id else None
     order = db.get(Order, row.order_id) if row.order_id else None
@@ -1989,7 +1996,9 @@ def _reservation_dict(
         "warning_codes": warning_codes,
         "reserved_at": utc_naive_to_api(row.reserved_at) if row.reserved_at else None,
         "released_at": utc_naive_to_api(row.released_at) if row.released_at else None,
-        "release_reason": row.release_reason,
+        "release_reason": (
+            row.release_reason if include_sensitive_details else None
+        ),
     }
 
 
@@ -8327,14 +8336,41 @@ def _visible_mold_products(
     return products
 
 
+def _historical_visible_mold_products(
+    row: MoldTool,
+    allowed_customer_ids: set[int] | None,
+) -> list[Product]:
+    """Return historical bindings without crossing the caller's customer scope."""
+
+    return sorted(
+        (
+            product
+            for product in row.products
+            if (
+                allowed_customer_ids is None
+                or product.customer_id in allowed_customer_ids
+            )
+        ),
+        key=lambda product: (
+            product.customer.name if product.customer else "",
+            product.product_code,
+            product.id,
+        ),
+    )
+
+
 def _require_mold_customer_scope(
     row: MoldTool,
     allowed_customer_ids: set[int] | None,
+    *,
+    include_historical: bool = False,
 ) -> None:
-    if allowed_customer_ids is not None and not _visible_mold_products(
-        row,
-        allowed_customer_ids,
-    ):
+    visible_products = (
+        _historical_visible_mold_products(row, allowed_customer_ids)
+        if include_historical
+        else _visible_mold_products(row, allowed_customer_ids)
+    )
+    if allowed_customer_ids is not None and not visible_products:
         raise HTTPException(status_code=403, detail="无客户访问权限")
 
 
@@ -8343,19 +8379,17 @@ def _mold_tool_dict(
     allowed_customer_ids: set[int] | None = None,
     *,
     time_archive: dict | None = None,
+    historical_products: list[Product] | None = None,
 ) -> dict:
     products = _visible_mold_products(row, allowed_customer_ids)
     historical_products = (
-        sorted(
-            row.products,
-            key=lambda product: (
-                product.customer.name if product.customer else "",
-                product.product_code,
-                product.id,
-            ),
+        (
+            _historical_visible_mold_products(row, allowed_customer_ids)
+            if allowed_customer_ids is None
+            else products
         )
-        if allowed_customer_ids is None
-        else products
+        if historical_products is None
+        else historical_products
     )
     archive_candidate = (
         mold_archive_candidate(row) if allowed_customer_ids is None else None
@@ -8425,30 +8459,6 @@ def _mold_tool_dict(
         "updated_at": utc_naive_to_api(row.updated_at) if row.updated_at else None,
         "time_archive": time_archive,
     }
-
-
-def _mold_tool_dicts_with_time_archive(
-    db: Session,
-    rows: list[MoldTool],
-    allowed_customer_ids: set[int] | None,
-) -> list[dict]:
-    products_by_mold = {
-        row.id: _visible_mold_products(row, allowed_customer_ids) for row in rows
-    }
-    archives = build_mold_time_archives(
-        db,
-        rows,
-        products_by_mold=products_by_mold,
-        allowed_customer_ids=allowed_customer_ids,
-    )
-    return [
-        _mold_tool_dict(
-            row,
-            allowed_customer_ids,
-            time_archive=archives.get(row.id),
-        )
-        for row in rows
-    ]
 
 
 def _mold_tools_query(
@@ -8562,13 +8572,53 @@ def list_mold_tools(
         ordered_query = ordered_query.limit(limit)
     rows = db.scalars(ordered_query).unique().all()
     return {
-        "items": _mold_tool_dicts_with_time_archive(
-            db, rows, allowed_customer_ids
-        ),
+        "items": [
+            _mold_tool_dict(row, allowed_customer_ids)
+            for row in rows
+        ],
         "total": total,
         "page": page or 1,
         "page_size": page_size if page is not None else limit,
     }
+
+
+@router.get("/molds/{mold_id}/detail")
+def get_mold_tool_detail(
+    mold_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    allowed_customer_ids = _mold_customer_scope(user, db)
+    row = db.scalar(
+        select(MoldTool)
+        .options(selectinload(MoldTool.products).selectinload(Product.customer))
+        .where(MoldTool.id == mold_id)
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="模具不存在")
+    _require_mold_customer_scope(
+        row,
+        allowed_customer_ids,
+        include_historical=True,
+    )
+    historical_products = _historical_visible_mold_products(
+        row,
+        allowed_customer_ids,
+    )
+    archive = build_mold_detail_timeline(
+        db,
+        row,
+        products=historical_products,
+        allowed_customer_ids=allowed_customer_ids,
+    )
+    result = _mold_tool_dict(
+        row,
+        allowed_customer_ids,
+        time_archive={key: value for key, value in archive.items() if key != "timeline"},
+        historical_products=historical_products,
+    )
+    result["timeline"] = archive["timeline"]
+    return result
 
 
 @router.get("/molds/by-map-area")
@@ -8665,9 +8715,10 @@ def list_mold_tools_by_map_area(
         "feature_code": normalized_feature_code,
         "area_name": feature.get("name") or normalized_feature_code,
         "rack_codes": rack_codes,
-        "items": _mold_tool_dicts_with_time_archive(
-            db, rows, allowed_customer_ids
-        ),
+        "items": [
+            _mold_tool_dict(row, allowed_customer_ids)
+            for row in rows
+        ],
         "total": total,
         "page": page,
         "page_size": page_size,
@@ -9391,6 +9442,7 @@ def unbind_mold_product(
 @router.put("/molds/{mold_id}/enable")
 def enable_mold_tool(
     mold_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     user: User = Depends(admin_only),
 ) -> dict:
@@ -9399,8 +9451,31 @@ def enable_mold_tool(
         raise HTTPException(status_code=404, detail="模具不存在")
     if row.archive_status == "archived":
         raise HTTPException(status_code=409, detail="封存模具不能普通启用，请先搬回一楼正式模具位并恢复")
+    if row.is_active:
+        return _mold_tool_dict(row)
     row.is_active = True
     row.updated_by = user.id
+    append_audit_event(
+        db,
+        request=request,
+        actor=user,
+        event_category="business",
+        result="success",
+        source="web",
+        module_code="warehouse",
+        action_code="mold.legacy_disabled.restore",
+        legacy_action="ENABLE",
+        resource=f"warehouse/molds/{row.id}/enable",
+        entity_type="mold_tool",
+        entity_id=row.id,
+        object_ref=row.mold_code,
+        description="历史普通停用模具恢复使用",
+        details={
+            "mold_code": row.mold_code,
+            "location_changed": False,
+            "note": "兼容恢复历史普通停用事实，不生成位置搬运事实",
+        },
+    )
     db.commit()
     return _mold_tool_dict(row)
 
@@ -9414,12 +9489,10 @@ def disable_mold_tool(
     row = db.get(MoldTool, mold_id)
     if row is None:
         raise HTTPException(status_code=404, detail="模具不存在")
-    if row.archive_status == "archived":
-        raise HTTPException(status_code=409, detail="模具已经处于封存待复用状态")
-    row.is_active = False
-    row.updated_by = user.id
-    db.commit()
-    return _mold_tool_dict(row)
+    raise HTTPException(
+        status_code=409,
+        detail="普通停用已合并，请完成现场搬运后使用封存待复用",
+    )
 
 
 @router.get("/references/template-locations")
@@ -10112,16 +10185,58 @@ def get_lot(
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
-    _require_lot_customer_access(db, lot_id, user)
-    row = db.scalar(_lot_query().where(InventoryLot.id == lot_id))
-    if row is None:
-        raise HTTPException(status_code=404, detail="库存批次不存在")
+    row = _require_lot_customer_access(db, lot_id, user)
+    include_sensitive_details = has_unrestricted_customer_access(user, db)
+    timeline = build_inventory_lot_detail_timeline(
+        db,
+        row,
+        include_sensitive_details=include_sensitive_details,
+    )
+    archive = build_inventory_lot_time_archives(db, [row]).get(row.id) or {}
+    location_events = [
+        event
+        for event in timeline
+        if event.get("event_type")
+        in {
+            "location_transfer",
+            "pallet_location_move",
+            "inventory_location_transfer",
+        }
+        or event.get("basis") == "inferred_from_finished_lot_edit_audit"
+    ]
+    stocktake_events = [
+        event
+        for event in timeline
+        if event.get("event_type") in {"stocktake_submitted", "stocktake_approved"}
+    ]
+    if location_events:
+        archive["latest_location_transfer_at"] = location_events[0]["occurred_at"]
+        current_entry_events = [
+            event
+            for event in location_events
+            if event.get("direction") in {"in", "move"}
+            or event.get("event_type") == "pallet_location_move"
+            or event.get("basis") == "inferred_from_finished_lot_edit_audit"
+        ]
+        if current_entry_events:
+            archive["entered_current_location_at"] = current_entry_events[0][
+                "occurred_at"
+            ]
+            archive["entered_current_location_basis"] = current_entry_events[0][
+                "basis"
+            ]
+    if stocktake_events:
+        archive["latest_stocktake_at"] = stocktake_events[0]["occurred_at"]
     result = _lot_dict(
         row,
-        time_archive=build_inventory_lot_time_archives(db, [row]).get(row.id),
+        time_archive=archive,
     )
+    result["timeline"] = timeline
     result["movements"] = [
-        _movement_dict(item)
+        _movement_dict(
+            item,
+            include_sensitive_details=include_sensitive_details,
+        )
         for item in db.scalars(
             select(InventoryMovement)
             .options(selectinload(InventoryMovement.lot))
@@ -10143,7 +10258,11 @@ def get_lot(
             )
         )
     result["reservations"] = [
-        _reservation_dict(item, db)
+        _reservation_dict(
+            item,
+            db,
+            include_sensitive_details=include_sensitive_details,
+        )
         for item in db.scalars(
             reservation_query.order_by(InventoryReservation.id.desc())
         ).all()

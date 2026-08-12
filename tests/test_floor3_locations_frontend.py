@@ -745,7 +745,7 @@ def test_finished_product_candidate_requires_manual_selection_and_shows_specific
     assert "selectFinishedProductCandidate(${index})" in render
 
 
-def test_inventory_lot_actions_stay_on_one_compact_row() -> None:
+def test_inventory_lot_actions_stay_compact_and_keep_distinct_workflows() -> None:
     assert 'id="lotTable"' in WAREHOUSE_HTML
     assert '.table-wrap.finished-lot-wrap{overflow-x:hidden}' in WAREHOUSE_HTML
     assert '.finished-lot-table{table-layout:fixed;white-space:normal}' in WAREHOUSE_HTML
@@ -762,17 +762,18 @@ def test_inventory_lot_actions_stay_on_one_compact_row() -> None:
     assert '<span class="lot-material">${h(d.material_code||"-")}</span>' in WAREHOUSE_HTML
     assert '<span class="lot-flute">${h(d.flute_type||"-")}</span>' in WAREHOUSE_HTML
     assert '.lot-material,.lot-flute{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' in WAREHOUSE_HTML
-    assert '.lot-actions{display:flex;align-items:center;justify-content:flex-end;gap:3px;flex-wrap:nowrap' in WAREHOUSE_HTML
+    assert '.lot-actions{display:flex;align-items:center;align-content:center;justify-content:flex-end;gap:3px;flex-wrap:wrap' in WAREHOUSE_HTML
     assert '.lot-actions .btn{padding:3px 5px;font-size:11px;line-height:1.2;white-space:nowrap}' in WAREHOUSE_HTML
     assert '<td class="lot-actions">${actionButtons(row)}</td>' in WAREHOUSE_HTML
 
     actions = WAREHOUSE_HTML.split("function actionButtons(row){", 1)[1].split(
         "async function openProductAssignments", 1
     )[0]
-    finished_return = actions.index("return label+staging+edit+general;")
+    finished_return = actions.index("return detail+label+staging+edit;")
+    assert 'onclick="openLotDetail(${row.id})">详情</button>' in actions[:finished_return]
     assert '>转入库位</button>' in actions[:finished_return]
     assert 'onclick="openLotEditor(${row.id})">编辑</button>' in actions[:finished_return]
-    assert actions.index(">转通用</button>") < finished_return
+    assert ">转通用</button>" not in actions
     assert actions.index(">冻结</button>") > finished_return
     assert actions.index(">报损</button>") > finished_return
     assert actions.index(">报废</button>") > finished_return
@@ -794,6 +795,23 @@ def test_inventory_lot_actions_stay_on_one_compact_row() -> None:
     assert "if(!productId)" in save
     assert "点击选择匹配候选" in save
     assert 'product_id:productId' in save
+
+
+def test_mold_status_and_finished_age_rows_do_not_render_explanation_blocks() -> None:
+    assert ".compact-lines-3{display:-webkit-box;max-height:4.05em;overflow:hidden;" in WAREHOUSE_HTML
+    assert "-webkit-line-clamp:3" in WAREHOUSE_HTML
+    assert 'return `<tr class="compact-ledger-row">${common}' in WAREHOUSE_HTML
+    assert '<td>${w}</td><td class="lot-actions">${actionButtons(row)}</td>' in WAREHOUSE_HTML
+    assert "inventoryTimeArchiveHtml" not in WAREHOUSE_HTML
+    assert 'title="${h(row.age_warning_text||"")}"' in WAREHOUSE_HTML
+
+    molds = WAREHOUSE_HTML.split("function renderMolds(){", 1)[1].split(
+        "function renderMoldPager", 1
+    )[0]
+    assert 'return `<tr class="compact-ledger-row">' in molds
+    assert "assetTimeArchiveHtml(row)" not in molds
+    assert "archiveMeta" not in molds
+    assert "可人工封存（不会自动执行）" not in molds
 
 
 def test_finished_lot_editor_requires_explicit_edit_and_keeps_stock_age_derived() -> None:
@@ -825,8 +843,9 @@ def test_finished_lot_editor_requires_explicit_edit_and_keeps_stock_age_derived(
     assert 'row.inventory_type==="finished"' in actions
     assert 'state.user.role!=="admin"' in actions
     assert 'onclick="openLotEditor(${row.id})">编辑</button>' in actions
-    assert '!row.detail.is_general' in actions
-    assert actions.index("return label+staging+edit+general;") < actions.index(">调整</button>")
+    assert 'id="lotEditGeneralize"' in editor
+    assert "/api/warehouse/lots/${lotId}/transfer-to-general" in WAREHOUSE_HTML
+    assert actions.index("return detail+label+staging+edit;") < actions.index(">调整</button>")
 
 
 def test_finished_lot_editor_scopes_product_match_and_saves_transaction_payload() -> None:
@@ -844,13 +863,14 @@ def test_finished_lot_editor_scopes_product_match_and_saves_transaction_payload(
     assert "clearTimeout(state.lotEdit.searchTimer)" in ownership
     assert "state.lotEdit.requestId+=1" in ownership
     assert '$("lotEditProductKeyword").value=""' in ownership
-    assert '$("lotEditOwnership").onchange=()=>updateLotEditOwnership()' in WAREHOUSE_HTML
-    assert '$("lotEditOwnership").onchange=updateLotEditOwnership' not in WAREHOUSE_HTML
+    assert '$("lotEditOwnership").onchange=normalizeLotEditOwnership' in WAREHOUSE_HTML
+    assert "请使用下方‘转为通用库存’" in WAREHOUSE_HTML
 
     save = WAREHOUSE_HTML.split("async function saveLotEditor(event){", 1)[1].split(
         "function updateFlutes", 1
     )[0]
     assert "/api/warehouse/lots/${lotId}/edit-finished" in save
+    assert "transfer-to-general" in WAREHOUSE_HTML
     for field in (
         "expected_version",
         "is_general",
@@ -872,7 +892,7 @@ def test_finished_lot_editor_scopes_product_match_and_saves_transaction_payload(
     assert '$("lotEditSave").disabled=true' in save
     assert "sessionId=state.lotEdit.sessionId" in save
     assert "state.lotEdit.sessionId===sessionId&&state.lotEdit.lotId===lotId" in save
-    assert 'event.key==="Escape"' in WAREHOUSE_HTML
+    assert 'event.key!=="Escape"' in WAREHOUSE_HTML
 
 
 def test_floor3_clear_uses_one_confirmation_without_reason_prompt() -> None:

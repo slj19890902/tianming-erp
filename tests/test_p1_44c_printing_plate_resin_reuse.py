@@ -347,6 +347,8 @@ def test_warehouse_page_explains_plate_rack_reuse_without_archive_semantics() ->
     assert "现场已撕除旧树脂版" in section
     assert "现场已贴好新树脂版" in section
     assert "换版历史" in source
+    assert "row.latest_resin_reuse" in source
+    assert "最近换版" in source
     assert "/resin-reuse/preview" in source
     assert "/resin-reuse/confirm" in source
     assert "/resin-reuses?page=1&page_size=100" in source

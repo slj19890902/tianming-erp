@@ -140,6 +140,12 @@ def test_archive_restore_is_atomic_idempotent_and_searchable(archive_app) -> Non
         assert bypass.status_code == 409
         assert "搬回" in bypass.json()["detail"]
 
+        ordinary_disable = client.put(
+            f"/api/warehouse/molds/{mold['id']}/disable"
+        )
+        assert ordinary_disable.status_code == 409
+        assert "普通停用已合并" in ordinary_disable.json()["detail"]
+
         restored = client.post(
             f"/api/warehouse/molds/{mold['id']}/restore",
             json={

@@ -396,6 +396,37 @@ def test_p1_16e2_merge_all_preserves_formal_lots_and_is_idempotent(
             "clear",
             "add_item",
         }
+        from app.services.asset_time_archive import (
+            build_inventory_lot_detail_timeline,
+        )
+
+        for lot_id in source_lot_ids:
+            timeline = build_inventory_lot_detail_timeline(
+                db,
+                db.get(InventoryLot, lot_id),
+            )
+            merge_events = [
+                event
+                for event in timeline
+                if event.get("movement_subtype") == "loose_goods_merge"
+            ]
+            assert len(merge_events) == 1
+            merge_event = merge_events[0]
+            assert merge_event["event_type"] == "pallet_location_move"
+            assert merge_event["direction"] == "move"
+            assert merge_event["from_location_id"] == ids["locations"][0]
+            assert merge_event["to_location_id"] == ids["locations"][1]
+            assert merge_event["source_pallet_id"] == source_pallet_id
+            assert merge_event["target_pallet_id"] == target_pallet_id
+            assert not any(
+                event.get("event_type") == "inventory_location_transfer"
+                and event.get("movement_id") == merge_event["movement_id"]
+                for event in timeline
+            )
+        assert not any(
+            event.get("movement_subtype") == "loose_goods_merge"
+            for event in build_inventory_lot_detail_timeline(db, target_lot)
+        )
         assert db.scalar(
             select(func.count(OperationLog.id)).where(
                 OperationLog.description.in_(
@@ -1340,6 +1371,106 @@ def test_floor3_scope_redacts_and_rejects_other_customer_content(floor3_app) -> 
         )
         assert hidden_customer_name.status_code == 200, hidden_customer_name.text
         assert hidden_customer_name.json()["items"] == []
+
+
+def test_lot_detail_hides_free_text_audit_fields_from_scoped_users(
+    floor3_app,
+) -> None:
+    from app.models.warehouse_inventory import InventoryMovement, InventoryReservation
+    from app.services.warehouse_inventory import manual_finished_in
+
+    app, ids, factory = floor3_app
+    with factory() as db:
+        lot = manual_finished_in(
+            db,
+            customer_id=ids["tianhua"],
+            product_id=ids["products"][0],
+            location_id=ids["locations"][0],
+            quantity=7,
+            stock_date=date(2026, 7, 15),
+            source_type="manual",
+            remarks=None,
+            operator_id=ids["admin"],
+            idempotency_key="scoped-lot-detail-base",
+        )
+        db.flush()
+        db.add(
+            InventoryMovement(
+                movement_number="SCOPED-DETAIL-001",
+                inventory_lot_id=lot.id,
+                movement_type="damage",
+                quantity=1,
+                unit="boxes",
+                before_available=7,
+                after_available=6,
+                before_reserved=0,
+                after_reserved=0,
+                before_consumed=0,
+                after_consumed=0,
+                before_damaged=0,
+                after_damaged=1,
+                before_scrapped=0,
+                after_scrapped=0,
+                reason="SECRET-REASON-PO-001",
+                remarks="SECRET-REMARK-CUSTOMER-001",
+                operator_id=ids["admin"],
+                idempotency_key="scoped-lot-detail-secret",
+            )
+        )
+        db.add(
+            InventoryReservation(
+                reservation_number="SCOPED-RESERVATION-001",
+                inventory_lot_id=lot.id,
+                reservation_type="finished_order",
+                reserved_stock_quantity=1,
+                consumed_stock_quantity=0,
+                released_stock_quantity=1,
+                consumed_requirement_quantity=0,
+                released_requirement_quantity=0,
+                status="released",
+                release_reason="SECRET-RELEASE-REASON-001",
+                idempotency_key="scoped-reservation-secret",
+            )
+        )
+        db.commit()
+        lot_id = lot.id
+
+    with TestClient(app) as scoped_client:
+        _login(scoped_client, "floor3-scoped")
+        scoped_detail = scoped_client.get(f"/api/warehouse/lots/{lot_id}")
+        assert scoped_detail.status_code == 200, scoped_detail.text
+        scoped_text = scoped_detail.text
+        assert "SECRET-REASON-PO-001" not in scoped_text
+        assert "SECRET-REMARK-CUSTOMER-001" not in scoped_text
+        assert "SECRET-RELEASE-REASON-001" not in scoped_text
+        scoped_event = next(
+            event
+            for event in scoped_detail.json()["timeline"]
+            if event.get("movement_number") == "SCOPED-DETAIL-001"
+        )
+        assert scoped_event["reason"] is None
+        assert scoped_event["remarks"] is None
+        assert "operator_name" not in scoped_event
+        assert scoped_detail.json()["reservations"][0]["release_reason"] is None
+        assert scoped_detail.json()["movements"][0]["reason"] is None
+
+    with TestClient(app) as admin_client:
+        _login(admin_client, "floor3-admin")
+        admin_detail = admin_client.get(f"/api/warehouse/lots/{lot_id}")
+        assert admin_detail.status_code == 200, admin_detail.text
+        admin_event = next(
+            event
+            for event in admin_detail.json()["timeline"]
+            if event.get("movement_number") == "SCOPED-DETAIL-001"
+        )
+        assert admin_event["reason"] == "SECRET-REASON-PO-001"
+        assert admin_event["remarks"] == "SECRET-REMARK-CUSTOMER-001"
+        assert admin_event["operator_name"] == "三楼测试管理员"
+        assert (
+            admin_detail.json()["reservations"][0]["release_reason"]
+            == "SECRET-RELEASE-REASON-001"
+        )
+        assert admin_detail.json()["movements"][0]["reason"] == "SECRET-REASON-PO-001"
 
 
 def test_floor3_scope_treats_mixed_customer_pallet_as_restricted_occupancy(

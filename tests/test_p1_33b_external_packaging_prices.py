@@ -76,12 +76,12 @@ def price_app(tmp_path):
                 sort_order=index * 10,
                 version=1,
                 supply_categories=[
-                    SupplierSupplyCategory(category_code="paper_corner_guard")
+                    SupplierSupplyCategory(category_code="other_packaging")
                 ],
             )
             supplier.packaging_products.append(
                 ExternalPackagingProduct(
-                    category_code="paper_corner_guard",
+                    category_code="other_packaging",
                     supplier_product_code=f"HJ-{index}",
                     normalized_supplier_product_code=f"HJ-{index}",
                     product_name="L型纸护角",
@@ -314,13 +314,14 @@ def test_price_frontend_is_cost_gated_and_separates_fees() -> None:
         encoding="utf-8"
     )
     for needle in (
-        'v-if="canViewCosts" class="btn small" @click="openSupplierPackagingPrices(row)"',
+        'v-if="canViewCosts" class="btn small primary" @click="openSupplierPackagingPrices(row)"',
         "采购价待完善（不会自动填 0）",
+        "维护正式报价",
         "同规格同口径比价",
         "打样费",
         "版费",
         "刀模费",
-        "阶梯价（可选）",
+        "阶梯价",
         "price-comparison",
     ):
         assert needle in source

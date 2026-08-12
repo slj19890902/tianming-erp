@@ -58,7 +58,18 @@ def test_supplier_groups_and_external_product_editor_are_explicit() -> None:
     assert "纸板供应商" in supplier_panel
     assert "包材供应商" in supplier_panel
     assert "供应商大类" in supplier_panel
-    assert "supplierBusinessGroup(row)" in supplier_panel
+    assert "supplierHasCorrugated(row)" in supplier_panel
+    assert "supplierHasPackaging(row)" in supplier_panel
+    assert "纸板材质维护" in supplier_panel
+    assert "包材产品与报价" in supplier_panel
+    assert "包材供应商只维护包材产品、规格和正式报价" in supplier_panel
+
+    supplier_rows = supplier_panel.split(
+        '<tbody><tr v-for="row in filteredSuppliers"', 1
+    )[1].split("</tbody>", 1)[0]
+    assert 'supplierGroupFilter===\'corrugated\'' in supplier_rows
+    assert 'supplierGroupFilter===\'packaging\'' in supplier_rows
+    assert "材质维护</button><button" not in supplier_rows
 
     for marker in (
         "外购包材资料",
@@ -75,6 +86,11 @@ def test_supplier_groups_and_external_product_editor_are_explicit() -> None:
     assert "hollow_board" in INDEX
     assert "中空板" in INDEX
     assert 'supplierPackagingForm.category_code===\'hollow_board\'' in INDEX
+    assert "维护正式报价" in INDEX
+    assert "不进入材质字典、组合材质或材质规则" in INDEX
+    assert "去维护正式报价" in INDEX
+    assert "openExternalPurchasePriceMaintenance" in INDEX
+    assert "supplierPriceProduct?.category_code==='paper_corner_guard'" in INDEX
 
     assert "v-if=\"productForm.supply_mode!=='external_purchase'\"" in product_modal
     assert product_modal.count("productForm.supply_mode!=='external_purchase'") >= 8
@@ -154,6 +170,45 @@ if (payload.production_label_enabled !== false) throw new Error("production labe
 if (payload.external_supply.candidates.length !== 1 || payload.external_supply.candidates[0].is_default !== true) throw new Error("external supply snapshot is invalid");
 if (payload.external_supply.customer_specification.length_mm !== 780) throw new Error("customer length was not saved separately");
 if (payload.unit !== "根") throw new Error("corner guard customer unit must be roots");
+"""
+    _run_node(tmp_path, source)
+
+
+def test_mixed_supplier_appears_in_both_business_groups(tmp_path: Path) -> None:
+    method_names = (
+        "supplierHasCorrugated",
+        "supplierHasPackaging",
+        "filteredSuppliers",
+    )
+    methods = {name: _method(name) for name in method_names}
+    source = f"""
+const vm = {{
+  supplierGroupFilter:"corrugated",
+  supplierSearch:"",
+  suppliers:[
+    {{id:1,standard_name:"纸板兼包材",sort_order:1,supply_categories:["corrugated_board","paper_corner_guard"]}},
+    {{id:2,standard_name:"仅纸板",sort_order:2,supply_categories:["corrugated_board"]}},
+    {{id:3,standard_name:"仅包材",sort_order:3,supply_categories:["epe"]}},
+  ],
+}};
+vm.supplierHasCorrugated = new Function(
+  {json.dumps(methods["supplierHasCorrugated"][0])},
+  {json.dumps(methods["supplierHasCorrugated"][1], ensure_ascii=False)}
+).bind(vm);
+vm.supplierHasPackaging = new Function(
+  {json.dumps(methods["supplierHasPackaging"][0])},
+  {json.dumps(methods["supplierHasPackaging"][1], ensure_ascii=False)}
+).bind(vm);
+vm.filteredSuppliers = new Function(
+  {json.dumps(methods["filteredSuppliers"][0])},
+  {json.dumps(methods["filteredSuppliers"][1], ensure_ascii=False)}
+).bind(vm);
+
+const paperboardIds = vm.filteredSuppliers().map(row=>row.id).join(",");
+if (paperboardIds !== "1,2") throw new Error(`paperboard group mismatch: ${{paperboardIds}}`);
+vm.supplierGroupFilter = "packaging";
+const packagingIds = vm.filteredSuppliers().map(row=>row.id).join(",");
+if (packagingIds !== "1,3") throw new Error(`packaging group mismatch: ${{packagingIds}}`);
 """
     _run_node(tmp_path, source)
 

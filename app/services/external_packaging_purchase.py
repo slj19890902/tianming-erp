@@ -38,6 +38,18 @@ from app.services.corner_guard_pricing import (
 
 MONEY = Decimal("0.01")
 SIX_PLACES = Decimal("0.000001")
+PACKAGING_PRICE_MAINTENANCE_PATH = (
+    "维护路径：常用箱与材质 → 供应商 → 包材供应商 → "
+    "包材产品与报价 → 维护正式报价"
+)
+CORNER_GUARD_MISSING_PRICE_MESSAGE = (
+    "当前没有有效价格：纸护角必须维护每米正式报价；"
+    f"{PACKAGING_PRICE_MAINTENANCE_PATH}"
+)
+PACKAGING_MISSING_PRICE_MESSAGE = (
+    "当前没有匹配冻结规格和采购单位的有效价格；"
+    f"{PACKAGING_PRICE_MAINTENANCE_PATH}"
+)
 
 
 class ExternalPurchaseContractError(ValueError):
@@ -330,9 +342,9 @@ def _candidate_preview(
     )
     if price is None and blocked_reason is None:
         blocked_reason = (
-            "当前没有有效价格：纸护角必须维护每米正式报价"
+            CORNER_GUARD_MISSING_PRICE_MESSAGE
             if component.category_code == CORNER_GUARD_CATEGORY_CODE
-            else "当前没有匹配冻结规格和采购单位的有效价格"
+            else PACKAGING_MISSING_PRICE_MESSAGE
         )
     pricing = None
     quantity_error = _purchase_quantity_error(
@@ -896,9 +908,9 @@ def confirm_external_purchase(
         if price is None:
             raise ExternalPurchaseContractError(
                 (
-                    f"组件“{component.purpose}”当前没有有效价格：纸护角必须维护每米正式报价；请先维护报价版本"
+                    f"组件“{component.purpose}”{CORNER_GUARD_MISSING_PRICE_MESSAGE}"
                     if component.category_code == CORNER_GUARD_CATEGORY_CODE
-                    else f"组件“{component.purpose}”当前没有匹配冻结规格和采购单位的有效价格；请先维护报价版本"
+                    else f"组件“{component.purpose}”{PACKAGING_MISSING_PRICE_MESSAGE}"
                 )
             )
         quantity_error = _purchase_quantity_error(

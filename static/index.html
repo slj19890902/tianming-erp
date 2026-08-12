@@ -2496,11 +2496,11 @@
             </template>
 
             <template v-else-if="activePage === 'products'">
-              <page-head title="常用箱与材质" desc="先选择客户，再维护该客户的常用箱。"></page-head>
+              <page-head title="常用箱、纸板材质与供应商" desc="常用箱按客户维护；纸板材质与包材产品使用各自入口。"></page-head>
               <div class="toolbar">
                 <div class="toolbar-group">
                   <button :class="['btn', {primary: productTab === 'products'}]" @click="selectProductTab('products')">产品资料</button>
-                  <button :class="['btn', {primary: productTab === 'materials'}]" @click="selectProductTab('materials')">材质字典</button>
+                  <button :class="['btn', {primary: productTab === 'materials'}]" @click="selectProductTab('materials')">纸板材质字典</button>
                   <button v-if="canAdmin" :class="['btn', {primary: productTab === 'suppliers'}]" @click="selectProductTab('suppliers')">供应商</button>
                   <button v-if="canCreateProducts && productTab === 'products' && selectedProductCustomer" class="btn success" @click="openProduct()">新增产品</button>
                   <button v-if="canDeleteProducts && productTab === 'products'" class="btn" @click="toggleProductTrash()">产品垃圾站</button>
@@ -2651,13 +2651,16 @@
                 <div class="toolbar" style="margin-bottom:8px">
                   <div class="toolbar-group">
                     <div class="order-status-tabs">
-                      <button :class="['status-tab-btn',{active:supplierGroupFilter==='all'}]" @click="supplierGroupFilter='all'">全部</button>
                       <button :class="['status-tab-btn',{active:supplierGroupFilter==='corrugated'}]" @click="supplierGroupFilter='corrugated'">纸板供应商</button>
                       <button :class="['status-tab-btn',{active:supplierGroupFilter==='packaging'}]" @click="supplierGroupFilter='packaging'">包材供应商</button>
                     </div>
                     <input class="input" style="width:220px" v-model.trim="supplierSearch" placeholder="供应商名称 / 简称 / 业务代码" />
                     <button class="btn primary" @click="openSupplier()">新增供应商</button>
                   </div>
+                </div>
+                <div class="notice" style="margin-bottom:8px">
+                  <template v-if="supplierGroupFilter==='corrugated'">纸板供应商沿用纸板材质、组合材质、材质规则和平方报价维护。</template>
+                  <template v-else>包材供应商只维护包材产品、规格和正式报价，不使用材质字典、组合材质或材质规则。</template>
                 </div>
                 <div v-if="supplierError" class="notice danger" style="margin-bottom:8px">{{ supplierError }} <button class="btn small" @click="loadSuppliers(true)" :disabled="supplierLoading">重新加载</button></div>
                 <div v-if="supplierLoading" class="muted" style="padding:18px;text-align:center">供应商正在加载…</div>
@@ -2668,15 +2671,15 @@
                     <tbody><tr v-for="row in filteredSuppliers" :key="row.id">
                       <td><strong>{{ row.standard_name }}</strong></td>
                       <td>{{ row.display_name || row.standard_name }}</td>
-                      <td><span :class="['status',supplierBusinessGroup(row)==='packaging' ? 'orange' : 'blue']">{{ supplierBusinessGroup(row)==='packaging' ? '包材供应商' : '纸板供应商' }}</span></td>
+                      <td><span :class="['status',supplierGroupFilter==='packaging' ? 'orange' : 'blue']">{{ supplierGroupFilter==='packaging' ? '包材供应商' : '纸板供应商' }}</span></td>
                       <td><span v-for="code in (row.supply_categories || ['corrugated_board'])" :key="code" class="status blue" style="margin:2px">{{ supplierCategoryLabel(code) }}</span></td>
                       <td>{{ row.business_code || "-" }}</td>
                       <td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td>
                       <td>{{ [row.contact_name,row.phone].filter(Boolean).join(" / ") || "-" }}</td>
                       <td class="toolbar-group">
                         <button class="btn small" @click="openSupplier(row)">编辑</button>
-                        <button class="btn small" @click="openSupplierMaterials(row)">材质维护</button>
-                        <button class="btn small" @click="openSupplierPackagingCatalog(row)">外购产品</button>
+                        <button v-if="supplierGroupFilter==='corrugated' && supplierHasCorrugated(row)" class="btn small" @click="openSupplierMaterials(row)">纸板材质维护</button>
+                        <button v-if="supplierGroupFilter==='packaging' && supplierHasPackaging(row)" class="btn small primary" @click="openSupplierPackagingCatalog(row)">包材产品与报价</button>
                       </td>
                     </tr></tbody>
                   </table>
@@ -4554,21 +4557,22 @@
               </details>
             </div>
             <div v-else-if="modal.type === 'supplierPackagingCatalog'">
+              <div class="notice" style="margin-bottom:10px">包材只在这里维护产品、规格和正式报价，不进入材质字典、组合材质或材质规则。</div>
               <div class="toolbar" style="margin-bottom:10px">
                 <div class="toolbar-group">
                   <input class="input" style="width:260px" v-model.trim="supplierPackagingSearch" placeholder="产品代码 / 名称 / 规格" />
                   <button class="btn" @click="loadSupplierPackagingProducts">搜索</button>
-                  <button class="btn primary" @click="openSupplierPackagingProduct()">新增外购产品</button>
+                  <button class="btn primary" @click="openSupplierPackagingProduct()">新增包材产品</button>
                 </div>
                 <span class="muted">{{ supplierPackagingSupplier?.display_name || supplierPackagingSupplier?.standard_name }}</span>
               </div>
               <div v-if="supplierPackagingError" class="notice danger">{{ supplierPackagingError }}</div>
               <div v-if="supplierPackagingLoading" class="empty">正在读取外购产品…</div>
-              <div v-else-if="!supplierPackagingProducts.length" class="empty">暂无外购包装产品</div>
+              <div v-else-if="!supplierPackagingProducts.length" class="empty">暂无包材产品</div>
               <div v-else class="table-wrap"><table class="compact-table"><thead><tr><th>类别</th><th>供应商产品代码</th><th>产品名称</th><th>规格</th><th>适用客户</th><th>采购单位</th><th>交期</th><th>状态</th><th>操作</th></tr></thead><tbody>
                 <tr v-for="row in supplierPackagingProducts" :key="row.id">
                   <td>{{ supplierCategoryLabel(row.category_code) }}</td><td><strong>{{ row.supplier_product_code }}</strong></td><td>{{ row.product_name }}</td><td>{{ row.specification_summary }}</td><td>{{ row.customer_scope_name || '通用' }}</td><td>{{ row.purchase_unit }}</td><td>{{ row.lead_time_days == null ? '-' : row.lead_time_days+'天' }}</td><td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td>
-                  <td class="toolbar-group"><button class="btn small" @click="openSupplierPackagingProduct(row)">编辑</button><button v-if="canViewCosts" class="btn small" @click="openSupplierPackagingPrices(row)">采购报价</button><button :class="['btn','small',row.is_active ? 'danger' : 'success']" @click="toggleSupplierPackagingProduct(row)">{{ row.is_active ? '停用' : '启用' }}</button></td>
+                  <td class="toolbar-group"><button class="btn small" @click="openSupplierPackagingProduct(row)">编辑</button><button v-if="canViewCosts" class="btn small primary" @click="openSupplierPackagingPrices(row)">维护正式报价</button><button :class="['btn','small',row.is_active ? 'danger' : 'success']" @click="toggleSupplierPackagingProduct(row)">{{ row.is_active ? '停用' : '启用' }}</button></td>
                 </tr>
               </tbody></table></div>
             </div>
@@ -4600,6 +4604,7 @@
               <div v-else>
                 <div class="panel" style="margin-bottom:10px">
                   <div class="toolbar"><div><strong>{{ supplierPriceProduct?.supplier_product_code }}｜{{ supplierPriceProduct?.product_name }}</strong><div class="muted">{{ supplierPriceProduct?.supplier_name }}｜{{ supplierPriceProduct?.specification_summary }}</div></div><button class="btn" @click="loadSupplierPriceComparison">同规格比价</button></div>
+                  <div class="notice" style="margin-top:8px">包材正式报价不使用纸板材质字典。纸护角按根/支采购，但正式报价单位固定为“米”，系统按客户单根长度换算。</div>
                   <div v-if="supplierPriceCurrent" class="toolbar-group" style="margin-top:8px;flex-wrap:wrap"><span class="status green">当前有效 v{{ supplierPriceCurrent.version_number }}</span><strong>{{ supplierPriceCurrent.currency }} {{ supplierPriceCurrent.unit_price }} / {{ supplierPriceCurrent.quote_unit }}</strong><span>{{ supplierPriceTaxLabel(supplierPriceCurrent) }}</span><span v-if="supplierPriceCurrent.moq_quantity">MOQ {{ supplierPriceCurrent.moq_quantity }} {{ supplierPriceCurrent.moq_unit }}</span><span class="muted">生效 {{ supplierPriceCurrent.effective_from }}</span></div>
                   <div v-else class="status orange" style="margin-top:8px">采购价待完善（不会自动填 0）</div>
                 </div>
@@ -4607,30 +4612,20 @@
                   <div class="notice" style="margin:8px 0">只有拿到供应商真实报价后填写。同一事实重复保存不会增加版本；价格或口径变化才新增。</div>
                   <div class="form-grid">
                     <div class="field"><label>单价（必填）</label><input class="input" type="number" min="0.000001" step="0.000001" v-model="supplierPriceForm.unit_price" /></div>
-                    <div class="field"><label>报价主单位</label><select class="select" v-model="supplierPriceForm.quote_unit"><option v-for="unit in externalPackagingUnits" :key="unit" :value="unit">{{ unit }}</option><option value="㎡">㎡</option><option value="m³">m³</option></select></div>
+                    <div class="field"><label>报价主单位</label><select class="select" v-model="supplierPriceForm.quote_unit" :disabled="supplierPriceProduct?.category_code==='paper_corner_guard'"><option v-for="unit in externalPackagingUnits" :key="unit" :value="unit">{{ unit }}</option><option value="㎡">㎡</option><option value="m³">m³</option></select><div v-if="supplierPriceProduct?.category_code==='paper_corner_guard'" class="muted">纸护角固定按元/米维护；采购根数由系统按长度换算。</div></div>
                     <div v-if="supplierPriceForm.quote_unit && supplierPriceForm.quote_unit!==supplierPriceProduct?.purchase_unit" class="field wide"><label>单位换算依据（必填）</label><input class="input" v-model.trim="supplierPriceForm.unit_conversion_basis" placeholder="供应商报价单或包装换算说明" /></div>
                     <div class="field"><label>币种</label><input class="input" maxlength="3" v-model.trim="supplierPriceForm.currency" /></div>
                     <div class="field"><label>税费口径</label><select class="select" v-model="supplierPriceForm.tax_mode"><option value="tax_inclusive">含税</option><option value="tax_exclusive">未税</option></select></div>
                     <div class="field"><label>税率</label><input class="input" type="number" min="0" max="1" step="0.01" v-model="supplierPriceForm.tax_rate" /></div>
-                    <div class="field"><label>每单位税额（报价有写才填）</label><input class="input" type="number" min="0" step="0.000001" v-model="supplierPriceForm.tax_amount_per_unit" /></div>
                     <div class="field"><label>生效日期</label><input class="input" type="date" v-model="supplierPriceForm.effective_from" /></div>
-                    <div class="field"><label>失效日期（可空）</label><input class="input" type="date" v-model="supplierPriceForm.effective_to" /></div>
-                    <div class="field"><label>MOQ（{{ supplierPriceForm.quote_unit || '-' }}）</label><input class="input" type="number" min="0.0001" step="0.0001" v-model="supplierPriceForm.moq_quantity" /></div>
-                    <div class="field"><label>包装倍数</label><input class="input" type="number" min="0.0001" step="0.0001" v-model="supplierPriceForm.packaging_multiple" /></div>
-                    <div class="field"><label>运费方式</label><select class="select" v-model="supplierPriceForm.shipping_fee_mode"><option value="not_provided">报价未说明</option><option value="included">已含单价</option><option value="per_order">按单</option><option value="per_unit">按单位</option></select></div>
-                    <div v-if="['per_order','per_unit'].includes(supplierPriceForm.shipping_fee_mode)" class="field"><label>运费金额</label><input class="input" type="number" min="0" step="0.01" v-model="supplierPriceForm.shipping_fee" /></div>
-                    <div class="field"><label>打样费</label><input class="input" type="number" min="0" step="0.01" v-model="supplierPriceForm.sample_fee" /></div>
-                    <div class="field"><label>版费</label><input class="input" type="number" min="0" step="0.01" v-model="supplierPriceForm.plate_fee" /></div>
-                    <div class="field"><label>刀模费</label><input class="input" type="number" min="0" step="0.01" v-model="supplierPriceForm.die_fee" /></div>
                     <div class="field wide"><label>报价证据（必填）</label><input class="input" v-model.trim="supplierPriceForm.evidence_reference" placeholder="报价单号 / 文件名 / 确认日期" /></div>
                   </div>
-                  <div class="panel" style="margin-top:10px"><div class="toolbar"><strong>阶梯价（可选）</strong><button class="btn small" @click="supplierPriceForm.tier_prices.push({min_quantity:'',unit_price:''})">增加阶梯</button></div><div v-for="(tier,index) in supplierPriceForm.tier_prices" :key="index" class="toolbar-group" style="margin-top:6px"><input class="input" style="width:150px" type="number" min="0.0001" step="0.0001" v-model="tier.min_quantity" placeholder="起订数量" /><input class="input" style="width:150px" type="number" min="0.000001" step="0.000001" v-model="tier.unit_price" placeholder="该档单价" /><button class="btn small danger" @click="supplierPriceForm.tier_prices.splice(index,1)">删除</button></div></div>
-                  <div class="field" style="margin-top:10px"><label>备注</label><textarea class="textarea" v-model.trim="supplierPriceForm.remarks"></textarea></div>
+                  <details class="panel" style="margin-top:10px"><summary style="cursor:pointer;font-weight:700">选填：有效期、起订量、运费和其他费用</summary><div class="form-grid" style="margin-top:10px"><div class="field"><label>失效日期</label><input class="input" type="date" v-model="supplierPriceForm.effective_to" /></div><div class="field"><label>每单位税额（报价有写才填）</label><input class="input" type="number" min="0" step="0.000001" v-model="supplierPriceForm.tax_amount_per_unit" /></div><div class="field"><label>MOQ（{{ supplierPriceForm.quote_unit || '-' }}）</label><input class="input" type="number" min="0.0001" step="0.0001" v-model="supplierPriceForm.moq_quantity" /></div><div class="field"><label>包装倍数</label><input class="input" type="number" min="0.0001" step="0.0001" v-model="supplierPriceForm.packaging_multiple" /></div><div class="field"><label>运费方式</label><select class="select" v-model="supplierPriceForm.shipping_fee_mode"><option value="not_provided">报价未说明</option><option value="included">已含单价</option><option value="per_order">按单</option><option value="per_unit">按单位</option></select></div><div v-if="['per_order','per_unit'].includes(supplierPriceForm.shipping_fee_mode)" class="field"><label>运费金额</label><input class="input" type="number" min="0" step="0.01" v-model="supplierPriceForm.shipping_fee" /></div><div class="field"><label>打样费</label><input class="input" type="number" min="0" step="0.01" v-model="supplierPriceForm.sample_fee" /></div><div class="field"><label>版费</label><input class="input" type="number" min="0" step="0.01" v-model="supplierPriceForm.plate_fee" /></div><div class="field"><label>刀模费</label><input class="input" type="number" min="0" step="0.01" v-model="supplierPriceForm.die_fee" /></div></div><div class="panel" style="margin-top:10px"><div class="toolbar"><strong>阶梯价</strong><button class="btn small" @click="supplierPriceForm.tier_prices.push({min_quantity:'',unit_price:''})">增加阶梯</button></div><div v-for="(tier,index) in supplierPriceForm.tier_prices" :key="index" class="toolbar-group" style="margin-top:6px"><input class="input" style="width:150px" type="number" min="0.0001" step="0.0001" v-model="tier.min_quantity" placeholder="起订数量" /><input class="input" style="width:150px" type="number" min="0.000001" step="0.000001" v-model="tier.unit_price" placeholder="该档单价" /><button class="btn small danger" @click="supplierPriceForm.tier_prices.splice(index,1)">删除</button></div></div><div class="field" style="margin-top:10px"><label>备注</label><textarea class="textarea" v-model.trim="supplierPriceForm.remarks"></textarea></div></details>
                   <div class="toolbar" style="justify-content:flex-end;margin-top:10px"><button class="btn primary" :disabled="supplierPriceSaving" @click="saveSupplierPriceVersion">{{ supplierPriceSaving ? '保存中…' : '保存报价版本' }}</button></div>
                 </details>
                 <div v-if="supplierPriceComparison" class="panel" style="margin-top:10px"><div class="toolbar"><strong>同规格同口径比价</strong><span class="muted">不同单位、币种或税费口径不会进入比较</span></div><div v-if="!supplierPriceComparison.items?.length" class="muted" style="margin-top:8px">暂无可直接比较的其他报价。</div><div v-else class="table-wrap" style="margin-top:8px"><table class="compact-table"><thead><tr><th>供应商</th><th>产品代码</th><th>单价</th><th>比最低</th><th>条件差异</th></tr></thead><tbody><tr v-for="row in supplierPriceComparison.items" :key="row.external_product_id"><td>{{ row.supplier?.display_name || row.supplier?.standard_name }}</td><td>{{ row.supplier_product_code }}</td><td>{{ row.currency }} {{ row.unit_price }}/{{ row.quote_unit }}</td><td>{{ Number(row.difference_to_lowest || 0)===0 ? '当前最低' : '+'+row.difference_to_lowest }}</td><td>{{ row.condition_differences?.join('、') || '无' }}</td></tr></tbody></table></div></div>
                 <div class="panel" style="margin-top:10px"><strong>不可变价格历史</strong><div v-if="!supplierPriceItems.length" class="muted" style="margin-top:8px">暂无历史报价。</div><div v-else class="table-wrap" style="margin-top:8px"><table class="compact-table"><thead><tr><th>版本</th><th>单价/单位</th><th>税费</th><th>MOQ/倍数</th><th>运费</th><th>一次性费用</th><th>生效期</th><th>证据</th></tr></thead><tbody><tr v-for="row in supplierPriceItems" :key="row.id"><td>v{{ row.version_number }}</td><td><strong>{{ row.currency }} {{ row.unit_price }}/{{ row.quote_unit }}</strong></td><td>{{ supplierPriceTaxLabel(row) }}</td><td>{{ row.moq_quantity ? row.moq_quantity+' '+row.moq_unit : '-' }} / {{ row.packaging_multiple || '-' }}</td><td>{{ supplierPriceShippingLabel(row) }}</td><td>样 {{ row.sample_fee ?? '-' }} / 版 {{ row.plate_fee ?? '-' }} / 刀模 {{ row.die_fee ?? '-' }}</td><td>{{ row.effective_from }}～{{ row.effective_to || '长期' }}</td><td>{{ row.evidence_reference }}</td></tr></tbody></table></div></div>
-                <div class="toolbar" style="justify-content:flex-end;margin-top:10px"><button class="btn" @click="returnToSupplierPackagingCatalog">返回外购产品</button></div>
+                <div class="toolbar" style="justify-content:flex-end;margin-top:10px"><button class="btn" @click="returnFromSupplierPriceMaintenance">{{ supplierPriceReturnContext ? '返回采购核对' : '返回包材产品' }}</button></div>
               </div>
             </div>
             <div v-else-if="modal.type === 'quotationConvert'" class="product-edit-grid">
@@ -6263,7 +6258,7 @@
                     <td><select class="input" v-model.number="row.selected_candidate_id"><option v-for="candidate in row.candidates" :key="candidate.id" :value="candidate.id" :disabled="!!candidate.blocked_reason">{{ externalPackagingCandidateText(candidate) }}{{ candidate.blocked_reason ? `（${candidate.blocked_reason}）` : '' }}</option></select></td>
                     <td>
                       <template v-if="selectedExternalPurchaseCandidate(row)?.price"><strong>{{ selectedExternalPurchaseCandidate(row).price.currency }} {{ selectedExternalPurchaseCandidate(row).price.unit_price }} / {{ selectedExternalPurchaseCandidate(row).price.quote_unit }}</strong><div v-if="selectedExternalPurchaseCandidate(row).price.purchase_unit_price" class="sensitive-price">按客户定长换算：{{ selectedExternalPurchaseCandidate(row).price.purchase_unit_price }} 元/{{ selectedExternalPurchaseCandidate(row).price.purchase_unit }}</div><div class="muted">价格版本 {{ selectedExternalPurchaseCandidate(row).price.version_number }}；{{ selectedExternalPurchaseCandidate(row).price.tax_mode==='tax_inclusive' ? '含税' : '未税' }}</div><div v-if="selectedExternalPurchaseCandidate(row).suggested_quantity_warning" class="status orange" style="margin-top:4px;white-space:normal">{{ selectedExternalPurchaseCandidate(row).suggested_quantity_warning }}，可修改数量后提交</div></template>
-                      <span v-else class="status red">{{ selectedExternalPurchaseCandidate(row)?.blocked_reason || '缺少有效价格' }}</span>
+                      <div v-else><span class="status red">{{ selectedExternalPurchaseCandidate(row)?.blocked_reason || '缺少有效价格' }}</span><button v-if="selectedExternalPurchaseCandidate(row)?.external_product_id" class="btn small" style="margin-top:6px" @click="openExternalPurchasePriceMaintenance(row)">去维护正式报价</button></div>
                     </td>
                   </tr>
                 </tbody></table></div>
@@ -7685,7 +7680,7 @@
             supplierLoading: false,
             supplierError: "",
             supplierSearch: "",
-            supplierGroupFilter:"all",
+            supplierGroupFilter:"corrugated",
             supplierForm: blankSupplier(),
             supplierCategoryOptions: [
               {value:"corrugated_board",label:"瓦楞纸板"},
@@ -7716,6 +7711,7 @@
             supplierPriceItems:[],
             supplierPriceComparison:null,
             supplierPriceForm:blankSupplierPrice(),
+            supplierPriceReturnContext:null,
             materialSuppliers: [],
             productEditorOptionsLoading: false,
             productEditorOptionsError: "",
@@ -7849,7 +7845,7 @@
             costGapState:{loading:false,error:"",scope_label:"",total_items:0,returned_items:0,truncated:false,categories:[],items:[],filter:"all"},
             costReviewState:{loading:false,loaded:false,error:"",scope_label:"",evaluated_items:0,total_items:0,returned_items:0,truncated:false,summary:[],items:[]},
             orderDetail:null, orderGroupDetail:null, orderTrace:null, orderTraceEventDetail:null, orderTraceEventDetailLoadingKey:"", orderTraceReturnContext:null, traceRollbackBusy:false, drawingFile:null,
-            externalPurchase:{loading:false,saving:false,error:"",submitError:"",status:"",orderId:null,items:[],confirmation:null,idempotencyKey:""},
+            externalPurchase:{loading:false,saving:false,error:"",submitError:"",status:"",orderId:null,orderLabel:"",items:[],confirmation:null,idempotencyKey:""},
             externalPurchaseRouting:[], externalPurchaseRoutingLoading:false, externalPurchaseRoutingError:"",
             orderItemSaveState:{saving:false,committed:false,outcomeUncertain:false,result:null},
             finishedInventoryCandidates: [], finishedInventoryCandidatesLoaded: false,
@@ -8160,8 +8156,9 @@
           },
           filteredSuppliers() {
             const keyword = String(this.supplierSearch || "").trim().toLowerCase();
-            const rows = (this.suppliers || []).filter(row =>
-              this.supplierGroupFilter === "all" || this.supplierBusinessGroup(row) === this.supplierGroupFilter
+            const rows = (this.suppliers || []).filter(row => this.supplierGroupFilter === "packaging"
+              ? this.supplierHasPackaging(row)
+              : this.supplierHasCorrugated(row)
             ).slice().sort((a,b) =>
               Number(a.sort_order || 0) - Number(b.sort_order || 0)
               || String(a.standard_name || "").localeCompare(String(b.standard_name || ""), "zh-CN")
@@ -12549,8 +12546,12 @@
           supplierCategoryLabel(code) {
             return this.supplierCategoryOptions.find(option => option.value === code)?.label || code || "-";
           },
-          supplierBusinessGroup(row) {
-            return (row?.supply_categories || []).some(code=>code !== "corrugated_board") ? "packaging" : "corrugated";
+          supplierHasCorrugated(row) {
+            const categories = row?.supply_categories || ["corrugated_board"];
+            return categories.includes("corrugated_board");
+          },
+          supplierHasPackaging(row) {
+            return (row?.supply_categories || []).some(code=>code !== "corrugated_board");
           },
           productExternalDefaultCandidate() {
             const form = this.productForm || {};
@@ -12661,11 +12662,12 @@
           },
           async openSupplierPackagingCatalog(row) {
             if (!this.canAdmin || !row?.id) return;
+            this.supplierPriceReturnContext = null;
             this.supplierPackagingSupplier = JSON.parse(JSON.stringify(row));
             this.supplierPackagingSearch = "";
             this.supplierPackagingProducts = [];
             this.supplierPackagingError = "";
-            this.modal = {type:"supplierPackagingCatalog",title:`外购产品｜${row.display_name || row.standard_name}`};
+            this.modal = {type:"supplierPackagingCatalog",title:`包材产品与报价｜${row.display_name || row.standard_name}`};
             await this.loadSupplierPackagingProducts();
           },
           async loadSupplierPackagingProducts() {
@@ -12679,7 +12681,7 @@
               this.supplierPackagingProducts = Array.isArray(data?.items) ? data.items : [];
               return true;
             } catch (error) {
-              this.supplierPackagingError = `外购产品读取失败：${this.errorMessage(error)}`;
+              this.supplierPackagingError = `包材产品读取失败：${this.errorMessage(error)}`;
               return false;
             } finally {
               this.supplierPackagingLoading = false;
@@ -12700,11 +12702,11 @@
               ...blankSupplierPackagingProduct(),
               category_code:this.activeExternalPackagingCategoryOptions[0]?.value || "",
             };
-            this.modal = {type:"supplierPackagingProduct",title:row ? "编辑外购产品" : "新增外购产品"};
+            this.modal = {type:"supplierPackagingProduct",title:row ? "编辑包材产品" : "新增包材产品"};
           },
           returnToSupplierPackagingCatalog() {
             const supplier = this.supplierPackagingSupplier;
-            this.modal = {type:"supplierPackagingCatalog",title:`外购产品｜${supplier?.display_name || supplier?.standard_name || "供应商"}`};
+            this.modal = {type:"supplierPackagingCatalog",title:`包材产品与报价｜${supplier?.display_name || supplier?.standard_name || "供应商"}`};
           },
           supplierPackagingPayload() {
             const form = this.supplierPackagingForm || {};
@@ -12739,7 +12741,7 @@
               }
               this.returnToSupplierPackagingCatalog();
               await this.loadSupplierPackagingProducts();
-              this.showToast(row.id ? "外购产品已更新" : "外购产品已新增");
+              this.showToast(row.id ? "包材产品已更新" : "包材产品已新增");
               return true;
             } catch (error) {
               this.showToast(this.errorMessage(error),true);
@@ -12754,13 +12756,14 @@
             try {
               await axios.put(`/api/master/suppliers/${supplierId}/packaging-products/${row.id}/status`,{expected_version:Number(row.version),is_active:row.is_active === false});
               await this.loadSupplierPackagingProducts();
-              this.showToast(row.is_active === false ? "外购产品已启用" : "外购产品已停用");
+              this.showToast(row.is_active === false ? "包材产品已启用" : "包材产品已停用");
             } catch (error) {
               this.showToast(this.errorMessage(error),true);
             }
           },
-          async openSupplierPackagingPrices(row) {
+          async openSupplierPackagingPrices(row, fromExternalPurchase=false) {
             if (!this.canViewCosts || !row?.id) return;
+            if (!fromExternalPurchase) this.supplierPriceReturnContext = null;
             this.supplierPriceLoading = true;
             this.supplierPriceProduct = {...JSON.parse(JSON.stringify(row)),supplier_name:this.supplierPackagingSupplier?.display_name || this.supplierPackagingSupplier?.standard_name};
             this.supplierPriceCurrent = null;
@@ -12772,7 +12775,7 @@
             if (row.category_code === "paper_corner_guard") {
               this.supplierPriceForm.unit_conversion_basis = "客户单根长度mm÷1000换算";
             }
-            this.modal = {type:"supplierPackagingPrices",title:`采购报价｜${row.supplier_product_code}`};
+            this.modal = {type:"supplierPackagingPrices",title:`维护正式报价｜${row.supplier_product_code}`};
             try {
               await this.loadSupplierPriceVersions();
             } finally {
@@ -12847,6 +12850,7 @@
                 this.supplierPriceForm.unit_conversion_basis = "客户单根长度mm÷1000换算";
               }
               this.showToast(data?.created === false ? "报价事实未变化，沿用原版本" : `报价版本 v${data?.item?.version_number || ""} 已保存`);
+              if (this.supplierPriceReturnContext) await this.returnFromSupplierPriceMaintenance();
               return true;
             } catch (error) {
               this.showToast(this.errorMessage(error),true);
@@ -18430,11 +18434,47 @@
           selectedExternalPurchaseCandidate(row) {
             return (row?.candidates || []).find(candidate => Number(candidate.id) === Number(row?.selected_candidate_id)) || null;
           },
+          async openExternalPurchasePriceMaintenance(row) {
+            const candidate = this.selectedExternalPurchaseCandidate(row);
+            if (!candidate?.external_product_id || !this.canAdmin || !this.canViewCosts) return false;
+            const orderId = Number(this.externalPurchase.orderId || 0);
+            this.supplierPriceReturnContext = {
+              orderId,
+              orderLabel:this.externalPurchase.orderLabel || "",
+            };
+            this.supplierPackagingSupplier = {
+              id:Number(candidate.supplier_id || 0),
+              standard_name:candidate.supplier_name || "包材供应商",
+              display_name:candidate.supplier_name || "包材供应商",
+            };
+            await this.openSupplierPackagingPrices({
+              id:Number(candidate.external_product_id),
+              category_code:row.category_code,
+              supplier_product_code:candidate.supplier_product_code,
+              product_name:candidate.product_name,
+              purchase_unit:candidate.purchase_unit,
+              specification_summary:row.specification_summary,
+            }, true);
+            return true;
+          },
+          async returnFromSupplierPriceMaintenance() {
+            const context = this.supplierPriceReturnContext;
+            if (!context?.orderId) {
+              this.returnToSupplierPackagingCatalog();
+              return;
+            }
+            this.supplierPriceReturnContext = null;
+            await this.openExternalPurchase({
+              id:Number(context.orderId),
+              display_order_number:context.orderLabel || "",
+            });
+          },
           async openExternalPurchase(order) {
             const orderId = Number(order?.id || 0);
             if (!orderId || !this.canAdmin || !this.canViewCosts) return;
-            this.externalPurchase = {loading:true,saving:false,error:"",submitError:"",status:"",orderId,items:[],confirmation:null,idempotencyKey:createIdempotencyKey()};
-            this.modal = {type:"externalPurchase",title:`外购包装采购核对 · ${this.displayOrderNumber(order)}`};
+            const orderLabel = this.displayOrderNumber(order);
+            this.externalPurchase = {loading:true,saving:false,error:"",submitError:"",status:"",orderId,orderLabel,items:[],confirmation:null,idempotencyKey:createIdempotencyKey()};
+            this.modal = {type:"externalPurchase",title:`外购包装采购核对 · ${orderLabel}`};
             try {
               const {data} = await axios.get(`/api/orders/${orderId}/external-packaging-purchase`);
               this.externalPurchase.status = data.status;

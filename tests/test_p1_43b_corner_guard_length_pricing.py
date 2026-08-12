@@ -23,6 +23,12 @@ from test_p1_33c2_order_external_component_snapshots import (
     _order_payload,
     snapshot_app,
 )
+from test_p1_33b_external_packaging_prices import (
+    _login as login_price,
+    _product_ids as price_product_ids,
+    _price_payload,
+    price_app,
+)
 
 
 def _customer_specification(length_mm: int, *, side_a_mm: int = 50) -> dict:
@@ -81,6 +87,41 @@ def test_exact_meter_to_root_cost_formula() -> None:
     assert result["pricing_quantity_m"] == Decimal("780.000000")
     assert result["unit_cost_per_root"] == Decimal("0.858000")
     assert result["total_cost"] == Decimal("858.00")
+
+
+def test_corner_guard_formal_price_rejects_non_meter_unit(
+    price_app: FastAPI,
+) -> None:
+    from app.models.supplier import ExternalPackagingProduct
+
+    product_id = price_product_ids(price_app)[0]
+    with price_app.state.session_factory() as db:
+        product = db.get(ExternalPackagingProduct, product_id)
+        product.category_code = "paper_corner_guard"
+        db.commit()
+
+    with TestClient(price_app) as client:
+        login_price(client, "price-admin")
+        root_price = _price_payload("1.10")
+        blocked = client.post(
+            f"/api/master/external-packaging/products/{product_id}/prices",
+            json=root_price,
+        )
+        assert blocked.status_code == 422
+        assert "报价单位必须为“米”" in blocked.json()["detail"]
+
+        meter_price = _price_payload("1.10")
+        meter_price.update(
+            quote_unit="米",
+            moq_unit="米",
+            unit_conversion_basis="客户单根长度mm÷1000换算",
+        )
+        saved = client.post(
+            f"/api/master/external-packaging/products/{product_id}/prices",
+            json=meter_price,
+        )
+        assert saved.status_code == 201, saved.text
+        assert saved.json()["item"]["quote_unit"] == "米"
 
 
 def test_customer_lengths_and_sale_prices_are_independent_from_supplier_master(

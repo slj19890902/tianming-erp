@@ -143,6 +143,27 @@ body.warehouse-twin-page {
   background: #06131de8;
   box-shadow: 0 7px 18px #0004;
 }
+.twin-operation-modes {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px;
+  border: 1px solid #b9c9cf;
+  border-radius: 4px;
+  background: #eef3f5;
+}
+.twin-operation-modes button {
+  min-height: 30px;
+  padding: 5px 11px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: #526b77;
+  background: transparent;
+  font-size: 11px;
+  font-weight: 900;
+}
+.twin-operation-modes button.active { border-color: #0f766e; color: #fff; background: #0f766e; }
+.twin-operation-modes button:disabled { cursor: not-allowed; color: #8a9aa2; opacity: .72; }
 .twin-segmented { padding: 2px; border: 1px solid #244b5a; border-radius: 4px; background: #030c14; }
 .twin-segmented button,
 .twin-camera-presets button,
@@ -598,8 +619,8 @@ body.warehouse-twin-page {
 .twin-search input { border-color: #d4dde1; color: #263c49; background: #fff; }
 
 .twin-workspace { gap: 6px; padding: 6px; overflow: hidden; }
-.twin-workspace.layers-open { grid-template-columns: 140px 210px minmax(380px, 1fr) 292px; }
-.twin-workspace.layers-collapsed { grid-template-columns: 210px minmax(430px, 1fr) 292px; }
+.twin-workspace.layers-open { grid-template-columns: 150px 280px minmax(380px, 1fr) 320px; }
+.twin-workspace.layers-collapsed { grid-template-columns: 280px minmax(430px, 1fr) 320px; }
 .twin-layer-rail,
 .twin-context-rail,
 .twin-inspector,
@@ -627,23 +648,37 @@ body.warehouse-twin-page {
 
 .twin-context-rail { position: relative; z-index: 6; min-height: 0; overflow: hidden; border: 1px solid #cbd6db; background: #fff; box-shadow: 0 2px 8px #0f172a12; }
 .twin-context-rail > header { padding: 9px 10px; border-bottom: 1px solid #d4dee2; background: #f4f7f8; }
-.twin-context-rail > header small { color: #0f766e; font: 800 8px Consolas, monospace; letter-spacing: .14em; }
-.twin-context-rail > header h2 { margin: 2px 0 0; color: #17384a; font-size: 14px; }
+.twin-context-rail > header small { color: #0f766e; font: 800 10px Consolas, monospace; letter-spacing: .14em; }
+.twin-context-rail > header h2 { margin: 2px 0 0; color: #17384a; font-size: 17px; }
 .twin-context-heading { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
 .twin-context-heading b { color: #294653; font-size: 12px; }
-.twin-context-heading button { padding: 0; border: 0; color: #0f766e; background: transparent; font-size: 9px; }
+.twin-context-heading button { padding: 2px 4px; border: 0; color: #0f766e; background: transparent; font-size: 11px; }
 .twin-global-search { height: calc(100% - 51px); min-height: 0; padding: 9px; display: flex; flex-direction: column; gap: 5px; box-sizing: border-box; }
 .twin-global-search > input { width: 100%; padding: 7px 8px; box-sizing: border-box; border: 1px solid #b8c9d0; border-radius: 3px; outline: none; color: #263c49; background: #fff; font-size: 10px; }
 .twin-global-search > input:focus { border-color: #0f766e; box-shadow: 0 0 0 2px #0f766e16; }
-.twin-global-search > small { color: #718590; font-size: 8px; line-height: 1.4; }
+.twin-global-search > small { color: #617783; font-size: 11px; line-height: 1.45; }
 .twin-search-result-list { min-height: 0; overflow-y: auto; border-top: 1px solid #dde5e8; scrollbar-color: #9ab0b8 #eef2f4; }
 .twin-search-result-list > button { width: 100%; padding: 7px 5px; display: grid; gap: 2px; border: 0; border-bottom: 1px solid #e1e8eb; border-left: 2px solid transparent; color: #405966; background: transparent; text-align: left; }
 .twin-search-result-list > button:hover { background: #f3f7f8; }
 .twin-search-result-list > button.selected { border-left-color: #f59e0b; background: #fff8e7; }
-.twin-search-result-list b { color: #263c49; font: 800 9px Consolas, "Microsoft YaHei", sans-serif; overflow-wrap: anywhere; }
-.twin-search-result-list strong { color: #3e5663; font-size: 9px; }
+.twin-search-result-list b { color: #263c49; font: 800 12px Consolas, "Microsoft YaHei", sans-serif; overflow-wrap: anywhere; }
+.twin-search-result-list strong { color: #3e5663; font-size: 12px; }
 .twin-search-result-list span,
-.twin-search-result-list small { color: #718590; font-size: 8px; overflow-wrap: anywhere; }
+.twin-search-result-list small { color: #647985; font-size: 10px; line-height: 1.4; overflow-wrap: anywhere; }
+.twin-search-floor-line { color: #315f72 !important; }
+.twin-search-error { padding: 8px; display: grid; gap: 4px; border: 1px solid #f2b8b5; background: #fff1f0; }
+.twin-search-error b { color: #b42318; font-size: 12px; }
+.twin-search-error span { color: #7a352f; font-size: 11px; }
+.twin-search-error button { justify-self: start; padding: 4px 8px; border: 1px solid #c85148; color: #9f2118; background: #fff; font-size: 11px; }
+.twin-search-floor-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.twin-search-floor-actions button { padding: 4px 7px; border: 1px solid #d8a342; border-radius: 3px; color: #78350f; background: #fffaf0; font-size: 10px; font-weight: 800; }
+.twin-search-floor-actions button.active { color: #fff; background: #b45309; }
+.twin-search-floor-actions button:disabled { cursor: default; opacity: .7; }
+.twin-search-location-list { margin-top: 5px; display: grid; gap: 3px; }
+.twin-search-location-list button { padding: 5px 6px; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 6px; border: 1px solid #ead2a5; border-radius: 3px; color: #694019; background: #fffdf7; text-align: left; }
+.twin-search-location-list button b { font-size: 10px; }
+.twin-search-location-list button span { font-size: 10px; overflow-wrap: anywhere; }
+.twin-search-location-list button em { grid-column: 1 / -1; color: #8c6845; font-size: 9px; font-style: normal; }
 .twin-context-zone,
 .twin-context-empty { margin: 8px; padding: 9px; border: 1px solid #d5e0e4; background: #f8fafb; }
 .twin-context-zone h3 { margin: 5px 0 1px; color: #17384a; font: 800 18px Consolas, "Microsoft YaHei", sans-serif; }
@@ -656,8 +691,8 @@ body.warehouse-twin-page {
 
 .twin-stage::after { border-color: #0f766e18; }
 .twin-stage-heading > div { padding: 6px 8px; background: #ffffffde; box-shadow: 0 2px 7px #0f172a18; }
-.twin-stage-heading b { color: #17384a; }
-.twin-stage-heading > span { color: #5f7481; background: #ffffffd9; }
+.twin-stage-heading b { color: #17384a; font-size: 15px; }
+.twin-stage-heading > span { color: #526a77; background: #ffffffd9; font-size: 11px; }
 .editor-canvas.warehouse-theme .map-compass,
 .editor-canvas.warehouse-theme .map-scale,
 .editor-canvas.warehouse-theme .map-coordinate {
@@ -721,9 +756,9 @@ body.warehouse-twin-page {
 .twin-area-lot:hover { background: #f3f7f8; }
 .twin-area-lot.search-hit { background: #e7f4f1; box-shadow: none; }
 .twin-location-line { padding: 4px 5px; display: grid !important; grid-template-columns: auto minmax(0, 1fr) auto; gap: 5px; border: 1px solid #d5e4e1; border-radius: 2px; color: #355364; background: #edf7f5; }
-.twin-location-line b { color: #0f766e; font-size: 9px; }
-.twin-location-line span { color: #49616e; font-size: 8px; overflow-wrap: anywhere; }
-.twin-location-line em { padding: 1px 3px; border: 0; color: #5f7481; background: #fff; font-size: 7px; }
+.twin-location-line b { color: #0f766e; font-size: 11px; }
+.twin-location-line span { color: #49616e; font-size: 10px; overflow-wrap: anywhere; }
+.twin-location-line em { padding: 1px 3px; border: 0; color: #82929a; background: #fff; font-size: 8px; font-weight: 400; }
 .twin-area-lot b { color: #263c49; }
 .twin-area-lot strong { color: #3e5663; }
 .twin-area-lot > span,
@@ -1017,6 +1052,26 @@ body.warehouse-twin-page {
 .warehouse-twin-shell.large-text .twin-area-lot > b,
 .warehouse-twin-shell.large-text .twin-area-lot > strong { font-size: 16px; }
 .warehouse-twin-shell.large-text .twin-location-item-summary > strong { font-size: 18px; }
+.warehouse-twin-shell.large-text .twin-operation-modes button,
+.warehouse-twin-shell.large-text .twin-toolbar button,
+.warehouse-twin-shell.large-text .twin-toolbar-summary span,
+.warehouse-twin-shell.large-text .twin-stage-heading > span,
+.warehouse-twin-shell.large-text .twin-context-heading,
+.warehouse-twin-shell.large-text .twin-global-search small,
+.warehouse-twin-shell.large-text .twin-search-result-list b,
+.warehouse-twin-shell.large-text .twin-search-result-list strong,
+.warehouse-twin-shell.large-text .twin-search-result-list span,
+.warehouse-twin-shell.large-text .twin-search-result-list small,
+.warehouse-twin-shell.large-text .twin-search-focus-note b,
+.warehouse-twin-shell.large-text .twin-search-focus-note span,
+.warehouse-twin-shell.large-text .twin-search-floor-actions button { font-size: 14px; }
+.warehouse-twin-shell.large-text .twin-search-step > span { font-size: 14px; }
+.warehouse-twin-shell.large-text .twin-search-step input,
+.warehouse-twin-shell.large-text .twin-search-step select { min-height: 44px; font-size: 16px; }
+.warehouse-twin-shell.large-text .twin-context-rail > header h2,
+.warehouse-twin-shell.large-text .twin-stage-heading b { font-size: 20px; }
+.warehouse-twin-shell.large-text .twin-workspace.layers-open { grid-template-columns: 180px 360px minmax(360px, 1fr) 400px; }
+.warehouse-twin-shell.large-text .twin-workspace.layers-collapsed { grid-template-columns: 360px minmax(420px, 1fr) 400px; }
 .warehouse-twin-shell.large-text .twin-workspace.location-editing.layers-collapsed.context-collapsed { grid-template-columns: minmax(420px, 1fr) 620px; }
 .warehouse-twin-shell.large-text .twin-workspace.location-editing.layers-open.context-collapsed { grid-template-columns: 140px minmax(360px, 1fr) 620px; }
 

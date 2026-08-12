@@ -6822,7 +6822,18 @@ def search_warehouse_twin_inventory(
     effective_keyword = str(keyword or inventory_code or "").strip()
     if len(effective_keyword) < 2:
         raise HTTPException(status_code=422, detail="全仓查找至少输入2个字符")
-    query = _lot_query().where(InventoryLot.status.in_(("active", "frozen")))
+    query = (
+        _lot_query()
+        .where(InventoryLot.status.in_(("active", "frozen")))
+        .options(
+            selectinload(InventoryLot.finished_detail).selectinload(
+                FinishedGoodsInventoryDetail.customer
+            ),
+            selectinload(InventoryLot.semi_finished_detail).selectinload(
+                SemiFinishedInventoryDetail.customer
+            ),
+        )
+    )
     visible_customer_ids = _visible_customer_ids(user, db)
     if visible_customer_ids is not None:
         query = query.where(_visible_lot_condition(visible_customer_ids))
@@ -7149,7 +7160,18 @@ def locate_warehouse_twin_objects(
         search_type == "finished" and customer_id is not None
     ):
         raise HTTPException(status_code=422, detail="全仓查找至少输入2个字符")
-    query = _lot_query().where(InventoryLot.status.in_(("active", "frozen")))
+    query = (
+        _lot_query()
+        .where(InventoryLot.status.in_(("active", "frozen")))
+        .options(
+            selectinload(InventoryLot.finished_detail).selectinload(
+                FinishedGoodsInventoryDetail.customer
+            ),
+            selectinload(InventoryLot.semi_finished_detail).selectinload(
+                SemiFinishedInventoryDetail.customer
+            ),
+        )
+    )
     visible_customer_ids = _twin_locator_visible_customer_ids(db, user)
     if visible_customer_ids is not None:
         query = query.where(_visible_lot_condition(visible_customer_ids))

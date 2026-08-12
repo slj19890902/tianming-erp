@@ -145,7 +145,7 @@ def test_operational_twin_expands_real_area_inventory_with_local_filter_and_sear
     assert "filterAreaInventory(selectedInventory, areaInventorySearch)" in SOURCE
     assert "区域库存筛选" in SOURCE
     assert "存货编码、产品、客户、位置" in SOURCE
-    assert "地图已突出显示" in SOURCE
+    assert "全部真实位置已选中" in SOURCE
     assert "数据截至" in SOURCE
     assert "当前区域没有有效库存" in SOURCE
     assert "这是 ERP 当前真实空态，不生成模拟货物" in SOURCE
@@ -156,8 +156,8 @@ def test_operational_twin_expands_real_area_inventory_with_local_filter_and_sear
 def test_operational_twin_uses_cross_floor_search_highlights_and_mapped_location_pallets() -> None:
     assert "全仓查找" in SOURCE
     assert "库存编码定位" not in SOURCE
-    assert "先选择查找类型" in SOURCE
-    assert 'const [searchPanelOpen, setSearchPanelOpen] = useState(false)' in SOURCE
+    assert "统一查货" in SOURCE
+    assert 'const [searchPanelOpen, setSearchPanelOpen] = useState(true)' in SOURCE
     assert "searchHighlightAreaCodes(searchHighlightItems, floorCode)" in SOURCE
     assert "highlightFeatureIds={searchHighlightFeatureIds}" in SOURCE
     assert "highlightedPalletIds={searchHighlightPalletIds}" in SOURCE
@@ -169,15 +169,25 @@ def test_operational_twin_uses_cross_floor_search_highlights_and_mapped_location
     assert "twin-system-footer" not in SOURCE
 
 
-def test_phase2c14_uses_typed_map_search_and_customer_first_difference_entry() -> None:
+def test_p1_47a_uses_typed_map_search_and_one_unified_read_only_entry() -> None:
     assert 'type WarehouseSearchType = "finished" | "mold" | "printing_plate"' in SOURCE
     assert "纸箱成品" in SOURCE
     assert "模具编码或名称" in SOURCE
     assert "印刷版编码、产品或位置" in SOURCE
-    assert "1　客户名称或简写" in SOURCE
-    assert "2　存货编码或产品名称" in SOURCE
+    assert "客户、简写、存货编码、产品名称或规格" in SOURCE
+    assert "不必先记住存货编码" in SOURCE
     assert "groupSearchProducts(searchResponse?.items || [])" in SOURCE
-    assert "地图已突出显示" in SOURCE
+    assert "全部真实位置已选中" in SOURCE
+    assert 'type WarehouseMapMode = "lookup" | "move" | "planning"' in SOURCE
+    assert 'const [mapMode, setMapMode] = useState<WarehouseMapMode>("lookup")' in SOURCE
+    assert "查货模式 · 只读" in SOURCE
+    assert "P1-47C 独立阶段启用" in SOURCE
+    assert "P1-47B 独立阶段启用" in SOURCE
+    assert 'mapMode === "move"' in SOURCE
+    assert 'mapMode === "planning"' in SOURCE
+    assert "warehouseSearchFloorSummaries(current.items)" in SOURCE
+    assert "warehouseSearchLocationSummaries(current.items)" in SOURCE
+    assert "真实文字位置" in SOURCE
     assert "warehouse-search-hit" in SOURCE
     assert "product-search-hit" in SOURCE
     assert "地图选点入仓 / 差异补录" in SOURCE
@@ -259,7 +269,8 @@ def test_phase2c9_admin_operations_and_read_only_locating_share_the_measured_map
     assert "focusedResource.prompt" in SOURCE
     assert 'setSelected({ kind: "pallet", id: `erp-location-${pendingLocationId}` })' in SOURCE
     assert "只读定位" in SOURCE
-    assert "当前账号只可查找和定位，不可执行仓库写操作" in SOURCE
+    assert "当前是查货模式，只读真实库存和地图位置" in SOURCE
+    assert "不执行入库、移货、盘点或布局写入" in SOURCE
 
 
 def test_phase2c9_pallet_label_prioritizes_goods_and_collapses_secondary_location_facts() -> None:
@@ -309,7 +320,7 @@ def test_p1_42b_uses_only_measured_dispatch_zones_and_keeps_transfer_targets() -
     assert "/api/warehouse/pallets/${selectedLocation.pallet.pallet_id}/merge-all" in SOURCE
     assert '<select value={moveTargetLocationId}' not in SOURCE
     assert '<select value={mergeTargetPalletId}' not in SOURCE
-    assert 'allowPalletSelection={viewMode === "25d" || locationEditMode || canEditLocations}' in SOURCE
+    assert 'canChooseProducts={canEditLocations && mapMode === "move"}' in SOURCE
     assert ".twin-map-target-thumbnail" in TWIN_CSS
     assert ".twin-dispatch-label-list" in TWIN_CSS
 

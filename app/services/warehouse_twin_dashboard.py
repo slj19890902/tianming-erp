@@ -82,6 +82,7 @@ def _lot_business_fields(row: InventoryLot) -> dict:
     if row.finished_detail is not None:
         detail = row.finished_detail
         return {
+            "product_id": detail.product_id,
             "inventory_code": detail.inventory_code_snapshot,
             "product_name": detail.product_name_snapshot,
             "customer_id": detail.owner_customer_id,
@@ -102,6 +103,7 @@ def _lot_business_fields(row: InventoryLot) -> dict:
             else None
         )
         return {
+            "product_id": None,
             "inventory_code": detail.material_code_snapshot,
             "product_name": "客户专用纸板备料" if detail.owner_customer_id else "通用半成品片料",
             "customer_id": detail.owner_customer_id,
@@ -110,6 +112,7 @@ def _lot_business_fields(row: InventoryLot) -> dict:
             "material": detail.normalized_material_code or detail.material_code_snapshot,
         }
     return {
+        "product_id": None,
         "inventory_code": None,
         "product_name": "待补充库存名称",
         "customer_id": None,
@@ -901,23 +904,49 @@ def build_inventory_code_search_results(
 
 def inventory_search_matches(row: InventoryLot, keyword: str, as_of: date) -> bool:
     """Match only already-visible inventory facts; this never widens customer scope."""
-    needle = str(keyword or "").strip().casefold()
+    def normalized(value: object) -> str:
+        return (
+            "".join(str(value or "").split())
+            .replace("X", "×")
+            .replace("x", "×")
+            .replace("*", "×")
+            .replace("毫米", "")
+            .replace("mm", "")
+            .casefold()
+        )
+
+    needle = normalized(keyword)
     if not needle:
         return False
     payload = _lot_payload(row, as_of)
     location = row.location
     pallet = row.pallet_item.pallet if row.pallet_item is not None else None
+    finished_customer_code = (
+        row.finished_detail.customer.customer_code
+        if row.finished_detail is not None and row.finished_detail.customer is not None
+        else None
+    )
+    semi_finished_customer_code = (
+        row.semi_finished_detail.customer.customer_code
+        if row.semi_finished_detail is not None
+        and row.semi_finished_detail.customer is not None
+        else None
+    )
     searchable = " ".join(
         str(value or "")
         for value in (
             payload.get("inventory_code"),
             payload.get("product_name"),
             payload.get("customer_name"),
+            finished_customer_code,
+            semi_finished_customer_code,
+            payload.get("specification"),
+            payload.get("material"),
             payload.get("lot_number"),
             location.location_code if location else None,
             location.location_name if location else None,
             location.area_code if location else None,
             pallet.pallet_code if pallet else None,
         )
-    ).casefold()
-    return needle in searchable
+    )
+    return needle in normalized(searchable)

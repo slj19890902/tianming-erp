@@ -9,7 +9,10 @@ import {
   inventoryAgeTone,
   inventoryUnitLabel,
   locationLayoutGeometry,
-  searchHighlightAreaCodes
+  searchHighlightAreaCodes,
+  warehouseSearchFloorSummaries,
+  warehouseSearchLocationSummaries,
+  warehouseSearchProductKey
 } from "../src/warehouseInventory.mjs";
 
 const locations = [
@@ -82,6 +85,37 @@ test("full warehouse matches keep all mapped areas highlighted across the active
   ];
   assert.deepEqual(searchHighlightAreaCodes(results, "3F"), ["A1", "A2"]);
   assert.deepEqual(searchHighlightAreaCodes(results, "1F"), ["P"]);
+});
+
+test("warehouse lookup keeps units separate and summarizes every real floor location", () => {
+  const finished = { product_id: 99, customer_id: 1, customer_name: "天华", inventory_code: "TM-001", product_name: "纸箱", inventory_type: "finished", unit: "boxes" };
+  assert.equal(
+    warehouseSearchProductKey(finished),
+    warehouseSearchProductKey({ ...finished, customer_name: "天华旧名称", inventory_code: "TM-001-OLD", product_name: "旧快照名称" })
+  );
+  assert.notEqual(
+    warehouseSearchProductKey(finished),
+    warehouseSearchProductKey({ ...finished, inventory_type: "semi_finished", unit: "sheets" })
+  );
+  assert.deepEqual(warehouseSearchFloorSummaries([
+    { floor_code: "1F", location_id: 10, quantity: 5 },
+    { floor_code: "3F", location_id: 20, quantity: 12 },
+    { floor_code: "3F", location_id: 21, quantity: 8 },
+    { floor_code: "3F", location_id: 21, quantity: 2 },
+    { floor_code: "UNLOCATED", location_name: "待布局", quantity: 3 }
+  ]), [
+    { floor_code: "1F", quantity: 5, location_count: 1 },
+    { floor_code: "3F", quantity: 22, location_count: 2 },
+    { floor_code: "UNLOCATED", quantity: 3, location_count: 1 }
+  ]);
+  assert.deepEqual(warehouseSearchLocationSummaries([
+    { floor_code: "3F", area_code: "A1", location_id: 21, location_name: "A1第一位", position_status: "mapped", quantity: 8 },
+    { floor_code: "3F", area_code: "A1", location_id: 21, location_name: "A1第一位", position_status: "mapped", quantity: 2 },
+    { floor_code: "UNLOCATED", area_code: null, location_id: null, location_name: "待布局", position_status: "unplaced", quantity: 3 }
+  ]), [
+    { key: "location:21", floor_code: "3F", area_code: "A1", location_id: 21, location_name: "A1第一位", position_status: "mapped", quantity: 10 },
+    { key: "UNLOCATED:TEXT:待布局", floor_code: "UNLOCATED", area_code: null, location_id: null, location_name: "待布局", position_status: "unplaced", quantity: 3 }
+  ]);
 });
 
 test("every visible mapped location receives one stable read-only pallet simulation", () => {

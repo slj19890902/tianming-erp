@@ -344,7 +344,6 @@ def test_inventory_and_asset_time_archives_use_formal_facts_without_writes(tmp_p
         assert lots[unknown_lot.id]["formed_on"] is None
         assert lots[unknown_lot.id]["age_days"] is None
         assert lots[unknown_lot.id]["formation_status"] == "历史未建立/待确认"
-
         for archive in (molds[mold.id], plates[plate.id]):
             assert archive["latest_customer_order_use"]["order_number"] == order.order_number
             assert archive["latest_actual_production_use"]["production_task_id"] == task.id
@@ -365,17 +364,24 @@ def test_inventory_and_asset_time_archives_use_formal_facts_without_writes(tmp_p
     engine.dispose()
 
 
-def test_time_archive_frontend_distinguishes_order_and_actual_production():
+def test_time_archive_frontend_keeps_asset_detail_without_expanding_finished_age_rows():
     from pathlib import Path
 
     source = Path("static/warehouse.html").read_text(encoding="utf-8")
-    assert "形成：" in source
-    assert "入当前位置：" in source
-    assert "最近盘点：" in source
-    assert "最近下单：" in source
-    assert "最近实际生产：" in source
-    assert "距实际生产：" in source
-    assert "查看时间线" in source
+    assert 'id="assetDetailMask"' in source
+    assert source.index('id="assetDetailMask"') > source.index("</main>")
+    assert "function openLotDetail(lotId)" in source
+    assert "function openMoldDetail(moldId)" in source
+    assert "/api/warehouse/molds/${moldId}/detail" in source
+    assert "function timelineHtml(events)" in source
+    assert 'onclick="openLotDetail(${row.id})">详情</button>' in source
+    assert 'onclick="openMoldDetail(${row.id})">详情</button>' in source
+    assert "archive.inbound_notice" in source
+    assert "archive.stocktake_notice" in source
     assert "历史未建立/待确认" in source
     assert "latest_customer_order_use" in source
     assert "latest_actual_production_use" in source
+    assert "inventoryTimeArchiveHtml" not in source
+    assert "assetTimeArchiveHtml" not in source
+    assert 'return `<tr class="compact-ledger-row">${common}' in source
+    assert '<td>${w}</td><td class="lot-actions">${actionButtons(row)}</td>' in source

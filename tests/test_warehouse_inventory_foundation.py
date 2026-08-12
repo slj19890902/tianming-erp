@@ -641,6 +641,25 @@ def test_edit_finished_lot_moves_bound_floor3_pallet_and_projection(
     assert location_movement is not None
     assert location_movement.to_location_id == target.id
     assert location_movement.remarks == "编辑成品库存批次"
+    from app.services.asset_time_archive import build_inventory_lot_detail_timeline
+
+    timeline = build_inventory_lot_detail_timeline(db, edited)
+    matching_location_events = [
+        event
+        for event in timeline
+        if event.get("from_location") == source.location_code
+        and event.get("to_location") == target.location_code
+    ]
+    assert [event["event_type"] for event in matching_location_events] == [
+        "pallet_location_move"
+    ]
+    adjust_event = next(
+        event for event in timeline if event["event_type"] == "inventory_adjust"
+    )
+    assert (adjust_event["before_available"], adjust_event["after_available"]) == (
+        20,
+        15,
+    )
 
 
 def test_edit_finished_lot_rejects_occupied_floor3_target_and_rolls_back(

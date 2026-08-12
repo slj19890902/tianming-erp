@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
+from hashlib import sha256
 import json
 from typing import Iterable, Literal
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.core.time_contract import beijing_today, utc_naive_to_api
+from app.core.time_contract import beijing_naive_to_api, beijing_today, utc_naive_to_api
 from app.models.customer import Customer
+from app.models.audit import OperationLog
 from app.models.master_data_object_version import MasterDataObjectVersion
 from app.models.mold_tool import MoldLocationMovement, MoldTool
 from app.models.order import Order, OrderItem
@@ -18,7 +20,14 @@ from app.models.product import Product
 from app.models.product_bom import SalesOrderItemBomComponent
 from app.models.production import ProductionCompletion, ProductionTask
 from app.models.stocktake import StocktakeItem, StocktakeOrder
-from app.models.warehouse_inventory import InventoryLot, InventoryLotTransfer
+from app.models.user import User
+from app.models.warehouse_inventory import (
+    InventoryLocationMovement,
+    InventoryLot,
+    InventoryLotTransfer,
+    InventoryMovement,
+    WarehouseLocation,
+)
 
 
 _PLATE_FIELDS = (
@@ -39,9 +48,19 @@ def _idle_days(value: datetime | None, as_of: date) -> int | None:
 
 
 def _timeline(events: Iterable[dict]) -> list[dict]:
+    def instant(item: dict) -> datetime:
+        value = str(item.get("occurred_at") or "")
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return datetime.min.replace(tzinfo=timezone.utc)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
     return sorted(
         events,
-        key=lambda item: str(item.get("occurred_at") or ""),
+        key=instant,
         reverse=True,
     )
 
@@ -171,6 +190,386 @@ def build_inventory_lot_time_archives(
             "timeline": _timeline(events),
         }
     return result
+
+
+def _location_labels(db: Session, location_ids: set[int]) -> dict[int, str]:
+    if not location_ids:
+        return {}
+    return {
+        row.id: row.location_code
+        for row in db.scalars(
+            select(WarehouseLocation).where(WarehouseLocation.id.in_(location_ids))
+        ).all()
+    }
+
+
+def _operator_names(db: Session, operator_ids: set[int]) -> dict[int, str]:
+    if not operator_ids:
+        return {}
+    return {
+        row.id: row.display_name or row.real_name or row.username
+        for row in db.scalars(select(User).where(User.id.in_(operator_ids))).all()
+    }
+
+
+def _transfer_movement_key(transfer_key: str, side: str) -> str:
+    raw = f"location-transfer:{transfer_key}:{side}"
+    if len(raw) <= 100:
+        return raw
+    digest = sha256(raw.encode("utf-8")).hexdigest()[:24]
+    return f"{raw[:75]}:{digest}"
+
+
+def build_inventory_lot_detail_timeline(
+    db: Session,
+    lot: InventoryLot,
+    *,
+    include_sensitive_details: bool = False,
+) -> list[dict]:
+    """Build a complete, read-only timeline from persisted inventory facts.
+
+    ``InventoryLotTransfer`` is authoritative for location movement.  The
+    mirrored ``InventoryMovement.location_transfer`` rows are therefore not
+    repeated.  A split lot keeps direct source/target facts visible without
+    guessing older lineage that is not attached to the selected lot.
+    """
+
+    events: list[dict] = [
+        {
+            "event_type": "lot_registration",
+            "label": "库存批次建档",
+            "occurred_at": _api_time(lot.created_at),
+            "basis": "inventory_lot",
+            "operator_id": lot.created_by,
+        }
+    ]
+    if lot.stock_date_accuracy != "unknown":
+        events.append(
+            {
+                "event_type": "inventory_formed",
+                "label": "形成库存",
+                "occurred_at": lot.stock_date.isoformat(),
+                "basis": f"stock_date_{lot.stock_date_accuracy}",
+                "stock_date_accuracy": lot.stock_date_accuracy,
+            }
+        )
+
+    transfers = db.execute(
+        select(InventoryLotTransfer).where(
+            or_(
+                InventoryLotTransfer.source_lot_id == lot.id,
+                InventoryLotTransfer.target_lot_id == lot.id,
+            )
+        )
+    ).scalars().all()
+    location_ids = {
+        location_id
+        for transfer in transfers
+        for location_id in (
+            transfer.source_location_id,
+            transfer.target_location_id,
+        )
+    }
+    location_labels = _location_labels(db, location_ids)
+    transfer_movement_keys: set[str] = set()
+    for transfer in transfers:
+        if transfer.source_lot_id == lot.id and transfer.target_lot_id == lot.id:
+            direction = "移位"
+            direction_code = "move"
+        elif transfer.target_lot_id == lot.id:
+            direction = "转入"
+            direction_code = "in"
+        else:
+            direction = "转出"
+            direction_code = "out"
+        transfer_movement_keys.update(
+            {
+                _transfer_movement_key(transfer.idempotency_key, "source"),
+                _transfer_movement_key(transfer.idempotency_key, "target"),
+            }
+        )
+        events.append(
+            {
+                "event_type": "location_transfer",
+                "label": f"库存位置{direction}" if direction != "移位" else "库存位置移位",
+                "occurred_at": _api_time(transfer.transferred_at),
+                "basis": "inventory_lot_transfer",
+                "direction": direction_code,
+                "transfer_id": transfer.id,
+                "from_location_id": transfer.source_location_id,
+                "from_location": location_labels.get(transfer.source_location_id),
+                "to_location_id": transfer.target_location_id,
+                "to_location": location_labels.get(transfer.target_location_id),
+                "quantity": transfer.quantity,
+                "unit": lot.unit,
+                "operator_id": transfer.transferred_by,
+            }
+        )
+
+    movements = db.scalars(
+        select(InventoryMovement)
+        .where(InventoryMovement.inventory_lot_id == lot.id)
+        .order_by(InventoryMovement.created_at, InventoryMovement.id)
+    ).all()
+
+    # Floor-three loose-goods merging records the selected lot with an
+    # ``InventoryMovement`` key ending in ``:lot:{lot.id}``, while the physical
+    # source/target pallet facts are stored as an exact ``clear``/``add_item``
+    # pair.  Only combine all three immutable facts when the keys and locations
+    # agree; incomplete historical rows remain visible as a generic movement.
+    loose_merge_bases: dict[str, InventoryMovement] = {}
+    lot_key_suffix = f":lot:{lot.id}"
+    for movement in movements:
+        key = movement.idempotency_key or ""
+        if (
+            movement.movement_type == "location_transfer"
+            and movement.quantity == 0
+            and key.endswith(lot_key_suffix)
+            and len(key) > len(lot_key_suffix)
+        ):
+            loose_merge_bases[key[: -len(lot_key_suffix)]] = movement
+
+    matched_loose_merge_movement_ids: set[int] = set()
+    if loose_merge_bases:
+        pallet_keys = {
+            key
+            for base_key in loose_merge_bases
+            for key in (base_key, f"{base_key}:target")
+        }
+        loose_pallet_rows = db.scalars(
+            select(InventoryLocationMovement).where(
+                InventoryLocationMovement.idempotency_key.in_(sorted(pallet_keys))
+            )
+        ).all()
+        loose_pallet_by_key = {
+            row.idempotency_key: row
+            for row in loose_pallet_rows
+            if row.idempotency_key is not None
+        }
+        loose_location_ids: set[int] = set()
+        valid_loose_merges: list[
+            tuple[InventoryMovement, InventoryLocationMovement, InventoryLocationMovement]
+        ] = []
+        for base_key, lot_movement in loose_merge_bases.items():
+            source = loose_pallet_by_key.get(base_key)
+            target = loose_pallet_by_key.get(f"{base_key}:target")
+            if (
+                source is None
+                or target is None
+                or source.movement_type != "clear"
+                or target.movement_type != "add_item"
+                or source.pallet_id == target.pallet_id
+                or source.from_location_id is None
+                or source.to_location_id is None
+                or source.to_location_id != target.from_location_id
+                or source.to_location_id != target.to_location_id
+                or source.moved_at != target.moved_at
+                or source.operator_id != target.operator_id
+                or source.remarks != target.remarks
+            ):
+                continue
+            loose_location_ids.update(
+                {source.from_location_id, source.to_location_id}
+            )
+            valid_loose_merges.append((lot_movement, source, target))
+
+        loose_location_labels = _location_labels(db, loose_location_ids)
+        for lot_movement, source, target in valid_loose_merges:
+            matched_loose_merge_movement_ids.add(lot_movement.id)
+            events.append(
+                {
+                    "event_type": "pallet_location_move",
+                    "movement_subtype": "loose_goods_merge",
+                    "label": "零散货合并移位",
+                    "occurred_at": beijing_naive_to_api(source.moved_at),
+                    "basis": "inventory_location_movement_loose_goods_merge",
+                    "direction": "move",
+                    "movement_id": lot_movement.id,
+                    "source_pallet_movement_id": source.id,
+                    "target_pallet_movement_id": target.id,
+                    "source_pallet_id": source.pallet_id,
+                    "target_pallet_id": target.pallet_id,
+                    "from_location_id": source.from_location_id,
+                    "from_location": loose_location_labels.get(
+                        source.from_location_id
+                    ),
+                    "to_location_id": source.to_location_id,
+                    "to_location": loose_location_labels.get(source.to_location_id),
+                    "operator_id": source.operator_id,
+                    "remarks": source.remarks if include_sensitive_details else None,
+                }
+            )
+
+    pallet_item = lot.pallet_item
+    pallet_move_keys: set[str] = set()
+    if pallet_item is not None:
+        pallet_movements = db.scalars(
+            select(InventoryLocationMovement)
+            .where(
+                InventoryLocationMovement.pallet_id == pallet_item.pallet_id,
+                InventoryLocationMovement.movement_type == "move",
+                InventoryLocationMovement.moved_at
+                >= pallet_item.created_at + timedelta(hours=8),
+            )
+            .order_by(
+                InventoryLocationMovement.moved_at,
+                InventoryLocationMovement.id,
+            )
+        ).all()
+        pallet_location_ids = {
+            location_id
+            for movement in pallet_movements
+            for location_id in (movement.from_location_id, movement.to_location_id)
+            if location_id is not None
+        }
+        pallet_location_labels = _location_labels(db, pallet_location_ids)
+        for movement in pallet_movements:
+            if movement.idempotency_key:
+                pallet_move_keys.add(movement.idempotency_key)
+            from_location = pallet_location_labels.get(movement.from_location_id)
+            to_location = pallet_location_labels.get(movement.to_location_id)
+            events.append(
+                {
+                    "event_type": "pallet_location_move",
+                    "label": "整栈板位置移位",
+                    "occurred_at": beijing_naive_to_api(movement.moved_at),
+                    "basis": "inventory_location_movement_current_binding",
+                    "movement_id": movement.id,
+                    "pallet_id": movement.pallet_id,
+                    "from_location": from_location,
+                    "to_location": to_location,
+                    "operator_id": movement.operator_id,
+                    "remarks": movement.remarks if include_sensitive_details else None,
+                    "scope_notice": "仅覆盖当前批次绑定该栈板后的可靠记录",
+                }
+            )
+
+    stocktake_rows = db.execute(
+        select(StocktakeItem, StocktakeOrder)
+        .join(StocktakeOrder, StocktakeOrder.id == StocktakeItem.order_id)
+        .where(StocktakeItem.inventory_lot_id == lot.id)
+    ).all()
+    for item, order in stocktake_rows:
+        events.append(
+            {
+                "event_type": "stocktake_submitted",
+                "label": "盘点提交",
+                "occurred_at": _api_time(order.submitted_at),
+                "basis": "stocktake_order",
+                "order_number": order.order_number,
+                "status": "submitted",
+                "current_status": order.status,
+                "operator_id": order.submitted_by,
+                "system_quantity": item.on_hand_quantity_snapshot,
+                "counted_quantity": item.counted_quantity,
+                "difference_quantity": item.difference_quantity,
+                "adjustment_movement_id": item.adjustment_movement_id,
+            }
+        )
+        if order.reviewed_at is not None:
+            events.append(
+                {
+                    "event_type": f"stocktake_{order.status}",
+                    "label": "盘点审核通过" if order.status == "approved" else "盘点驳回",
+                    "occurred_at": _api_time(order.reviewed_at),
+                    "basis": "stocktake_order_review",
+                    "order_number": order.order_number,
+                    "status": order.status,
+                    "operator_id": order.reviewed_by,
+                    "note": order.review_note if include_sensitive_details else None,
+                }
+            )
+
+    for movement in movements:
+        if movement.id in matched_loose_merge_movement_ids:
+            continue
+        if (
+            movement.movement_type == "location_transfer"
+            and movement.idempotency_key in transfer_movement_keys
+        ):
+            continue
+        event = {
+            "event_type": f"inventory_{movement.movement_type}",
+            "label": movement.movement_type,
+            "occurred_at": _api_time(movement.created_at),
+            "basis": "inventory_movement",
+            "movement_id": movement.id,
+            "movement_number": movement.movement_number,
+            "quantity": movement.quantity,
+            "unit": movement.unit,
+            "before_available": movement.before_available,
+            "after_available": movement.after_available,
+            "before_reserved": movement.before_reserved,
+            "after_reserved": movement.after_reserved,
+            "before_consumed": movement.before_consumed,
+            "after_consumed": movement.after_consumed,
+            "before_damaged": movement.before_damaged,
+            "after_damaged": movement.after_damaged,
+            "before_scrapped": movement.before_scrapped,
+            "after_scrapped": movement.after_scrapped,
+            "reason": movement.reason if include_sensitive_details else None,
+            "remarks": (
+                movement.remarks
+                if include_sensitive_details
+                and movement.movement_type != "adjust"
+                else None
+            ),
+            "operator_id": movement.operator_id,
+        }
+        if movement.movement_type == "adjust" and movement.remarks:
+            try:
+                audit = json.loads(movement.remarks)
+            except (TypeError, ValueError):
+                audit = None
+            location_change = (
+                (audit or {}).get("changes", {}).get("warehouse_location_id")
+                if isinstance(audit, dict)
+                else None
+            )
+            if isinstance(location_change, dict):
+                edit_move_key = (
+                    f"finished-edit:{sha256(movement.idempotency_key.encode('utf-8')).hexdigest()}"
+                    if movement.idempotency_key
+                    else None
+                )
+                if edit_move_key not in pallet_move_keys:
+                    from_id = location_change.get("before")
+                    to_id = location_change.get("after")
+                    inferred_labels = _location_labels(
+                        db,
+                        {
+                            int(value)
+                            for value in (from_id, to_id)
+                            if value is not None
+                        },
+                    )
+                    event.update(
+                        {
+                            "label": "编辑批次并移位",
+                            "from_location_id": from_id,
+                            "from_location": inferred_labels.get(from_id),
+                            "to_location_id": to_id,
+                            "to_location": inferred_labels.get(to_id),
+                            "basis": "inferred_from_finished_lot_edit_audit",
+                            "scope_notice": "位置方向来自不可变编辑审计，历史无独立移位单",
+                        }
+                    )
+                    if include_sensitive_details:
+                        event["remarks"] = movement.remarks
+        events.append(event)
+    if include_sensitive_details:
+        operator_names = _operator_names(
+            db,
+            {
+                int(event["operator_id"])
+                for event in events
+                if event.get("operator_id") is not None
+            },
+        )
+        for event in events:
+            if event.get("operator_id") is not None:
+                event["operator_name"] = operator_names.get(int(event["operator_id"]))
+    return _timeline(events)
 
 
 def _current_binding_starts(
@@ -593,6 +992,119 @@ def build_mold_time_archives(
         allowed_customer_ids=allowed_customer_ids,
         as_of=as_of,
     )
+
+
+def build_mold_detail_timeline(
+    db: Session,
+    mold: MoldTool,
+    *,
+    products: list[Product],
+    allowed_customer_ids: set[int] | None,
+) -> dict:
+    """Return every reliable mold time fact without inventing inbound/stocktake data."""
+
+    summary = build_mold_time_archives(
+        db,
+        [mold],
+        products_by_mold={mold.id: products},
+        allowed_customer_ids=allowed_customer_ids,
+    )[mold.id]
+    events: list[dict] = [
+        {
+            "event_type": "mold_registration",
+            "label": "模具档案登记",
+            "occurred_at": _api_time(mold.created_at),
+            "basis": "mold_master",
+            "operator_id": mold.created_by,
+        }
+    ]
+    movements = db.scalars(
+        select(MoldLocationMovement)
+        .where(MoldLocationMovement.mold_tool_id == mold.id)
+        .order_by(MoldLocationMovement.moved_at, MoldLocationMovement.id)
+    ).all()
+    movement_labels = {
+        "archive": "封存移位",
+        "restore": "搬回恢复",
+        "manual_input": "位置移位",
+        "scanner_paste": "扫码粘贴移位",
+        "url_parameter": "扫码链接移位",
+        "api": "位置移位",
+    }
+    for movement in movements:
+        events.append(
+            {
+                "event_type": "mold_location_move",
+                "label": movement_labels.get(movement.source, "位置移位"),
+                "occurred_at": _api_time(movement.moved_at),
+                "basis": "mold_location_movement",
+                "movement_id": movement.id,
+                "from_location": movement.from_location,
+                "to_location": movement.to_location,
+                "source": movement.source,
+                "note": movement.note if allowed_customer_ids is None else None,
+                "operator_id": movement.actor_id,
+                "expected_version": movement.expected_version,
+                "resulting_version": movement.resulting_version,
+            }
+        )
+    if mold.last_location_confirmed_at is not None and not movements:
+        events.append(
+            {
+                "event_type": "mold_location_confirmation",
+                "label": "位置确认",
+                "occurred_at": _api_time(mold.last_location_confirmed_at),
+                "basis": "mold_location_confirmation",
+                "to_location": mold.rack_location,
+                "operator_id": mold.last_location_confirmed_by,
+            }
+        )
+    legacy_restore_logs = db.scalars(
+        select(OperationLog)
+        .where(
+            OperationLog.entity_type == "mold_tool",
+            OperationLog.entity_id == mold.id,
+            OperationLog.action_code == "mold.legacy_disabled.restore",
+        )
+        .order_by(OperationLog.created_at, OperationLog.id)
+    ).all()
+    for log in legacy_restore_logs:
+        events.append(
+            {
+                "event_type": "mold_legacy_disabled_restore",
+                "label": "历史停用恢复使用",
+                "occurred_at": _api_time(log.created_at),
+                "basis": "operation_log",
+                "operator_id": log.actor_user_id_snapshot or log.user_id,
+                "scope_notice": "兼容恢复历史普通停用事实，不代表实物移位",
+            }
+        )
+    for event in summary.get("timeline") or []:
+        if event.get("event_type") in {
+            "customer_order_use",
+            "actual_production_use",
+        }:
+            events.append(dict(event))
+    if allowed_customer_ids is None:
+        operator_names = _operator_names(
+            db,
+            {
+                int(event["operator_id"])
+                for event in events
+                if event.get("operator_id") is not None
+            },
+        )
+        for event in events:
+            if event.get("operator_id") is not None:
+                event["operator_name"] = operator_names.get(
+                    int(event["operator_id"])
+                )
+    summary["timeline"] = _timeline(events)
+    summary["stocktake_status"] = "not_supported"
+    summary["stocktake_notice"] = "当前尚无模具盘点事实；不会从档案更新时间推算。"
+    summary["inbound_status"] = "not_recorded"
+    summary["inbound_notice"] = "当前尚无模具实物入库单；档案登记不等于实物入库。"
+    return summary
 
 
 def build_printing_plate_time_archives(

@@ -542,6 +542,7 @@ def test_scoped_account_only_reads_allowed_mold_products_and_labels(mold_app) ->
             (1, "SHARED-ALLOW", shared_mold_id),
             (denied_customer_id, "SHARED-DENY", shared_mold_id),
         ]
+        product_ids = {}
         for customer_id, product_code, mold_id in products:
             response = admin_client.post(
                 "/api/master/products",
@@ -558,6 +559,14 @@ def test_scoped_account_only_reads_allowed_mold_products_and_labels(mold_app) ->
                 },
             )
             assert response.status_code == 201, response.text
+            product_ids[product_code] = response.json()["id"]
+
+        with factory() as db:
+            from app.models.product import Product
+
+            db.get(Product, product_ids["ALLOW-001"]).is_active = False
+            db.get(Product, product_ids["SHARED-DENY"]).is_active = False
+            db.commit()
 
     with TestClient(app) as scoped_client:
         _login(scoped_client, "sales")
@@ -567,7 +576,7 @@ def test_scoped_account_only_reads_allowed_mold_products_and_labels(mold_app) ->
         )
         assert listed.status_code == 200, listed.text
         by_code = {row["mold_code"]: row for row in listed.json()["items"]}
-        assert "SCOPE-ALLOW" in by_code
+        assert "SCOPE-ALLOW" not in by_code
         assert "SCOPE-DENY" not in by_code
         assert by_code["SCOPE-SHARED"]["product_count"] == 1
         assert [
@@ -580,20 +589,43 @@ def test_scoped_account_only_reads_allowed_mold_products_and_labels(mold_app) ->
         assert denied_search.status_code == 200, denied_search.text
         assert denied_search.json()["items"] == []
 
+        allowed_detail = scoped_client.get(
+            f"/api/warehouse/molds/{allowed_mold_id}/detail"
+        )
+        assert allowed_detail.status_code == 200, allowed_detail.text
+        assert allowed_detail.json()["time_archive"]["inbound_status"] == "not_recorded"
+        assert allowed_detail.json()["time_archive"]["stocktake_status"] == "not_supported"
+        assert allowed_detail.json()["product_count"] == 0
+        assert [
+            row["product_code"]
+            for row in allowed_detail.json()["binding_history"]
+        ] == ["ALLOW-001"]
+        shared_detail = scoped_client.get(
+            f"/api/warehouse/molds/{shared_mold_id}/detail"
+        )
+        assert shared_detail.status_code == 200, shared_detail.text
+        assert [
+            row["product_code"] for row in shared_detail.json()["binding_history"]
+        ] == ["SHARED-ALLOW"]
+        denied_detail = scoped_client.get(
+            f"/api/warehouse/molds/{denied_mold_id}/detail"
+        )
+        assert denied_detail.status_code == 403, denied_detail.text
+        assert denied_detail.json()["detail"] == "无客户访问权限"
+
         mapped_area = scoped_client.get(
             "/api/warehouse/molds/by-map-area",
             params={"feature_code": "ZONE-1F-MOLD-002", "page_size": 100},
         )
         assert mapped_area.status_code == 200, mapped_area.text
         assert {row["mold_code"] for row in mapped_area.json()["items"]} == {
-            "SCOPE-ALLOW",
             "SCOPE-SHARED",
         }
 
         allowed_label = scoped_client.get(
             f"/api/warehouse/molds/{allowed_mold_id}/label"
         )
-        assert allowed_label.status_code == 200, allowed_label.text
+        assert allowed_label.status_code == 403, allowed_label.text
         denied_label = scoped_client.get(
             f"/api/warehouse/molds/{denied_mold_id}/label"
         )
@@ -602,12 +634,11 @@ def test_scoped_account_only_reads_allowed_mold_products_and_labels(mold_app) ->
 
         allowed_batch = scoped_client.get(
             "/api/warehouse/molds/labels",
-            params={"mold_ids": f"{shared_mold_id},{allowed_mold_id}"},
+            params={"mold_ids": str(shared_mold_id)},
         )
         assert allowed_batch.status_code == 200, allowed_batch.text
         assert [row["id"] for row in allowed_batch.json()["items"]] == [
             shared_mold_id,
-            allowed_mold_id,
         ]
         assert [
             product["product_code"]
@@ -659,6 +690,57 @@ def test_workshop_can_query_but_cannot_modify_mold(mold_app) -> None:
             },
         )
         assert denied.status_code == 403
+
+
+def test_ordinary_mold_disable_is_retired_and_legacy_restore_is_audited(
+    mold_app,
+) -> None:
+    app, factory = mold_app
+    from app.models.audit import OperationLog
+    from app.models.mold_tool import MoldTool
+    from sqlalchemy import select
+
+    with factory() as db:
+        legacy = MoldTool(
+            mold_code="LEGACY-DISABLED-001",
+            mold_name="历史普通停用模具",
+            rack_location="1F-M-R01-L2-G01",
+            is_active=False,
+        )
+        db.add(legacy)
+        db.commit()
+        legacy_id = legacy.id
+
+    with TestClient(app) as client:
+        _login(client, "admin")
+        retired = client.put(f"/api/warehouse/molds/{legacy_id}/disable")
+        assert retired.status_code == 409, retired.text
+        assert "普通停用已合并" in retired.json()["detail"]
+
+        restored = client.put(f"/api/warehouse/molds/{legacy_id}/enable")
+        assert restored.status_code == 200, restored.text
+        assert restored.json()["is_active"] is True
+
+        detail = client.get(f"/api/warehouse/molds/{legacy_id}/detail")
+        assert detail.status_code == 200, detail.text
+        restore_event = next(
+            event
+            for event in detail.json()["timeline"]
+            if event["event_type"] == "mold_legacy_disabled_restore"
+        )
+        assert restore_event["label"] == "历史停用恢复使用"
+        assert "不代表实物移位" in restore_event["scope_notice"]
+
+    with factory() as db:
+        log = db.scalar(
+            select(OperationLog).where(
+                OperationLog.entity_type == "mold_tool",
+                OperationLog.entity_id == legacy_id,
+                OperationLog.action_code == "mold.legacy_disabled.restore",
+            )
+        )
+        assert log is not None
+        assert log.description == "历史普通停用模具恢复使用"
 
 
 def test_workshop_can_open_structured_location_label_and_qr(

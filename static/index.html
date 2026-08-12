@@ -1081,6 +1081,24 @@
         align-items: end;
         background: #f5f9ff;
       }
+      .product-size-report-row--standard {
+        grid-template-columns: repeat(3, 84px) 96px 72px minmax(315px, 1fr) 100px 112px 268px;
+      }
+      .product-size-report-row--telescoping {
+        grid-template-columns: repeat(3, 84px) minmax(0, 1fr);
+      }
+      .product-size-report-row--plain-3d-with-crease {
+        grid-template-columns: repeat(3, 84px) 330px 100px 112px 268px;
+      }
+      .product-size-report-row--plain-3d {
+        grid-template-columns: repeat(3, 84px) 330px 100px 112px;
+      }
+      .product-size-report-row--flat-2d {
+        grid-template-columns: repeat(2, 84px) 330px 100px 112px;
+      }
+      .product-size-report-row--no-dimensions {
+        grid-template-columns: 330px 100px 112px 268px;
+      }
       .product-dimension-field { min-width: 0; }
       .product-dimension-field .input { width: 84px; min-width: 84px; max-width: 84px; background:#f8fcf6; }
       .product-splice-field { min-width: 0; }
@@ -4689,7 +4707,7 @@
                 <div v-if="canViewCosts && productForm.supply_mode==='external_purchase'" class="muted sensitive-price" style="margin-top:6px">上表是供应商采购成本；下方“客户默认销售单价”是对客户报价，两者独立，系统不会互相覆盖。</div>
               </div>
 
-              <div v-if="productForm.supply_mode!=='external_purchase'" class="product-form-row product-size-report-row">
+              <div v-if="productForm.supply_mode!=='external_purchase'" class="product-form-row product-size-report-row" :class="productSizeReportRowClass(productForm.box_style)">
                 <div v-if="productRequiresDimension(productForm.box_style,'length_mm')" class="field product-dimension-field"><label>长(mm)</label><input class="input" type="number" min="0" step="1" v-model.number="productForm.length_mm" /></div>
                 <div v-if="productRequiresDimension(productForm.box_style,'width_mm')" class="field product-dimension-field"><label>宽(mm)</label><input class="input" type="number" min="0" step="1" v-model.number="productForm.width_mm" /></div>
                 <div v-if="productRequiresDimension(productForm.box_style,'height_mm')" class="field product-dimension-field"><label>高(mm)</label><input class="input" type="number" min="0" step="1" v-model.number="productForm.height_mm" /></div>
@@ -20632,6 +20650,22 @@
           },
           usesProductDefaultCuttingMode(boxType) {
             return this.productBoxTypeRule(boxType)?.supports_cutting_mode === true;
+          },
+          productSizeReportRowClass(boxType) {
+            const rule = this.productBoxTypeRule(boxType);
+            if (!rule) return "product-size-report-row--standard";
+            if (rule.code === "a3_set") return "product-size-report-row--telescoping";
+            if (rule.supports_splice === true || rule.uses_flap === true) {
+              return "product-size-report-row--standard";
+            }
+            const dimensionCount = Array.isArray(rule.required_dimensions)
+              ? rule.required_dimensions.length
+              : 0;
+            if (dimensionCount === 0) return "product-size-report-row--no-dimensions";
+            if (dimensionCount <= 2) return "product-size-report-row--flat-2d";
+            return this.productSupportsCreaseSegments(boxType)
+              ? "product-size-report-row--plain-3d-with-crease"
+              : "product-size-report-row--plain-3d";
           },
           productRequiresDimension(boxType, dimension) {
             if (!String(boxType || "").trim()) return true;

@@ -65,6 +65,54 @@ Fixes made:
 
 final result: passed
 
+---
+
+# 编辑常用箱多箱型第二排布局修复 Design QA（2026-08-12）
+
+## Comparison target
+
+- baseline URL: `http://127.0.0.1:18128/`（v0.22.92 隔离验收副本）
+- fixed implementation URL: `http://127.0.0.1:18129/`（当前独立修复工作树与独立 SQLite 副本）
+- combined comparison board: `D:\tm-worktrees\erp-common-box-box-type-row-fix-20260812\.codex_tmp\box-type-row-qa\comparison-board.png`
+- browser viewport and state: Codex in-app browser, 1606 x 979；新增常用箱；长宽高输入五位数、报料长宽输入六位数，具备三段压线的箱型切到“压线”。
+- compared box types: 独立天盖、独立底、衬板、隔板、刀卡、模切内盒、异形箱。
+
+## Required fidelity surfaces
+
+- Layout rhythm: 保留 v0.22.92 五个紧凑功能色带和其余字段位置，只根据后端箱型能力给第二排选择标准箱、天地盖、三维带压线、三维、二维或无规格六种网格。
+- Input capacity: 长宽高仍完整显示五位数字，报料长宽仍完整显示六位数字；二维衬板/隔板/刀卡不人为补空的“高”框。
+- Business fields: 独立天盖、独立底、异形箱保留三段压线位置；衬板、隔板、刀卡、模切内盒保留可编辑“一开 N”；无拼箱、无舌头箱型没有幽灵占位。
+- Frontend/backend consistency: 模切内盒和异形箱的后端 `required_dimensions` 均为长、宽、高；前端由同一规则源显示三个规格框，API 创建后读取三项值一致。
+- Safety: 异形箱仍只允许人工填写报料尺寸，不新增自动展开公式；本轮没有迁移、没有正式数据库写入。
+
+## Comparison history
+
+### Pass 1 — fixed
+
+- P1: v0.22.92 的固定九列网格假定所有箱型都有三规格、拼箱和舌头；条件字段被隐藏后，后续报料、开料、压线仍按原列号落位，造成文字和输入框相互堆叠。
+- P1: 模切内盒只显示长宽，异形箱连成品规格框都不显示，与老板本轮确认的长宽高规则不一致。
+
+Fixes made:
+
+- 从后端箱型规则动态选择第二排网格，隐藏字段后其余字段自动紧邻排列，不再继承 A1 的空列假设。
+- 模切内盒和异形箱改为长宽高三规格；保留人工报料边界，不引入未经确认的公式。
+
+### Pass 2 — passed
+
+- 七个指定箱型逐类浏览器测量，所有第二排字段矩形重叠数均为 0。
+- 模切内盒、异形箱浏览器中均出现 3 个规格输入框；衬板、隔板、刀卡保持 2 个。
+- A1、A3、围板、满摇盖、半开槽回归检查无重叠。
+- 浏览器运行日志为空；相关自动化测试全部通过。
+
+## Primary interactions tested
+
+- 通过真实“主数据 → 常用箱与材质 → 客户 → 新增产品”路径打开编辑器。
+- 逐项切换七个指定箱型并输入五位规格、六位报料；具备压线能力的箱型切换到“压线”显示三段尺寸。
+- 对每个箱型读取实际 DOM 几何并检查字段交叠；七类均为 0。
+- API 隔离数据库创建并重新读取模切内盒、异形箱，长宽高分别保持 `12345 / 23456 / 34567`。
+
+final result: passed
+
 # P1-34B3 65×45 mm 生产包装标签实尺寸极简版视觉验收
 
 ## Comparison target

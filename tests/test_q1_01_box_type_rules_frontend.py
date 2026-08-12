@@ -63,6 +63,29 @@ def test_product_fields_follow_rule_capabilities() -> None:
     assert "productSupportsCreaseSegments(productForm.box_style)" in product_form
 
 
+def test_product_size_row_layout_follows_each_box_type_capability() -> None:
+    assert (
+        'class="product-form-row product-size-report-row" '
+        ':class="productSizeReportRowClass(productForm.box_style)"'
+    ) in INDEX
+    assert "productSizeReportRowClass(productForm.box_style)" in INDEX
+    method = INDEX.split("productSizeReportRowClass(boxType) {", 1)[1].split(
+        "productRequiresDimension(boxType, dimension)", 1
+    )[0]
+    for layout_class in (
+        "product-size-report-row--standard",
+        "product-size-report-row--telescoping",
+        "product-size-report-row--plain-3d-with-crease",
+        "product-size-report-row--plain-3d",
+        "product-size-report-row--flat-2d",
+        "product-size-report-row--no-dimensions",
+    ):
+        assert layout_class in method
+        assert f".{layout_class}" in INDEX
+    assert "rule.required_dimensions.length" in method
+    assert "this.productSupportsCreaseSegments(boxType)" in method
+
+
 def test_manual_dimensions_are_only_forced_by_recommend_button() -> None:
     assert "const applyMain = force || !form._report_dims_manual;" in INDEX
     assert "const applyCrease = force || !form._crease_dims_manual;" in INDEX

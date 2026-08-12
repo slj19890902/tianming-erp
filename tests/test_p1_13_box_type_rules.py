@@ -61,6 +61,20 @@ def test_registry_has_stable_codes_and_explicit_historical_aliases() -> None:
     assert box_type_code("A356客户自定义") is None
 
 
+def test_die_cut_inner_box_and_irregular_box_require_three_dimensions() -> None:
+    rules = {rule.code: rule for rule in BOX_TYPE_RULES}
+    expected = ("length_mm", "width_mm", "height_mm")
+
+    assert rules["die_cut_inner_box"].required_dimensions == expected
+    assert rules["irregular"].required_dimensions == expected
+    assert rules["liner"].required_dimensions == ("length_mm", "width_mm")
+    assert rules["divider"].required_dimensions == ("length_mm", "width_mm")
+    assert rules["die_cut_partition"].required_dimensions == (
+        "length_mm",
+        "width_mm",
+    )
+
+
 def test_stable_rule_router_exposes_read_and_preview_paths() -> None:
     methods_by_path = {
         route.path: route.methods

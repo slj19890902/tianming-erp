@@ -164,6 +164,35 @@ def _create_material(client: TestClient, suffix: str, **overrides) -> dict:
     return response.json()
 
 
+@pytest.mark.parametrize(
+    ("box_style", "suffix"),
+    (("模切内盒", "DIM-DIE"), ("异形箱", "DIM-IRR")),
+)
+def test_three_dimension_box_types_round_trip_all_spec_values(
+    writer_app: FastAPI,
+    box_style: str,
+    suffix: str,
+) -> None:
+    with TestClient(writer_app) as client:
+        customer = _create_customer(client, suffix, 166)
+        product = _create_product(
+            client,
+            customer["id"],
+            suffix,
+            box_style=box_style,
+            length_mm=12345,
+            width_mm=23456,
+            height_mm=34567,
+        )
+        fetched = client.get(f"/api/master/products/{product['id']}")
+
+    assert fetched.status_code == 200, fetched.text
+    assert tuple(
+        Decimal(fetched.json()[field])
+        for field in ("length_mm", "width_mm", "height_mm")
+    ) == (Decimal("12345"), Decimal("23456"), Decimal("34567"))
+
+
 def test_product_material_supplier_gate_blocks_new_links_but_keeps_unchanged_history(
     writer_app: FastAPI,
 ) -> None:

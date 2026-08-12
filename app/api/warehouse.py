@@ -202,6 +202,7 @@ from app.services.master_data_versioning import (
 )
 from app.services.mold_identity import (
     MoldIdentityError,
+    mold_customer_short_name,
     next_available_mold_code,
 )
 from app.services.mold_location import (
@@ -8512,6 +8513,11 @@ def _mold_tool_dict(
                 "customer_id": product.customer_id,
                 "customer_code": product.customer.customer_code if product.customer else None,
                 "customer_name": product.customer.name if product.customer else None,
+                "customer_short_name": mold_customer_short_name(
+                    row.mold_name,
+                    product.customer.name if product.customer else None,
+                    product.customer.customer_code if product.customer else None,
+                ),
                 "product_code": product.product_code,
                 "product_name": product.product_name,
                 "customer_material_code": product.customer_material_code,

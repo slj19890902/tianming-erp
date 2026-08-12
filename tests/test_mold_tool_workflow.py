@@ -714,6 +714,7 @@ def test_workshop_can_open_structured_location_label_and_qr(
         )
         assert data["qr_data_url"].startswith("data:image/png;base64,")
         assert data["products"][0]["customer_code"] == "MOLD-C"
+        assert data["products"][0]["customer_short_name"] == "模具联动测试客户"
         assert data["products"][0]["product_code"] == "MOBILE-P001"
 
 

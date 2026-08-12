@@ -13,6 +13,9 @@ _MOLD_NAME_PATTERN = re.compile(
     r"^(?P<customer>.*?)[\s:：_-]*(?P<inventory>[A-Za-z0-9][A-Za-z0-9._/+\-]*)$"
 )
 _INITIALS_PATTERN = re.compile(r"^[A-Z0-9]{1,20}$")
+_LEADING_CHINESE_LABEL_PATTERN = re.compile(
+    r"^(?P<label>[\u3400-\u9fff]{2,8})[\s:：_-]*(?=[A-Za-z0-9])"
+)
 
 
 class MoldIdentityError(ValueError):
@@ -25,6 +28,34 @@ class MoldIdentityParts:
     customer_initials: str
     inventory_code: str
     base_code: str
+
+
+def mold_customer_short_name(
+    mold_name: str | None,
+    customer_name: str | None,
+    customer_code: str | None,
+) -> str | None:
+    """Return the maintained Chinese label embedded in a formal mold name.
+
+    New mold names are entered as ``customer Chinese short name + inventory
+    code``.  Reuse that explicit operator-maintained text for the physical
+    label, but never guess a short name from a mold code or truncate a legal
+    customer name.  Older molds without that convention fall back to the full
+    customer name and finally the customer code.
+    """
+
+    name = str(mold_name or "").strip()
+    normalized_customer_name = str(customer_name or "").strip()
+    match = _LEADING_CHINESE_LABEL_PATTERN.match(name)
+    if match is not None and normalized_customer_name:
+        label = match.group("label")
+        if label in normalized_customer_name:
+            return label
+    for value in (normalized_customer_name, customer_code):
+        normalized = str(value or "").strip()
+        if normalized:
+            return normalized
+    return None
 
 
 def parse_mold_identity(

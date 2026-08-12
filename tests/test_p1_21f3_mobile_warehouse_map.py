@@ -178,8 +178,9 @@ def test_mobile_map_uses_published_geometry_without_pallet_identifiers(
             "/api/mobile/erp/warehouse/map/floors/1F", params={"area_code": "FG"}
         )
         assert pending_area.status_code == 200, pending_area.text
-        assert pending_area.json()["map_status"] == "area_pending_location"
-        assert "不能猜测具体货位" in pending_area.json()["guidance"]
+        assert pending_area.json()["map_status"] == "unmeasured"
+        assert pending_area.json()["map_status_text"] == "未建立实测地图"
+        assert "不会生成假坐标" in pending_area.json()["guidance"]
 
     with TestClient(app) as client:
         _login(client, "mobile-scoped")

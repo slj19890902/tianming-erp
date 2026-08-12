@@ -8,7 +8,7 @@ from decimal import Decimal
 from typing import Literal
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import String, and_, case, cast, delete, exists, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
@@ -67,6 +67,13 @@ from app.models.warehouse_inventory import (
 )
 from app.services.history_orders import build_display_registry, display_order_number
 from app.services.location_candidates import is_operational_location
+from app.services.warehouse_floor1_candidate_planner import (
+    overlay_formal_area_bindings,
+)
+from app.services.warehouse_twin_layout import (
+    WarehouseTwinLayoutNotFoundError,
+    load_warehouse_twin_floor,
+)
 from app.services.delivery_numbering import (
     DeliveryNumberingError,
     next_delivery_number,
@@ -4438,6 +4445,120 @@ def _pick_task_for_user(
     return task
 
 
+def _delivery_pick_measured_map_context(
+    db: Session,
+    *,
+    task: DeliveryPickTask,
+) -> tuple[dict, list[dict], dict[int, object], dict[int, object]]:
+    """Return the current pick plan plus its formal warehouse-space metadata.
+
+    The delivery pick plan remains the authority for which locations belong to
+    this task.  The map only supplies measured floor geometry for those exact
+    locations; it must never expand the task into a general inventory view.
+    """
+
+    task_payload = _pick_task_response(db, task)
+    location_groups = [
+        group
+        for group in task_payload.get("location_groups") or []
+        if group.get("location_id") is not None
+        and group.get("warehouse_floor") is not None
+        and str(group.get("area_code") or "").strip()
+    ]
+    floor_numbers = {
+        int(group["warehouse_floor"])
+        for group in location_groups
+        if group.get("warehouse_floor") is not None
+    }
+    floor_rows = list(
+        db.scalars(
+            select(WarehouseFloor).where(
+                WarehouseFloor.floor_number.in_(floor_numbers or {-1})
+            )
+        ).all()
+    )
+    floors_by_number = {int(row.floor_number): row for row in floor_rows}
+    floor_ids = [int(row.id) for row in floor_rows]
+    area_rows = list(
+        db.scalars(
+            select(WarehouseArea).where(
+                WarehouseArea.floor_id.in_(floor_ids or [-1])
+            )
+        ).all()
+    )
+    areas_by_key = {
+        (int(row.floor_id), str(row.area_code or "").strip().upper()): row
+        for row in area_rows
+    }
+    return task_payload, location_groups, floors_by_number, areas_by_key
+
+
+def _delivery_pick_floor_code(
+    floor_number: int,
+    floors_by_number: dict[int, object],
+) -> str:
+    floor = floors_by_number.get(int(floor_number))
+    return (
+        str(floor.floor_code).strip().upper()
+        if floor is not None and str(floor.floor_code or "").strip()
+        else f"{int(floor_number)}F"
+    )
+
+
+def _delivery_pick_map_floor(
+    db: Session,
+    *,
+    floor_code: str,
+) -> dict | None:
+    try:
+        return overlay_formal_area_bindings(
+            db,
+            floor_code=floor_code,
+            floor_layout=load_warehouse_twin_floor(floor_code),
+        )
+    except (WarehouseTwinLayoutNotFoundError, ValueError):
+        return None
+
+
+def _delivery_pick_map_features(
+    map_floor: dict | None,
+    *,
+    area_code: str,
+) -> list[dict]:
+    if map_floor is None:
+        return []
+    normalized_area = area_code.strip().upper()
+    features: list[dict] = []
+    for raw in map_floor.get("features") or []:
+        kind = str(raw.get("feature_kind") or "")
+        bound_area = str(raw.get("erp_area_code") or "").strip().upper()
+        if kind == "aisle" or (kind == "zone" and bound_area == normalized_area):
+            features.append(
+                {
+                    "id": raw.get("id"),
+                    "feature_kind": kind,
+                    "name": raw.get("name"),
+                    "points": raw.get("points") or [],
+                }
+            )
+    return features
+
+
+def _delivery_pick_group_updated_at(task_payload: dict, group: dict) -> str | None:
+    updated_by_item = {
+        int(item["id"]): item.get("updated_at")
+        for item in task_payload.get("items") or []
+        if item.get("id") is not None and item.get("updated_at")
+    }
+    timestamps = [
+        updated_by_item.get(int(line["pick_item_id"]))
+        for line in group.get("lines") or []
+        if line.get("pick_item_id") is not None
+        and updated_by_item.get(int(line["pick_item_id"]))
+    ]
+    return max(timestamps) if timestamps else task_payload.get("as_of")
+
+
 @router.post("/{delivery_id}/pick-task", status_code=status.HTTP_201_CREATED)
 def create_or_rebuild_delivery_pick_task(
     delivery_id: int,
@@ -4572,6 +4693,197 @@ def get_delivery_pick_task(
     user: User = Depends(_can_view_pick_tasks),
 ) -> dict:
     return _pick_task_response(db, _pick_task_for_user(db, task_id, user))
+
+
+@pick_router.get("/{task_id}/measured-map/floors")
+def get_delivery_pick_measured_map_floors(
+    task_id: int,
+    response: Response,
+    db: Session = Depends(get_db),
+    user: User = Depends(_can_view_pick_tasks),
+) -> dict:
+    response.headers["Cache-Control"] = "private, no-store"
+    task = _pick_task_for_user(db, task_id, user)
+    task_payload, groups, floors_by_number, areas_by_key = (
+        _delivery_pick_measured_map_context(db, task=task)
+    )
+    grouped: dict[str, dict] = {}
+    for group in groups:
+        floor_number = int(group["warehouse_floor"])
+        floor_code = _delivery_pick_floor_code(floor_number, floors_by_number)
+        floor_row = floors_by_number.get(floor_number)
+        area_code = str(group.get("area_code") or "").strip().upper()
+        area_row = (
+            areas_by_key.get((int(floor_row.id), area_code))
+            if floor_row is not None
+            else None
+        )
+        floor = grouped.setdefault(
+            floor_code,
+            {
+                "floor_code": floor_code,
+                "floor_name": (
+                    floor_row.floor_name if floor_row is not None else f"{floor_number}楼"
+                ),
+                "floor_number": floor_number,
+                "areas": {},
+            },
+        )
+        area = floor["areas"].setdefault(
+            area_code,
+            {
+                "area_code": area_code,
+                "area_name": area_row.area_name if area_row is not None else area_code,
+                "task_location_count": 0,
+                "mapped_location_count": 0,
+            },
+        )
+        area["task_location_count"] += 1
+        if group.get("map_status") == "mapped" and group.get("map_point"):
+            area["mapped_location_count"] += 1
+
+    floors: list[dict] = []
+    for floor in sorted(
+        grouped.values(),
+        key=lambda item: (item["floor_number"], item["floor_code"]),
+    ):
+        map_floor = _delivery_pick_map_floor(db, floor_code=floor["floor_code"])
+        areas = []
+        for area in sorted(
+            floor.pop("areas").values(), key=lambda item: item["area_code"]
+        ):
+            measured = bool(map_floor is not None and area["mapped_location_count"])
+            area["map_status"] = "ready" if measured else "unmeasured"
+            area["map_status_text"] = (
+                "实测地图已建立" if measured else "未建立实测地图"
+            )
+            areas.append(area)
+        floor["areas"] = areas
+        floors.append(floor)
+    return {
+        "task_id": int(task.id),
+        "snapshot_version": int(task.snapshot_version),
+        "floors": floors,
+        "text_only_groups": [
+            {
+                "key": group.get("key"),
+                "label": group.get("label"),
+                "map_status": group.get("map_status"),
+                "reason": "未建立实测地图，只能按文字位置核对。",
+            }
+            for group in task_payload.get("location_groups") or []
+            if group.get("map_status") != "mapped" or not group.get("map_point")
+        ],
+        "as_of": task_payload.get("as_of"),
+        "read_only": True,
+    }
+
+
+@pick_router.get("/{task_id}/measured-map/floors/{floor_code}")
+def get_delivery_pick_measured_map_area(
+    task_id: int,
+    floor_code: str,
+    response: Response,
+    area_code: str = Query(min_length=1, max_length=30),
+    db: Session = Depends(get_db),
+    user: User = Depends(_can_view_pick_tasks),
+) -> dict:
+    response.headers["Cache-Control"] = "private, no-store"
+    task = _pick_task_for_user(db, task_id, user)
+    task_payload, groups, floors_by_number, areas_by_key = (
+        _delivery_pick_measured_map_context(db, task=task)
+    )
+    normalized_floor = floor_code.strip().upper()
+    normalized_area = area_code.strip().upper()
+    selected_groups = [
+        group
+        for group in groups
+        if _delivery_pick_floor_code(
+            int(group["warehouse_floor"]), floors_by_number
+        )
+        == normalized_floor
+        and str(group.get("area_code") or "").strip().upper() == normalized_area
+    ]
+    if not selected_groups:
+        raise HTTPException(
+            status_code=404,
+            detail="当前拿货任务不包含这个楼层和区域",
+        )
+    floor_number = int(selected_groups[0]["warehouse_floor"])
+    floor_row = floors_by_number.get(floor_number)
+    area_row = (
+        areas_by_key.get((int(floor_row.id), normalized_area))
+        if floor_row is not None
+        else None
+    )
+    map_floor = _delivery_pick_map_floor(db, floor_code=normalized_floor)
+    measured = bool(
+        map_floor is not None
+        and any(
+            group.get("map_status") == "mapped" and group.get("map_point")
+            for group in selected_groups
+        )
+    )
+    group_payloads = []
+    for group in selected_groups:
+        group_payloads.append(
+            {
+                "key": group.get("key"),
+                "recommended_sequence": group.get("recommended_sequence"),
+                "label": group.get("label"),
+                "source_type": group.get("source_type"),
+                "location_id": group.get("location_id"),
+                "location_code": group.get("location_code"),
+                "location_name": group.get("location_name"),
+                "pallet_code": group.get("pallet_code"),
+                "total_pick_quantity": group.get("total_pick_quantity"),
+                "geometry": group.get("map_point") if measured else None,
+                "map_status": "ready" if measured and group.get("map_point") else "unmeasured",
+                "map_status_text": (
+                    "实测地图已建立"
+                    if measured and group.get("map_point")
+                    else "未建立实测地图"
+                ),
+                "updated_at": _delivery_pick_group_updated_at(task_payload, group),
+                "lines": [
+                    {
+                        "pick_item_id": line.get("pick_item_id"),
+                        "product_code": line.get("product_code"),
+                        "product_name": line.get("product_name"),
+                        "specification": line.get("specification"),
+                        "lot_number": line.get("lot_number"),
+                        "pick_quantity": line.get("pick_quantity"),
+                        "unit": line.get("unit"),
+                    }
+                    for line in group.get("lines") or []
+                ],
+            }
+        )
+    return {
+        "task_id": int(task.id),
+        "snapshot_version": int(task.snapshot_version),
+        "floor_code": normalized_floor,
+        "floor_name": (
+            floor_row.floor_name if floor_row is not None else f"{floor_number}楼"
+        ),
+        "area_code": normalized_area,
+        "area_name": area_row.area_name if area_row is not None else normalized_area,
+        "map_status": "ready" if measured else "unmeasured",
+        "map_status_text": "实测地图已建立" if measured else "未建立实测地图",
+        "guidance": (
+            "橙色高亮为当前任务位置；到现场后核对库位、产品、批次和更新时间。"
+            if measured
+            else "未建立实测地图，只能按文字位置核对；系统不会生成假坐标或编号格子。"
+        ),
+        "bounds_mm": map_floor.get("bounds_mm") if map_floor else None,
+        "features": _delivery_pick_map_features(
+            map_floor,
+            area_code=normalized_area,
+        ),
+        "groups": group_payloads,
+        "as_of": task_payload.get("as_of"),
+        "read_only": True,
+    }
 
 
 @pick_router.post("/{task_id}/complete-planned")

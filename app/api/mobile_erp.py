@@ -1890,10 +1890,12 @@ def mobile_warehouse_map_floors(
         areas = []
         for area in sorted(floor.pop("areas").values(), key=lambda item: item["area_code"]):
             area["map_status"] = (
-                "ready" if area["published_location_count"] else "area_pending_location"
+                "ready" if area["published_location_count"] else "unmeasured"
             )
             area["map_status_text"] = (
-                "位置已发布" if area["published_location_count"] else "区域待定位"
+                "实测地图已建立"
+                if area["published_location_count"]
+                else "未建立实测地图"
             )
             areas.append(area)
         floor["areas"] = areas
@@ -1995,8 +1997,8 @@ def mobile_warehouse_map_area(
                 "location_name": location.location_name,
                 "area_code": normalized_area,
                 "geometry": _mobile_layout_payload(layout) if layout else None,
-                "map_status": "ready" if layout else "area_pending_location",
-                "map_status_text": "位置已发布" if layout else "区域待定位",
+                "map_status": "ready" if layout else "unmeasured",
+                "map_status_text": "实测地图已建立" if layout else "未建立实测地图",
                 "occupancy_state": (
                     "occupied" if goods else "empty"
                 )
@@ -2012,12 +2014,12 @@ def mobile_warehouse_map_area(
         "floor_name": rows[0].floor.floor_name if rows[0].floor else normalized_floor,
         "area_code": normalized_area,
         "area_name": rows[0].area.area_name if rows[0].area else normalized_area,
-        "map_status": "ready" if has_geometry else "area_pending_location",
-        "map_status_text": "位置已发布" if has_geometry else "区域待定位",
+        "map_status": "ready" if has_geometry else "unmeasured",
+        "map_status_text": "实测地图已建立" if has_geometry else "未建立实测地图",
         "guidance": (
             f"{normalized_floor} {normalized_area}区，以地图高亮位置为准；到现场后核对相邻位置。"
             if has_geometry
-            else "该区域尚未发布位置几何，只能查看区域，不能猜测具体货位。"
+            else "未建立实测地图，只能查看文字区域和库位；系统不会生成假坐标或编号格子。"
         ),
         "bounds_mm": map_floor.get("bounds_mm") if map_floor else None,
         "features": features,

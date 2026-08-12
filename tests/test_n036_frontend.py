@@ -118,9 +118,11 @@ def test_p1_21c_assignment_and_task_scoped_map_are_exposed_without_warehouse_pag
         assert marker in INDEX
     for marker in (
         "map_status",
-        "map_point",
+        "measured-map/floors",
+        "feature.points",
         "recommended_sequence",
         "地图定位此位置",
+        "未建立实测地图",
         "返回拿货任务",
         "taskScrollY",
         "openTaskMap",

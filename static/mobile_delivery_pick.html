@@ -21,7 +21,7 @@
     .normal-action { margin-bottom:10px; padding:12px; background:#e9f5ec; border:1px solid #bdd9c5; border-radius:11px; } .normal-action button { width:100%; min-height:52px; font-size:18px; } .normal-action p { margin:7px 0 0; color:#45604f; font-size:12px; text-align:center; }
     .location-card { margin-bottom:9px; padding:12px; background:#fffdf8; border:1px solid var(--line); border-left:6px solid var(--green); border-radius:11px; box-shadow:0 3px 12px #4b4b3518; } .location-card.direct { border-left-color:#3974a7; } .location-card.relocation { border-left-color:var(--orange); } .location-card.attention { border-left-color:var(--red); background:#fff5f2; } .location-title { font-size:21px; font-weight:900; line-height:1.25; } .location-meta { margin-top:4px; color:var(--muted); font-size:12px; } .location-line { display:grid; grid-template-columns:1fr auto; gap:9px; align-items:center; padding:9px 0; border-top:1px dashed #ddd7ca; } .location-line:first-of-type { margin-top:8px; } .location-product { font-size:15px; font-weight:800; } .location-spec { margin-top:2px; color:var(--muted); font-size:12px; } .location-qty { color:#143d27; font-size:22px; font-weight:900; white-space:nowrap; }
     .location-heading { display:flex; gap:8px; align-items:center; justify-content:space-between; } .sequence { flex:0 0 auto; min-width:34px; padding:4px 7px; color:white; background:var(--green); border-radius:999px; font-size:12px; text-align:center; } .map-button { margin-top:8px; width:100%; }
-    [hidden] { display:none !important; } .map-overlay { position:fixed; inset:0; z-index:20; display:flex; flex-direction:column; background:#eef3ec; } .map-header { display:flex; gap:8px; align-items:center; padding:10px; color:white; background:#183f2c; } .map-header strong { flex:1; } .map-header button { color:white; border-color:#ffffff66; background:transparent; } .map-body { flex:1; overflow:auto; padding:10px; } .map-floor-tabs { display:flex; gap:7px; overflow:auto; margin-bottom:9px; } .map-floor-tabs button { flex:0 0 auto; } .map-floor-tabs button.active { color:white; background:var(--green); border-color:var(--green); } .task-map { position:relative; width:100%; min-height:66vh; overflow:hidden; border:2px solid #8aa18f; border-radius:12px; background-color:#fffdf8; background-image:linear-gradient(#dce5dd 1px,transparent 1px),linear-gradient(90deg,#dce5dd 1px,transparent 1px); background-size:10% 10%; } .map-point { position:absolute; display:flex; align-items:center; justify-content:center; min-width:42px; min-height:36px; padding:4px; transform:translate(-1px,-1px); color:#153d27; background:#aee0bc; border:2px solid #287348; border-radius:7px; font-size:11px; font-weight:900; text-align:center; box-shadow:0 2px 7px #183f2c44; } .map-point.active { z-index:30 !important; color:white; background:#d8661f; border-color:#a53e0c; outline:4px solid #f3b18488; } .map-legend { margin-top:10px; padding:10px; background:white; border-radius:10px; } .map-legend-row { padding:7px 0; border-top:1px dashed var(--line); font-size:13px; } .map-legend-row:first-child { border-top:0; }
+    [hidden] { display:none !important; } .map-overlay { position:fixed; inset:0; z-index:20; display:flex; flex-direction:column; background:#eef3ec; } .map-header { display:flex; gap:8px; align-items:center; padding:10px; color:white; background:#183f2c; } .map-header strong { flex:1; } .map-header button { color:white; border-color:#ffffff66; background:transparent; } .map-body { flex:1; overflow:auto; padding:10px; } .map-floor-tabs { display:flex; gap:7px; overflow:auto; margin-bottom:8px; } .map-floor-tabs button { flex:0 0 auto; } .map-floor-tabs button.active { color:white; background:var(--green); border-color:var(--green); } .map-guidance { margin:0 0 8px; padding:9px; color:#704700; background:#fff5d8; border-radius:9px; font-size:12px; font-weight:800; } .task-map { position:relative; width:100%; min-height:66vh; overflow:hidden; border:2px solid #8aa18f; border-radius:12px; background:#fffdf8; } .task-map-features { position:absolute; inset:0; width:100%; height:100%; } .task-map-zone { fill:#eef4f0; stroke:#9db1a6; stroke-width:80; } .task-map-aisle { fill:#fff8df; stroke:#d4b761; stroke-width:55; } .map-point { position:absolute; display:flex; align-items:center; justify-content:center; min-width:42px; min-height:36px; padding:4px; color:#153d27; background:#aee0bc; border:2px solid #287348; border-radius:7px; font-size:11px; font-weight:900; text-align:center; box-shadow:0 2px 7px #183f2c44; } .map-point.active { z-index:30 !important; color:white; background:#d8661f; border-color:#a53e0c; outline:4px solid #f3b18488; } .map-unavailable { display:grid; min-height:66vh; place-content:center; padding:24px; text-align:center; color:#704700; background:#fff8e7; } .map-unavailable strong { display:block; margin-bottom:8px; font-size:22px; } .map-legend { margin-top:10px; padding:10px; background:white; border-radius:10px; } .map-legend-row { padding:8px 0; border-top:1px dashed var(--line); font-size:13px; } .map-legend-row:first-child { border-top:0; } .map-line { margin-top:4px; color:var(--muted); font-size:12px; }
     .ready-banner { margin-bottom:10px; padding:13px; color:#145d36; background:#e1f4e8; border:1px solid #aad1b8; border-radius:10px; font-size:16px; font-weight:800; text-align:center; }
     details.exception-tools { margin-top:12px; padding:0 10px 10px; background:#fffdf8; border:1px solid var(--line); border-radius:11px; } details.exception-tools > summary { padding:13px 2px; color:#6c4631; font-weight:800; cursor:pointer; } .exception-help { margin:0 0 8px; color:var(--muted); font-size:12px; }
     .error { color:var(--red); margin-top:8px; font-size:13px; } .toast { position:fixed; left:50%; bottom:20px; z-index:10; transform:translateX(-50%); padding:10px 15px; color:white; background:#17211be8; border-radius:10px; }
@@ -59,14 +59,15 @@
   </main>
   <section id="mapOverlay" class="map-overlay" hidden aria-label="本次拿货位置地图">
     <div class="map-header"><button onclick="closeTaskMap()">返回拿货任务</button><strong id="mapTitle">本任务拿货位置</strong></div>
-    <div class="map-body"><nav id="mapFloorTabs" class="map-floor-tabs" aria-label="本任务涉及楼层"></nav><div id="taskMap" class="task-map"></div><div id="mapLegend" class="map-legend"></div></div>
+    <div class="map-body"><nav id="mapFloorTabs" class="map-floor-tabs" aria-label="本任务涉及楼层"></nav><nav id="mapAreaTabs" class="map-floor-tabs" aria-label="本任务涉及区域"></nav><p id="mapGuidance" class="map-guidance">只读取本任务涉及的一层一片区域。</p><div id="taskMap" class="task-map"></div><div id="mapLegend" class="map-legend"></div></div>
   </section>
   <div id="toast" class="toast" hidden></div>
   <script>
     const initialParams = new URLSearchParams(location.search);
     let taskId = initialParams.get("task_id");
     const expectedPrintVersion = initialParams.get("print_version");
-    let task = null; let activeFilter = "open"; let taskScrollY = 0; let activeMapGroupKey = ""; let activeMapFloor = "";
+    let task = null; let activeFilter = "open"; let taskScrollY = 0; let activeMapGroupKey = ""; let activeMapFloor = ""; let activeMapArea = "";
+    let mapFloors=[], mapData=null, mapGeneration=0, mapController=null;
     let listGeneration=0, listController=null, detailGeneration=0, detailController=null;
     const listPageSize=20; let listPage=0, listTotal=0, listRows=[], listHasMore=false, listLoading=false, listAsOf="";
     const busyItems=new Set(); let taskActionBusy=false; let loginBusy=false;
@@ -142,6 +143,7 @@
       } finally { if(generation===listGeneration){listController=null;listLoading=false;if(append&&listRows.length)renderTaskChooser();} }
     }
     async function selectTask(id) {
+      closeTaskMap({restoreScroll:false});
       const selectedId=String(id); taskId=selectedId; const url=new URL(location.href); url.searchParams.set("task_id",taskId); history.replaceState(null,"",url);
       const generation=++detailGeneration; detailController?.abort(); const controller=new AbortController(); detailController=controller; task=null; showTaskLoading();
       try {
@@ -158,7 +160,7 @@
         if(error?.name==="AbortError"||generation!==detailGeneration||taskId!==selectedId) return false; if(handleAuthError(error)) return false; showTaskFailure(error); return false;
       } finally { if(generation===detailGeneration) detailController=null; }
     }
-    async function showTaskList() { if(taskActionBusy||busyItems.size) return; detailGeneration+=1; detailController?.abort(); detailController=null; task=null; taskId=null; const url=new URL(location.href); url.searchParams.delete("task_id"); history.replaceState(null,"",url); await loadTaskList(); }
+    async function showTaskList() { if(taskActionBusy||busyItems.size) return; closeTaskMap({restoreScroll:false}); detailGeneration+=1; detailController?.abort(); detailController=null; task=null; taskId=null; const url=new URL(location.href); url.searchParams.delete("task_id"); history.replaceState(null,"",url); await loadTaskList(); }
     function render() {
       if(!task) return;
       document.getElementById("taskMeta").textContent=`${task.delivery_number || "送货单"} · ${taskStatusLabel(task.status)}${task.as_of?` · 更新 ${task.as_of}`:""}`;
@@ -183,29 +185,55 @@
       const classes=["location-card"]; if(group.source_type==="production_direct") classes.push("direct"); if(group.needs_relocation) classes.push("relocation"); if(group.requires_attention) classes.push("attention");
       const pallet=group.pallet_code ? `栈板 ${group.pallet_code}` : (group.source_type==="finished_inventory" ? "未绑定栈板" : "");
       const lines=(group.lines || []).map(line=>`<div class="location-line"><div><div class="location-product">${escapeHtml([line.product_code || "-",line.product_name || "未命名产品"].join(" / "))}</div><div class="location-spec">${escapeHtml(line.specification || "-")}${line.lot_number ? ` · 批次 ${escapeHtml(line.lot_number)}` : ""}</div></div><div class="location-qty">${Number(line.pick_quantity || 0)} ${escapeHtml(line.unit || "个")}</div></div>`).join("");
-      const sequence=Number(group.recommended_sequence || 0); const mapped=group.map_status==="mapped" && group.map_point;
-      const mapAction=mapped ? `<button class="map-button" onclick="openTaskMap('${escapeHtml(group.key)}')">地图定位此位置</button>` : `<div class="location-meta">${group.map_status==="unmapped"?"此库位尚未录入地图，按上方位置文字拿货":"此项按文字位置拿货"}</div>`;
+      const sequence=Number(group.recommended_sequence || 0); const hasLocation=group.location_id!=null;
+      const mapAction=hasLocation ? `<button class="map-button" onclick="openTaskMap('${escapeHtml(group.key)}')">${group.map_status==="mapped"?"地图定位此位置":"查看文字位置"}</button>` : `<div class="location-meta">此项没有实测库位，只能按文字位置拿货</div>`;
       return `<section class="${classes.join(" ")}"><div class="location-heading"><div class="location-title">${escapeHtml(group.label || "拿货位置")}</div>${sequence?`<span class="sequence">第${sequence}站</span>`:""}</div>${pallet ? `<div class="location-meta">${escapeHtml(pallet)}</div>` : ""}${lines}${mapAction}</section>`;
     }
-    function mapFloorKey(group) { return group.warehouse_floor==null?"仓库":String(Number(group.warehouse_floor)); }
+    function currentMapFloor() { return mapFloors.find(floor=>floor.floor_code===activeMapFloor) || null; }
+    function currentMapAreas() { return currentMapFloor()?.areas || []; }
+    function currentMapGroup() { return (mapData?.groups || []).find(group=>group.key===activeMapGroupKey) || null; }
+    function renderTaskMapSelectors() {
+      document.getElementById("mapFloorTabs").innerHTML=mapFloors.map(floor=>`<button class="${floor.floor_code===activeMapFloor?"active":""}" type="button" onclick="showMapFloor('${escapeHtml(floor.floor_code)}')">${escapeHtml(floor.floor_name || floor.floor_code)}</button>`).join("");
+      document.getElementById("mapAreaTabs").innerHTML=currentMapAreas().map(area=>`<button class="${area.area_code===activeMapArea?"active":""}" type="button" onclick="showMapArea('${escapeHtml(area.area_code)}')">${escapeHtml(area.area_name || area.area_code)}${area.map_status==="ready"?"":" · 未建图"}</button>`).join("");
+    }
     function renderTaskMap() {
-      const mapped=(task?.location_groups || []).filter(group=>group.map_status==="mapped" && group.map_point);
-      const floors=[...new Set(mapped.map(mapFloorKey))].sort((a,b)=>Number(a||999)-Number(b||999)); if(!floors.includes(activeMapFloor))activeMapFloor=floors[0]||"";
-      document.getElementById("mapFloorTabs").innerHTML=floors.map(floor=>`<button class="${floor===activeMapFloor?"active":""}" type="button" onclick="showMapFloor('${escapeHtml(floor)}')">${floor==="仓库"?floor:`${floor}楼`}</button>`).join("");
-      const visible=mapped.filter(group=>mapFloorKey(group)===activeMapFloor); if(!visible.some(group=>group.key===activeMapGroupKey))activeMapGroupKey=visible[0]?.key||"";
-      document.getElementById("taskMap").innerHTML=visible.map(group=>{ const point=group.map_point; const active=group.key===activeMapGroupKey; return `<button class="map-point ${active?"active":""}" style="left:${Number(point.left_pct)}%;top:${Number(point.top_pct)}%;width:${Math.max(Number(point.width_pct),7)}%;height:${Math.max(Number(point.height_pct),6)}%;z-index:${active?30:Number(point.z_index||1)}" onclick="focusMapGroup('${escapeHtml(group.key)}')">${Number(group.recommended_sequence||0)}<br>${escapeHtml(group.location_code || "库位")}</button>`; }).join("");
-      document.getElementById("mapLegend").innerHTML=visible.map(group=>`<div class="map-legend-row"><strong>第${Number(group.recommended_sequence||0)}站 · ${escapeHtml(group.area_code||"未分区")} · ${escapeHtml(group.location_code || group.label)}</strong>　${Number(group.total_pick_quantity||0)} 个</div>`).join("");
-      const selected=visible.find(group=>group.key===activeMapGroupKey); document.getElementById("mapTitle").textContent=selected?`${activeMapFloor==="仓库"?"仓库":`${activeMapFloor}楼`} · ${selected.location_code}`:"本任务拿货位置";
+      const data=mapData || {}; const groups=Array.isArray(data.groups)?data.groups:[]; if(!groups.some(group=>group.key===activeMapGroupKey))activeMapGroupKey=groups[0]?.key||"";
+      const stage=document.getElementById("taskMap"); renderTaskMapSelectors(); document.getElementById("mapGuidance").textContent=data.guidance || "只显示当前拿货任务涉及的实测位置。";
+      if(data.map_status!=="ready") {
+        stage.innerHTML=`<div class="map-unavailable"><strong>未建立实测地图</strong><span>${escapeHtml(data.guidance || "只能按文字位置核对；系统不会生成假坐标或编号格子。")}</span></div>`;
+      } else {
+        const bounds=data.bounds_mm||{}; const minX=Number(bounds.min_x),minY=Number(bounds.min_y),width=Number(bounds.max_x)-minX,height=Number(bounds.max_y)-minY;
+        const featureSvg=Number.isFinite(width)&&width>0&&Number.isFinite(height)&&height>0?`<svg class="task-map-features" viewBox="${minX} ${minY} ${width} ${height}" preserveAspectRatio="none">${(data.features||[]).filter(feature=>Array.isArray(feature.points)&&feature.points.length>=3).map(feature=>`<polygon class="${feature.feature_kind==="aisle"?"task-map-aisle":"task-map-zone"}" points="${feature.points.map(point=>`${Number(point[0])},${Number(point[1])}`).join(" ")}"></polygon>`).join("")}</svg>`:"";
+        const points=groups.filter(group=>group.geometry).map(group=>{const point=group.geometry,active=group.key===activeMapGroupKey;return `<button class="map-point ${active?"active":""}" style="left:${Number(point.left_pct)}%;top:${Number(point.top_pct)}%;width:${Math.max(Number(point.width_pct),7)}%;height:${Math.max(Number(point.height_pct),6)}%;z-index:${active?30:Number(point.z_index||1)}" onclick="focusMapGroup('${escapeHtml(group.key)}')">第${Number(group.recommended_sequence||0)}站<br>${escapeHtml(group.location_code||"库位")}</button>`;}).join("");
+        stage.innerHTML=featureSvg+points;
+      }
+      document.getElementById("mapLegend").innerHTML=groups.map(group=>`<div class="map-legend-row"><strong>第${Number(group.recommended_sequence||0)}站 · ${escapeHtml(group.location_code || group.label)}</strong>　${Number(group.total_pick_quantity||0)} 个${group.pallet_code?` · 栈板 ${escapeHtml(group.pallet_code)}`:""}<div class="map-line">${(group.lines||[]).map(line=>`${escapeHtml(line.product_code||"-")} / ${escapeHtml(line.product_name||"未命名")} · ${Number(line.pick_quantity||0)}${escapeHtml(line.unit||"个")}${line.lot_number?` · 批次 ${escapeHtml(line.lot_number)}`:""}`).join("<br>")}</div><div class="map-line">最近更新：${escapeHtml(group.updated_at||data.as_of||"未记录")}</div></div>`).join("") || '<div class="map-legend-row">当前区域没有任务位置。</div>';
+      const selected=currentMapGroup(); document.getElementById("mapTitle").textContent=selected?`${data.floor_name || activeMapFloor}｜${data.area_name || activeMapArea}｜${selected.location_code || "文字位置"}`:"本任务实测拿货地图";
     }
-    function openTaskMap(groupKey) {
-      const mapped=(task?.location_groups || []).filter(group=>group.map_status==="mapped" && group.map_point);
-      if(!mapped.length) return toast("本任务没有已录入地图的位置");
-      taskScrollY=window.scrollY; activeMapGroupKey=groupKey || mapped[0].key; const selected=mapped.find(group=>group.key===activeMapGroupKey)||mapped[0]; activeMapFloor=mapFloorKey(selected); renderTaskMap();
-      document.getElementById("mapOverlay").hidden=false;
+    async function loadTaskMapArea() {
+      mapController?.abort(); const controller=new AbortController(); mapController=controller; const generation=++mapGeneration; const taskSnapshot=String(task?.id||"");
+      document.getElementById("taskMap").innerHTML='<div class="map-unavailable"><strong>正在读取实测地图…</strong><span>只读取本任务涉及的一层一片区域。</span></div>';
+      try {
+        const data=await request(`/api/delivery-picks/${encodeURIComponent(taskSnapshot)}/measured-map/floors/${encodeURIComponent(activeMapFloor)}?area_code=${encodeURIComponent(activeMapArea)}`,{signal:controller.signal});
+        if(generation!==mapGeneration||String(task?.id||"")!==taskSnapshot)return false; mapData=data; renderTaskMap(); return true;
+      } catch(error) {
+        if(error?.name==="AbortError"||generation!==mapGeneration)return false; mapData={floor_code:activeMapFloor,area_code:activeMapArea,map_status:"unmeasured",guidance:error.message||"实测地图读取失败",groups:[]}; renderTaskMap(); return false;
+      } finally { if(generation===mapGeneration)mapController=null; }
     }
-    function showMapFloor(floor) { activeMapFloor=String(floor); renderTaskMap(); }
+    async function openTaskMap(groupKey) {
+      if(!task?.id)return; taskScrollY=window.scrollY; activeMapGroupKey=groupKey||""; document.getElementById("mapOverlay").hidden=false; document.getElementById("taskMap").innerHTML='<div class="map-unavailable"><strong>正在读取任务地图…</strong></div>';
+      const generation=++mapGeneration; mapController?.abort(); const controller=new AbortController(); mapController=controller; const taskSnapshot=String(task.id);
+      try {
+        const data=await request(`/api/delivery-picks/${encodeURIComponent(taskSnapshot)}/measured-map/floors`,{signal:controller.signal}); if(generation!==mapGeneration||String(task?.id||"")!==taskSnapshot)return;
+        mapFloors=Array.isArray(data.floors)?data.floors:[]; const selected=(task.location_groups||[]).find(group=>group.key===activeMapGroupKey); activeMapFloor=mapFloors.find(floor=>Number(floor.floor_number)===Number(selected?.warehouse_floor))?.floor_code||mapFloors[0]?.floor_code||"";
+        const areas=currentMapAreas(); activeMapArea=areas.find(area=>area.area_code===String(selected?.area_code||"").toUpperCase())?.area_code||areas[0]?.area_code||""; mapController=null;
+        if(!activeMapFloor||!activeMapArea){mapData={map_status:"unmeasured",guidance:"未建立实测地图，只能按任务中的文字位置核对。",groups:[]};renderTaskMap();return;} await loadTaskMapArea();
+      } catch(error) { if(error?.name==="AbortError"||generation!==mapGeneration)return; mapData={map_status:"unmeasured",guidance:error.message||"实测地图读取失败",groups:[]};renderTaskMap(); }
+    }
+    async function showMapFloor(floor) { activeMapFloor=String(floor); activeMapArea=currentMapAreas()[0]?.area_code||""; if(activeMapArea)await loadTaskMapArea();else renderTaskMap(); }
+    async function showMapArea(area) { activeMapArea=String(area); await loadTaskMapArea(); }
     function focusMapGroup(groupKey) { activeMapGroupKey=groupKey; renderTaskMap(); }
-    function closeTaskMap() { document.getElementById("mapOverlay").hidden=true; requestAnimationFrame(()=>window.scrollTo(0,taskScrollY)); }
+    function closeTaskMap({restoreScroll=true}={}) { mapGeneration+=1;mapController?.abort();mapController=null;mapFloors=[];mapData=null;activeMapFloor="";activeMapArea="";activeMapGroupKey="";document.getElementById("mapOverlay").hidden=true; if(restoreScroll)requestAnimationFrame(()=>window.scrollTo(0,taskScrollY)); }
     function renderPickComponents(item) {
       const components=(item.component_lines || []).filter(component=>Number(component.planned_delivery_quantity ?? component.quantity ?? 0)>0);
       if(!components.length) return "";

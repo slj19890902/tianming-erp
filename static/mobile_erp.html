@@ -496,8 +496,10 @@
           byId("preDeliveryFrame").src = "/mobile/delivery-pick.html?embedded=1";
           state.loadedFrames.add(page);
         }
+        if (isWarehouse) {
+          openWarehouseMap();
+        }
         window.requestAnimationFrame(() => window.scrollTo(0, state.scrollByPage.get(page) || 0));
-        if (isWarehouse) byId("searchInput").focus();
         if (page === "production" && !state.productionStationItems.length) loadProductionStation();
       }
 
@@ -791,7 +793,7 @@
         });
         areaSelect.replaceChildren();
         warehouseAreaOptions().forEach(area => {
-          const suffix = area.map_status === "ready" ? "" : "（区域待定位）";
+          const suffix = area.map_status === "ready" ? "" : "（未建立实测地图）";
           const option = node("option", "", `${area.area_name || area.area_code}${suffix}`);
           option.value = area.area_code;
           option.selected = area.area_code === state.warehouseMapArea;
@@ -801,6 +803,7 @@
 
       async function openWarehouseMap(preferred = {}) {
         byId("warehouseMapLayer").hidden = false;
+        byId("closeWarehouseMap").textContent = "返回仓库搜索";
         byId("warehouseDiscrepancyListButton").hidden = !state.warehouseMapCanCorrect;
         if (!state.warehouseMapFloors.length) {
           showStatus("warehouseMapState", "正在读取仓库楼层与区域…", "");
@@ -909,7 +912,7 @@
         stage.style.transform = `scale(${state.warehouseMapZoom})`;
         stage.hidden = data.map_status !== "ready";
         if (data.map_status !== "ready") {
-          showStatus("warehouseMapState", data.map_status_text || "区域待定位", "empty", loadWarehouseMapArea);
+          showStatus("warehouseMapState", data.map_status_text || "未建立实测地图", "empty", loadWarehouseMapArea);
         } else {
           byId("warehouseMapState").hidden = true;
         }

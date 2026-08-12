@@ -76,27 +76,40 @@ function toast(){{}}
 def test_task_map_shows_only_involved_floors_and_preserves_task_scroll(
     tmp_path: Path,
 ) -> None:
-    source = _between("function mapFloorKey(group)", "function renderPickComponents(item)")
+    source = _between("function currentMapFloor()", "function renderPickComponents(item)")
     harness = f"""
-const nodes={{mapFloorTabs:{{innerHTML:""}},taskMap:{{innerHTML:""}},mapLegend:{{innerHTML:""}},mapTitle:{{textContent:""}},mapOverlay:{{hidden:true}}}};
+class FakeAbortController {{ constructor(){{this.signal={{aborted:false}}}} abort(){{this.signal.aborted=true}} }}
+global.AbortController=FakeAbortController;
+const nodes={{mapFloorTabs:{{innerHTML:""}},mapAreaTabs:{{innerHTML:""}},mapGuidance:{{textContent:""}},taskMap:{{innerHTML:""}},mapLegend:{{innerHTML:""}},mapTitle:{{textContent:""}},mapOverlay:{{hidden:true}}}};
 global.document={{getElementById:id=>nodes[id]}};
 global.window={{scrollY:387,scrollTo(){{}}}};
 global.requestAnimationFrame=callback=>callback();
 const escapeHtml=value=>String(value??"");
 function toast(message){{throw new Error(message)}}
-let taskScrollY=0,activeMapGroupKey="",activeMapFloor="";
-let task={{location_groups:[
+let taskScrollY=0,activeMapGroupKey="",activeMapFloor="",activeMapArea="";
+let mapFloors=[],mapData=null,mapGeneration=0,mapController=null;
+let task={{id:91,location_groups:[
   {{key:"floor-2",warehouse_floor:2,area_code:"B2",location_code:"B2-L01",recommended_sequence:1,total_pick_quantity:12,map_status:"mapped",map_point:{{left_pct:10,top_pct:20,width_pct:8,height_pct:7,z_index:1}}}},
   {{key:"floor-3",warehouse_floor:3,area_code:"C1",location_code:"C1-L02",recommended_sequence:2,total_pick_quantity:8,map_status:"mapped",map_point:{{left_pct:30,top_pct:40,width_pct:8,height_pct:7,z_index:1}}}},
   {{key:"unrelated",warehouse_floor:1,location_code:"A1-L99",map_status:"text_only",map_point:null}}
 ]}};
+const calls=[];
+async function request(url){{
+  calls.push(url);
+  if(url.endsWith("/measured-map/floors"))return {{floors:[{{floor_code:"2F",floor_name:"二楼",floor_number:2,areas:[{{area_code:"B2",area_name:"B2区",map_status:"ready"}}]}},{{floor_code:"3F",floor_name:"三楼",floor_number:3,areas:[{{area_code:"C1",area_name:"C1区",map_status:"ready"}}]}}]}};
+  const is3=url.includes("/3F?");
+  return {{floor_code:is3?"3F":"2F",floor_name:is3?"三楼":"二楼",area_code:is3?"C1":"B2",area_name:is3?"C1区":"B2区",map_status:"ready",guidance:"实测地图",bounds_mm:{{min_x:0,min_y:0,max_x:100,max_y:100}},features:[],groups:[is3?{{key:"floor-3",location_code:"C1-L02",recommended_sequence:2,total_pick_quantity:8,geometry:{{left_pct:30,top_pct:40,width_pct:8,height_pct:7,z_index:1}},lines:[]}}:{{key:"floor-2",location_code:"B2-L01",recommended_sequence:1,total_pick_quantity:12,geometry:{{left_pct:10,top_pct:20,width_pct:8,height_pct:7,z_index:1}},lines:[]}}]}};
+}}
 {source}
-openTaskMap("floor-2");
+(async()=>{{
+await openTaskMap("floor-2");
 if(taskScrollY!==387||nodes.mapOverlay.hidden)throw new Error("map open did not preserve task state");
-if(!nodes.mapFloorTabs.innerHTML.includes("2楼")||!nodes.mapFloorTabs.innerHTML.includes("3楼")||nodes.mapFloorTabs.innerHTML.includes("1楼"))throw new Error("floor tabs exposed the wrong floors");
+if(!calls[0].includes("/api/delivery-picks/91/measured-map/floors"))throw new Error("task map did not use the measured task endpoint");
+if(!nodes.mapFloorTabs.innerHTML.includes("二楼")||!nodes.mapFloorTabs.innerHTML.includes("三楼")||nodes.mapFloorTabs.innerHTML.includes("一楼"))throw new Error("floor tabs exposed the wrong floors");
 if(!nodes.taskMap.innerHTML.includes("B2-L01")||nodes.taskMap.innerHTML.includes("C1-L02"))throw new Error("map must render only the active involved floor");
-showMapFloor("3");
+await showMapFloor("3F");
 if(!nodes.taskMap.innerHTML.includes("C1-L02")||nodes.taskMap.innerHTML.includes("B2-L01"))throw new Error("floor switch leaked another floor");
+}})().catch(error=>{{console.error(error);process.exit(1)}});
 """
     _run_node(tmp_path, "p1-21f4-task-map.js", harness)
 
@@ -189,6 +202,7 @@ def test_pre_delivery_labels_and_state_boundary_are_plain_and_safe() -> None:
     assert "/api/deliveries/" not in _between(
         "async function updateItem(itemId,status)", "async function loadTask()"
     )
+    assert "/measured-map/floors" in MOBILE
     assert "/api/mobile/erp/warehouse/map/floors" not in MOBILE
     assert "/warehouse.html" not in MOBILE
 

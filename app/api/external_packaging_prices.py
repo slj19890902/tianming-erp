@@ -26,6 +26,8 @@ router = APIRouter()
 can_cost = PermissionChecker("cost.view")
 admin_only = RoleChecker(["admin"])
 ALLOWED_UNITS = {"根", "米", "件", "张", "令", "kg", "吨", "只", "个", "套", "片", "卷", "㎡", "m³"}
+CORNER_GUARD_CATEGORY = "paper_corner_guard"
+CORNER_GUARD_QUOTE_UNIT = "米"
 
 
 class TierPricePayload(BaseModel):
@@ -200,6 +202,14 @@ def _clean_price_payload(
     unit = payload.quote_unit
     if unit not in ALLOWED_UNITS:
         raise HTTPException(status_code=422, detail="报价主单位不在允许范围内")
+    if (
+        product.category_code == CORNER_GUARD_CATEGORY
+        and unit != CORNER_GUARD_QUOTE_UNIT
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="纸护角正式报价单位必须为“米”；采购按根/支，系统按客户单根长度自动换算",
+        )
     conversion_basis = str(payload.unit_conversion_basis or "").strip() or None
     if unit != product.purchase_unit and not conversion_basis:
         raise HTTPException(

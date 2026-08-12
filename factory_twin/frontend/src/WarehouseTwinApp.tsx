@@ -259,6 +259,14 @@ interface AreaLocationCountResponse {
   }>;
 }
 
+interface AreaLocationManagement {
+  floor_code: string;
+  area_code: string;
+  management_mode: "floor3_v11" | "formal_area";
+  source_version: "V11" | "TWIN_V1";
+  available_actions: Array<"location_count" | "layout" | "disable_empty" | "enable_empty">;
+}
+
 interface Floor1FormalCandidate {
   map_feature_id: string;
   feature_code: string;
@@ -750,6 +758,7 @@ export function WarehouseTwinApp() {
   const [locationEditMessage, setLocationEditMessage] = useState("");
   const [swapSourceLocationId, setSwapSourceLocationId] = useState<number | null>(null);
   const [targetAreaLocationCount, setTargetAreaLocationCount] = useState("");
+  const [areaLocationManagement, setAreaLocationManagement] = useState<AreaLocationManagement | null>(null);
   const [formalAreaCodeDraft, setFormalAreaCodeDraft] = useState("");
   const [formalAreaNameDraft, setFormalAreaNameDraft] = useState("");
   const [floor1CandidatePlan, setFloor1CandidatePlan] = useState<Floor1FormalCandidatePlan | null>(null);
@@ -1193,6 +1202,19 @@ export function WarehouseTwinApp() {
     storage_layout: selectedAreaFeature.storage_layout
       || (selectedAreaFeature.subtype.includes("rack") ? "rack" : selectedAreaRacks.length ? "mixed" : "pallet_ground")
   }) : null;
+  useEffect(() => {
+    setAreaLocationManagement(null);
+    if (!canEditLocations || !locationEditMode || !selectedAreaCode) return;
+    let current = true;
+    requestJson<AreaLocationManagement>(
+      `/api/warehouse/spatial-layout/floors/${encodeURIComponent(floorCode)}/areas/${encodeURIComponent(selectedAreaCode)}/management`
+    ).then((value) => {
+      if (current) setAreaLocationManagement(value);
+    }).catch((reason: Error) => {
+      if (current) setLocationEditMessage(`区域库位管理路径读取失败：${reason.message}`);
+    });
+    return () => { current = false; };
+  }, [canEditLocations, locationEditMode, floorCode, selectedAreaCode]);
   const selectedAreaCreatesInventoryLocations = Boolean(
     selectedZonePolicy?.allowed_inventory_types.some((value) => value === "finished" || value === "semi_finished")
   );
@@ -1569,9 +1591,11 @@ export function WarehouseTwinApp() {
         if (areaCode) grouped.set(areaCode, [...(grouped.get(areaCode) || []), draft]);
       });
       for (const [areaCode, slots] of grouped) {
-        const endpoint = floorCode === "3F"
-          ? `/api/warehouse/floor3/layout/areas/${areaCode}`
-          : `/api/warehouse/spatial-layout/floors/${floorCode}/areas/${areaCode}`;
+        const management = await requestJson<AreaLocationManagement>(
+          `/api/warehouse/spatial-layout/floors/${encodeURIComponent(floorCode)}/areas/${encodeURIComponent(areaCode)}/management`
+        );
+        if (!management.available_actions.includes("layout")) throw new Error(`${areaCode} 区当前不允许保存库位布局。`);
+        const endpoint = `/api/warehouse/spatial-layout/floors/${encodeURIComponent(floorCode)}/areas/${encodeURIComponent(areaCode)}`;
         await mutateJson(endpoint, "PATCH", { slots });
       }
       setLocationDrafts({});
@@ -1630,9 +1654,10 @@ export function WarehouseTwinApp() {
     if (!window.confirm(`确认把 ${selectedAreaCode} 区有效库位从 ${selectedAreaLocationCount} 个${direction}到 ${targetCount} 个吗？\n\n新增库位会自动编号并先进入待布局草稿；减少时只停用无库存、无预占、无实体栈板的空库位。`)) return;
     setLocationEditBusy(true);
     try {
-      const endpoint = floorCode === "3F"
-        ? `/api/warehouse/floor3/layout/areas/${selectedAreaCode}/location-count`
-        : `/api/warehouse/spatial-layout/floors/${floorCode}/areas/${selectedAreaCode}/location-count`;
+      if (!areaLocationManagement?.available_actions.includes("location_count")) {
+        throw new Error("区域库位管理路径尚未就绪，请刷新后重试。");
+      }
+      const endpoint = `/api/warehouse/spatial-layout/floors/${encodeURIComponent(floorCode)}/areas/${encodeURIComponent(selectedAreaCode)}/location-count`;
       const result = await mutateJson<AreaLocationCountResponse>(endpoint, "POST", {
         target_count: targetCount,
         confirmed: true
@@ -1669,9 +1694,10 @@ export function WarehouseTwinApp() {
     if (!window.confirm(`确认停用空库位 ${selectedLocation.location_code} 吗？历史身份和操作记录会保留。`)) return;
     setLocationEditBusy(true);
     try {
-      const endpoint = floorCode === "3F"
-        ? `/api/warehouse/floor3/layout/slots/${selectedLocation.location_id}/disable`
-        : `/api/warehouse/spatial-layout/locations/${selectedLocation.location_id}/disable`;
+      if (!areaLocationManagement?.available_actions.includes("disable_empty")) {
+        throw new Error("区域库位管理路径尚未就绪，请刷新后重试。");
+      }
+      const endpoint = `/api/warehouse/spatial-layout/locations/${selectedLocation.location_id}/disable`;
       await mutateJson(endpoint, "POST", {
         expected_version: selectedLocation.map_position.version
       });

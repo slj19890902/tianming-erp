@@ -196,10 +196,12 @@ def test_phase2c8_keeps_location_layout_editing_in_2d_and_25d_read_only() -> Non
     assert "二维编辑" in SOURCE
     assert "2.5D 流畅查看 · 详情见右侧" in SOURCE
     assert "locationLayoutGeometry(" in SOURCE
-    assert "/api/warehouse/floor3/layout/areas/${areaCode}" in SOURCE
-    assert "/api/warehouse/floor3/layout/areas/${selectedAreaCode}/location-count" in SOURCE
+    assert "/api/warehouse/spatial-layout/floors/${encodeURIComponent(floorCode)}/areas/${encodeURIComponent(areaCode)}" in SOURCE
+    assert "/api/warehouse/spatial-layout/floors/${encodeURIComponent(floorCode)}/areas/${encodeURIComponent(selectedAreaCode)}/location-count" in SOURCE
+    assert "/management" in SOURCE
+    assert "available_actions" in SOURCE
     assert "系统按区域自动生成内部唯一编码" in SOURCE
-    assert "/api/warehouse/floor3/layout/slots/${selectedLocation.location_id}/disable" in SOURCE
+    assert "/api/warehouse/spatial-layout/locations/${selectedLocation.location_id}/disable" in SOURCE
     assert "palletEditingOnly={locationEditMode}" in SOURCE
     assert "选择区域或设备" not in SOURCE
 

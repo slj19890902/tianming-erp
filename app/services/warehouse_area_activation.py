@@ -19,6 +19,7 @@ from app.models.warehouse_inventory import (
     WarehouseLocation,
 )
 from app.services.floor3_locations import (
+    FLOOR3_LAYOUT_AREA_CODES,
     _layout_rectangles,
     _suggested_layout_rectangles,
     _validate_layout_geometry,
@@ -27,6 +28,12 @@ from app.services.floor3_locations import (
 
 AREA_LOCATION_SOURCE_VERSION = "TWIN_V1"
 FORMAL_INVENTORY_USAGES = frozenset({"finished", "semi_finished"})
+AREA_LOCATION_MANAGEMENT_ACTIONS = (
+    "location_count",
+    "layout",
+    "disable_empty",
+    "enable_empty",
+)
 
 
 class WarehouseAreaActivationError(ValueError):
@@ -46,6 +53,27 @@ class AreaLocationCountResult:
     disabled: tuple[WarehouseLocation, ...]
 
 
+@dataclass(frozen=True)
+class AreaLocationManagementRoute:
+    floor_code: str
+    area_code: str
+    management_mode: str
+    source_version: str
+    available_actions: tuple[str, ...] = AREA_LOCATION_MANAGEMENT_ACTIONS
+
+
+def area_location_management_payload(
+    route: AreaLocationManagementRoute,
+) -> dict[str, object]:
+    return {
+        "floor_code": route.floor_code,
+        "area_code": route.area_code,
+        "management_mode": route.management_mode,
+        "source_version": route.source_version,
+        "available_actions": list(route.available_actions),
+    }
+
+
 def warehouse_floor_for_code(db: Session, floor_code: str) -> WarehouseFloor | None:
     normalized = floor_code.strip().upper()
     floor = db.scalar(
@@ -61,6 +89,101 @@ def warehouse_floor_for_code(db: Session, floor_code: str) -> WarehouseFloor | N
             WarehouseFloor.floor_number == int(match.group(1))
         )
     )
+
+
+def resolve_area_location_management(
+    db: Session,
+    *,
+    floor_code: str,
+    area_code: str,
+) -> AreaLocationManagementRoute:
+    """Resolve the authoritative location lifecycle for one formal area."""
+
+    normalized_area = area_code.strip().upper()
+    floor = warehouse_floor_for_code(db, floor_code)
+    if floor is None:
+        raise WarehouseAreaActivationError("正式仓库楼层不存在", status_code=404)
+    if not normalized_area:
+        raise WarehouseAreaActivationError("正式仓库区域不存在", status_code=404)
+
+    raw_sources = list(
+        db.scalars(
+            select(WarehouseLocation.source_version)
+            .where(
+                WarehouseLocation.warehouse_floor == floor.floor_number,
+                func.upper(WarehouseLocation.area_code) == normalized_area,
+            )
+            .distinct()
+        ).all()
+    )
+    source_versions = {
+        str(value).strip() for value in raw_sources if str(value or "").strip()
+    }
+    has_unversioned_rows = any(not str(value or "").strip() for value in raw_sources)
+    supported_sources = {"V11", AREA_LOCATION_SOURCE_VERSION}
+    if (
+        has_unversioned_rows
+        or source_versions - supported_sources
+        or source_versions == supported_sources
+    ):
+        raise WarehouseAreaActivationError(
+            f"{normalized_area} 区库位来源冲突，请停止操作并核对正式区域台账",
+            status_code=409,
+        )
+
+    if floor.floor_number == 3 and normalized_area in FLOOR3_LAYOUT_AREA_CODES:
+        if AREA_LOCATION_SOURCE_VERSION in source_versions:
+            raise WarehouseAreaActivationError(
+                f"{normalized_area} 区同时存在动态区域库位与三楼 V11 身份，请停止操作并核对",
+                status_code=409,
+            )
+        return AreaLocationManagementRoute(
+            floor_code=floor.floor_code.upper(),
+            area_code=normalized_area,
+            management_mode="floor3_v11",
+            source_version="V11",
+        )
+
+    if "V11" in source_versions:
+        raise WarehouseAreaActivationError(
+            f"{normalized_area} 区存在无法归属旧三楼区域的 V11 库位，请停止操作并核对",
+            status_code=409,
+        )
+
+    formal_area(db, floor_code=floor.floor_code, area_code=normalized_area)
+    return AreaLocationManagementRoute(
+        floor_code=floor.floor_code.upper(),
+        area_code=normalized_area,
+        management_mode="formal_area",
+        source_version=AREA_LOCATION_SOURCE_VERSION,
+    )
+
+
+def resolve_location_management(
+    db: Session,
+    *,
+    location_id: int,
+) -> tuple[WarehouseLocation, AreaLocationManagementRoute]:
+    location = db.scalar(
+        select(WarehouseLocation)
+        .options(selectinload(WarehouseLocation.floor3_layout))
+        .where(WarehouseLocation.id == location_id)
+    )
+    if location is None:
+        raise WarehouseAreaActivationError("正式区域库位不存在", status_code=404)
+    if location.warehouse_floor is None or not str(location.area_code or "").strip():
+        raise WarehouseAreaActivationError("库位尚未绑定正式楼层和区域", status_code=409)
+    route = resolve_area_location_management(
+        db,
+        floor_code=f"{location.warehouse_floor}F",
+        area_code=str(location.area_code),
+    )
+    if location.source_version != route.source_version:
+        raise WarehouseAreaActivationError(
+            "库位来源与正式区域管理路径不一致，请停止操作并核对",
+            status_code=409,
+        )
+    return location, route
 
 
 def policy_inventory_types(policy: WarehouseAreaStoragePolicy) -> list[str]:
@@ -586,6 +709,11 @@ def publish_floor_area_policies(
     published: list[WarehouseAreaStoragePolicy] = []
     for policy in policies:
         area = policy.area
+        route = resolve_area_location_management(
+            db,
+            floor_code=floor.floor_code,
+            area_code=area.area_code,
+        )
         feature = features.get(policy.map_feature_id)
         feature_area_code = (
             str((feature or {}).get("erp_area_code") or "").strip().upper()
@@ -620,9 +748,7 @@ def publish_floor_area_policies(
                 status_code=409,
             )
         if location_type is not None and area.planned_location_count > 0:
-            source_version = (
-                "V11" if floor.floor_number == 3 else AREA_LOCATION_SOURCE_VERSION
-            )
+            source_version = route.source_version
             active_rows = list(
                 db.scalars(
                     select(WarehouseLocation).where(

@@ -42,7 +42,11 @@ from app.models.audit import OperationLog
 from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryPickTask
 from app.models.mold_tool import MoldLocationMovement, MoldTool
-from app.models.printing_plate import PrintingPlate, PrintingPlateLocationMovement
+from app.models.printing_plate import (
+    PrintingPlate,
+    PrintingPlateLocationMovement,
+    PrintingPlateResinReuse,
+)
 from app.models.product import Product
 from app.models.product_bom import SalesOrderItemBomComponent
 from app.models.order import Order, OrderItem
@@ -221,6 +225,14 @@ from app.services.printing_plate_location import (
     describe_printing_plate_location,
     normalize_printing_plate_location,
     preview_printing_plate_move,
+)
+from app.services.printing_plate_resin_reuse import (
+    PrintingPlateResinReuseError,
+    PrintingPlateResinReusePreview,
+    PrintingPlateResinReuseResult,
+    confirm_printing_plate_resin_reuse,
+    preview_printing_plate_resin_reuse,
+    printing_plate_binding_count,
 )
 
 
@@ -960,6 +972,29 @@ class PrintingPlateUpdatePayload(BaseModel):
 class PrintingPlateStatusPayload(BaseModel):
     expected_version: int = Field(gt=0)
     status: Literal["active", "inactive", "damaged"]
+
+
+class PrintingPlateResinReusePreviewPayload(BaseModel):
+    target_customer_id: int = Field(gt=0)
+    target_plate_name: str = Field(min_length=1, max_length=200)
+    target_color_name: str = Field(min_length=1, max_length=100)
+
+    @field_validator("target_plate_name", "target_color_name")
+    @classmethod
+    def strip_printing_plate_resin_reuse_fields(cls, value: str) -> str:
+        return value.strip()
+
+
+class PrintingPlateResinReuseConfirmPayload(PrintingPlateResinReusePreviewPayload):
+    expected_version: int = Field(gt=0)
+    idempotency_key: str = Field(min_length=8, max_length=120)
+    old_resin_removed: Literal[True]
+    new_resin_mounted: Literal[True]
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def strip_printing_plate_resin_reuse_key(cls, value: str) -> str:
+        return value.strip()
 
 
 class PrintingPlateLocationPreviewPayload(BaseModel):
@@ -7532,6 +7567,90 @@ def _printing_plate_products_by_plate(
     return result
 
 
+def _printing_plate_binding_counts_by_plate(
+    db: Session,
+    plate_ids: list[int],
+) -> dict[int, int]:
+    result = {plate_id: 0 for plate_id in plate_ids}
+    if not plate_ids:
+        return result
+    rows = db.execute(
+        select(
+            Product.printing_plate_1_id,
+            Product.printing_plate_2_id,
+            Product.printing_plate_3_id,
+        ).where(
+            or_(
+                Product.printing_plate_1_id.in_(plate_ids),
+                Product.printing_plate_2_id.in_(plate_ids),
+                Product.printing_plate_3_id.in_(plate_ids),
+            )
+        )
+    )
+    for values in rows:
+        for plate_id in set(values):
+            if plate_id in result:
+                result[plate_id] += 1
+    return result
+
+
+def _printing_plate_reuse_dict(row: PrintingPlateResinReuse) -> dict:
+    return {
+        "id": row.id,
+        "printing_plate_id": row.printing_plate_id,
+        "plate_code": row.plate_code_snapshot,
+        "from_customer_id": row.from_customer_id,
+        "from_customer_name": row.from_customer_name_snapshot,
+        "from_plate_name": row.from_plate_name_snapshot,
+        "from_color_name": row.from_color_name_snapshot,
+        "to_customer_id": row.to_customer_id,
+        "to_customer_name": row.to_customer_name_snapshot,
+        "to_plate_name": row.to_plate_name_snapshot,
+        "to_color_name": row.to_color_name_snapshot,
+        "rack_location": row.rack_location_snapshot,
+        "actor_id": row.actor_id,
+        "actor_username": row.actor_username_snapshot,
+        "reused_at": utc_naive_to_api(row.reused_at),
+        "expected_version": row.expected_version,
+        "resulting_version": row.resulting_version,
+        "old_resin_removed": row.old_resin_removed,
+        "new_resin_mounted": row.new_resin_mounted,
+    }
+
+
+def _printing_plate_reuse_summaries(
+    db: Session,
+    plate_ids: list[int],
+) -> tuple[dict[int, int], dict[int, PrintingPlateResinReuse]]:
+    counts = {plate_id: 0 for plate_id in plate_ids}
+    latest: dict[int, PrintingPlateResinReuse] = {}
+    if not plate_ids:
+        return counts, latest
+    for plate_id, count in db.execute(
+        select(
+            PrintingPlateResinReuse.printing_plate_id,
+            func.count(PrintingPlateResinReuse.id),
+        )
+        .where(PrintingPlateResinReuse.printing_plate_id.in_(plate_ids))
+        .group_by(PrintingPlateResinReuse.printing_plate_id)
+    ):
+        counts[int(plate_id)] = int(count or 0)
+    latest_ids = (
+        select(func.max(PrintingPlateResinReuse.id).label("id"))
+        .where(PrintingPlateResinReuse.printing_plate_id.in_(plate_ids))
+        .group_by(PrintingPlateResinReuse.printing_plate_id)
+        .subquery()
+    )
+    rows = db.scalars(
+        select(PrintingPlateResinReuse).join(
+            latest_ids, latest_ids.c.id == PrintingPlateResinReuse.id
+        )
+    ).all()
+    for row in rows:
+        latest.setdefault(row.printing_plate_id, row)
+    return counts, latest
+
+
 def _printing_plate_dict(
     db: Session,
     row: PrintingPlate,
@@ -7539,10 +7658,29 @@ def _printing_plate_dict(
     *,
     time_archive: dict | None = None,
     products: list[Product] | None = None,
+    binding_count: int | None = None,
+    reuse_count: int | None = None,
+    latest_reuse: PrintingPlateResinReuse | None = None,
 ) -> dict:
     products = products if products is not None else _printing_plate_products(
         db, row.id, allowed_customer_ids
     )
+    binding_count = (
+        printing_plate_binding_count(db, row.id)
+        if binding_count is None
+        else binding_count
+    )
+    if reuse_count is None:
+        reuse_counts, latest_reuses = _printing_plate_reuse_summaries(db, [row.id])
+        reuse_count = reuse_counts[row.id]
+        latest_reuse = latest_reuses.get(row.id)
+    reuse_blockers = []
+    if row.status != "active":
+        reuse_blockers.append("只有启用且未报损的实体挂板才能换版复用")
+    if "-L2-" not in row.rack_location.upper():
+        reuse_blockers.append("请先移动到挂板区货架第 2 层")
+    if binding_count:
+        reuse_blockers.append(f"仍有 {binding_count} 个常用箱绑定")
     return {
         "id": row.id,
         "plate_code": row.plate_code,
@@ -7563,6 +7701,7 @@ def _printing_plate_dict(
         "last_location_confirmed_by": row.last_location_confirmed_by,
         "remarks": row.remarks,
         "product_count": len(products),
+        "binding_count": binding_count,
         "products": [
             {
                 "id": product.id,
@@ -7575,6 +7714,16 @@ def _printing_plate_dict(
         "created_at": utc_naive_to_api(row.created_at),
         "updated_at": utc_naive_to_api(row.updated_at) if row.updated_at else None,
         "time_archive": time_archive,
+        "resin_reuse_count": reuse_count,
+        "latest_resin_reuse": (
+            _printing_plate_reuse_dict(latest_reuse)
+            if latest_reuse is not None
+            else None
+        ),
+        "resin_reuse_candidate": {
+            "eligible": not reuse_blockers,
+            "blockers": reuse_blockers,
+        },
     }
 
 
@@ -7633,6 +7782,22 @@ def list_printing_plates(
             )
             .exists()
         )
+        reuse_history_match = (
+            select(PrintingPlateResinReuse.id)
+            .where(
+                PrintingPlateResinReuse.printing_plate_id == PrintingPlate.id,
+                or_(
+                    PrintingPlateResinReuse.plate_code_snapshot.like(pattern),
+                    PrintingPlateResinReuse.from_customer_name_snapshot.like(pattern),
+                    PrintingPlateResinReuse.from_plate_name_snapshot.like(pattern),
+                    PrintingPlateResinReuse.from_color_name_snapshot.like(pattern),
+                    PrintingPlateResinReuse.to_customer_name_snapshot.like(pattern),
+                    PrintingPlateResinReuse.to_plate_name_snapshot.like(pattern),
+                    PrintingPlateResinReuse.to_color_name_snapshot.like(pattern),
+                ),
+            )
+            .exists()
+        )
         query = query.where(
             or_(
                 PrintingPlate.plate_code.like(pattern),
@@ -7642,6 +7807,7 @@ def list_printing_plates(
                 PrintingPlate.remarks.like(pattern),
                 PrintingPlate.customer.has(Customer.name.like(pattern)),
                 linked_product_match,
+                reuse_history_match,
             )
         )
     rows = db.scalars(
@@ -7653,6 +7819,9 @@ def list_printing_plates(
     products_by_plate = _printing_plate_products_by_plate(
         db, [row.id for row in rows], allowed_customer_ids
     )
+    plate_ids = [row.id for row in rows]
+    binding_counts = _printing_plate_binding_counts_by_plate(db, plate_ids)
+    reuse_counts, latest_reuses = _printing_plate_reuse_summaries(db, plate_ids)
     archives = build_printing_plate_time_archives(
         db,
         rows,
@@ -7667,6 +7836,9 @@ def list_printing_plates(
                 allowed_customer_ids,
                 time_archive=archives.get(row.id),
                 products=products_by_plate.get(row.id, []),
+                binding_count=binding_counts.get(row.id, 0),
+                reuse_count=reuse_counts.get(row.id, 0),
+                latest_reuse=latest_reuses.get(row.id),
             )
             for row in rows
         ]
@@ -7790,6 +7962,185 @@ def update_printing_plate_status(
         raise HTTPException(status_code=409, detail="挂板资料已变化，请刷新后重试")
     db.commit()
     return _printing_plate_dict(db, _printing_plate_or_404(db, plate_id))
+
+
+def _printing_plate_reuse_target_customer(
+    db: Session,
+    customer_id: int,
+) -> Customer:
+    customer = db.get(Customer, customer_id)
+    if customer is None:
+        raise HTTPException(status_code=400, detail="新树脂版客户不存在")
+    if not customer.is_active:
+        raise HTTPException(status_code=409, detail="新树脂版客户已停用，不能登记新用途")
+    return customer
+
+
+def _printing_plate_reuse_preview_dict(
+    db: Session,
+    preview: PrintingPlateResinReusePreview,
+) -> dict:
+    return {
+        "plate": _printing_plate_dict(
+            db,
+            preview.plate,
+            binding_count=preview.binding_count,
+        ),
+        "target_customer": {
+            "id": preview.target_customer.id,
+            "customer_code": preview.target_customer.customer_code,
+            "name": preview.target_customer.name,
+        },
+        "expected_version": preview.plate.version,
+        "eligible": preview.eligible,
+        "binding_count": preview.binding_count,
+        "blockers": list(preview.blockers),
+        "physical_rule": (
+            "实体挂板编号保持不变；确认旧树脂版已撕除、新树脂版已贴好后，"
+            "系统只更新当前用途并永久保留换版历史。"
+        ),
+    }
+
+
+@router.post("/printing-plates/{plate_id}/resin-reuse/preview")
+def preview_printing_plate_resin_reuse_endpoint(
+    plate_id: int,
+    payload: PrintingPlateResinReusePreviewPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    plate = _printing_plate_or_404(db, plate_id)
+    target_customer = _printing_plate_reuse_target_customer(
+        db, payload.target_customer_id
+    )
+    require_customer_access(plate.customer_id, current_user=user, db=db)
+    require_customer_access(target_customer.id, current_user=user, db=db)
+    preview = preview_printing_plate_resin_reuse(
+        db,
+        plate=plate,
+        target_customer=target_customer,
+    )
+    return _printing_plate_reuse_preview_dict(db, preview)
+
+
+@router.post("/printing-plates/{plate_id}/resin-reuse/confirm")
+def confirm_printing_plate_resin_reuse_endpoint(
+    plate_id: int,
+    payload: PrintingPlateResinReuseConfirmPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    try:
+        plate = _printing_plate_or_404(db, plate_id)
+        target_customer = _printing_plate_reuse_target_customer(
+            db, payload.target_customer_id
+        )
+        result = confirm_printing_plate_resin_reuse(
+            db,
+            plate=plate,
+            target_customer=target_customer,
+            target_plate_name=payload.target_plate_name,
+            target_color_name=payload.target_color_name,
+            expected_version=payload.expected_version,
+            idempotency_key=payload.idempotency_key,
+            actor_id=user.id,
+            actor_username=user.username,
+            old_resin_removed=payload.old_resin_removed,
+            new_resin_mounted=payload.new_resin_mounted,
+        )
+        if not result.replayed:
+            db.add(
+                OperationLog(
+                    user_id=user.id,
+                    username=user.username,
+                    role=user.role,
+                    action="UPDATE",
+                    resource=(
+                        f"warehouse/printing-plates/{plate_id}/resin-reuse"
+                    ),
+                    entity_type="printing_plate",
+                    entity_id=plate_id,
+                    description="现场确认挂板旧树脂版撕除并换版复用",
+                    details=json.dumps(
+                        {
+                            "reuse_id": result.reuse.id,
+                            "plate_code": result.reuse.plate_code_snapshot,
+                            "from_customer_id": result.reuse.from_customer_id,
+                            "to_customer_id": result.reuse.to_customer_id,
+                            "from_plate_name": result.reuse.from_plate_name_snapshot,
+                            "to_plate_name": result.reuse.to_plate_name_snapshot,
+                            "from_color_name": result.reuse.from_color_name_snapshot,
+                            "to_color_name": result.reuse.to_color_name_snapshot,
+                            "rack_location": result.reuse.rack_location_snapshot,
+                            "expected_version": result.reuse.expected_version,
+                            "resulting_version": result.reuse.resulting_version,
+                            "idempotency_key": result.reuse.idempotency_key,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    ip_address=request.client.host if request.client else None,
+                    user_agent=request.headers.get("user-agent"),
+                )
+            )
+        db.commit()
+        current_plate = _printing_plate_or_404(db, plate_id)
+        return {
+            "message": (
+                "该换版确认已处理，本次未重复写入"
+                if result.replayed
+                else "挂板换版复用已确认；实体挂板编号和第 2 层位置保持不变"
+            ),
+            "plate": _printing_plate_dict(db, current_plate),
+            "reuse": _printing_plate_reuse_dict(result.reuse),
+            "idempotent_replay": result.replayed,
+        }
+    except PrintingPlateResinReuseError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="挂板换版资料、版本或幂等键冲突，请重新预览",
+        ) from error
+
+
+@router.get("/printing-plates/{plate_id}/resin-reuses")
+def list_printing_plate_resin_reuses(
+    plate_id: int,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    plate = _printing_plate_or_404(db, plate_id)
+    require_customer_access(plate.customer_id, current_user=user, db=db)
+    query = select(PrintingPlateResinReuse).where(
+        PrintingPlateResinReuse.printing_plate_id == plate_id
+    )
+    total = int(
+        db.scalar(
+            select(func.count(PrintingPlateResinReuse.id)).where(
+                PrintingPlateResinReuse.printing_plate_id == plate_id
+            )
+        )
+        or 0
+    )
+    rows = db.scalars(
+        query.order_by(
+            PrintingPlateResinReuse.reused_at.desc(),
+            PrintingPlateResinReuse.id.desc(),
+        )
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    ).all()
+    return {
+        "items": [_printing_plate_reuse_dict(row) for row in rows],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }
 
 
 def _printing_plate_preview_dict(

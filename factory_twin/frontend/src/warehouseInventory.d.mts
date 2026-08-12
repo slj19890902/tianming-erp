@@ -1,5 +1,6 @@
 export interface InventoryProjectionItem {
   lot_id: number;
+  product_id?: number | null;
   lot_number?: string;
   inventory_code?: string;
   product_name?: string;
@@ -56,6 +57,44 @@ export function searchHighlightAreaCodes(
   items: Array<{ floor_code?: string; area_code?: string | null; position_status?: string }>,
   floorCode: string
 ): string[];
+
+export function warehouseSearchProductKey(item: {
+  product_id?: number | null;
+  customer_id?: number | null;
+  customer_name?: string | null;
+  inventory_code?: string | null;
+  product_name?: string | null;
+  specification?: string | null;
+  inventory_type?: string | null;
+  unit?: string | null;
+}): string;
+
+export function warehouseSearchFloorSummaries(items: Array<{
+  floor_code?: string | null;
+  area_code?: string | null;
+  location_id?: number | null;
+  location_name?: string | null;
+  quantity?: number | null;
+  available_quantity?: number | null;
+}>): Array<{ floor_code: string; quantity: number; location_count: number }>;
+
+export function warehouseSearchLocationSummaries(items: Array<{
+  floor_code?: string | null;
+  area_code?: string | null;
+  location_id?: number | null;
+  location_name?: string | null;
+  position_status?: string | null;
+  quantity?: number | null;
+  available_quantity?: number | null;
+}>): Array<{
+  key: string;
+  floor_code: string;
+  area_code: string | null;
+  location_id: number | null;
+  location_name: string;
+  position_status: string;
+  quantity: number;
+}>;
 
 export function buildMappedLocationPallets(
   features: Array<{ id: string; feature_kind: string; feature_code: string; erp_area_code?: string | null; points: number[][] }>,

@@ -103,6 +103,66 @@ export function searchHighlightAreaCodes(items, floorCode) {
     .sort((left, right) => left.localeCompare(right, "zh-CN"));
 }
 
+export function warehouseSearchProductKey(item) {
+  const customerIdentity = item.customer_id
+    ? `customer:${item.customer_id}`
+    : `customer-name:${item.customer_name || ""}`;
+  const businessIdentity = item.product_id
+    ? `product:${item.product_id}`
+    : [item.inventory_code || "", item.product_name || "", item.specification || ""].join("::");
+  return [
+    customerIdentity,
+    businessIdentity,
+    item.inventory_type || "",
+    item.unit || ""
+  ].join("::").toLocaleLowerCase("zh-CN");
+}
+
+export function warehouseSearchFloorSummaries(items) {
+  const floors = new Map();
+  for (const item of items || []) {
+    const floorCode = item.floor_code || "UNLOCATED";
+    const row = floors.get(floorCode) || {
+      floor_code: floorCode,
+      quantity: 0,
+      location_count: 0,
+      location_keys: new Set()
+    };
+    row.quantity += Number(item.quantity ?? item.available_quantity ?? 0);
+    row.location_keys.add(item.location_id || `${item.area_code || "TEXT"}:${item.location_name || "待定位"}`);
+    row.location_count = row.location_keys.size;
+    floors.set(floorCode, row);
+  }
+  return [...floors.values()]
+    .map(({ location_keys: _locationKeys, ...row }) => row)
+    .sort((left, right) => String(left.floor_code).localeCompare(String(right.floor_code), "zh-CN", { numeric: true }));
+}
+
+export function warehouseSearchLocationSummaries(items) {
+  const locations = new Map();
+  for (const item of items || []) {
+    const key = item.location_id
+      ? `location:${item.location_id}`
+      : `${item.floor_code || "UNLOCATED"}:${item.area_code || "TEXT"}:${item.location_name || "待定位"}`;
+    const row = locations.get(key) || {
+      key,
+      floor_code: item.floor_code || "UNLOCATED",
+      area_code: item.area_code || null,
+      location_id: item.location_id || null,
+      location_name: item.location_name || "位置待确认",
+      position_status: item.position_status || "unlocated",
+      quantity: 0
+    };
+    row.quantity += Number(item.quantity ?? item.available_quantity ?? 0);
+    locations.set(key, row);
+  }
+  return [...locations.values()].sort((left, right) =>
+    String(left.floor_code).localeCompare(String(right.floor_code), "zh-CN", { numeric: true })
+    || String(left.area_code || "").localeCompare(String(right.area_code || ""), "zh-CN", { numeric: true })
+    || String(left.location_name).localeCompare(String(right.location_name), "zh-CN", { numeric: true })
+  );
+}
+
 export function buildMappedLocationPallets(features, locations, floorCode, layoutId = "erp-twin") {
   const zoneByArea = new Map(
     features

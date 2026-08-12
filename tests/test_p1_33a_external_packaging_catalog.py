@@ -359,7 +359,7 @@ def test_supplier_catalog_frontend_has_category_and_catalog_workflow() -> None:
     for needle in (
         "供货类别",
         "openSupplierPackagingCatalog(row)",
-        "新增外购产品",
+        "新增包材产品",
         "supplierPackagingPayload()",
         "paper_corner_guard",
         "coated_board",

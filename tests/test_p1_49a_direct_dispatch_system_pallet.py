@@ -28,7 +28,7 @@ from app.services.production_workflow import (
 from test_n029_production_service import production_app
 
 
-PARENT_REVISION = "hh16v8x9z05"
+PARENT_REVISION = "hi17v8x9z06"
 TARGET_REVISION = "ii17v8x9z06"
 
 

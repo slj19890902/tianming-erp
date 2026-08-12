@@ -12,6 +12,7 @@ from alembic.script import ScriptDirectory
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PREVIOUS_REVISION = "hh16v8x9z05"
 TARGET_REVISION = "hi17v8x9z06"
+RELEASE_HEAD_REVISION = "ii17v8x9z06"
 
 
 def _config(monkeypatch: pytest.MonkeyPatch, database: Path) -> Config:
@@ -200,7 +201,7 @@ def test_migration_is_the_unique_head_and_round_trips_cleanly(
     database = tmp_path / "a1-transition-roundtrip.sqlite3"
     config = _config(monkeypatch, database)
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == [TARGET_REVISION]
+    assert script.get_heads() == [RELEASE_HEAD_REVISION]
     assert script.get_revision(TARGET_REVISION).down_revision == PREVIOUS_REVISION
 
     command.upgrade(config, TARGET_REVISION)

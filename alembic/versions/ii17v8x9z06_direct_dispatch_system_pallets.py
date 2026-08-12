@@ -1,7 +1,7 @@
 """allow distinct direct-dispatch pallets in the formal staging area
 
 Revision ID: ii17v8x9z06
-Revises: hh16v8x9z05
+Revises: hi17v8x9z06
 Create Date: 2026-08-12
 """
 
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 revision = "ii17v8x9z06"
-down_revision = "hh16v8x9z05"
+down_revision = "hi17v8x9z06"
 branch_labels = None
 depends_on = None
 

@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.core.time_contract import beijing_now_naive, beijing_today, utc_now_naive
 from app.models.customer import Customer
 from app.models.delivery import DeliveryItem
+from app.models.incoming_receipt import IncomingReceiptItem
 from app.models.material import Material
 from app.models.order import Order, OrderItem
 from app.models.product import Product
@@ -280,6 +281,7 @@ SEMI_FINISHED_FLUTES_BY_LAYER: dict[int, frozenset[str]] = {
 
 RAW_MATERIAL_STAGING_WAREHOUSE_TYPES = frozenset({"semi_finished", "shared"})
 RAW_MATERIAL_STAGING_STORAGE_TYPES = frozenset({"ground", "temporary_aisle"})
+TRANSITIONAL_RAW_MATERIAL_STAGING_LOCATION_CODE = "1FA"
 
 
 @dataclass(frozen=True)
@@ -376,15 +378,25 @@ def _is_raw_material_staging_location(
 ) -> bool:
     """Return whether a location is the explicitly allowed board staging point."""
 
+    location_code = (location.location_code or "").strip().upper()
+    transitional_marker = (
+        location_code == TRANSITIONAL_RAW_MATERIAL_STAGING_LOCATION_CODE
+    )
     if (
         not location.is_active
         or location.warehouse_type not in RAW_MATERIAL_STAGING_WAREHOUSE_TYPES
         or location.warehouse_floor != 1
         or (location.area_code or "").strip().upper() != "A1"
         or location.storage_type not in RAW_MATERIAL_STAGING_STORAGE_TYPES
-        or location.placement_status != "placed"
+        or (
+            location.placement_status != "placed"
+            and not (
+                transitional_marker
+                and location.placement_status == "unplaced"
+            )
+        )
         or location.source_version == "V11"
-        or location.location_code == "F1-DISPATCH-01"
+        or location_code == "F1-DISPATCH-01"
     ):
         return False
     floor = db.scalar(
@@ -400,7 +412,13 @@ def _is_raw_material_staging_location(
             WarehouseArea.area_code == location.area_code,
         )
     )
-    if area is None or area.construction_status != "enabled":
+    if area is None or (
+        area.construction_status != "enabled"
+        and not (
+            transitional_marker
+            and area.construction_status == "ledger_building"
+        )
+    ):
         return False
     return True
 
@@ -440,6 +458,9 @@ def _location(
     inventory_type: str,
     *,
     allow_raw_material_staging: bool = False,
+    raw_material_staging_source_type: str | None = None,
+    raw_material_staging_source_ref_type: str | None = None,
+    raw_material_staging_source_ref_id: int | None = None,
 ) -> WarehouseLocation:
     location = db.get(WarehouseLocation, location_id)
     allowed = {
@@ -478,6 +499,28 @@ def _location(
         and allow_raw_material_staging
         and _is_raw_material_staging_location(db, location)
     ):
+        if location.placement_status == "unplaced":
+            if not (
+                raw_material_staging_source_type == "replenishment"
+                and raw_material_staging_source_ref_type
+                == "stock_replenishment_receipt"
+                and raw_material_staging_source_ref_id is not None
+            ):
+                raise WarehouseInventoryError(
+                    "过渡原料暂存标记只允许补库来料实收使用。", 409
+                )
+            posted_receipt_item = db.scalar(
+                select(IncomingReceiptItem.id).where(
+                    IncomingReceiptItem.id
+                    == raw_material_staging_source_ref_id,
+                    IncomingReceiptItem.status == "posted",
+                    IncomingReceiptItem.stock_replenishment_item_id.is_not(None),
+                )
+            )
+            if posted_receipt_item is None:
+                raise WarehouseInventoryError(
+                    "过渡原料暂存标记缺少有效的补库来料实收事实。", 409
+                )
         return location
     if getattr(location, "placement_status", None) == "unplaced":
         raise WarehouseInventoryError(
@@ -2494,6 +2537,9 @@ def manual_semi_finished_in(
         location_id,
         "semi_finished",
         allow_raw_material_staging=allow_raw_material_staging,
+        raw_material_staging_source_type=source_type,
+        raw_material_staging_source_ref_type=source_ref_type,
+        raw_material_staging_source_ref_id=source_ref_id,
     )
     customer = db.get(Customer, customer_id) if customer_id else None
     if customer_id and customer is None:

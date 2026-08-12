@@ -303,6 +303,21 @@ def create_app() -> FastAPI:
             include_in_schema=False,
         )
     if not any(
+        route.path == "/incoming-production-card.html"
+        for route in application.routes
+    ):
+        incoming_production_card_path = (
+            Path(__file__).resolve().parents[1]
+            / "static"
+            / "incoming-production-card.html"
+        )
+        application.add_api_route(
+            "/incoming-production-card.html",
+            _conditional_file_endpoint(incoming_production_card_path),
+            methods=["GET"],
+            include_in_schema=False,
+        )
+    if not any(
         route.path == "/production-packaging-label.html"
         for route in application.routes
     ):

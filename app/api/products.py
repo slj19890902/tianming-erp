@@ -74,6 +74,10 @@ from app.services.production_label_strategy import (
     ProductionLabelStrategyError,
     normalize_production_label_strategy,
 )
+from app.services.printing_colors import (
+    PrintingColorError,
+    normalize_printing_colors,
+)
 from app.services.corner_guard_pricing import (
     CATEGORY_CODE as CORNER_GUARD_CATEGORY_CODE,
     ROOT_UNITS as CORNER_GUARD_ROOT_UNITS,
@@ -211,13 +215,29 @@ def _normalize_product_printing_plate_configuration(payload: ProductPayload) -> 
         "machine_set_width_mm",
         "machine_set_height_mm",
     )
-    if required == 0 or payload.printing_plate_mode == "no_plate":
+    if required == 0:
+        payload.printing_colors = None
         payload.printing_plate_mode = "no_plate"
         for field in (*plate_fields, *setting_fields):
             setattr(payload, field, None)
         return
     if required < 0:
-        raise ValueError("挂板印刷只支持单色、双色或三色印刷")
+        raise ValueError("印刷情况只支持无印刷、单色、双色或三色印刷")
+    if payload.printing_plate_mode == "no_plate":
+        try:
+            payload.printing_colors = normalize_printing_colors(
+                payload.print_content,
+                payload.printing_colors,
+            )
+        except PrintingColorError as error:
+            raise ValueError(str(error)) from error
+        for field in (*plate_fields, *setting_fields):
+            setattr(payload, field, None)
+        return
+
+    # A hanging-plate product obtains its ordered colours from the bound plate
+    # assets.  Never retain a stale direct-print colour or invent black here.
+    payload.printing_colors = None
     ids = [getattr(payload, field) for field in plate_fields]
     selected = [value for value in ids if value is not None]
     if len(selected) != required or any(
@@ -226,6 +246,50 @@ def _normalize_product_printing_plate_configuration(payload: ProductPayload) -> 
         raise ValueError(f"{payload.print_content}挂板必须按颜色顺序选择 {required} 块挂板")
     if len(set(selected)) != len(selected):
         raise ValueError("同一块挂板不能在一个常用箱中重复绑定")
+
+
+_PRODUCT_PRINTING_CONFIGURATION_FIELDS = (
+    "print_content",
+    "printing_colors",
+    "printing_plate_mode",
+    "printing_plate_1_id",
+    "printing_plate_2_id",
+    "printing_plate_3_id",
+    "plate_alignment_value_mm",
+    "plate_mount_value_mm",
+    "machine_set_length_mm",
+    "machine_set_width_mm",
+    "machine_set_height_mm",
+)
+
+
+def _product_printing_configuration_unchanged(
+    product: Product,
+    payload: ProductPayload,
+) -> bool:
+    """Allow an unrelated edit to carry an incomplete legacy print record.
+
+    This exemption is exact: changing any print field re-enters the current
+    strict contract.  It prevents a label-only or other sibling-field update
+    from rewriting, clearing, or fabricating old printing facts.
+    """
+
+    return all(
+        getattr(payload, field) == getattr(product, field)
+        for field in _PRODUCT_PRINTING_CONFIGURATION_FIELDS
+    )
+
+
+def _normalize_product_printing_configuration_for_api(
+    payload: ProductPayload,
+) -> None:
+    try:
+        _normalize_product_printing_plate_configuration(payload)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(error),
+        ) from error
 
 
 def _validate_product_printing_plates(db: Session, payload: ProductPayload) -> None:
@@ -375,7 +439,7 @@ class ProductPayload(BaseModel):
     external_packaging_purchase_unit: str | None = None
     external_supply: ProductExternalSupplyPayload | None = None
     print_content: str | None = None
-    printing_colors: str | None = None
+    printing_colors: str | None = Field(default=None, max_length=150)
     printing_plate_mode: Literal["no_plate", "plate"] = "no_plate"
     printing_plate_1_id: int | None = Field(default=None, gt=0)
     printing_plate_2_id: int | None = Field(default=None, gt=0)
@@ -490,9 +554,9 @@ class ProductPayload(BaseModel):
                 "不印刷",
             }:
                 self.print_content = "单色印刷"
-            if not (self.printing_colors or "").strip():
-                self.printing_colors = "黑色"
-        _normalize_product_printing_plate_configuration(self)
+        # Endpoint-level create/update normalization runs after customer and
+        # existing-product context is known.  Keeping it out of Pydantic also
+        # lets old stored records remain readable without inventing colours.
         secondary_gluing_error = _secondary_gluing_error(
             production_process=self.production_process,
             box_style=self.box_style,
@@ -1008,7 +1072,12 @@ def _validated_product_versioned_updates(
         )
     supply_updates = _normalize_product_external_supply(db, payload=payload, existing=product)
     _normalize_product_mold_binding(payload)
-    _normalize_product_printing_plate_configuration(payload)
+    printing_configuration_unchanged = _product_printing_configuration_unchanged(
+        product,
+        payload,
+    )
+    if not printing_configuration_unchanged:
+        _normalize_product_printing_configuration_for_api(payload)
     _validate_references(
         db,
         customer_id=payload.customer_id,
@@ -1017,7 +1086,8 @@ def _validated_product_versioned_updates(
         historical_material_id=product.material_id,
     )
     _validate_product_material_flute(db, payload)
-    _validate_product_printing_plates(db, payload)
+    if not printing_configuration_unchanged:
+        _validate_product_printing_plates(db, payload)
     _validate_changed_product_crease_widths(payload, product)
     updates = _product_write_data(payload, user)
     if not virtual_marker_was_submitted:
@@ -1994,7 +2064,7 @@ def create_product(
     require_customer_access(payload.customer_id, current_user=user, db=db)
     supply_updates = _normalize_product_external_supply(db, payload=payload)
     _normalize_product_mold_binding(payload)
-    _normalize_product_printing_plate_configuration(payload)
+    _normalize_product_printing_configuration_for_api(payload)
     _validate_references(
         db,
         customer_id=payload.customer_id,

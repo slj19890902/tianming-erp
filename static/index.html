@@ -1298,6 +1298,18 @@
         border-radius: 9px;
         background: #fff7ed;
       }
+      .product-printing-color-config {
+        flex:1 0 100%;
+        display:grid;
+        grid-template-columns:repeat(3,minmax(150px,1fr));
+        gap:8px 10px;
+        padding:10px;
+        border:1px solid #bae6fd;
+        border-radius:9px;
+        background:#f0f9ff;
+      }
+      .product-printing-color-actions { grid-column:1 / -1; display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+      .product-printing-color-message { grid-column:1 / -1; }
       .product-production-label-config {
         flex:0 0 142px;
         display: grid;
@@ -1537,7 +1549,9 @@
         .product-mold-adjacent,
         .product-print-status-field,
         .product-print-method-field,
+        .product-printing-color-config,
         .product-production-label-config { min-width:0; width:auto; margin-left:0; }
+        .product-printing-color-config { grid-template-columns:repeat(2,minmax(0,1fr)); grid-column:1 / -1; }
         .product-production-label-config { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-column: 1 / -1; }
         .telescoping-component-grid { grid-template-columns: 1fr; }
       }
@@ -1554,6 +1568,7 @@
         .product-material-candidate-metrics { grid-template-columns: 1fr; }
         .product-material-history-row { grid-template-columns: 1fr; }
         .product-print-row { grid-template-columns:1fr; }
+        .product-printing-color-config { grid-template-columns:1fr; grid-column:1 / -1; }
         .product-production-label-config { grid-template-columns: 1fr; grid-column: 1 / -1; }
       }
 
@@ -4991,22 +5006,31 @@
                 </div>
                 <div v-if="productForm.supply_mode!=='external_purchase' && productUsesMold(productForm)" class="field product-mold-adjacent"><label>生产模具 / 货架位置（必选）</label><search-select v-model="productForm.mold_tool_id" :options="moldToolSelectOptions()" label-key="_label" value-key="id" placeholder="输入模具编号、名称或位置" :allow-empty="false" @search="searchMoldTools"></search-select><div v-if="productMoldError" class="status orange" style="display:block;margin-top:4px">{{ productMoldError }}</div></div>
                 <div v-if="productForm.supply_mode!=='external_purchase'" class="field product-print-status-field"><label>印刷情况</label>
-                  <select class="select" v-model="productForm.print_content" @change="onProductPrintingChanged">
+                  <select class="select" v-model="productForm._printing_situation" @change="onProductPrintingSituationChanged">
                     <option value="无印刷">无印刷</option>
                     <option value="单色印刷">单色印刷</option>
                     <option value="双色印刷">双色印刷</option>
                     <option value="三色印刷">三色印刷</option>
-                    <option v-if="productForm.print_content && !['无印刷','单色印刷','双色印刷','三色印刷'].includes(productForm.print_content)" :value="productForm.print_content">原记录：{{ productForm.print_content }}</option>
+                    <option value="挂板印刷">挂板印刷</option>
                   </select>
                 </div>
-                <div v-if="productForm.supply_mode!=='external_purchase' && productHasPrinting(productForm)" class="field product-print-method-field"><label>印刷方式</label>
-                  <select class="select" v-model="productForm.printing_plate_mode" @change="onProductPrintingChanged">
-                    <option value="no_plate">不挂板</option>
-                    <option value="plate">挂板</option>
-                  </select>
-                  <div v-if="productForm.printing_plate_mode==='no_plate'" class="status orange product-print-method-note" style="display:block;margin-top:4px" title="按图纸核对印刷内容，可能有印刷尺寸偏差">按图纸核对</div>
+                <div v-if="productForm.supply_mode!=='external_purchase' && productUsesDirectPrinting(productForm)" class="field product-print-method-field"><label>颜色</label>
+                  <div class="muted">{{ productPrintingColorSummary(productForm) || '颜色待完善' }}</div>
+                  <div class="status orange product-print-method-note" style="display:block;margin-top:4px" title="按图纸核对印刷内容，可能有印刷尺寸偏差">按图纸核对</div>
+                </div>
+                <div v-if="productForm.supply_mode!=='external_purchase' && productUsesDirectPrinting(productForm)" class="product-printing-color-config">
+                  <div class="field" v-for="index in productDirectPrintingColorCount(productForm)" :key="`printing-color-${index}`">
+                    <label>第{{ index }}色</label>
+                    <input class="input" maxlength="40" list="product-printing-color-suggestions" v-model="productForm._printing_colors[index-1]" :placeholder="index===1 && productForm._printing_situation==='单色印刷' ? '首次可用黑色' : `填写第${index}色`" @input="onProductPrintingColorInput" @blur="normalizeProductPrintingColor(index-1)" />
+                  </div>
+                  <datalist id="product-printing-color-suggestions"><option value="黑色"></option><option value="红色"></option><option value="蓝色"></option><option value="橙色"></option><option value="绿色"></option></datalist>
+                  <div v-if="productForm._printing_situation==='双色印刷'" class="product-printing-color-actions"><span class="muted">快捷填充：</span><button type="button" class="btn small" @click="applyProductPrintingColorPreset(['黑色','红色'])">黑＋红</button><button type="button" class="btn small" @click="applyProductPrintingColorPreset(['黑色','绿色'])">黑＋绿</button><button type="button" class="btn small" @click="applyProductPrintingColorPreset(['黑色','蓝色'])">黑＋蓝</button><span class="muted">填充后仍可编辑</span></div>
+                  <div v-if="productForm.print_content==='多色印刷'" class="muted product-printing-color-message">历史多色记录：{{ productForm.printing_colors || '颜色待完善' }}。当前按三色兼容显示，保存前请人工核对。</div>
+                  <div v-if="productPrintingColorsIncomplete(productForm)" class="status orange product-printing-color-message">颜色待完善</div>
+                  <div v-if="productPrintingColorError" class="status red product-printing-color-message">{{ productPrintingColorError }}</div>
                 </div>
                 <div v-if="productForm.supply_mode!=='external_purchase' && productHasPrinting(productForm) && productForm.printing_plate_mode==='plate'" class="product-printing-plate-config">
+                  <div class="muted" style="grid-column:1/-1">当前沿用原挂板选择；P1-51B 将在此处升级为动态挂板行。</div>
                   <div class="field" v-for="index in productPrintingPlateCount(productForm)" :key="`printing-plate-${index}`">
                     <label>第{{ index }}色挂板</label>
                     <search-select v-model="productForm[`printing_plate_${index}_id`]" :options="printingPlateSelectOptions()" label-key="_label" value-key="id" :placeholder="`选择第${index}色挂板`" :allow-empty="false"></search-select>
@@ -5040,7 +5064,7 @@
                     </div>
                   </div>
                 </div>
-                <button type="button" class="btn primary product-inline-save" :disabled="loading || masterSavePending || !!productCreaseMismatch || !!productMoldError || !!productPrintingPlateError || !!productProductionLabelError" @click="saveModal()">{{ masterSavePending ? '保存中…' : '保存' }}</button>
+                <button type="button" class="btn primary product-inline-save" :disabled="loading || masterSavePending || !!productCreaseMismatch || !!productMoldError || !!productPrintingPlateError || !!productPrintingColorError || !!productProductionLabelError" @click="saveModal()">{{ masterSavePending ? '保存中…' : '保存' }}</button>
               </div>
               </fieldset>
               <details class="product-secondary-disclosure">
@@ -7163,7 +7187,7 @@
             <button v-if="canSaveModal && modal?.type==='order'" class="btn primary" :disabled="loading || orderCreateSaveState.saving || orderCreateSaveState.committed || orderCreateSaveState.outcomeUncertain" @click="saveModal()">{{ orderCreateSaveState.saving ? '正在保存订单…' : (orderCreateSaveState.committed ? '订单已保存' : '保存') }}</button>
             <button v-if="canSaveModal && modal?.type==='orderEdit'" class="btn primary" :disabled="loading || orderGroupSaveState.saving || orderGroupSaveState.committed || orderGroupSaveState.outcomeUncertain" @click="saveModal()">{{ orderGroupSaveState.saving ? '正在保存订单组…' : (orderGroupSaveState.committed ? '订单组已保存' : '保存') }}</button>
             <button v-if="canSaveModal && modal?.type==='orderItem'" class="btn primary" :disabled="loading || orderItemSaveState.saving || orderItemSaveState.committed || orderItemSaveState.outcomeUncertain || finishedReservationActionBlocked() || !!orderItemCreaseMismatch" @click="saveModal()">{{ orderItemSaveState.saving ? '正在保存明细…' : (orderItemSaveState.committed ? '订单明细已保存' : '保存') }}</button>
-            <button v-if="canSaveModal && !['quotationConvert','order','orderEdit','orderItem'].includes(modal?.type)" class="btn primary" :class="{'delivery-guide-target':modal?.type==='delivery' && ['review','save','print'].includes(deliveryGuideStage)}" :disabled="loading || masterSavePending || (['supplierRequisitionDraft','requisition'].includes(modal?.type) && requisitionInventoryActionBlocked()) || (modal?.type==='supplierRequisitionDraft' && (supplierRequisitionSaveState.saving || supplierRequisitionSaveState.committed)) || (modal?.type==='requisition' && (compositeRequisitionSaveState.saving || compositeRequisitionSaveState.committed)) || (modal?.type==='stockReplenishment' && (stockReplenishmentSaveState.saving || stockReplenishmentSaveState.committed)) || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError || !!productPrintingPlateError || !!productProductionLabelError)) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && (deliverySaveState.saving || deliverySaveState.outcomeUncertain || !!deliveryValidationError || !!deliveryOperationState.action)) || (modal?.type==='receipt' && !!receiptOperationState.action) || (modal?.type==='requisitionHold' && requisitionHoldSaveBlocked)" @click="modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()">{{ ['customer','product','material','supplier'].includes(modal?.type) && masterSavePending ? '保存中…' : (modal?.type==='delivery' ? (deliverySaveState.saving ? '正在保存草稿…' : deliveryPrimaryLabel()) : (modal?.type==='receipt' ? (receiptOperationState.action==='save' ? '保存中…' : '保存回单') : (modal?.type==='supplierRequisitionDraft' ? (supplierRequisitionSaveState.saving ? '正在生成采购单…' : (supplierRequisitionSaveState.committed ? '采购单已生成' : '确认生成正式采购单')) : (modal?.type==='requisition' ? (compositeRequisitionSaveState.saving ? '正在生成组合报料…' : (compositeRequisitionSaveState.committed ? '组合报料已生成' : '确认生成正式采购单')) : (modal?.type==='requisitionHold' ? '确认暂缓' : (modal?.type==='stockReplenishment' ? (stockReplenishmentSaveState.saving ? '正在保存补库草稿…' : (stockReplenishmentSaveState.committed ? '补库草稿已保存' : (stockReplenishmentForm.source_type==='stock_warning' ? '保存报料草稿' : '保存补库报料草稿'))) : '保存')))))) }}</button>
+            <button v-if="canSaveModal && !['quotationConvert','order','orderEdit','orderItem'].includes(modal?.type)" class="btn primary" :class="{'delivery-guide-target':modal?.type==='delivery' && ['review','save','print'].includes(deliveryGuideStage)}" :disabled="loading || masterSavePending || (['supplierRequisitionDraft','requisition'].includes(modal?.type) && requisitionInventoryActionBlocked()) || (modal?.type==='supplierRequisitionDraft' && (supplierRequisitionSaveState.saving || supplierRequisitionSaveState.committed)) || (modal?.type==='requisition' && (compositeRequisitionSaveState.saving || compositeRequisitionSaveState.committed)) || (modal?.type==='stockReplenishment' && (stockReplenishmentSaveState.saving || stockReplenishmentSaveState.committed)) || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError || !!productPrintingPlateError || !!productPrintingColorError || !!productProductionLabelError)) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && (deliverySaveState.saving || deliverySaveState.outcomeUncertain || !!deliveryValidationError || !!deliveryOperationState.action)) || (modal?.type==='receipt' && !!receiptOperationState.action) || (modal?.type==='requisitionHold' && requisitionHoldSaveBlocked)" @click="modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()">{{ ['customer','product','material','supplier'].includes(modal?.type) && masterSavePending ? '保存中…' : (modal?.type==='delivery' ? (deliverySaveState.saving ? '正在保存草稿…' : deliveryPrimaryLabel()) : (modal?.type==='receipt' ? (receiptOperationState.action==='save' ? '保存中…' : '保存回单') : (modal?.type==='supplierRequisitionDraft' ? (supplierRequisitionSaveState.saving ? '正在生成采购单…' : (supplierRequisitionSaveState.committed ? '采购单已生成' : '确认生成正式采购单')) : (modal?.type==='requisition' ? (compositeRequisitionSaveState.saving ? '正在生成组合报料…' : (compositeRequisitionSaveState.committed ? '组合报料已生成' : '确认生成正式采购单')) : (modal?.type==='requisitionHold' ? '确认暂缓' : (modal?.type==='stockReplenishment' ? (stockReplenishmentSaveState.saving ? '正在保存补库草稿…' : (stockReplenishmentSaveState.committed ? '补库草稿已保存' : (stockReplenishmentForm.source_type==='stock_warning' ? '保存报料草稿' : '保存补库报料草稿'))) : '保存')))))) }}</button>
           </div>
         </div>
       </div>
@@ -7516,7 +7540,9 @@
         id: null, version: null, customer_id: null, product_code: "", customer_material_code: "",
         product_name: "", material_id: null, legacy_material_text: null,
         length_mm: null, width_mm: null, height_mm: null, box_category: "normal",
-        box_style: "", print_content: "无印刷", printing_colors: "",
+        box_style: "", print_content: "无印刷", printing_colors:"",
+        _printing_situation: "无印刷", _printing_colors: [], _printing_colors_original_count: 0, _printing_colors_touched: false,
+        _printing_original: null,
         supply_mode: "corrugated_production", external_packaging_category_code: "",
         external_packaging_specification_summary: "", external_packaging_purchase_unit: "",
         external_supply: { candidates: [], customer_specification:null },
@@ -8625,6 +8651,21 @@
             if (new Set(selected).size !== selected.length) return "同一块挂板不能重复绑定";
             return "";
           },
+          productPrintingColorError() {
+            if (!this.modal || this.modal.type !== "product" || !this.productUsesDirectPrinting(this.productForm)) return "";
+            if (this.productForm.id && !this.productForm._printing_colors_touched) return "";
+            const count = this.productDirectPrintingColorCount(this.productForm);
+            const colors = this.productPrintingColorsForWrite(this.productForm);
+            if (!count) return "直接印刷只支持单色、双色或三色";
+            if (colors.length !== count || colors.some(value=>!value)) return `${this.productForm._printing_situation}必须完整填写 ${count} 个颜色`;
+            if (colors.some(value=>value.length>40)) return "每个印刷颜色最多 40 个字符";
+            if (new Set(colors.map(value=>value.toLocaleLowerCase())).size !== colors.length) return "同一个印刷颜色不能重复填写";
+            if (colors.join("＋").length > 150) return "印刷颜色合计最多 150 个字符";
+            if (String(this.productForm.print_content || "").trim() === "多色印刷" && Number(this.productForm._printing_colors_original_count || 0) > 3 && !this.productForm._printing_colors_touched) {
+              return "历史多色记录超过三色，请人工改为三色后再保存";
+            }
+            return "";
+          },
           productProductionLabelError() {
             if (!this.modal || this.modal.type !== "product" || !this.productForm.production_label_enabled) return "";
             const raw = this.productForm.production_label_units_per_label;
@@ -9374,8 +9415,11 @@
             if (productCreaseError) throw new Error(productCreaseError);
             if (!isExternal && this.productMoldError) throw new Error(this.productMoldError);
             if (!isExternal && this.productPrintingPlateError) throw new Error(this.productPrintingPlateError);
+            if (!isExternal && this.productPrintingColorError) throw new Error(this.productPrintingColorError);
             if (!isExternal && this.productProductionLabelError) throw new Error(this.productProductionLabelError);
             const payload = { ...this.productForm };
+            const printing = this.productPrintingWriteFields(this.productForm);
+            Object.assign(payload,printing);
             if (isExternal) {
               const selectedIds = [...new Set((payload._external_selected_ids || []).map(Number).filter(value=>value>0))];
               if (!payload.external_packaging_category_code) throw new Error("请选择外购包材类别");
@@ -9398,7 +9442,7 @@
               payload.crease_left_mm=null; payload.crease_middle_mm=null; payload.crease_right_mm=null;
               payload.base_report_length_mm=null; payload.base_report_width_mm=null; payload.base_crease_type=null;
               payload.base_crease_left_mm=null; payload.base_crease_middle_mm=null; payload.base_crease_right_mm=null;
-              payload.production_process=""; payload._production_processes=[]; payload.print_content="无印刷";
+              payload.production_process=""; payload._production_processes=[]; payload.print_content="无印刷"; payload.printing_colors=null;
               payload.production_label_enabled=false; payload.production_label_units_per_label=null; payload.mold_tool_id=null;
             } else {
               payload.external_packaging_category_code=null;
@@ -9418,6 +9462,11 @@
             if (!String(payload.production_process || "").split(/[,，、]/).map(value=>value.trim()).includes("模切")) payload.mold_tool_id=null;
             delete payload._production_processes;
             delete payload._production_process_legacy;
+            delete payload._printing_situation;
+            delete payload._printing_colors;
+            delete payload._printing_colors_original_count;
+            delete payload._printing_colors_touched;
+            delete payload._printing_original;
             delete payload._material_supplier;
             delete payload._report_dims_manual;
             delete payload._crease_dims_manual;
@@ -9452,7 +9501,7 @@
               if (payload[key] === "") payload[key] = null;
               else if (payload[key] !== null && payload[key] !== undefined) payload[key] = Number(payload[key]);
             });
-            if (!this.productHasPrinting(payload) || payload.printing_plate_mode !== "plate") {
+            if (isExternal || (this.productPrintingConfigurationChanged(this.productForm) && (!this.productHasPrinting(payload) || payload.printing_plate_mode !== "plate"))) {
               payload.printing_plate_mode="no_plate";
               [1,2,3].forEach(index=>payload[`printing_plate_${index}_id`]=null);
               ["plate_alignment_value_mm","plate_mount_value_mm","machine_set_length_mm","machine_set_width_mm","machine_set_height_mm"].forEach(key=>payload[key]=null);
@@ -19491,12 +19540,134 @@
           productHasPrinting(form) {
             return !!form && !["", "无印刷", "无", "否", "不印刷"].includes(String(form.print_content || "").trim());
           },
-          productPrintingPlateCount(form) {
-            const value = String(form?.print_content || "").trim();
+          parseProductPrintingColors(value) {
+            return String(value || "")
+              .split(/[,，、\/／|｜;；+＋]/)
+              .map(item=>String(item || "").trim().replace(/\s+/g," "))
+              .filter(Boolean);
+          },
+          productPrintingColorsForWrite(form) {
+            const count = this.productDirectPrintingColorCount(form);
+            return Array.from({length:count},(_,index)=>String(form?._printing_colors?.[index] || "").trim().replace(/\s+/g," "));
+          },
+          productPrintingColorSummary(form) {
+            return this.productPrintingColorsForWrite(form).filter(Boolean).join('＋');
+          },
+          productPrintingOriginalSnapshot(form) {
+            const source = form?._printing_original || {};
+            const originalValue = (key,fallback) => Object.prototype.hasOwnProperty.call(source,key) ? source[key] : fallback;
+            return {
+              print_content: originalValue("print_content",form?.print_content ?? null),
+              printing_colors: originalValue("printing_colors",form?.printing_colors ?? null),
+              printing_plate_mode: originalValue("printing_plate_mode",form?.printing_plate_mode ?? "no_plate"),
+              printing_plate_1_id: originalValue("printing_plate_1_id",form?.printing_plate_1_id ?? null),
+              printing_plate_2_id: originalValue("printing_plate_2_id",form?.printing_plate_2_id ?? null),
+              printing_plate_3_id: originalValue("printing_plate_3_id",form?.printing_plate_3_id ?? null),
+            };
+          },
+          productPrintingConfigurationChanged(form) {
+            if (!form?._printing_original) return true;
+            const source = form._printing_original;
+            const original = this.productPrintingOriginalSnapshot(form);
+            const normalizeColors = values => (Array.isArray(values) ? values : [])
+              .map(value=>String(value || "").trim().replace(/\s+/g," "));
+            const originalSituation = Object.prototype.hasOwnProperty.call(source,"_printing_situation")
+              ? source._printing_situation
+              : form._printing_situation;
+            const originalColors = Object.prototype.hasOwnProperty.call(source,"_printing_colors")
+              ? source._printing_colors
+              : form._printing_colors;
+            return String(form._printing_situation || "") !== String(originalSituation || "")
+              || JSON.stringify(normalizeColors(form._printing_colors)) !== JSON.stringify(normalizeColors(originalColors))
+              || String(form.printing_plate_mode === "plate" ? "plate" : "no_plate") !== String(original.printing_plate_mode === "plate" ? "plate" : "no_plate")
+              || [1,2,3].some(index=>Number(form[`printing_plate_${index}_id`] || 0) !== Number(original[`printing_plate_${index}_id`] || 0));
+          },
+          productPrintingWriteFields(form) {
+            if (form?.id && !this.productPrintingConfigurationChanged(form)) return this.productPrintingOriginalSnapshot(form);
+            const mode = form?.printing_plate_mode === "plate" ? "plate" : "no_plate";
+            const printContent = this.productHasPrinting(form) ? (form.print_content || "单色印刷") : "无印刷";
+            return {
+              print_content: printContent,
+              printing_colors: mode === "plate" || !this.productHasPrinting(form) ? null : (this.productPrintingColorSummary(form) || null),
+              printing_plate_mode: mode,
+              printing_plate_1_id: mode === "plate" ? (form.printing_plate_1_id || null) : null,
+              printing_plate_2_id: mode === "plate" ? (form.printing_plate_2_id || null) : null,
+              printing_plate_3_id: mode === "plate" ? (form.printing_plate_3_id || null) : null,
+            };
+          },
+          productDirectPrintingColorCount(form) {
+            if (!form || form.printing_plate_mode === "plate") return 0;
+            const value = String(form._printing_situation || form.print_content || "").trim();
             if (value === "单色印刷") return 1;
             if (value === "双色印刷") return 2;
-            if (["三色印刷", "多色印刷"].includes(value)) return 3;
+            if (["三色印刷","多色印刷"].includes(value)) return 3;
             return 0;
+          },
+          productUsesDirectPrinting(form) {
+            return this.productDirectPrintingColorCount(form) > 0;
+          },
+          productPrintingColorsIncomplete(form) {
+            if (!this.productUsesDirectPrinting(form)) return false;
+            return this.productPrintingColorsForWrite(form).some(value=>!value);
+          },
+          normalizeProductPrintingColor(index) {
+            const colors = Array.isArray(this.productForm._printing_colors) ? [...this.productForm._printing_colors] : [];
+            colors[index] = String(colors[index] || "").trim().replace(/\s+/g," ").slice(0,40);
+            this.productForm._printing_colors = colors;
+          },
+          onProductPrintingColorInput() {
+            this.productForm._printing_colors_touched = true;
+            if (this.productForm.print_content !== this.productForm._printing_situation) this.productForm.print_content = this.productForm._printing_situation;
+          },
+          applyProductPrintingColorPreset(colors) {
+            this.productForm._printing_colors = colors.map(value=>String(value));
+            this.productForm._printing_colors_touched = true;
+            if (this.productForm.print_content !== this.productForm._printing_situation) this.productForm.print_content = this.productForm._printing_situation;
+          },
+          productPrintingPlateCount(form) {
+            const value = String(form?.print_content || "").trim();
+            if (value === "单色印刷" || value.includes("单色")) return 1;
+            if (value === "双色印刷" || value.includes("双色")) return 2;
+            if (["三色印刷", "多色印刷"].includes(value) || value.includes("三色") || value.includes("多色")) return 3;
+            if (form?.printing_plate_mode === "plate") {
+              const selected = [1,2,3].filter(index=>Number(form[`printing_plate_${index}_id`] || 0));
+              if (selected.length) return selected.length;
+            }
+            return 0;
+          },
+          onProductPrintingSituationChanged() {
+            const form = this.productForm;
+            const situation = String(form._printing_situation || "无印刷");
+            const wasPlate = form.printing_plate_mode === "plate";
+            form._printing_colors_touched = true;
+            if (situation === "挂板印刷") {
+              // P1-51A→B 线性兼容：A 阶段只收拢入口，继续映射到旧挂板 UI；B 再替换为动态挂板行。
+              form.printing_plate_mode = "plate";
+              form.print_content = this.productPrintingPlateCount(form) ? form.print_content : "单色印刷";
+              form.printing_colors = null;
+              const count = this.productPrintingPlateCount(form);
+              for (let index=count+1; index<=3; index+=1) form[`printing_plate_${index}_id`]=null;
+              return;
+            }
+            form.print_content = situation;
+            form.printing_plate_mode = "no_plate";
+            [1,2,3].forEach(index=>form[`printing_plate_${index}_id`]=null);
+            form.plate_alignment_value_mm=null;
+            form.plate_mount_value_mm=null;
+            form.machine_set_length_mm=null;
+            form.machine_set_width_mm=null;
+            form.machine_set_height_mm=null;
+            if (!this.productHasPrinting(form)) {
+              form._printing_colors = [];
+              form.printing_colors = null;
+              return;
+            }
+            const count = this.productDirectPrintingColorCount(form);
+            const colors = wasPlate ? [] : (Array.isArray(form._printing_colors) ? [...form._printing_colors] : []);
+            colors.length = count;
+            while (colors.length < count) colors.push("");
+            if (situation === "单色印刷" && !String(colors[0] || "").trim()) colors[0] = "黑色";
+            form._printing_colors = colors;
           },
           onProductPrintingChanged() {
             const form = this.productForm;
@@ -19540,6 +19711,14 @@
           },
           hydrateProductForm(detail) {
             const form = { ...blankProduct(), ...JSON.parse(JSON.stringify(detail || {})) };
+            const printingOriginal = {
+              print_content: detail?.print_content ?? null,
+              printing_colors: detail?.printing_colors ?? null,
+              printing_plate_mode: detail?.printing_plate_mode ?? null,
+              printing_plate_1_id: detail?.printing_plate_1_id ?? null,
+              printing_plate_2_id: detail?.printing_plate_2_id ?? null,
+              printing_plate_3_id: detail?.printing_plate_3_id ?? null,
+            };
             form.supply_mode = ["external_purchase","mixed_bom"].includes(form.supply_mode) ? form.supply_mode : "corrugated_production";
             const externalSupply = detail?.external_supply || {};
             const snapshots = Array.isArray(externalSupply.candidates) ? externalSupply.candidates : [];
@@ -19558,6 +19737,21 @@
             form.box_style = this.normalizeBoxTypeDisplay(form.box_style || "");
             form.print_content = form.print_content || "无印刷";
             form.printing_plate_mode = form.printing_plate_mode === "plate" ? "plate" : "no_plate";
+            const parsedPrintingColors = this.parseProductPrintingColors(form.printing_colors);
+            form._printing_colors_original_count = parsedPrintingColors.length;
+            form._printing_colors_touched = false;
+            form._printing_colors = parsedPrintingColors;
+            if (form.printing_plate_mode === "plate") form._printing_situation = "挂板印刷";
+            else if (["单色印刷","双色印刷","三色印刷"].includes(form.print_content)) form._printing_situation = form.print_content;
+            else if (String(form.print_content || "").includes("双色")) form._printing_situation = "双色印刷";
+            else if (["三色印刷","多色印刷"].some(value=>String(form.print_content || "").includes(value.replace("印刷","")))) form._printing_situation = "三色印刷";
+            else if (String(form.print_content || "").includes("单色")) form._printing_situation = "单色印刷";
+            else form._printing_situation = "无印刷";
+            form._printing_original = {
+              ...printingOriginal,
+              _printing_situation: form._printing_situation,
+              _printing_colors: [...parsedPrintingColors],
+            };
             form.production_label_enabled = form.production_label_enabled === true;
             const productionLabelUnits = Number(form.production_label_units_per_label);
             form.production_label_units_per_label = form.production_label_enabled && Number.isInteger(productionLabelUnits) && productionLabelUnits > 0
@@ -19621,6 +19815,7 @@
           },
           _productFormSaveFields() {
             const f = this.productForm;
+            const printing = this.productPrintingWriteFields(f);
             return {
               customer_id: f.customer_id, product_code: f.product_code,
               customer_material_code: f.customer_material_code, product_name: f.product_name,
@@ -19633,10 +19828,12 @@
               external_supply_candidates: (f._external_selected_ids || []).map(Number).sort((a,b)=>a-b),
               external_supply_default: Number(f._external_default_product_id || 0) || null,
               length_mm: f.length_mm, width_mm: f.width_mm, height_mm: f.height_mm,
-              print_content: f.print_content, production_processes: f._production_processes,
-              printing_plate_mode: f.printing_plate_mode,
-              printing_plate_1_id: f.printing_plate_1_id, printing_plate_2_id: f.printing_plate_2_id,
-              printing_plate_3_id: f.printing_plate_3_id,
+              print_content: printing.print_content,
+              printing_colors: printing.printing_colors,
+              production_processes: f._production_processes,
+              printing_plate_mode: printing.printing_plate_mode,
+              printing_plate_1_id: printing.printing_plate_1_id, printing_plate_2_id: printing.printing_plate_2_id,
+              printing_plate_3_id: printing.printing_plate_3_id,
               plate_alignment_value_mm: f.plate_alignment_value_mm, plate_mount_value_mm: f.plate_mount_value_mm,
               machine_set_length_mm: f.machine_set_length_mm, machine_set_width_mm: f.machine_set_width_mm,
               machine_set_height_mm: f.machine_set_height_mm,

@@ -8,6 +8,8 @@ from app.services.warehouse_twin_layout import load_warehouse_twin_floor
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = (ROOT / "factory_twin" / "frontend" / "src" / "WarehouseTwinApp.tsx").read_text(encoding="utf-8")
+MOVE_DRAFT = (ROOT / "factory_twin" / "frontend" / "src" / "warehouseMoveDraft.mjs").read_text(encoding="utf-8")
+STOCKTAKE_DRAFT = (ROOT / "factory_twin" / "frontend" / "src" / "warehouseStocktakeDraft.mjs").read_text(encoding="utf-8")
 CANVAS = (ROOT / "factory_twin" / "frontend" / "src" / "EditorCanvas.tsx").read_text(encoding="utf-8")
 INDUSTRIAL = (ROOT / "factory_twin" / "frontend" / "src" / "industrialScene.ts").read_text(encoding="utf-8")
 BUILT = (ROOT / "static" / "factory-twin-assets" / "warehouse-twin.html").read_text(encoding="utf-8")
@@ -300,7 +302,7 @@ def test_p1_47a_uses_typed_map_search_and_one_unified_read_only_entry() -> None:
     assert "查货模式 · 只读" in SOURCE
     assert "P1-47C 独立阶段启用" not in SOURCE
     assert 'setCanExecuteWarehouse(value.permissions.includes("warehouse.execute"))' in SOURCE
-    assert '{canExecuteWarehouse && <button type="button" className={mapMode === "move" ? "active" : ""} disabled={spatialEditBusy} onClick={enterWarehouseMoveMode}>移货 / 盘点</button>}' in SOURCE
+    assert '(canExecuteWarehouse || canStocktake) && <button type="button" className={mapMode === "move" ? "active" : ""} disabled={spatialEditBusy} onClick={enterWarehouseMoveMode}' in SOURCE
     assert "区域规划" in SOURCE
     assert "P1-47B 独立阶段启用" not in SOURCE
     assert 'mapMode === "move"' in SOURCE
@@ -310,13 +312,14 @@ def test_p1_47a_uses_typed_map_search_and_one_unified_read_only_entry() -> None:
     assert "真实文字位置" in SOURCE
     assert "warehouse-search-hit" in SOURCE
     assert "product-search-hit" in SOURCE
-    assert "地图选点入仓 / 差异补录" in SOURCE
-    assert "先在顶部选择 1F/3F" in SOURCE
-    assert "筛选该客户常用箱" in SOURCE
-    assert "同客户、同存货产品且类型兼容时可合并" in SOURCE
-    assert "/api/warehouse/twin-operations/semi-finished-inbound" in SOURCE
+    assert "正式货位盘点调整" in SOURCE
+    assert "筛选该客户已有产品" in SOURCE
+    assert "底部一次确认整批提交" in SOURCE
+    assert "buildStocktakeBatchPayload(stocktakeBatchIdempotencyKey, stocktakeDrafts)" in SOURCE
+    assert '"/api/warehouse/twin-operations/stocktake-batches"' in SOURCE
+    assert "/api/warehouse/twin-operations/semi-finished-inbound" not in SOURCE
     assert "selectedLocation.location_name" in SOURCE
-    assert "内部库位编码只在详情中保留" in SOURCE
+    assert "内部码 {item.location_code || \"未编\"}" in SOURCE
     assert ".twin-location-item.warehouse-search-hit" in TWIN_CSS
     assert ".twin-area-lot.product-search-hit" in TWIN_CSS
 
@@ -375,22 +378,21 @@ def test_p1_34c_layout_edits_use_admin_draft_validation_and_explicit_publish() -
 
 def test_phase2c9_admin_operations_and_read_only_locating_share_the_measured_map() -> None:
     assert 'value.user.role === "admin"' in SOURCE
-    assert "/api/warehouse/twin-operations/finished-inbound" in SOURCE
-    assert "/api/warehouse/twin-operations/pallets/${selectedLocation.pallet.pallet_id}/move" in SOURCE
-    assert "地图选点入仓 / 差异补录" in SOURCE
-    assert "正式栈板移位" in SOURCE
-    assert "仅 admin" in SOURCE
-    assert "confirmed: true" in SOURCE
-    assert "idempotency_key: inboundIdempotencyKey" in SOURCE
-    assert "idempotency_key: moveIdempotencyKey" in SOURCE
-    assert 'item.storage_type !== "rack"' in SOURCE
-    assert 'selectedLocation?.storage_type !== "rack"' in SOURCE
-    assert "该位置尚未启用、未完成布局、区域用途不匹配或与柱子冲突" in SOURCE
-    assert '"/api/warehouse/pallets"' in SOURCE
-    assert 'item_type: "raw_material"' in SOURCE
+    assert 'value.permissions.includes("warehouse.stocktake.submit")' in SOURCE
+    assert "/api/warehouse/twin-operations/finished-inbound" not in SOURCE
+    assert '"/api/warehouse/twin-operations/move-batches"' in SOURCE
+    assert "移货页面草稿" in SOURCE
+    assert 'moveSource.operation === "pallet_move" ? "整栈板" : "库存批次"' in SOURCE
+    assert "canExecuteWarehouse" in SOURCE
+    assert "buildMoveBatchPayload(moveBatchIdempotencyKey, moveDrafts)" in SOURCE
+    assert "idempotency_key: idempotencyKey" in MOVE_DRAFT
+    assert "buildStocktakeBatchPayload(stocktakeBatchIdempotencyKey, stocktakeDrafts)" in SOURCE
+    assert 'inventoryType === "finished" && storageType === "rack"' in STOCKTAKE_DRAFT
+    assert '["ground", "rack", "temporary_aisle"]' in STOCKTAKE_DRAFT
+    assert "stocktakeLocationBlockReason" in STOCKTAKE_DRAFT
+    assert 'allowed_inventory_types?: InventoryUsage[]' in SOURCE
     assert '>前往移货</button>' in SOURCE
     assert 'setMoveAction("relocate")' in SOURCE
-    assert ">原材料栈板</button>" in SOURCE
     assert "模具编码或名称" in SOURCE
     assert "印刷版编码、产品或位置" in SOURCE
     assert "focusedResource.prompt" in SOURCE
@@ -467,16 +469,19 @@ def test_p1_42b_uses_only_measured_dispatch_zones_and_keeps_transfer_targets() -
     assert 'onClick={() => switchWarehouseFloor("3F")}' in SOURCE
     assert "选择后同步切换地图" in SOURCE
     assert "继续点地图中的具体空货位" in SOURCE
-    assert "直接点选三楼空位缩略图" in SOURCE
+    assert "楼层（选择后同步切换地图）" in SOURCE
+    assert "区域（也可直接点地图区域）" in SOURCE
+    assert "具体货位（也可直接点地图空位）" in SOURCE
     assert "目标必须是上方已选集合中的一块" in SOURCE
-    assert "/api/warehouse/twin-operations/staging-lots/${selectedDispatchStagingItem.lot_id}/place" in SOURCE
-    assert "/api/warehouse/twin-operations/pallets/${selectedLocation.pallet.pallet_id}/move" in SOURCE
+    assert "历史散存也可从右侧选择" in SOURCE
+    assert '"/api/warehouse/twin-operations/move-batches"' in SOURCE
+    assert "buildMoveBatchPayload(moveBatchIdempotencyKey, moveDrafts)" in SOURCE
     assert '"/api/warehouse/pallets/merge-batches"' in SOURCE
     assert '<select value={moveTargetLocationId}' not in SOURCE
     assert 'role="radiogroup" aria-label="目标系统栈板"' in SOURCE
-    assert "const P1_47D_ENABLED = false;" in SOURCE
-    assert 'canChooseProducts={P1_47D_ENABLED && canEditLocations && mapMode === "move"}' in SOURCE
-    assert 'canChooseProducts={canEditLocations && mapMode === "move"}' not in SOURCE
+    assert "P1_47D_ENABLED" not in SOURCE
+    assert 'canChooseProducts={canStocktake && mapMode === "move" && moveAction === "stocktake"}' in SOURCE
+    assert "stocktakeLocationBlockReason(location)" in STOCKTAKE_DRAFT
     assert ".twin-map-target-thumbnail" in TWIN_CSS
     assert ".twin-dispatch-label-list" in TWIN_CSS
 
@@ -522,23 +527,23 @@ def test_phase2c11_adds_rack_navigation_auto_locations_and_admin_corrections() -
     assert "区域库位数量" in SOURCE
     assert "目标库位数" in SOURCE
     assert "location-count" in SOURCE
-    assert "/api/warehouse/twin-operations/lots/${selectedCorrectionItem.lot_id}/quantity-correction" in SOURCE
-    assert "管理员二次确认" in SOURCE
-    assert "移除不会物理删除批次或流水" in SOURCE
+    assert "/quantity-correction" not in SOURCE
+    assert '"/api/warehouse/twin-operations/stocktake-batches"' in SOURCE
+    assert "buildStocktakeBatchPayload" in SOURCE
     assert 'uiMode === "large" ? "large-text" : ""' in SOURCE
     assert "location-editing" in SOURCE
 
 
 def test_phase2c12_location_first_product_selection_and_collapsed_rack_details() -> None:
-    assert "地图选点入仓 / 差异补录" in SOURCE
+    assert "正式货位盘点调整" in SOURCE
     assert "为此货位选产品" in SOURCE
-    assert "已完工未送" in SOURCE
-    assert "/api/warehouse/twin-operations/location-product-candidates" in SOURCE
-    assert "/api/warehouse/twin-operations/staging-lots/${selectedStagingProduct.lot_id}/place" in SOURCE
-    assert "/api/warehouse/twin-operations/temporary-finished-inbound" in SOURCE
-    assert "临时新产品" in SOURCE
-    assert "临时建档原因（必填）" in SOURCE
-    assert "本次只移动原库存位置，不增加库存总数" in SOURCE
+    assert "筛选该客户已有产品" in SOURCE
+    assert "/api/warehouse/floor3/product-candidates?${params.toString()}" in SOURCE
+    assert '"/api/warehouse/twin-operations/stocktake-batches"' in SOURCE
+    assert "/api/warehouse/twin-operations/temporary-finished-inbound" not in SOURCE
+    assert "queueStocktakeAddDraft" in SOURCE
+    assert "queueStocktakeDecreaseDraft" in SOURCE
+    assert "stocktakeLocationBlockReason" in STOCKTAKE_DRAFT
     assert "查看详情" in SOURCE
     assert "twin-rack-product-detail" in SOURCE
 

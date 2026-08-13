@@ -125,10 +125,15 @@ def _lot_business_fields(row: InventoryLot) -> dict:
     }
 
 
-def _lot_payload(row: InventoryLot, as_of: date) -> dict:
+def _lot_payload(
+    row: InventoryLot,
+    as_of: date,
+    *,
+    stocktake_decrease_issues: dict[int, str | None] | None = None,
+) -> dict:
     business = _lot_business_fields(row)
     age_days = _age_days(row, as_of)
-    return {
+    payload = {
         "lot_id": row.id,
         "lot_number": row.lot_number,
         "inventory_type": row.inventory_type,
@@ -144,6 +149,22 @@ def _lot_payload(row: InventoryLot, as_of: date) -> dict:
         "status": row.status,
         "version": row.version,
     }
+    if stocktake_decrease_issues is not None:
+        has_projection = int(row.id) in stocktake_decrease_issues
+        decrease_issue = stocktake_decrease_issues.get(int(row.id))
+        payload.update(
+            {
+                "stocktake_decrease_eligible": bool(
+                    has_projection and decrease_issue is None
+                ),
+                "stocktake_decrease_block_reason": (
+                    decrease_issue
+                    if has_projection
+                    else "当前投影未计算盘点调减资格"
+                ),
+            }
+        )
+    return payload
 
 
 def _pallet_visible(
@@ -340,12 +361,17 @@ def _location_payload(
     pallets: list[InventoryPallet],
     as_of: date,
     allowed_inventory_types: list[str] | None = None,
+    stocktake_decrease_issues: dict[int, str | None] | None = None,
 ) -> dict:
     position_status, map_position = _location_position(row)
     pallet_payloads = []
     for pallet in sorted(pallets, key=lambda item: item.id):
         items = [
-            _lot_payload(lot, as_of)
+            _lot_payload(
+                lot,
+                as_of,
+                stocktake_decrease_issues=stocktake_decrease_issues,
+            )
             for lot in lots
             if lot.pallet_item is not None
             and lot.pallet_item.pallet_id == pallet.id
@@ -367,6 +393,8 @@ def _location_payload(
                     "age_bucket": "unknown",
                     "stock_date_accuracy": "unknown",
                     "status": item.match_status,
+                    "stocktake_decrease_eligible": False,
+                    "stocktake_decrease_block_reason": "库存条目尚未匹配正式批次",
                 }
                 for item in pallet.items
                 if item.inventory_lot_id is None
@@ -382,7 +410,11 @@ def _location_payload(
             }
         )
     loose_items = [
-        _lot_payload(lot, as_of)
+        _lot_payload(
+            lot,
+            as_of,
+            stocktake_decrease_issues=stocktake_decrease_issues,
+        )
         for lot in lots
         if lot.pallet_item is None
     ]
@@ -397,6 +429,7 @@ def _location_payload(
         "warehouse_type": row.warehouse_type,
         "allowed_inventory_types": allowed_inventory_types or [],
         "storage_type": row.storage_type,
+        "source_version": row.source_version,
         "is_temporary": row.is_temporary,
         "is_active": row.is_active,
         "position_status": position_status,
@@ -556,6 +589,7 @@ def build_warehouse_twin_dashboard(
     visible_customer_ids: set[int] | None,
     days: int,
     as_of: date,
+    stocktake_decrease_issues: dict[int, str | None] | None = None,
 ) -> dict:
     """Build one read-only projection from formal lots, pallets, locations and movements."""
 
@@ -632,6 +666,7 @@ def build_warehouse_twin_dashboard(
                     ),
                     [],
                 ),
+                stocktake_decrease_issues=stocktake_decrease_issues,
             )
         )
 

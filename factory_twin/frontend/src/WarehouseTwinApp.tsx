@@ -45,6 +45,16 @@ import {
   togglePalletMergeSource
 } from "./warehousePalletMergeDraft.mjs";
 import type { PalletMergeCandidate } from "./warehousePalletMergeDraft.mjs";
+import {
+  buildStocktakeBatchPayload,
+  clearStocktakeDrafts,
+  removeStocktakeDraft,
+  stocktakeAddBlockReason,
+  stocktakeDecreaseBlockReason,
+  stocktakeLocationBlockReason,
+  upsertStocktakeDraft
+} from "./warehouseStocktakeDraft.mjs";
+import type { WarehouseStocktakeDraft } from "./warehouseStocktakeDraft.mjs";
 import type {
   AssetTemplate,
   CameraPreset,
@@ -76,9 +86,8 @@ type InventoryUsage = "finished" | "semi_finished" | "raw_material" | "mold" | "
 type StorageLayout = "rack" | "pallet_ground" | "mixed";
 type WarehouseSearchType = "finished" | "mold" | "printing_plate";
 type WarehouseMapMode = "lookup" | "move" | "planning";
-type InboundInventoryType = "finished" | "semi_finished" | "raw_material";
+type StocktakeInventoryType = "finished" | "semi_finished";
 type RackDraft = Rack & { level_clear_heights_mm: number[]; level_cell_counts: number[] };
-const P1_47D_ENABLED = false;
 const P1_49C_ENABLED = true;
 
 interface LayoutMutationResponse<T> {
@@ -144,6 +153,8 @@ interface InventoryItem {
   damaged_quantity?: number;
   unit?: string;
   status?: "active" | "frozen" | string;
+  stocktake_decrease_eligible?: boolean;
+  stocktake_decrease_block_reason?: string | null;
   age_days?: number | null;
   version?: number;
   specification?: string | null;
@@ -170,6 +181,7 @@ interface DashboardLocation {
   location_name: string;
   floor_code: string;
   area_code: string | null;
+  source_version: string | null;
   warehouse_type: string;
   allowed_inventory_types?: InventoryUsage[];
   storage_type: string;
@@ -307,20 +319,6 @@ interface ProductCandidate {
 
 interface ProductCandidatesResponse {
   items: ProductCandidate[];
-}
-
-interface StagingProductCandidate extends InventoryItem {
-  total_quantity: number;
-  customer_id?: number | null;
-  product_id?: number | null;
-  source_location_id: number;
-  source_location_code: string;
-  source_location_name: string;
-  stock_date: string;
-}
-
-interface StagingProductCandidatesResponse {
-  items: StagingProductCandidate[];
 }
 
 interface CustomerOption {
@@ -845,7 +843,16 @@ function WarehouseRackElevation({
               <div className={cellCount ? "" : "unpartitioned"}>{cellCount === 0 ? <i className="twin-unpartitioned-cell">本层尚未分格</i> : levelSlots.map((slot, bay) => {
                 const item = slot.item;
                 if (item) return <button type="button" className={selectedItem?.lot_id === item.lot_id ? "selected" : ""} key={`${item.lot_id}-${bay}`} onClick={() => { setSelectedItem(item); setDetailOpen(false); }}><b>{item.inventory_code || item.lot_number || `批次 ${item.lot_id}`}</b><span>{item.customer_name || "客户待确认"}</span><strong>{formatNumber(inventoryLabelQuantity(item))} {inventoryUnitLabel(item.unit)}</strong></button>;
-                if (slot.location) return <button type="button" className="empty" key={`empty-${slot.location.location_id}`} disabled={!canChooseProducts} onClick={() => onChooseEmptyLocation(slot.location!.location_id)}><b>＋ 为此货位选产品</b><span>{slot.location.location_name}</span><strong>当前空位</strong></button>;
+                if (slot.location) {
+                  const finishedBlock = stocktakeAddBlockReason(slot.location, "finished");
+                  const semiFinishedBlock = stocktakeAddBlockReason(slot.location, "semi_finished");
+                  const blockReason = !canChooseProducts
+                    ? "进入盘点调整后才可选择产品。"
+                    : finishedBlock && semiFinishedBlock
+                      ? finishedBlock
+                      : null;
+                  return <button type="button" className="empty" key={`empty-${slot.location.location_id}`} disabled={Boolean(blockReason)} title={blockReason || ""} onClick={() => onChooseEmptyLocation(slot.location!.location_id)}><b>＋ 为此货位选产品</b><span>{slot.location.location_name}</span><strong>{blockReason || "当前空位"}</strong></button>;
+                }
                 return <i key={bay}>暂无已建空货位</i>;
               })}</div>
             </div>})}
@@ -854,7 +861,7 @@ function WarehouseRackElevation({
         </div>
         <aside>
           <small>ERP PRODUCT LABEL</small>
-          {!selectedItem ? <><h3>点击货架上的产品或空货位</h3><p>产品标签显示常用信息；管理员可从空货位直接选择待入位产品。</p><strong>{items.length} 条产品标签 · {emptyLocations.length} 个空货位</strong>{area?.quantities.map((item) => <div className="twin-quantity-row" key={item.key}><span>{item.label}</span><b>{formatNumber(item.available)} {inventoryUnitLabel(item.unit)}</b></div>)}</> : <article className="twin-rack-product-label">
+          {!selectedItem ? <><h3>点击货架上的产品或空货位</h3><p>产品标签显示常用信息；有盘点权限时可从空货位选择已有产品，加入盘点草稿。</p><strong>{items.length} 条产品标签 · {emptyLocations.length} 个空货位</strong>{area?.quantities.map((item) => <div className="twin-quantity-row" key={item.key}><span>{item.label}</span><b>{formatNumber(item.available)} {inventoryUnitLabel(item.unit)}</b></div>)}</> : <article className="twin-rack-product-label">
             <span>当前产品标签</span>
             <h3>{selectedItem.inventory_code || selectedItem.lot_number || `批次 ${selectedItem.lot_id}`}</h3>
             <strong>{selectedItem.product_name || "产品名称待补充"}</strong>
@@ -927,6 +934,7 @@ export function WarehouseTwinApp() {
   const [productionMessage, setProductionMessage] = useState("");
   const [canEditLocations, setCanEditLocations] = useState(false);
   const [canExecuteWarehouse, setCanExecuteWarehouse] = useState(false);
+  const [canStocktake, setCanStocktake] = useState(false);
   const [canViewProductionProjection, setCanViewProductionProjection] = useState(false);
   const [uiMode, setUiMode] = useState<"standard" | "large">("standard");
   const [locationEditMode, setLocationEditMode] = useState(false);
@@ -952,7 +960,6 @@ export function WarehouseTwinApp() {
   const [formalAreaOptionsError, setFormalAreaOptionsError] = useState("");
   const [floor1CandidatePlan, setFloor1CandidatePlan] = useState<Floor1FormalCandidatePlan | null>(null);
   const [floor1CandidateBusy, setFloor1CandidateBusy] = useState(false);
-  const [warehouseOperationBusy, setWarehouseOperationBusy] = useState(false);
   const [warehouseOperationMessage, setWarehouseOperationMessage] = useState("");
   const [moveCandidates, setMoveCandidates] = useState<MoveCandidate[]>([]);
   const [moveCandidatesLoading, setMoveCandidatesLoading] = useState(false);
@@ -965,47 +972,28 @@ export function WarehouseTwinApp() {
   const [moveDrafts, setMoveDrafts] = useState<WarehouseMoveDraft[]>([]);
   const [moveBatchIdempotencyKey, setMoveBatchIdempotencyKey] = useState(() => operationKey("warehouse-move-batch"));
   const [moveBatchBusy, setMoveBatchBusy] = useState(false);
-  const [moveAction, setMoveAction] = useState<"relocate" | "merge">("relocate");
+  const [moveAction, setMoveAction] = useState<"relocate" | "merge" | "stocktake">("relocate");
   const [mergeSources, setMergeSources] = useState<PalletMergeCandidate[]>([]);
   const [mergeTarget, setMergeTarget] = useState<PalletMergeCandidate | null>(null);
   const [mergeBatchIdempotencyKey, setMergeBatchIdempotencyKey] = useState(() => operationKey("warehouse-pallet-merge-batch"));
   const [mergeBatchBusy, setMergeBatchBusy] = useState(false);
   const [locationDetailOpen, setLocationDetailOpen] = useState(false);
   const [locationItemsExpanded, setLocationItemsExpanded] = useState(false);
-  const [inboundMode, setInboundMode] = useState<"staging" | "catalog" | "temporary">("staging");
-  const [inboundInventoryType, setInboundInventoryType] = useState<InboundInventoryType>("finished");
-  const [inboundCustomerQuery, setInboundCustomerQuery] = useState("");
-  const [inboundCustomers, setInboundCustomers] = useState<CustomerOption[]>([]);
-  const [inboundCustomerId, setInboundCustomerId] = useState("");
-  const [stagingQuery, setStagingQuery] = useState("");
-  const [stagingCandidates, setStagingCandidates] = useState<StagingProductCandidate[]>([]);
-  const [stagingLotId, setStagingLotId] = useState("");
-  const [stagingIdempotencyKey, setStagingIdempotencyKey] = useState(() => operationKey("map-place-staging"));
-  const [productQuery, setProductQuery] = useState("");
-  const [productCandidates, setProductCandidates] = useState<ProductCandidate[]>([]);
-  const [inboundProductId, setInboundProductId] = useState("");
-  const [inboundQuantity, setInboundQuantity] = useState("");
-  const [inboundStockDate, setInboundStockDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [inboundPalletCode, setInboundPalletCode] = useState("");
-  const [inboundIdempotencyKey, setInboundIdempotencyKey] = useState(() => operationKey("map-inbound"));
-  const [temporaryCustomerQuery, setTemporaryCustomerQuery] = useState("");
-  const [temporaryCustomers, setTemporaryCustomers] = useState<CustomerOption[]>([]);
-  const [temporaryCustomerId, setTemporaryCustomerId] = useState("");
-  const [temporaryInventoryCode, setTemporaryInventoryCode] = useState("");
-  const [temporaryProductName, setTemporaryProductName] = useState("");
-  const [temporaryReason, setTemporaryReason] = useState("");
-  const [temporaryIdempotencyKey, setTemporaryIdempotencyKey] = useState(() => operationKey("map-temporary-inbound"));
-  const [moveTargetLocationId, setMoveTargetLocationId] = useState("");
-  const [moveIdempotencyKey, setMoveIdempotencyKey] = useState(() => operationKey("map-move"));
-  const [dispatchTransferLotId, setDispatchTransferLotId] = useState<number | null>(null);
-  const [dispatchTransferQuantity, setDispatchTransferQuantity] = useState("");
-  const [dispatchTransferTargetId, setDispatchTransferTargetId] = useState("");
-  const [dispatchTransferIdempotencyKey, setDispatchTransferIdempotencyKey] = useState(() => operationKey("dispatch-to-floor3"));
+  const [stocktakeDrafts, setStocktakeDrafts] = useState<WarehouseStocktakeDraft[]>([]);
+  const [stocktakeBatchIdempotencyKey, setStocktakeBatchIdempotencyKey] = useState(() => operationKey("warehouse-stocktake-batch"));
+  const [stocktakeBatchBusy, setStocktakeBatchBusy] = useState(false);
+  const [stocktakeInventoryType, setStocktakeInventoryType] = useState<StocktakeInventoryType>("finished");
+  const [stocktakeCustomerQuery, setStocktakeCustomerQuery] = useState("");
+  const [stocktakeCustomers, setStocktakeCustomers] = useState<CustomerOption[]>([]);
+  const [stocktakeCustomerId, setStocktakeCustomerId] = useState("");
+  const [stocktakeProductQuery, setStocktakeProductQuery] = useState("");
+  const [stocktakeProductCandidates, setStocktakeProductCandidates] = useState<ProductCandidate[]>([]);
+  const [stocktakeProductId, setStocktakeProductId] = useState("");
+  const [stocktakeAddQuantity, setStocktakeAddQuantity] = useState("");
+  const [stocktakeStockDate, setStocktakeStockDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [rackFocusId, setRackFocusId] = useState<string | null>(null);
-  const [correctionLotId, setCorrectionLotId] = useState<number | null>(null);
-  const [correctionQuantity, setCorrectionQuantity] = useState("");
-  const [correctionReason, setCorrectionReason] = useState("");
-  const [correctionIdempotencyKey, setCorrectionIdempotencyKey] = useState(() => operationKey("map-correction"));
+  const [stocktakeLotId, setStocktakeLotId] = useState<number | null>(null);
+  const [stocktakeDecreaseQuantity, setStocktakeDecreaseQuantity] = useState("");
 
   const refreshDashboard = useCallback(async () => {
     const value = await requestJson<TwinDashboard>("/api/warehouse/twin-dashboard/overview?days=30");
@@ -1019,12 +1007,14 @@ export function WarehouseTwinApp() {
       .then((value) => {
         setCanEditLocations(value.user.role === "admin");
         setCanExecuteWarehouse(value.permissions.includes("warehouse.execute"));
+        setCanStocktake(value.permissions.includes("warehouse.stocktake.submit"));
         setCanViewProductionProjection(value.permissions.includes("warehouse.view"));
         setUiMode(value.user.ui_mode === "large" ? "large" : "standard");
       })
       .catch(() => {
         setCanEditLocations(false);
         setCanExecuteWarehouse(false);
+        setCanStocktake(false);
         setCanViewProductionProjection(false);
       });
   }, [refreshDashboard]);
@@ -1040,6 +1030,12 @@ export function WarehouseTwinApp() {
       setSwapSourceLocationId(null);
     }
   }, [viewMode]);
+
+  useEffect(() => {
+    if (mapMode !== "move") return;
+    if (moveAction === "stocktake" && !canStocktake && canExecuteWarehouse) setMoveAction("relocate");
+    if (moveAction !== "stocktake" && !canExecuteWarehouse && canStocktake) setMoveAction("stocktake");
+  }, [mapMode, moveAction, canExecuteWarehouse, canStocktake]);
 
   useEffect(() => {
     let active = true;
@@ -1525,70 +1521,38 @@ export function WarehouseTwinApp() {
   const selectedLocationHasColumnConflict = Boolean(
     selectedLocation && palletColumnConflictIds.has(`erp-location-${selectedLocation.location_id}`)
   );
-  const selectedLocationBaseReceivable = Boolean(
-    selectedLocation
-    && selectedLocation.is_active
-    && selectedLocation.position_status === "mapped"
-    && !locationDrafts[selectedLocation.location_id]
-    && !selectedLocationHasColumnConflict
-  );
   const selectedLocationPolicyTypes = selectedLocation?.allowed_inventory_types || [];
-  const selectedLocationPolicyAllows = (inventoryType: InventoryUsage) => (
-    selectedLocationPolicyTypes.length === 0
-    || selectedLocationPolicyTypes.includes(inventoryType)
-  );
-  const selectedLocationCanReceiveFinished = Boolean(
-    selectedLocationBaseReceivable
-    && selectedLocation
-    && ["finished", "shared"].includes(selectedLocation.warehouse_type)
-    && selectedLocationPolicyAllows("finished")
-  );
-  const selectedLocationCanReceiveSemiFinished = Boolean(
-    selectedLocationBaseReceivable
-    && selectedLocation
-    && ["1F", "3F"].includes(selectedLocation.floor_code)
-    && ["semi_finished", "shared"].includes(selectedLocation.warehouse_type)
-    && selectedLocationPolicyAllows("semi_finished")
-  );
-  const selectedLocationCanReceiveRawMaterial = Boolean(
-    selectedLocationBaseReceivable
-    && selectedLocation?.occupancy_status === "empty"
-    && selectedLocation.storage_type !== "rack"
-    && selectedLocation.warehouse_type === "shared"
-    && selectedLocationPolicyAllows("raw_material")
-  );
-  const selectedLocationCanReceiveProduct = inboundInventoryType === "finished"
+  const selectedLocationStocktakeBlockReason = !selectedLocation
+    ? "请先在地图选择正式货位。"
+    : locationDrafts[selectedLocation.location_id]
+      ? "该货位仍有未发布的布局草稿，不能加入盘点草稿。"
+      : selectedLocationHasColumnConflict
+        ? "该货位与固定柱子冲突，不能加入盘点草稿。"
+        : stocktakeLocationBlockReason(selectedLocation);
+  const selectedLocationBaseReceivable = Boolean(selectedLocation && !selectedLocationStocktakeBlockReason);
+  const selectedLocationFinishedAddBlockReason = selectedLocationStocktakeBlockReason
+    || (selectedLocationPolicyTypes.length && !selectedLocationPolicyTypes.includes("finished")
+      ? "成品不在该正式区域已发布的库存类型范围内。"
+      : null)
+    || stocktakeAddBlockReason(selectedLocation, "finished");
+  const selectedLocationSemiFinishedAddBlockReason = selectedLocationStocktakeBlockReason
+    || (selectedLocationPolicyTypes.length && !selectedLocationPolicyTypes.includes("semi_finished")
+      ? "半成品不在该正式区域已发布的库存类型范围内。"
+      : null)
+    || stocktakeAddBlockReason(selectedLocation, "semi_finished");
+  const selectedLocationCanReceiveFinished = !selectedLocationFinishedAddBlockReason;
+  const selectedLocationCanReceiveSemiFinished = !selectedLocationSemiFinishedAddBlockReason;
+  const selectedLocationCanReceiveProduct = stocktakeInventoryType === "finished"
     ? selectedLocationCanReceiveFinished
-    : inboundInventoryType === "semi_finished"
-      ? selectedLocationCanReceiveSemiFinished
-      : selectedLocationCanReceiveRawMaterial;
-  const selectedLocationSupportsPallet = Boolean(
-    selectedLocation
-    && selectedLocationSinglePallet
-    && ["1F", "3F"].includes(selectedLocation.floor_code)
-    && selectedLocation?.storage_type !== "rack"
+    : selectedLocationCanReceiveSemiFinished;
+  const selectedLocationAddBlockReason = stocktakeInventoryType === "finished"
+    ? selectedLocationFinishedAddBlockReason
+    : selectedLocationSemiFinishedAddBlockReason;
+  const selectedStocktakeProduct = stocktakeProductCandidates.find(
+    (item) => String(item.product_id) === stocktakeProductId
   );
-  const selectedLocationCanReceiveStaging = Boolean(
-    selectedLocationCanReceiveFinished
-    && selectedLocation?.storage_type !== "rack"
-    && selectedLocation?.location_code !== "F1-DISPATCH-01"
-  );
-  const emptyMoveTargets = visualLocations.filter(
-    (item) => item.floor_code === "3F"
-      && item.occupancy_status === "empty"
-      && item.position_status === "mapped"
-      && item.storage_type !== "rack"
-      && ["finished", "shared"].includes(item.warehouse_type)
-      && item.location_id !== selectedLocation?.location_id
-  );
-  const selectedInboundProduct = productCandidates.find(
-    (item) => String(item.product_id) === inboundProductId
-  );
-  const selectedInboundCustomer = inboundCustomers.find(
-    (item) => String(item.id) === inboundCustomerId
-  );
-  const selectedStagingProduct = stagingCandidates.find(
-    (item) => String(item.lot_id) === stagingLotId
+  const selectedStocktakeCustomer = stocktakeCustomers.find(
+    (item) => String(item.id) === stocktakeCustomerId
   );
   const selectedLocationAreaCode = selectedLocation?.area_code?.trim() || null;
   const selectedRackAreaCode = selectedRack ? rackAreaCode(selectedRack, features) : null;
@@ -1602,9 +1566,6 @@ export function WarehouseTwinApp() {
     ? pointsBoundsMm(selectedAreaBoundaryPoints) : null;
   const selectedFeatureIsMeasuredDispatch = floorCode === "1F" && isMeasuredDispatchFeature(selectedFeature);
   const dispatchStagingItems = dispatchStagingLocation?.loose_items || [];
-  const selectedDispatchStagingItem = dispatchStagingItems.find(
-    (item) => item.lot_id === dispatchTransferLotId
-  );
   const selectedAreaCode = featureAreaCode(selectedAreaFeature) || selectedLocationAreaCode || selectedRackAreaCode;
   const selectedAreaIsMold = Boolean(selectedAreaFeature && selectedAreaFeature.subtype.toLowerCase().includes("mold"));
   const selectedArea = selectedAreaCode ? areaStats.get(selectedAreaCode) : undefined;
@@ -1853,30 +1814,30 @@ export function WarehouseTwinApp() {
       })
       .sort((left, right) => left.location_code.localeCompare(right.location_code, "zh-CN", { numeric: true }));
   }, [focusedRack, focusedRackAreaCode, focusedAreaRacks, visualLocations, mappedLocationPallets, floorCode, locationDrafts, palletColumnConflictIds]);
-  const selectedCorrectionItem = selectedLocationItems.find((item) => item.lot_id === correctionLotId) || null;
+  const selectedStocktakeItem = selectedLocationItems.find((item) => item.lot_id === stocktakeLotId) || null;
+  const selectedStocktakeDecreaseBlockReason = selectedStocktakeItem
+    ? selectedLocationStocktakeBlockReason || stocktakeDecreaseBlockReason(selectedStocktakeItem)
+    : null;
 
   useEffect(() => {
     setLocationDetailOpen(false);
-    const nextInventoryType: InboundInventoryType = selectedLocation?.warehouse_type === "semi_finished" ? "semi_finished" : "finished";
-    setInboundInventoryType(nextInventoryType);
-    setInboundMode(selectedLocationCanReceiveStaging && selectedLocation?.occupancy_status === "empty" ? "staging" : "catalog");
-    setInboundCustomerQuery("");
-    setInboundCustomers([]);
-    setInboundCustomerId("");
-    setProductQuery("");
-    setProductCandidates([]);
-    setInboundProductId("");
-    setStagingQuery("");
-    setStagingCandidates([]);
-    setStagingLotId("");
-    setCorrectionLotId(null);
-    setCorrectionQuantity("");
-    setCorrectionReason("");
-    setLocationDetailOpen(false);
     setLocationItemsExpanded(false);
-    setMoveTargetLocationId("");
+    const nextInventoryType: StocktakeInventoryType = (
+      selectedLocation?.warehouse_type === "semi_finished"
+      || (selectedLocation?.warehouse_type === "shared" && selectedLocation.storage_type === "rack")
+    ) ? "semi_finished" : "finished";
+    setStocktakeInventoryType(nextInventoryType);
+    setStocktakeCustomerQuery("");
+    setStocktakeCustomers([]);
+    setStocktakeCustomerId("");
+    setStocktakeProductQuery("");
+    setStocktakeProductCandidates([]);
+    setStocktakeProductId("");
+    setStocktakeAddQuantity("");
+    setStocktakeLotId(null);
+    setStocktakeDecreaseQuantity("");
     setWarehouseOperationMessage("");
-  }, [selected?.kind, selected?.id, selectedLocation?.occupancy_status, selectedLocationCanReceiveStaging]);
+  }, [selected?.kind, selected?.id]);
   useEffect(() => {
     if (mapMode !== "move") return;
     setMoveTargetFloorCode((current) => moveTargetFloors.includes(current)
@@ -1954,80 +1915,47 @@ export function WarehouseTwinApp() {
   }, [pendingLocationId, floorCode, visualLocations]);
 
   useEffect(() => {
-    if (!canEditLocations || viewMode !== "2d" || !selectedLocation || inboundMode !== "catalog") {
-      setInboundCustomers([]);
+    if (
+      !canStocktake
+      || mapMode !== "move"
+      || moveAction !== "stocktake"
+      || viewMode !== "2d"
+      || !selectedLocationBaseReceivable
+      || (!selectedLocationCanReceiveFinished && !selectedLocationCanReceiveSemiFinished)
+    ) {
+      setStocktakeCustomers([]);
       return;
     }
     let active = true;
     const timer = window.setTimeout(() => {
-      const params = new URLSearchParams({ keyword: inboundCustomerQuery.trim(), page: "1", page_size: "50" });
+      const params = new URLSearchParams({ keyword: stocktakeCustomerQuery.trim(), page: "1", page_size: "50" });
       requestJson<CustomerOptionsResponse>(`/api/master/customers?${params.toString()}`)
-        .then((value) => active && setInboundCustomers(value.items || []))
+        .then((value) => active && setStocktakeCustomers(value.items || []))
         .catch((reason: Error) => active && setWarehouseOperationMessage(reason.message));
     }, 220);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [inboundCustomerQuery, canEditLocations, viewMode, selectedLocation?.location_id, inboundMode]);
+  }, [stocktakeCustomerQuery, canStocktake, mapMode, moveAction, viewMode, selectedLocation?.location_id, selectedLocationBaseReceivable, selectedLocationCanReceiveFinished, selectedLocationCanReceiveSemiFinished]);
 
   useEffect(() => {
-    const keyword = productQuery.trim();
-    if (!canEditLocations || viewMode !== "2d" || !selectedLocationCanReceiveProduct || inboundMode !== "catalog" || !inboundCustomerId) {
-      setProductCandidates([]);
-      setInboundProductId("");
+    const keyword = stocktakeProductQuery.trim();
+    if (!canStocktake || mapMode !== "move" || moveAction !== "stocktake" || viewMode !== "2d" || !selectedLocationCanReceiveProduct || !stocktakeCustomerId) {
+      setStocktakeProductCandidates([]);
+      setStocktakeProductId("");
       return;
     }
     let active = true;
     const timer = window.setTimeout(() => {
-      const params = new URLSearchParams({ q: keyword, customer_id: inboundCustomerId, limit: "50" });
+      const params = new URLSearchParams({ q: keyword, customer_id: stocktakeCustomerId, limit: "50" });
       requestJson<ProductCandidatesResponse>(`/api/warehouse/floor3/product-candidates?${params.toString()}`)
         .then((value) => {
           if (!active) return;
-          setProductCandidates(value.items || []);
-          setInboundProductId((current) => current && value.items.some((item) => String(item.product_id) === current) ? current : "");
+          setStocktakeProductCandidates(value.items || []);
+          setStocktakeProductId((current) => current && value.items.some((item) => String(item.product_id) === current) ? current : "");
         })
         .catch((reason: Error) => active && setWarehouseOperationMessage(reason.message));
     }, 300);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [productQuery, inboundCustomerId, canEditLocations, viewMode, selectedLocation?.location_id, selectedLocationCanReceiveProduct, inboundMode]);
-
-  useEffect(() => {
-    if (!canEditLocations || viewMode !== "2d" || !selectedLocationCanReceiveStaging || selectedLocation?.occupancy_status !== "empty" || inboundMode !== "staging") {
-      setStagingCandidates([]);
-      setStagingLotId("");
-      return;
-    }
-    let active = true;
-    const timer = window.setTimeout(() => {
-      const params = new URLSearchParams({ location_id: String(selectedLocation.location_id), limit: "30" });
-      if (stagingQuery.trim()) params.set("q", stagingQuery.trim());
-      requestJson<StagingProductCandidatesResponse>(`/api/warehouse/twin-operations/location-product-candidates?${params.toString()}`)
-        .then((value) => {
-          if (!active) return;
-          setStagingCandidates(value.items || []);
-          setStagingLotId((current) => current && value.items.some((item) => String(item.lot_id) === current) ? current : "");
-        })
-        .catch((reason: Error) => active && setWarehouseOperationMessage(reason.message));
-    }, 250);
-    return () => { active = false; window.clearTimeout(timer); };
-  }, [stagingQuery, canEditLocations, viewMode, selectedLocation?.location_id, selectedLocation?.occupancy_status, selectedLocationCanReceiveStaging, inboundMode]);
-
-  useEffect(() => {
-    if (!canEditLocations || inboundMode !== "temporary") {
-      setTemporaryCustomers([]);
-      return;
-    }
-    let active = true;
-    const timer = window.setTimeout(() => {
-      const params = new URLSearchParams({ keyword: temporaryCustomerQuery.trim(), page: "1", page_size: "50" });
-      requestJson<CustomerOptionsResponse>(`/api/master/customers?${params.toString()}`)
-        .then((value) => {
-          if (!active) return;
-          setTemporaryCustomers(value.items || []);
-          setTemporaryCustomerId((current) => current || (value.items[0] ? String(value.items[0].id) : ""));
-        })
-        .catch((reason: Error) => active && setWarehouseOperationMessage(reason.message));
-    }, 250);
-    return () => { active = false; window.clearTimeout(timer); };
-  }, [temporaryCustomerQuery, canEditLocations, inboundMode]);
+  }, [stocktakeProductQuery, stocktakeCustomerId, canStocktake, mapMode, moveAction, viewMode, selectedLocation?.location_id, selectedLocationCanReceiveProduct]);
 
   const chooseProductionTask = (task: ProductionTaskProjection) => {
     setProductionTaskId(task.source_task_id);
@@ -2538,260 +2466,95 @@ export function WarehouseTwinApp() {
     }
   };
 
-  const confirmStagingProductPlacement = async () => {
-    if (!selectedLocation || !selectedStagingProduct || !inboundQuantity) return;
-    const quantity = Number(inboundQuantity);
-    if (!Number.isInteger(quantity) || quantity <= 0 || quantity > selectedStagingProduct.total_quantity) {
-      setWarehouseOperationMessage(`转入数量必须为 1 到 ${selectedStagingProduct.total_quantity} 的整数。`);
+  const queueStocktakeAddDraft = () => {
+    if (selectedLocationAddBlockReason) {
+      setWarehouseOperationMessage(selectedLocationAddBlockReason);
       return;
     }
-    if (!window.confirm(`管理员二次确认：从当前空货位接收这批已完工未送产品？\n\n目标货位：${selectedLocation.location_name}\n客户：${selectedStagingProduct.customer_name || "待确认"}\n产品：${selectedStagingProduct.inventory_code || selectedStagingProduct.product_name}\n转入数量：${quantity} 箱\n\n本次只移动原库存位置，不增加库存总数。`)) return;
-    setWarehouseOperationBusy(true);
-    setWarehouseOperationMessage("");
-    try {
-      await mutateJson(`/api/warehouse/twin-operations/staging-lots/${selectedStagingProduct.lot_id}/place`, "POST", {
-        location_id: selectedLocation.location_id,
-        expected_version: selectedStagingProduct.version,
-        quantity,
-        idempotency_key: stagingIdempotencyKey,
-        confirmed: true
-      });
-      await refreshDashboard();
-      setStagingLotId("");
-      setInboundQuantity("");
-      setStagingIdempotencyKey(operationKey("map-place-staging"));
-      setWarehouseOperationMessage(`${selectedLocation.location_name} 已接收 ${quantity} 箱；原库存总数未改变。`);
-    } catch (reason) {
-      setWarehouseOperationMessage((reason as Error).message);
-    } finally {
-      setWarehouseOperationBusy(false);
+    if (!selectedLocation || !selectedStocktakeCustomer || !selectedStocktakeProduct) {
+      setWarehouseOperationMessage("请先确认已有客户和已有产品。 ");
+      return;
     }
+    const quantity = Number(stocktakeAddQuantity);
+    const draft: WarehouseStocktakeDraft = {
+      client_item_id: operationKey("stocktake-add"), operation: "add",
+      location_id: selectedLocation.location_id, location_code: selectedLocation.location_code,
+      location_name: selectedLocation.location_name, floor_code: selectedLocation.floor_code,
+      area_code: selectedLocation.area_code, customer_id: selectedStocktakeCustomer.id,
+      customer_name: selectedStocktakeCustomer.name, product_id: selectedStocktakeProduct.product_id,
+      inventory_code: selectedStocktakeProduct.product_code || selectedStocktakeProduct.customer_material_code || String(selectedStocktakeProduct.product_id),
+      product_name: selectedStocktakeProduct.product_name, inventory_type: stocktakeInventoryType,
+      unit: stocktakeInventoryType === "finished" ? "boxes" : "sheets", quantity,
+      stock_date: stocktakeStockDate
+    };
+    const result = upsertStocktakeDraft(stocktakeDrafts, draft);
+    if (result.error) { setWarehouseOperationMessage(result.error); return; }
+    setStocktakeDrafts(result.items);
+    setStocktakeBatchIdempotencyKey(operationKey("warehouse-stocktake-batch"));
+    setStocktakeAddQuantity("");
+    setWarehouseOperationMessage(`已加入盘点新增草稿：${selectedLocation.location_name} · ${selectedStocktakeProduct.product_name}；正式库存尚未改变。`);
   };
 
-  const confirmTemporaryProductInbound = async () => {
-    if (!selectedLocation || !temporaryCustomerId || !temporaryInventoryCode.trim() || !temporaryProductName.trim() || !temporaryReason.trim() || !inboundQuantity || !inboundStockDate) return;
-    const quantity = Number(inboundQuantity);
-    if (!Number.isInteger(quantity) || quantity <= 0) {
-      setWarehouseOperationMessage("临时产品数量必须是正整数。");
+  const queueStocktakeDecreaseDraft = () => {
+    if (!selectedLocation || !selectedStocktakeItem?.version) return;
+    const blockReason = selectedLocationStocktakeBlockReason || stocktakeDecreaseBlockReason(selectedStocktakeItem);
+    if (blockReason) {
+      setWarehouseOperationMessage(blockReason);
       return;
     }
-    const customer = temporaryCustomers.find((item) => String(item.id) === temporaryCustomerId);
-    if (!customer) {
-      setWarehouseOperationMessage("请选择已确认客户。");
-      return;
-    }
-    if (!window.confirm(`管理员二次确认：创建临时产品档案并登记当前货位实物？\n\n目标货位：${selectedLocation.location_name}\n客户：${customer.name}\n存货编码：${temporaryInventoryCode.trim()}\n产品名称：${temporaryProductName.trim()}\n数量：${quantity} 箱\n原因：${temporaryReason.trim()}\n\n该操作会创建产品档案、正式库存批次和审计记录。`)) return;
-    setWarehouseOperationBusy(true);
-    setWarehouseOperationMessage("");
-    try {
-      await mutateJson("/api/warehouse/twin-operations/temporary-finished-inbound", "POST", {
-        location_id: selectedLocation.location_id,
-        pallet_code: inboundPalletCode.trim() || null,
-        customer_id: Number(temporaryCustomerId),
-        inventory_code: temporaryInventoryCode.trim(),
-        product_name: temporaryProductName.trim(),
-        quantity,
-        stock_date: inboundStockDate,
-        reason: temporaryReason.trim(),
-        idempotency_key: temporaryIdempotencyKey,
-        confirmed: true
-      });
-      await refreshDashboard();
-      setTemporaryInventoryCode("");
-      setTemporaryProductName("");
-      setTemporaryReason("");
-      setInboundQuantity("");
-      setInboundPalletCode("");
-      setTemporaryIdempotencyKey(operationKey("map-temporary-inbound"));
-      setWarehouseOperationMessage(`${selectedLocation.location_name} 已完成临时产品建档和入位。`);
-    } catch (reason) {
-      setWarehouseOperationMessage((reason as Error).message);
-    } finally {
-      setWarehouseOperationBusy(false);
-    }
+    const quantity = Number(stocktakeDecreaseQuantity);
+    const available = Number(selectedStocktakeItem.available_quantity || 0);
+    const result = upsertStocktakeDraft(stocktakeDrafts, {
+      client_item_id: operationKey("stocktake-decrease"), operation: "decrease",
+      location_id: selectedLocation.location_id, location_code: selectedLocation.location_code,
+      location_name: selectedLocation.location_name, floor_code: selectedLocation.floor_code,
+      area_code: selectedLocation.area_code, lot_id: selectedStocktakeItem.lot_id,
+      expected_version: selectedStocktakeItem.version, customer_name: selectedStocktakeItem.customer_name || "客户待确认",
+      inventory_code: selectedStocktakeItem.inventory_code || selectedStocktakeItem.lot_number || `批次 ${selectedStocktakeItem.lot_id}`,
+      product_name: selectedStocktakeItem.product_name || "产品名称待补充", unit: selectedStocktakeItem.unit || "",
+      quantity, available_quantity: available, quantity_before: Number(selectedStocktakeItem.quantity || available)
+    });
+    if (result.error) { setWarehouseOperationMessage(result.error); return; }
+    setStocktakeDrafts(result.items);
+    setStocktakeBatchIdempotencyKey(operationKey("warehouse-stocktake-batch"));
+    setStocktakeDecreaseQuantity("");
+    setWarehouseOperationMessage(`已加入盘点调减草稿：${selectedStocktakeItem.inventory_code || selectedStocktakeItem.lot_number} 调减 ${quantity} ${inventoryUnitLabel(selectedStocktakeItem.unit)}；正式库存尚未改变。`);
   };
 
-  const confirmDispatchStagingTransfer = async () => {
-    if (!selectedDispatchStagingItem || !dispatchTransferQuantity || !dispatchTransferTargetId) return;
-    const target = emptyMoveTargets.find(
-      (item) => String(item.location_id) === dispatchTransferTargetId
-    );
-    const quantity = Number(dispatchTransferQuantity);
-    const maximum = inventoryLabelQuantity(selectedDispatchStagingItem);
-    if (!target) {
-      setWarehouseOperationMessage("请在三楼缩略图中点选当前空闲的正式成品位置。");
-      return;
-    }
-    if (!Number.isInteger(quantity) || quantity <= 0 || quantity > maximum) {
-      setWarehouseOperationMessage(`转入数量必须为 1 到 ${formatNumber(maximum)} 的整数。`);
-      return;
-    }
-    if (!selectedDispatchStagingItem.version) {
-      setWarehouseOperationMessage("待送库存版本缺失，请刷新地图后重试。");
-      return;
-    }
-    if (!window.confirm(`确认将这批暂不送的货物转入三楼？\n\n客户：${selectedDispatchStagingItem.customer_name || "待确认"}\n产品：${selectedDispatchStagingItem.inventory_code || selectedDispatchStagingItem.product_name}\n数量：${quantity} ${inventoryUnitLabel(selectedDispatchStagingItem.unit)}\n目标：${target.location_name}\n\n本次只移动正式库存位置，不增加或减少库存总数。`)) return;
-    setWarehouseOperationBusy(true);
-    setWarehouseOperationMessage("");
-    try {
-      await mutateJson(`/api/warehouse/twin-operations/staging-lots/${selectedDispatchStagingItem.lot_id}/place`, "POST", {
-        location_id: target.location_id,
-        expected_version: selectedDispatchStagingItem.version,
-        quantity,
-        idempotency_key: dispatchTransferIdempotencyKey,
-        confirmed: true
-      });
-      await refreshDashboard();
-      setFloorCode("3F");
-      setSelected({ kind: "pallet", id: `erp-location-${target.location_id}` });
-      setDispatchTransferLotId(null);
-      setDispatchTransferQuantity("");
-      setDispatchTransferTargetId("");
-      setDispatchTransferIdempotencyKey(operationKey("dispatch-to-floor3"));
-      setWarehouseOperationMessage(`${quantity} ${inventoryUnitLabel(selectedDispatchStagingItem.unit)}已转入${target.location_name}；库存总数未改变。`);
-    } catch (reason) {
-      setWarehouseOperationMessage((reason as Error).message);
-    } finally {
-      setWarehouseOperationBusy(false);
-    }
+  const removeStocktakeDraftItem = (clientItemId: string) => {
+    setStocktakeDrafts((current) => removeStocktakeDraft(current, clientItemId));
+    setStocktakeBatchIdempotencyKey(operationKey("warehouse-stocktake-batch"));
+    setWarehouseOperationMessage("已撤销该条盘点草稿，正式库存未改变。");
   };
 
-  const confirmMapFinishedInbound = async () => {
-    if (!selectedLocation || !selectedInboundProduct || !inboundQuantity || !inboundStockDate) return;
-    const quantity = Number(inboundQuantity);
-    if (!Number.isInteger(quantity) || quantity <= 0) {
-      setWarehouseOperationMessage("补录数量必须是正整数。");
-      return;
-    }
-    const correctionMode = selectedLocation.occupancy_status === "occupied";
-    const inventoryTypeLabel = inboundInventoryType === "finished"
-      ? "成品"
-      : inboundInventoryType === "semi_finished"
-        ? "半成品"
-        : "原材料栈板";
-    const quantityUnit = inboundInventoryType === "finished" ? "只" : "张";
-    if (!window.confirm(`管理员二次确认：把 ${selectedInboundProduct.customer_name} / ${selectedInboundProduct.product_name} 共 ${quantity} ${quantityUnit}${correctionMode ? "合并补录到已有同产品位置" : "登记到当前地图位置"}？\n\n楼层：${floorCode}\n区域：${selectedLocation.area_code || "未分区"}\n位置：${selectedLocation.location_name}\n库存类型：${inventoryTypeLabel}\n\n系统使用内部 location_id 落账，员工无需记忆库位编码。`)) return;
-    setWarehouseOperationBusy(true);
+  const cancelStocktakeDrafts = () => {
+    setStocktakeDrafts(clearStocktakeDrafts());
+    setStocktakeBatchIdempotencyKey(operationKey("warehouse-stocktake-batch"));
+    setWarehouseOperationMessage("已取消全部盘点草稿，没有发送任何库存请求。");
+  };
+
+  const confirmStocktakeDrafts = async () => {
+    if (!stocktakeDrafts.length || stocktakeBatchBusy) return;
+    const preview = stocktakeDrafts.slice(0, 6).map((item) => `${item.operation === "add" ? "新增" : "调减"} · ${item.location_name} · ${item.inventory_code} · ${item.quantity} ${inventoryUnitLabel(item.unit)}`).join("\n");
+    if (!window.confirm(`确认一次提交 ${stocktakeDrafts.length} 条盘点调整吗？\n${preview}${stocktakeDrafts.length > 6 ? "\n……" : ""}\n\n提交成功后才会写入正式库存流水；调减到零只隐藏空卡，不删除历史。`)) return;
+    setStocktakeBatchBusy(true);
     setWarehouseOperationMessage("");
     try {
-      if (inboundInventoryType === "raw_material") {
-        await mutateJson("/api/warehouse/pallets", "POST", {
-          location_id: selectedLocation.location_id,
-          pallet_code: inboundPalletCode.trim() || null,
-          remarks: `二维地图人工确认原材料栈板入仓 · ${inboundStockDate}`,
-          items: [{
-            customer_id: selectedInboundProduct.customer_id,
-            product_id: selectedInboundProduct.product_id,
-            item_type: "raw_material",
-            quantity,
-            unit: "sheets",
-            match_status: "matched",
-            idempotency_key: inboundIdempotencyKey,
-            remarks: "实测区域原材料实体栈板"
-          }]
-        });
-      } else {
-        const endpoint = inboundInventoryType === "finished"
-          ? "/api/warehouse/twin-operations/finished-inbound"
-          : "/api/warehouse/twin-operations/semi-finished-inbound";
-        await mutateJson(endpoint, "POST", {
-          location_id: selectedLocation.location_id,
-          ...(inboundInventoryType === "finished" ? { pallet_code: inboundPalletCode.trim() || null } : {}),
-          customer_id: selectedInboundProduct.customer_id,
-          product_id: selectedInboundProduct.product_id,
-          quantity,
-          stock_date: inboundStockDate,
-          idempotency_key: inboundIdempotencyKey,
-          confirmed: true,
-          remarks: correctionMode ? `二维地图管理员确认${inventoryTypeLabel}差异合并补录` : `二维地图人工确认${inventoryTypeLabel}入仓`
-        });
-      }
-      await refreshDashboard();
-      setInboundQuantity("");
-      setInboundPalletCode("");
-      setInboundIdempotencyKey(operationKey("map-inbound"));
-      setWarehouseOperationMessage(
-        `${selectedLocation.location_name} 已${correctionMode ? "完成同产品合并补录" : `完成${inventoryTypeLabel}入仓`}；`
-        + (inboundInventoryType === "raw_material" ? "实体栈板账已保存。" : "正式库存账已保存。")
+      await mutateJson(
+        "/api/warehouse/twin-operations/stocktake-batches",
+        "POST",
+        buildStocktakeBatchPayload(stocktakeBatchIdempotencyKey, stocktakeDrafts)
       );
-    } catch (reason) {
-      setWarehouseOperationMessage((reason as Error).message);
-    } finally {
-      setWarehouseOperationBusy(false);
-    }
-  };
-
-  const confirmMapPalletMove = async () => {
-    if (!selectedLocation?.pallet || !moveTargetLocationId) return;
-    const target = emptyMoveTargets.find((item) => String(item.location_id) === moveTargetLocationId);
-    if (!target) {
-      setWarehouseOperationMessage("请选择当前空闲且已确认布局的目标库位。");
-      return;
-    }
-    if (!window.confirm(`确认将实体栈板 ${selectedLocation.pallet.pallet_code} 从 ${selectedLocation.location_code} 移到 ${target.location_code} 吗？`)) return;
-    setWarehouseOperationBusy(true);
-    setWarehouseOperationMessage("");
-    try {
-      await mutateJson(`/api/warehouse/twin-operations/pallets/${selectedLocation.pallet.pallet_id}/move`, "POST", {
-        expected_version: selectedLocation.pallet.version,
-        to_location_id: target.location_id,
-        idempotency_key: moveIdempotencyKey,
-        confirmed: true,
-        remarks: "二维地图人工确认正式栈板移位"
-      });
       await refreshDashboard();
-      setFloorCode("3F");
-      setSelected({ kind: "pallet", id: `erp-location-${target.location_id}` });
-      setMoveTargetLocationId("");
-      setMoveIdempotencyKey(operationKey("map-move"));
-      setWarehouseOperationMessage(`${selectedLocation.pallet.pallet_code} 已移到 ${target.location_code}，关联正式库存位置已同步更新。`);
+      setStocktakeDrafts(clearStocktakeDrafts());
+      setStocktakeLotId(null);
+      setStocktakeDecreaseQuantity("");
+      setStocktakeBatchIdempotencyKey(operationKey("warehouse-stocktake-batch"));
+      setWarehouseOperationMessage("盘点调整已整批成功，地图已刷新。");
     } catch (reason) {
-      setWarehouseOperationMessage((reason as Error).message);
+      setWarehouseOperationMessage(`盘点整批提交失败：${(reason as Error).message}。页面草稿与本次幂等键已保留，可核对后重试。`);
     } finally {
-      setWarehouseOperationBusy(false);
-    }
-  };
-
-  const correctSelectedInventoryLot = async (action: "decrease" | "remove") => {
-    if (!selectedLocation || !selectedCorrectionItem?.lot_id || !selectedCorrectionItem.version) return;
-    const available = Number(selectedCorrectionItem.available_quantity || 0);
-    const reserved = Number(selectedCorrectionItem.reserved_quantity || 0);
-    const quantity = Number(correctionQuantity);
-    if (action === "decrease" && (!Number.isInteger(quantity) || quantity <= 0 || quantity > available)) {
-      setWarehouseOperationMessage(`减少数量必须是 1 到 ${formatNumber(available)} 之间的整数。`);
-      return;
-    }
-    if (action === "remove" && reserved > 0) {
-      setWarehouseOperationMessage("该货物仍有预占，必须先释放预占后才能移除。");
-      return;
-    }
-    if (correctionReason.trim().length < 2) {
-      setWarehouseOperationMessage("请填写至少 2 个字的现场差异原因。");
-      return;
-    }
-    const actionLabel = action === "remove" ? "把该货物数量归零并从当前标签移除" : `减少 ${quantity} ${inventoryUnitLabel(selectedCorrectionItem.unit)}`;
-    if (!window.confirm(`管理员二次确认：${actionLabel}？\n\n客户：${selectedCorrectionItem.customer_name || "待确认"}\n产品：${selectedCorrectionItem.inventory_code || selectedCorrectionItem.product_name || selectedCorrectionItem.lot_number}\n位置：${selectedLocation.location_name}\n原因：${correctionReason.trim()}\n\n该操作会写正式库存流水，不能用删除页面记录的方式撤销。`)) return;
-    setWarehouseOperationBusy(true);
-    setWarehouseOperationMessage("");
-    try {
-      await mutateJson(`/api/warehouse/twin-operations/lots/${selectedCorrectionItem.lot_id}/quantity-correction`, "POST", {
-        expected_version: selectedCorrectionItem.version,
-        action,
-        ...(action === "decrease" ? { quantity } : {}),
-        reason: correctionReason.trim(),
-        idempotency_key: correctionIdempotencyKey,
-        confirmed: true
-      });
-      await refreshDashboard();
-      setCorrectionQuantity("");
-      setCorrectionReason("");
-      setCorrectionLotId(null);
-      setCorrectionIdempotencyKey(operationKey("map-correction"));
-      setWarehouseOperationMessage(action === "remove" ? "该货物已受控归零并保留历史流水。" : "库存数量已按管理员确认减少。");
-    } catch (reason) {
-      setWarehouseOperationMessage((reason as Error).message);
-    } finally {
-      setWarehouseOperationBusy(false);
+      setStocktakeBatchBusy(false);
     }
   };
 
@@ -2929,7 +2692,7 @@ export function WarehouseTwinApp() {
   };
 
   const enterWarehouseMoveMode = async () => {
-    if (!canExecuteWarehouse || spatialEditBusy) return;
+    if ((!canExecuteWarehouse && !canStocktake) || spatialEditBusy) return;
     setSpatialEditBusy(true);
     try {
       if (locationEditMode || mapMode === "planning") await refreshPublishedTwinFloor();
@@ -2944,9 +2707,10 @@ export function WarehouseTwinApp() {
       setLocationDrafts({});
       setSwapSourceLocationId(null);
       setLocationEditMessage("");
-      setWarehouseOperationMessage(moveDrafts.length
-        ? `已回到移货 / 盘点，保留 ${moveDrafts.length} 条页面草稿；尚未写入。`
-        : "移货 / 盘点已开启：拖动或三级选择只形成页面草稿，底部一次确认后才提交。"
+      setMoveAction((current) => canExecuteWarehouse && current !== "stocktake" ? current : canStocktake ? "stocktake" : "relocate");
+      setWarehouseOperationMessage(stocktakeDrafts.length
+        ? `已回到移货 / 盘点，保留 ${stocktakeDrafts.length} 条盘点草稿；尚未写入。`
+        : "移货 / 盘点已开启：每个操作先形成页面草稿，底部一次确认后才提交。"
       );
     } catch (reason) {
       setWarehouseOperationMessage(`进入移货 / 盘点失败：${(reason as Error).message}`);
@@ -3457,7 +3221,7 @@ export function WarehouseTwinApp() {
   const chooseRackEmptyLocation = (locationId: number) => {
     setRackFocusId(null);
     setViewMode("2d");
-    setInboundMode("staging");
+    setMoveAction("stocktake");
     setSelected({ kind: "pallet", id: `erp-location-${locationId}` });
     cameraFocusSequenceRef.current += 1;
     setCameraFocusTarget({ entity: { kind: "pallet", id: `erp-location-${locationId}` }, token: cameraFocusSequenceRef.current, source: "search" });
@@ -3479,7 +3243,7 @@ export function WarehouseTwinApp() {
       area={focusedRackAreaCode ? areaStats.get(focusedRackAreaCode) : undefined}
       items={rackInventoryItems}
       emptyLocations={focusedRackEmptyLocations}
-      canChooseProducts={P1_47D_ENABLED && canEditLocations && mapMode === "move"}
+      canChooseProducts={canStocktake && mapMode === "move" && moveAction === "stocktake"}
       rackIndex={focusedRackIndex}
       rackCount={focusedAreaRacks.length || 1}
       onPrevious={() => switchFocusedRack(-1)}
@@ -3492,14 +3256,14 @@ export function WarehouseTwinApp() {
         <button type="button" className={floorCode === "1F" ? "active" : ""} onClick={() => switchWarehouseFloor("1F")}><b>1F</b><span>生产车间</span></button>
         <button type="button" className={floorCode === "3F" ? "active" : ""} onClick={() => switchWarehouseFloor("3F")}><b>3F</b><span>成品仓库</span></button>
       </nav>{selectedAreaCode && <div className="twin-header-area-summary"><small>当前区域</small><b>{selectedAreaCode} · {selectedAreaFeature?.name || "仓储区域"}</b><span>{selectedAreaFeature?.area_mm2 ? `${(selectedAreaFeature.area_mm2 / 1_000_000).toFixed(1)} m²` : "面积待确认"} · {selectedAreaLocationCount} 库位 · {selectedArea?.lot_count || 0} 批次</span></div>}<p>{floorTitle} · 正式仓库作业层</p></div>
-      <div className="twin-command-status"><span className="live">{mapMode === "planning" ? advancedAreaMaintenanceOpen ? "区域规划 · 高级维护" : "区域规划 · 一次确认" : mapMode === "move" ? moveAction === "merge" ? `移货 · 合并栈板 · ${mergeSources.length} 块已选` : `移货 · ${moveDrafts.length} 条页面草稿` : "查货模式 · 只读"}</span><b>{currentFloor?.active_lots || 0}</b><small>当前层有效批次</small></div>
+      <div className="twin-command-status"><span className="live">{mapMode === "planning" ? advancedAreaMaintenanceOpen ? "区域规划 · 高级维护" : "区域规划 · 一次确认" : mapMode === "move" ? moveAction === "stocktake" ? `盘点调整 · ${stocktakeDrafts.length} 条草稿` : moveAction === "merge" ? `移货 · 合并栈板 · ${mergeSources.length} 块已选` : `移货 · ${moveDrafts.length} 条页面草稿` : "查货模式 · 只读"}</span><b>{currentFloor?.active_lots || 0}</b><small>当前层有效批次</small></div>
       <a className="twin-ledger-link" href="/warehouse-ledger.html?tab=finished" target="_top">库存台账</a>
     </header>
 
     <section className="twin-toolbar">
       <div className="twin-operation-modes" role="tablist" aria-label="仓库地图操作模式">
         <button type="button" className={mapMode === "lookup" ? "active" : ""} onClick={returnToLookupMode}>查货</button>
-        {canExecuteWarehouse && <button type="button" className={mapMode === "move" ? "active" : ""} disabled={spatialEditBusy} onClick={enterWarehouseMoveMode}>移货 / 盘点</button>}
+        {(canExecuteWarehouse || canStocktake) && <button type="button" className={mapMode === "move" ? "active" : ""} disabled={spatialEditBusy} onClick={enterWarehouseMoveMode}>移货 / 盘点</button>}
         {canEditLocations && <button type="button" className={mapMode === 'planning' ? 'active' : ''} disabled={spatialEditBusy} onClick={toggleLayoutEditor}>区域规划</button>}
       </div>
       <button type="button" className={`twin-layer-toggle ${layerPanelOpen ? "active" : ""}`} aria-expanded={layerPanelOpen} onClick={() => setLayerPanelOpen((value) => !value)}>图层</button>
@@ -3535,7 +3299,7 @@ export function WarehouseTwinApp() {
           ["zones", "区域"], ["aisles", "通道"], ["racks", "货架"], ["equipment", "设备"],
           ["structures", "原始墙柱"], ["customStructures", "补充墙柱门窗"], ["noGo", "禁放区"], ["pallets", "栈板"], ["production", "生产投影"]
         ] as Array<[keyof LayerVisibility, string]>).map(([key, label]) => <button type="button" key={key} className={layers[key] ? "active" : ""} onClick={() => toggleLayer(key)}><i /><span>{label}</span></button>)}
-        <div className="twin-rail-safety"><b>数据边界</b><p>{mapMode === "planning" ? "一次确认只建立区域用途、形式和容量；不会移动库存、栈板或产品。高级维护仅在实测边界、货架或库位确需调整时使用。" : mapMode === "move" ? moveAction === "merge" ? "多选只形成页面草稿；不建档、不入仓、不增减、不盘点。明确目标后底部一次提交整批合并。" : "拖动和选择只形成页面草稿；不提供建档、入仓、增减、移除或盘点。底部一次确认后才提交整批移货。" : "当前是查货模式，只读真实库存和地图位置，不执行入库、移货、盘点或布局写入。"}</p></div>
+        <div className="twin-rail-safety"><b>数据边界</b><p>{mapMode === "planning" ? "一次确认只建立区域用途、形式和容量；不会移动库存、栈板或产品。高级维护仅在实测边界、货架或库位确需调整时使用。" : mapMode === "move" ? moveAction === "stocktake" ? "新增与调减只形成页面草稿；不拖动、不改地图结构。底部一次确认后才写正式盘点流水。" : moveAction === "merge" ? "多选只形成页面草稿；不建档、不入仓、不增减、不盘点。明确目标后底部一次提交整批合并。" : "拖动和选择只形成页面草稿；不提供建档、入仓、增减、移除或盘点。底部一次确认后才提交整批移货。" : "当前是查货模式，只读真实库存和地图位置，不执行入库、移货、盘点或布局写入。"}</p></div>
       </aside>}
 
       {searchPanelOpen && <aside className="twin-context-rail">
@@ -3601,7 +3365,7 @@ export function WarehouseTwinApp() {
           palletEditingOnly={(locationEditMode && advancedAreaMaintenanceOpen) || warehouseMoveModeActive}
           rackEditingEnabled={locationEditMode && advancedAreaMaintenanceOpen}
           featureEditingEnabled={locationEditMode && advancedAreaMaintenanceOpen && areaPolicyEditMode}
-          allowPalletSelection={viewMode === "25d" || locationEditMode || canEditLocations || canExecuteWarehouse}
+          allowPalletSelection={viewMode === "25d" || locationEditMode || canEditLocations || canExecuteWarehouse || canStocktake}
           draggablePalletIds={warehouseMoveModeActive ? movablePalletIds : undefined}
           readOnly={(!locationEditMode || !advancedAreaMaintenanceOpen) && !warehouseMoveModeActive}
           visualTheme="warehouse"
@@ -3642,13 +3406,14 @@ export function WarehouseTwinApp() {
           </div>}
         </section>}
         {locationEditMessage && <div className={`twin-location-message ${locationEditMessage.includes("失败") || locationEditMessage.includes("缺失") ? "error" : ""}`}><span>{locationEditMessage}</span>{(locationEditMessage.includes("先完成移货") || locationEditMessage.includes("移到其他已启用区域")) && <button type="button" onClick={() => { setLocationEditMode(false); setMapMode("move"); setMoveAction("relocate"); setWarehouseOperationMessage("请点选当前区域内的货物或实体栈板，再切换楼层并选择目标位置；提交前不会改动库存。"); }}>前往移货</button>}</div>}
-        {canExecuteWarehouse && mapMode === "move" && <section className="twin-move-control-panel">
-          <div className="twin-formal-operation-title"><b>{moveAction === "merge" ? "多栈合并草稿" : "移货页面草稿"}</b><span>楼层切换不丢来源与草稿</span></div>
-          {P1_49C_ENABLED && <div className="twin-move-action-tabs" role="tablist" aria-label="移货操作类型">
-            <button type="button" role="tab" aria-selected={moveAction === "relocate"} className={moveAction === "relocate" ? "active" : ""} onClick={() => { setMoveAction("relocate"); setWarehouseOperationMessage(moveDrafts.length ? `已切回移动位置；保留 ${moveDrafts.length} 条移货草稿。` : "已切回移动位置。"); }}>移动位置</button>
-            <button type="button" role="tab" aria-selected={moveAction === "merge"} className={moveAction === "merge" ? "active" : ""} onClick={() => { setMoveAction("merge"); setMoveSource(null); setWarehouseOperationMessage(mergeSources.length ? `已切到合并栈板；保留 ${mergeSources.length} 块来源。` : "请从真实位置逐块选择至少两块兼容系统栈板。"); }}>合并栈板</button>
-          </div>}
-          {moveAction === "merge" ? <>
+        {(canExecuteWarehouse || canStocktake) && mapMode === "move" && <section className="twin-move-control-panel">
+          <div className="twin-formal-operation-title"><b>{moveAction === "stocktake" ? "盘点调整草稿" : moveAction === "merge" ? "多栈合并草稿" : "移货页面草稿"}</b><span>楼层切换不丢页面草稿</span></div>
+          <div className="twin-move-action-tabs" role="tablist" aria-label="仓库地图操作类型">
+            {canExecuteWarehouse && <button type="button" role="tab" aria-selected={moveAction === "relocate"} className={moveAction === "relocate" ? "active" : ""} onClick={() => { setMoveAction("relocate"); setWarehouseOperationMessage(moveDrafts.length ? `已切回移动位置；保留 ${moveDrafts.length} 条移货草稿。` : "已切回移动位置。"); }}>移动位置</button>}
+            {P1_49C_ENABLED && canExecuteWarehouse && <button type="button" role="tab" aria-selected={moveAction === "merge"} className={moveAction === "merge" ? "active" : ""} onClick={() => { setMoveAction("merge"); setMoveSource(null); setWarehouseOperationMessage(mergeSources.length ? `已切到合并栈板；保留 ${mergeSources.length} 块来源。` : "请从真实位置逐块选择至少两块兼容系统栈板。"); }}>合并栈板</button>}
+            {canStocktake && <button type="button" role="tab" aria-selected={moveAction === "stocktake"} className={moveAction === "stocktake" ? "active" : ""} onClick={() => { setMoveAction("stocktake"); setMoveSource(null); setWarehouseOperationMessage(stocktakeDrafts.length ? `已切到盘点调整；保留 ${stocktakeDrafts.length} 条草稿。` : "请选择正式货位，新增已有产品或从真实批次调减。"); }}>盘点调整</button>}
+          </div>
+          {moveAction === "stocktake" ? <p>盘点只在右侧所选正式货位形成新增或调减草稿；不拖动货物、不改变地图结构，底部一次确认整批提交。</p> : moveAction === "merge" ? <>
             <p>合并集合已选 {mergeSources.length} 块；可切楼层和位置继续选择，再从集合内明确一块目标。合并不拆批次、不改数量，失败会保留本页选择与重试键。</p>
             {mergeSources.length > 0 && <div className="twin-merge-source-chips">{mergeSources.map((item) => <button type="button" key={item.pallet_id} disabled={mergeBatchBusy} onClick={() => {
               const result = togglePalletMergeSource(mergeSources, item);
@@ -3723,9 +3488,9 @@ export function WarehouseTwinApp() {
           <div className="twin-dispatch-label-list">
             {dispatchStagingPallets.map((pallet) => {
               const summary = dashboardPalletSummary(pallet);
-              return <button type="button" className={(mapMode === "move" ? moveSource?.source_key === `pallet:${pallet.pallet_id}` : selectedDispatchPallet?.pallet_id === pallet.pallet_id) ? "selected" : ""} key={`dispatch-pallet-${pallet.pallet_id}`} onClick={() => {
+              return <button type="button" className={(mapMode === "move" ? moveAction === "relocate" && moveSource?.source_key === `pallet:${pallet.pallet_id}` : selectedDispatchPallet?.pallet_id === pallet.pallet_id) ? "selected" : ""} key={`dispatch-pallet-${pallet.pallet_id}`} onClick={() => {
                 setSelected({ kind: "pallet", id: `erp-dispatch-pallet-${pallet.pallet_id}` });
-                if (mapMode === "move" && canExecuteWarehouse && dispatchStagingLocation) chooseMoveSource(palletMoveSource(dispatchStagingLocation, pallet));
+                if (mapMode === "move" && moveAction === "relocate" && canExecuteWarehouse && dispatchStagingLocation) chooseMoveSource(palletMoveSource(dispatchStagingLocation, pallet));
               }}>
                 <small>真实栈板 · {pallet.pallet_code}</small>
                 <b>{formatNumber(summary.quantity)} {inventoryUnitLabel(summary.unit)}</b>
@@ -3733,12 +3498,10 @@ export function WarehouseTwinApp() {
                 <span>{summary.customer}</span>
               </button>;
             })}
-            {dispatchStagingItems.map((item, itemIndex) => <button type="button" className={(mapMode === "move" ? moveSource?.source_key === `lot:${item.lot_id}` : dispatchTransferLotId === item.lot_id) ? "selected" : ""} key={item.lot_id || `dispatch-${itemIndex}`} onClick={() => {
-              if (mapMode === "move" && canExecuteWarehouse && dispatchStagingLocation) {
+            {dispatchStagingItems.map((item, itemIndex) => <button type="button" className={moveAction === "relocate" && moveSource?.source_key === `lot:${item.lot_id}` ? "selected" : ""} key={item.lot_id || `dispatch-${itemIndex}`} onClick={() => {
+              if (mapMode === "move" && moveAction === "relocate" && canExecuteWarehouse && dispatchStagingLocation) {
                 chooseMoveSource(lotMoveSource(dispatchStagingLocation, item));
-                return;
               }
-              setDispatchTransferLotId(item.lot_id); setDispatchTransferQuantity(String(inventoryLabelQuantity(item))); setDispatchTransferTargetId(""); setDispatchTransferIdempotencyKey(operationKey("dispatch-to-floor3")); setWarehouseOperationMessage("");
             }}>
               <small>散存待送 · 未绑定实体栈板</small>
               <b>{item.inventory_code || item.lot_number || `批次 ${item.lot_id}`}</b>
@@ -3748,31 +3511,31 @@ export function WarehouseTwinApp() {
             </button>)}
             {dispatchStagingPallets.length === 0 && dispatchStagingItems.length === 0 && <p>当前待送区没有货物。</p>}
           </div>
-          {mapMode === "move" && canExecuteWarehouse && <p className="twin-dispatch-weather-note">点击上方栈板后，可随意切换 1F / 3F 地图；来源不会丢失，再点区域和具体空货位即可移动，不会改变订单和后续送货关系。</p>}
-          {P1_47D_ENABLED && selectedDispatchStagingItem && canEditLocations && mapMode === "move" && viewMode === "2d" && <div className="twin-formal-operation twin-dispatch-transfer">
-            <div className="twin-formal-operation-title"><b>暂不送，转三楼成品区</b><span>只移动原库存</span></div>
-            <label><span>本次转入数量（默认全部）</span><input type="number" min="1" max={inventoryLabelQuantity(selectedDispatchStagingItem)} step="1" value={dispatchTransferQuantity} onChange={(event) => setDispatchTransferQuantity(event.target.value)} /></label>
-            <span className="twin-map-target-title">直接点选三楼空位缩略图</span>
-            <div className="twin-map-target-grid" role="listbox" aria-label="散存待送转三楼目标">
-              {emptyMoveTargets.map((item) => <button type="button" role="option" aria-selected={dispatchTransferTargetId === String(item.location_id)} className={dispatchTransferTargetId === String(item.location_id) ? "selected" : ""} key={item.location_id} onClick={() => { setDispatchTransferTargetId(String(item.location_id)); setDispatchTransferIdempotencyKey(operationKey("dispatch-to-floor3")); }}>
-                <span className="twin-map-target-thumbnail"><i style={{ left: `${Math.max(4, Math.min(88, Number(item.map_position?.left_pct || 50)))}%`, top: `${Math.max(4, Math.min(82, Number(item.map_position?.top_pct || 50)))}%` }} /></span>
-                <b>{item.location_name}</b><small>{item.area_code} · 当前空位</small>
-              </button>)}
-              {emptyMoveTargets.length === 0 && <p>三楼当前没有已发布、已放置的成品空位。</p>}
-            </div>
-            <button type="button" className="twin-primary-action" disabled={warehouseOperationBusy || !dispatchTransferQuantity || !dispatchTransferTargetId} onClick={confirmDispatchStagingTransfer}>确认转入点选位置</button>
-          </div>}
+          {mapMode === "move" && moveAction === "relocate" && canExecuteWarehouse && <p className="twin-dispatch-weather-note">点击上方栈板或散存标签后，可随意切换 1F / 3F 地图；来源不会丢失，再点区域和具体空货位即可移动，不会改变订单和后续送货关系。</p>}
           {warehouseOperationMessage && <div className="twin-location-message">{warehouseOperationMessage}</div>}
         </section>}
         {selectedLocation && <section className="twin-location-card">
           <div className="twin-location-card-title"><div><small>当前位置 · {selectedLocation.location_code}</small><b>{selectedLocation.location_name}</b></div><em className={selectedLocation.occupancy_status}>{selectedLocation.occupancy_status === "occupied" ? "有货" : "空位"}</em></div>
           <div className="twin-selection-summary"><span><small>货物</small><b>{selectedLocationItems.length} 条</b></span><span><small>客户</small><b>{selectedLocationCustomerLabel}</b></span><span><small>栈板</small><b>{selectedLocationPallets.length || 0} 块</b></span></div>
           {selectedLocationItems.length === 0 && <p className="twin-location-empty-primary">该位置当前没有货物</p>}
-          {visibleSelectedLocationItems.map((item, itemIndex) => <button type="button" className={`twin-location-item ${correctionLotId === item.lot_id ? "correction-selected" : ""} ${focusedSearchProductKey && searchProductKey(item) === focusedSearchProductKey ? "warehouse-search-hit" : ""}`} key={item.lot_id || `${item.inventory_code}-${itemIndex}`} onClick={() => { setCorrectionLotId(item.lot_id || null); setCorrectionQuantity(""); setCorrectionReason(""); setWarehouseOperationMessage(""); }}>
-            <div className="twin-location-item-code"><b>{item.inventory_code || item.lot_number || `批次 ${item.lot_id}`}</b><strong>{formatNumber(inventoryLabelQuantity(item))} {inventoryUnitLabel(item.unit)}</strong></div>
-            <h4>{item.product_name || "产品名称待补充"}</h4>
-            <div className="twin-location-item-summary"><span>{item.customer_name || "客户待确认"}</span></div>
-          </button>)}
+          {visibleSelectedLocationItems.map((item, itemIndex) => {
+            const stocktakeBlockReason = mapMode === "move" && moveAction === "stocktake"
+              ? selectedLocationStocktakeBlockReason || stocktakeDecreaseBlockReason(item)
+              : null;
+            return <button
+              type="button"
+              className={`twin-location-item ${stocktakeLotId === item.lot_id ? "correction-selected" : ""} ${focusedSearchProductKey && searchProductKey(item) === focusedSearchProductKey ? "warehouse-search-hit" : ""} ${stocktakeBlockReason ? "stocktake-ineligible" : ""}`}
+              key={item.lot_id || `${item.inventory_code}-${itemIndex}`}
+              disabled={Boolean(stocktakeBlockReason)}
+              title={stocktakeBlockReason || ""}
+              onClick={() => { if (mapMode === "move" && moveAction === "stocktake") { setStocktakeLotId(item.lot_id || null); setStocktakeDecreaseQuantity(""); setWarehouseOperationMessage(""); } }}
+            >
+              <div className="twin-location-item-code"><span>存货编码</span><b>{item.inventory_code || item.lot_number || `批次 ${item.lot_id}`}</b></div>
+              <h4>{item.product_name || "产品名称待补充"}</h4>
+              <div className="twin-location-item-summary"><span><small>客户</small>{item.customer_name || "客户待确认"}</span><strong><small>产品数量</small>{formatNumber(inventoryLabelQuantity(item))} {inventoryUnitLabel(item.unit)}</strong></div>
+              {stocktakeBlockReason && <small className="twin-stocktake-block-reason">不可盘点调减：{stocktakeBlockReason}</small>}
+            </button>;
+          })}
           {mapMode === "lookup" && selectedLocationItems.length > 4 && <button type="button" className="twin-detail-toggle" aria-expanded={locationItemsExpanded} onClick={() => setLocationItemsExpanded((current) => !current)}>{locationItemsExpanded ? "收起货物" : `查看全部 ${selectedLocationItems.length} 条货物`}</button>}
           {palletColumnConflictIds.has(`erp-location-${selectedLocation.location_id}`) && <p className="twin-location-column-warning">该货位与固定柱子重叠，请在二维“库位布局”中拖离柱子后再保存。</p>}
           <button type="button" className="twin-detail-toggle secondary" aria-expanded={locationDetailOpen} onClick={() => setLocationDetailOpen((current) => !current)}>{locationDetailOpen ? "收起位置与栈板详情" : "位置与栈板详情"}</button>
@@ -3787,7 +3550,7 @@ export function WarehouseTwinApp() {
           </div>}
           {viewMode === "25d" && <p className="twin-location-readonly-note">2.5D 仅查看库位与货物标签；调整请切换二维平面。</p>}
           {warehouseOperationMessage && <div className="twin-location-message">{warehouseOperationMessage}</div>}
-          {canExecuteWarehouse && mapMode === "move" && viewMode === "2d" && <section className="twin-move-source-panel">
+          {canExecuteWarehouse && mapMode === "move" && moveAction !== "stocktake" && viewMode === "2d" && <section className="twin-move-source-panel">
             <div className="twin-formal-operation-title"><b>① {moveAction === "merge" ? "多选兼容系统栈板" : "选择要移动的货物"}</b><span>只建页面草稿</span></div>
             {selectedLocation.occupancy_status === "empty" ? <p>{moveAction === "merge" ? "当前是空货位，没有可加入合并集合的系统栈板。" : "当前是空货位。请先点有货位置选择来源，或将已绑定实体栈板的货物卡拖到此处。"}</p> : <>
               {selectedLocationPallets.length > 1 && <p className="twin-shared-pallet-note">该实际位置共有 {selectedLocationPallets.length} 块系统栈板。地图只显示一个真实位置，不伪造重叠坐标；请在下方逐块选择。</p>}
@@ -3818,73 +3581,25 @@ export function WarehouseTwinApp() {
               </div>}
             </>}
           </section>}
-          {P1_47D_ENABLED && canEditLocations && mapMode === "move" && viewMode === "2d" && !locationEditMode && (selectedLocationCanReceiveFinished || selectedLocationCanReceiveSemiFinished || selectedLocationCanReceiveRawMaterial) && <section className="twin-formal-operation">
-            <div className="twin-formal-operation-title"><b>地图选点入仓 / 差异补录</b><span>{floorCode} · {selectedLocation.area_code} · {selectedLocation.location_name} · 仅 admin</span></div>
-            <div className="twin-map-inbound-type" role="tablist" aria-label="入仓库存类型">
-              <button type="button" className={inboundInventoryType === "finished" ? "active" : ""} disabled={!selectedLocationCanReceiveFinished} onClick={() => { setInboundInventoryType("finished"); setInboundMode(selectedLocation.occupancy_status === "empty" && selectedLocationCanReceiveStaging ? "staging" : "catalog"); setInboundCustomerId(""); setInboundProductId(""); setWarehouseOperationMessage(""); }}>成品</button>
-              <button type="button" className={inboundInventoryType === "semi_finished" ? "active" : ""} disabled={!selectedLocationCanReceiveSemiFinished} onClick={() => { setInboundInventoryType("semi_finished"); setInboundMode("catalog"); setInboundCustomerId(""); setInboundProductId(""); setWarehouseOperationMessage(""); }}>半成品</button>
-              <button type="button" className={inboundInventoryType === "raw_material" ? "active" : ""} disabled={!selectedLocationCanReceiveRawMaterial} onClick={() => { setInboundInventoryType("raw_material"); setInboundMode("catalog"); setInboundCustomerId(""); setInboundProductId(""); setWarehouseOperationMessage(""); }}>原材料栈板</button>
+          {canStocktake && mapMode === "move" && moveAction === "stocktake" && viewMode === "2d" && !locationEditMode && selectedLocationBaseReceivable && <section className="twin-formal-operation twin-stocktake-operation">
+            <div className="twin-formal-operation-title"><b>正式货位盘点调整</b><span>{selectedLocation.floor_code} · {selectedLocation.area_code || "未分区"} · {selectedLocation.location_name}</span></div>
+            <p className="twin-map-pick-hint">这里只加入页面草稿；底部一次确认后，整批写正式盘点流水。无需填写原因，不会新建客户或产品。</p>
+            <div className="twin-map-inbound-type" role="tablist" aria-label="盘点新增库存类型">
+              <button type="button" className={stocktakeInventoryType === "finished" ? "active" : ""} disabled={!selectedLocationCanReceiveFinished} title={selectedLocationFinishedAddBlockReason || ""} onClick={() => { setStocktakeInventoryType("finished"); setStocktakeCustomerId(""); setStocktakeProductId(""); }}>成品 · 固定单位箱</button>
+              <button type="button" className={stocktakeInventoryType === "semi_finished" ? "active" : ""} disabled={!selectedLocationCanReceiveSemiFinished} title={selectedLocationSemiFinishedAddBlockReason || ""} onClick={() => { setStocktakeInventoryType("semi_finished"); setStocktakeCustomerId(""); setStocktakeProductId(""); }}>半成品 · 固定单位张</button>
             </div>
-            <p className="twin-map-pick-hint">先在顶部选择 1F/3F，再直接点地图上的真实位置。页面以区域和现场位置为主，内部库位编码只在详情中保留。</p>
-            <div className="twin-inbound-mode" role="tablist" aria-label="货位选货来源">
-              {inboundInventoryType === "finished" && selectedLocationCanReceiveStaging && selectedLocation.occupancy_status === "empty" && <button type="button" className={inboundMode === "staging" ? "active" : ""} onClick={() => { setInboundMode("staging"); setInboundQuantity(""); setWarehouseOperationMessage(""); }}>已完工未送</button>}
-              <button type="button" className={inboundMode === "catalog" ? "active" : ""} onClick={() => { setInboundMode("catalog"); setInboundQuantity(""); setWarehouseOperationMessage(""); }}>ERP 已有产品</button>
-              {inboundInventoryType === "finished" && <button type="button" className={inboundMode === "temporary" ? "active" : ""} onClick={() => { setInboundMode("temporary"); setInboundQuantity(""); setWarehouseOperationMessage(""); }}>临时新产品</button>}
-            </div>
-            {inboundInventoryType === "finished" && inboundMode === "staging" && selectedLocationCanReceiveStaging && selectedLocation.occupancy_status === "empty" && <>
-              <label><span>查找待送产品</span><input value={stagingQuery} onChange={(event) => setStagingQuery(event.target.value)} placeholder="客户、存货编码、产品名称或批次" /></label>
-              <div className="twin-staging-candidates">
-                {stagingCandidates.slice(0, 12).map((item) => <button type="button" className={stagingLotId === String(item.lot_id) ? "selected" : ""} key={item.lot_id} onClick={() => { setStagingLotId(String(item.lot_id)); setInboundQuantity(String(item.total_quantity)); }}><b>{item.inventory_code || item.lot_number}</b><strong>{item.product_name || "产品名称待补充"}</strong><span>{item.customer_name || "客户待确认"} · {formatNumber(item.total_quantity)} {inventoryUnitLabel(item.unit)}</span></button>)}
-                {stagingCandidates.length === 0 && <p>当前没有匹配的已完工未送产品</p>}
-              </div>
-              {selectedStagingProduct && <small className="twin-formal-selected">从一楼待送区转入 · 可选 {formatNumber(selectedStagingProduct.total_quantity)} {inventoryUnitLabel(selectedStagingProduct.unit)}</small>}
-              <label><span>本次转入数量（箱）</span><input type="number" min="1" max={selectedStagingProduct?.total_quantity} step="1" value={inboundQuantity} onChange={(event) => setInboundQuantity(event.target.value)} /></label>
-              <button type="button" className="twin-primary-action" disabled={warehouseOperationBusy || !selectedStagingProduct?.version || !inboundQuantity} onClick={confirmStagingProductPlacement}>二次确认并转入当前货位</button>
-            </>}
-            {inboundMode === "catalog" && <>
-              <label><span>1　客户名称或简写</span><input value={inboundCustomerQuery} onChange={(event) => { setInboundCustomerQuery(event.target.value); setInboundCustomerId(""); setInboundProductId(""); }} placeholder="输入客户全称、简称或客户编码" /></label>
-              <label><span>确认客户</span><select value={inboundCustomerId} onChange={(event) => { setInboundCustomerId(event.target.value); setProductQuery(""); setInboundProductId(""); }}><option value="">请选择客户</option>{inboundCustomers.map((item) => <option key={item.id} value={item.id}>{item.customer_code ? `${item.customer_code} · ` : ""}{item.name}</option>)}</select></label>
-              <label><span>2　筛选该客户常用箱</span><input value={productQuery} disabled={!inboundCustomerId} onChange={(event) => { setProductQuery(event.target.value); setInboundProductId(""); }} placeholder={inboundCustomerId ? "输入存货编码或产品名称；留空显示常用箱" : "请先确认客户"} /></label>
-              <label><span>确认常用箱</span><select value={inboundProductId} disabled={!inboundCustomerId} onChange={(event) => setInboundProductId(event.target.value)}><option value="">请选择已确认产品</option>{productCandidates.map((item) => <option key={item.product_id} value={item.product_id}>{item.product_code || item.customer_material_code || item.product_id} · {item.product_name}</option>)}</select></label>
-              {selectedInboundProduct && <small className="twin-formal-selected">{selectedInboundProduct.customer_name} / {selectedInboundProduct.product_code || selectedInboundProduct.customer_material_code || "编码待补充"} / {selectedInboundProduct.product_name} / {selectedInboundProduct.specification || "规格待补充"}</small>}
-              <div className="twin-formal-operation-grid"><label><span>{selectedLocation.occupancy_status === "empty" ? "现场实物" : "合并补录"}数量（{inboundInventoryType === "finished" ? "只" : "张"}）</span><input type="number" min="1" step="1" value={inboundQuantity} onChange={(event) => setInboundQuantity(event.target.value)} /></label><label><span>{inboundInventoryType === "raw_material" ? "登记日期" : "库存日期"}</span><input type="date" value={inboundStockDate} onChange={(event) => setInboundStockDate(event.target.value)} /></label></div>
-              {(inboundInventoryType === "finished" || inboundInventoryType === "raw_material") && selectedLocation.occupancy_status === "empty" && selectedLocation.storage_type !== "rack" && <label><span>实体栈板编号（可留空自动生成）</span><input value={inboundPalletCode} onChange={(event) => setInboundPalletCode(event.target.value)} placeholder="例如 PAL-3F-001" /></label>}
-              {selectedLocation.occupancy_status === "occupied" && <small className="twin-merge-rule">已有货物不代表禁止入仓：同客户、同存货产品且类型兼容时可合并；其他情况系统会阻止。</small>}
-              <button type="button" className="twin-primary-action" disabled={warehouseOperationBusy || !selectedInboundCustomer || !selectedInboundProduct || !inboundQuantity || !inboundStockDate || !selectedLocationCanReceiveProduct} onClick={confirmMapFinishedInbound}>{selectedLocation.occupancy_status === "empty" ? `二次确认并登记${inboundInventoryType === "finished" ? "成品" : inboundInventoryType === "semi_finished" ? "半成品" : "原材料栈板"}` : "二次确认并合并补录"}</button>
-            </>}
-            {inboundInventoryType === "finished" && inboundMode === "temporary" && <div className="twin-temporary-product-form">
-              <b>仅用于现场已有实物、ERP 尚无产品档案</b>
-              <label><span>查找客户</span><input value={temporaryCustomerQuery} onChange={(event) => { setTemporaryCustomerQuery(event.target.value); setTemporaryCustomerId(""); }} placeholder="输入客户名称或编码" /></label>
-              <label><span>确认客户</span><select value={temporaryCustomerId} onChange={(event) => setTemporaryCustomerId(event.target.value)}><option value="">请选择客户</option>{temporaryCustomers.map((item) => <option key={item.id} value={item.id}>{item.name}{item.customer_code ? ` · ${item.customer_code}` : ""}</option>)}</select></label>
-              <label><span>存货编码</span><input value={temporaryInventoryCode} onChange={(event) => setTemporaryInventoryCode(event.target.value)} placeholder="现场标签上的存货编码" /></label>
-              <label><span>产品名称</span><input value={temporaryProductName} onChange={(event) => setTemporaryProductName(event.target.value)} placeholder="完整产品名称" /></label>
-              <div className="twin-formal-operation-grid"><label><span>现场数量（箱）</span><input type="number" min="1" step="1" value={inboundQuantity} onChange={(event) => setInboundQuantity(event.target.value)} /></label><label><span>盘点日期</span><input type="date" value={inboundStockDate} onChange={(event) => setInboundStockDate(event.target.value)} /></label></div>
-              <label><span>临时建档原因（必填）</span><textarea value={temporaryReason} onChange={(event) => setTemporaryReason(event.target.value)} placeholder="例如：首次盘点发现现场实物，历史系统没有该产品" /></label>
-              <button type="button" className="twin-primary-action" disabled={warehouseOperationBusy || !temporaryCustomerId || !temporaryInventoryCode.trim() || !temporaryProductName.trim() || temporaryReason.trim().length < 2 || !inboundQuantity || !inboundStockDate} onClick={confirmTemporaryProductInbound}>二次确认：建档并放入当前货位</button>
-            </div>}
-            {selectedLocation.occupancy_status === "occupied" && <div className="twin-formal-divider"><span>或调整现有货物</span></div>}
-            {selectedLocation.occupancy_status === "occupied" && selectedCorrectionItem && selectedCorrectionItem.version ? <div className="twin-correction-form">
-              <b>{selectedCorrectionItem.inventory_code || selectedCorrectionItem.lot_number} · 可用 {formatNumber(selectedCorrectionItem.available_quantity)} {inventoryUnitLabel(selectedCorrectionItem.unit)}</b>
-              <label><span>减少数量</span><input type="number" min="1" max={selectedCorrectionItem.available_quantity || undefined} step="1" value={correctionQuantity} onChange={(event) => setCorrectionQuantity(event.target.value)} placeholder="输入本次减少数量" /></label>
-              <label><span>现场差异原因（必填）</span><textarea value={correctionReason} onChange={(event) => setCorrectionReason(event.target.value)} placeholder="例如：现场盘点少 20 只、历史数据未同步" /></label>
-              <div><button type="button" disabled={warehouseOperationBusy || !correctionQuantity || correctionReason.trim().length < 2} onClick={() => correctSelectedInventoryLot("decrease")}>二次确认后减少</button><button type="button" className="danger" disabled={warehouseOperationBusy || Number(selectedCorrectionItem.reserved_quantity || 0) > 0 || correctionReason.trim().length < 2} onClick={() => correctSelectedInventoryLot("remove")}>移除该货物</button></div>
-              <small>移除不会物理删除批次或流水；有预占时必须先释放预占。</small>
-            </div> : selectedLocation.occupancy_status === "occupied" && <p className="twin-correction-hint">先点击上方某个产品标签，再进行减量或移除。</p>}
-            {selectedLocation.occupancy_status === "occupied" && selectedLocationSupportsPallet && <div className="twin-formal-divider"><span>实体栈板移位</span></div>}
-            {selectedLocation.occupancy_status === "occupied" && selectedLocationSupportsPallet && <>
-              <span className="twin-map-target-title">点选三楼空位缩略图</span>
-              <div className="twin-map-target-grid" role="listbox" aria-label="三楼整托移位目标">
-                {emptyMoveTargets.map((item) => <button type="button" role="option" aria-selected={moveTargetLocationId === String(item.location_id)} className={moveTargetLocationId === String(item.location_id) ? "selected" : ""} key={item.location_id} onClick={() => { setMoveTargetLocationId(String(item.location_id)); setMoveIdempotencyKey(operationKey("map-move")); }}>
-                  <span className="twin-map-target-thumbnail"><i style={{ left: `${Math.max(4, Math.min(88, Number(item.map_position?.left_pct || 50)))}%`, top: `${Math.max(4, Math.min(82, Number(item.map_position?.top_pct || 50)))}%` }} /></span>
-                  <b>{item.location_name}</b><small>{item.area_code} · 当前空位</small>
-                </button>)}
-                {emptyMoveTargets.length === 0 && <p>三楼当前没有已发布、已放置的成品空位。</p>}
-              </div>
-              <small className="twin-formal-selected">本次会同步移动实体栈板及其关联正式库存位置，不改变库存数量。</small>
-              <button type="button" className="twin-primary-action" disabled={warehouseOperationBusy || !moveTargetLocationId || !selectedLocation.pallet} onClick={confirmMapPalletMove}>确认正式栈板移位</button>
-            </>}
+            {selectedLocationAddBlockReason && <p className="twin-stocktake-block-reason">当前新增类型不可用：{selectedLocationAddBlockReason}</p>}
+            <label><span>1　查找已有客户</span><input value={stocktakeCustomerQuery} onChange={(event) => { setStocktakeCustomerQuery(event.target.value); setStocktakeCustomerId(""); setStocktakeProductId(""); }} placeholder="客户全称、简称或客户编码" /></label>
+            <label><span>确认已有客户</span><select value={stocktakeCustomerId} onChange={(event) => { setStocktakeCustomerId(event.target.value); setStocktakeProductQuery(""); setStocktakeProductId(""); }}><option value="">请选择客户</option>{stocktakeCustomers.map((item) => <option key={item.id} value={item.id}>{item.customer_code ? `${item.customer_code} · ` : ""}{item.name}</option>)}</select></label>
+            <label><span>2　筛选该客户已有产品</span><input value={stocktakeProductQuery} disabled={!stocktakeCustomerId} onChange={(event) => { setStocktakeProductQuery(event.target.value); setStocktakeProductId(""); }} placeholder={stocktakeCustomerId ? "存货编码或产品名称；留空显示候选" : "请先确认客户"} /></label>
+            <label><span>确认已有产品</span><select value={stocktakeProductId} disabled={!stocktakeCustomerId} onChange={(event) => setStocktakeProductId(event.target.value)}><option value="">请选择产品</option>{stocktakeProductCandidates.map((item) => <option key={item.product_id} value={item.product_id}>{item.product_code || item.customer_material_code || item.product_id} · {item.product_name}</option>)}</select></label>
+            {selectedStocktakeProduct && <small className="twin-formal-selected">{selectedStocktakeProduct.customer_name} / {selectedStocktakeProduct.product_code || selectedStocktakeProduct.customer_material_code || "编码待补充"} / {selectedStocktakeProduct.product_name}</small>}
+            <div className="twin-formal-operation-grid"><label><span>盘点新增数量（{stocktakeInventoryType === "finished" ? "箱" : "张"}）</span><input type="number" min="1" step="1" value={stocktakeAddQuantity} onChange={(event) => setStocktakeAddQuantity(event.target.value)} /></label><label><span>库存日期</span><input type="date" value={stocktakeStockDate} onChange={(event) => setStocktakeStockDate(event.target.value)} /></label></div>
+            <button type="button" className="twin-primary-action" title={selectedLocationAddBlockReason || ""} disabled={!selectedStocktakeCustomer || !selectedStocktakeProduct || !stocktakeAddQuantity || !stocktakeStockDate || !selectedLocationCanReceiveProduct} onClick={queueStocktakeAddDraft}>加入盘点新增草稿</button>
+            {selectedLocationItems.length > 0 && <div className="twin-formal-divider"><span>调减当前真实批次</span></div>}
+            {selectedStocktakeItem?.version ? <div className="twin-correction-form"><b>{selectedStocktakeItem.inventory_code || selectedStocktakeItem.lot_number} · 可用 {formatNumber(selectedStocktakeItem.available_quantity)} {inventoryUnitLabel(selectedStocktakeItem.unit)}</b><label><span>本次调减数量</span><input type="number" min="1" max={selectedStocktakeItem.available_quantity || undefined} step="1" value={stocktakeDecreaseQuantity} onChange={(event) => setStocktakeDecreaseQuantity(event.target.value)} /></label>{selectedStocktakeDecreaseBlockReason && <small className="twin-stocktake-block-reason">不可盘点调减：{selectedStocktakeDecreaseBlockReason}</small>}<button type="button" title={selectedStocktakeDecreaseBlockReason || ""} disabled={Boolean(selectedStocktakeDecreaseBlockReason) || !stocktakeDecreaseQuantity || Number(stocktakeDecreaseQuantity) > Number(selectedStocktakeItem.available_quantity || 0)} onClick={queueStocktakeDecreaseDraft}>加入盘点调减草稿</button><small>调减至零后地图只隐藏空卡；批次、流水和审计历史保留。</small></div> : selectedLocationItems.length > 0 && <p className="twin-correction-hint">点击上方一个可盘点调减的真实产品卡，再输入调减数量；不能大于当前可用量。</p>}
           </section>}
-          {P1_47D_ENABLED && canEditLocations && mapMode === "move" && viewMode === "2d" && !locationEditMode && !selectedLocationCanReceiveFinished && !selectedLocationCanReceiveSemiFinished && !selectedLocationCanReceiveRawMaterial && <p className="twin-location-readonly-note">该位置尚未启用、未完成布局、区域用途不匹配或与柱子冲突，暂不能办理入仓；请直接在地图上改选兼容位置。</p>}
+          {canStocktake && mapMode === "move" && moveAction === "stocktake" && viewMode === "2d" && !locationEditMode && !selectedLocationBaseReceivable && <p className="twin-location-readonly-note">{selectedLocationStocktakeBlockReason || "该位置不能加入盘点草稿。"}</p>}
           {locationEditMode && advancedAreaMaintenanceOpen && canEditLocations && <div className="twin-location-edit-actions">
             <button type="button" disabled={!selectedLocation.map_position || locationEditBusy} onClick={exchangeLocationDraft}>{swapSourceLocationId === null ? "设为交换起点" : swapSourceLocationId === selectedLocation.location_id ? "已选交换起点" : `与 ${visualLocations.find((item) => item.location_id === swapSourceLocationId)?.location_code || "起点"} 交换位置`}</button>
             <button type="button" className="danger" disabled={selectedLocation.occupancy_status !== "empty" || !selectedLocation.map_position || locationEditBusy} onClick={disableSelectedLocation}>停用空库位</button>
@@ -3973,8 +3688,17 @@ export function WarehouseTwinApp() {
         {selectedPlacement && <section className="twin-object-card twin-equipment-card"><span className="twin-object-kind">生产设备</span><h3>{selectedPlacement.name}</h3><dl><div><dt>长 × 宽</dt><dd>{formatNumber(selectedPlacement.width_mm)} × {formatNumber(selectedPlacement.depth_mm)} mm</dd></div><div><dt>高度</dt><dd>{formatNumber(selectedPlacement.height_mm)} mm</dd></div><div><dt>坐标</dt><dd>X {formatNumber(selectedPlacement.x_mm)} / Y {formatNumber(selectedPlacement.y_mm)}</dd></div></dl></section>}
       </aside>
     </section>
-    {mapMode === "move" && canExecuteWarehouse && <section className={`twin-move-draft-bar ${moveAction === "merge" ? "merge-mode" : ""}`} aria-label={moveAction === "merge" ? "多栈合并页面草稿汇总" : "移货页面草稿汇总"}>
-      {moveAction === "merge" ? <>
+    {mapMode === "move" && (canExecuteWarehouse || canStocktake) && <section className={`twin-move-draft-bar ${moveAction === "merge" ? "merge-mode" : moveAction === "stocktake" ? "stocktake-mode" : ""}`} aria-label={moveAction === "stocktake" ? "盘点调整页面草稿汇总" : moveAction === "merge" ? "多栈合并页面草稿汇总" : "移货页面草稿汇总"}>
+      {moveAction === "stocktake" ? <>
+        <div className="twin-move-draft-heading"><div><small>STOCKTAKE DRAFT · 尚未写入</small><b>{stocktakeDrafts.length ? `${stocktakeDrafts.length} 条待确认调整` : "尚无盘点草稿"}</b></div><span>{stocktakeDrafts.length ? "一次确认整批提交；失败后草稿和重试键都会保留。" : "在右侧选择正式货位，加入已有产品或调减真实批次。"}</span></div>
+        <div className="twin-move-draft-list">{stocktakeDrafts.map((item) => <article key={item.client_item_id}>
+          <div><b>{item.operation === "add" ? "盘点新增" : "盘点调减"} · {item.inventory_code}</b><span>{item.customer_name} · {item.product_name}</span></div>
+          <strong>{item.floor_code} / {item.area_code || "未分区"} / {item.location_name}</strong>
+          <small>{formatNumber(item.quantity)} {inventoryUnitLabel(item.unit)}{item.operation === "decrease" && item.quantity === item.quantity_before ? " · 调减至零后仅隐藏空卡" : ""}</small>
+          <button type="button" disabled={stocktakeBatchBusy} onClick={() => removeStocktakeDraftItem(item.client_item_id)}>撤销</button>
+        </article>)}</div>
+        <div className="twin-move-draft-actions"><button type="button" disabled={!stocktakeDrafts.length || stocktakeBatchBusy} onClick={cancelStocktakeDrafts}>取消全部草稿</button><button type="button" className="confirm" disabled={!stocktakeDrafts.length || stocktakeBatchBusy} onClick={confirmStocktakeDrafts}>{stocktakeBatchBusy ? "正在一次提交…" : `一次确认 ${stocktakeDrafts.length || ""} 条`}</button></div>
+      </> : moveAction === "merge" ? <>
         <div className="twin-move-draft-heading"><div><small>MERGE DRAFT · 尚未写入</small><b>{mergeSources.length ? `${mergeSources.length} 块已选系统栈板` : "尚无合并草稿"}</b></div><span>{mergeSources.length ? "从集合内明确一块目标；失败后选择、目标和重试键都会保留。" : "在真实地图位置右侧逐块选择，不生成栈板假坐标。"}</span></div>
         <div className="twin-move-draft-list">{mergeSources.map((item) => <article className={mergeTarget?.pallet_id === item.pallet_id ? "merge-target" : ""} key={item.client_item_id || item.pallet_id}>
           <div><b>{item.pallet_code}</b><span>{item.customer_name} · {item.product_count} 款 / {item.lot_count} 批次</span></div>

@@ -1026,6 +1026,8 @@ body.warehouse-twin-page {
 .twin-location-item { width: 100%; font-family: inherit; text-align: left; cursor: pointer; }
 .twin-location-item:hover,
 .twin-location-item.correction-selected { border-color: #0f766e; background: #e7f6f3; box-shadow: 0 0 0 2px #0f766e1c; }
+.twin-location-item.stocktake-ineligible { border-color: #d8c7c3; border-left-color: #a75548; color: #6f5a56; background: #fff7f5; cursor: not-allowed; opacity: .86; }
+.twin-stocktake-block-reason { margin: 0; padding: 5px 6px; border-left: 3px solid #b42318; color: #8f241b; background: #fff1f0; font-size: 8px; font-weight: 800; line-height: 1.45; }
 .twin-formal-divider { position: relative; margin: 5px 0 2px; display: grid; place-items: center; border-top: 1px solid #bdd5d1; }
 .twin-formal-divider span { margin-top: -7px; padding: 0 7px; color: #526b77; background: #f2f9f8; font-size: 8px; font-weight: 800; }
 .twin-correction-form { padding: 8px; display: grid; gap: 7px; border: 1px solid #e2b7a8; border-radius: 3px; background: #fff8f4; }
@@ -1116,20 +1118,6 @@ body.warehouse-twin-page {
 .twin-rack-product-label dd { margin: 0; color: #e5ffff; font-size: 10px; font-weight: 800; overflow-wrap: anywhere; }
 .twin-rack-detail-toggle { min-height: 32px; border: 1px solid #3f7c83; border-radius: 3px; color: #bff7ef; background: #123e48; font-size: 10px; font-weight: 800; }
 .twin-rack-product-detail { margin-top: 0 !important; }
-
-.twin-inbound-mode { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; }
-.twin-inbound-mode button { min-height: 34px; padding: 5px 3px; border: 1px solid #9dbfbb; border-radius: 3px; color: #48616d; background: #f7fbfa; font-size: 9px; font-weight: 800; }
-.twin-inbound-mode button.active { border-color: #0f766e; color: #fff; background: #0f766e; box-shadow: 0 0 0 2px #0f766e1a; }
-.twin-staging-candidates { max-height: 210px; padding: 4px; display: grid; gap: 5px; overflow: auto; border: 1px solid #c3d8d5; border-radius: 3px; background: #f7fbfa; }
-.twin-staging-candidates > button { min-height: 56px; padding: 7px 8px; display: grid; gap: 2px; border: 1px solid #c2d6d3; border-radius: 3px; color: #23434f; background: #fff; text-align: left; }
-.twin-staging-candidates > button:hover,
-.twin-staging-candidates > button.selected { border-color: #0f766e; background: #e8f6f3; box-shadow: inset 3px 0 #0f766e; }
-.twin-staging-candidates > button b { color: #0f766e; font: 800 10px Consolas, monospace; }
-.twin-staging-candidates > button strong { font-size: 11px; }
-.twin-staging-candidates > button span { color: #5c737c; font-size: 9px; }
-.twin-staging-candidates > p { margin: 10px; color: #657b83; font-size: 9px; text-align: center; }
-.twin-temporary-product-form { padding: 9px; display: grid; gap: 8px; border: 1px solid #d5b66f; border-radius: 4px; background: #fffaf0; }
-.twin-temporary-product-form > b { color: #8a5b09; font-size: 10px; }
 
 .twin-rack-layout-editor,
 .twin-zone-policy-editor,
@@ -1265,6 +1253,10 @@ body.warehouse-twin-page {
 .twin-move-target-cascade small.error { color: #b42318; }
 .twin-move-draft-bar { position: relative; z-index: 25; min-height: 78px; max-height: 190px; padding: 8px 12px; display: grid; grid-template-columns: minmax(190px, 260px) minmax(280px, 1fr) auto; align-items: stretch; gap: 10px; border-top: 2px solid #d5aa3b; color: #29424d; background: #fffdf6; box-shadow: 0 -9px 24px #0f172a30; }
 .twin-move-draft-bar.merge-mode { border-top-color: #b56800; background: #fffaf1; }
+.twin-move-draft-bar.stocktake-mode { border-top-color: #0f766e; background: #f0fdfa; }
+.twin-stocktake-operation { border-color: #0f766e; background: linear-gradient(145deg, #ecfdf5, #f8fafc); }
+.twin-stocktake-operation .twin-correction-form { padding: 7px; display: grid; gap: 6px; border: 1px solid #f4b46c; border-radius: 3px; background: #fffaf2; }
+.twin-stocktake-operation .twin-correction-form > button { padding: 6px 8px; border: 1px solid #b45309; border-radius: 3px; color: #fff; background: #b45309; font-size: 9px; font-weight: 800; }
 .twin-move-draft-heading { min-width: 0; display: grid; align-content: center; gap: 4px; }
 .twin-move-draft-heading div { display: grid; gap: 2px; }
 .twin-move-draft-heading small { color: #a16207; font: 800 8px Consolas, monospace; letter-spacing: .09em; }

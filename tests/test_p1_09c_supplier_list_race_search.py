@@ -54,6 +54,7 @@ const vm = {{
   materialSuppliers: [],
   supplierLoading: false,
   supplierError: "",
+  hasPermission(permission) {{ return permission === "products.view"; }},
   get activeSupplierNames() {{ return this.suppliers.filter(row => row.is_active !== false).map(row => row.standard_name); }},
   beginLatestRequest(key) {{
     latestRequestControllers.get(key)?.abort();

@@ -422,6 +422,8 @@ global.requisitionAutoReleaseFlight={{old:true}};
 global.searchDebounceTimers=new Map();
 global.pageSearchGenerations=new Map();
 global.pinyinSearchTextCache=new Map();
+global.today=()=>"2026-08-13";
+global.plusDays=()=>"2026-08-20";
 const vm={{
   loginAttemptSequence:1,pageLoadSequence:1,loading:true,pageCacheUpdatedAt:{{incoming:1}},
   orderGroupDetails:{{}},orderGroupDetailLoading:{{}},orderGroupDetailErrors:{{}},

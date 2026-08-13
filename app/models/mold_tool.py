@@ -102,6 +102,11 @@ class MoldTool(Base):
         passive_deletes=True,
         order_by="MoldLocationMovement.id",
     )
+    label_print_items: Mapped[list["MoldLabelPrintJobItem"]] = relationship(
+        back_populates="mold_tool",
+        passive_deletes=True,
+        order_by="MoldLabelPrintJobItem.id",
+    )
     last_location_confirmer: Mapped["User | None"] = relationship(
         foreign_keys=[last_location_confirmed_by],
     )
@@ -167,3 +172,89 @@ class MoldLocationMovement(Base):
 
     mold_tool: Mapped["MoldTool"] = relationship(back_populates="location_movements")
     actor: Mapped["User | None"] = relationship(foreign_keys=[actor_id])
+
+
+class MoldLabelPrintJob(Base):
+    """Immutable operator action recording one single or batch label print."""
+
+    __tablename__ = "mold_label_print_jobs"
+    __table_args__ = (
+        UniqueConstraint(
+            "idempotency_key",
+            name="uq_mold_label_print_jobs_idempotency_key",
+        ),
+        CheckConstraint(
+            "source IN ('single','batch')",
+            name="ck_mold_label_print_jobs_source",
+        ),
+        CheckConstraint(
+            "item_count >= 1 AND item_count <= 100",
+            name="ck_mold_label_print_jobs_item_count",
+        ),
+        Index("ix_mold_label_print_jobs_printed_at", "printed_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    source: Mapped[str] = mapped_column(String(20), nullable=False)
+    item_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    printed_by: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    printed_by_username: Mapped[str] = mapped_column(String(100), nullable=False)
+    printed_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.current_timestamp(),
+        nullable=False,
+    )
+
+    items: Mapped[list["MoldLabelPrintJobItem"]] = relationship(
+        back_populates="job",
+        passive_deletes=True,
+        order_by="MoldLabelPrintJobItem.item_order",
+    )
+    printer: Mapped["User"] = relationship(foreign_keys=[printed_by])
+
+
+class MoldLabelPrintJobItem(Base):
+    """Immutable mold snapshot included in one label print job."""
+
+    __tablename__ = "mold_label_print_job_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "print_job_id",
+            "mold_tool_id",
+            name="uq_mold_label_print_job_items_job_mold",
+        ),
+        UniqueConstraint(
+            "print_job_id",
+            "item_order",
+            name="uq_mold_label_print_job_items_job_order",
+        ),
+        CheckConstraint(
+            "item_order >= 1 AND item_order <= 100",
+            name="ck_mold_label_print_job_items_order",
+        ),
+        Index(
+            "ix_mold_label_print_job_items_mold_job",
+            "mold_tool_id",
+            "print_job_id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    print_job_id: Mapped[int] = mapped_column(
+        ForeignKey("mold_label_print_jobs.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    mold_tool_id: Mapped[int] = mapped_column(
+        ForeignKey("mold_tools.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    item_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    mold_code_snapshot: Mapped[str] = mapped_column(String(100), nullable=False)
+    rack_location_snapshot: Mapped[str] = mapped_column(String(250), nullable=False)
+
+    job: Mapped["MoldLabelPrintJob"] = relationship(back_populates="items")
+    mold_tool: Mapped["MoldTool"] = relationship(back_populates="label_print_items")

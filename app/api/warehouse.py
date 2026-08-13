@@ -42,7 +42,12 @@ from app.models.user import User
 from app.models.audit import OperationLog
 from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryPickTask
-from app.models.mold_tool import MoldLocationMovement, MoldTool
+from app.models.mold_tool import (
+    MoldLabelPrintJob,
+    MoldLabelPrintJobItem,
+    MoldLocationMovement,
+    MoldTool,
+)
 from app.models.printing_plate import (
     PrintingPlate,
     PrintingPlateLocationMovement,
@@ -1083,6 +1088,30 @@ class MoldRestoreConfirmPayload(BaseModel):
     @classmethod
     def strip_restore_fields(cls, value: str) -> str:
         return value.strip()
+
+
+class MoldLabelPrintRegisterPayload(BaseModel):
+    mold_ids: list[int] = Field(min_length=1, max_length=100)
+    source: Literal["single", "batch"]
+    idempotency_key: str = Field(min_length=8, max_length=120)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def strip_mold_label_print_idempotency_key(cls, value: str) -> str:
+        text = value.strip()
+        if len(text) < 8:
+            raise ValueError("幂等键去除首尾空白后至少需要 8 个字符")
+        return text
+
+    @model_validator(mode="after")
+    def validate_mold_label_print_selection(self) -> "MoldLabelPrintRegisterPayload":
+        if any(mold_id <= 0 for mold_id in self.mold_ids):
+            raise ValueError("模具选择无效")
+        if len(self.mold_ids) != len(set(self.mold_ids)):
+            raise ValueError("同一模具不能重复选择")
+        if self.source == "single" and len(self.mold_ids) != 1:
+            raise ValueError("单个打印一次只能选择一件模具")
+        return self
 
 
 class PrintingPlateCreatePayload(BaseModel):
@@ -9463,6 +9492,7 @@ def _mold_tool_dict(
     row: MoldTool,
     allowed_customer_ids: set[int] | None = None,
     *,
+    label_print_status: dict | None = None,
     time_archive: dict | None = None,
     historical_products: list[Product] | None = None,
 ) -> dict:
@@ -9520,7 +9550,56 @@ def _mold_tool_dict(
         "created_at": utc_naive_to_api(row.created_at),
         "updated_at": utc_naive_to_api(row.updated_at) if row.updated_at else None,
         "time_archive": time_archive,
+        "label_print_status": label_print_status
+        or {
+            "printed": False,
+            "label": "未打印",
+            "last_printed_at": None,
+            "last_printed_by": None,
+            "print_count": 0,
+        },
     }
+
+
+def _mold_label_print_statuses(
+    db: Session,
+    mold_ids: list[int],
+) -> dict[int, dict]:
+    if not mold_ids:
+        return {}
+    rows = db.execute(
+        select(
+            MoldLabelPrintJobItem.mold_tool_id,
+            MoldLabelPrintJob.printed_at,
+            MoldLabelPrintJob.printed_by_username,
+        )
+        .join(
+            MoldLabelPrintJob,
+            MoldLabelPrintJob.id == MoldLabelPrintJobItem.print_job_id,
+        )
+        .where(MoldLabelPrintJobItem.mold_tool_id.in_(mold_ids))
+        .order_by(
+            MoldLabelPrintJobItem.mold_tool_id,
+            MoldLabelPrintJob.printed_at.desc(),
+            MoldLabelPrintJob.id.desc(),
+        )
+    ).all()
+    result: dict[int, dict] = {}
+    for mold_id, printed_at, printed_by_username in rows:
+        current = result.get(mold_id)
+        if current is None:
+            current = {
+                "printed": True,
+                "label": "已打印",
+                "last_printed_at": (
+                    utc_naive_to_api(printed_at) if printed_at else None
+                ),
+                "last_printed_by": printed_by_username,
+                "print_count": 0,
+            }
+            result[mold_id] = current
+        current["print_count"] += 1
+    return result
 
 
 def _mold_tools_query(
@@ -9634,9 +9713,17 @@ def list_mold_tools(
     else:
         ordered_query = ordered_query.limit(limit)
     rows = db.scalars(ordered_query).unique().all()
+    label_print_statuses = _mold_label_print_statuses(
+        db,
+        [row.id for row in rows],
+    )
     return {
         "items": [
-            _mold_tool_dict(row, allowed_customer_ids)
+            _mold_tool_dict(
+                row,
+                allowed_customer_ids,
+                label_print_status=label_print_statuses.get(row.id),
+            )
             for row in rows
         ],
         "total": total,
@@ -11153,6 +11240,145 @@ def get_mold_labels(
         ],
         "count": len(ordered_rows),
     }
+
+
+def _mold_label_print_job_dict(
+    job: MoldLabelPrintJob,
+    *,
+    replayed: bool,
+) -> dict:
+    return {
+        "print_job_id": job.id,
+        "source": job.source,
+        "count": job.item_count,
+        "mold_ids": [item.mold_tool_id for item in job.items],
+        "printed_at": utc_naive_to_api(job.printed_at) if job.printed_at else None,
+        "printed_by": job.printed_by_username,
+        "replayed": replayed,
+    }
+
+
+@router.post("/molds/label-prints")
+def register_mold_label_print(
+    payload: MoldLabelPrintRegisterPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    allowed_customer_ids = _mold_customer_scope(user, db)
+    if allowed_customer_ids is not None:
+        raise HTTPException(
+            status_code=403,
+            detail="实体模具标签仅允许全客户范围的仓库账号打印",
+        )
+    existing = db.scalar(
+        select(MoldLabelPrintJob)
+        .options(selectinload(MoldLabelPrintJob.items))
+        .where(MoldLabelPrintJob.idempotency_key == payload.idempotency_key)
+    )
+    if existing is not None:
+        existing_ids = [item.mold_tool_id for item in existing.items]
+        if existing.source != payload.source or existing_ids != payload.mold_ids:
+            raise HTTPException(
+                status_code=409,
+                detail="该打印凭证已用于另一组模具，请刷新列表后重新操作",
+            )
+        return _mold_label_print_job_dict(existing, replayed=True)
+
+    rows = db.scalars(
+        select(MoldTool)
+        .options(
+            selectinload(MoldTool.products).selectinload(Product.customer),
+            selectinload(MoldTool.products).selectinload(Product.material),
+        )
+        .where(MoldTool.id.in_(payload.mold_ids))
+    ).unique().all()
+    rows_by_id = {row.id: row for row in rows}
+    if any(mold_id not in rows_by_id for mold_id in payload.mold_ids):
+        raise HTTPException(status_code=404, detail="所选模具已变化，请返回列表重新选择")
+    ordered_rows = [rows_by_id[mold_id] for mold_id in payload.mold_ids]
+    for row in ordered_rows:
+        _require_mold_customer_scope(row, allowed_customer_ids)
+        # Reuse the existing label serializer as the single source of truth for
+        # active/binding/size/identity printability.  No print fact is written
+        # when any selected label is invalid.
+        _mold_label_dict(row, allowed_customer_ids)
+
+    job = MoldLabelPrintJob(
+        idempotency_key=payload.idempotency_key,
+        source=payload.source,
+        item_count=len(ordered_rows),
+        printed_by=user.id,
+        printed_by_username=user.username,
+    )
+    db.add(job)
+    try:
+        db.flush()
+        for item_order, row in enumerate(ordered_rows, start=1):
+            db.add(
+                MoldLabelPrintJobItem(
+                    print_job_id=job.id,
+                    mold_tool_id=row.id,
+                    item_order=item_order,
+                    mold_code_snapshot=row.mold_code,
+                    rack_location_snapshot=row.rack_location,
+                )
+            )
+        db.add(
+            OperationLog(
+                user_id=user.id,
+                username=user.username,
+                role=user.role,
+                action="PRINT",
+                resource="warehouse/molds/label-prints",
+                entity_type="mold_label_print_job",
+                entity_id=job.id,
+                description=(
+                    "批量打印模具标签" if payload.source == "batch" else "打印模具标签"
+                ),
+                details=json.dumps(
+                    {
+                        "source": payload.source,
+                        "mold_ids": payload.mold_ids,
+                        "mold_codes": [row.mold_code for row in ordered_rows],
+                        "idempotency_key": payload.idempotency_key,
+                    },
+                    ensure_ascii=False,
+                ),
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"),
+                event_category="business_operation",
+                result="success",
+                source="api",
+                module_code="warehouse",
+                action_code="mold.label.print",
+                actor_user_id_snapshot=user.id,
+                operator_name_snapshot=user.username,
+                object_ref=f"mold_label_print_job:{job.id}",
+                request_id=request.headers.get("x-request-id"),
+                batch_id=payload.idempotency_key if payload.source == "batch" else None,
+                schema_version=1,
+            )
+        )
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        replay = db.scalar(
+            select(MoldLabelPrintJob)
+            .options(selectinload(MoldLabelPrintJob.items))
+            .where(MoldLabelPrintJob.idempotency_key == payload.idempotency_key)
+        )
+        if replay is None:
+            raise
+        replay_ids = [item.mold_tool_id for item in replay.items]
+        if replay.source != payload.source or replay_ids != payload.mold_ids:
+            raise HTTPException(
+                status_code=409,
+                detail="该打印凭证已用于另一组模具，请刷新列表后重新操作",
+            )
+        return _mold_label_print_job_dict(replay, replayed=True)
+    db.refresh(job)
+    return _mold_label_print_job_dict(job, replayed=False)
 
 
 @router.get("/molds/{mold_id}/label")

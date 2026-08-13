@@ -1375,11 +1375,13 @@ def test_batch_shape_is_strict_and_never_writes(
         ) is None
 
 
-def test_frontend_uses_one_atomic_batch_and_keeps_p1_47d_disabled() -> None:
+def test_frontend_uses_one_atomic_merge_batch_alongside_p1_47d() -> None:
     source = FRONTEND.read_text(encoding="utf-8")
     assert "P1_49C_ENABLED = true" in source
     assert '"/api/warehouse/pallets/merge-batches"' in source
     assert "const [mergeSources" in source
     assert "const [mergeTarget" in source
     assert "Promise.all" not in source[source.find("confirmPalletMergeBatch") : source.find("confirmPalletMergeBatch") + 2500]
-    assert "P1_47D_ENABLED = false" in source
+    assert "P1_47D_ENABLED" not in source
+    assert 'value.permissions.includes("warehouse.stocktake.submit")' in source
+    assert source.count('"/api/warehouse/twin-operations/stocktake-batches"') == 1

@@ -179,6 +179,21 @@ def test_unbound_measured_zone_does_not_offer_a_disconnected_capacity_review() -
     assert "区域绑定草稿待发布" in SOURCE
 
 
+def test_floor1_candidate_blockers_offer_direct_actions_and_recheck() -> None:
+    assert 'blocking_items: Floor1CandidateBlockingItem[]' in SOURCE
+    assert 'floor1CandidateBlockerHref(item)' in SOURCE
+    assert 'floor1CandidateBlockerDetail(item)' in SOURCE
+    assert 'target="_blank" rel="noreferrer"' in SOURCE
+    assert "去移动库存和栈板" in (
+        ROOT / "app" / "services" / "warehouse_floor1_candidate_planner.py"
+    ).read_text(encoding="utf-8")
+    assert "处理完成，重新检查" in SOURCE
+    assert 'query.get("mode")' in SOURCE
+    assert 'query.get("area_code")' in SOURCE
+    assert 'query.get("map_feature_id")' in SOURCE
+    assert 'query.get("edit") === "area_policy"' in SOURCE
+
+
 def test_existing_area_picker_keeps_confirmed_a2_and_rejects_unsafe_candidates() -> None:
     helper = SOURCE[SOURCE.index("export function availableFormalAreasForFeature"):SOURCE.index("async function requestJson")]
     assert "!area.storage_policy" in helper
@@ -238,7 +253,8 @@ def test_p1_47a_uses_typed_map_search_and_one_unified_read_only_entry() -> None:
     assert "groupSearchProducts(searchResponse?.items || [])" in SOURCE
     assert "全部真实位置已选中" in SOURCE
     assert 'type WarehouseMapMode = "lookup" | "move" | "planning"' in SOURCE
-    assert 'const [mapMode, setMapMode] = useState<WarehouseMapMode>("lookup")' in SOURCE
+    assert 'const [mapMode, setMapMode] = useState<WarehouseMapMode>(() =>' in SOURCE
+    assert 'requested === "move" || requested === "planning"' in SOURCE
     assert "查货模式 · 只读" in SOURCE
     assert "P1-47C 独立阶段启用" not in SOURCE
     assert 'setCanExecuteWarehouse(value.permissions.includes("warehouse.execute"))' in SOURCE

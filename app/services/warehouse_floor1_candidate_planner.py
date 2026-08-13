@@ -546,9 +546,29 @@ def inspect_floor1_formal_candidate_state(
     )
     candidate_areas = [area for area in all_areas if area.area_code in candidate_codes]
     already_applied = _candidate_state_exists(db, floor=floor, plan=plan)
-    blockers: list[str] = []
+    blocking_items: list[dict] = []
+    candidate_feature_ids = {
+        row["area_code"]: row["map_feature_id"] for row in plan["candidates"]
+    }
     if candidate_areas and not already_applied:
-        blockers.append("自动候选区域已存在部分正式台账或位置，不能静默覆盖")
+        for area in candidate_areas:
+            blocking_items.append(
+                {
+                    "code": "partial_candidate_state",
+                    "message": (
+                        f"{area.area_code} 自动候选区域已存在部分正式台账或位置，"
+                        "不能静默覆盖"
+                    ),
+                    "action_kind": "open_area_planning",
+                    "action_label": "去核对区域设置",
+                    "area_id": area.id,
+                    "area_code": area.area_code,
+                    "map_feature_id": candidate_feature_ids.get(area.area_code),
+                    "location_id": None,
+                    "live_lot_count": 0,
+                    "current_pallet_count": 0,
+                }
+            )
 
     legacy_areas: list[dict] = []
     for area in all_areas:
@@ -567,7 +587,24 @@ def inspect_floor1_formal_candidate_state(
         location_ids = [row.id for row in locations]
         live_lot_count = 0
         current_pallet_count = 0
+        blocking_location_ids: list[int] = []
         if location_ids:
+            live_lot_location_ids = set(
+                db.scalars(
+                    select(InventoryLot.warehouse_location_id)
+                    .where(
+                        InventoryLot.warehouse_location_id.in_(location_ids),
+                        InventoryLot.status.in_(("active", "frozen")),
+                        (
+                            InventoryLot.quantity_available
+                            + InventoryLot.quantity_reserved
+                            + InventoryLot.quantity_damaged
+                        )
+                        > 0,
+                    )
+                    .distinct()
+                ).all()
+            )
             live_lot_count = int(
                 db.scalar(
                     select(func.count(InventoryLot.id)).where(
@@ -583,6 +620,16 @@ def inspect_floor1_formal_candidate_state(
                 )
                 or 0
             )
+            current_pallet_location_ids = set(
+                db.scalars(
+                    select(InventoryPallet.location_id)
+                    .where(
+                        InventoryPallet.location_id.in_(location_ids),
+                        InventoryPallet.is_current.is_(True),
+                    )
+                    .distinct()
+                ).all()
+            )
             current_pallet_count = int(
                 db.scalar(
                     select(func.count(InventoryPallet.id)).where(
@@ -592,15 +639,52 @@ def inspect_floor1_formal_candidate_state(
                 )
                 or 0
             )
+            blocking_location_ids = sorted(
+                int(location_id)
+                for location_id in live_lot_location_ids | current_pallet_location_ids
+                if location_id is not None
+            )
         active_location_count = sum(1 for row in locations if row.is_active)
         has_blocker = bool(
             area.storage_policy is not None or live_lot_count or current_pallet_count
         )
         if area.storage_policy is not None:
-            blockers.append(f"{area.area_code} 历史区域仍绑定正式地图策略")
+            blocking_items.append(
+                {
+                    "code": "legacy_area_policy",
+                    "message": f"{area.area_code} 历史区域仍绑定正式地图策略",
+                    "action_kind": "open_area_planning",
+                    "action_label": "去处理区域绑定",
+                    "area_id": area.id,
+                    "area_code": area.area_code,
+                    "map_feature_id": area.storage_policy.map_feature_id,
+                    "location_id": location_ids[0] if location_ids else None,
+                    "live_lot_count": live_lot_count,
+                    "current_pallet_count": current_pallet_count,
+                }
+            )
         if live_lot_count or current_pallet_count:
-            blockers.append(
-                f"{area.area_code} 历史区域仍有库存或实体栈板，不能自动归档"
+            blocking_items.append(
+                {
+                    "code": "legacy_area_inventory",
+                    "message": (
+                        f"{area.area_code} 历史区域仍有库存或实体栈板，不能自动归档"
+                    ),
+                    "action_kind": "open_inventory_move",
+                    "action_label": "去移动库存和栈板",
+                    "area_id": area.id,
+                    "area_code": area.area_code,
+                    "map_feature_id": (
+                        area.storage_policy.map_feature_id
+                        if area.storage_policy is not None
+                        else None
+                    ),
+                    "location_id": (
+                        blocking_location_ids[0] if blocking_location_ids else None
+                    ),
+                    "live_lot_count": live_lot_count,
+                    "current_pallet_count": current_pallet_count,
+                }
             )
         archive_required = not has_blocker and bool(
             area.construction_status == "enabled"
@@ -631,6 +715,7 @@ def inspect_floor1_formal_candidate_state(
             }
         )
 
+    blockers = [item["message"] for item in blocking_items]
     canonical = json.dumps(
         {
             "map_revision": plan["map_revision"],
@@ -638,6 +723,7 @@ def inspect_floor1_formal_candidate_state(
             "candidate_area_ids": [area.id for area in candidate_areas],
             "legacy_areas": legacy_areas,
             "blocking_conflicts": blockers,
+            "blocking_items": blocking_items,
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -651,6 +737,7 @@ def inspect_floor1_formal_candidate_state(
         ),
         "legacy_areas": legacy_areas,
         "blocking_conflicts": blockers,
+        "blocking_items": blocking_items,
     }
 
 

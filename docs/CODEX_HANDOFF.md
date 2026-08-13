@@ -4039,3 +4039,10 @@ legacy_ruida_* 原始层
   `upgrade → downgrade → upgrade`；模具保持 80、历史打印事实 0、完整性正常、外键异常 0。
   完整模具回归 `78 passed`，P1-58 与前端相邻聚焦 `38 passed`，Python 编译、Alembic 单 head、
   `git diff --check` 通过。NAS 任务卡、A 级规则与候选回执已写回；正式数据库未写入。
+
+## 148. 2026-08-13 P1-59 一楼自动生成阻断直达处理候选
+
+- 老板反馈“一楼区域自动生成”被 DISPATCH 历史库存/实体栈板阻断，但原界面只有文字，不能直接进入历史区域处理。独立分支 `codex/floor1-blocker-actions-20260813` 基于正式 `v0.22.105@c8a35cc6a581c325b7c9e0a2faa980c5f6fdd132`；无 migration，未提交、推送或发布。
+- 候选把确认阻断改成带正式区域、地图 feature、真实库位和实时数量的结构化操作项。DISPATCH 可在新页直接进入二维“移货/盘点”并选中 `F1-DISPATCH-01`；区域策略/部分正式区域冲突进入对应区域设置。原候选页保留“处理完成，重新检查”，阻断消失后才恢复“一次确认并启用”。
+- 正式库只读回放为 `DISPATCH area_id=24 / location_id=401 / 17 批次 / 5 当前实体栈板`，`query_only=1` 且前后 `total_changes=0`。数量仅为当次快照，页面实时重算。
+- 不自动搬货、归零、删栈板、猜目标或降低归档门禁。联合回归 `71 passed`，聚焦契约 `36 passed`，前端 `51 passed`，TypeScript 与 Vite build 通过；NAS A 级规则和候选回执已写回。

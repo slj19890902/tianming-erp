@@ -803,6 +803,14 @@ body.warehouse-twin-page {
 .twin-floor1-candidate-panel > small { margin: 0; color: #607577; font-size: 8px; line-height: 1.55; }
 .twin-floor1-candidate-panel > p.twin-floor1-candidate-warning { padding: 6px; border: 1px solid #dbc68f; color: #73551f; background: #fff9e8; }
 .twin-floor1-candidate-blockers { padding: 7px; border: 1px solid #dfb2b2; color: #8c2d2d; background: #fff3f3; display: grid; gap: 3px; font-size: 8px; }
+.twin-floor1-candidate-blockers > article { padding: 6px; border: 1px solid #e5c2c2; border-radius: 3px; background: #fff; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 7px; }
+.twin-floor1-candidate-blockers > article > div { min-width: 0; display: grid; gap: 2px; }
+.twin-floor1-candidate-blockers > article span { color: #7e2929; font-size: 8px; line-height: 1.45; overflow-wrap: anywhere; }
+.twin-floor1-candidate-blockers > article small { color: #93605e; font-size: 7px; }
+.twin-floor1-candidate-blockers > article a,
+.twin-floor1-candidate-recheck { padding: 5px 7px; border: 1px solid #ba7773; border-radius: 3px; color: #7b2623; background: #fff8f7; font-size: 8px; font-weight: 800; text-align: center; text-decoration: none; white-space: nowrap; }
+.twin-floor1-candidate-recheck { margin-top: 3px; width: 100%; background: #fff; }
+.twin-floor1-candidate-recheck:disabled { opacity: .55; cursor: not-allowed; }
 .twin-floor1-candidate-list { max-height: 270px; overflow: auto; display: grid; gap: 4px; }
 .twin-floor1-candidate-list article { padding: 6px; border: 1px solid #d0e0dd; border-left: 3px solid #74a89f; border-radius: 3px; background: #fff; display: grid; gap: 2px; }
 .twin-floor1-candidate-list article.excluded { border-left-color: #aab5b7; background: #f8f9f9; }

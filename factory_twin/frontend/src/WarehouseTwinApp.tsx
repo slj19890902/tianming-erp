@@ -6,6 +6,11 @@ import {
   formalAreaOptionsEffectEnabled,
   stableTwinFeatures
 } from "./formalAreaOptions.mjs";
+import {
+  floor1CandidateBlockerDetail,
+  floor1CandidateBlockerHref
+} from "./floor1CandidateBlockers.mjs";
+import type { Floor1CandidateBlockingItem } from "./floor1CandidateBlockers.mjs";
 import { pointsBoundsMm, resizeAndMovePointsMm, translatePointsMm } from "./layoutGeometry.mjs";
 import {
   buildMappedLocationPallets,
@@ -419,6 +424,7 @@ interface Floor1FormalCandidatePlan {
       action: "block" | "archive_empty_legacy" | "keep_archived_history";
     }>;
     blocking_conflicts: string[];
+    blocking_items: Floor1CandidateBlockingItem[];
   };
   confirmation_required: boolean;
   applied?: boolean;
@@ -857,9 +863,15 @@ export function WarehouseTwinApp() {
   const [moldAreaError, setMoldAreaError] = useState("");
   const [layerPanelOpen, setLayerPanelOpen] = useState(false);
   const [searchPanelOpen, setSearchPanelOpen] = useState(true);
-  const [mapMode, setMapMode] = useState<WarehouseMapMode>("lookup");
+  const [mapMode, setMapMode] = useState<WarehouseMapMode>(() => {
+    const requested = query.get("mode");
+    return requested === "move" || requested === "planning" ? requested : "lookup";
+  });
   const [productionPanelOpen, setProductionPanelOpen] = useState(false);
-  const [pendingAreaCode, setPendingAreaCode] = useState<string | null>(null);
+  const [pendingAreaCode, setPendingAreaCode] = useState<string | null>(() => query.get("area_code")?.trim().toUpperCase() || null);
+  const [pendingMapFeatureId, setPendingMapFeatureId] = useState<string | null>(() => query.get("map_feature_id")?.trim() || null);
+  const [pendingAreaPolicyEdit, setPendingAreaPolicyEdit] = useState(query.get("edit") === "area_policy");
+  const areaPolicyDeepLinkStartedRef = useRef(false);
   const [productionProjection, setProductionProjection] = useState<ProductionProjectionResponse | null>(null);
   const [productionTaskId, setProductionTaskId] = useState<number | null>(null);
   const [productionSearch, setProductionSearch] = useState("");
@@ -987,7 +999,7 @@ export function WarehouseTwinApp() {
     setZonePolicyDrafts({});
     setZoneGeometryDrafts({});
     setLayoutDraftControl(null);
-    setMapMode((current) => current === "move" ? "move" : "lookup");
+    setMapMode((current) => current === "move" || (current === "planning" && pendingAreaPolicyEdit) ? current : "lookup");
     setSearchPanelOpen(true);
     setLocationEditMode(false);
     setAreaPolicyEditMode(false);
@@ -1077,6 +1089,18 @@ export function WarehouseTwinApp() {
     }, 300);
     return () => { active = false; window.clearTimeout(timer); };
   }, [searchPanelOpen, searchType, search, searchRetryToken]);
+
+  useEffect(() => {
+    if (!layout || layout.floor_code !== floorCode || !pendingMapFeatureId) return;
+    const feature = (layout.features as TwinFeature[]).find(
+      (item) => item.feature_kind === "zone" && item.id === pendingMapFeatureId
+    );
+    if (!feature) return;
+    setSelected({ kind: "feature", id: feature.id });
+    cameraFocusSequenceRef.current += 1;
+    setCameraFocusTarget({ entity: { kind: "feature", id: feature.id }, token: cameraFocusSequenceRef.current, source: "search" });
+    setPendingMapFeatureId(null);
+  }, [layout, floorCode, pendingMapFeatureId]);
 
   useEffect(() => {
     if (!layout || layout.floor_code !== floorCode || !pendingAreaCode) return;
@@ -2749,6 +2773,47 @@ export function WarehouseTwinApp() {
     }
   };
 
+  useEffect(() => {
+    if (
+      !pendingAreaPolicyEdit
+      || !canEditLocations
+      || !layout
+      || spatialEditBusy
+      || areaPolicyDeepLinkStartedRef.current
+    ) return;
+    areaPolicyDeepLinkStartedRef.current = true;
+    let active = true;
+    const openAreaPolicy = async () => {
+      setSpatialEditBusy(true);
+      setLocationEditMessage("");
+      try {
+        const raw = await requestJson<TwinFloorDraftResponse>(`/api/warehouse/twin-layout/floors/${floorCode}/draft`);
+        if (!active) return;
+        showTwinFloor(raw);
+        setLayoutDraftControl(raw.draft_control);
+        setMapMode("planning");
+        setViewMode("2d");
+        setSearchPanelOpen(false);
+        setLocationEditMode(true);
+        setAreaPolicyEditMode(true);
+        setRackDrafts({});
+        setZonePolicyDrafts({});
+        setZoneGeometryDrafts({});
+        setPendingAreaPolicyEdit(false);
+        setLocationEditMessage("已打开阻断区域设置；处理并发布后，请返回原页面重新检查。");
+      } catch (reason) {
+        if (!active) return;
+        setLocationEditMessage(`打开阻断区域设置失败：${(reason as Error).message}`);
+        setPendingAreaPolicyEdit(false);
+      } finally {
+        areaPolicyDeepLinkStartedRef.current = false;
+        if (active) setSpatialEditBusy(false);
+      }
+    };
+    void openAreaPolicy();
+    return () => { active = false; };
+  }, [pendingAreaPolicyEdit, canEditLocations, layout?.id, floorCode]);
+
   const rememberServerDraft = (revision: string) => {
     setLayoutDraftControl((current) => ({
       has_draft: true,
@@ -3284,7 +3349,7 @@ export function WarehouseTwinApp() {
           <p>按 {floor1CandidatePlan.standard_pallet_mm.width}×{floor1CandidatePlan.standard_pallet_mm.depth}mm 标准栈板和已发布毫米坐标测算，已避开通道、设备、货架、柱子和禁放区；确认前不会写正式台账。</p>
           {floor1CandidatePlan.excluded_out_of_bounds_count > 0 && <p className="twin-floor1-candidate-warning">已排除 {floor1CandidatePlan.excluded_out_of_bounds_count} 个实测边界外旧区域：{floor1CandidatePlan.excluded_out_of_bounds.map((item) => item.feature_code).join("、")}。这些区域不显示、不计容量，也不会生成正式区域或库位。</p>}
           {floor1CandidatePlan.formal_state.archivable_legacy_area_count > 0 && <p className="twin-floor1-candidate-warning">将同步归档 {floor1CandidatePlan.formal_state.archivable_legacy_area_count} 个无库存、无栈板的未映射历史区域：{floor1CandidatePlan.formal_state.legacy_areas.filter((item) => item.archive_required).map((item) => item.area_code).join("、")}。只停用空库位，历史身份保留。</p>}
-          {floor1CandidatePlan.formal_state.blocking_conflicts.length > 0 && <div className="twin-floor1-candidate-blockers"><b>当前不能确认</b>{floor1CandidatePlan.formal_state.blocking_conflicts.map((item) => <span key={item}>{item}</span>)}</div>}
+          {floor1CandidatePlan.formal_state.blocking_items.length > 0 && <div className="twin-floor1-candidate-blockers"><b>当前不能确认</b>{floor1CandidatePlan.formal_state.blocking_items.map((item) => <article key={`${item.code}-${item.area_id || item.area_code || item.message}`}><div><span>{item.message}</span>{floor1CandidateBlockerDetail(item) && <small>{floor1CandidateBlockerDetail(item)}</small>}</div><a href={floor1CandidateBlockerHref(item)} target="_blank" rel="noreferrer">{item.action_label}</a></article>)}<button type="button" className="twin-floor1-candidate-recheck" disabled={floor1CandidateBusy} onClick={previewFloor1FormalCandidates}>{floor1CandidateBusy ? "正在重新检查…" : "处理完成，重新检查"}</button></div>}
           <div className="twin-floor1-candidate-list">{floor1CandidatePlan.candidates.map((item) => <article key={item.map_feature_id} className={item.long_term_capacity_eligible ? "eligible" : "excluded"}><div><b>{item.area_code}</b><span>{item.area_name}</span></div><strong>{item.planned_pallet_capacity ? `${item.planned_pallet_capacity} 个长期栈板位` : "不计长期容量"}</strong><small>{item.formal_location_count ? `生成 ${item.formal_location_count} 个正式库位 · ` : ""}{item.capacity_note}</small></article>)}</div>
           <button type="button" className="twin-primary-action" disabled={floor1CandidateBusy || floor1CandidatePlan.formal_state.blocking_conflicts.length > 0} onClick={confirmFloor1FormalCandidates}>{floor1CandidateBusy ? "正在确认…" : floor1CandidatePlan.formal_state.already_applied ? "已确认，无需重复生成" : "一次确认并启用"}</button>
           <small>确认只写区域、容量、位置与审计记录，不改变库存数量、栈板内容、订单或生产数据。</small>

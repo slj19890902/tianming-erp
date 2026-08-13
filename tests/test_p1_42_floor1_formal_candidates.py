@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,8 @@ from app.models.warehouse_inventory import (
     WarehouseAreaStoragePolicy,
     WarehouseFloor,
     WarehouseLocation,
+    InventoryLot,
+    InventoryPallet,
 )
 from app.services.location_candidates import list_operational_locations
 from app.services.warehouse_floor1_candidate_planner import (
@@ -307,5 +310,95 @@ def test_floor1_confirmation_archives_only_empty_unmapped_legacy_area(
             assert legacy.capacity_review_status == "excluded"
             assert legacy.planned_location_count == 0
             assert len(result.locations) == 45
+    finally:
+        engine.dispose()
+
+
+def test_floor1_candidate_inventory_blocker_exposes_exact_move_action(
+    tmp_path: Path,
+) -> None:
+    engine, factory = _factory(tmp_path)
+    plan = build_floor1_formal_candidate_plan(load_warehouse_twin_floor("1F"))
+    try:
+        with factory() as db:
+            _seed_floor_and_admin(db)
+            floor = db.scalar(select(WarehouseFloor).where(WarehouseFloor.floor_number == 1))
+            assert floor is not None
+            area = WarehouseArea(
+                floor_id=floor.id,
+                area_code="DISPATCH",
+                area_name="待送区",
+                planned_location_count=1,
+                planned_pallet_capacity=1,
+                construction_status="enabled",
+                capacity_review_status="pending",
+                capacity_eligible=False,
+            )
+            db.add(area)
+            db.flush()
+            location = WarehouseLocation(
+                location_code="F1-DISPATCH-01",
+                location_name="一楼厂外待送区",
+                warehouse_type="finished",
+                is_active=True,
+                warehouse_floor=1,
+                area_code="DISPATCH",
+                storage_type="temporary_aisle",
+                sort_order=1,
+                source_version="P1-25C",
+                placement_status="placed",
+            )
+            db.add(location)
+            db.flush()
+            db.add(
+                InventoryLot(
+                    lot_number="FG-DISPATCH-BLOCKER",
+                    inventory_type="finished",
+                    warehouse_location_id=location.id,
+                    quantity_available=10,
+                    quantity_reserved=0,
+                    quantity_consumed=0,
+                    quantity_damaged=0,
+                    quantity_scrapped=0,
+                    unit="boxes",
+                    status="active",
+                    source_type="manual",
+                    stock_date=date(2026, 8, 13),
+                    stock_date_accuracy="exact",
+                    last_movement_at=datetime(2026, 8, 13, 10, 0),
+                    version=1,
+                )
+            )
+            db.add(
+                InventoryPallet(
+                    pallet_code="PLT-DISPATCH-BLOCKER",
+                    location_id=location.id,
+                    location_occupancy_key="DISPATCH-BLOCKER",
+                    status="active",
+                    is_current=True,
+                    needs_relocation=True,
+                    version=1,
+                )
+            )
+            db.flush()
+
+            formal_state = inspect_floor1_formal_candidate_state(db, plan=plan)
+            assert formal_state["blocking_conflicts"] == [
+                "DISPATCH 历史区域仍有库存或实体栈板，不能自动归档"
+            ]
+            assert formal_state["blocking_items"] == [
+                {
+                    "code": "legacy_area_inventory",
+                    "message": "DISPATCH 历史区域仍有库存或实体栈板，不能自动归档",
+                    "action_kind": "open_inventory_move",
+                    "action_label": "去移动库存和栈板",
+                    "area_id": area.id,
+                    "area_code": "DISPATCH",
+                    "map_feature_id": None,
+                    "location_id": location.id,
+                    "live_lot_count": 1,
+                    "current_pallet_count": 1,
+                }
+            ]
     finally:
         engine.dispose()

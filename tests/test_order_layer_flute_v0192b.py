@@ -20,13 +20,14 @@ from app.services import material_pricing as mp
 
 
 @pytest.fixture()
-def db(tmp_path: Path):
+def db(tmp_path: Path, seed_supplier_master):
     from app.core.database import create_sqlite_engine
     from app.models import Base
 
     engine = create_sqlite_engine(tmp_path / "test_order_lf.sqlite3")
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
+    seed_supplier_master(factory, "苏州嘉林亿", "JLY-OLF")
     with factory() as session:
         yield session
 

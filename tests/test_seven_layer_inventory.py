@@ -21,20 +21,27 @@ REVISION = "aw50v8x9y0s40"
 
 
 @pytest.fixture()
-def inventory_app(tmp_path: Path):
+def inventory_app(tmp_path: Path, seed_supplier_master):
     from app.api.auth import router as auth_router
     from app.api.deps import get_db
+    from app.api.incoming import router as incoming_router
     from app.api.requisition import router as requisition_router
     from app.core.database import create_sqlite_engine
     from app.core.security import hash_password
     from app.models import Base
     from app.models.material import Material
     from app.models.user import User
-    from app.models.warehouse_inventory import WarehouseLocation
+    from app.models.warehouse_inventory import (
+        WarehouseArea,
+        WarehouseFloor,
+        WarehouseLocation,
+    )
 
     engine = create_sqlite_engine(tmp_path / "seven-layer-inventory.sqlite3")
     session_factory = sessionmaker(bind=engine, expire_on_commit=False)
     Base.metadata.create_all(engine)
+    seed_supplier_master(session_factory, "七层测试纸板厂", "SEVEN-INV")
+    seed_supplier_master(session_factory, "三五层回归纸板厂", "L35-INV")
     with session_factory() as db:
         user = User(
             username="seven-layer-admin",
@@ -53,13 +60,31 @@ def inventory_app(tmp_path: Path):
             price_unit="元/㎡",
             is_active=True,
         )
+        floor = WarehouseFloor(
+            floor_code="F1",
+            floor_name="一楼",
+            floor_number=1,
+            construction_status="enabled",
+        )
+        db.add(floor)
+        db.flush()
+        area = WarehouseArea(
+            floor_id=floor.id,
+            area_code="A1",
+            area_name="A1原料暂存区",
+            construction_status="enabled",
+        )
         location = WarehouseLocation(
             location_code="SI-7L-01",
             location_name="七层半成品测试库位",
             warehouse_type="semi_finished",
+            warehouse_floor=1,
+            area_code="A1",
+            storage_type="ground",
+            placement_status="placed",
             is_active=True,
         )
-        db.add_all([user, material, location])
+        db.add_all([user, material, area, location])
         db.commit()
         ids = {
             "material_id": material.id,
@@ -68,6 +93,7 @@ def inventory_app(tmp_path: Path):
 
     app = FastAPI()
     app.include_router(auth_router, prefix="/api/auth")
+    app.include_router(incoming_router, prefix="/api/incoming")
     app.include_router(requisition_router, prefix="/api/requisition")
 
     def override_get_db() -> Generator[Session, None, None]:
@@ -133,7 +159,7 @@ def test_seven_layer_policy_order_save_and_semi_finished_stock(
             "/api/requisition/stock-replenishment/orders",
             json={
                 "source_type": "customer_request",
-                "supplier_name": "不会覆盖材质供应商",
+                "supplier_name": "七层测试纸板厂",
                 "stock_now": False,
                 "items": [
                     {
@@ -163,8 +189,18 @@ def test_seven_layer_policy_order_save_and_semi_finished_stock(
         stock_response = client.post(
             f"/api/requisition/stock-replenishment/orders/{order['id']}/stock"
         )
-        assert stock_response.status_code == 200, stock_response.text
-        stocked = stock_response.json()
+        assert stock_response.status_code == 409, stock_response.text
+        stocked_response = client.put(
+            f"/api/incoming/receive/sr{order['items'][0]['id']}",
+            json={
+                "received_quantity": 24,
+                "idempotency_key": "seven-layer-incoming-receipt",
+            },
+        )
+        assert stocked_response.status_code == 200, stocked_response.text
+        stocked = client.get(
+            f"/api/requisition/stock-replenishment/orders/{order['id']}"
+        ).json()
         assert stocked["status"] == "stocked"
         assert stocked["stocked_quantity"] == 24
         assert stocked["items"][0]["inventory_lot"]["quantity_available"] == 24
@@ -359,8 +395,15 @@ def test_three_and_five_layer_replenishment_regression(
         stocked = client.post(
             f"/api/requisition/stock-replenishment/orders/{order['id']}/stock"
         )
-        assert stocked.status_code == 200, stocked.text
-        assert stocked.json()["status"] == "stocked"
+        assert stocked.status_code == 409, stocked.text
+        received = client.put(
+            f"/api/incoming/receive/sr{order['items'][0]['id']}",
+            json={
+                "received_quantity": layer_count,
+                "idempotency_key": f"layer-{layer_count}-incoming-receipt",
+            },
+        )
+        assert received.status_code == 200, received.text
 
     from app.models.warehouse_inventory import SemiFinishedInventoryDetail
 
@@ -490,10 +533,10 @@ def test_high_confidence_mapping_validates_seven_layer_code_and_clears_flute(
         )
         db.commit()
 
-        assert result.products_updated == 2
-        assert result.materials_created == 1
+        assert result.products_updated == 3
+        assert result.materials_created == 2
         assert result.materials_reused == 1
-        assert result.skipped_no_match == 2
+        assert result.skipped_no_match == 1
         created = db.scalar(select(Material).where(Material.code == "JA616AJ"))
         assert created is not None
         assert created.layer_count == 7
@@ -501,13 +544,12 @@ def test_high_confidence_mapping_validates_seven_layer_code_and_clears_flute(
         db.refresh(existing_material)
         assert existing_material.flute_type is None
         assert db.scalar(select(Material).where(Material.code == "A414B")) is None
-        assert db.scalar(select(Material).where(Material.code == "JA616A!")) is None
-        for product in products[:2]:
+        assert db.scalar(select(Material).where(Material.code == "JA616A!")) is not None
+        for product in (products[0], products[1], products[3]):
             db.refresh(product)
             assert product.material_id is not None
-        for product in products[2:]:
-            db.refresh(product)
-            assert product.material_id is None
+        db.refresh(products[2])
+        assert products[2].material_id is None
     engine.dispose()
 
 

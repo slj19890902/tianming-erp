@@ -132,6 +132,44 @@ def isolated_database_path(tmp_path: Path) -> Path:
     return tmp_path / "erp-test.sqlite3"
 
 
+@pytest.fixture(scope="session")
+def seed_supplier_master():
+    """Return an explicit helper for legacy tests that require supplier facts.
+
+    This is intentionally not autouse: tests that verify missing suppliers must
+    continue to start without hidden master data.
+    """
+    from app.models.supplier import Supplier
+    from app.services.supplier_master import normalize_supplier_identity
+
+    def seed(session_factory, name: str, business_code: str) -> int:
+        normalized_name = normalize_supplier_identity(name)
+        normalized_code = business_code.strip().upper()
+        with session_factory() as db:
+            supplier = (
+                db.query(Supplier)
+                .filter(Supplier.normalized_name == normalized_name)
+                .one_or_none()
+            )
+            if supplier is None:
+                supplier = Supplier(
+                    standard_name=name,
+                    normalized_name=normalized_name,
+                    display_name=name,
+                    business_code=business_code,
+                    normalized_business_code=normalized_code,
+                    is_active=True,
+                    version=1,
+                )
+                db.add(supplier)
+                db.commit()
+            else:
+                assert supplier.is_active is True
+            return supplier.id
+
+    return seed
+
+
 @pytest.fixture
 def isolated_engine(isolated_database_path: Path):
     """Create and dispose a SQLite engine bound to the per-test file."""

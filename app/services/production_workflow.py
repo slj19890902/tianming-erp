@@ -61,6 +61,7 @@ from app.services.production_label_strategy import (
     ProductionLabelStrategyError,
     build_new_task_production_label_snapshot,
 )
+from app.services.printing_colors import parse_printing_colors
 from app.services.requisition_quantities import cutting_factor
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
@@ -93,6 +94,14 @@ TEMPORARY_LOCATION_CODES = frozenset(
 )
 DIRECT_DELIVERY_STAGING_LOCATION_CODE = "F1-DISPATCH-01"
 DIRECT_DISPATCH_PALLET_KEY_PREFIX = "PRODUCTION_COMPLETION"
+_PRINTING_PLATE_COUNTS = {
+    "单色印刷": 1,
+    "双色印刷": 2,
+    "三色印刷": 3,
+    # Historical common-box records used this wording for three plates.
+    "多色印刷": 3,
+}
+_PRINTING_PLATE_COUNT_LABELS = {1: "单色", 2: "双色", 3: "三色"}
 
 
 class ProductionWorkflowError(ValueError):
@@ -105,9 +114,15 @@ def _new_task_printing_snapshot(db: Session, product: Product | None) -> dict:
     """Freeze common-box printing setup once when a production task is created."""
 
     if product is None or product.printing_plate_mode != "plate":
+        colors = (
+            parse_printing_colors(product.printing_colors)
+            if product is not None
+            else []
+        )
         return {
             "printing_plate_mode_snapshot": "no_plate",
             "print_content_snapshot": product.print_content if product is not None else None,
+            "printing_colors_snapshot": json.dumps(colors, ensure_ascii=False),
             "printing_plate_codes_snapshot": "[]",
             "printing_plate_details_snapshot": "[]",
             "plate_alignment_value_mm_snapshot": None,
@@ -116,33 +131,60 @@ def _new_task_printing_snapshot(db: Session, product: Product | None) -> dict:
             "machine_set_width_mm_snapshot": None,
             "machine_set_height_mm_snapshot": None,
         }
-    plate_ids = [
-        value
-        for value in (
-            product.printing_plate_1_id,
-            product.printing_plate_2_id,
-            product.printing_plate_3_id,
+    plate_slots = (
+        product.printing_plate_1_id,
+        product.printing_plate_2_id,
+        product.printing_plate_3_id,
+    )
+    required_plate_count = _PRINTING_PLATE_COUNTS.get(
+        str(product.print_content or "").strip()
+    )
+    if (
+        required_plate_count is None
+        or any(plate_slots[index] is None for index in range(required_plate_count))
+        or any(
+            plate_slots[index] is not None
+            for index in range(required_plate_count, len(plate_slots))
         )
-        if value is not None
-    ]
+    ):
+        raise ProductionWorkflowError(
+            "常用箱印刷色数与挂板顺序不一致，请先核对后再建生产任务",
+            409,
+        )
+    plate_ids = [int(plate_slots[index]) for index in range(required_plate_count)]
     plates = {
         row.id: row
         for row in db.scalars(
             select(PrintingPlate).where(PrintingPlate.id.in_(plate_ids))
         ).all()
     }
-    codes = [plates[plate_id].plate_code for plate_id in plate_ids if plate_id in plates]
+    if (
+        len(plate_ids) != len(set(plate_ids))
+        or any(plate_id not in plates for plate_id in plate_ids)
+    ):
+        raise ProductionWorkflowError("常用箱挂板资料不完整，请先核对挂板后再建生产任务", 409)
+    selected_plates = [plates[plate_id] for plate_id in plate_ids]
+    if any(
+        plate.status != "active" or plate.customer_id != product.customer_id
+        for plate in selected_plates
+    ):
+        raise ProductionWorkflowError("常用箱挂板已停用或不属于当前客户，请先核对", 409)
+    codes = [plate.plate_code for plate in selected_plates]
     details = [
         {
-            "plate_code": plates[plate_id].plate_code,
-            "color_name": plates[plate_id].color_name,
+            "plate_code": plate.plate_code,
+            "plate_name": plate.plate_name,
+            "color_name": plate.color_name,
         }
-        for plate_id in plate_ids
-        if plate_id in plates
+        for plate in selected_plates
     ]
     return {
         "printing_plate_mode_snapshot": "plate",
         "print_content_snapshot": product.print_content,
+        "printing_colors_snapshot": json.dumps(
+            [plate.color_name for plate in selected_plates],
+            ensure_ascii=False,
+        ),
         "printing_plate_codes_snapshot": json.dumps(codes, ensure_ascii=False),
         "printing_plate_details_snapshot": json.dumps(details, ensure_ascii=False),
         "plate_alignment_value_mm_snapshot": product.plate_alignment_value_mm,
@@ -183,16 +225,52 @@ def _task_printing_snapshot(task: ProductionTask) -> dict:
     safe_details = [
         {
             "plate_code": str(value.get("plate_code") or "").strip(),
+            "plate_name": str(value.get("plate_name") or "").strip() or None,
             "color_name": str(value.get("color_name") or "").strip(),
         }
         for value in details
         if isinstance(value, dict) and str(value.get("plate_code") or "").strip()
     ]
+    colors_frozen = task.printing_colors_snapshot is not None
+    try:
+        colors = json.loads(task.printing_colors_snapshot or "[]")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        colors = []
+    if not isinstance(colors, list):
+        colors = []
+    safe_colors = [str(value).strip() for value in colors if str(value).strip()]
+    if not colors_frozen and task.printing_plate_mode_snapshot == "plate":
+        # P1-16D-4 already froze plate colours inside the legacy detail JSON.
+        safe_colors = [
+            str(value.get("color_name") or "").strip()
+            for value in safe_details
+            if str(value.get("color_name") or "").strip()
+        ]
+        colors_frozen = bool(safe_details)
+    content = str(task.print_content_snapshot or "").strip()
+    no_print = content in {"", "无印刷", "无", "否", "不印刷"}
+    plate_count = len(safe_details) or len(
+        [value for value in codes if str(value).strip()]
+    )
+    plate_count_label = _PRINTING_PLATE_COUNT_LABELS.get(
+        plate_count,
+        "颜色数未冻结",
+    )
+    printing_situation = (
+        "无印刷"
+        if no_print
+        else f"挂板印刷（{plate_count_label}）"
+        if task.printing_plate_mode_snapshot == "plate"
+        else content
+    )
     return {
         "print_content": task.print_content_snapshot,
+        "printing_situation": printing_situation,
         "printing_plate_mode": task.printing_plate_mode_snapshot or "no_plate",
         "printing_plate_codes": [str(value) for value in codes if str(value).strip()],
         "printing_plates": safe_details,
+        "printing_colors": safe_colors,
+        "printing_colors_frozen": colors_frozen,
         "plate_alignment_value_mm": task.plate_alignment_value_mm_snapshot,
         "plate_mount_value_mm": task.plate_mount_value_mm_snapshot,
         "machine_set_length_mm": task.machine_set_length_mm_snapshot,
@@ -208,6 +286,37 @@ def _task_printing_snapshot(task: ProductionTask) -> dict:
             )
         ),
     }
+
+
+def _annotate_printing_plate_current_locations(
+    db: Session,
+    rows: Sequence[dict],
+) -> None:
+    """Attach live plate locations without changing the immutable task snapshot."""
+
+    codes = {
+        str(plate.get("plate_code") or "").strip()
+        for row in rows
+        for plate in (row.get("printing_plates") or [])
+        if isinstance(plate, dict) and str(plate.get("plate_code") or "").strip()
+    }
+    if not codes:
+        return
+    locations = {
+        str(code): location
+        for code, location in db.execute(
+            select(PrintingPlate.plate_code, PrintingPlate.rack_location).where(
+                PrintingPlate.plate_code.in_(codes)
+            )
+        ).all()
+    }
+    for row in rows:
+        for plate in row.get("printing_plates") or []:
+            if not isinstance(plate, dict):
+                continue
+            plate["current_location"] = locations.get(
+                str(plate.get("plate_code") or "").strip()
+            )
 
 
 @dataclass(frozen=True)
@@ -3123,6 +3232,7 @@ def list_production_tasks(
                 )
             ),
         })
+    _annotate_printing_plate_current_locations(db, result)
     return result
 
 
@@ -3543,6 +3653,7 @@ def _production_completion_dicts(db: Session, rows: Sequence[tuple]) -> list[dic
                 ),
             }
         )
+    _annotate_printing_plate_current_locations(db, result)
     return result
 
 

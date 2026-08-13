@@ -1101,6 +1101,28 @@
         byId("mapLayer").hidden = false;
       }
 
+      function productionPrintingSnapshotLines(task) {
+        const printingSituation = String(task.printing_situation || task.print_content || "").trim();
+        if (task.printing_plate_mode === "plate") {
+          const machine = [task.machine_set_length_mm, task.machine_set_width_mm, task.machine_set_height_mm]
+            .map(value => value ?? "-").join("×");
+          const plates = Array.isArray(task.printing_plates) && task.printing_plates.length
+            ? task.printing_plates.map((item, index) => `第${index + 1}色 ${item.color_name || "颜色未填"}｜${item.plate_code || "编号未登记"}｜${item.plate_name || "内容未冻结"}${item.current_location ? `｜当前位置 ${item.current_location}` : ""}`).join("；")
+            : (task.printing_plate_codes || []).join(" / ");
+          return [`${printingSituation || "挂板印刷"}｜${plates || "未登记"}｜对版 ${task.plate_alignment_value_mm ?? "-"}｜挂版 ${task.plate_mount_value_mm ?? "-"}｜机设 ${machine}mm`];
+        }
+        if (printingSituation && !["无印刷", "无", "否", "不印刷"].includes(printingSituation)) {
+          const colors = Array.isArray(task.printing_colors)
+            ? task.printing_colors.map(value => String(value || "").trim()).filter(Boolean)
+            : [];
+          const colorText = task.printing_colors_frozen === false
+            ? "历史颜色未冻结"
+            : colors.length ? `颜色：${colors.join("＋")}` : "颜色待完善";
+          return [`${printingSituation}｜${colorText}｜不挂板`];
+        }
+        return [];
+      }
+
       function productionStationCard(task) {
         const dieCut = state.productionStation === "die_cut";
         const card = node("section", `card station-task ${dieCut ? "die-cut" : "printing"}`);
@@ -1133,8 +1155,7 @@
         }
         card.append(facts);
         if (!dieCut) {
-          card.append(node("p", "fact-line", `印刷内容：${task.print_content || "未填写"}`));
-          card.append(node("p", "fact-line", `颜色 / 方式：${(task.printing_colors || []).join(" / ") || "未填写"}｜${task.printing_instruction || task.printing_method || "未填写"}`));
+          productionPrintingSnapshotLines(task).forEach(line => card.append(node("p", "fact-line", line)));
           if (task.cutting_mode) card.append(node("p", "fact-line", `开料方式：${task.cutting_mode}`));
         } else {
           card.append(node("p", "fact-line", `模具：${task.mold_name || "未命名"}`));
@@ -1240,16 +1261,7 @@
         if (task.mold_name || task.mold_location) {
           card.append(node("p", "fact-line", `模具：${task.mold_name || "未命名"}｜位置 ${task.mold_location || "未登记"}`));
         }
-        if (task.printing_plate_mode === "plate") {
-          const machine = [task.machine_set_length_mm, task.machine_set_width_mm, task.machine_set_height_mm]
-            .map(value => value ?? "-").join("×");
-          const plates = Array.isArray(task.printing_plates) && task.printing_plates.length
-            ? task.printing_plates.map(item => `${item.color_name || "颜色未填"} ${item.plate_code}`).join(" / ")
-            : (task.printing_plate_codes || []).join(" / ");
-          card.append(node("p", "fact-line", `挂板：${plates || "未登记"}｜对版 ${task.plate_alignment_value_mm ?? "-"}｜挂版 ${task.plate_mount_value_mm ?? "-"}｜机设 ${machine}mm`));
-        } else if (task.printing_instruction) {
-          card.append(node("p", "fact-line", task.printing_instruction));
-        }
+        productionPrintingSnapshotLines(task).forEach(line => card.append(node("p", "fact-line", line)));
         if (task.drawing_path) {
           const drawing = node("button", "drawing-btn", "查看图纸");
           drawing.type = "button";

@@ -284,6 +284,9 @@ def _safe_production_task(task: dict, *, drawing_path: str | None) -> dict:
         "mold_location": task.get("mold_location"),
         "printing_plate_mode": task.get("printing_plate_mode"),
         "print_content": task.get("print_content"),
+        "printing_situation": task.get("printing_situation") or task.get("print_content"),
+        "printing_colors": task.get("printing_colors") or [],
+        "printing_colors_frozen": task.get("printing_colors_frozen") is True,
         "printing_plate_codes": task.get("printing_plate_codes") or [],
         "printing_plates": task.get("printing_plates") or [],
         "plate_alignment_value_mm": task.get("plate_alignment_value_mm"),
@@ -489,11 +492,6 @@ def _production_station_task_payloads(
             ),
         }
         if station == "printing":
-            plate_colors = [
-                str(row.get("color_name") or "").strip()
-                for row in task.get("printing_plates") or []
-                if str(row.get("color_name") or "").strip()
-            ]
             common.update(
                 {
                     "carton_length_mm": _number_text(product.length_mm) if product else None,
@@ -506,18 +504,23 @@ def _production_station_task_payloads(
                         _number_text(value) for value in crease_values if value is not None
                     ],
                     "print_content": task.get("print_content"),
-                    "printing_colors": plate_colors
-                    or [
-                        value.strip()
-                        for value in str(
-                            product.printing_colors if product else ""
-                        ).replace("，", ",").split(",")
-                        if value.strip()
-                    ],
+                    "printing_situation": task.get("printing_situation")
+                    or task.get("print_content"),
+                    "printing_colors": task.get("printing_colors") or [],
+                    "printing_colors_frozen": (
+                        task.get("printing_colors_frozen") is True
+                    ),
                     "printing_method": task.get("printing_plate_mode"),
                     "printing_instruction": task.get("printing_instruction"),
                     "printing_plate_codes": task.get("printing_plate_codes") or [],
                     "printing_plates": task.get("printing_plates") or [],
+                    "plate_alignment_value_mm": task.get(
+                        "plate_alignment_value_mm"
+                    ),
+                    "plate_mount_value_mm": task.get("plate_mount_value_mm"),
+                    "machine_set_length_mm": task.get("machine_set_length_mm"),
+                    "machine_set_width_mm": task.get("machine_set_width_mm"),
+                    "machine_set_height_mm": task.get("machine_set_height_mm"),
                     "cutting_mode": task.get("special_process"),
                 }
             )

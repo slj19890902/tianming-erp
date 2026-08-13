@@ -119,6 +119,7 @@ class ProductionTask(Base):
         String(20), default="no_plate", server_default="no_plate", nullable=False
     )
     print_content_snapshot: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    printing_colors_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True)
     printing_plate_codes_snapshot: Mapped[str] = mapped_column(
         Text, default="[]", server_default="[]", nullable=False
     )

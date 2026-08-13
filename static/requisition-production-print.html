@@ -46,6 +46,9 @@
     .detail-row { display:grid; grid-template-columns:23mm 1fr; gap:2mm; padding:.8mm 0; font-size:8pt; line-height:1.25; }
     .detail-row .label { color:#444; }
     .detail-row .value { font-weight:750; overflow-wrap:anywhere; }
+    .printing-block { margin:.8mm 0; padding:.8mm 0; border-top:.28mm solid #999; border-bottom:.28mm solid #999; }
+    .printing-block-title { margin:.4mm 0; font-size:7.5pt; font-weight:800; overflow-wrap:anywhere; }
+    .printing-plate-line { white-space:normal; overflow-wrap:anywhere; }
     .structure { border-left:.28mm solid #777; padding:2mm; min-width:0; min-height:0; display:flex; flex-direction:column; }
     .structure-title { display:flex; justify-content:space-between; gap:2mm; color:#333; font-size:7.5pt; font-weight:700; }
     .structure-source { color:#555; font-weight:400; }
@@ -81,6 +84,34 @@
     .single-page .structure-empty { padding:8mm; font-size:11pt; }
     .single-page .warning { margin-top:4mm; padding:3mm 4mm; font-size:10pt; }
     .single-page .foot { margin-top:4mm; font-size:8pt; }
+    .single-page .task-card.printing-heavy { padding:4mm 3mm 3mm; }
+    .single-page .task-card.printing-heavy h1 { font-size:18pt; }
+    .single-page .task-card.printing-heavy .status { padding:1mm 2.5mm; font-size:9pt; }
+    .single-page .task-card.printing-heavy .headline-metrics { gap:2.5mm; margin:2.5mm 0; }
+    .single-page .task-card.printing-heavy .headline-metric { padding:2mm 3mm; }
+    .single-page .task-card.printing-heavy .headline-metric span,
+    .single-page .task-card.printing-heavy .field-label { font-size:8pt; }
+    .single-page .task-card.printing-heavy .headline-metric strong { margin-top:.8mm; font-size:14pt; }
+    .single-page .task-card.printing-heavy .product-strip { gap:5mm; padding:2mm 0 2.5mm; }
+    .single-page .task-card.printing-heavy .field-value { margin-top:.8mm; font-size:11pt; }
+    .single-page .task-card.printing-heavy .production-key-value,
+    .single-page .task-card.printing-heavy .detail-row.production-key-fact .value { font-size:13pt; }
+    .single-page .task-card.printing-heavy .process-title { margin:2.5mm 0 1mm; font-size:8.5pt; }
+    .single-page .task-card.printing-heavy .process-route { gap:1.5mm; }
+    .single-page .task-card.printing-heavy .process-route li { padding:1.5mm 2mm; font-size:9pt; }
+    .single-page .task-card.printing-heavy .detail-grid { grid-template-columns:1.4fr .6fr; margin-top:2.5mm; min-height:0; }
+    .single-page .task-card.printing-heavy .detail-list { padding:2.5mm 3mm; }
+    .single-page .task-card.printing-heavy .detail-row { grid-template-columns:27mm 1fr; gap:2.5mm; padding:.8mm 0; font-size:8.5pt; line-height:1.22; }
+    .single-page .task-card.printing-heavy .printing-block { margin:.4mm 0; padding:.4mm 0; }
+    .single-page .task-card.printing-heavy .printing-block-title { margin:.2mm 0; font-size:8pt; }
+    .single-page .task-card.printing-heavy .structure { padding:3mm; }
+    .single-page .task-card.printing-heavy .structure-title { font-size:8pt; }
+    .single-page .task-card.printing-heavy .structure-body { margin-top:2mm; }
+    .single-page .task-card.printing-heavy .structure-body img,
+    .single-page .task-card.printing-heavy .structure-body object { max-height:105mm; }
+    .single-page .task-card.printing-heavy .structure-empty { padding:3mm; font-size:8.5pt; }
+    .single-page .task-card.printing-heavy .warning { margin-top:2mm; padding:1.5mm 2mm; font-size:8pt; }
+    .single-page .task-card.printing-heavy .foot { margin-top:2mm; font-size:7pt; }
     @page { size:A4 portrait; margin:0; }
     @media print {
       body { background:#fff; }
@@ -192,13 +223,98 @@
         return `<div class="detail-row ${extraClass}"><span class="label">${escapeHtml(label)}</span><span class="value">${escapeHtml(value || "-")}</span></div>`;
       }
 
+      function printingComponentHtml(component, componentIndex, componentCount) {
+        const content = String(component && (component.printing_situation || component.print_content) || "").trim();
+        if (!content || ["无印刷", "无", "否", "不印刷"].includes(content)) return "";
+        const title = componentCount > 1
+          ? `${component.component_label || component.product_code || `组件${componentIndex + 1}`} · 印刷`
+          : "印刷";
+        const rows = [];
+        if (component.printing_plate_mode !== "plate") {
+          rows.push(detailRow("印刷情况", content));
+          if (component.printing_colors_frozen === false) {
+            rows.push(detailRow("印刷颜色", "历史颜色未冻结"));
+          } else {
+            const colors = Array.isArray(component.printing_colors)
+              ? component.printing_colors.map((value) => String(value || "").trim()).filter(Boolean)
+              : [];
+            rows.push(detailRow("印刷颜色", colors.length ? colors.join("＋") : "颜色待完善"));
+          }
+          rows.push(detailRow("挂板方式", "不挂板"));
+        } else {
+          const plates = Array.isArray(component.printing_plates) ? component.printing_plates : [];
+          rows.push(detailRow("印刷情况", component.printing_situation || `挂板印刷（${plates.length}色）`));
+          plates.forEach((plate, index) => {
+            rows.push(detailRow(
+              `第${index + 1}色`,
+              `颜色：${plate.color_name || "未冻结"}｜挂板编号：${plate.plate_code || "未冻结"}｜挂板内容：${plate.plate_name || "未冻结"}`,
+              "printing-plate-line",
+            ));
+            if (plate.current_location) rows.push(detailRow(`第${index + 1}色当前位置`, plate.current_location, "internal-only"));
+          });
+          if (!plates.length) rows.push(detailRow("挂板快照", "历史挂板明细未冻结"));
+          rows.push(detailRow("对版值", numberText(component.plate_alignment_value_mm), "internal-only"));
+          rows.push(detailRow("挂版值", numberText(component.plate_mount_value_mm), "internal-only"));
+          const machine = [component.machine_set_length_mm, component.machine_set_width_mm, component.machine_set_height_mm]
+            .map(numberText).join(" × ");
+          rows.push(detailRow("机器设定", `${machine} mm`, "internal-only"));
+        }
+        return `<section class="printing-block"><div class="printing-block-title">${escapeHtml(title)}</div>${rows.join("")}</section>`;
+      }
+
+      function printingHtml(card) {
+        const components = Array.isArray(card.components) ? card.components : [];
+        return components.map((component, index) => printingComponentHtml(component, index, components.length)).filter(Boolean).join("");
+      }
+
+      function printingComplexity(card) {
+        return (Array.isArray(card && card.components) ? card.components : []).reduce((total, component) => {
+          const content = String(component && (component.printing_situation || component.print_content) || "").trim();
+          if (!content || ["无印刷", "无", "否", "不印刷"].includes(content)) return total;
+          if (component.printing_plate_mode !== "plate") return total + 2;
+          const plateCount = Array.isArray(component.printing_plates) ? component.printing_plates.length : 0;
+          return total + 4 + plateCount * 2;
+        }, 0);
+      }
+
+      function cardNeedsFullPage(card) {
+        const components = Array.isArray(card && card.components) ? card.components : [];
+        const printableComponents = components.filter((component) => {
+          const content = String(component && (component.printing_situation || component.print_content) || "").trim();
+          return content && !["无印刷", "无", "否", "不印刷"].includes(content);
+        });
+        return printingComplexity(card) >= 6 || printableComponents.length > 1;
+      }
+
+      function printPageLayouts(cards) {
+        if (Array.isArray(cards) && cards.length === 1) {
+          return [{ fullPage:true, top:cards[0], bottom:null }];
+        }
+        const layouts = [];
+        let pending = null;
+        (Array.isArray(cards) ? cards : []).forEach((card) => {
+          if (cardNeedsFullPage(card)) {
+            if (pending) {
+              layouts.push({ fullPage:false, top:pending, bottom:null });
+              pending = null;
+            }
+            layouts.push({ fullPage:true, top:card, bottom:null });
+          } else if (pending) {
+            layouts.push({ fullPage:false, top:pending, bottom:card });
+            pending = null;
+          } else {
+            pending = card;
+          }
+        });
+        if (pending) layouts.push({ fullPage:false, top:pending, bottom:null });
+        return layouts;
+      }
+
       function detailHtml(card) {
         const sizes = textList(componentSizes(card));
         const flute = unique((card.components || []).map((line) => [line.flute_type, line.layer_count ? `${line.layer_count}层` : null].filter(Boolean).join(" / ")));
         const crease = textList(firstValues(card, "crease_display"));
         const cutting = textList(firstValues(card, "cutting_mode"));
-        const printContent = textList(firstValues(card, "print_content"));
-        const colors = textList(card.printing_colors || []);
         const mold = unique((card.components || []).map((line) => [line.mold_code, line.mold_name].filter(Boolean).join(" ")));
         const locations = firstValues(card, "mold_location");
         if (card.layout_kind === "liner") {
@@ -219,7 +335,7 @@
             detailRow("纸板尺寸", sizes),
             detailRow("楞型", textList(flute)),
             detailRow("开料方式", cutting),
-            detailRow("印刷内容", printContent),
+            printingHtml(card),
             detailRow("是否粘贴", card.joining_method && card.joining_method.includes("粘贴") ? "需要" : "不需要 / 待确认"),
             detailRow("模具编号", textList(mold), "internal-only"),
             detailRow("模具位置", textList(locations), "internal-only"),
@@ -229,8 +345,7 @@
           detailRow("纸板尺寸", sizes),
           detailRow("楞型", textList(flute)),
           detailRow("压线尺寸", crease, "production-key-fact"),
-          detailRow("印刷内容", printContent),
-          detailRow("印刷颜色", colors),
+          printingHtml(card),
           detailRow("结合方式", card.joining_method || "待确认", "production-key-fact"),
         ].join("");
       }
@@ -263,11 +378,12 @@
         const statusClass = card.review_required ? "status warn" : "status";
         const warnings = card.review_required ? `<div class="warning">计划已变化 / 请核对并重打：${escapeHtml(textList(card.review_messages))}</div>` : "";
         const denseClass = (card.components || []).length > 3 ? " dense" : "";
+        const printingClass = cardNeedsFullPage(card) ? " printing-heavy" : "";
         const metric = thirdMetric(card);
         const productLine = [card.product_name, card.product_code].filter(Boolean).join(" / ") || "-";
         const quantityUnit = card.layout_kind === "liner" ? "张" : "只";
         const safeNote = '<span class="safe-only">客户随货版 · 已隐藏内部任务及资产定位信息</span>';
-        return `<section class="task-card half-card${fullPage ? " full-card" : ""}${denseClass}" data-layout="${escapeHtml(card.layout_kind || "carton")}">
+        return `<section class="task-card half-card${fullPage ? " full-card" : ""}${denseClass}${printingClass}" data-layout="${escapeHtml(card.layout_kind || "carton")}">
           <header class="card-head"><div><div class="brand">TM 天明包装</div><h1>${escapeHtml(titleFor(card))}</h1></div><span class="${statusClass}">${escapeHtml(card.status_label || "待来料")}</span></header>
           <div class="headline-metrics">
             <div class="headline-metric"><span>客户</span><strong>${escapeHtml(card.customer_name || "-")}</strong></div>
@@ -292,15 +408,24 @@
       }
 
       function render(packageData) {
-        if (packageData.card_count === 1 && packageData.cards && packageData.cards[0]) {
-          pagesHost.innerHTML = `<article class="page single-page" data-page="1">${cardHtml(packageData.cards[0], packageData, true)}</article>`;
-          toolbarNote.textContent = "黑白打印 · 单张任务单独占一张 A4";
-        } else {
-          pagesHost.innerHTML = (packageData.pages || []).map((page) => `<article class="page batch-page" data-page="${escapeHtml(page.page_number)}">${cardHtml(page.top, packageData)}${cardHtml(page.bottom, packageData)}</article>`).join("");
-          toolbarNote.textContent = "黑白打印 · 批量每张 A4 上下两款";
-        }
+        const layouts = printPageLayouts(packageData.cards || []);
+        pagesHost.innerHTML = layouts.map((layout, index) => layout.fullPage
+          ? `<article class="page single-page" data-page="${index + 1}">${cardHtml(layout.top, packageData, true)}</article>`
+          : `<article class="page batch-page" data-page="${index + 1}">${cardHtml(layout.top, packageData)}${cardHtml(layout.bottom, packageData)}</article>`
+        ).join("");
+        const fullPageCount = layouts.filter((layout) => layout.fullPage).length;
+        const singleCard = packageData.card_count === 1 && layouts.length === 1;
+        toolbarNote.textContent = fullPageCount
+          ? `黑白打印 · ${fullPageCount} 款复杂印刷任务单独占 A4，其余每页上下两款`
+          : (singleCard
+            ? "黑白打印 · 单张任务单独占一张 A4"
+            : "黑白打印 · 批量每张 A4 上下两款");
         applyMode();
-        const overflowingCards = Array.from(pagesHost.querySelectorAll(".task-card:not(.blank)")).filter((card) => card.scrollHeight > card.clientHeight + 1);
+        const overflowingCards = Array.from(pagesHost.querySelectorAll(".task-card:not(.blank)")).filter((card) => {
+          if (card.scrollHeight > card.clientHeight + 1 || card.scrollWidth > card.clientWidth + 1) return true;
+          const constrained = [card, ...card.querySelectorAll(".detail-grid,.detail-list,.structure")];
+          return constrained.slice(1).some((element) => element.scrollHeight > element.clientHeight + 1 || element.scrollWidth > element.clientWidth + 1);
+        });
         if (overflowingCards.length) {
           overflowingCards.forEach((card) => card.classList.add("layout-overflow"));
           message.hidden = false;
@@ -310,7 +435,7 @@
           return;
         }
         message.hidden = true;
-        printButton.disabled = !(packageData.pages || []).length || packageData.printable === false;
+        printButton.disabled = !layouts.length || packageData.printable === false;
         const labelCount = Number(packageData.production_label_count || 0);
         labelButton.textContent = labelCount > 0 ? `生产包装标签（${labelCount}张）` : "未启用包装标签";
         labelButton.disabled = labelCount <= 0 || packageData.review_required === true;

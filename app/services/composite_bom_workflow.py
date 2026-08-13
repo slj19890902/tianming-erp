@@ -359,7 +359,10 @@ def ensure_component_production_tasks(
         snapshot = db.get(SalesOrderItemBomComponent, demand.snapshot_id)
         if snapshot is None:
             raise CompositeBomWorkflowError("订单组件快照不存在")
-        from app.services.production_workflow import cutting_output_factor
+        from app.services.production_workflow import (
+            _new_task_printing_snapshot,
+            cutting_output_factor,
+        )
 
         output_factor = cutting_output_factor(
             snapshot.snapshot_component_default_cutting_mode
@@ -394,6 +397,7 @@ def ensure_component_production_tasks(
                 output_factor=output_factor,
                 readiness_basis=None,
                 version=1,
+                **_new_task_printing_snapshot(db, component_product),
                 **label_snapshot,
             )
             db.add(task)

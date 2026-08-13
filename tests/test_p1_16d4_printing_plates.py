@@ -426,8 +426,18 @@ def test_production_task_freezes_plate_codes_and_machine_values(plate_app) -> No
         task_rows = list_production_tasks(db, allowed_customer_ids=None)
         assert task_rows[0]["printing_plate_codes"] == ["PL000101", "PL000102"]
         assert task_rows[0]["printing_plates"] == [
-            {"plate_code": "PL000101", "color_name": "红色"},
-            {"plate_code": "PL000102", "color_name": "蓝色"},
+            {
+                "plate_code": "PL000101",
+                "plate_name": "任务红版",
+                "color_name": "红色",
+                "current_location": "1F-PL-R01-L1-P21",
+            },
+            {
+                "plate_code": "PL000102",
+                "plate_name": "任务蓝版",
+                "color_name": "蓝色",
+                "current_location": "1F-PL-R01-L1-P22",
+            },
         ]
         assert task_rows[0]["printing_instruction"] == "按挂板编号安装并核对机器设定值"
 

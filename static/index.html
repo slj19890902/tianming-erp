@@ -1350,9 +1350,8 @@
         font-size: 11px;
         line-height: 1.3;
         min-width:0;
-        overflow:hidden;
-        text-overflow:ellipsis;
-        white-space:nowrap;
+        white-space:normal;
+        overflow-wrap:anywhere;
       }
       .product-final-row {
         grid-template-columns: 245px 360px minmax(360px, 1fr) 92px;
@@ -15338,16 +15337,23 @@
             return `有备料 ${sheets} 张${locationText}，可做 ${products} 个`;
           },
           productionPrintingSetup(row) {
-            const content = String(row?.print_content || "").trim();
+            const content = String(row?.printing_situation || row?.print_content || "").trim();
             if (!content || ["无印刷","无","否","不印刷"].includes(content)) return "";
-            if (row?.printing_plate_mode !== "plate") return `${content}｜不挂板·看图纸`;
+            if (row?.printing_plate_mode !== "plate") {
+              if (row?.printing_colors_frozen === false) return `${content}｜历史颜色未冻结｜不挂板`;
+              const colors = Array.isArray(row?.printing_colors)
+                ? row.printing_colors.map(value=>String(value || "").trim()).filter(Boolean)
+                : [];
+              return `${content}｜${colors.length ? `颜色：${colors.join("＋")}` : "颜色待完善"}｜不挂板`;
+            }
             const details = Array.isArray(row?.printing_plates) ? row.printing_plates : [];
-            const codes = details.length
-              ? details.map(item=>`${item.color_name || "颜色未填"} ${item.plate_code}`).join("/")
-              : (Array.isArray(row?.printing_plate_codes) ? row.printing_plate_codes.join("/") : "");
+            const plateLines = details.map((item,index)=>
+              `第${index+1}色：${item?.color_name || "颜色未填"}｜挂板 ${item?.plate_code || "编号未登记"}｜${item?.plate_name || "内容未冻结"}${item?.current_location ? `｜当前位置 ${item.current_location}` : ""}`
+            );
             const machine = [row?.machine_set_length_mm,row?.machine_set_width_mm,row?.machine_set_height_mm]
               .map(value=>value ?? "-").join("×");
-            return `${content}｜${codes || "挂板未登记"}｜对${row?.plate_alignment_value_mm ?? "-"} 挂${row?.plate_mount_value_mm ?? "-"}｜机${machine}`;
+            const situation = String(row?.printing_situation || "").trim() || `挂板印刷（${details.length || 0}色）`;
+            return `${situation}｜${plateLines.length ? plateLines.join("；") : "挂板快照未登记"}｜对版 ${row?.plate_alignment_value_mm ?? "-"}｜挂版 ${row?.plate_mount_value_mm ?? "-"}｜机器设定 ${machine}`;
           },
           productionProductTitle(row) {
             const parts = [

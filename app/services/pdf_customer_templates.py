@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.models.customer import Customer
 from app.models.pdf_training import PdfOrderCustomerTemplate, PdfOrderTrainingSample
+from app.core.uat_isolation import UatIsolationError, assert_uat_managed_path
 from app.services.order_pdf_import import file_sha256, match_import_draft
 from app.services.pdf_parse_pipeline import parse_pdf_bytes
 from app.services.pdf_scoring import (
@@ -240,7 +241,14 @@ def read_and_verify_sample_pdf(sample: PdfOrderTrainingSample) -> bytes:
     """Read an immutable sample source only after checking its recorded digest."""
     if not sample.file_path:
         raise ValueError("样本未保留原始 PDF，不能作为金样本")
-    path = Path(sample.file_path)
+    try:
+        path = assert_uat_managed_path(
+            sample.file_path,
+            "ERP_PDF_TRAINING_DIR",
+            label="PDF training sample",
+        )
+    except UatIsolationError as error:
+        raise ValueError("样本原始 PDF 不属于当前隔离 UAT") from error
     if not path.is_file():
         raise ValueError("样本原始 PDF 文件不存在")
     content = path.read_bytes()

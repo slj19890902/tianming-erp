@@ -115,6 +115,12 @@ def temporary_upload_root() -> Path:
     return root.resolve()
 
 
+def legacy_upload_root() -> Path:
+    configured = os.getenv("ERP_LEGACY_UPLOAD_DIR")
+    root = Path(configured) if configured else _repo_root() / "static" / "uploads"
+    return root.resolve()
+
+
 def _is_within(candidate: Path, root: Path) -> bool:
     try:
         candidate.relative_to(root)
@@ -524,7 +530,7 @@ def resolve_stored_reference(reference: str) -> Path:
         return candidate
     legacy_prefix = "/static/uploads/"
     if reference.startswith(legacy_prefix):
-        root = (_repo_root() / "static" / "uploads").resolve()
+        root = legacy_upload_root()
         candidate = (root / reference.removeprefix(legacy_prefix)).resolve()
         if not _is_within(candidate, root):
             raise FileNotFoundError("legacy upload reference escaped storage root")

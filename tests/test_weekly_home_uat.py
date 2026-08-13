@@ -393,13 +393,21 @@ def test_powershell_entries_keep_factory_and_home_boundaries() -> None:
     ):
         assert marker in import_source
     for marker in (
-        "erp_uat_",
-        "Win32_Process",
-        "uvicorn",
-        "--app-dir",
+            "erp_uat_",
+            "Win32_Process",
+            "uvicorn",
+            "from\\s+uvicorn\\.main\\s+import\\s+main",
         "--confirm-reset",
+        "ConvertFrom-Json",
+        '"nonce", "pid", "process_creation_token", "port", "isolation_id"',
+        "Test-UatProcessCommandLine",
+        "Assert-OwnedRecordNonce",
+        "[Environment]::MachineName",
+        '$pidFile = Join-Path $runRoot ("erp_uat_{0}.pid" -f $Port)',
+        "UAT 所有权记录指向隔离目录之外",
     ):
         assert marker in reset_source
+    assert "cleanup-owned" in reset_source
     for marker in (
         'ERP_ENVIRONMENT = "test"',
         'ERP_BIND_HOST = "127.0.0.1"',
@@ -418,3 +426,40 @@ def test_powershell_entries_keep_factory_and_home_boundaries() -> None:
         source = (PROJECT_ROOT / relative).read_text(encoding="utf-8")
         assert "powershell.exe" in source
         assert "-ExecutionPolicy Bypass" in source
+
+
+def test_reset_entry_supports_nonce_bound_pid_records_and_legacy_pid() -> None:
+    source = (
+        PROJECT_ROOT / "scripts" / "windows" / "reset_weekly_home_uat.ps1"
+    ).read_text(encoding="utf-8-sig")
+
+    for marker in (
+        '$runRoot = Get-FullPath ([System.IO.Path]::GetDirectoryName($database))',
+        '$pidFile = Join-Path $runRoot ("erp_uat_{0}.pid" -f $Port)',
+        '$pidText -match "^\\d+$"',
+        '"nonce", "pid", "process_creation_token", "port", "isolation_id"',
+        "cleanup-owned",
+        "Test-UatProcessCommandLine",
+        "Win32_Process",
+        "Assert-NoReparseComponents",
+        "Assert-OwnedRecordNonce",
+        "$expectedLeasePath",
+        "$expectedAttestationPath",
+        '[Environment]::MachineName -ieq "PC-20250926DZYH"',
+    ):
+        assert marker in source
+    assert "$structuredPidFile" not in source
+    assert "$legacyPidFile" not in source
+    assert "$env:COMPUTERNAME" not in source
+
+    command_check = source.index("Test-UatProcessCommandLine `")
+    stop_process = source.index("Stop-Process -Id $pidValue -Force")
+    stopped_check = source.index(
+        'Get-CimInstance Win32_Process -Filter ("ProcessId=" + $pidValue) '
+        "-ErrorAction Stop) {"
+    )
+    cleanup_owned = source.index("cleanup-owned")
+    assert command_check < stop_process < stopped_check
+    assert cleanup_owned < stop_process
+    assert "Remove-Item -Path" not in source
+    assert "Remove-Item *" not in source

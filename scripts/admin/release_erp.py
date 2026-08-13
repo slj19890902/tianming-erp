@@ -87,8 +87,9 @@ def code_revision(project_root: Path = PROJECT_ROOT) -> str:
 
 
 def git_sha(project_root: Path = PROJECT_ROOT) -> str:
+    git_executable = os.getenv("ERP_UAT_GIT_PATH", "git").strip() or "git"
     result = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
+        [git_executable, "rev-parse", "HEAD"],
         cwd=project_root,
         check=False,
         capture_output=True,

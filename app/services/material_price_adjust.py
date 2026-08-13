@@ -144,8 +144,11 @@ def preview(
 
 def backup_database() -> Path:
     """备份 data/carton_erp.sqlite3 → data/backups/..._BEFORE_SUPPLIER_PRICE_ADJUST_*。"""
-    db_path = load_settings().database_path
-    backup_dir = db_path.parent / "backups"
+    current = load_settings()
+    db_path = current.database_path
+    # Respect the launcher/configured backup boundary.  In UAT this is a
+    # run-local directory and must never fall back to db.parent/backups.
+    backup_dir = current.backup_dir
     backup_dir.mkdir(parents=True, exist_ok=True)
     stamp = beijing_now_naive().strftime("%Y%m%d_%H%M%S")
     dest = backup_dir / f"carton_erp_BEFORE_SUPPLIER_PRICE_ADJUST_{stamp}.sqlite3"

@@ -31,6 +31,9 @@ _SETTINGS_FILENAME = "delivery_print_settings.json"
 
 def delivery_print_settings_path() -> Path:
     """Return the per-database print settings file location."""
+    configured = os.getenv("ERP_DELIVERY_PRINT_SETTINGS_PATH", "").strip()
+    if configured:
+        return Path(configured).resolve(strict=False)
     return load_settings().database_path.parent / _SETTINGS_FILENAME
 
 

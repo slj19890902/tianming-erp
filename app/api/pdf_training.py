@@ -28,6 +28,7 @@ Phase 18 / v0.18.0: PDF 订单识别训练样本库 REST API。
 from __future__ import annotations
 
 import json
+import os
 import re
 from datetime import datetime
 from pathlib import Path
@@ -42,6 +43,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import PermissionChecker, get_db
 from app.core.time_contract import utc_naive_to_api, utc_now_naive
+from app.core.uat_isolation import UatIsolationError, assert_uat_managed_path
 from app.models.audit import OperationLog
 from app.models.customer import Customer
 from app.models.pdf_training import (
@@ -84,7 +86,12 @@ require_pdf_training_manage = PermissionChecker("pdf_training.manage")
 
 # 训练样本本地存储目录（使用绝对路径，避免因启动目录不同而写错位置）
 # 本文件位于 app/api/pdf_training.py，parents[2] = 项目根目录
-_SAMPLE_DIR = Path(__file__).resolve().parents[2] / "data" / "pdf_training_samples"
+_SAMPLE_DIR = Path(
+    os.getenv(
+        "ERP_PDF_TRAINING_DIR",
+        str(Path(__file__).resolve().parents[2] / "data" / "pdf_training_samples"),
+    )
+).resolve(strict=False)
 
 
 # ---------------------------------------------------------------------------
@@ -213,11 +220,15 @@ def _ensure_sample_pdf(
     """Persist the immutable source PDF once, repairing a missing/stale local copy."""
     expected_sha = sample.file_sha256
     if sample.file_path:
-        current_path = Path(sample.file_path)
         try:
+            current_path = assert_uat_managed_path(
+                sample.file_path,
+                "ERP_PDF_TRAINING_DIR",
+                label="PDF training sample",
+            )
             if current_path.is_file() and file_sha256(current_path.read_bytes()) == expected_sha:
                 return False
-        except OSError:
+        except (OSError, UatIsolationError):
             pass
 
     _SAMPLE_DIR.mkdir(parents=True, exist_ok=True)

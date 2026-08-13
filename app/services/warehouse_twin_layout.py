@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 
@@ -8,9 +9,12 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 TWIN_LAYOUT_PATH = (
     _PROJECT_ROOT / "static" / "factory_maps" / "twin_layout_v1.json"
 )
-TWIN_LAYOUT_RUNTIME_PATH = (
-    _PROJECT_ROOT / "data" / "layout_runtime" / "twin_layout_v1.json"
-)
+TWIN_LAYOUT_RUNTIME_PATH = Path(
+    os.getenv(
+        "ERP_TWIN_LAYOUT_RUNTIME_PATH",
+        str(_PROJECT_ROOT / "data" / "layout_runtime" / "twin_layout_v1.json"),
+    )
+).resolve(strict=False)
 
 
 class WarehouseTwinLayoutNotFoundError(LookupError):
@@ -76,6 +80,9 @@ def resolve_warehouse_twin_layout_path(path: Path | None = None) -> Path:
     if path is not None:
         return path
     if TWIN_LAYOUT_RUNTIME_PATH.exists():
+        return TWIN_LAYOUT_RUNTIME_PATH
+    if os.getenv("ERP_UAT_ROOT"):
+        # A UAT run must never fall back to a shared code-tree layout.
         return TWIN_LAYOUT_RUNTIME_PATH
     return TWIN_LAYOUT_PATH
 

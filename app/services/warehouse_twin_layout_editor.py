@@ -33,8 +33,18 @@ ALLOWED_ACCESS_SIDES = {"north", "south", "east", "west", "both"}
 _LAYOUT_EDIT_LOCK = Lock()
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 TWIN_LAYOUT_PATH = DEFAULT_TWIN_LAYOUT_RUNTIME_PATH
-TWIN_LAYOUT_DRAFT_PATH = _PROJECT_ROOT / "data" / "layout_drafts" / "twin_layout_v1.draft.json"
-TWIN_LAYOUT_BACKUP_DIR = _PROJECT_ROOT / "data" / "layout_backups"
+TWIN_LAYOUT_DRAFT_PATH = Path(
+    os.getenv(
+        "ERP_TWIN_LAYOUT_DRAFT_PATH",
+        str(_PROJECT_ROOT / "data" / "layout_drafts" / "twin_layout_v1.draft.json"),
+    )
+).resolve(strict=False)
+TWIN_LAYOUT_BACKUP_DIR = Path(
+    os.getenv(
+        "ERP_TWIN_LAYOUT_BACKUP_DIR",
+        str(_PROJECT_ROOT / "data" / "layout_backups"),
+    )
+).resolve(strict=False)
 
 
 class WarehouseTwinLayoutEditError(ValueError):
@@ -74,6 +84,10 @@ def _published_layout_paths(explicit_path: Path | None = None) -> _PublishedLayo
     runtime_target = TWIN_LAYOUT_PATH
     if runtime_target.exists():
         return _PublishedLayoutPaths(source=runtime_target, target=runtime_target)
+    if os.getenv("ERP_UAT_ROOT"):
+        raise WarehouseTwinLayoutEditNotFoundError(
+            "隔离 UAT 运行态地图不存在，拒绝回退共享代码树基线"
+        )
     return _PublishedLayoutPaths(source=TWIN_LAYOUT_BASELINE_PATH, target=runtime_target)
 
 

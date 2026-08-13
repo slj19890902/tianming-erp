@@ -6,7 +6,8 @@ from pathlib import Path
 from alembic import command
 from alembic.config import Config
 import pytest
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 from app.core.database import create_sqlite_engine
 from app.models.customer import Customer
@@ -30,23 +31,21 @@ def _config(monkeypatch: pytest.MonkeyPatch, database: Path) -> Config:
 
 def _seed_one_product(database: Path) -> None:
     engine = create_sqlite_engine(database)
-    factory = sessionmaker(bind=engine, expire_on_commit=False)
-    with factory() as session:
-        customer = Customer(
-            customer_number=1,
-            customer_code="YL",
-            name="迁移测试客户",
-        )
-        session.add(customer)
-        session.flush()
-        session.add(
-            Product(
-                customer_id=customer.id,
-                product_code="Z.001.000093",
-                customer_material_code="Z.001.000093",
-                product_name="双路ECU新版纸盒",
-                box_category="normal",
+    with Session(engine) as session:
+        customer_id = session.execute(
+            text(
+                """INSERT INTO customers(customer_number,customer_code,name)
+                VALUES (1,'YL','迁移测试客户') RETURNING id"""
             )
+        ).scalar_one()
+        session.execute(
+            text(
+                """INSERT INTO products(
+                customer_id,product_code,customer_material_code,product_name,box_category
+                ) VALUES (:customer_id,'Z.001.000093','Z.001.000093',
+                '双路ECU新版纸盒','normal')"""
+            ),
+            {"customer_id": customer_id},
         )
         session.commit()
     engine.dispose()
@@ -54,16 +53,14 @@ def _seed_one_product(database: Path) -> None:
 
 def _insert_same_code_child(database: Path) -> None:
     engine = create_sqlite_engine(database)
-    factory = sessionmaker(bind=engine, expire_on_commit=False)
-    with factory() as session:
-        session.add(
-            Product(
-                customer_id=1,
-                product_code="Z.001.000093",
-                customer_material_code="Z.001.000093",
-                product_name="双路ECU新版纸盒内衬",
-                box_category="normal",
-                is_internal_component=True,
+    with Session(engine) as session:
+        session.execute(
+            text(
+                """INSERT INTO products(
+                customer_id,product_code,customer_material_code,product_name,
+                box_category,is_internal_component
+                ) VALUES (1,'Z.001.000093','Z.001.000093',
+                '双路ECU新版纸盒内衬','normal',1)"""
             )
         )
         session.commit()

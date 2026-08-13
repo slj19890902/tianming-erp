@@ -203,6 +203,10 @@ def _auth_payload(user: User, db: Session) -> dict:
     return {
         "ok": True,
         "user": _user_payload(user),
+        "session_identity": {
+            "user_id": user.id,
+            "auth_version": user.auth_version,
+        },
         "permissions": sorted(effective_permissions(user)),
         "customer_scope": sorted(customer_scope_ids(user, db)),
         "customer_access_mode": user.customer_access_mode,

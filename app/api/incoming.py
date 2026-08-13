@@ -2467,7 +2467,10 @@ def pending_items(
     user: User = Depends(can_read),
     page: Annotated[int | None, Query(ge=1)] = None,
     page_size: Annotated[int | None, Query(ge=1, le=200)] = None,
+    response: Response = None,
 ) -> dict:
+    if response is not None:
+        response.headers["X-ERP-Session-Identity"] = f"{user.id}:{user.auth_version}"
     if page is None and page_size is None:
         return {
             "items": [

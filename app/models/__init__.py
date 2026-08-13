@@ -30,7 +30,12 @@ from app.models.supplier import (  # noqa: E402,F401
 from app.models.master_data_object_version import (  # noqa: E402,F401
     MasterDataObjectVersion,
 )
-from app.models.mold_tool import MoldLocationMovement, MoldTool  # noqa: E402,F401
+from app.models.mold_tool import (  # noqa: E402,F401
+    MoldLabelPrintJob,
+    MoldLabelPrintJobItem,
+    MoldLocationMovement,
+    MoldTool,
+)
 from app.models.printing_plate import (  # noqa: E402,F401
     PrintingPlate,
     PrintingPlateLocationMovement,

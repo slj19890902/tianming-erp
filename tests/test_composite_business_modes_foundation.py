@@ -165,5 +165,7 @@ def test_product_bom_editor_exposes_mode_without_reusing_display_mode() -> None:
     assert 'value="component_priced"' in bom_block
     assert 'combination_mode: "parent_priced_set"' in INDEX
     assert "combination_mode: f.combination_mode" in INDEX
-    assert "component.display_mode" in bom_block
+    # 组件展示范围仍是 BOM 组件自己的事实，不能复用父件计价方式。
+    assert "component.display_mode" in INDEX
+    assert "display_mode: component.display_mode" in INDEX
     assert "display_mode: f.combination_mode" not in INDEX

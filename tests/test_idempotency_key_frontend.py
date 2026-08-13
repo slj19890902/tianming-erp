@@ -145,5 +145,7 @@ def test_only_real_inventory_candidates_have_an_editable_reserve_quantity() -> N
     assert 'v-model.number="candidate._reserve_qty"' in INDEX_HTML
     assert "candidate.quantity_available" in INDEX_HTML
     assert "finishedInventoryRemainingRequirement" in INDEX_HTML
-    assert "inventory_lot_id:candidate.lot_id" in INDEX_HTML
-    assert "expected_version:candidate.version" in INDEX_HTML
+    assert "const lotId=Number(candidate?.lot_id||0);" in INDEX_HTML
+    assert "const expectedVersion=Number(candidate?.version||0);" in INDEX_HTML
+    assert "inventory_lot_id:lotId" in INDEX_HTML
+    assert "expected_version:expectedVersion" in INDEX_HTML

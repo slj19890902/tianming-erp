@@ -34,9 +34,9 @@ def test_reported_incoming_production_and_delivery_use_server_pages() -> None:
 def test_warehouse_finished_and_semi_finished_use_real_backend_paging() -> None:
     assert 'lotPage:1,lotPageSize:25,lotTotal:0' in WAREHOUSE
     assert 'page:state.lotPage,page_size:state.lotPageSize' in WAREHOUSE
-    assert 'finished_product_code:state.tab==="finished"' in WAREHOUSE
-    assert 'semi_supplier:state.tab==="semi_finished"' in WAREHOUSE
-    assert 'semi_allowed_product:state.tab==="semi_finished"' in WAREHOUSE
+    assert 'finished_product_code:inventoryType==="finished"' in WAREHOUSE
+    assert 'semi_supplier:inventoryType==="semi_finished"' in WAREHOUSE
+    assert 'semi_allowed_product:inventoryType==="semi_finished"' in WAREHOUSE
     assert 'location_keyword:$("locationKeywordFilter").value' in WAREHOUSE
     assert 'pallet_keyword:$("palletKeywordFilter").value' in WAREHOUSE
     assert "state.lotTotal=Number(data.total||0)" in WAREHOUSE

@@ -20,8 +20,8 @@ def test_daily_product_toolbar_has_no_global_material_candidate_entry() -> None:
 
 def test_common_box_editor_embeds_product_specific_candidate_and_requisition_history() -> None:
     source = _source()
-    editor_start = source.index('<div class="product-material-workbench">')
-    editor_context = source[editor_start:editor_start + 12000]
+    editor_start = source.index('class="product-material-workbench">')
+    editor_context = source[editor_start:editor_start + 24000]
     candidate_heading = "这款常用箱的候选材质"
     history_heading = "这款常用箱的报料材质轨迹"
     assert candidate_heading in editor_context
@@ -65,8 +65,8 @@ def test_common_box_candidate_column_is_narrower_than_history_column() -> None:
     grid_rule_start = source.index(".product-material-workbench {")
     grid_rule = source[grid_rule_start:source.index("}", grid_rule_start)]
     column_fractions = [float(value) for value in re.findall(r"minmax\([^,]+,\s*([0-9.]+)fr\)", grid_rule)]
-    assert len(column_fractions) == 3
-    assert column_fractions[1] < column_fractions[2]
+    assert len(column_fractions) == 2
+    assert column_fractions[0] < column_fractions[1]
 
 
 def test_common_box_candidate_keeps_flute_and_history_does_not_mutate_form() -> None:

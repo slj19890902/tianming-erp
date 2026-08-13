@@ -38,7 +38,7 @@ def test_page_has_one_plain_confirm_button_and_success_panel() -> None:
 
 def test_confirm_button_keeps_submit_and_review_permission_gates() -> None:
     assert (
-        'const canReviewStocktakes=()=>'
+        'const canReviewStocktakes=()=>!state.readOnly&&'
         'hasPermission("warehouse.stocktake.review")'
     ) in WAREHOUSE
     assert (

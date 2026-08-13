@@ -33,7 +33,9 @@ def test_production_history_has_admin_reversal_and_inventory_deep_link() -> None
 
 
 def test_order_group_detail_keeps_active_page_else_if_chain_adjacent() -> None:
-    detail_start = INDEX.index('<template v-for="row in group.orders" :key="row.id">')
+    detail_start = INDEX.index(
+        '<template v-for="row in orderGroupExpandedOrders(group)" :key="row.id">'
+    )
     detail_body_end = INDEX.index("</tbody>", detail_start)
     detail_fragment = INDEX[detail_start:detail_body_end]
 

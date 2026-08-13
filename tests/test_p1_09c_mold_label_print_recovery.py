@@ -64,8 +64,10 @@ def test_mold_label_keeps_formal_and_prototype_sources() -> None:
     assert "sourceRows=prototypeRows()" in LABEL
     assert "sourceRows=batchMode?(data.items||[]):[data]" in LABEL
     assert "打印匿名测试标签" in LABEL
-    assert "40×30 mm 匿名样例" in LABEL
-    assert "扫码后登录 ERP 查看实时订单、收料和材料位置" in LABEL
+    assert "40×30 mm 模具侧面标签" in LABEL
+    assert "第一排单独显示片料尺寸" in LABEL
+    assert "第二排并列显示产品尺寸与楞型" in LABEL
+    assert "模具编号按长度自动紧排缩小" in LABEL
 
 
 def test_batch_controls_cannot_unlock_print_before_current_data_and_qr_are_ready() -> None:

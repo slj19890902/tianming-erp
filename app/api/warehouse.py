@@ -243,7 +243,7 @@ from app.services.master_data_versioning import (
 from app.services.mold_identity import (
     MoldIdentityError,
     mold_customer_short_name,
-    mold_label_display_identity,
+    mold_label_display_number,
     next_available_mold_code,
 )
 from app.core.config import load_settings
@@ -10115,21 +10115,42 @@ def _lan_ip() -> str:
         connection.close()
 
 
-def _label_identity(row: MoldTool, products: list[Product]) -> str:
+def _label_customer(row: MoldTool, products: list[Product]) -> tuple[str, str | None]:
     customers = {
         (product.customer.name, product.customer.customer_code)
         for product in products
         if product.customer is not None
     }
     if len(customers) != 1:
-        return f"{'多客户' if customers else '待完善'}{row.mold_code or '待完善'}"
+        return ("多客户" if customers else "待完善", None)
     customer_name, customer_code = next(iter(customers))
-    return mold_label_display_identity(
+    return (
+        mold_customer_short_name(row.mold_name, customer_name, customer_code)
+        or "待完善",
+        customer_code,
+    )
+
+
+def _label_mold_number(row: MoldTool, products: list[Product]) -> str:
+    customers = {
+        (product.customer.name, product.customer.customer_code)
+        for product in products
+        if product.customer is not None
+    }
+    if len(customers) != 1:
+        return row.mold_code or "待完善"
+    customer_name, customer_code = next(iter(customers))
+    return mold_label_display_number(
         row.mold_name,
         row.mold_code,
         customer_name,
         customer_code,
     )
+
+
+def _label_identity(row: MoldTool, products: list[Product]) -> str:
+    customer_name, _customer_code = _label_customer(row, products)
+    return f"{customer_name}{_label_mold_number(row, products)}"
 
 
 def _label_dimension(products: list[Product], field: str) -> str:
@@ -10165,14 +10186,30 @@ def _label_dimension(products: list[Product], field: str) -> str:
     return ""
 
 
+def _label_flute_type(products: list[Product]) -> str:
+    values = [
+        str(
+            product.flute_type
+            or (product.material.flute_type if product.material is not None else "")
+            or ""
+        )
+        .strip()
+        .upper()
+        for product in products
+    ]
+    if not values or not any(values):
+        return ""
+    if any(not value for value in values) or len(set(values)) != 1:
+        return "多款见扫码"
+    return values[0]
+
+
 _LABEL_PRINTABLE_IDENTITY_LIMIT = 24
-_LABEL_PRINTABLE_MANUAL_LOCATION_LIMIT = 20
 
 
 def _mold_label_printability_error(
     row: MoldTool,
     products: list[Product],
-    location_guide: dict,
 ) -> str | None:
     """Return a human-fixable reason instead of printing clipped facts."""
 
@@ -10186,13 +10223,6 @@ def _mold_label_printability_error(
             f"模具 {row.mold_code} 的客户名称+模具编号过长，"
             "请先按“客户中文简写+编号”维护模具名称"
         )
-    if location_guide.get("kind") == "manual":
-        manual_location = str(row.rack_location or "").strip()
-        if len(manual_location) > _LABEL_PRINTABLE_MANUAL_LOCATION_LIMIT:
-            return (
-                f"模具 {row.mold_code} 的手工位置过长，"
-                "请先维护为正式货架/层/格位置后再打印"
-            )
     return None
 
 
@@ -10225,7 +10255,6 @@ def _mold_label_dict(
     printability_error = _mold_label_printability_error(
         row,
         products,
-        basics["location_guide"],
     )
     if printability_error:
         raise HTTPException(status_code=409, detail=printability_error)
@@ -10236,12 +10265,15 @@ def _mold_label_dict(
         "is_active": row.is_active,
         "product_count": len(products),
         "label_identity": _label_identity(row, products),
+        "label_customer_name": _label_customer(row, products)[0],
+        "label_mold_number": _label_mold_number(row, products),
         "label_product_specification": _label_dimension(
             products, "specification"
         ),
         "label_report_specification": _label_dimension(
             products, "report_specification"
         ),
+        "label_flute_type": _label_flute_type(products),
         "lookup_url": lookup_url,
         "qr_data_url": (
             "data:image/png;base64,"

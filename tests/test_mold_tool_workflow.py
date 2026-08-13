@@ -801,6 +801,7 @@ def test_workshop_can_open_structured_location_label_and_qr(
                 product_name="手机查找测试产品",
                 box_category="die_cut",
                 production_process="模切",
+                flute_type="AB",
                 report_length_mm=1200,
                 report_width_mm=800,
                 report_notes="长边顺瓦楞方向",
@@ -863,13 +864,17 @@ def test_workshop_can_open_structured_location_label_and_qr(
             "is_active",
             "product_count",
             "label_identity",
+            "label_customer_name",
+            "label_mold_number",
             "label_product_specification",
             "label_report_specification",
+            "label_flute_type",
             "lookup_url",
             "qr_data_url",
         }
         assert "id" not in data
         assert "public_lookup_token" not in data
+        assert data["label_flute_type"] == "AB"
 
 
 
@@ -950,6 +955,7 @@ def test_mold_label_dimensions_are_complete_and_printing_fails_closed(
                     width_mm=Decimal("68"),
                     report_length_mm=880,
                     report_width_mm=None,
+                    flute_type="B",
                     mold_tool_id=complete.id,
                 ),
                 Product(
@@ -999,6 +1005,7 @@ def test_mold_label_dimensions_are_complete_and_printing_fails_closed(
         assert label.status_code == 200, label.text
         assert label.json()["label_product_specification"] == "430.5 × 68"
         assert label.json()["label_report_specification"] == "多款见扫码"
+        assert label.json()["label_flute_type"] == "多款见扫码"
 
         long_title = client.get(
             f"/api/warehouse/molds/{long_identity_id}/label"
@@ -1009,8 +1016,8 @@ def test_mold_label_dimensions_are_complete_and_printing_fails_closed(
         manual_location = client.get(
             f"/api/warehouse/molds/{long_location_id}/label"
         )
-        assert manual_location.status_code == 409, manual_location.text
-        assert "手工位置过长" in manual_location.json()["detail"]
+        assert manual_location.status_code == 200, manual_location.text
+        assert manual_location.json()["label_mold_number"] == "LOC001"
 
         inactive = client.get(f"/api/warehouse/molds/{archived_id}/label")
         assert inactive.status_code == 409, inactive.text

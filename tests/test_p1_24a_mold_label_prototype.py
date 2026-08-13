@@ -27,7 +27,11 @@ def test_mold_label_is_fixed_to_real_40x30_paper() -> None:
     assert "body,html{width:40mm;height:auto" in LABEL
     assert "body>*:not(#previewContent){display:none!important}" in LABEL
     assert "#previewContent,#labels{display:block!important" in LABEL
-    assert ".label{display:flex!important" in LABEL
+    assert ".label{display:grid!important" in LABEL
+    assert "--print-x-compensation:2mm" in LABEL
+    assert "border:0!important" in LABEL
+    assert "translateX(calc(0mm - var(--print-x-compensation)))" in LABEL
+    assert "translate(calc(0mm - var(--print-x-compensation)),2mm)" in LABEL
     assert "40×30 标签样式" in WAREHOUSE
     assert "90×60 标签样式" not in WAREHOUSE
     assert "/mold-label.html?prototype=1" in WAREHOUSE
@@ -37,11 +41,17 @@ def test_mold_label_keeps_only_complete_on_label_identification_fields() -> None
     assert "label_identity" in LABEL
     assert "report_specification" in LABEL
     assert "specification" in LABEL
-    assert "shortLocation" in LABEL
-    assert "客户名称+模具编号、位置、产品尺寸、片料尺寸和固定二维码" in LABEL
+    assert "shortLocation" not in LABEL
+    assert "第一排单独显示片料尺寸" in LABEL
+    assert "第二排并列显示产品尺寸与楞型" in LABEL
+    assert "模具编号按长度自动紧排缩小" in LABEL
+    assert "不打印位置和外围边框" in LABEL
     assert "共 ${total} 款见扫码" not in LABEL
     assert "label_product_specification" in LABEL
     assert "label_report_specification" in LABEL
+    assert "label_customer_name" in LABEL
+    assert "label_mold_number" in LABEL
+    assert "label_flute_type" in LABEL
     assert "qr_data_url" in LABEL
     assert 'class="qr"' in LABEL
     assert "width:13.9mm;height:13.9mm" in LABEL
@@ -50,7 +60,18 @@ def test_mold_label_keeps_only_complete_on_label_identification_fields() -> None
     assert "image-rendering:pixelated" in LABEL
     assert "await waitForQrImages()" in LABEL
     assert 'split("-")[0]' not in LABEL
-    assert "row.label_identity||row.mold_code" in LABEL
+    assert "row.label_customer_name||product?.customer_short_name" in LABEL
+    assert 'grid-column:2;grid-row:1/4' in LABEL
+    assert 'align-self:end' in LABEL
+    assert '<span class="field-key">位置</span>' not in LABEL
+    assert 'class="product-flute-row"' in LABEL
+    assert 'factRow("片料",board,"","board-row")' in LABEL
+    assert '.customer-name{font-size:3.05mm' in LABEL
+    assert 'function numberClass(value)' in LABEL
+    assert 'length>19?"xxlong":length>15?"xlong":length>11?"long":length>8?"compact"' in LABEL
+    assert '.mold-number.compact{font-size:3.85mm' in LABEL
+    assert '.mold-number.xxlong{font-size:2.2mm' in LABEL
+    assert 'extraClass==="flute"?3:12' in LABEL
     for marker in (
         "聚晟达61452621",
         "SME-CPN087075",

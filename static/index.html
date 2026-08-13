@@ -8,6 +8,7 @@
     <script src="/static/vendor/vue-3.5.40.global.prod.js"></script>
     <script src="/static/vendor/axios-1.18.1.min.js"></script>
     <script src="/static/assets/time-utils.js?v=95c91f9ded41"></script>
+    <script src="/static/assets/phone-display.js?v=b9c44d142168"></script>
     <style>
       :root {
         /* Apple-style design tokens */
@@ -1942,6 +1943,11 @@
       .menu-icon { display: flex; align-items: center; opacity: 0.55; flex-shrink: 0; }
       .menu-item.active .menu-icon { opacity: 1; }
       .menu-item:hover .menu-icon { opacity: 0.75; }
+      .menu-count-summary { display:flex; flex-direction:column; align-items:flex-end; gap:3px; min-width:0; flex:0 1 auto; }
+      .menu-count-details { max-width:106px; color:var(--muted); font-size:10px; line-height:1.25; text-align:right; white-space:normal; overflow-wrap:anywhere; }
+      .ui-large .menu-item-inner { min-width:0; flex:1 1 auto; }
+      .ui-large .menu-count-details { max-width:116px; font-size:12px; }
+      .phone-review-note { display:block; margin-top:3px; color:#92400e; font-size:11px; font-weight:700; white-space:normal; }
 
       /* Toolbar → panel connector: remove top radius when panel follows toolbar/filterbar */
       .toolbar + .panel,
@@ -2205,7 +2211,10 @@
             <div class="menu-title">业务中心</div>
             <button v-for="item in menus" :key="item.key" :class="['menu-item', {active: isMenuActive(item.key)}]" @click="goMenu(item.key)">
               <span class="menu-item-inner"><span class="menu-icon" v-html="navIcon(item.key)"></span><span>{{ item.label }}</span></span>
-              <span v-if="item.count !== undefined" class="status">{{ item.count }}</span>
+              <span v-if="item.count !== undefined" class="menu-count-summary">
+                <span class="status">{{ item.countLabel || '数量' }} {{ item.count }}</span>
+                <span v-if="item.countDetails" class="menu-count-details">{{ item.countDetails }}</span>
+              </span>
             </button>
           </aside>
           <main :class="['main', {'warehouse-main': activePage === 'warehouse'}]">
@@ -2412,12 +2421,12 @@
               <page-head title="客户管理" desc="维护客户编号、账期、信用额度、联系人和开票资料。"></page-head>
               <div class="toolbar">
                 <div class="toolbar-group"><button v-if="canCreateCustomers" class="btn primary" @click="openCustomer()">新增客户</button></div>
-                <div class="toolbar-group"><label><input type="checkbox" v-model="filters.showInactive" @change="runExplicitPageListLoad('customers',{resetPage:true})" /> 显示已停用客户</label><input class="input" v-model="filters.customerKeyword" @input="queuePageSearch('customers')" @keyup.enter="runExplicitPageListLoad('customers',{resetPage:true})" /><button class="btn" @click="runExplicitPageListLoad('customers',{resetPage:true})">查询</button></div>
+                <div class="toolbar-group"><button class="btn" :disabled="customerPhoneGovernanceExporting" @click="exportCustomerPhoneGovernance">{{ customerPhoneGovernanceExporting ? '生成清单中…' : '导出电话待核对清单' }}</button><label><input type="checkbox" v-model="filters.showInactive" @change="runExplicitPageListLoad('customers',{resetPage:true})" /> 显示已停用客户</label><input class="input" v-model="filters.customerKeyword" @input="queuePageSearch('customers')" @keyup.enter="runExplicitPageListLoad('customers',{resetPage:true})" /><button class="btn" @click="runExplicitPageListLoad('customers',{resetPage:true})">查询</button></div>
               </div>
               <data-panel :empty="!customers.length">
                 <table class="customer-list-table"><colgroup><col class="customer-col-number" /><col class="customer-col-code" /><col class="customer-col-name" /><col class="customer-col-contact" /><col class="customer-col-phone" /><col class="customer-col-term" /><col class="customer-col-delivery" /><col class="customer-col-status" /><col class="customer-col-actions" /></colgroup><thead><tr><th>客户编号</th><th>客户缩写</th><th>客户名称</th><th>联系人</th><th>电话</th><th>账期</th><th>送货方式</th><th>状态</th><th>操作</th></tr></thead>
                 <tbody><tr v-for="row in customers" :key="row.id">
-                  <td>{{ row.customer_number }}</td><td>{{ row.customer_code }}</td><td>{{ row.name }}</td><td>{{ row.contact_person || "-" }}</td><td>{{ row.phone || "-" }}</td>
+                  <td>{{ row.customer_number }}</td><td>{{ row.customer_code }}</td><td>{{ row.name }}</td><td>{{ row.contact_person || "-" }}</td><td><span>{{ customerPhoneDisplay(row.phone) || "-" }}</span><span v-if="customerPhoneAnalysis(row.phone).needs_review" class="phone-review-note">疑似占位，待核对</span></td>
                   <td>{{ row.payment_term_days }} 天</td><td>{{ row.delivery_method }}</td><td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td>
                   <td class="toolbar-group customer-list-actions"><button v-if="canViewQuotations" class="btn small primary" @click="openCustomerQuotations(row)">报价</button><button v-if="canViewContracts" class="btn small primary" @click="openCustomerContracts(row)">合同</button><button class="btn small" @click="openCustomer(row)">{{ canEditCustomers ? "查看/编辑" : "查看" }}</button><button class="btn small" @click="openMasterVersionHistory('customer',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateCustomers" :class="['btn','small',row.is_active ? 'danger' : 'success']" :disabled="customerLifecycleBusy()" @click="toggleCustomerStatus(row)">{{ customerLifecyclePending('status',row.id) ? '处理中…' : (row.is_active ? "停用" : "启用") }}</button></td>
                 </tr></tbody></table>
@@ -6669,7 +6678,7 @@
               <div v-for="group in deliveryRoutePlan.groups || []" :key="group.area" class="order-group-detail-card" style="margin-bottom:12px">
                 <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px"><strong>{{ group.area }}同车建议</strong><span v-if="group.same_as_origin_area" class="status green">与工厂同区域</span><span class="muted">{{ group.customer_count }} 家｜{{ group.pending_item_count }} 条｜待送 {{ group.pending_quantity }}</span></div>
                 <table style="font-size:12px"><thead><tr><th>顺序</th><th>客户</th><th>地址</th><th>交期 / 待送</th><th>涉及款号</th><th>分段导航</th></tr></thead><tbody>
-                  <tr v-for="customer in group.customers" :key="customer.customer_id"><td><strong>{{ customer.sequence }}</strong></td><td>{{ customer.customer_name }}<div class="muted">{{ customer.contact_person || '' }} {{ customer.phone || '' }}</div></td><td style="white-space:normal;min-width:240px">{{ customer.address || '地址未登记' }}<div v-if="customer.subarea" class="muted">{{ customer.subarea }}</div></td><td>{{ customer.earliest_delivery_date || '-' }}<div class="muted">{{ customer.pending_item_count }} 条 / {{ customer.pending_quantity }}</div></td><td style="white-space:normal">{{ compactList(customer.product_codes,5).join(' / ') }}<span v-if="compactMore(customer.product_codes,5)" class="muted"> 等 {{ customer.product_codes.length }} 款</span></td><td><a v-if="customer.navigation_url" class="btn small primary" :href="customer.navigation_url" target="_blank" rel="noopener">从上一站导航到此</a><span v-else :class="['status', customer.same_as_previous_address ? 'green' : 'orange']">{{ customer.navigation_note || '缺少起点或地址' }}</span></td></tr>
+                  <tr v-for="customer in group.customers" :key="customer.customer_id"><td><strong>{{ customer.sequence }}</strong></td><td>{{ customer.customer_name }}<div class="muted">{{ customer.contact_person || '' }} {{ customerPhoneDisplay(customer.phone) }}</div></td><td style="white-space:normal;min-width:240px">{{ customer.address || '地址未登记' }}<div v-if="customer.subarea" class="muted">{{ customer.subarea }}</div></td><td>{{ customer.earliest_delivery_date || '-' }}<div class="muted">{{ customer.pending_item_count }} 条 / {{ customer.pending_quantity }}</div></td><td style="white-space:normal">{{ compactList(customer.product_codes,5).join(' / ') }}<span v-if="compactMore(customer.product_codes,5)" class="muted"> 等 {{ customer.product_codes.length }} 款</span></td><td><a v-if="customer.navigation_url" class="btn small primary" :href="customer.navigation_url" target="_blank" rel="noopener">从上一站导航到此</a><span v-else :class="['status', customer.same_as_previous_address ? 'green' : 'orange']">{{ customer.navigation_note || '缺少起点或地址' }}</span></td></tr>
                 </tbody></table>
               </div>
             </div>
@@ -7743,6 +7752,7 @@
             loginForm: { username: localStorage.getItem("erp_username") || "", password: "", remember_me: true },
             overview: { cards: [], todos: [], summary: {} }, warehouseCapacitySummary:null, overviewError: "", overviewLoading: false,
             kpi: {}, customers: [], customerOptions: [], orderCustomerOptions: [], products: [], materials: [], orders: [],
+            customerPhoneGovernanceExporting: false,
             quotationCustomer: null,
             quotationDraft: { id:null, quotation_date:today(), remarks:"", items:[blankQuotationLine()] },
             quotationConvertForm: {},
@@ -8821,7 +8831,12 @@
           menus() {
             const items = [
               { key: "dashboard", label: "首页" },
-              { key: "workbench", label: "订单主链", count: this.ordersUnfinishedTotal + this.requisitionPendingOverallTotal + this.incomingPendingTotal },
+              {
+                key: "workbench", label: "订单主链",
+                count: this.ordersUnfinishedTotal + this.requisitionPendingOverallTotal + this.incomingPendingTotal,
+                countLabel: "待办",
+                countDetails: `订单 ${this.ordersUnfinishedTotal}｜报料 ${this.requisitionPendingOverallTotal}｜纸板待入库 ${this.incomingPendingTotal}`,
+              },
               { key: "production", label: "生产确认", count: this.productionPendingTotal },
               { key: "deliveries", label: "送货与回单", count: this.deliveriesTotal },
               { key: "finance", label: "对账开票收款" },
@@ -9139,6 +9154,12 @@
           window.addEventListener("popstate", this.handlePdfWarehousePopState);
         },
         methods: {
+          customerPhoneAnalysis(value) {
+            return TmPhone.analyze(value);
+          },
+          customerPhoneDisplay(value) {
+            return TmPhone.display(value);
+          },
           focusableElements(container) {
             if (!container) return [];
             return [...container.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
@@ -11982,6 +12003,7 @@
             this.loginAttemptSequence += 1;
             this.pageLoadSequence += 1;
             this.loading = false;
+            this.customerPhoneGovernanceExporting = false;
             this.pageCacheUpdatedAt = {};
             for (const controller of latestRequestControllers.values()) controller.abort();
             latestRequestControllers.clear();
@@ -12511,6 +12533,68 @@
               throw error;
             } finally {
               this.finishLatestRequest(requestKey, controller);
+            }
+          },
+          async exportCustomerPhoneGovernance() {
+            if (!this.hasPermission("customers.view") || this.customerPhoneGovernanceExporting) return false;
+            const requestGeneration = this.authGeneration;
+            const requestUserId = this.user?.id ?? null;
+            this.customerPhoneGovernanceExporting = true;
+            try {
+              const rows = [];
+              let page = 1;
+              let totalPages = 1;
+              do {
+                const {data} = await axios.get("/api/master/customers", {
+                  params:{page,page_size:200,include_inactive:true},
+                });
+                if (requestGeneration !== this.authGeneration || requestUserId !== (this.user?.id ?? null)) return false;
+                for (const customer of (data?.items || [])) {
+                  const phone = this.customerPhoneAnalysis(customer.phone);
+                  if (!phone.needs_review) continue;
+                  rows.push({
+                    customer_number:customer.customer_number ?? "",
+                    customer_code:customer.customer_code || "",
+                    customer_name:customer.name || "",
+                    raw_phone:phone.raw,
+                    display_phone:phone.text,
+                    reason:phone.reason || "疑似占位，待核对",
+                  });
+                }
+                totalPages = Math.max(1,Number(data?.total_pages || 1));
+                page += 1;
+              } while (page <= totalPages);
+              if (!rows.length) {
+                this.showToast("当前权限范围内没有疑似占位电话");
+                return true;
+              }
+              const headers = ["客户编号","客户缩写","客户名称","原始电话","展示电话","核对原因"];
+              const values = rows.map(row => [
+                row.customer_number,row.customer_code,row.customer_name,
+                row.raw_phone,row.display_phone,row.reason,
+              ]);
+              const csvCell = value => {
+                const original = String(value ?? "");
+                const safe = /^\s*[=+\-@]/.test(original) ? `'${original}` : original;
+                return `"${safe.replaceAll('"','""')}"`;
+              };
+              const csv = [headers,...values].map(row=>row.map(csvCell).join(",")).join("\r\n");
+              const blob = new Blob(["\ufeff",csv],{type:"text/csv;charset=utf-8"});
+              const objectUrl = URL.createObjectURL(blob);
+              const link = document.createElement("a");
+              link.href = objectUrl;
+              link.download = `客户电话疑似占位待核对_${TmTime.beijingToday()}.csv`;
+              link.click();
+              setTimeout(()=>URL.revokeObjectURL(objectUrl),1000);
+              this.showToast(`已生成 ${rows.length} 条电话待核对清单；未修改客户资料`);
+              return true;
+            } catch (error) {
+              if (requestGeneration === this.authGeneration && requestUserId === (this.user?.id ?? null)) {
+                this.showToast(`电话待核对清单生成失败：${this.errorMessage(error)}`,true);
+              }
+              return false;
+            } finally {
+              if (requestGeneration === this.authGeneration && requestUserId === (this.user?.id ?? null)) this.customerPhoneGovernanceExporting = false;
             }
           },
           async loadCustomerOptions(force=false) {

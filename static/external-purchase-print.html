@@ -42,8 +42,9 @@
     let loadController=null;
 
     function displayDate(value){
-      if(!value)return "-";
-      try{return TmTime.formatBusinessDate(value);}catch(_){return String(value);}
+      if(!value)throw new Error("采购确认日期缺失，请返回 ERP 核对");
+      try{return TmTime.formatBeijingDate(value);}
+      catch(_){throw new Error("采购确认日期格式异常，请返回 ERP 核对");}
     }
     function parseErrorDetail(detail){
       if(typeof detail==="string"&&detail.trim())return detail;
@@ -65,10 +66,11 @@
     function setLoading(){printButton.disabled=true;retryButton.classList.add("hidden");loadState.classList.remove("hidden","error");loadState.textContent="正在读取外购包装采购单，请稍候…";}
     function renderError(error,allowRetry=true){printButton.disabled=true;loadState.classList.remove("hidden");loadState.classList.add("error");loadState.textContent=error?.status===401?"登录已失效，请返回 ERP 登录后重新打印。":(error?.status===403?"当前账号没有打印该采购单的权限。":(error?.message||"无法读取采购单，请重试"));retryButton.classList.toggle("hidden",!allowRetry);}
     function renderPurchase(data){
+      const confirmedDate=displayDate(data.confirmed_at);
       document.getElementById("companyName").textContent=data.buyer?.company_name||"苏州天明包装有限公司";
       document.getElementById("supplierName").textContent=data.supplier?.name||"-";
       document.getElementById("purchaseNumber").textContent=data.purchase_number||"-";
-      document.getElementById("confirmedDate").textContent=displayDate(data.confirmed_at);
+      document.getElementById("confirmedDate").textContent=confirmedDate;
       const items=Array.isArray(data.items)?data.items:[];
       rowsNode.innerHTML=items.length?items.map((item,index)=>`<tr><td>${index+1}</td><td class="left">${escapeHtml(item.specification_summary||"-")}</td><td>${escapeHtml(item.purchase_quantity)} ${escapeHtml(item.purchase_unit)}</td></tr>`).join(""):'<tr><td colspan="3">该采购单暂无明细</td></tr>';
       loadState.classList.add("hidden");loadState.classList.remove("error");retryButton.classList.add("hidden");printButton.disabled=false;

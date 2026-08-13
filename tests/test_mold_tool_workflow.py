@@ -2579,6 +2579,206 @@ def test_desktop_mold_form_builds_confirmed_one_floor_location_codes() -> None:
     )[0].split('<section id="moldSection"', 1)[1]
 
 
+def test_mold_edit_can_atomically_move_to_another_published_level(mold_app) -> None:
+    app, factory = mold_app
+    from app.models.audit import OperationLog
+    from app.models.mold_tool import MoldLocationMovement, MoldTool
+    from sqlalchemy import func, select
+
+    with factory() as db:
+        mold = MoldTool(
+            mold_code="MJ-EDIT-MOVE-001",
+            mold_name="编辑移位测试模",
+            rack_location="1F-M-R01-L2-G01",
+            remarks="移动前",
+        )
+        db.add(mold)
+        db.commit()
+        mold_id = mold.id
+
+    payload = {
+        "mold_code": "MJ-EDIT-MOVE-001",
+        "mold_name": "编辑移位测试模（已核对）",
+        "rack_location": "1F-M-R01-L3-G01",
+        "remarks": "从二层搬到三层",
+        "expected_location_version": 1,
+        "location_idempotency_key": "p1-57-edit-move-001",
+        "physical_move_confirmed": True,
+        "location_note": "模具档案编辑中确认实物移位",
+    }
+    with TestClient(app) as client:
+        _login(client, "admin")
+        metadata_only = client.put(
+            f"/api/warehouse/molds/{mold_id}",
+            json={
+                "mold_code": "MJ-EDIT-MOVE-001",
+                "mold_name": "编辑移位测试模（只改资料）",
+                "rack_location": "1F-M-R01-L2-G01",
+                "remarks": "只改资料不移位",
+            },
+        )
+        assert metadata_only.status_code == 200, metadata_only.text
+        assert metadata_only.json()["location_version"] == 1
+        with factory() as db:
+            assert db.scalar(select(func.count(MoldLocationMovement.id))) == 0
+
+        moved = client.put(f"/api/warehouse/molds/{mold_id}", json=payload)
+        assert moved.status_code == 200, moved.text
+        assert moved.json()["rack_location"] == "1F-M-R01-L3-G01"
+        assert moved.json()["location_version"] == 2
+        assert moved.json()["mold_name"] == "编辑移位测试模（已核对）"
+        assert moved.json()["remarks"] == "从二层搬到三层"
+
+        replayed = client.put(f"/api/warehouse/molds/{mold_id}", json=payload)
+        assert replayed.status_code == 200, replayed.text
+        assert replayed.json()["location_version"] == 2
+
+    with factory() as db:
+        movement = db.scalar(select(MoldLocationMovement))
+        assert movement is not None
+        assert movement.from_location == "1F-M-R01-L2-G01"
+        assert movement.to_location == "1F-M-R01-L3-G01"
+        assert movement.expected_version == 1
+        assert movement.resulting_version == 2
+        assert db.scalar(select(func.count(MoldLocationMovement.id))) == 1
+        assert db.scalar(
+            select(func.count(OperationLog.id)).where(
+                OperationLog.description == "模具编辑确认位置移动"
+            )
+        ) == 1
+
+
+def test_mold_edit_location_change_requires_confirmation_and_current_version(
+    mold_app,
+) -> None:
+    app, factory = mold_app
+    from app.models.mold_tool import MoldLocationMovement, MoldTool
+    from sqlalchemy import func, select
+
+    with factory() as db:
+        mold = MoldTool(
+            mold_code="MJ-EDIT-GUARD-001",
+            mold_name="编辑移位门禁模",
+            rack_location="1F-M-R01-L2-G01",
+            remarks="原备注",
+        )
+        db.add(mold)
+        db.commit()
+        mold_id = mold.id
+
+    base = {
+        "mold_code": "MJ-EDIT-GUARD-001",
+        "mold_name": "不应保存的新名称",
+        "rack_location": "1F-M-R01-L3-G01",
+        "remarks": "不应保存的新备注",
+        "location_idempotency_key": "p1-57-edit-guard-001",
+    }
+    with TestClient(app) as client:
+        _login(client, "admin")
+        unconfirmed = client.put(
+            f"/api/warehouse/molds/{mold_id}",
+            json={**base, "expected_location_version": 1},
+        )
+        assert unconfirmed.status_code == 409
+        assert "确认模具实物" in unconfirmed.json()["detail"]
+
+        missing_version = client.put(
+            f"/api/warehouse/molds/{mold_id}",
+            json={**base, "physical_move_confirmed": True},
+        )
+        assert missing_version.status_code == 409
+        assert "位置版本缺失" in missing_version.json()["detail"]
+
+        stale = client.put(
+            f"/api/warehouse/molds/{mold_id}",
+            json={
+                **base,
+                "physical_move_confirmed": True,
+                "expected_location_version": 2,
+            },
+        )
+        assert stale.status_code == 409
+        assert "位置版本已变化" in stale.json()["detail"]
+
+    with factory() as db:
+        mold = db.get(MoldTool, mold_id)
+        assert mold is not None
+        assert mold.rack_location == "1F-M-R01-L2-G01"
+        assert mold.location_version == 1
+        assert mold.mold_name == "编辑移位门禁模"
+        assert mold.remarks == "原备注"
+        assert db.scalar(select(func.count(MoldLocationMovement.id))) == 0
+
+
+def test_mold_edit_rolls_back_location_and_metadata_when_audit_fails(
+    mold_app,
+    monkeypatch,
+) -> None:
+    app, factory = mold_app
+    from app.api import warehouse
+    from app.models.mold_tool import MoldLocationMovement, MoldTool
+    from sqlalchemy import func, select
+
+    with factory() as db:
+        mold = MoldTool(
+            mold_code="MJ-EDIT-ATOMIC-001",
+            mold_name="原子保存测试模",
+            rack_location="1F-M-R01-L2-G01",
+            remarks="原备注",
+        )
+        db.add(mold)
+        db.commit()
+        mold_id = mold.id
+
+    def fail_audit(*_args, **_kwargs) -> None:
+        raise RuntimeError("fault injection after movement flush")
+
+    monkeypatch.setattr(warehouse, "_append_mold_location_move_log", fail_audit)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        _login(client, "admin")
+        response = client.put(
+            f"/api/warehouse/molds/{mold_id}",
+            json={
+                "mold_code": "MJ-EDIT-ATOMIC-001",
+                "mold_name": "不应落库的新名称",
+                "rack_location": "1F-M-R01-L3-G01",
+                "remarks": "不应落库的新备注",
+                "expected_location_version": 1,
+                "location_idempotency_key": "p1-57-edit-atomic-001",
+                "physical_move_confirmed": True,
+            },
+        )
+        assert response.status_code == 500
+
+    with factory() as db:
+        mold = db.get(MoldTool, mold_id)
+        assert mold is not None
+        assert mold.rack_location == "1F-M-R01-L2-G01"
+        assert mold.location_version == 1
+        assert mold.mold_name == "原子保存测试模"
+        assert mold.remarks == "原备注"
+        assert db.scalar(select(func.count(MoldLocationMovement.id))) == 0
+
+
+def test_desktop_mold_edit_location_requires_preview_confirm_and_reuses_attempt() -> None:
+    warehouse = Path("static/warehouse.html").read_text(encoding="utf-8")
+    for marker in (
+        'id="moldEditLocationNotice"',
+        "state.moldEditLocation",
+        "markMoldLocationSelectionChanged",
+        'setMoldLocationBuilderDisabled(false)',
+        'api("/api/warehouse/molds/location-movement/preview"',
+        "原位置：${state.moldEditLocation.originalLocation}",
+        "新位置：${preview.target_location}",
+        "physical_move_confirmed:true",
+        "location_idempotency_key:createIdempotencyKey()",
+        "attempt.requestPayload",
+        "复用同一凭证核对",
+        "已保存，但列表刷新失败",
+    ):
+        assert marker in warehouse
+
+
 @pytest.mark.parametrize(
     ("target_location", "expected_kind", "expected_floor"),
     [

@@ -572,6 +572,7 @@
         </div>
         <div id="moldCodeHint" class="notice info" style="margin-top:10px">输入模具名称后，系统会显示将要保存的模具编号。</div>
         <div id="moldLocationBuilderHint" class="notice info" style="margin-top:10px">位置按已发布的一楼模具区货架、层、格生成，不会记录左右顺序，也不会创建纸箱库存库位。</div>
+        <div id="moldEditLocationNotice" class="notice warn hidden" style="margin-top:10px">编辑位置代表模具实物已经搬动。保存前系统会显示原位置和新位置，请核对后确认。</div>
       </form>
       <div id="moldBindingPanel" class="panel admin-only hidden">
         <h2>绑定客户常用箱</h2>
@@ -812,6 +813,7 @@
     // END IDEMPOTENCY_KEY_HELPER
 
     const state={user:null,permissions:[],readOnly:warehouseReadonlyMode,tab:"finished",lotPage:1,lotPageSize:25,lotTotal:0,locationView:"ledger",locations:[],locationLabelSelection:new Set(),finishedLocationCandidates:[],locationsLoaded:false,locationsPromise:null,warehouseFloors:[],selectedWarehouseFloorId:null,customers:[],customersLoaded:false,customersPromise:null,lots:[],molds:[],moldPage:1,moldPageSize:20,moldTotal:0,moldSelection:new Set(),moldLocationOptions:[],moldLocationOptionsLoaded:false,moldSaving:false,moldCodePreviewRequestId:0,moldCodePreviewTimer:null,moldBinding:{moldId:null,customerId:null,items:[],selected:null,requestId:0,saving:false},printingPlates:[],insights:null,loadRequests:{lots:0,locations:0,insights:0,movements:0,molds:0,printingPlates:0},operationPending:new Set(),finishedProductCandidates:[],finishedProductSearchTimer:null,finishedProductSearchRequestId:0,stocktakeReviews:[],stocktakeReviewDetail:null,stocktakeReviewSelectedId:null,stocktakeReviewAttempt:{signature:"",key:null},lotEdit:{lotId:null,version:null,candidates:[],selectedProduct:null,searchTimer:null,requestId:0,sessionId:0,saving:false},stagingTransfer:{lotId:null,version:null,total:0,saving:false,sessionId:0},semiLotEdit:null,assignment:{lotId:null,items:[],selected:new Set()},onboarding:{batches:[],batch:null,lines:[],selectedBatchId:null,editingLineId:null,busy:false,submitAttempt:{signature:"",key:null}},factoryMap:{activeFloor:"3F",floor1:null,selectedZoneCode:"",selectedRackId:"",selectedRackSlot:"",loading:false,twinFloors:{},selectedTwinFeatureId:"",selectedTwinLocationId:null,twinZoom:100,twinViewBox:null,pan:{active:false,startX:0,startY:0,viewBox:null}},twinDashboard:{data:null,days:30,loading:false,requestId:0,searchTimer:null,searchRequestId:0,search:null,lastError:null},capacityForecast:{data:null,days:7,loading:false,requestId:0},floor3:{locations:[],mapLocations:[],moveLocations:[],mergeLocations:[],mergeAttempt:{signature:"",key:null},detail:null,selectedLocationId:null,selectedAreaCode:"",planZoom:100,viewMode:"overview",mapPopoverLocationId:null,mapPopoverPoint:{left:50,top:50},pendingMove:null,moveMode:false,layoutEdit:false,layoutDrag:null,layoutDraft:{},areaNavCollapsed:false,legendVisible:true,searchFocusLocationId:null,deepLinkLotId:null,searchTimer:null,searchRequestId:0,loading:false,error:"",pan:{active:false,startX:0,startY:0,scrollLeft:0,scrollTop:0},bindPanelOpen:false,bindRows:[],addCandidates:[],addCandidate:null,addSearchTimer:null,addSearchRequestId:0,addSearchKey:"",addInventoryIdempotencyKey:null,promotionKeys:{},promotionPending:new Set()}};
+    state.moldEditLocation={moldId:null,originalLocation:"",expectedVersion:null,syncing:false,selectionChanged:false,attempt:null};
     const $=id=>document.getElementById(id);
     const hasPermission=code=>state.user?.role==="admin"||state.permissions.includes(code);
     const canReviewStocktakes=()=>!state.readOnly&&hasPermission("warehouse.stocktake.review");
@@ -1001,7 +1003,7 @@
       $("refreshInsights").onclick=loadInsights;
       $("refreshMolds").onclick=loadMoldsFirstPage;$("moldKeyword").onkeydown=event=>{if(event.key==="Enter"){event.preventDefault();loadMoldsFirstPage()}};
       $("moldPrevPage").onclick=()=>{if(state.moldPage>1){state.moldPage-=1;loadMolds()}};$("moldNextPage").onclick=()=>{const pages=Math.max(1,Math.ceil(state.moldTotal/state.moldPageSize));if(state.moldPage<pages){state.moldPage+=1;loadMolds()}};
-      $("moldName").oninput=scheduleMoldCodePreview;$("moldRackSelect").onchange=renderMoldLocationLevels;$("moldLevelSelect").onchange=renderMoldLocationGrids;$("moldGridSelect").onchange=buildMoldRackLocation;$("resetMoldForm").onclick=resetMoldForm;
+      $("moldName").oninput=scheduleMoldCodePreview;$("moldRackSelect").onchange=()=>{markMoldLocationSelectionChanged();renderMoldLocationLevels()};$("moldLevelSelect").onchange=()=>{markMoldLocationSelectionChanged();renderMoldLocationGrids()};$("moldGridSelect").onchange=()=>{markMoldLocationSelectionChanged();buildMoldRackLocation()};$("resetMoldForm").onclick=resetMoldForm;
       $("moldBindingCustomerKeyword").oninput=renderMoldBindingCustomerCandidates;$("moldBindingCustomerKeyword").onkeydown=event=>{if(event.key==="Enter"){event.preventDefault();renderMoldBindingCustomerCandidates()}};$("moldBindingKeyword").onkeydown=event=>{if(event.key==="Enter"){event.preventDefault();searchMoldBindingProducts()}};$("searchMoldBindingProducts").onclick=searchMoldBindingProducts;$("confirmMoldBinding").onclick=()=>saveMoldBinding(false);$("addMoldBinding").onclick=()=>saveMoldBinding(true);$("closeMoldBinding").onclick=closeMoldBinding;
       $("refreshPrintingPlates").onclick=loadPrintingPlates;$("printingPlateKeyword").onkeydown=event=>{if(event.key==="Enter"){event.preventDefault();loadPrintingPlates()}};$("resetPrintingPlateForm").onclick=resetPrintingPlateForm;
       $("printingPlateRackSelect").onchange=$("printingPlateLevelSelect").onchange=$("printingPlatePositionNumber").oninput=buildPrintingPlateLocation;$("printingPlateLocation").onchange=()=>syncPrintingPlateLocationBuilder($("printingPlateLocation").value);
@@ -1827,7 +1829,9 @@
     function selectedMoldRack(){return state.moldLocationOptions.find(row=>row.rack_code===$("moldRackSelect").value)||null}
     function selectedMoldLevel(){const rack=selectedMoldRack(),level=Number.parseInt($("moldLevelSelect").value,10);return(rack?.levels||[]).find(row=>Number(row.level)===level)||null}
     function setMoldLocationBuilderDisabled(disabled){["moldRackSelect","moldLevelSelect","moldGridSelect"].forEach(id=>$(id).disabled=disabled)}
+    function markMoldLocationSelectionChanged(){if(state.moldEditLocation.syncing)return;state.moldEditLocation.selectionChanged=true}
     function buildMoldRackLocation(){
+      if(state.moldEditLocation.moldId&&!state.moldEditLocation.selectionChanged&&!state.moldEditLocation.syncing)return;
       const rack=selectedMoldRack();if(!rack)return;
       if(rack.location_depth==="rack"){$("moldRackLocation").value=`1F-M-${rack.rack_code}`;$("moldLocationBuilderHint").textContent=`已选择：${rack.rack_code} ${rack.name}。该区域没有层号或格号，左右顺序不记录。`;return}
       const level=selectedMoldLevel();if(!level)return;
@@ -1860,8 +1864,9 @@
       }catch(error){$("moldLocationBuilderHint").textContent=`一楼模具货架读取失败：${error.message}；请刷新后重试，禁止猜测位置码。`;return false}
     }
     function syncMoldLocationBuilder(value){
-      const clean=String(value||"").trim().toUpperCase(),match=/^1F-M-(R0[1-4])(?:-L(\d+))?(?:-G(\d+))?$/.exec(clean);if(!match){$("moldLocationBuilderHint").textContent="这是历史模具位置；档案编辑时保留原值，需要移动时请使用模具双码移动确认。";return false}
-      $("moldRackSelect").value=match[1];renderMoldLocationLevels();if(match[2]){$("moldLevelSelect").value=String(Number(match[2]));renderMoldLocationGrids()}if(match[3]){$("moldGridSelect").value=String(Number(match[3]));buildMoldRackLocation()}return true;
+      const clean=String(value||"").trim().toUpperCase(),match=/^1F-M-(R0[1-4])(?:-L(\d+))?(?:-G(\d+))?$/.exec(clean);if(!match){$("moldLocationBuilderHint").textContent="这是历史模具位置；选择已发布的新货架、层、格后，保存时会按真实移位处理。";return false}
+      state.moldEditLocation.syncing=true;
+      try{$("moldRackSelect").value=match[1];renderMoldLocationLevels();if(match[2]){$("moldLevelSelect").value=String(Number(match[2]));renderMoldLocationGrids()}if(match[3]){$("moldGridSelect").value=String(Number(match[3]));buildMoldRackLocation()}return true}finally{state.moldEditLocation.syncing=false}
     }
     let moldPinyinRuntimePromise=null;
     async function ensureMoldPinyinRuntime(){
@@ -1883,7 +1888,7 @@
     }
     function scheduleMoldCodePreview(){clearTimeout(state.moldCodePreviewTimer);state.moldCodePreviewTimer=setTimeout(updateMoldCodePreview,180)}
     function resetMoldForm(){
-      state.moldCodePreviewRequestId+=1;clearTimeout(state.moldCodePreviewTimer);$("moldForm").reset();$("moldId").value="";$("moldCode").value="";$("moldCustomerInitials").value="";setMoldLocationBuilderDisabled(false);$("moldCodeHint").textContent="输入模具名称后，系统会显示将要保存的模具编号。";closeMoldBinding();renderMoldLocationLevels();
+      if(state.moldEditLocation.attempt&&!state.moldEditLocation.attempt.committed){toast("当前模具的位置保存结果还未确定，请先原样重试核对",true);return}state.moldCodePreviewRequestId+=1;clearTimeout(state.moldCodePreviewTimer);state.moldEditLocation={moldId:null,originalLocation:"",expectedVersion:null,syncing:false,selectionChanged:false,attempt:null};$("moldForm").reset();$("moldId").value="";$("moldCode").value="";$("moldCustomerInitials").value="";setMoldLocationBuilderDisabled(false);$("moldEditLocationNotice").classList.add("hidden");$("moldCodeHint").textContent="输入模具名称后，系统会显示将要保存的模具编号。";closeMoldBinding();renderMoldLocationLevels();
     }
     function moldBindingCustomerLabel(row){return row?(row.customer_code?`${row.customer_code} · ${row.name}`:`${row.customer_number||""} · ${row.name}`):""}
     function renderMoldBindingCustomerCandidates(){
@@ -1955,12 +1960,37 @@
     function openMoldBatchLabels(){const ids=state.molds.filter(row=>state.moldSelection.has(row.id)).map(row=>row.id);if(!ids.length){toast("请先选择要打印的模具",true);return}window.open(`/mold-label.html?mold_ids=${ids.join(",")}`,'_blank')}
     function editMold(id){
       const row=state.molds.find(value=>value.id===id);if(!row)return;
-      state.moldCodePreviewRequestId+=1;$("moldId").value=row.id;$("moldCode").value=row.mold_code;$("moldName").value=row.mold_name;$("moldRackLocation").value=row.rack_location;$("moldRemarks").value=row.remarks||"";$("moldCustomerInitials").value="";$("moldCodeHint").textContent="模具编号已生成并锁定；编辑名称不会改写编号。";syncMoldLocationBuilder(row.rack_location);setMoldLocationBuilderDisabled(true);openMoldBinding(row);
+      const pending=state.moldEditLocation.attempt;if(pending){toast(Number(state.moldEditLocation.moldId)===Number(id)?"这件模具的保存结果正在核对，请在当前编辑区再次点击保存":"上一件模具的位置保存结果还未确定，请先原样重试核对",true);return}
+      state.moldCodePreviewRequestId+=1;state.moldEditLocation={moldId:row.id,originalLocation:row.rack_location,expectedVersion:row.location_version,syncing:false,selectionChanged:false,attempt:null};$("moldId").value=row.id;$("moldCode").value=row.mold_code;$("moldName").value=row.mold_name;$("moldRackLocation").value=row.rack_location;$("moldRemarks").value=row.remarks||"";$("moldCustomerInitials").value="";$("moldCodeHint").textContent="模具编号已生成并锁定；编辑名称不会改写编号。";syncMoldLocationBuilder(row.rack_location);setMoldLocationBuilderDisabled(false);$("moldEditLocationNotice").classList.remove("hidden");openMoldBinding(row);
       $("moldForm").scrollIntoView({behavior:"smooth",block:"start"});
     }
     async function saveMold(event){
       event.preventDefault();if(state.moldSaving)return;state.moldSaving=true;$("moldSaveButton").disabled=true;
-      try{const id=$("moldId").value;if(!id&&!$("moldCustomerInitials").value){await updateMoldCodePreview();if(!$("moldCustomerInitials").value){toast($("moldCodeHint").textContent,true);return}}const payload={mold_name:$("moldName").value,rack_location:$("moldRackLocation").value,remarks:$("moldRemarks").value||null,...(id?{mold_code:$("moldCode").value}:{customer_initials:$("moldCustomerInitials").value})};const saved=await api(`/api/warehouse/molds${id?"/"+id:""}`,{method:id?"PUT":"POST",body:JSON.stringify(payload)});toast("模具档案已保存，可以继续绑定常用箱");await loadMolds();const row=state.molds.find(value=>value.id===saved.id)||saved;$("moldId").value=row.id;$("moldCode").value=row.mold_code;setMoldLocationBuilderDisabled(true);$("moldCodeHint").textContent="模具编号已生成并锁定；编辑名称不会改写编号。";openMoldBinding(row);$("moldBindingPanel").scrollIntoView({behavior:"smooth",block:"start"})}catch(err){toast(err.message,true)}finally{state.moldSaving=false;$("moldSaveButton").disabled=false}
+      try{
+        const id=$("moldId").value;
+        if(!id&&!$("moldCustomerInitials").value){await updateMoldCodePreview();if(!$("moldCustomerInitials").value){toast($("moldCodeHint").textContent,true);return}}
+        let attempt=state.moldEditLocation.attempt,payload;
+        if(attempt?.committed){const refreshed=await loadMolds();if(refreshed===false){toast("模具档案已保存，但列表刷新失败；请勿重复提交，稍后再点保存只会继续刷新",true);return}const current=state.molds.find(value=>Number(value.id)===Number(state.moldEditLocation.moldId));state.moldEditLocation.attempt=null;if(current)editMold(current.id);toast("已核对模具档案保存成功");return}
+        if(attempt){payload=attempt.requestPayload;toast("正在使用上次相同移位凭证核对结果，请勿更换模具或位置")}
+        else{
+          payload={mold_name:$("moldName").value,rack_location:$("moldRackLocation").value,remarks:$("moldRemarks").value||null,...(id?{mold_code:$("moldCode").value}:{customer_initials:$("moldCustomerInitials").value})};
+          if(id&&payload.rack_location.trim()!==state.moldEditLocation.originalLocation.trim()){
+            const preview=await api("/api/warehouse/molds/location-movement/preview",{method:"POST",body:JSON.stringify({mold_code:$("moldCode").value,target_location:payload.rack_location})});
+            if(preview.same_location){toast("系统中的模具位置已经变化，请刷新后重新编辑",true);return}
+            const occupants=Number(preview.co_located_count||0)?`\n该位置当前还有 ${preview.co_located_count} 件模具，同一格允许并排存放。`:"";
+            if(!window.confirm(`请确认模具实物已经搬动：\n\n原位置：${state.moldEditLocation.originalLocation}\n新位置：${preview.target_location}\n${preview.target_guide?.prompt||""}${occupants}\n\n确认后将保存位置并追加移位流水。`))return;
+            payload={...payload,expected_location_version:preview.expected_version,location_idempotency_key:createIdempotencyKey(),physical_move_confirmed:true,location_note:"模具档案编辑中确认实物移位"};
+            attempt={requestPayload:payload,committed:false};state.moldEditLocation.attempt=attempt;
+          }
+        }
+        let saved;
+        try{saved=await api(`/api/warehouse/molds${id?"/"+id:""}`,{method:id?"PUT":"POST",body:JSON.stringify(payload)})}
+        catch(error){if(attempt&&error.status&&error.status<500){state.moldEditLocation.attempt=null;const refreshed=await loadMolds();const current=refreshed!==false?state.molds.find(value=>Number(value.id)===Number(id)):null;if(current)editMold(current.id)}toast(attempt&&(!error.status||error.status>=500)?"模具位置保存结果暂不确定；再次点击保存会复用同一凭证核对，不会重复移动":error.message,true);return}
+        if(attempt)attempt.committed=true;
+        toast(id&&payload.physical_move_confirmed?"模具新位置已保存，并已记录移位流水":"模具档案已保存，可以继续绑定常用箱");
+        const refreshed=await loadMolds();if(refreshed===false){toast("模具档案已保存，但列表刷新失败；请勿重复提交，稍后再点保存只会继续刷新",true);return}
+        const row=state.molds.find(value=>value.id===saved.id)||saved;state.moldEditLocation.attempt=null;editMold(row.id);$("moldBindingPanel").scrollIntoView({behavior:"smooth",block:"start"});
+      }catch(err){toast(err.message,true)}finally{state.moldSaving=false;$("moldSaveButton").disabled=false}
     }
     async function enableLegacyMold(id){const row=state.molds.find(item=>item.id===id);if(!row||row.archive_status!=="active"||row.is_active)return;if(!window.confirm(`确认恢复历史停用模具 ${row.mold_code}？恢复不会生成搬运事实；如实物已搬到封存区，请不要使用此按钮。`))return;try{await api(`/api/warehouse/molds/${id}/enable`,{method:"PUT"});toast(`${row.mold_code} 已恢复使用`);await loadMolds()}catch(err){toast(err.message,true)}}
     async function archiveMold(id){

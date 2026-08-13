@@ -983,13 +983,26 @@ class MoldToolPayload(BaseModel):
     mold_name: str = Field(min_length=1, max_length=200)
     rack_location: str = Field(min_length=1, max_length=250)
     remarks: str | None = None
+    expected_location_version: int | None = Field(default=None, gt=0)
+    location_idempotency_key: str | None = Field(
+        default=None,
+        min_length=8,
+        max_length=120,
+    )
+    physical_move_confirmed: bool = False
+    location_note: str | None = Field(default=None, max_length=500)
 
     @field_validator("mold_name", "rack_location")
     @classmethod
     def strip_mold_fields(cls, value: str) -> str:
         return value.strip()
 
-    @field_validator("mold_code", "customer_initials")
+    @field_validator(
+        "mold_code",
+        "customer_initials",
+        "location_idempotency_key",
+        "location_note",
+    )
     @classmethod
     def strip_optional_mold_fields(cls, value: str | None) -> str | None:
         text = (value or "").strip()
@@ -9717,6 +9730,47 @@ def _mold_location_move_response(
     }
 
 
+def _append_mold_location_move_log(
+    db: Session,
+    *,
+    request: Request,
+    user: User,
+    result: MoldLocationMoveResult,
+    description: str,
+) -> None:
+    if result.replayed or result.no_change or result.movement is None:
+        return
+    movement = result.movement
+    db.add(
+        OperationLog(
+            user_id=user.id,
+            username=user.username,
+            role=user.role,
+            action="UPDATE",
+            resource=f"warehouse/molds/{result.mold.id}/location",
+            entity_type="mold_tool",
+            entity_id=result.mold.id,
+            description=description,
+            details=json.dumps(
+                {
+                    "movement_id": movement.id,
+                    "mold_code": movement.mold_code_snapshot,
+                    "from_location": movement.from_location,
+                    "to_location": movement.to_location,
+                    "expected_version": movement.expected_version,
+                    "resulting_version": movement.resulting_version,
+                    "idempotency_key": movement.idempotency_key,
+                    "source": movement.source,
+                    "note": movement.note,
+                },
+                ensure_ascii=False,
+            ),
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    )
+
+
 def _require_mold_archive_operator(user: User) -> None:
     if user.role not in {"admin", "boss"}:
         raise HTTPException(status_code=403, detail="只有管理员或老板可以封存和恢复模具")
@@ -9885,35 +9939,13 @@ def confirm_mold_location_movement(
             source=payload.source,
             note=payload.note,
         )
-        if not result.replayed and not result.no_change and result.movement is not None:
-            db.add(
-                OperationLog(
-                    user_id=user.id,
-                    username=user.username,
-                    role=user.role,
-                    action="UPDATE",
-                    resource=f"warehouse/molds/{result.mold.id}/location",
-                    entity_type="mold_tool",
-                    entity_id=result.mold.id,
-                    description="双码确认模具位置移动",
-                    details=json.dumps(
-                        {
-                            "movement_id": result.movement.id,
-                            "mold_code": result.movement.mold_code_snapshot,
-                            "from_location": result.movement.from_location,
-                            "to_location": result.movement.to_location,
-                            "expected_version": result.movement.expected_version,
-                            "resulting_version": result.movement.resulting_version,
-                            "idempotency_key": result.movement.idempotency_key,
-                            "source": result.movement.source,
-                            "note": result.movement.note,
-                        },
-                        ensure_ascii=False,
-                    ),
-                    ip_address=request.client.host if request.client else None,
-                    user_agent=request.headers.get("user-agent"),
-                )
-            )
+        _append_mold_location_move_log(
+            db,
+            request=request,
+            user=user,
+            result=result,
+            description="双码确认模具位置移动",
+        )
         db.commit()
         return _mold_location_move_response(result, allowed_customer_ids)
     except MoldLocationError as error:
@@ -11117,7 +11149,15 @@ def create_mold_tool(
     user: User = Depends(admin_only),
 ) -> dict:
     with _MOLD_CODE_WRITE_LOCK:
-        values = payload.model_dump(exclude={"customer_initials"})
+        values = payload.model_dump(
+            exclude={
+                "customer_initials",
+                "expected_location_version",
+                "location_idempotency_key",
+                "physical_move_confirmed",
+                "location_note",
+            }
+        )
         if payload.customer_initials:
             try:
                 values["mold_code"], _parts = next_available_mold_code(
@@ -11151,6 +11191,7 @@ def create_mold_tool(
 def update_mold_tool(
     mold_id: int,
     payload: MoldToolPayload,
+    request: Request,
     db: Session = Depends(get_db),
     user: User = Depends(admin_only),
 ) -> dict:
@@ -11159,22 +11200,81 @@ def update_mold_tool(
         raise HTTPException(status_code=404, detail="模具不存在")
     if row.archive_status == "archived":
         raise HTTPException(status_code=409, detail="封存模具不能直接编辑，请先按现场搬回后恢复启用")
-    if payload.rack_location.strip() != row.rack_location.strip():
-        raise HTTPException(
-            status_code=409,
-            detail="模具位置不能在档案编辑中直接修改，请使用模具码 + 位置码双码移动确认",
-        )
     if payload.mold_code and payload.mold_code != row.mold_code:
         raise HTTPException(status_code=409, detail="模具编号生成后不可在档案编辑中修改")
-    values = payload.model_dump(exclude={"customer_initials", "mold_code"})
+    location_changed = payload.rack_location.strip() != row.rack_location.strip()
+    result: MoldLocationMoveResult | None = None
+    if location_changed:
+        if not payload.physical_move_confirmed:
+            raise HTTPException(status_code=409, detail="请先确认模具实物已经搬到新位置")
+        if payload.expected_location_version is None:
+            raise HTTPException(status_code=409, detail="模具位置版本缺失，请重新预览后再保存")
+        if payload.location_idempotency_key is None:
+            raise HTTPException(status_code=409, detail="模具移位凭证缺失，请重新预览后再保存")
+        try:
+            # SQLite releases a SAVEPOINT as a durable transaction when no
+            # outer write has begun. Claim the mold row first so the movement,
+            # metadata and audit remain one rollback-safe transaction. The
+            # version predicate also makes this the concurrency gate.
+            claimed = db.execute(
+                update(MoldTool)
+                .where(
+                    MoldTool.id == row.id,
+                    MoldTool.is_active.is_(True),
+                    MoldTool.location_version == payload.expected_location_version,
+                )
+                .values(location_version=MoldTool.location_version)
+                .execution_options(synchronize_session=False)
+            )
+            if claimed.rowcount != 1:
+                raise MoldLocationError("模具位置版本已变化，请重新预览", status_code=409)
+            db.refresh(row)
+            preview_mold_location_move(
+                db,
+                mold_code=row.mold_code,
+                target_location=payload.rack_location,
+            )
+            result = confirm_mold_location_move(
+                db,
+                mold_code=row.mold_code,
+                target_location=payload.rack_location,
+                expected_version=payload.expected_location_version,
+                idempotency_key=payload.location_idempotency_key,
+                actor_id=user.id,
+                source="manual_input",
+                note=payload.location_note,
+            )
+            row = result.mold
+        except MoldLocationError as error:
+            db.rollback()
+            raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    values = payload.model_dump(
+        exclude={
+            "customer_initials",
+            "mold_code",
+            "rack_location",
+            "expected_location_version",
+            "location_idempotency_key",
+            "physical_move_confirmed",
+            "location_note",
+        }
+    )
     for key, value in values.items():
         setattr(row, key, value)
     row.updated_by = user.id
+    if result is not None:
+        _append_mold_location_move_log(
+            db,
+            request=request,
+            user=user,
+            result=result,
+            description="模具编辑确认位置移动",
+        )
     try:
         db.commit()
     except IntegrityError as error:
         db.rollback()
-        raise HTTPException(status_code=409, detail="模具编号已存在") from error
+        raise HTTPException(status_code=409, detail="模具位置已变化或保存冲突，请重新预览") from error
     db.refresh(row)
     return _mold_tool_dict(row)
 

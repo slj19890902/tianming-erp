@@ -34,7 +34,7 @@ def test_phase3_migration_script_can_run_directly() -> None:
     assert "--dry-run" in result.stdout
 
 
-def test_product_unique_constraints_are_scoped_to_customer(tmp_path: Path) -> None:
+def test_product_identity_allows_same_code_with_distinct_names(tmp_path: Path) -> None:
     from app.core.database import create_sqlite_engine
     from app.models import Base
     from app.models.customer import Customer
@@ -73,8 +73,8 @@ def test_product_unique_constraints_are_scoped_to_customer(tmp_path: Path) -> No
                 box_category="normal",
             )
         )
-        with pytest.raises(IntegrityError):
-            session.commit()
+        session.commit()
+        assert session.query(Product).count() == 2
 
 
 def test_phase3_schema_migration_preserves_product_archives(
@@ -278,37 +278,19 @@ def test_phase3_data_migration_supports_dry_run_and_is_idempotent(
         customer = session.get(Customer, 1)
         assert customer.customer_code is None
 
-    first = migrate_phase3_data(
-        target_database=target_path,
-        boxerp_database=source_path,
-        report_path=report_path,
-        dry_run=False,
-    )
-    second = migrate_phase3_data(
-        target_database=target_path,
-        boxerp_database=source_path,
-        report_path=report_path,
-        dry_run=False,
-    )
-
-    assert first.products_created == 1
-    assert second.products_created == 0
-    assert second.products_skipped == 1
+    with pytest.raises(RuntimeError, match="已拒绝旧离线脚本"):
+        migrate_phase3_data(
+            target_database=target_path,
+            boxerp_database=source_path,
+            report_path=report_path,
+            dry_run=False,
+        )
     with session_factory() as session:
-        assert len(session.scalars(select(Material)).all()) == 1
-        products = session.scalars(select(Product)).all()
-        mappings = session.scalars(select(MigrationEntityMap)).all()
+        assert session.scalar(select(Material).limit(1)) is None
+        assert session.scalar(select(Product).limit(1)) is None
+        assert session.scalar(select(MigrationEntityMap).limit(1)) is None
         customer = session.get(Customer, 1)
-
-    assert len(products) == 1
-    assert products[0].box_category == "normal"
-    assert products[0].material_id is not None
-    assert len(mappings) == 1
-    assert mappings[0].source_id == "100"
-    assert customer.customer_number == 1
-    assert customer.customer_code == "TH"
-    assert customer.payment_term_days == 30
-    assert float(customer.credit_limit) == 100000
+        assert customer.customer_code is None
     assert report_path.exists()
 
 

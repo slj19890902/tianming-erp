@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 
 @pytest.fixture()
-def order_api_app(tmp_path: Path):
+def order_api_app(tmp_path: Path, seed_supplier_master):
     from app.api.auth import router as auth_router
     from app.api.deps import get_db
     from app.api.orders import router as orders_router
@@ -30,6 +30,7 @@ def order_api_app(tmp_path: Path):
     engine = create_sqlite_engine(tmp_path / "orders.sqlite3")
     Base.metadata.create_all(engine)
     session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    seed_supplier_master(session_factory, "P1 Order Supplier", "P1-ORDER")
     with session_factory() as session:
         session.add_all(
             [
@@ -428,6 +429,7 @@ def test_common_box_compact_editor_fields_round_trip_without_contract_drift(
                 "crease_right_mm": 225,
                 "default_cutting_mode": "一开一",
                 "print_content": "单色印刷",
+                "printing_colors": "黑色",
                 "printing_plate_mode": "no_plate",
                 "production_process": "粘贴",
                 "sale_unit_price": "7.3500",
@@ -464,6 +466,7 @@ def test_common_box_compact_editor_fields_round_trip_without_contract_drift(
                 "crease_right_mm",
                 "default_cutting_mode",
                 "print_content",
+                "printing_colors",
                 "printing_plate_mode",
                 "production_process",
                 "sale_unit_price",
@@ -1044,18 +1047,21 @@ def test_order_list_supports_tm_display_search_and_hides_legacy_raw_number(
             order.order_number = "RUIDA-42838"
             session.commit()
 
-        keyword = client.get("/api/orders", params={"keyword": "TM20260613-0001"})
+        keyword = client.get(
+            "/api/orders",
+            params={"scope": "history", "keyword": "TM20260613-0001"},
+        )
         exact = client.get(
             "/api/orders",
-            params={"order_number": "TM20260613-0001"},
+            params={"scope": "history", "order_number": "TM20260613-0001"},
         )
         customer = client.get(
             "/api/orders",
-            params={"customer_name": "思迈尔"},
+            params={"scope": "history", "customer_name": "思迈尔"},
         )
         missing = client.get(
             "/api/orders",
-            params={"order_number": "TM20260613-9999"},
+            params={"scope": "history", "order_number": "TM20260613-9999"},
         )
 
     assert keyword.status_code == 200
@@ -2735,7 +2741,7 @@ def test_business_hides_fully_delivered_orders_and_finished_view_lists_them(
         )
 
     assert business.status_code == 200
-    assert business.json()["total"] == 0
+    assert business.json()["total"] == 1
     assert business.json()["unfinished_total"] == 0
     assert business_keyword.status_code == 200
     assert business_keyword.json()["total"] == 1
@@ -3313,7 +3319,7 @@ def test_back_dated_pdf_order_surfaces_at_top_of_business(order_api_app) -> None
     assert data["items"][0]["id"] == back_dated["id"]
 
 
-def test_business_orders_sort_by_latest_update(order_api_app) -> None:
+def test_business_orders_sort_by_creation_not_mutable_update(order_api_app) -> None:
     from app.models.order import Order
 
     app, session_factory = order_api_app
@@ -3328,8 +3334,8 @@ def test_business_orders_sort_by_latest_update(order_api_app) -> None:
         business = client.get("/api/orders", params={"status": "business"})
 
     assert business.status_code == 200
-    assert business.json()["items"][0]["id"] == first["id"]
-    assert business.json()["items"][1]["id"] == second["id"]
+    assert business.json()["items"][0]["id"] == second["id"]
+    assert business.json()["items"][1]["id"] == first["id"]
 
 
 def test_dead_order_is_excluded_from_business(order_api_app) -> None:

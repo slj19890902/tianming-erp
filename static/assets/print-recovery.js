@@ -127,7 +127,7 @@
         );
         if (generation !== loadGeneration || controller.signal.aborted) return false;
         try {
-          render(data);
+          await render(data);
         } catch (error) {
           throw new Error(`打印内容无法显示：${error?.message || "页面渲染失败"}`);
         }

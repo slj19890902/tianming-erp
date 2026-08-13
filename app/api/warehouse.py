@@ -11,9 +11,9 @@ import socket
 import sqlite3
 from threading import Lock
 from typing import Literal
-from urllib.parse import quote
+from urllib.parse import urlsplit, urlunsplit
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 import qrcode
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import and_, func, or_, select, update
@@ -50,8 +50,17 @@ from app.models.printing_plate import (
 )
 from app.models.product import Product
 from app.models.product_bom import SalesOrderItemBomComponent
+from app.models.product_bom import RequisitionItemBomSource
+from app.models.requisition import Requisition, RequisitionItem
 from app.models.order import Order, OrderItem
+from app.models.incoming_receipt import IncomingReceiptItem
+from app.models.incoming_receipt import IncomingReceipt
+from app.models.master_data_object_version import MasterDataObjectVersion
 from app.models.production import ProductionTask
+from app.models.supplier_requisition_order import (
+    SupplierRequisitionOrder,
+    SupplierRequisitionOrderItem,
+)
 from app.models.warehouse_capacity import WarehouseCapacityForecastPlan
 from app.models.warehouse_inventory import (
     FinishedGoodsInventoryDetail,
@@ -147,6 +156,7 @@ from app.services.asset_time_archive import (
     build_printing_plate_time_archives,
 )
 from app.services.production_workflow import PENDING, list_production_tasks
+from app.services.production_workflow import MUTABLE_ORDER_STATUSES
 from app.services.semi_finished_inventory import (
     SemiFinishedCandidate,
     SemiFinishedLotVersion,
@@ -233,8 +243,10 @@ from app.services.master_data_versioning import (
 from app.services.mold_identity import (
     MoldIdentityError,
     mold_customer_short_name,
+    mold_label_display_identity,
     next_available_mold_code,
 )
+from app.core.config import load_settings
 from app.services.mold_location import (
     MOLD_ARCHIVE_AREA_CODE,
     MoldLocationError,
@@ -9235,6 +9247,77 @@ def _require_mold_customer_scope(
         raise HTTPException(status_code=403, detail="无客户访问权限")
 
 
+def _mold_binding_dict(row: MoldTool, product: Product) -> dict:
+    material = product.material
+    customer_name = product.customer.name if product.customer else None
+    customer_code = product.customer.customer_code if product.customer else None
+    material_code = (
+        material.code
+        if material is not None and str(material.code or "").strip()
+        else product.default_material_code or product.legacy_material_text
+    )
+    return {
+        "id": product.id,
+        "customer_id": product.customer_id,
+        "customer_code": customer_code,
+        "customer_name": customer_name,
+        "customer_short_name": mold_customer_short_name(
+            row.mold_name,
+            customer_name,
+            customer_code,
+        ),
+        "product_code": product.product_code,
+        "product_name": product.product_name,
+        "customer_material_code": product.customer_material_code,
+        "specification": " × ".join(
+            str(round(value))
+            for value in (product.length_mm, product.width_mm, product.height_mm)
+            if value is not None
+        ),
+        "report_specification": " × ".join(
+            str(round(value))
+            for value in (product.report_length_mm, product.report_width_mm)
+            if value is not None
+        ),
+        "material_code": material_code,
+        "material_composition": (
+            material.paper_composition if material is not None else None
+        ),
+        "layer_count": (
+            product.layer_count
+            if product.layer_count is not None
+            else (material.layer_count if material is not None else None)
+        ),
+        "flute_type": (
+            product.flute_type
+            or (material.flute_type if material is not None else None)
+        ),
+        "production_process": product.production_process,
+        "direction_note": product.report_notes,
+    }
+
+
+def _mold_live_binding_dict(row: MoldTool, product: Product) -> dict:
+    """Project only the non-sensitive product facts needed by the scan page."""
+
+    payload = _mold_binding_dict(row, product)
+    return {
+        key: payload[key]
+        for key in (
+            "customer_name",
+            "customer_short_name",
+            "product_code",
+            "product_name",
+            "specification",
+            "report_specification",
+            "material_code",
+            "material_composition",
+            "layer_count",
+            "flute_type",
+        )
+    }
+
+
 def _mold_tool_dict(
     row: MoldTool,
     allowed_customer_ids: set[int] | None = None,
@@ -9280,35 +9363,7 @@ def _mold_tool_dict(
         "archive_candidate": archive_candidate,
         "archive_area_code": MOLD_ARCHIVE_AREA_CODE,
         "product_count": len(products),
-        "products": [
-            {
-                "id": product.id,
-                "customer_id": product.customer_id,
-                "customer_code": product.customer.customer_code if product.customer else None,
-                "customer_name": product.customer.name if product.customer else None,
-                "customer_short_name": mold_customer_short_name(
-                    row.mold_name,
-                    product.customer.name if product.customer else None,
-                    product.customer.customer_code if product.customer else None,
-                ),
-                "product_code": product.product_code,
-                "product_name": product.product_name,
-                "customer_material_code": product.customer_material_code,
-                "specification": " × ".join(
-                    str(round(value))
-                    for value in (product.length_mm, product.width_mm, product.height_mm)
-                    if value is not None
-                ),
-                "report_specification": " × ".join(
-                    str(round(value))
-                    for value in (product.report_length_mm, product.report_width_mm)
-                    if value is not None
-                ),
-                "production_process": product.production_process,
-                "direction_note": product.report_notes,
-            }
-            for product in products
-        ],
+        "products": [_mold_binding_dict(row, product) for product in products],
         "binding_history": [
             {
                 "id": product.id,
@@ -9336,7 +9391,8 @@ def _mold_tools_query(
 ):
     allowed_customer_ids = _mold_customer_scope(user, db)
     query = select(MoldTool).options(
-        selectinload(MoldTool.products).selectinload(Product.customer)
+        selectinload(MoldTool.products).selectinload(Product.customer),
+        selectinload(MoldTool.products).selectinload(Product.material),
     )
     if allowed_customer_ids is not None:
         query = query.where(
@@ -9871,7 +9927,24 @@ def confirm_mold_location_movement(
         ) from error
 
 
+def _mold_live_url(mold_id: int) -> str:
+    """Build the permanent label URL from the configured ERP browser origin."""
+
+    configured = urlsplit(load_settings().browser_url)
+    return urlunsplit(
+        (
+            configured.scheme.upper(),
+            configured.netloc,
+            f"/M/{int(mold_id)}",
+            "",
+            "",
+        )
+    )
+
+
 def _lan_ip() -> str:
+    """Retain the legacy helper for non-mold labels and test compatibility."""
+
     connection = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         connection.connect(("8.8.8.8", 80))
@@ -9882,22 +9955,133 @@ def _lan_ip() -> str:
         connection.close()
 
 
+def _label_identity(row: MoldTool, products: list[Product]) -> str:
+    customers = {
+        (product.customer.name, product.customer.customer_code)
+        for product in products
+        if product.customer is not None
+    }
+    if len(customers) != 1:
+        return f"{'多客户' if customers else '待完善'}{row.mold_code or '待完善'}"
+    customer_name, customer_code = next(iter(customers))
+    return mold_label_display_identity(
+        row.mold_name,
+        row.mold_code,
+        customer_name,
+        customer_code,
+    )
+
+
+def _label_dimension(products: list[Product], field: str) -> str:
+    if field == "specification":
+        dimensions = []
+        for product in products:
+            required = (product.length_mm, product.width_mm)
+            if product.height_mm is not None:
+                required = (*required, product.height_mm)
+            dimensions.append(required)
+    else:
+        dimensions = [
+            (product.report_length_mm, product.report_width_mm)
+            for product in products
+        ]
+    def format_value(value) -> str:
+        number = Decimal(str(value))
+        if number == number.to_integral_value():
+            return str(int(number))
+        return format(number.normalize(), "f")
+
+    values = [
+        " × ".join(format_value(value) for value in row)
+        if row and all(value is not None and value > 0 for value in row)
+        else ""
+        for row in dimensions
+    ]
+    unique_values = set(values)
+    if len(unique_values) == 1 and values and values[0]:
+        return values[0]
+    if len(unique_values) > 1:
+        return "多款见扫码"
+    return ""
+
+
+_LABEL_PRINTABLE_IDENTITY_LIMIT = 24
+_LABEL_PRINTABLE_MANUAL_LOCATION_LIMIT = 20
+
+
+def _mold_label_printability_error(
+    row: MoldTool,
+    products: list[Product],
+    location_guide: dict,
+) -> str | None:
+    """Return a human-fixable reason instead of printing clipped facts."""
+
+    if not row.is_active or row.archive_status != "active":
+        return f"模具 {row.mold_code} 已停用或归档，不能打印使用标签"
+    if not products:
+        return f"模具 {row.mold_code} 尚未绑定有效常用箱，不能打印使用标签"
+    identity = _label_identity(row, products)
+    if len(identity) > _LABEL_PRINTABLE_IDENTITY_LIMIT:
+        return (
+            f"模具 {row.mold_code} 的客户名称+模具编号过长，"
+            "请先按“客户中文简写+编号”维护模具名称"
+        )
+    if location_guide.get("kind") == "manual":
+        manual_location = str(row.rack_location or "").strip()
+        if len(manual_location) > _LABEL_PRINTABLE_MANUAL_LOCATION_LIMIT:
+            return (
+                f"模具 {row.mold_code} 的手工位置过长，"
+                "请先维护为正式货架/层/格位置后再打印"
+            )
+    return None
+
+
 def _mold_label_dict(
     row: MoldTool,
-    request: Request,
     allowed_customer_ids: set[int] | None,
-    lan_ip: str | None = None,
 ) -> dict:
-    port = request.url.port or 8000
-    lookup_url = (
-        f"http://{lan_ip or _lan_ip()}:{port}/mobile/mold-lookup"
-        f"?mold={quote(row.mold_code, safe='')}"
+    products = _visible_mold_products(row, allowed_customer_ids)
+    lookup_url = _mold_live_url(row.id)
+    qr = qrcode.QRCode(
+        version=None,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=3,
+        border=4,
     )
-    image = qrcode.make(lookup_url)
+    qr.add_data(lookup_url)
+    qr.make(fit=True)
+    if qr.version != 2 or len(qr.get_matrix()) != 33:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "固定二维码地址超出 40×30 标签的 203dpi 清晰度契约，"
+                "请先核对 ERP_BROWSER_URL 配置"
+            ),
+        )
+    image = qr.make_image(fill_color="black", back_color="white")
     buffer = BytesIO()
     image.save(buffer, format="PNG")
+    basics = _mold_tool_dict(row, allowed_customer_ids)
+    printability_error = _mold_label_printability_error(
+        row,
+        products,
+        basics["location_guide"],
+    )
+    if printability_error:
+        raise HTTPException(status_code=409, detail=printability_error)
     return {
-        **_mold_tool_dict(row, allowed_customer_ids),
+        "mold_code": row.mold_code,
+        "rack_location": row.rack_location,
+        "location_guide": basics["location_guide"],
+        "is_active": row.is_active,
+        "product_count": len(products),
+        "label_identity": _label_identity(row, products),
+        "label_product_specification": _label_dimension(
+            products, "specification"
+        ),
+        "label_report_specification": _label_dimension(
+            products, "report_specification"
+        ),
         "lookup_url": lookup_url,
         "qr_data_url": (
             "data:image/png;base64,"
@@ -9906,13 +10090,875 @@ def _mold_label_dict(
     }
 
 
+_MOLD_TASK_STATUS_LABELS = {
+    "waiting_material": "待收料",
+    "pending": "待生产",
+    "completed": "已完成",
+    "not_required": "无需生产",
+}
+_MOLD_ORDER_STATUS_LABELS = {
+    "pending_confirmation": "待确认",
+    "pending_production": "待生产",
+    "production": "生产中",
+    "pending_delivery": "待送货",
+}
+
+
+def _current_mold_binding_starts(
+    db: Session,
+    products: list[Product],
+    mold_id: int,
+) -> dict[int, datetime]:
+    """Return the proven start of each product's current mold binding period."""
+
+    product_ids = [product.id for product in products]
+    if not product_ids:
+        return {}
+    versions = db.execute(
+        select(
+            MasterDataObjectVersion.object_id,
+            MasterDataObjectVersion.created_at,
+            MasterDataObjectVersion.snapshot_json,
+        )
+        .where(
+            MasterDataObjectVersion.object_type == "product",
+            MasterDataObjectVersion.object_id.in_(product_ids),
+        )
+        .order_by(
+            MasterDataObjectVersion.object_id,
+            MasterDataObjectVersion.version,
+        )
+    ).all()
+    by_product: dict[int, list[tuple[datetime, dict]]] = {}
+    for product_id, created_at, snapshot_json in versions:
+        try:
+            snapshot = json.loads(snapshot_json)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(snapshot, dict):
+            by_product.setdefault(int(product_id), []).append(
+                (created_at, snapshot)
+            )
+
+    result: dict[int, datetime] = {}
+    for product in products:
+        start: datetime | None = None
+        linked_before = False
+        for created_at, snapshot in by_product.get(product.id, []):
+            linked = snapshot.get("mold_tool_id") == mold_id
+            if linked and not linked_before:
+                start = created_at
+            elif not linked:
+                start = None
+            linked_before = linked
+        if linked_before and start is not None:
+            result[product.id] = start
+    return result
+
+
+def _mold_live_task_ids(
+    db: Session,
+    *,
+    mold: MoldTool,
+    products: list[Product],
+    allowed_customer_ids: set[int] | None,
+) -> tuple[list[int], list[str]]:
+    warnings: list[str] = []
+    task_ids: set[int] = set()
+    starts = _current_mold_binding_starts(db, products, mold.id)
+    missing_evidence = sorted(
+        product.product_code
+        for product in products
+        if product.id not in starts
+    )
+    if missing_evidence:
+        warnings.append(
+            "部分常用箱缺少可证明的当前模具绑定起点，未倒推其历史订单："
+            + "、".join(missing_evidence)
+        )
+    for product in products:
+        binding_start = starts.get(product.id)
+        if binding_start is None:
+            continue
+        query = (
+            select(ProductionTask.id)
+            .join(OrderItem, OrderItem.id == ProductionTask.order_item_id)
+            .join(Order, Order.id == OrderItem.order_id)
+            .where(
+                ProductionTask.sales_order_item_bom_component_id.is_(None),
+                OrderItem.product_id == product.id,
+                ProductionTask.created_at >= binding_start,
+                OrderItem.is_force_closed.is_(False),
+                Order.status.in_(MUTABLE_ORDER_STATUSES),
+            )
+        )
+        if allowed_customer_ids is not None:
+            query = query.where(Order.customer_id.in_(allowed_customer_ids))
+        task_ids.update(int(value) for value in db.scalars(query).all())
+
+    component_query = (
+        select(ProductionTask.id)
+        .join(
+            SalesOrderItemBomComponent,
+            SalesOrderItemBomComponent.id
+            == ProductionTask.sales_order_item_bom_component_id,
+        )
+        .join(OrderItem, OrderItem.id == ProductionTask.order_item_id)
+        .join(Order, Order.id == OrderItem.order_id)
+        .where(
+            SalesOrderItemBomComponent.snapshot_mold_tool_id == mold.id,
+            OrderItem.is_force_closed.is_(False),
+            Order.status.in_(MUTABLE_ORDER_STATUSES),
+        )
+    )
+    if allowed_customer_ids is not None:
+        component_query = component_query.where(
+            Order.customer_id.in_(allowed_customer_ids)
+        )
+    task_ids.update(int(value) for value in db.scalars(component_query).all())
+    return sorted(task_ids), warnings
+
+
+def _material_locations_for_task(
+    db: Session,
+    *,
+    task: ProductionTask,
+    item: OrderItem,
+) -> list[dict]:
+    query = (
+        select(InventoryReservation, InventoryLot, WarehouseLocation)
+        .join(InventoryLot, InventoryLot.id == InventoryReservation.inventory_lot_id)
+        .join(
+            WarehouseLocation,
+            WarehouseLocation.id == InventoryLot.warehouse_location_id,
+        )
+        .where(
+            InventoryReservation.order_item_id == item.id,
+            InventoryReservation.reservation_type == "semi_order",
+            InventoryReservation.status.notin_(("cancelled", "released", "consumed")),
+            InventoryReservation.reserved_stock_quantity
+            > InventoryReservation.consumed_stock_quantity
+            + InventoryReservation.released_stock_quantity,
+            InventoryReservation.credited_requirement_quantity.is_not(None),
+            InventoryReservation.credited_requirement_quantity
+            > InventoryReservation.consumed_requirement_quantity
+            + InventoryReservation.released_requirement_quantity,
+            InventoryLot.inventory_type == "semi_finished",
+            InventoryLot.status.in_(("active", "frozen")),
+        )
+    )
+    if task.sales_order_item_bom_component_id is None:
+        query = query.where(
+            InventoryReservation.sales_order_item_bom_component_id.is_(None)
+        )
+    else:
+        query = query.where(
+            InventoryReservation.sales_order_item_bom_component_id
+            == task.sales_order_item_bom_component_id
+        )
+    locations: list[dict] = []
+    for reservation, lot, location in db.execute(
+        query.order_by(InventoryLot.stock_date, InventoryLot.id)
+    ).all():
+        remaining = max(
+            int(reservation.reserved_stock_quantity or 0)
+            - int(reservation.consumed_stock_quantity or 0)
+            - int(reservation.released_stock_quantity or 0),
+            0,
+        )
+        if remaining <= 0:
+            continue
+        remaining_requirement = max(
+            int(reservation.credited_requirement_quantity or 0)
+            - int(reservation.consumed_requirement_quantity or 0)
+            - int(reservation.released_requirement_quantity or 0),
+            0,
+        )
+        if remaining_requirement <= 0:
+            continue
+        locations.append(
+            {
+                "location_code": location.location_code,
+                "location_name": location.location_name,
+                "availability_state": (
+                    "available" if lot.status == "active" else "frozen"
+                ),
+            }
+        )
+    return list(
+        {
+            (
+                row["location_code"],
+                row["location_name"],
+                row["availability_state"],
+            ): row
+            for row in locations
+        }.values()
+    )
+
+
+_INACTIVE_REQUISITION_SOURCE_STATUSES = frozenset(
+    {
+        "cancelled",
+        "canceled",
+        "voided",
+        "withdrawn",
+        "invalid",
+        "已取消",
+        "已作废",
+        "已撤回",
+    }
+)
+
+
+def _current_requisition_source_ids(
+    db: Session,
+    *,
+    item: OrderItem,
+    requisitions: list[RequisitionItem],
+) -> set[int]:
+    """Return current receivable source rows while retaining facts separately."""
+
+    if not requisitions:
+        return set()
+    confirmed_supplier = False
+    latest_supplier_requisition_id: int | None = None
+    if item.supplier_order_number:
+        confirmed_supplier = db.scalar(
+            select(SupplierRequisitionOrderItem.id)
+            .join(
+                SupplierRequisitionOrder,
+                SupplierRequisitionOrder.id
+                == SupplierRequisitionOrderItem.supplier_order_id,
+            )
+            .where(
+                SupplierRequisitionOrder.order_number
+                == item.supplier_order_number,
+                SupplierRequisitionOrder.status == "confirmed",
+                SupplierRequisitionOrderItem.order_item_id == item.id,
+            )
+            .limit(1)
+        ) is not None
+    if confirmed_supplier:
+        latest_supplier_requisition_id = db.scalar(
+            select(func.max(RequisitionItem.requisition_id))
+            .join(Requisition, Requisition.id == RequisitionItem.requisition_id)
+            .where(
+                RequisitionItem.order_item_id == item.id,
+                Requisition.status == "supplier_requisition_created",
+            )
+        )
+    return {
+        requisition.id
+        for requisition in requisitions
+        if (
+            requisition.status == "有效"
+            if not confirmed_supplier
+            else requisition.status == "supplier_requisition_created"
+            and requisition.requisition_id == latest_supplier_requisition_id
+        )
+    }
+
+
+def _material_sources_for_task(
+    db: Session,
+    *,
+    task: ProductionTask,
+    item: OrderItem,
+) -> tuple[list[dict], str | None]:
+    """Build receipt facts per physical cardboard source without cross-counting."""
+
+    receipt_rows = db.scalars(
+        select(IncomingReceiptItem)
+        .join(IncomingReceipt, IncomingReceipt.id == IncomingReceiptItem.receipt_id)
+        .where(
+            IncomingReceiptItem.order_item_id == item.id,
+            IncomingReceiptItem.status == "posted",
+            IncomingReceipt.status == "posted",
+        )
+        .order_by(IncomingReceiptItem.id)
+    ).all()
+    receipts_by_requisition: dict[int | None, list[IncomingReceiptItem]] = {}
+    for receipt in receipt_rows:
+        receipts_by_requisition.setdefault(receipt.requisition_item_id, []).append(
+            receipt
+        )
+
+    warnings: list[str] = []
+    requisition_entries: list[
+        tuple[RequisitionItem, RequisitionItemBomSource | None]
+    ]
+    if task.sales_order_item_bom_component_id is not None:
+        requisition_entries = db.execute(
+            select(RequisitionItem, RequisitionItemBomSource)
+            .join(
+                RequisitionItemBomSource,
+                RequisitionItemBomSource.requisition_item_id
+                == RequisitionItem.id,
+            )
+            .where(
+                RequisitionItem.order_item_id == item.id,
+                RequisitionItemBomSource.sales_order_item_bom_component_id
+                == task.sales_order_item_bom_component_id
+            )
+            .order_by(RequisitionItem.id)
+        ).all()
+    else:
+        linked_bom_source = (
+            select(RequisitionItemBomSource.id)
+            .where(
+                RequisitionItemBomSource.requisition_item_id
+                == RequisitionItem.id
+            )
+            .exists()
+        )
+        requisition_rows = db.scalars(
+            select(RequisitionItem)
+            .where(
+                RequisitionItem.order_item_id == item.id,
+                ~linked_bom_source,
+            )
+            .order_by(RequisitionItem.id)
+        ).all()
+        requisition_entries = [(row, None) for row in requisition_rows]
+
+    current_source_ids = _current_requisition_source_ids(
+        db,
+        item=item,
+        requisitions=[row for row, _source in requisition_entries],
+    )
+    sources: list[dict] = []
+    for requisition, bom_source in requisition_entries:
+        source_receipts = receipts_by_requisition.get(requisition.id, [])
+        inactive = (
+            str(requisition.status or "").strip().lower()
+            in _INACTIVE_REQUISITION_SOURCE_STATUSES
+        )
+        has_preserved_fact = bool(source_receipts) or requisition.status == "已入库"
+        is_current = requisition.id in current_source_ids and (
+            bom_source is None or bom_source.active_guard == 1
+        )
+        if inactive and not has_preserved_fact:
+            continue
+        if not is_current and not has_preserved_fact:
+            continue
+        legacy_received = not source_receipts and requisition.status == "已入库"
+        legacy_received_quantity = (
+            int(requisition.requisition_qty or 0) or None
+            if legacy_received
+            else None
+        )
+        sources.append(
+            {
+                "requisition": requisition,
+                "receipts": source_receipts,
+                "planned_fallback": (
+                    None
+                    if legacy_received
+                    else int(requisition.requisition_qty or 0) or None
+                ),
+                "legacy_received": legacy_received,
+                "legacy_received_quantity": legacy_received_quantity,
+                "legacy_unattributed": False,
+                "is_current": is_current,
+                "has_preserved_fact": has_preserved_fact,
+                "component_type": (
+                    str(bom_source.component_type or "whole").strip().lower()
+                    if bom_source is not None
+                    else None
+                ),
+                "source_conflict": False,
+            }
+        )
+
+    if task.sales_order_item_bom_component_id is not None and sources:
+        # One BOM snapshot has one physical source per whole/cover/base kind.  A
+        # superseded source with no receipt fact must not duplicate the current
+        # active_guard row.  A historical fact may replace an empty current row;
+        # multiple facts for the same physical kind are ambiguous and fail closed.
+        normalized: list[dict] = []
+        ambiguous = False
+        by_component: dict[str, list[dict]] = {}
+        for source in sources:
+            by_component.setdefault(source["component_type"] or "whole", []).append(
+                source
+            )
+        for component_sources in by_component.values():
+            factual = [
+                source
+                for source in component_sources
+                if source["has_preserved_fact"]
+            ]
+            current = [source for source in component_sources if source["is_current"]]
+            if len(factual) == 1:
+                normalized.append(factual[0])
+            elif len(factual) > 1:
+                normalized.extend(factual)
+                ambiguous = True
+            elif len(current) == 1:
+                normalized.append(current[0])
+            elif len(current) > 1:
+                normalized.extend(current)
+                ambiguous = True
+
+        whole_sources = [
+            source for source in normalized if source["component_type"] == "whole"
+        ]
+        split_sources = [
+            source
+            for source in normalized
+            if source["component_type"] in {"cover", "base"}
+        ]
+        if whole_sources and split_sources:
+            whole_has_fact = any(
+                source["has_preserved_fact"] for source in whole_sources
+            )
+            split_has_fact = any(
+                source["has_preserved_fact"] for source in split_sources
+            )
+            if whole_has_fact and not split_has_fact:
+                normalized = whole_sources
+            elif split_has_fact and not whole_has_fact:
+                normalized = split_sources
+            else:
+                ambiguous = True
+        if ambiguous:
+            for source in normalized:
+                source["source_conflict"] = True
+            warnings.append(
+                "该模切组件同时存在无法安全合并的整片与盖片/底片，或同一物理料来源存在多条收料事实；"
+                "本页不计算精确收料数量，请人工核对。"
+            )
+        sources = normalized
+
+    direct_receipts = receipts_by_requisition.get(None, [])
+    if task.sales_order_item_bom_component_id is None and direct_receipts:
+        if sources:
+            warnings.append(
+                "该订单同时存在旧直收与具体报料来源，收料数量存在来源冲突；"
+                "本页不计算精确收料数量，请人工核对。"
+            )
+            for source in sources:
+                source["source_conflict"] = True
+        sources.append(
+            {
+                "requisition": None,
+                "receipts": direct_receipts,
+                "planned_fallback": int(item.requisition_qty or 0) or None,
+                "legacy_received": False,
+                "legacy_received_quantity": None,
+                "legacy_unattributed": False,
+                "is_current": False,
+                "has_preserved_fact": True,
+                "component_type": None,
+                "source_conflict": bool(sources),
+            }
+        )
+    elif task.sales_order_item_bom_component_id is None and not sources:
+        legacy_received = item.material_status == "received"
+        sources.append(
+            {
+                "requisition": None,
+                "receipts": [],
+                "planned_fallback": (
+                    None
+                    if legacy_received
+                    else int(item.requisition_qty or 0) or None
+                ),
+                "legacy_received": legacy_received,
+                "legacy_received_quantity": (
+                    int(item.requisition_qty or 0) or None
+                    if legacy_received
+                    else None
+                ),
+                "legacy_unattributed": False,
+                "is_current": not legacy_received,
+                "has_preserved_fact": legacy_received,
+                "component_type": None,
+                "source_conflict": False,
+            }
+        )
+    elif (
+        task.sales_order_item_bom_component_id is not None
+        and not sources
+        and item.material_status == "received"
+    ):
+        sources.append(
+            {
+                "requisition": None,
+                "receipts": [],
+                "planned_fallback": None,
+                "legacy_received": True,
+                "legacy_received_quantity": None,
+                "legacy_unattributed": True,
+                "is_current": False,
+                "has_preserved_fact": True,
+                "component_type": None,
+                "source_conflict": False,
+            }
+        )
+        warnings.append("历史组合订单只有父单收料状态，无法归属到具体模切组件。")
+    return sources, "；".join(warnings) or None
+
+
+def _material_facts_for_task(
+    db: Session,
+    *,
+    task: ProductionTask,
+    item: OrderItem,
+) -> dict:
+    locations = _material_locations_for_task(db, task=task, item=item)
+    sources, warning = _material_sources_for_task(db, task=task, item=item)
+    calculated: list[dict] = []
+    for source in sources:
+        receipts: list[IncomingReceiptItem] = source["receipts"]
+        latest = receipts[-1] if receipts else None
+        legacy_received = bool(source["legacy_received"])
+        planned = None if legacy_received else (
+            int(latest.planned_quantity or 0)
+            if latest is not None
+            else source["planned_fallback"]
+        )
+        received = (
+            source["legacy_received_quantity"]
+            if legacy_received
+            else sum(int(receipt.received_quantity or 0) for receipt in receipts)
+        )
+        accepted_short = bool(
+            latest is not None and latest.resolution_action == "accept_short"
+        )
+        closed = legacy_received or accepted_short or bool(
+            planned is not None and received is not None and received >= planned
+        )
+        calculated.append(
+            {
+                "planned": planned,
+                "received": received,
+                "has_modern_receipt": bool(receipts),
+                "accepted_short": accepted_short,
+                "legacy_received": legacy_received,
+                "legacy_unattributed": bool(source["legacy_unattributed"]),
+                "source_conflict": bool(source["source_conflict"]),
+                "closed": closed,
+            }
+        )
+
+    source_conflict = any(source["source_conflict"] for source in calculated)
+    legacy_unattributed = any(
+        source["legacy_unattributed"] for source in calculated
+    )
+    any_modern = any(source["has_modern_receipt"] for source in calculated)
+    any_legacy = any(source["legacy_received"] for source in calculated)
+    legacy_received_quantity = (
+        sum(int(source["received"]) for source in calculated if source["legacy_received"])
+        if any_legacy
+        and all(
+            source["received"] is not None
+            for source in calculated
+            if source["legacy_received"]
+        )
+        else None
+    )
+    any_received = any((source["received"] or 0) > 0 for source in calculated)
+    all_closed = bool(calculated) and all(source["closed"] for source in calculated)
+    accepted_short = any(source["accepted_short"] for source in calculated)
+    planned_quantities_known = bool(calculated) and all(
+        source["planned"] is not None for source in calculated
+    )
+    received_quantities_known = bool(calculated) and all(
+        source["received"] is not None for source in calculated
+    )
+    planned_total = (
+        sum(int(source["planned"]) for source in calculated)
+        if planned_quantities_known and not source_conflict and not legacy_unattributed
+        else None
+    )
+    received_total = (
+        sum(int(source["received"]) for source in calculated)
+        if received_quantities_known and not source_conflict and not legacy_unattributed
+        else None
+    )
+    remaining = None
+    if (
+        planned_quantities_known
+        and received_quantities_known
+        and not source_conflict
+        and not legacy_unattributed
+    ):
+        remaining = sum(
+            0
+            if source["closed"]
+            else max(int(source["planned"]) - int(source["received"]), 0)
+            for source in calculated
+        )
+    physical_shortage_quantity = None
+    if accepted_short and not source_conflict and not legacy_unattributed:
+        physical_shortage_quantity = sum(
+            max(int(source["planned"]) - int(source["received"]), 0)
+            for source in calculated
+            if source["accepted_short"]
+            and source["planned"] is not None
+            and source["received"] is not None
+        )
+        if all_closed:
+            # A short-receipt decision closes the business requirement even
+            # when another closed legacy source no longer has its original
+            # planned quantity available for an exact physical total.
+            remaining = 0
+
+    if task.status == "not_required":
+        state, state_label = "not_required", "无需来料（库存覆盖）"
+    elif source_conflict:
+        state, state_label = "source_conflict", "收料来源冲突，需人工核对"
+    elif legacy_unattributed:
+        state, state_label = (
+            "legacy_received_unattributed",
+            "历史父单已收料（无法归属当前模切组件）",
+        )
+    elif all_closed and accepted_short:
+        state, state_label = "received_accept_short", "已短收结单"
+    elif any_legacy and all_closed:
+        state = "legacy_received"
+        state_label = (
+            f"已收料（历史实收 {received_total} 张，原计划未记录）"
+            if received_total is not None
+            else "已收料（历史实收数量未记录）"
+        )
+    elif all_closed:
+        state, state_label = "received", "已收料"
+    elif any_modern or any_received or any_legacy:
+        state, state_label = "partially_received", "部分收料"
+    elif locations:
+        state, state_label = "covered_by_inventory", "已备料（库存预占）"
+    else:
+        state, state_label = "not_received", "未收料"
+
+    receipt_source = (
+        "conflicting_sources"
+        if source_conflict
+        else "legacy_status_unattributed"
+        if legacy_unattributed
+        else "posted_receipt_items"
+        if any_modern
+        else "legacy_status"
+        if any_legacy
+        else "no_receipt_fact"
+    )
+    receipt_proven = any_modern or any_received or any_legacy
+    return {
+        "visibility": "visible",
+        "state": state,
+        "state_label": state_label,
+        "planned_quantity": planned_total,
+        "received_quantity": received_total,
+        "legacy_received_quantity": legacy_received_quantity,
+        "remaining_quantity": remaining,
+        "physical_shortage_quantity": physical_shortage_quantity,
+        "quantity_unit": "sheets",
+        "receipt_source": receipt_source,
+        "location_state": (
+            "recorded"
+            if locations
+            else "not_recorded"
+            if receipt_proven
+            else "not_applicable"
+        ),
+        "location_display": (
+            "已收料，系统尚无可证明的材料库位"
+            if receipt_proven and not locations
+            else None
+        ),
+        "locations": locations,
+        "warning": warning,
+    }
+
+
+def _mold_live_tasks(
+    db: Session,
+    *,
+    task_ids: list[int],
+    allowed_customer_ids: set[int] | None,
+    include_incoming: bool,
+) -> list[dict]:
+    if not task_ids:
+        return []
+    task_rows = list_production_tasks(
+        db,
+        allowed_customer_ids=allowed_customer_ids,
+        task_ids=task_ids,
+    )
+    tasks_by_id = {
+        row.id: (row, item, order)
+        for row, item, order in db.execute(
+            select(ProductionTask, OrderItem, Order)
+            .join(OrderItem, OrderItem.id == ProductionTask.order_item_id)
+            .join(Order, Order.id == OrderItem.order_id)
+            .where(ProductionTask.id.in_(task_ids))
+        ).all()
+    }
+    result: list[dict] = []
+    for payload in task_rows:
+        task, item, order = tasks_by_id[int(payload["id"])]
+        material: dict = {"visibility": "hidden_by_permission"}
+        if include_incoming:
+            material = _material_facts_for_task(db, task=task, item=item)
+        result.append(
+            {
+                "order_number": order.order_number,
+                "order_status": order.status,
+                "order_status_label": _MOLD_ORDER_STATUS_LABELS.get(
+                    order.status, order.status
+                ),
+                "delivery_date": order.delivery_date.isoformat()
+                if order.delivery_date
+                else None,
+                "product_code": payload.get("product_code"),
+                "product_name": payload.get("product_name"),
+                "is_component_task": bool(payload.get("is_component_task")),
+                "order_quantity": int(payload.get("order_quantity") or 0),
+                "parent_order_quantity": int(
+                    payload.get("parent_order_quantity") or 0
+                ),
+                "production_quantity_unit": payload.get(
+                    "production_quantity_unit"
+                ),
+                "task_status": payload.get("status"),
+                "task_status_label": _MOLD_TASK_STATUS_LABELS.get(
+                    str(payload.get("status")), str(payload.get("status") or "")
+                ),
+                "planned_quantity": int(payload.get("planned_quantity") or 0),
+                "actual_output_quantity": int(
+                    payload.get("actual_output_quantity") or 0
+                ),
+                "linkage_basis": (
+                    "bom_order_snapshot"
+                    if payload.get("is_component_task")
+                    else "versioned_current_product_binding"
+                ),
+                "material": material,
+            }
+        )
+    return result
+
+
+@router.get("/molds/live/{mold_id}")
+def get_mold_live_status(
+    mold_id: int,
+    response: Response,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    response.headers["Cache-Control"] = "private, no-store, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Vary"] = "Cookie"
+    response.headers["X-Robots-Tag"] = "noindex, nofollow"
+    row = db.scalar(
+        select(MoldTool)
+        .options(
+            selectinload(MoldTool.products).selectinload(Product.customer),
+            selectinload(MoldTool.products).selectinload(Product.material),
+        )
+        .where(MoldTool.id == mold_id)
+    )
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail="查询对象不存在",
+            headers={"Cache-Control": "private, no-store, max-age=0"},
+        )
+    allowed_customer_ids = _mold_customer_scope(user, db)
+    products = _visible_mold_products(row, allowed_customer_ids)
+    snapshot_customer_access = False
+    if allowed_customer_ids is not None and not products:
+        snapshot_customer_access = db.scalar(
+            select(ProductionTask.id)
+            .join(
+                SalesOrderItemBomComponent,
+                SalesOrderItemBomComponent.id
+                == ProductionTask.sales_order_item_bom_component_id,
+            )
+            .join(OrderItem, OrderItem.id == ProductionTask.order_item_id)
+            .join(Order, Order.id == OrderItem.order_id)
+            .where(
+                SalesOrderItemBomComponent.snapshot_mold_tool_id == row.id,
+                Order.customer_id.in_(allowed_customer_ids),
+                OrderItem.is_force_closed.is_(False),
+                Order.status.in_(MUTABLE_ORDER_STATUSES),
+            )
+            .limit(1)
+        ) is not None
+        if not snapshot_customer_access:
+            raise HTTPException(
+                status_code=404,
+                detail="查询对象不存在",
+                headers={"Cache-Control": "private, no-store, max-age=0"},
+            )
+    basics = _mold_tool_dict(row, allowed_customer_ids)
+    dynamic_allowed = (
+        has_permission(user, "orders.view")
+        and has_permission(user, "production.die_cut.view")
+    )
+    task_ids: list[int] = []
+    warnings: list[str] = []
+    tasks: list[dict] = []
+    if dynamic_allowed:
+        task_ids, warnings = _mold_live_task_ids(
+            db,
+            mold=row,
+            products=products,
+            allowed_customer_ids=allowed_customer_ids,
+        )
+        tasks = _mold_live_tasks(
+            db,
+            task_ids=task_ids,
+            allowed_customer_ids=allowed_customer_ids,
+            include_incoming=has_permission(user, "incoming.view"),
+        )
+    return {
+        "schema_version": "mold-live-v1",
+        "as_of": beijing_naive_to_api(beijing_now_naive()),
+        "read_only": True,
+        "mode": (
+            "restricted"
+            if not dynamic_allowed
+            else "current_orders"
+            if tasks
+            else "mold_master"
+        ),
+        "task_visibility": (
+            "visible" if dynamic_allowed else "hidden_by_permission"
+        ),
+        "mold": {
+            "mold_code": row.mold_code,
+            "label_identity": _label_identity(row, products),
+            "rack_location": row.rack_location,
+            "location_guide": basics["location_guide"],
+            "location_version": row.location_version,
+            "is_active": row.is_active,
+            "archive_status": row.archive_status,
+        },
+        "bindings": {
+            "total": len(products),
+            "items": [_mold_live_binding_dict(row, product) for product in products],
+        },
+        "current_orders": {
+            "total": len(tasks) if dynamic_allowed else None,
+            "items": tasks if dynamic_allowed else [],
+        },
+        "warnings": warnings,
+    }
+
+
 @router.get("/molds/labels")
 def get_mold_labels(
-    request: Request,
+    response: Response,
     mold_ids: str = Query(min_length=1, max_length=1200),
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
+    response.headers["Cache-Control"] = "private, no-store, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Vary"] = "Cookie"
     raw_ids = [part.strip() for part in mold_ids.split(",") if part.strip()]
     if not raw_ids or any(not part.isdigit() or int(part) <= 0 for part in raw_ids):
         raise HTTPException(status_code=422, detail="模具批量标签参数无效")
@@ -9921,7 +10967,10 @@ def get_mold_labels(
         raise HTTPException(status_code=422, detail="一次最多打印 100 件模具")
     rows = db.scalars(
         select(MoldTool)
-        .options(selectinload(MoldTool.products).selectinload(Product.customer))
+        .options(
+            selectinload(MoldTool.products).selectinload(Product.customer),
+            selectinload(MoldTool.products).selectinload(Product.material),
+        )
         .where(MoldTool.id.in_(ordered_ids))
     ).unique().all()
     rows_by_id = {row.id: row for row in rows}
@@ -9929,13 +10978,17 @@ def get_mold_labels(
     if missing_ids:
         raise HTTPException(status_code=404, detail="所选模具已变化，请返回列表重新选择")
     allowed_customer_ids = _mold_customer_scope(user, db)
+    if allowed_customer_ids is not None:
+        raise HTTPException(
+            status_code=403,
+            detail="实体模具标签仅允许全客户范围的仓库账号打印",
+        )
     ordered_rows = [rows_by_id[mold_id] for mold_id in ordered_ids]
     for row in ordered_rows:
         _require_mold_customer_scope(row, allowed_customer_ids)
-    lan_ip = _lan_ip()
     return {
         "items": [
-            _mold_label_dict(row, request, allowed_customer_ids, lan_ip)
+            _mold_label_dict(row, allowed_customer_ids)
             for row in ordered_rows
         ],
         "count": len(ordered_rows),
@@ -9945,20 +10998,31 @@ def get_mold_labels(
 @router.get("/molds/{mold_id}/label")
 def get_mold_label(
     mold_id: int,
-    request: Request,
+    response: Response,
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
+    response.headers["Cache-Control"] = "private, no-store, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Vary"] = "Cookie"
     row = db.scalar(
         select(MoldTool)
-        .options(selectinload(MoldTool.products).selectinload(Product.customer))
+        .options(
+            selectinload(MoldTool.products).selectinload(Product.customer),
+            selectinload(MoldTool.products).selectinload(Product.material),
+        )
         .where(MoldTool.id == mold_id)
     )
     if row is None:
         raise HTTPException(status_code=404, detail="模具不存在")
     allowed_customer_ids = _mold_customer_scope(user, db)
+    if allowed_customer_ids is not None:
+        raise HTTPException(
+            status_code=403,
+            detail="实体模具标签仅允许全客户范围的仓库账号打印",
+        )
     _require_mold_customer_scope(row, allowed_customer_ids)
-    return _mold_label_dict(row, request, allowed_customer_ids)
+    return _mold_label_dict(row, allowed_customer_ids)
 
 
 @router.get("/molds/code-preview")
@@ -10068,7 +11132,11 @@ def create_mold_tool(
                 status_code=422,
                 detail="模具名称生成编号所需的客户拼音缩写缺失",
             )
-        row = MoldTool(**values, created_by=user.id, updated_by=user.id)
+        row = MoldTool(
+            **values,
+            created_by=user.id,
+            updated_by=user.id,
+        )
         db.add(row)
         try:
             db.commit()

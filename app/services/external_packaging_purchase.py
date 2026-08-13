@@ -7,7 +7,7 @@ import hashlib
 import json
 from typing import Any, Iterable
 
-from sqlalchemy import func, or_, select, text
+from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.core.time_contract import beijing_today
@@ -16,6 +16,7 @@ from app.models.customer import Customer
 from app.models.external_packaging_price import ExternalPackagingPriceVersion
 from app.models.external_packaging_purchase import (
     ExternalPackagingPurchaseBatch,
+    ExternalPackagingPurchaseCancellation,
     ExternalPackagingPurchaseItem,
     ExternalPackagingPurchaseOrder,
     ExternalPackagingReceiptItem,
@@ -69,9 +70,12 @@ def _decimal_text(value: Decimal | None) -> str | None:
 
 
 def _order_components(
-    db: Session, order_id: int
+    db: Session, order_id: int, *, lock_order: bool = False
 ) -> tuple[Order | None, list[SalesOrderItemExternalComponent]]:
-    order = db.get(Order, order_id)
+    order_query = select(Order).where(Order.id == order_id)
+    if lock_order:
+        order_query = order_query.with_for_update(of=Order)
+    order = db.scalar(order_query)
     if order is None:
         return None, []
     rows = list(
@@ -94,6 +98,24 @@ def _order_components(
         ).all()
     )
     return order, rows
+
+
+def claim_external_purchase_order(db: Session, order_id: int) -> Order | None:
+    """Serialize purchase, receipt and termination on SQLite and PostgreSQL."""
+
+    claimed = db.execute(
+        update(Order)
+        .where(Order.id == order_id)
+        .values(status=Order.status)
+        .execution_options(synchronize_session=False)
+    )
+    if claimed.rowcount != 1:
+        return None
+    db.flush()
+    order = db.get(Order, order_id)
+    if order is not None:
+        db.refresh(order)
+    return order
 
 
 def _current_price(
@@ -428,6 +450,7 @@ def _received_totals_by_purchase_item_ids(
 def _external_purchase_summary_response(
     batch: ExternalPackagingPurchaseBatch,
     received_totals: dict[int, Decimal],
+    cancelled_purchase_ids: set[int],
 ) -> dict[str, Any]:
     def receipt_status(purchase: ExternalPackagingPurchaseOrder) -> str:
         if all(
@@ -443,8 +466,13 @@ def _external_purchase_summary_response(
             return "partially_received"
         return "pending_receipt"
 
+    active_purchase_orders = [
+        row
+        for row in batch.purchase_orders
+        if row.status == "confirmed" and int(row.id) not in cancelled_purchase_ids
+    ]
     purchase_statuses = {
-        row.id: receipt_status(row) for row in batch.purchase_orders
+        row.id: receipt_status(row) for row in active_purchase_orders
     }
     overall_receipt_status = (
         "received"
@@ -457,11 +485,11 @@ def _external_purchase_summary_response(
         )
     )
     return {
-        "status": "confirmed",
+        "status": "confirmed" if active_purchase_orders else "cancelled",
         "receipt_status": overall_receipt_status,
         "batch_id": batch.id,
         "purchase_numbers": [
-            row.purchase_number for row in batch.purchase_orders
+            row.purchase_number for row in active_purchase_orders
         ],
         "purchase_orders": [
             {
@@ -469,7 +497,7 @@ def _external_purchase_summary_response(
                 "purchase_number": row.purchase_number,
                 "receipt_status": purchase_statuses[row.id],
             }
-            for row in batch.purchase_orders
+            for row in active_purchase_orders
         ],
         "confirmed_at": (
             batch.confirmed_at.isoformat() if batch.confirmed_at else None
@@ -478,6 +506,7 @@ def _external_purchase_summary_response(
 
 
 def get_external_purchase_summary(db: Session, order_id: int) -> dict[str, Any]:
+    order_status = db.scalar(select(Order.status).where(Order.id == order_id))
     batch = db.scalar(
         select(ExternalPackagingPurchaseBatch)
         .options(
@@ -486,15 +515,37 @@ def get_external_purchase_summary(db: Session, order_id: int) -> dict[str, Any]:
             )
         )
         .where(ExternalPackagingPurchaseBatch.sales_order_id == order_id)
+        .order_by(ExternalPackagingPurchaseBatch.id.desc())
+        .limit(1)
     )
     if batch is None:
         return {"status": "pending", "purchase_numbers": []}
+    cancelled_purchase_ids = {
+        int(value)
+        for value in db.scalars(
+            select(ExternalPackagingPurchaseCancellation.purchase_order_id)
+            .join(
+                ExternalPackagingPurchaseOrder,
+                ExternalPackagingPurchaseOrder.id
+                == ExternalPackagingPurchaseCancellation.purchase_order_id,
+            )
+            .where(ExternalPackagingPurchaseOrder.batch_id == batch.id)
+        ).all()
+    }
+    if order_status in {"cancelled", "dead"} or (
+        batch.purchase_orders and all(
+            int(purchase.id) in cancelled_purchase_ids
+            for purchase in batch.purchase_orders
+        )
+    ):
+        return {"status": "cancelled", "purchase_numbers": []}
     purchase_item_ids = {
         item.id for purchase in batch.purchase_orders for item in purchase.items
     }
     return _external_purchase_summary_response(
         batch,
         _received_totals_by_purchase_item_ids(db, purchase_item_ids),
+        cancelled_purchase_ids,
     )
 
 
@@ -529,11 +580,41 @@ def get_external_purchase_summaries_by_order_ids(
     received_totals = _received_totals_by_purchase_item_ids(
         db, purchase_item_ids
     )
-    batch_by_order_id = {int(batch.sales_order_id): batch for batch in batches}
+    purchase_order_ids = {
+        int(purchase.id) for batch in batches for purchase in batch.purchase_orders
+    }
+    cancelled_purchase_ids = {
+        int(value)
+        for value in db.scalars(
+            select(ExternalPackagingPurchaseCancellation.purchase_order_id).where(
+                ExternalPackagingPurchaseCancellation.purchase_order_id.in_(
+                    purchase_order_ids
+                )
+            )
+        ).all()
+    } if purchase_order_ids else set()
+    batch_by_order_id: dict[int, ExternalPackagingPurchaseBatch] = {}
+    for batch in batches:
+        current = batch_by_order_id.get(int(batch.sales_order_id))
+        if current is None or int(batch.id) > int(current.id):
+            batch_by_order_id[int(batch.sales_order_id)] = batch
+    cancelled_order_ids = {
+        int(order_id)
+        for order_id in db.scalars(
+            select(Order.id).where(
+                Order.id.in_(resolved_ids),
+                Order.status.in_(("cancelled", "dead")),
+            )
+        ).all()
+    }
     return {
         order_id: (
-            _external_purchase_summary_response(
-                batch_by_order_id[order_id], received_totals
+            {"status": "cancelled", "purchase_numbers": []}
+            if order_id in cancelled_order_ids
+            else _external_purchase_summary_response(
+                batch_by_order_id[order_id],
+                received_totals,
+                cancelled_purchase_ids,
             )
             if order_id in batch_by_order_id
             else {"status": "pending", "purchase_numbers": []}
@@ -573,13 +654,13 @@ def list_external_purchase_routing_rows(
             SalesOrderItemExternalComponent.sales_order_item_id == OrderItem.id,
         )
         .join(Customer, Customer.id == Order.customer_id)
-        .outerjoin(
-            ExternalPackagingPurchaseBatch,
-            ExternalPackagingPurchaseBatch.sales_order_id == Order.id,
-        )
         .where(
-            ExternalPackagingPurchaseBatch.id.is_(None),
-            Order.status.notin_(("cancelled", "dead")),
+            Order.status.notin_(("cancelled", "dead", "closed", "archived")),
+            ~select(ExternalPackagingPurchaseBatch.id)
+            .where(
+                ExternalPackagingPurchaseBatch.sales_order_id == Order.id,
+            )
+            .exists(),
         )
         .group_by(
             Order.id,
@@ -647,6 +728,14 @@ def build_external_purchase_preview(
             "该订单没有冻结的外购包装组件，不能补写或猜测旧订单", status_code=409
         )
     summary = get_external_purchase_summary(db, order.id)
+    if summary["status"] == "cancelled":
+        return {
+            "order_id": order.id,
+            "order_number": order.order_number,
+            "status": "cancelled",
+            "message": "该订单原外购包材采购已随订单流程撤回作废；如需重新采购，请新建正确订单。",
+            "items": [],
+        }
     if summary["status"] == "confirmed":
         batch = _load_batch(db, int(summary["batch_id"]))
         return {
@@ -656,6 +745,8 @@ def build_external_purchase_preview(
             "confirmation": _serialize_batch(batch),
             "items": [],
         }
+    if order.status in {"cancelled", "dead", "closed", "archived"}:
+        raise ExternalPurchaseContractError("订单已终止，不能确认外购包材采购")
     as_of = beijing_today()
     item_ids = {row.sales_order_item_id for row in components}
     order_items = {
@@ -837,6 +928,13 @@ def confirm_external_purchase(
     except (InvalidOperation, TypeError, ValueError, KeyError) as error:
         raise ExternalPurchaseContractError("采购明细格式不正确", status_code=422) from error
 
+    order = claim_external_purchase_order(db, order_id)
+    if order is None:
+        raise ExternalPurchaseContractError("订单不存在", status_code=404)
+    if order.status in {"cancelled", "dead", "closed", "archived"}:
+        raise ExternalPurchaseContractError("订单已终止，不能确认外购包材采购")
+    order, components = _order_components(db, order_id, lock_order=True)
+
     keyed = db.scalar(
         select(ExternalPackagingPurchaseBatch).where(
             ExternalPackagingPurchaseBatch.idempotency_key == key
@@ -850,11 +948,22 @@ def confirm_external_purchase(
             raise ExternalPurchaseContractError(
                 "同一提交标识对应的采购内容不同，请刷新订单后重新操作"
             )
+        cancelled = db.scalar(
+            select(ExternalPackagingPurchaseCancellation.id)
+            .join(
+                ExternalPackagingPurchaseOrder,
+                ExternalPackagingPurchaseOrder.id
+                == ExternalPackagingPurchaseCancellation.purchase_order_id,
+            )
+            .where(ExternalPackagingPurchaseOrder.batch_id == keyed.id)
+            .limit(1)
+        )
+        if cancelled is not None:
+            raise ExternalPurchaseContractError(
+                "该订单原外购包材采购已随流程撤回作废；如需重新采购，请新建正确订单。"
+            )
         return _load_batch(db, keyed.id), False
 
-    order, components = _order_components(db, order_id)
-    if order is None:
-        raise ExternalPurchaseContractError("订单不存在", status_code=404)
     if not components:
         raise ExternalPurchaseContractError(
             "该订单没有冻结的外购包装组件，不能补写或猜测旧订单"
@@ -945,6 +1054,18 @@ def confirm_external_purchase(
         order_item = db.get(OrderItem, component.sales_order_item_id)
         if order_item is None or order_item.order_id != order.id:
             raise ExternalPurchaseContractError("订单外购组件来源不完整")
+        minimum_quantity = _suggested_quantity(
+            component, int(order_item.quantity)
+        )
+        if quantity < minimum_quantity:
+            raise ExternalPurchaseContractError(
+                (
+                    f"组件“{component.purpose}”采购数量不能低于冻结需求 "
+                    f"{_decimal_text(minimum_quantity)} "
+                    f"{candidate.purchase_unit_snapshot}；MOQ 或包装倍数只允许向上调整"
+                ),
+                status_code=422,
+            )
         supplier_rows[product.supplier.id] = product.supplier
         prepared_by_supplier[product.supplier.id].append(
             {
@@ -1169,11 +1290,21 @@ def build_external_purchase_print(
     if purchase is None:
         raise ExternalPurchaseContractError("外购包装采购单不存在", status_code=404)
 
+    cancellation = db.scalar(
+        select(ExternalPackagingPurchaseCancellation.id).where(
+            ExternalPackagingPurchaseCancellation.purchase_order_id == purchase.id
+        )
+    )
+    if cancellation is not None:
+        raise ExternalPurchaseContractError("外购包装采购单已作废，禁止继续打印")
+
     sales_order = db.get(Order, purchase.batch.sales_order_id)
     if sales_order is None:
         raise ExternalPurchaseContractError(
             "采购单关联订单不存在，禁止猜测打印来源", status_code=409
         )
+    if sales_order.status in {"cancelled", "dead"}:
+        raise ExternalPurchaseContractError("关联订单已终止，禁止继续打印采购单")
     company = db.get(CompanyConfig, 1)
 
     items: list[dict[str, Any]] = []

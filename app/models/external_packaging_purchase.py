@@ -244,6 +244,37 @@ class ExternalPackagingPurchaseItem(Base):
     )
 
 
+class ExternalPackagingPurchaseCancellation(Base):
+    """Append-only invalidation fact for an unreceived purchase document."""
+
+    __tablename__ = "external_packaging_purchase_cancellations"
+    __table_args__ = (
+        UniqueConstraint(
+            "purchase_order_id",
+            name="uq_external_packaging_purchase_cancellation_order",
+        ),
+        CheckConstraint(
+            "source IN ('order_workflow_rollback','order_status_cancelled','order_status_dead','authorized_data_repair')",
+            name="ck_external_packaging_purchase_cancellation_source",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    purchase_order_id: Mapped[int] = mapped_column(
+        ForeignKey("external_packaging_purchase_orders.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    source: Mapped[str] = mapped_column(String(40), nullable=False)
+    reason: Mapped[str] = mapped_column(String(500), nullable=False)
+    cancelled_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
+    )
+    cancelled_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.current_timestamp()
+    )
+
+
 class ExternalPackagingReceipt(Base):
     """One append-only external-packaging receiving event."""
 

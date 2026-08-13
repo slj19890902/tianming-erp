@@ -89,6 +89,7 @@ from app.models.order_external_packaging import (  # noqa: E402,F401
 )
 from app.models.external_packaging_purchase import (  # noqa: E402,F401
     ExternalPackagingPurchaseBatch,
+    ExternalPackagingPurchaseCancellation,
     ExternalPackagingPurchaseDailySequence,
     ExternalPackagingPurchaseItem,
     ExternalPackagingPurchaseOrder,

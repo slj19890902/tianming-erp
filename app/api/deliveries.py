@@ -34,7 +34,14 @@ from app.models.delivery import (
     DeliveryPickTaskItem,
 )
 from app.models.finance import ReturnReceipt
+from app.models.external_packaging_purchase import (
+    ExternalPackagingPurchaseCancellation,
+    ExternalPackagingPurchaseItem,
+    ExternalPackagingPurchaseOrder,
+    ExternalPackagingReceiptItem,
+)
 from app.models.order import Order, OrderItem
+from app.models.order_external_packaging import SalesOrderItemExternalComponent
 from app.models.product import Product
 from app.models.product_bom import (
     BomComponentDirectDeliveryAllocation,
@@ -222,7 +229,81 @@ def _received_telescoping_capacity(db: Session, order_item_id: int) -> int | Non
     return None
 
 
+def _external_packaging_received(db: Session, order_item_id: int) -> bool:
+    required_component_ids = {
+        int(value)
+        for value in db.scalars(
+            select(SalesOrderItemExternalComponent.id).where(
+                SalesOrderItemExternalComponent.sales_order_item_id
+                == order_item_id,
+                SalesOrderItemExternalComponent.is_required.is_(True),
+            )
+        ).all()
+    }
+    if not required_component_ids:
+        return False
+    received_total = (
+        select(
+            func.coalesce(
+                func.sum(ExternalPackagingReceiptItem.received_quantity), 0
+            )
+        )
+        .where(
+            ExternalPackagingReceiptItem.purchase_item_id
+            == ExternalPackagingPurchaseItem.id
+        )
+        .correlate(ExternalPackagingPurchaseItem)
+        .scalar_subquery()
+    )
+    rows = db.execute(
+        select(
+            ExternalPackagingPurchaseItem.order_component_id,
+            ExternalPackagingPurchaseItem.purchase_quantity,
+            received_total.label("received_quantity"),
+        )
+        .join(
+            ExternalPackagingPurchaseOrder,
+            ExternalPackagingPurchaseOrder.id
+            == ExternalPackagingPurchaseItem.purchase_order_id,
+        )
+        .outerjoin(
+            ExternalPackagingPurchaseCancellation,
+            ExternalPackagingPurchaseCancellation.purchase_order_id
+            == ExternalPackagingPurchaseOrder.id,
+        )
+        .where(
+            ExternalPackagingPurchaseItem.sales_order_item_id == order_item_id,
+            ExternalPackagingPurchaseOrder.status == "confirmed",
+            ExternalPackagingPurchaseCancellation.id.is_(None),
+            ExternalPackagingPurchaseItem.order_component_id.in_(
+                required_component_ids
+            ),
+        )
+    ).all()
+    fully_received_component_ids = {
+        int(component_id)
+        for component_id, purchase_quantity, received_quantity in rows
+        if Decimal(str(received_quantity or 0)) >= Decimal(purchase_quantity)
+    }
+    return required_component_ids.issubset(fully_received_component_ids)
+
+
 def _delivery_remaining_quantity(db: Session, order_item: OrderItem) -> int:
+    has_external_components = bool(
+        db.scalar(
+            select(SalesOrderItemExternalComponent.id)
+            .where(
+                SalesOrderItemExternalComponent.sales_order_item_id
+                == order_item.id,
+                SalesOrderItemExternalComponent.is_required.is_(True),
+            )
+            .limit(1)
+        )
+    )
+    if has_external_components and not _external_packaging_received(
+        db, order_item.id
+    ):
+        return 0
     if is_composite_order_item(db, order_item.id):
         return int(kit_availability(db, order_item.id)["available_sets"])
     task = db.scalar(
@@ -230,6 +311,11 @@ def _delivery_remaining_quantity(db: Session, order_item: OrderItem) -> int:
             ProductionTask.order_item_id == order_item.id,
         )
     )
+    if order_item.supply_mode_snapshot == "external_purchase":
+        return max(
+            int(order_item.quantity or 0) - int(order_item.delivered_quantity or 0),
+            0,
+        )
     if task is not None:
         if task.status not in {"completed", "not_required"}:
             return 0
@@ -1408,6 +1494,61 @@ def _pending_query(
         .correlate(OrderItem)
         .scalar_subquery()
     )
+    required_external_components = (
+        select(func.count(SalesOrderItemExternalComponent.id))
+        .where(
+            SalesOrderItemExternalComponent.sales_order_item_id == OrderItem.id,
+            SalesOrderItemExternalComponent.is_required.is_(True),
+        )
+        .correlate(OrderItem)
+        .scalar_subquery()
+    )
+    received_required_external_components = (
+        select(func.count(ExternalPackagingPurchaseItem.id))
+        .join(
+            ExternalPackagingPurchaseOrder,
+            ExternalPackagingPurchaseOrder.id
+            == ExternalPackagingPurchaseItem.purchase_order_id,
+        )
+        .outerjoin(
+            ExternalPackagingPurchaseCancellation,
+            ExternalPackagingPurchaseCancellation.purchase_order_id
+            == ExternalPackagingPurchaseOrder.id,
+        )
+        .join(
+            SalesOrderItemExternalComponent,
+            SalesOrderItemExternalComponent.id
+            == ExternalPackagingPurchaseItem.order_component_id,
+        )
+        .where(
+            ExternalPackagingPurchaseItem.sales_order_item_id == OrderItem.id,
+            ExternalPackagingPurchaseOrder.status == "confirmed",
+            ExternalPackagingPurchaseCancellation.id.is_(None),
+            SalesOrderItemExternalComponent.is_required.is_(True),
+            ExternalPackagingPurchaseItem.purchase_quantity
+            <= select(
+                func.coalesce(
+                    func.sum(ExternalPackagingReceiptItem.received_quantity), 0
+                )
+            )
+            .where(
+                ExternalPackagingReceiptItem.purchase_item_id
+                == ExternalPackagingPurchaseItem.id
+            )
+            .correlate(ExternalPackagingPurchaseItem)
+            .scalar_subquery(),
+        )
+        .correlate(OrderItem)
+        .scalar_subquery()
+    )
+    external_packaging_received = and_(
+        required_external_components > 0,
+        received_required_external_components == required_external_components,
+    )
+    external_packaging_gate = or_(
+        required_external_components == 0,
+        external_packaging_received,
+    )
     query = (
         select(
             OrderItem.id.label("item_id"),
@@ -1434,6 +1575,7 @@ def _pending_query(
         .join(Customer, Customer.id == Order.customer_id)
         .join(Product, Product.id == OrderItem.product_id)
         .where(
+            external_packaging_gate,
             or_(
                 production_task_ready,
                 and_(
@@ -1443,10 +1585,12 @@ def _pending_query(
                         active_finished_reserved >= OrderItem.quantity,
                         semi_fully_covered,
                         received_telescoping_components > 0,
+                        external_packaging_received,
                     ),
                 ),
             ),
             OrderItem.is_force_closed.is_(False),
+            Order.status.notin_(("cancelled", "dead", "closed", "archived")),
         )
     )
     if customer_id is not None:
@@ -5196,6 +5340,24 @@ def _collect_delivery_lines(
             )
         order_item, order = row
         production_managed = _has_production_task(db, order_item.id)
+        has_external_components = bool(
+            db.scalar(
+                select(SalesOrderItemExternalComponent.id)
+                .where(
+                    SalesOrderItemExternalComponent.sales_order_item_id
+                    == order_item.id,
+                    SalesOrderItemExternalComponent.is_required.is_(True),
+                )
+                .limit(1)
+            )
+        )
+        if has_external_components and not _external_packaging_received(
+            db, order_item.id
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=f"第{index}条订单明细外购包材尚未收齐，当前不可发货",
+            )
         quantity_facts = _delivery_quantity_facts(db, order_item)
         remaining = quantity_facts["deliverable_quantity"]
         order_remaining = quantity_facts["order_remaining_quantity"]
@@ -5246,6 +5408,10 @@ def _collect_delivery_lines(
             and (
             (
                 order_item.material_status != "received"
+                and not (
+                    order_item.supply_mode_snapshot == "external_purchase"
+                    and _external_packaging_received(db, order_item.id)
+                )
                 and not full_inventory_coverage
                 and _received_telescoping_capacity(db, order_item.id) is None
             )
@@ -6088,10 +6254,33 @@ class _PendingDeliveryReadContext:
             | semi_requirement_item_ids
             | telescoping_item_ids
         )
+        required_external_item_ids = {
+            int(value)
+            for value in db.scalars(
+                select(SalesOrderItemExternalComponent.sales_order_item_id)
+                .where(
+                    SalesOrderItemExternalComponent.sales_order_item_id.in_(
+                        item_ids
+                    ),
+                    SalesOrderItemExternalComponent.is_required.is_(True),
+                )
+                .distinct()
+            ).all()
+        }
+        external_received_ids = {
+            int(item_id)
+            for item_id, item in self.order_items.items()
+            if item_id in required_external_item_ids
+            and _external_packaging_received(db, int(item_id))
+        }
         self.fast_item_ids = {
             item_id
             for item_id, item in self.order_items.items()
-            if item.material_status == "received" and item_id not in excluded_ids
+            if (
+                item.material_status == "received"
+                or item_id in external_received_ids
+            )
+            and item_id not in excluded_ids
         }
         completions_by_item: dict[int, list[ProductionCompletion]] = {}
         for completion in db.scalars(
@@ -6178,6 +6367,12 @@ class _PendingDeliveryReadContext:
             delivered = max(int(item.delivered_quantity or 0), 0)
             task = regular_tasks.get(item_id)
             if task is not None:
+                if (
+                    item_id in required_external_item_ids
+                    and item_id not in external_received_ids
+                ):
+                    self.remaining_by_item[item_id] = 0
+                    continue
                 if task.status not in {"completed", "not_required"}:
                     self.remaining_by_item[item_id] = 0
                     continue
@@ -6199,6 +6394,13 @@ class _PendingDeliveryReadContext:
                 continue
 
             max_deliverable = max(int(item.quantity or 0), 0)
+            if item.supply_mode_snapshot == "external_purchase":
+                self.remaining_by_item[item_id] = (
+                    max(max_deliverable - delivered, 0)
+                    if item_id in external_received_ids
+                    else 0
+                )
+                continue
             component_state = telescoping.get(item_id)
             if component_state is not None:
                 max_deliverable = min(

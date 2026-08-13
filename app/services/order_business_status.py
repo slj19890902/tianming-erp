@@ -8,6 +8,13 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.delivery import Delivery, DeliveryItem
+from app.models.external_packaging_purchase import (
+    ExternalPackagingPurchaseBatch,
+    ExternalPackagingPurchaseCancellation,
+    ExternalPackagingPurchaseItem,
+    ExternalPackagingPurchaseOrder,
+    ExternalPackagingReceiptItem,
+)
 from app.models.finance import (
     Invoice,
     ReturnReceipt,
@@ -18,6 +25,7 @@ from app.models.finance import (
 )
 from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
 from app.models.order import Order, OrderItem
+from app.models.order_external_packaging import SalesOrderItemExternalComponent
 from app.models.product_bom import SalesOrderItemBomComponent
 from app.models.production import ProductionCompletion, ProductionTask
 from app.models.supplier_requisition_order import (
@@ -151,8 +159,11 @@ def build_order_business_statuses(
 
     confirmed_supplier_item_ids: set[int] = set()
     closed_incoming_item_ids: set[int] = set()
+    confirmed_external_component_ids_by_item: dict[int, set[int]] = defaultdict(set)
+    received_external_component_ids_by_item: dict[int, set[int]] = defaultdict(set)
     posted_completion_item_ids: set[int] = set()
     required_component_ids_by_item: dict[int, set[int]] = defaultdict(set)
+    required_external_component_ids_by_item: dict[int, set[int]] = defaultdict(set)
     task_statuses_by_item: dict[int, dict[int | None, str]] = defaultdict(dict)
     finished_coverage_by_item: dict[int, int] = defaultdict(int)
     dispatched_rows_by_item: dict[int, list[tuple[int, int, int]]] = defaultdict(list)
@@ -175,6 +186,69 @@ def build_order_business_statuses(
             ).all()
             if item_id is not None
         )
+        external_purchase_rows = db.execute(
+            select(
+                ExternalPackagingPurchaseItem.sales_order_item_id,
+                ExternalPackagingPurchaseItem.order_component_id,
+                ExternalPackagingPurchaseItem.id,
+                ExternalPackagingPurchaseItem.purchase_quantity,
+            )
+            .join(
+                ExternalPackagingPurchaseOrder,
+                ExternalPackagingPurchaseOrder.id
+                == ExternalPackagingPurchaseItem.purchase_order_id,
+            )
+            .join(
+                ExternalPackagingPurchaseBatch,
+                ExternalPackagingPurchaseBatch.id
+                == ExternalPackagingPurchaseOrder.batch_id,
+            )
+            .outerjoin(
+                ExternalPackagingPurchaseCancellation,
+                ExternalPackagingPurchaseCancellation.purchase_order_id
+                == ExternalPackagingPurchaseOrder.id,
+            )
+            .where(
+                ExternalPackagingPurchaseItem.sales_order_item_id.in_(
+                    item_id_chunk
+                ),
+                ExternalPackagingPurchaseOrder.status == "confirmed",
+                ExternalPackagingPurchaseCancellation.id.is_(None),
+            )
+        ).all()
+        external_purchase_item_ids = [int(row[2]) for row in external_purchase_rows]
+        received_external_totals = {
+            int(purchase_item_id): Decimal(str(quantity or 0))
+            for purchase_item_id, quantity in db.execute(
+                select(
+                    ExternalPackagingReceiptItem.purchase_item_id,
+                    func.sum(ExternalPackagingReceiptItem.received_quantity),
+                )
+                .where(
+                    ExternalPackagingReceiptItem.purchase_item_id.in_(
+                        external_purchase_item_ids
+                    )
+                )
+                .group_by(ExternalPackagingReceiptItem.purchase_item_id)
+            ).all()
+        } if external_purchase_item_ids else {}
+        for (
+            sales_order_item_id,
+            order_component_id,
+            purchase_item_id,
+            purchase_quantity,
+        ) in external_purchase_rows:
+            order_item_id = int(sales_order_item_id)
+            component_id = int(order_component_id)
+            confirmed_external_component_ids_by_item[order_item_id].add(
+                component_id
+            )
+            if received_external_totals.get(
+                int(purchase_item_id), Decimal("0")
+            ) >= Decimal(purchase_quantity):
+                received_external_component_ids_by_item[order_item_id].add(
+                    component_id
+                )
         closed_incoming_item_ids.update(
             int(item_id)
             for item_id in db.scalars(
@@ -217,6 +291,20 @@ def build_order_business_statuses(
             )
         ):
             required_component_ids_by_item[int(order_item_id)].add(int(component_id))
+        for order_item_id, component_id in db.execute(
+            select(
+                SalesOrderItemExternalComponent.sales_order_item_id,
+                SalesOrderItemExternalComponent.id,
+            ).where(
+                SalesOrderItemExternalComponent.sales_order_item_id.in_(
+                    item_id_chunk
+                ),
+                SalesOrderItemExternalComponent.is_required.is_(True),
+            )
+        ):
+            required_external_component_ids_by_item[int(order_item_id)].add(
+                int(component_id)
+            )
         for order_item_id, component_id, task_status in db.execute(
             select(
                 ProductionTask.order_item_id,
@@ -431,6 +519,24 @@ def build_order_business_statuses(
             or item_id in closed_incoming_item_ids
         )
         has_formal_requisition = item_id in confirmed_supplier_item_ids
+        required_external_components = required_external_component_ids_by_item.get(
+            item_id, set()
+        )
+        purchased_external_components = confirmed_external_component_ids_by_item.get(
+            item_id, set()
+        )
+        received_external_components = received_external_component_ids_by_item.get(
+            item_id, set()
+        )
+        has_external_requirement = bool(required_external_components)
+        external_purchase_complete = bool(
+            has_external_requirement
+            and required_external_components.issubset(purchased_external_components)
+        )
+        external_receipt_complete = bool(
+            external_purchase_complete
+            and required_external_components.issubset(received_external_components)
+        )
 
         if delivered_quantity > 0 and remaining_quantity > 0:
             status = "partially_delivered"
@@ -527,6 +633,66 @@ def build_order_business_statuses(
                             "对应对账范围已完成结款",
                             statement_count=len(related_statement_ids),
                         )
+        elif item.supply_mode_snapshot == "external_purchase":
+            if external_receipt_complete:
+                status = "pending_delivery"
+                evidence = _evidence(
+                    "external_packaging_received",
+                    "纯外购包材已收齐，等待送货",
+                    external_component_count=len(required_external_components),
+                )
+            elif (
+                external_purchase_complete
+                or item.requisition_status == "外购包材已采购"
+            ):
+                status = "pending_incoming"
+                evidence = _evidence(
+                    "confirmed_external_packaging_purchase",
+                    "正式外购包材采购已保存，等待实收",
+                    external_component_count=len(required_external_components),
+                    purchased_external_component_count=len(
+                        purchased_external_components
+                    ),
+                    received_external_component_count=len(
+                        received_external_components
+                    ),
+                )
+            else:
+                status = "pending_material"
+                evidence = _evidence(
+                    "no_confirmed_external_packaging_purchase",
+                    "尚无有效正式外购包材采购",
+                )
+        elif has_external_requirement:
+            if not has_formal_requisition or not external_purchase_complete:
+                status = "pending_material"
+                evidence = _evidence(
+                    "mixed_supply_not_fully_requisitioned",
+                    "纸板报料与外购包材采购尚未全部完成",
+                    has_formal_supplier_requisition=has_formal_requisition,
+                    external_purchase_complete=external_purchase_complete,
+                )
+            elif not has_actual_incoming or not external_receipt_complete:
+                status = "pending_incoming"
+                evidence = _evidence(
+                    "mixed_supply_waiting_incoming",
+                    "纸板与外购包材尚未全部实收",
+                    has_actual_supplier_incoming=has_actual_incoming,
+                    external_receipt_complete=external_receipt_complete,
+                )
+            elif production_ready:
+                status = "pending_delivery"
+                evidence = _evidence(
+                    "production_or_finished_inventory_ready",
+                    "生产已完成或成品库存已足额覆盖",
+                    finished_inventory_coverage=finished_coverage,
+                )
+            else:
+                status = "pending_production"
+                evidence = _evidence(
+                    "mixed_supply_received",
+                    "纸板与外购包材均已实收，等待生产确认",
+                )
         elif production_ready:
             status = "pending_delivery"
             evidence = _evidence(

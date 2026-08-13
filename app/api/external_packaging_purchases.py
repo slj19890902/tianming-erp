@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.api.deps import (
@@ -183,6 +183,12 @@ def receive_external_packaging_purchase(
     except ExternalPurchaseContractError as error:
         db.rollback()
         raise _translate(error) from error
+    except OperationalError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="订单或采购正在被其他操作处理，请刷新后重试",
+        ) from error
 
 
 @router.get("/orders/{order_id}/external-packaging-purchase")
@@ -285,3 +291,9 @@ def confirm_external_packaging_purchase(
     except ExternalPurchaseContractError as error:
         db.rollback()
         raise _translate(error) from error
+    except OperationalError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="订单或采购正在被其他操作处理，请刷新后重试",
+        ) from error

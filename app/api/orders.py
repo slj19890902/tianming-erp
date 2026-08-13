@@ -48,6 +48,7 @@ from app.core.time_contract import (
 from app.models.audit import OperationLog
 from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryItem
+from app.models.external_packaging_purchase import ExternalPackagingPurchaseItem
 from app.models.finance import (
     Invoice,
     ReturnReceipt,
@@ -84,7 +85,11 @@ from app.models.tianhua_pre_delivery import (
     TianhuaPreDeliveryImportItem,
 )
 from app.models.user import User
-from app.models.warehouse_inventory import DeliveryInventoryAllocation, InventoryLot
+from app.models.warehouse_inventory import (
+    DeliveryInventoryAllocation,
+    InventoryLot,
+    InventoryReservation,
+)
 from app.services.history_orders import (
     build_display_registry,
     filter_order_ids_for_display_search,
@@ -190,6 +195,12 @@ from app.services.external_packaging_purchase import (
     get_external_purchase_summaries_by_order_ids,
     get_external_purchase_summary,
 )
+from app.services.external_packaging_purchase_lifecycle import (
+    ExternalPackagingPurchaseLifecycleError,
+    active_external_purchase_orders_for_order_ids,
+    cancel_unreceived_external_purchases,
+)
+from app.services.external_packaging_receiving import purchase_receipt_progress
 from app.services.composite_bom_workflow import (
     CompositeBomWorkflowError,
     append_component_demand_adjustment,
@@ -4383,6 +4394,117 @@ def _ensure_no_production_completion_facts(
         raise HTTPException(status_code=409, detail=_PRODUCTION_FACT_CONFLICT)
 
 
+def _already_at_workflow_rollback_baseline(
+    db: Session,
+    *,
+    order: Order,
+    item_ids: list[int],
+) -> bool:
+    """Return true only when a prior rollback left no new downstream work."""
+
+    prior_rollback = db.scalar(
+        select(OperationLog.id)
+        .where(
+            OperationLog.entity_type == "order",
+            OperationLog.entity_id == order.id,
+            OperationLog.action_code == "order.workflow_rollback",
+        )
+        .limit(1)
+    )
+    if prior_rollback is None or order.status != "pending_production":
+        return False
+    if order.payment_status != "unpaid":
+        return False
+    if any(
+        (
+            int(item.delivered_quantity or 0) != 0
+            or bool(item.is_force_closed)
+            or item.material_status != "pending"
+            or item.material_received_at is not None
+            or item.material_received_by is not None
+            or int(item.inventory_deducted_qty or 0) != 0
+            or item.requisition_qty is not None
+            or item.requisition_status != "未报料"
+            or item.special_process != "无"
+            or item.requisition_spec is not None
+            or item.cardboard_len is not None
+            or item.cardboard_width is not None
+            or item.requisition_date is not None
+            or item.supplier_delivery_time is not None
+            or item.supplier_order_number is not None
+            or item.requisition_remark is not None
+        )
+        for item in order.items
+    ):
+        return False
+    if active_external_purchase_orders_for_order_ids(db, {order.id}):
+        return False
+    supplier_statuses = db.scalars(
+        select(SupplierRequisitionOrder.status)
+        .join(
+            SupplierRequisitionOrderItem,
+            SupplierRequisitionOrderItem.supplier_order_id
+            == SupplierRequisitionOrder.id,
+        )
+        .where(SupplierRequisitionOrderItem.order_item_id.in_(item_ids))
+    ).all()
+    inactive_supplier_statuses = {
+        _normalized_supplier_requisition_status(value)
+        for value in _INACTIVE_SUPPLIER_REQUISITION_ORDER_STATUSES
+    }
+    if any(
+        _normalized_supplier_requisition_status(value)
+        not in inactive_supplier_statuses
+        for value in supplier_statuses
+    ):
+        return False
+    if db.scalar(
+        select(RequisitionItem.id)
+        .where(RequisitionItem.order_item_id.in_(item_ids))
+        .limit(1)
+    ) is not None:
+        return False
+    if db.scalar(
+        select(DeliveryItem.id)
+        .where(DeliveryItem.order_item_id.in_(item_ids))
+        .limit(1)
+    ) is not None:
+        return False
+    if db.scalar(
+        select(IncomingReceiptItem.id)
+        .where(
+            or_(
+                IncomingReceiptItem.order_id == order.id,
+                IncomingReceiptItem.order_item_id.in_(item_ids),
+            ),
+            IncomingReceiptItem.status == "posted",
+        )
+        .limit(1)
+    ) is not None:
+        return False
+    if db.scalar(
+        select(InventoryReservation.id)
+        .where(
+            InventoryReservation.order_item_id.in_(item_ids),
+            InventoryReservation.status != "cancelled",
+            InventoryReservation.reserved_stock_quantity
+            > InventoryReservation.consumed_stock_quantity
+            + InventoryReservation.released_stock_quantity,
+        )
+        .limit(1)
+    ) is not None:
+        return False
+    if _active_predelivery_order_ids(db, [order.id]):
+        return False
+    if db.scalar(
+        select(TianhuaPreDeliveryImportItem.id)
+        .where(TianhuaPreDeliveryImportItem.order_id == order.id)
+        .limit(1)
+    ) is not None:
+        return False
+    return True
+
+
 def _lock_orders_for_production_transition(
     db: Session,
     order_ids: list[int],
@@ -4704,11 +4826,59 @@ def update_order_status(
         )
         if order is None:
             raise HTTPException(status_code=409, detail="订单已被删除，请刷新后重试")
+    if order.status == target:
+        customer = db.get(Customer, order.customer_id)
+        return _order_response(
+            order,
+            user,
+            db=db,
+            customer_name=customer.name if customer else None,
+        )
     if target in {"dead", "cancelled"}:
         _ensure_no_production_completion_facts(
             db,
             [item.id for item in order.items],
         )
+        try:
+            external_purchase_changes = cancel_unreceived_external_purchases(
+                db,
+                order_id=order.id,
+                source=f"order_status_{target}",
+                reason=remark or f"订单状态变更为{target}",
+                cancelled_by=user.id,
+            )
+        except ExternalPackagingPurchaseLifecycleError as error:
+            db.rollback()
+            raise HTTPException(status_code=409, detail=str(error)) from error
+    else:
+        external_purchase_changes = []
+        if target in {"closed", "archived"}:
+            active_external_purchases = active_external_purchase_orders_for_order_ids(
+                db, {order.id}
+            )
+            purchase_progress = purchase_receipt_progress(
+                db,
+                {int(purchase.id) for purchase in active_external_purchases},
+            )
+            unfinished_external_purchases = [
+                purchase
+                for purchase in active_external_purchases
+                if purchase_progress.get(int(purchase.id), {}).get("status")
+                != "received"
+            ]
+            if unfinished_external_purchases:
+                numbers = "、".join(
+                    purchase.purchase_number
+                    for purchase in unfinished_external_purchases
+                )
+                db.rollback()
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"订单仍有未收齐的外购包材采购单 {numbers}，不能直接结档或归档；"
+                        "请先完成收料，或将错误订单撤回后作废。"
+                    ),
+                )
     before = order.status
     order.status = target
     if remark is not None:
@@ -4731,7 +4901,12 @@ def update_order_status(
         action_code="order.status_change",
         legacy_action="STATUS",
         description=f"订单状态变更为{target}",
-        details={"before": before, "after": target, "remark": remark},
+        details={
+            "before": before,
+            "after": target,
+            "remark": remark,
+            "external_packaging_purchase_changes": external_purchase_changes,
+        },
     )
     db.commit()
     customer = db.get(Customer, order.customer_id)
@@ -4822,8 +4997,28 @@ def rollback_order_workflow(
         raise HTTPException(status_code=409, detail="订单已被删除，请刷新后重试")
     if order.order_number.startswith("RUIDA-"):
         raise HTTPException(status_code=409, detail="历史订单禁止执行流程撤回")
+    if order.status in {"cancelled", "dead", "closed", "archived"}:
+        customer = db.get(Customer, order.customer_id)
+        return _order_response(
+            order,
+            user,
+            db=db,
+            customer_name=customer.name if customer else None,
+        )
     item_ids = [item.id for item in order.items]
     _ensure_no_production_completion_facts(db, item_ids)
+    if _already_at_workflow_rollback_baseline(
+        db,
+        order=order,
+        item_ids=item_ids,
+    ):
+        customer = db.get(Customer, order.customer_id)
+        return _order_response(
+            order,
+            user,
+            db=db,
+            customer_name=customer.name if customer else None,
+        )
     delivery_items = db.scalars(
         select(DeliveryItem).where(DeliveryItem.order_item_id.in_(item_ids))
     ).all()
@@ -4925,6 +5120,16 @@ def rollback_order_workflow(
             db,
             order_item_ids=item_ids,
         )
+        try:
+            external_purchase_changes = cancel_unreceived_external_purchases(
+                db,
+                order_id=order.id,
+                source="order_workflow_rollback",
+                reason=reason,
+                cancelled_by=user.id,
+            )
+        except ExternalPackagingPurchaseLifecycleError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
         requisition_ids = set(
             db.scalars(
                 select(RequisitionItem.requisition_id).where(
@@ -4981,6 +5186,7 @@ def rollback_order_workflow(
                 "receipt_ids": receipt_ids,
                 "statement_ids": sorted(statement_ids),
                 "supplier_requisition_changes": supplier_requisition_changes,
+                "external_packaging_purchase_changes": external_purchase_changes,
             },
         )
         db.commit()
@@ -7547,6 +7753,16 @@ def delete_order_item(
         raise HTTPException(status_code=409, detail="已流转明细禁止删除")
     if item.requisition_status != "未报料":
         raise HTTPException(status_code=409, detail="请先取消报料再删除订单明细")
+    external_purchase_history = db.scalar(
+        select(ExternalPackagingPurchaseItem.id)
+        .where(ExternalPackagingPurchaseItem.sales_order_item_id == item.id)
+        .limit(1)
+    )
+    if external_purchase_history is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="该明细已有外购包材采购历史，不能删除；请保留原订单用于追溯。",
+        )
     item_count = db.scalar(
         select(func.count()).select_from(OrderItem).where(
             OrderItem.order_id == order.id

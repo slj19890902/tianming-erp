@@ -32,7 +32,7 @@ def _confirm(client: TestClient, order_id: int) -> dict:
             {
                 "order_component_id": row["order_component_id"],
                 "candidate_id": row["default_candidate_id"],
-                "purchase_quantity": "100" if index == 0 else row["suggested_purchase_quantity"],
+                "purchase_quantity": row["suggested_purchase_quantity"],
             }
         )
     response = client.post(
@@ -65,9 +65,9 @@ def test_partial_then_complete_receipt_is_idempotent_and_creates_no_inventory(
         _login(client, "purchase-admin")
         _confirm(client, order_id)
         purchase, line = _root_line(_pending(client))
-        assert line["ordered_quantity"] == "100"
+        assert line["ordered_quantity"] == "408"
         assert line["received_quantity"] == "0"
-        assert line["remaining_quantity"] == "100"
+        assert line["remaining_quantity"] == "408"
         assert "unit_price" not in line
         assert "total_amount" not in line
 
@@ -109,7 +109,7 @@ def test_partial_then_complete_receipt_is_idempotent_and_creates_no_inventory(
         purchase_after, line_after = _root_line(_pending(client))
         assert purchase_after["status"] == "partially_received"
         assert line_after["received_quantity"] == "40"
-        assert line_after["remaining_quantity"] == "60"
+        assert line_after["remaining_quantity"] == "368"
 
         over = client.post(
             f"/api/external-packaging-purchases/{purchase['id']}/receipts",
@@ -118,13 +118,13 @@ def test_partial_then_complete_receipt_is_idempotent_and_creates_no_inventory(
                 "lines": [
                     {
                         "purchase_item_id": line["purchase_item_id"],
-                        "received_quantity": "61",
+                        "received_quantity": "369",
                     }
                 ],
             },
         )
         assert over.status_code == 409
-        assert "最多可收 60 根" in over.text
+        assert "最多可收 368 根" in over.text
 
         complete = client.post(
             f"/api/external-packaging-purchases/{purchase['id']}/receipts",
@@ -133,7 +133,7 @@ def test_partial_then_complete_receipt_is_idempotent_and_creates_no_inventory(
                 "lines": [
                     {
                         "purchase_item_id": line["purchase_item_id"],
-                        "received_quantity": "60",
+                        "received_quantity": "368",
                     }
                 ],
             },

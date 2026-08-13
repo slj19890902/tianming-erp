@@ -3173,7 +3173,7 @@
                                   <tr v-for="(item,itemIndex) in row.items" :key="item.id">
                                     <td class="col-order-item-sequence">{{ item.item_sequence || itemIndex + 1 }}</td>
                                     <td><span v-for="(part,index) in orderSearchHighlightParts(plainProductText(item.snapshot_product_code))" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span></td>
-                                    <td><span v-for="(part,index) in orderSearchHighlightParts(plainProductText(item.snapshot_product_name))" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span><div v-if="item.combination_role==='priced_component'" class="status blue" style="margin-top:3px">{{ combinationGroupLabel(item) }}</div><div v-if="hasExternalPackagingRequirements(item)" :class="['status', row.external_packaging_purchase_summary?.status==='confirmed' ? 'green' : 'orange']" style="margin-top:3px;white-space:normal">{{ row.external_packaging_purchase_summary?.status==='confirmed' ? `外购包装已确认 ${row.external_packaging_purchase_summary.purchase_numbers.join('、')}` : `下一步：核对外购包装 ${item.external_packaging_requirements.length} 项` }}</div><div v-if="item.mold_location" class="muted" style="font-size:11px">模具：{{ moldLocationText(item) }}</div></td>
+                                    <td><span v-for="(part,index) in orderSearchHighlightParts(plainProductText(item.snapshot_product_name))" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span><div v-if="item.combination_role==='priced_component'" class="status blue" style="margin-top:3px">{{ combinationGroupLabel(item) }}</div><div v-if="hasExternalPackagingRequirements(item)" :class="['status', row.external_packaging_purchase_summary?.status==='confirmed' ? 'green' : (row.external_packaging_purchase_summary?.status==='cancelled' ? 'red' : 'orange')]" style="margin-top:3px;white-space:normal">{{ row.external_packaging_purchase_summary?.status==='confirmed' ? `外购包装已确认 ${row.external_packaging_purchase_summary.purchase_numbers.join('、')}` : (row.external_packaging_purchase_summary?.status==='cancelled' ? '原外购包装采购已作废，请新建正确订单' : `下一步：核对外购包装 ${item.external_packaging_requirements.length} 项`) }}</div><div v-if="item.mold_location" class="muted" style="font-size:11px">模具：{{ moldLocationText(item) }}</div></td>
                                     <td><span v-for="(part,index) in orderSearchHighlightParts(item.snapshot_spec || '-')" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span></td>
                                     <td style="white-space:normal;word-break:break-all;max-width:140px;font-size:12px"><span v-for="(part,index) in orderSearchHighlightParts(orderItemMaterialText(item, false))" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span></td>
                                     <td class="cell-right"><strong>{{ item.quantity }}</strong><div v-if="Number(item.business_delivered_quantity || 0) > 0" class="order-delivery-compact">已送 {{ item.business_delivered_quantity }}/{{ item.quantity }}</div></td>
@@ -6274,14 +6274,15 @@
               <div v-if="orderDetail.items.some(hasExternalPackagingRequirements)" class="external-packaging-order-panel">
                 <div class="toolbar" style="margin-bottom:0">
                   <div>
-                    <strong>{{ orderDetail.external_packaging_purchase_summary?.status==='confirmed' ? '外购包装已确认采购' : '下一步：外购包装待确认' }}</strong>
+                    <strong>{{ orderDetail.external_packaging_purchase_summary?.status==='confirmed' ? '外购包装已确认采购' : (orderDetail.external_packaging_purchase_summary?.status==='cancelled' ? '原外购包装采购已作废' : '下一步：外购包装待确认') }}</strong>
                     <div v-if="orderDetail.external_packaging_purchase_summary?.status==='confirmed'" class="status green" style="margin-top:4px">
                       <template v-if="canAdmin && canViewCosts && orderDetail.external_packaging_purchase_summary.purchase_orders?.length"><a v-for="purchase in orderDetail.external_packaging_purchase_summary.purchase_orders" :key="purchase.id" class="btn small" style="margin-right:5px" :href="`/external-purchase-print.html?id=${purchase.id}`" target="_blank" rel="noopener">{{ purchase.purchase_number }} · 打印</a></template>
                       <span v-else>{{ orderDetail.external_packaging_purchase_summary.purchase_numbers.join('、') }}</span>
                     </div>
+                    <div v-else-if="orderDetail.external_packaging_purchase_summary?.status==='cancelled'" class="status red" style="margin-top:3px">原采购已随订单流程撤回作废；如需重新采购，请新建正确订单。</div>
                     <div v-else class="muted" style="margin-top:3px">下单时的用量建议已冻结；不会自动选供应商或生成采购单，管理员确认后才按供应商拆单。</div>
                   </div>
-                  <button v-if="canAdmin && canViewCosts" class="btn primary" @click="openExternalPurchase(orderDetail)">{{ orderDetail.external_packaging_purchase_summary?.status==='confirmed' ? '查看采购确认' : '核对并确认采购' }}</button>
+                  <button v-if="canAdmin && canViewCosts && orderDetail.external_packaging_purchase_summary?.status!=='cancelled'" class="btn primary" @click="openExternalPurchase(orderDetail)">{{ orderDetail.external_packaging_purchase_summary?.status==='confirmed' ? '查看采购确认' : '核对并确认采购' }}</button>
                 </div>
                 <div v-for="item in orderDetail.items.filter(hasExternalPackagingRequirements)" :key="`external-${item.id}`" class="external-packaging-order-item">
                   <div><strong>{{ item.item_sequence || '-' }}. {{ item.snapshot_product_code || '-' }}｜{{ item.snapshot_product_name || '-' }}</strong> · 订单 {{ item.quantity }} 个<div class="external-packaging-order-meta">供货：{{ item.supply_mode_snapshot==='external_purchase' ? '纯外购包材' : '纸板主件＋外购组件' }}<span v-if="!isWorkshop" class="sensitive-price"> · 客户销售单价 {{ money(item.unit_price) }} 元/{{ item.external_packaging_purchase_unit_snapshot || '只' }}</span></div></div>
@@ -6310,6 +6311,9 @@
                     <tr v-for="item in purchase.items" :key="item.id"><td><strong>{{ item.purpose }}</strong><br>{{ item.supplier_product_code }}｜{{ item.product_name }}<br><span class="muted">{{ item.specification_summary }}</span></td><td>{{ item.purchase_quantity }} {{ item.purchase_unit }}</td><td>{{ item.currency }} {{ item.unit_price }}</td><td>{{ item.line_amount }}</td><td>{{ item.tax_amount }}</td></tr>
                   </tbody></table>
                 </div>
+              </template>
+              <template v-else-if="externalPurchase.status === 'cancelled'">
+                <div class="notice danger">原外购包装采购已随订单流程撤回作废；不能再次确认或打印。如需重新采购，请新建正确订单。</div>
               </template>
               <template v-else>
                 <div class="notice">一次核对全部外购组件；同一供应商自动合并为一张采购单。附加费按价格版本保留为条款，本阶段不自动收货入库。</div>

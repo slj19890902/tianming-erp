@@ -6706,6 +6706,7 @@ def _pending_requisition_candidates(
         .where(
             OrderItem.requisition_status.in_(["未报料", "已报料"]),
             OrderItem.material_status == "pending",
+            OrderItem.supply_mode_snapshot != "external_purchase",
             Order.status.notin_(["cancelled", "dead", "closed", "archived"]),
             OrderItem.is_force_closed.is_(False),
         )

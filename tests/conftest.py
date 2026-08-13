@@ -14,6 +14,8 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -130,6 +132,16 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
 def isolated_database_path(tmp_path: Path) -> Path:
     """Return a per-test SQLite path for tests that need a real file."""
     return tmp_path / "erp-test.sqlite3"
+
+
+@pytest.fixture(scope="session")
+def current_alembic_head() -> str:
+    """Return the repository's unique Alembic head for release-chain tests."""
+    config = Config(str(PROJECT_ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
+    heads = ScriptDirectory.from_config(config).get_heads()
+    assert len(heads) == 1, f"expected one Alembic head, got {heads}"
+    return heads[0]
 
 
 @pytest.fixture(scope="session")

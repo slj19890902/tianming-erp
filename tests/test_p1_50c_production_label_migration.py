@@ -27,11 +27,12 @@ def _config(monkeypatch: pytest.MonkeyPatch, database: Path) -> Config:
 def test_p1_50c_is_single_head_and_clean_round_trip(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    current_alembic_head: str,
 ) -> None:
     database = tmp_path / "p1-50c-roundtrip.sqlite3"
     config = _config(monkeypatch, database)
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == [TARGET]
+    assert script.get_heads() == [current_alembic_head]
     assert script.get_revision(TARGET).down_revision == PARENT
 
     command.upgrade(config, PARENT)

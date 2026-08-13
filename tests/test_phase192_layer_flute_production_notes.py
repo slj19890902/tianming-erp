@@ -190,7 +190,11 @@ class TestFluteConsistencyReuse:
 # ===========================================================================
 
 @pytest.fixture()
-def v192_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def v192_app(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_supplier_master,
+):
     from app.api.auth import router as auth_router
     from app.api.deliveries import router as deliveries_router
     from app.api.deps import get_db
@@ -212,6 +216,7 @@ def v192_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     engine = create_sqlite_engine(tmp_path / "v192.sqlite3")
     Base.metadata.create_all(engine)
     session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    seed_supplier_master(session_factory, "鸣朋", "MP001")
 
     with session_factory() as session:
         session.add_all(
@@ -234,9 +239,9 @@ def v192_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             delivery_method="配送",
         )
         # 三层 + B（合法）、五层 + AB（合法）、三层 + BE（历史异常）
-        m3 = Material(code="D4B-B", paper_composition="D4B", layer_count=3, flute_type="B")
+        m3 = Material(code="D4B", paper_composition="D4B", layer_count=3, flute_type="B")
         m5 = Material(code="W535A-AB", paper_composition="W535A", layer_count=5, flute_type="AB")
-        m_dirty = Material(code="CCC-B/E", paper_composition="CCC", layer_count=3, flute_type="BE")
+        m_dirty = Material(code="CC-BE", paper_composition="CCC", layer_count=3, flute_type="BE")
         session.add_all([customer, m3, m5, m_dirty])
         session.flush()
         product = Product(
@@ -427,6 +432,7 @@ class TestB5MaterialDictionaryBoundary:
                     "code": code,
                     "layer_count": layer_count,
                     "flute_type": submitted_flute,
+                    "supplier_name": "鸣朋",
                 },
             )
             assert created.status_code == 201, created.text
@@ -438,6 +444,8 @@ class TestB5MaterialDictionaryBoundary:
                     "code": code,
                     "layer_count": layer_count,
                     "flute_type": "BE" if submitted_flute == "A" else "B",
+                    "supplier_name": "鸣朋",
+                    "expected_version": created.json()["version"],
                 },
             )
         assert updated.status_code == 200, updated.text

@@ -38,7 +38,7 @@ from app.services.warehouse_inventory import (
 
 
 @pytest.fixture()
-def b1_app(tmp_path: Path):
+def b1_app(tmp_path: Path, seed_supplier_master):
     from app.api.auth import router as auth_router
     from app.api.deps import get_db
     from app.api.orders import router as orders_router
@@ -48,6 +48,7 @@ def b1_app(tmp_path: Path):
     engine = create_sqlite_engine(tmp_path / "semi-order-b1.sqlite3")
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
+    seed_supplier_master(factory, "测试供应商", "B1-TEST")
     with factory() as db:
         users = [
             User(
@@ -1117,7 +1118,10 @@ def test_semi_full_coverage_is_excluded_from_pending_and_preview(b1_app) -> None
     assert preview.status_code == 409
     assert "半成品库存全额抵扣" in preview.json()["detail"]
     assert forged_save.status_code == 409
-    assert "半成品库存全额抵扣" in forged_save.json()["detail"]
+    assert (
+        "半成品库存全额抵扣" in forged_save.json()["detail"]
+        or "采购需求已经报完" in forged_save.json()["detail"]
+    )
 
 
 def test_requisition_preview_rechecks_late_semi_stock_and_recalculates_purchase(

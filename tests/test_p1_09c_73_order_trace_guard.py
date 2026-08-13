@@ -54,6 +54,7 @@ const vm={{
   isCancelledRequest(error){{return error?.name==="CanceledError";}},
   cancelOrderTraceEventDetailRequest(){{global.latestRequestControllers.get("orders:trace-event-detail")?.abort();global.latestRequestControllers.delete("orders:trace-event-detail");this.orderTraceEventDetailLoadingKey="";}},
   cancelOrderTraceChildRequests(){{for(const key of ["orders:trace-reload","orders:trace-event-detail"]){{global.latestRequestControllers.get(key)?.abort();global.latestRequestControllers.delete(key);}}}},
+  rememberModalOpener(){{return null;}},focusAccessibleModal(){{}},
   showToast(message,isError){{toasts.push({{message,isError}});}},errorMessage(error){{return error?.message||String(error);}},displayOrderNumber(row){{return row.order_number||row.id;}},
   $nextTick(callback){{if(callback)callback();}}
 }};
@@ -67,8 +68,8 @@ def test_top_level_order_read_modals_share_latest_request_guard() -> None:
         "async ensureOrderGroupDetail(group, {force=false}={}) {",
         "async toggleOrderGroup(group) {",
     )
-    group = _method_body("async openOrderGroupDetail(group) {", "async openOrderDetail(row) {")
-    detail = _method_body("async openOrderDetail(row) {", "openEstimatedCost(order, item) {")
+    group = _method_body("async openOrderGroupDetail(group) {", "async openOrderDetail(row, {keepModalA11ySession=false, returnFocusFallback=null}={}) {")
+    detail = _method_body("async openOrderDetail(row, {keepModalA11ySession=false, returnFocusFallback=null}={}) {", "openEstimatedCost(order, item) {")
     trace = _method_body("async openOrderTrace(order, item) {", "traceCurrentEvent() {")
 
     assert "orderGroupDetailRequests.get(key)" in ensure
@@ -84,10 +85,10 @@ def test_top_level_order_read_modals_share_latest_request_guard() -> None:
 
 
 def test_latest_trace_beats_older_order_detail_and_owns_return_context(tmp_path: Path) -> None:
-    detail = _method_body("async openOrderDetail(row) {", "openEstimatedCost(order, item) {")
+    detail = _method_body("async openOrderDetail(row, {keepModalA11ySession=false, returnFocusFallback=null}={}) {", "openEstimatedCost(order, item) {")
     trace = _method_body("async openOrderTrace(order, item) {", "traceCurrentEvent() {")
     script = _runtime({
-        "openOrderDetail": (["row"], detail),
+        "openOrderDetail": (["row", "{keepModalA11ySession=false, returnFocusFallback=null}={}"], detail),
         "openOrderTrace": (["order", "item"], trace),
     }) + """
 (async()=>{
@@ -165,8 +166,8 @@ def test_order_detail_and_trace_reads_remain_read_only() -> None:
                 "async ensureOrderGroupDetail(group, {force=false}={}) {",
                 "async toggleOrderGroup(group) {",
             ),
-            _method_body("async openOrderGroupDetail(group) {", "async openOrderDetail(row) {"),
-            _method_body("async openOrderDetail(row) {", "openEstimatedCost(order, item) {"),
+            _method_body("async openOrderGroupDetail(group) {", "async openOrderDetail(row, {keepModalA11ySession=false, returnFocusFallback=null}={}) {"),
+            _method_body("async openOrderDetail(row, {keepModalA11ySession=false, returnFocusFallback=null}={}) {", "openEstimatedCost(order, item) {"),
             _method_body("async openOrderTrace(order, item) {", "traceCurrentEvent() {"),
             _method_body("async reloadOrderTrace() {", "async rollbackTraceEvent(event) {"),
             _method_body("async openTraceEventDetail(event) {", "returnFromOrderTrace() {"),

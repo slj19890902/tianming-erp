@@ -44,7 +44,7 @@ def test_delivery_guide_is_short_reuses_existing_actions_and_never_auto_executes
     assert "toggleDeliveryBatchPicker()" in modal
     assert "toggleUnorderedFinishedPicker" in modal
 
-    footer = _block('<div class="modal-foot">', "<!-- 共用图纸预览")
+    footer = _block('<div v-if="modal?.type !== \'product\'" class="modal-foot">', "<!-- 共用图纸预览")
     assert "deliveryPrimaryAction()" in footer
     assert "deliveryPrimaryLabel()" in footer
     assert "['review','save','print'].includes(deliveryGuideStage)" in footer

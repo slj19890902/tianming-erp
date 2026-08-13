@@ -5966,6 +5966,7 @@ class TwinZoneStoragePolicyPayload(BaseModel):
     storage_layout: Literal["rack", "pallet_ground", "mixed"]
     erp_area_code: str = Field(min_length=1, max_length=30)
     area_name: str | None = Field(default=None, max_length=100)
+    existing_area_id: int | None = Field(default=None, ge=1)
 
     @field_validator("erp_area_code")
     @classmethod
@@ -6136,6 +6137,84 @@ def _rack_layout_values(payload: TwinRackLayoutFields) -> dict:
     )
 
 
+def _formal_area_identity_blockers(db: Session, floor_code: str) -> list[str]:
+    """Verify that a draft which selected an existing area still points to it."""
+
+    normalized = floor_code.strip().upper()
+    floor = warehouse_floor_for_code(db, normalized)
+    if floor is None:
+        return []
+    draft = load_warehouse_twin_layout_draft(normalized)
+    areas = list(
+        db.scalars(
+            select(WarehouseArea)
+            .where(WarehouseArea.floor_id == floor.id)
+            .options(selectinload(WarehouseArea.storage_policy))
+        ).all()
+    )
+    areas_by_id = {area.id: area for area in areas}
+    areas_by_code = {area.area_code.upper(): area for area in areas}
+    policies_by_feature = {
+        policy.map_feature_id: policy
+        for policy in db.scalars(
+            select(WarehouseAreaStoragePolicy)
+            .join(WarehouseArea)
+            .where(WarehouseArea.floor_id == floor.id)
+            .options(selectinload(WarehouseAreaStoragePolicy.area))
+        ).all()
+    }
+    blockers: list[str] = []
+    for feature in draft.get("features") or []:
+        if feature.get("feature_kind") != "zone" or not feature.get("id"):
+            continue
+        feature_id = str(feature["id"])
+        area_code = str(feature.get("erp_area_code") or "").strip().upper()
+        if not area_code:
+            continue
+        raw_area_id = feature.get("formal_area_id")
+        raw_floor_id = feature.get("formal_floor_id")
+        has_area_id = raw_area_id not in (None, "")
+        has_floor_id = raw_floor_id not in (None, "")
+        if has_area_id != has_floor_id:
+            blockers.append(f"{area_code} 区域草稿的正式区域身份不完整")
+            continue
+        policy = policies_by_feature.get(feature_id)
+        area_by_code = areas_by_code.get(area_code)
+        if has_area_id:
+            try:
+                expected_area_id = int(raw_area_id)
+                expected_floor_id = int(raw_floor_id)
+            except (TypeError, ValueError):
+                blockers.append(f"{area_code} 区域草稿的正式区域身份无效")
+                continue
+            expected_area = areas_by_id.get(expected_area_id)
+            if (
+                expected_area is None
+                or expected_area.floor_id != floor.id
+                or expected_floor_id != floor.id
+                or expected_area.area_code.upper() != area_code
+                or area_by_code is None
+                or area_by_code.id != expected_area_id
+            ):
+                blockers.append(f"{area_code} 区域草稿对应的正式区域身份已变化")
+                continue
+            if (
+                expected_area.storage_policy is not None
+                and expected_area.storage_policy.map_feature_id != feature_id
+            ):
+                blockers.append(f"{area_code} 正式区域已绑定其他地图区域")
+                continue
+            if policy is not None and policy.area_id != expected_area_id:
+                blockers.append(f"{area_code} 地图区域已绑定其他正式区域")
+        elif (
+            area_by_code is not None
+            and area_by_code.storage_policy is None
+            and policy is None
+        ):
+            blockers.append(f"{area_code} 已是现有未绑定区域，必须返回区域设置明确选择")
+    return blockers
+
+
 @router.post("/twin-layout/floors/{floor_code}/draft/validate")
 def validate_twin_layout_draft(
     floor_code: str,
@@ -6145,6 +6224,12 @@ def validate_twin_layout_draft(
     user: User = Depends(admin_only),
 ) -> dict:
     with WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK:
+        identity_blockers = _formal_area_identity_blockers(db, floor_code)
+        if identity_blockers:
+            raise HTTPException(
+                status_code=409,
+                detail="正式区域身份核验未通过：" + "；".join(identity_blockers[:5]),
+            )
         draft_snapshot = snapshot_warehouse_twin_layout_draft()
         result = None
         try:
@@ -6770,6 +6855,33 @@ def _update_twin_zone_storage_policy_locked(
             func.upper(WarehouseArea.area_code) == requested_area_code,
         )
     )
+    if (
+        formal_area is not None
+        and formal_area.storage_policy is None
+        and payload.existing_area_id is None
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="该编号对应现有未绑定区域，请从现有区域列表明确选择后再保存",
+        )
+    if payload.existing_area_id is not None:
+        selected_area = db.scalar(
+            select(WarehouseArea)
+            .options(selectinload(WarehouseArea.storage_policy))
+            .where(
+                WarehouseArea.id == payload.existing_area_id,
+                WarehouseArea.floor_id == floor.id,
+            )
+        )
+        if selected_area is None:
+            raise HTTPException(status_code=409, detail="所选现有区域已变化或不属于当前楼层")
+        if selected_area.area_code.upper() != requested_area_code:
+            raise HTTPException(status_code=409, detail="所选现有区域与正式区域编号不一致")
+        if formal_area is None or formal_area.id != selected_area.id:
+            raise HTTPException(status_code=409, detail="正式区域编号已被其他区域占用")
+        if selected_area.storage_policy is not None:
+            raise HTTPException(status_code=409, detail="所选现有区域已被绑定，请刷新后重新选择")
+        formal_area = selected_area
     if formal_area is None:
         orphaned_formal_locations = list(
             db.scalars(
@@ -6881,6 +6993,7 @@ def _update_twin_zone_storage_policy_locked(
             and formal_area.storage_policy.map_feature_id != feature_id
         ):
             raise HTTPException(status_code=409, detail="正式区域已绑定其他地图区域")
+    selected_existing_area_id = formal_area.id if formal_area is not None else None
     if semantic_change and formal_area is not None and formal_area.storage_policy is not None:
         blockers = policy_location_transition_blockers(
             db, floor=floor, area=formal_area, policy=formal_area.storage_policy,
@@ -6911,10 +7024,25 @@ def _update_twin_zone_storage_policy_locked(
             storage_layout=payload.storage_layout,
             erp_area_code=payload.erp_area_code,
             area_name=payload.area_name,
+            formal_area_id=selected_existing_area_id,
+            formal_floor_id=(formal_area.floor_id if formal_area is not None else None),
         )
         mapped_area_code = str(mutation.value.get("erp_area_code") or "").strip().upper()
         if mapped_area_code != requested_area_code:
             raise HTTPException(status_code=409, detail='地图草稿与本次正式区域编号不一致')
+        mutation.value["formal_binding_status"] = "draft"
+        mutation.value["formal_policy_status"] = (
+            formal_area.storage_policy.status
+            if formal_area is not None and formal_area.storage_policy is not None
+            else None
+        )
+        if selected_existing_area_id is not None:
+            mutation.value["formal_area_name"] = formal_area.area_name
+            mutation.value["formal_construction_status"] = formal_area.construction_status
+            mutation.value["planned_pallet_capacity"] = formal_area.planned_pallet_capacity
+            mutation.value["capacity_review_status"] = formal_area.capacity_review_status
+            mutation.value["capacity_eligible"] = formal_area.capacity_eligible
+            mutation.value["confirmed_pallet_capacity"] = formal_area.confirmed_pallet_capacity
         if not mutation.applied:
             return {
                 'item': mutation.value,

@@ -928,7 +928,11 @@
     }
     async function applyWarehouseDeepLink(){
       const params=new URLSearchParams(location.search),requestedTab=params.get("tab"),requestedLocationView=params.get("location_view"),urlLocationId=Number(params.get("location_id")),urlCustomerId=Number(params.get("customer_id")),lotId=Number(params.get("lot_id")),keyword=String(params.get("keyword")||"").trim();
-      if(requestedLocationView==="ledger"&&params.get("capacity_review")==="1"){await openCapacityReviewLedger({focusChecklist:true});return}
+      if(requestedLocationView==="ledger"&&params.get("capacity_review")==="1"){
+        const capacityAreaId=Number(params.get("area_id")||0),capacityFloorId=Number(params.get("floor_id")||0),capacityAreaCode=String(params.get("area_code")||"").trim().toUpperCase(),capacityMapFeatureId=String(params.get("map_feature_id")||"").trim();
+        if(capacityAreaId>0&&capacityFloorId>0&&capacityAreaCode&&capacityMapFeatureId){await openCapacityReviewLedger({areaId:capacityAreaId,floorId:capacityFloorId,areaCode:capacityAreaCode,mapFeatureId:capacityMapFeatureId});return}
+        toast("容量复核链接缺少完整地图区域身份，请返回实测地图重新进入",true);return
+      }
       if(requestedTab==="locations"){openMeasuredWarehouseMap(params);return}
       const fromPdfOrder=params.get("source")==="pdf-order";
       if(fromPdfOrder&&!lotId){toast("库存定位链接缺少批次信息，请返回 PDF 订单后重新打开",true);return}
@@ -1211,10 +1215,10 @@
       state.tab="locations";document.querySelectorAll("[data-tab]").forEach(button=>button.classList.remove("active"));$("locationViewTabs").classList.add("hidden");document.body.classList.remove("floor3-mode","floor3-area-mode","floor3-workspace-mode");
       $("inventorySection").classList.add("hidden");$("insightSection").classList.add("hidden");$("movementSection").classList.add("hidden");$("moldSection").classList.add("hidden");$("printingPlateSection").classList.add("hidden");setStocktakeReviewSectionVisibility("locations");setInventoryOnboardingSectionVisibility("locations");$("finishedForm").classList.add("hidden");$("semiForm").classList.add("hidden");
     }
-    async function openCapacityReviewLedger({areaId=null,focusChecklist=false}={}){
+    async function openCapacityReviewLedger({areaId=null,floorId=null,areaCode=null,mapFeatureId=null,focusChecklist=false}={}){
       if(!canManageLocations()){toast("只有管理员可以复核仓库安全容量",true);return false}
       activateWarehouseLocationHub();capacityReviewSpaceOnly=true;try{await switchLocationView("ledger")}finally{capacityReviewSpaceOnly=false}
-      if(areaId){const area=state.warehouseFloors.flatMap(row=>row.areas||[]).find(row=>Number(row.id)===Number(areaId));if(!area){toast("待复核区域已变化，请刷新后重试",true);return false}selectWarehouseFloor(area.floor_id);editWarehouseArea(area.id);requestAnimationFrame(()=>{$("warehouseAreaCapacityReview").scrollIntoView({behavior:"smooth",block:"center"});$("warehouseAreaCapacityReview").focus()});return true}
+      if(areaId){const area=state.warehouseFloors.flatMap(row=>row.areas||[]).find(row=>Number(row.id)===Number(areaId)),expectedCode=String(areaCode||"").trim().toUpperCase(),actualCode=String(area?.area_code||"").trim().toUpperCase(),actualFeatureId=String(area?.storage_policy?.map_feature_id||"").trim(),policyStatus=String(area?.storage_policy?.status||"").trim(),hasMapIdentity=Boolean(floorId||expectedCode||mapFeatureId);if(!area||hasMapIdentity&&(!floorId||!expectedCode||!mapFeatureId||Number(area.floor_id)!==Number(floorId)||actualCode!==expectedCode||actualFeatureId!==String(mapFeatureId)||policyStatus!=="published")){toast("当前地图区域与容量台账的正式绑定已变化，请返回实测地图重新选择",true);return false}selectWarehouseFloor(area.floor_id);editWarehouseArea(area.id);requestAnimationFrame(()=>{$("warehouseAreaCapacityReview").scrollIntoView({behavior:"smooth",block:"center"});$("warehouseAreaCapacityReview").focus()});return true}
       if(focusChecklist)requestAnimationFrame(()=>$('capacityReviewChecklist').scrollIntoView({behavior:"smooth",block:"start"}));return true;
     }
     async function switchTab(tab){

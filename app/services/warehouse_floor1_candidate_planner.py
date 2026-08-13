@@ -907,6 +907,13 @@ def overlay_formal_area_bindings(
             policy_query
         ).all()
     )
+    areas_by_code = {
+        area.area_code.upper(): area
+        for area in db.scalars(
+            select(WarehouseArea).where(WarehouseArea.floor_id == floor.id)
+        ).all()
+    }
+    areas_by_id = {area.id: area for area in areas_by_code.values()}
     has_draft = bool((floor_layout.get("draft_control") or {}).get("has_draft"))
     by_feature = {policy.map_feature_id: policy for policy in policies}
     features: list[dict] = []
@@ -915,14 +922,15 @@ def overlay_formal_area_bindings(
         policy = by_feature.get(str(feature.get("id") or ""))
         if policy is not None:
             policy_types = json.loads(policy.allowed_inventory_types_json)
+            feature["formal_area_id"] = policy.area.id
+            feature["formal_floor_id"] = policy.area.floor_id
+            feature["formal_policy_status"] = policy.status
             if include_draft:
                 feature.setdefault("erp_area_code", policy.area.area_code)
                 feature.setdefault("allowed_inventory_types", policy_types)
                 feature.setdefault("storage_layout", policy.storage_layout)
                 feature.setdefault("formal_area_name", policy.area.area_name)
-                feature["formal_binding_status"] = (
-                    "draft" if has_draft else policy.status
-                )
+                feature["formal_binding_status"] = policy.status
             else:
                 feature["erp_area_code"] = policy.area.area_code
                 feature["allowed_inventory_types"] = policy_types
@@ -946,5 +954,22 @@ def overlay_formal_area_bindings(
             and str(feature.get("erp_area_code") or "").strip()
         ):
             feature["formal_binding_status"] = "draft"
+            draft_area_id = feature.get("formal_area_id")
+            draft_area = (
+                areas_by_id.get(int(draft_area_id))
+                if isinstance(draft_area_id, int) or str(draft_area_id or "").isdigit()
+                else None
+            )
+            if draft_area is not None:
+                draft_code = str(feature.get("erp_area_code") or "").strip().upper()
+                if draft_area.floor_id != floor.id or draft_area.area_code.upper() != draft_code:
+                    feature["formal_identity_status"] = "drifted"
+                    features.append(feature)
+                    continue
+                feature["formal_construction_status"] = draft_area.construction_status
+                feature["planned_pallet_capacity"] = draft_area.planned_pallet_capacity
+                feature["capacity_review_status"] = draft_area.capacity_review_status
+                feature["capacity_eligible"] = draft_area.capacity_eligible
+                feature["confirmed_pallet_capacity"] = draft_area.confirmed_pallet_capacity
         features.append(feature)
     return {**floor_layout, "features": features}

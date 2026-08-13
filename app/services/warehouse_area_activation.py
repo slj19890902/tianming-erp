@@ -796,6 +796,14 @@ def publish_floor_area_policies(
                 "formal_area_name": feature_policy.area.area_name,
             }
             area_code = feature_policy.area.area_code.upper()
+        raw_formal_area_id = feature.get("formal_area_id")
+        raw_formal_floor_id = feature.get("formal_floor_id")
+        has_formal_area_id = raw_formal_area_id not in (None, "")
+        has_formal_floor_id = raw_formal_floor_id not in (None, "")
+        if has_formal_area_id != has_formal_floor_id:
+            raise WarehouseAreaActivationError(
+                f"{area_code} 区域草稿的正式区域身份不完整", status_code=409
+            )
         if area_code in proposal_area_codes or feature_id in proposal_feature_ids:
             raise WarehouseAreaActivationError(
                 f"{area_code} 区发布草稿存在重复区域或地图标识", status_code=409
@@ -831,6 +839,28 @@ def publish_floor_area_policies(
             )
         area = areas_by_code.get(area_code)
         policy = area.storage_policy if area is not None else None
+        if has_formal_area_id:
+            try:
+                expected_area_id = int(raw_formal_area_id)
+                expected_floor_id = int(raw_formal_floor_id)
+            except (TypeError, ValueError) as error:
+                raise WarehouseAreaActivationError(
+                    f"{area_code} 区域草稿的正式区域身份无效", status_code=409
+                ) from error
+            if (
+                area is None
+                or area.id != expected_area_id
+                or area.floor_id != floor.id
+                or expected_floor_id != floor.id
+            ):
+                raise WarehouseAreaActivationError(
+                    f"{area_code} 区域草稿对应的正式区域身份已变化", status_code=409
+                )
+        elif area is not None and policy is None and feature_policy is None:
+            raise WarehouseAreaActivationError(
+                f"{area_code} 已是现有未绑定区域，必须重新明确选择后发布",
+                status_code=409,
+            )
         if feature_policy is not None and (
             area is None or feature_policy.area_id != area.id
         ):

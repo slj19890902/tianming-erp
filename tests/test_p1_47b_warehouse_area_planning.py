@@ -715,6 +715,8 @@ def test_empty_area_first_policy_is_not_blocked_when_mapping_store_is_missing(
                 admin,
             )
             assert response['applied'] is True
+            assert response['item']['formal_binding_status'] == 'draft'
+            assert response['item']['formal_policy_status'] is None
 
         with factory() as verify:
             assert verify.scalar(select(func.count(WarehouseArea.id))) == 0
@@ -1615,6 +1617,7 @@ def test_draft_policy_is_visible_only_in_admin_draft_overlay_until_published(
                 item for item in formal['features'] if item['id'] == 'zone-f1'
             )
             for key in (
+                'formal_area_id',
                 'allowed_inventory_types',
                 'storage_layout',
                 'formal_binding_status',
@@ -1650,6 +1653,7 @@ def test_draft_policy_is_visible_only_in_admin_draft_overlay_until_published(
             assert published_feature['allowed_inventory_types'] == ['semi_finished']
             assert published_feature['storage_layout'] == 'rack'
             assert published_feature['formal_binding_status'] == 'published'
+            assert published_feature['formal_area_id'] == area.id
             assert published_feature['formal_area_name'] == '仅草稿可见的 F1 名称'
             assert published_feature['planned_pallet_capacity'] == 77
             assert published_feature['capacity_review_status'] == 'pending'
@@ -1853,6 +1857,8 @@ def test_published_area_policy_draft_and_discard_preserve_formal_employee_state(
                 admin,
             )
             assert changed['applied'] is True
+            assert changed['item']['formal_binding_status'] == 'draft'
+            assert changed['item']['formal_policy_status'] == 'published'
             db.expire_all()
             formal_area = db.get(WarehouseArea, area.id)
             formal_policy = db.get(WarehouseAreaStoragePolicy, policy.id)
@@ -1980,6 +1986,8 @@ def test_new_area_policy_stays_json_only_until_publish_creates_formal_ledger(
                 admin,
             )
             assert changed['applied'] is True
+            assert changed['item']['formal_binding_status'] == 'draft'
+            assert changed['item']['formal_policy_status'] is None
             assert draft.is_file()
             assert db.scalar(select(func.count(WarehouseArea.id))) == 0
             assert db.scalar(select(func.count(WarehouseAreaStoragePolicy.id))) == 0
@@ -2021,6 +2029,578 @@ def test_new_area_policy_stays_json_only_until_publish_creates_formal_ledger(
                 ['finished'], ensure_ascii=False, separators=(',', ':')
             )
             assert area.storage_policy.storage_layout == 'pallet_ground'
+    finally:
+        engine.dispose()
+
+
+def test_existing_unbound_area_is_reused_and_keeps_confirmed_capacity_on_publish(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    published, draft = _isolate_layout_paths(tmp_path, monkeypatch)
+    document = json.loads(published.read_text(encoding='utf-8'))
+    document['floors']['3F']['features'][0].pop('erp_area_code', None)
+    document['floors']['3F']['revision'] = _floor_revision(document['floors']['3F'])
+    published.write_text(
+        json.dumps(document, ensure_ascii=False, separators=(',', ':')),
+        encoding='utf-8',
+    )
+    runtime = Path(editor.TWIN_LAYOUT_PATH)
+    monkeypatch.setattr(warehouse_api, 'list_production_projection_mappings', lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        warehouse_api,
+        'load_warehouse_twin_floor',
+        lambda floor_code: json.loads(runtime.read_text(encoding='utf-8'))['floors'][floor_code.upper()],
+    )
+    engine, factory = _database(tmp_path)
+    try:
+        with factory() as db:
+            admin = db.scalar(select(User).where(User.username == 'p1-47b-admin'))
+            floor = db.scalar(select(WarehouseFloor).where(WarehouseFloor.floor_code == '3F'))
+            assert admin is not None and floor is not None
+            area = WarehouseArea(
+                floor_id=floor.id,
+                area_code='A2',
+                area_name='A2原料区',
+                planned_location_count=14,
+                planned_pallet_capacity=15,
+                construction_status='enabled',
+                capacity_review_status='confirmed',
+                capacity_eligible=True,
+                confirmed_pallet_capacity=6,
+                capacity_reviewed_by='现场管理员',
+                capacity_reviewed_at=datetime(2026, 8, 13, 13, 19),
+            )
+            db.add(area)
+            db.commit()
+            original_id = area.id
+
+            changed = warehouse_api.update_twin_zone_storage_policy(
+                '3F',
+                'zone-f1',
+                warehouse_api.TwinZoneStoragePolicyPayload(
+                    expected_revision=_revision(published),
+                    expected_version=1,
+                    operation_key='p1-47b-existing-a2-draft',
+                    allowed_inventory_types=['raw_material'],
+                    storage_layout='pallet_ground',
+                    erp_area_code='A2',
+                    area_name='A2原料区',
+                    existing_area_id=original_id,
+                ),
+                _request(),
+                db,
+                admin,
+            )
+            assert changed['formal_area']['id'] == original_id
+            assert changed['item']['formal_area_id'] == original_id
+            assert changed['item']['formal_binding_status'] == 'draft'
+            assert changed['item']['formal_policy_status'] is None
+            assert db.scalar(select(func.count(WarehouseArea.id))) == 1
+            assert db.scalar(select(func.count(WarehouseAreaStoragePolicy.id))) == 0
+            db.refresh(area)
+            assert (area.capacity_review_status, area.confirmed_pallet_capacity) == ('confirmed', 6)
+            saved_draft_feature = json.loads(draft.read_text(encoding='utf-8'))[
+                'floors'
+            ]['3F']['features'][0]
+            assert saved_draft_feature['erp_area_code'] == 'A2'
+            assert saved_draft_feature['formal_area_id'] == original_id
+            assert saved_draft_feature['formal_floor_id'] == floor.id
+
+            validated = warehouse_api.validate_twin_layout_draft(
+                '3F',
+                warehouse_api.TwinLayoutDraftValidatePayload(expected_revision=changed['revision']),
+                _request(),
+                db,
+                admin,
+            )
+            assert validated['status'] == 'validated'
+            result = warehouse_api.publish_twin_layout_draft(
+                '3F',
+                warehouse_api.TwinLayoutDraftPublishPayload(
+                    expected_published_revision=_revision(published),
+                    expected_draft_revision=changed['revision'],
+                    operation_key='p1-47b-existing-a2-publish',
+                ),
+                _request(),
+                db,
+                admin,
+            )
+            assert result['applied'] is True
+            db.expire_all()
+            reused = db.get(WarehouseArea, original_id)
+            assert reused is not None
+            assert db.scalar(select(func.count(WarehouseArea.id))) == 1
+            assert reused.storage_policy is not None
+            assert reused.storage_policy.map_feature_id == 'zone-f1'
+            assert reused.storage_policy.status == 'published'
+            assert (reused.capacity_review_status, reused.confirmed_pallet_capacity) == ('confirmed', 6)
+    finally:
+        engine.dispose()
+
+
+def test_existing_area_id_mismatch_is_rejected_without_draft_or_formal_writes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    published, draft = _isolate_layout_paths(tmp_path, monkeypatch)
+    document = json.loads(published.read_text(encoding='utf-8'))
+    document['floors']['3F']['features'][0].pop('erp_area_code', None)
+    document['floors']['3F']['revision'] = _floor_revision(document['floors']['3F'])
+    published.write_text(
+        json.dumps(document, ensure_ascii=False, separators=(',', ':')),
+        encoding='utf-8',
+    )
+    engine, factory = _database(tmp_path)
+    try:
+        with factory() as db:
+            admin = db.scalar(select(User).where(User.username == 'p1-47b-admin'))
+            floor = db.scalar(select(WarehouseFloor).where(WarehouseFloor.floor_code == '3F'))
+            assert admin is not None and floor is not None
+            area = WarehouseArea(
+                floor_id=floor.id,
+                area_code='A2',
+                area_name='A2 现有未绑定区域',
+                planned_location_count=8,
+                planned_pallet_capacity=9,
+                construction_status='enabled',
+                capacity_review_status='pending',
+                capacity_eligible=False,
+            )
+            db.add(area)
+            db.commit()
+            area_before = (
+                area.id,
+                area.floor_id,
+                area.area_code,
+                area.area_name,
+                area.planned_location_count,
+                area.planned_pallet_capacity,
+                area.construction_status,
+                area.capacity_review_status,
+            )
+            area_count_before = db.scalar(select(func.count(WarehouseArea.id)))
+            policy_count_before = db.scalar(
+                select(func.count(WarehouseAreaStoragePolicy.id))
+            )
+            assert not draft.exists()
+
+            with pytest.raises(warehouse_api.HTTPException) as caught:
+                warehouse_api.update_twin_zone_storage_policy(
+                    '3F',
+                    'zone-f1',
+                    warehouse_api.TwinZoneStoragePolicyPayload(
+                        expected_revision=_revision(published),
+                        expected_version=1,
+                        operation_key='p1-47b-existing-area-identity-mismatch',
+                        allowed_inventory_types=['finished'],
+                        storage_layout='pallet_ground',
+                        erp_area_code='B9',
+                        area_name='B9 错误提交区域',
+                        existing_area_id=area.id,
+                    ),
+                    _request(),
+                    db,
+                    admin,
+                )
+
+            assert caught.value.status_code == 409
+            assert not draft.exists()
+            db.expire_all()
+            unchanged = db.get(WarehouseArea, area_before[0])
+            assert unchanged is not None
+            assert (
+                unchanged.id,
+                unchanged.floor_id,
+                unchanged.area_code,
+                unchanged.area_name,
+                unchanged.planned_location_count,
+                unchanged.planned_pallet_capacity,
+                unchanged.construction_status,
+                unchanged.capacity_review_status,
+            ) == area_before
+            assert db.scalar(select(func.count(WarehouseArea.id))) == area_count_before
+            assert (
+                db.scalar(select(func.count(WarehouseAreaStoragePolicy.id)))
+                == policy_count_before
+            )
+    finally:
+        engine.dispose()
+
+
+def test_existing_unbound_area_code_requires_explicit_area_identity(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    published, draft = _isolate_layout_paths(tmp_path, monkeypatch)
+    document = json.loads(published.read_text(encoding='utf-8'))
+    document['floors']['3F']['features'][0].pop('erp_area_code', None)
+    document['floors']['3F']['revision'] = _floor_revision(document['floors']['3F'])
+    published.write_text(
+        json.dumps(document, ensure_ascii=False, separators=(',', ':')),
+        encoding='utf-8',
+    )
+    monkeypatch.setattr(
+        warehouse_api,
+        'list_production_projection_mappings',
+        lambda *_args, **_kwargs: [],
+    )
+    engine, factory = _database(tmp_path)
+    try:
+        with factory() as db:
+            admin = db.scalar(select(User).where(User.username == 'p1-47b-admin'))
+            floor = db.scalar(select(WarehouseFloor).where(WarehouseFloor.floor_code == '3F'))
+            assert admin is not None and floor is not None
+            area = WarehouseArea(
+                floor_id=floor.id,
+                area_code='A2',
+                area_name='A2 现有未绑定区域',
+                planned_location_count=8,
+                planned_pallet_capacity=9,
+                construction_status='enabled',
+                capacity_review_status='pending',
+                capacity_eligible=False,
+            )
+            db.add(area)
+            db.commit()
+            area_before = (
+                area.id,
+                area.floor_id,
+                area.area_code,
+                area.area_name,
+                area.planned_location_count,
+                area.planned_pallet_capacity,
+                area.construction_status,
+                area.capacity_review_status,
+            )
+            area_count_before = db.scalar(select(func.count(WarehouseArea.id)))
+            policy_count_before = db.scalar(
+                select(func.count(WarehouseAreaStoragePolicy.id))
+            )
+            log_count_before = db.scalar(select(func.count(OperationLog.id)))
+            assert not draft.exists()
+
+            with pytest.raises(warehouse_api.HTTPException) as caught:
+                warehouse_api.update_twin_zone_storage_policy(
+                    '3F',
+                    'zone-f1',
+                    warehouse_api.TwinZoneStoragePolicyPayload(
+                        expected_revision=_revision(published),
+                        expected_version=1,
+                        operation_key='p1-47b-existing-area-id-required',
+                        allowed_inventory_types=['finished'],
+                        storage_layout='pallet_ground',
+                        erp_area_code='A2',
+                        area_name='A2 现有未绑定区域',
+                    ),
+                    _request(),
+                    db,
+                    admin,
+                )
+
+            assert caught.value.status_code == 409
+            assert not draft.exists()
+            db.expire_all()
+            unchanged = db.get(WarehouseArea, area_before[0])
+            assert unchanged is not None
+            assert (
+                unchanged.id,
+                unchanged.floor_id,
+                unchanged.area_code,
+                unchanged.area_name,
+                unchanged.planned_location_count,
+                unchanged.planned_pallet_capacity,
+                unchanged.construction_status,
+                unchanged.capacity_review_status,
+            ) == area_before
+            assert db.scalar(select(func.count(WarehouseArea.id))) == area_count_before
+            assert (
+                db.scalar(select(func.count(WarehouseAreaStoragePolicy.id)))
+                == policy_count_before
+            )
+            assert db.scalar(select(func.count(OperationLog.id))) == log_count_before
+    finally:
+        engine.dispose()
+
+
+def test_existing_area_identity_drift_is_blocked_before_formal_map_publish(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    published, draft = _isolate_layout_paths(tmp_path, monkeypatch)
+    document = json.loads(published.read_text(encoding='utf-8'))
+    document['floors']['3F']['features'][0].pop('erp_area_code', None)
+    document['floors']['3F']['revision'] = _floor_revision(document['floors']['3F'])
+    published.write_text(
+        json.dumps(document, ensure_ascii=False, separators=(',', ':')),
+        encoding='utf-8',
+    )
+    runtime = Path(editor.TWIN_LAYOUT_PATH)
+    monkeypatch.setattr(
+        warehouse_api,
+        'list_production_projection_mappings',
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        warehouse_api,
+        'load_warehouse_twin_floor',
+        lambda floor_code: json.loads(runtime.read_text(encoding='utf-8'))[
+            'floors'
+        ][floor_code.upper()],
+    )
+    engine, factory = _database(tmp_path)
+    try:
+        with factory() as db:
+            admin = db.scalar(select(User).where(User.username == 'p1-47b-admin'))
+            floor = db.scalar(select(WarehouseFloor).where(WarehouseFloor.floor_code == '3F'))
+            assert admin is not None and floor is not None
+            original = WarehouseArea(
+                floor_id=floor.id,
+                area_code='A2',
+                area_name='A2 原始未绑定区域',
+                planned_location_count=0,
+                planned_pallet_capacity=7,
+                construction_status='enabled',
+                capacity_review_status='pending',
+                capacity_eligible=False,
+            )
+            db.add(original)
+            db.commit()
+            original_id = original.id
+            changed = warehouse_api.update_twin_zone_storage_policy(
+                '3F',
+                'zone-f1',
+                warehouse_api.TwinZoneStoragePolicyPayload(
+                    expected_revision=_revision(published),
+                    expected_version=1,
+                    operation_key='p1-47b-existing-a2-drift-draft',
+                    allowed_inventory_types=['finished'],
+                    storage_layout='pallet_ground',
+                    erp_area_code='A2',
+                    area_name='A2 原始未绑定区域',
+                    existing_area_id=original_id,
+                ),
+                _request(),
+                db,
+                admin,
+            )
+            assert changed['item']['formal_area_id'] == original_id
+            # Seed the identity fields expected from a correct save so this test
+            # independently exercises validation/publish drift protection.
+            draft_document = json.loads(draft.read_text(encoding='utf-8'))
+            draft_floor = draft_document['floors']['3F']
+            draft_feature = draft_floor['features'][0]
+            draft_feature['formal_area_id'] = original_id
+            draft_feature['formal_floor_id'] = floor.id
+            draft_floor['revision'] = _floor_revision(draft_floor)
+            draft.write_text(
+                json.dumps(
+                    draft_document,
+                    ensure_ascii=False,
+                    separators=(',', ':'),
+                ),
+                encoding='utf-8',
+            )
+            seeded_revision = draft_floor['revision']
+
+            original.area_code = 'A2-HISTORY'
+            replacement = WarehouseArea(
+                floor_id=floor.id,
+                area_code='A2',
+                area_name='A2 后建同码区域',
+                planned_location_count=0,
+                planned_pallet_capacity=99,
+                construction_status='enabled',
+                capacity_review_status='pending',
+                capacity_eligible=False,
+            )
+            db.add(replacement)
+            db.commit()
+            replacement_id = replacement.id
+            published_before = published.read_bytes()
+            runtime_before = runtime.read_bytes() if runtime.exists() else None
+
+            blocked_at = None
+            try:
+                validated = warehouse_api.validate_twin_layout_draft(
+                    '3F',
+                    warehouse_api.TwinLayoutDraftValidatePayload(
+                        expected_revision=seeded_revision
+                    ),
+                    _request(),
+                    db,
+                    admin,
+                )
+            except warehouse_api.HTTPException as error:
+                assert error.status_code == 409
+                blocked_at = 'validate'
+            else:
+                with pytest.raises(warehouse_api.HTTPException) as caught:
+                    warehouse_api.publish_twin_layout_draft(
+                        '3F',
+                        warehouse_api.TwinLayoutDraftPublishPayload(
+                            expected_published_revision=_revision(published),
+                            expected_draft_revision=validated.get(
+                                'revision', seeded_revision
+                            ),
+                            operation_key='p1-47b-existing-a2-drift-publish',
+                        ),
+                        _request(),
+                        db,
+                        admin,
+                    )
+                assert caught.value.status_code == 409
+                blocked_at = 'publish'
+
+            assert blocked_at in {'validate', 'publish'}
+            assert published.read_bytes() == published_before
+            assert (runtime.read_bytes() if runtime.exists() else None) == runtime_before
+            db.expire_all()
+            original_after = db.get(WarehouseArea, original_id)
+            replacement_after = db.get(WarehouseArea, replacement_id)
+            assert original_after is not None and replacement_after is not None
+            assert original_after.area_code == 'A2-HISTORY'
+            assert replacement_after.area_code == 'A2'
+            assert original_after.storage_policy is None
+            assert replacement_after.storage_policy is None
+            assert db.scalar(select(func.count(WarehouseAreaStoragePolicy.id))) == 0
+    finally:
+        engine.dispose()
+
+
+def test_publish_rechecks_validated_existing_area_identity_after_late_drift(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    published, draft = _isolate_layout_paths(tmp_path, monkeypatch)
+    document = json.loads(published.read_text(encoding='utf-8'))
+    document['floors']['3F']['features'][0].pop('erp_area_code', None)
+    document['floors']['3F']['revision'] = _floor_revision(document['floors']['3F'])
+    published.write_text(
+        json.dumps(document, ensure_ascii=False, separators=(',', ':')),
+        encoding='utf-8',
+    )
+    runtime = Path(editor.TWIN_LAYOUT_PATH)
+    monkeypatch.setattr(
+        warehouse_api,
+        'list_production_projection_mappings',
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        warehouse_api,
+        'load_warehouse_twin_floor',
+        lambda floor_code: json.loads(runtime.read_text(encoding='utf-8'))[
+            'floors'
+        ][floor_code.upper()],
+    )
+    engine, factory = _database(tmp_path)
+    try:
+        with factory() as db:
+            admin = db.scalar(select(User).where(User.username == 'p1-47b-admin'))
+            floor = db.scalar(select(WarehouseFloor).where(WarehouseFloor.floor_code == '3F'))
+            assert admin is not None and floor is not None
+            original = WarehouseArea(
+                floor_id=floor.id,
+                area_code='A2',
+                area_name='A2 已选正式区域',
+                planned_location_count=0,
+                planned_pallet_capacity=7,
+                construction_status='enabled',
+                capacity_review_status='pending',
+                capacity_eligible=False,
+            )
+            db.add(original)
+            db.commit()
+            original_id = original.id
+
+            changed = warehouse_api.update_twin_zone_storage_policy(
+                '3F',
+                'zone-f1',
+                warehouse_api.TwinZoneStoragePolicyPayload(
+                    expected_revision=_revision(published),
+                    expected_version=1,
+                    operation_key='p1-47b-existing-a2-late-drift-draft',
+                    allowed_inventory_types=['finished'],
+                    storage_layout='pallet_ground',
+                    erp_area_code='A2',
+                    area_name='A2 已选正式区域',
+                    existing_area_id=original_id,
+                ),
+                _request(),
+                db,
+                admin,
+            )
+            assert changed['item']['formal_area_id'] == original_id
+            assert changed['item']['formal_floor_id'] == floor.id
+
+            validated = warehouse_api.validate_twin_layout_draft(
+                '3F',
+                warehouse_api.TwinLayoutDraftValidatePayload(
+                    expected_revision=changed['revision']
+                ),
+                _request(),
+                db,
+                admin,
+            )
+            assert validated['status'] == 'validated'
+            validated_draft_before = draft.read_bytes()
+            published_before = published.read_bytes()
+            runtime_before = runtime.read_bytes() if runtime.exists() else None
+
+            original.area_code = 'A2-HISTORY'
+            replacement = WarehouseArea(
+                floor_id=floor.id,
+                area_code='A2',
+                area_name='A2 同码替身区域',
+                planned_location_count=0,
+                planned_pallet_capacity=99,
+                construction_status='enabled',
+                capacity_review_status='pending',
+                capacity_eligible=False,
+            )
+            db.add(replacement)
+            db.commit()
+            replacement_id = replacement.id
+            area_count_before_publish = db.scalar(select(func.count(WarehouseArea.id)))
+            policy_count_before_publish = db.scalar(
+                select(func.count(WarehouseAreaStoragePolicy.id))
+            )
+
+            with pytest.raises(warehouse_api.HTTPException) as caught:
+                warehouse_api.publish_twin_layout_draft(
+                    '3F',
+                    warehouse_api.TwinLayoutDraftPublishPayload(
+                        expected_published_revision=_revision(published),
+                        expected_draft_revision=validated.get(
+                            'draft_revision', changed['revision']
+                        ),
+                        operation_key='p1-47b-existing-a2-late-drift-publish',
+                    ),
+                    _request(),
+                    db,
+                    admin,
+                )
+
+            assert caught.value.status_code == 409
+            assert published.read_bytes() == published_before
+            assert (runtime.read_bytes() if runtime.exists() else None) == runtime_before
+            assert draft.read_bytes() == validated_draft_before
+            db.expire_all()
+            original_after = db.get(WarehouseArea, original_id)
+            replacement_after = db.get(WarehouseArea, replacement_id)
+            assert original_after is not None and replacement_after is not None
+            assert original_after.area_code == 'A2-HISTORY'
+            assert replacement_after.area_code == 'A2'
+            assert original_after.storage_policy is None
+            assert replacement_after.storage_policy is None
+            assert (
+                db.scalar(select(func.count(WarehouseArea.id)))
+                == area_count_before_publish
+            )
+            assert (
+                db.scalar(select(func.count(WarehouseAreaStoragePolicy.id)))
+                == policy_count_before_publish
+            )
     finally:
         engine.dispose()
 

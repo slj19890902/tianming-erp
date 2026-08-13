@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EditorCanvas, type CanvasFocusTarget } from "./EditorCanvas";
 import { filterOperationalFeatures } from "./operationalView.mjs";
+import {
+  clearFormalAreaOptions,
+  formalAreaOptionsEffectEnabled,
+  stableTwinFeatures
+} from "./formalAreaOptions.mjs";
 import { pointsBoundsMm, resizeAndMovePointsMm, translatePointsMm } from "./layoutGeometry.mjs";
 import {
   buildMappedLocationPallets,
@@ -49,9 +54,12 @@ import type {
 } from "./types";
 
 type TwinFeature = LayoutFeature & {
+  formal_area_id?: number | null;
+  formal_floor_id?: number | null;
   erp_area_code?: string | null;
   formal_area_name?: string | null;
   formal_binding_status?: string | null;
+  formal_policy_status?: "draft" | "published" | null;
   formal_construction_status?: string | null;
   planned_pallet_capacity?: number | null;
   capacity_review_status?: string | null;
@@ -71,7 +79,31 @@ interface LayoutMutationResponse<T> {
   item: T;
   revision: string;
   applied: boolean;
-  formal_area?: unknown | null;
+  formal_area?: FormalWarehouseAreaOption | null;
+}
+
+interface FormalWarehouseAreaOption {
+  id: number;
+  floor_id: number;
+  floor_code: string;
+  floor_number: number;
+  area_code: string;
+  area_name: string;
+  planned_pallet_capacity: number;
+  capacity_review_status: string;
+  confirmed_pallet_capacity?: number | null;
+  construction_status: string;
+  recorded_location_count: number;
+  storage_policy?: { map_feature_id: string; status: string } | null;
+}
+
+interface WarehouseSpaceResponse {
+  items: Array<{
+    id: number;
+    floor_code: string;
+    floor_number: number;
+    areas: FormalWarehouseAreaOption[];
+  }>;
 }
 
 interface QuantityGroup {
@@ -476,6 +508,24 @@ function apiErrorMessage(body: unknown, status: number) {
   return status === 401 ? "登录状态已失效" : `请求失败（${status}）`;
 }
 
+export function availableFormalAreasForFeature(
+  areas: FormalWarehouseAreaOption[],
+  features: TwinFeature[],
+  selectedFeature: TwinFeature
+) {
+  const occupiedDraftCodes = new Set(
+    features
+      .filter((feature) => feature.id !== selectedFeature.id && feature.erp_area_code)
+      .map((feature) => String(feature.erp_area_code).toUpperCase())
+  );
+  return areas.filter((area) => (
+    !area.storage_policy
+    && Number(area.recorded_location_count || 0) === 0
+    && !occupiedDraftCodes.has(area.area_code.toUpperCase())
+    && (!selectedFeature.erp_area_code || area.area_code === selectedFeature.erp_area_code)
+  ));
+}
+
 async function requestJson<T>(path: string): Promise<T> {
   const response = await fetch(path, { credentials: "same-origin" });
   const body = await response.json().catch(() => ({}));
@@ -835,6 +885,9 @@ export function WarehouseTwinApp() {
   const [areaLocationManagement, setAreaLocationManagement] = useState<AreaLocationManagement | null>(null);
   const [formalAreaCodeDraft, setFormalAreaCodeDraft] = useState("");
   const [formalAreaNameDraft, setFormalAreaNameDraft] = useState("");
+  const [formalAreaOptions, setFormalAreaOptions] = useState<FormalWarehouseAreaOption[]>([]);
+  const [selectedExistingAreaId, setSelectedExistingAreaId] = useState("");
+  const [formalAreaOptionsError, setFormalAreaOptionsError] = useState("");
   const [floor1CandidatePlan, setFloor1CandidatePlan] = useState<Floor1FormalCandidatePlan | null>(null);
   const [floor1CandidateBusy, setFloor1CandidateBusy] = useState(false);
   const [warehouseOperationBusy, setWarehouseOperationBusy] = useState(false);
@@ -1038,7 +1091,7 @@ export function WarehouseTwinApp() {
     setPendingAreaCode(null);
   }, [layout, pendingAreaCode]);
 
-  const features = (layout?.features || []) as TwinFeature[];
+  const features = stableTwinFeatures(layout) as TwinFeature[];
   const warehouseMoveModeActive = mapMode === "move" && moveAction === "relocate" && canExecuteWarehouse && viewMode === "2d";
   const currentFloor = dashboard?.floors.find((item) => item.floor_code === floorCode);
   const visualLocations = useMemo<DashboardLocation[]>(() => (dashboard?.locations || []).map((location) => {
@@ -1417,9 +1470,16 @@ export function WarehouseTwinApp() {
     storage_layout: selectedAreaFeature.storage_layout
       || (selectedAreaFeature.subtype.includes("rack") ? "rack" : selectedAreaRacks.length ? "mixed" : "pallet_ground")
   }) : null;
+  const selectedAreaHasPublishedBinding = Boolean(
+    (
+      selectedAreaFeature?.formal_policy_status === "published"
+      || selectedAreaFeature?.formal_binding_status === "published"
+    )
+    && selectedAreaFeature?.formal_area_id
+  );
   useEffect(() => {
     setAreaLocationManagement(null);
-    if (!canEditLocations || !locationEditMode || !selectedAreaCode) return;
+    if (!canEditLocations || !locationEditMode || !selectedAreaCode || !selectedAreaHasPublishedBinding) return;
     let current = true;
     requestJson<AreaLocationManagement>(
       `/api/warehouse/spatial-layout/floors/${encodeURIComponent(floorCode)}/areas/${encodeURIComponent(selectedAreaCode)}/management`
@@ -1429,14 +1489,26 @@ export function WarehouseTwinApp() {
       if (current) setLocationEditMessage(`区域库位管理路径读取失败：${reason.message}`);
     });
     return () => { current = false; };
-  }, [canEditLocations, locationEditMode, floorCode, selectedAreaCode]);
+  }, [canEditLocations, locationEditMode, floorCode, selectedAreaCode, selectedAreaHasPublishedBinding]);
   const selectedAreaCreatesInventoryLocations = Boolean(
     selectedZonePolicy?.allowed_inventory_types.some((value) => value === "finished" || value === "semi_finished")
   );
   const selectedAreaHasFormalLedger = Boolean(
-    selectedAreaFeature?.formal_binding_status === "published"
-    || selectedAreaFeature?.formal_construction_status
+    selectedAreaHasPublishedBinding
   );
+  const selectedAreaCapacityReviewUrl = selectedAreaFeature?.formal_area_id && selectedAreaFeature.erp_area_code
+    ? (() => {
+      const params = new URLSearchParams({
+        location_view: "ledger",
+        capacity_review: "1",
+        area_id: String(selectedAreaFeature.formal_area_id),
+        floor_id: String(selectedAreaFeature.formal_floor_id || ""),
+        area_code: selectedAreaFeature.erp_area_code,
+        map_feature_id: selectedAreaFeature.id
+      });
+      return `/warehouse-ledger.html?${params.toString()}`;
+    })()
+    : "";
   const selectedRackEditDraft = selectedRack
     ? (rackDrafts[selectedRack.id] || rackDraft(selectedRack))
     : null;
@@ -1491,6 +1563,7 @@ export function WarehouseTwinApp() {
     if (!selectedAreaFeature) {
       setFormalAreaCodeDraft("");
       setFormalAreaNameDraft("");
+      setSelectedExistingAreaId("");
       return;
     }
     const suggested = selectedAreaFeature.feature_code
@@ -1501,7 +1574,56 @@ export function WarehouseTwinApp() {
       .slice(0, 30);
     setFormalAreaCodeDraft(selectedAreaFeature.erp_area_code || suggested);
     setFormalAreaNameDraft(selectedAreaFeature.formal_area_name || selectedAreaFeature.name || suggested);
+    setSelectedExistingAreaId("");
   }, [selectedAreaFeature?.id, selectedAreaFeature?.erp_area_code, selectedAreaFeature?.formal_area_name, selectedAreaFeature?.name]);
+  const shouldLoadFormalAreaOptions = formalAreaOptionsEffectEnabled({
+    canEditLocations,
+    locationEditMode,
+    areaPolicyEditMode,
+    hasSelectedFeature: Boolean(selectedAreaFeature),
+    formalAreaId: selectedAreaFeature?.formal_area_id
+  });
+  useEffect(() => {
+    setSelectedExistingAreaId("");
+    setFormalAreaOptionsError("");
+    if (!shouldLoadFormalAreaOptions || !selectedAreaFeature) {
+      setFormalAreaOptions(clearFormalAreaOptions);
+      return;
+    }
+    let active = true;
+    requestJson<WarehouseSpaceResponse>("/api/warehouse/space/floors")
+      .then((value) => {
+        if (!active) return;
+        const floorNumber = Number(floorCode.replace(/\D/g, ""));
+        const floor = (value.items || []).find((item) => Number(item.floor_number) === floorNumber);
+        setFormalAreaOptions(availableFormalAreasForFeature(floor?.areas || [], features, selectedAreaFeature));
+      })
+      .catch((reason: Error) => {
+        if (!active) return;
+        setFormalAreaOptions(clearFormalAreaOptions);
+        setFormalAreaOptionsError(reason.message);
+      });
+    return () => { active = false; };
+  }, [shouldLoadFormalAreaOptions, selectedAreaFeature?.id, selectedAreaFeature?.formal_area_id, selectedAreaFeature?.erp_area_code, floorCode, features]);
+  const selectExistingFormalArea = (areaId: string) => {
+    setSelectedExistingAreaId(areaId);
+    const area = formalAreaOptions.find((item) => String(item.id) === areaId);
+    if (!area) {
+      const suggested = selectedAreaFeature?.feature_code
+        .replace(/^ZONE-(?:1F|3F)-/i, "")
+        .replace(/[^A-Z0-9-]+/gi, "-")
+        .replace(/^-+|-+$/g, "")
+        .toUpperCase()
+        .slice(0, 30) || "";
+      setFormalAreaCodeDraft(selectedAreaFeature?.erp_area_code || suggested);
+      setFormalAreaNameDraft(selectedAreaFeature?.formal_area_name || selectedAreaFeature?.name || suggested);
+      setLocationEditMessage("已取消选用现有区域；请核对下方正式区域编号后再保存草稿。");
+      return;
+    }
+    setFormalAreaCodeDraft(area.area_code);
+    setFormalAreaNameDraft(area.area_name);
+    setLocationEditMessage(`已选用现有区域 ${area.floor_code} · ${area.area_code} ${area.area_name}；保存后仍是地图草稿，校验并发布才会建立绑定。`);
+  };
   const focusedRack = rackFocusId ? layout?.racks.find((item) => item.id === rackFocusId) || null : null;
   const focusedRackAreaCode = focusedRack ? rackAreaCode(focusedRack, features) : null;
   const focusedAreaRacks = useMemo(() => {
@@ -2909,6 +3031,11 @@ export function WarehouseTwinApp() {
       setLocationEditMessage("请输入正式区域编号；保存后该地图区域才能生成正式库位。");
       return;
     }
+    const selectedExistingArea = formalAreaOptions.find((item) => String(item.id) === selectedExistingAreaId);
+    if (selectedExistingArea && selectedExistingArea.area_code !== formalAreaCodeDraft.trim().toUpperCase()) {
+      setLocationEditMessage("现有区域选择与正式区域编号不一致，请重新选择，系统不会按名称猜测绑定。");
+      return;
+    }
     setSpatialEditBusy(true);
     try {
       const response = await mutateJson<LayoutMutationResponse<TwinFeature>>(
@@ -2920,16 +3047,31 @@ export function WarehouseTwinApp() {
           operation_key: operationKey("zone-policy"),
           erp_area_code: formalAreaCodeDraft.trim().toUpperCase(),
           area_name: formalAreaNameDraft.trim() || selectedAreaFeature.name,
+          existing_area_id: selectedExistingArea?.id || null,
           ...selectedZonePolicy
         }
       );
       if (!response) return;
+      if (selectedExistingArea && (!response.formal_area || Number(response.formal_area.id) !== Number(selectedExistingArea.id))) {
+        setLocationEditMessage("服务器未能核验所选现有区域，草稿未在页面继续；请放弃草稿后重试。");
+        return;
+      }
       setLayout((current) => current ? {
         ...current,
         source_sha256: response.revision,
         features: current.features.map((item) => item.id === response.item.id ? response.item : item)
       } : current);
       rememberServerDraft(response.revision);
+      setLayoutDraftControl((current) => current ? {
+        ...current,
+        has_draft: true,
+        status: "draft",
+        draft_revision: response.revision,
+        updated_at: new Date().toISOString(),
+        validated_at: null,
+        blockers: [],
+        warnings: []
+      } : current);
       setZonePolicyDrafts((current) => {
         const next = { ...current };
         delete next[selectedAreaFeature.id];
@@ -3395,7 +3537,9 @@ export function WarehouseTwinApp() {
             </label>
             {!selectedAreaIsMold && focusedSearchProduct && focusedSearchProduct.items.some((item) => item.area_code === selectedAreaCode) && <div className="twin-search-focus-note product-focus"><b>已找到该产品</b><span>{focusedSearchProduct.inventory_code} · 本区域位置已高亮</span></div>}
             {locationEditMode && canEditLocations && <div className="twin-area-layout-summary"><div><b>区域布局</b><small>{selectedAreaRacks.length} 个货架 · {selectedAreaLocationCount} 个正式库位</small></div><button type="button" disabled={spatialEditBusy || !selectedAreaFeature} onClick={addRackToSelectedArea}>＋ 添加货架</button></div>}
-            {locationEditMode && canEditLocations && !['confirmed', 'excluded'].includes(selectedAreaFeature.capacity_review_status || '') && <div className="twin-location-readonly-note"><b>容量待复核</b><span>规划参考 {selectedAreaFeature.planned_pallet_capacity || 0} 个，仅供现场复核，不计算利用率。</span><a href="/warehouse-ledger.html?location_view=ledger&capacity_review=1" target="_top">前往容量复核</a></div>}
+            {locationEditMode && canEditLocations && selectedAreaHasPublishedBinding && selectedAreaFeature.capacity_review_status === 'pending' && <div className="twin-location-readonly-note"><b>容量待复核</b><span>规划参考 {selectedAreaFeature.planned_pallet_capacity || 0} 个，仅供现场复核，不计算利用率。</span><a href={selectedAreaCapacityReviewUrl} target="_top">前往当前区域容量复核</a></div>}
+            {locationEditMode && canEditLocations && !selectedAreaFeature.formal_area_id && selectedAreaFeature.formal_binding_status !== 'draft' && <div className="twin-location-readonly-note"><b>尚未绑定正式区域</b><span>当前只是实测地图区域；请打开“区域设置”，选择现有区域或填写新区域编号。未绑定前不进入容量复核。</span><button type="button" onClick={() => { setAreaPolicyEditMode(true); setLocationEditMessage("请为当前实测区域选择一个现有未绑定区域，或填写新的正式区域编号。"); }}>打开区域设置</button></div>}
+            {locationEditMode && canEditLocations && selectedAreaFeature.formal_binding_status === 'draft' && selectedAreaFeature.formal_policy_status !== 'published' && <div className="twin-location-readonly-note"><b>区域绑定草稿待发布</b><span>请先校验并发布地图草稿；发布后才能复核该区域容量。</span></div>}
             {locationEditMode && canEditLocations && selectedAreaFeature.capacity_review_status === 'confirmed' && selectedAreaFeature.capacity_eligible && <div className="twin-location-readonly-note"><b>现场确认最大 {selectedAreaFeature.confirmed_pallet_capacity || 0} 个栈板</b></div>}
             {locationEditMode && canEditLocations && selectedAreaFeature.capacity_review_status === 'confirmed' && !selectedAreaFeature.capacity_eligible && <div className="twin-location-readonly-note"><b>不计入长期容量</b></div>}
             {locationEditMode && canEditLocations && selectedAreaFeature.capacity_review_status === 'excluded' && <div className="twin-location-readonly-note"><b>不计入长期容量</b></div>}
@@ -3407,8 +3551,9 @@ export function WarehouseTwinApp() {
                 }} /></label>)}
               </div><div><button type="button" className="primary" disabled={spatialEditBusy || !zoneGeometryDrafts[selectedAreaFeature.id]} onClick={saveSelectedZoneGeometry}>保存实测边界草稿</button><button type="button" disabled={!zoneGeometryDrafts[selectedAreaFeature.id]} onClick={() => setZoneGeometryDrafts((current) => { const next = { ...current }; delete next[selectedAreaFeature.id]; return next; })}>取消边界草稿</button></div></>}
               <div><b>正式区域绑定</b><small>区域编号保存后不可与其他地图区域重复；发布前仍不会进入员工入库候选。</small></div>
-              <label><span>正式区域编号</span><input maxLength={30} value={formalAreaCodeDraft} onChange={(event) => setFormalAreaCodeDraft(event.target.value.toUpperCase())} placeholder="例如 FIN-001" /></label>
-              <label><span>区域名称</span><input maxLength={100} value={formalAreaNameDraft} onChange={(event) => setFormalAreaNameDraft(event.target.value)} placeholder="例如 一楼成品待送区" /></label>
+              {!selectedAreaFeature.formal_area_id && <label><span>选用现有未绑定区域</span><select value={selectedExistingAreaId} onChange={(event) => selectExistingFormalArea(event.target.value)}><option value="">不选，按下方编号建立新区域</option>{formalAreaOptions.map((area) => <option value={area.id} key={area.id}>{area.floor_code} · {area.area_code} {area.area_name} · {area.capacity_review_status === "confirmed" ? `已确认 ${area.confirmed_pallet_capacity || 0} 栈板` : area.capacity_review_status === "excluded" ? "不计长期容量" : "容量待复核"}</option>)}</select>{formalAreaOptionsError && <small>现有区域读取失败：{formalAreaOptionsError}</small>} {!formalAreaOptionsError && formalAreaOptions.length === 0 && <small>当前楼层没有可选的未绑定区域；可使用下方新编号。</small>}</label>}
+              <label><span>正式区域编号</span><input maxLength={30} disabled={Boolean(selectedExistingAreaId)} value={formalAreaCodeDraft} onChange={(event) => setFormalAreaCodeDraft(event.target.value.toUpperCase())} placeholder="例如 FIN-001" /></label>
+              <label><span>区域名称</span><input maxLength={100} disabled={Boolean(selectedExistingAreaId)} value={formalAreaNameDraft} onChange={(event) => setFormalAreaNameDraft(event.target.value)} placeholder="例如 一楼成品待送区" /></label>
               <div><b>区域允许存放类型</b><small>可多选；只保存区域策略，不自动转换现有库存</small></div>
               <div className="twin-zone-policy-options">{([[
                 "finished", "成品"

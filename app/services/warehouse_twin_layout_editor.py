@@ -653,6 +653,8 @@ def update_warehouse_twin_zone_policy(
     storage_layout: str,
     erp_area_code: str | None = None,
     area_name: str | None = None,
+    formal_area_id: int | None = None,
+    formal_floor_id: int | None = None,
     path: Path | None = None,
 ) -> LayoutMutation:
     normalized_types = list(dict.fromkeys(str(value).strip() for value in allowed_inventory_types))
@@ -662,6 +664,10 @@ def update_warehouse_twin_zone_policy(
         raise WarehouseTwinLayoutEditError("区域展示形式必须是货架、栈板地堆或混合")
     normalized_area_code = str(erp_area_code or "").strip().upper() or None
     normalized_area_name = str(area_name or "").strip() or None
+    if (formal_area_id is None) != (formal_floor_id is None):
+        raise WarehouseTwinLayoutEditError("正式区域身份必须同时包含区域 ID 和楼层 ID")
+    if formal_area_id is not None and (formal_area_id <= 0 or formal_floor_id <= 0):
+        raise WarehouseTwinLayoutEditError("正式区域身份无效")
     if normalized_area_code is not None and len(normalized_area_code) > 30:
         raise WarehouseTwinLayoutEditError("正式区域编号最多 30 个字符")
 
@@ -692,6 +698,12 @@ def update_warehouse_twin_zone_policy(
             )
         if normalized_area_name is not None:
             feature["formal_area_name"] = normalized_area_name
+        if formal_area_id is not None:
+            feature["formal_area_id"] = int(formal_area_id)
+            feature["formal_floor_id"] = int(formal_floor_id)
+        else:
+            feature.pop("formal_area_id", None)
+            feature.pop("formal_floor_id", None)
         feature["version"] = int(feature.get("version") or 1) + 1
         return dict(feature)
 
@@ -708,7 +720,11 @@ def update_warehouse_twin_zone_policy(
         same_layout = mutation.value.get('storage_layout') == storage_layout
         same_area = normalized_area_code is None or mutation.value.get('erp_area_code') == normalized_area_code
         same_name = normalized_area_name is None or mutation.value.get('formal_area_name') == normalized_area_name
-        if not (same_types and same_layout and same_area and same_name):
+        same_identity = (
+            mutation.value.get('formal_area_id') == formal_area_id
+            and mutation.value.get('formal_floor_id') == formal_floor_id
+        )
+        if not (same_types and same_layout and same_area and same_name and same_identity):
             raise WarehouseTwinLayoutEditConflictError('该操作键已用于不同的区域策略')
     return mutation
 

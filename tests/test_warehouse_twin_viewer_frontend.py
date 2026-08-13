@@ -153,6 +153,62 @@ def test_operational_twin_expands_real_area_inventory_with_local_filter_and_sear
     assert "已预占 {formatNumber(item.reserved_quantity)} {inventoryUnitLabel(item.unit)}" in SOURCE
 
 
+def test_capacity_review_link_keeps_the_clicked_map_area_identity() -> None:
+    assert "formal_area_id?: number | null" in SOURCE
+    assert (
+        "locationEditMode && canEditLocations && selectedAreaHasPublishedBinding "
+        "&& selectedAreaFeature.capacity_review_status === 'pending'"
+    ) in SOURCE
+    assert 'location_view: "ledger"' in SOURCE
+    assert 'capacity_review: "1"' in SOURCE
+    assert 'area_id: String(selectedAreaFeature.formal_area_id)' in SOURCE
+    assert 'floor_id: String(selectedAreaFeature.formal_floor_id || "")' in SOURCE
+    assert 'area_code: selectedAreaFeature.erp_area_code' in SOURCE
+    assert 'map_feature_id: selectedAreaFeature.id' in SOURCE
+    assert 'href={selectedAreaCapacityReviewUrl}' in SOURCE
+    assert "前往当前区域容量复核" in SOURCE
+    assert '/warehouse-ledger.html?location_view=ledger&capacity_review=1"' not in SOURCE
+
+
+def test_unbound_measured_zone_does_not_offer_a_disconnected_capacity_review() -> None:
+    assert "尚未绑定正式区域" in SOURCE
+    assert "未绑定前不进入容量复核" in SOURCE
+    assert "选用现有未绑定区域" in SOURCE
+    assert "打开区域设置" in SOURCE
+    assert "selectedAreaFeature.formal_binding_status === 'draft'" in SOURCE
+    assert "区域绑定草稿待发布" in SOURCE
+
+
+def test_existing_area_picker_keeps_confirmed_a2_and_rejects_unsafe_candidates() -> None:
+    helper = SOURCE[SOURCE.index("export function availableFormalAreasForFeature"):SOURCE.index("async function requestJson")]
+    assert "!area.storage_policy" in helper
+    assert "Number(area.recorded_location_count || 0) === 0" in helper
+    assert "!occupiedDraftCodes.has(area.area_code.toUpperCase())" in helper
+    assert "construction_status" not in helper
+    assert "capacity_review_status" not in helper
+    assert 'existing_area_id: selectedExistingArea?.id || null' in SOURCE
+    assert 'disabled={Boolean(selectedExistingAreaId)}' in SOURCE
+    assert "!selectedAreaHasPublishedBinding" in SOURCE
+
+
+def test_existing_area_picker_empty_layout_dependencies_are_stable() -> None:
+    assert 'import {\n  clearFormalAreaOptions,\n  formalAreaOptionsEffectEnabled,\n  stableTwinFeatures\n} from "./formalAreaOptions.mjs"' in SOURCE
+    assert "const features = stableTwinFeatures(layout) as TwinFeature[]" in SOURCE
+    assert "setFormalAreaOptions(clearFormalAreaOptions)" in SOURCE
+    assert "const shouldLoadFormalAreaOptions = formalAreaOptionsEffectEnabled" in SOURCE
+    assert "features = (layout?.features || [])" not in SOURCE
+    assert "setFormalAreaOptions([])" not in SOURCE
+
+
+def test_published_policy_remains_operational_while_an_unrelated_layout_draft_exists() -> None:
+    assert 'formal_policy_status?: "draft" | "published" | null' in SOURCE
+    assert 'selectedAreaFeature?.formal_policy_status === "published"' in SOURCE
+    assert (
+        "selectedAreaFeature.formal_binding_status === 'draft' && "
+        "selectedAreaFeature.formal_policy_status !== 'published'"
+    ) in SOURCE
+
+
 def test_operational_twin_uses_cross_floor_search_highlights_and_mapped_location_pallets() -> None:
     assert "全仓查找" in SOURCE
     assert "库存编码定位" not in SOURCE

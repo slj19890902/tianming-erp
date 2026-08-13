@@ -134,7 +134,7 @@ for(const id of ["locationViewTabs","inventorySection","insightSection","movemen
 }
 const $=id=>elements.get(id);
 const document={body:{classList:fakeClassList},querySelectorAll(){return []}};
-const state={tab:"finished",warehouseFloors:[{id:9,floor_number:3,areas:[{id:42,floor_id:9,area_code:"B2"}]}]};
+const state={tab:"finished",warehouseFloors:[{id:9,floor_number:3,areas:[{id:42,floor_id:9,area_code:"B2",storage_policy:{map_feature_id:"zone-b2",status:"published"}}]}]};
 const canManageLocations=()=>true;
 const toast=message=>calls.push(`toast:${message}`);
 const setStocktakeReviewSectionVisibility=tab=>calls.push(`stocktake:${tab}`);
@@ -145,7 +145,7 @@ const selectWarehouseFloor=id=>calls.push(`floor:${id}`);
 const editWarehouseArea=id=>calls.push(`area:${id}`);
 const requestAnimationFrame=callback=>callback();
 (async()=>{
-  const result=await openCapacityReviewLedger({areaId:42});
+  const result=await openCapacityReviewLedger({areaId:42,areaCode:"B2",mapFeatureId:"zone-b2",floorId:9});
   console.log(JSON.stringify({result,tab:state.tab,calls}));
 })().catch(error=>{console.error(error);process.exit(1)});
 """
@@ -156,6 +156,89 @@ const requestAnimationFrame=callback=>callback();
     assert "floor:9" in payload["calls"]
     assert "area:42" in payload["calls"]
     assert "focus:warehouseAreaCapacityReview" in payload["calls"]
+
+
+def test_open_review_fails_closed_when_declared_map_area_identity_has_drifted() -> None:
+    functions = "\n".join(
+        (
+            _javascript_function("activateWarehouseLocationHub"),
+            _javascript_function("openCapacityReviewLedger"),
+        )
+    )
+    script = functions + r"""
+const calls=[];
+const fakeClassList={add(){},remove(){}};
+const elements=new Map();
+for(const id of ["locationViewTabs","inventorySection","insightSection","movementSection","moldSection","printingPlateSection","finishedForm","semiForm","warehouseAreaCapacityReview","capacityReviewChecklist"]){
+  elements.set(id,{classList:fakeClassList,scrollIntoView(){calls.push(`scroll:${id}`)},focus(){calls.push(`focus:${id}`)}});
+}
+const $=id=>elements.get(id);
+const document={body:{classList:fakeClassList},querySelectorAll(){return []}};
+const state={tab:"finished",warehouseFloors:[{id:9,floor_number:3,areas:[{id:42,floor_id:9,area_code:"B2",storage_policy:{map_feature_id:"zone-b2",status:"published"}}]}]};
+const canManageLocations=()=>true;
+const toast=(message,isError)=>calls.push(`toast:${Boolean(isError)}:${message}`);
+const setStocktakeReviewSectionVisibility=()=>{};
+const setInventoryOnboardingSectionVisibility=()=>{};
+let capacityReviewSpaceOnly=false;
+const switchLocationView=async()=>{};
+const selectWarehouseFloor=id=>calls.push(`floor:${id}`);
+const editWarehouseArea=id=>calls.push(`area:${id}`);
+const requestAnimationFrame=callback=>callback();
+(async()=>{
+  const results=[];
+  for(const options of [
+    {areaId:42,areaCode:"B9",mapFeatureId:"zone-b2",floorId:9},
+    {areaId:42,areaCode:"B2",mapFeatureId:"zone-other",floorId:9},
+    {areaId:42,areaCode:"B2",mapFeatureId:"zone-b2",floorId:1},
+    {areaId:404,areaCode:"B2",mapFeatureId:"zone-b2",floorId:9},
+  ]) results.push(await openCapacityReviewLedger(options));
+  console.log(JSON.stringify({results,calls}));
+})().catch(error=>{console.error(error);process.exit(1)});
+"""
+    payload = _run_node(script)
+    assert payload["results"] == [False, False, False, False]
+    assert not any(call.startswith("floor:") for call in payload["calls"])
+    assert not any(call.startswith("area:") for call in payload["calls"])
+    error_toasts = [call for call in payload["calls"] if call.startswith("toast:true:")]
+    assert len(error_toasts) == 4
+
+
+def test_exact_map_review_rejects_a_nonpublished_storage_policy() -> None:
+    functions = "\n".join(
+        (
+            _javascript_function("activateWarehouseLocationHub"),
+            _javascript_function("openCapacityReviewLedger"),
+        )
+    )
+    script = functions + r"""
+const calls=[];
+const fakeClassList={add(){},remove(){}};
+const elements=new Map();
+for(const id of ["locationViewTabs","inventorySection","insightSection","movementSection","moldSection","printingPlateSection","finishedForm","semiForm","warehouseAreaCapacityReview","capacityReviewChecklist"]){
+  elements.set(id,{classList:fakeClassList,scrollIntoView(){calls.push(`scroll:${id}`)},focus(){calls.push(`focus:${id}`)}});
+}
+const $=id=>elements.get(id);
+const document={body:{classList:fakeClassList},querySelectorAll(){return []}};
+const state={tab:"finished",warehouseFloors:[{id:9,floor_number:3,areas:[{id:42,floor_id:9,area_code:"B2",storage_policy:{map_feature_id:"zone-b2",status:"draft"}}]}]};
+const canManageLocations=()=>true;
+const toast=(message,isError)=>calls.push(`toast:${Boolean(isError)}:${message}`);
+const setStocktakeReviewSectionVisibility=()=>{};
+const setInventoryOnboardingSectionVisibility=()=>{};
+let capacityReviewSpaceOnly=false;
+const switchLocationView=async()=>{};
+const selectWarehouseFloor=id=>calls.push(`floor:${id}`);
+const editWarehouseArea=id=>calls.push(`area:${id}`);
+const requestAnimationFrame=callback=>callback();
+(async()=>{
+  const result=await openCapacityReviewLedger({areaId:42,areaCode:"B2",mapFeatureId:"zone-b2",floorId:9});
+  console.log(JSON.stringify({result,calls}));
+})().catch(error=>{console.error(error);process.exit(1)});
+"""
+    payload = _run_node(script)
+    assert payload["result"] is False
+    assert not any(call.startswith("floor:") for call in payload["calls"])
+    assert not any(call.startswith("area:") for call in payload["calls"])
+    assert len([call for call in payload["calls"] if call.startswith("toast:true:")]) == 1
 
 
 def test_empty_all_excluded_and_complete_states_are_explicit() -> None:
@@ -210,10 +293,59 @@ console.log(JSON.stringify({empty,zero,complete,pending}));
     assert "areaId:13" in payload["pending"]["items"]
 
 
-def test_deep_link_opens_checklist_without_loading_full_location_ledger() -> None:
+def test_capacity_review_deep_link_passes_exact_map_area_identity() -> None:
     deep_link = _javascript_function("applyWarehouseDeepLink")
+    script = deep_link + r"""
+const calls=[];
+const location={search:"?location_view=ledger&capacity_review=1&area_id=42&area_code=B2&map_feature_id=zone-b2&floor_id=9"};
+const openCapacityReviewLedger=async options=>{calls.push(options);return true};
+(async()=>{
+  await applyWarehouseDeepLink();
+  console.log(JSON.stringify(calls));
+})().catch(error=>{console.error(error);process.exit(1)});
+"""
+    payload = _run_node(script)
+    assert payload == [
+        {
+            "areaId": 42,
+            "areaCode": "B2",
+            "mapFeatureId": "zone-b2",
+            "floorId": 9,
+        }
+    ]
+
+
+def test_targeted_capacity_review_deep_link_rejects_any_missing_identity_field() -> None:
+    deep_link = _javascript_function("applyWarehouseDeepLink")
+    script = deep_link + r"""
+const calls=[];
+const errors=[];
+let location={search:""};
+const openCapacityReviewLedger=async options=>{calls.push(options);return true};
+const toast=(message,isError)=>errors.push({message,isError:Boolean(isError)});
+(async()=>{
+  for(const search of [
+    "?location_view=ledger&capacity_review=1",
+    "?location_view=ledger&capacity_review=1&area_id=42",
+    "?location_view=ledger&capacity_review=1&area_id=42&area_code=B2&map_feature_id=zone-b2",
+    "?location_view=ledger&capacity_review=1&area_id=42&floor_id=9&map_feature_id=zone-b2",
+    "?location_view=ledger&capacity_review=1&area_id=42&floor_id=9&area_code=B2",
+    "?location_view=ledger&capacity_review=1&floor_id=9&area_code=B2&map_feature_id=zone-b2",
+  ]){
+    location={search};
+    await applyWarehouseDeepLink();
+  }
+  console.log(JSON.stringify({calls,errors}));
+})().catch(error=>{console.error(error);process.exit(1)});
+"""
+    payload = _run_node(script)
+    assert payload["calls"] == []
+    assert len(payload["errors"]) == 6
+    assert all(item["isError"] for item in payload["errors"])
+
+
+def test_internal_capacity_review_checklist_still_skips_the_full_location_ledger() -> None:
     switch_view = _javascript_function("switchLocationView")
-    assert 'requestedLocationView==="ledger"&&params.get("capacity_review")==="1"' in deep_link
-    assert "await openCapacityReviewLedger({focusChecklist:true})" in deep_link
+    assert 'onclick="openCapacityReviewLedger({focusChecklist:true})"' in WAREHOUSE_HTML
     assert "if(!spaceOnly)await loadLocations(true)" in switch_view
     assert 'if(spaceOnly&&state.warehouseFloors.length)renderWarehouseSpace()' in switch_view

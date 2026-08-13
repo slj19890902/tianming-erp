@@ -733,7 +733,13 @@ body.warehouse-twin-page {
 .twin-inventory-title > div { display: grid; gap: 2px; }
 .twin-inventory-title small { color: #0f766e; font: 800 8px Consolas, monospace; letter-spacing: .1em; }
 .twin-inventory-title b { color: #17384a; font-size: 13px; }
-.twin-inventory-title > span { color: #718590; font-size: 8px; text-align: right; }
+.twin-inventory-title > span { padding: 2px 6px; border-radius: 10px; color: #0f766e; background: #e2f4ef; font-size: 8px; font-weight: 800; text-align: right; white-space: nowrap; }
+.twin-selection-summary { margin-top: 7px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; }
+.twin-selection-summary > span { min-width: 0; padding: 6px; display: grid; gap: 2px; border: 1px solid #d7e3e5; border-radius: 3px; background: #f7fafb; }
+.twin-selection-summary small { color: #718590; font-size: 7px; }
+.twin-selection-summary b { color: #294653; font-size: 10px; line-height: 1.3; overflow-wrap: anywhere; }
+.twin-selection-summary.area > span:first-child { background: #eef8f5; }
+.twin-selection-summary.area > span:first-child b { color: #0f766e; }
 .twin-area-filter-prominent { margin: 7px 0 5px; padding: 7px; border: 1px solid #aecbc7; border-radius: 3px; background: #eef7f5; }
 .twin-inventory-quantities { display: grid; grid-template-columns: 1fr; }
 .twin-zone-summary { padding: 7px 8px; display: flex; align-items: center; justify-content: space-between; border: 1px solid #cfe0de; border-radius: 3px; color: #49616e; background: #eef7f5; font-size: 10px; }
@@ -751,8 +757,8 @@ body.warehouse-twin-page {
 .twin-area-filter > span { color: #405966; }
 .twin-area-filter > small { color: #718590; }
 .twin-area-filter input { padding: 6px 7px; border-color: #c7d5da; color: #263c49; background: #fff; }
-.twin-area-lot-list { margin-top: 6px; max-height: 270px; scrollbar-color: #9ab0b8 #eef2f4; }
-.twin-area-lot { padding: 6px; border-color: #dde5e8; background: #fff; }
+.twin-area-lot-list { margin-top: 6px; max-height: 310px; scrollbar-color: #9ab0b8 #eef2f4; }
+.twin-area-lot { padding: 7px; gap: 4px; border-color: #dde5e8; background: #fff; }
 .twin-area-lot:hover { background: #f3f7f8; }
 .twin-area-lot.search-hit { background: #e7f4f1; box-shadow: none; }
 .twin-location-line { padding: 4px 5px; display: grid !important; grid-template-columns: auto minmax(0, 1fr) auto; gap: 5px; border: 1px solid #d5e4e1; border-radius: 2px; color: #355364; background: #edf7f5; }
@@ -760,11 +766,15 @@ body.warehouse-twin-page {
 .twin-location-line span { color: #49616e; font-size: 10px; overflow-wrap: anywhere; }
 .twin-location-line em { padding: 1px 3px; border: 0; color: #82929a; background: #fff; font-size: 8px; font-weight: 400; }
 .twin-area-lot b { color: #263c49; }
+.twin-area-lot > div:first-child > strong { flex: 0 0 auto; color: #0f766e; font-size: 11px; white-space: nowrap; }
 .twin-area-lot strong { color: #3e5663; }
 .twin-area-lot > span,
 .twin-area-lot-meta span { color: #6c808b; }
 .twin-area-lot-meta b { color: #0f766e; }
 .twin-area-lot em { border-color: #b9cad1; color: #526c78; background: #f3f6f7; }
+.twin-area-lot-details { padding-top: 4px; display: grid !important; gap: 2px !important; border-top: 1px dashed #d8e2e5; }
+.twin-area-lot-details span { color: #718590; font-size: 8px; overflow-wrap: anywhere; }
+.twin-area-lot-details small { color: #a16207; font-size: 8px; }
 .twin-area-empty { border-color: #bdccd2; background: #f8fafb; }
 .twin-area-empty b { color: #3e5663; }
 .twin-area-empty span { color: #718590; }
@@ -852,10 +862,10 @@ body.warehouse-twin-page {
 .twin-location-empty-primary { margin: 7px 0 0; padding: 9px; color: #718590; background: #f5f8f9; font-size: 9px; text-align: center; }
 .twin-location-item { margin-top: 6px; padding: 7px; display: grid; gap: 5px; border: 1px solid #cfe1df; border-left: 3px solid #149486; border-radius: 3px; background: linear-gradient(135deg, #f3fbf9, #fff); }
 .twin-location-item-code { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; }
-.twin-location-item-code span { color: #718590; font-size: 7px; }
-.twin-location-item-code b { color: #0f766e; font: 900 11px Consolas, "Microsoft YaHei", sans-serif; letter-spacing: .02em; text-align: right; overflow-wrap: anywhere; }
+.twin-location-item-code b { color: #0f766e; font: 900 11px Consolas, "Microsoft YaHei", sans-serif; letter-spacing: .02em; overflow-wrap: anywhere; }
+.twin-location-item-code strong { flex: 0 0 auto; color: #b65f00; font-size: 12px; white-space: nowrap; }
 .twin-location-item h4 { margin: 0; color: #17384a; font-size: 10px; line-height: 1.35; }
-.twin-location-item-summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 8px; }
+.twin-location-item-summary { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; }
 .twin-location-item-summary > span,
 .twin-location-item-summary > strong { min-width: 0; display: grid; gap: 2px; color: #405966; font-size: 8px; overflow-wrap: anywhere; }
 .twin-location-item-summary > strong { color: #b65f00; font-size: 11px; text-align: right; white-space: nowrap; }
@@ -864,6 +874,7 @@ body.warehouse-twin-page {
 .twin-location-column-warning { margin: 6px 0 0; padding: 6px 7px; border: 1px solid #efb4ae; color: #a12a20; background: #fff1f0; font-size: 8px; font-weight: 800; line-height: 1.45; }
 .twin-detail-toggle { width: 100%; margin-top: 7px; padding: 5px 7px; border: 1px solid #cbdadf; border-radius: 2px; color: #405966; background: #f5f8f9; font-size: 8px; font-weight: 800; }
 .twin-detail-toggle:hover { border-color: #79aaa3; color: #0f766e; background: #edf8f6; }
+.twin-detail-toggle.secondary { border-color: transparent; color: #718590; background: transparent; font-weight: 600; }
 .twin-location-secondary { margin-top: 6px; padding: 2px 7px 5px; border: 1px solid #dce6e8; background: #f8fafb; }
 .twin-location-readonly-note { margin: 6px 0 0; padding: 5px 6px; color: #526b77; background: #eef4f5; font-size: 8px; line-height: 1.4; }
 .twin-formal-operation { margin-top: 7px; padding: 7px; display: grid; gap: 6px; border: 1px solid #7ab8af; border-radius: 3px; background: linear-gradient(145deg, #edf8f6, #f8fbfb); }
@@ -1163,6 +1174,21 @@ body.warehouse-twin-page {
 .twin-zone-policy-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
 .twin-zone-policy-options label { min-height: 30px; padding: 5px 7px; display: flex; align-items: center; gap: 6px; border: 1px solid #c5d9d6; border-radius: 3px; color: #36535d; background: #fff; font-size: 9px; }
 .twin-zone-policy-options input { accent-color: #0f766e; }
+
+.twin-zone-simple-planner { margin: 8px 0; padding: 14px; display: grid; gap: 11px; border: 2px solid #0f766e; border-radius: 7px; background: #f4fbf9; }
+.twin-zone-simple-planner header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.twin-zone-simple-planner header > div { min-width: 0; display: grid; gap: 2px; }
+.twin-zone-simple-planner header small { color: #627982; font-size: 9px; }
+.twin-zone-simple-planner header b { color: #123f4c; font-size: 14px; overflow-wrap: anywhere; }
+.twin-zone-simple-planner header span { flex: 0 0 auto; padding: 3px 6px; border-radius: 10px; color: #0f665f; background: #dff3ee; font-size: 8px; font-weight: 800; }
+.twin-zone-simple-planner label { display: grid; gap: 4px; color: #34515d; font-size: 10px; font-weight: 800; }
+.twin-zone-simple-planner select,
+.twin-zone-simple-planner input { min-width: 0; min-height: 42px; padding: 7px 9px; border: 1px solid #9ebbb8; border-radius: 4px; color: #173b49; background: #fff; font-size: 14px; font-weight: 800; }
+.twin-zone-simple-planner label small { color: #6b7d84; font-size: 9px; font-weight: 400; }
+.twin-zone-simple-planner > button.confirm { min-height: 46px; border: 1px solid #0f766e; border-radius: 4px; color: #fff; background: #0f766e; font-size: 14px; font-weight: 900; }
+.twin-zone-simple-planner > button.confirm:disabled { cursor: not-allowed; opacity: .45; }
+.twin-zone-simple-planner > p { margin: 0; color: #5e737b; font-size: 9px; line-height: 1.45; text-align: center; }
+.twin-zone-simple-planner > button.advanced-toggle { min-height: 30px; border: 0; border-top: 1px solid #c9ddd9; color: #667b82; background: transparent; font-size: 9px; }
 
 .twin-workspace.location-editing .twin-rack-layout-editor,
 .twin-workspace.location-editing .twin-zone-policy-editor { padding: 13px; }

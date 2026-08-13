@@ -6012,6 +6012,41 @@ class TwinZoneStoragePolicyPayload(BaseModel):
         return normalized or None
 
 
+class TwinZoneConfirmAreaPayload(BaseModel):
+    expected_revision: str = Field(min_length=1, max_length=64)
+    expected_published_revision: str = Field(min_length=1, max_length=64)
+    expected_version: int = Field(ge=1)
+    operation_key: str = Field(min_length=8, max_length=120)
+    primary_inventory_type: Literal[
+        "finished",
+        "semi_finished",
+        "raw_material",
+        "mold",
+        "print_plate",
+        "temporary_turnover",
+    ]
+    storage_layout: Literal["rack", "pallet_ground"]
+    max_pallet_capacity: int = Field(ge=0, le=500)
+    erp_area_code: str = Field(min_length=1, max_length=30)
+    area_name: str | None = Field(default=None, max_length=100)
+    existing_area_id: int | None = Field(default=None, ge=1)
+    confirmed: Literal[True]
+
+    @field_validator("erp_area_code")
+    @classmethod
+    def normalize_erp_area_code(cls, value: str) -> str:
+        normalized = (value or "").strip().upper()
+        if not normalized:
+            raise ValueError("正式区域编号不能为空")
+        return normalized
+
+    @field_validator("area_name")
+    @classmethod
+    def normalize_area_name(cls, value: str | None) -> str | None:
+        normalized = (value or "").strip()
+        return normalized or None
+
+
 class TwinZoneGeometryPayload(BaseModel):
     expected_revision: str = Field(min_length=1, max_length=64)
     expected_version: int = Field(ge=1)
@@ -6539,6 +6574,7 @@ def _publish_twin_layout_draft_locked(
     request: Request,
     db: Session,
     user: User,
+    commit: bool = True,
 ) -> dict:
     blockers = _formal_area_publish_blockers(db, floor_code)
     if blockers:
@@ -6588,7 +6624,8 @@ def _publish_twin_layout_draft_locked(
                 "inventory_changed": False,
             },
             )
-            db.commit()
+            if commit:
+                db.commit()
     except WarehouseTwinLayoutEditError as error:
         db.rollback()
         restore_warehouse_twin_publish_state(
@@ -6850,6 +6887,7 @@ def _update_twin_zone_storage_policy_locked(
     request: Request,
     db: Session,
     user: User,
+    commit: bool = True,
 ) -> dict:
     requested_area_code = str(payload.erp_area_code or "").strip().upper()
     formal_area: WarehouseArea | None = None
@@ -7100,7 +7138,8 @@ def _update_twin_zone_storage_policy_locked(
                     "inventory_changed": False,
                 },
             )
-            db.commit()
+            if commit:
+                db.commit()
     except WarehouseTwinLayoutEditError as error:
         db.rollback()
         if mutation is not None and mutation.applied:
@@ -7119,6 +7158,196 @@ def _update_twin_zone_storage_policy_locked(
             _warehouse_area_dict(db, formal_area) if formal_area is not None else None
         ),
     }
+
+
+@router.post('/twin-layout/floors/{floor_code}/zones/{feature_id}/confirm-area')
+def confirm_twin_zone_area(
+    floor_code: str,
+    feature_id: str,
+    payload: TwinZoneConfirmAreaPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    """Confirm one measured zone and publish its formal storage result atomically."""
+
+    with WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK:
+        publish_snapshot = snapshot_warehouse_twin_publish_state()
+        result: dict | None = None
+        try:
+            effective_floor = load_effective_warehouse_twin_floor_for_edit(floor_code)
+            expected_revision = str(effective_floor.get('revision') or '')
+            if expected_revision != payload.expected_revision:
+                raise HTTPException(
+                    status_code=409,
+                    detail='地图或区域已被其他操作更新，请刷新后重新确认',
+                )
+            existing_draft = effective_floor.get('draft_control') or {}
+            has_existing_draft = bool(existing_draft.get('has_draft'))
+            if has_existing_draft:
+                raise HTTPException(
+                    status_code=409,
+                    detail='当前楼层已有未完成的高级维护草稿，请先在高级维护中放弃或发布后再一次确认区域',
+                )
+            current_feature = next(
+                (
+                    item
+                    for item in effective_floor.get('features') or []
+                    if str(item.get('id') or '') == feature_id
+                ),
+                None,
+            )
+            if current_feature is None or current_feature.get('feature_kind') != 'zone':
+                raise HTTPException(status_code=404, detail='区域不存在或已被删除')
+            if payload.expected_revision != payload.expected_published_revision:
+                raise HTTPException(status_code=409, detail='正式地图版本不一致，请刷新后重试')
+            policy_result = _update_twin_zone_storage_policy_locked(
+                floor_code=floor_code,
+                feature_id=feature_id,
+                payload=TwinZoneStoragePolicyPayload(
+                    expected_revision=expected_revision,
+                    expected_version=payload.expected_version,
+                    operation_key=f'{payload.operation_key}-policy',
+                    allowed_inventory_types=[payload.primary_inventory_type],
+                    storage_layout=payload.storage_layout,
+                    erp_area_code=payload.erp_area_code,
+                    area_name=payload.area_name,
+                    existing_area_id=payload.existing_area_id,
+                ),
+                request=request,
+                db=db,
+                user=user,
+                commit=False,
+            )
+            draft_revision = str(policy_result.get('revision') or '')
+            identity_blockers = _formal_area_identity_blockers(db, floor_code)
+            if identity_blockers:
+                raise HTTPException(
+                    status_code=409,
+                    detail='正式区域身份校验未通过：' + '；'.join(identity_blockers[:5]),
+                )
+            validation = validate_warehouse_twin_layout_draft(
+                floor_code,
+                expected_revision=draft_revision,
+            )
+            if validation.value.get('blockers'):
+                raise HTTPException(
+                    status_code=409,
+                    detail='区域无法启用：' + '；'.join(validation.value['blockers'][:5]),
+                )
+            result = _publish_twin_layout_draft_locked(
+                floor_code=floor_code,
+                payload=TwinLayoutDraftPublishPayload(
+                    expected_published_revision=payload.expected_published_revision,
+                    expected_draft_revision=draft_revision,
+                    operation_key=f'{payload.operation_key}-publish',
+                ),
+                request=request,
+                db=db,
+                user=user,
+                commit=False,
+            )
+            area = db.scalar(
+                select(WarehouseArea)
+                .join(WarehouseAreaStoragePolicy)
+                .where(WarehouseAreaStoragePolicy.map_feature_id == feature_id)
+                .options(
+                    selectinload(WarehouseArea.floor),
+                    selectinload(WarehouseArea.storage_policy),
+                )
+            )
+            if area is None or area.area_code.upper() != payload.erp_area_code:
+                raise HTTPException(status_code=409, detail='区域发布后正式身份回读失败')
+            before_capacity = {
+                'planned_pallet_capacity': area.planned_pallet_capacity,
+                'capacity_review_status': area.capacity_review_status,
+                'capacity_eligible': area.capacity_eligible,
+                'confirmed_pallet_capacity': area.confirmed_pallet_capacity,
+                'capacity_reviewed_by': area.capacity_reviewed_by,
+                'capacity_reviewed_at': area.capacity_reviewed_at,
+            }
+            area.planned_pallet_capacity = payload.max_pallet_capacity
+            area.capacity_review_status = (
+                'confirmed' if payload.max_pallet_capacity > 0 else 'excluded'
+            )
+            area.capacity_eligible = payload.max_pallet_capacity > 0
+            area.confirmed_pallet_capacity = (
+                payload.max_pallet_capacity if payload.max_pallet_capacity > 0 else None
+            )
+            _apply_capacity_review(area, user=user, review_changed=True)
+            after_capacity = {
+                'planned_pallet_capacity': area.planned_pallet_capacity,
+                'capacity_review_status': area.capacity_review_status,
+                'capacity_eligible': area.capacity_eligible,
+                'confirmed_pallet_capacity': area.confirmed_pallet_capacity,
+                'capacity_reviewed_by': area.capacity_reviewed_by,
+                'capacity_reviewed_at': area.capacity_reviewed_at,
+            }
+            _warehouse_capacity_log(
+                db,
+                request=request,
+                user=user,
+                action='warehouse_area_one_step_confirm',
+                entity_type='warehouse_area',
+                entity_id=area.id,
+                object_ref=f'{area.floor.floor_code}/{area.area_code}',
+                before=before_capacity,
+                after=after_capacity,
+            )
+            _twin_layout_asset_log(
+                db,
+                request=request,
+                user=user,
+                action='TWIN_ZONE_ONE_STEP_CONFIRM',
+                entity_type='twin_zone',
+                entity_id=feature_id,
+                description='管理员一次确认并启用仓库区域',
+                details={
+                    'floor_code': floor_code,
+                    'area_id': area.id,
+                    'area_code': area.area_code,
+                    'primary_inventory_type': payload.primary_inventory_type,
+                    'storage_layout': payload.storage_layout,
+                    'max_pallet_capacity': payload.max_pallet_capacity,
+                    'published_revision': result.get('published_revision'),
+                    'inventory_changed': False,
+                    'pallet_binding_changed': False,
+                },
+            )
+            db.flush()
+            db.expire(area, ['storage_policy'])
+            area_payload = _warehouse_area_dict(db, area)
+            response_payload = {
+                **result,
+                'area': area_payload,
+                'message': f'{area.area_code} {area.area_name} 已确认并启用',
+                'inventory_changed': False,
+                'pallet_binding_changed': False,
+            }
+            db.commit()
+            return response_payload
+        except HTTPException:
+            db.rollback()
+            restore_warehouse_twin_publish_state(
+                publish_snapshot,
+                backup_name=(result.get('backup_name') if result else None),
+            )
+            raise
+        except (WarehouseTwinLayoutEditError, WarehouseAreaActivationError) as error:
+            db.rollback()
+            restore_warehouse_twin_publish_state(
+                publish_snapshot,
+                backup_name=(result.get('backup_name') if result else None),
+            )
+            status_code = getattr(error, 'status_code', 409)
+            raise HTTPException(status_code=status_code, detail=str(error)) from error
+        except Exception:
+            db.rollback()
+            restore_warehouse_twin_publish_state(
+                publish_snapshot,
+                backup_name=(result.get('backup_name') if result else None),
+            )
+            raise
 
 
 class TwinProductionMappingPayload(BaseModel):

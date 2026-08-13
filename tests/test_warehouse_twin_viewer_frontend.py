@@ -32,7 +32,7 @@ def test_operational_twin_reuses_formal_inventory_and_does_not_fake_rack_positio
     assert "/api/warehouse/twin-operations/locate?${params.toString()}" in SOURCE
     assert "/api/warehouse/molds/by-map-area?${params.toString()}" in SOURCE
     assert "当前区域模具筛选" in SOURCE
-    assert "件已登记模具" in SOURCE
+    assert 'selectedAreaIsMold ? `${moldAreaResponse?.total || 0} 件`' in SOURCE
     assert "未填写位置或仍使用旧自由文本位置的模具" in SOURCE
     assert "库存只投影到已确认区域，不虚构货架层、格或箱体坐标" not in SOURCE
     assert "暂无已建空货位" in SOURCE
@@ -143,14 +143,17 @@ def test_operational_twin_expands_real_area_inventory_with_local_filter_and_sear
     assert 'from "./warehouseInventory.mjs"' in SOURCE
     assert "expandAreaInventory(dashboard?.locations || [], floorCode, selectedAreaCode)" in SOURCE
     assert "filterAreaInventory(selectedInventory, areaInventorySearch)" in SOURCE
-    assert "区域库存筛选" in SOURCE
+    assert "当前区域库存筛选" in SOURCE
     assert "存货编码、产品、客户、位置" in SOURCE
     assert "全部真实位置已选中" in SOURCE
-    assert "数据截至" in SOURCE
+    assert 'selectedInventory.length ? "当前有货" : "当前空区域"' in SOURCE
     assert "当前区域没有有效库存" in SOURCE
     assert "这是 ERP 当前真实空态，不生成模拟货物" in SOURCE
-    assert "可用 {formatNumber(item.available_quantity ?? item.quantity)} {inventoryUnitLabel(item.unit)}" in SOURCE
+    assert "{formatNumber(item.available_quantity ?? item.quantity)} {inventoryUnitLabel(item.unit)}" in SOURCE
     assert "已预占 {formatNumber(item.reserved_quantity)} {inventoryUnitLabel(item.unit)}" in SOURCE
+    assert "visibleSelectedInventory" in SOURCE
+    assert "查看全部 ${filteredSelectedInventory.length} 条库存" in SOURCE
+    assert "批次与预占详情" in SOURCE
 
 
 def test_capacity_review_link_keeps_the_clicked_map_area_identity() -> None:
@@ -166,17 +169,18 @@ def test_capacity_review_link_keeps_the_clicked_map_area_identity() -> None:
     assert 'area_code: selectedAreaFeature.erp_area_code' in SOURCE
     assert 'map_feature_id: selectedAreaFeature.id' in SOURCE
     assert 'href={selectedAreaCapacityReviewUrl}' in SOURCE
-    assert "前往当前区域容量复核" in SOURCE
+    assert "旧区域可直接在下方填写最大栈板数并一次确认" in SOURCE
+    assert "单独复核旧容量" in SOURCE
     assert '/warehouse-ledger.html?location_view=ledger&capacity_review=1"' not in SOURCE
 
 
 def test_unbound_measured_zone_does_not_offer_a_disconnected_capacity_review() -> None:
     assert "尚未绑定正式区域" in SOURCE
-    assert "未绑定前不进入容量复核" in SOURCE
+    assert "直接使用下方简化表单确认用途、形式和容量" in SOURCE
     assert "选用现有未绑定区域" in SOURCE
-    assert "打开区域设置" in SOURCE
+    assert "确认并启用此区域" in SOURCE
     assert "selectedAreaFeature.formal_binding_status === 'draft'" in SOURCE
-    assert "区域绑定草稿待发布" in SOURCE
+    assert "区域绑定草稿待处理" in SOURCE
 
 
 def test_floor1_candidate_blockers_offer_direct_actions_and_recheck() -> None:
@@ -237,6 +241,24 @@ def test_operational_twin_uses_cross_floor_search_highlights_and_mapped_location
     assert "const movePreviewPallets = useMemo(() =>" in SOURCE
     assert "if (mapMode !== \"move\" || !moveDrafts.length) return mappedLocationPallets" in SOURCE
     assert "pallets: [...layout.pallets, ...movePreviewPallets]" in SOURCE
+
+
+def test_area_planning_defaults_to_one_result_oriented_confirmation() -> None:
+    assert "主要用来堆放" in SOURCE
+    assert "区域形式" in SOURCE
+    assert "最大可放栈板数" in SOURCE
+    assert "确认并启用此区域" in SOURCE
+    assert "系统自动完成保存、校验和启用；不会移动库存、栈板或产品" in SOURCE
+    assert "/confirm-area`" in SOURCE
+    assert 'primary_inventory_type: simpleAreaUsage' in SOURCE
+    assert 'storage_layout: simpleAreaLayout' in SOURCE
+    assert 'max_pallet_capacity: capacity' in SOURCE
+    assert 'setPlanningPublishedRevision(result.published_revision)' in SOURCE
+    assert 'palletEditingOnly={(locationEditMode && advancedAreaMaintenanceOpen) || warehouseMoveModeActive}' in SOURCE
+    assert 'rackEditingEnabled={locationEditMode && advancedAreaMaintenanceOpen}' in SOURCE
+    assert '区域规划 · 一次确认' in SOURCE
+    assert "advancedAreaMaintenanceOpen && <div className=\"twin-layout-draft-workflow\"" in SOURCE
+    assert "高级维护" in SOURCE
     assert '<aside className="twin-context-rail">' in SOURCE
     assert "库存与库位" in SOURCE
     assert "twin-stage-footer" not in SOURCE
@@ -290,9 +312,9 @@ def test_phase2c8_keeps_location_layout_editing_in_2d_and_25d_read_only() -> Non
     assert "available_actions" in SOURCE
     assert "系统按区域自动生成内部唯一编码" in SOURCE
     assert "/api/warehouse/spatial-layout/locations/${selectedLocation.location_id}/disable" in SOURCE
-    assert "palletEditingOnly={locationEditMode || warehouseMoveModeActive}" in SOURCE
-    assert "rackEditingEnabled={locationEditMode}" in SOURCE
-    assert "featureEditingEnabled={locationEditMode && areaPolicyEditMode}" in SOURCE
+    assert "palletEditingOnly={(locationEditMode && advancedAreaMaintenanceOpen) || warehouseMoveModeActive}" in SOURCE
+    assert "rackEditingEnabled={locationEditMode && advancedAreaMaintenanceOpen}" in SOURCE
+    assert "featureEditingEnabled={locationEditMode && advancedAreaMaintenanceOpen && areaPolicyEditMode}" in SOURCE
     assert "选择区域或设备" not in SOURCE
 
 
@@ -300,7 +322,7 @@ def test_phase2c13_uses_2d_layout_mode_for_rack_and_area_spatial_modeling() -> N
     assert 'if (locationEditMode)' in SOURCE
     assert 'setRackFocusId(null)' in SOURCE
     assert 'onMoveRack={moveRackDraft}' in SOURCE
-    assert 'rackEditingEnabled={locationEditMode}' in SOURCE
+    assert 'rackEditingEnabled={locationEditMode && advancedAreaMaintenanceOpen}' in SOURCE
     assert 'className="twin-rack-layout-editor"' in SOURCE
     assert "逐层设置" in SOURCE
     assert "层格数" in SOURCE
@@ -353,20 +375,36 @@ def test_phase2c9_admin_operations_and_read_only_locating_share_the_measured_map
     assert "不执行入库、移货、盘点或布局写入" in SOURCE
 
 
-def test_phase2c9_pallet_label_prioritizes_goods_and_collapses_secondary_location_facts() -> None:
+def test_phase2c9_right_side_selection_summarizes_location_and_collapses_secondary_facts() -> None:
     assert 'const [locationDetailOpen, setLocationDetailOpen] = useState(false)' in SOURCE
-    assert "当前栈板货物" in SOURCE
-    assert "存货编码" in SOURCE
+    assert 'const [locationItemsExpanded, setLocationItemsExpanded] = useState(false)' in SOURCE
+    assert "当前位置 · {selectedLocation.location_code}" in SOURCE
+    assert "selectedLocation.location_name" in SOURCE
+    assert "货物</small><b>{selectedLocationItems.length} 条" in SOURCE
     assert "产品名称待补充" in SOURCE
-    assert "产品数量" in SOURCE
     assert "客户" in SOURCE
     assert 'aria-expanded={locationDetailOpen}' in SOURCE
-    assert 'locationDetailOpen ? "收起详细信息" : "详细信息"' in SOURCE
+    assert 'locationDetailOpen ? "收起位置与栈板详情" : "位置与栈板详情"' in SOURCE
     assert 'locationDetailOpen && <div className="twin-location-secondary"' in SOURCE
     assert "区域与库位" in SOURCE
     assert "地图状态" in SOURCE
     assert "实体栈板" in SOURCE
     assert "库存明细" in SOURCE
+
+
+def test_right_side_area_summary_hides_duplicate_labels_but_keeps_full_ledger_accessible() -> None:
+    assert 'const [areaInventoryDetailsOpen, setAreaInventoryDetailsOpen] = useState(false)' in SOURCE
+    assert "当前区域 · {selectedAreaCode || selectedAreaFeature.feature_code}" in SOURCE
+    assert "selectedAreaFeature.name" in SOURCE
+    assert "可用数量" in SOURCE
+    assert "正式位置" in SOURCE
+    assert "库存记录" in SOURCE
+    assert "selectedAreaQuantitySummary" in SOURCE
+    assert "areaInventoryDetailsOpen && <div className=\"twin-area-lot-details\"" in SOURCE
+    assert "内部码 {item.location_code || \"未编\"}" in SOURCE
+    assert "inventoryAgeLabel(item.age_days)" in SOURCE
+    assert "item.location_guide?.prompt" in SOURCE
+    assert "item.rack_location" not in SOURCE[SOURCE.index('className="twin-area-mold"'):SOURCE.index('className="twin-area-mold-pagination"')]
 
 
 def test_p1_42b_uses_only_measured_dispatch_zones_and_keeps_transfer_targets() -> None:

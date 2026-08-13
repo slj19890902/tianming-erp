@@ -14,6 +14,11 @@ def _method_body(signature: str, next_signature: str) -> str:
     return INDEX.split(signature, 1)[1].split(next_signature, 1)[0].rsplit("}", 1)[0]
 
 
+def _business_footer() -> str:
+    start = INDEX.index('<div v-if="modal?.type !== \'product\'" class="modal-foot">')
+    return INDEX[start : INDEX.index("</div>", start) + 6]
+
+
 def _run_node(source: str, tmp_path: Path, name: str) -> None:
     node = shutil.which("node")
     assert node is not None, "Node.js is required for the customer save regression"
@@ -31,9 +36,8 @@ def _run_node(source: str, tmp_path: Path, name: str) -> None:
 
 
 def test_embedded_customer_save_uses_shared_lock_and_feedback() -> None:
-    footer_start = INDEX.index('<div class="modal-foot">')
-    footer = INDEX[footer_start : INDEX.index('</div>\n        </div>\n      </div>', footer_start)]
-    save = _method_body("async saveModal() {", "async dispatchDelivery(row) {")
+    footer = _business_footer()
+    save = _method_body("async saveModal() {", "async dispatchDelivery(row, options = {}) {")
 
     assert "['customer','product','material','supplier'].includes(modal?.type) && masterSavePending ? '保存中…'" in footer
     assert 'const masterSaveEntity = ["customer","product","material","supplier"].includes(this.modal?.type)' in save
@@ -81,7 +85,7 @@ const expect=(value,message)=>{{if(!value)throw new Error(message)}};
 
 
 def test_customer_preflight_runtime_is_single_flight(tmp_path: Path) -> None:
-    save_body = _method_body("async saveModal() {", "async dispatchDelivery(row) {")
+    save_body = _method_body("async saveModal() {", "async dispatchDelivery(row, options = {}) {")
     script = f"""
 const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
 let preflightCalls=0,releasePreflight;const notices=[];
@@ -108,9 +112,9 @@ def test_customer_write_target_is_frozen_and_refresh_failure_is_success_warning(
     tmp_path: Path,
 ) -> None:
     refresh_body = _method_body(
-        "handleMasterSaveRefreshFailure(entity, error) {", "async saveModal() {"
+        "handleMasterSaveRefreshFailure(entity, error) {", "async saveNewOrder(orderPayload) {"
     )
-    save_body = _method_body("async saveModal() {", "async dispatchDelivery(row) {")
+    save_body = _method_body("async saveModal() {", "async dispatchDelivery(row, options = {}) {")
     script = f"""
 const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
 let releaseWrite;const requests=[],notices=[];let closed=0;

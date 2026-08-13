@@ -15,6 +15,11 @@ def _method_body(signature: str, next_signature: str) -> str:
     return INDEX.split(signature, 1)[1].split(next_signature, 1)[0].rsplit("}", 1)[0]
 
 
+def _business_footer() -> str:
+    start = INDEX.index('<div v-if="modal?.type !== \'product\'" class="modal-foot">')
+    return INDEX[start : INDEX.index("</div>", start) + 6]
+
+
 def _run_node(source: str, tmp_path: Path, name: str) -> None:
     node = shutil.which("node")
     assert node is not None, "Node.js is required for the supplier save regression"
@@ -32,8 +37,7 @@ def _run_node(source: str, tmp_path: Path, name: str) -> None:
 
 
 def test_supplier_save_uses_shared_lock_and_disables_both_footer_actions() -> None:
-    footer_start = INDEX.index('<div class="modal-foot">')
-    footer = INDEX[footer_start : INDEX.index('</div>\n        </div>\n      </div>', footer_start)]
+    footer = _business_footer()
     save = _method_body(
         "async saveModal() {", "async dispatchDelivery(row, options = {}) {"
     )

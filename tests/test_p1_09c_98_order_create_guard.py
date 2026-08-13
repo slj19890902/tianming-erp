@@ -57,7 +57,7 @@ const source={{customer_id:5,customer_po:"PO-1",items:[{{client_line_id:"L1",qua
 const vm={{
   orderCreateSaveState:{{saving:false,committed:false,outcomeUncertain:false,result:null}},
   closeModal(){{closeCount+=1;}},loadOrders:async()=>true,loadKpi:async()=>true,
-  showToast(){{}},errorMessage:error=>error.message,
+  showToast(){{}},showOrderNextStepGuide(){{}},errorMessage:error=>error.message,
 }};
 vm.saveNewOrder=factory(axios).bind(vm);
 const expect=(value,message)=>{{if(!value)throw new Error(message)}};
@@ -89,7 +89,7 @@ const toasts=[];let closed=false;
 const vm={{
   orderCreateSaveState:{{saving:false,committed:false,outcomeUncertain:false,result:null}},
   closeModal(){{closed=true;}},loadOrders:async()=>{{throw new Error("orders offline");}},loadKpi:async()=>true,
-  showToast:(message,isError)=>toasts.push({{message,isError}}),errorMessage:error=>error.message,
+  showToast:(message,isError)=>toasts.push({{message,isError}}),showOrderNextStepGuide(){{}},errorMessage:error=>error.message,
 }};
 (async()=>{{
   const result=await factory(axios).bind(vm)({{customer_id:5,items:[{{client_line_id:"L1"}}]}});
@@ -109,7 +109,7 @@ const factory=axios=>new Function("axios","return async function(orderPayload) {
 const makeVm=()=>({{
   orderCreateSaveState:{{saving:false,committed:false,outcomeUncertain:false,result:null}},
   closeCount:0,closeModal(){{this.closeCount+=1;}},loadOrders:async()=>true,loadKpi:async()=>true,
-  showToast(){{}},errorMessage:error=>error.message,
+  showToast(){{}},showOrderNextStepGuide(){{}},errorMessage:error=>error.message,
 }});
 const payload={{customer_id:5,items:[{{client_line_id:"L1"}}]}};
 (async()=>{{

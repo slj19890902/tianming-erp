@@ -100,8 +100,8 @@ const expect=(value,message)=>{{if(!value)throw new Error(message)}};
 
 
 def test_product_save_treats_false_refresh_as_success_warning(tmp_path: Path) -> None:
-    refresh_body = _method_body("handleMasterSaveRefreshFailure(entity, error) {", "async saveModal() {")
-    save_body = _method_body("async saveModal() {", "async dispatchDelivery(row) {")
+    refresh_body = _method_body("handleMasterSaveRefreshFailure(entity, error) {", "async saveNewOrder(orderPayload) {")
+    save_body = _method_body("async saveModal() {", "async dispatchDelivery(row, options = {}) {")
     script = f"""
 const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
 let closed=0;const notices=[];
@@ -127,8 +127,8 @@ const expect=(value,message)=>{{if(!value)throw new Error(message)}};
 
 
 def test_material_save_treats_false_refresh_as_success_warning(tmp_path: Path) -> None:
-    refresh_body = _method_body("handleMasterSaveRefreshFailure(entity, error) {", "async saveModal() {")
-    save_body = _method_body("async saveModal() {", "async dispatchDelivery(row) {")
+    refresh_body = _method_body("handleMasterSaveRefreshFailure(entity, error) {", "async saveNewOrder(orderPayload) {")
+    save_body = _method_body("async saveModal() {", "async dispatchDelivery(row, options = {}) {")
     script = f"""
 const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
 let closed=0;const notices=[];

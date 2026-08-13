@@ -139,7 +139,7 @@ const makeVm=()=>({{
 
 
 def test_save_modal_handles_committed_and_uncertain_outcomes_without_generic_success() -> None:
-    body = _method_body("async saveModal() {", "async dispatchDelivery(row) {")
+    body = _method_body("async saveModal() {", "async dispatchDelivery(row, options = {}) {")
     assert "if (this.modal?.type === \"quotationConvert\"" in body
     assert "const conversion = await this.saveQuotationConversion();" in body
     assert "if (conversion?._in_flight) return false;" in body

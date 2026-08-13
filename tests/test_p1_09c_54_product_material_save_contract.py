@@ -14,6 +14,11 @@ def _method_body(signature: str, next_signature: str) -> str:
     return INDEX.split(signature, 1)[1].split(next_signature, 1)[0].rsplit("}", 1)[0]
 
 
+def _business_footer() -> str:
+    start = INDEX.index('<div v-if="modal?.type !== \'product\'" class="modal-foot">')
+    return INDEX[start : INDEX.index("</div>", start) + 6]
+
+
 def _run_node(source: str, tmp_path: Path, name: str) -> None:
     node = shutil.which("node")
     assert node is not None, "Node.js is required for the master save regression"
@@ -31,7 +36,7 @@ def _run_node(source: str, tmp_path: Path, name: str) -> None:
 
 
 def test_product_and_material_save_button_exposes_shared_single_flight_state() -> None:
-    footer = INDEX[INDEX.index('<div class="modal-foot">') : INDEX.index('</div>\n        </div>\n      </div>', INDEX.index('<div class="modal-foot">'))]
+    footer = _business_footer()
     assert "masterSavePending" in INDEX
     assert ":disabled=\"loading || masterSavePending ||" in footer
     assert "['customer','product','material','supplier'].includes(modal?.type) && masterSavePending ? '保存中…'" in footer

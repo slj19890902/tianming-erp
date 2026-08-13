@@ -75,7 +75,8 @@ ERP_SECRET_KEY_FILE=data/session_secret.key
 ```powershell
 .\scripts\admin\release_erp.ps1 -Prepare `
   -ExpectedCodeSha "<已批准的40位SHA>" `
-  -ExpectedRevision "<已批准的Alembic revision>"
+  -ExpectedRevision "<已批准的Alembic revision>" `
+  -ExpectedAppVersion "<已批准的v0.x.x版本号>"
 ```
 
 Prepare 固定执行：生产配置与路径核验 → SHA/revision 核验 → 精确识别并停止 ERP → SQLite Backup API 备份 → 备份哈希、完整性、外键、revision、核心表计数核验 → 从备份创建隔离演练副本 → 隔离副本精确迁移到指定 revision → 再次核验。

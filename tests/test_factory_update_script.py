@@ -70,6 +70,18 @@ def test_factory_update_reports_current_release_version() -> None:
         for item in current_release
     )
     assert any(item.startswith("v0.22.96：本次更新｜") for item in APP_CHANGELOG)
+    assert any(
+        item.startswith("v0.22.98：本次更新｜")
+        and "外购包装采购单" in item
+        and "客户订单" in item
+        for item in APP_CHANGELOG
+    )
+    assert any(
+        item.startswith("v0.22.98：如何验证｜")
+        and "v0.22.98" in item
+        and "kk19" in item
+        for item in APP_CHANGELOG
+    )
     assert any(item.startswith("v0.22.94：本次更新｜") for item in APP_CHANGELOG)
     assert any(
         item.startswith("v0.22.86：本次更新｜")

@@ -98,7 +98,7 @@ const $ = id => nodes[id];
 const state = {{
   activeTab:"pending", pending:[{{item_id:"r1", incoming_quantity:7}}], pendingTotal:51, pendingPage:2,
   pendingRetryPage:2, pendingPageSize:25, pendingLoading:false, pendingError:"", expandedIds:new Set(["r1"]),
-  authGeneration:1, user:{{id:7}}
+  authGeneration:1, user:{{id:7}}, sessionIdentity:{{user_id:7,auth_version:1}}
 }};
 const calls = [];
 function api(url, options) {{
@@ -116,7 +116,7 @@ async function loadData() {{ throw new Error("error retry must not use the last-
   const oldRequest = loadPending({{page:2}});
   const failingRequest = loadPending({{page:3}});
   if (!calls[1].url.includes("page=3&page_size=25")) throw new Error("paged URL missing");
-  calls[0].resolve({{items:[{{item_id:"old"}}], total:1, page:1, page_size:25}});
+  calls[0].resolve({{items:[{{item_id:"old"}}], total:1, page:1, page_size:25, session_identity_header:"7:1"}});
   await oldRequest;
   if (state.pending[0]?.item_id !== "r1" || state.pendingPage !== 2) throw new Error("old response replaced last-good page");
   calls[1].reject(new Error("network down"));
@@ -129,7 +129,7 @@ async function loadData() {{ throw new Error("error retry must not use the last-
 
   const clampedRequest = retryCurrentView();
   if (!calls[2].url.includes("page=3&page_size=25")) throw new Error("retry did not request the failed page");
-  calls[2].resolve({{items:[{{item_id:"sr9", remaining_quantity:4}}], total:10, page:1, page_size:25}});
+  calls[2].resolve({{items:[{{item_id:"sr9", remaining_quantity:4}}], total:10, page:1, page_size:25, session_identity_header:"7:1"}});
   const succeeded = await clampedRequest;
   if (succeeded !== true) throw new Error("clamped response failed");
   if (state.pendingPage !== 1 || state.pendingTotal !== 10) throw new Error("server clamp was not applied");
@@ -160,7 +160,7 @@ const nodes = {{loadingState:{{hidden:true}},errorState:{{hidden:true}},errorMes
 const $ = id => nodes[id];
 const state = {{
   pending:[{{item_id:"r1"}}], pendingTotal:1, pendingPage:1, pendingPageSize:25,
-  pendingRetryPage:1, pendingLoading:false, pendingError:"", expandedIds:new Set(), authGeneration:4, user:{{id:7}}
+  pendingRetryPage:1, pendingLoading:false, pendingError:"", expandedIds:new Set(), authGeneration:4, user:{{id:7}}, sessionIdentity:{{user_id:7,auth_version:1}}
 }};
 let resolveRequest;
 function api() {{ return new Promise(resolve => {{ resolveRequest = resolve; }}); }}
@@ -173,7 +173,7 @@ function toChineseMessage(error) {{ return String(error?.message || error); }}
   const request = loadPending({{page:1}});
   state.authGeneration = 5;
   state.user = {{id:8}};
-  resolveRequest({{items:[{{item_id:"foreign"}}], total:1, page:1, page_size:25}});
+  resolveRequest({{items:[{{item_id:"foreign"}}], total:1, page:1, page_size:25, session_identity_header:"7:1"}});
   const result = await request;
   if (result !== false) throw new Error("old account response reported success");
   if (state.pending[0]?.item_id !== "r1") throw new Error("old account response entered new session");

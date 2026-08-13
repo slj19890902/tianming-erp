@@ -1060,6 +1060,7 @@ def search_pending_incoming(
     """Search final pending incoming routes without changing receipt facts."""
 
     _no_store(response)
+    response.headers["X-ERP-Session-Identity"] = f"{user.id}:{user.auth_version}"
     keyword = q.strip()
     if not keyword:
         raise HTTPException(status_code=422, detail="请输入客户名称或报料尺寸")

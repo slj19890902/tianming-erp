@@ -109,22 +109,8 @@ def test_normal_move_submit_is_one_request_and_cancel_is_zero_request() -> None:
     assert "buildMoveBatchPayload(moveBatchIdempotencyKey, moveDrafts)" in submit_move
     assert "页面草稿与本次幂等键已保留" in submit_move
 
-    direct_pallet_move = _between(
-        APP_SOURCE,
-        "  const confirmMapPalletMove = async () => {",
-        "  const correctSelectedInventoryLot =",
-    )
-    assert "window.confirm" not in direct_pallet_move
-    assert direct_pallet_move.count("await mutateJson(") == 1
-
-    staging_transfer = _between(
-        APP_SOURCE,
-        "  const confirmDispatchStagingTransfer = async () => {",
-        "  const confirmMapFinishedInbound =",
-    )
-    assert "window.confirm" not in staging_transfer
-    assert staging_transfer.count("await mutateJson(") == 1
-
+    assert "confirmMapPalletMove" not in APP_SOURCE
+    assert "confirmDispatchStagingTransfer" not in APP_SOURCE
     assert APP_SOURCE.count("onClick={confirmMoveDrafts}") == 1
 
 

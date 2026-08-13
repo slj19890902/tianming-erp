@@ -35,6 +35,16 @@ import {
   palletMergeTargetChoices,
   togglePalletMergeSource
 } from "../src/warehousePalletMergeDraft.mjs";
+import {
+  buildStocktakeBatchPayload,
+  clearStocktakeDrafts,
+  removeStocktakeDraft,
+  stocktakeAddBlockReason,
+  stocktakeDecreaseBlockReason,
+  stocktakeLocationBlockReason,
+  upsertStocktakeDraft,
+  validateStocktakeDraft
+} from "../src/warehouseStocktakeDraft.mjs";
 
 const STANDARD_PALLET = {
   contract_version: "standard-pallet-v1",
@@ -645,4 +655,102 @@ test("pallet merge target is chosen from the selected set and omitted from batch
   ], target).sources, [
     { client_item_id: "merge-source-11", pallet_id: 11, expected_version: 11 }
   ]);
+});
+
+test("stocktake drafts upsert by formal inventory identity and preserve the client item id", () => {
+  const add = {
+    client_item_id: "stocktake-add-1", operation: "add", location_id: 21, expected_layout_version: 3,
+    location_code: "A1-01", location_name: "三楼 A1-01", floor_code: "3F", area_code: "A1",
+    customer_id: 7, customer_name: "苏州思迈尔包装有限公司", product_id: 99,
+    inventory_code: "CP-099", product_name: "五层加强纸箱", inventory_type: "finished",
+    unit: "boxes", quantity: 20, stock_date: "2026-08-13"
+  };
+  const first = upsertStocktakeDraft([], add);
+  const replacement = upsertStocktakeDraft(first.items, { ...add, client_item_id: "discarded", quantity: 25 });
+  assert.equal(replacement.error, null);
+  assert.equal(replacement.items.length, 1);
+  assert.equal(replacement.items[0].client_item_id, "stocktake-add-1");
+  assert.equal(replacement.items[0].quantity, 25);
+  const conflict = upsertStocktakeDraft(replacement.items, { ...add, client_item_id: "semi", inventory_type: "semi_finished", unit: "sheets" });
+  assert.match(conflict.error, /同一货位/);
+  assert.deepEqual(conflict.items, replacement.items);
+});
+
+test("stocktake location gates reject unsupported floors and dispatch while preserving formal rack rules", () => {
+  const ground = {
+    location_code: "3F-A1-01", floor_code: "3F", area_code: "A1",
+    warehouse_type: "finished", storage_type: "ground", is_active: true,
+    position_status: "mapped", source_version: "TWIN_V1", map_position: { version: 3 }
+  };
+  assert.equal(stocktakeLocationBlockReason(ground), null);
+  assert.equal(stocktakeAddBlockReason(ground, "finished"), null);
+  assert.equal(stocktakeLocationBlockReason({ ...ground, floor_code: "1F" }), null);
+  assert.equal(stocktakeLocationBlockReason({ ...ground, source_version: "V11" }), null);
+  assert.match(stocktakeLocationBlockReason({ ...ground, source_version: undefined }), /正式地图来源/);
+  assert.match(stocktakeLocationBlockReason({ ...ground, source_version: "twin_v1" }), /正式地图来源/);
+  assert.match(stocktakeLocationBlockReason({ ...ground, source_version: " TWIN_V1 " }), /正式地图来源/);
+  assert.match(stocktakeLocationBlockReason({ ...ground, floor_code: "3f" }), /正式地图来源/);
+  assert.match(stocktakeLocationBlockReason({ ...ground, floor_code: " 3F " }), /正式地图来源/);
+  assert.match(stocktakeLocationBlockReason({ ...ground, source_version: "V11", floor_code: "1F" }), /正式地图来源/);
+  assert.match(stocktakeLocationBlockReason({ ...ground, floor_code: "2F" }), /正式地图来源/);
+  assert.match(stocktakeLocationBlockReason({ ...ground, area_code: null }), /正式区域或库位编码/);
+  assert.match(stocktakeLocationBlockReason({ ...ground, location_code: null }), /正式区域或库位编码/);
+  assert.match(stocktakeLocationBlockReason({ ...ground, area_code: "dispatch" }), /待送区/);
+  assert.match(stocktakeLocationBlockReason({ ...ground, area_code: "A1", location_code: "1F-DISPATCH-01" }), /待送区/);
+  assert.match(stocktakeLocationBlockReason({ ...ground, is_active: false }), /停用/);
+  assert.match(stocktakeLocationBlockReason({ ...ground, position_status: "unplaced" }), /正式地图/);
+
+  const rack = { ...ground, location_code: "3F-F1-R01", storage_type: "rack" };
+  assert.match(stocktakeAddBlockReason(rack, "finished"), /成品.*不支持货架位/);
+  assert.equal(stocktakeAddBlockReason({ ...rack, warehouse_type: "semi_finished" }, "semi_finished"), null);
+});
+
+test("stocktake decrease eligibility fails closed and preserves the backend block reason", () => {
+  assert.equal(stocktakeDecreaseBlockReason({ stocktake_decrease_eligible: true, stocktake_decrease_block_reason: null }), null);
+  assert.equal(
+    stocktakeDecreaseBlockReason({ stocktake_decrease_eligible: false, stocktake_decrease_block_reason: "库存仍绑定生产任务" }),
+    "库存仍绑定生产任务"
+  );
+  assert.match(stocktakeDecreaseBlockReason({}), /未通过/);
+});
+
+test("stocktake draft validation fixes units and protects available quantity", () => {
+  const invalidUnit = {
+    client_item_id: "bad-unit", operation: "add", location_id: 1, expected_layout_version: 3, customer_id: 2, product_id: 3,
+    inventory_type: "finished", unit: "sheets", quantity: 1, stock_date: "2026-08-13"
+  };
+  assert.match(validateStocktakeDraft(invalidUnit), /boxes/);
+  const decrease = {
+    client_item_id: "dec-1", operation: "decrease", location_id: 21, expected_layout_version: 3, lot_id: 88,
+    expected_version: 4, quantity: 11, available_quantity: 10
+  };
+  assert.match(validateStocktakeDraft(decrease), /可用数量/);
+});
+
+test("stocktake batch strips display fields and never emits remove semantics", () => {
+  const add = {
+    client_item_id: "add-1", operation: "add", location_id: 21, expected_layout_version: 3, location_code: "A1-01",
+    location_name: "三楼 A1-01", floor_code: "3F", area_code: "A1", customer_id: 7,
+    customer_name: "苏州思迈尔包装有限公司", product_id: 99, inventory_code: "CP-099",
+    product_name: "五层加强纸箱", inventory_type: "finished", unit: "boxes", quantity: 20,
+    stock_date: "2026-08-13"
+  };
+  const decrease = {
+    client_item_id: "dec-1", operation: "decrease", location_id: 21, expected_layout_version: 3, location_code: "A1-01",
+    location_name: "三楼 A1-01", floor_code: "3F", area_code: "A1", lot_id: 88,
+    expected_version: 4, customer_name: "苏州思迈尔包装有限公司", inventory_code: "CP-099",
+    product_name: "五层加强纸箱", unit: "boxes", quantity: 10, available_quantity: 10,
+    quantity_before: 10
+  };
+  const payload = buildStocktakeBatchPayload("stocktake-batch-key", [add, decrease]);
+  assert.deepEqual(payload, {
+    idempotency_key: "stocktake-batch-key", confirmed: true,
+    items: [
+      { client_item_id: "add-1", operation: "add", location_id: 21, expected_layout_version: 3, customer_id: 7, product_id: 99, inventory_type: "finished", unit: "boxes", quantity: 20, stock_date: "2026-08-13" },
+      { client_item_id: "dec-1", operation: "decrease", location_id: 21, expected_layout_version: 3, lot_id: 88, expected_version: 4, quantity: 10 }
+    ]
+  });
+  assert.equal(JSON.stringify(payload).includes("remove"), false);
+  assert.deepEqual(removeStocktakeDraft([add, decrease], "add-1"), [decrease]);
+  assert.deepEqual(clearStocktakeDrafts(), []);
 });

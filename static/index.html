@@ -3397,7 +3397,7 @@
                   <button :class="['btn',{primary:incomingTab==='history'}]" @click="selectIncomingTab('history')">历史入库</button>
                 </div>
                 <div class="toolbar-group">
-                  <button v-if="incomingTab==='pending' && hasPermission('incoming.execute')" class="btn success" :disabled="!incomingSelectedCount()" @click="batchReceiveIncoming">批量确认入库（{{ incomingSelectedCount() }}）</button>
+                  <button v-if="incomingTab==='pending' && hasPermission('incoming.execute')" class="btn success" :disabled="incomingBatchReceiveAttempt?.saving || (!incomingBatchReceiveAttempt && !incomingSelectedCount())" @click="batchReceiveIncoming">{{ incomingBatchReceiveAttempt?.saving ? '正在核对批量实收…' : incomingBatchReceiveAttempt ? '核对上次批量实收' : '批量确认入库（' + incomingSelectedCount() + '）' }}</button>
                   <button class="btn" :disabled="incomingTab==='pending' && incomingPendingLoading" @click="refreshIncomingTab">{{ incomingTab==='pending' && incomingPendingLoading ? '读取中…' : '刷新' }}</button>
                 </div>
               </div>
@@ -3450,7 +3450,7 @@
                     <td>{{ row.requisition_date || "-" }}</td>
                     <td><a v-if="row.drawing_is_pdf" class="btn small" :href="row.drawing_path" target="_blank">打开PDF</a><span v-else>-</span></td>
                     <td><button v-if="incomingTab==='received' && row.receipt_item_id && row.receipt_status==='posted' && row.order_item_id" class="btn small primary" :disabled="incomingProductionCardOpening" @click="openIncomingProductionCard(row)">{{ incomingProductionCardOpening ? '正在打开…' : '打印生产卡' }}</button><span v-else class="muted">-</span></td>
-                    <td v-if="hasPermission('incoming.execute')" class="incoming-action-cell"><template v-if="incomingTab==='pending'"><button class="btn small success" @click="receiveIncoming(row)">确认实收</button><button v-if="row.pending_receipt_item_id" class="btn small" @click="acceptShortIncoming(row)">不再补货，短收结单</button></template><button v-else-if="canAdmin" class="btn small danger" @click="revertIncoming(row)">撤销收料，回到已报料</button></td>
+                    <td v-if="hasPermission('incoming.execute')" class="incoming-action-cell"><template v-if="incomingTab==='pending'"><button class="btn small success" :disabled="incomingReceiveAttempts[row.item_id]?.saving" @click="receiveIncoming(row)">{{ incomingReceiveAttempts[row.item_id]?.saving ? '正在实收…' : '确认实收' }}</button><button v-if="row.pending_receipt_item_id" class="btn small" @click="acceptShortIncoming(row)">不再补货，短收结单</button></template><button v-else-if="canAdmin" class="btn small danger" @click="revertIncoming(row)">撤销收料，回到已报料</button></td>
                   </tr></tbody>
                 </table>
                 <pager v-if="incomingTab==='pending'" :page="pages.incomingPending" :total="incomingPendingTotal" :page-size="pageSize" :always="true" :compact="true" @change="changeIncomingPendingPage($event)"></pager>
@@ -8033,7 +8033,7 @@
               visible:false, url:"", title:"", draftKey:"", focusId:"",
               modalScrollTop:0, tableScrollTop:0, historyPushed:false,
             },
-            incomingSelected: {},
+            incomingSelected: {}, incomingReceiveAttempts: {}, incomingBatchReceiveAttempt: null,
             mobileEntry: { url:"", qr_data_url:"" },
             orderPdfImport: { file: null, draft: null, matchedCustomerLabel: "" },
             deliveryForm: { editingId: null, delivery_number: "", source_mode: "order", source_tab: "order", customer_id: null, delivery_date: today(), vehicle_number: "", lines: [], saved_signature: "", pick_task: null },
@@ -11894,6 +11894,8 @@
             this.incomingPendingRetryPage = 1;
             this.pages.incomingPending = 1;
             this.incomingSelected = {};
+            this.incomingReceiveAttempts = {};
+            this.incomingBatchReceiveAttempt = null;
             this.incomingReceived = [];
             this.incomingReceivedLoaded = false;
             this.incomingReceivedLoading = false;
@@ -15749,6 +15751,20 @@
             Object.keys(this.incomingSelected).forEach(itemId => {
               if (!pendingIds.has(String(itemId))) delete this.incomingSelected[itemId];
             });
+            Object.entries(this.incomingReceiveAttempts || {}).forEach(([itemId, attempt]) => {
+              const attemptPage=Number(attempt?.page || 1);
+              if (attempt?.committed && !attempt.saving && attemptPage === this.incomingPendingAppliedPage && !pendingIds.has(String(itemId))) {
+                delete this.incomingReceiveAttempts[itemId];
+              }
+            });
+            const batchAttempt=this.incomingBatchReceiveAttempt;
+            if (
+              batchAttempt
+              && batchAttempt.committed
+              && !batchAttempt.saving
+              && Number(batchAttempt.page || 1) === this.incomingPendingAppliedPage
+              && (batchAttempt.item_ids || []).every(itemId => !pendingIds.has(String(itemId)))
+            ) this.incomingBatchReceiveAttempt=null;
           },
           async loadIncomingPendingPage({page=null, clearSelection=false, markCache=true}={}) {
             const requestedPage=Math.max(1, Number(page ?? this.incomingPendingAppliedPage ?? 1));
@@ -15916,7 +15932,8 @@
               this.loadKpi(),
             ];
             if (this.incomingReceivedLoaded) tasks.push(this.loadIncomingReceived({force:true}));
-            await Promise.all(tasks);
+            const results = await Promise.all(tasks);
+            return results.every(result => result !== false);
           },
           incomingProjectedVariance(row) {
             return Number(row.cumulative_received_quantity || 0) + Number(row.incoming_quantity || 0) - Number(row.planned_quantity ?? row.requisition_qty ?? row.quantity ?? 0);
@@ -15942,7 +15959,7 @@
             if (action==="transfer_to_semi_inventory" && this.incomingLocationsLoading) throw new Error("正在读取半成品库位，请稍候再确认");
             if (action==="transfer_to_semi_inventory" && this.incomingLocationsError) throw new Error(this.incomingLocationsError);
             if (action==="transfer_to_semi_inventory" && !Number(row.surplus_location_id)) throw new Error("余量转半成品库存时必须选择库位");
-            return {item_id:row.item_id,received_quantity:Number(row.incoming_quantity),resolution_action:action,resolution_reason:row.resolution_reason?.trim()||null,surplus_location_id:Number(row.surplus_location_id)||null,idempotency_key:createIdempotencyKey()};
+            return {item_id:row.item_id,received_quantity:Number(row.incoming_quantity),resolution_action:action,resolution_reason:row.resolution_reason?.trim()||null,surplus_location_id:Number(row.surplus_location_id)||null};
           },
           canReceiveIncoming(row) {
             return row?.material_status === "pending" && ["已报料", "供应商已排单"].includes(row?.requisition_status);
@@ -15956,64 +15973,176 @@
             });
           },
           async batchReceiveIncoming() {
-            const rows = this.incomingPending.filter(row => this.canReceiveIncoming(row) && this.incomingSelected[row.item_id]);
-            if (!rows.length) return;
-            for (const row of rows) {
-              const quantity = Number(row.incoming_quantity);
-              if (!Number.isInteger(quantity) || quantity <= 0) {
-                this.showToast(`${row.product_code || row.product_name} 的入库数量必须是大于0的整数`, true);
-                return;
+            const previousAttempt=this.incomingBatchReceiveAttempt;
+            if (previousAttempt?.saving) return;
+            if (previousAttempt?.committed) {
+              const refreshed=await this.refreshIncomingAfterWrite();
+              if (refreshed) {
+                this.incomingBatchReceiveAttempt=null;
+                this.showToast("批量实收记录已确认，请以刷新后的列表为准");
+              } else {
+                this.showToast("批量实收已成功，但列表刷新失败；请点击刷新，勿重复录入",true);
               }
-              try { this.incomingPayload(row); } catch(error) { this.showToast(`${row.product_code || row.product_name}：${error.message}`,true); return; }
+              return;
             }
-            if (!confirm(`确认将选中的 ${rows.length} 条来料记录入库？`)) return;
+            let rows=[];
+            let preparedItems=[];
+            let signature=previousAttempt?.signature || "";
+            if (previousAttempt) {
+              if (!confirm("上次批量实收结果尚未确认。系统将忽略当前勾选和修改，使用上次冻结的原数量与原凭证核对；该操作不会重复记账，是否继续？")) return;
+            } else {
+              rows=this.incomingPending.filter(row => this.canReceiveIncoming(row) && this.incomingSelected[row.item_id]);
+              if (!rows.length) return;
+              for (const row of rows) {
+                const quantity=Number(row.incoming_quantity);
+                if (!Number.isInteger(quantity) || quantity <= 0) {
+                  this.showToast(`${row.product_code || row.product_name} 的入库数量必须是大于0的整数`, true);
+                  return;
+                }
+                try { preparedItems.push(this.incomingPayload(row)); } catch(error) { this.showToast(`${row.product_code || row.product_name}：${error.message}`,true); return; }
+              }
+              signature=JSON.stringify(preparedItems);
+              if (!confirm(`确认将选中的 ${rows.length} 条来料记录入库？`)) return;
+            }
+            const requestPayload=previousAttempt?.request_payload || {
+              idempotency_key:createIdempotencyKey(),
+              items:preparedItems.map(item => ({...item,idempotency_key:createIdempotencyKey()})),
+            };
+            const attempt=previousAttempt || {
+              signature,
+              request_payload:requestPayload,
+              page:this.incomingPendingAppliedPage,
+              item_ids:preparedItems.map(item => String(item.item_id)),
+              order_item_ids:rows.filter(row => row.source_type !== "stock_replenishment").map(row => String(row.item_id)),
+              saving:false,
+              committed:false,
+            };
+            attempt.saving=true;
+            this.incomingBatchReceiveAttempt=attempt;
+            const authGeneration=this.authGeneration;
+            const userId=this.user?.id ?? null;
+            let committed=false;
             try {
-              const { data } = await axios.put("/api/incoming/batch-receive", {
-                idempotency_key:createIdempotencyKey(),
-                items: rows.map(row => this.incomingPayload(row)),
-              });
+              const { data } = await axios.put("/api/incoming/batch-receive",requestPayload);
+              if (authGeneration !== this.authGeneration || userId !== (this.user?.id ?? null)) return;
+              committed=true;
+              attempt.committed=true;
               const successfulResults = (data.results || []).filter(result => result.success);
               const successfulItemIds = new Set(successfulResults.map(result => String(result.item_id)));
-              const successfulOrderRows = rows.filter(row =>
-                successfulItemIds.has(String(row.item_id)) && row.source_type !== "stock_replenishment"
+              const successfulOrderItemIds = new Set(
+                (attempt.order_item_ids || []).filter(itemId => successfulItemIds.has(String(itemId)))
               );
-              if (successfulOrderRows.length) {
+              if (successfulOrderItemIds.size) {
                 this.showIncomingNextStepGuide({
-                  count:successfulOrderRows.length,
+                  count:successfulOrderItemIds.size,
                   pendingBalance:successfulResults.some(result =>
-                    successfulItemIds.has(String(result.item_id))
+                    successfulOrderItemIds.has(String(result.item_id))
                     && result.item?.material_status === "pending"
-                    && successfulOrderRows.some(row => String(row.item_id) === String(result.item_id))
                   ),
                 });
               }
               this.incomingSelected = {};
-              await this.refreshIncomingAfterWrite();
+              const refreshed=await this.refreshIncomingAfterWrite();
+              if (refreshed && this.incomingBatchReceiveAttempt === attempt) this.incomingBatchReceiveAttempt=null;
               if (data.failed) {
                 const reasons = (data.results || []).filter(row => !row.success).slice(0, 3).map(row => `第${row.item_id}条：${row.message}`).join("；");
-                this.showToast(`成功 ${data.succeeded} 条，失败 ${data.failed} 条。${reasons}`, true);
+                this.showToast(`成功 ${data.succeeded} 条，失败 ${data.failed} 条。${reasons}${refreshed ? "" : "；列表刷新失败，请勿重复提交成功项"}`, true);
+              } else if (!refreshed) {
+                this.showToast("批量实收已成功，但列表刷新失败；请点击刷新，勿重复录入",true);
               } else {
                 this.showToast(`已批量入库 ${data.succeeded} 条来料记录`);
               }
-            } catch(error) { this.showToast(this.errorMessage(error),true); }
+            } catch(error) {
+              const status=Number(error?.response?.status || 0);
+              if (status > 0 && status < 500) {
+                if (this.incomingBatchReceiveAttempt === attempt) this.incomingBatchReceiveAttempt=null;
+                this.showToast(this.errorMessage(error),true);
+              } else {
+                this.showToast(
+                  committed
+                    ? "批量实收已成功，但后续页面刷新失败；请点击刷新，勿重复录入"
+                    : `${this.errorMessage(error)}；批量实收结果暂未确认，重试会复用原凭证，请勿修改数量`,
+                  true,
+                );
+              }
+            } finally {
+              attempt.saving=false;
+            }
           },
           async receiveIncoming(row) {
+            const attemptKey=String(row.item_id);
+            const previousAttempt=this.incomingReceiveAttempts[attemptKey];
+            if (previousAttempt?.saving) return;
             const quantity=Number(row.incoming_quantity);
             if (!Number.isInteger(quantity) || quantity <= 0) { this.showToast("入库数量必须是大于0的整数",true); return; }
             let payload;
             try { payload=this.incomingPayload(row); } catch(error) { this.showToast(error.message,true); return; }
+            const signature=JSON.stringify(payload);
+            if (previousAttempt?.committed) {
+              const refreshed=await this.refreshIncomingAfterWrite();
+              if (refreshed) {
+                delete this.incomingReceiveAttempts[attemptKey];
+                this.showToast("实收记录已确认，请以刷新后的列表为准");
+              } else {
+                this.showToast("实收已成功，但列表刷新失败；请点击刷新，勿重复录入",true);
+              }
+              return;
+            }
+            if (previousAttempt && previousAttempt.signature !== signature) {
+              this.showToast("上次实收结果尚未确认，不能修改数量或处理方式后重新提交；请先刷新核对",true);
+              return;
+            }
             if (!confirm(`确认入库 ${quantity} 张纸板吗？`)) return;
+            const idempotencyKey=previousAttempt?.idempotency_key || createIdempotencyKey();
+            payload.idempotency_key=idempotencyKey;
+            const attempt=previousAttempt || {
+              signature,
+              idempotency_key:idempotencyKey,
+              page:this.incomingPendingAppliedPage,
+              saving:false,
+              committed:false,
+            };
+            attempt.saving=true;
+            this.incomingReceiveAttempts[attemptKey]=attempt;
+            const authGeneration=this.authGeneration;
+            const userId=this.user?.id ?? null;
+            let committed=false;
             try {
               const {data}=await axios.put(`/api/incoming/receive/${row.item_id}`,payload);
+              if (authGeneration !== this.authGeneration || userId !== (this.user?.id ?? null)) return;
+              committed=true;
+              attempt.committed=true;
               if (row.source_type !== "stock_replenishment") {
                 this.showIncomingNextStepGuide({
                   count:1,
                   pendingBalance:data.material_status === "pending",
                 });
               }
-              await this.refreshIncomingAfterWrite();
-              this.showToast(data.material_status==="pending" ? `已记录实收，仍待补 ${data.remaining_quantity} 张` : "来料入库成功");
-            } catch(error) { this.showToast(this.errorMessage(error),true); }
+              const refreshed=await this.refreshIncomingAfterWrite();
+              if (refreshed) {
+                if (this.incomingReceiveAttempts[attemptKey] === attempt) delete this.incomingReceiveAttempts[attemptKey];
+                this.showToast(data.material_status==="pending" ? `已记录实收，仍待补 ${data.remaining_quantity} 张` : "来料入库成功");
+              } else {
+                attempt.saving=false;
+                this.showToast("实收已成功，但列表刷新失败；请点击刷新，勿重复录入",true);
+              }
+            } catch(error) {
+              const status=Number(error?.response?.status || 0);
+              if (status > 0 && status < 500) {
+                if (this.incomingReceiveAttempts[attemptKey] === attempt) delete this.incomingReceiveAttempts[attemptKey];
+                this.showToast(this.errorMessage(error),true);
+              } else {
+                attempt.saving=false;
+                this.showToast(
+                  committed
+                    ? "实收已成功，但后续页面刷新失败；请点击刷新，勿重复录入"
+                    : `${this.errorMessage(error)}；实收结果暂未确认，请先刷新，勿重复录入`,
+                  true,
+                );
+              }
+            } finally {
+              attempt.saving=false;
+            }
           },
           async acceptShortIncoming(row) {
             if (!row.pending_receipt_item_id) return;

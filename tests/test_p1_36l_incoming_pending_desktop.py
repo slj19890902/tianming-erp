@@ -89,7 +89,7 @@ const vm={{
   authGeneration:2,user:{{id:7}},activePage:"incoming",pageSize:25,
   pages:{{incomingPending:1}},incomingPending:[{{item_id:"r1",incoming_quantity:77}}],incomingPendingTotal:51,
   incomingPendingLoading:false,incomingPendingError:"",incomingPendingAppliedPage:1,incomingPendingRetryPage:1,
-  incomingSelected:{{r1:true,sr9:true}},invalidations:[],marks:[],
+  incomingSelected:{{r1:true,sr9:true}},incomingReceiveAttempts:{{}},invalidations:[],marks:[],
   beginLatestRequest(key){{latestRequestControllers.get(key)?.abort();const c=new AbortController();latestRequestControllers.set(key,c);return c;}},
   finishLatestRequest(key,c){{if(latestRequestControllers.get(key)===c)latestRequestControllers.delete(key);}},
   isCancelledRequest(error){{return error?.name==="AbortError"||error?.code==="ERR_CANCELED";}},
@@ -214,6 +214,200 @@ def test_existing_write_and_external_purchase_endpoints_are_unchanged() -> None:
     assert "axios.post(`/api/external-packaging-purchases/${purchase.id}/receipts`" in INDEX
 
 
+def test_desktop_single_receive_reuses_key_and_never_reports_refresh_as_write_failure(
+    tmp_path: Path,
+) -> None:
+    receive = _method_body(
+        "async receiveIncoming(row) {",
+        "async acceptShortIncoming(row) {",
+    )
+    script = f"""
+const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
+const requests=[];const toasts=[];const refreshResults=[false,true,true];
+global.confirm=()=>true;
+global.createIdempotencyKey=()=>`attempt-${{++keySequence}}`;
+global.axios={{put:async(url,payload)=>{{
+  requests.push({{url,payload:JSON.parse(JSON.stringify(payload))}});
+  if(requests.length===1)throw Object.assign(new Error("Request failed with status code 500"),{{response:{{status:500}}}});
+  return {{data:{{material_status:"received",remaining_quantity:0}}}};
+}}}};
+let keySequence=0;
+const vm={{
+  incomingReceiveAttempts:{{}},
+  incomingPayload(row){{return {{item_id:row.item_id,received_quantity:Number(row.incoming_quantity),resolution_action:null,resolution_reason:null,surplus_location_id:null}};}},
+  showIncomingNextStepGuide(){{}},
+  async refreshIncomingAfterWrite(){{return refreshResults.shift();}},
+  showToast(message,isError){{toasts.push({{message:String(message),isError:!!isError}});}},
+  errorMessage(error){{return error?.message||String(error);}},
+}};
+vm.receiveIncoming=new AsyncFunction("row",{json.dumps(receive, ensure_ascii=False)}).bind(vm);
+const row={{item_id:99,incoming_quantity:20,source_type:"supplier_order"}};
+const expect=(value,message)=>{{if(!value)throw new Error(message);}};
+(async()=>{{
+  await vm.receiveIncoming(row);
+  expect(requests.length===1,"first write was not attempted");
+  const firstKey=requests[0].payload.idempotency_key;
+  expect(firstKey==="attempt-1","attempt did not own the idempotency key");
+  expect(toasts.at(-1).message.includes("结果暂未确认"),"5xx was not described as uncertain");
+  await vm.receiveIncoming(row);
+  expect(requests.length===2,"same payload was not retried");
+  expect(requests[1].payload.idempotency_key===firstKey,"same payload used a new idempotency key");
+  expect(toasts.at(-1).message.includes("实收已成功")&&toasts.at(-1).message.includes("刷新失败"),"committed write was misreported");
+  expect(!toasts.at(-1).message.includes("Request failed"),"raw request failure leaked after commit");
+  await vm.receiveIncoming(row);
+  expect(requests.length===2,"committed attempt submitted a duplicate write");
+  expect(!vm.incomingReceiveAttempts["99"],"authoritative refresh did not clear the attempt");
+}})().catch(error=>{{console.error(error);process.exit(1);}});
+"""
+    _run_node(script, tmp_path, "p1-56-desktop-receive-attempt.js")
+
+
+def test_desktop_single_receive_blocks_changed_uncertain_attempt_clears_4xx_and_single_flights(
+    tmp_path: Path,
+) -> None:
+    receive = _method_body(
+        "async receiveIncoming(row) {",
+        "async acceptShortIncoming(row) {",
+    )
+    script = f"""
+const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
+const requests=[];const toasts=[];let keySequence=0;let resolveThird;
+global.confirm=()=>true;
+global.createIdempotencyKey=()=>`single-${{++keySequence}}`;
+global.axios={{put:(url,payload)=>{{
+  requests.push({{url,payload:JSON.parse(JSON.stringify(payload))}});
+  if(requests.length===1)return Promise.reject(Object.assign(new Error("server uncertain"),{{response:{{status:500}}}}));
+  if(requests.length===2)return Promise.reject(Object.assign(new Error("validation failed"),{{response:{{status:422}}}}));
+  if(requests.length===3)return new Promise(resolve=>{{resolveThird=resolve;}});
+  throw new Error("unexpected duplicate write");
+}}}};
+const vm={{
+  incomingReceiveAttempts:{{}},
+  incomingPayload(row){{return {{item_id:row.item_id,received_quantity:Number(row.incoming_quantity),resolution_action:null,resolution_reason:null,surplus_location_id:null}};}},
+  showIncomingNextStepGuide(){{}},
+  async refreshIncomingAfterWrite(){{return true;}},
+  showToast(message,isError){{toasts.push({{message:String(message),isError:!!isError}});}},
+  errorMessage(error){{return error?.message||String(error);}},
+}};
+vm.receiveIncoming=new AsyncFunction("row",{json.dumps(receive, ensure_ascii=False)}).bind(vm);
+const row={{item_id:99,incoming_quantity:20,source_type:"supplier_order"}};
+const expect=(value,message)=>{{if(!value)throw new Error(message);}};
+(async()=>{{
+  await vm.receiveIncoming(row);
+  expect(requests.length===1,"initial uncertain write was not attempted");
+  const uncertainKey=requests[0].payload.idempotency_key;
+
+  row.incoming_quantity=21;
+  await vm.receiveIncoming(row);
+  expect(requests.length===1,"changed uncertain payload was submitted with a new key");
+  expect(toasts.at(-1).message.includes("不能修改数量或处理方式"),"changed uncertain payload was not rejected clearly");
+
+  row.incoming_quantity=20;
+  await vm.receiveIncoming(row);
+  expect(requests.length===2,"same uncertain payload was not retried for the 4xx case");
+  expect(requests[1].payload.idempotency_key===uncertainKey,"same uncertain payload did not retain its key before 4xx");
+  expect(!vm.incomingReceiveAttempts["99"],"explicit 4xx did not clear the attempt");
+
+  row.incoming_quantity=21;
+  const first=vm.receiveIncoming(row);
+  const doubleClick=vm.receiveIncoming(row);
+  expect(requests.length===3,"double click submitted more than one in-flight write");
+  expect(vm.incomingReceiveAttempts["99"]?.saving===true,"single-flight attempt was not marked saving");
+  expect(requests[2].payload.idempotency_key!==uncertainKey,"new payload after explicit 4xx reused the rejected key");
+  resolveThird({{data:{{material_status:"received",remaining_quantity:0}}}});
+  await Promise.all([first,doubleClick]);
+  expect(requests.length===3,"double click produced a late duplicate write");
+  expect(!vm.incomingReceiveAttempts["99"],"successful single-flight write did not clear its attempt");
+}})().catch(error=>{{console.error(error);process.exit(1);}});
+"""
+    _run_node(script, tmp_path, "p1-56-desktop-single-guards.js")
+
+
+def test_desktop_batch_receive_recovers_frozen_payload_before_current_selection(
+    tmp_path: Path,
+) -> None:
+    batch_receive = _method_body(
+        "async batchReceiveIncoming() {",
+        "async receiveIncoming(row) {",
+    )
+    script = f"""
+const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
+const requests=[];const toasts=[];const refreshResults=[false,true];
+let keySequence=0;let rejectFirst;let rejectMissingRowsRetry;
+global.confirm=()=>true;
+global.createIdempotencyKey=()=>`batch-key-${{++keySequence}}`;
+global.axios={{put:(url,payload)=>{{
+  requests.push({{url,payload:JSON.parse(JSON.stringify(payload))}});
+  if(requests.length===1)return new Promise((_resolve,reject)=>{{rejectFirst=reject;}});
+  if(requests.length===2)return new Promise((_resolve,reject)=>{{rejectMissingRowsRetry=reject;}});
+  if(requests.length===3)return Promise.resolve({{data:{{
+    succeeded:2,failed:0,
+    results:[
+      {{item_id:"r1",success:true,item:{{material_status:"received"}}}},
+      {{item_id:"r2",success:true,item:{{material_status:"received"}}}},
+    ],
+  }}}});
+  throw new Error("unexpected duplicate batch write");
+}}}};
+const rows=[
+  {{item_id:"r1",incoming_quantity:10,source_type:"supplier_order",material_status:"pending",requisition_status:"已报料",product_code:"A"}},
+  {{item_id:"r2",incoming_quantity:20,source_type:"supplier_order",material_status:"pending",requisition_status:"已报料",product_code:"B"}},
+];
+const vm={{
+  incomingPending:rows,
+  incomingSelected:{{r1:true,r2:true}},
+  incomingBatchReceiveAttempt:null,
+  canReceiveIncoming(row){{return row.material_status==="pending";}},
+  incomingPayload(row){{return {{item_id:row.item_id,received_quantity:Number(row.incoming_quantity),resolution_action:null,resolution_reason:null,surplus_location_id:null}};}},
+  showIncomingNextStepGuide(){{}},
+  async refreshIncomingAfterWrite(){{return refreshResults.shift();}},
+  showToast(message,isError){{toasts.push({{message:String(message),isError:!!isError}});}},
+  errorMessage(error){{return error?.message||String(error);}},
+}};
+vm.batchReceiveIncoming=new AsyncFunction({json.dumps(batch_receive, ensure_ascii=False)}).bind(vm);
+const expect=(value,message)=>{{if(!value)throw new Error(message);}};
+(async()=>{{
+  const first=vm.batchReceiveIncoming();
+  const doubleClick=vm.batchReceiveIncoming();
+  expect(requests.length===1,"batch double click submitted more than one in-flight write");
+  expect(vm.incomingBatchReceiveAttempt?.saving===true,"batch attempt was not marked saving");
+  rejectFirst(Object.assign(new Error("batch request failed with 500"),{{response:{{status:500}}}}));
+  await Promise.all([first,doubleClick]);
+  const firstPayload=requests[0].payload;
+  expect(firstPayload.idempotency_key&&firstPayload.items.every(item=>item.idempotency_key),"batch attempt did not persist batch and line keys");
+  expect(keySequence===3,"initial batch did not create exactly one batch key and two line keys");
+
+  vm.incomingPending=[];
+  vm.incomingSelected={{}};
+  const missingRowsRetry=vm.batchReceiveIncoming();
+  const missingRowsDoubleClick=vm.batchReceiveIncoming();
+  expect(requests.length===2,"missing rows or empty selection prevented the frozen batch replay");
+  expect(JSON.stringify(requests[1].payload)===JSON.stringify(firstPayload),"missing-row recovery did not replay the frozen batch and line keys");
+  expect(keySequence===3,"missing-row recovery generated new idempotency keys");
+  expect(vm.incomingBatchReceiveAttempt?.saving===true,"missing-row recovery was not single-flight");
+  rejectMissingRowsRetry(Object.assign(new Error("batch retry still uncertain"),{{response:{{status:500}}}}));
+  await Promise.all([missingRowsRetry,missingRowsDoubleClick]);
+
+  const newRow={{item_id:"r-new",incoming_quantity:99,source_type:"supplier_order",material_status:"pending",requisition_status:"已报料",product_code:"NEW"}};
+  vm.incomingPending=[newRow];
+  vm.incomingSelected={{"r-new":true}};
+  await vm.batchReceiveIncoming();
+  expect(requests.length===3,"new selection prevented recovery of the old uncertain batch");
+  expect(JSON.stringify(requests[2].payload)===JSON.stringify(firstPayload),"new selection replaced the frozen old batch payload");
+  expect(!requests[2].payload.items.some(item=>item.item_id==="r-new"),"newly selected row leaked into the old batch recovery");
+  expect(keySequence===3,"new selection caused recovery to allocate new keys");
+  expect(vm.incomingBatchReceiveAttempt?.committed===true,"committed batch was not retained after refresh failure");
+  expect(toasts.at(-1).message.includes("批量实收已成功")&&toasts.at(-1).message.includes("刷新失败"),"committed batch refresh failure was misreported");
+
+  vm.incomingSelected={{"r-new":true}};
+  await vm.batchReceiveIncoming();
+  expect(requests.length===3,"committed batch was written again while recovering the list");
+  expect(vm.incomingBatchReceiveAttempt===null,"successful recovery refresh did not clear the committed batch attempt");
+}})().catch(error=>{{console.error(error);process.exit(1);}});
+"""
+    _run_node(script, tmp_path, "p1-56-desktop-batch-guards.js")
+
+
 def test_desktop_session_reset_clears_account_bound_incoming_last_good(
     tmp_path: Path,
 ) -> None:
@@ -236,6 +430,8 @@ const vm={{
   incomingPending:[{{item_id:"r-secret"}}],incomingPendingTotal:51,incomingPendingLoading:true,
   incomingPendingError:"old",incomingPendingAppliedPage:3,incomingPendingRetryPage:4,
   incomingSelected:{{"r-secret":true}},incomingReceived:[{{customer_name:"old"}}],
+  incomingReceiveAttempts:{{"r-secret":{{idempotency_key:"secret",committed:true}}}},
+  incomingBatchReceiveAttempt:{{signature:"secret-batch",request_payload:{{idempotency_key:"secret"}},saving:false,committed:true}},
   incomingReceivedLoaded:true,incomingReceivedLoading:true,incomingReceivedError:"old",
   incomingHistory:[{{customer_name:"old"}}],incomingHistoryTotal:1,incomingLocations:[{{id:1}}],
   incomingLocationsLoading:true,incomingLocationsError:"old",incomingReceiptLocations:[{{id:2}}],
@@ -246,6 +442,8 @@ const vm={{
 }};
 new FunctionCtor({json.dumps(reset, ensure_ascii=False)}).call(vm);
 if(vm.incomingPending.length||vm.incomingPendingTotal||Object.keys(vm.incomingSelected).length)throw new Error("pending last-good survived session reset");
+if(Object.keys(vm.incomingReceiveAttempts).length)throw new Error("incoming receive attempts survived session reset");
+if(vm.incomingBatchReceiveAttempt!==null)throw new Error("incoming batch receive attempt survived session reset");
 if(vm.pages.incomingPending!==1||vm.incomingPendingAppliedPage!==1||vm.incomingPendingRetryPage!==1)throw new Error("pending page survived session reset");
 if(vm.incomingReceived.length||vm.incomingHistory.length||vm.externalIncomingPending.length)throw new Error("incoming account data survived session reset");
 """

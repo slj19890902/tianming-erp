@@ -2693,8 +2693,9 @@ def receive_item(
             idempotency_key=(payload.idempotency_key if payload else None),
             audit_context={"request": request},
         )
+        response = _new_receipt_response(db, fact)
         db.commit()
-        return _new_receipt_response(db, fact)
+        return response
     except IncomingReceiptError as error:
         db.rollback()
         _raise_receipt_error(error)
@@ -2841,8 +2842,9 @@ def accept_short_receipt_item(
             reason=payload.reason,
             audit_context={"request": request},
         )
+        response = _new_receipt_response(db, fact)
         db.commit()
-        return _new_receipt_response(db, fact)
+        return response
     except IncomingReceiptError as error:
         db.rollback()
         _raise_receipt_error(error)

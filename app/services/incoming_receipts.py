@@ -6,6 +6,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.time_contract import (
@@ -35,6 +36,7 @@ from app.models.warehouse_inventory import InventoryLot, InventoryMovement
 from app.services.production_workflow import (
     ProductionWorkflowError,
     has_production_completion_facts,
+    is_production_task_status_quantity_conflict,
     lock_order_rows_for_production_transition,
     refresh_order_production_status,
     refresh_production_task,
@@ -749,6 +751,14 @@ def _mark_order_progress(db: Session, target: IncomingTarget, *, closed: bool, u
         production_task = refresh_production_task(db, item.id)
     except ProductionWorkflowError as error:
         raise IncomingReceiptError(str(error), error.status_code) from error
+    except IntegrityError as error:
+        if not is_production_task_status_quantity_conflict(error):
+            raise
+        raise IncomingReceiptError(
+            "实收纸板与生产计划换算结果冲突，本次实收未保存；"
+            "请刷新后核对实收数量、开料方式和单双拼设置",
+            409,
+        ) from error
     if production_task is not None:
         refresh_order_production_status(db, item.order_id)
         return

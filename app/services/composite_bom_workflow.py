@@ -361,6 +361,7 @@ def ensure_component_production_tasks(
             raise CompositeBomWorkflowError("订单组件快照不存在")
         from app.services.production_workflow import (
             _new_task_printing_snapshot,
+            _validate_task_status_quantity,
             cutting_output_factor,
         )
 
@@ -416,13 +417,28 @@ def ensure_component_production_tasks(
         input_quantity = (
             ceil(planned_quantity / max(output_factor, 1)) if ready else 0
         )
-        task.planned_quantity = planned_quantity if ready else 0
+        next_planned_quantity = planned_quantity if ready else 0
+        next_status = (
+            "not_required"
+            if coverage >= demand.required_piece_quantity
+            else "pending"
+            if ready
+            else "waiting_material"
+        )
+        _validate_task_status_quantity(next_status, next_planned_quantity)
+        task.planned_quantity = next_planned_quantity
         task.finished_coverage_snapshot = coverage
         task.material_received_quantity = input_quantity
         task.material_input_quantity = input_quantity
         task.output_factor = output_factor
-        task.status = "pending" if ready and demand.required_piece_quantity else "waiting_material"
-        task.readiness_basis = "component_material_received" if ready else None
+        task.status = next_status
+        task.readiness_basis = (
+            "component_finished_inventory"
+            if next_status == "not_required"
+            else "component_material_received"
+            if ready
+            else None
+        )
         task.version = max(int(task.version or 0), 1) + 1
         tasks.append(task)
     db.flush()

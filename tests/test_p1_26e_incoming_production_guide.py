@@ -36,7 +36,11 @@ def test_single_receipt_guides_only_order_linked_success() -> None:
     guide = "this.showIncomingNextStepGuide({"
 
     assert write in receive
-    assert receive.index(write) < receive.index(guide) < receive.index("await this.refreshIncomingAfterWrite();")
+    refresh_after_write = receive.index(
+        "const refreshed=await this.refreshIncomingAfterWrite();",
+        receive.index(write),
+    )
+    assert receive.index(write) < receive.index(guide) < refresh_after_write
     assert 'if (row.source_type !== "stock_replenishment")' in receive
     assert 'pendingBalance:data.material_status === "pending"' in receive
 
@@ -45,11 +49,18 @@ def test_batch_receipt_counts_only_successful_order_rows() -> None:
     batch = _block("async batchReceiveIncoming()", "async receiveIncoming(row)")
 
     assert "const successfulResults = (data.results || []).filter(result => result.success);" in batch
-    assert "successfulItemIds.has(String(row.item_id))" in batch
+    assert "successfulItemIds.has(String(itemId))" in batch
     assert 'row.source_type !== "stock_replenishment"' in batch
-    assert "count:successfulOrderRows.length" in batch
+    assert "count:successfulOrderItemIds.size" in batch
     assert 'result.item?.material_status === "pending"' in batch
-    assert batch.index("this.showIncomingNextStepGuide({") < batch.index("await this.refreshIncomingAfterWrite();")
+    write = 'const { data } = await axios.put("/api/incoming/batch-receive",requestPayload);'
+    guide = "this.showIncomingNextStepGuide({"
+    assert write in batch
+    refresh_after_write = batch.index(
+        "const refreshed=await this.refreshIncomingAfterWrite();",
+        batch.index(write),
+    )
+    assert batch.index(write) < batch.index(guide) < refresh_after_write
 
 
 def test_non_receipt_paths_do_not_claim_new_incoming_success() -> None:

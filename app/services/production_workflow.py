@@ -110,6 +110,40 @@ class ProductionWorkflowError(ValueError):
         self.status_code = status_code
 
 
+def _validate_task_status_quantity(status: str, planned_quantity: int) -> None:
+    """Reject an invalid task state before the database constraint does.
+
+    This keeps receiving failures in the business-error path, where the whole
+    receipt transaction is rolled back with an actionable 409 response.
+    """
+
+    quantity = int(planned_quantity or 0)
+    if status in {PENDING, COMPLETED} and quantity <= 0:
+        raise ProductionWorkflowError(
+            "实收纸板换算后的生产数量不足1只，无法进入待生产；"
+            "请核对实收数量、开料方式和单双拼设置",
+            409,
+        )
+    if status in {WAITING_MATERIAL, NOT_REQUIRED} and quantity != 0:
+        raise ProductionWorkflowError(
+            "生产任务状态与计划数量不一致，本次操作未保存；请刷新后重试",
+            409,
+        )
+
+
+def is_production_task_status_quantity_conflict(error: IntegrityError) -> bool:
+    """Return true only for the production-task status/quantity constraint."""
+
+    original = getattr(error, "orig", None)
+    diagnostic = getattr(original, "diag", None)
+    if (
+        getattr(diagnostic, "constraint_name", None)
+        == "ck_production_tasks_status_quantity"
+    ):
+        return True
+    return "ck_production_tasks_status_quantity" in str(original or error)
+
+
 def _new_task_printing_snapshot(db: Session, product: Product | None) -> dict:
     """Freeze common-box printing setup once when a production task is created."""
 
@@ -743,6 +777,7 @@ def _refresh_composite_production_tasks(
             material_input_quantity = 0
             readiness_basis = None
 
+        _validate_task_status_quantity(next_status, planned_quantity)
         changed = (
             task.status != next_status
             or int(task.planned_quantity or 0) != planned_quantity
@@ -861,14 +896,14 @@ def refresh_production_task(
     elif item.material_status == "received":
         next_status = PENDING
         if material_input_quantity > 0:
-            planned_quantity = max(
-                production_output_quantity(
-                    material_input_quantity,
-                    output_factor,
-                    pieces_per_box,
-                )
-                - finished_coverage,
-                0,
+            # Modern receipt facts already contain only the physical sheets
+            # assigned to production after finished-goods coverage reduced the
+            # requisition.  Subtracting that coverage again would double-count
+            # it (for example: order 50, finished 30, receipt 20 -> plan 0).
+            planned_quantity = production_output_quantity(
+                material_input_quantity,
+                output_factor,
+                pieces_per_box,
             )
             readiness_basis = "incoming_receipt"
         else:
@@ -889,6 +924,7 @@ def refresh_production_task(
         planned_quantity = 0
         readiness_basis = None
 
+    _validate_task_status_quantity(next_status, planned_quantity)
     state_changed = (
         task.status != next_status
         or int(task.planned_quantity or 0) != planned_quantity

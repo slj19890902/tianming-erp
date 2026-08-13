@@ -64,7 +64,8 @@ def test_phone_display_removes_only_empty_separators_and_flags_placeholders(
     phone_asset = ROOT / "static" / "assets" / "phone-display.js"
     assert phone_asset.exists()
     source = phone_asset.read_text(encoding="utf-8")
-    cache_key = hashlib.sha256(phone_asset.read_bytes()).hexdigest()[:12]
+    cache_bytes = phone_asset.read_bytes().replace(b"\r\n", b"\n")
+    cache_key = hashlib.sha256(cache_bytes).hexdigest()[:12]
     assert f"phone-display.js?v={cache_key}" in INDEX
     assert f"phone-display.js?v={cache_key}" in LEGACY_CUSTOMERS
     harness = source + r'''

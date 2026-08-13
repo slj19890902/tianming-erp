@@ -42,7 +42,7 @@ def test_embedded_customer_save_uses_shared_lock_and_feedback() -> None:
 
 
 def test_embedded_customer_lists_only_accept_latest_response_and_return_result() -> None:
-    customers = _method_body("async loadCustomers() {", "async loadCustomerOptions(")
+    customers = _method_body("async loadCustomers() {", "async exportCustomerPhoneGovernance(")
     options = _method_body("async loadCustomerOptions(force=false) {", "async loadProducts() {")
     for block, key in ((customers, "customers:list"), (options, "customers:options")):
         assert f'const requestKey = "{key}"' in block
@@ -52,7 +52,7 @@ def test_embedded_customer_lists_only_accept_latest_response_and_return_result()
 
 
 def test_customer_list_runtime_discards_ignored_abort_response(tmp_path: Path) -> None:
-    customers_body = _method_body("async loadCustomers() {", "async loadCustomerOptions(")
+    customers_body = _method_body("async loadCustomers() {", "async exportCustomerPhoneGovernance(")
     options_body = _method_body("async loadCustomerOptions(force=false) {", "async loadProducts() {")
     script = f"""
 const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;

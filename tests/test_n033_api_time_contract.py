@@ -309,6 +309,9 @@ def test_void_supplier_order_writes_beijing_naive_time(monkeypatch):
         def get(self, _model, _key):
             return order
 
+        def scalar(self, _statement):
+            return None
+
         def commit(self):
             return None
 

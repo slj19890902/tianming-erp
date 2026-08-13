@@ -25,9 +25,9 @@ def pricing_api_app(tmp_path: Path):
     with session_factory() as session:
         session.add(
             User(
-                username="sales",
+                username="admin",
                 password_hash=hash_password("RolePass123!"),
-                role="sales",
+                role="admin",
                 real_name="业务员",
                 display_name="业务员",
                 must_change_password=False,
@@ -104,7 +104,7 @@ def test_pricing_api_accepts_extra_fee(pricing_api_app) -> None:
     with TestClient(pricing_api_app) as client:
         login = client.post(
             "/api/auth/login",
-            json={"username": "sales", "password": "RolePass123!"},
+            json={"username": "admin", "password": "RolePass123!"},
         )
         assert login.status_code == 200
         response = client.post(

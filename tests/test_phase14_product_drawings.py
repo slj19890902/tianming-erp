@@ -260,6 +260,7 @@ def test_common_box_process_and_print_type_round_trip_without_drawing(
         "box_category": "normal",
         "print_content": "双色印刷",
         "production_process": "粘贴,打钉",
+        "printing_colors": "black+red",
         "sale_unit_price": "4.1600",
         "remark": "常用箱编辑回显测试",
         "expected_version": 1,

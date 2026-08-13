@@ -7,8 +7,6 @@ import sys
 from pathlib import Path
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from sqlalchemy import inspect, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
@@ -117,11 +115,32 @@ def test_phase3_schema_migration_preserves_product_archives(
         )
         connection.commit()
 
-    monkeypatch.setenv("ERP_DATABASE_PATH", str(database_path))
-    monkeypatch.setenv("ERP_BACKUP_DIR", str(tmp_path / "backups"))
-    monkeypatch.setenv("ERP_SECRET_KEY", "phase3-migration-test")
-    config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
-    command.upgrade(config, "head")
+    project_root = Path(__file__).resolve().parents[1]
+    migration_environment = {
+        **os.environ,
+        "ERP_DATABASE_PATH": str(database_path),
+        "ERP_BACKUP_DIR": str(tmp_path / "backups"),
+        "ERP_SECRET_KEY": "phase3-migration-test",
+        "PYTHONIOENCODING": "utf-8",
+    }
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "alembic",
+            "-c",
+            str(project_root / "alembic.ini"),
+            "upgrade",
+            "head",
+        ],
+        cwd=project_root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=migration_environment,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
     with sqlite3.connect(database_path) as connection:
         tables = {

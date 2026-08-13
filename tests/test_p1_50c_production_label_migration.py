@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
 import sqlite3
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -22,6 +25,33 @@ def _config(monkeypatch: pytest.MonkeyPatch, database: Path) -> Config:
     config.set_main_option("script_location", str(ROOT / "alembic"))
     config.set_main_option("sqlalchemy.url", f"sqlite:///{database.as_posix()}")
     return config
+
+
+def _upgrade_in_isolated_process(database: Path, revision: str) -> None:
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "ERP_DATABASE_PATH": str(database),
+            "ERP_BACKUP_DIR": str(database.parent / "backups"),
+            "ERP_SECRET_KEY": "p1-50c-label-migration-test",
+        }
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "alembic",
+            "-c",
+            str(ROOT / "alembic.ini"),
+            "upgrade",
+            revision,
+        ],
+        cwd=ROOT,
+        env=environment,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
 
 
 def test_p1_50c_is_single_head_and_clean_round_trip(
@@ -73,7 +103,7 @@ def test_existing_task_gets_legacy_template_metadata_without_print_fact(
 ) -> None:
     database = tmp_path / "p1-50c-existing.sqlite3"
     config = _config(monkeypatch, database)
-    command.upgrade(config, PARENT)
+    _upgrade_in_isolated_process(database, PARENT)
     with sqlite3.connect(database) as connection:
         connection.execute("PRAGMA foreign_keys=ON")
         customer_id = connection.execute(

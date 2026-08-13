@@ -109,17 +109,47 @@ def test_n029_models_register_complete_contract_in_metadata() -> None:
     assert set(tasks.columns.keys()) == {
         "id",
         "order_item_id",
+        "sales_order_item_bom_component_id",
         "status",
         "planned_quantity",
         "finished_coverage_snapshot",
+        "ordered_quantity_snapshot",
+        "material_received_quantity",
+        "material_input_quantity",
+        "output_factor",
         "readiness_basis",
+        "printing_plate_mode_snapshot",
+        "print_content_snapshot",
+        "printing_colors_snapshot",
+        "printing_plate_codes_snapshot",
+        "printing_plate_details_snapshot",
+        "plate_alignment_value_mm_snapshot",
+        "plate_mount_value_mm_snapshot",
+        "machine_set_length_mm_snapshot",
+        "machine_set_width_mm_snapshot",
+        "machine_set_height_mm_snapshot",
+        "production_label_enabled_snapshot",
+        "production_label_units_per_label_snapshot",
+        "production_label_total_quantity_snapshot",
+        "production_label_count_snapshot",
+        "production_label_template_version_snapshot",
+        "production_label_product_version_snapshot",
         "ready_at",
         "version",
         "created_at",
         "updated_at",
     }
-    assert frozenset({"order_item_id"}) in _unique_column_sets("production_tasks")
-    assert _foreign_key_deletes("production_tasks") == {"order_item_id": "CASCADE"}
+    unique_indexes = {
+        index.name for index in tasks.indexes if index.unique
+    }
+    assert {
+        "uq_production_tasks_regular_order_item",
+        "uq_production_tasks_bom_component",
+    } <= unique_indexes
+    assert _foreign_key_deletes("production_tasks") == {
+        "order_item_id": "CASCADE",
+        "sales_order_item_bom_component_id": "SET NULL",
+    }
     task_checks = _check_sql("production_tasks")
     assert "planned_quantity >= 0" in task_checks
     assert "finished_coverage_snapshot >= 0" in task_checks
@@ -143,9 +173,8 @@ def test_n029_models_register_complete_contract_in_metadata() -> None:
     assert "item_count > 0" in batch_checks
 
     completions = Base.metadata.tables["production_completions"]
-    assert frozenset({"order_item_id"}) in _unique_column_sets(
-        "production_completions"
-    )
+    # One order item may now have multiple posted completion facts; inventory
+    # lot identity remains unique.
     assert frozenset({"inventory_lot_id"}) in _unique_column_sets(
         "production_completions"
     )
@@ -156,6 +185,7 @@ def test_n029_models_register_complete_contract_in_metadata() -> None:
         "warehouse_location_id": "RESTRICT",
         "inventory_lot_id": "RESTRICT",
         "completed_by": "SET NULL",
+        "reversed_by": "SET NULL",
     }
     completion_checks = _check_sql("production_completions")
     assert "expected_version >= 1" in completion_checks
@@ -180,6 +210,7 @@ def test_n029_models_register_complete_contract_in_metadata() -> None:
         "warehouse_location_id": "RESTRICT",
         "inventory_lot_id": "RESTRICT",
         "transferred_by": "SET NULL",
+        "reversed_by": "SET NULL",
     }
     assert "length(request_hash) = 64" in _check_sql(
         "production_stock_transfers"

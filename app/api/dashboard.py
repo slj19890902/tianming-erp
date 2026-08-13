@@ -209,6 +209,7 @@ def _workflow_projection_rows(
                 OrderItem.is_force_closed,
                 OrderItem.material_status,
                 OrderItem.snapshot_product_code,
+                OrderItem.supply_mode_snapshot,
             ),
         )
         .where(

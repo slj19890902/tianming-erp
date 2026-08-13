@@ -521,6 +521,10 @@ def _validated_plan(
         _validate_changed_product_crease_widths(payload, product)
 
     payload_data = payload.model_dump()
+    # ``external_supply`` is an API-only write projection. Its persisted facts
+    # are the explicit external-packaging snapshot columns already present in
+    # ``payload_data``; comparing it to the ORM object creates a false update.
+    payload_data.pop("external_supply", None)
     if normalized_row["mold_code"] in new_mold_codes:
         payload_data["mold_tool_id"] = None
     missing_fields = _completion_missing_fields(payload, material=material)

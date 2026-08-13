@@ -39,7 +39,9 @@ def phase12_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from app.models.material import Material
     from app.models.order import Order, OrderItem
     from app.models.product import Product
+    from app.models.supplier import Supplier
     from app.models.user import User
+    from app.services.supplier_master import normalize_supplier_identity
 
     upload_dir = tmp_path / "uploads"
     monkeypatch.setenv("ERP_FILE_STORAGE_DIR", str(upload_dir))
@@ -82,7 +84,15 @@ def phase12_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             flute_type="AB",
             basis_weight_description="供应商A 170g/130g/80g/170g/150g 高强",
         )
-        session.add_all([*users, active, inactive, material])
+        supplier_name = "供应商A"
+        supplier = Supplier(
+            standard_name=supplier_name,
+            normalized_name=normalize_supplier_identity(supplier_name),
+            display_name=supplier_name,
+            is_active=True,
+            version=1,
+        )
+        session.add_all([*users, active, inactive, material, supplier])
         session.flush()
         product = Product(
             customer_id=active.id,
@@ -271,9 +281,10 @@ def test_material_normalizes_weight_and_rejects_unknown_flute(phase12_app):
         created = client.post(
             "/api/master/materials",
             json={
-                "code": "TEST-AB",
+                "code": "A416D",
                 "layer_count": 5,
                 "flute_type": "AB",
+                "supplier_name": "供应商A",
                 "basis_weight_description": "嘉林亿170克/130g/80克/170g/150g",
             },
         )
@@ -470,7 +481,7 @@ def test_export_returns_404_for_nonexistent_statement(phase12_app):
     assert response.status_code == 404
 
 
-def test_export_does_not_write_to_database(phase12_app):
+def test_export_writes_one_audit_event_without_changing_business_facts(phase12_app):
     from app.models.audit import OperationLog
 
     app, session_factory, _ = phase12_app
@@ -483,7 +494,7 @@ def test_export_does_not_write_to_database(phase12_app):
     with session_factory() as session:
         after_count = session.query(OperationLog).count()
 
-    assert after_count == before_count, "导出操作不应写入数据库"
+    assert after_count == before_count + 1
 
 
 HEADER_ROW = 5  # row 1=title, 2=customer info, 3=company info, 4=blank, 5=headers
@@ -634,7 +645,8 @@ def test_export_column_order_exact(phase12_app):
     actual = [cell.value for cell in sheet[5]]
     expected = [
         "客户名称", "客户单号", "存货编码", "送货日期", "送货单号",
-        "产品名称", "规格型号", "材质", "实际签收数量", "单价", "金额",
+        "产品名称", "规格型号", "材质", "订单数量", "实际送货数量",
+        "超订单数量", "实际签收数量", "单价", "金额",
         "备注", "开票状态", "对账状态", "结清状态",
     ]
     assert actual == expected, f"列顺序不符\n预期：{expected}\n实际：{actual}"

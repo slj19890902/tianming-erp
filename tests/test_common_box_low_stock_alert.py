@@ -536,6 +536,8 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
         FinishedGoodsInventoryDetail,
         InventoryMovement,
         SemiFinishedLotAllowedProduct,
+        WarehouseArea,
+        WarehouseFloor,
         WarehouseLocation,
     )
 
@@ -614,6 +616,49 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
                 updated_by=admin.id,
             )
         )
+        floor1 = WarehouseFloor(
+            floor_code="1F",
+            floor_name="Floor 1",
+            floor_number=1,
+            construction_status="enabled",
+        )
+        db.add(floor1)
+        db.flush()
+        db.add(
+            WarehouseArea(
+                floor_id=floor1.id,
+                area_code="A1",
+                area_name="A1 raw-material staging",
+                construction_status="enabled",
+            )
+        )
+        floor3 = WarehouseFloor(
+            floor_code="3F",
+            floor_name="Floor 3",
+            floor_number=3,
+            construction_status="enabled",
+        )
+        db.add(floor3)
+        db.flush()
+        db.add(
+            WarehouseArea(
+                floor_id=floor3.id,
+                area_code="E1",
+                area_name="E1 finished-goods area",
+                construction_status="enabled",
+            )
+        )
+        raw_staging = WarehouseLocation(
+            location_code="1FA",
+            location_name="Floor 1 A1 raw-material staging",
+            warehouse_type="semi_finished",
+            warehouse_floor=1,
+            area_code="A1",
+            storage_type="temporary_aisle",
+            placement_status="placed",
+            source_version="P1-36L",
+            is_active=True,
+        )
         semi_location = WarehouseLocation(
             location_code="SF-UAT-01",
             location_name="客户纸板备料位",
@@ -630,7 +675,7 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
             placement_status="placed",
             is_active=True,
         )
-        db.add_all([semi_location, production_location])
+        db.add_all([raw_staging, semi_location, production_location])
         db.commit()
         semi_location_id = semi_location.id
         production_location_id = production_location.id
@@ -1048,8 +1093,8 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
                 ],
                 "source_ref_type": "stock_replenishment_receipt",
                 "source_ref_id": received.json()["receipt_item_id"],
-                "location_code": "SF-UAT-01",
-                "location_name": "客户纸板备料位",
+                "location_code": "1FA",
+                "location_name": "Floor 1 A1 raw-material staging",
                 "remaining_sheet_quantity": 40,
                 "remaining_product_quantity": 80,
                 "stock_yield_per_sheet": 2,

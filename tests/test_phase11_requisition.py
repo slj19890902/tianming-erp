@@ -590,13 +590,13 @@ def test_frontend_supplier_draft_shows_duplicate_dimension_and_quantity_checks()
         "quantity_override_acknowledged",
     ):
         assert expected in index
-    assert "/api/requisition/reported-documents" in index
+    assert "/api/requisition/reported-items" in index
     assert "draftGroupLines(group)" in index
     assert "line.source_items || []" in index
     assert "supplierOrderPrintLines(modal.data)" in index
-    assert "reported-compact-table" in index
-    assert "reported-source-cell" in index
-    assert "reported-code-cell" in index
+    assert "reported-item-table" in index
+    assert "reported-item-select-column" in index
+    assert "reported-item-dimension" in index
 
 
 def test_preview_supplier_order_draft_supports_single_regular_pending_item(
@@ -943,6 +943,13 @@ def test_merge_group_lifecycle_creates_supplier_order_only_at_final_step(
 
     app, session_factory = requisition_app
     second_id = _add_second_merge_candidate(session_factory)
+    with session_factory() as session:
+        for item_id in (1, second_id):
+            item = session.get(OrderItem, item_id)
+            assert item is not None
+            item.snapshot_report_length_mm = 1000
+            item.snapshot_report_width_mm = 800
+        session.commit()
     with TestClient(app) as client:
         _login(client, "sales")
         created = _create_merge_group(client, [1, second_id])
@@ -956,9 +963,21 @@ def test_merge_group_lifecycle_creates_supplier_order_only_at_final_step(
             f"/api/requisition/merge-groups/{created['id']}",
             json={
                 "supplier_name": "更新后的供应商",
-                "report_length_mm": 1100,
-                "report_width_mm": 900,
+                "report_length_mm": 1000,
+                "report_width_mm": 1600,
                 "cutting_mode": "一开二",
+                "expected_cutting_plan_fingerprint": created[
+                    "cutting_plan_fingerprint"
+                ],
+                "calculated_report_length_mm": 1000,
+                "calculated_report_width_mm": 1600,
+                "calculated_requisition_qty": (
+                    created["effective_demand_piece_qty"] + 1
+                )
+                // 2,
+                "calculated_effective_demand_piece_qty": created[
+                    "effective_demand_piece_qty"
+                ],
                 "remark": "更新合并组备注",
             },
         )
@@ -1006,8 +1025,8 @@ def test_merge_group_lifecycle_creates_supplier_order_only_at_final_step(
         row for row in pending_after_update.json()["items"] if row.get("is_merge_group")
     )
     assert updated_row["supplier_name"] == "更新后的供应商"
-    assert Decimal(str(updated_row["report_length_mm"])) == Decimal("1100")
-    assert Decimal(str(updated_row["report_width_mm"])) == Decimal("900")
+    assert Decimal(str(updated_row["report_length_mm"])) == Decimal("1000")
+    assert Decimal(str(updated_row["report_width_mm"])) == Decimal("1600")
     assert updated_row["cutting_mode"] == "一开二"
     assert updated_row["remark"] == "更新合并组备注"
 

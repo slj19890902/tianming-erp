@@ -181,7 +181,7 @@ def test_new_order_form_has_dedicated_code_width_classes() -> None:
 
 
 def test_requisition_page_keeps_pending_and_submitted_views() -> None:
-    assert "待报料 {{ requisitionPending.length }}" in INDEX
+    assert "待报料 {{ requisitionPendingOverallTotal }}" in INDEX
     assert "已报料/已入库<span v-if=\"requisitionReportedLoaded\"> {{ requisitionReportedTotal }}</span>" in INDEX
     assert '@click="openSupplierRequisitionDraft()"' in INDEX
 

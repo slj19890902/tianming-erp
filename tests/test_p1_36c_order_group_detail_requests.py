@@ -60,6 +60,7 @@ const vm={{
   beginLatestRequest(key){{latestRequestControllers.get(key)?.abort();const controller=new AbortController();latestRequestControllers.set(key,controller);return controller;}},
   finishLatestRequest(key,controller){{if(latestRequestControllers.get(key)===controller)latestRequestControllers.delete(key);}},
   cancelOrderTraceChildRequests(){{}},isCancelledRequest(error){{return error?.name==="AbortError";}},
+  rememberModalOpener(){{return null;}},focusAccessibleModal(){{}},
   errorMessage(error){{return error?.message||String(error);}},showToast(message,isError){{toasts.push({{message,isError}});}}
 }};
 vm.ensureOrderGroupDetail=ensure.bind(vm);vm.openOrderGroupDetail=openDetail.bind(vm);vm.openOrderEditor=openEditor.bind(vm);

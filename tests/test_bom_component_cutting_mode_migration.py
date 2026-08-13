@@ -6,13 +6,65 @@ import sqlite3
 from alembic import command
 from alembic.config import Config
 import pytest
-from sqlalchemy import inspect
+from sqlalchemy import CheckConstraint, Column, Integer, MetaData, String, Table, inspect
 from app.core.database import create_sqlite_engine
 
 
 ROOT = Path(__file__).resolve().parents[1]
 PARENT_REVISION = "ci65v8x9z54"
 TARGET_REVISION = "co71v8x9z60"
+
+
+def _create_parent_schema(path: Path) -> None:
+    """Build only the direct-parent contract used by this migration.
+
+    Replaying the entire historical chain is unrelated to this revision and
+    can crash SQLAlchemy's native SQLite reflection path on Windows.
+    """
+    engine = create_sqlite_engine(path)
+    metadata = MetaData()
+    Table("alembic_version", metadata, Column("version_num", String, primary_key=True))
+    Table(
+        "sales_order_item_bom_components",
+        metadata,
+        Column("id", Integer, primary_key=True),
+        Column("sales_order_item_id", Integer, nullable=False),
+        Column("component_product_id", Integer, nullable=False),
+        Column("product_bom_component_id", Integer),
+        Column("snapshot_schema_version", Integer, nullable=False),
+        Column("order_set_quantity", Integer, nullable=False),
+        Column("quantity_per_set", Integer, nullable=False),
+        Column("required_piece_quantity", Integer, nullable=False),
+        Column("display_order", Integer, nullable=False),
+        Column("internal_component_code", String),
+        Column("is_die_cut", Integer, nullable=False),
+        Column("spare_sheet_quantity", Integer, nullable=False),
+        Column("display_mode", String, nullable=False),
+        Column("is_required", Integer, nullable=False),
+        Column("snapshot_component_product_code", String, nullable=False),
+        Column("snapshot_component_product_name", String, nullable=False),
+        Column("snapshot_component_box_category", String, nullable=False),
+        Column("snapshot_component_box_style", String),
+    )
+    Table(
+        "requisition_item_bom_sources",
+        metadata,
+        Column("id", Integer, primary_key=True),
+        Column("calculation_rule_version", String, nullable=False),
+        Column("order_set_quantity", Integer, nullable=False),
+        Column("quantity_per_set", Integer, nullable=False),
+        Column("required_piece_quantity", Integer, nullable=False),
+        CheckConstraint(
+            "required_piece_quantity = order_set_quantity * quantity_per_set",
+            name="ck_requisition_item_bom_sources_required_piece_formula",
+        ),
+    )
+    metadata.create_all(engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            f"INSERT INTO alembic_version(version_num) VALUES ('{PARENT_REVISION}')"
+        )
+    engine.dispose()
 
 
 def _config(monkeypatch: pytest.MonkeyPatch, path: Path) -> Config:
@@ -35,8 +87,8 @@ def test_cutting_snapshot_migration_is_linear_and_round_trips_empty_database(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "bom-cutting-roundtrip.sqlite3"
+    _create_parent_schema(path)
     config = _config(monkeypatch, path)
-    command.upgrade(config, PARENT_REVISION)
     command.upgrade(config, TARGET_REVISION)
 
     engine = create_sqlite_engine(path)
@@ -74,6 +126,7 @@ def test_cutting_snapshot_migration_downgrade_fails_closed_after_new_order_fact(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "bom-cutting-fail-closed.sqlite3"
+    _create_parent_schema(path)
     config = _config(monkeypatch, path)
     command.upgrade(config, TARGET_REVISION)
     with sqlite3.connect(path) as connection:

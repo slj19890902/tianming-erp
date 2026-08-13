@@ -360,7 +360,7 @@ def test_new_delivery_stays_first_even_when_older_delivery_was_operated_later(
     ]
 
 
-def test_over_delivery_warns_without_requiring_reason_and_can_be_dispatched(
+def test_over_delivery_without_physical_surplus_is_rejected_before_dispatch(
     delivery_api_app,
 ) -> None:
     from app.models.order import OrderItem
@@ -376,13 +376,10 @@ def test_over_delivery_warns_without_requiring_reason_and_can_be_dispatched(
     with TestClient(app) as client:
         _login(client, "admin")
         created = client.post("/api/deliveries", json=payload)
-        dispatched = client.put(f"/api/deliveries/{created.json()['id']}/dispatch")
 
-    assert created.status_code == 201, created.text
-    assert created.json()["warnings"][0]["code"] == "OVER_DELIVERY"
-    assert dispatched.status_code == 200, dispatched.text
+    assert created.status_code == 409, created.text
     with session_factory() as session:
-        assert session.get(OrderItem, 1).delivered_quantity == 110
+        assert session.get(OrderItem, 1).delivered_quantity == 20
 
 
 def test_telescoping_lid_delivery_capacity_uses_min_received_components(

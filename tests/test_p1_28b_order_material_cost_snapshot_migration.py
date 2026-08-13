@@ -78,26 +78,26 @@ def test_snapshot_is_immutable_and_downgrade_fails_closed(
     command.upgrade(config, TARGET_REVISION)
     engine = create_sqlite_engine(path)
     with Session(engine) as session:
-        customer = Customer(name="迁移匿名客户")
-        session.add(customer)
-        session.flush()
-        product = Product(
-            customer_id=customer.id,
-            product_code="P1-28B-MIGRATION",
-            customer_material_code="P1-28B-MIGRATION",
-            product_name="迁移匿名纸箱",
-            box_category="normal",
-        )
-        session.add(product)
-        session.flush()
-        order = Order(
-            order_number="TM20260809028",
-            customer_id=customer.id,
-            order_date=date(2026, 8, 9),
-            total_amount=Decimal("1"),
-        )
-        session.add(order)
-        session.flush()
+        customer_id = session.execute(
+            text("INSERT INTO customers(name) VALUES ('迁移匿名客户') RETURNING id")
+        ).scalar_one()
+        product_id = session.execute(
+            text(
+                """INSERT INTO products(
+                customer_id,product_code,customer_material_code,product_name,box_category
+                ) VALUES (:customer_id,'P1-28B-MIGRATION','P1-28B-MIGRATION',
+                '迁移匿名纸箱','normal') RETURNING id"""
+            ),
+            {"customer_id": customer_id},
+        ).scalar_one()
+        order_id = session.execute(
+            text(
+                """INSERT INTO sales_orders(
+                order_number,customer_id,order_date,total_amount
+                ) VALUES ('TM20260809028',:customer_id,'2026-08-09',1) RETURNING id"""
+            ),
+            {"customer_id": customer_id},
+        ).scalar_one()
         item_id = session.execute(
             text(
                 """INSERT INTO sales_order_items(
@@ -106,7 +106,7 @@ def test_snapshot_is_immutable_and_downgrade_fails_closed(
                 ) VALUES (:order_id,:product_id,1,1,1,'pending','迁移匿名纸箱')
                 RETURNING id"""
             ),
-            {"order_id": order.id, "product_id": product.id},
+            {"order_id": order_id, "product_id": product_id},
         ).scalar_one()
         session.execute(
             text(

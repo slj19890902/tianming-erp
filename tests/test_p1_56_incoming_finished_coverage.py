@@ -39,7 +39,7 @@ from app.services.production_workflow import (
 )
 
 pytestmark = pytest.mark.filterwarnings(
-    "ignore:The HMAC key is 20 bytes long:jwt.warnings.InsecureKeyLengthWarning"
+    "ignore:The HMAC key is 20 bytes long"
 )
 
 

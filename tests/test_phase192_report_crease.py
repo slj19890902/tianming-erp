@@ -31,6 +31,17 @@ from sqlalchemy.orm import sessionmaker, Session
 import app.models  # noqa: F401 – registers all ORM models / tables
 
 
+def _put_with_required_confirmation(client, url, payload, *, cookies):
+    """Exercise the current two-step master-data confirmation contract."""
+    response = client.put(url, json=payload, cookies=cookies)
+    if response.status_code != 409:
+        return response
+    detail = response.json().get("detail") or {}
+    assert detail.get("code") == "MASTER_CHANGE_CONFIRMATION_REQUIRED", response.text
+    confirmed_payload = {**payload, "confirmation_token": detail["confirmation_token"]}
+    return client.put(url, json=confirmed_payload, cookies=cookies)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Shared app fixture (module scope for speed)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -129,7 +140,40 @@ def customer_id(client, admin_cookies):
 
 
 @pytest.fixture(scope="module")
-def material_id(client, admin_cookies):
+def active_material_supplier(api_app):
+    """Seed the supplier master required by current material write guards."""
+    from app.models.supplier import Supplier
+    from app.services.supplier_master import normalize_supplier_identity
+
+    _, session_factory = api_app
+    supplier_name = "苏州嘉林亿"
+    normalized_name = normalize_supplier_identity(supplier_name)
+    with session_factory() as db:
+        supplier = (
+            db.query(Supplier)
+            .filter(Supplier.normalized_name == normalized_name)
+            .one_or_none()
+        )
+        if supplier is None:
+            supplier = Supplier(
+                standard_name=supplier_name,
+                normalized_name=normalized_name,
+                display_name="嘉林亿",
+                business_code="JLY-RC",
+                normalized_business_code="JLY-RC",
+                sort_order=10,
+                is_active=True,
+                version=1,
+            )
+            db.add(supplier)
+            db.commit()
+        else:
+            assert supplier.is_active is True
+        return supplier.id
+
+
+@pytest.fixture(scope="module")
+def material_id(client, admin_cookies, active_material_supplier):
     r = client.post(
         "/api/master/materials",
         json={"code": "A6D-B", "layer_count": 5, "flute_type": "AB",
@@ -236,8 +280,14 @@ class TestProductReportFields:
             "crease_left_mm": None,
             "crease_middle_mm": None,
             "crease_right_mm": None,
+            "expected_version": base["version"],
         }
-        r2 = client.put(f"/api/master/products/{product_id_a}", json=payload, cookies=admin_cookies)
+        r2 = _put_with_required_confirmation(
+            client,
+            f"/api/master/products/{product_id_a}",
+            payload,
+            cookies=admin_cookies,
+        )
         assert r2.status_code == 200, r2.text
         d = r2.json()
         assert d["crease_type"] == "净料"
@@ -253,7 +303,13 @@ class TestProductReportFields:
                              "height_mm", "box_category", "layer_count", "flute_type",
                              "sale_unit_price", "report_length_mm", "report_width_mm"}}
         payload["crease_type"] = "毛片"
-        r2 = client.put(f"/api/master/products/{product_id_a}", json=payload, cookies=admin_cookies)
+        payload["expected_version"] = base["version"]
+        r2 = _put_with_required_confirmation(
+            client,
+            f"/api/master/products/{product_id_a}",
+            payload,
+            cookies=admin_cookies,
+        )
         assert r2.status_code == 200, r2.text
         assert r2.json()["crease_type"] == "毛片"
 
@@ -266,7 +322,8 @@ class TestProductReportFields:
                              "height_mm", "box_category", "layer_count", "flute_type",
                              "sale_unit_price", "report_length_mm", "report_width_mm"}}
         payload.update(report_width_mm=600, crease_type="压线", crease_left_mm=162,
-                       crease_middle_mm=276, crease_right_mm=162)
+                       crease_middle_mm=276, crease_right_mm=162,
+                       expected_version=base["version"])
         r2 = client.put(f"/api/master/products/{product_id_a}", json=payload, cookies=admin_cookies)
         assert r2.status_code == 200, r2.text
         d = r2.json()
@@ -278,24 +335,35 @@ class TestProductReportFields:
         assert isinstance(d["crease_left_mm"], int)
 
     def test_sync_fields_report(self, client, admin_cookies, product_id_a):
+        current = client.get(
+            f"/api/master/products/{product_id_a}", cookies=admin_cookies
+        ).json()
         r = client.post(
             f"/api/master/products/{product_id_a}/sync-fields",
             json={"fields": {"report_length_mm": 1560, "report_width_mm": 610,
-                             "crease_type": "压线",
-                             "crease_left_mm": 162, "crease_middle_mm": 286,
-                             "crease_right_mm": 162}},
+                              "crease_type": "压线",
+                              "crease_left_mm": 162, "crease_middle_mm": 286,
+                              "crease_right_mm": 162},
+                  "expected_version": current["version"]},
             cookies=admin_cookies,
         )
         assert r.status_code == 200, r.text
         assert "report_length_mm" in r.json()["updated"]
-        assert "crease_type" in r.json()["updated"]
+        current = client.get(
+            f"/api/master/products/{product_id_a}", cookies=admin_cookies
+        ).json()
+        assert current["crease_type"] == "压线"
 
     def test_sync_fields_enforces_product_layer_flute_boundary(
         self, client, admin_cookies, product_id_a
     ):
+        current = client.get(
+            f"/api/master/products/{product_id_a}", cookies=admin_cookies
+        ).json()
         rejected = client.post(
             f"/api/master/products/{product_id_a}/sync-fields",
-            json={"fields": {"layer_count": 3, "flute_type": "AB"}},
+            json={"fields": {"layer_count": 3, "flute_type": "AB"},
+                  "expected_version": current["version"]},
             cookies=admin_cookies,
         )
         assert rejected.status_code == 400, rejected.text
@@ -308,7 +376,8 @@ class TestProductReportFields:
 
         accepted = client.post(
             f"/api/master/products/{product_id_a}/sync-fields",
-            json={"fields": {"layer_count": 5, "flute_type": "AB"}},
+            json={"fields": {"layer_count": 5, "flute_type": "AB"},
+                  "expected_version": unchanged["version"]},
             cookies=admin_cookies,
         )
         assert accepted.status_code == 200, accepted.text
@@ -501,8 +570,14 @@ class TestManualModifiedFlag:
                    if k in {"customer_id", "product_code", "customer_material_code",
                              "product_name", "material_id", "length_mm", "width_mm",
                              "height_mm", "box_category", "layer_count", "flute_type",
-                             "sale_unit_price"}}
-        r2 = client.put(f"/api/master/products/{product_id_b}", json=payload, cookies=admin_cookies)
+                              "sale_unit_price"}}
+        payload["expected_version"] = base["version"]
+        r2 = _put_with_required_confirmation(
+            client,
+            f"/api/master/products/{product_id_b}",
+            payload,
+            cookies=admin_cookies,
+        )
         assert r2.status_code == 200, r2.text
         assert r2.json()["manual_modified"] is True
         assert r2.json()["manual_modified_at"] is not None
@@ -513,7 +588,7 @@ class TestManualModifiedFlag:
         before = client.get(f"/api/master/products/{product_id_b}", cookies=admin_cookies).json()
         toggled = client.put(
             f"/api/master/products/{product_id_b}/status",
-            json={"is_active": False},
+            json={"is_active": False, "expected_version": before["version"]},
             cookies=admin_cookies,
         )
         assert toggled.status_code == 200, toggled.text
@@ -523,7 +598,7 @@ class TestManualModifiedFlag:
         # 恢复状态，避免影响其它用例
         restore = client.put(
             f"/api/master/products/{product_id_b}/status",
-            json={"is_active": True},
+            json={"is_active": True, "expected_version": after["version"]},
             cookies=admin_cookies,
         )
         assert restore.status_code == 200
@@ -535,7 +610,8 @@ class TestManualModifiedFlag:
         before = client.get(f"/api/master/products/{product_id_b}", cookies=admin_cookies).json()
         r = client.post(
             f"/api/master/products/{product_id_b}/sync-fields",
-            json={"fields": {"remark": "来自订单同步的备注"}},
+            json={"fields": {"remark": "来自订单同步的备注"},
+                  "expected_version": before["version"]},
             cookies=admin_cookies,
         )
         assert r.status_code == 200, r.text

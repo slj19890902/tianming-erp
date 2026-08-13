@@ -136,6 +136,7 @@ const vm = {{
     {{external_product_id:8,specification_summary:"L型50×50×5mm，长870mm",purchase_unit:"根"}},
   ],
   productMoldError:"", productPrintingPlateError:"", productProductionLabelError:"",
+  productPrintingWriteFields(){{return {{printing_plate_mode:"no_plate",printing_plate_product_id:null,printing_content_description:""}};}},
   validateProductCreaseAndReport(){{return null;}},
   serializeProductionProcesses(rows){{return (rows||[]).join(",");}},
   normalizeMmInteger(value){{return Number(value);}},

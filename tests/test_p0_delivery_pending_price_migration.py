@@ -8,6 +8,7 @@ import sqlite3
 import subprocess
 import sys
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.database import create_sqlite_engine
@@ -80,54 +81,38 @@ def test_pending_price_fact_blocks_downgrade_before_ddl(tmp_path: Path) -> None:
     _must(database, "upgrade", TARGET)
     engine = create_sqlite_engine(database)
     with Session(engine) as db:
-        customer = Customer(
-            name="迁移匿名客户",
-            payment_term_days=0,
-            statement_cycle_start_day=20,
-            credit_limit=Decimal("0"),
-            delivery_method="配送",
-            default_tax_rate=Decimal("0.13"),
-            status="active",
-            is_active=True,
-            version=1,
-        )
-        db.add(customer)
-        db.flush()
-        product = Product(
-            customer_id=customer.id,
-            product_code="P0-MIG-NOPRICE",
-            customer_material_code="P0-MIG-NOPRICE",
-            product_name="迁移待定价纸箱",
-            box_category="normal",
-            box_style="普通箱",
-        )
-        db.add(product)
-        db.flush()
-        delivery = Delivery(
-            delivery_number="P0-MIG-DELIVERY",
-            customer_id=customer.id,
-            delivery_date=date(2026, 8, 4),
-            source_mode="unordered_finished",
-            status="pending",
-            total_quantity=1,
-        )
-        db.add(delivery)
-        db.flush()
-        db.add(
-            DeliveryItem(
-                delivery_id=delivery.id,
-                source_type="unordered_finished",
-                product_id=product.id,
-                product_code_snapshot=product.product_code,
-                product_name_snapshot=product.product_name,
-                unit_snapshot="只",
-                unit_price_snapshot=None,
-                price_source="pending",
-                delivered_quantity=1,
-                ordered_quantity_snapshot=0,
-                order_remaining_snapshot=0,
-                over_delivery_quantity=0,
-            )
+        customer_id = db.execute(
+            text("INSERT INTO customers(name) VALUES ('迁移匿名客户') RETURNING id")
+        ).scalar_one()
+        product_id = db.execute(
+            text(
+                """INSERT INTO products(
+                customer_id,product_code,customer_material_code,product_name,box_category
+                ) VALUES (:customer_id,'P0-MIG-NOPRICE','P0-MIG-NOPRICE',
+                '迁移待定价纸箱','normal') RETURNING id"""
+            ),
+            {"customer_id": customer_id},
+        ).scalar_one()
+        delivery_id = db.execute(
+            text(
+                """INSERT INTO sales_deliveries(
+                delivery_number,customer_id,delivery_date,source_mode,status,total_quantity
+                ) VALUES ('P0-MIG-DELIVERY',:customer_id,'2026-08-04',
+                'unordered_finished','pending',1) RETURNING id"""
+            ),
+            {"customer_id": customer_id},
+        ).scalar_one()
+        db.execute(
+            text(
+                """INSERT INTO sales_delivery_items(
+                delivery_id,source_type,product_id,product_code_snapshot,
+                product_name_snapshot,unit_snapshot,unit_price_snapshot,price_source,
+                delivered_quantity,ordered_quantity_snapshot,order_remaining_snapshot,
+                over_delivery_quantity
+                ) VALUES (:delivery_id,'unordered_finished',:product_id,
+                'P0-MIG-NOPRICE','迁移待定价纸箱','只',NULL,'pending',1,0,0,0)"""
+            ),
+            {"delivery_id": delivery_id, "product_id": product_id},
         )
         db.commit()
     engine.dispose()

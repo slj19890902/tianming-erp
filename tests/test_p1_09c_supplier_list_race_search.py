@@ -54,6 +54,7 @@ const vm = {{
   materialSuppliers: [],
   supplierLoading: false,
   supplierError: "",
+  hasPermission(permission) {{ return permission === "products.view"; }},
   get activeSupplierNames() {{ return this.suppliers.filter(row => row.is_active !== false).map(row => row.standard_name); }},
   beginLatestRequest(key) {{
     latestRequestControllers.get(key)?.abort();
@@ -109,7 +110,16 @@ const vm = {{
     business_code: "NEW",
     aliases: ["旧供应商简称"],
     sort_order: 1
-  }}]
+  }}],
+  supplierHasCorrugated(row) {{
+    const categories = Array.isArray(row?.supply_categories) && row.supply_categories.length
+      ? row.supply_categories
+      : ["corrugated_board"];
+    return categories.includes("corrugated_board");
+  }},
+  supplierHasPackaging(row) {{
+    return (row?.supply_categories || []).some(code => code !== "corrugated_board");
+  }}
 }};
 vm.filteredSuppliers = new Function({json.dumps(body, ensure_ascii=False)}).bind(vm);
 const rows = vm.filteredSuppliers();

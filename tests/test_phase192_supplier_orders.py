@@ -180,6 +180,7 @@ def test_replenishment_item_preserves_seven_layer_material(
                 crease_type="净料",
                 quantity=10,
             ),
+            source_type="manual",
         )
         assert item.material_code_snapshot == "A12345B"
         assert item.normalized_material_code == "A12345B"
@@ -213,6 +214,7 @@ def test_replenishment_item_rejects_invalid_seven_layer_flute(
                     crease_type="净料",
                     quantity=10,
                 ),
+                source_type="manual",
             )
         detail = str(exc_info.value)
         assert "楞型" in detail
@@ -243,10 +245,13 @@ class TestSupplierOrders:
         )
         assert r.status_code == 400
 
-    def test_create_supplier_order(self, client, admin_cookies, session_factory):
+    def test_create_supplier_order(
+        self, client, admin_cookies, session_factory, seed_supplier_master
+    ):
         global _created_id, _created_number
         from app.models.material import Material
 
+        seed_supplier_master(session_factory, "天意纸板厂", "TY-RC")
         db = session_factory()
         try:
             material = Material(
@@ -373,9 +378,11 @@ def test_supplier_order_preserves_seven_layer_code_and_flute(
     client,
     admin_cookies,
     session_factory,
+    seed_supplier_master,
 ):
     from app.models.material import Material
 
+    seed_supplier_master(session_factory, "七层供应商", "SEVEN-RC")
     with session_factory() as db:
         material = Material(
             code="A12345B",

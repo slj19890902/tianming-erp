@@ -32,7 +32,8 @@ def test_order_edit_contains_common_box_fields_and_total_costs():
         "总预估毛利",
     ):
         assert label in INDEX
-    assert "保存后将同步更新该常用箱资料" in INDEX
+    assert "修改材质并保存时会自动同步关联常用箱" in INDEX
+    assert "同步本页其他常用箱资料" in INDEX
 
 
 def test_requisition_ui_prioritizes_supplier_and_purchase_quantity():
@@ -44,7 +45,7 @@ def test_requisition_ui_prioritizes_supplier_and_purchase_quantity():
     assert "purchase-qty-cell" in INDEX
     assert "pieces-per-box-cell" in INDEX
     assert "{{ m.pieces_per_box }}片" in INDEX
-    assert "{{ line.pieces_per_box }}片" in INDEX
+    assert "每箱 {{ line.source_items?.[0]?.pieces_per_box || 1 }} 片" in INDEX
     assert "m.material_display" in INDEX
     assert "line.material_display" in INDEX
 

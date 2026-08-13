@@ -406,7 +406,11 @@ def test_delivery_variance_ui_separates_return_difference_and_authorized_over_de
     assert 'value="accept_over"' in INDEX
     assert "validateReceiptForm" in INDEX
     assert "编辑回单" in INDEX
-    assert '@click="openReceipt(row)"' in INDEX
+    primary_delegate = INDEX[
+        INDEX.index("runDeliveryPrimaryRowAction(row) {") :
+        INDEX.index("deliveryHasSecondaryRowActions(row) {")
+    ]
+    assert "return this.openReceipt(row)" in primary_delegate
     assert "this.pages.deliveries = 1;" in INDEX
     assert "短收结单必须填写原因" not in INDEX
     assert "短收结单必须填写原因" not in INCOMING

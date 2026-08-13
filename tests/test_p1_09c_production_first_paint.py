@@ -32,11 +32,13 @@ def _run_node(source: str, tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_production_cold_entry_requests_only_pending_tasks() -> None:
+def test_production_cold_entry_requests_only_current_action_queues() -> None:
     production = _block("async loadProduction()", "async ensureProductionLocations")
 
     assert 'params: { status: "pending", page, page_size: this.pageSize }' in production
-    assert "return this.loadProductionPage(this.pages.productionPending || 1);" in production
+    assert "this.loadProductionPage(this.pages.productionPending || 1)" in production
+    assert "this.loadProductionWaitingLabelPage(this.pages.productionWaitingLabels || 1)" in production
+    assert 'status:"waiting_material"' in production
     assert "/api/production/temporary-locations" not in production
     assert "loadProductionHistory" not in production
     assert 'this.beginLatestRequest("production:pending")' in production
@@ -63,7 +65,7 @@ def test_production_pending_latest_page_wins_and_failure_keeps_last_good_rows(
 ) -> None:
     body = _method_body(
         "async loadProductionPage(requestedPage = 1) {",
-        "async ensureProductionLocations",
+        "productionLabelSnapshot(row) {",
     )
     script = f"""
 const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;

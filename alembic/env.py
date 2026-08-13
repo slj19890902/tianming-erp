@@ -13,7 +13,10 @@ config = context.config
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # Alembic shares this interpreter with the regression suite.  Keep the
+    # application's existing loggers alive instead of letting fileConfig's
+    # default disable them for every test collected after a migration check.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 settings = load_settings()
 config.set_main_option("sqlalchemy.url", settings.database_url)

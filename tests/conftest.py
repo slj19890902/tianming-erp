@@ -14,6 +14,8 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -130,6 +132,54 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
 def isolated_database_path(tmp_path: Path) -> Path:
     """Return a per-test SQLite path for tests that need a real file."""
     return tmp_path / "erp-test.sqlite3"
+
+
+@pytest.fixture(scope="session")
+def current_alembic_head() -> str:
+    """Return the repository's unique Alembic head for release-chain tests."""
+    config = Config(str(PROJECT_ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
+    heads = ScriptDirectory.from_config(config).get_heads()
+    assert len(heads) == 1, f"expected one Alembic head, got {heads}"
+    return heads[0]
+
+
+@pytest.fixture(scope="session")
+def seed_supplier_master():
+    """Return an explicit helper for legacy tests that require supplier facts.
+
+    This is intentionally not autouse: tests that verify missing suppliers must
+    continue to start without hidden master data.
+    """
+    from app.models.supplier import Supplier
+    from app.services.supplier_master import normalize_supplier_identity
+
+    def seed(session_factory, name: str, business_code: str) -> int:
+        normalized_name = normalize_supplier_identity(name)
+        normalized_code = business_code.strip().upper()
+        with session_factory() as db:
+            supplier = (
+                db.query(Supplier)
+                .filter(Supplier.normalized_name == normalized_name)
+                .one_or_none()
+            )
+            if supplier is None:
+                supplier = Supplier(
+                    standard_name=name,
+                    normalized_name=normalized_name,
+                    display_name=name,
+                    business_code=business_code,
+                    normalized_business_code=normalized_code,
+                    is_active=True,
+                    version=1,
+                )
+                db.add(supplier)
+                db.commit()
+            else:
+                assert supplier.is_active is True
+            return supplier.id
+
+    return seed
 
 
 @pytest.fixture

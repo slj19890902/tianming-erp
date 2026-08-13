@@ -76,7 +76,7 @@ const nodes = {{
   emptyState: {{hidden:true}}, errorMessage: {{textContent:""}}, authNotice: {{hidden:true}}
 }};
 const $ = id => nodes[id];
-const state = {{pending:[], expandedIds:new Set()}};
+const state = {{pending:[], expandedIds:new Set(), sessionIdentity:{{user_id:7,auth_version:1}}}};
 const calls = [];
 function api(url, options) {{
   return new Promise((resolve, reject) => calls.push({{resolve, reject, signal:options.signal}}));
@@ -88,11 +88,11 @@ function toChineseMessage(error) {{ return String(error?.message || error); }}
 (async () => {{
   const first = loadPending();
   const second = loadPending();
-  calls[0].resolve({{items:[{{item_id:1, remaining_quantity:1}}]}});
+  calls[0].resolve({{items:[{{item_id:1, remaining_quantity:1}}],session_identity_header:"7:1"}});
   await first;
   if (nodes.loadingState.hidden) throw new Error("older request hid the active loading state");
   if (state.pending.length) throw new Error("older response overwrote current data");
-  calls[1].resolve({{items:[{{item_id:2, remaining_quantity:2}}]}});
+  calls[1].resolve({{items:[{{item_id:2, remaining_quantity:2}}],session_identity_header:"7:1"}});
   await second;
   if (!nodes.loadingState.hidden) throw new Error("latest request did not clear loading state");
   if (state.pending[0]?.item_id !== 2) throw new Error("latest response was not retained");

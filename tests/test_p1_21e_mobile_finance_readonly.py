@@ -43,9 +43,11 @@ def test_dashboard_backend_remains_permission_and_customer_scoped() -> None:
     assert not has_permission(finance_user, "warehouse.view")
 
 
-def test_mobile_finance_scope_only_adds_explicit_logout_post() -> None:
-    assert MOBILE.count('method: "POST"') == 1
+def test_mobile_finance_scope_keeps_mutations_outside_finance_pages() -> None:
+    assert MOBILE.count('method: "POST"') == 2
     assert 'fetch("/api/auth/logout"' in MOBILE
+    assert 'apiPost("/api/finance' not in MOBILE
+    assert 'apiPost("/api/dashboard' not in MOBILE
     assert 'method: "PUT"' not in MOBILE
     assert 'method: "PATCH"' not in MOBILE
     assert 'method: "DELETE"' not in MOBILE

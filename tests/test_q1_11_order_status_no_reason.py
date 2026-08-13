@@ -35,4 +35,6 @@ def test_status_backend_keeps_manual_targets_locks_and_automatic_audit() -> None
     assert "_ensure_no_production_completion_facts" in ORDERS
     assert "_release_order_reservations" in ORDERS
     assert 'action_code="order.status_change"' in ORDERS
-    assert 'details={"before": before, "after": target, "remark": remark}' in ORDERS
+    audit = ORDERS.split('action_code="order.status_change"', 1)[1].split("db.commit()", 1)[0]
+    for marker in ('"before": before', '"after": target', '"remark": remark'):
+        assert marker in audit

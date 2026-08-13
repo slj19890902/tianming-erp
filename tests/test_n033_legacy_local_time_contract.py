@@ -21,6 +21,11 @@ def test_product_legacy_local_timestamps_keep_beijing_offset(monkeypatch):
         drawings=[],
         material=None,
         mold_tool=None,
+        printing_plate_1=None,
+        printing_plate_2=None,
+        printing_plate_3=None,
+        external_packaging_candidate_snapshot_json=None,
+        external_packaging_specification_json=None,
     )
     monkeypatch.setattr(products, "beijing_now_naive", lambda: legacy_local)
 

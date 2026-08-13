@@ -385,6 +385,10 @@ def test_config_fails_before_creating_an_outside_secret(
     outside = tmp_path / "outside" / "stolen-secret.key"
     monkeypatch.setenv("ERP_SECRET_KEY_FILE", str(outside))
     monkeypatch.delenv("ERP_SECRET_KEY", raising=False)
+    # Full-suite predecessors may already have imported this module. Exercise
+    # the startup path itself rather than accepting the cached module object;
+    # monkeypatch restores the prior cache entry after this test.
+    monkeypatch.delitem(sys.modules, "app.core.config", raising=False)
 
     with pytest.raises(isolation.UatIsolationError, match="escapes UAT root"):
         import importlib

@@ -151,6 +151,7 @@
       locations: [],
       user: null,
       permissions: [],
+      sessionIdentity: null,
       revertingItemId: null,
       busyItemIds: new Set(),
       receiveIdempotencyKeys: new Map(),
@@ -158,12 +159,57 @@
       expandedIds: new Set(),
       authGeneration: 0,
       productionDetailRouteId: null,
+      initialContentReported: false,
+      performanceRequests: [],
     };
 
     const $ = (id) => document.getElementById(id);
     const requestControllers = new Map();
     const hasPermission = (code) => state.user?.role === "admin" || state.permissions.includes(code);
     const canOperate = () => hasPermission("incoming.execute");
+    const incomingPerformancePrefix = "tm.mobile.incoming.";
+
+    function markIncomingPerformance(stage) {
+      if (!globalThis.performance || typeof globalThis.performance.mark !== "function") return;
+      const name = `${incomingPerformancePrefix}${stage}`;
+      globalThis.performance.clearMarks?.(name);
+      globalThis.performance.mark(name);
+    }
+
+    function notifyIncomingPerformance(stage, extra = {}) {
+      markIncomingPerformance(stage);
+      if (!window.parent || window.parent === window || typeof window.parent.postMessage !== "function") return;
+      window.parent.postMessage({
+        type: "tm-mobile-incoming-performance",
+        stage,
+        ...extra,
+      }, window.location.origin);
+    }
+
+    function recordIncomingRequestTiming(endpointAlias, response, startedAt, serverTiming, requestId) {
+      if (!endpointAlias) return;
+      const duration = globalThis.performance && typeof globalThis.performance.now === "function"
+        ? globalThis.performance.now() - startedAt
+        : 0;
+      state.performanceRequests.push({
+        endpoint_alias: String(endpointAlias).slice(0, 32),
+        status: Number(response.status || 0),
+        duration_ms: Math.round(Math.max(0, duration) * 10) / 10,
+        server_timing: String(serverTiming || "").slice(0, 256),
+        request_id: String(requestId || "").slice(0, 128),
+      });
+      state.performanceRequests = state.performanceRequests.slice(-8);
+    }
+
+    function reportIncomingContentReady() {
+      if (state.initialContentReported) return;
+      state.initialContentReported = true;
+      window.requestAnimationFrame(() => {
+        notifyIncomingPerformance("content-ready", {
+          requests: state.performanceRequests.map(item => ({...item})),
+        });
+      });
+    }
 
     function resetAuthenticatedIncomingState({abortRequests = false} = {}) {
       if (abortRequests) {
@@ -191,6 +237,9 @@
       state.revertingItemId = null;
       state.revertSubmitting = false;
       state.expandedIds = new Set();
+      state.sessionIdentity = null;
+      state.initialContentReported = false;
+      state.performanceRequests = [];
       $("pendingCount").textContent = "0";
       $("receivedCount").textContent = "0";
       $("cardList").innerHTML = "";
@@ -272,9 +321,12 @@
       return "";
     }
 
-    async function api(url, options = {}) {
+    async function api(url, options = {}, endpointAlias = "") {
       // v0.23.0 P0-2：来料相关接口一律禁止缓存，避免手机浏览器复用上一次的旧数据。
       const bustUrl = url.includes("?") ? `${url}&_=${Date.now()}` : `${url}?_=${Date.now()}`;
+      const startedAt = globalThis.performance && typeof globalThis.performance.now === "function"
+        ? globalThis.performance.now()
+        : 0;
       let response;
       try {
         response = await fetch(bustUrl, {
@@ -296,11 +348,28 @@
           data = {};
         }
       }
+      const responseSessionIdentity = response.headers && typeof response.headers.get === "function"
+        ? String(response.headers.get("X-ERP-Session-Identity") || "")
+        : "";
+      if (responseSessionIdentity) data.session_identity_header = responseSessionIdentity;
+      if (typeof recordIncomingRequestTiming === "function") {
+        const serverTiming = response.headers && typeof response.headers.get === "function"
+          ? response.headers.get("Server-Timing")
+          : "";
+        const requestId = response.headers && typeof response.headers.get === "function"
+          ? response.headers.get("X-Request-ID")
+          : "";
+        recordIncomingRequestTiming(endpointAlias, response, startedAt, serverTiming, requestId);
+      }
+      if (response.ok && endpointAlias === "pending-initial" && typeof notifyIncomingPerformance === "function") {
+        notifyIncomingPerformance("data-ready");
+      }
       if (response.status === 401) {
         resetAuthenticatedIncomingState({abortRequests: true});
         state.authGeneration += 1;
         state.user = null;
         state.permissions = [];
+        state.sessionIdentity = null;
         $("authNotice").hidden = false;
         const authError = new Error("登录已失效，请重新登录");
         authError.status = 401;
@@ -321,13 +390,14 @@
     async function checkAuth() {
       try {
         const previousUserId = state.user?.id ?? null;
-        const data = await api("/api/auth/me");
+        const data = await api("/api/auth/me", {}, "auth-initial");
         if (previousUserId !== null && String(previousUserId) !== String(data.user?.id ?? "")) {
           resetAuthenticatedIncomingState({abortRequests: true});
         }
         state.authGeneration += 1;
         state.user = data.user;
         state.permissions = data.permissions || [];
+        state.sessionIdentity = data.session_identity || null;
         if (!hasPermission("incoming.view")) {
           resetAuthenticatedIncomingState({abortRequests: true});
           $("authNotice").textContent = "当前账号没有来料入库查看权限，请联系管理员。";
@@ -336,6 +406,9 @@
         }
         $("userLabel").textContent = `${data.user.real_name} · ${data.user.role}`;
         $("authNotice").hidden = true;
+        if (!state.initialContentReported && typeof notifyIncomingPerformance === "function") {
+          notifyIncomingPerformance("auth-ready");
+        }
         return true;
       } catch (error) {
         $("userLabel").textContent = "未登录";
@@ -583,6 +656,7 @@
 
     async function loadPending({page = state.pendingPage || 1} = {}) {
       const options = arguments[0] || {};
+      const authorizationPromise = options.authorizationPromise || null;
       const query = Object.prototype.hasOwnProperty.call(options, "query")
         ? options.query
         : state.pendingAppliedQuery;
@@ -593,8 +667,8 @@
       const pageSize = Math.max(1, Number(state.pendingPageSize) || 20);
       const requestedQuery = String(query || "").trim();
       const requestedDimensionMode = ["any", "length", "width"].includes(dimensionMode) ? dimensionMode : "any";
-      const authGeneration = Number(state.authGeneration || 0);
-      const userId = String(state.user?.id ?? "");
+      let authGeneration = Number(state.authGeneration || 0);
+      let userId = String(state.user?.id ?? "");
       const controller = beginLatestRequest("incoming:pending");
       state.pendingRetryPage = requestedPage;
       state.pendingLoading = true;
@@ -613,7 +687,36 @@
           params.set("q", requestedQuery);
           params.set("dimension_mode", requestedDimensionMode);
         }
-        const pending = await api(`${endpoint}?${params.toString()}`, {signal: controller.signal});
+        const pendingPromise = api(
+          `${endpoint}?${params.toString()}`,
+          {signal: controller.signal},
+          authorizationPromise ? "pending-initial" : (requestedQuery ? "pending-search" : "pending"),
+        );
+        let pending;
+        if (authorizationPromise) {
+          const [authorizationResult, pendingResult] = await Promise.allSettled([authorizationPromise, pendingPromise]);
+          if (!isLatestRequest("incoming:pending", controller)) return false;
+          if (authorizationResult.status !== "fulfilled" || authorizationResult.value !== true) return false;
+          authGeneration = Number(state.authGeneration || 0);
+          userId = String(state.user?.id ?? "");
+          if (pendingResult.status === "rejected") throw pendingResult.reason;
+          pending = pendingResult.value;
+        } else {
+          pending = await pendingPromise;
+        }
+        const authIdentity = state.sessionIdentity;
+        const pendingIdentity = String(pending.session_identity_header || "");
+        const expectedIdentity = `${authIdentity?.user_id ?? ""}:${authIdentity?.auth_version ?? ""}`;
+        if (!authIdentity || !pendingIdentity || pendingIdentity !== expectedIdentity) {
+          resetAuthenticatedIncomingState({abortRequests: true});
+          state.authGeneration += 1;
+          state.user = null;
+          state.permissions = [];
+          state.sessionIdentity = null;
+          const identityError = new Error("登录状态已变化，请重新加载后继续");
+          identityError.status = 409;
+          throw identityError;
+        }
         if (!isLatestRequest("incoming:pending", controller)) return false;
         if (Number(state.authGeneration || 0) !== authGeneration || String(state.user?.id ?? "") !== userId) return false;
         const previousPage = Number(state.pendingPage || 1);
@@ -636,6 +739,7 @@
         state.pendingError = "";
         $("errorState").hidden = true;
         render();
+        if (!state.initialContentReported && typeof reportIncomingContentReady === "function") reportIncomingContentReady();
         return true;
       } catch (error) {
         if (error?.name === "AbortError" || !isLatestRequest("incoming:pending", controller)) return false;
@@ -1050,11 +1154,21 @@
     $("closeDrawingViewer").addEventListener("click", closeDrawing);
     $("closeDrawingViewerBottom").addEventListener("click", closeDrawing);
     $("closeProductionDetail").addEventListener("click", closeProductionDetail);
-
+    if (typeof window.addEventListener === "function") {
+      window.addEventListener("message", (event) => {
+        if (event.origin !== window.location.origin || event.source !== window.parent) return;
+        if (event.data?.type !== "tm-mobile-incoming-performance-resume" || !state.initialContentReported) return;
+        window.requestAnimationFrame(() => notifyIncomingPerformance("content-ready", {requests: []}));
+      });
+    }
     // v0.23.0 P0-2：初始加载统一走 init()，扫码/刷新/重新打开都强制重新校验登录 +
     // 重新拉取数据，不依赖任何上一次渲染留下的 DOM/状态。
     async function init() {
-      if (await checkAuth()) await loadData();
+      notifyIncomingPerformance("document-ready");
+      markIncomingPerformance("auth-start");
+      markIncomingPerformance("data-start");
+      const authorizationPromise = checkAuth();
+      await loadPending({page: state.pendingPage, authorizationPromise});
     }
     init();
   </script>

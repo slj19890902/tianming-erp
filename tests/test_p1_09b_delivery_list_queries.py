@@ -4,7 +4,7 @@ from sqlalchemy import event
 from fastapi.testclient import TestClient
 
 
-pytest_plugins = ("test_n029_production_integration",)
+from test_n029_production_integration import n029_delivery_app as n029_delivery_app
 
 
 def _login(client: TestClient) -> None:

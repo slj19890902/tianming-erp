@@ -18,6 +18,7 @@ def n028_customer_scope_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from app.api.auth import router as auth_router
     from app.api.customers import router as customers_router
     from app.api.deps import get_db
+    from app.api.incoming import router as incoming_router
     from app.api.orders import router as orders_router
     from app.api.products import router as products_router
     from app.api.requisition import router as requisition_router
@@ -156,6 +157,18 @@ def n028_customer_scope_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
                     granted_by=admin.id,
                 ),
                 UserPermissionOverride(
+                    user_id=sales.id,
+                    permission_code="incoming.view",
+                    is_allowed=True,
+                    granted_by=admin.id,
+                ),
+                UserPermissionOverride(
+                    user_id=sales.id,
+                    permission_code="incoming.execute",
+                    is_allowed=True,
+                    granted_by=admin.id,
+                ),
+                UserPermissionOverride(
                     user_id=empty_sales.id,
                     permission_code="requisition.view",
                     is_allowed=True,
@@ -206,6 +219,7 @@ def n028_customer_scope_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     app.include_router(products_router, prefix="/api/master/products")
     app.include_router(orders_router, prefix="/api/orders")
     app.include_router(requisition_router, prefix="/api/requisition")
+    app.include_router(incoming_router, prefix="/api/incoming")
     app.include_router(warehouse_router, prefix="/api/warehouse")
 
     def override_get_db() -> Generator[Session, None, None]:
@@ -920,7 +934,11 @@ def test_warehouse_insights_and_direct_lot_access_are_customer_scoped(
     n028_customer_scope_app,
 ) -> None:
     from app.models.product import Product
-    from app.models.warehouse_inventory import WarehouseLocation
+    from app.models.warehouse_inventory import (
+        WarehouseArea,
+        WarehouseFloor,
+        WarehouseLocation,
+    )
     from app.services.warehouse_inventory import manual_finished_in
 
     app, ids, factory = n028_customer_scope_app
@@ -1380,24 +1398,75 @@ def test_stock_replenishment_full_chain_is_customer_scoped(
         StockReplenishmentOrder,
         StockReplenishmentOrderItem,
     )
-    from app.models.warehouse_inventory import WarehouseLocation
+    from app.models.warehouse_inventory import (
+        WarehouseArea,
+        WarehouseFloor,
+        WarehouseLocation,
+    )
 
     app, ids, factory = n028_customer_scope_app
     with factory() as db:
         products = {
             row.customer_id: row for row in db.scalars(select(Product)).all()
         }
-        finished_location = WarehouseLocation(
-            location_code="N028-STOCK-FG",
-            location_name="N028 stock finished",
-            warehouse_type="finished",
-        )
         semi_location = WarehouseLocation(
             location_code="N028-STOCK-SI",
             location_name="N028 stock semi",
             warehouse_type="semi_finished",
         )
-        db.add_all([finished_location, semi_location])
+        floor1 = WarehouseFloor(
+            floor_code="1F",
+            floor_name="Floor 1",
+            floor_number=1,
+            construction_status="enabled",
+        )
+        db.add(floor1)
+        db.flush()
+        db.add(
+            WarehouseArea(
+                floor_id=floor1.id,
+                area_code="A1",
+                area_name="A1 raw-material staging",
+                construction_status="enabled",
+            )
+        )
+        floor3 = WarehouseFloor(
+            floor_code="3F",
+            floor_name="Floor 3",
+            floor_number=3,
+            construction_status="enabled",
+        )
+        db.add(floor3)
+        db.flush()
+        db.add(
+            WarehouseArea(
+                floor_id=floor3.id,
+                area_code="FG",
+                area_name="Finished goods",
+                construction_status="enabled",
+            )
+        )
+        finished_location = WarehouseLocation(
+            location_code="N028-STOCK-FG",
+            location_name="N028 stock finished",
+            warehouse_type="finished",
+            warehouse_floor=3,
+            area_code="FG",
+            storage_type="ground",
+            placement_status="placed",
+            source_version="N028-test",
+        )
+        raw_staging = WarehouseLocation(
+            location_code="1FA",
+            location_name="Floor 1 A1 raw-material staging",
+            warehouse_type="semi_finished",
+            warehouse_floor=1,
+            area_code="A1",
+            storage_type="temporary_aisle",
+            placement_status="placed",
+            source_version="P1-36L",
+        )
+        db.add_all([finished_location, semi_location, raw_staging])
         db.commit()
         product_ids = {
             customer_id: product.id for customer_id, product in products.items()
@@ -1553,8 +1622,19 @@ def test_stock_replenishment_full_chain_is_customer_scoped(
         stocked_a = client.post(
             f"/api/requisition/stock-replenishment/orders/{order_ids['A']}/stock"
         )
-        assert stocked_a.status_code == 200, stocked_a.text
-        assert stocked_a.json()["status"] == "stocked"
+        assert stocked_a.status_code == 409, stocked_a.text
+        replenishment = client.get(
+            f"/api/requisition/stock-replenishment/orders/{order_ids['A']}"
+        ).json()
+        replenishment_item_id = replenishment["items"][0]["id"]
+        received_a = client.put(
+            f"/api/incoming/receive/sr{replenishment_item_id}",
+            json={
+                "received_quantity": 2,
+                "idempotency_key": "n028-scoped-replenishment-receipt",
+            },
+        )
+        assert received_a.status_code == 200, received_a.text
         assert client.post(
             "/api/requisition/stock-replenishment/orders",
             json=order_payloads["B"],

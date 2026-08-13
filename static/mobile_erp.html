@@ -55,7 +55,7 @@
     .status.error { border-color: #efb2ad; background: var(--red-soft); color: #861c15; }
     .status.empty { background: #f8faf9; color: var(--muted); }
     .retry, .small-btn {
-      min-height: 36px; padding: 6px 10px; border: 1px solid var(--line);
+      min-height: 44px; padding: 8px 10px; border: 1px solid var(--line);
       border-radius: 9px; background: #fff; color: var(--ink); font-weight: 800;
     }
     .metric-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
@@ -68,6 +68,19 @@
     .entry-card span { display: block; margin-top: 7px; color: var(--muted); font-size: 12px; line-height: 1.5; }
     .entry-card em { display: block; margin-top: 7px; color: var(--blue); font-size: 11px; font-style: normal; font-weight: 900; }
     .embedded-entry { width: 100%; min-height: calc(100vh - 150px); border: 0; border-radius: 12px; background: #fff; }
+    body.incoming-frame-active { height: 100vh; height: 100dvh; overflow: hidden; }
+    body.incoming-frame-active .app {
+      height: 100vh; height: 100dvh; min-height: 0; display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+    body.incoming-frame-active main { min-height: 0; overflow: hidden; }
+    body.incoming-frame-active #incomingPage {
+      height: 100%; min-height: 0; display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+    }
+    body.incoming-frame-active #incomingFrame {
+      display: block; width: 100%; height: 100%; min-height: 0;
+    }
     .searchbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-bottom: 10px; }
     .searchbar input { width: 100%; min-height: 46px; padding: 9px 11px; border: 1px solid #aabbb2; border-radius: 10px; background: #fff; }
     .search-btn { min-height: 46px; padding: 8px 14px; border: 0; border-radius: 10px; background: var(--green); color: #fff; font-weight: 900; }
@@ -99,13 +112,13 @@
     .location-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 7px; }
     .location strong { overflow-wrap: anywhere; }
     .location p { margin: 5px 0 0; }
-    .map-btn { flex: 0 0 auto; min-height: 34px; padding: 5px 8px; border: 1px solid var(--blue); border-radius: 8px; background: var(--blue-soft); color: var(--blue); font-weight: 900; }
+    .map-btn { flex: 0 0 auto; min-height: 44px; padding: 7px 9px; border: 1px solid var(--blue); border-radius: 8px; background: var(--blue-soft); color: var(--blue); font-weight: 900; }
     .tag { display: inline-flex; margin-top: 5px; padding: 3px 7px; border-radius: 99px; font-size: 10px; font-weight: 900; }
     .tag.mapped { background: var(--green-soft); color: var(--green); }
     .tag.unplaced { background: var(--orange-soft); color: var(--orange); }
     .tag.ledger_only { background: #edf0ee; color: #54615b; }
     .periods { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-bottom: 10px; }
-    .period-btn { min-height: 38px; padding: 5px 3px; border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--muted); font-weight: 900; }
+    .period-btn { min-height: 44px; padding: 7px 3px; border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--muted); font-weight: 900; }
     .period-btn.active { border-color: var(--green); background: var(--green-soft); color: var(--green); }
     .station-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin-bottom: 10px; }
     .station-btn { min-height: 44px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--muted); font-weight: 900; }
@@ -132,7 +145,7 @@
     .task-fact { padding: 7px; border-radius: 8px; background: #fff; }
     .task-fact strong { color: var(--green); font-size: 16px; }
     .task-fact span { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; }
-    .drawing-btn { display: inline-flex; align-items: center; min-height: 34px; margin-top: 8px; padding: 5px 9px; border: 1px solid var(--blue); border-radius: 8px; background: var(--blue-soft); color: var(--blue); font-weight: 900; }
+    .drawing-btn { display: inline-flex; align-items: center; min-height: 44px; margin-top: 8px; padding: 7px 9px; border: 1px solid var(--blue); border-radius: 8px; background: var(--blue-soft); color: var(--blue); font-weight: 900; }
     .bottom-nav {
       position: fixed; right: 0; bottom: 0; left: 0; z-index: 12;
       padding: 7px 10px calc(7px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: rgba(255, 255, 255, .98);
@@ -366,9 +379,23 @@
         scrollByPage: new Map(),
         loadedFrames: new Set(),
         initializing: false,
+        incomingPerformanceActive: false,
+        incomingPerformanceRequests: [],
       };
       const mobilePages = new Set(["home", "incoming", "warehouse", "production", "pre_delivery"]);
       const byId = id => document.getElementById(id);
+      const incomingPerformancePrefix = "tm.mobile.incoming.";
+      const incomingPerformanceStages = new Set([
+        "entry", "shell-ready", "document-ready", "auth-ready", "data-ready", "content-ready",
+      ]);
+      const incomingPerformanceMeasures = [
+        ["entry-to-shell", "entry", "shell-ready"],
+        ["shell-to-document", "shell-ready", "document-ready"],
+        ["document-to-auth", "document-ready", "auth-ready"],
+        ["document-to-data", "document-ready", "data-ready"],
+        ["data-to-content", "data-ready", "content-ready"],
+        ["entry-to-content", "entry", "content-ready"],
+      ];
 
       function node(tag, className, text) {
         const element = document.createElement(tag);
@@ -376,6 +403,74 @@
         if (text !== undefined) element.textContent = String(text);
         return element;
       }
+
+      function markIncomingPerformance(stage) {
+        if (!state.incomingPerformanceActive || !incomingPerformanceStages.has(stage)) return false;
+        if (!globalThis.performance || typeof globalThis.performance.mark !== "function") return false;
+        const name = `${incomingPerformancePrefix}${stage}`;
+        if (globalThis.performance.getEntriesByName?.(name).length) return false;
+        globalThis.performance.mark(name);
+        return true;
+      }
+
+      function measureIncomingPerformance() {
+        if (!globalThis.performance || typeof globalThis.performance.measure !== "function") return;
+        incomingPerformanceMeasures.forEach(([measure, start, end]) => {
+          const startName = `${incomingPerformancePrefix}${start}`;
+          const endName = `${incomingPerformancePrefix}${end}`;
+          if (!globalThis.performance.getEntriesByName(startName).length || !globalThis.performance.getEntriesByName(endName).length) return;
+          const measureName = `${incomingPerformancePrefix}${measure}`;
+          globalThis.performance.clearMeasures?.(measureName);
+          try { globalThis.performance.measure(measureName, startName, endName); } catch (_error) { /* diagnostic only */ }
+        });
+      }
+
+      function startIncomingPerformance() {
+        incomingPerformanceStages.forEach(stage => globalThis.performance?.clearMarks?.(`${incomingPerformancePrefix}${stage}`));
+        incomingPerformanceMeasures.forEach(([measure]) => globalThis.performance?.clearMeasures?.(`${incomingPerformancePrefix}${measure}`));
+        state.incomingPerformanceRequests = [];
+        state.incomingPerformanceActive = true;
+        markIncomingPerformance("entry");
+        if (state.shell) markIncomingPerformance("shell-ready");
+      }
+
+      function sanitizedIncomingRequests(value) {
+        if (!Array.isArray(value)) return [];
+        const aliases = new Set(["auth-initial", "pending-initial", "pending", "pending-search"]);
+        return value.slice(-8).map(item => {
+          const alias = String(item?.endpoint_alias || "");
+          const status = Number(item?.status || 0);
+          const duration = Number(item?.duration_ms || 0);
+          const serverTiming = String(item?.server_timing || "");
+          const requestId = String(item?.request_id || "");
+          return {
+            endpoint_alias: aliases.has(alias) ? alias : "unknown",
+            status: Number.isInteger(status) && status >= 100 && status <= 599 ? status : 0,
+            duration_ms: Number.isFinite(duration) && duration >= 0 ? Math.round(duration * 10) / 10 : 0,
+            server_timing: /^[A-Za-z0-9_.;=,\- ]{0,256}$/.test(serverTiming) ? serverTiming : "",
+            request_id: /^[A-Za-z0-9_.:\-]{0,128}$/.test(requestId) ? requestId : "",
+          };
+        });
+      }
+
+      function acceptIncomingPerformanceMessage(event) {
+        if (event.origin !== window.location.origin) return;
+        if (event.source !== byId("incomingFrame").contentWindow) return;
+        const payload = event.data;
+        if (!payload || payload.type !== "tm-mobile-incoming-performance" || !incomingPerformanceStages.has(payload.stage)) return;
+        if (!state.incomingPerformanceActive) return;
+        if (payload.stage === "content-ready") state.incomingPerformanceRequests = sanitizedIncomingRequests(payload.requests);
+        markIncomingPerformance(payload.stage);
+        if (payload.stage === "content-ready") measureIncomingPerformance();
+      }
+
+      window.__tmMobileIncomingPerformanceSnapshot = () => ({
+        measures: incomingPerformanceMeasures.map(([measure]) => {
+          const entry = globalThis.performance?.getEntriesByName?.(`${incomingPerformancePrefix}${measure}`, "measure")?.at(-1);
+          return { name: measure, duration_ms: entry ? Math.round(entry.duration * 10) / 10 : null };
+        }),
+        requests: state.incomingPerformanceRequests.map(item => ({...item})),
+      });
 
       async function apiGet(url, options = {}) {
         let response;
@@ -468,17 +563,22 @@
         return mobilePages.has(requested) ? requested : "";
       }
 
-      function setPage(page, { updateLocation = true } = {}) {
+      function setPage(page, { updateLocation = true, incomingPerformanceStarted = false } = {}) {
         if (!state.allowedPages.has(page)) {
           page = document.querySelector(".nav-btn:not([hidden])")?.dataset.page || "";
         }
         if (!page || !state.allowedPages.has(page)) return;
-        if (state.activePage) state.scrollByPage.set(state.activePage, window.scrollY);
+        const previousPage = state.activePage;
+        if (state.activePage && state.activePage !== "incoming") state.scrollByPage.set(state.activePage, window.scrollY);
         state.activePage = page;
         const isHome = page === "home";
+        const isIncoming = page === "incoming";
         const isWarehouse = page === "warehouse";
+        if (isIncoming && previousPage !== "incoming" && !incomingPerformanceStarted) startIncomingPerformance();
+        document.body.classList.toggle("incoming-frame-active", isIncoming);
+        if (!isIncoming) state.incomingPerformanceActive = false;
         byId("homePage").hidden = !isHome;
-        byId("incomingPage").hidden = page !== "incoming";
+        byId("incomingPage").hidden = !isIncoming;
         byId("searchPage").hidden = !isWarehouse;
         byId("productionPage").hidden = page !== "production";
         byId("preDeliveryPage").hidden = page !== "pre_delivery";
@@ -491,6 +591,11 @@
         if (page === "incoming" && !state.loadedFrames.has(page)) {
           byId("incomingFrame").src = "/incoming.html?embedded=1";
           state.loadedFrames.add(page);
+        } else if (isIncoming && previousPage !== "incoming") {
+          byId("incomingFrame").contentWindow?.postMessage(
+            {type: "tm-mobile-incoming-performance-resume"},
+            window.location.origin,
+          );
         }
         if (page === "pre_delivery" && !state.loadedFrames.has(page)) {
           byId("preDeliveryFrame").src = "/mobile/delivery-pick.html?embedded=1";
@@ -499,7 +604,8 @@
         if (isWarehouse) {
           openWarehouseMap();
         }
-        window.requestAnimationFrame(() => window.scrollTo(0, state.scrollByPage.get(page) || 0));
+        const outerScrollTop = isIncoming ? 0 : (state.scrollByPage.get(page) || 0);
+        window.requestAnimationFrame(() => window.scrollTo(0, outerScrollTop));
         if (page === "production" && !state.productionStationItems.length) loadProductionStation();
       }
 
@@ -1440,8 +1546,12 @@
         if (state.initializing) return;
         state.initializing = true;
         byId("bottomNav").hidden = true;
+        const requestedPage = safeRequestedPage();
+        const requestedIncoming = requestedPage === "incoming";
+        if (requestedIncoming) startIncomingPerformance();
         try {
           state.shell = await apiGet("/api/mobile/erp/shell");
+          if (state.incomingPerformanceActive) markIncomingPerformance("shell-ready");
           const user = state.shell.user || {};
           const entries = Array.isArray(state.shell.entries) ? state.shell.entries : [];
           const productionEntry = entries.find(entry => entry.id === "production");
@@ -1470,9 +1580,9 @@
           document.querySelector(".bottom-inner").style.setProperty("--nav-count", visibleNav.length || 1);
           byId("bottomNav").hidden = false;
           renderEntryHome();
-          const requestedPage = safeRequestedPage();
           const firstPage = state.allowedPages.has(requestedPage) ? requestedPage : "home";
-          setPage(firstPage);
+          setPage(firstPage, {incomingPerformanceStarted: requestedIncoming});
+          if (firstPage !== "incoming") state.incomingPerformanceActive = false;
         } catch (error) {
           byId("bottomNav").hidden = true;
           showStatus("homeState", error.message || "手机版初始化失败", "error", initialize);
@@ -1560,6 +1670,10 @@
       });
       byId("productionLookupButton").addEventListener("click", runProductionLookup);
       byId("clearProductionLookup").addEventListener("click", clearProductionLookup);
+      byId("incomingFrame").addEventListener("load", () => {
+        if (state.activePage === "incoming" && state.loadedFrames.has("incoming")) markIncomingPerformance("document-ready");
+      });
+      window.addEventListener("message", acceptIncomingPerformanceMessage);
 
       window.addEventListener("hashchange", () => {
         const requestedPage = safeRequestedPage();

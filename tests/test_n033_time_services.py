@@ -296,10 +296,15 @@ def test_production_response_datetimes_are_explicit_and_nullable(
         box_category=None,
         product_code="P-1",
         product_name="product",
+        version=1,
+        production_label_enabled=False,
+        production_label_units_per_label=None,
     )
     task_rows = [(task, item, order, customer, product)]
     db = NullObject(
         execute=lambda _query: Rows(task_rows),
+        scalars=lambda _query: Rows([]),
+        scalar=lambda _query: 0,
         get=lambda _model, _key: None,
     )
     monkeypatch.setattr(production_workflow, "_task_query", lambda *_args: Query())
@@ -307,6 +312,11 @@ def test_production_response_datetimes_are_explicit_and_nullable(
         production_workflow,
         "production_ready_quantity",
         lambda *_args: 10,
+    )
+    monkeypatch.setattr(
+        production_workflow,
+        "_active_customer_board_preparation_sources",
+        lambda *_args, **_kwargs: [],
     )
 
     task_payload = production_workflow.list_production_tasks(
@@ -324,6 +334,16 @@ def test_production_response_datetimes_are_explicit_and_nullable(
         id=6,
         batch_id=7,
         quantity=10,
+        completion_type="normal",
+        material_input_quantity=10,
+        planned_output_quantity=10,
+        actual_output_quantity=10,
+        defective_quantity=0,
+        order_reserved_quantity=10,
+        direct_delivery_quantity=0,
+        stock_quantity=10,
+        surplus_finished_quantity=0,
+        status="posted",
         initial_disposition="stock",
         warehouse_location_id=None,
         inventory_lot_id=None,

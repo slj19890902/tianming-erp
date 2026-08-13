@@ -10,7 +10,7 @@ from typing import Any, Iterable
 from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-from app.core.time_contract import beijing_today
+from app.core.time_contract import beijing_today, utc_naive_to_api
 from app.models.company_config import CompanyConfig
 from app.models.customer import Customer
 from app.models.external_packaging_price import ExternalPackagingPriceVersion
@@ -500,7 +500,7 @@ def _external_purchase_summary_response(
             for row in active_purchase_orders
         ],
         "confirmed_at": (
-            batch.confirmed_at.isoformat() if batch.confirmed_at else None
+            utc_naive_to_api(batch.confirmed_at) if batch.confirmed_at else None
         ),
     }
 
@@ -1206,7 +1206,7 @@ def _serialize_batch(batch: ExternalPackagingPurchaseBatch) -> dict[str, Any]:
     return {
         "batch_id": batch.id,
         "order_id": batch.sales_order_id,
-        "confirmed_at": batch.confirmed_at.isoformat() if batch.confirmed_at else None,
+        "confirmed_at": utc_naive_to_api(batch.confirmed_at) if batch.confirmed_at else None,
         "purchase_orders": [
             {
                 "id": order.id,
@@ -1322,7 +1322,7 @@ def build_external_purchase_print(
     return {
         "purchase_number": purchase.purchase_number,
         "confirmed_at": (
-            purchase.confirmed_at.isoformat() if purchase.confirmed_at else None
+            utc_naive_to_api(purchase.confirmed_at) if purchase.confirmed_at else None
         ),
         "supplier": {
             "name": purchase.supplier_name_snapshot,

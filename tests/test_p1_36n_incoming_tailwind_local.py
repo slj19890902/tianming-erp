@@ -269,12 +269,12 @@ window.location = {href: "http://localhost/incoming.html"};
 global.TmTime = {formatBeijingDateTime(value) { return String(value || ""); }};
 const fetchCalls = [];
 function response(payload) {
-  return {ok:true,status:200,text:async()=>JSON.stringify(payload)};
+  return {ok:true,status:200,headers:{get(name){return name==="X-ERP-Session-Identity"?"7:1":"";}},text:async()=>JSON.stringify(payload)};
 }
 global.fetch = async (url, options) => {
   fetchCalls.push({url:String(url), options});
   if (String(url).startsWith("/api/auth/me")) {
-    return response({user:{id:7,real_name:"测试管理员",role:"admin"},permissions:["incoming.view","incoming.execute"]});
+    return response({user:{id:7,real_name:"测试管理员",role:"admin"},session_identity:{user_id:7,auth_version:1},permissions:["incoming.view","incoming.execute"]});
   }
   if (String(url).startsWith("/api/incoming/pending")) {
     return response({items:[],total:0,page:1,page_size:25});
@@ -296,7 +296,7 @@ async function settle() {
   await settle();
   assert(fetchCalls.length === 2, `cold init added requests: ${fetchCalls.map(row=>row.url)}`);
   assert(cleanUrl(fetchCalls[0].url) === "/api/auth/me", "auth request changed");
-  assert(cleanUrl(fetchCalls[1].url) === "/api/incoming/pending?page=1&page_size=25", "pending request changed");
+  assert(cleanUrl(fetchCalls[1].url) === "/api/incoming/pending?page=1&page_size=20", "pending request changed");
   assert(fetchCalls.every(row => row.options.cache === "no-store"), "business request cache guard changed");
 
   await tabs[1].listeners.click();
@@ -377,7 +377,7 @@ def test_inline_javascript_is_valid_and_business_endpoints_are_unchanged(
     incoming = _incoming()
     endpoint_markers = (
         "/api/auth/me",
-        "/api/incoming/pending?page=${requestedPage}&page_size=${pageSize}",
+        'endpoint = "/api/incoming/pending"',
         "/api/incoming/received",
         "/api/incoming/surplus-locations",
         "/api/incoming/receive/${item.item_id}",

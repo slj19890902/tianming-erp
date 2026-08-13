@@ -337,6 +337,7 @@ def test_general_production_excludes_dispatch_but_direct_delivery_keeps_it(
         area="DISPATCH",
         storage_type="temporary_aisle",
     )
+    dispatch.source_version = "P1-25C"
     dispatch.location_name = "一楼待送区"
     location_db.add(dispatch)
     location_db.flush()

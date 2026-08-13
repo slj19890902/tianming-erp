@@ -34,7 +34,7 @@ def correction_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         pdf_training_api,
         "_parse_pdf_sample_content",
-        lambda _db, _content, _name: {
+        lambda _db, _content, _name, **_kwargs: {
             "parser_result_json": json.dumps(
                 {
                     "customer_po": "OCR-WRONG",
@@ -95,7 +95,11 @@ def _submit(
     truth: str,
     customer_id: int | None,
 ):
-    upload = UploadFile(filename="n038-order.pdf", file=BytesIO(content))
+    upload = UploadFile(
+        filename="n038-order.pdf",
+        file=BytesIO(content),
+        headers={"content-type": "application/pdf"},
+    )
     return asyncio.run(
         pdf_training_api.submit_correction_sample(
             file=upload,

@@ -11,13 +11,19 @@ from sqlalchemy.orm import sessionmaker
 
 
 @pytest.fixture()
-def db(tmp_path: Path):
+def db(tmp_path: Path, seed_supplier_master):
     from app.core.database import create_sqlite_engine
     from app.models import Base
 
     engine = create_sqlite_engine(tmp_path / "seven-layer-write-guards.sqlite3")
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
+    for layer_count in (3, 5, 7):
+        seed_supplier_master(
+            factory,
+            f"{layer_count}层供应商",
+            f"L{layer_count}-GUARD",
+        )
     with factory() as session:
         yield session
     engine.dispose()
@@ -431,6 +437,7 @@ def test_order_edit_uses_real_selected_material_layer(db):
             layer_count=layer_count,
             flute_type=flute_type,
             sync_product=False,
+            product_expected_version=product.version,
         )
 
     with pytest.raises(HTTPException) as exc_info:
@@ -446,7 +453,14 @@ def test_order_edit_uses_real_selected_material_layer(db):
         update_order_item(item.id, payload("ABC", 3), db=db, user=user)
     assert exc_info.value.status_code == 400
 
-    update_order_item(item.id, payload("ABC"), db=db, user=user)
+    with pytest.raises(HTTPException) as confirmation:
+        update_order_item(item.id, payload("ABC"), db=db, user=user)
+    assert confirmation.value.status_code == 409
+    detail = confirmation.value.detail
+    assert detail["code"] == "MASTER_CHANGE_CONFIRMATION_REQUIRED"
+    confirmed = payload("ABC")
+    confirmed.product_confirmation_token = detail["confirmation_token"]
+    update_order_item(item.id, confirmed, db=db, user=user)
     assert (item.material_id, item.layer_count, item.flute_type) == (
         seven_layer.id,
         7,

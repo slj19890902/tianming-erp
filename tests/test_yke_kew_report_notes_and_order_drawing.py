@@ -15,7 +15,9 @@ def test_shared_drawing_preview_is_global_for_new_order_common_box_import() -> N
     assert INDEX.index(marker) < INDEX.index(
         '<div v-if="pdfWarehouseLocator.visible"'
     )
-    assert INDEX.index(marker) > INDEX.index('<div class="modal-foot">')
+    business_modal = INDEX.index('<div v-if="modal" class="modal-mask"')
+    business_modal_end = INDEX.index(marker)
+    assert '<div v-if="modal?.type !== \'product\'" class="modal-foot">' in INDEX[business_modal:business_modal_end]
 
     import_start = INDEX.index("async importSelectedOrderCommonBoxes()")
     import_end = INDEX.index("openOrderPdfImport()", import_start)

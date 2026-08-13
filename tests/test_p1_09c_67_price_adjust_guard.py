@@ -97,7 +97,7 @@ const expect=(value,message)=>{{if(!value)throw new Error(message)}};
 
 
 def test_apply_price_adjust_is_single_flight_freezes_contract_and_reports_refresh_failure(tmp_path: Path) -> None:
-    body = _method_body("async applyPriceAdjust() {", "async openPriceHistory(row) {")
+    body = _method_body("async applyPriceAdjust() {", "reloadPriceHistoryFilters() {")
     assert "if (this.priceAdjustLoading || this.priceAdjustAction) return false;" in body
     assert "const formSnapshot =" in body
     assert "const body = JSON.parse(JSON.stringify(this.priceAdjustRequestBody(true)))" in body
@@ -138,7 +138,7 @@ const expect=(value,message)=>{{if(!value)throw new Error(message)}};
 
 
 def test_price_adjust_keeps_preview_contract_and_backup_confirmation() -> None:
-    apply_body = _method_body("async applyPriceAdjust() {", "async openPriceHistory(row) {")
+    apply_body = _method_body("async applyPriceAdjust() {", "reloadPriceHistoryFilters() {")
     assert "expected_versions" in INDEX
     assert "preview_token" in INDEX
     assert "confirmation_token" in INDEX

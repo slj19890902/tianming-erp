@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <script src="/static/assets/time-utils.js?v=95c91f9ded41"></script>
+    <script src="/static/assets/phone-display.js?v=b9c44d142168"></script>
     <title>客户管理 - 三级纸箱厂 ERP</title>
     <style>
       :root {
@@ -353,6 +354,14 @@
       .status.inactive {
         color: #5f6872;
         background: #e8ebee;
+      }
+
+      .phone-review-note {
+        display: block;
+        margin-top: 3px;
+        color: #92400e;
+        font-size: 11px;
+        font-weight: 700;
       }
 
       .pagination {
@@ -1037,10 +1046,7 @@
       }
 
       function cleanPhone(value) {
-        return String(value || "")
-          .replace(/\s*,\s*\/\s*,?\s*/g, " / ")
-          .replace(/\s*,\s*$/g, "")
-          .trim();
+        return TmPhone.display(value);
       }
 
       function taxText(value) {
@@ -1151,7 +1157,7 @@
                   <span class="cell-sub">${escapeHtml(row.invoice_title || "")}</span>
                 </td>
                 <td>${escapeHtml(row.contact_person || "-")}</td>
-                <td title="${escapeHtml(cleanPhone(row.phone))}">${escapeHtml(cleanPhone(row.phone) || "-")}</td>
+                <td title="${escapeHtml(cleanPhone(row.phone))}">${escapeHtml(cleanPhone(row.phone) || "-")}${TmPhone.analyze(row.phone).needs_review ? '<span class="phone-review-note">疑似占位，待核对</span>' : ""}</td>
                 <td title="${escapeHtml(row.address || "")}">${escapeHtml(row.address || "-")}</td>
                 <td>${escapeHtml(row.credit_terms || "-")}</td>
                 <td>${Number(row.product_count || 0).toLocaleString("zh-CN")}</td>
@@ -1262,7 +1268,7 @@
           $("customerCode").value = customer.customer_code || "";
           $("customerName").value = customer.name || "";
           $("contactPerson").value = customer.contact_person || "";
-          $("phone").value = cleanPhone(customer.phone);
+          $("phone").value = customer.phone || "";
           $("address").value = customer.address || "";
           $("creditTerms").value = customer.credit_terms || "";
           $("taxRate").value = String(Number(customer.default_tax_rate ?? 0.13));

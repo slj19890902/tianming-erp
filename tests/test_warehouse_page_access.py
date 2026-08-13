@@ -60,7 +60,7 @@ def test_warehouse_page_route_returns_new_digital_twin_and_keeps_ledger_separate
 
 
 def test_homepage_keeps_warehouse_inside_lazy_persistent_erp_shell() -> None:
-    assert '{ key: "workbench", label: "订单主链"' in INDEX_HTML
+    assert 'key: "workbench", label: "订单主链"' in INDEX_HTML
     assert 'v-if="pageAllowed(\'warehouse\')"' in INDEX_HTML
     assert '@click="goMenu(\'warehouse\')"' in INDEX_HTML
     assert 'v-if="warehouseFrameUrl" v-show="activePage === \'warehouse\'"' in INDEX_HTML

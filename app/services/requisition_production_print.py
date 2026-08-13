@@ -21,6 +21,7 @@ from app.models.product_bom import (
     SalesOrderItemBomComponent,
 )
 from app.models.product_drawing import ProductDrawing
+from app.models.printing_plate import PrintingPlate
 from app.models.production import ProductionTask
 from app.models.supplier_requisition_order import (
     SupplierRequisitionOrder,
@@ -28,6 +29,7 @@ from app.models.supplier_requisition_order import (
 )
 from app.services.box_type_rules import box_type_code, canonical_box_style
 from app.services.history_orders import build_display_registry, display_order_number
+from app.services.production_workflow import _task_printing_snapshot
 
 
 _REQUISITION_ITEM_SOURCE = re.compile(r"^requisition_item:(\d+)$")
@@ -129,10 +131,12 @@ def _printing_snapshot(task: ProductionTask | None) -> dict:
     if task is None:
         return {
             "print_content": None,
+            "printing_situation": "无印刷",
             "printing_plate_mode": None,
             "printing_plate_codes": [],
             "printing_plates": [],
             "printing_colors": [],
+            "printing_colors_frozen": False,
             "printing_instruction": None,
             "plate_alignment_value_mm": None,
             "plate_mount_value_mm": None,
@@ -140,42 +144,7 @@ def _printing_snapshot(task: ProductionTask | None) -> dict:
             "machine_set_width_mm": None,
             "machine_set_height_mm": None,
         }
-    codes = [
-        str(value).strip()
-        for value in _json_list(task.printing_plate_codes_snapshot)
-        if str(value).strip()
-    ]
-    details = [
-        {
-            "plate_code": str(value.get("plate_code") or "").strip(),
-            "color_name": str(value.get("color_name") or "").strip(),
-        }
-        for value in _json_list(task.printing_plate_details_snapshot)
-        if isinstance(value, dict)
-        and str(value.get("plate_code") or "").strip()
-    ]
-    content = str(task.print_content_snapshot or "").strip() or None
-    if not content or content in {"无印刷", "无", "否", "不印刷"}:
-        instruction = "无需印刷"
-    elif task.printing_plate_mode_snapshot == "plate":
-        instruction = "按挂板编号安装并核对机器设定值"
-    else:
-        instruction = "不挂板：按图纸核对印刷内容"
-    return {
-        "print_content": content,
-        "printing_plate_mode": task.printing_plate_mode_snapshot or "no_plate",
-        "printing_plate_codes": codes,
-        "printing_plates": details,
-        "printing_colors": _unique_text(
-            [value.get("color_name") for value in details]
-        ),
-        "printing_instruction": instruction,
-        "plate_alignment_value_mm": task.plate_alignment_value_mm_snapshot,
-        "plate_mount_value_mm": task.plate_mount_value_mm_snapshot,
-        "machine_set_length_mm": task.machine_set_length_mm_snapshot,
-        "machine_set_width_mm": task.machine_set_width_mm_snapshot,
-        "machine_set_height_mm": task.machine_set_height_mm_snapshot,
-    }
+    return _task_printing_snapshot(task)
 
 
 def _crease_values(
@@ -404,6 +373,24 @@ def build_supplier_requisition_production_package(
         for task in tasks
         if task.sales_order_item_bom_component_id is not None
     }
+    printing_plate_codes = {
+        str(value).strip()
+        for task in tasks
+        for value in _json_list(task.printing_plate_codes_snapshot)
+        if str(value).strip()
+    }
+    printing_plate_locations = (
+        {
+            str(code): location
+            for code, location in db.execute(
+                select(PrintingPlate.plate_code, PrintingPlate.rack_location).where(
+                    PrintingPlate.plate_code.in_(printing_plate_codes)
+                )
+            ).all()
+        }
+        if printing_plate_codes
+        else {}
+    )
 
     supplier_item_ids = [int(item.id) for item in items]
     receipt_rows = db.execute(
@@ -505,6 +492,10 @@ def build_supplier_requisition_production_package(
                 product_drawing.thumbnail_path or product_drawing.image_path
             )
         printing_snapshot = _printing_snapshot(task)
+        for plate in printing_snapshot["printing_plates"]:
+            plate["current_location"] = printing_plate_locations.get(
+                str(plate.get("plate_code") or "").strip()
+            )
         product_code = str(item.product_code or "").strip()
         customer_key: object = customer.id if customer is not None else item.customer_name
         group_key = (
@@ -591,9 +582,7 @@ def build_supplier_requisition_production_package(
             joining_method = _explicit_joining_method([product.production_process])
             if joining_method:
                 joining_method_source = "current_common_box_fallback"
-        component_printing_colors = printing_snapshot[
-            "printing_colors"
-        ] or _unique_text([product.printing_colors if product is not None else None])
+        component_printing_colors = printing_snapshot["printing_colors"]
         component = {
             "supplier_order_item_id": item.id,
             "source_identity": source_identity,

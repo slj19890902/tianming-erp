@@ -1766,8 +1766,9 @@ def _stock_completion_lot(
         require_empty_pallet=require_empty_pallet,
         movement_reason=movement_reason,
         expected_layout_version=(
-            None
+            int(location.floor3_layout.version)
             if location_id_override is not None
+            and location.floor3_layout is not None
             else command.expected_layout_version
         ),
     )

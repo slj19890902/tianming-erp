@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 import qrcode
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import and_, func, or_, select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import (
@@ -222,6 +222,18 @@ from app.services.warehouse_movement_batch import (
     movement_batch_replay,
     movement_batch_request_hash,
 )
+from app.services.warehouse_stocktake_batch import (
+    STOCKTAKE_BATCH_ACTION_CODE,
+    WAREHOUSE_STOCKTAKE_BATCH_LOCK,
+    WarehouseStocktakeBatchError,
+    WarehouseStocktakeBatchItem,
+    execute_warehouse_stocktake_batch,
+    stocktake_batch_audit_details,
+    stocktake_batch_replay,
+    stocktake_batch_request_hash,
+    stocktake_decrease_issues,
+    stocktake_item_customer_id,
+)
 from app.services.warehouse_pallet_merge_batch import (
     PALLET_MERGE_BATCH_ACTION_CODE,
     PALLET_MERGE_BATCH_LOCK,
@@ -322,6 +334,7 @@ can_archive = PermissionChecker("warehouse.archive")
 can_read_orders = PermissionChecker("orders.view")
 can_reserve = PermissionChecker("warehouse.reserve")
 can_view_reservations = PermissionChecker("warehouse.view")
+can_submit_stocktake = PermissionChecker("warehouse.stocktake.submit")
 VALID_SOURCE_TYPES = {
     "manual",
     "production_surplus",
@@ -343,8 +356,10 @@ WAREHOUSE_CONSTRUCTION_STATUSES = {
 def _can_locate_twin(
     current_user: User = Depends(get_current_user),
 ) -> User:
-    if has_permission(current_user, "warehouse.view") or has_permission(
-        current_user, "deliveries.pick"
+    if (
+        has_permission(current_user, "warehouse.view")
+        or has_permission(current_user, "deliveries.pick")
+        or has_permission(current_user, "warehouse.stocktake.submit")
     ):
         return current_user
     raise HTTPException(status_code=403, detail="权限不足")
@@ -948,6 +963,83 @@ class TwinMovementBatchPayload(BaseModel):
         ids = [str(item.client_item_id) for item in self.items]
         if len(ids) != len(set(ids)):
             raise ValueError("批次内 client_item_id 不能重复")
+        return self
+
+
+class TwinStocktakeBatchItemPayload(BaseModel):
+    client_item_id: str = Field(min_length=1, max_length=80)
+    operation: Literal["add", "decrease"]
+    location_id: int = Field(gt=0)
+    expected_layout_version: int = Field(gt=0)
+    inventory_type: Literal["finished", "semi_finished"] | None = None
+    unit: Literal["boxes", "sheets"] | None = None
+    customer_id: int | None = Field(default=None, gt=0)
+    product_id: int | None = Field(default=None, gt=0)
+    quantity: int = Field(gt=0)
+    stock_date: date | None = None
+    lot_id: int | None = Field(default=None, gt=0)
+    expected_version: int | None = Field(default=None, gt=0)
+
+    @field_validator("client_item_id")
+    @classmethod
+    def strip_stocktake_batch_client_item_id(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("盘点草稿标识不能为空")
+        return text
+
+    @model_validator(mode="after")
+    def validate_stocktake_operation_fields(self) -> "TwinStocktakeBatchItemPayload":
+        if self.operation == "add":
+            expected_unit = {
+                "finished": "boxes",
+                "semi_finished": "sheets",
+            }.get(self.inventory_type or "")
+            if (
+                expected_unit is None
+                or self.unit != expected_unit
+                or self.customer_id is None
+                or self.product_id is None
+                or self.stock_date is None
+                or self.lot_id is not None
+                or self.expected_version is not None
+            ):
+                raise ValueError(
+                    "盘点新增必须填写货位、客户、产品、类型、匹配单位、数量和库存日期"
+                )
+        elif (
+            self.lot_id is None
+            or self.expected_version is None
+            or self.inventory_type is not None
+            or self.unit is not None
+            or self.customer_id is not None
+            or self.product_id is not None
+            or self.stock_date is not None
+        ):
+            raise ValueError("盘点调减只允许填写货位、批次、版本和数量")
+        return self
+
+
+class TwinStocktakeBatchPayload(BaseModel):
+    idempotency_key: str = Field(min_length=1, max_length=64)
+    confirmed: Literal[True]
+    items: list[TwinStocktakeBatchItemPayload] = Field(
+        min_length=1, max_length=50
+    )
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def strip_stocktake_batch_key(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("盘点批次幂等键不能为空")
+        return text
+
+    @model_validator(mode="after")
+    def reject_duplicate_stocktake_client_item_ids(self) -> "TwinStocktakeBatchPayload":
+        ids = [item.client_item_id for item in self.items]
+        if len(ids) != len(set(ids)):
+            raise ValueError("盘点批次内 client_item_id 不能重复")
         return self
 
 
@@ -5113,7 +5205,7 @@ def floor3_product_candidates(
     customer_id: int | None = Query(default=None, gt=0),
     limit: int = Query(default=30, ge=1, le=100),
     db: Session = Depends(get_db),
-    user: User = Depends(can_read),
+    user: User = Depends(_can_locate_twin),
 ) -> dict:
     keyword = q.strip()
     if not keyword and customer_id is None:
@@ -6065,6 +6157,136 @@ def confirm_twin_movement_batch(
                 status_code=409,
                 detail="移货目标、版本或幂等记录已被其他请求更新，请刷新后重试",
             ) from error
+        except HTTPException:
+            db.rollback()
+            raise
+        except Exception:
+            db.rollback()
+            raise
+
+
+@router.post("/twin-operations/stocktake-batches")
+def confirm_twin_stocktake_batch(
+    payload: TwinStocktakeBatchPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_submit_stocktake),
+) -> dict:
+    """Atomically confirm one map stocktake draft into the formal ledger."""
+
+    items = [
+        WarehouseStocktakeBatchItem(
+            client_item_id=item.client_item_id,
+            operation=item.operation,
+            location_id=item.location_id,
+            expected_layout_version=item.expected_layout_version,
+            quantity=item.quantity,
+            inventory_type=item.inventory_type,
+            unit=item.unit,
+            customer_id=item.customer_id,
+            product_id=item.product_id,
+            stock_date=item.stock_date,
+            lot_id=item.lot_id,
+            expected_version=item.expected_version,
+        )
+        for item in payload.items
+    ]
+    request_hash = stocktake_batch_request_hash(
+        batch_id=payload.idempotency_key,
+        items=items,
+    )
+    with WAREHOUSE_STOCKTAKE_BATCH_LOCK:
+        try:
+            replay = stocktake_batch_replay(
+                db,
+                batch_id=payload.idempotency_key,
+                request_hash=request_hash,
+                actor_user_id=user.id,
+            )
+
+            # Customer scope is checked on every current item even for replay.
+            for item in items:
+                customer_id = stocktake_item_customer_id(db, item)
+                require_customer_access(customer_id, user, db, request)
+
+            if replay is not None:
+                return {
+                    **replay,
+                    "idempotent_replay": True,
+                    "request_hash": request_hash,
+                }
+
+            result = execute_warehouse_stocktake_batch(
+                db,
+                batch_id=payload.idempotency_key,
+                items=items,
+                operator_id=user.id,
+            )
+            audit_result = {**result, "request_hash": request_hash}
+            append_audit_event(
+                db,
+                request=request,
+                actor=user,
+                event_category="business",
+                result="success",
+                source="web",
+                module_code="warehouse",
+                action_code=STOCKTAKE_BATCH_ACTION_CODE,
+                legacy_action="STOCKTAKE_BATCH",
+                resource="warehouse/twin-operations/stocktake-batches",
+                entity_type="warehouse_stocktake_batch",
+                object_ref=payload.idempotency_key,
+                batch_id=payload.idempotency_key,
+                description="仓库盘点草稿已一次确认并原子写入正式库存流水",
+                details=stocktake_batch_audit_details(
+                    request_hash=request_hash,
+                    result=audit_result,
+                ),
+            )
+            db.commit()
+            return {
+                **audit_result,
+                "idempotent_replay": False,
+            }
+        except WarehouseStocktakeBatchError as error:
+            db.rollback()
+            raise HTTPException(
+                status_code=error.status_code,
+                detail=str(error),
+            ) from error
+        except Floor3LocationError as error:
+            db.rollback()
+            raise HTTPException(
+                status_code=error.status_code,
+                detail=str(error),
+            ) from error
+        except WarehouseInventoryError as error:
+            db.rollback()
+            _handle(error)
+        except IntegrityError as error:
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="盘点库存、版本、货位或幂等记录已发生冲突，请刷新后重试",
+            ) from error
+        except (OperationalError, sqlite3.OperationalError) as error:
+            db.rollback()
+            rendered = str(error).lower()
+            if any(
+                marker in rendered
+                for marker in (
+                    "database is locked",
+                    "database table is locked",
+                    "database schema is locked",
+                    "sqlite_busy",
+                    "sqlite_locked",
+                )
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="盘点库存正在被其他操作更新，请稍后刷新后重试",
+                ) from error
+            raise
         except HTTPException:
             db.rollback()
             raise
@@ -9047,6 +9269,7 @@ def get_warehouse_twin_dashboard(
     lots, locations, pallets, floors, visible_customer_ids = (
         _twin_dashboard_source_rows(db, user)
     )
+    decrease_issues = stocktake_decrease_issues(db, lots)
     return build_warehouse_twin_dashboard(
         db,
         lots=lots,
@@ -9056,6 +9279,7 @@ def get_warehouse_twin_dashboard(
         visible_customer_ids=visible_customer_ids,
         days=days,
         as_of=beijing_today(),
+        stocktake_decrease_issues=decrease_issues,
     )
 
 

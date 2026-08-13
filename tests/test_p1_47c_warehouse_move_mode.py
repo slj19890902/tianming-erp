@@ -487,7 +487,8 @@ def _login(client: TestClient, username: str) -> None:
 
 
 def _pallet_move(
-    *, client_item_id: str, pallet_id: int, version: int, target: int
+    *, client_item_id: str, pallet_id: int, version: int, target: int,
+    expected_target_layout_version: int = 1,
 ) -> dict[str, object]:
     return {
         "client_item_id": client_item_id,
@@ -495,11 +496,13 @@ def _pallet_move(
         "pallet_id": pallet_id,
         "expected_version": version,
         "target_location_id": target,
+        "expected_target_layout_version": expected_target_layout_version,
     }
 
 
 def _lot_transfer(
-    *, client_item_id: str, lot_id: int, version: int, quantity: int, target: int
+    *, client_item_id: str, lot_id: int, version: int, quantity: int, target: int,
+    expected_target_layout_version: int = 1,
 ) -> dict[str, object]:
     return {
         "client_item_id": client_item_id,
@@ -508,6 +511,7 @@ def _lot_transfer(
         "expected_version": version,
         "quantity": quantity,
         "target_location_id": target,
+        "expected_target_layout_version": expected_target_layout_version,
     }
 
 
@@ -1270,17 +1274,21 @@ def test_p1_47c_fixture_never_uses_the_formal_database(move_batch_app) -> None:
 
 def test_frontend_exposes_execute_scoped_three_level_move_draft_once_only() -> None:
     source = FRONTEND.read_text(encoding="utf-8")
+    move_helper = FRONTEND.with_name("warehouseMoveDraft.mjs").read_text(
+        encoding="utf-8"
+    )
     assert 'value.permissions.includes("warehouse.execute")' in source
     assert 'setMapMode("move")' in source
     assert ">移货 / 盘点</button>" in source
     assert "楼层" in source and "区域" in source and "具体货位" in source
     assert source.count('"/api/warehouse/twin-operations/move-batches"') == 1
-    assert "idempotency_key" in source
-    assert "client_item_id" in source
+    assert "buildMoveBatchPayload(moveBatchIdempotencyKey, moveDrafts)" in source
+    assert "export function buildMoveBatchPayload" in move_helper
+    assert "idempotency_key: idempotencyKey" in move_helper
+    assert "client_item_id: draft.client_item_id" in move_helper
     assert "operation: \"pallet_move\"" in source
     assert "operation: \"lot_transfer\"" in source
     assert "撤销" in source and "一次确认" in source
-    assert "const P1_47D_ENABLED = false;" in source
-    assert source.count("P1_47D_ENABLED &&") >= 3
-    assert "盘点新增" not in source
-    assert "盘点调减" not in source
+    assert "P1_47D_ENABLED" not in source
+    assert 'value.permissions.includes("warehouse.stocktake.submit")' in source
+    assert source.count('"/api/warehouse/twin-operations/stocktake-batches"') == 1

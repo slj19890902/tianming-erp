@@ -188,14 +188,14 @@ class TestOrderListUI:
 class TestOrderFormColumns:
     def test_no_standalone_layer_flute_columns_in_header(self):
         # 新订单表头不再有独立「层数」「楞型」列（已合并入材质+楞型列）
-        i = HTML.index("历史模板搜索</th>")
-        header_row = HTML[i:i+400]
-        assert "材质 + 楞型" in header_row
+        i = HTML.index('<table class="line-items order-entry-table">')
+        header_row = HTML[i:i+700]
+        assert "材质楞型" in header_row
 
     def test_drawing_column_in_new_order_table(self):
-        i = HTML.index("历史模板搜索</th>")
-        header_row = HTML[i:i+400]
-        assert "图纸" in header_row
+        i = HTML.index('<table class="line-items order-entry-table">')
+        header_row = HTML[i:HTML.index("</thead>", i)]
+        assert "图纸 / 删除" in header_row
 
     def test_submit_passes_layer_count_and_flute(self):
         assert "layer_count: item.layer_count" in HTML

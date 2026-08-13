@@ -128,8 +128,9 @@ def test_semi_lot_keeps_replace_checkbox_and_audited_void_path() -> None:
     void = WAREHOUSE.split("async function voidSemiLot()", 1)[1].split(
         "async function openProductAssignments", 1
     )[0]
-    for marker in ("/void-semi-finished", "expected_version:row.version", "reason:reason.trim()", "作废关闭并保留原流水"):
+    for marker in ("/void-semi-finished", "expected_version:row.version", "作废关闭并保留原流水"):
         assert marker in void
+    assert "prompt(" not in void
 
 
 def test_lot_binding_uses_physical_batch_contract_and_refreshes_conflicts() -> None:

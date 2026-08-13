@@ -111,7 +111,7 @@ def test_p5_delivery_list_narrow_desktop_contract_keeps_every_column_and_action(
         "拿货",
         "管理员查看",
         "打开手机拿货",
-        "打印拿货单",
+        "打印仓库找货单",
         "发货打印",
         "直接发货打印",
         "编辑",
@@ -142,7 +142,7 @@ def test_p5_incoming_table_wraps_controls_inside_fixed_columns() -> None:
         '<td class="incoming-board-cell"><strong>{{ formatBoardSpec(row.cardboard_len,row.cardboard_width) }}</strong></td>',
         'class="incoming-decision-cell"><template v-if="incomingTab===\'pending\'">',
         'class="incoming-action-cell"><template v-if="incomingTab===\'pending\'">',
-        '<button class="btn small success" @click="receiveIncoming(row)">确认实收</button>',
+        '<button class="btn small success" :disabled="incomingReceiveAttempts[row.item_id]?.saving" @click="receiveIncoming(row)">',
         '<button v-if="row.pending_receipt_item_id" class="btn small" @click="acceptShortIncoming(row)">不再补货，短收结单</button>',
     ):
         assert marker in INDEX
@@ -200,6 +200,7 @@ def test_p5_boss_dashboard_uses_authoritative_business_cards_in_fixed_order() ->
         "pending_reconciliation",
         "pending_invoice",
         "pending_payment",
+        "warehouse_capacity",
         "inventory_risk",
         "business_anomaly",
     ]
@@ -212,10 +213,13 @@ def test_p5_boss_dashboard_uses_authoritative_business_cards_in_fixed_order() ->
         "待对账",
         "待开票",
         "待结款",
+        "仓储容量",
         "库存风险",
         "异常",
     ]
-    assert "if (!this.isBoss) return cards;" in INDEX
+    assert "if (this.isBoss) {" in INDEX
+    assert "eligible = bossOverviewCardOrder" in INDEX
+    assert 'return this.applyEffectiveLayout("dashboard_cards", eligible);' in INDEX
     assert "v-for=\"card in dashboardCards\"" in INDEX
     assert "v-for=\"card in overview.cards\"" not in INDEX
 
@@ -226,7 +230,7 @@ def test_p5_boss_has_no_system_technical_entry() -> None:
     assert '"system"' not in boss_menu.group(1)
     assert '"permissions"' not in boss_menu.group(1)
     assert 'if (this.isBoss && ["system", "permissions"].includes(page)) return false;' in INDEX
-    assert '.filter(item => item.key !== "system" || this.user?.role !== "boss")' in INDEX
+    assert '.filter(item => item.key !== "system_hub" || this.user?.role !== "boss")' in INDEX
 
 
 def test_p5_inline_javascript_is_syntactically_valid(tmp_path: Path) -> None:

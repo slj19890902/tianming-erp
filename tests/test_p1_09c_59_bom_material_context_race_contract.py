@@ -27,7 +27,7 @@ def _run_node(source: str, tmp_path: Path, name: str) -> None:
 
 def test_bom_search_and_material_context_declare_latest_request_contract() -> None:
     search = _method_body("async searchBomProducts(keyword=\"\") {", "addBomComponent() {")
-    context = _method_body("async loadProductMaterialContext(productId) {", "applyProductMaterialCandidate(")
+    context = _method_body("async loadProductMaterialContext(productId) {", "productMaterialCandidateKey(candidate) {")
 
     assert 'const requestKey = "product:bom-search"' in search
     assert "requestedProductId" in search and "requestedCustomerId" in search
@@ -67,7 +67,7 @@ const expect=(value,message)=>{{if(!value)throw new Error(message)}};
 
 
 def test_material_context_runtime_ignores_old_failure_after_new_success(tmp_path: Path) -> None:
-    body = _method_body("async loadProductMaterialContext(productId) {", "applyProductMaterialCandidate(")
+    body = _method_body("async loadProductMaterialContext(productId) {", "productMaterialCandidateKey(candidate) {")
     script = f"""
 const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
 global.latestRequestControllers=new Map();const pending=[];
@@ -76,7 +76,9 @@ const vm={{
   productForm:{{id:10}},productMaterialContext:{{product_id:10,candidates:[],requisition_history:[],manual_selection_history:[],loading:false,error:""}},
   beginLatestRequest(key){{latestRequestControllers.get(key)?.abort();const controller=new AbortController();latestRequestControllers.set(key,controller);return controller;}},
   finishLatestRequest(key,controller){{if(latestRequestControllers.get(key)===controller)latestRequestControllers.delete(key);}},
-  isCancelledRequest(error){{return error?.code==="ERR_CANCELED";}},errorMessage(error){{return error?.message||String(error);}}
+  isCancelledRequest(error){{return error?.code==="ERR_CANCELED";}},errorMessage(error){{return error?.message||String(error);}},
+  productMaterialCandidateKey(candidate){{return String(candidate?.material_id||"");}},
+  productMaterialCandidateDetailKeys:[],productMaterialCompareKeys:[]
 }};
 vm.loadProductMaterialContext=new AsyncFunction("productId",{json.dumps(body, ensure_ascii=False)}).bind(vm);
 const expect=(value,message)=>{{if(!value)throw new Error(message)}};

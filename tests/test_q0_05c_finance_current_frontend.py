@@ -39,4 +39,6 @@ def test_dashboard_finance_cards_route_to_same_grouped_filters() -> None:
     assert 'balance_type:"pending_reconciliation"' in INDEX
     assert "this.pages.financeCurrent = 1" in INDEX
     assert 'this.financeView = "current"' in INDEX
-    assert 'if (page === "finance") await Promise.all([this.loadCustomerOptions(force), this.loadFinance()]);' in INDEX
+    finance_load = INDEX.split('if (page === "finance") await Promise.all([', 1)[1].split("]);", 1)[0]
+    assert "requirePageLoad(this.loadCustomerOptions(force))" in finance_load
+    assert "requirePageLoad(this.loadFinance())" in finance_load

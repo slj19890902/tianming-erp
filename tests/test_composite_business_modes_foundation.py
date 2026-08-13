@@ -20,6 +20,37 @@ MIGRATION = ROOT / "alembic" / "versions" / "cp72v8x9z61_composite_business_mode
 INDEX = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
 
 
+def _create_parent_schema(path: Path) -> None:
+    """Build the direct-parent contract without replaying unrelated history."""
+    from sqlalchemy import Column, Integer, MetaData, Numeric, String, Table, UniqueConstraint
+    from app.core.database import create_sqlite_engine
+
+    engine = create_sqlite_engine(path)
+    metadata = MetaData()
+    Table("alembic_version", metadata, Column("version_num", String, primary_key=True))
+    Table("products", metadata, Column("id", Integer, primary_key=True))
+    Table(
+        "sales_order_items", metadata, Column("id", Integer, primary_key=True),
+        Column("order_id", Integer, nullable=False), Column("product_id", Integer, nullable=False),
+        Column("quantity", Integer, nullable=False), Column("unit_price", Numeric, nullable=False),
+        Column("subtotal", Numeric, nullable=False), Column("material_status", String, nullable=False),
+        Column("snapshot_product_name", String, nullable=False),
+        Column("requisition_status", String, nullable=False),
+        Column("special_process", String, nullable=False),
+    )
+    Table(
+        "order_item_semi_requirements", metadata,
+        Column("id", Integer, primary_key=True), Column("order_item_id", Integer, nullable=False),
+        Column("component_type", String, nullable=False),
+        Column("sales_order_item_bom_component_id", Integer),
+        UniqueConstraint("order_item_id", "component_type", name="uq_order_item_semi_requirements_item_component"),
+    )
+    metadata.create_all(engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql("INSERT INTO alembic_version(version_num) VALUES ('co71v8x9z60')")
+    engine.dispose()
+
+
 def _product_payload(**overrides):
     data = {
         "customer_id": 1,
@@ -92,8 +123,8 @@ def test_migration_round_trips_empty_isolated_sqlite(
     from app.core.database import create_sqlite_engine
 
     path = tmp_path / "composite-modes.sqlite3"
+    _create_parent_schema(path)
     config = _alembic_config(monkeypatch, path)
-    command.upgrade(config, "co71v8x9z60")
     command.upgrade(config, "cp72v8x9z61")
     columns = {
         column["name"]
@@ -123,6 +154,7 @@ def test_migration_rejects_invalid_provenance_and_fails_closed_with_any_new_fact
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     path = tmp_path / "composite-modes-fail-closed.sqlite3"
+    _create_parent_schema(path)
     config = _alembic_config(monkeypatch, path)
     command.upgrade(config, "cp72v8x9z61")
     base_values = (

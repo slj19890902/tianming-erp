@@ -19,6 +19,31 @@ PARENT_REVISION = "dz08v8x9z97"
 TARGET_REVISION = "ea09v8x9z98"
 
 
+def _create_parent_schema(database: Path) -> None:
+    from sqlalchemy import Column, Integer, MetaData, String, Table, UniqueConstraint
+
+    engine = create_sqlite_engine(database)
+    metadata = MetaData()
+    Table("alembic_version", metadata, Column("version_num", String, primary_key=True))
+    Table(
+        "customers", metadata, Column("id", Integer, primary_key=True),
+        Column("customer_number", Integer, nullable=False), Column("customer_code", String, nullable=False),
+        Column("name", String, nullable=False),
+    )
+    Table(
+        "products", metadata, Column("id", Integer, primary_key=True),
+        Column("customer_id", Integer, nullable=False), Column("product_code", String, nullable=False),
+        Column("customer_material_code", String, nullable=False), Column("product_name", String, nullable=False),
+        Column("box_category", String, nullable=False), Column("is_internal_component", Integer, nullable=False, server_default="0"),
+        UniqueConstraint("customer_id", "product_code", name="uq_products_customer_product_code"),
+        UniqueConstraint("customer_id", "customer_material_code", name="uq_products_customer_material_code"),
+    )
+    metadata.create_all(engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql("INSERT INTO alembic_version(version_num) VALUES ('dz08v8x9z97')")
+    engine.dispose()
+
+
 def _config(monkeypatch: pytest.MonkeyPatch, database: Path) -> Config:
     monkeypatch.setenv("ERP_DATABASE_PATH", str(database))
     monkeypatch.setenv("ERP_BACKUP_DIR", str(database.parent / "backups"))
@@ -72,8 +97,8 @@ def test_product_code_name_identity_round_trip(
     tmp_path: Path,
 ) -> None:
     database = tmp_path / "product-code-name-round-trip.sqlite3"
+    _create_parent_schema(database)
     config = _config(monkeypatch, database)
-    command.upgrade(config, PARENT_REVISION)
     _seed_one_product(database)
 
     command.upgrade(config, TARGET_REVISION)
@@ -116,6 +141,7 @@ def test_product_code_name_downgrade_fails_closed_with_same_code_facts(
     tmp_path: Path,
 ) -> None:
     database = tmp_path / "product-code-name-downgrade-guard.sqlite3"
+    _create_parent_schema(database)
     config = _config(monkeypatch, database)
     command.upgrade(config, TARGET_REVISION)
     _seed_one_product(database)

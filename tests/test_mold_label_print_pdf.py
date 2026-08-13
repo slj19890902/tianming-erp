@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import html
 import base64
 import os
 from pathlib import Path
@@ -97,20 +96,26 @@ def _qr_data_url() -> str:
 
 
 def _label_markup(index: int, qr_data_url: str) -> str:
-    marker = f"LABEL-{index:03d}"
+    number_variants = (
+        ("61452621", ""),
+        ("61452621R1F", "compact"),
+        ("Z.001.000093", "long"),
+        ("MOLD-2026-00000001", "xlong"),
+        ("MOLD-2026-000000000001", "xxlong"),
+    )
+    mold_number, number_class = number_variants[(index - 1) % len(number_variants)]
     return f"""
       <article class="label">
-        <div class="topline">
-          <div class="mold-code">聚晟达61452621</div>
+        <div class="fact-row board-row"><span class="fact-key">片料</span><strong class="fact-value">880 × 425</strong></div>
+        <div class="product-flute-row">
+          <div class="inline-fact"><span class="fact-key">产品</span><strong class="fact-value">430 × 68</strong></div>
+          <div class="inline-fact flute-fact"><span class="fact-key">楞型</span><strong class="fact-value flute">AB</strong></div>
         </div>
-        <div class="location">位置 1F · R01 · 2层 · 1排</div>
-        <div class="label-body">
-          <div class="dimensions">
-            <div class="dimension-card"><span>产品尺寸</span><strong>430 × 68</strong></div>
-            <div class="dimension-card"><span>片料尺寸</span><strong>{html.escape(marker)} · 880 × 425</strong></div>
-          </div>
-          <img class="qr" src="{qr_data_url}" alt="二维码">
+        <div class="identity">
+          <div class="customer-name">聚晟达</div>
+          <div class="mold-number {number_class}">{mold_number}</div>
         </div>
+        <img class="qr" src="{qr_data_url}" alt="二维码">
       </article>
     """
 
@@ -211,8 +216,15 @@ def test_mold_label_print_pdf_has_one_40x30mm_page_per_label(
         )
 
         page_text = page.extract_text() or ""
-        expected_marker = f"LABEL-{page_number:03d}"
-        assert expected_marker in page_text, (
-            f"第 {page_number} 页未找到标签标识 {expected_marker}，"
-            "该页可能为空白页或发生了标签跨页"
-        )
+        expected_number = (
+            "61452621",
+            "61452621R1F",
+            "Z.001.000093",
+            "MOLD-2026-00000001",
+            "MOLD-2026-000000000001",
+        )[(page_number - 1) % 5]
+        for expected_text in ("片料", "楞型", "产品", "聚晟达", expected_number):
+            assert expected_text in page_text, (
+                f"第 {page_number} 页未找到标签字段 {expected_text}，"
+                "该页可能为空白页或发生了标签跨页"
+            )

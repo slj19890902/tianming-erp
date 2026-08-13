@@ -26,13 +26,12 @@ def test_desktop_delivery_list_exposes_pick_task_contract_and_actions() -> None:
 
 
 def test_desktop_delivery_row_owns_pick_actions_without_duplicate_panel() -> None:
-    action_position = INDEX.index("createDeliveryPickTask(row)")
+    action_position = INDEX.index("runDeliveryPrimaryRowAction(row)")
     row_start = INDEX.rfind("<tr", 0, action_position)
     row_end = INDEX.index("</tr>", action_position)
     assert row_start >= 0
     delivery_row = INDEX[row_start:row_end]
     for marker in (
-        "createDeliveryPickTask(row)",
         "openDeliveryPickTask(row)",
         "dispatchDelivery(row)",
         "拿货",
@@ -40,6 +39,8 @@ def test_desktop_delivery_row_owns_pick_actions_without_duplicate_panel() -> Non
         "发货打印",
     ):
         assert marker in delivery_row
+    primary = INDEX[INDEX.index("runDeliveryPrimaryRowAction(row) {") : INDEX.index("deliveryHasSecondaryRowActions(row) {")]
+    assert "this.createDeliveryPickTask(row)" in primary
     assert "delivery-pick-task-panel" not in INDEX
     assert "司机拿货任务" not in INDEX
 

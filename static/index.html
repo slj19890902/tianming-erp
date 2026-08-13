@@ -55,6 +55,9 @@
       }
       button, input, select, textarea { font: inherit; }
       button { cursor: pointer; }
+      body.business-modal-open,
+      body.business-modal-open .main,
+      body.business-modal-open .sidebar { overflow: hidden; }
 
       /* Login */
       .login-shell {
@@ -125,6 +128,10 @@
       .btn.danger { color: #fff; background: var(--red); border-color: var(--red); }
       .btn.small { min-height: 26px; padding: 3px 10px; font-size: 12px; }
       .btn:disabled { cursor: not-allowed; opacity: .45; box-shadow: none; }
+      .ui-standard .high-frequency-action,
+      .ui-standard .delivery-row-primary-action,
+      .ui-standard .delivery-row-more-toggle,
+      .ui-standard .high-risk-action { min-height: 40px; padding-top: 7px; padding-bottom: 7px; }
 
       /* App shell and persisted display modes */
       .app-shell { height: 100vh; min-height: 0; display: grid; grid-template-rows: 60px minmax(0, 1fr); overflow: hidden; }
@@ -895,6 +902,16 @@
         width: min(1400px, 98vw); overflow: visible;
         border: 1px solid var(--line); border-radius: 16px;
         background: var(--panel); box-shadow: var(--shadow-modal);
+      }
+      .modal:focus { outline: none; }
+      .modal:focus-visible { outline: 3px solid rgba(0,113,227,.45); outline-offset: 3px; }
+      .delivery-row-more { position: relative; }
+      .delivery-row-more > summary { list-style: none; }
+      .delivery-row-more > summary::-webkit-details-marker { display: none; }
+      .delivery-row-more-panel {
+        display: flex; flex-wrap: wrap; gap: 7px; min-width: 220px; max-width: 320px;
+        margin-top: 6px; padding: 9px; border: 1px solid var(--line-strong);
+        border-radius: 10px; background: #fafafa;
       }
       .modal.product-editor-modal { width: min(1580px, 98vw); }
       .modal.product-editor-modal .modal-body { padding: 14px; }
@@ -2008,7 +2025,7 @@
       .order-next-step-copy strong { display:block; color:#176b3a; }
       .order-next-step-copy span { display:block; margin-top:2px; color:var(--text-secondary); font-size:13px; }
       .order-next-step-actions { display:flex; align-items:center; justify-content:flex-end; gap:6px; flex:0 0 auto; }
-      .ui-large .business-flow-step { min-height:38px; font-size:14px; }
+      .ui-large .business-flow-step { min-height:48px; font-size:15px; }
       .ui-large .order-next-step-copy span { font-size:15px; }
       .delivery-flow-guide {
         display:grid; gap:6px; margin:0 0 10px; padding:8px 10px;
@@ -2025,7 +2042,7 @@
       .delivery-flow-message { min-width:0; color:var(--text-secondary); font-size:13px; line-height:1.35; overflow-wrap:anywhere; }
       .delivery-guide-target { outline:2px solid #60a5fa; outline-offset:2px; border-radius:8px; }
       .delivery-guide-review-target { box-shadow:0 0 0 2px #93c5fd inset; border-radius:8px; }
-      .ui-large .delivery-flow-step { min-height:36px; font-size:14px; }
+      .ui-large .delivery-flow-step { min-height:48px; font-size:14px; }
       .ui-large .delivery-flow-message { font-size:15px; }
       .order-page-actionbar, .requisition-page-actionbar {
         display:flex; align-items:center; justify-content:space-between; gap:10px;
@@ -2157,10 +2174,10 @@
         <form class="login-card" @submit.prevent="login">
           <h1><img src="/static/assets/logo.png" alt="天明包装ERP" style="width:40px;height:40px;vertical-align:middle;margin-right:8px;object-fit:contain" />天明包装ERP</h1>
           <p>订单、来料、送货、回单、对账、开票与收款闭环</p>
-          <div class="field"><label>用户名</label><input class="input" v-model.trim="loginForm.username" autocomplete="username" /></div>
-          <div class="field"><label>密码</label><input class="input" v-model="loginForm.password" type="password" autocomplete="current-password" /></div>
-          <label class="remember-line"><input type="checkbox" v-model="loginForm.remember_me" /> 记住登录（常用电脑 30 天免重复登录）</label>
-          <div v-if="loginError" class="danger-text" style="margin-bottom:10px">{{ loginError }}</div>
+          <div class="field"><label for="erp-login-username">用户名</label><input id="erp-login-username" class="input" v-model.trim="loginForm.username" autocomplete="username" :aria-describedby="loginError ? 'erp-login-error' : null" :aria-invalid="!!loginError" /></div>
+          <div class="field"><label for="erp-login-password">密码</label><input id="erp-login-password" class="input" v-model="loginForm.password" type="password" autocomplete="current-password" :aria-describedby="loginError ? 'erp-login-error' : null" :aria-invalid="!!loginError" /></div>
+          <div class="remember-line"><input id="erp-login-remember" type="checkbox" v-model="loginForm.remember_me" /><label for="erp-login-remember">记住登录（常用电脑 30 天免重复登录）</label></div>
+          <div v-if="loginError" id="erp-login-error" class="danger-text" role="alert" aria-live="assertive" style="margin-bottom:10px">{{ loginError }}</div>
           <button class="btn primary" style="width:100%" :disabled="loading">{{ loading ? "登录中..." : "登录" }}</button>
           <div class="login-help"><button class="link-btn" type="button" @click="forgotPassword">忘记密码</button></div>
         </form>
@@ -3054,7 +3071,7 @@
                       <button v-if="canCreateOrders" class="btn" @click="openOrderPdfImport">识别PDF订单</button>
                     </div>
                     <div class="toolbar-group">
-                      <button v-if="canViewCosts" class="btn" @click="openCostGaps">成本与利润提醒</button>
+                      <button v-if="canViewCosts" ref="costGapTrigger" class="btn" @click="openCostGaps">成本与利润提醒</button>
                       <button class="btn" @click="runExplicitPageListLoad('orders')">刷新</button>
                     </div>
                   </div>
@@ -3605,22 +3622,25 @@
                     <td><status-tag :value="row.return_receipt_status === 'cancelled' ? 'receipt_cancelled' : (row.return_receipt_status || 'waiting_receipt')"></status-tag></td>
                     <td><button class="btn small delivery-list-detail-toggle" @click="toggleDeliveryListDetail(row)">{{ expandedDeliveryRows[row.id] ? '收起明细' : `查看明细（${row.item_count ?? (row.items || []).length}）` }}</button></td>
                     <td class="toolbar-group delivery-list-actions">
-                      <button v-if="canDelivery && row.status==='pending' && !row.pick_task" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="createDeliveryPickTask(row)">{{ deliveryOperationState.action==='pick' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '推送中…' : '拿货' }}</button>
-                      <select v-if="canDelivery && row.pick_task && row.status==='pending'" class="select" style="max-width:130px" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" :value="row.pick_task.assigned_to || ''" @change="assignDeliveryPickTask(row,$event.target.value)">
-                        <option value="">未分配</option>
-                        <option v-for="picker in deliveryPickers" :key="picker.id" :value="picker.id">{{ picker.name }}</option>
-                      </select>
-                      <span v-if="deliveryOperationState.action==='assign' && Number(deliveryOperationState.deliveryId)===Number(row.id) && Number(deliveryOperationState.taskId)===Number(row.pick_task?.id)" class="muted">分配中…</span>
-                      <button v-if="row.pick_task" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="openDeliveryPickTask(row)">{{ row.pick_task.assignment_required ? '管理员查看' : '打开手机拿货' }}</button>
-                      <button v-if="row.pick_task" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="openDeliveryPickPrint(row)">打印仓库找货单</button>
-                      <button v-if="canDelivery && row.status==='pending'" class="btn small success" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="dispatchDelivery(row)">{{ deliveryOperationState.action==='dispatch' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '发货中…' : (row.pick_task ? '发货打印' : '直接发货打印') }}</button>
-                      <button v-if="canDelivery && row.status==='pending'" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="editDelivery(row)">编辑</button>
-                      <button v-if="canDelivery && row.status==='pending'" class="btn small danger" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="deleteDelivery(row)">{{ deliveryOperationState.action==='delete' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '删除中…' : '删除' }}</button>
-                      <button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="openReceipt(row)">{{ receiptOperationState.action==='open' && Number(receiptOperationState.deliveryId)===Number(row.id) ? '加载中…' : '编辑回单' }}</button>
-                      <button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small danger" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="cancelReceipt(row)">{{ receiptOperationState.action==='cancel' && Number(receiptOperationState.deliveryId)===Number(row.id) ? '取消中…' : '取消回单' }}</button>
-                      <button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="openReceipt(row)">{{ receiptOperationState.action==='open' && Number(receiptOperationState.deliveryId)===Number(row.id) ? '加载中…' : '确认回单' }}</button>
-                      <button v-if="row.status==='dispatched'" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="printDelivery(row)">{{ deliveryOperationState.action==='reprint' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '打开中…' : '补打' }}</button>
-                      <button v-if="canDelivery && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small danger" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="cancelDelivery(row)">{{ deliveryOperationState.action==='cancel' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '取消中…' : '取消发货' }}</button>
+                      <button v-if="deliveryPrimaryRowActionLabel(row)" class="btn small primary delivery-row-primary-action" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="runDeliveryPrimaryRowAction(row)">{{ deliveryOperationState.action==='pick' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '推送中…' : (deliveryOperationState.action==='dispatch' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '发货中…' : (receiptOperationState.action==='open' && Number(receiptOperationState.deliveryId)===Number(row.id) ? '加载中…' : deliveryPrimaryRowActionLabel(row))) }}</button>
+                      <details v-if="deliveryHasSecondaryRowActions(row)" class="delivery-row-more">
+                        <summary class="btn small delivery-row-more-toggle">更多</summary>
+                        <div class="delivery-row-more-panel">
+                          <select v-if="canDelivery && row.pick_task && row.status==='pending'" class="select" style="max-width:130px" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" :value="row.pick_task.assigned_to || ''" @change="assignDeliveryPickTask(row,$event.target.value)">
+                            <option value="">未分配</option>
+                            <option v-for="picker in deliveryPickers" :key="picker.id" :value="picker.id">{{ picker.name }}</option>
+                          </select>
+                          <span v-if="deliveryOperationState.action==='assign' && Number(deliveryOperationState.deliveryId)===Number(row.id) && Number(deliveryOperationState.taskId)===Number(row.pick_task?.id)" class="muted">分配中…</span>
+                          <button v-if="row.pick_task" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="openDeliveryPickTask(row)">{{ row.pick_task.assignment_required ? '管理员查看' : '打开手机拿货' }}</button>
+                          <button v-if="row.pick_task" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="openDeliveryPickPrint(row)">打印仓库找货单</button>
+                          <button v-if="canDelivery && row.status==='pending' && !row.pick_task" class="btn small success" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="dispatchDelivery(row)">{{ deliveryOperationState.action==='dispatch' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '发货中…' : '直接发货打印' }}</button>
+                          <button v-if="canDelivery && row.status==='pending'" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="editDelivery(row)">编辑</button>
+                          <button v-if="canDelivery && row.status==='pending'" class="btn small danger high-risk-action" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="deleteDelivery(row)">{{ deliveryOperationState.action==='delete' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '删除中…' : '删除' }}</button>
+                          <button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small danger high-risk-action" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="cancelReceipt(row)">{{ receiptOperationState.action==='cancel' && Number(receiptOperationState.deliveryId)===Number(row.id) ? '取消中…' : '取消回单' }}</button>
+                          <button v-if="row.status==='dispatched'" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="printDelivery(row)">{{ deliveryOperationState.action==='reprint' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '打开中…' : '补打' }}</button>
+                          <button v-if="canDelivery && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small danger high-risk-action" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="cancelDelivery(row)">{{ deliveryOperationState.action==='cancel' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '取消中…' : '取消发货' }}</button>
+                        </div>
+                      </details>
                     </td>
                   </tr>
                   <tr v-if="expandedDeliveryRows[row.id]" class="delivery-list-detail-row">
@@ -4497,8 +4517,8 @@
       </div>
 
       <div v-if="modal" class="modal-mask" @click.self="onModalMaskClick">
-        <div class="modal" :class="{'order-entry-modal': modal.type === 'order', 'order-entry-large': modal.type === 'order' && isLargeUi, 'pdf-order-import-modal': modal.type === 'orderPdfImport', 'product-editor-modal': modal.type === 'product'}">
-          <div class="modal-head"><strong>{{ modal.title }}</strong><button v-if="!isForcedPassword" class="btn small" @click="closeModal">关闭</button></div>
+        <div ref="businessModal" class="modal" :class="{'order-entry-modal': modal.type === 'order', 'order-entry-large': modal.type === 'order' && isLargeUi, 'pdf-order-import-modal': modal.type === 'orderPdfImport', 'product-editor-modal': modal.type === 'product'}" :role="isAccessibleBusinessDialog ? 'dialog' : null" :aria-modal="isAccessibleBusinessDialog ? 'true' : null" :aria-labelledby="isAccessibleBusinessDialog ? 'erp-business-dialog-title' : null" :aria-describedby="isAccessibleReadOnlyOrderDialog ? 'erp-order-detail-description' : null" :tabindex="isAccessibleBusinessDialog ? -1 : null" @keydown="onModalKeydown">
+          <div class="modal-head"><strong :id="isAccessibleBusinessDialog ? 'erp-business-dialog-title' : null">{{ modal.title }}</strong><button v-if="!isForcedPassword" class="btn small high-frequency-action" @click="closeModal">关闭</button></div>
           <div class="modal-body">
             <div v-if="masterVersionConflict && masterVersionConflict.entity === modal.type" class="notice danger" style="margin-bottom:12px">
               <strong>他人已修改，打开版本{{ masterVersionConflict.expectedVersion }} / 当前版本{{ masterVersionConflict.currentVersion }}</strong>
@@ -6051,6 +6071,7 @@
               <div v-if="orderTrace.events.length <= 1" class="muted" style="margin-top:10px">该明细目前尚无真实后续单据。</div>
             </div>
             <div v-else-if="modal.type === 'orderGroupDetail' && orderGroupDetail">
+              <p id="erp-order-detail-description" class="muted" style="margin:0 0 12px">只读查看订单事实；按 Esc 可关闭，Tab 只在本对话框内移动。</p>
               <div class="form-grid">
                 <div class="field"><label>客户</label><div>{{ orderGroupDetail.customer_name }}</div></div>
                 <div class="field"><label>客户单号</label><div>{{ orderGroupDetail.customer_po || "未填写客户单号" }}</div></div>
@@ -6216,6 +6237,7 @@
               </template>
             </div>
             <div v-else-if="modal.type === 'orderDetail' && orderDetail">
+              <p id="erp-order-detail-description" class="muted" style="margin:0 0 12px">只读查看订单事实；按 Esc 可关闭，Tab 只在本对话框内移动。</p>
               <div class="form-grid">
                 <div class="field"><label class="sys-num">系统单号</label><div class="sys-num">{{ displayOrderNumber(orderDetail) }}</div></div>
                 <div class="field"><label>客户</label><div>{{ orderDetail.customer_name }}</div></div>
@@ -6635,6 +6657,7 @@
               </fieldset>
             </div>
             <div v-else-if="modal.type === 'receipt'">
+              <div class="notice" style="margin-bottom:10px"><strong>客户：{{ receiptForm.customer_name || '客户未登记' }}</strong><span style="margin-left:12px">送货单：{{ receiptForm.delivery_number || '-' }}</span></div>
               <div class="form-grid"><div class="field"><label>实际签收日期</label><input class="input" type="date" v-model="receiptForm.actual_received_date" /></div><div class="field"><label>签收人</label><input class="input" v-model.trim="receiptForm.signed_by" /></div></div>
               <table><thead><tr><th>产品</th><th>发货数</th><th>实际签收数</th><th>差异处理</th><th>退回放哪里</th><th>差异备注（可选）</th></tr></thead><tbody><tr v-for="line in receiptForm.items" :key="line.delivery_item_id" :class="{'warning-row':Number(line.actual_received_quantity)!==Number(line.delivered_quantity)}"><td>{{ line.product_code }} / {{ line.product_name }}</td><td>{{ line.delivered_quantity }}</td><td><input class="input compact-input" type="number" min="0" v-model.number="line.actual_received_quantity" @change="normalizeReceiptResolution(line)" /></td><td><select v-if="Number(line.actual_received_quantity)<Number(line.delivered_quantity)" class="select" v-model="line.resolution_action"><option value="">请选择短收处理</option><option value="continue_delivery">保留剩余数量，继续待送</option><option value="accept_short">按本次实收数量结单</option></select><select v-else-if="Number(line.actual_received_quantity)>Number(line.delivered_quantity)" class="select" v-model="line.resolution_action"><option value="">请选择超收处理</option><option value="accept_over">确认按实际超收数量入账</option></select><span v-else class="muted">无差异</span></td><td><div v-if="receiptLineNeedsReturnLocation(line)" class="receipt-return-location-picker"><select class="select" v-model.number="line.return_floor_number" @change="onReceiptReturnFloorChange(line)"><option :value="null">先选楼层</option><option v-for="floor in receiptLocationFloors(line)" :key="floor.number" :value="floor.number">{{ floor.label }}</option></select><select class="select" v-model="line.return_area_code" :disabled="!line.return_floor_number" @change="onReceiptReturnAreaChange(line)"><option value="">再选区域</option><option v-for="area in receiptAreasForFloor(line,line.return_floor_number)" :key="area.code" :value="area.code">{{ area.code }}</option></select><select class="select" v-model.number="line.return_location_id" :disabled="!line.return_area_code"><option :value="null">再选库位</option><option v-for="location in receiptLocationsForArea(line,line.return_floor_number,line.return_area_code)" :key="location.id" :value="location.id">{{ location.location_code }}</option></select></div><span v-else-if="Number(line.actual_received_quantity)<Number(line.delivered_quantity) && line.source_type==='unordered_finished'" class="muted">自动退回原批次</span><span v-else class="muted">无需退回</span></td><td><input class="input" v-model.trim="line.difference_reason" placeholder="可选" /></td></tr></tbody></table>
             </div>
@@ -7218,9 +7241,9 @@
       </div>
 
       <!-- 共用图纸预览必须位于业务页面分支之外；订单、来料等页面也会调用。 -->
-      <div v-if="showDrawingPreview" class="modal-backdrop drawing-preview-backdrop" @click.self="showDrawingPreview=false">
-        <div class="modal" style="max-width:90vw;max-height:90vh;overflow:auto">
-          <div class="modal-header"><h3>图纸预览</h3><button class="btn small" @click="showDrawingPreview=false">关闭</button></div>
+      <div v-if="showDrawingPreview" class="modal-backdrop drawing-preview-backdrop" @click.self="closeDrawingPreview">
+        <div ref="drawingPreviewDialog" class="modal" role="dialog" aria-modal="true" aria-labelledby="erp-drawing-preview-title" tabindex="-1" style="max-width:90vw;max-height:90vh;overflow:auto" @keydown="onDrawingPreviewKeydown">
+          <div class="modal-header"><h3 id="erp-drawing-preview-title">图纸预览</h3><button class="btn small high-frequency-action" @click="closeDrawingPreview">关闭</button></div>
           <div style="text-align:center;padding:12px">
             <img :src="drawingPreviewUrl" style="max-width:100%;max-height:75vh;object-fit:contain" />
           </div>
@@ -7434,6 +7457,10 @@
       const latestRequestControllers = new Map();
       const searchDebounceTimers = new Map();
       const pageSearchGenerations = new Map();
+      let modalOpenerElement = null;
+      let modalOpenerFallbackElement = null;
+      let modalA11ySessionActive = false;
+      let modalA11ySessionGeneration = 0;
       let requisitionAutoReleaseFlight = null;
       const orderGroupDetailRequests = new Map();
       let orderGroupDetailRequestSequence = 0;
@@ -8723,6 +8750,12 @@
               && !!this.priceAdjustPreviewKey
               && this.priceAdjustPreviewKey === this.priceAdjustFormKey();
           },
+          isAccessibleReadOnlyOrderDialog() {
+            return ["orderDetail", "orderGroupDetail"].includes(this.modal?.type);
+          },
+          isAccessibleBusinessDialog() {
+            return this.isAccessibleReadOnlyOrderDialog || modalA11ySessionActive;
+          },
           canSaveModal() {
             if (!this.modal) return false;
             if (this.modal.type === "customer") return this.customerForm.id ? this.canEditCustomers : this.canCreateCustomers;
@@ -9080,6 +9113,7 @@
           window.erpAuthRequired = () => {
             this.authGeneration += 1;
             this.resetPagePerformanceState();
+            this.resetModalA11ySession({discardModal:true});
             this.uiModeSaving = false;
             this.uiLayoutEffective = null;
             this.uiLayoutAdminPreview = false;
@@ -9105,6 +9139,79 @@
           window.addEventListener("popstate", this.handlePdfWarehousePopState);
         },
         methods: {
+          focusableElements(container) {
+            if (!container) return [];
+            return [...container.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+              .filter(element => element.getClientRects().length > 0 && element.getAttribute("aria-hidden") !== "true");
+          },
+          rememberModalOpener() {
+            if (modalA11ySessionActive) return modalOpenerElement;
+            const active = document.activeElement;
+            return active instanceof HTMLElement && active !== document.body ? active : null;
+          },
+          focusAccessibleModal(opener = null, fallback = null) {
+            if (!this.isAccessibleBusinessDialog) return;
+            if (!modalA11ySessionActive) {
+              modalOpenerElement = opener;
+              modalOpenerFallbackElement = fallback;
+              modalA11ySessionGeneration += 1;
+            }
+            modalA11ySessionActive = true;
+            document.body.classList.add("business-modal-open");
+            this.$nextTick(() => {
+              const container = this.$refs.businessModal;
+              const first = this.focusableElements(container)[0];
+              (first || container)?.focus();
+            });
+          },
+          restoreModalOpenerFocus() {
+            document.body.classList.remove("business-modal-open");
+            modalA11ySessionActive = false;
+            modalA11ySessionGeneration += 1;
+            const opener = modalOpenerElement;
+            const fallback = modalOpenerFallbackElement;
+            modalOpenerElement = null;
+            modalOpenerFallbackElement = null;
+            this.$nextTick(() => {
+              const focusTarget = opener?.isConnected ? opener : fallback?.isConnected ? fallback : null;
+              if (typeof focusTarget?.focus === "function") focusTarget.focus();
+            });
+          },
+          resetModalA11ySession({discardModal=false}={}) {
+            document.body.classList.remove("business-modal-open");
+            modalA11ySessionActive = false;
+            modalA11ySessionGeneration += 1;
+            modalOpenerElement = null;
+            modalOpenerFallbackElement = null;
+            if (!discardModal) return;
+            this.cancelOrderReadDetailRequests();
+            this.showDrawingPreview = false;
+            this.drawingPreviewUrl = "";
+            this.modal = null;
+            this.orderDetail = null;
+            this.orderGroupDetail = null;
+            this.estimatedCostForm = {};
+            this.externalPurchase = {loading:false,saving:false,error:"",submitError:"",status:"",orderId:null,orderLabel:"",items:[],confirmation:null,idempotencyKey:""};
+          },
+          onModalKeydown(event) {
+            if (!this.isAccessibleBusinessDialog || event.key !== "Tab") return;
+            const container = this.$refs.businessModal;
+            const focusable = this.focusableElements(container);
+            if (!focusable.length) {
+              event.preventDefault();
+              container?.focus();
+              return;
+            }
+            const first = focusable[0];
+            const last = focusable.at(-1);
+            if (event.shiftKey && (document.activeElement === first || document.activeElement === container)) {
+              event.preventDefault();
+              last.focus();
+            } else if (!event.shiftKey && document.activeElement === last) {
+              event.preventDefault();
+              first.focus();
+            }
+          },
           async setUiMode(mode) {
             if (!["standard", "large"].includes(mode) || mode === this.uiMode || this.uiModeSaving) return;
             const previousMode = this.uiMode;
@@ -11857,6 +11964,7 @@
           async logout() {
             this.authGeneration += 1;
             this.resetPagePerformanceState();
+            this.resetModalA11ySession({discardModal:true});
             this.uiModeSaving = false;
             this.uiLayoutEffective = null;
             this.uiLayoutAdminPreview = false;
@@ -16155,6 +16263,31 @@
             if (task) return "blue";
             return "muted";
           },
+          deliveryPrimaryRowActionLabel(row) {
+            if (this.canDelivery && row?.status === "pending") {
+              if (!row.pick_task) {
+                if (this.deliveryOperationState.action === "pick" && Number(this.deliveryOperationState.deliveryId) === Number(row.id)) return "推送中…";
+                return "拿货";
+              }
+              if (this.deliveryOperationState.action === "dispatch" && Number(this.deliveryOperationState.deliveryId) === Number(row.id)) return "发货中…";
+              return "发货打印";
+            }
+            if (this.canFinance && row?.status === "dispatched") {
+              if (this.receiptOperationState.action === "open" && Number(this.receiptOperationState.deliveryId) === Number(row.id)) return "加载中…";
+              return row.return_receipt_status === "confirmed" ? "编辑回单" : "确认回单";
+            }
+            return "";
+          },
+          runDeliveryPrimaryRowAction(row) {
+            // 委托给原有 single-flight 业务动作；列表主按钮不复制发货或回单逻辑。
+            if (this.canDelivery && row?.status === "pending") return row.pick_task ? this.dispatchDelivery(row) : this.createDeliveryPickTask(row);
+            if (this.canFinance && row?.status === "dispatched") return this.openReceipt(row);
+            return false;
+          },
+          deliveryHasSecondaryRowActions(row) {
+            if (row?.pick_task || row?.status === "dispatched") return true;
+            return !!(this.canDelivery && row?.status === "pending");
+          },
           deliveryPickExceptionText(row) {
             const task = this.normalizeDeliveryPickTask(row);
             if (!task) return "";
@@ -18798,6 +18931,7 @@
             const orderLabel = this.displayOrderNumber(order);
             this.externalPurchase = {loading:true,saving:false,error:"",submitError:"",status:"",orderId,orderLabel,items:[],confirmation:null,idempotencyKey:createIdempotencyKey()};
             this.modal = {type:"externalPurchase",title:`外购包装采购核对 · ${orderLabel}`};
+            if (modalA11ySessionActive) this.focusAccessibleModal();
             try {
               const {data} = await axios.get(`/api/orders/${orderId}/external-packaging-purchase`);
               this.externalPurchase.status = data.status;
@@ -23535,8 +23669,39 @@
             if (this.isImageDrawing(path)) {
               this.drawingPreviewUrl = path;
               this.showDrawingPreview = true;
+              this.$nextTick(() => {
+                const dialog = this.$refs.drawingPreviewDialog;
+                (this.focusableElements(dialog)[0] || dialog)?.focus();
+              });
             } else {
               window.open(path, "_blank");
+            }
+          },
+          closeDrawingPreview() {
+            this.showDrawingPreview = false;
+            if (modalA11ySessionActive) this.$nextTick(() => this.focusAccessibleModal());
+          },
+          onDrawingPreviewKeydown(event) {
+            if (event.key === "Escape") {
+              event.preventDefault();
+              event.stopPropagation();
+              this.closeDrawingPreview();
+              return;
+            }
+            if (event.key !== "Tab") return;
+            const dialog = this.$refs.drawingPreviewDialog;
+            const focusable = this.focusableElements(dialog);
+            if (!focusable.length) {
+              event.preventDefault();
+              dialog?.focus();
+              return;
+            }
+            const first = focusable[0];
+            const last = focusable.at(-1);
+            if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog)) {
+              event.preventDefault(); last.focus();
+            } else if (!event.shiftKey && document.activeElement === last) {
+              event.preventDefault(); first.focus();
             }
           },
           orderItemFluteOptions(itemOrLayerCount) {
@@ -23666,6 +23831,7 @@
           },
           async openOrderGroupDetail(group) {
             const requestKey = "orders:read-detail-modal";
+            const modalOpener = this.rememberModalOpener();
             this.cancelOrderTraceChildRequests();
             const controller = this.beginLatestRequest(requestKey);
             try {
@@ -23676,6 +23842,7 @@
                 type:"orderGroupDetail",
                 title:`订单详情 · ${data.customer_name} · ${data.customer_po || "未填写客户单号"}`,
               };
+              this.focusAccessibleModal(modalOpener);
               return true;
             } finally {
               if (latestRequestControllers.get(requestKey) === controller) this.finishLatestRequest(requestKey, controller);
@@ -23754,26 +23921,35 @@
             }
           },
           openCostGapOrder(row) {
-            return this.openOrderDetail({id:row?.order_id});
+            return this.openOrderDetail(
+              {id:row?.order_id},
+              {returnFocusFallback:this.$refs.costGapTrigger || null},
+            );
           },
-          async openOrderDetail(row) {
+          async openOrderDetail(row, {keepModalA11ySession=false, returnFocusFallback=null}={}) {
             const requestKey = "orders:read-detail-modal";
             const orderId = Number(row?.id || 0);
             if (!orderId) {
               this.showToast("订单信息不完整，请刷新后重试", true);
               return false;
             }
+            const keepCurrentModalSession = !!keepModalA11ySession && modalA11ySessionActive;
+            const expectedModalSessionGeneration = keepCurrentModalSession ? modalA11ySessionGeneration : null;
+            const modalOpener = this.rememberModalOpener();
             this.cancelOrderTraceChildRequests();
             const controller = this.beginLatestRequest(requestKey);
             try {
               const { data } = await axios.get(`/api/orders/${orderId}`, {signal:controller.signal});
               if (latestRequestControllers.get(requestKey) !== controller) return false;
+              if (keepCurrentModalSession && (!modalA11ySessionActive || modalA11ySessionGeneration !== expectedModalSessionGeneration)) return false;
               this.orderDetail = data;
               this.modal = { type:"orderDetail", title:`只读订单详情 ${this.displayOrderNumber(data)}` };
+              this.focusAccessibleModal(modalOpener, returnFocusFallback);
               return true;
             } catch (error) {
               if (this.isCancelledRequest(error) || latestRequestControllers.get(requestKey) !== controller) return false;
               this.showToast(`订单详情读取失败：${this.errorMessage(error)}`, true);
+              if (keepCurrentModalSession && modalA11ySessionActive && modalA11ySessionGeneration === expectedModalSessionGeneration) this.focusAccessibleModal(modalOpener);
               return false;
             } finally {
               if (latestRequestControllers.get(requestKey) === controller) this.finishLatestRequest(requestKey, controller);
@@ -23794,9 +23970,11 @@
               other_fee:Number(fees.other_fee || 0),
             };
             this.modal = {type:"estimatedCost", title:"调整预计成本（仅当前订单）"};
+            if (modalA11ySessionActive) this.focusAccessibleModal();
           },
           async saveEstimatedCost() {
             const form = this.estimatedCostForm || {};
+            const expectedModalSessionGeneration = modalA11ySessionActive ? modalA11ySessionGeneration : null;
             if (!form.item_id || !form.expected_snapshot_version) throw new Error("预计成本版本缺失，请刷新订单详情");
             for (const key of ["die_fee","plate_fee","freight_fee","other_fee"]) {
               if (!Number.isFinite(Number(form[key])) || Number(form[key]) < 0) throw new Error("一次性费用不能小于 0");
@@ -23810,7 +23988,11 @@
               other_fee:String(form.other_fee || 0),
             });
             this.showToast("预计成本已保存");
-            return this.openOrderDetail({id:form.order_id});
+            if (expectedModalSessionGeneration === null || !modalA11ySessionActive || modalA11ySessionGeneration !== expectedModalSessionGeneration) {
+              this.showToast("预计成本已保存；原订单详情已关闭，请手动刷新核对", false);
+              return true;
+            }
+            return this.openOrderDetail({id:form.order_id},{keepModalA11ySession:true});
           },
           async openOrderTrace(order, item) {
             const requestKey = "orders:read-detail-modal";
@@ -25143,6 +25325,8 @@
               const defaultFloor = emptyFloors.length === 1 ? emptyFloors[0] : null;
               this.receiptForm = {
                 id:receipt?.id || null, delivery_id:deliveryId,
+                customer_name:delivery.customer_name || row?.customer_name || "客户未登记",
+                delivery_number:delivery.delivery_number || deliveryNumber,
                 actual_received_date:receipt?.actual_received_date || today(), signed_by:receipt?.signed_by || "客户签收",
                 items:(delivery.items || []).map(item => ({
                   delivery_item_id:item.id, product_code:item.product_code, product_name:item.product_name,
@@ -26251,8 +26435,10 @@
                 this.returnFromOrderTrace();
                 return;
               }
+              const restoreReadOnlyOrderFocus = modalA11ySessionActive;
+              if (restoreReadOnlyOrderFocus) this.cancelOrderReadDetailRequests();
               if (["orderGroupDetail","orderDetail"].includes(this.modal?.type)) {
-                this.cancelOrderReadDetailRequests();
+                if (!restoreReadOnlyOrderFocus) this.cancelOrderReadDetailRequests();
                 this.orderGroupDetail = null;
                 this.orderDetail = null;
               }
@@ -26286,6 +26472,7 @@
 	              this.invoiceTaskOperationState.detailError = "";
 	            }
 	            this.modal = null;
+            if (restoreReadOnlyOrderFocus) this.restoreModalOpenerFocus();
             this.statementDetail = null;
             this.statementEditForm = { id: null, statement_month: "" };
             this.productFormSnapshot = null;
@@ -27098,7 +27285,8 @@
               const details = this.deliveryPickExceptionText(row);
               if (!confirm(`司机拿货结果存在异常，请确认以下变化后再发货：\n${details || "存在没货或数量变化"}\n\n确认后系统会先应用司机结果，再继续发货打印。`)) return false;
             }
-            if (options?.confirmAction !== false && !confirm(`确认发货并打印 ${deliveryNumber} 吗？`)) return false;
+            const customerName = String(row?.customer_name || "客户未登记");
+            if (options?.confirmAction !== false && !confirm(`确认发货并打印吗？\n客户：${customerName}\n送货单：${deliveryNumber}`)) return false;
             this.deliveryOperationState = {action:"dispatch",deliveryId,deliveryNumber};
             const frozenRow = {...row,id:deliveryId,delivery_number:deliveryNumber,pick_task:frozenTask};
             let printSession = null;
@@ -27234,11 +27422,12 @@
             if (this.deliveryOperationState.action || this.receiptOperationState?.action) return false;
             const deliveryId = Number(row?.id || 0);
             const deliveryNumber = String(row?.delivery_number || `#${deliveryId}`);
+            const customerName = String(row?.customer_name || "客户未登记");
             if (!deliveryId) {
               this.showToast("送货单不存在，无法删除", true);
               return false;
             }
-            if (!confirm(`确认移除送货单 ${deliveryNumber} 吗？\n未发生发货的草稿将直接删除；已有发货、回单或库存历史的单据将作废归档，不会再次改变库存或订单已送数量。`)) return false;
+            if (!confirm(`确认移除这张送货单吗？\n客户：${customerName}\n送货单：${deliveryNumber}\n未发生发货的草稿将直接删除；已有发货、回单或库存历史的单据将作废归档，不会再次改变库存或订单已送数量。`)) return false;
             this.deliveryOperationState = {action:"delete",deliveryId,deliveryNumber};
             try {
               let response;
@@ -27273,11 +27462,12 @@
             if (this.deliveryOperationState.action || this.receiptOperationState?.action) return false;
             const deliveryId = Number(row?.id || 0);
             const deliveryNumber = String(row?.delivery_number || `#${deliveryId}`);
+            const customerName = String(row?.customer_name || "客户未登记");
             if (!deliveryId) {
               this.showToast("送货单不存在，无法取消发货", true);
               return false;
             }
-            if (!confirm(`确认取消发货 ${deliveryNumber} 吗？\n将回滚本单已送数量并恢复订单待送状态。\n若已有回单或已进入对账，系统会拒绝取消。`)) return false;
+            if (!confirm(`确认取消这张送货单的发货吗？\n客户：${customerName}\n送货单：${deliveryNumber}\n将回滚本单已送数量并恢复订单待送状态。\n若已有回单或已进入对账，系统会拒绝取消。`)) return false;
             this.deliveryOperationState = {action:"cancel",deliveryId,deliveryNumber};
             try {
               try {
@@ -27306,11 +27496,12 @@
             const receiptId = Number(row?.return_receipt_id || this.receiptForm?.id || 0);
             const deliveryId = Number(row?.id || this.receiptForm?.delivery_id || 0);
             const deliveryNumber = String(row?.delivery_number || `#${deliveryId}`);
+            const customerName = String(row?.customer_name || "客户未登记");
             if (!receiptId) {
               this.showToast("没有可取消的有效回单", true);
               return false;
             }
-            if (!confirm("确定要取消回单吗？取消后该送货单会退回到已发货状态。")) return false;
+            if (!confirm(`确定要取消这张送货单的回单吗？\n客户：${customerName}\n送货单：${deliveryNumber}\n取消后该送货单会退回到已发货状态。`)) return false;
             this.receiptOperationState = {action:"cancel",deliveryId,receiptId,deliveryNumber};
             try {
               try {

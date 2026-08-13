@@ -9,7 +9,7 @@ from alembic import command
 from alembic.config import Config
 import pytest
 from pydantic import ValidationError
-from sqlalchemy import inspect, select
+from sqlalchemy import Boolean, Column, Integer, MetaData, Numeric, String, Table, inspect, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.api.products import ProductPayload, _validated_product_versioned_updates
@@ -36,6 +36,62 @@ from app.services.production_workflow import refresh_production_task
 ROOT = Path(__file__).resolve().parents[1]
 PARENT_REVISION = "dx06v8x9z95"
 TARGET_REVISION = "dy07v8x9z96"
+
+
+def _create_parent_schema(path: Path) -> None:
+    """Build the direct-parent columns exercised by this migration only."""
+    engine = create_sqlite_engine(path)
+    metadata = MetaData()
+    Table("alembic_version", metadata, Column("version_num", String, primary_key=True))
+    Table(
+        "customers", metadata,
+        Column("id", Integer, primary_key=True), Column("name", String, nullable=False),
+        Column("payment_term_days", Integer), Column("statement_cycle_start_day", Integer),
+        Column("credit_limit", Numeric), Column("delivery_method", String),
+        Column("default_tax_rate", Numeric), Column("status", String),
+        Column("is_active", Boolean), Column("version", Integer),
+    )
+    Table(
+        "products", metadata,
+        Column("id", Integer, primary_key=True), Column("customer_id", Integer, nullable=False),
+        Column("product_code", String, nullable=False), Column("customer_material_code", String, nullable=False),
+        Column("product_name", String, nullable=False), Column("box_category", String, nullable=False),
+        Column("unit", String), Column("default_cutting_mode", String),
+        Column("is_composite", Boolean), Column("combination_mode", String),
+        Column("is_internal_component", Boolean), Column("is_active", Boolean),
+        Column("manual_modified", Boolean), Column("version", Integer),
+    )
+    Table(
+        "sales_orders", metadata,
+        Column("id", Integer, primary_key=True), Column("order_number", String, nullable=False),
+        Column("customer_id", Integer, nullable=False), Column("order_date", String),
+        Column("status", String), Column("payment_status", String),
+        Column("requisition_strategy", String), Column("total_amount", Numeric),
+    )
+    Table(
+        "sales_order_items", metadata,
+        Column("id", Integer, primary_key=True), Column("order_id", Integer, nullable=False),
+        Column("product_id", Integer, nullable=False), Column("quantity", Integer),
+        Column("delivered_quantity", Integer), Column("is_force_closed", Boolean),
+        Column("unit_price", Numeric), Column("subtotal", Numeric),
+        Column("material_status", String), Column("snapshot_product_name", String),
+        Column("inventory_deducted_qty", Integer), Column("requisition_status", String),
+        Column("special_process", String), Column("combination_role", String),
+    )
+    Table(
+        "production_tasks", metadata,
+        Column("id", Integer, primary_key=True), Column("order_item_id", Integer, nullable=False),
+        Column("status", String), Column("planned_quantity", Integer),
+        Column("finished_coverage_snapshot", Integer), Column("ordered_quantity_snapshot", Integer),
+        Column("material_received_quantity", Integer), Column("material_input_quantity", Integer),
+        Column("output_factor", Integer), Column("version", Integer),
+    )
+    metadata.create_all(engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            f"INSERT INTO alembic_version(version_num) VALUES ('{PARENT_REVISION}')"
+        )
+    engine.dispose()
 
 
 def _alembic_config(monkeypatch: pytest.MonkeyPatch, path: Path) -> Config:
@@ -354,8 +410,8 @@ def test_migration_is_linear_defaults_old_facts_and_round_trips(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "p1-34b3-migration.sqlite3"
+    _create_parent_schema(path)
     config = _alembic_config(monkeypatch, path)
-    command.upgrade(config, PARENT_REVISION)
     with sqlite3.connect(path) as connection:
         connection.execute(
             """
@@ -443,6 +499,7 @@ def test_migration_downgrade_fails_closed_after_strategy_fact(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "p1-34b3-fail-closed.sqlite3"
+    _create_parent_schema(path)
     config = _alembic_config(monkeypatch, path)
     command.upgrade(config, TARGET_REVISION)
     with sqlite3.connect(path) as connection:

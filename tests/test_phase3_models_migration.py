@@ -131,7 +131,7 @@ def test_phase3_schema_migration_preserves_product_archives(
             "-c",
             str(project_root / "alembic.ini"),
             "upgrade",
-            "head",
+            "6dd634401138",
         ],
         cwd=project_root,
         capture_output=True,

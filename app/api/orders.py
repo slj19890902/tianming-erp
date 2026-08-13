@@ -273,6 +273,14 @@ can_delete = PermissionChecker("orders.delete")
 can_rollback = PermissionChecker("orders.rollback")
 can_view_cost = PermissionChecker("cost.view")
 
+ORDER_SALES_AMOUNT_ROLES = frozenset({"admin", "boss", "sales", "finance"})
+
+
+def _can_view_order_sales_amount(user: User) -> bool:
+    """Keep customer sales amounts on an explicit, fail-closed role allowlist."""
+
+    return user.role in ORDER_SALES_AMOUNT_ROLES and has_permission(user, "orders.view")
+
 
 def _append_order_audit(
     db: Session,
@@ -2208,7 +2216,7 @@ def _order_response(
                 Decimal(str(item.subtotal)).quantize(MONEY_QUANTUM)
             )
         data["items"].append(item_data)
-    if user.role == "workshop":
+    if not _can_view_order_sales_amount(user):
         data.pop("total_amount", None)
         data.pop("payment_status", None)
         for item in data["items"]:
@@ -2267,7 +2275,7 @@ def _order_list_summary_response(
         ),
         "business_remaining_quantity": business_remaining_quantity,
     }
-    if user.role == "workshop":
+    if not _can_view_order_sales_amount(user):
         data.pop("total_amount", None)
     return data
 

@@ -157,7 +157,7 @@ ROLE_DEFAULT_PERMISSIONS: dict[str, frozenset[str]] = {
             "deliveries.view",
         }
     ),
-    "delivery_picker": frozenset({"orders.view", "deliveries.pick"}),
+    "delivery_picker": frozenset({"deliveries.pick"}),
 }
 
 

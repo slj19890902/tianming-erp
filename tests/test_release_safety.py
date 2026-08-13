@@ -352,11 +352,17 @@ def test_uat_launcher_isolated_from_factory_database_and_port() -> None:
         "check-startup",
         "18000",
         "19999",
-        "UAT 禁止连接工厂正式数据库",
         "UAT 禁止使用正式端口 8000",
         '"D:\\纸箱厂erp软件搭建\\data\\carton_erp.sqlite3"',
+        "$protectedPaths",
+        "$forbiddenRoots",
+        '"--protected-path"',
+        '"--forbidden-root"',
+        '"assert-ownership"',
         "$PythonPath",
     ):
         assert marker in source
+    assert "SetEnvironmentVariable" not in source
+    assert "Start-Process" not in source
     assert "alembic upgrade" not in source
     assert '"-m", "alembic"' not in source

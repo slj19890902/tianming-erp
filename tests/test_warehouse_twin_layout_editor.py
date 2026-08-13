@@ -10,6 +10,7 @@ from app.services import warehouse_twin_layout_editor as editor
 from app.services.warehouse_twin_layout_editor import (
     WarehouseTwinLayoutEditConflictError,
     WarehouseTwinLayoutEditError,
+    WarehouseTwinLayoutEditNotFoundError,
     _floor_revision,
     create_warehouse_twin_rack,
     delete_warehouse_twin_rack,
@@ -337,6 +338,30 @@ def test_damaged_runtime_layout_fails_closed_without_static_fallback(
         load_warehouse_twin_layout_draft("3F")
     with pytest.raises(ValueError, match="运行地图损坏"):
         warehouse_twin_layout.load_warehouse_twin_floor("3F")
+
+
+def test_uat_editor_missing_runtime_fails_closed_without_static_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    baseline = _asset(tmp_path / "static-baseline.json")
+    runtime = tmp_path / "uat" / "warehouse" / "runtime" / "twin_layout_v1.json"
+    draft = tmp_path / "uat" / "warehouse" / "drafts" / "twin_layout_v1.draft.json"
+    backups = tmp_path / "uat" / "warehouse" / "backups"
+    baseline_sha256 = sha256(baseline.read_bytes()).hexdigest()
+    monkeypatch.setenv("ERP_UAT_ROOT", str(tmp_path / "uat"))
+    monkeypatch.setattr(editor, "TWIN_LAYOUT_BASELINE_PATH", baseline)
+    monkeypatch.setattr(editor, "TWIN_LAYOUT_PATH", runtime)
+    monkeypatch.setattr(editor, "TWIN_LAYOUT_DRAFT_PATH", draft)
+    monkeypatch.setattr(editor, "TWIN_LAYOUT_BACKUP_DIR", backups)
+
+    with pytest.raises(WarehouseTwinLayoutEditNotFoundError):
+        load_warehouse_twin_layout_draft("3F")
+
+    assert sha256(baseline.read_bytes()).hexdigest() == baseline_sha256
+    assert not runtime.exists()
+    assert not draft.exists()
+    assert not backups.exists()
 
 
 def test_invalid_or_stale_draft_is_refused_and_never_changes_published(

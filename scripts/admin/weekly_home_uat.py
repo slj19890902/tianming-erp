@@ -204,8 +204,9 @@ def _safe_package_id(value: str) -> str:
 
 
 def _git_branch(project_root: Path) -> str:
+    git_executable = os.getenv("ERP_UAT_GIT_PATH", "git").strip() or "git"
     result = subprocess.run(
-        ["git", "branch", "--show-current"],
+        [git_executable, "branch", "--show-current"],
         cwd=project_root,
         check=False,
         capture_output=True,
@@ -218,8 +219,9 @@ def _git_branch(project_root: Path) -> str:
 
 
 def _git_is_ancestor(project_root: Path, ancestor: str, descendant: str) -> bool:
+    git_executable = os.getenv("ERP_UAT_GIT_PATH", "git").strip() or "git"
     result = subprocess.run(
-        ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+        [git_executable, "merge-base", "--is-ancestor", ancestor, descendant],
         cwd=project_root,
         check=False,
         capture_output=True,

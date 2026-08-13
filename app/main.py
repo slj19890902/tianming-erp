@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from ipaddress import ip_address
+import os
 from pathlib import Path
 import sqlite3
 from urllib.parse import urlsplit
@@ -61,6 +62,7 @@ from app.api.tianhua_pre_delivery import (
     router as tianhua_pre_delivery_router,
 )
 from app.core.config import load_settings
+from app.core.uat_isolation import write_uat_attestation
 from app.middleware.performance import (
     PerformanceObservabilityMiddleware,
     slow_request_threshold_ms,
@@ -82,8 +84,18 @@ async def phase2_lifespan(_: FastAPI):
     current = load_settings()
     print(f"BoxERP database: {current.database_path}")
     # 确保 PDF 训练样本存储目录存在（不进入 Git，.gitkeep 已追踪目录结构）
-    _pdf_dir = Path(__file__).resolve().parent.parent / "data" / "pdf_training_samples"
+    _pdf_dir = Path(
+        os.getenv(
+            "ERP_PDF_TRAINING_DIR",
+            str(Path(__file__).resolve().parent.parent / "data" / "pdf_training_samples"),
+        )
+    )
     _pdf_dir.mkdir(parents=True, exist_ok=True)
+    if os.getenv("ERP_UAT_ROOT"):
+        from app.core.uat_isolation import validate_uat_process_ownership
+
+        validate_uat_process_ownership()
+    write_uat_attestation(current)
     yield
 
 

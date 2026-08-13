@@ -324,6 +324,11 @@ def load_settings() -> Settings:
     environment = _environment()
     is_production = environment == "production"
     production_transport = _production_transport(production=is_production)
+    if os.getenv("ERP_UAT_ROOT"):
+        # Fail before _load_or_create_secret can touch a copied .env path.
+        from app.core.uat_isolation import validate_uat_environment
+
+        validate_uat_environment()
     configured_secret = os.getenv("ERP_SECRET_KEY", "").strip()
     secret_key = configured_secret or _load_or_create_secret(
         secret_file,
@@ -379,7 +384,7 @@ def load_settings() -> Settings:
                 raise ValueError(
                     f"lan_http 的 {env_name} 来源必须包含在 ERP_ALLOWED_ORIGINS"
                 )
-    return Settings(
+    result = Settings(
         database_path=database_path,
         backup_dir=backup_dir,
         allowed_origins=allowed_origins,
@@ -412,6 +417,9 @@ def load_settings() -> Settings:
         session_cookie_secure=(is_production and production_transport == "https_proxy")
         or cookie_secure_requested,
     )
+    if os.getenv("ERP_UAT_ROOT"):
+        validate_uat_environment(result)
+    return result
 
 
 settings = load_settings()

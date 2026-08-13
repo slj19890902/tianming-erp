@@ -694,6 +694,28 @@ def _verified_sqlite_connection(connection: sqlite3.Connection, *, label: str) -
 def _verified_sqlite_bytes(content: bytes, *, label: str) -> dict[str, Any]:
     """Run SQLite semantic verification on bytes captured from a locked handle."""
 
+    # Python builds before 3.11 do not expose Connection.deserialize().
+    # Materialize the already-locked bytes into a private temporary file and
+    # run the same read-only PRAGMA checks through the portable sqlite API.
+    deserialize = getattr(sqlite3.Connection, "deserialize", None)
+    if not callable(deserialize):
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=".uat-verify-", suffix=".sqlite3"
+        )
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+            with closing(sqlite3.connect(f"{temporary.as_uri()}?mode=ro", uri=True)) as connection:
+                connection.execute("PRAGMA query_only=ON")
+                return _verified_sqlite_connection(connection, label=label)
+        except sqlite3.Error as error:
+            raise UatIsolationError(f"{label} verification failed") from error
+        finally:
+            temporary.unlink(missing_ok=True)
+
     with closing(sqlite3.connect(":memory:")) as connection:
         try:
             connection.deserialize(content)
@@ -761,7 +783,15 @@ def create_sqlite_copy(
                 final,
                 label="SQLite copy final",
             )
-            verified_content = final.serialize()
+            # ``Connection.serialize`` is only available in newer Python
+            # sqlite builds.  The factory runtime may not expose it; the
+            # immutable temporary file is still the exact artifact that will
+            # be locked and published, so read those bytes as the portable
+            # equivalent and re-check them under the publish lock below.
+            serialize = getattr(final, "serialize", None)
+            verified_content = (
+                serialize() if callable(serialize) else temporary.read_bytes()
+            )
         verification_lock = _windows_lock_verified_file(temporary)
         try:
             # The exclusive read/delete handle blocks all new writers and name

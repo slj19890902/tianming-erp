@@ -375,6 +375,7 @@ def test_single_pallet_location_keeps_legacy_pallet_and_pallets_contract(
                 "pallet_id": ids["first_pallet"],
                 "expected_version": 1,
                 "target_location_id": ids["floor1_target"],
+                "expected_target_layout_version": 1,
             }
         ],
     }
@@ -887,6 +888,7 @@ def test_each_dispatch_pallet_moves_independently_and_preserves_delivery_facts(
                 "pallet_id": ids["first_pallet"],
                 "expected_version": 1,
                 "target_location_id": ids["floor3_target"],
+                "expected_target_layout_version": 1,
             }
         ],
     }
@@ -984,7 +986,7 @@ def test_each_dispatch_pallet_moves_independently_and_preserves_delivery_facts(
         )
 
 
-def test_p1_49b_move_mode_now_mounts_p1_49c_merge_without_enabling_count_controls() -> None:
+def test_p1_49b_move_mode_keeps_p1_49c_merge_when_stocktake_is_enabled() -> None:
     source = FRONTEND.read_text(encoding="utf-8")
     inventory_source = WAREHOUSE_INVENTORY.read_text(encoding="utf-8")
     assert 'value.permissions.includes("warehouse.execute")' in source
@@ -999,7 +1001,9 @@ def test_p1_49b_move_mode_now_mounts_p1_49c_merge_without_enabling_count_control
     assert "leftId - rightId" in inventory_source
     assert "pallet_move" in source
     assert "楼层" in source and "区域" in source and "具体货位" in source
-    assert "const P1_47D_ENABLED = false;" in source
+    assert "P1_47D_ENABLED" not in source
+    assert 'value.permissions.includes("warehouse.stocktake.submit")' in source
+    assert source.count('"/api/warehouse/twin-operations/stocktake-batches"') == 1
     assert "const P1_49C_ENABLED = true;" in source
     assert "selectedMergePalletIds" not in source
     assert source.count('"/api/warehouse/pallets/merge-batches"') == 1

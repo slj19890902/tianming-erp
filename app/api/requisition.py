@@ -191,6 +191,7 @@ can_read_production_labels = PermissionChecker("orders.view")
 admin_rollback = RoleChecker(["admin"])
 _FINISHED_STOCK_POLICY_WRITE_LOCK = Lock()
 _SUPPLIER_ORDER_CREATE_WRITE_LOCK = Lock()
+_MERGE_GROUP_WRITE_LOCK = Lock()
 
 
 class ProductionPackagingLabelJobRequest(BaseModel):
@@ -534,6 +535,13 @@ class MergeGroupUpdatePayload(BaseModel):
     report_width_mm: Decimal | None = Field(default=None, gt=0)
     cutting_mode: str | None = None
     remark: str | None = None
+    expected_cutting_plan_fingerprint: str | None = Field(
+        default=None, min_length=64, max_length=64
+    )
+    calculated_report_length_mm: Decimal | None = Field(default=None, gt=0)
+    calculated_report_width_mm: Decimal | None = Field(default=None, gt=0)
+    calculated_requisition_qty: int | None = Field(default=None, gt=0)
+    calculated_effective_demand_piece_qty: int | None = Field(default=None, gt=0)
 
     @field_validator("cutting_mode")
     @classmethod
@@ -893,6 +901,14 @@ class PendingSupplierOrderDraftLine(BaseModel):
     requisition_qty: int
     dimension_override_acknowledged: bool = False
     quantity_override_acknowledged: bool = False
+    cutting_plan_fingerprint: str | None = Field(
+        default=None, min_length=64, max_length=64
+    )
+    original_report_length_mm: Decimal | None = Field(default=None, gt=0)
+    original_report_width_mm: Decimal | None = Field(default=None, gt=0)
+    effective_demand_piece_qty: int | None = Field(default=None, gt=0)
+    theoretical_output_piece_qty: int | None = Field(default=None, gt=0)
+    remainder_piece_qty: int | None = Field(default=None, ge=0)
     remark: str | None = None
     source_items: list[PendingSupplierOrderDraftSourceItem] = Field(min_length=1)
 
@@ -4153,6 +4169,310 @@ def _merge_group_rows(db: Session, group_id: int) -> list[tuple[RequisitionItem,
     ).all()
 
 
+def _merge_group_original_report_dimensions(
+    order_item: OrderItem,
+    req_item: RequisitionItem,
+    *,
+    cutting_mode: str,
+) -> tuple[Decimal, Decimal]:
+    component_type = _requisition_item_component(req_item)
+    original_length = (
+        order_item.snapshot_base_report_length_mm
+        if component_type == "base"
+        else order_item.snapshot_report_length_mm
+    )
+    original_width = (
+        order_item.snapshot_base_report_width_mm
+        if component_type == "base"
+        else order_item.snapshot_report_width_mm
+    )
+    if original_length is None or original_width is None:
+        persisted_mode = normalize_cutting_mode(
+            req_item.special_process or DEFAULT_CUTTING_MODE
+        )
+        if (
+            persisted_mode == DEFAULT_CUTTING_MODE
+            and cutting_mode == DEFAULT_CUTTING_MODE
+            and req_item.cardboard_len is not None
+            and req_item.cardboard_width is not None
+        ):
+            return Decimal(req_item.cardboard_len), Decimal(
+                req_item.cardboard_width
+            )
+        raise HTTPException(
+            status_code=409,
+            detail="合并报料缺少冻结的原始单片报料尺寸，请先补齐订单快照后重试",
+        )
+    original_length = Decimal(original_length)
+    original_width = Decimal(original_width)
+    if original_length <= 0 or original_width <= 0:
+        raise HTTPException(
+            status_code=409,
+            detail="合并报料的原始单片报料尺寸无效，请先修复订单快照后重试",
+        )
+    return original_length, original_width
+
+
+def _merge_group_cutting_plan(
+    group: Requisition,
+    db: Session,
+    *,
+    cutting_mode: str | None = None,
+) -> dict:
+    """Return one authoritative aggregate plan for a pending merge group."""
+    rows = _merge_group_rows(db, group.id)
+    if not rows:
+        raise HTTPException(status_code=409, detail="合并报料组没有可核对的来源明细")
+    first_req_item = rows[0][0]
+    resolved_mode = normalize_cutting_mode(
+        cutting_mode or first_req_item.special_process or DEFAULT_CUTTING_MODE
+    )
+    factor = _cutting_factor(resolved_mode)
+    original_dimensions: tuple[Decimal, Decimal] | None = None
+    member_plans: list[dict] = []
+    active_total = 0
+    active_covered_pieces = 0
+    active_modes: set[str] = set()
+    fingerprint_members: list[dict] = []
+    for req_item, order_item, order, customer, product in rows:
+        member_dimensions = _merge_group_original_report_dimensions(
+            order_item, req_item, cutting_mode=resolved_mode
+        )
+        if original_dimensions is None:
+            original_dimensions = member_dimensions
+        elif member_dimensions != original_dimensions:
+            raise HTTPException(
+                status_code=409,
+                detail="合并报料组来源的原始单片报料尺寸不一致，不能按同一采购规格合并",
+            )
+        requirements = _current_requisition_requirements(
+            db,
+            order_item,
+            cutting_mode=resolved_mode,
+            pieces_per_box=req_item.pieces_per_box or _pieces_per_box(order_item),
+            component_type=_requisition_item_component(req_item),
+        )
+        active = _active_supplier_requisition_facts(
+            db,
+            item=order_item,
+            req_item=req_item,
+            component_type=_requisition_item_component(req_item),
+        )
+        active_quantity = int(active.get("quantity") or 0)
+        active_total += active_quantity
+        member_active_covered_pieces = 0
+        for active_row in active.get("orders") or []:
+            active_mode = normalize_cutting_mode(
+                active_row.get("cutting_mode") or DEFAULT_CUTTING_MODE
+            )
+            active_modes.add(active_mode)
+            covered_pieces = int(
+                active_row.get("requisition_qty") or 0
+            ) * _cutting_factor(active_mode)
+            member_active_covered_pieces += covered_pieces
+            active_covered_pieces += covered_pieces
+        member_plan = {
+            "req_item": req_item,
+            "order_item": order_item,
+            "order": order,
+            "customer": customer,
+            "product": product,
+            "requirements": requirements,
+            "active_requisition": active,
+            "active_covered_piece_qty": member_active_covered_pieces,
+        }
+        member_plans.append(member_plan)
+        fingerprint_members.append(
+            {
+                "requisition_item_id": req_item.id,
+                "order_item_id": order_item.id,
+                "group_status": group.status,
+                "item_status": req_item.status,
+                "persisted_length": _plain(req_item.cardboard_len),
+                "persisted_width": _plain(req_item.cardboard_width),
+                "persisted_cutting_mode": normalize_cutting_mode(
+                    req_item.special_process or DEFAULT_CUTTING_MODE
+                ),
+                "persisted_requisition_qty": int(req_item.requisition_qty or 0),
+                "original_length": _plain(member_dimensions[0]),
+                "original_width": _plain(member_dimensions[1]),
+                "finished_reserved": int(
+                    requirements["finished_inventory_reserved_qty"]
+                ),
+                "production_required": int(requirements["production_required_qty"]),
+                "required_pieces": int(requirements["required_piece_qty"]),
+                "semi_reserved_pieces": int(
+                    requirements["semi_finished_reserved_piece_qty"]
+                ),
+                "effective_pieces": int(
+                    requirements["remaining_required_piece_qty"]
+                ),
+                "active_requisition_qty": active_quantity,
+                "active_supplier_order_ids": sorted(
+                    int(row["supplier_order_id"])
+                    for row in active.get("orders") or []
+                    if row.get("supplier_order_id") is not None
+                ),
+                "active_requisition_facts": [
+                    {
+                        "supplier_order_id": row.get("supplier_order_id"),
+                        "requisition_qty": int(row.get("requisition_qty") or 0),
+                        "cutting_mode": normalize_cutting_mode(
+                            row.get("cutting_mode") or DEFAULT_CUTTING_MODE
+                        ),
+                    }
+                    for row in active.get("orders") or []
+                ],
+            }
+        )
+    assert original_dimensions is not None
+    effective_demand = sum(
+        int(member["requirements"]["remaining_required_piece_qty"])
+        for member in member_plans
+    )
+    current_mode = normalize_cutting_mode(
+        first_req_item.special_process or DEFAULT_CUTTING_MODE
+    )
+    if active_total > 0 and resolved_mode != current_mode:
+        raise HTTPException(
+            status_code=409,
+            detail="合并报料组已有正式报料记录，不能再修改一开数",
+        )
+    if active_modes and active_modes != {resolved_mode}:
+        raise HTTPException(
+            status_code=409,
+            detail="合并报料组历史正式报料的一开数与当前草稿不一致，必须人工核对后再继续",
+        )
+    remaining_effective_demand = max(
+        effective_demand - active_covered_pieces, 0
+    )
+    if remaining_effective_demand <= 0:
+        raise HTTPException(
+            status_code=409,
+            detail="合并报料组当前已无有效剩余需求，请刷新列表后重试",
+        )
+    requisition_qty = _purchase_qty(
+        remaining_effective_demand, 0, resolved_mode
+    )
+    allocations = _allocate_integer_total(
+        requisition_qty,
+        [
+            max(
+                int(member["requirements"]["remaining_required_piece_qty"])
+                - int(member["active_covered_piece_qty"]),
+                0,
+            )
+            for member in member_plans
+        ],
+    )
+    for member, allocation in zip(member_plans, allocations):
+        member["allocated_requisition_qty"] = int(allocation)
+    theoretical_output = requisition_qty * factor
+    fingerprint_payload = {
+        "group_id": group.id,
+        "supplier_name": (group.supplier_name or "").strip(),
+        "cutting_mode": resolved_mode,
+        "factor": factor,
+        "gross_effective_demand_piece_qty": effective_demand,
+        "effective_demand_piece_qty": remaining_effective_demand,
+        "active_covered_piece_qty": active_covered_pieces,
+        "aggregate_requisition_qty": requisition_qty,
+        "active_requisition_qty": active_total,
+        "members": fingerprint_members,
+    }
+    fingerprint = hashlib.sha256(
+        json.dumps(
+            fingerprint_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return {
+        "rows": rows,
+        "members": member_plans,
+        "cutting_mode": resolved_mode,
+        "cutting_factor": factor,
+        "original_report_length_mm": original_dimensions[0],
+        "original_report_width_mm": original_dimensions[1],
+        "report_length_mm": original_dimensions[0],
+        "report_width_mm": original_dimensions[1] * factor,
+        "gross_effective_demand_piece_qty": effective_demand,
+        "effective_demand_piece_qty": remaining_effective_demand,
+        "remaining_effective_demand_piece_qty": remaining_effective_demand,
+        "requisition_qty": requisition_qty,
+        "active_requisition_qty": active_total,
+        "remaining_requisition_qty": requisition_qty,
+        "theoretical_output_piece_qty": theoretical_output,
+        "remainder_piece_qty": max(
+            theoretical_output - remaining_effective_demand, 0
+        ),
+        "cutting_plan_fingerprint": fingerprint,
+    }
+
+
+def _claim_merge_group_pending(db: Session, group_id: int) -> None:
+    """Acquire SQLite's writer lock without manufacturing a business change."""
+    claimed = db.execute(
+        update(Requisition)
+        .where(
+            Requisition.id == group_id,
+            Requisition.status == "merged_pending",
+        )
+        .values(status=Requisition.status)
+        .execution_options(synchronize_session=False)
+    )
+    if claimed.rowcount != 1:
+        raise HTTPException(
+            status_code=409,
+            detail="合并报料草稿状态已变化，请刷新后重试",
+        )
+
+
+def _assert_merge_plan_submission(
+    *,
+    plan: dict,
+    fingerprint: str | None,
+    report_length_mm: Decimal | None,
+    report_width_mm: Decimal | None,
+    requisition_qty: int | None,
+    effective_demand_piece_qty: int | None,
+) -> None:
+    if not fingerprint or fingerprint != plan["cutting_plan_fingerprint"]:
+        raise HTTPException(
+            status_code=409,
+            detail="合并报料计算依据已变化，请刷新当前草稿后重试",
+        )
+    comparisons = (
+        (
+            report_length_mm,
+            plan["report_length_mm"],
+            "采购长度",
+        ),
+        (
+            report_width_mm,
+            plan["report_width_mm"],
+            "采购宽度",
+        ),
+        (
+            requisition_qty,
+            plan["requisition_qty"],
+            "采购张数",
+        ),
+        (
+            effective_demand_piece_qty,
+            plan["effective_demand_piece_qty"],
+            "有效需求片数",
+        ),
+    )
+    for submitted, expected, label in comparisons:
+        if submitted is None or Decimal(str(submitted)) != Decimal(str(expected)):
+            raise HTTPException(
+                status_code=409,
+                detail=f"{label}与服务端当前权威计算不一致，请刷新后重试",
+            )
+
+
 def _merge_group_dict(
     group: Requisition,
     db: Session,
@@ -4160,6 +4480,11 @@ def _merge_group_dict(
     display_registry=None,
 ) -> dict:
     rows = _merge_group_rows(db, group.id)
+    cutting_plan = _merge_group_cutting_plan(group, db)
+    plan_members = {
+        int(member["req_item"].id): member
+        for member in cutting_plan["members"]
+    }
     registry = display_registry or build_display_registry(db)
     members = []
     product_codes: list[str | None] = []
@@ -4180,13 +4505,8 @@ def _merge_group_dict(
         display_no = display_order_number(order, registry)
         product_code = req_item.product_code_snapshot or order_item.snapshot_product_code or product.product_code
         product_name = req_item.product_name_snapshot or order_item.snapshot_product_name
-        requirements = _current_requisition_requirements(
-            db,
-            order_item,
-            cutting_mode=req_item.special_process,
-            pieces_per_box=req_item.pieces_per_box or _pieces_per_box(order_item),
-            component_type=_requisition_item_component(req_item),
-        )
+        plan_member = plan_members[int(req_item.id)]
+        requirements = plan_member["requirements"]
         if not _requires_supplier_purchase(requirements):
             continue
         if first_item is None:
@@ -4204,7 +4524,7 @@ def _merge_group_dict(
         remaining_required_piece_qty = int(
             requirements["remaining_required_piece_qty"]
         )
-        requisition_qty = int(requirements["requisition_qty"])
+        requisition_qty = int(plan_member["allocated_requisition_qty"])
         product_codes.append(product_code)
         order_numbers.append(display_no)
         customer_names.append(customer.name)
@@ -4252,9 +4572,9 @@ def _merge_group_dict(
             fallback_text=first_item.snapshot_material,
         )
     supplier_name = (group.supplier_name or "").strip()
-    cardboard_len = first_req_item.cardboard_len if first_req_item else None
-    cardboard_width = first_req_item.cardboard_width if first_req_item else None
-    cutting_mode = first_req_item.special_process if first_req_item else DEFAULT_CUTTING_MODE
+    cardboard_len = cutting_plan["report_length_mm"]
+    cardboard_width = cutting_plan["report_width_mm"]
+    cutting_mode = cutting_plan["cutting_mode"]
     return {
         "item_id": f"mg{group.id}",
         "id": group.id,
@@ -4280,6 +4600,22 @@ def _merge_group_dict(
         "required_piece_qty": total_required_piece_qty,
         "semi_finished_reserved_piece_qty": total_semi_finished_reserved_piece_qty,
         "remaining_required_piece_qty": total_remaining_required_piece_qty,
+        "effective_demand_piece_qty": cutting_plan[
+            "effective_demand_piece_qty"
+        ],
+        "original_report_length_mm": cutting_plan[
+            "original_report_length_mm"
+        ],
+        "original_report_width_mm": cutting_plan[
+            "original_report_width_mm"
+        ],
+        "theoretical_output_piece_qty": cutting_plan[
+            "theoretical_output_piece_qty"
+        ],
+        "remainder_piece_qty": cutting_plan["remainder_piece_qty"],
+        "cutting_plan_fingerprint": cutting_plan[
+            "cutting_plan_fingerprint"
+        ],
         "total_quantity": total_quantity,
         "total_required_piece_qty": total_required_piece_qty,
         "suggested_cardboard_len": cardboard_len,
@@ -4465,6 +4801,9 @@ def _active_supplier_requisition_facts(
                 "supplier_order_number": supplier_order.order_number,
                 "supplier_name": supplier_order.supplier_name,
                 "requisition_qty": int(order_line.requisition_qty or 0),
+                "cutting_mode": normalize_cutting_mode(
+                    order_line.cutting_mode or supplier_order.cutting_mode
+                ),
                 "created_at": (
                     beijing_naive_to_api(supplier_order.created_at)
                     if supplier_order.created_at is not None
@@ -4507,6 +4846,9 @@ def _active_supplier_requisition_facts(
                     "supplier_order_number": requisition.requisition_number,
                     "supplier_name": requisition.supplier_name,
                     "requisition_qty": int(legacy_line.requisition_qty or 0),
+                    "cutting_mode": normalize_cutting_mode(
+                        legacy_line.special_process or DEFAULT_CUTTING_MODE
+                    ),
                     "created_at": (
                         beijing_naive_to_api(requisition.created_at)
                         if requisition.created_at is not None
@@ -5069,6 +5411,11 @@ def _purchase_line_spec_from_entry(entry: dict) -> dict:
     flute_type = _clean_supplier_flute(order_item.flute_type)
     clean_material_code = _clean_supplier_material_code(material_code, layer_count)
     return {
+        "merge_group_id": (
+            int(entry["group"].id)
+            if entry.get("group") is not None
+            else None
+        ),
         "material_id": material_id,
         "material_code": clean_material_code,
         "material_display": _format_supplier_material(
@@ -5093,6 +5440,7 @@ def _purchase_line_spec_from_entry(entry: dict) -> dict:
 def _purchase_line_key(supplier_name: str | None, spec: dict) -> str:
     key_payload = {
         "supplier_name": (supplier_name or "").strip(),
+        "merge_group_id": spec.get("merge_group_id"),
         "material_id": spec.get("material_id"),
         "material_code": spec.get("material_code") or "",
         "material_display": spec.get("material_display") or "",
@@ -5149,6 +5497,22 @@ def _aggregate_entries_to_purchase_lines(
                 "recommended_report_width_mm": entry.get(
                     "recommended_report_width_mm"
                 ),
+                "cutting_plan_fingerprint": entry.get(
+                    "cutting_plan_fingerprint"
+                ),
+                "original_report_length_mm": entry.get(
+                    "original_report_length_mm"
+                ),
+                "original_report_width_mm": entry.get(
+                    "original_report_width_mm"
+                ),
+                "effective_demand_piece_qty": entry.get(
+                    "effective_demand_piece_qty"
+                ),
+                "theoretical_output_piece_qty": entry.get(
+                    "theoretical_output_piece_qty"
+                ),
+                "remainder_piece_qty": entry.get("remainder_piece_qty"),
                 "source_items": [],
             }
             line_map[line_key] = line
@@ -5179,6 +5543,18 @@ def _aggregate_entries_to_purchase_lines(
             entry.get("existing_supplier_orders") or []
         )
         line["source_items"].append(_source_item_from_entry(entry))
+        if entry.get("cutting_plan_fingerprint"):
+            line["cutting_plan_fingerprint"] = entry[
+                "cutting_plan_fingerprint"
+            ]
+            for key in (
+                "original_report_length_mm",
+                "original_report_width_mm",
+                "effective_demand_piece_qty",
+                "theoretical_output_piece_qty",
+                "remainder_piece_qty",
+            ):
+                line[key] = entry.get(key)
 
     lines = list(line_map.values())
     for line in lines:
@@ -5449,35 +5825,39 @@ def _pending_selection_preview_groups(
         if not rows:
             raise HTTPException(status_code=400, detail="合并组没有来源明细")
         supplier_name = (selection.supplier_name or group.supplier_name or "").strip()
+        requested_mode = selection.cutting_mode or rows[0][0].special_process
+        cutting_plan = _merge_group_cutting_plan(
+            group, db, cutting_mode=requested_mode
+        )
+        plan_members = {
+            int(member["req_item"].id): member
+            for member in cutting_plan["members"]
+        }
+        if selection.report_length_mm is not None and Decimal(
+            selection.report_length_mm
+        ) != Decimal(cutting_plan["report_length_mm"]):
+            raise HTTPException(status_code=409, detail="合并报料采购长度已变化，请刷新后重试")
+        if selection.report_width_mm is not None and Decimal(
+            selection.report_width_mm
+        ) != Decimal(cutting_plan["report_width_mm"]):
+            raise HTTPException(status_code=409, detail="合并报料采购宽度已变化，请刷新后重试")
         preview_count_before_group = len(seen_source_keys)
         for req_item, order_item, order, customer, product in rows:
             if req_item.status != "merged_pending":
                 raise HTTPException(status_code=409, detail="合并组状态异常，不能生成报料草稿")
             _ensure_pending_order_item_for_supplier_order(db, order_item.id)
             material = db.get(Material, order_item.material_id) if order_item.material_id else None
-            cutting_mode = selection.cutting_mode or req_item.special_process
-            requirements = _current_requisition_requirements(
-                db,
-                order_item,
-                cutting_mode=cutting_mode,
-                pieces_per_box=req_item.pieces_per_box or _pieces_per_box(order_item),
-                component_type=_requisition_item_component(req_item),
-            )
+            member_plan = plan_members[int(req_item.id)]
+            requirements = member_plan["requirements"]
             if bool(requirements["fully_covered_by_finished_inventory"]):
                 continue
             if not _requires_supplier_purchase(requirements):
                 continue
-            active_requisition = _active_supplier_requisition_facts(
-                db,
-                item=order_item,
-                req_item=req_item,
+            active_requisition = member_plan["active_requisition"]
+            theoretical_requisition_qty = int(
+                member_plan["allocated_requisition_qty"]
             )
-            theoretical_requisition_qty = int(requirements["requisition_qty"])
-            remaining_requisition_qty = max(
-                theoretical_requisition_qty
-                - int(active_requisition["quantity"]),
-                0,
-            )
+            remaining_requisition_qty = theoretical_requisition_qty
             if remaining_requisition_qty <= 0:
                 continue
             recommended_len, recommended_width = _recommended_supplier_dimensions(
@@ -5497,9 +5877,9 @@ def _pending_selection_preview_groups(
                     "customer": customer,
                     "product": product,
                     "material": material,
-                    "cardboard_len": selection.report_length_mm or req_item.cardboard_len,
-                    "cardboard_width": selection.report_width_mm or req_item.cardboard_width,
-                    "cutting_mode": requirements["cutting_mode"],
+                    "cardboard_len": cutting_plan["report_length_mm"],
+                    "cardboard_width": cutting_plan["report_width_mm"],
+                    "cutting_mode": cutting_plan["cutting_mode"],
                     "remark": (selection.remark or req_item.remark or "").strip() or None,
                     "inventory_deducted_qty": int(
                         requirements["finished_inventory_reserved_qty"]
@@ -5524,6 +5904,24 @@ def _pending_selection_preview_groups(
                     "existing_supplier_orders": active_requisition["orders"],
                     "recommended_report_length_mm": recommended_len,
                     "recommended_report_width_mm": recommended_width,
+                    "cutting_plan_fingerprint": cutting_plan[
+                        "cutting_plan_fingerprint"
+                    ],
+                    "original_report_length_mm": cutting_plan[
+                        "original_report_length_mm"
+                    ],
+                    "original_report_width_mm": cutting_plan[
+                        "original_report_width_mm"
+                    ],
+                    "effective_demand_piece_qty": cutting_plan[
+                        "effective_demand_piece_qty"
+                    ],
+                    "theoretical_output_piece_qty": cutting_plan[
+                        "theoretical_output_piece_qty"
+                    ],
+                    "remainder_piece_qty": cutting_plan[
+                        "remainder_piece_qty"
+                    ],
                 },
             )
         if len(seen_source_keys) == preview_count_before_group:
@@ -5784,6 +6182,93 @@ def _draft_group_entries_by_purchase_lines(
                 )
                 for ref in source_refs
             ]
+            merge_groups = {
+                int(ref["merge_group"].id): ref["merge_group"]
+                for ref in source_refs
+                if ref["merge_group"] is not None
+            }
+            is_merge_line = bool(merge_groups)
+            merge_plan: dict | None = None
+            if is_merge_line:
+                if len(merge_groups) != 1 or any(
+                    ref["merge_group"] is None for ref in source_refs
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="一个采购规格行只能对应一个完整的合并报料组，请刷新草稿后重试",
+                    )
+                merge_group = next(iter(merge_groups.values()))
+                _claim_merge_group_pending(db, merge_group.id)
+                merge_plan = _merge_group_cutting_plan(
+                    merge_group,
+                    db,
+                    cutting_mode=draft_line.cutting_mode,
+                )
+                if {
+                    int(ref["req_item"].id) for ref in source_refs
+                } != {
+                    int(member["req_item"].id)
+                    for member in merge_plan["members"]
+                }:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="合并报料草稿来源不完整，请刷新后重试",
+                    )
+                _assert_merge_plan_submission(
+                    plan=merge_plan,
+                    fingerprint=draft_line.cutting_plan_fingerprint,
+                    report_length_mm=draft_line.original_report_length_mm
+                    and draft_line.report_length_mm,
+                    report_width_mm=draft_line.original_report_width_mm
+                    and draft_line.report_width_mm,
+                    requisition_qty=merge_plan["requisition_qty"],
+                    effective_demand_piece_qty=(
+                        draft_line.effective_demand_piece_qty
+                    ),
+                )
+                for submitted, expected, label in (
+                    (
+                        draft_line.original_report_length_mm,
+                        merge_plan["original_report_length_mm"],
+                        "原始单片报料长",
+                    ),
+                    (
+                        draft_line.original_report_width_mm,
+                        merge_plan["original_report_width_mm"],
+                        "原始单片报料宽",
+                    ),
+                    (
+                        draft_line.theoretical_output_piece_qty,
+                        merge_plan["theoretical_output_piece_qty"],
+                        "理论产出片数",
+                    ),
+                    (
+                        draft_line.remainder_piece_qty,
+                        merge_plan["remainder_piece_qty"],
+                        "尾数余量",
+                    ),
+                ):
+                    if submitted is None or Decimal(str(submitted)) != Decimal(
+                        str(expected)
+                    ):
+                        raise HTTPException(
+                            status_code=409,
+                            detail=f"{label}与服务端当前权威计算不一致，请刷新后重试",
+                        )
+                plan_by_req_item = {
+                    int(member["req_item"].id): member
+                    for member in merge_plan["members"]
+                }
+                current_requirements = [
+                    plan_by_req_item[int(ref["req_item"].id)]["requirements"]
+                    for ref in source_refs
+                ]
+                active_requisitions = [
+                    plan_by_req_item[int(ref["req_item"].id)][
+                        "active_requisition"
+                    ]
+                    for ref in source_refs
+                ]
             if not group_payload.request_key and any(
                 int(active["quantity"]) > 0 for active in active_requisitions
             ):
@@ -5810,7 +6295,18 @@ def _draft_group_entries_by_purchase_lines(
                     active_requisitions,
                 )
             ]
-            remaining_line_total = sum(remaining_requisition_quantities)
+            if merge_plan is not None:
+                remaining_line_total = int(merge_plan["requisition_qty"])
+                remaining_requisition_quantities = [
+                    int(
+                        plan_by_req_item[int(ref["req_item"].id)][
+                            "allocated_requisition_qty"
+                        ]
+                    )
+                    for ref in source_refs
+                ]
+            else:
+                remaining_line_total = sum(remaining_requisition_quantities)
             if remaining_line_total <= 0:
                 combined_orders = [
                     row
@@ -5827,6 +6323,11 @@ def _draft_group_entries_by_purchase_lines(
             if requested_line_total <= 0:
                 raise HTTPException(status_code=400, detail="本次报料张数必须大于 0")
             is_over_quantity = requested_line_total > remaining_line_total
+            if is_merge_line and is_over_quantity:
+                raise HTTPException(
+                    status_code=409,
+                    detail="合并报料采购张数超过当前权威剩余张数，请刷新草稿后重试",
+                )
             submitted_source_quantities = [
                 (
                     int(ref["source_payload"].requisition_qty)
@@ -5842,10 +6343,17 @@ def _draft_group_entries_by_purchase_lines(
                     remaining_requisition_quantities,
                 )
             )
+            if is_merge_line and stale_source_quantities:
+                raise HTTPException(
+                    status_code=409,
+                    detail="合并报料来源张数已变化，请刷新当前草稿后重试",
+                )
             submitted_source_total = sum(
                 submitted or 0 for submitted in submitted_source_quantities
             )
             if (
+                not is_merge_line
+                and
                 is_over_quantity
                 and not draft_line.quantity_override_acknowledged
                 and stale_source_quantities
@@ -6035,6 +6543,11 @@ def _draft_group_entries_by_purchase_lines(
                     "recommended_report_width_mm": expected_dimensions[1],
                     "dimension_override": bool(swapped_sources),
                     "quantity_override": is_over_quantity,
+                    "merge_plan_remaining_after_qty": (
+                        max(remaining_line_total - requested_line_total, 0)
+                        if merge_plan is not None
+                        else None
+                    ),
                 }
                 if req_item is not None:
                     req_item.cardboard_len = draft_line.report_length_mm
@@ -6143,9 +6656,18 @@ def _create_supplier_order_for_pending_entries(
         )
         entries_by_order_item.setdefault(order_item.id, []).append(entry)
         if req_item is not None:
+            merge_remaining = entry.get("merge_plan_remaining_after_qty")
             req_item.status = (
                 "supplier_requisition_created"
-                if int(entry.get("remaining_after_requisition_qty") or 0) <= 0
+                if (
+                    merge_remaining is not None
+                    and int(merge_remaining) <= 0
+                )
+                or (
+                    merge_remaining is None
+                    and int(entry.get("remaining_after_requisition_qty") or 0)
+                    <= 0
+                )
                 else "merged_pending"
             )
     db.flush()
@@ -12065,6 +12587,69 @@ def create_merge_group(
     reservation_map = active_finished_reservations_by_item_ids(
         db, [item.id for item, *_ in rows]
     )
+    resolved_mode = normalize_cutting_mode(payload.cutting_mode)
+    resolved_factor = _cutting_factor(resolved_mode)
+    original_dimensions: tuple[Decimal, Decimal] | None = None
+    create_requirements: list[dict] = []
+    for item, _order, _customer, _product in rows:
+        if (
+            item.snapshot_report_length_mm is None
+            or item.snapshot_report_width_mm is None
+        ):
+            if resolved_mode != DEFAULT_CUTTING_MODE:
+                raise HTTPException(
+                    status_code=409,
+                    detail="修改一开数前必须先有冻结的原始单片报料尺寸",
+                )
+            member_dimensions = (
+                Decimal(payload.report_length_mm),
+                Decimal(payload.report_width_mm),
+            )
+        else:
+            member_dimensions = (
+                Decimal(item.snapshot_report_length_mm),
+                Decimal(item.snapshot_report_width_mm),
+            )
+        if original_dimensions is None:
+            original_dimensions = member_dimensions
+        elif member_dimensions != original_dimensions:
+            raise HTTPException(
+                status_code=409,
+                detail="所选来源的原始单片报料尺寸不一致，不能合并",
+            )
+        create_requirements.append(
+            _current_requisition_summary(
+                db,
+                item,
+                cutting_mode=resolved_mode,
+                finished_reserved_qty=reservation_map.get(item.id, 0),
+            )
+        )
+    assert original_dimensions is not None
+    expected_length = original_dimensions[0]
+    expected_width = original_dimensions[1] * resolved_factor
+    if Decimal(payload.report_length_mm) != expected_length or Decimal(
+        payload.report_width_mm
+    ) != expected_width:
+        raise HTTPException(
+            status_code=409,
+            detail="合并报料采购尺寸不符合原始单片尺寸与一开数公式",
+        )
+    aggregate_requisition_qty = _purchase_qty(
+        sum(
+            int(requirements["remaining_required_piece_qty"])
+            for requirements in create_requirements
+        ),
+        0,
+        resolved_mode,
+    )
+    allocations = _allocate_integer_total(
+        aggregate_requisition_qty,
+        [
+            int(requirements["remaining_required_piece_qty"])
+            for requirements in create_requirements
+        ],
+    )
     supplier_name = (payload.supplier_name or "").strip()
     if supplier_name:
         supplier_name = _require_active_supplier(db, supplier_name)
@@ -12079,13 +12664,9 @@ def create_merge_group(
         )
         db.add(group)
         db.flush()
-        for item, _order, _customer, product in rows:
-            requirements = _current_requisition_summary(
-                db,
-                item,
-                cutting_mode=payload.cutting_mode,
-                finished_reserved_qty=reservation_map.get(item.id, 0),
-            )
+        for (item, _order, _customer, product), requirements, allocation in zip(
+            rows, create_requirements, allocations
+        ):
             pieces_per_box = int(requirements["pieces_per_box"])
             production_required_qty = int(requirements["production_required_qty"])
             if production_required_qty == 0:
@@ -12099,9 +12680,9 @@ def create_merge_group(
                     requisition_id=group.id,
                     order_item_id=item.id,
                     inventory_deducted_qty=0,
-                    requisition_qty=int(requirements["requisition_qty"]),
-                    cardboard_len=payload.report_length_mm,
-                    cardboard_width=payload.report_width_mm,
+                    requisition_qty=int(allocation),
+                    cardboard_len=expected_length,
+                    cardboard_width=expected_width,
                     pieces_per_box=pieces_per_box,
                     required_piece_qty=required_piece_qty,
                     special_process=payload.cutting_mode,
@@ -12139,6 +12720,46 @@ def update_merge_group(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
+    changes_cutting_plan = any(
+        value is not None
+        for value in (
+            payload.report_length_mm,
+            payload.report_width_mm,
+            payload.cutting_mode,
+        )
+    )
+    if changes_cutting_plan and any(
+        value is None
+        for value in (
+            payload.expected_cutting_plan_fingerprint,
+            payload.calculated_report_length_mm,
+            payload.calculated_report_width_mm,
+            payload.calculated_requisition_qty,
+            payload.calculated_effective_demand_piece_qty,
+        )
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="修改合并报料开料方式时必须提交完整的当前计算依据，请刷新后重试",
+        )
+    with _MERGE_GROUP_WRITE_LOCK:
+        return _update_merge_group_locked(
+            group_id=group_id,
+            payload=payload,
+            db=db,
+            user=user,
+            changes_cutting_plan=changes_cutting_plan,
+        )
+
+
+def _update_merge_group_locked(
+    *,
+    group_id: int,
+    payload: MergeGroupUpdatePayload,
+    db: Session,
+    user: User,
+    changes_cutting_plan: bool,
+) -> dict:
     group = db.get(Requisition, group_id)
     if group is None:
         raise HTTPException(status_code=404, detail="待报料合并组不存在")
@@ -12146,6 +12767,43 @@ def update_merge_group(
     if group.status != "merged_pending":
         raise HTTPException(status_code=409, detail="该合并组已生成供应商报料单，不能修改")
     try:
+        _claim_merge_group_pending(db, group.id)
+        old_plan = _merge_group_cutting_plan(group, db)
+        proposed_mode = normalize_cutting_mode(
+            payload.cutting_mode or old_plan["cutting_mode"]
+        )
+        new_plan = _merge_group_cutting_plan(
+            group, db, cutting_mode=proposed_mode
+        )
+        if changes_cutting_plan:
+            _assert_merge_plan_submission(
+                plan={
+                    **new_plan,
+                    "cutting_plan_fingerprint": old_plan[
+                        "cutting_plan_fingerprint"
+                    ],
+                },
+                fingerprint=payload.expected_cutting_plan_fingerprint,
+                report_length_mm=payload.calculated_report_length_mm,
+                report_width_mm=payload.calculated_report_width_mm,
+                requisition_qty=payload.calculated_requisition_qty,
+                effective_demand_piece_qty=(
+                    payload.calculated_effective_demand_piece_qty
+                ),
+            )
+            if (
+                payload.report_length_mm is not None
+                and Decimal(payload.report_length_mm)
+                != Decimal(new_plan["report_length_mm"])
+            ) or (
+                payload.report_width_mm is not None
+                and Decimal(payload.report_width_mm)
+                != Decimal(new_plan["report_width_mm"])
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="提交的采购尺寸不符合原始单片尺寸与一开数公式",
+                )
         if payload.supplier_name is not None:
             requested_supplier = payload.supplier_name.strip()
             current_supplier = (group.supplier_name or "").strip()
@@ -12157,38 +12815,70 @@ def update_merge_group(
                     if requested_supplier
                     else None
                 )
-        updates = {
-            key: value
-            for key, value in {
-                "cardboard_len": payload.report_length_mm,
-                "cardboard_width": payload.report_width_mm,
-                "special_process": payload.cutting_mode,
-                "remark": (payload.remark.strip() if payload.remark is not None else None),
-            }.items()
-            if value is not None
+        plan_members = {
+            int(member["req_item"].id): member
+            for member in new_plan["members"]
         }
         for item in group.items:
-            for key, value in updates.items():
-                setattr(item, key, value)
-            order_item = db.get(OrderItem, item.order_item_id)
+            member = plan_members[int(item.id)]
+            if changes_cutting_plan:
+                item.cardboard_len = new_plan["report_length_mm"]
+                item.cardboard_width = new_plan["report_width_mm"]
+                item.special_process = new_plan["cutting_mode"]
+            if payload.remark is not None:
+                item.remark = payload.remark.strip() or None
+            order_item = member["order_item"]
             if order_item is None:
                 raise HTTPException(status_code=404, detail="合并组订单明细不存在")
-            requirements = _current_requisition_requirements(
-                db,
-                order_item,
-                cutting_mode=item.special_process,
-                pieces_per_box=item.pieces_per_box or _pieces_per_box(order_item),
-                component_type=_requisition_item_component(item),
-            )
+            requirements = member["requirements"]
             item.pieces_per_box = int(requirements["pieces_per_box"])
             item.required_piece_qty = int(requirements["required_piece_qty"])
-            item.requisition_qty = int(requirements["requisition_qty"])
-        _audit(
+            item.requisition_qty = int(member["allocated_requisition_qty"])
+        customer_ids = sorted(
+            {int(member["order"].customer_id) for member in new_plan["members"]}
+        )
+        customer_names = sorted(
+            {str(member["customer"].name) for member in new_plan["members"]}
+        )
+        audit_plan_keys = (
+            "cutting_mode",
+            "original_report_length_mm",
+            "original_report_width_mm",
+            "report_length_mm",
+            "report_width_mm",
+            "requisition_qty",
+            "effective_demand_piece_qty",
+            "theoretical_output_piece_qty",
+            "remainder_piece_qty",
+        )
+        append_audit_event(
             db,
-            user=user,
-            action="UPDATE_REQUISITION_MERGE_GROUP",
+            event_category="business",
+            result="success",
+            source="web",
+            module_code="requisition",
+            action_code="requisition.merge_group.update",
+            legacy_action="UPDATE_REQUISITION_MERGE_GROUP",
+            resource="Requisition",
+            actor=user,
+            entity_type="material_requisition",
             entity_id=group.id,
-            details={"group_id": group.id},
+            object_ref=group.requisition_number,
+            customer_id=(customer_ids[0] if len(customer_ids) == 1 else None),
+            customer_name=(
+                customer_names[0] if len(customer_names) == 1 else None
+            ),
+            details={
+                "group_id": group.id,
+                "member_item_ids": sorted(
+                    int(member["order_item"].id)
+                    for member in new_plan["members"]
+                ),
+                "customer_ids": customer_ids,
+                "customer_names": customer_names,
+                "old": {key: old_plan[key] for key in audit_plan_keys},
+                "new": {key: new_plan[key] for key in audit_plan_keys},
+            },
             description="修改待报料合并组",
         )
         db.commit()
@@ -12208,199 +12898,68 @@ def create_supplier_order_from_merge_group(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
-    group = db.get(Requisition, group_id)
-    if group is None:
-        raise HTTPException(status_code=404, detail="待报料合并组不存在")
-    _require_requisition_customer_access(group, user, db)
-    if group.status != "merged_pending":
-        raise HTTPException(status_code=409, detail="该合并组已生成供应商报料单，不能重复生成")
-    supplier_name = (group.supplier_name or "").strip()
-    if not supplier_name:
-        raise HTTPException(status_code=400, detail="请先为合并组选择供应商")
-    supplier_name = _require_active_supplier(db, supplier_name)
-    rows = _merge_group_rows(db, group.id)
-    if not rows:
-        raise HTTPException(status_code=400, detail="合并组没有来源明细")
-    current_rows: list[tuple] = []
-    for req_item, order_item, order_row, customer, product in rows:
-        if req_item.status != "merged_pending":
-            raise HTTPException(status_code=409, detail="合并组状态异常，不能生成供应商报料单")
-        if order_item.requisition_status != "未报料":
-            raise HTTPException(status_code=409, detail="合并组中存在已报料明细，不能重复生成")
-        _ensure_order_item_crease_width(order_item)
-        late_finished_inventory = _late_finished_inventory_preview(
-            db,
-            item=order_item,
-            order=order_row,
-            product=product,
-        )
-        if late_finished_inventory["can_auto_reserve"]:
+    # Keep the legacy URL as a response adapter only.  It must share the same
+    # serialized, server-authoritative preview/finalize path as the current UI;
+    # otherwise this endpoint could reintroduce per-member ceiling and bypass
+    # the cutting-plan fingerprint/stock recheck performed by finalization.
+    with _SUPPLIER_ORDER_CREATE_WRITE_LOCK:
+        group = db.get(Requisition, group_id)
+        if group is None:
+            raise HTTPException(status_code=404, detail="待报料合并组不存在")
+        _require_requisition_customer_access(group, user, db)
+        if group.status != "merged_pending":
             raise HTTPException(
                 status_code=409,
-                detail=(
-                    "合并组中发现后来入库的同客户同存货编码成品库存，"
-                    "请先返回待报料列表点击“使用成品，剩余再报”后重试"
-                ),
+                detail="该合并组已生成供应商报料单，不能重复生成",
             )
-        requirements = _current_requisition_requirements(
-            db,
-            order_item,
-            cutting_mode=req_item.special_process,
-            pieces_per_box=req_item.pieces_per_box or _pieces_per_box(order_item),
-            component_type=_requisition_item_component(req_item),
+        supplier_name = (group.supplier_name or "").strip()
+        if not supplier_name:
+            raise HTTPException(status_code=400, detail="请先为合并组选择供应商")
+        rows = _merge_group_rows(db, group.id)
+        if not rows:
+            raise HTTPException(status_code=409, detail="合并组没有来源明细")
+        current_mode = normalize_cutting_mode(
+            rows[0][0].special_process or DEFAULT_CUTTING_MODE
         )
-        if bool(requirements["fully_covered_by_finished_inventory"]):
-            raise HTTPException(
-                status_code=409,
-                detail="合并组中存在已由成品库存全额抵扣的明细，请刷新后重试",
-            )
-        req_item.pieces_per_box = int(requirements["pieces_per_box"])
-        req_item.required_piece_qty = int(requirements["required_piece_qty"])
-        req_item.requisition_qty = int(requirements["requisition_qty"])
-        current_rows.append(
-            (
-                req_item,
-                order_item,
-                order_row,
-                customer,
-                product,
-                requirements,
-            )
-        )
-
-    first_req_item, first_order_item, *_ = current_rows[0]
-    material = db.get(Material, first_order_item.material_id) if first_order_item.material_id else None
-    _require_active_material_supplier(db, material)
-    layer_count = material.layer_count if material else first_order_item.layer_count
-    flute_type, flute_error = _business_flute_error(
-        layer_count,
-        first_order_item.flute_type,
-    )
-    if flute_error:
-        raise HTTPException(status_code=400, detail=flute_error)
-    total_quantity = sum(
-        int(requirements["production_required_qty"])
-        for *_, requirements in current_rows
-    )
-    total_stock_deduction_qty = sum(
-        int(requirements["finished_inventory_reserved_qty"])
-        for *_, requirements in current_rows
-    )
-    total_required_piece_qty = sum(
-        int(requirements["required_piece_qty"])
-        for *_, requirements in current_rows
-    )
-    total_requisition_qty = sum(
-        int(requirements["requisition_qty"])
-        for *_, requirements in current_rows
-    )
-    order = SupplierRequisitionOrder(
-        order_number=_supplier_order_number(db),
-        supplier_name=supplier_name,
-        material_id=first_order_item.material_id,
-        layer_count=layer_count,
-        flute_type=flute_type,
-        report_length_mm=int(first_req_item.cardboard_len),
-        report_width_mm=int(first_req_item.cardboard_width),
-        crease_type=first_order_item.snapshot_crease_type,
-        crease_left_mm=first_order_item.snapshot_crease_left_mm,
-        crease_middle_mm=first_order_item.snapshot_crease_middle_mm,
-        crease_right_mm=first_order_item.snapshot_crease_right_mm,
-        cutting_mode=first_req_item.special_process,
-        pieces_per_box=first_req_item.pieces_per_box,
-        required_piece_qty=total_required_piece_qty,
-        total_quantity=total_quantity,
-        stock_deduction_qty=total_stock_deduction_qty,
-        requisition_qty=total_requisition_qty,
-        remark=first_req_item.remark,
-        status="confirmed",
-        created_by=user.id,
-    )
-    try:
-        db.add(order)
-        db.flush()
-        requisition_date = beijing_today()
-        for (
-            req_item,
-            order_item,
-            _order,
-            customer,
-            _product,
-            requirements,
-        ) in current_rows:
-            db.add(
-                SupplierRequisitionOrderItem(
-                    supplier_order_id=order.id,
-                    order_item_id=order_item.id,
-                    **_supplier_item_snapshot_values(
-                        db,
-                        order_item,
-                        fallback_material_id=order.material_id,
-                        fallback_supplier_name=order.supplier_name,
-                        fallback_layer_count=order.layer_count,
-                        fallback_flute_type=order.flute_type,
-                    ),
-                    order_number=order_item.item_order_number,
-                    product_code=req_item.product_code_snapshot,
-                    product_name=req_item.product_name_snapshot,
-                    source_key=_supplier_requisition_source_key(
-                        order_item,
-                        req_item,
-                        component_type=_requisition_item_component(req_item),
-                    ),
-                    report_length_mm=int(req_item.cardboard_len),
-                    report_width_mm=int(req_item.cardboard_width),
-                    quantity=int(requirements["production_required_qty"]),
-                    stock_deduction_qty=int(
-                        requirements["finished_inventory_reserved_qty"]
-                    ),
-                    requisition_qty=int(requirements["requisition_qty"]),
-                    cutting_mode=str(requirements["cutting_mode"]),
-                    pieces_per_box=int(requirements["pieces_per_box"]),
-                    required_piece_qty=int(requirements["required_piece_qty"]),
-                    customer_name=customer.name,
-                    delivery_date=_order.delivery_date,
-                )
-            )
-            order_item.inventory_deducted_qty = 0
-            order_item.requisition_status = "已报料"
-            order_item.requisition_qty = int(requirements["requisition_qty"])
-            order_item.special_process = str(requirements["cutting_mode"])
-            order_item.cardboard_len = req_item.cardboard_len
-            order_item.cardboard_width = req_item.cardboard_width
-            order_item.requisition_spec = (
-                f"{_plain(req_item.cardboard_len)}×{_plain(req_item.cardboard_width)}"
-            )
-            order_item.requisition_date = requisition_date
-            order_item.requisition_remark = req_item.remark
-            req_item.status = "supplier_requisition_created"
-        group.status = "supplier_requisition_created"
-        _audit(
+        preview = _pending_selection_preview_groups(
             db,
+            PendingSupplierOrderCreatePayload(
+                selections=[
+                    PendingSupplierOrderSelection(
+                        type="merge_group",
+                        merge_group_id=group.id,
+                        supplier_name=supplier_name,
+                        cutting_mode=current_mode,
+                    )
+                ]
+            ),
+            user,
+        )
+        result = _create_supplier_orders_from_pending_selection_locked(
+            payload=PendingSupplierOrderFinalizePayload.model_validate(preview),
+            db=db,
             user=user,
-            action="CREATE_SUPPLIER_ORDER_FROM_MERGE_GROUP",
-            entity_id=group.id,
-            details={
-                "merge_group_id": group.id,
-                "supplier_order_id": order.id,
-                "supplier_order_number": order.order_number,
-            },
-            description="待报料合并组生成供应商报料单",
         )
-        db.commit()
-        db.refresh(order)
+        created_orders = list(result.get("created_orders") or [])
+        if len(created_orders) != 1:
+            raise HTTPException(
+                status_code=409,
+                detail="合并组生成结果异常，请刷新后重试",
+            )
+        created = created_orders[0]
+        order = db.get(
+            SupplierRequisitionOrder,
+            int(created["supplier_order_id"]),
+        )
+        if order is None:
+            raise HTTPException(status_code=409, detail="供应商报料单生成结果不存在")
         return {
             "supplier_order_id": order.id,
             "supplier_order_number": order.order_number,
             "status": "created",
             "supplier_order": _supplier_order_dict(order, db),
         }
-    except HTTPException:
-        db.rollback()
-        raise
-    except Exception:
-        db.rollback()
-        raise
+
 
 
 @router.get("/batches/{batch_id}/print")
@@ -13404,6 +13963,20 @@ def create_supplier_orders_from_pending_selection(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
+    with _SUPPLIER_ORDER_CREATE_WRITE_LOCK:
+        return _create_supplier_orders_from_pending_selection_locked(
+            payload=payload,
+            db=db,
+            user=user,
+        )
+
+
+def _create_supplier_orders_from_pending_selection_locked(
+    *,
+    payload: PendingSupplierOrderFinalizePayload,
+    db: Session,
+    user: User,
+) -> dict:
     request_keys = [
         group.request_key
         for group in payload.supplier_groups
@@ -13424,6 +13997,10 @@ def create_supplier_orders_from_pending_selection(
             .order_by(SupplierRequisitionOrder.id)
         ).all()
         if existing_orders:
+            for existing_order in existing_orders:
+                _require_supplier_order_customer_access(
+                    existing_order, user, db
+                )
             if len(existing_orders) == len(request_keys):
                 return _created_supplier_orders_response(
                     list(existing_orders),
@@ -13568,6 +14145,10 @@ def create_supplier_orders_from_pending_selection(
                 .where(SupplierRequisitionOrder.request_key.in_(request_keys))
                 .order_by(SupplierRequisitionOrder.id)
             ).all()
+            for existing_order in existing_orders:
+                _require_supplier_order_customer_access(
+                    existing_order, user, db
+                )
             if len(existing_orders) == len(request_keys):
                 return _created_supplier_orders_response(
                     list(existing_orders),

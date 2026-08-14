@@ -37,7 +37,8 @@ def test_desktop_pending_uses_server_total_pager_and_current_page_selection() ->
         '<template v-else-if="activePage === \'incoming\'">', 1
     )[1].split('<template v-else-if="activePage === \'production\'">', 1)[0]
 
-    assert "待入库 {{ incomingPendingTotal + externalIncomingPending.length }}" in page
+    assert "待入库 {{ incomingPendingTotal }}" in page
+    assert "待入库 {{ incomingPendingTotal + externalIncomingPending.length }}" not in page
     assert "全选本页" in page
     assert ':page="pages.incomingPending"' in page
     assert ':total="incomingPendingTotal"' in page
@@ -143,7 +144,7 @@ const expect=(value,message)=>{{if(!value)throw new Error(message);}};
     _run_node(script, tmp_path, "p1-36l-desktop-page-race.js")
 
 
-def test_full_refresh_is_concurrent_but_page_and_write_reload_only_paper(
+def test_board_refresh_page_and_write_reload_only_paper(
     tmp_path: Path,
 ) -> None:
     load = _method_body("async loadIncoming() {", "externalIncomingDraftKey(")
@@ -160,12 +161,11 @@ const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
 const calls=[];const pending=[];
 const deferred=kind=>new Promise(resolve=>{{calls.push(kind);pending.push({{kind,resolve}});}});
 const vm={{
-  activePage:"incoming",incomingPendingAppliedPage:2,incomingPendingError:"",incomingReceivedLoaded:false,marks:0,
+  activePage:"incoming",incomingWorkspace:"board",incomingPendingAppliedPage:2,incomingPendingError:"",incomingReceivedLoaded:false,
   loadIncomingPendingPage(options){{this.lastPendingOptions=options;return deferred("paper");}},
-  loadExternalIncoming(){{return deferred("external");}},
+  loadExternalIncoming(){{calls.push("external");return Promise.resolve(true);}},
   loadKpi(){{calls.push("kpi");return Promise.resolve(true);}},
   loadIncomingReceived(){{calls.push("received");return Promise.resolve(true);}},
-  markPageCache(page){{if(page==="incoming")this.marks+=1;}},
 }};
 vm.loadIncoming=new AsyncFunction({json.dumps(load, ensure_ascii=False)}).bind(vm);
 vm.changeIncomingPendingPage=new AsyncFunction("page",{json.dumps(change, ensure_ascii=False)}).bind(vm);
@@ -173,10 +173,10 @@ vm.refreshIncomingAfterWrite=new AsyncFunction({json.dumps(refresh, ensure_ascii
 const expect=(value,message)=>{{if(!value)throw new Error(message);}};
 (async()=>{{
   const full=vm.loadIncoming();
-  expect(calls.join("|")==="paper|external","cold/manual refresh did not start paper and external concurrently");
-  pending.find(row=>row.kind==="paper").resolve(true);
-  pending.find(row=>row.kind==="external").resolve(true);
-  expect(await full===true&&vm.marks===1,"successful full refresh did not complete/cache once");
+  expect(calls.join("|")==="paper","board cold/manual refresh requested external packaging");
+  expect(vm.lastPendingOptions.page===2&&vm.lastPendingOptions.clearSelection===false,"board refresh did not keep the applied paper page");
+  pending[0].resolve(true);
+  expect(await full===true,"successful paper refresh did not report success");
 
   calls.length=0;pending.length=0;
   const page=vm.changeIncomingPendingPage(3);
@@ -425,10 +425,11 @@ global.pinyinSearchTextCache=new Map();
 global.today=()=>"2026-08-13";
 global.plusDays=()=>"2026-08-20";
 const vm={{
-  loginAttemptSequence:1,pageLoadSequence:1,loading:true,pageCacheUpdatedAt:{{incoming:1}},
+  loginAttemptSequence:1,pageLoadSequence:1,loading:true,pageCacheUpdatedAt:{{incoming:1,"incoming:external-packaging":2}},
   orderGroupDetails:{{}},orderGroupDetailLoading:{{}},orderGroupDetailErrors:{{}},
   deliveryDetailRequestSequence:0,deliveryDetailState:{{}},expandedDeliveryRows:{{}},
-  supplierRequisitionPreviewLoading:true,pages:{{incomingPending:3}},
+  supplierRequisitionPreviewLoading:true,pages:{{incomingPending:3,externalIncoming:4}},
+  incomingWorkspace:"external-packaging",
   incomingPending:[{{item_id:"r-secret"}}],incomingPendingTotal:51,incomingPendingLoading:true,
   incomingPendingError:"old",incomingPendingAppliedPage:3,incomingPendingRetryPage:4,
   incomingSelected:{{"r-secret":true}},incomingReceived:[{{customer_name:"old"}}],
@@ -439,7 +440,7 @@ const vm={{
   incomingLocationsLoading:true,incomingLocationsError:"old",incomingReceiptLocations:[{{id:2}}],
   incomingReceiptLocationsLoading:true,incomingReceiptLocationsError:"old",
   externalIncomingPending:[{{id:3}}],externalIncomingDrafts:{{x:1}},externalIncomingLoading:true,
-  externalIncomingError:"old",externalIncomingSavingId:3,
+  externalIncomingError:"old",externalIncomingFilter:"secret",externalIncomingLoaded:true,externalIncomingSavingId:3,
   cancelOrderGroupDetailRequests(){{}},
 }};
 new FunctionCtor({json.dumps(reset, ensure_ascii=False)}).call(vm);
@@ -448,5 +449,7 @@ if(Object.keys(vm.incomingReceiveAttempts).length)throw new Error("incoming rece
 if(vm.incomingBatchReceiveAttempt!==null)throw new Error("incoming batch receive attempt survived session reset");
 if(vm.pages.incomingPending!==1||vm.incomingPendingAppliedPage!==1||vm.incomingPendingRetryPage!==1)throw new Error("pending page survived session reset");
 if(vm.incomingReceived.length||vm.incomingHistory.length||vm.externalIncomingPending.length)throw new Error("incoming account data survived session reset");
+if(vm.incomingWorkspace!=="board"||vm.externalIncomingFilter||vm.externalIncomingLoaded||vm.pages.externalIncoming!==1)throw new Error("external incoming workspace/filter/page survived session reset");
+if(Object.keys(vm.pageCacheUpdatedAt).length)throw new Error("incoming cache keys survived session reset");
 """
     _run_node(script, tmp_path, "p1-36l-desktop-session-reset.js")

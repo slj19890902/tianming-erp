@@ -364,6 +364,44 @@
         line-height: 1.35;
         white-space: nowrap;
       }
+      .order-view-switch { display:flex; align-items:center; gap:4px; padding:3px; border:1px solid var(--line); border-radius:10px; background:#f5f6f8; }
+      .order-view-switch .btn { border-color:transparent; background:transparent; box-shadow:none; }
+      .order-view-switch .btn.active { color:#fff; background:var(--primary); }
+      .customer-heat-toolbar { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin:8px 0; }
+      .customer-heat-legend { display:flex; align-items:center; gap:7px; flex-wrap:wrap; color:var(--muted); font-size:12px; }
+      .customer-heat-legend-item { display:inline-flex; align-items:center; gap:4px; white-space:nowrap; }
+      .customer-heat-legend-swatch { width:18px; height:7px; border-radius:999px; background:var(--heat-color); }
+      .customer-heat-list { display:grid; gap:9px; }
+      .customer-heat-card { position:relative; overflow:hidden; border:1px solid var(--line); border-radius:12px; background:var(--panel); box-shadow:var(--shadow-card); }
+      .customer-heat-band { position:absolute; inset:0 auto 0 0; width:6px; background:var(--heat-color); }
+      .customer-heat-card-main { padding:12px 14px 12px 20px; }
+      .customer-heat-card-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+      .customer-heat-customer { min-width:0; }
+      .customer-heat-customer strong { display:block; font-size:16px; overflow-wrap:anywhere; }
+      .customer-heat-customer small { display:block; margin-top:2px; color:var(--muted); overflow-wrap:anywhere; }
+      .customer-heat-badge { display:inline-flex; align-items:center; min-height:26px; padding:3px 9px; border:1px solid color-mix(in srgb, var(--heat-color) 72%, #777); border-radius:999px; background:color-mix(in srgb, var(--heat-color) 13%, #fff); font-weight:700; white-space:nowrap; }
+      .customer-heat-metrics { display:grid; grid-template-columns:repeat(7,minmax(105px,1fr)); gap:6px; margin-top:10px; }
+      .customer-heat-metric { min-width:0; padding:7px 8px; border:1px solid #ececf1; border-radius:8px; background:#fafafd; }
+      .customer-heat-metric span { display:block; color:var(--muted); font-size:11px; }
+      .customer-heat-metric strong { display:block; margin-top:2px; overflow-wrap:anywhere; }
+      .customer-heat-reason { margin-top:7px; color:var(--muted); font-size:12px; line-height:1.45; overflow-wrap:anywhere; }
+      .customer-heat-actions { display:flex; justify-content:flex-end; margin-top:8px; }
+      .customer-heat-orders { margin:0 14px 14px 20px; padding:10px; border:1px solid var(--line); border-radius:10px; background:#fafafe; }
+      .customer-heat-orders table { table-layout:fixed; white-space:normal; }
+      .customer-heat-orders th, .customer-heat-orders td { position:static; min-width:0; padding:7px 6px; overflow-wrap:anywhere; }
+      .customer-heat-tone-5 { --heat-color:#d93b2f; }
+      .customer-heat-tone-4 { --heat-color:#ed7a25; }
+      .customer-heat-tone-3 { --heat-color:#d4a91d; }
+      .customer-heat-tone-2 { --heat-color:#3d86c6; }
+      .customer-heat-tone-1 { --heat-color:#7a8494; }
+      .customer-heat-tone-new { --heat-color:#7b61b8; }
+      .ui-large .customer-heat-card-main { padding:16px 18px 16px 24px; }
+      .ui-large .customer-heat-customer strong { font-size:20px; }
+      .ui-large .customer-heat-badge { min-height:34px; padding:5px 12px; font-size:16px; }
+      .ui-large .customer-heat-metric { padding:10px; font-size:16px; }
+      .ui-large .customer-heat-metric span, .ui-large .customer-heat-reason, .ui-large .customer-heat-legend { font-size:14px; }
+      @media (max-width: 1500px) { .customer-heat-metrics { grid-template-columns:repeat(4,minmax(120px,1fr)); } }
+      @media (max-width: 900px) { .customer-heat-metrics { grid-template-columns:repeat(2,minmax(120px,1fr)); } }
       @media (max-width: 1800px) {
         .order-group-table {
           width: 100%; min-width: 0; table-layout: fixed; white-space: normal;
@@ -3104,12 +3142,18 @@
                 <div class="order-head-card">
                   <div class="order-page-actionbar">
                     <div class="toolbar-group">
-                      <button v-if="canCreateOrders" class="btn primary" @click="openOrder">新建订单</button>
-                      <button v-if="canCreateOrders" class="btn" @click="openOrderPdfImport">识别PDF订单</button>
+                      <div class="order-view-switch" role="tablist" aria-label="订单视图">
+                        <button :class="['btn',{active:orderWorkspace === 'queue'}]" role="tab" :aria-selected="orderWorkspace === 'queue'" @click="openBusinessQueueView()">业务队列</button>
+                        <button :class="['btn',{active:orderWorkspace === 'customer-heat'}]" role="tab" :aria-selected="orderWorkspace === 'customer-heat'" @click="openCustomerHeatView()">客户热力</button>
+                      </div>
+                      <template v-if="orderWorkspace === 'queue'">
+                        <button v-if="canCreateOrders" class="btn primary" @click="openOrder">新建订单</button>
+                        <button v-if="canCreateOrders" class="btn" @click="openOrderPdfImport">识别PDF订单</button>
+                      </template>
                     </div>
                     <div class="toolbar-group">
-                      <button v-if="canViewCosts" ref="costGapTrigger" class="btn" @click="openCostGaps">成本与利润提醒</button>
-                      <button class="btn" @click="runExplicitPageListLoad('orders')">刷新</button>
+                      <button v-if="orderWorkspace === 'queue' && canViewCosts" ref="costGapTrigger" class="btn" @click="openCostGaps">成本与利润提醒</button>
+                      <button class="btn" @click="refreshCurrentOrderWorkspace()">刷新</button>
                     </div>
                   </div>
                 </div>
@@ -3117,10 +3161,10 @@
                   <div class="order-filter-compact">
                     <input class="input order-keyword-input"
                            v-model.trim="filters.orderKeyword"
-                           placeholder="搜索客户、订单号、存货编码、产品或规格"
+                           :placeholder="orderWorkspace === 'customer-heat' ? '搜索客户名称或客户编号' : '搜索客户、订单号、存货编码、产品或规格'"
                            @input="queuePageSearch('orders')"
                            @keyup.enter="runExplicitPageListLoad('orders',{resetPage:true})" />
-                    <div class="order-status-tabs">
+                    <div v-if="orderWorkspace === 'queue'" class="order-status-tabs">
                       <button v-for="scope in orderScopeTabs" :key="scope.value"
                               :class="['status-tab-btn', {active: filters.orderScope === scope.value}]"
                               @click="applyOrderScope(scope.value)">{{ scope.label }}</button>
@@ -3134,11 +3178,13 @@
                   </div>
                   <div v-if="showAdvancedFilter" class="order-filter-advanced">
                     <search-select v-model="filters.orderCustomer" :options="orderCustomerOptions" label-key="name" value-key="id" placeholder="客户筛选" :allow-empty="true" @change="applyOrderFilters()"></search-select>
-                    <input class="input" v-model.trim="filters.orderNumber" placeholder="订单号" @keyup.enter="runExplicitPageListLoad('orders',{resetPage:true})" />
-                    <input class="input" v-model.trim="filters.orderCustomerPo" placeholder="客户单号" @keyup.enter="runExplicitPageListLoad('orders',{resetPage:true})" />
-                    <input class="input" v-model.trim="filters.orderProductCode" placeholder="存货编码" @keyup.enter="runExplicitPageListLoad('orders',{resetPage:true})" />
-                    <input class="input" v-model.trim="filters.orderProductName" placeholder="产品名称" @keyup.enter="runExplicitPageListLoad('orders',{resetPage:true})" />
-                    <input class="input" v-model.trim="filters.orderSpecification" placeholder="规格" @keyup.enter="runExplicitPageListLoad('orders',{resetPage:true})" />
+                    <template v-if="orderWorkspace === 'queue'">
+                      <input class="input" v-model.trim="filters.orderNumber" placeholder="订单号" @keyup.enter="runExplicitPageListLoad('orders',{resetPage:true})" />
+                      <input class="input" v-model.trim="filters.orderCustomerPo" placeholder="客户单号" @keyup.enter="runExplicitPageListLoad('orders',{resetPage:true})" />
+                      <input class="input" v-model.trim="filters.orderProductCode" placeholder="存货编码" @keyup.enter="runExplicitPageListLoad('orders',{resetPage:true})" />
+                      <input class="input" v-model.trim="filters.orderProductName" placeholder="产品名称" @keyup.enter="runExplicitPageListLoad('orders',{resetPage:true})" />
+                      <input class="input" v-model.trim="filters.orderSpecification" placeholder="规格" @keyup.enter="runExplicitPageListLoad('orders',{resetPage:true})" />
+                    </template>
                     <span class="muted">下单</span>
                     <input class="input" style="width:130px" type="date" v-model="filters.orderDateFrom" @change="runExplicitPageListLoad('orders',{resetPage:true})" />
                     <span class="muted">至</span>
@@ -3154,10 +3200,66 @@
                       <button v-for="chip in orderActiveFilterChips" :key="chip.key" class="btn small" @click="removeOrderFilter(chip.key)">{{ chip.label }}：{{ chip.value }} ×</button>
                       <button class="btn small muted" @click="resetOrderFilters()">一键清空</button>
                     </div>
-                    <pager :page="pages.orders" :total="ordersTotal" :page-size="pageSize" :always="true" :compact="true" :filter-count="orderActiveFilterChips.length" @change="pages.orders=$event; runExplicitPageListLoad('orders')"></pager>
+                    <pager v-if="orderWorkspace === 'queue'" :page="pages.orders" :total="ordersTotal" :page-size="pageSize" :always="true" :compact="true" :filter-count="orderActiveFilterChips.length" @change="pages.orders=$event; runExplicitPageListLoad('orders')"></pager>
+                    <pager v-else :page="pages.customerHeat" :total="customerHeatTotal" :page-size="pageSize" :always="true" :compact="true" :filter-count="orderActiveFilterChips.length" @change="pages.customerHeat=$event; runExplicitPageListLoad('orders')"></pager>
                   </div>
                 </div>
               </div>
+              <template v-if="orderWorkspace === 'customer-heat'">
+                <div class="customer-heat-toolbar">
+                  <div class="customer-heat-legend" aria-label="客户热力图例">
+                    <strong>图例</strong>
+                    <span v-for="level in [5,4,3,2,1]" :key="level" class="customer-heat-legend-item"><i :class="['customer-heat-legend-swatch',`customer-heat-tone-${level}`]"></i>热{{ level }}</span>
+                    <span class="customer-heat-legend-item"><i class="customer-heat-legend-swatch customer-heat-tone-new"></i>新客户</span>
+                    <span>热力仅供查找客户，不改变订单处理优先级；流程状态仍沿用原颜色。</span>
+                  </div>
+                  <div class="toolbar-group">
+                    <span class="muted">排序</span>
+                    <select class="select" v-model="customerHeatSortBy" @change="applyCustomerHeatSort()">
+                      <option value="heat">客户热力</option>
+                      <option value="recency">最近下单</option>
+                      <option value="frequency">近90天下单天数</option>
+                      <option v-if="canViewSalesAmounts" value="annual_amount">近365天金额</option>
+                    </select>
+                    <button class="btn small" @click="toggleCustomerHeatSortDirection()">{{ customerHeatSortDirection === 'desc' ? '降序 ↓' : '升序 ↑' }}</button>
+                  </div>
+                </div>
+                <div v-if="customerHeatError" class="notice warning"><span>{{ customerHeatError }}</span><button class="btn small" @click="loadCustomerHeat({force:true})">重新加载客户热力</button></div>
+                <div v-if="customerHeatLoading && !customerHeatItems.length" class="empty">正在计算客户热力…</div>
+                <div v-else-if="!customerHeatItems.length" class="empty">当前筛选没有客户</div>
+                <div v-else class="customer-heat-list">
+                  <article v-for="customer in customerHeatItems" :key="customer.customer_id" :class="['customer-heat-card',customerHeatTone(customer)]">
+                    <div class="customer-heat-band" aria-hidden="true"></div>
+                    <div class="customer-heat-card-main">
+                      <div class="customer-heat-card-head">
+                        <div class="customer-heat-customer"><strong>{{ customer.customer_name }}</strong><small>{{ customer.customer_code || customer.customer_number || '无客户编号' }}</small></div>
+                        <span class="customer-heat-badge">{{ customer.heat_label || '待判定' }}</span>
+                      </div>
+                      <div class="customer-heat-metrics">
+                        <div class="customer-heat-metric"><span>最近有效下单</span><strong>{{ customer.last_valid_order_date || '暂无' }}</strong></div>
+                        <div class="customer-heat-metric"><span>距今天数 R</span><strong>{{ customerHeatRecencyText(customer) }}</strong></div>
+                        <div class="customer-heat-metric"><span>近90天下单 F</span><strong>{{ customer.valid_order_days_90 || 0 }} 天</strong></div>
+                        <div class="customer-heat-metric"><span>近365天主单</span><strong>{{ customer.valid_master_orders_365 || 0 }} 张</strong></div>
+                        <div v-if="canViewSalesAmounts && customerHeatAmountVisible" class="customer-heat-metric sensitive-price"><span>近365天金额 M</span><strong>{{ customerHeatAmountText(customer) }}</strong></div>
+                        <div class="customer-heat-metric"><span>进行中订单</span><strong>{{ customer.ongoing_order_count || 0 }} 张</strong></div>
+                        <div class="customer-heat-metric"><span>最早阻塞阶段</span><strong><status-tag v-if="customer.earliest_blocking_stage" :value="customer.earliest_blocking_stage"></status-tag><template v-else>无</template></strong></div>
+                      </div>
+                      <div class="customer-heat-reason">{{ customer.heat_reason || '暂无说明' }}<span v-if="canViewSalesAmounts && customerHeatAmountVisible && customer.annual_amount_complete === false">；金额不完整，已知 {{ customerHeatKnownAmountText(customer) }}</span></div>
+                      <div class="customer-heat-actions"><button class="btn small" :disabled="customerHeatOrders[customer.customer_id]?.loading" @click="toggleCustomerHeatCustomer(customer)">{{ customerHeatOrders[customer.customer_id]?.loading ? '加载中…' : (customerHeatExpanded[customer.customer_id] ? '收起订单' : '展开订单') }}</button></div>
+                    </div>
+                    <div v-if="customerHeatExpanded[customer.customer_id]" class="customer-heat-orders">
+                      <div v-if="customerHeatOrders[customer.customer_id]?.error" class="notice warning">{{ customerHeatOrders[customer.customer_id].error }} <button class="btn small" @click="loadCustomerHeatOrders(customer,{page:customerHeatOrders[customer.customer_id]?.page || 1,force:true})">重试</button></div>
+                      <div v-if="customerHeatOrders[customer.customer_id]?.loading && !customerHeatOrders[customer.customer_id]?.items?.length" class="empty">正在加载该客户订单…</div>
+                      <div v-else-if="!customerHeatOrders[customer.customer_id]?.items?.length" class="empty">当前筛选没有可展开订单</div>
+                      <table v-else><thead><tr><th>订单号</th><th>客户单号</th><th>下单日期</th><th>交期</th><th>款数 / 数量</th><th v-if="canViewSalesAmounts" class="sensitive-price">金额</th><th>流程状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in customerHeatOrders[customer.customer_id].items" :key="row.id"><td>{{ row.order_number }}</td><td>{{ row.customer_po || '-' }}</td><td>{{ row.order_date }}</td><td>{{ row.delivery_date || '-' }}</td><td>{{ row.item_count || 0 }} 款 / {{ row.total_quantity || 0 }}</td><td v-if="canViewSalesAmounts" class="sensitive-price">{{ row.total_amount === undefined ? '-' : `¥ ${money(row.total_amount)}` }}</td><td><status-tag :value="row.business_status || row.status"></status-tag></td><td><button class="btn small" @click="openOrderDetail(row)">查看详情</button></td></tr></tbody></table>
+                      <pager v-if="customerHeatOrders[customer.customer_id]" :page="customerHeatOrders[customer.customer_id].page || 1" :total="customerHeatOrders[customer.customer_id].total || 0" :page-size="customerHeatOrders[customer.customer_id].page_size || pageSize" :compact="true" @change="loadCustomerHeatOrders(customer,{page:$event})"></pager>
+                    </div>
+                  </article>
+                </div>
+                <pager :page="pages.customerHeat" :total="customerHeatTotal" :page-size="pageSize" @change="pages.customerHeat=$event; runExplicitPageListLoad('orders')"></pager>
+                <div class="muted" style="margin-top:6px">热力口径 {{ customerHeatThresholdVersion || '-' }}｜候选状态 {{ customerHeatThresholdStatus || 'prototype_pending_p1_61c_acceptance' }}，待正式 ERP 人工验收后定稿。</div>
+              </template>
+              <template v-else>
               <data-panel :empty="!orders.length">
                 <table class="order-group-table">
                   <thead>
@@ -3256,6 +3358,7 @@
                 </table>
               </data-panel>
               <pager :page="pages.orders" :total="ordersTotal" :page-size="pageSize" @change="pages.orders=$event; runExplicitPageListLoad('orders')"></pager>
+              </template>
             </template>
 
             <template v-else-if="activePage === 'orders_legacy'">
@@ -7827,6 +7930,7 @@
             loginForm: { username: localStorage.getItem("erp_username") || "", password: "", remember_me: true },
             overview: { cards: [], todos: [], summary: {} }, warehouseCapacitySummary:null, overviewError: "", overviewLoading: false,
             kpi: {}, customers: [], customerOptions: [], orderCustomerOptions: [], products: [], materials: [], orders: [],
+            orderWorkspace: "queue", customerHeatItems:[], customerHeatTotal:0, customerHeatLoading:false, customerHeatError:"", customerHeatAmountVisible:false, customerHeatAsOf:"", customerHeatThresholdContract:null, customerHeatThresholdVersion:"", customerHeatThresholdStatus:"prototype_pending_p1_61c_acceptance", customerHeatSortBy:"heat", customerHeatSortDirection:"desc", customerHeatAppliedSignature:"", customerHeatExpanded:{}, customerHeatOrders:{},
             customerPhoneGovernanceExporting: false,
             quotationCustomer: null,
             quotationDraft: { id:null, quotation_date:today(), remarks:"", items:[blankQuotationLine()] },
@@ -8047,7 +8151,7 @@
             financeReportData: { monthly:[], yearly_summary:{}, selected_month_summary:{}, selected_month_customers:[], customer_balances:[], aging:[], as_of:"", included_through_statement_month:"" },
             financeReportState: { loading:false, error:"", loaded:false },
             statementsTotal: 0, financeCustomersTotal: 0, invoicesTotal: 0, pageSize: 25,
-            pages: { customers: 1, products: 1, orders: 1, requisitionPending: 1, requisitionHolds: 1, requisitionReported: 1, externalPurchaseRouting: 1, incomingPending: 1, externalIncoming: 1, incomingHistory: 1, productionPending: 1, productionWaitingLabels: 1, productionHistory: 1, deliveries: 1, statements: 1, invoices: 1, financeCurrent: 1, financeSettled: 1 },
+            pages: { customers: 1, products: 1, orders: 1, customerHeat: 1, requisitionPending: 1, requisitionHolds: 1, requisitionReported: 1, externalPurchaseRouting: 1, incomingPending: 1, externalIncoming: 1, incomingHistory: 1, productionPending: 1, productionWaitingLabels: 1, productionHistory: 1, deliveries: 1, statements: 1, invoices: 1, financeCurrent: 1, financeSettled: 1 },
             productTab: "products", modal: null,
             materialCandidateItems: [], materialCandidateLoading: false,
             materialCandidateFilter: { customer_id:null, q:"", include_inactive:false },
@@ -8978,15 +9082,17 @@
             const stage = this.orderStageOptions.find(row => row.value === this.filters.orderStage);
             const customer = this.orderCustomerOptions.find(row => Number(row.id) === Number(this.filters.orderCustomer));
             const entries = [
-              ["scope", "范围", scope?.label || "进行中"],
+              ...(this.orderWorkspace === "queue" ? [["scope", "范围", scope?.label || "进行中"]] : []),
               ["stage", "流程", stage?.value ? stage.label : ""],
               ["keyword", "搜索", this.filters.orderKeyword],
               ["customer", "客户", customer?.name],
-              ["orderNumber", "订单号", this.filters.orderNumber],
-              ["customerPo", "客户单号", this.filters.orderCustomerPo],
-              ["productCode", "存货编码", this.filters.orderProductCode],
-              ["productName", "产品名称", this.filters.orderProductName],
-              ["specification", "规格", this.filters.orderSpecification],
+              ...(this.orderWorkspace === "queue" ? [
+                ["orderNumber", "订单号", this.filters.orderNumber],
+                ["customerPo", "客户单号", this.filters.orderCustomerPo],
+                ["productCode", "存货编码", this.filters.orderProductCode],
+                ["productName", "产品名称", this.filters.orderProductName],
+                ["specification", "规格", this.filters.orderSpecification],
+              ] : []),
               ["orderDate", "下单日期", [this.filters.orderDateFrom, this.filters.orderDateTo].filter(Boolean).join(" 至 ")],
               ["deliveryDate", "交期", [this.filters.orderDeliveryDateFrom, this.filters.orderDeliveryDateTo].filter(Boolean).join(" 至 ")],
             ];
@@ -10943,14 +11049,14 @@
             this.showAdvancedFilter = false;
             return this.runExplicitPageListLoad("orders", {
               resetPage:true,
-              load:async() => Promise.all([this.loadOrderCustomerOptions(), this.loadOrders()]),
+              load:async() => Promise.all([this.loadOrderCustomerOptions(), this.loadCurrentOrderWorkspace()]),
             });
           },
           async refreshOrderFilters({ refreshCustomers=false } = {}) {
             return this.runExplicitPageListLoad("orders", {
               resetPage:true,
               load:async() => {
-                const requests = [this.loadOrders()];
+                const requests = [this.loadCurrentOrderWorkspace()];
                 if (refreshCustomers) requests.push(this.loadOrderCustomerOptions());
                 return Promise.all(requests);
               },
@@ -12187,6 +12293,22 @@
             this.orders = [];
             this.ordersTotal = 0;
             this.ordersUnfinishedTotal = 0;
+            this.orderWorkspace = "queue";
+            this.customerHeatItems = [];
+            this.customerHeatTotal = 0;
+            this.customerHeatLoading = false;
+            this.customerHeatError = "";
+            this.customerHeatAmountVisible = false;
+            this.customerHeatAsOf = "";
+            this.customerHeatThresholdContract = null;
+            this.customerHeatThresholdVersion = "";
+            this.customerHeatThresholdStatus = "prototype_pending_p1_61c_acceptance";
+            this.customerHeatSortBy = "heat";
+            this.customerHeatSortDirection = "desc";
+            this.customerHeatAppliedSignature = "";
+            this.customerHeatExpanded = {};
+            this.customerHeatOrders = {};
+            this.pages.customerHeat = 1;
             this.expandedOrders = {};
             this.orderGroupDetails = {};
             this.orderGroupDetailLoading = {};
@@ -12346,6 +12468,7 @@
             searchDebounceTimers.delete(key);
           },
           pageSearchCacheKey(page) {
+            if (page === "orders" && this.activePage === "orders" && this.orderWorkspace === "customer-heat") return "orders:customer-heat";
             if (page === "orders" && this.activePage === "orders_legacy") return "orders_legacy";
             return page;
           },
@@ -12380,7 +12503,8 @@
           },
           async runExplicitPageListLoad(page, {resetPage=false, load=null} = {}) {
             this.cancelQueuedPageSearch(page);
-            if (resetPage && this.pages[page] != null) this.pages[page] = 1;
+            if (resetPage && page === "orders" && this.orderWorkspace === "customer-heat") this.pages.customerHeat = 1;
+            else if (resetPage && this.pages[page] != null) this.pages[page] = 1;
             const cachePage = this.pageSearchCacheKey(page);
             const authGeneration = this.authGeneration;
             const userId = this.user?.id ?? null;
@@ -12394,7 +12518,7 @@
               if (typeof load === "function") result = await load();
               else if (page === "customers") result = await this.loadCustomers();
               else if (page === "products") result = await this.loadProducts();
-              else if (page === "orders") result = await this.loadOrders();
+              else if (page === "orders") result = await this.loadCurrentOrderWorkspace();
               const succeeded = Array.isArray(result)
                 ? result.every(item => item !== false)
                 : result !== false;
@@ -12451,6 +12575,11 @@
               this.syncDesktopWorkspaceUrl(page);
             }
             if (page !== "requisition") this.cancelSupplierRequisitionPreview();
+            if (page === "orders" && this.activePage !== "orders") {
+              this.cancelLatestRequest("orders:customer-heat");
+              this.cancelCustomerHeatOrderRequests();
+              this.orderWorkspace = "queue";
+            }
             if (page !== this.activePage) {
               const previousSearchPage = this.activePage === "orders_legacy" ? "orders" : this.activePage;
               if (["customers", "products", "orders"].includes(previousSearchPage)) {
@@ -12674,6 +12803,8 @@
               ? "requisition:external-packaging"
               : page === "incoming" && this.incomingWorkspace === "external-packaging"
                 ? "incoming:external-packaging"
+                : page === "orders" && this.orderWorkspace === "customer-heat"
+                  ? "orders:customer-heat"
                 : page;
             const requestIsCurrent = () => (
               requestSequence === this.pageLoadSequence
@@ -12715,7 +12846,7 @@
               if (page === "orders") await Promise.all([
                 requirePageLoad(this.loadCustomerOptions(force)),
                 requirePageLoad(this.loadOrderCustomerOptions()),
-                requirePageLoad(this.loadOrders()),
+                requirePageLoad(this.loadCurrentOrderWorkspace()),
               ]);
               if (page === "orders_legacy") await Promise.all([
                 requirePageLoad(this.loadCustomerOptions(force)),
@@ -12755,7 +12886,7 @@
           },
           refreshCurrent() {
             if (this.activePage === "warehouse") return this.refreshWarehouseFrame();
-            this.invalidatePageCache(this.activePage);
+            this.invalidatePageCache(this.pageSearchCacheKey(this.activePage));
             return this.loadPage(this.activePage, { force:true });
           },
           ensureWarehouseFrame(target = "") {
@@ -14430,6 +14561,202 @@
             if (lc === 3 && !["A", "B", "E"].includes(ft)) return true;
             if (lc === 5 && !["AB", "BE"].includes(ft)) return true;
             return false;
+          },
+          customerHeatRequestParams(page=this.pages.customerHeat) {
+            const params = {
+              page:Math.max(1, Number(page || 1)),
+              page_size:this.pageSize,
+              sort_by:this.customerHeatSortBy || "heat",
+              sort_direction:this.customerHeatSortDirection || "desc",
+            };
+            if (this.filters.orderKeyword) params.keyword = this.filters.orderKeyword;
+            if (this.filters.orderCustomer) params.customer_id = Number(this.filters.orderCustomer);
+            if (this.filters.orderStage) params.stage = this.filters.orderStage;
+            if (this.filters.orderDateFrom) params.order_date_from = this.filters.orderDateFrom;
+            if (this.filters.orderDateTo) params.order_date_to = this.filters.orderDateTo;
+            if (this.filters.orderDeliveryDateFrom) params.delivery_date_from = this.filters.orderDeliveryDateFrom;
+            if (this.filters.orderDeliveryDateTo) params.delivery_date_to = this.filters.orderDeliveryDateTo;
+            return params;
+          },
+          customerHeatRequestIsCurrent(controller, authGeneration, userId) {
+            return (
+              latestRequestControllers.get("orders:customer-heat") === controller
+              && !controller.signal.aborted
+              && authGeneration === this.authGeneration
+              && userId === (this.user?.id ?? null)
+              && this.activePage === "orders"
+              && this.orderWorkspace === "customer-heat"
+            );
+          },
+          async loadCustomerHeat({page=null,force=false}={}) {
+            const requestedPage = Math.max(1, Number(page ?? this.pages.customerHeat ?? 1));
+            const params = this.customerHeatRequestParams(requestedPage);
+            const signature = JSON.stringify(params);
+            if (!force && this.pageCacheFresh("orders:customer-heat") && this.customerHeatAppliedSignature === signature) return true;
+            const controller = this.beginLatestRequest("orders:customer-heat");
+            const authGeneration = this.authGeneration;
+            const userId = this.user?.id ?? null;
+            const sessionIsCurrent = () => authGeneration === this.authGeneration && userId === (this.user?.id ?? null);
+            this.customerHeatLoading = true;
+            this.customerHeatError = "";
+            try {
+              const {data} = await axios.get("/api/orders/customer-heat", {params, signal:controller.signal});
+              if (!this.customerHeatRequestIsCurrent(controller, authGeneration, userId)) return false;
+              const previousSignature = this.customerHeatAppliedSignature;
+              this.customerHeatItems = Array.isArray(data?.items) ? data.items : [];
+              this.customerHeatTotal = Number(data?.total || 0);
+              this.pages.customerHeat = Math.max(1, Number(data?.page || requestedPage));
+              this.customerHeatAmountVisible = !!data?.amount_visible && !!this.canViewSalesAmounts;
+              this.customerHeatAsOf = String(data?.as_of || "");
+              this.customerHeatThresholdContract = data?.threshold_contract || null;
+              this.customerHeatThresholdVersion = String(data?.threshold_version || "");
+              this.customerHeatThresholdStatus = String(data?.threshold_status || "prototype_pending_p1_61c_acceptance");
+              this.customerHeatAppliedSignature = signature;
+              if (previousSignature && previousSignature !== signature) this.resetCustomerHeatExpanded();
+              this.markPageCache("orders:customer-heat");
+              return true;
+            } catch (error) {
+              if (this.isCancelledRequest(error)) return false;
+              if (error?.response?.status === 403 && sessionIsCurrent()) {
+                this.resetPagePerformanceState();
+                this.resetModalA11ySession({discardModal:true});
+                this.showToast("订单查看权限或客户范围已变化，请重新进入", true);
+                return false;
+              }
+              if (this.customerHeatRequestIsCurrent(controller, authGeneration, userId)) this.customerHeatError = this.errorMessage(error);
+              return false;
+            } finally {
+              if (this.customerHeatRequestIsCurrent(controller, authGeneration, userId)) this.customerHeatLoading = false;
+              this.finishLatestRequest("orders:customer-heat", controller);
+            }
+          },
+          async openCustomerHeatView() {
+            this.cancelLatestRequest("orders:list");
+            this.orderWorkspace = "customer-heat";
+            if (!this.canViewSalesAmounts && this.customerHeatSortBy === "annual_amount") this.customerHeatSortBy = "heat";
+            return this.loadCustomerHeat();
+          },
+          async openBusinessQueueView() {
+            this.cancelLatestRequest("orders:customer-heat");
+            this.cancelCustomerHeatOrderRequests();
+            this.customerHeatLoading = false;
+            this.orderWorkspace = "queue";
+            if (this.pageCacheFresh("orders")) return true;
+            return this.runExplicitPageListLoad("orders");
+          },
+          loadCurrentOrderWorkspace() {
+            return this.orderWorkspace === "customer-heat" ? this.loadCustomerHeat() : this.loadOrders();
+          },
+          refreshCurrentOrderWorkspace() {
+            const cacheKey = this.orderWorkspace === "customer-heat" ? "orders:customer-heat" : "orders";
+            this.invalidatePageCache(cacheKey);
+            return this.runExplicitPageListLoad("orders");
+          },
+          applyCustomerHeatSort() {
+            if (!this.canViewSalesAmounts && this.customerHeatSortBy === "annual_amount") this.customerHeatSortBy = "heat";
+            return this.runExplicitPageListLoad("orders", {resetPage:true});
+          },
+          toggleCustomerHeatSortDirection() {
+            this.customerHeatSortDirection = this.customerHeatSortDirection === "asc" ? "desc" : "asc";
+            return this.runExplicitPageListLoad("orders", {resetPage:true});
+          },
+          customerHeatTone(customer) {
+            if (customer?.segment === "new" || customer?.heat_level === null || customer?.heat_level === undefined) return "customer-heat-tone-new";
+            const level = Math.max(1, Math.min(5, Number(customer?.heat_level || 1)));
+            return `customer-heat-tone-${level}`;
+          },
+          customerHeatRecencyText(customer) {
+            return customer?.recency_days === null || customer?.recency_days === undefined ? "暂无" : `${Number(customer.recency_days)} 天`;
+          },
+          customerHeatAmountText(customer) {
+            if (customer?.annual_amount_complete === false) return "金额不完整";
+            return customer?.annual_amount === null || customer?.annual_amount === undefined ? "暂无完整金额" : `¥ ${this.money(customer.annual_amount)}`;
+          },
+          customerHeatKnownAmountText(customer) {
+            const known = customer?.known_annual_amount === null || customer?.known_annual_amount === undefined ? "未知" : `¥ ${this.money(customer.known_annual_amount)}`;
+            const rate = customer?.annual_amount_completeness_rate;
+            return rate === null || rate === undefined ? known : `${known}（完整率 ${(Number(rate) * 100).toFixed(0)}%）`;
+          },
+          customerHeatOrderRequestParams(customer, page=1) {
+            const params = {page:Math.max(1, Number(page || 1)), page_size:this.pageSize, scope:"active"};
+            if (this.filters.orderKeyword) params.keyword = this.filters.orderKeyword;
+            if (this.filters.orderStage) params.stage = this.filters.orderStage;
+            if (this.filters.orderDateFrom) params.order_date_from = this.filters.orderDateFrom;
+            if (this.filters.orderDateTo) params.order_date_to = this.filters.orderDateTo;
+            if (this.filters.orderDeliveryDateFrom) params.delivery_date_from = this.filters.orderDeliveryDateFrom;
+            if (this.filters.orderDeliveryDateTo) params.delivery_date_to = this.filters.orderDeliveryDateTo;
+            return params;
+          },
+          customerHeatOrderRequestIsCurrent(customerId, controller, authGeneration, userId) {
+            return (
+              latestRequestControllers.get(`orders:customer-heat:${customerId}`) === controller
+              && !controller.signal.aborted
+              && authGeneration === this.authGeneration
+              && userId === (this.user?.id ?? null)
+              && this.activePage === "orders"
+              && this.orderWorkspace === "customer-heat"
+              && !!this.customerHeatExpanded[customerId]
+            );
+          },
+          async loadCustomerHeatOrders(customer, {page=1,force=false}={}) {
+            const customerId = Number(customer?.customer_id || 0);
+            if (!customerId) return false;
+            const params = this.customerHeatOrderRequestParams(customer, page);
+            const signature = JSON.stringify(params);
+            const previous = this.customerHeatOrders[customerId] || {items:[],total:0,page:1,page_size:this.pageSize,error:"",loading:false,signature:""};
+            if (!force && previous.signature === signature && Array.isArray(previous.items)) return true;
+            const key = `orders:customer-heat:${customerId}`;
+            const controller = this.beginLatestRequest(key);
+            const authGeneration = this.authGeneration;
+            const userId = this.user?.id ?? null;
+            const sessionIsCurrent = () => authGeneration === this.authGeneration && userId === (this.user?.id ?? null);
+            this.customerHeatOrders = {...this.customerHeatOrders,[customerId]:{...previous,loading:true,error:""}};
+            try {
+              const {data} = await axios.get(`/api/orders/customer-heat/${customerId}/orders`, {params, signal:controller.signal});
+              if (!this.customerHeatOrderRequestIsCurrent(customerId, controller, authGeneration, userId)) return false;
+              this.customerHeatOrders = {...this.customerHeatOrders,[customerId]:{
+                items:Array.isArray(data?.items) ? data.items : [],
+                total:Number(data?.total || 0),page:Math.max(1,Number(data?.page || page)),page_size:Number(data?.page_size || this.pageSize),loading:false,error:"",signature,
+              }};
+              return true;
+            } catch (error) {
+              if (this.isCancelledRequest(error)) return false;
+              if (error?.response?.status === 403 && sessionIsCurrent()) {
+                this.resetPagePerformanceState();
+                this.resetModalA11ySession({discardModal:true});
+                this.showToast("订单查看权限或客户范围已变化，请重新进入", true);
+                return false;
+              }
+              if (this.customerHeatOrderRequestIsCurrent(customerId, controller, authGeneration, userId)) this.customerHeatOrders = {...this.customerHeatOrders,[customerId]:{...previous,loading:false,error:this.errorMessage(error)}};
+              return false;
+            } finally {
+              const state = this.customerHeatOrders[customerId];
+              if (this.customerHeatOrderRequestIsCurrent(customerId, controller, authGeneration, userId) && state?.loading) this.customerHeatOrders = {...this.customerHeatOrders,[customerId]:{...state,loading:false}};
+              this.finishLatestRequest(key, controller);
+            }
+          },
+          async toggleCustomerHeatCustomer(customer) {
+            const customerId = Number(customer?.customer_id || 0);
+            if (!customerId) return false;
+            const isOpen = !!this.customerHeatExpanded[customerId];
+            this.customerHeatExpanded = {...this.customerHeatExpanded,[customerId]:!isOpen};
+            if (isOpen) {
+              this.cancelLatestRequest(`orders:customer-heat:${customerId}`);
+              return true;
+            }
+            return this.loadCustomerHeatOrders(customer, {page:1});
+          },
+          cancelCustomerHeatOrderRequests() {
+            for (const [key, controller] of latestRequestControllers.entries()) {
+              if (!key.startsWith("orders:customer-heat:")) continue;
+              controller.abort();
+              latestRequestControllers.delete(key);
+            }
+          },
+          resetCustomerHeatExpanded() {
+            this.cancelCustomerHeatOrderRequests();
+            this.customerHeatExpanded = {};
+            this.customerHeatOrders = {};
           },
           async loadOrders() {
             const params = { page: this.pages.orders, page_size: this.pageSize };

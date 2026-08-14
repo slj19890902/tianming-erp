@@ -41,7 +41,7 @@ def test_p1_08_filter_changes_return_to_first_page_and_can_be_cleared() -> None:
         "async removeOrderFilter(key)",
         'this.filters.orderScope = "active";',
         'this.filters.orderStage = "";',
-        "load:async() => Promise.all([this.loadOrderCustomerOptions(), this.loadOrders()]),",
+        "load:async() => Promise.all([this.loadOrderCustomerOptions(), this.loadCurrentOrderWorkspace()]),",
     ):
         assert marker in INDEX
 

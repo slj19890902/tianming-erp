@@ -142,6 +142,7 @@ from app.services.order_business_status import (
 from app.services.order_customer_heat import (
     THRESHOLD_STATUS as CUSTOMER_HEAT_THRESHOLD_STATUS,
     THRESHOLD_VERSION as CUSTOMER_HEAT_THRESHOLD_VERSION,
+    customer_ids_matching_heat_filters,
     list_customer_heat,
     threshold_contract as customer_heat_threshold_contract,
 )
@@ -3127,6 +3128,12 @@ def list_order_customer_options(
 @router.get("/customer-heat")
 def list_order_customer_heat(
     keyword: str | None = None,
+    customer_id: int | None = None,
+    stage: list[str] | None = Query(default=None),
+    order_date_from: date | None = None,
+    order_date_to: date | None = None,
+    delivery_date_from: date | None = None,
+    delivery_date_to: date | None = None,
     sort_by: Literal["heat", "recency", "frequency", "annual_amount"] = "heat",
     sort_direction: Literal["asc", "desc"] = "desc",
     page: int = Query(default=1, ge=1),
@@ -3145,6 +3152,39 @@ def list_order_customer_heat(
         if has_unrestricted_customer_access(user, db)
         else customer_scope_ids(user, db)
     )
+    if customer_id is not None:
+        require_customer_access(customer_id, current_user=user, db=db)
+    selected_stages: set[str] = set()
+    for value in (stage or []):
+        normalized = value.strip()
+        if normalized in DERIVED_BUSINESS_STATUSES or normalized == "pending_confirmation":
+            selected_stages.add(normalized)
+        elif normalized in _DERIVED_STATUS_FILTER_GROUPS:
+            selected_stages.update(_DERIVED_STATUS_FILTER_GROUPS[normalized])
+    filters_requested = bool(
+        customer_id is not None
+        or selected_stages
+        or order_date_from is not None
+        or order_date_to is not None
+        or delivery_date_from is not None
+        or delivery_date_to is not None
+    )
+    eligible_customer_ids = (
+        customer_ids_matching_heat_filters(
+            db,
+            as_of=resolved_as_of,
+            visible_customer_ids=visible_customer_ids,
+            customer_id=customer_id,
+            selected_stages=selected_stages,
+            order_date_from=order_date_from,
+            order_date_to=order_date_to,
+            delivery_date_from=delivery_date_from,
+            delivery_date_to=delivery_date_to,
+            include_finance_status=has_permission(user, "finance.view"),
+        )
+        if filters_requested
+        else None
+    )
     result = list_customer_heat(
         db,
         as_of=resolved_as_of,
@@ -3156,6 +3196,7 @@ def list_order_customer_heat(
         sort_direction=sort_direction,
         page=page,
         page_size=page_size,
+        eligible_customer_ids=eligible_customer_ids,
     )
     return {
         **result,

@@ -147,6 +147,83 @@ def _ongoing_customer_summaries(
     return result
 
 
+def customer_ids_matching_heat_filters(
+    db: Session,
+    *,
+    as_of: date,
+    visible_customer_ids: set[int] | None,
+    customer_id: int | None,
+    selected_stages: set[str],
+    order_date_from: date | None,
+    order_date_to: date | None,
+    delivery_date_from: date | None,
+    delivery_date_to: date | None,
+    include_finance_status: bool,
+) -> set[int]:
+    """Return customers with at least one order matching the current heat view.
+
+    This is only used when P1-61C supplies a structured customer, stage, or date
+    filter.  The default heat query stays on the aggregate-only SQL path.  A
+    stage filter reuses the P0-04 batch projection instead of rebuilding status
+    rules in SQL or in the browser.
+    """
+
+    if visible_customer_ids is not None and not visible_customer_ids:
+        return set()
+    normalized_status = func.lower(func.trim(func.coalesce(Order.status, "")))
+    conditions = [
+        Order.order_number.is_not(None),
+        func.trim(Order.order_number) != "",
+        Order.order_date <= as_of,
+        normalized_status.notin_(_INVALID_HEAT_ORDER_STATUSES),
+    ]
+    if visible_customer_ids is not None:
+        conditions.append(Order.customer_id.in_(visible_customer_ids))
+    if customer_id is not None:
+        conditions.append(Order.customer_id == customer_id)
+    if order_date_from is not None:
+        conditions.append(Order.order_date >= order_date_from)
+    if order_date_to is not None:
+        conditions.append(Order.order_date <= order_date_to)
+    if delivery_date_from is not None:
+        conditions.append(Order.delivery_date >= delivery_date_from)
+    if delivery_date_to is not None:
+        conditions.append(Order.delivery_date <= delivery_date_to)
+
+    if not selected_stages:
+        return {
+            int(value)
+            for value in db.scalars(
+                select(Order.customer_id).where(*conditions).distinct()
+            ).all()
+        }
+
+    conditions.extend(
+        [
+            ~Order.order_number.like("RUIDA-%"),
+            Order.status.notin_(_ONGOING_EXCLUDED_STATUSES),
+        ]
+    )
+    orders = list(
+        db.scalars(
+            select(Order)
+            .options(selectinload(Order.items))
+            .where(*conditions)
+        ).all()
+    )
+    projections = build_order_business_statuses(
+        db,
+        orders,
+        include_finance=include_finance_status,
+    )
+    return {
+        int(order.customer_id)
+        for order in orders
+        if str(projections.get(int(order.id), {}).get("business_status") or order.status)
+        in selected_stages
+    }
+
+
 def list_customer_heat(
     db: Session,
     *,
@@ -159,6 +236,7 @@ def list_customer_heat(
     sort_direction: Literal["asc", "desc"],
     page: int,
     page_size: int,
+    eligible_customer_ids: set[int] | None = None,
 ) -> dict[str, object]:
     """Return one permission-scoped, server-paged customer heat projection.
 
@@ -169,7 +247,10 @@ def list_customer_heat(
     already true at the API permission boundary.
     """
 
-    if visible_customer_ids is not None and not visible_customer_ids:
+    if (
+        (visible_customer_ids is not None and not visible_customer_ids)
+        or (eligible_customer_ids is not None and not eligible_customer_ids)
+    ):
         return {
             "total": 0,
             "page": page,
@@ -183,6 +264,8 @@ def list_customer_heat(
     ]
     if visible_customer_ids is not None:
         customer_conditions.append(Customer.id.in_(visible_customer_ids))
+    if eligible_customer_ids is not None:
+        customer_conditions.append(Customer.id.in_(eligible_customer_ids))
     if keyword and keyword.strip():
         pattern = f"%{keyword.strip()}%"
         customer_conditions.append(

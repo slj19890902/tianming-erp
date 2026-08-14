@@ -41,11 +41,11 @@ def test_page_cache_is_written_only_after_required_loaders_succeed() -> None:
         "queuePageSearch(page) {",
     )
 
-    assert "if (requestIsCurrent()) this.invalidatePageCache(page);" in page
+    assert "if (requestIsCurrent()) this.invalidatePageCache(resourceCacheKey);" in page
     assert "if (await promise === false) pageSucceeded = false;" in page
-    assert "if (requestIsCurrent() && searchGenerationIsCurrent() && pageSucceeded) this.markPageCache(page);" in page
+    assert "if (requestIsCurrent() && searchGenerationIsCurrent() && pageSucceeded) this.markPageCache(resourceCacheKey);" in page
     assert "return requestIsCurrent() && searchGenerationIsCurrent() && pageSucceeded;" in page
-    assert "return true;" in page.split("if (!force && this.pageCacheFresh(page))", 1)[1]
+    assert "return true;" in page.split("if (!force && this.pageCacheFresh(resourceCacheKey))", 1)[1]
     assert "await this.runExplicitPageListLoad(page, {resetPage:true})" in search
     assert "const succeeded = Array.isArray(result)" in explicit
     assert "succeeded && this.pageSearchIsCurrent(" in explicit
@@ -65,8 +65,8 @@ def test_top_level_loaders_expose_stable_success_and_failure_results() -> None:
     for block in (overview, pickers, finance, audit, permissions, system, order_customers):
         assert "return true;" in block
         assert "return false;" in block
-    assert "return false;" in incoming
-    assert "return externalLoaded !== false;" in incoming
+    assert "return this.loadIncomingPendingPage" in incoming
+    assert "loadExternalIncoming" not in incoming
     assert "if (!this.canDelivery) return true;" in pickers
     assert 'if (!this.hasPermission("audit.view")) return true;' in audit
     assert "if (!force && this.systemSectionLoaded[section]) return true;" in system

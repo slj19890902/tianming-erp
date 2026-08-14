@@ -18,13 +18,16 @@ def test_desktop_incoming_cold_entry_only_requests_pending() -> None:
         "async loadIncomingPendingPage(",
         "async changeIncomingPendingPage",
     )
-    load_incoming = _block(INDEX, "async loadIncoming()", "async loadIncomingReceived")
+    load_incoming = _block(INDEX, "async loadIncoming()", "externalIncomingDraftKey(")
 
-    assert 'if (page === "incoming") await requirePageLoad(this.loadIncoming());' in load_page
+    assert 'if (page === "incoming") {' in load_page
+    assert 'if (this.incomingWorkspace === "external-packaging") await requirePageLoad(this.loadExternalIncoming());' in load_page
+    assert 'else await requirePageLoad(this.loadIncoming());' in load_page
     assert 'axios.get("/api/incoming/pending"' in load_pending_page
     assert "params:this.incomingPendingRequestParams(requestedPage)" in load_pending_page
     assert "this.loadIncomingPendingPage" in load_incoming
-    assert "this.loadExternalIncoming()" in load_incoming
+    assert "this.loadExternalIncoming()" not in load_incoming
+    assert "/api/external-packaging-purchases/pending-receipts" not in load_incoming
     assert "/api/incoming/received" not in load_incoming
     assert "/api/incoming/surplus-locations" not in load_incoming
     assert 'beginLatestRequest("incoming:pending")' in load_pending_page

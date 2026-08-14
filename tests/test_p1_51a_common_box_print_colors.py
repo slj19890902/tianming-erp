@@ -696,8 +696,9 @@ def test_common_box_ui_exposes_ordered_colors_without_persisting_suggestion() ->
     assert 'maxlength="40"' in index
     for color in ("黑色", "红色", "蓝色", "橙色", "绿色"):
         assert f'<option value="{color}"></option>' in index
-    for label in ("黑＋红", "黑＋绿", "黑＋蓝"):
-        assert f">{label}</button>" in index
+    assert 'class="select product-printing-color-preset"' in index
+    for value, label in (("黑色＋红色", "黑＋红"), ("黑色＋绿色", "黑＋绿"), ("黑色＋蓝色", "黑＋蓝")):
+        assert f'<option value="{value}">{label}</option>' in index
     assert "颜色待完善" in index
     assert "printing_colors:" in index
     assert "_printing_colors: []" in index

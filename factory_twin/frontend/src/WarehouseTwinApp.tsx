@@ -13,6 +13,7 @@ import {
 import type { Floor1CandidateBlockingItem } from "./floor1CandidateBlockers.mjs";
 import { pointsBoundsMm, resizeAndMovePointsMm, translatePointsMm } from "./layoutGeometry.mjs";
 import {
+  buildMeasuredDispatchPallets,
   buildMappedLocationPallets,
   expandAreaInventory,
   filterAreaInventory,
@@ -600,6 +601,39 @@ function inventoryLabelQuantity(item: InventoryItem) {
   return Number(item.available_quantity || 0) + Number(item.reserved_quantity || 0);
 }
 
+function palletMoveSource(location: DashboardLocation, pallet?: DashboardPallet | null): WarehouseMoveSource | null {
+  const selectedPallet = pallet || singleLocationPallet(location) as DashboardPallet | null;
+  if (!selectedPallet?.pallet_id || !selectedPallet.version) return null;
+  const firstItem = selectedPallet.items[0];
+  return {
+    source_key: `pallet:${selectedPallet.pallet_id}`,
+    operation: "pallet_move",
+    pallet_id: selectedPallet.pallet_id,
+    expected_version: selectedPallet.version,
+    source_location_id: location.location_id,
+    source_floor_code: location.floor_code,
+    source_area_code: location.area_code,
+    source_location_code: location.location_code,
+    source_location_name: location.location_name,
+    inventory_code: selectedPallet.pallet_code,
+    product_name: firstItem?.product_name || `整栈板 ${selectedPallet.pallet_code}`,
+    customer_name: firstItem?.customer_name || "客户待确认",
+    unit: firstItem?.unit || "boxes"
+  };
+}
+
+function dashboardPalletSummary(pallet: DashboardPallet) {
+  const items = pallet.items || [];
+  const products = [...new Set(items.map((item) => item.product_name).filter(Boolean))];
+  const customers = [...new Set(items.map((item) => item.customer_name).filter(Boolean))];
+  return {
+    product: products.length === 1 ? products[0] : products.length > 1 ? `${products[0]} 等 ${products.length} 款` : "产品名称待补充",
+    customer: customers.length === 1 ? customers[0] : customers.length > 1 ? `${customers.length} 个客户` : "客户待确认",
+    quantity: items.reduce((sum, item) => sum + Number(inventoryLabelQuantity(item) || 0), 0),
+    unit: items.find((item) => item.unit)?.unit || "boxes"
+  };
+}
+
 function movableLotQuantity(item: InventoryItem) {
   if (item.available_quantity !== undefined || item.reserved_quantity !== undefined) {
     return Number(item.available_quantity || 0) + Number(item.reserved_quantity || 0);
@@ -1149,6 +1183,14 @@ export function WarehouseTwinApp() {
       }
     } : location;
   }), [dashboard?.locations, locationDrafts]);
+  const dispatchStagingLocation = useMemo(
+    () => visualLocations.find((item) => item.floor_code === "1F" && item.location_code === "F1-DISPATCH-01"),
+    [visualLocations]
+  );
+  const dispatchStagingPallets = useMemo(
+    () => inventoryLocationPallets(dispatchStagingLocation) as DashboardPallet[],
+    [dispatchStagingLocation]
+  );
   useEffect(() => {
     if (!locationEditMode || !advancedAreaMaintenanceOpen) return;
     setLocationDrafts((current) => {
@@ -1177,8 +1219,12 @@ export function WarehouseTwinApp() {
     });
   }, [locationEditMode, floorCode, dashboard?.locations]);
   const mappedLocationPallets = useMemo(
-    () => buildMappedLocationPallets(features, visualLocations, floorCode, layout?.id),
-    [features, visualLocations, floorCode, layout?.id]
+    () => [
+      ...buildMappedLocationPallets(features, visualLocations, floorCode, layout?.id)
+        .filter((pallet) => pallet.id !== `erp-location-${dispatchStagingLocation?.location_id || 0}`),
+      ...buildMeasuredDispatchPallets(features, dispatchStagingLocation, floorCode, layout?.id)
+    ],
+    [features, visualLocations, dispatchStagingLocation, floorCode, layout?.id]
   );
   const moveReservedTargetIds = useMemo(
     () => moveDrafts
@@ -1226,6 +1272,18 @@ export function WarehouseTwinApp() {
   const movePreviewPallets = useMemo(() => {
     if (mapMode !== "move" || !moveDrafts.length) return mappedLocationPallets;
     return mappedLocationPallets.map((pallet) => {
+      if (pallet.id.startsWith("erp-dispatch-pallet-")) {
+        const palletId = Number(pallet.id.replace("erp-dispatch-pallet-", ""));
+        const outbound = moveDrafts.find((item) => item.operation === "pallet_move" && item.pallet_id === palletId);
+        if (!outbound) return pallet;
+        return {
+          ...pallet,
+          name: `${pallet.name} · 页面草稿待移出`,
+          color: "#64748b",
+          visual_status: "empty" as const,
+          status_note: `页面草稿 · 待一次确认后移往 ${outbound.target_floor_code} / ${outbound.target_location_name}`
+        };
+      }
       const locationId = Number(pallet.id.replace("erp-location-", ""));
       const location = visualLocations.find((item) => item.location_id === locationId);
       const locationPallets = inventoryLocationPallets(location);
@@ -1374,6 +1432,25 @@ export function WarehouseTwinApp() {
       }
       return;
     }
+    if (entity.kind === "pallet" && entity.id.startsWith("erp-dispatch-pallet-")) {
+      const palletId = Number(entity.id.replace("erp-dispatch-pallet-", ""));
+      const pallet = dispatchStagingPallets.find((item) => item.pallet_id === palletId);
+      setSelected(entity);
+      if (mapMode === "move" && dispatchStagingLocation && pallet) {
+        const source = palletMoveSource(dispatchStagingLocation, pallet);
+        if (!source) {
+          setWarehouseOperationMessage("该待送栈板缺少可移动版本，请刷新后重试。");
+          return;
+        }
+        setMoveSource(source);
+        setMoveQuantity("");
+        setMoveTargetFloorCode(floorCode);
+        setMoveTargetAreaCode("");
+        setMoveDraftTargetLocationId("");
+        setWarehouseOperationMessage(`已选待送栈板 ${pallet.pallet_code}；来源保持不变，请切换 1F 或 3F 后点区域和具体空货位。`);
+      }
+      return;
+    }
     if (entity.kind === "pallet" && entity.id.startsWith("erp-location-")) {
       if (mapMode === "move" && moveSource) {
         const locationId = Number(entity.id.replace("erp-location-", ""));
@@ -1392,11 +1469,22 @@ export function WarehouseTwinApp() {
       entity.kind === "feature"
       && layout?.features.some((item) => item.id === entity.id && item.feature_kind === "zone")
     ) {
+      if (mapMode === "move" && moveSource) {
+        const feature = features.find((item) => item.id === entity.id);
+        const areaCode = featureAreaCode(feature);
+        const targets = mappedMoveTargets.filter((item) => item.floor_code === floorCode && item.area_code === areaCode);
+        setMoveTargetFloorCode(floorCode);
+        setMoveTargetAreaCode(areaCode || "");
+        setMoveDraftTargetLocationId("");
+        setWarehouseOperationMessage(areaCode && targets.length
+          ? `已选 ${floorCode} · ${areaCode} 区；来源栈板仍保留，请继续点地图中的具体空货位。`
+          : `当前区域没有可用空货位；来源栈板仍保留，可切换其他楼层或区域继续选择。`);
+      }
       setSelected(entity);
       return;
     }
     setSelected(null);
-  }, [layout, locationEditMode, advancedAreaMaintenanceOpen, rackDrafts, mapMode, moveSource, mappedMoveTargets]);
+  }, [layout, locationEditMode, advancedAreaMaintenanceOpen, rackDrafts, mapMode, moveSource, mappedMoveTargets, dispatchStagingLocation, dispatchStagingPallets, floorCode, features]);
   const selectedFeature = selected?.kind === "feature"
     ? features.find((item) => item.id === selected.id && item.feature_kind === "zone")
     : undefined;
@@ -1404,6 +1492,9 @@ export function WarehouseTwinApp() {
   const selectedRack = selected?.kind === "rack" ? visualLayout?.racks.find((item) => item.id === selected.id) : undefined;
   const selectedLocation = selected?.kind === "pallet"
     ? visualLocations.find((item) => `erp-location-${item.location_id}` === selected.id)
+    : undefined;
+  const selectedDispatchPallet = selected?.kind === "pallet" && selected.id.startsWith("erp-dispatch-pallet-")
+    ? dispatchStagingPallets.find((item) => `erp-dispatch-pallet-${item.pallet_id}` === selected.id)
     : undefined;
   const selectedLocationPallets = useMemo(
     () => inventoryLocationPallets(selectedLocation) as DashboardPallet[],
@@ -1492,9 +1583,6 @@ export function WarehouseTwinApp() {
   const selectedAreaBoundary = selectedAreaBoundaryPoints.length
     ? pointsBoundsMm(selectedAreaBoundaryPoints) : null;
   const selectedFeatureIsMeasuredDispatch = floorCode === "1F" && isMeasuredDispatchFeature(selectedFeature);
-  const dispatchStagingLocation = visualLocations.find(
-    (item) => item.floor_code === "1F" && item.location_code === "F1-DISPATCH-01"
-  );
   const dispatchStagingItems = dispatchStagingLocation?.loose_items || [];
   const selectedDispatchStagingItem = dispatchStagingItems.find(
     (item) => item.lot_id === dispatchTransferLotId
@@ -1775,11 +1863,11 @@ export function WarehouseTwinApp() {
     if (mapMode !== "move") return;
     setMoveTargetFloorCode((current) => moveTargetFloors.includes(current)
       ? current
-      : moveTargetFloors.includes(floorCode) ? floorCode : moveTargetFloors[0] || "");
+      : moveTargetFloors.includes(floorCode) ? floorCode : "");
   }, [mapMode, floorCode, moveTargetFloors]);
   useEffect(() => {
     if (mapMode !== "move") return;
-    setMoveTargetAreaCode((current) => moveTargetAreas.includes(current) ? current : moveTargetAreas[0] || "");
+    setMoveTargetAreaCode((current) => moveTargetAreas.includes(current) ? current : "");
   }, [mapMode, moveTargetAreas]);
   useEffect(() => {
     if (moveTargetLocations.some((item) => String(item.location_id) === moveDraftTargetLocationId)) return;
@@ -2014,27 +2102,6 @@ export function WarehouseTwinApp() {
     setLocationEditMessage(hitsColumn
       ? `${location.location_code} 与柱子重叠，已标红；请拖离柱子后再保存。`
       : `${location.location_code} 已形成二维草稿；点击保存后才写入布局。`);
-  };
-
-  const palletMoveSource = (location: DashboardLocation, pallet?: DashboardPallet | null): WarehouseMoveSource | null => {
-    const selectedPallet = pallet || singleLocationPallet(location) as DashboardPallet | null;
-    if (!selectedPallet?.pallet_id || !selectedPallet.version) return null;
-    const firstItem = selectedPallet.items[0];
-    return {
-      source_key: `pallet:${selectedPallet.pallet_id}`,
-      operation: "pallet_move",
-      pallet_id: selectedPallet.pallet_id,
-      expected_version: selectedPallet.version,
-      source_location_id: location.location_id,
-      source_floor_code: location.floor_code,
-      source_area_code: location.area_code,
-      source_location_code: location.location_code,
-      source_location_name: location.location_name,
-      inventory_code: selectedPallet.pallet_code,
-      product_name: firstItem?.product_name || `整栈板 ${selectedPallet.pallet_code}`,
-      customer_name: firstItem?.customer_name || selectedLocationCustomerLabel,
-      unit: firstItem?.unit || "boxes"
-    };
   };
 
   const lotMoveSource = (location: DashboardLocation, item: InventoryItem): WarehouseMoveSource | null => {
@@ -3345,6 +3412,15 @@ export function WarehouseTwinApp() {
     setCameraFocusTarget({ entity: { kind: "pallet", id: `erp-location-${locationId}` }, token: cameraFocusSequenceRef.current, source: "search" });
   };
 
+  const switchWarehouseFloor = (nextFloorCode: "1F" | "3F") => {
+    setFloorCode(nextFloorCode);
+    if (mapMode !== "move" || !moveSource) return;
+    setMoveTargetFloorCode(nextFloorCode);
+    setMoveTargetAreaCode("");
+    setMoveDraftTargetLocationId("");
+    setWarehouseOperationMessage(`来源 ${moveSource.inventory_code} 仍保留；请在 ${nextFloorCode} 地图点选区域，再点具体空货位。`);
+  };
+
   return <main className={`warehouse-twin-shell ${uiMode === "large" ? "large-text" : ""} ${mapMode === "move" ? "move-mode" : ""}`}>
     {focusedRack && <WarehouseRackElevation
       rack={focusedRack}
@@ -3362,8 +3438,8 @@ export function WarehouseTwinApp() {
     />}
     <header className={`twin-command-bar ${embedded ? "embedded" : ""}`}>
       <div className="twin-brand"><div><small>TIANMING WAREHOUSE</small><h1>天明智慧仓储</h1></div><nav className="twin-floor-switch" aria-label="楼层切换">
-        <button type="button" className={floorCode === "1F" ? "active" : ""} onClick={() => setFloorCode("1F")}><b>1F</b><span>生产车间</span></button>
-        <button type="button" className={floorCode === "3F" ? "active" : ""} onClick={() => setFloorCode("3F")}><b>3F</b><span>成品仓库</span></button>
+        <button type="button" className={floorCode === "1F" ? "active" : ""} onClick={() => switchWarehouseFloor("1F")}><b>1F</b><span>生产车间</span></button>
+        <button type="button" className={floorCode === "3F" ? "active" : ""} onClick={() => switchWarehouseFloor("3F")}><b>3F</b><span>成品仓库</span></button>
       </nav>{selectedAreaCode && <div className="twin-header-area-summary"><small>当前区域</small><b>{selectedAreaCode} · {selectedAreaFeature?.name || "仓储区域"}</b><span>{selectedAreaFeature?.area_mm2 ? `${(selectedAreaFeature.area_mm2 / 1_000_000).toFixed(1)} m²` : "面积待确认"} · {selectedAreaLocationCount} 库位 · {selectedArea?.lot_count || 0} 批次</span></div>}<p>{floorTitle} · 正式仓库作业层</p></div>
       <div className="twin-command-status"><span className="live">{mapMode === "planning" ? advancedAreaMaintenanceOpen ? "区域规划 · 高级维护" : "区域规划 · 一次确认" : mapMode === "move" ? moveAction === "merge" ? `移货 · 合并栈板 · ${mergeSources.length} 块已选` : `移货 · ${moveDrafts.length} 条页面草稿` : "查货模式 · 只读"}</span><b>{currentFloor?.active_lots || 0}</b><small>当前层有效批次</small></div>
       <a className="twin-ledger-link" href="/warehouse-ledger.html?tab=finished" target="_top">库存台账</a>
@@ -3535,14 +3611,18 @@ export function WarehouseTwinApp() {
               <div className="twin-merge-target-list" role="radiogroup" aria-label="目标系统栈板">{mergeTargetChoices.map((item) => <button type="button" role="radio" aria-checked={mergeTarget?.pallet_id === item.pallet_id} className={mergeTarget?.pallet_id === item.pallet_id ? "selected" : ""} key={item.pallet_id} onClick={() => chooseMergeTarget(item)}><b>{item.pallet_code}</b><span>{item.floor_code} / {item.location_name} · {item.customer_name}</span><small>合计 {formatNumber(item.total_quantity)} {inventoryUnitLabel(item.unit)} · 设为目标后其余 {mergeSources.length - 1} 块作为来源</small></button>)}</div>
               {!mergeTargetChoices.length && <small className="error">已选集合中没有通过位置门禁的目标栈板；请移除不可作为目标的栈板后重选。</small>}
             </div>}
-          </> : !moveSource ? <p>先点地图上的有货位置选择整栈板或批次；一楼待送区的散存标签也可作为来源。</p> : <>
+          </> : !moveSource ? <p>先点地图上的真实栈板；厂外待送区每个栈板图案都可单独选择，历史散存也可从右侧选择。</p> : <>
             <div className="twin-move-source-summary"><small>已选货物 · {moveSource.operation === "pallet_move" ? "整栈板" : "库存批次"}</small><b>{moveSource.inventory_code} · {moveSource.product_name}</b><span>{moveSource.source_floor_code} / {moveSource.source_area_code || "未分区"} / {moveSource.source_location_name}</span><button type="button" onClick={() => { setMoveSource(null); setMoveQuantity(""); setMoveDraftTargetLocationId(""); setWarehouseOperationMessage("已清除本次页面选择；库存、入库来源和送货单均未改变。"); }}>重新选择货物</button></div>
             <div className="twin-move-target-cascade">
-              <div className="twin-formal-operation-title"><b>选择目标空货位</b><span>楼层 → 区域 → 具体货位</span></div>
+              <div className="twin-formal-operation-title"><b>在地图选择目标空货位</b><span>可切换 1F / 3F；来源不会丢失</span></div>
               {moveSource.operation === "lot_transfer" && <label><span>本次移动数量（可用＋预占，损坏不计）</span><input type="number" min="1" max={moveSource.max_quantity} step="1" value={moveQuantity} onChange={(event) => setMoveQuantity(event.target.value)} /></label>}
-              <label><span>楼层</span><select value={moveTargetFloorCode} onChange={(event) => { setMoveTargetFloorCode(event.target.value); setMoveTargetAreaCode(""); setMoveDraftTargetLocationId(""); }}><option value="">请选择楼层</option>{moveTargetFloors.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
-              <label><span>区域</span><select value={moveTargetAreaCode} disabled={!moveTargetFloorCode} onChange={(event) => { setMoveTargetAreaCode(event.target.value); setMoveDraftTargetLocationId(""); }}><option value="">请选择区域</option>{moveTargetAreas.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
-              <label><span>具体货位</span><select value={moveDraftTargetLocationId} disabled={!moveTargetAreaCode} onChange={(event) => setMoveDraftTargetLocationId(event.target.value)}><option value="">请选择可用空货位</option>{moveTargetLocations.map((item) => <option value={item.location_id} key={item.location_id}>{item.location_name} · {item.location_code}</option>)}</select></label>
+              <label><span>楼层（选择后同步切换地图）</span><select value={moveTargetFloorCode} onChange={(event) => {
+                const nextFloor = event.target.value;
+                if (nextFloor === "1F" || nextFloor === "3F") switchWarehouseFloor(nextFloor);
+                else { setMoveTargetFloorCode(""); setMoveTargetAreaCode(""); setMoveDraftTargetLocationId(""); }
+              }}><option value="">请选择楼层</option>{moveTargetFloors.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
+              <label><span>区域（也可直接点地图区域）</span><select value={moveTargetAreaCode} disabled={!moveTargetFloorCode} onChange={(event) => { setMoveTargetAreaCode(event.target.value); setMoveDraftTargetLocationId(""); }}><option value="">请选择区域</option>{moveTargetAreas.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
+              <label><span>具体货位（也可直接点地图空位）</span><select value={moveDraftTargetLocationId} disabled={!moveTargetAreaCode} onChange={(event) => setMoveDraftTargetLocationId(event.target.value)}><option value="">请选择可用空货位</option>{moveTargetLocations.map((item) => <option value={item.location_id} key={item.location_id}>{item.location_name} · {item.location_code}</option>)}</select></label>
               {moveCandidatesLoading && <small>正在读取可用空货位…</small>}
               {moveCandidatesError && <small className="error">空货位读取失败：{moveCandidatesError}</small>}
               {!moveCandidatesLoading && !moveCandidatesError && mappedMoveTargets.length === 0 && <small>当前没有可用空货位；请先确认目标区域已启用并设有空货位。</small>}
@@ -3571,11 +3651,37 @@ export function WarehouseTwinApp() {
           <div className="twin-layout-editor-actions"><button type="button" onClick={() => updateRackDraft(selectedRackEditDraft.id, { rotation_deg: ((selectedRackEditDraft.rotation_deg + 90) % 360) as Rack["rotation_deg"] })}>旋转 90°</button><button type="button" className="primary" disabled={spatialEditBusy} onClick={saveSelectedRack}>保存到草稿</button><button type="button" disabled={spatialEditBusy} onClick={() => setRackDrafts((current) => { const next = { ...current }; delete next[selectedRackEditDraft.id]; return next; })}>取消本次修改</button><button type="button" className="danger" disabled={spatialEditBusy || selectedRackEditDraft.is_locked} onClick={deleteSelectedRack}>从草稿删除</button></div>
           <p>保存后仍是管理员草稿；校验并发布前，员工地图、库存数量、栈板和正式库位均不改变。</p>
         </section>}
+        {selectedDispatchPallet && dispatchStagingLocation && <section className="twin-location-card twin-dispatch-board">
+          {(() => {
+            const summary = dashboardPalletSummary(selectedDispatchPallet);
+            return <>
+              <div className="twin-location-card-title"><div><small>厂外待送 · 真实系统栈板</small><b>{selectedDispatchPallet.pallet_code}</b></div><em className="occupied">待送货</em></div>
+              <div className="twin-selection-summary"><span><small>产品</small><b>{summary.product}</b></span><span><small>客户</small><b>{summary.customer}</b></span><span><small>数量</small><b>{formatNumber(summary.quantity)} {inventoryUnitLabel(summary.unit)}</b></span></div>
+              <p className="twin-dispatch-weather-note">地图上的这一块图案对应这一块真实栈板；位置点只表示它位于实测厂外待送区，不伪造未登记的区内坐标。</p>
+              {canExecuteWarehouse && <button type="button" className="twin-primary-action" onClick={async () => {
+                if (mapMode !== "move") await enterWarehouseMoveMode();
+                chooseMoveSource(palletMoveSource(dispatchStagingLocation, selectedDispatchPallet));
+              }}>移动这块栈板到 1F / 3F</button>}
+            </>;
+          })()}
+        </section>}
         {selectedFeatureIsMeasuredDispatch && <section className="twin-location-card twin-dispatch-board">
           <div className="twin-location-card-title"><div><small>1F MEASURED DISPATCH</small><b>{selectedFeature?.name || "一楼成品待送区"}</b></div><em className="occupied">临时待装车</em></div>
           <p className="twin-dispatch-weather-note">只使用当前实测地图内已经确认的待送区域轮廓；不向图外补画或扩展区域。</p>
-          <div className="twin-dispatch-summary"><b>{dispatchStagingItems.length}</b><span>条正式散存待送标签</span><small>已绑定实体栈板会直接显示在对应地图位置；下列历史批次未绑定木栈板，不会伪造栈板编号。</small></div>
+          <div className="twin-dispatch-summary"><b>{dispatchStagingPallets.length}</b><span>块真实待送栈板</span><small>点击栈板可实时查看产品、客户和数量；转走后该区数量同步减少。另有 {dispatchStagingItems.length} 条未绑定实体栈板的历史散存。</small></div>
           <div className="twin-dispatch-label-list">
+            {dispatchStagingPallets.map((pallet) => {
+              const summary = dashboardPalletSummary(pallet);
+              return <button type="button" className={(mapMode === "move" ? moveSource?.source_key === `pallet:${pallet.pallet_id}` : selectedDispatchPallet?.pallet_id === pallet.pallet_id) ? "selected" : ""} key={`dispatch-pallet-${pallet.pallet_id}`} onClick={() => {
+                setSelected({ kind: "pallet", id: `erp-dispatch-pallet-${pallet.pallet_id}` });
+                if (mapMode === "move" && canExecuteWarehouse && dispatchStagingLocation) chooseMoveSource(palletMoveSource(dispatchStagingLocation, pallet));
+              }}>
+                <small>真实栈板 · {pallet.pallet_code}</small>
+                <b>{formatNumber(summary.quantity)} {inventoryUnitLabel(summary.unit)}</b>
+                <strong>{summary.product}</strong>
+                <span>{summary.customer}</span>
+              </button>;
+            })}
             {dispatchStagingItems.map((item, itemIndex) => <button type="button" className={(mapMode === "move" ? moveSource?.source_key === `lot:${item.lot_id}` : dispatchTransferLotId === item.lot_id) ? "selected" : ""} key={item.lot_id || `dispatch-${itemIndex}`} onClick={() => {
               if (mapMode === "move" && canExecuteWarehouse && dispatchStagingLocation) {
                 chooseMoveSource(lotMoveSource(dispatchStagingLocation, item));
@@ -3589,9 +3695,9 @@ export function WarehouseTwinApp() {
               <span>{item.customer_name || "客户待确认"}</span>
               <em>{formatNumber(inventoryLabelQuantity(item))} {inventoryUnitLabel(item.unit)}</em>
             </button>)}
-            {dispatchStagingItems.length === 0 && <p>当前没有未绑定实体栈板的待送货物。</p>}
+            {dispatchStagingPallets.length === 0 && dispatchStagingItems.length === 0 && <p>当前待送区没有货物。</p>}
           </div>
-          {mapMode === "move" && canExecuteWarehouse && <p className="twin-dispatch-weather-note">点击上方货物，再选择楼层、区域和具体空货位即可移动；不会改变订单和后续送货关系。</p>}
+          {mapMode === "move" && canExecuteWarehouse && <p className="twin-dispatch-weather-note">点击上方栈板后，可随意切换 1F / 3F 地图；来源不会丢失，再点区域和具体空货位即可移动，不会改变订单和后续送货关系。</p>}
           {P1_47D_ENABLED && selectedDispatchStagingItem && canEditLocations && mapMode === "move" && viewMode === "2d" && <div className="twin-formal-operation twin-dispatch-transfer">
             <div className="twin-formal-operation-title"><b>暂不送，转三楼成品区</b><span>只移动原库存</span></div>
             <label><span>本次转入数量（默认全部）</span><input type="number" min="1" max={inventoryLabelQuantity(selectedDispatchStagingItem)} step="1" value={dispatchTransferQuantity} onChange={(event) => setDispatchTransferQuantity(event.target.value)} /></label>

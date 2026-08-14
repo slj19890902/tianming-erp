@@ -204,6 +204,67 @@ export function singleLocationPallet(location) {
   return pallets.length === 1 ? pallets[0] : null;
 }
 
+function dispatchPalletItemQuantity(item) {
+  if (item?.quantity !== undefined && item?.quantity !== null) return Math.max(0, Number(item.quantity) || 0);
+  return Math.max(
+    0,
+    Number(item?.available_quantity || 0)
+      + Number(item?.reserved_quantity || 0)
+  );
+}
+
+export function buildMeasuredDispatchPallets(features, dispatchLocation, floorCode, layoutId = "erp-twin") {
+  if (floorCode !== "1F" || dispatchLocation?.location_code !== "F1-DISPATCH-01") return [];
+  const zones = (features || [])
+    .filter((feature) => feature.feature_kind === "zone"
+      && String(feature.subtype || "").toLowerCase() === "finished_wait_delivery"
+      && feature.points?.length >= 3)
+    .sort((left, right) => String(left.feature_code).localeCompare(String(right.feature_code), "zh-CN", { numeric: true }));
+  const sourcePallets = inventoryLocationPallets(dispatchLocation);
+  if (!zones.length || !sourcePallets.length) return [];
+
+  const zonePallets = zones.map(() => []);
+  sourcePallets.forEach((pallet, index) => zonePallets[index % zones.length].push(pallet));
+  return zones.flatMap((zone, zoneIndex) => {
+    const pallets = zonePallets[zoneIndex];
+    const points = stableZonePoints(zone.points, pallets.length);
+    return pallets.map((pallet, palletIndex) => {
+      const items = Array.isArray(pallet.items) ? pallet.items : [];
+      const productNames = [...new Set(items.map((item) => item.product_name).filter(Boolean))];
+      const customerNames = [...new Set(items.map((item) => item.customer_name).filter(Boolean))];
+      const totalQuantity = items.reduce((sum, item) => sum + dispatchPalletItemQuantity(item), 0);
+      const unit = items.find((item) => item.unit)?.unit || "boxes";
+      const productLabel = productNames.length === 1
+        ? productNames[0]
+        : productNames.length > 1 ? `${productNames[0]} 等 ${productNames.length} 款` : "产品名称待补充";
+      const customerLabel = customerNames.length === 1
+        ? customerNames[0]
+        : customerNames.length > 1 ? `${customerNames.length} 个客户` : "客户待确认";
+      return {
+        id: `erp-dispatch-pallet-${pallet.pallet_id}`,
+        layout_id: layoutId,
+        pallet_code: pallet.pallet_code,
+        name: `${productLabel} · ${totalQuantity.toLocaleString("zh-CN")} ${inventoryUnitLabel(unit)}`,
+        zone_id: zone.id,
+        zone_code: zone.feature_code,
+        x_mm: points[palletIndex][0],
+        y_mm: points[palletIndex][1],
+        z_mm: 0,
+        width_mm: 1200,
+        depth_mm: 1000,
+        height_mm: 160,
+        rotation_deg: 0,
+        color: "#ea580c",
+        visual_status: "waiting",
+        status_note: `真实待送栈板 · ${customerLabel} · ${pallet.pallet_code}`,
+        is_simulated: false,
+        version: Number(pallet.version || 1),
+        snapped: false
+      };
+    });
+  });
+}
+
 export function buildMappedLocationPallets(features, locations, floorCode, layoutId = "erp-twin") {
   const zoneByArea = new Map(
     features

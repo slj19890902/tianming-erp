@@ -117,6 +117,13 @@ export function singleLocationPallet(
   location?: InventoryProjectionLocation | null
 ): InventoryProjectionPallet | null;
 
+export function buildMeasuredDispatchPallets(
+  features: Array<{ id: string; feature_kind: string; feature_code: string; subtype?: string | null; points: number[][] }>,
+  dispatchLocation?: InventoryProjectionLocation | null,
+  floorCode?: string,
+  layoutId?: string
+): import("./types").Pallet[];
+
 export function buildMappedLocationPallets(
   features: Array<{ id: string; feature_kind: string; feature_code: string; erp_area_code?: string | null; points: number[][] }>,
   locations: InventoryProjectionLocation[],

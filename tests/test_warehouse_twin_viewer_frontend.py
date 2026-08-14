@@ -447,10 +447,20 @@ def test_p1_42b_uses_only_measured_dispatch_zones_and_keeps_transfer_targets() -
     assert measured_dispatch == {"ZONE-1F-FIN-001", "ZONE-1F-FIN-002", "ZONE-1F-FIN-003"}
 
     assert "isMeasuredDispatchFeature" in SOURCE
+    assert "buildMeasuredDispatchPallets" in SOURCE
     assert "只使用当前实测地图内已经确认的待送区域轮廓" in SOURCE
     assert "不向图外补画或扩展区域" in SOURCE
     assert "散存待送 · 未绑定实体栈板" in SOURCE
-    assert "已绑定实体栈板会直接显示在对应地图位置" in SOURCE
+    assert "块真实待送栈板" in SOURCE
+    assert "点击栈板可实时查看产品、客户和数量" in SOURCE
+    assert 'id: `erp-dispatch-pallet-${pallet.pallet_id}`' in (ROOT / "factory_twin/frontend/src/warehouseInventory.mjs").read_text(encoding="utf-8")
+    assert 'entity.id.startsWith("erp-dispatch-pallet-")' in SOURCE
+    assert "移动这块栈板到 1F / 3F" in SOURCE
+    assert "const switchWarehouseFloor" in SOURCE
+    assert "来源 ${moveSource.inventory_code} 仍保留" in SOURCE
+    assert 'onClick={() => switchWarehouseFloor("3F")}' in SOURCE
+    assert "选择后同步切换地图" in SOURCE
+    assert "继续点地图中的具体空货位" in SOURCE
     assert "直接点选三楼空位缩略图" in SOURCE
     assert "目标必须是上方已选集合中的一块" in SOURCE
     assert "/api/warehouse/twin-operations/staging-lots/${selectedDispatchStagingItem.lot_id}/place" in SOURCE

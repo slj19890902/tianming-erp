@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildMeasuredDispatchPallets,
   buildMappedLocationPallets,
   expandAreaInventory,
   findPalletColumnConflicts,
@@ -276,6 +277,39 @@ test("shared dispatch location keeps every system pallet without fabricating map
     [202, "PLT-F1-PC-22"],
     [303, null]
   ]);
+});
+
+test("measured dispatch zones project every real system pallet with live product quantity", () => {
+  const zones = [
+    { id: "fin-2", feature_kind: "zone", feature_code: "FIN-002", subtype: "finished_wait_delivery", points: [[12000, 0], [22000, 0], [22000, 5000], [12000, 5000]] },
+    { id: "fin-1", feature_kind: "zone", feature_code: "FIN-001", subtype: "finished_wait_delivery", points: [[0, 0], [10000, 0], [10000, 5000], [0, 5000]] },
+    { id: "raw-1", feature_kind: "zone", feature_code: "RAW-001", subtype: "raw_material", points: [[0, 6000], [10000, 6000], [10000, 9000], [0, 9000]] }
+  ];
+  const dispatch = {
+    location_id: 401,
+    location_code: "F1-DISPATCH-01",
+    location_name: "一楼厂外成品待送区",
+    floor_code: "1F",
+    area_code: "DISPATCH",
+    pallets: [
+      { pallet_id: 12, pallet_code: "PLT-PC-12", version: 3, items: [{ product_name: "五层纸箱", customer_name: "客户乙", reserved_quantity: 80, unit: "boxes" }] },
+      { pallet_id: 10, pallet_code: "PLT-PC-10", version: 2, items: [{ product_name: "三层纸箱", customer_name: "客户甲", available_quantity: 20, reserved_quantity: 30, unit: "boxes" }] },
+      { pallet_id: 11, pallet_code: "PLT-PC-11", version: 1, items: [{ product_name: "模切纸箱", customer_name: "客户丙", quantity: 60, unit: "boxes" }] }
+    ],
+    loose_items: []
+  };
+
+  const first = buildMeasuredDispatchPallets(zones, dispatch, "1F", "layout-1f");
+  const second = buildMeasuredDispatchPallets(zones, dispatch, "1F", "layout-1f");
+  assert.deepEqual(first, second);
+  assert.deepEqual(first.map((item) => item.id), ["erp-dispatch-pallet-10", "erp-dispatch-pallet-12", "erp-dispatch-pallet-11"]);
+  assert.deepEqual(first.map((item) => item.zone_code), ["FIN-001", "FIN-001", "FIN-002"]);
+  assert.match(first[0].name, /三层纸箱 · 50 只/);
+  assert.match(first[0].status_note, /客户甲/);
+  assert.ok(first.every((item) => item.is_simulated === false));
+  assert.ok(first.slice(0, 2).every((item) => item.x_mm > 0 && item.x_mm < 10000 && item.y_mm > 0 && item.y_mm < 5000));
+  assert.ok(first.slice(2).every((item) => item.x_mm > 12000 && item.x_mm < 22000 && item.y_mm > 0 && item.y_mm < 5000));
+  assert.deepEqual(buildMeasuredDispatchPallets(zones, dispatch, "3F", "layout-3f"), []);
 });
 
 test("ordinary single-pallet location keeps the legacy one-card move path", () => {

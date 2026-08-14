@@ -3294,10 +3294,39 @@
             </template>
 
             <template v-else-if="activePage === 'requisition'">
+              <template v-if="requisitionWorkspace==='external-packaging'">
+                <div class="page-head requisition-page-head">
+                  <div>
+                    <h2>包材报料</h2>
+                    <p>仅核对纯外购包材与混合 BOM 外购组件；确认后仍由原采购接口按供应商生成 EP 采购单。</p>
+                  </div>
+                  <button class="btn" type="button" @click="returnToBoardRequisition">返回纸板报料</button>
+                </div>
+                <div class="toolbar requisition-page-actionbar">
+                  <div class="toolbar-group">
+                    <input class="input" v-model.trim="externalPurchaseRoutingFilter" @input="pages.externalPurchaseRouting=1" placeholder="搜索客户、订单、品号或包材" />
+                  </div>
+                  <button class="btn" type="button" :disabled="externalPurchaseRoutingLoading" @click="loadExternalPurchaseRouting">{{ externalPurchaseRoutingLoading ? '读取中…' : '刷新包材待确认' }}</button>
+                </div>
+                <div v-if="externalPurchaseRoutingLoading" class="status blue" style="display:block;margin:8px 0">正在读取外购包材待确认；已显示的上次结果不会被清空。</div>
+                <div v-if="externalPurchaseRoutingError" class="status orange" style="display:flex;align-items:center;gap:8px;white-space:normal;margin:8px 0">
+                  <span>{{ externalPurchaseRoutingError }}</span>
+                  <button class="btn small" type="button" :disabled="externalPurchaseRoutingLoading" @click="loadExternalPurchaseRouting">重试</button>
+                </div>
+                <div v-if="externalPurchaseRoutingLoaded && !externalPurchaseRoutingLoading && !filteredExternalPurchaseRouting.length" class="empty">当前条件下没有待确认的外购包材需求。</div>
+                <div v-if="pagedExternalPurchaseRouting.length" class="table-wrap">
+                  <table class="compact-table">
+                    <thead><tr><th>客户 / 订单</th><th>品号 / 名称</th><th>供货方式</th><th>规格</th><th>数量</th><th>下一步</th></tr></thead>
+                    <tbody><tr v-for="row in pagedExternalPurchaseRouting" :key="'external-route-'+row.order_item_id"><td>{{ row.customer_name }}<div class="muted">{{ row.order_number }}｜交期 {{ row.delivery_date || '-' }}</div></td><td>{{ row.product_code || '-' }}｜{{ row.product_name || '-' }}</td><td>{{ row.supply_mode==='external_purchase' ? '纯外购包材' : '纸板主件＋外购组件' }}</td><td>{{ row.specification_summary || (row.component_count + '项外购组件') }}<div class="muted">{{ row.purchase_unit || '' }}</div></td><td>{{ row.quantity }}</td><td><button v-if="canAdmin && canViewCosts" class="btn small primary" @click="openExternalPurchase(row)">核对并确认采购</button><span v-else class="muted">请管理员在成本权限下确认采购</span></td></tr></tbody>
+                  </table>
+                </div>
+                <pager :page="pages.externalPurchaseRouting" :total="filteredExternalPurchaseRouting.length" :page-size="pageSize" :always="true" :compact="true" :filter-count="externalPurchaseRoutingFilter ? 1 : 0" @change="pages.externalPurchaseRouting=$event"></pager>
+              </template>
+              <template v-else>
               <div class="page-head requisition-page-head">
                 <div>
-                  <h2>智能报料工作台</h2>
-                  <p>订单报料、库存抵扣和库存补库统一先生成可核对草稿；实际到料后再确认入账。</p>
+                  <h2>纸板报料</h2>
+                  <p>纸板订单报料、库存抵扣和库存补库统一先生成可核对草稿；外购包材请进入独立子页处理。</p>
                 </div>
               </div>
               <div class="toolbar requisition-page-actionbar">
@@ -3310,15 +3339,9 @@
                   <button v-if="canRequisition" class="btn warning" :disabled="requisitionTab!=='pending' || !selectedPendingKeys.length || requisitionInventoryActionBlocked() || requisitionVoidActionBlocked()" @click="openRequisitionHold()">暂不报料</button>
                   <button v-if="canRequisition" class="btn primary" :disabled="requisitionInventoryActionBlocked() || requisitionVoidActionBlocked()" @click="openStockReplenishment">库存补库<span v-if="stockPolicyWarnings.length">（预警 {{ stockPolicyWarnings.length }}）</span></button>
                   <button :class="['btn',{primary:requisitionTab==='waiting'}]" :disabled="requisitionInventoryActionBlocked() || requisitionVoidActionBlocked()" @click="selectRequisitionTab('waiting')">等候报料 {{ requisitionHoldSummary.total }}<span v-if="requisitionHoldSummary.due_count">（到期 {{ requisitionHoldSummary.due_count }}）</span></button>
+                  <button class="btn" type="button" @click="openExternalPackagingRequisition">包材报料</button>
                   <button class="btn" :disabled="!!requisitionInventoryActionState.action || !!requisitionVoidActionState.action || requisitionPendingLoading" @click="requisitionInventoryActionBlocked() ? refreshRequisitionInventoryState() : (requisitionVoidActionBlocked() ? refreshRequisitionVoidState() : refreshRequisitionTab())">{{ requisitionInventoryActionBlocked() ? '核对待报料库存状态' : (requisitionVoidActionBlocked() ? '核对报料状态' : (requisitionPendingLoading ? '读取中…' : '刷新')) }}</button>
                 </div>
-              </div>
-              <div v-if="requisitionTab==='pending'" class="panel" style="margin:8px 0;border-color:#f59e0b">
-                <div class="toolbar"><div><strong>外购包材待确认 {{ externalPurchaseRouting.length }}</strong><div class="muted">纯护角、EPE等不进入纸板报料；混合BOM的外购组件也在这里核对，确认后生成EP采购单。</div></div><button v-if="externalPurchaseRoutingError" class="btn small" @click="loadRequisition({skipAutoRelease:true})">重试</button></div>
-                <div v-if="externalPurchaseRoutingLoading" class="muted">正在读取外购包材需求…</div>
-                <div v-else-if="externalPurchaseRoutingError" class="status orange">{{ externalPurchaseRoutingError }}</div>
-                <div v-else-if="!externalPurchaseRouting.length" class="muted">当前没有待确认的外购包材需求。</div>
-                <div v-else class="table-wrap"><table class="compact-table"><thead><tr><th>客户 / 订单</th><th>品号 / 名称</th><th>供货方式</th><th>规格</th><th>数量</th><th>下一步</th></tr></thead><tbody><tr v-for="row in externalPurchaseRouting" :key="'external-route-'+row.order_item_id"><td>{{ row.customer_name }}<div class="muted">{{ row.order_number }}｜交期 {{ row.delivery_date || '-' }}</div></td><td>{{ row.product_code || '-' }}｜{{ row.product_name || '-' }}</td><td>{{ row.supply_mode==='external_purchase' ? '纯外购包材' : '纸板主件＋外购组件' }}</td><td>{{ row.specification_summary || (row.component_count + '项外购组件') }}<div class="muted">{{ row.purchase_unit || '' }}</div></td><td>{{ row.quantity }}</td><td><button v-if="canAdmin && canViewCosts" class="btn small primary" @click="openExternalPurchase(row)">核对并确认采购</button><span v-else class="muted">请管理员在成本权限下确认采购</span></td></tr></tbody></table></div>
               </div>
               <div v-if="requisitionInventoryActionBlocked()" class="status orange" style="display:flex;align-items:center;gap:8px;white-space:normal;margin:8px 0">
                 <span>{{ requisitionInventoryActionState.action ? requisitionInventoryActionLabel() : (requisitionInventoryActionState.committed ? '库存已经使用，但页面刷新失败，请先核对状态，不要重复操作。' : '上次库存操作结果暂不确定，请先核对状态，不要重复操作。') }}</span>
@@ -3412,6 +3435,7 @@
               <div v-if="requisitionTab==='submitted' && requisitionReportedMatchedLines" class="muted reported-match-summary">当前条件命中 {{ requisitionReportedMatchedLines }} 条明细；报料单仍按一张一行显示。</div>
               <data-panel v-if="requisitionTab==='submitted'" :empty="!requisitionItems.length"><table class="reported-compact-table reported-document-table"><thead><tr><th>报料单号 / 日期</th><th>供应商 / 来源</th><th>客户 / 订单</th><th>明细 / 报料数</th><th>入库状态</th><th>操作</th></tr></thead><tbody><template v-for="row in requisitionItems" :key="row.source_type + '-' + row.id"><tr :class="{'row-voided': row.status==='voided' || row.status==='已取消'}"><td><strong>{{ row.document_number }}</strong><br><span class="muted">{{ formatBeijingDate(row.created_at) }}</span></td><td>{{ supplierDisplayName(row.supplier_name || '-') }}<br><span :class="['status', row.source_type==='supplier_order' ? 'blue' : row.source_type==='stock_replenishment' ? 'orange' : 'green']">{{ reportedSourceLabel(row) }}</span></td><td class="reported-source-cell"><strong>{{ compactList(row.customer_names).join(' / ') || '-' }}</strong><br><span class="muted">{{ compactList(row.order_numbers).join(' / ') || '-' }}</span></td><td><strong>{{ row.item_count }} 条 · {{ row.requisition_qty || 0 }} 张</strong><br><span v-if="row.matched_line_count" class="status blue">命中 {{ row.matched_line_count }} 条</span></td><td>{{ row.incoming_status || '-' }}</td><td><div class="toolbar-group"><button class="btn small" @click="reportedExpanded[row.source_type + '-' + row.id]=!reportedExpanded[row.source_type + '-' + row.id]">{{ reportedExpanded[row.source_type + '-' + row.id] ? '收起明细' : '查看明细' }}</button><button class="btn small" @click="openReportedDocument(row)">{{ row.source_type==='supplier_order' ? '采购单' : '打印' }}</button><button v-if="row.source_type==='supplier_order' && row.status==='confirmed'" class="btn small primary" @click="openRequisitionProductionPrint(row)">待来料任务单</button><button v-if="row.source_type==='stock_replenishment' && ['confirmed','partially_stocked'].includes(row.status) && (isWorkshop || canAdmin)" class="btn small success" @click="openIncomingPage()">去仓库来料入库</button><button v-else-if="row.source_type!=='stock_replenishment' && row.incoming_status!=='已作废' && (isWorkshop || canAdmin)" class="btn small" @click="openIncomingPage()">去入库</button><button v-if="row.source_type==='stock_replenishment' && row.can_void && canRequisition" class="btn small danger" :disabled="stockReplenishmentVoidBusy(row) || stockReplenishmentVoidUncertain(row)" @click="voidReportedReplenishment(row)">{{ stockReplenishmentVoidBusy(row) ? '撤销中…' : (stockReplenishmentVoidUncertain(row) ? '请刷新核对' : '撤销报料') }}</button><button v-if="row.source_type==='supplier_order' && row.status!=='voided' && canRequisition" class="btn small danger" @click="voidReportedSupplierOrder(row)">作废</button><button v-if="row.source_type==='composite_bom_requisition' && row.can_void && canRequisition" class="btn small danger" @click="voidReportedCompositeRequisition(row)">作废</button></div></td></tr><tr v-if="reportedExpanded[row.source_type + '-' + row.id]" class="reported-detail-host"><td colspan="6"><div class="reported-detail-grid"><div v-for="line in row.line_items || []" :key="line.stable_id || line.id" :class="['reported-detail-card',{'reported-match-row':line.matched}]"><div><strong :class="{'reported-match-cell':reportedFieldMatched(line,'product_code')}">{{ line.product_code || '-' }}</strong><br><span :class="{'reported-match-cell':reportedFieldMatched(line,'product_name')}">{{ line.product_name || '-' }}</span></div><div><span :class="{'reported-match-cell':reportedFieldMatched(line,'report_length_mm')}">{{ line.report_length_mm || '-' }}</span> × <span :class="{'reported-match-cell':reportedFieldMatched(line,'report_width_mm')}">{{ line.report_width_mm || '-' }}</span> mm<br><span class="muted">压线 {{ line.crease_display || '-' }}</span></div><div><span :class="{'reported-match-cell':reportedFieldMatched(line,'material_code')}">{{ line.material_code || '-' }}</span> / <span :class="{'reported-match-cell':reportedFieldMatched(line,'flute_type')}">{{ line.flute_type || '-' }}</span><br><span class="muted">{{ line.customer_name || '-' }} · {{ line.order_number || '-' }}</span></div><div><strong>{{ line.requisition_qty || 0 }} {{ line.unit || '张' }}</strong><br><span class="muted">{{ line.status || '-' }}<template v-if="line.remaining_qty!==null && line.remaining_qty!==undefined"> · 待收 {{ line.remaining_qty }}</template></span></div><div v-if="line.can_void && canRequisition"><button class="btn small danger" @click="voidReportedCompositeLine(row,line)">撤销本条</button></div></div></div></td></tr></template></tbody></table></data-panel>
               </fieldset>
+              </template>
             </template>
 
             <template v-else-if="activePage === 'incoming'">
@@ -7904,7 +7928,7 @@
             pdfTrainingTemplates: [], pdfTemplateStatusFilter: "active_draft", pdfTemplateDryRun: null,
             pdfTemplateForm: { id:null, customer_id:null, template_name:"", order_no_pattern:"", date_pattern:"", item_row_pattern:"", customer_name_pattern:"", column_map_json:"", notes:"", status:"draft", version:null },
             pdfTemplateLoading: false, pdfTemplatesLoaded: false,
-            requisitionTab: "pending", requisitionPending: [], requisitionPendingTotal: 0, requisitionPendingOverallTotal: 0, requisitionPendingLoading: false, requisitionPendingError: "", requisitionPendingAppliedPage: 1, requisitionPendingAppliedSupplierFilter: "", requisitionPendingRetryPage: 1, requisitionPendingRetrySupplierFilter: "", requisitionPendingRetryScope: "page", requisitionItems: [], requisitionReportedLoaded: false, requisitionSelected: {}, selectedPendingKeys: [], selectedBomSnapshotIds: [],
+            requisitionWorkspace: "board", requisitionTab: "pending", requisitionPending: [], requisitionPendingTotal: 0, requisitionPendingOverallTotal: 0, requisitionPendingLoading: false, requisitionPendingError: "", requisitionPendingAppliedPage: 1, requisitionPendingAppliedSupplierFilter: "", requisitionPendingRetryPage: 1, requisitionPendingRetrySupplierFilter: "", requisitionPendingRetryScope: "page", requisitionItems: [], requisitionReportedLoaded: false, requisitionSelected: {}, selectedPendingKeys: [], selectedBomSnapshotIds: [],
             requisitionInventoryActionState:{action:"",committed:false,outcomeUncertain:false,context:"",orderItemId:null,bomSnapshotId:null,targetKey:"",result:null},
             requisitionVoidActionState:{action:"",sourceType:"",targetId:null,targetKey:"",documentNumber:"",committed:false,outcomeUncertain:false,result:null},
             requisitionHolds: [], requisitionHoldsLoaded: false, requisitionHoldsTotal: 0, requisitionHoldSummary: { total:0, due_count:0, anomaly_count:0 },
@@ -7953,7 +7977,7 @@
             costReviewState:{loading:false,loaded:false,error:"",scope_label:"",evaluated_items:0,total_items:0,returned_items:0,truncated:false,summary:[],items:[]},
             orderDetail:null, orderGroupDetail:null, orderTrace:null, orderTraceEventDetail:null, orderTraceEventDetailLoadingKey:"", orderTraceReturnContext:null, traceRollbackBusy:false, drawingFile:null,
             externalPurchase:{loading:false,saving:false,error:"",submitError:"",status:"",orderId:null,orderLabel:"",items:[],confirmation:null,idempotencyKey:""},
-            externalPurchaseRouting:[], externalPurchaseRoutingLoading:false, externalPurchaseRoutingError:"",
+            externalPurchaseRouting:[], externalPurchaseRoutingLoading:false, externalPurchaseRoutingError:"", externalPurchaseRoutingFilter:"", externalPurchaseRoutingLoaded:false,
             orderItemSaveState:{saving:false,committed:false,outcomeUncertain:false,result:null},
             finishedInventoryCandidates: [], finishedInventoryCandidatesLoaded: false,
             finishedInventoryReservations: [],
@@ -7972,7 +7996,7 @@
             financeReportData: { monthly:[], yearly_summary:{}, selected_month_summary:{}, selected_month_customers:[], customer_balances:[], aging:[], as_of:"", included_through_statement_month:"" },
             financeReportState: { loading:false, error:"", loaded:false },
             statementsTotal: 0, financeCustomersTotal: 0, invoicesTotal: 0, pageSize: 25,
-            pages: { customers: 1, products: 1, orders: 1, requisitionPending: 1, requisitionHolds: 1, requisitionReported: 1, incomingPending: 1, incomingHistory: 1, productionPending: 1, productionWaitingLabels: 1, productionHistory: 1, deliveries: 1, statements: 1, invoices: 1, financeCurrent: 1, financeSettled: 1 },
+            pages: { customers: 1, products: 1, orders: 1, requisitionPending: 1, requisitionHolds: 1, requisitionReported: 1, externalPurchaseRouting: 1, incomingPending: 1, incomingHistory: 1, productionPending: 1, productionWaitingLabels: 1, productionHistory: 1, deliveries: 1, statements: 1, invoices: 1, financeCurrent: 1, financeSettled: 1 },
             productTab: "products", modal: null,
             materialCandidateItems: [], materialCandidateLoading: false,
             materialCandidateFilter: { customer_id:null, q:"", include_inactive:false },
@@ -8921,6 +8945,25 @@
           },
           filteredRequisitionPending() {
             return this.requisitionPending;
+          },
+          filteredExternalPurchaseRouting() {
+            const keyword = String(this.externalPurchaseRoutingFilter || "").trim().toLowerCase();
+            if (!keyword) return this.externalPurchaseRouting;
+            return (this.externalPurchaseRouting || []).filter(row => [
+              row.customer_name,
+              row.order_number,
+              row.product_code,
+              row.product_name,
+              row.specification_summary,
+              row.purchase_unit,
+              row.supply_mode,
+            ].some(value => String(value || "").toLowerCase().includes(keyword)));
+          },
+          pagedExternalPurchaseRouting() {
+            const pageSize = Math.max(1, Number(this.pageSize || 25));
+            const page = Math.max(1, Number(this.pages.externalPurchaseRouting || 1));
+            const start = (page - 1) * pageSize;
+            return this.filteredExternalPurchaseRouting.slice(start, start + pageSize);
           },
           filteredMergeSuggestions() {
             if (!this.requisitionSupplierFilter) return this.mergeSuggestions;
@@ -11896,6 +11939,18 @@
             if (pathPage === "permissions") return "permissions";
             return pages.has(pathPage) ? pathPage : "dashboard";
           },
+          initialRequisitionWorkspaceFromLocation(page) {
+            if (page !== "requisition") return "board";
+            const subpage = new URLSearchParams(window.location.search).get("subpage") || "";
+            return subpage === "external-packaging" ? "external-packaging" : "board";
+          },
+          syncDesktopWorkspaceUrl(page, subpage="") {
+            const url = new URL(window.location.href);
+            url.searchParams.set("page", page);
+            if (subpage) url.searchParams.set("subpage", subpage);
+            else url.searchParams.delete("subpage");
+            window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+          },
           redirectAfterLogin() {
             if (this.user?.must_change_password) return false;
             if (this.user?.role === "delivery_picker" && this.hasPermission("deliveries.pick")) {
@@ -11960,6 +12015,7 @@
               const initialPage = this.initialPageFromLocation();
               this.activePage = initialPage;
               if (!this.pageAllowed(this.activePage)) this.activePage = this.firstAllowedPage();
+              this.requisitionWorkspace = this.initialRequisitionWorkspaceFromLocation(this.activePage);
               if (!await this.loadInitialPageResources()) return;
               if (this.user?.must_change_password) this.openChangePassword(true);
             } catch (error) {
@@ -12005,6 +12061,7 @@
               const initialPage = this.initialPageFromLocation();
               this.activePage = initialPage;
               if (!this.pageAllowed(this.activePage)) this.activePage = this.firstAllowedPage();
+              this.requisitionWorkspace = this.initialRequisitionWorkspaceFromLocation(this.activePage);
               const initialResourcesReady = await this.loadInitialPageResources();
               if (!requestIsCurrent() || !initialResourcesReady) return;
               if (this.user?.must_change_password) this.openChangePassword(true, currentPassword);
@@ -12060,7 +12117,65 @@
             this.deliveryDetailRequestSequence += 1;
             this.deliveryDetailState = {};
             this.expandedDeliveryRows = {};
+            this.requisitionWorkspace = "board";
+            this.requisitionTab = "pending";
+            this.requisitionPending = [];
+            this.requisitionPendingTotal = 0;
+            this.requisitionPendingOverallTotal = 0;
+            this.requisitionPendingLoading = false;
+            this.requisitionPendingError = "";
+            this.requisitionPendingAppliedPage = 1;
+            this.requisitionPendingAppliedSupplierFilter = "";
+            this.requisitionPendingRetryPage = 1;
+            this.requisitionPendingRetrySupplierFilter = "";
+            this.requisitionPendingRetryScope = "page";
+            this.pages.requisitionPending = 1;
+            this.requisitionItems = [];
+            this.requisitionReportedLoaded = false;
+            this.requisitionReportedTotal = 0;
+            this.requisitionReportedMatchedLines = 0;
+            this.requisitionSelected = {};
+            this.selectedPendingKeys = [];
+            this.selectedBomSnapshotIds = [];
+            this.requisitionInventoryActionState = {action:"",committed:false,outcomeUncertain:false,context:"",orderItemId:null,bomSnapshotId:null,targetKey:"",result:null};
+            this.requisitionVoidActionState = {action:"",sourceType:"",targetId:null,targetKey:"",documentNumber:"",committed:false,outcomeUncertain:false,result:null};
+            this.requisitionHolds = [];
+            this.requisitionHoldsLoaded = false;
+            this.requisitionHoldsTotal = 0;
+            this.requisitionHoldSummary = {total:0,due_count:0,anomaly_count:0};
+            this.pages.requisitionHolds = 1;
+            this.pages.requisitionReported = 1;
+            this.requisitionHoldFilters = {customer_id:"",product_code:"",product_name:"",status:"",date_from:"",date_to:""};
+            this.requisitionHoldForm = {id:null,version:null,rows:[],release_mode:"previous_batch_completed",expected_requisition_date:"",previous_order_item_ids:{},error:""};
+            this.requisitionHoldCandidates = {};
+            this.requisitionHoldCandidateLoading = {};
+            this.requisitionSupplierFilter = "";
+            this.requisitionSupplierCounts = [];
+            this.requisitionMaterialForm = {item_id:null,supplier_name:"",material_id:null,layer_count:null,flute_type:null,sync_product:false,customer_material_code:"",original_material_confidence:"",candidate_options:[],candidate_loading:false,candidate_error:"",candidate_id:null,source_type:"manual",source_reference:null,selection_reason:"",selection_history:[],history_loading:false,history_error:""};
+            this.mergeSuggestions = [];
+            this.mergeSuggestionsLoading = false;
+            this.mergeSuggestionsError = "";
+            this.mergeSuggestionsExpanded = {};
+            this.mergeSuggestionsDeduction = {};
+            this.requisitionMergeExpanded = {};
+            this.requisitionComponentExpanded = {};
+            this.supplierOrders = [];
+            this.requisitionForm = {supplier_name:"",items:[]};
+            this.supplierRequisitionDraft = {supplier_groups:[]};
+            this.supplierRequisitionSelections = [];
             this.supplierRequisitionPreviewLoading = false;
+            this.supplierRequisitionSaveState = {saving:false,committed:false,uncertain:false,result:null};
+            this.stockReplenishmentSaveState = {saving:false,committed:false,uncertain:false,result:null};
+            this.stockReplenishmentVoidState = {orderId:null,documentNumber:"",uncertainIds:{}};
+            this.stockPolicyWarnings = [];
+            this.stockReplenishmentProducts = [];
+            this.stockReplenishmentCompanions = [];
+            this.stockReplenishmentForm = {source_type:"customer_request",idempotency_key:null,supplier_name:"",customer_id:null,remark:"",stock_now:false,items:[]};
+            this.reportedFilters = {customer_id:"",report_length_mm:"",report_width_mm:"",document_number:"",order_number:"",product_code:"",product_name:"",material_code:"",flute_type:"",supplier_name:"",status:"",date_from:"",date_to:""};
+            this.reportedCustomerOptions = [];
+            this.reportedAdvancedVisible = false;
+            this.reportedExpanded = {};
+            this.externalPurchase = {loading:false,saving:false,error:"",submitError:"",status:"",orderId:null,orderLabel:"",items:[],confirmation:null,idempotencyKey:""};
             this.incomingPending = [];
             this.incomingPendingTotal = 0;
             this.incomingPendingLoading = false;
@@ -12092,6 +12207,9 @@
             this.externalPurchaseRouting = [];
             this.externalPurchaseRoutingLoading = false;
             this.externalPurchaseRoutingError = "";
+            this.externalPurchaseRoutingFilter = "";
+            this.externalPurchaseRoutingLoaded = false;
+            this.pages.externalPurchaseRouting = 1;
             for (const timer of searchDebounceTimers.values()) clearTimeout(timer);
             searchDebounceTimers.clear();
             pageSearchGenerations.clear();
@@ -12114,6 +12232,11 @@
             return controller;
           },
           finishLatestRequest(key, controller) {
+            if (latestRequestControllers.get(key) === controller) latestRequestControllers.delete(key);
+          },
+          cancelLatestRequest(key) {
+            const controller = latestRequestControllers.get(key);
+            controller?.abort();
             if (latestRequestControllers.get(key) === controller) latestRequestControllers.delete(key);
           },
           isCancelledRequest(error) {
@@ -12207,6 +12330,17 @@
             if (!this.pageAllowed(page)) {
               this.showToast("当前账号没有访问该功能的权限", true);
               return;
+            }
+            if (page === "requisition") {
+              this.cancelLatestRequest("requisition:external-packaging");
+              this.externalPurchaseRoutingLoading = false;
+              this.requisitionWorkspace = "board";
+              this.syncDesktopWorkspaceUrl("requisition");
+            } else if (this.activePage === "requisition") {
+              this.cancelLatestRequest("requisition:external-packaging");
+              this.externalPurchaseRoutingLoading = false;
+              this.requisitionWorkspace = "board";
+              this.syncDesktopWorkspaceUrl(page);
             }
             if (page !== "requisition") this.cancelSupplierRequisitionPreview();
             if (page !== this.activePage) {
@@ -12428,6 +12562,9 @@
             const requestAuthGeneration = this.authGeneration;
             const requestUserId = this.user?.id ?? null;
             const requestSearchGeneration = this.currentPageSearchGeneration?.(page) ?? 0;
+            const resourceCacheKey = page === "requisition" && this.requisitionWorkspace === "external-packaging"
+              ? "requisition:external-packaging"
+              : page;
             const requestIsCurrent = () => (
               requestSequence === this.pageLoadSequence
               && requestAuthGeneration === this.authGeneration
@@ -12436,11 +12573,11 @@
             const searchGenerationIsCurrent = () => (
               requestSearchGeneration === (this.currentPageSearchGeneration?.(page) ?? 0)
             );
-            if (!force && this.pageCacheFresh(page)) {
+            if (!force && this.pageCacheFresh(resourceCacheKey)) {
               if (requestIsCurrent()) this.loading = false;
               return true;
             }
-            if (requestIsCurrent()) this.invalidatePageCache(page);
+            if (requestIsCurrent()) this.invalidatePageCache(resourceCacheKey);
             this.loading = true;
             let pageSucceeded = true;
             const requirePageLoad = async promise => {
@@ -12474,7 +12611,10 @@
                 requirePageLoad(this.loadCustomerOptions(force)),
                 requirePageLoad(this.loadOrders()),
               ]);
-              if (page === "requisition") await requirePageLoad(this.loadRequisition());
+              if (page === "requisition") {
+                if (this.requisitionWorkspace === "external-packaging") await requirePageLoad(this.loadExternalPurchaseRouting());
+                else await requirePageLoad(this.loadRequisition());
+              }
               if (page === "incoming") await requirePageLoad(this.loadIncoming());
               if (page === "production") await requirePageLoad(this.loadProduction());
               if (page === "deliveries") await Promise.all([
@@ -12490,7 +12630,7 @@
               if (page === "audit") await requirePageLoad(this.loadAuditLogs());
               if (page === "system") await requirePageLoad(this.loadSystem({ force }));
               if (page === "permissions") await requirePageLoad(this.loadPermissionUsers());
-              if (requestIsCurrent() && searchGenerationIsCurrent() && pageSucceeded) this.markPageCache(page);
+              if (requestIsCurrent() && searchGenerationIsCurrent() && pageSucceeded) this.markPageCache(resourceCacheKey);
               return requestIsCurrent() && searchGenerationIsCurrent() && pageSucceeded;
             } catch (error) {
               if (requestIsCurrent()) this.showToast(this.errorMessage(error), true);
@@ -14267,6 +14407,8 @@
               && !controller.signal.aborted
               && authGeneration === this.authGeneration
               && userId === (this.user?.id ?? null)
+              && this.activePage === "requisition"
+              && (this.requisitionWorkspace || "board") === "board"
             );
           },
           requisitionPendingRequestParams(page, supplierName) {
@@ -14399,18 +14541,13 @@
               const autoReleasedIds = skipAutoRelease
                 ? []
                 : await this.autoReleaseReadyRequisitionHolds(controller.signal);
-              this.externalPurchaseRoutingLoading = true;
-              this.externalPurchaseRoutingError = "";
-              const [holds, pending, externalRouting] = await Promise.all([
+              const [holds, pending] = await Promise.all([
                 axios.get("/api/requisition/holds", {
                   params:{page:1, page_size:this.pageSize},
                   signal:controller.signal,
                 }),
                 axios.get("/api/requisition/pending", {
                   params:this.requisitionPendingRequestParams(requestedPage, requestedSupplier),
-                  signal:controller.signal,
-                }),
-                axios.get("/api/external-packaging-purchases/pending-confirmations", {
                   signal:controller.signal,
                 }),
               ]);
@@ -14423,7 +14560,6 @@
                 ...(holds.data || {}),
                 auto_released_hold_ids:autoReleasedIds,
               });
-              this.externalPurchaseRouting = Array.isArray(externalRouting.data?.items) ? externalRouting.data.items : [];
               if (this.activePage === "requisition") this.markPageCache("requisition");
               return true;
             } catch (error) {
@@ -14431,12 +14567,10 @@
               this.pages.requisitionPending = this.requisitionPendingAppliedPage;
               this.requisitionSupplierFilter = this.requisitionPendingAppliedSupplierFilter;
               this.requisitionPendingError = "待报料读取失败：" + this.errorMessage(error);
-              this.externalPurchaseRoutingError = "外购包材待确认读取失败：" + this.errorMessage(error);
               throw error;
             } finally {
               if (this.pendingRequisitionRequestIsCurrent(controller, authGeneration, userId)) {
                 this.requisitionPendingLoading = false;
-                this.externalPurchaseRoutingLoading = false;
               }
               this.finishLatestRequest("requisition:pending", controller);
             }
@@ -14456,6 +14590,69 @@
             this.requisitionHoldsLoaded = true;
             if ((data.auto_released_hold_ids || []).length) {
               this.showToast(`有 ${data.auto_released_hold_ids.length} 条等候条件已满足，已自动回到待报料`);
+            }
+          },
+          externalPurchaseRoutingRequestIsCurrent(controller, authGeneration, userId) {
+            return (
+              latestRequestControllers.get("requisition:external-packaging") === controller
+              && !controller.signal.aborted
+              && authGeneration === this.authGeneration
+              && userId === (this.user?.id ?? null)
+              && this.activePage === "requisition"
+              && this.requisitionWorkspace === "external-packaging"
+            );
+          },
+          async openExternalPackagingRequisition() {
+            if (!this.pageAllowed("requisition")) {
+              this.showToast("当前账号没有包材报料查看权限", true);
+              return false;
+            }
+            this.cancelLatestRequest("requisition:pending");
+            this.requisitionPendingLoading = false;
+            this.requisitionWorkspace = "external-packaging";
+            this.syncDesktopWorkspaceUrl("requisition", "external-packaging");
+            return this.loadExternalPurchaseRouting();
+          },
+          async returnToBoardRequisition() {
+            this.cancelLatestRequest("requisition:external-packaging");
+            this.externalPurchaseRoutingLoading = false;
+            this.requisitionWorkspace = "board";
+            this.syncDesktopWorkspaceUrl("requisition");
+            if (this.pageCacheFresh("requisition")) return true;
+            return this.loadRequisition({skipAutoRelease:true});
+          },
+          async loadExternalPurchaseRouting() {
+            const controller = this.beginLatestRequest("requisition:external-packaging");
+            const authGeneration = this.authGeneration;
+            const userId = this.user?.id ?? null;
+            this.externalPurchaseRoutingLoading = true;
+            this.externalPurchaseRoutingError = "";
+            try {
+              const {data} = await axios.get("/api/external-packaging-purchases/pending-confirmations", {
+                signal:controller.signal,
+              });
+              if (!this.externalPurchaseRoutingRequestIsCurrent(controller, authGeneration, userId)) return false;
+              this.externalPurchaseRouting = Array.isArray(data?.items) ? data.items : [];
+              this.externalPurchaseRoutingLoaded = true;
+              const pageSize = Math.max(1, Number(this.pageSize || 25));
+              const maxPage = Math.max(1, Math.ceil(this.filteredExternalPurchaseRouting.length / pageSize));
+              this.pages.externalPurchaseRouting = Math.min(Math.max(1, Number(this.pages.externalPurchaseRouting || 1)), maxPage);
+              this.markPageCache("requisition:external-packaging");
+              return true;
+            } catch (error) {
+              if (this.isCancelledRequest(error) || !this.externalPurchaseRoutingRequestIsCurrent(controller, authGeneration, userId)) return false;
+              if (error?.response?.status === 403) {
+                this.resetPagePerformanceState();
+                this.resetModalA11ySession?.({discardModal:true});
+                return false;
+              }
+              this.externalPurchaseRoutingError = "外购包材待确认读取失败：" + this.errorMessage(error);
+              return false;
+            } finally {
+              if (this.externalPurchaseRoutingRequestIsCurrent(controller, authGeneration, userId)) {
+                this.externalPurchaseRoutingLoading = false;
+              }
+              this.finishLatestRequest("requisition:external-packaging", controller);
             }
           },
           async loadRequisitionHolds({skipAutoRelease=false}={}) {
@@ -19229,7 +19426,10 @@
               const detail = await axios.get(`/api/orders/${this.externalPurchase.orderId}`);
               this.orderDetail = detail.data;
               await this.loadOrders();
-              if (this.activePage === "requisition") await this.loadRequisition({skipAutoRelease:true});
+              if (this.activePage === "requisition") {
+                if (this.requisitionWorkspace === "external-packaging") await this.loadExternalPurchaseRouting();
+                else await this.loadRequisition({skipAutoRelease:true});
+              }
               this.showToast(data.created ? "外购包装已按供应商确认采购" : "该采购已确认，本次未重复创建");
             } catch (error) {
               this.externalPurchase.submitError = this.errorMessage(error);

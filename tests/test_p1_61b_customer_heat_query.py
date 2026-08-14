@@ -440,3 +440,46 @@ def test_customer_heat_routes_are_explicit_and_internal_badge_flag_is_not_public
     assert "include_unfinished_total" not in {
         parameter["name"] for parameter in order_parameters
     }
+
+
+def test_customer_heat_filters_groups_by_stage_customer_and_dates(
+    customer_heat_app,
+) -> None:
+    app, ids, _engine = customer_heat_app
+    with TestClient(app) as client:
+        _login(client, "heat-admin")
+
+        stage = _heat(client, stage="pending_confirmation")
+        assert stage.status_code == 200, stage.text
+        assert {row["customer_id"] for row in stage.json()["items"]} == {
+            ids["hot"],
+            ids["new"],
+        }
+
+        selected = _heat(
+            client,
+            customer_id=ids["new"],
+            stage="pending_confirmation",
+        )
+        assert selected.status_code == 200, selected.text
+        assert [row["customer_id"] for row in selected.json()["items"]] == [
+            ids["new"]
+        ]
+
+        recent = _heat(client, order_date_from="2026-08-14")
+        assert recent.status_code == 200, recent.text
+        assert {row["customer_id"] for row in recent.json()["items"]} == {
+            ids["hot"],
+            ids["new"],
+            ids["outside"],
+        }
+
+        _login(client, "heat-scoped")
+        scoped = _heat(client, stage="pending_confirmation")
+        assert scoped.status_code == 200, scoped.text
+        assert {row["customer_id"] for row in scoped.json()["items"]} == {
+            ids["hot"],
+            ids["new"],
+        }
+        denied = _heat(client, customer_id=ids["outside"])
+        assert denied.status_code == 403

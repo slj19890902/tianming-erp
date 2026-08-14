@@ -49,6 +49,7 @@ from app.api.products import (
 )
 from app.api.product_import import router as product_import_router
 from app.api.requisition import router as requisition_router
+from app.api.requisition_moq import router as requisition_moq_router
 from app.api.quotations import router as quotations_router
 from app.api.contracts import router as contracts_router
 from app.api.pdf_training import router as pdf_training_router
@@ -631,6 +632,12 @@ def create_app() -> FastAPI:
             requisition_router,
             prefix="/api/requisition",
             tags=["requisition"],
+        )
+    if not any(route.path == "/api/requisition/moq-rules" for route in application.routes):
+        application.include_router(
+            requisition_moq_router,
+            prefix="/api/requisition/moq-rules",
+            tags=["requisition-moq-rules"],
         )
     if not any(
         route.path == "/api/deliveries/pending_items"

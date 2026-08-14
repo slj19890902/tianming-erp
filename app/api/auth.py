@@ -72,6 +72,7 @@ PERMISSION_LABELS: dict[str, tuple[str, str]] = {
     "production.die_cut.view": ("production", "手机模切工位查看"),
     "requisition.view": ("requisition", "报料查看"),
     "requisition.execute": ("requisition", "报料执行"),
+    "requisition.config": ("requisition", "报料配置"),
     "dashboard.view": ("dashboard", "首页仪表盘查看"),
     "incoming.view": ("incoming", "来料入库查看"),
     "incoming.execute": ("incoming", "来料入库操作"),

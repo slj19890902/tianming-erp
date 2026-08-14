@@ -27,6 +27,7 @@ from app.models.supplier import (  # noqa: E402,F401
     SupplierAlias,
     SupplierSupplyCategory,
 )
+from app.models.supplier_moq import SupplierMinimumOrderRule  # noqa: E402,F401
 from app.models.master_data_object_version import (  # noqa: E402,F401
     MasterDataObjectVersion,
 )

@@ -3361,6 +3361,7 @@
                 <div class="toolbar-group">
                   <button :class="['btn',{primary:requisitionTab==='pending'}]" :disabled="requisitionInventoryActionBlocked() || requisitionVoidActionBlocked()" @click="selectRequisitionTab('pending')">待报料 {{ requisitionPendingOverallTotal }}</button>
                   <button :class="['btn',{primary:requisitionTab==='submitted'}]" :disabled="requisitionInventoryActionBlocked() || requisitionVoidActionBlocked()" @click="selectRequisitionTab('submitted')">已报料/已入库<span v-if="requisitionReportedLoaded"> {{ requisitionReportedTotal }}</span></button>
+                  <button v-if="canConfigureRequisition()" :class="['btn',{primary:requisitionTab==='moq'}]" :disabled="requisitionInventoryActionBlocked() || requisitionVoidActionBlocked()" @click="selectRequisitionTab('moq')">供应商 MOQ 规则</button>
                   <button v-if="canRequisition && requisitionTab==='pending'" class="btn success" @click="openSupplierRequisitionDraft()" :disabled="supplierRequisitionPreviewLoading || requisitionInventoryActionBlocked() || requisitionVoidActionBlocked()">{{ supplierRequisitionPreviewLoading ? "正在生成草稿…" : "合并报料" }}</button>
                 </div>
                 <div class="requisition-page-actions">
@@ -3380,6 +3381,34 @@
                 <button class="btn small" type="button" :disabled="!!requisitionVoidActionState.action" @click="refreshRequisitionVoidState">核对报料状态</button>
               </div>
               <fieldset :disabled="requisitionInventoryActionBlocked() || requisitionVoidActionBlocked()" style="border:0;padding:0;margin:0;min-width:0">
+              <section v-if="requisitionTab==='moq' && canConfigureRequisition()" class="order-detail-box" style="margin:8px 0">
+                <div class="status orange" style="display:block;white-space:normal;margin-bottom:10px">D1 只登记供应商人工确认的 MOQ 事实；当前规则尚未接入订单、报料推荐或自动采购，也不会替代人工核对。</div>
+                <div class="list-filterbar">
+                  <select class="select" v-model="supplierMoqFilter.supplier_id"><option value="">全部供应商</option><option v-for="supplier in supplierMoqSuppliers" :key="supplier.id" :value="String(supplier.id)">{{ supplier.name }}</option></select>
+                  <select class="select" v-model="supplierMoqFilter.scope_type"><option value="">全部范围</option><option value="supplier">供应商全局</option><option value="customer">客户</option><option value="material">材质</option><option value="flute">楞型</option></select>
+                  <select class="select" v-model="supplierMoqFilter.status"><option value="">全部状态</option><option value="active">生效</option><option value="inactive">停用</option></select>
+                  <button class="btn" type="button" :disabled="supplierMoqLoading" @click="loadSupplierMoqRules">{{ supplierMoqLoading ? '读取中…' : '查询' }}</button>
+                  <button class="btn primary" type="button" @click="newSupplierMoqRule">新增人工确认规则</button>
+                </div>
+                <div v-if="supplierMoqError" class="status orange" style="display:flex;gap:8px;align-items:center;white-space:normal;margin:8px 0"><span>{{ supplierMoqError }}</span><button class="btn small" type="button" @click="loadSupplierMoqRules">重试</button></div>
+                <div v-if="supplierMoqEditing" class="order-detail-box" style="margin:10px 0">
+                  <div class="toolbar-group" style="justify-content:space-between"><strong>{{ supplierMoqForm.id ? '编辑 MOQ 规则' : '新增 MOQ 规则' }}</strong><button class="btn small" type="button" @click="cancelSupplierMoqEdit">取消</button></div>
+                  <div class="list-filterbar" style="margin-top:8px">
+                    <label>供应商<select class="select" v-model.number="supplierMoqForm.supplier_id"><option :value="null">请选择</option><option v-for="supplier in supplierMoqSuppliers" :key="supplier.id" :value="supplier.id">{{ supplier.name }}</option></select></label>
+                    <label>适用范围<select class="select" v-model="supplierMoqForm.scope_type"><option value="supplier">供应商全局</option><option value="customer">客户 ID</option><option value="material">材质</option><option value="flute">楞型</option></select></label>
+                    <label v-if="supplierMoqForm.scope_type!=='supplier'">范围值<input class="input" v-model.trim="supplierMoqForm.scope_value" :placeholder="supplierMoqForm.scope_type==='customer' ? '客户 ID' : '输入确认值'" /></label>
+                    <label>MOQ 数量<input class="input" type="number" min="0.0001" step="0.0001" v-model="supplierMoqForm.minimum_quantity" /></label>
+                    <label>单位<select class="select" v-model="supplierMoqForm.unit"><option value="sheets">张</option><option value="square_meters">平方米</option><option value="meters">米</option><option value="amount">金额</option><option value="group_total">合并总量</option></select></label>
+                    <label><input type="checkbox" v-model="supplierMoqForm.merge_allowed" @change="supplierMoqForm.merge_window_days=supplierMoqForm.merge_allowed ? (supplierMoqForm.merge_window_days || 7) : null" /> 允许合并凑单</label>
+                    <label v-if="supplierMoqForm.merge_allowed">合并窗口（天）<input class="input" type="number" min="1" max="365" v-model.number="supplierMoqForm.merge_window_days" /></label>
+                    <label>生效日<input class="input" type="date" v-model="supplierMoqForm.effective_from" /></label>
+                    <label>结束日<input class="input" type="date" v-model="supplierMoqForm.effective_to" /></label>
+                  </div>
+                  <label style="display:block;margin-top:8px">人工确认依据<input class="input" style="width:100%" v-model.trim="supplierMoqForm.evidence_reference" placeholder="例如：供应商确认单编号、邮件主题或电话确认记录" /></label>
+                  <div class="toolbar-group" style="margin-top:8px"><button class="btn primary" type="button" :disabled="supplierMoqSaving" @click="saveSupplierMoqRule">{{ supplierMoqSaving ? '保存中…' : '保存人工确认规则' }}</button></div>
+                </div>
+                <data-panel :empty="!supplierMoqRules.length"><table><thead><tr><th>供应商</th><th>适用范围</th><th>MOQ</th><th>合并</th><th>生效区间</th><th>人工依据</th><th>状态/版本</th><th>操作</th></tr></thead><tbody><tr v-for="rule in supplierMoqRules" :key="rule.id"><td>{{ rule.supplier_name }}</td><td>{{ supplierMoqScopeLabel(rule.scope_type) }}｜{{ rule.scope_label }}</td><td><strong>{{ rule.minimum_quantity }}</strong> {{ supplierMoqUnitLabel(rule.unit) }}</td><td>{{ rule.merge_allowed ? `允许，${rule.merge_window_days}天` : '不允许' }}</td><td>{{ rule.effective_from }} ～ {{ rule.effective_to || '长期' }}</td><td style="white-space:normal">{{ rule.evidence_reference }}<div class="muted">确认人 {{ rule.confirmed_by_username }}</div></td><td><span :class="['status',rule.status==='active'?'green':'gray']">{{ rule.status==='active'?'生效':'停用' }}</span><br>v{{ rule.version }}</td><td><div class="toolbar-group"><button class="btn small" type="button" @click="editSupplierMoqRule(rule)">编辑</button><button :class="['btn','small',rule.status==='active'?'danger':'success']" type="button" :disabled="supplierMoqSaving" @click="toggleSupplierMoqRuleStatus(rule)">{{ rule.status==='active'?'停用':'恢复' }}</button></div></td></tr></tbody></table></data-panel>
+              </section>
               <div v-if="requisitionTab==='pending'" class="supplier-priority-bar">
                 <strong>供应商优先选择</strong>
                 <button :class="['btn','small','supplier-count-button',{active:!requisitionSupplierFilter}]" :disabled="requisitionPendingLoading" @click="selectRequisitionSupplierFilter('')">全部供应商（{{ requisitionPendingOverallTotal }}）</button>
@@ -7980,6 +8009,9 @@
             pdfTemplateForm: { id:null, customer_id:null, template_name:"", order_no_pattern:"", date_pattern:"", item_row_pattern:"", customer_name_pattern:"", column_map_json:"", notes:"", status:"draft", version:null },
             pdfTemplateLoading: false, pdfTemplatesLoaded: false,
             requisitionWorkspace: "board", requisitionTab: "pending", requisitionPending: [], requisitionPendingTotal: 0, requisitionPendingOverallTotal: 0, requisitionPendingLoading: false, requisitionPendingError: "", requisitionPendingAppliedPage: 1, requisitionPendingAppliedSupplierFilter: "", requisitionPendingRetryPage: 1, requisitionPendingRetrySupplierFilter: "", requisitionPendingRetryScope: "page", requisitionItems: [], requisitionReportedLoaded: false, requisitionSelected: {}, selectedPendingKeys: [], selectedBomSnapshotIds: [],
+            supplierMoqRules: [], supplierMoqSuppliers: [], supplierMoqLoading: false, supplierMoqSaving: false, supplierMoqLoaded: false, supplierMoqError: "", supplierMoqEditing: false,
+            supplierMoqFilter: {supplier_id:"",scope_type:"",status:""},
+            supplierMoqForm: {id:null,version:null,supplier_id:null,scope_type:"supplier",scope_value:null,minimum_quantity:"",unit:"sheets",merge_allowed:false,merge_window_days:null,effective_from:today(),effective_to:null,evidence_reference:""},
             requisitionInventoryActionState:{action:"",committed:false,outcomeUncertain:false,context:"",orderItemId:null,bomSnapshotId:null,targetKey:"",result:null},
             requisitionVoidActionState:{action:"",sourceType:"",targetId:null,targetKey:"",documentNumber:"",committed:false,outcomeUncertain:false,result:null},
             requisitionHolds: [], requisitionHoldsLoaded: false, requisitionHoldsTotal: 0, requisitionHoldSummary: { total:0, due_count:0, anomaly_count:0 },
@@ -8736,6 +8768,7 @@
           canManageInvoiceAttachment() { return this.hasPermission("finance.invoice_attachment.manage"); },
           canDelivery() { return this.hasPermission("deliveries.execute"); },
           canRequisition() { return this.hasPermission("requisition.execute"); },
+          canConfigureRequisition() { return this.hasPermission("requisition.config"); },
           canWarehouseReserve() { return this.hasPermission("warehouse.reserve"); },
           permissionGroups() {
             const groups = {};
@@ -12205,6 +12238,15 @@
             this.requisitionWorkspace = "board";
             this.incomingWorkspace = "board";
             this.requisitionTab = "pending";
+            this.supplierMoqRules = [];
+            this.supplierMoqSuppliers = [];
+            this.supplierMoqLoading = false;
+            this.supplierMoqSaving = false;
+            this.supplierMoqLoaded = false;
+            this.supplierMoqError = "";
+            this.supplierMoqEditing = false;
+            this.supplierMoqFilter = {supplier_id:"",scope_type:"",status:""};
+            this.supplierMoqForm = {id:null,version:null,supplier_id:null,scope_type:"supplier",scope_value:null,minimum_quantity:"",unit:"sheets",merge_allowed:false,merge_window_days:null,effective_from:today(),effective_to:null,evidence_reference:""};
             this.requisitionPending = [];
             this.requisitionPendingTotal = 0;
             this.requisitionPendingOverallTotal = 0;
@@ -14431,6 +14473,157 @@
             if (lc === 5 && !["AB", "BE"].includes(ft)) return true;
             return false;
           },
+          supplierMoqBlankForm() {
+            return {id:null,version:null,supplier_id:null,scope_type:"supplier",scope_value:null,minimum_quantity:"",unit:"sheets",merge_allowed:false,merge_window_days:null,effective_from:today(),effective_to:null,evidence_reference:""};
+          },
+          supplierMoqScopeLabel(value) {
+            return ({supplier:"供应商全局",customer:"客户",material:"材质",flute:"楞型"})[value] || value || "-";
+          },
+          supplierMoqUnitLabel(value) {
+            return ({sheets:"张",square_meters:"平方米",meters:"米",amount:"金额",group_total:"合并总量"})[value] || value || "-";
+          },
+          supplierMoqRequestIsCurrent(controller, authGeneration, userId) {
+            return latestRequestControllers.get("requisition:moq-rules") === controller
+              && this.authGeneration === authGeneration
+              && (this.user?.id ?? null) === userId
+              && this.activePage === "requisition"
+              && this.requisitionWorkspace === "board"
+              && this.requisitionTab === "moq";
+          },
+          clearSupplierMoqState({leaveTab=true}={}) {
+            this.cancelLatestRequest("requisition:moq-rules");
+            this.supplierMoqRules = [];
+            this.supplierMoqSuppliers = [];
+            this.supplierMoqLoading = false;
+            this.supplierMoqSaving = false;
+            this.supplierMoqLoaded = false;
+            this.supplierMoqError = "";
+            this.supplierMoqEditing = false;
+            this.supplierMoqFilter = {supplier_id:"",scope_type:"",status:""};
+            this.supplierMoqForm = this.supplierMoqBlankForm();
+            if (leaveTab && this.requisitionTab === "moq") this.requisitionTab = "pending";
+          },
+          async loadSupplierMoqRules() {
+            if (!this.canConfigureRequisition()) return false;
+            const controller = this.beginLatestRequest("requisition:moq-rules");
+            const authGeneration = this.authGeneration;
+            const userId = this.user?.id ?? null;
+            const params = {};
+            if (this.supplierMoqFilter.supplier_id) params.supplier_id = Number(this.supplierMoqFilter.supplier_id);
+            if (this.supplierMoqFilter.scope_type) params.scope_type = this.supplierMoqFilter.scope_type;
+            if (this.supplierMoqFilter.status) params.status = this.supplierMoqFilter.status;
+            this.supplierMoqLoading = true;
+            this.supplierMoqError = "";
+            try {
+              const {data} = await axios.get("/api/requisition/moq-rules", {params,signal:controller.signal});
+              if (!this.supplierMoqRequestIsCurrent(controller,authGeneration,userId)) return false;
+              this.supplierMoqRules = data.items || [];
+              this.supplierMoqSuppliers = data.suppliers || [];
+              this.supplierMoqLoaded = true;
+              return true;
+            } catch (error) {
+              if (this.isCancelledRequest(error) || !this.supplierMoqRequestIsCurrent(controller,authGeneration,userId)) return false;
+              if (error?.response?.status === 403) {
+                this.clearSupplierMoqState();
+                return false;
+              }
+              this.supplierMoqError = "MOQ 规则读取失败：" + this.errorMessage(error);
+              return false;
+            } finally {
+              if (this.supplierMoqRequestIsCurrent(controller,authGeneration,userId)) this.supplierMoqLoading = false;
+              this.finishLatestRequest("requisition:moq-rules",controller);
+            }
+          },
+          newSupplierMoqRule() {
+            this.supplierMoqForm = this.supplierMoqBlankForm();
+            this.supplierMoqEditing = true;
+          },
+          editSupplierMoqRule(rule) {
+            this.supplierMoqForm = {
+              id:rule.id,version:rule.version,supplier_id:rule.supplier_id,
+              scope_type:rule.scope_type,scope_value:rule.scope_value,
+              minimum_quantity:rule.minimum_quantity,unit:rule.unit,
+              merge_allowed:!!rule.merge_allowed,merge_window_days:rule.merge_window_days,
+              effective_from:rule.effective_from,effective_to:rule.effective_to,
+              evidence_reference:rule.evidence_reference || "",
+            };
+            this.supplierMoqEditing = true;
+          },
+          cancelSupplierMoqEdit() {
+            this.supplierMoqEditing = false;
+            this.supplierMoqForm = this.supplierMoqBlankForm();
+          },
+          supplierMoqWritePayload() {
+            const form = this.supplierMoqForm || {};
+            return {
+              supplier_id:Number(form.supplier_id),
+              scope_type:form.scope_type,
+              scope_value:form.scope_type === "supplier" ? null : String(form.scope_value || "").trim(),
+              minimum_quantity:String(form.minimum_quantity || "").trim(),
+              unit:form.unit,
+              merge_allowed:!!form.merge_allowed,
+              merge_window_days:form.merge_allowed ? Number(form.merge_window_days) : null,
+              effective_from:form.effective_from,
+              effective_to:form.effective_to || null,
+              evidence_reference:String(form.evidence_reference || "").trim(),
+            };
+          },
+          async saveSupplierMoqRule() {
+            if (this.supplierMoqSaving || !this.canConfigureRequisition()) return false;
+            const payload = this.supplierMoqWritePayload();
+            if (!payload.supplier_id || !payload.minimum_quantity || !payload.effective_from || !payload.evidence_reference) {
+              this.showToast("请完整填写供应商、MOQ 数量、生效日和人工确认依据",true);
+              return false;
+            }
+            const authGeneration = this.authGeneration;
+            const userId = this.user?.id ?? null;
+            this.supplierMoqSaving = true;
+            try {
+              const ruleId = this.supplierMoqForm.id;
+              if (ruleId) await axios.put(`/api/requisition/moq-rules/${ruleId}`, {...payload,expected_version:this.supplierMoqForm.version});
+              else await axios.post("/api/requisition/moq-rules", payload);
+              if (this.authGeneration !== authGeneration || (this.user?.id ?? null) !== userId) return false;
+              this.cancelSupplierMoqEdit();
+              const refreshed = await this.loadSupplierMoqRules();
+              if (!refreshed) this.showToast("MOQ 规则已保存，但列表刷新失败；请勿重复提交，手动刷新核对",true);
+              else this.showToast("供应商 MOQ 规则已保存");
+              return true;
+            } catch (error) {
+              if (this.authGeneration !== authGeneration || (this.user?.id ?? null) !== userId) return false;
+              if (error?.response?.status === 403) {
+                this.clearSupplierMoqState();
+                return false;
+              }
+              this.showToast("MOQ 规则保存失败：" + this.errorMessage(error),true);
+              return false;
+            } finally {
+              if (this.authGeneration === authGeneration && (this.user?.id ?? null) === userId) this.supplierMoqSaving = false;
+            }
+          },
+          async toggleSupplierMoqRuleStatus(rule) {
+            if (this.supplierMoqSaving || !this.canConfigureRequisition()) return false;
+            const nextStatus = rule.status === "active" ? "inactive" : "active";
+            if (!confirm(`确认${nextStatus === 'active' ? '恢复' : '停用'}这条供应商 MOQ 规则？`)) return false;
+            const authGeneration = this.authGeneration;
+            const userId = this.user?.id ?? null;
+            this.supplierMoqSaving = true;
+            try {
+              await axios.put(`/api/requisition/moq-rules/${rule.id}/status`, {expected_version:rule.version,status:nextStatus});
+              if (this.authGeneration !== authGeneration || (this.user?.id ?? null) !== userId) return false;
+              await this.loadSupplierMoqRules();
+              return true;
+            } catch (error) {
+              if (this.authGeneration !== authGeneration || (this.user?.id ?? null) !== userId) return false;
+              if (error?.response?.status === 403) {
+                this.clearSupplierMoqState();
+                return false;
+              }
+              this.showToast("MOQ 规则状态更新失败：" + this.errorMessage(error),true);
+              return false;
+            } finally {
+              if (this.authGeneration === authGeneration && (this.user?.id ?? null) === userId) this.supplierMoqSaving = false;
+            }
+          },
           async loadOrders() {
             const params = { page: this.pages.orders, page_size: this.pageSize };
             if (this.activePage === "orders") params.detail_level = "summary";
@@ -15067,7 +15260,12 @@
           },
           async selectRequisitionTab(tab) {
             if (tab === this.requisitionTab) return;
+            if (tab === "moq" && !this.canConfigureRequisition()) return;
             this.requisitionTab = tab;
+            if (tab === "moq") {
+              await this.loadSupplierMoqRules();
+              return;
+            }
             if (tab === "waiting") {
               await this.loadRequisitionHolds();
               return;
@@ -15079,6 +15277,7 @@
             }
           },
           async refreshRequisitionTab() {
+            if (this.requisitionTab === "moq") return this.loadSupplierMoqRules();
             if (this.requisitionTab === "submitted") return this.loadReportedDocuments();
             if (this.requisitionTab === "waiting") return this.loadRequisitionHolds();
             return this.loadRequisition();
@@ -18026,7 +18225,7 @@
               ["customers", "客户查看", "customers.view"], ["customers", "客户新增", "customers.create"], ["customers", "客户编辑", "customers.edit"], ["customers", "客户停用", "customers.deactivate"], ["customers", "客户删除", "customers.delete"],
               ["products", "产品查看", "products.view"], ["products", "产品新增", "products.create"], ["products", "产品编辑", "products.edit"], ["products", "产品停用", "products.deactivate"], ["products", "产品删除", "products.delete"],
               ["quotations", "报价查看", "quotations.view"], ["quotations", "报价编辑", "quotations.edit"], ["contracts", "合同查看", "contracts.view"], ["contracts", "合同编辑", "contracts.edit"], ["contracts", "合同转订单", "contracts.convert"], ["orders", "订单查看", "orders.view"], ["orders", "订单新增", "orders.create"], ["orders", "订单编辑", "orders.edit"], ["orders", "订单状态操作", "orders.status"], ["orders", "订单删除", "orders.delete"], ["orders", "订单回滚", "orders.rollback"],
-              ["requisition", "报料查看", "requisition.view"], ["requisition", "报料执行", "requisition.execute"], ["sensitive", "成本/毛利查看", "cost.view"], ["system", "系统备份", "system.backup"], ["system", "用户权限管理", "users.manage"],
+              ["requisition", "报料查看", "requisition.view"], ["requisition", "报料执行", "requisition.execute"], ["requisition", "报料配置", "requisition.config"], ["sensitive", "成本/毛利查看", "cost.view"], ["system", "系统备份", "system.backup"], ["system", "用户权限管理", "users.manage"],
               ["production", "手机印刷工位查看", "production.printing.view"], ["production", "手机模切工位查看", "production.die_cut.view"],
               ["dashboard", "首页仪表盘查看", "dashboard.view"], ["audit", "操作记录查看", "audit.view"], ["incoming", "来料入库查看", "incoming.view"], ["incoming", "来料入库操作", "incoming.execute"],
               ["warehouse", "仓库库存查看", "warehouse.view"], ["warehouse", "仓库库存操作", "warehouse.execute"], ["warehouse", "模具封存与恢复", "warehouse.archive"], ["warehouse", "订单库存预占", "warehouse.reserve"], ["warehouse", "库存盘点查看", "warehouse.stocktake.view"], ["warehouse", "库存盘点提交", "warehouse.stocktake.submit"], ["warehouse", "库存盘点审核", "warehouse.stocktake.review"],
@@ -18039,7 +18238,7 @@
             const role = roleOverride || this.permissionProfile?.role || this.permissionUsers.find(row => row.id === this.selectedPermissionUserId)?.role;
             if (role === "admin") return true;
             const defaults = {
-              boss: this.permissionCatalogSeed().map(row => row.code).filter(code => !["system.backup","users.manage","audit.view","warehouse.stocktake.review","deliveries.over_delivery"].includes(code)),
+              boss: this.permissionCatalogSeed().map(row => row.code).filter(code => !["system.backup","users.manage","audit.view","warehouse.stocktake.review","deliveries.over_delivery","requisition.config"].includes(code)),
               sales: ["customers.view","customers.edit","products.view","products.edit","quotations.view","quotations.edit","orders.view","orders.create","orders.edit","dashboard.view"].concat(["contracts.view","contracts.edit","contracts.convert"]),
               finance: ["customers.view","quotations.view","contracts.view","orders.view","dashboard.view","deliveries.view","finance.view","finance.execute","cost.view"],
               workshop: ["customers.view","products.view","orders.view","production.printing.view","production.die_cut.view","dashboard.view","incoming.view","incoming.execute","warehouse.view","warehouse.execute","warehouse.stocktake.view","warehouse.stocktake.submit","deliveries.view"],

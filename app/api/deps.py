@@ -42,6 +42,7 @@ PERMISSION_CATALOG = frozenset(
         "production.die_cut.view",
         "requisition.view",
         "requisition.execute",
+        "requisition.config",
         "dashboard.view",
         "incoming.view",
         "incoming.execute",
@@ -107,6 +108,7 @@ BOSS_DEFAULT_PERMISSIONS = frozenset(
     if not permission.startswith(("system.", "pdf_training."))
     and permission != "users.manage"
     and permission != "deliveries.over_delivery"
+    and permission != "requisition.config"
     and permission
     not in {
         "finance.statement.confirm",

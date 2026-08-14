@@ -91,6 +91,16 @@ class LayoutPublishSnapshot:
 
 
 @dataclass(frozen=True)
+class LayoutOneStepDraftContext:
+    """A suspended advanced draft that must survive a one-step zone publish."""
+
+    draft_snapshot: LayoutDraftSnapshot
+    had_active_draft: bool
+    published_floor_revision: str
+    published_feature_version: int
+
+
+@dataclass(frozen=True)
 class _PublishedLayoutPaths:
     source: Path
     target: Path
@@ -250,6 +260,189 @@ def restore_warehouse_twin_publish_state(
             (backup_dir or TWIN_LAYOUT_BACKUP_DIR).joinpath(normalized_backup_name).unlink(
                 missing_ok=True
             )
+
+
+def begin_warehouse_twin_one_step_publish(
+    floor_code: str,
+    feature_id: str,
+    *,
+    expected_effective_revision: str,
+    expected_published_revision: str,
+    published_path: Path | None = None,
+    draft_path: Path | None = None,
+) -> LayoutOneStepDraftContext:
+    """Suspend an unrelated advanced draft before an isolated zone publish.
+
+    The one-step flow is allowed only when the selected zone itself is still
+    byte-for-byte identical to the published map. Other rack, geometry, or
+    floor edits remain protected in the suspended draft and are rebased after
+    the selected zone has been published.
+    """
+
+    normalized = _normalize_floor_code(floor_code)
+    published_source = _published_layout_paths(published_path).source
+    draft_target = draft_path or TWIN_LAYOUT_DRAFT_PATH
+    with _LAYOUT_EDIT_LOCK:
+        published = _read_document(published_source)
+        published_floor = published["floors"].get(normalized)
+        if not isinstance(published_floor, dict):
+            raise WarehouseTwinLayoutEditNotFoundError(
+                f"数字孪生平面缺少 {normalized}"
+            )
+        published_revision = str(published_floor.get("revision") or "")
+        if published_revision != str(expected_published_revision or ""):
+            raise WarehouseTwinLayoutEditConflictError(
+                "正式地图已更新，请刷新后重新确认"
+            )
+        published_feature = next(
+            (
+                item
+                for item in published_floor.get("features") or []
+                if str(item.get("id") or "") == feature_id
+            ),
+            None,
+        )
+        if not isinstance(published_feature, dict) or published_feature.get(
+            "feature_kind"
+        ) != "zone":
+            raise WarehouseTwinLayoutEditNotFoundError("区域不存在或已被删除")
+
+        draft_snapshot = snapshot_warehouse_twin_layout_draft(
+            draft_path=draft_target
+        )
+        active_draft = _active_draft_document_unlocked(
+            published_path=published_source,
+            draft_path=draft_target,
+            create=False,
+        )
+        effective_floor = published_floor
+        if active_draft is not None:
+            candidate = active_draft["floors"].get(normalized)
+            if not isinstance(candidate, dict):
+                raise WarehouseTwinLayoutEditError(f"布局草稿缺少 {normalized}")
+            effective_floor = candidate
+        if str(effective_floor.get("revision") or "") != str(
+            expected_effective_revision or ""
+        ):
+            raise WarehouseTwinLayoutEditConflictError(
+                "地图或区域已被其他操作更新，请刷新后重新确认"
+            )
+
+        if active_draft is not None:
+            draft_feature = next(
+                (
+                    item
+                    for item in effective_floor.get("features") or []
+                    if str(item.get("id") or "") == feature_id
+                ),
+                None,
+            )
+            if draft_feature != published_feature:
+                raise WarehouseTwinLayoutEditConflictError(
+                    "当前区域本身有未发布的高级维护草稿改动；请先发布或放弃该区域改动"
+                )
+            draft_target.unlink(missing_ok=True)
+
+        return LayoutOneStepDraftContext(
+            draft_snapshot=draft_snapshot,
+            had_active_draft=active_draft is not None,
+            published_floor_revision=published_revision,
+            published_feature_version=int(published_feature.get("version") or 1),
+        )
+
+
+def rebase_warehouse_twin_advanced_draft_after_one_step(
+    context: LayoutOneStepDraftContext,
+    floor_code: str,
+    feature_id: str,
+    *,
+    published_path: Path | None = None,
+    draft_path: Path | None = None,
+) -> bool:
+    """Restore unrelated advanced edits on top of the newly published zone."""
+
+    if not context.had_active_draft:
+        return False
+    if not context.draft_snapshot.existed or context.draft_snapshot.content is None:
+        raise WarehouseTwinLayoutEditError("高级维护草稿快照缺失")
+
+    normalized = _normalize_floor_code(floor_code)
+    published_source = _published_layout_paths(published_path).source
+    draft_target = draft_path or TWIN_LAYOUT_DRAFT_PATH
+    with _LAYOUT_EDIT_LOCK:
+        try:
+            advanced = json.loads(context.draft_snapshot.content.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise WarehouseTwinLayoutEditError("高级维护草稿快照无法读取") from error
+        published = _read_document(published_source)
+        advanced_floor = (advanced.get("floors") or {}).get(normalized)
+        published_floor = (published.get("floors") or {}).get(normalized)
+        if not isinstance(advanced_floor, dict) or not isinstance(
+            published_floor, dict
+        ):
+            raise WarehouseTwinLayoutEditError(f"地图草稿缺少 {normalized}")
+        published_feature = next(
+            (
+                item
+                for item in published_floor.get("features") or []
+                if str(item.get("id") or "") == feature_id
+            ),
+            None,
+        )
+        advanced_features = list(advanced_floor.get("features") or [])
+        advanced_index = next(
+            (
+                index
+                for index, item in enumerate(advanced_features)
+                if str(item.get("id") or "") == feature_id
+            ),
+            None,
+        )
+        if not isinstance(published_feature, dict) or advanced_index is None:
+            raise WarehouseTwinLayoutEditError("一次确认后区域身份回读失败")
+        advanced_features[advanced_index] = deepcopy(published_feature)
+        advanced_floor["features"] = advanced_features
+
+        receipts: list[dict[str, Any]] = []
+        receipt_keys: set[tuple[str, str]] = set()
+        for receipt in [
+            *(advanced_floor.get("layout_edit_receipts") or []),
+            *(published_floor.get("layout_edit_receipts") or []),
+        ]:
+            key = (
+                str(receipt.get("operation_key") or ""),
+                str(receipt.get("action") or ""),
+            )
+            if key in receipt_keys:
+                continue
+            receipt_keys.add(key)
+            receipts.append(deepcopy(receipt))
+        advanced_floor["layout_edit_receipts"] = receipts[-100:]
+        advanced_floor["revision"] = _floor_revision(advanced_floor)
+        advanced["generated_at"] = _utc_iso()
+
+        meta = advanced.get("draft_meta")
+        if not isinstance(meta, dict):
+            raise WarehouseTwinLayoutEditError("高级维护草稿元数据缺失")
+        meta["status"] = "draft"
+        meta["updated_at"] = _utc_iso()
+        meta["base_published_sha256"] = _path_sha256(published_source)
+        meta["base_floor_revisions"] = {
+            code: str(item.get("revision") or "")
+            for code, item in published.get("floors", {}).items()
+            if isinstance(item, dict)
+        }
+        for key in (
+            "validated_at",
+            "validated_floor_revisions",
+            "validation_blockers",
+            "validation_warnings",
+            "published_at",
+            "last_publish",
+        ):
+            meta.pop(key, None)
+        _write_document(draft_target, advanced)
+        return True
 
 
 def _path_sha256(path: Path) -> str:

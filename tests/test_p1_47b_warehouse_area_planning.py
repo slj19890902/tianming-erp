@@ -149,6 +149,7 @@ def _request() -> Request:
 def _confirm_area_payload(
     *,
     revision: str,
+    published_revision: str | None = None,
     operation_key: str,
     usage: str = 'finished',
     storage_layout: str = 'pallet_ground',
@@ -159,7 +160,7 @@ def _confirm_area_payload(
 ):
     return warehouse_api.TwinZoneConfirmAreaPayload(
         expected_revision=revision,
-        expected_published_revision=revision,
+        expected_published_revision=published_revision or revision,
         expected_version=1,
         operation_key=operation_key,
         primary_inventory_type=usage,
@@ -2323,6 +2324,7 @@ def test_one_step_confirmation_never_publishes_an_existing_advanced_draft(
                     'zone-f1',
                     _confirm_area_payload(
                         revision=changed['revision'],
+                        published_revision=_revision(published),
                         operation_key='p1-60-must-not-publish-advanced-draft',
                     ),
                     _request(),
@@ -2339,6 +2341,148 @@ def test_one_step_confirmation_never_publishes_an_existing_advanced_draft(
                 db.scalar(select(func.count(WarehouseAreaStoragePolicy.id)))
                 == policy_count_before
             )
+    finally:
+        engine.dispose()
+
+
+def test_one_step_confirmation_preserves_unrelated_advanced_draft(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    published, draft = _isolate_layout_paths(tmp_path, monkeypatch)
+    _add_floor_one_to_published_layout(published)
+    runtime = Path(editor.TWIN_LAYOUT_PATH)
+    monkeypatch.setattr(
+        warehouse_api,
+        'list_production_projection_mappings',
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        warehouse_api,
+        'load_warehouse_twin_floor',
+        lambda floor_code: json.loads(runtime.read_text(encoding='utf-8'))[
+            'floors'
+        ][floor_code.upper()],
+    )
+    engine, factory = _database(tmp_path)
+    try:
+        changed = update_warehouse_twin_zone_geometry(
+            '1F',
+            'zone-1f',
+            expected_revision=_revision(published, '1F'),
+            expected_version=1,
+            operation_key='p1-60-unrelated-advanced-draft',
+            points=[[500, 500], [7_500, 500], [7_500, 7_500], [500, 7_500]],
+        )
+        advanced_before = json.loads(draft.read_text(encoding='utf-8'))
+        assert changed.applied is True
+        assert advanced_before['draft_meta']['status'] == 'draft'
+
+        with factory() as db:
+            admin = db.scalar(select(User).where(User.username == 'p1-47b-admin'))
+            assert admin is not None
+            result = warehouse_api.confirm_twin_zone_area(
+                '3F',
+                'zone-f1',
+                _confirm_area_payload(
+                    revision=_revision(published),
+                    operation_key='p1-60-preserve-unrelated-draft',
+                ),
+                _request(),
+                db,
+                admin,
+            )
+
+            assert result['status'] == 'published'
+            assert result['advanced_draft_preserved'] is True
+            assert result['area']['storage_policy']['status'] == 'published'
+            assert db.scalar(select(func.count(WarehouseAreaStoragePolicy.id))) == 1
+
+        live = json.loads(runtime.read_text(encoding='utf-8'))
+        rebased = json.loads(draft.read_text(encoding='utf-8'))
+        assert live['floors']['1F']['features'][0]['points'] != changed.value['points']
+        assert rebased['floors']['1F']['features'][0]['points'] == changed.value['points']
+        assert rebased['floors']['3F']['features'][0]['erp_area_code'] == 'F1'
+        assert rebased['draft_meta']['status'] == 'draft'
+        assert rebased['draft_meta']['base_published_sha256'] == sha256(
+            runtime.read_bytes()
+        ).hexdigest()
+        assert rebased['draft_meta']['base_floor_revisions']['3F'] == live['floors']['3F']['revision']
+    finally:
+        engine.dispose()
+
+
+def test_one_step_confirmation_preserves_same_floor_rack_draft(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    published, draft = _isolate_layout_paths(tmp_path, monkeypatch)
+    runtime = Path(editor.TWIN_LAYOUT_PATH)
+    monkeypatch.setattr(
+        warehouse_api,
+        'list_production_projection_mappings',
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        warehouse_api,
+        'load_warehouse_twin_floor',
+        lambda floor_code: json.loads(runtime.read_text(encoding='utf-8'))[
+            'floors'
+        ][floor_code.upper()],
+    )
+    original_revision = _revision(published)
+    rack = editor.create_warehouse_twin_rack(
+        '3F',
+        expected_revision=original_revision,
+        operation_key='p1-60-same-floor-rack-draft',
+        area_feature_id='zone-f1',
+        values={
+            'name': '待确认货架',
+            'width_mm': 2_000,
+            'depth_mm': 1_000,
+            'height_mm': 2_000,
+            'x_mm': 1_000,
+            'y_mm': 1_000,
+            'levels': 2,
+            'level_heights_mm': [1_000],
+            'cargo_rows': 3,
+            'level_cell_counts': [0, 0],
+            'bays': 1,
+            'rotation_deg': 0,
+            'access_side': 'south',
+            'min_aisle_width_mm': 1_500,
+        },
+    )
+    assert rack.applied is True
+
+    engine, factory = _database(tmp_path)
+    try:
+        with factory() as db:
+            admin = db.scalar(select(User).where(User.username == 'p1-47b-admin'))
+            assert admin is not None
+            result = warehouse_api.confirm_twin_zone_area(
+                '3F',
+                'zone-f1',
+                _confirm_area_payload(
+                    revision=rack.floor_revision,
+                    published_revision=original_revision,
+                    operation_key='p1-60-publish-beside-rack-draft',
+                ),
+                _request(),
+                db,
+                admin,
+            )
+            assert result['advanced_draft_preserved'] is True
+            assert result['area']['storage_policy']['status'] == 'published'
+
+        live = json.loads(runtime.read_text(encoding='utf-8'))
+        rebased = json.loads(draft.read_text(encoding='utf-8'))
+        assert live['floors']['3F']['racks'] == []
+        assert [item['id'] for item in rebased['floors']['3F']['racks']] == [
+            rack.value['id']
+        ]
+        assert rebased['floors']['3F']['features'][0]['erp_area_code'] == 'F1'
+        assert rebased['draft_meta']['status'] == 'draft'
     finally:
         engine.dispose()
 

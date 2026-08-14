@@ -132,12 +132,14 @@ from app.services.warehouse_twin_layout_editor import (
     WarehouseTwinLayoutEditError,
     WarehouseTwinLayoutEditNotFoundError,
     WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK,
+    begin_warehouse_twin_one_step_publish,
     create_warehouse_twin_rack,
     delete_warehouse_twin_rack,
     discard_warehouse_twin_layout_draft,
     load_effective_warehouse_twin_floor_for_edit,
     load_warehouse_twin_layout_draft,
     publish_warehouse_twin_layout_draft,
+    rebase_warehouse_twin_advanced_draft_after_one_step,
     restore_warehouse_twin_layout_draft,
     restore_warehouse_twin_publish_state,
     snapshot_warehouse_twin_layout_draft,
@@ -7174,6 +7176,7 @@ def confirm_twin_zone_area(
     with WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK:
         publish_snapshot = snapshot_warehouse_twin_publish_state()
         result: dict | None = None
+        advanced_draft_preserved = False
         try:
             effective_floor = load_effective_warehouse_twin_floor_for_edit(floor_code)
             expected_revision = str(effective_floor.get('revision') or '')
@@ -7181,13 +7184,6 @@ def confirm_twin_zone_area(
                 raise HTTPException(
                     status_code=409,
                     detail='地图或区域已被其他操作更新，请刷新后重新确认',
-                )
-            existing_draft = effective_floor.get('draft_control') or {}
-            has_existing_draft = bool(existing_draft.get('has_draft'))
-            if has_existing_draft:
-                raise HTTPException(
-                    status_code=409,
-                    detail='当前楼层已有未完成的高级维护草稿，请先在高级维护中放弃或发布后再一次确认区域',
                 )
             current_feature = next(
                 (
@@ -7200,13 +7196,24 @@ def confirm_twin_zone_area(
             if current_feature is None or current_feature.get('feature_kind') != 'zone':
                 raise HTTPException(status_code=404, detail='区域不存在或已被删除')
             if payload.expected_revision != payload.expected_published_revision:
-                raise HTTPException(status_code=409, detail='正式地图版本不一致，请刷新后重试')
+                draft_control = effective_floor.get('draft_control') or {}
+                if str(draft_control.get('published_revision') or '') != payload.expected_published_revision:
+                    raise HTTPException(status_code=409, detail='正式地图版本不一致，请刷新后重试')
+            try:
+                one_step_context = begin_warehouse_twin_one_step_publish(
+                    floor_code,
+                    feature_id,
+                    expected_effective_revision=payload.expected_revision,
+                    expected_published_revision=payload.expected_published_revision,
+                )
+            except WarehouseTwinLayoutEditError as error:
+                _handle_twin_layout_edit_error(error)
             policy_result = _update_twin_zone_storage_policy_locked(
                 floor_code=floor_code,
                 feature_id=feature_id,
                 payload=TwinZoneStoragePolicyPayload(
-                    expected_revision=expected_revision,
-                    expected_version=payload.expected_version,
+                    expected_revision=one_step_context.published_floor_revision,
+                    expected_version=one_step_context.published_feature_version,
                     operation_key=f'{payload.operation_key}-policy',
                     allowed_inventory_types=[payload.primary_inventory_type],
                     storage_layout=payload.storage_layout,
@@ -7246,6 +7253,11 @@ def confirm_twin_zone_area(
                 db=db,
                 user=user,
                 commit=False,
+            )
+            advanced_draft_preserved = rebase_warehouse_twin_advanced_draft_after_one_step(
+                one_step_context,
+                floor_code,
+                feature_id,
             )
             area = db.scalar(
                 select(WarehouseArea)
@@ -7310,6 +7322,7 @@ def confirm_twin_zone_area(
                     'storage_layout': payload.storage_layout,
                     'max_pallet_capacity': payload.max_pallet_capacity,
                     'published_revision': result.get('published_revision'),
+                    'advanced_draft_preserved': advanced_draft_preserved,
                     'inventory_changed': False,
                     'pallet_binding_changed': False,
                 },
@@ -7321,6 +7334,7 @@ def confirm_twin_zone_area(
                 **result,
                 'area': area_payload,
                 'message': f'{area.area_code} {area.area_name} 已确认并启用',
+                'advanced_draft_preserved': advanced_draft_preserved,
                 'inventory_changed': False,
                 'pallet_binding_changed': False,
             }

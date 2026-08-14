@@ -492,6 +492,7 @@ interface LayoutDraftPublishResponse {
 interface OneStepAreaConfirmResponse extends LayoutDraftPublishResponse {
   area: FormalWarehouseAreaOption;
   message: string;
+  advanced_draft_preserved: boolean;
   pallet_binding_changed: false;
 }
 
@@ -1798,6 +1799,18 @@ export function WarehouseTwinApp() {
   const selectedAreaQuantitySummary = selectedArea?.quantities.length
     ? selectedArea.quantities.map((item) => `${formatNumber(item.available)} ${inventoryUnitLabel(item.unit)}`).join(" / ")
     : "0";
+  const selectedAreaActivationLabel = selectedAreaHasPublishedBinding
+    ? "已启用"
+    : selectedAreaFeature?.formal_binding_status === "draft"
+      ? "待启用"
+      : "未启用";
+  const selectedAreaCapacitySummary = selectedAreaFeature?.capacity_review_status === "confirmed"
+    && selectedAreaFeature.capacity_eligible
+    ? `${selectedAreaFeature.confirmed_pallet_capacity || 0} 个栈板`
+    : selectedAreaFeature?.capacity_review_status === "excluded"
+      || (selectedAreaFeature?.capacity_review_status === "confirmed" && !selectedAreaFeature.capacity_eligible)
+      ? "不放栈板"
+      : "待确认";
   const selectedProductionTask = productionTaskId === null
     ? null
     : productionProjection?.items.find((item) => item.source_task_id === productionTaskId) || null;
@@ -2770,7 +2783,7 @@ export function WarehouseTwinApp() {
       setZonePolicyDrafts({});
       setZoneGeometryDrafts({});
       setLocationEditMessage(raw.draft_control.has_draft
-        ? "当前楼层有未完成的高级维护草稿；员工仍只看到已发布地图。请先在高级维护中处理后，再使用一次确认。"
+        ? "检测到以前保留的高级维护草稿，员工仍只看到已发布地图；系统会保留该草稿。只要当前区域本身没有高级改动，仍可直接一次确认启用。"
         : "区域规划已开启；选中区域后填写用途、形式和最大栈板数，一次确认即可启用。"
       );
     } catch (reason) {
@@ -3263,7 +3276,10 @@ export function WarehouseTwinApp() {
       setZonePolicyDrafts({});
       setZoneGeometryDrafts({});
       setSelectedExistingAreaId("");
-      setLocationEditMessage(`${result.message}；库存、栈板和产品位置均未改变。`);
+      setLocationEditMessage(
+        `${result.message}；区域启用状态已写入。当前没有货物时库存数量仍显示 0。` +
+        (result.advanced_draft_preserved ? "原有高级维护草稿已保留，没有随本次确认发布。" : "")
+      );
     } catch (reason) {
       setLocationEditMessage(`区域未启用：${(reason as Error).message}`);
     } finally {
@@ -3710,8 +3726,8 @@ export function WarehouseTwinApp() {
         </section>}
         {(selectedFeature || (locationEditMode && selectedRack)) && <section className="twin-inventory-card">
           {selectedAreaFeature ? <>
-            <div className="twin-inventory-title"><div><small>当前区域 · {selectedAreaCode || selectedAreaFeature.feature_code}</small><b>{selectedAreaFeature.name || "仓储区域"}</b></div><span>{selectedAreaIsMold ? "模具台账" : selectedInventory.length ? "当前有货" : "当前空区域"}</span></div>
-            <div className="twin-selection-summary area"><span><small>{selectedAreaIsMold ? "模具" : "可用数量"}</small><b>{selectedAreaIsMold ? `${moldAreaResponse?.total || 0} 件` : selectedAreaQuantitySummary}</b></span><span><small>正式位置</small><b>{selectedAreaLocationCount} 个</b></span><span><small>{selectedAreaIsMold ? "货架" : "库存记录"}</small><b>{selectedAreaIsMold ? `${moldAreaResponse?.rack_codes.length || 0} 个` : `${selectedArea?.lot_count || 0} 条`}</b></span></div>
+            <div className="twin-inventory-title"><div><small>当前区域 · {selectedAreaCode || selectedAreaFeature.feature_code}</small><b>{selectedAreaFeature.name || "仓储区域"}</b></div><span>{selectedAreaActivationLabel}</span></div>
+            <div className="twin-selection-summary area"><span><small>区域状态</small><b>{selectedAreaActivationLabel}</b></span><span><small>最大容量</small><b>{selectedAreaCapacitySummary}</b></span><span><small>{selectedAreaIsMold ? "当前模具" : "当前库存"}</small><b>{selectedAreaIsMold ? `${moldAreaResponse?.total || 0} 件` : selectedAreaQuantitySummary === "0" ? "0 · 当前无货" : selectedAreaQuantitySummary}</b></span></div>
             {(areaInventorySearch || (selectedAreaIsMold ? (moldAreaResponse?.total || 0) > 5 : selectedInventory.length > 5)) && <label className="twin-area-filter twin-area-filter-prominent">
               <span>{selectedAreaIsMold ? "当前区域模具筛选" : "当前区域库存筛选"}</span>
               <input value={areaInventorySearch} onChange={(event) => { setAreaInventorySearch(event.target.value); setMoldAreaPage(1); }} placeholder={selectedAreaIsMold ? "模具编号、名称、客户或存货编码" : "存货编码、产品、客户、位置"} />
@@ -3774,7 +3790,7 @@ export function WarehouseTwinApp() {
               {!moldAreaLoading && moldAreaResponse && moldAreaResponse.total > moldAreaResponse.page_size && <div className="twin-area-mold-pagination"><button type="button" disabled={moldAreaResponse.page <= 1} onClick={() => setMoldAreaPage((value) => Math.max(1, value - 1))}>上一页</button><span>第 {moldAreaResponse.page} / {Math.ceil(moldAreaResponse.total / moldAreaResponse.page_size)} 页</span><button type="button" disabled={moldAreaResponse.page * moldAreaResponse.page_size >= moldAreaResponse.total} onClick={() => setMoldAreaPage((value) => value + 1)}>下一页</button></div>}
             </div> : <>
               <div className="twin-area-lot-list">
-                {!selectedInventory.length && <div className="twin-area-empty"><b>当前区域没有有效库存</b><span>这是 ERP 当前真实空态，不生成模拟货物。</span></div>}
+                {!selectedInventory.length && <div className="twin-area-empty"><b>{selectedAreaHasPublishedBinding ? "区域已启用，当前没有货物" : selectedAreaActivationLabel === "待启用" ? "区域绑定仍待启用" : "区域尚未启用"}</b><span>{selectedAreaHasPublishedBinding ? `${selectedAreaCapacitySummary}；库存为 0 不代表区域未启用。` : "进入区域规划确认用途、形式和容量后即可启用；系统不会生成模拟货物。"}</span></div>}
                 {selectedInventory.length > 0 && !filteredSelectedInventory.length && <div className="twin-area-empty"><b>本区域没有匹配结果</b><span>请更换存货编码、产品、客户或位置关键词。</span></div>}
                 {visibleSelectedInventory.map((item) => <article className={`twin-area-lot ${focusedSearchProductKey && searchProductKey(item) === focusedSearchProductKey ? "search-hit product-search-hit" : focusedSearchItem?.lot_id === item.lot_id ? "search-hit" : ""}`} key={item.lot_id}>
                   <div><b>{item.inventory_code || item.lot_number || `批次 ${item.lot_id}`}</b><strong>{formatNumber(item.available_quantity ?? item.quantity)} {inventoryUnitLabel(item.unit)}</strong></div>

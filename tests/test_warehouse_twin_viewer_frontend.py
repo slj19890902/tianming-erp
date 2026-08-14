@@ -146,9 +146,9 @@ def test_operational_twin_expands_real_area_inventory_with_local_filter_and_sear
     assert "当前区域库存筛选" in SOURCE
     assert "存货编码、产品、客户、位置" in SOURCE
     assert "全部真实位置已选中" in SOURCE
-    assert 'selectedInventory.length ? "当前有货" : "当前空区域"' in SOURCE
-    assert "当前区域没有有效库存" in SOURCE
-    assert "这是 ERP 当前真实空态，不生成模拟货物" in SOURCE
+    assert 'const selectedAreaActivationLabel = selectedAreaHasPublishedBinding' in SOURCE
+    assert "区域已启用，当前没有货物" in SOURCE
+    assert "库存为 0 不代表区域未启用" in SOURCE
     assert "{formatNumber(item.available_quantity ?? item.quantity)} {inventoryUnitLabel(item.unit)}" in SOURCE
     assert "已预占 {formatNumber(item.reserved_quantity)} {inventoryUnitLabel(item.unit)}" in SOURCE
     assert "visibleSelectedInventory" in SOURCE
@@ -254,6 +254,7 @@ def test_area_planning_defaults_to_one_result_oriented_confirmation() -> None:
     assert 'storage_layout: simpleAreaLayout' in SOURCE
     assert 'max_pallet_capacity: capacity' in SOURCE
     assert 'setPlanningPublishedRevision(result.published_revision)' in SOURCE
+    assert "原有高级维护草稿已保留，没有随本次确认发布" in SOURCE
     assert 'palletEditingOnly={(locationEditMode && advancedAreaMaintenanceOpen) || warehouseMoveModeActive}' in SOURCE
     assert 'rackEditingEnabled={locationEditMode && advancedAreaMaintenanceOpen}' in SOURCE
     assert '区域规划 · 一次确认' in SOURCE
@@ -396,9 +397,10 @@ def test_right_side_area_summary_hides_duplicate_labels_but_keeps_full_ledger_ac
     assert 'const [areaInventoryDetailsOpen, setAreaInventoryDetailsOpen] = useState(false)' in SOURCE
     assert "当前区域 · {selectedAreaCode || selectedAreaFeature.feature_code}" in SOURCE
     assert "selectedAreaFeature.name" in SOURCE
-    assert "可用数量" in SOURCE
-    assert "正式位置" in SOURCE
-    assert "库存记录" in SOURCE
+    assert "区域状态" in SOURCE
+    assert "最大容量" in SOURCE
+    assert "当前库存" in SOURCE
+    assert "0 · 当前无货" in SOURCE
     assert "selectedAreaQuantitySummary" in SOURCE
     assert "areaInventoryDetailsOpen && <div className=\"twin-area-lot-details\"" in SOURCE
     assert "内部码 {item.location_code || \"未编\"}" in SOURCE

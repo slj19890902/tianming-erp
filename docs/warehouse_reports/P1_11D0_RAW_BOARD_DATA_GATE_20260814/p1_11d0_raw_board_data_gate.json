@@ -1,0 +1,57 @@
+{
+  "anonymous_candidates": [],
+  "audit": {
+    "connection_mode": "sqlite_mode_ro_query_only",
+    "connection_total_changes_after": 0,
+    "connection_total_changes_before": 0,
+    "database_changed_during_scan": false,
+    "database_written": false,
+    "source_sha256_after": "CCE64D51D1A985D57995C4419224314E357A4D5004E0D24C4351BE894E91BCDD",
+    "source_sha256_before": "CCE64D51D1A985D57995C4419224314E357A4D5004E0D24C4351BE894E91BCDD"
+  },
+  "gate": {
+    "checks": {
+      "database_hash_unchanged": true,
+      "foreign_key_check_ok": true,
+      "has_formal_raw_board_denominator": false,
+      "has_ready_customer_specific_lot": false,
+      "has_ready_general_lot": false,
+      "historical_unlinked_semi_items_resolved": false,
+      "integrity_check_ok": true,
+      "query_only_no_changes": true,
+      "revision_matches_current": false
+    },
+    "status": "blocked"
+  },
+  "reason_counts": {},
+  "scope": {
+    "business_compatibility": "not_evaluated_without_frozen_demand_D1_D3_not_authorized",
+    "stage": "real_data_gate_only"
+  },
+  "source": {
+    "database_revision": "cr74v8x9z63",
+    "expected_revision": "mm21v8x9z10",
+    "foreign_key_errors": 0,
+    "integrity_check": [
+      "ok"
+    ]
+  },
+  "summary": {
+    "active_raw_board_reservations": 0,
+    "active_raw_board_reserved_quantity": 0.0,
+    "business_blocked_lots": 0,
+    "field_completeness": {
+      "complete": 0,
+      "denominator": 0,
+      "percent": null,
+      "semantics": "no_formal_raw_board_denominator"
+    },
+    "field_incomplete_lots": 0,
+    "formal_raw_board_lots": 0,
+    "ready_customer_specific_lots": 0,
+    "ready_general_lots": 0,
+    "unlinked_historical_semi_items": 22,
+    "unlinked_historical_semi_quantity": 12811.0
+  },
+  "task": "P1-11D0"
+}

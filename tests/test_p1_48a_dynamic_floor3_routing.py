@@ -296,7 +296,7 @@ def test_old_floor3_area_stays_v11_and_unified_endpoint_delegates(routing_app) -
             ) == 2
 
 
-def test_dynamic_floor3_asset_policy_never_creates_inventory_locations(
+def test_dynamic_floor3_raw_policy_creates_shared_pallet_location(
     routing_app,
 ) -> None:
     app, factory = routing_app
@@ -334,14 +334,15 @@ def test_dynamic_floor3_asset_policy_never_creates_inventory_locations(
             "/api/warehouse/spatial-layout/floors/3F/areas/RAW-001/location-count",
             json={"target_count": 1, "confirmed": True},
         )
-        assert response.status_code == 409, response.text
-        assert "不生成" in response.text
+        assert response.status_code == 200, response.text
+        assert response.json()["created_count"] == 1
+        assert response.json()["items"][0]["location"]["warehouse_type"] == "shared"
     with factory() as db:
         assert db.scalar(
             select(func.count(WarehouseLocation.id)).where(
                 WarehouseLocation.area_code == "RAW-001"
             )
-        ) == 0
+        ) == 1
 
 
 @pytest.mark.parametrize(
@@ -510,7 +511,7 @@ def test_mixed_floor3_sources_fail_closed_without_partial_mutation(routing_app) 
             json={"target_count": 3, "confirmed": True},
         )
         assert response.status_code == 409, response.text
-        assert "V11" in response.text and "核对" in response.text
+        assert "当前实测三楼区域" in response.text and "核对" in response.text
     with factory() as db:
         assert db.scalar(
             select(func.count(WarehouseLocation.id)).where(

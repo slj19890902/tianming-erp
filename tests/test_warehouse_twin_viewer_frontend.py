@@ -169,8 +169,8 @@ def test_capacity_review_link_keeps_the_clicked_map_area_identity() -> None:
     assert 'area_code: selectedAreaFeature.erp_area_code' in SOURCE
     assert 'map_feature_id: selectedAreaFeature.id' in SOURCE
     assert 'href={selectedAreaCapacityReviewUrl}' in SOURCE
-    assert "旧区域可直接在下方填写最大栈板数并一次确认" in SOURCE
-    assert "单独复核旧容量" in SOURCE
+    assert "已启用区域可直接在下方填写最大栈板数并一次确认" in SOURCE
+    assert "单独复核容量" in SOURCE
     assert '/warehouse-ledger.html?location_view=ledger&capacity_review=1"' not in SOURCE
 
 
@@ -205,7 +205,8 @@ def test_existing_area_picker_keeps_confirmed_a2_and_rejects_unsafe_candidates()
     assert "!occupiedDraftCodes.has(area.area_code.toUpperCase())" in helper
     assert "construction_status" not in helper
     assert "capacity_review_status" not in helper
-    assert 'existing_area_id: selectedExistingArea?.id || null' in SOURCE
+    assert 'existing_area_id: existingAreaId' in SOURCE
+    assert 'selectedAreaFeature.formal_area_id && !selectedAreaFeature.formal_policy_status' in SOURCE
     assert 'disabled={Boolean(selectedExistingAreaId)}' in SOURCE
     assert "!selectedAreaHasPublishedBinding" in SOURCE
 
@@ -384,7 +385,12 @@ def test_phase2c9_admin_operations_and_read_only_locating_share_the_measured_map
     assert "idempotency_key: moveIdempotencyKey" in SOURCE
     assert 'item.storage_type !== "rack"' in SOURCE
     assert 'selectedLocation?.storage_type !== "rack"' in SOURCE
-    assert "该位置尚未启用、未完成布局、库存类型不匹配或与柱子冲突" in SOURCE
+    assert "该位置尚未启用、未完成布局、区域用途不匹配或与柱子冲突" in SOURCE
+    assert '"/api/warehouse/pallets"' in SOURCE
+    assert 'item_type: "raw_material"' in SOURCE
+    assert '>前往移货</button>' in SOURCE
+    assert 'setMoveAction("relocate")' in SOURCE
+    assert ">原材料栈板</button>" in SOURCE
     assert "模具编码或名称" in SOURCE
     assert "印刷版编码、产品或位置" in SOURCE
     assert "focusedResource.prompt" in SOURCE

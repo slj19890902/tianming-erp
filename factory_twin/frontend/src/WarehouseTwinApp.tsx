@@ -76,7 +76,7 @@ type InventoryUsage = "finished" | "semi_finished" | "raw_material" | "mold" | "
 type StorageLayout = "rack" | "pallet_ground" | "mixed";
 type WarehouseSearchType = "finished" | "mold" | "printing_plate";
 type WarehouseMapMode = "lookup" | "move" | "planning";
-type InboundInventoryType = "finished" | "semi_finished";
+type InboundInventoryType = "finished" | "semi_finished" | "raw_material";
 type RackDraft = Rack & { level_clear_heights_mm: number[]; level_cell_counts: number[] };
 const P1_47D_ENABLED = false;
 const P1_49C_ENABLED = true;
@@ -171,6 +171,7 @@ interface DashboardLocation {
   floor_code: string;
   area_code: string | null;
   warehouse_type: string;
+  allowed_inventory_types?: InventoryUsage[];
   storage_type: string;
   is_active: boolean;
   occupancy_status: "occupied" | "empty";
@@ -1531,19 +1532,36 @@ export function WarehouseTwinApp() {
     && !locationDrafts[selectedLocation.location_id]
     && !selectedLocationHasColumnConflict
   );
+  const selectedLocationPolicyTypes = selectedLocation?.allowed_inventory_types || [];
+  const selectedLocationPolicyAllows = (inventoryType: InventoryUsage) => (
+    selectedLocationPolicyTypes.length === 0
+    || selectedLocationPolicyTypes.includes(inventoryType)
+  );
   const selectedLocationCanReceiveFinished = Boolean(
     selectedLocationBaseReceivable
     && selectedLocation
     && ["finished", "shared"].includes(selectedLocation.warehouse_type)
+    && selectedLocationPolicyAllows("finished")
   );
   const selectedLocationCanReceiveSemiFinished = Boolean(
     selectedLocationBaseReceivable
-    && selectedLocation?.floor_code === "1F"
+    && selectedLocation
+    && ["1F", "3F"].includes(selectedLocation.floor_code)
     && ["semi_finished", "shared"].includes(selectedLocation.warehouse_type)
+    && selectedLocationPolicyAllows("semi_finished")
+  );
+  const selectedLocationCanReceiveRawMaterial = Boolean(
+    selectedLocationBaseReceivable
+    && selectedLocation?.occupancy_status === "empty"
+    && selectedLocation.storage_type !== "rack"
+    && selectedLocation.warehouse_type === "shared"
+    && selectedLocationPolicyAllows("raw_material")
   );
   const selectedLocationCanReceiveProduct = inboundInventoryType === "finished"
     ? selectedLocationCanReceiveFinished
-    : selectedLocationCanReceiveSemiFinished;
+    : inboundInventoryType === "semi_finished"
+      ? selectedLocationCanReceiveSemiFinished
+      : selectedLocationCanReceiveRawMaterial;
   const selectedLocationSupportsPallet = Boolean(
     selectedLocation
     && selectedLocationSinglePallet
@@ -2646,31 +2664,56 @@ export function WarehouseTwinApp() {
       return;
     }
     const correctionMode = selectedLocation.occupancy_status === "occupied";
-    const inventoryTypeLabel = inboundInventoryType === "finished" ? "成品" : "半成品";
+    const inventoryTypeLabel = inboundInventoryType === "finished"
+      ? "成品"
+      : inboundInventoryType === "semi_finished"
+        ? "半成品"
+        : "原材料栈板";
     const quantityUnit = inboundInventoryType === "finished" ? "只" : "张";
     if (!window.confirm(`管理员二次确认：把 ${selectedInboundProduct.customer_name} / ${selectedInboundProduct.product_name} 共 ${quantity} ${quantityUnit}${correctionMode ? "合并补录到已有同产品位置" : "登记到当前地图位置"}？\n\n楼层：${floorCode}\n区域：${selectedLocation.area_code || "未分区"}\n位置：${selectedLocation.location_name}\n库存类型：${inventoryTypeLabel}\n\n系统使用内部 location_id 落账，员工无需记忆库位编码。`)) return;
     setWarehouseOperationBusy(true);
     setWarehouseOperationMessage("");
     try {
-      const endpoint = inboundInventoryType === "finished"
-        ? "/api/warehouse/twin-operations/finished-inbound"
-        : "/api/warehouse/twin-operations/semi-finished-inbound";
-      await mutateJson(endpoint, "POST", {
-        location_id: selectedLocation.location_id,
-        ...(inboundInventoryType === "finished" ? { pallet_code: inboundPalletCode.trim() || null } : {}),
-        customer_id: selectedInboundProduct.customer_id,
-        product_id: selectedInboundProduct.product_id,
-        quantity,
-        stock_date: inboundStockDate,
-        idempotency_key: inboundIdempotencyKey,
-        confirmed: true,
-        remarks: correctionMode ? `二维地图管理员确认${inventoryTypeLabel}差异合并补录` : `二维地图人工确认${inventoryTypeLabel}入仓`
-      });
+      if (inboundInventoryType === "raw_material") {
+        await mutateJson("/api/warehouse/pallets", "POST", {
+          location_id: selectedLocation.location_id,
+          pallet_code: inboundPalletCode.trim() || null,
+          remarks: `二维地图人工确认原材料栈板入仓 · ${inboundStockDate}`,
+          items: [{
+            customer_id: selectedInboundProduct.customer_id,
+            product_id: selectedInboundProduct.product_id,
+            item_type: "raw_material",
+            quantity,
+            unit: "sheets",
+            match_status: "matched",
+            idempotency_key: inboundIdempotencyKey,
+            remarks: "实测区域原材料实体栈板"
+          }]
+        });
+      } else {
+        const endpoint = inboundInventoryType === "finished"
+          ? "/api/warehouse/twin-operations/finished-inbound"
+          : "/api/warehouse/twin-operations/semi-finished-inbound";
+        await mutateJson(endpoint, "POST", {
+          location_id: selectedLocation.location_id,
+          ...(inboundInventoryType === "finished" ? { pallet_code: inboundPalletCode.trim() || null } : {}),
+          customer_id: selectedInboundProduct.customer_id,
+          product_id: selectedInboundProduct.product_id,
+          quantity,
+          stock_date: inboundStockDate,
+          idempotency_key: inboundIdempotencyKey,
+          confirmed: true,
+          remarks: correctionMode ? `二维地图管理员确认${inventoryTypeLabel}差异合并补录` : `二维地图人工确认${inventoryTypeLabel}入仓`
+        });
+      }
       await refreshDashboard();
       setInboundQuantity("");
       setInboundPalletCode("");
       setInboundIdempotencyKey(operationKey("map-inbound"));
-      setWarehouseOperationMessage(`${selectedLocation.location_name} 已${correctionMode ? "完成同产品合并补录" : `完成${inventoryTypeLabel}入仓`}；正式库存账已保存。`);
+      setWarehouseOperationMessage(
+        `${selectedLocation.location_name} 已${correctionMode ? "完成同产品合并补录" : `完成${inventoryTypeLabel}入仓`}；`
+        + (inboundInventoryType === "raw_material" ? "实体栈板账已保存。" : "正式库存账已保存。")
+      );
     } catch (reason) {
       setWarehouseOperationMessage((reason as Error).message);
     } finally {
@@ -2801,7 +2844,7 @@ export function WarehouseTwinApp() {
       `长期标准栈板容量：${plan.long_term_pallet_capacity} 个\n` +
       `成品/半成品正式库位：${plan.formal_location_count} 个\n\n` +
       (plan.formal_state.archivable_legacy_area_count
-        ? `另有 ${plan.formal_state.archivable_legacy_area_count} 个无库存、无栈板的未映射历史区域将逻辑归档，历史记录保留。\n\n`
+        ? `另有 ${plan.formal_state.archivable_legacy_area_count} 个无库存、无栈板且未映射的重复空台账记录将停用；实测区域不受影响。\n\n`
         : "") +
       `室外、临时周转区不计长期容量；模具、印版和原料继续使用各自台账，不会改动库存数量。`
     );
@@ -3238,6 +3281,10 @@ export function WarehouseTwinApp() {
       return;
     }
     const selectedExistingArea = formalAreaOptions.find((item) => String(item.id) === selectedExistingAreaId);
+    const existingAreaId = selectedExistingArea?.id
+      ?? (selectedAreaFeature.formal_area_id && !selectedAreaFeature.formal_policy_status
+        ? selectedAreaFeature.formal_area_id
+        : null);
     if (selectedExistingArea && selectedExistingArea.area_code !== formalAreaCodeDraft.trim().toUpperCase()) {
       setLocationEditMessage("现有区域选择与正式区域编号不一致，请重新选择，系统不会按名称猜测绑定。");
       return;
@@ -3253,7 +3300,7 @@ export function WarehouseTwinApp() {
           operation_key: operationKey("zone-policy"),
           erp_area_code: formalAreaCodeDraft.trim().toUpperCase(),
           area_name: formalAreaNameDraft.trim() || selectedAreaFeature.name,
-          existing_area_id: selectedExistingArea?.id || null,
+          existing_area_id: existingAreaId,
           ...selectedZonePolicy
         }
       );
@@ -3308,6 +3355,10 @@ export function WarehouseTwinApp() {
       return;
     }
     const selectedExistingArea = formalAreaOptions.find((item) => String(item.id) === selectedExistingAreaId);
+    const existingAreaId = selectedExistingArea?.id
+      ?? (selectedAreaFeature.formal_area_id && !selectedAreaFeature.formal_policy_status
+        ? selectedAreaFeature.formal_area_id
+        : null);
     if (selectedExistingArea && selectedExistingArea.area_code !== formalAreaCodeDraft.trim().toUpperCase()) {
       setLocationEditMessage("所选现有区域与地图编号不一致，请重新选择；系统不会按名称猜测绑定。");
       return;
@@ -3342,7 +3393,7 @@ export function WarehouseTwinApp() {
           max_pallet_capacity: capacity,
           erp_area_code: formalAreaCodeDraft.trim().toUpperCase(),
           area_name: formalAreaNameDraft.trim() || selectedAreaFeature.name,
-          existing_area_id: selectedExistingArea?.id || null,
+          existing_area_id: existingAreaId,
           confirmed: true
         }
       );
@@ -3563,8 +3614,8 @@ export function WarehouseTwinApp() {
           <div className="twin-floor1-candidate-title"><div><small>1F · 实测地图候选</small><b>一次确认区域与库位</b></div><button type="button" disabled={floor1CandidateBusy} onClick={() => setFloor1CandidatePlan(null)}>关闭</button></div>
           <div className="twin-floor1-candidate-summary"><span><b>{floor1CandidatePlan.candidate_count}</b> 个区域</span><span><b>{floor1CandidatePlan.long_term_pallet_capacity}</b> 个长期栈板位</span><span><b>{floor1CandidatePlan.formal_location_count}</b> 个正式库存库位</span></div>
           <p>按 {floor1CandidatePlan.standard_pallet_mm.width}×{floor1CandidatePlan.standard_pallet_mm.depth}mm 标准栈板和已发布毫米坐标测算，已避开通道、设备、货架、柱子和禁放区；确认前不会写正式台账。</p>
-          {floor1CandidatePlan.excluded_out_of_bounds_count > 0 && <p className="twin-floor1-candidate-warning">已排除 {floor1CandidatePlan.excluded_out_of_bounds_count} 个实测边界外旧区域：{floor1CandidatePlan.excluded_out_of_bounds.map((item) => item.feature_code).join("、")}。这些区域不显示、不计容量，也不会生成正式区域或库位。</p>}
-          {floor1CandidatePlan.formal_state.archivable_legacy_area_count > 0 && <p className="twin-floor1-candidate-warning">将同步归档 {floor1CandidatePlan.formal_state.archivable_legacy_area_count} 个无库存、无栈板的未映射历史区域：{floor1CandidatePlan.formal_state.legacy_areas.filter((item) => item.archive_required).map((item) => item.area_code).join("、")}。只停用空库位，历史身份保留。</p>}
+          {floor1CandidatePlan.excluded_out_of_bounds_count > 0 && <p className="twin-floor1-candidate-warning">已排除 {floor1CandidatePlan.excluded_out_of_bounds_count} 个实测边界外台账记录：{floor1CandidatePlan.excluded_out_of_bounds.map((item) => item.feature_code).join("、")}。这些记录不显示、不计容量，也不会生成正式区域或库位。</p>}
+          {floor1CandidatePlan.formal_state.archivable_legacy_area_count > 0 && <p className="twin-floor1-candidate-warning">将停用 {floor1CandidatePlan.formal_state.archivable_legacy_area_count} 个无库存、无栈板且未映射的重复空台账记录：{floor1CandidatePlan.formal_state.legacy_areas.filter((item) => item.archive_required).map((item) => item.area_code).join("、")}。真实实测区域不受影响。</p>}
           {floor1CandidatePlan.formal_state.blocking_items.length > 0 && <div className="twin-floor1-candidate-blockers"><b>当前不能确认</b>{floor1CandidatePlan.formal_state.blocking_items.map((item) => <article key={`${item.code}-${item.area_id || item.area_code || item.message}`}><div><span>{item.message}</span>{floor1CandidateBlockerDetail(item) && <small>{floor1CandidateBlockerDetail(item)}</small>}</div><a href={floor1CandidateBlockerHref(item)} target="_blank" rel="noreferrer">{item.action_label}</a></article>)}<button type="button" className="twin-floor1-candidate-recheck" disabled={floor1CandidateBusy} onClick={previewFloor1FormalCandidates}>{floor1CandidateBusy ? "正在重新检查…" : "处理完成，重新检查"}</button></div>}
           <div className="twin-floor1-candidate-list">{floor1CandidatePlan.candidates.map((item) => <article key={item.map_feature_id} className={item.long_term_capacity_eligible ? "eligible" : "excluded"}><div><b>{item.area_code}</b><span>{item.area_name}</span></div><strong>{item.planned_pallet_capacity ? `${item.planned_pallet_capacity} 个长期栈板位` : "不计长期容量"}</strong><small>{item.formal_location_count ? `生成 ${item.formal_location_count} 个正式库位 · ` : ""}{item.capacity_note}</small></article>)}</div>
           <button type="button" className="twin-primary-action" disabled={floor1CandidateBusy || floor1CandidatePlan.formal_state.blocking_conflicts.length > 0} onClick={confirmFloor1FormalCandidates}>{floor1CandidateBusy ? "正在确认…" : floor1CandidatePlan.formal_state.already_applied ? "已确认，无需重复生成" : "一次确认并启用"}</button>
@@ -3590,7 +3641,7 @@ export function WarehouseTwinApp() {
             </div>}
           </div>}
         </section>}
-        {locationEditMessage && <div className={`twin-location-message ${locationEditMessage.includes("失败") || locationEditMessage.includes("缺失") ? "error" : ""}`}>{locationEditMessage}</div>}
+        {locationEditMessage && <div className={`twin-location-message ${locationEditMessage.includes("失败") || locationEditMessage.includes("缺失") ? "error" : ""}`}><span>{locationEditMessage}</span>{(locationEditMessage.includes("先完成移货") || locationEditMessage.includes("移到其他已启用区域")) && <button type="button" onClick={() => { setLocationEditMode(false); setMapMode("move"); setMoveAction("relocate"); setWarehouseOperationMessage("请点选当前区域内的货物或实体栈板，再切换楼层并选择目标位置；提交前不会改动库存。"); }}>前往移货</button>}</div>}
         {canExecuteWarehouse && mapMode === "move" && <section className="twin-move-control-panel">
           <div className="twin-formal-operation-title"><b>{moveAction === "merge" ? "多栈合并草稿" : "移货页面草稿"}</b><span>楼层切换不丢来源与草稿</span></div>
           {P1_49C_ENABLED && <div className="twin-move-action-tabs" role="tablist" aria-label="移货操作类型">
@@ -3767,11 +3818,12 @@ export function WarehouseTwinApp() {
               </div>}
             </>}
           </section>}
-          {P1_47D_ENABLED && canEditLocations && mapMode === "move" && viewMode === "2d" && !locationEditMode && (selectedLocationCanReceiveFinished || selectedLocationCanReceiveSemiFinished) && <section className="twin-formal-operation">
+          {P1_47D_ENABLED && canEditLocations && mapMode === "move" && viewMode === "2d" && !locationEditMode && (selectedLocationCanReceiveFinished || selectedLocationCanReceiveSemiFinished || selectedLocationCanReceiveRawMaterial) && <section className="twin-formal-operation">
             <div className="twin-formal-operation-title"><b>地图选点入仓 / 差异补录</b><span>{floorCode} · {selectedLocation.area_code} · {selectedLocation.location_name} · 仅 admin</span></div>
             <div className="twin-map-inbound-type" role="tablist" aria-label="入仓库存类型">
               <button type="button" className={inboundInventoryType === "finished" ? "active" : ""} disabled={!selectedLocationCanReceiveFinished} onClick={() => { setInboundInventoryType("finished"); setInboundMode(selectedLocation.occupancy_status === "empty" && selectedLocationCanReceiveStaging ? "staging" : "catalog"); setInboundCustomerId(""); setInboundProductId(""); setWarehouseOperationMessage(""); }}>成品</button>
               <button type="button" className={inboundInventoryType === "semi_finished" ? "active" : ""} disabled={!selectedLocationCanReceiveSemiFinished} onClick={() => { setInboundInventoryType("semi_finished"); setInboundMode("catalog"); setInboundCustomerId(""); setInboundProductId(""); setWarehouseOperationMessage(""); }}>半成品</button>
+              <button type="button" className={inboundInventoryType === "raw_material" ? "active" : ""} disabled={!selectedLocationCanReceiveRawMaterial} onClick={() => { setInboundInventoryType("raw_material"); setInboundMode("catalog"); setInboundCustomerId(""); setInboundProductId(""); setWarehouseOperationMessage(""); }}>原材料栈板</button>
             </div>
             <p className="twin-map-pick-hint">先在顶部选择 1F/3F，再直接点地图上的真实位置。页面以区域和现场位置为主，内部库位编码只在详情中保留。</p>
             <div className="twin-inbound-mode" role="tablist" aria-label="货位选货来源">
@@ -3795,10 +3847,10 @@ export function WarehouseTwinApp() {
               <label><span>2　筛选该客户常用箱</span><input value={productQuery} disabled={!inboundCustomerId} onChange={(event) => { setProductQuery(event.target.value); setInboundProductId(""); }} placeholder={inboundCustomerId ? "输入存货编码或产品名称；留空显示常用箱" : "请先确认客户"} /></label>
               <label><span>确认常用箱</span><select value={inboundProductId} disabled={!inboundCustomerId} onChange={(event) => setInboundProductId(event.target.value)}><option value="">请选择已确认产品</option>{productCandidates.map((item) => <option key={item.product_id} value={item.product_id}>{item.product_code || item.customer_material_code || item.product_id} · {item.product_name}</option>)}</select></label>
               {selectedInboundProduct && <small className="twin-formal-selected">{selectedInboundProduct.customer_name} / {selectedInboundProduct.product_code || selectedInboundProduct.customer_material_code || "编码待补充"} / {selectedInboundProduct.product_name} / {selectedInboundProduct.specification || "规格待补充"}</small>}
-              <div className="twin-formal-operation-grid"><label><span>{selectedLocation.occupancy_status === "empty" ? "现场实物" : "合并补录"}数量（{inboundInventoryType === "finished" ? "只" : "张"}）</span><input type="number" min="1" step="1" value={inboundQuantity} onChange={(event) => setInboundQuantity(event.target.value)} /></label><label><span>库存日期</span><input type="date" value={inboundStockDate} onChange={(event) => setInboundStockDate(event.target.value)} /></label></div>
-              {inboundInventoryType === "finished" && selectedLocation.occupancy_status === "empty" && selectedLocation.storage_type !== "rack" && <label><span>实体栈板编号（可留空自动生成）</span><input value={inboundPalletCode} onChange={(event) => setInboundPalletCode(event.target.value)} placeholder="例如 PAL-3F-001" /></label>}
+              <div className="twin-formal-operation-grid"><label><span>{selectedLocation.occupancy_status === "empty" ? "现场实物" : "合并补录"}数量（{inboundInventoryType === "finished" ? "只" : "张"}）</span><input type="number" min="1" step="1" value={inboundQuantity} onChange={(event) => setInboundQuantity(event.target.value)} /></label><label><span>{inboundInventoryType === "raw_material" ? "登记日期" : "库存日期"}</span><input type="date" value={inboundStockDate} onChange={(event) => setInboundStockDate(event.target.value)} /></label></div>
+              {(inboundInventoryType === "finished" || inboundInventoryType === "raw_material") && selectedLocation.occupancy_status === "empty" && selectedLocation.storage_type !== "rack" && <label><span>实体栈板编号（可留空自动生成）</span><input value={inboundPalletCode} onChange={(event) => setInboundPalletCode(event.target.value)} placeholder="例如 PAL-3F-001" /></label>}
               {selectedLocation.occupancy_status === "occupied" && <small className="twin-merge-rule">已有货物不代表禁止入仓：同客户、同存货产品且类型兼容时可合并；其他情况系统会阻止。</small>}
-              <button type="button" className="twin-primary-action" disabled={warehouseOperationBusy || !selectedInboundCustomer || !selectedInboundProduct || !inboundQuantity || !inboundStockDate || !selectedLocationCanReceiveProduct} onClick={confirmMapFinishedInbound}>{selectedLocation.occupancy_status === "empty" ? `二次确认并登记${inboundInventoryType === "finished" ? "成品" : "半成品"}` : "二次确认并合并补录"}</button>
+              <button type="button" className="twin-primary-action" disabled={warehouseOperationBusy || !selectedInboundCustomer || !selectedInboundProduct || !inboundQuantity || !inboundStockDate || !selectedLocationCanReceiveProduct} onClick={confirmMapFinishedInbound}>{selectedLocation.occupancy_status === "empty" ? `二次确认并登记${inboundInventoryType === "finished" ? "成品" : inboundInventoryType === "semi_finished" ? "半成品" : "原材料栈板"}` : "二次确认并合并补录"}</button>
             </>}
             {inboundInventoryType === "finished" && inboundMode === "temporary" && <div className="twin-temporary-product-form">
               <b>仅用于现场已有实物、ERP 尚无产品档案</b>
@@ -3832,7 +3884,7 @@ export function WarehouseTwinApp() {
               <button type="button" className="twin-primary-action" disabled={warehouseOperationBusy || !moveTargetLocationId || !selectedLocation.pallet} onClick={confirmMapPalletMove}>确认正式栈板移位</button>
             </>}
           </section>}
-          {P1_47D_ENABLED && canEditLocations && mapMode === "move" && viewMode === "2d" && !locationEditMode && !selectedLocationCanReceiveFinished && !selectedLocationCanReceiveSemiFinished && <p className="twin-location-readonly-note">该位置尚未启用、未完成布局、库存类型不匹配或与柱子冲突，暂不能办理入仓；请直接在地图上改选兼容位置。</p>}
+          {P1_47D_ENABLED && canEditLocations && mapMode === "move" && viewMode === "2d" && !locationEditMode && !selectedLocationCanReceiveFinished && !selectedLocationCanReceiveSemiFinished && !selectedLocationCanReceiveRawMaterial && <p className="twin-location-readonly-note">该位置尚未启用、未完成布局、区域用途不匹配或与柱子冲突，暂不能办理入仓；请直接在地图上改选兼容位置。</p>}
           {locationEditMode && advancedAreaMaintenanceOpen && canEditLocations && <div className="twin-location-edit-actions">
             <button type="button" disabled={!selectedLocation.map_position || locationEditBusy} onClick={exchangeLocationDraft}>{swapSourceLocationId === null ? "设为交换起点" : swapSourceLocationId === selectedLocation.location_id ? "已选交换起点" : `与 ${visualLocations.find((item) => item.location_id === swapSourceLocationId)?.location_code || "起点"} 交换位置`}</button>
             <button type="button" className="danger" disabled={selectedLocation.occupancy_status !== "empty" || !selectedLocation.map_position || locationEditBusy} onClick={disableSelectedLocation}>停用空库位</button>
@@ -3850,7 +3902,7 @@ export function WarehouseTwinApp() {
             </label>}
             {!selectedAreaIsMold && focusedSearchProduct && focusedSearchProduct.items.some((item) => item.area_code === selectedAreaCode) && <div className="twin-search-focus-note product-focus"><b>已找到该产品</b><span>{focusedSearchProduct.inventory_code} · 本区域位置已高亮</span></div>}
             {locationEditMode && canEditLocations && advancedAreaMaintenanceOpen && <div className="twin-area-layout-summary"><div><b>区域布局</b><small>{selectedAreaRacks.length} 个货架 · {selectedAreaLocationCount} 个正式库位</small></div><button type="button" disabled={spatialEditBusy || !selectedAreaFeature} onClick={addRackToSelectedArea}>＋ 添加货架</button></div>}
-            {locationEditMode && canEditLocations && selectedAreaHasPublishedBinding && selectedAreaFeature.capacity_review_status === 'pending' && <div className="twin-location-readonly-note"><b>容量待复核</b><span>旧区域可直接在下方填写最大栈板数并一次确认；需要独立台账时再进入高级维护。</span>{advancedAreaMaintenanceOpen && <a href={selectedAreaCapacityReviewUrl} target="_top">单独复核旧容量</a>}</div>}
+            {locationEditMode && canEditLocations && selectedAreaHasPublishedBinding && selectedAreaFeature.capacity_review_status === 'pending' && <div className="twin-location-readonly-note"><b>容量待复核</b><span>已启用区域可直接在下方填写最大栈板数并一次确认；需要独立台账时再进入高级维护。</span>{advancedAreaMaintenanceOpen && <a href={selectedAreaCapacityReviewUrl} target="_top">单独复核容量</a>}</div>}
             {locationEditMode && canEditLocations && !selectedAreaFeature.formal_area_id && selectedAreaFeature.formal_binding_status !== 'draft' && <div className="twin-location-readonly-note"><b>尚未绑定正式区域</b><span>直接使用下方简化表单确认用途、形式和容量，系统会自动建立绑定并启用。</span></div>}
             {locationEditMode && canEditLocations && selectedAreaFeature.formal_binding_status === 'draft' && selectedAreaFeature.formal_policy_status !== 'published' && <div className="twin-location-readonly-note"><b>区域绑定草稿待处理</b><span>请展开高级维护，先发布或放弃该草稿；一次确认不会夹带发布其他草稿。</span></div>}
             {locationEditMode && canEditLocations && selectedAreaFeature.capacity_review_status === 'confirmed' && selectedAreaFeature.capacity_eligible && <div className="twin-location-readonly-note"><b>现场确认最大 {selectedAreaFeature.confirmed_pallet_capacity || 0} 个栈板</b></div>}

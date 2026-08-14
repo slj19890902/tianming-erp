@@ -681,7 +681,7 @@ def inspect_floor1_formal_candidate_state(
             blocking_items.append(
                 {
                     "code": "legacy_area_policy",
-                    "message": f"{area.area_code} 历史区域仍绑定正式地图策略",
+                    "message": f"{area.area_code} 未映射台账区域仍绑定正式地图策略",
                     "action_kind": "open_area_planning",
                     "action_label": "去处理区域绑定",
                     "area_id": area.id,
@@ -697,7 +697,7 @@ def inspect_floor1_formal_candidate_state(
                 {
                     "code": "legacy_area_inventory",
                     "message": (
-                        f"{area.area_code} 历史区域仍有库存或实体栈板，不能自动归档"
+                        f"{area.area_code} 未映射台账区域仍有库存或实体栈板，不能自动停用"
                     ),
                     "action_kind": "open_inventory_move",
                     "action_label": "去移动库存和栈板",
@@ -865,7 +865,7 @@ def confirm_floor1_formal_candidate_plan(
         area = db.get(WarehouseArea, legacy["area_id"])
         if area is None:
             raise Floor1CandidatePlanningError(
-                "历史区域台账已变化，请刷新后重试",
+                "未映射台账区域已变化，请刷新后重试",
                 status_code=409,
             )
         rows = list(
@@ -885,7 +885,7 @@ def confirm_floor1_formal_candidate_plan(
         area.confirmed_pallet_capacity = None
         area.capacity_reviewed_by = reviewer_name
         area.capacity_reviewed_at = now
-        archive_note = "P1-42 一楼实测区域确认时归档为空的未映射历史区域"
+        archive_note = "一楼实测区域确认时停用无货且未映射的重复台账记录"
         area.remarks = (
             f"{area.remarks}\n{archive_note}" if area.remarks else archive_note
         )
@@ -1032,13 +1032,12 @@ def overlay_formal_area_bindings(
     )
     areas_by_code = {area.area_code.upper(): area for area in area_rows}
     areas_by_id = {area.id: area for area in areas_by_code.values()}
-    legacy_v11_area_codes = {
+    formal_location_area_codes = {
         str(value).strip().upper()
         for value in db.scalars(
             select(WarehouseLocation.area_code)
             .where(
                 WarehouseLocation.warehouse_floor == floor.floor_number,
-                WarehouseLocation.source_version == "V11",
                 WarehouseLocation.is_active.is_(True),
                 WarehouseLocation.area_code.is_not(None),
             )
@@ -1089,49 +1088,26 @@ def overlay_formal_area_bindings(
                 policy.area.capacity_reviewed_at.isoformat()
                 if policy.area.capacity_reviewed_at else None
             )
-        elif (
-            include_draft
-            and has_draft
-            and str(feature.get("erp_area_code") or "").strip()
-        ):
-            feature["formal_binding_status"] = "draft"
-            draft_area_id = feature.get("formal_area_id")
-            draft_area = (
-                areas_by_id.get(int(draft_area_id))
-                if isinstance(draft_area_id, int) or str(draft_area_id or "").isdigit()
-                else None
-            )
-            if draft_area is not None:
-                draft_code = str(feature.get("erp_area_code") or "").strip().upper()
-                if draft_area.floor_id != floor.id or draft_area.area_code.upper() != draft_code:
-                    feature["formal_identity_status"] = "drifted"
-                    features.append(feature)
-                    continue
-                feature["formal_construction_status"] = draft_area.construction_status
-                feature["planned_pallet_capacity"] = draft_area.planned_pallet_capacity
-                feature["capacity_review_status"] = draft_area.capacity_review_status
-                feature["capacity_eligible"] = draft_area.capacity_eligible
-                feature["confirmed_pallet_capacity"] = draft_area.confirmed_pallet_capacity
         elif str(feature.get("erp_area_code") or "").strip():
-            # The accepted 3F V11 map predates WarehouseAreaStoragePolicy, but
-            # its published zones already carry the exact formal area code.
-            # Project that existing one-to-one identity live instead of making
-            # capacity review and the measured map behave like separate ledgers.
-            # New 1F/unbound zones remain policy-only and are never guessed.
+            # A measured zone and a formal area are the same operational area
+            # when their identity is proven by one unique same-floor code and
+            # active formal locations.  This projection is evaluated before
+            # draft display state so an unrelated layout draft can never make
+            # an enabled area look disabled.
             legacy_code = str(feature.get("erp_area_code") or "").strip().upper()
             legacy_area = areas_by_code.get(legacy_code)
-            legacy_binding_is_proven = bool(
+            direct_binding_is_proven = bool(
                 feature.get("feature_kind") == "zone"
                 and not feature.get("formal_area_id")
                 and feature_area_code_counts.get(legacy_code) == 1
-                and legacy_code in legacy_v11_area_codes
+                and legacy_code in formal_location_area_codes
                 and legacy_area is not None
                 and legacy_area.storage_policy is None
             )
-            if legacy_binding_is_proven and legacy_area is not None:
+            if direct_binding_is_proven and legacy_area is not None:
                 feature["formal_area_id"] = legacy_area.id
                 feature["formal_floor_id"] = legacy_area.floor_id
-                feature["formal_binding_source"] = "legacy_v11_area_code"
+                feature["formal_binding_source"] = "formal_area_code"
                 feature["formal_binding_status"] = (
                     "published"
                     if legacy_area.construction_status == "enabled"
@@ -1152,5 +1128,26 @@ def overlay_formal_area_bindings(
                     if legacy_area.capacity_reviewed_at
                     else None
                 )
+            elif include_draft and has_draft:
+                feature["formal_binding_status"] = "draft"
+                draft_area_id = feature.get("formal_area_id")
+                draft_area = (
+                    areas_by_id.get(int(draft_area_id))
+                    if isinstance(draft_area_id, int) or str(draft_area_id or "").isdigit()
+                    else None
+                )
+                if draft_area is not None:
+                    if (
+                        draft_area.floor_id != floor.id
+                        or draft_area.area_code.upper() != legacy_code
+                    ):
+                        feature["formal_identity_status"] = "drifted"
+                        features.append(feature)
+                        continue
+                    feature["formal_construction_status"] = draft_area.construction_status
+                    feature["planned_pallet_capacity"] = draft_area.planned_pallet_capacity
+                    feature["capacity_review_status"] = draft_area.capacity_review_status
+                    feature["capacity_eligible"] = draft_area.capacity_eligible
+                    feature["confirmed_pallet_capacity"] = draft_area.confirmed_pallet_capacity
         features.append(feature)
     return {**floor_layout, "features": features}

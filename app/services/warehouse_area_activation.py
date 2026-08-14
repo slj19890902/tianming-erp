@@ -141,12 +141,11 @@ def resolve_area_location_management(
             status_code=409,
         )
 
-    if floor.floor_number == 3 and normalized_area in FLOOR3_LAYOUT_AREA_CODES:
-        if AREA_LOCATION_SOURCE_VERSION in source_versions:
-            raise WarehouseAreaActivationError(
-                f"{normalized_area} 区同时存在动态区域库位与三楼 V11 身份，请停止操作并核对",
-                status_code=409,
-            )
+    if (
+        floor.floor_number == 3
+        and normalized_area in FLOOR3_LAYOUT_AREA_CODES
+        and AREA_LOCATION_SOURCE_VERSION not in source_versions
+    ):
         return AreaLocationManagementRoute(
             floor_code=floor.floor_code.upper(),
             area_code=normalized_area,
@@ -156,7 +155,7 @@ def resolve_area_location_management(
 
     if "V11" in source_versions:
         raise WarehouseAreaActivationError(
-            f"{normalized_area} 区存在无法归属旧三楼区域的 V11 库位，请停止操作并核对",
+            f"{normalized_area} 区存在无法归属当前实测三楼区域的库位，请停止操作并核对",
             status_code=409,
         )
 
@@ -211,12 +210,24 @@ def policy_inventory_types(policy: WarehouseAreaStoragePolicy) -> list[str]:
 
 
 def location_warehouse_type_for_inventory_types(values: list[str]) -> str | None:
-    values = set(values) & FORMAL_INVENTORY_USAGES
-    if values == FORMAL_INVENTORY_USAGES:
+    values = set(values)
+    pallet_inventory_types = values & {
+        "finished",
+        "semi_finished",
+        "raw_material",
+    }
+    # Raw material remains a pallet snapshot fact rather than a finished/semi
+    # InventoryLot.  Its measured floor position therefore uses a shared
+    # physical location while the published area policy remains authoritative
+    # for the raw-material usage.
+    if "raw_material" in pallet_inventory_types:
         return "shared"
-    if "finished" in values:
+    formal_values = pallet_inventory_types & FORMAL_INVENTORY_USAGES
+    if formal_values == FORMAL_INVENTORY_USAGES:
+        return "shared"
+    if "finished" in formal_values:
         return "finished"
-    if "semi_finished" in values:
+    if "semi_finished" in formal_values:
         return "semi_finished"
     return None
 
@@ -303,17 +314,19 @@ def policy_location_transition_blockers(
         ).all()
     )
     blockers: list[str] = []
-    active_rows = [row for row in rows if row.is_active]
-    if desired_type != current_type and active_rows:
-        blockers.append('仍有启用中的正式库位，请先停用空库位后再改变区域用途')
-    if desired_storage != current_storage and active_rows:
-        blockers.append('仍有启用中的正式库位，请先停用空库位后再改变存储形式')
+    occupied = bool(live_lot_types or current_pallet_location_ids)
     if desired_type is None:
-        if live_lot_types or current_pallet_location_ids:
-            blockers.append("仍有库存或实体栈板，不能改为原料/资产/临时周转用途")
+        if occupied:
+            blockers.append("区域内仍有库存或实体栈板，请先在地图中移到其他已启用区域，再转换用途")
         return blockers
     if desired_type == "shared":
+        if desired_storage != current_storage and occupied:
+            blockers.append("区域内仍有库存或实体栈板，请先完成移货，再把栈板区与货架区相互转换")
         return blockers
+    if desired_type != current_type and occupied:
+        blockers.append("区域内仍有库存或实体栈板，请先在地图中移到其他已启用区域，再转换用途")
+    if desired_storage != current_storage and occupied:
+        blockers.append("区域内仍有库存或实体栈板，请先完成移货，再把栈板区与货架区相互转换")
     incompatible_lot_types = live_lot_types - {desired_type}
     if incompatible_lot_types:
         blockers.append("仍有与新用途不一致的成品或半成品库存")
@@ -322,7 +335,87 @@ def policy_location_transition_blockers(
     }
     if unverified_pallets:
         blockers.append("仍有无法证明与新用途一致的实体栈板")
-    return blockers
+    return list(dict.fromkeys(blockers))
+
+
+def unbound_area_location_transition_blockers(
+    db: Session,
+    *,
+    floor: WarehouseFloor,
+    area: WarehouseArea,
+    requested_inventory_types: list[str],
+    requested_storage_layout: str,
+) -> list[str]:
+    """Protect occupied locations when a measured zone adopts a formal area."""
+
+    rows = formal_area_location_rows(db, floor=floor, area=area)
+    if not rows:
+        return []
+    location_ids = [row.id for row in rows]
+    live_lot_types = set(
+        db.scalars(
+            select(InventoryLot.inventory_type)
+            .where(
+                InventoryLot.warehouse_location_id.in_(location_ids),
+                InventoryLot.status.in_(("active", "frozen")),
+                (
+                    InventoryLot.quantity_available
+                    + InventoryLot.quantity_reserved
+                    + InventoryLot.quantity_damaged
+                )
+                > 0,
+            )
+            .distinct()
+        ).all()
+    )
+    pallet_location_ids = set(
+        db.scalars(
+            select(InventoryPallet.location_id).where(
+                InventoryPallet.location_id.in_(location_ids),
+                InventoryPallet.is_current.is_(True),
+            )
+        ).all()
+    )
+    if not live_lot_types and not pallet_location_ids:
+        return []
+
+    desired_type = location_warehouse_type_for_inventory_types(
+        requested_inventory_types
+    )
+    desired_storage = location_storage_type_for_layout(requested_storage_layout)
+    occupied_rows = [
+        row
+        for row in rows
+        if row.id in pallet_location_ids
+        or bool(
+            db.scalar(
+                select(InventoryLot.id)
+                .where(
+                    InventoryLot.warehouse_location_id == row.id,
+                    InventoryLot.status.in_(("active", "frozen")),
+                    (
+                        InventoryLot.quantity_available
+                        + InventoryLot.quantity_reserved
+                        + InventoryLot.quantity_damaged
+                    )
+                    > 0,
+                )
+                .limit(1)
+            )
+        )
+    ]
+    blockers: list[str] = []
+    if desired_type is None or (
+        desired_type != "shared" and live_lot_types - {desired_type}
+    ):
+        blockers.append("区域内仍有与新用途不一致的库存，请先在地图中移到其他已启用区域")
+    if desired_type not in (None, "shared") and any(
+        row.warehouse_type != desired_type for row in occupied_rows
+    ):
+        blockers.append("区域内仍有与新用途不一致的实体栈板，请先完成移货")
+    if any(row.storage_type != desired_storage for row in occupied_rows):
+        blockers.append("区域内仍有库存或实体栈板，请先完成移货，再把栈板区与货架区相互转换")
+    return list(dict.fromkeys(blockers))
 
 
 def formal_area(
@@ -884,9 +977,22 @@ def publish_floor_area_policies(
                     status_code=409,
                 )
         elif policy is None:
-            if formal_area_location_rows(db, floor=floor, area=area):
+            area_rows = formal_area_location_rows(db, floor=floor, area=area)
+            if area_rows and not has_formal_area_id:
                 raise WarehouseAreaActivationError(
-                    f"{area_code} 区已有正式库位但尚未建立正式策略",
+                    f"{area_code} 区已有正式库位，必须先确认其与实测地图为同一区域",
+                    status_code=409,
+                )
+            transition_blockers = unbound_area_location_transition_blockers(
+                db,
+                floor=floor,
+                area=area,
+                requested_inventory_types=inventory_types,
+                requested_storage_layout=storage_layout,
+            )
+            if transition_blockers:
+                raise WarehouseAreaActivationError(
+                    f"{area_code} 区" + "；".join(transition_blockers),
                     status_code=409,
                 )
         else:

@@ -1116,7 +1116,8 @@ def test_floor3_requires_both_floor_three_and_v11_source_boundary(floor3_app) ->
                 },
             )
             assert created.status_code == 409, created.text
-            assert "三楼 V11 Phase A" in created.json()["detail"]
+            assert "目标货位不可用" in created.json()["detail"]
+            assert "V11" not in created.json()["detail"]
 
         formal_locations = client.get("/api/warehouse/locations")
         assert formal_locations.status_code == 200, formal_locations.text

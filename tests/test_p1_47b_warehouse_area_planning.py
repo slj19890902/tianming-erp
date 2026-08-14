@@ -389,8 +389,8 @@ def _assert_policy_blocked_without_changes(
     ) == before
 
 
-@pytest.mark.parametrize('occupancy_kind', ('location', 'lot', 'pallet'))
-def test_formal_location_lot_or_pallet_blocks_incompatible_policy_without_changes(
+@pytest.mark.parametrize('occupancy_kind', ('lot', 'pallet'))
+def test_occupied_location_blocks_incompatible_policy_without_changes(
     tmp_path: Path,
     monkeypatch,
     occupancy_kind: str,
@@ -479,6 +479,28 @@ def test_formal_location_lot_or_pallet_blocks_incompatible_policy_without_change
                 before=before,
                 location_id=location.id,
             )
+            if occupancy_kind == 'pallet':
+                pallet = db.scalar(select(InventoryPallet))
+                assert pallet is not None
+                pallet.is_current = False
+                pallet.status = 'closed'
+                pallet.location_id = None
+                db.commit()
+
+                retried = warehouse_api.update_twin_zone_storage_policy(
+                    '3F',
+                    'zone-f1',
+                    _change_policy_payload(
+                        revision=_revision(published),
+                        version=1,
+                        operation_key='p1-47b-retry-after-pallet-moved',
+                    ),
+                    _request(),
+                    db,
+                    admin,
+                )
+                assert retried['applied'] is True
+                assert draft.is_file()
     finally:
         engine.dispose()
 
@@ -1055,6 +1077,18 @@ def test_sql_map_policy_drift_still_checks_active_location_occupancy(
                 placement_status='placed',
             )
             db.add(location)
+            db.flush()
+            db.add(
+                InventoryPallet(
+                    pallet_code='P1-47B-DRIFT-PALLET-001',
+                    location_id=location.id,
+                    location_occupancy_key='PRIMARY',
+                    status='active',
+                    is_current=True,
+                    needs_relocation=False,
+                    version=1,
+                )
+            )
             db.commit()
             before = _formal_snapshot(
                 db, policy_id=policy.id, location_id=location.id
@@ -1075,7 +1109,7 @@ def test_sql_map_policy_drift_still_checks_active_location_occupancy(
                 )
 
             assert caught.value.status_code == 409
-            assert '启用中的正式库位' in str(caught.value.detail)
+            assert '库存或实体栈板' in str(caught.value.detail)
             _assert_policy_blocked_without_changes(
                 db,
                 draft=draft,
@@ -1490,9 +1524,11 @@ def test_validate_or_discard_failure_restores_original_draft_and_zero_audit(
         engine.dispose()
 
 
-def test_inactive_empty_location_policy_change_then_publish_keeps_identity_and_syncs_fields(
+@pytest.mark.parametrize('location_active', (False, True))
+def test_empty_location_policy_change_then_publish_keeps_identity_and_syncs_fields(
     tmp_path: Path,
     monkeypatch,
+    location_active: bool,
 ) -> None:
     published, draft = _isolate_layout_paths(tmp_path, monkeypatch)
     document = json.loads(published.read_text(encoding='utf-8'))
@@ -1531,7 +1567,7 @@ def test_inactive_empty_location_policy_change_then_publish_keeps_identity_and_s
                 location_code='X1-INACTIVE-EMPTY-001',
                 location_name='X1 停用空库位',
                 warehouse_type='finished',
-                is_active=False,
+                is_active=location_active,
                 warehouse_floor=3,
                 area_code='X1',
                 storage_type='ground',
@@ -1593,7 +1629,7 @@ def test_inactive_empty_location_policy_change_then_publish_keeps_identity_and_s
             assert restored_location.id == location_id
             assert restored_location.warehouse_type == 'finished'
             assert restored_location.storage_type == 'rack'
-            assert restored_location.is_active is False
+            assert restored_location.is_active is location_active
             assert restored_policy.allowed_inventory_types_json == json.dumps(
                 ['finished'], ensure_ascii=False, separators=(',', ':')
             )
@@ -2105,8 +2141,8 @@ def test_one_step_area_confirmation_saves_validates_publishes_and_confirms_capac
             assert result['area']['storage_policy']['status'] == 'published'
             assert result['area']['storage_policy']['allowed_inventory_types'] == ['finished']
             assert result['area']['storage_policy']['storage_layout'] == 'pallet_ground'
-            assert result['created_location_count'] == 0
-            assert result['available_location_count'] == 0
+            assert result['created_location_count'] == 12
+            assert result['available_location_count'] == 12
             assert result['inventory_changed'] is False
             assert result['pallet_binding_changed'] is False
             assert runtime.is_file()
@@ -2114,7 +2150,7 @@ def test_one_step_area_confirmation_saves_validates_publishes_and_confirms_capac
             assert json.loads(draft.read_text(encoding='utf-8'))['draft_meta']['status'] == 'published'
             assert db.scalar(select(func.count(WarehouseArea.id))) == 1
             assert db.scalar(select(func.count(WarehouseAreaStoragePolicy.id))) == 1
-            assert db.scalar(select(func.count(WarehouseLocation.id))) == 0
+            assert db.scalar(select(func.count(WarehouseLocation.id))) == 12
             assert db.scalar(select(func.count(InventoryLot.id))) == 0
             assert db.scalar(select(func.count(InventoryPallet.id))) == 0
             actions = set(db.scalars(select(OperationLog.action)).all())
@@ -2174,7 +2210,94 @@ def test_one_step_zero_capacity_marks_non_pallet_area_excluded(
         engine.dispose()
 
 
-def test_legacy_v11_area_capacity_is_projected_live_to_the_unique_published_map_zone(
+def test_one_step_raw_material_area_creates_shared_pallet_positions(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    published, _draft = _isolate_layout_paths(tmp_path, monkeypatch)
+    runtime = Path(editor.TWIN_LAYOUT_PATH)
+    monkeypatch.setattr(
+        warehouse_api,
+        'list_production_projection_mappings',
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        warehouse_api,
+        'load_warehouse_twin_floor',
+        lambda floor_code: json.loads(runtime.read_text(encoding='utf-8'))[
+            'floors'
+        ][floor_code.upper()],
+    )
+    engine, factory = _database(tmp_path)
+    try:
+        with factory() as db:
+            admin = db.scalar(select(User).where(User.username == 'p1-47b-admin'))
+            assert admin is not None
+            result = warehouse_api.confirm_twin_zone_area(
+                '3F',
+                'zone-f1',
+                _confirm_area_payload(
+                    revision=_revision(published),
+                    operation_key='p1-60-one-step-raw-pallets',
+                    usage='raw_material',
+                    storage_layout='pallet_ground',
+                    capacity=4,
+                ),
+                _request(),
+                db,
+                admin,
+            )
+
+            assert result['status'] == 'published'
+            assert result['area']['storage_policy']['allowed_inventory_types'] == [
+                'raw_material'
+            ]
+            assert result['created_location_count'] == 4
+            assert result['available_location_count'] == 4
+            rows = list(
+                db.scalars(select(WarehouseLocation).order_by(WarehouseLocation.id))
+            )
+            assert len(rows) == 4
+            assert all(row.warehouse_type == 'shared' for row in rows)
+            assert all(row.storage_type == 'ground' for row in rows)
+            assert all(row.is_active and row.placement_status == 'placed' for row in rows)
+            assert all(row.floor3_layout is not None for row in rows)
+            pallet_result = warehouse_api.create_floor3_pallet(
+                warehouse_api.Floor3PalletCreatePayload(
+                    location_id=rows[0].id,
+                    pallet_code='P1-60-RAW-PALLET-001',
+                    items=[
+                        warehouse_api.Floor3PalletItemPayload(
+                            inventory_code='RAW-BOARD-1430X516',
+                            product_name='1430×516 原纸板',
+                            item_type='raw_material',
+                            quantity=Decimal('100'),
+                            unit='sheets',
+                            match_status='pending',
+                        )
+                    ],
+                ),
+                _request(),
+                db,
+                admin,
+            )
+            assert pallet_result['pallet']['location_id'] == rows[0].id
+            assert pallet_result['pallet']['items'][0]['item_type'] == 'raw_material'
+            dashboard = warehouse_api.get_warehouse_twin_dashboard(30, db, admin)
+            dashboard_location = next(
+                item
+                for item in dashboard['locations']
+                if item['location_id'] == rows[0].id
+            )
+            assert dashboard_location['allowed_inventory_types'] == ['raw_material']
+            assert dashboard_location['pallets'][0]['items'][0]['item_type'] == 'raw_material'
+            assert db.scalar(select(func.count(InventoryLot.id))) == 0
+            assert db.scalar(select(func.count(InventoryPallet.id))) == 1
+    finally:
+        engine.dispose()
+
+
+def test_formal_area_capacity_is_projected_live_to_the_unique_measured_map_zone(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -2227,7 +2350,7 @@ def test_legacy_v11_area_capacity_is_projected_live_to_the_unique_published_map_
             feature = next(item for item in first['features'] if item['id'] == 'zone-f1')
             assert feature['formal_area_id'] == area.id
             assert feature['formal_floor_id'] == floor.id
-            assert feature['formal_binding_source'] == 'legacy_v11_area_code'
+            assert feature['formal_binding_source'] == 'formal_area_code'
             assert feature['formal_binding_status'] == 'published'
             assert feature['formal_construction_status'] == 'enabled'
             assert feature['capacity_review_status'] == 'confirmed'
@@ -2246,7 +2369,7 @@ def test_legacy_v11_area_capacity_is_projected_live_to_the_unique_published_map_
         engine.dispose()
 
 
-def test_legacy_area_code_projection_fails_closed_without_unique_v11_identity(
+def test_formal_area_code_projection_fails_closed_without_unique_measured_identity(
     tmp_path: Path,
     monkeypatch,
 ) -> None:

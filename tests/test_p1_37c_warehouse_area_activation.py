@@ -208,11 +208,11 @@ def test_one_floor_area_stays_fail_closed_until_layout_is_published(tmp_path: Pa
         engine.dispose()
 
 
-def test_asset_or_raw_area_does_not_fake_inventory_locations(tmp_path: Path) -> None:
+def test_mold_area_does_not_fake_inventory_locations(tmp_path: Path) -> None:
     engine, factory = _factory(tmp_path)
     try:
         with factory() as db:
-            _seed_area(db, allowed=["raw_material", "mold"], area_code="RAW-001")
+            _seed_area(db, allowed=["mold"], area_code="MOLD-001")
             with pytest.raises(
                 WarehouseAreaActivationError,
                 match="使用各自台账",
@@ -220,7 +220,7 @@ def test_asset_or_raw_area_does_not_fake_inventory_locations(tmp_path: Path) -> 
                 adjust_area_location_count(
                     db,
                     floor_code="1F",
-                    area_code="RAW-001",
+                    area_code="MOLD-001",
                     target_count=1,
                     operator_id=1,
                 )
@@ -350,7 +350,7 @@ def test_floor_three_usage_change_is_blocked_when_inventory_is_incompatible(
         engine.dispose()
 
 
-def test_empty_floor_three_asset_area_disables_inventory_slots_but_keeps_ids(
+def test_empty_floor_three_raw_area_reuses_pallet_slots_and_keeps_ids(
     tmp_path: Path,
 ) -> None:
     engine, factory = _factory(tmp_path)
@@ -391,9 +391,13 @@ def test_empty_floor_three_asset_area_disables_inventory_slots_but_keeps_ids(
 
             assert published == [policy]
             assert row.id == original_id
-            assert row.is_active is False
-            assert area.planned_location_count == 0
-            assert list_operational_locations(db) == []
+            assert row.is_active is True
+            assert row.warehouse_type == "shared"
+            assert row.storage_type == "ground"
+            assert area.planned_location_count == 1
+            assert [item.location.id for item in list_operational_locations(db)] == [
+                original_id
+            ]
     finally:
         engine.dispose()
 

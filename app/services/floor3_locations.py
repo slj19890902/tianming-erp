@@ -116,7 +116,7 @@ def _location(db: Session, location_id: int) -> WarehouseLocation:
         raise Floor3LocationError("货位已停用，不能绑定或移入栈板", status_code=409)
     if row.warehouse_floor != 3 or row.source_version != "V11":
         raise Floor3LocationError(
-            "当前操作只允许三楼 V11 Phase A 货位", status_code=409
+            "当前操作只允许已启用的三楼实测货位", status_code=409
         )
     return row
 
@@ -1170,6 +1170,8 @@ def create_pallet(
     remarks: str | None,
     operator_id: int | None,
     allow_operational_location: bool = False,
+    require_published_location: bool = False,
+    required_inventory_type: str | None = None,
     allowed_inventory_lot_id: int | None = None,
     require_no_live_inventory: bool = False,
 ) -> InventoryPallet:
@@ -1189,7 +1191,12 @@ def create_pallet(
             operator_id=operator_id,
         )
     location = (
-        _operational_pallet_location(db, location_id)
+        _operational_pallet_location(
+            db,
+            location_id,
+            require_published=require_published_location,
+            required_inventory_type=required_inventory_type,
+        )
         if allow_operational_location
         else _location(db, location_id)
     )

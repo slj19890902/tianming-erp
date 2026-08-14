@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import date, timedelta
 from decimal import Decimal
+import json
 from math import ceil
 from typing import Iterable
 
@@ -20,6 +21,8 @@ from app.models.warehouse_inventory import (
     InventoryLot,
     InventoryMovement,
     InventoryPallet,
+    WarehouseArea,
+    WarehouseAreaStoragePolicy,
     WarehouseFloor,
     WarehouseLocation,
 )
@@ -336,6 +339,7 @@ def _location_payload(
     lots: list[InventoryLot],
     pallets: list[InventoryPallet],
     as_of: date,
+    allowed_inventory_types: list[str] | None = None,
 ) -> dict:
     position_status, map_position = _location_position(row)
     pallet_payloads = []
@@ -352,6 +356,7 @@ def _location_payload(
                     "lot_id": item.inventory_lot_id,
                     "inventory_code": item.inventory_code,
                     "product_name": item.product_name or "待匹配货物",
+                    "item_type": item.item_type,
                     "customer_id": item.customer_id,
                     "customer_name": item.customer_name_snapshot or "待确认",
                     "quantity": _number(item.quantity),
@@ -390,6 +395,7 @@ def _location_payload(
         "floor_number": row.warehouse_floor,
         "area_code": row.area_code,
         "warehouse_type": row.warehouse_type,
+        "allowed_inventory_types": allowed_inventory_types or [],
         "storage_type": row.storage_type,
         "is_temporary": row.is_temporary,
         "is_active": row.is_active,
@@ -586,6 +592,29 @@ def build_warehouse_twin_dashboard(
         if row.location_id is not None:
             pallets_by_location[row.location_id].append(row)
     visible_location_ids = set(lots_by_location) | set(pallets_by_location)
+    policy_types_by_area: dict[tuple[int, str], list[str]] = {}
+    policy_rows = db.execute(
+        select(
+            WarehouseFloor.floor_number,
+            WarehouseArea.area_code,
+            WarehouseAreaStoragePolicy.allowed_inventory_types_json,
+        )
+        .join(WarehouseArea, WarehouseArea.floor_id == WarehouseFloor.id)
+        .join(
+            WarehouseAreaStoragePolicy,
+            WarehouseAreaStoragePolicy.area_id == WarehouseArea.id,
+        )
+        .where(WarehouseAreaStoragePolicy.status == "published")
+    ).all()
+    for floor_number, area_code, raw_types in policy_rows:
+        try:
+            values = json.loads(raw_types)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            values = []
+        if isinstance(values, list):
+            policy_types_by_area[(int(floor_number), str(area_code).upper())] = [
+                str(value) for value in values if isinstance(value, str) and value
+            ]
     location_rows = []
     for location in locations:
         if visible_customer_ids is not None and location.id not in visible_location_ids:
@@ -596,6 +625,13 @@ def build_warehouse_twin_dashboard(
                 lots=lots_by_location.get(location.id, []),
                 pallets=pallets_by_location.get(location.id, []),
                 as_of=as_of,
+                allowed_inventory_types=policy_types_by_area.get(
+                    (
+                        int(location.warehouse_floor or 0),
+                        str(location.area_code or "").upper(),
+                    ),
+                    [],
+                ),
             )
         )
 

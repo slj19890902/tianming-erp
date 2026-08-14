@@ -106,12 +106,14 @@ from app.services.warehouse_area_activation import (
     adjust_area_location_count as adjust_activated_area_location_count,
     area_location_management_payload,
     formal_area_location_rows,
+    location_warehouse_type_for_inventory_types,
     policy_location_transition_blockers,
     policy_inventory_types,
     publish_floor_area_policies,
     resolve_area_location_management,
     resolve_location_management,
     set_area_location_active,
+    unbound_area_location_transition_blockers,
     update_area_location_layout,
     warehouse_floor_for_code,
 )
@@ -3328,7 +3330,7 @@ def _floor3_get_pallet(db: Session, pallet_id: int) -> InventoryPallet:
             or location.warehouse_floor != 3
             or location.source_version != "V11"
         ):
-            raise HTTPException(status_code=404, detail="三楼 V11 栈板不存在")
+            raise HTTPException(status_code=404, detail="三楼实测区域栈板不存在")
     return row
 
 
@@ -4612,12 +4614,11 @@ def create_twin_semi_finished_inbound(
     location = db.get(WarehouseLocation, payload.location_id)
     if location is None:
         raise HTTPException(status_code=404, detail="目标货位不存在")
-    if location.warehouse_floor != 1:
-        raise HTTPException(status_code=409, detail="半成品请在一楼地图选择已启用的半成品库位")
     issue = operational_location_issue(
         db,
         location,
         warehouse_types={"semi_finished", "shared"},
+        pallet_storage_only=True,
     )
     if issue:
         raise HTTPException(status_code=409, detail=f"目标货位不可用：{issue}")
@@ -5149,6 +5150,19 @@ def create_floor3_pallet(
 ) -> dict:
     for item in payload.items:
         _require_floor3_item_customer_access(db, item, user)
+    location = db.get(WarehouseLocation, payload.location_id)
+    if location is None:
+        raise HTTPException(status_code=404, detail="目标货位不存在")
+    item_types = {item.item_type for item in payload.items}
+    use_measured_area_location = not (
+        location.warehouse_floor == 3 and location.source_version == "V11"
+    )
+    if use_measured_area_location and len(item_types) != 1:
+        raise HTTPException(
+            status_code=409,
+            detail="实测区域内一块新栈板只能登记一种货物类型，请分开入位",
+        )
+    required_inventory_type = next(iter(item_types)) if item_types else None
     try:
         row = create_pallet(
             db,
@@ -5157,6 +5171,12 @@ def create_floor3_pallet(
             items=[item.model_dump() for item in payload.items],
             remarks=payload.remarks,
             operator_id=user.id,
+            allow_operational_location=use_measured_area_location,
+            require_published_location=use_measured_area_location,
+            required_inventory_type=(
+                required_inventory_type if use_measured_area_location else None
+            ),
+            require_no_live_inventory=use_measured_area_location,
         )
         _floor3_log(
             db,
@@ -6390,8 +6410,24 @@ def _formal_area_publish_blockers(db: Session, floor_code: str) -> list[str]:
             )
             continue
         if area.storage_policy is None:
-            if formal_area_location_rows(db, floor=floor, area=area):
-                blockers.append(f"{area_code} 区已有正式库位但尚未建立正式策略")
+            location_rows = formal_area_location_rows(db, floor=floor, area=area)
+            if location_rows:
+                raw_area_id = feature.get("formal_area_id")
+                if str(raw_area_id or "") != str(area.id):
+                    blockers.append(f"{area_code} 区与实测地图的正式身份尚未确认")
+                else:
+                    for message in unbound_area_location_transition_blockers(
+                        db,
+                        floor=floor,
+                        area=area,
+                        requested_inventory_types=list(
+                            feature.get("allowed_inventory_types") or []
+                        ),
+                        requested_storage_layout=str(
+                            feature.get("storage_layout") or ""
+                        ),
+                    ):
+                        blockers.append(f"{area_code} 区{message}")
             blockers.extend(
                 _zone_asset_and_production_blockers(
                     db,
@@ -7076,10 +7112,17 @@ def _update_twin_zone_storage_policy_locked(
                 detail='区域用途修改被阻止：' + '；'.join(blockers),
             )
     if formal_area is not None and formal_area.storage_policy is None:
-        if formal_area_location_rows(db, floor=floor, area=formal_area):
+        blockers = unbound_area_location_transition_blockers(
+            db,
+            floor=floor,
+            area=formal_area,
+            requested_inventory_types=list(payload.allowed_inventory_types),
+            requested_storage_layout=payload.storage_layout,
+        )
+        if blockers:
             raise HTTPException(
                 status_code=409,
-                detail='该正式区域已有库位，需先核对历史库位与占用后再绑定区域策略',
+                detail='区域用途修改被阻止：' + '；'.join(blockers),
             )
     draft_snapshot = snapshot_warehouse_twin_layout_draft()
     mutation = None
@@ -7174,8 +7217,11 @@ def _ensure_one_step_pallet_locations(
     target_count: int,
     operator_id: int,
 ) -> tuple[list[WarehouseLocation], int]:
+    location_warehouse_type = location_warehouse_type_for_inventory_types(
+        [inventory_type]
+    )
     if (
-        inventory_type not in {"finished", "semi_finished"}
+        location_warehouse_type is None
         or storage_layout != "pallet_ground"
         or target_count <= 0
     ):
@@ -7184,25 +7230,25 @@ def _ensure_one_step_pallet_locations(
     policy = area.storage_policy
     if floor is None or policy is None or policy.status != "published":
         raise WarehouseAreaActivationError("区域尚未完成正式发布，不能生成空货位", status_code=409)
-    if floor.floor_number != 1:
-        return [], 0
     existing = formal_area_location_rows(db, floor=floor, area=area)
     if existing:
         reusable = [
             row
             for row in existing
             if row.is_active
-            and row.source_version == AREA_LOCATION_SOURCE_VERSION
             and row.placement_status == "placed"
             and row.floor3_layout is not None
-            and row.warehouse_type == inventory_type
+            and row.warehouse_type == location_warehouse_type
             and row.storage_type == "ground"
         ]
-        if len(existing) == target_count and len(reusable) == target_count:
-            area.planned_location_count = target_count
-            return [], target_count
+        active_rows = [row for row in existing if row.is_active]
+        if active_rows and len(reusable) == len(active_rows):
+            # Existing measured locations are the physical truth.  Capacity is
+            # a separate warning limit and must not force duplicate positions.
+            area.planned_location_count = len(active_rows)
+            return [], len(active_rows)
         raise WarehouseAreaActivationError(
-            "该区域已有正式库位；数量或用途调整请在高级维护中核对，系统不会覆盖现有位置",
+            "该区域已有未落位或不可用的位置，请先完成位置核对；系统不会覆盖真实位置",
             status_code=409,
         )
     try:
@@ -7223,7 +7269,7 @@ def _ensure_one_step_pallet_locations(
         row = WarehouseLocation(
             location_code=f"{floor.floor_code.upper()}-{area.area_code.upper()}-L{serial:03d}",
             location_name=f"{area.area_name} {serial:03d} 号位",
-            warehouse_type=inventory_type,
+            warehouse_type=location_warehouse_type,
             warehouse_floor=floor.floor_number,
             area_code=area.area_code.upper(),
             storage_type="ground",
@@ -7376,6 +7422,10 @@ def confirm_twin_zone_area(
                 payload.max_pallet_capacity if payload.max_pallet_capacity > 0 else None
             )
             _apply_capacity_review(area, user=user, review_changed=True)
+            # An explicitly reused area may have had its empty relationship
+            # loaded before the publish step created the policy.  Refresh that
+            # identity before creating physical pallet positions.
+            db.expire(area, ['storage_policy'])
             created_locations, available_location_count = _ensure_one_step_pallet_locations(
                 db,
                 floor_layout=load_warehouse_twin_floor(floor_code),

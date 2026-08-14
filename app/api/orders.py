@@ -139,6 +139,12 @@ from app.services.order_business_status import (
     DERIVED_BUSINESS_STATUSES,
     build_order_business_statuses,
 )
+from app.services.order_customer_heat import (
+    THRESHOLD_STATUS as CUSTOMER_HEAT_THRESHOLD_STATUS,
+    THRESHOLD_VERSION as CUSTOMER_HEAT_THRESHOLD_VERSION,
+    list_customer_heat,
+    threshold_contract as customer_heat_threshold_contract,
+)
 from app.services import material_pricing
 from app.services.box_type_rules import (
     BoxTypeRuleError,
@@ -274,6 +280,12 @@ can_rollback = PermissionChecker("orders.rollback")
 can_view_cost = PermissionChecker("cost.view")
 
 ORDER_SALES_AMOUNT_ROLES = frozenset({"admin", "boss", "sales", "finance"})
+
+
+def _include_order_list_unfinished_total() -> bool:
+    """Keep the public list badge while allowing internal scoped reuse to skip it."""
+
+    return True
 
 
 def _can_view_order_sales_amount(user: User) -> bool:
@@ -2316,6 +2328,7 @@ def list_orders(
     sort_by: Literal["customer_name", "order_date", "delivery_date"] | None = None,
     sort_direction: Literal["asc", "desc"] = "desc",
     detail_level: Literal["full", "summary"] = "full",
+    include_unfinished_total: bool = Depends(_include_order_list_unfinished_total),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -2631,62 +2644,64 @@ def list_orders(
         if detail_level == "full"
         else None
     )
-    can_reuse_global_candidate_projection = bool(
-        needs_business_projection
-        and not requested_customer_ids
-        and not search_keyword
-        and not (order_number and order_number.strip())
-        and not (customer_name and customer_name.strip())
-        and order_date is None
-        and date_from is None
-        and date_to is None
-        and order_date_from is None
-        and order_date_to is None
-        and delivery_date_from is None
-        and delivery_date_to is None
-        and not (customer_po and customer_po.strip())
-        and not (product_code and product_code.strip())
-        and not (product_name and product_name.strip())
-        and not (specification and specification.strip())
-    )
-    if can_reuse_global_candidate_projection:
-        unfinished_ids = [
-            int(order.id) for order in candidate_orders if order.items
-        ]
-        unfinished_projections = candidate_projection
-    else:
-        unfinished_ids_query = select(Order.id).where(
-            ~history_condition,
-            Order.status.notin_(_BUSINESS_EXCLUDED_STATUSES),
-            Order.items.any(),
+    unfinished_total = 0
+    if include_unfinished_total:
+        can_reuse_global_candidate_projection = bool(
+            needs_business_projection
+            and not requested_customer_ids
+            and not search_keyword
+            and not (order_number and order_number.strip())
+            and not (customer_name and customer_name.strip())
+            and order_date is None
+            and date_from is None
+            and date_to is None
+            and order_date_from is None
+            and order_date_to is None
+            and delivery_date_from is None
+            and delivery_date_to is None
+            and not (customer_po and customer_po.strip())
+            and not (product_code and product_code.strip())
+            and not (product_name and product_name.strip())
+            and not (specification and specification.strip())
         )
-        if is_customer_scope_restricted:
-            unfinished_ids_query = unfinished_ids_query.where(
-                Order.customer_id.in_(scoped_customer_ids)
+        if can_reuse_global_candidate_projection:
+            unfinished_ids = [
+                int(order.id) for order in candidate_orders if order.items
+            ]
+            unfinished_projections = candidate_projection
+        else:
+            unfinished_ids_query = select(Order.id).where(
+                ~history_condition,
+                Order.status.notin_(_BUSINESS_EXCLUDED_STATUSES),
+                Order.items.any(),
             )
-        unfinished_ids = list(db.scalars(unfinished_ids_query).all())
-        unfinished_orders = (
-            list(
-                db.scalars(
-                    select(Order)
-                    .options(selectinload(Order.items))
-                    .where(Order.id.in_(unfinished_ids))
-                ).all()
+            if is_customer_scope_restricted:
+                unfinished_ids_query = unfinished_ids_query.where(
+                    Order.customer_id.in_(scoped_customer_ids)
+                )
+            unfinished_ids = list(db.scalars(unfinished_ids_query).all())
+            unfinished_orders = (
+                list(
+                    db.scalars(
+                        select(Order)
+                        .options(selectinload(Order.items))
+                        .where(Order.id.in_(unfinished_ids))
+                    ).all()
+                )
+                if unfinished_ids
+                else []
             )
-            if unfinished_ids
-            else []
+            unfinished_projections = build_order_business_statuses(
+                db,
+                unfinished_orders,
+                include_finance=has_permission(user, "finance.view"),
+            )
+        unfinished_total = sum(
+            1
+            for order_id in unfinished_ids
+            if unfinished_projections.get(order_id, {}).get("business_status")
+            in _DERIVED_STATUS_FILTER_GROUPS["unfinished"]
         )
-        unfinished_projections = build_order_business_statuses(
-            db,
-            unfinished_orders,
-            include_finance=has_permission(user, "finance.view"),
-        )
-    unfinished_total = sum(
-        1
-        for order_id in unfinished_ids
-        if unfinished_projections.get(order_id, {}).get("business_status")
-        in _DERIVED_STATUS_FILTER_GROUPS["unfinished"]
-    )
     return {
         "total": total,
         "unfinished_total": unfinished_total,
@@ -3106,6 +3121,120 @@ def list_order_customer_options(
             }
             for customer in customers
         ],
+    }
+
+
+@router.get("/customer-heat")
+def list_order_customer_heat(
+    keyword: str | None = None,
+    sort_by: Literal["heat", "recency", "frequency", "annual_amount"] = "heat",
+    sort_direction: Literal["asc", "desc"] = "desc",
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    """Return a permission-scoped, read-only customer activity projection."""
+
+    resolved_as_of = beijing_today()
+    include_amounts = _can_view_order_sales_amount(user)
+    if sort_by == "annual_amount" and not include_amounts:
+        raise HTTPException(status_code=403, detail="无订单金额查看权限")
+    visible_customer_ids = (
+        None
+        if has_unrestricted_customer_access(user, db)
+        else customer_scope_ids(user, db)
+    )
+    result = list_customer_heat(
+        db,
+        as_of=resolved_as_of,
+        visible_customer_ids=visible_customer_ids,
+        include_amounts=include_amounts,
+        include_finance_status=has_permission(user, "finance.view"),
+        keyword=keyword,
+        sort_by=sort_by,
+        sort_direction=sort_direction,
+        page=page,
+        page_size=page_size,
+    )
+    return {
+        **result,
+        "as_of": resolved_as_of,
+        "sort_by": sort_by,
+        "sort_direction": sort_direction,
+        "amount_visible": include_amounts,
+        "threshold_version": CUSTOMER_HEAT_THRESHOLD_VERSION,
+        "threshold_status": CUSTOMER_HEAT_THRESHOLD_STATUS,
+        "threshold_contract": customer_heat_threshold_contract(),
+    }
+
+
+@router.get("/customer-heat/{customer_id}/orders")
+def list_customer_heat_orders(
+    customer_id: int,
+    keyword: str | None = None,
+    scope: Literal["active", "completed", "cancelled", "history", "all"] = "active",
+    stage: list[str] | None = Query(default=None),
+    order_date_from: date | None = None,
+    order_date_to: date | None = None,
+    delivery_date_from: date | None = None,
+    delivery_date_to: date | None = None,
+    sort_by: Literal["customer_name", "order_date", "delivery_date"] | None = None,
+    sort_direction: Literal["asc", "desc"] = "desc",
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    """Lazily reuse the existing order-summary contract for one heat group."""
+
+    require_customer_access(customer_id, current_user=user, db=db)
+    customer = db.scalar(
+        select(Customer).where(
+            Customer.id == customer_id,
+            Customer.status == "active",
+            Customer.is_active.is_(True),
+        )
+    )
+    if customer is None:
+        raise HTTPException(status_code=404, detail="客户不存在或已停用")
+    result = list_orders(
+        customer_id=customer_id,
+        customer_ids=None,
+        keyword=keyword,
+        order_number=None,
+        customer_po=None,
+        product_code=None,
+        product_name=None,
+        specification=None,
+        customer_name=None,
+        order_date=None,
+        date_from=None,
+        date_to=None,
+        order_date_from=order_date_from,
+        order_date_to=order_date_to,
+        delivery_date_from=delivery_date_from,
+        delivery_date_to=delivery_date_to,
+        status_filter=None,
+        scope=scope,
+        stage=stage,
+        sort_by=sort_by,
+        sort_direction=sort_direction,
+        detail_level="summary",
+        include_unfinished_total=False,
+        page=page,
+        page_size=page_size,
+        db=db,
+        user=user,
+    )
+    return {
+        "customer_id": customer_id,
+        "customer_name": customer.name,
+        "scope": scope,
+        "total": result["total"],
+        "page": result["page"],
+        "page_size": result["page_size"],
+        "items": result["items"],
     }
 
 

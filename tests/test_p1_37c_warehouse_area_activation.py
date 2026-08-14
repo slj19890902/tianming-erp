@@ -208,6 +208,81 @@ def test_one_floor_area_stays_fail_closed_until_layout_is_published(tmp_path: Pa
         engine.dispose()
 
 
+def test_published_area_location_count_changes_stay_enabled_and_immediately_usable(
+    tmp_path: Path,
+) -> None:
+    engine, factory = _factory(tmp_path)
+    try:
+        with factory() as db:
+            floor, area, policy = _seed_area(
+                db,
+                allowed=["finished"],
+                area_code="FG-002",
+                floor_code="3F",
+                floor_number=3,
+            )
+            publish_floor_area_policies(
+                db,
+                floor_code=floor.floor_code,
+                published_revision="revision-published-location-maintenance",
+                operator_id=1,
+                published_features=[
+                    {
+                        "id": policy.map_feature_id,
+                        "feature_kind": "zone",
+                        "erp_area_code": area.area_code,
+                        "allowed_inventory_types": ["finished"],
+                        "storage_layout": "pallet_ground",
+                    }
+                ],
+            )
+            assert policy.status == "published"
+
+            grown = adjust_area_location_count(
+                db,
+                floor_code="3F",
+                area_code=area.area_code,
+                target_count=2,
+                operator_id=1,
+            )
+            assert len(grown.created) == 2
+            assert all(row.placement_status == "placed" for row in grown.created)
+            assert area.construction_status == "enabled"
+            assert policy.status == "published"
+            assert policy.published_map_revision == "revision-published-location-maintenance"
+            assert [
+                row.location.id
+                for row in list_operational_locations(
+                    db, warehouse_types={"finished"}, empty_only=True
+                )
+                if row.location.area_code == area.area_code
+            ] == [row.id for row in grown.created]
+
+            reduced = adjust_area_location_count(
+                db,
+                floor_code="3F",
+                area_code=area.area_code,
+                target_count=1,
+                operator_id=1,
+            )
+            assert len(reduced.disabled) == 1
+            assert area.construction_status == "enabled"
+            assert policy.status == "published"
+
+            regrown = adjust_area_location_count(
+                db,
+                floor_code="3F",
+                area_code=area.area_code,
+                target_count=2,
+                operator_id=1,
+            )
+            assert len(regrown.enabled) == 1
+            assert not regrown.created
+            assert policy.status == "published"
+    finally:
+        engine.dispose()
+
+
 def test_mold_area_does_not_fake_inventory_locations(tmp_path: Path) -> None:
     engine, factory = _factory(tmp_path)
     try:

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 import hashlib
 import json
+import math
 import re
 
 from sqlalchemy import func, select
@@ -19,7 +20,10 @@ from app.models.warehouse_inventory import (
     WarehouseFloor,
     WarehouseLocation,
 )
-from app.services.warehouse_area_activation import AREA_LOCATION_SOURCE_VERSION
+from app.services.warehouse_area_activation import (
+    AREA_LOCATION_SOURCE_VERSION,
+    floor3_v11_map_binding_is_proven,
+)
 
 
 STANDARD_PALLET_WIDTH_MM = 1200
@@ -34,6 +38,7 @@ _USAGE_BY_SUBTYPE = {
 }
 _INVENTORY_LOCATION_USAGES = frozenset({"finished", "semi_finished"})
 _ASSET_USAGES = frozenset({"mold", "print_plate"})
+_PRESERVED_BUSINESS_ANCHOR_AREA_CODES = frozenset({"DISPATCH"})
 
 
 class Floor1CandidatePlanningError(ValueError):
@@ -318,6 +323,119 @@ def measured_pallet_slots_for_zone(
     return [_percent_slot(slot, points, bounds) for slot in slots]
 
 
+def confirmed_capacity_slots_for_zone(
+    floor_layout: dict,
+    *,
+    feature_id: str,
+    target_count: int,
+    prefer_standard_pallet_slots: bool = True,
+) -> list[dict]:
+    """Create placed logical positions for an administrator-confirmed capacity.
+
+    The 1200x1000 fit calculation remains the default suggestion.  It is not a
+    veto over a manager's measured-site confirmation: narrow, long, irregular
+    and rack zones still need stable selectable positions for inbound, moves
+    and outbound work.  When the confirmed count exceeds the standard fit, a
+    deterministic compact grid is generated inside the measured polygon.
+    These rectangles are UI anchors, not a claim that every icon is a full
+    pallet footprint.
+    """
+
+    if target_count < 0 or target_count > 500:
+        raise Floor1CandidatePlanningError("确认容量必须在 0 到 500 之间", status_code=409)
+    if target_count == 0:
+        return []
+    if prefer_standard_pallet_slots:
+        measured = measured_pallet_slots_for_zone(
+            floor_layout, feature_id=feature_id
+        )
+        if len(measured) >= target_count:
+            return measured[:target_count]
+
+    bounds = floor_layout.get("bounds_mm") or {}
+    required_bounds = {"min_x", "min_y", "max_x", "max_y"}
+    if not required_bounds.issubset(bounds):
+        raise Floor1CandidatePlanningError(
+            "实测地图缺少毫米边界，无法生成确认容量位置", status_code=409
+        )
+    feature = next(
+        (
+            row
+            for row in floor_layout.get("features") or []
+            if row.get("feature_kind") == "zone"
+            and str(row.get("id") or "") == str(feature_id or "")
+        ),
+        None,
+    )
+    if feature is None:
+        raise Floor1CandidatePlanningError("实测地图区域不存在", status_code=404)
+    points = feature.get("points") or []
+    if len(points) < 3 or not _zone_inside_floor_bounds(points, bounds):
+        raise Floor1CandidatePlanningError(
+            "实测区域边界无效，无法生成确认容量位置", status_code=409
+        )
+    polygon = [(float(point[0]), float(point[1])) for point in points]
+    min_x = min(point[0] for point in polygon)
+    max_x = max(point[0] for point in polygon)
+    min_y = min(point[1] for point in polygon)
+    max_y = max(point[1] for point in polygon)
+    width = max_x - min_x
+    height = max_y - min_y
+    if width <= 0 or height <= 0:
+        raise Floor1CandidatePlanningError(
+            "实测区域边界无效，无法生成确认容量位置", status_code=409
+        )
+
+    aspect = max(0.05, min(20.0, width / height))
+    for density in range(3, 25):
+        cell_count = max(target_count * density, 16)
+        columns = max(1, int(math.ceil(math.sqrt(cell_count * aspect))))
+        rows = max(1, int(math.ceil(cell_count / columns)))
+        cell_width = width / columns
+        cell_height = height / rows
+        slot_width = cell_width * 0.68
+        slot_depth = cell_height * 0.68
+        slots: list[dict] = []
+        for row_index in range(rows):
+            center_y = min_y + (row_index + 0.5) * cell_height
+            for column_index in range(columns):
+                center_x = min_x + (column_index + 0.5) * cell_width
+                if not _point_in_polygon((center_x, center_y), polygon):
+                    continue
+                current_width = slot_width
+                current_depth = slot_depth
+                candidate = None
+                for _attempt in range(8):
+                    left = center_x - current_width / 2
+                    bottom = center_y - current_depth / 2
+                    if _rect_inside_polygon(
+                        x=left,
+                        y=bottom,
+                        width=current_width,
+                        depth=current_depth,
+                        polygon=polygon,
+                    ):
+                        candidate = {
+                            "x_mm": left,
+                            "y_mm": bottom,
+                            "width_mm": current_width,
+                            "depth_mm": current_depth,
+                            "row": row_index + 1,
+                            "column": column_index + 1,
+                            "capacity_confirmed": True,
+                        }
+                        break
+                    current_width *= 0.72
+                    current_depth *= 0.72
+                if candidate is not None:
+                    slots.append(_percent_slot(candidate, points, bounds))
+                    if len(slots) == target_count:
+                        return slots
+    raise Floor1CandidatePlanningError(
+        "实测区域边界过窄或无效，无法生成已确认容量位置", status_code=409
+    )
+
+
 def _zone_inside_floor_bounds(points: list, bounds: dict) -> bool:
     if len(points) < 3:
         return False
@@ -490,70 +608,37 @@ def _candidate_state_exists(
                 WarehouseArea.area_code == candidate["area_code"],
             )
         )
-        if area is None or area.storage_policy is None:
-            return False
-        policy = area.storage_policy
-        if (
-            policy.map_feature_id != candidate["map_feature_id"]
-            or policy.allowed_inventory_types_json
-            != json.dumps(
-                candidate["allowed_inventory_types"],
-                ensure_ascii=False,
-                separators=(",", ":"),
-            )
-            or policy.storage_layout != candidate["storage_layout"]
-            or policy.status != "published"
-            or policy.published_map_revision != plan["map_revision"]
-            or area.construction_status != "enabled"
-            or area.planned_location_count != candidate["formal_location_count"]
-            or area.planned_pallet_capacity != candidate["planned_pallet_capacity"]
-            or area.capacity_review_status
-            != ("confirmed" if candidate["long_term_capacity_eligible"] else "excluded")
-            or area.capacity_eligible
-            != bool(candidate["long_term_capacity_eligible"])
-            or area.confirmed_pallet_capacity
-            != (
-                candidate["planned_pallet_capacity"]
-                if candidate["long_term_capacity_eligible"]
-                else None
-            )
+        if area is None or not _published_candidate_area_matches(
+            area,
+            candidate=candidate,
+            map_revision=plan["map_revision"],
         ):
             return False
-        rows = list(
-            db.scalars(
-                select(WarehouseLocation)
-                .options(selectinload(WarehouseLocation.floor3_layout))
-                .where(
-                    WarehouseLocation.warehouse_floor == floor.floor_number,
-                    WarehouseLocation.area_code == area.area_code,
-                    WarehouseLocation.source_version == AREA_LOCATION_SOURCE_VERSION,
-                    WarehouseLocation.is_active.is_(True),
-                )
-                .order_by(WarehouseLocation.location_code)
-            ).all()
-        )
-        if len(rows) != candidate["formal_location_count"] or any(
-            row.placement_status != "placed" for row in rows
-        ):
-            return False
-        for serial, (row, slot) in enumerate(zip(rows, candidate["slots"]), start=1):
-            expected_code = (
-                f"{floor.floor_code.upper()}-{area.area_code}-L{serial:03d}"
-            )
-            layout = row.floor3_layout
-            if (
-                row.location_code != expected_code
-                or row.warehouse_type != candidate["usage"]
-                or row.storage_type
-                != ("rack" if candidate["storage_layout"] == "rack" else "ground")
-                or layout is None
-                or abs(float(layout.left_pct) - slot["left_pct"]) > 0.0001
-                or abs(float(layout.top_pct) - slot["top_pct"]) > 0.0001
-                or abs(float(layout.width_pct) - slot["width_pct"]) > 0.0001
-                or abs(float(layout.height_pct) - slot["height_pct"]) > 0.0001
-            ):
-                return False
     return True
+
+
+def _published_candidate_area_matches(
+    area: WarehouseArea,
+    *,
+    candidate: dict,
+    map_revision: str,
+) -> bool:
+    """Treat an administrator-published map binding as the current business fact.
+
+    The automatic plan is only a default for regions that have not yet been
+    configured.  Once an administrator has published the same measured zone,
+    its chosen use, capacity and locations must not be overwritten by a later
+    batch run.
+    """
+
+    policy = area.storage_policy
+    return bool(
+        policy is not None
+        and area.construction_status == "enabled"
+        and policy.status == "published"
+        and policy.map_feature_id == candidate["map_feature_id"]
+        and policy.published_map_revision == map_revision
+    )
 
 
 def inspect_floor1_formal_candidate_state(
@@ -574,13 +659,26 @@ def inspect_floor1_formal_candidate_state(
         ).all()
     )
     candidate_areas = [area for area in all_areas if area.area_code in candidate_codes]
-    already_applied = _candidate_state_exists(db, floor=floor, plan=plan)
+    candidate_by_code = {row["area_code"]: row for row in plan["candidates"]}
+    resolved_candidate_areas = [
+        area
+        for area in candidate_areas
+        if _published_candidate_area_matches(
+            area,
+            candidate=candidate_by_code[area.area_code],
+            map_revision=plan["map_revision"],
+        )
+    ]
+    resolved_candidate_area_ids = {area.id for area in resolved_candidate_areas}
+    already_applied = len(resolved_candidate_areas) == len(plan["candidates"])
     blocking_items: list[dict] = []
     candidate_feature_ids = {
         row["area_code"]: row["map_feature_id"] for row in plan["candidates"]
     }
     if candidate_areas and not already_applied:
         for area in candidate_areas:
+            if area.id in resolved_candidate_area_ids:
+                continue
             blocking_items.append(
                 {
                     "code": "partial_candidate_state",
@@ -674,10 +772,13 @@ def inspect_floor1_formal_candidate_state(
                 if location_id is not None
             )
         active_location_count = sum(1 for row in locations if row.is_active)
+        preserve_business_anchor = (
+            area.area_code.upper() in _PRESERVED_BUSINESS_ANCHOR_AREA_CODES
+        )
         has_blocker = bool(
             area.storage_policy is not None or live_lot_count or current_pallet_count
         )
-        if area.storage_policy is not None:
+        if area.storage_policy is not None and not preserve_business_anchor:
             blocking_items.append(
                 {
                     "code": "legacy_area_policy",
@@ -692,7 +793,7 @@ def inspect_floor1_formal_candidate_state(
                     "current_pallet_count": current_pallet_count,
                 }
             )
-        if live_lot_count or current_pallet_count:
+        if (live_lot_count or current_pallet_count) and not preserve_business_anchor:
             blocking_items.append(
                 {
                     "code": "legacy_area_inventory",
@@ -715,7 +816,7 @@ def inspect_floor1_formal_candidate_state(
                     "current_pallet_count": current_pallet_count,
                 }
             )
-        archive_required = not has_blocker and bool(
+        archive_required = not preserve_business_anchor and not has_blocker and bool(
             area.construction_status == "enabled"
             or active_location_count
             or area.planned_location_count
@@ -733,9 +834,12 @@ def inspect_floor1_formal_candidate_state(
                 "live_lot_count": live_lot_count,
                 "current_pallet_count": current_pallet_count,
                 "has_formal_policy": area.storage_policy is not None,
+                "preserve_business_anchor": preserve_business_anchor,
                 "archive_required": archive_required,
                 "action": (
-                    "block"
+                    "preserve_business_anchor"
+                    if preserve_business_anchor
+                    else "block"
                     if has_blocker
                     else "archive_empty_legacy"
                     if archive_required
@@ -750,6 +854,7 @@ def inspect_floor1_formal_candidate_state(
             "map_revision": plan["map_revision"],
             "already_applied": already_applied,
             "candidate_area_ids": [area.id for area in candidate_areas],
+            "resolved_candidate_area_ids": sorted(resolved_candidate_area_ids),
             "legacy_areas": legacy_areas,
             "blocking_conflicts": blockers,
             "blocking_items": blocking_items,
@@ -761,6 +866,7 @@ def inspect_floor1_formal_candidate_state(
     return {
         "fingerprint": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
         "already_applied": already_applied,
+        "resolved_candidate_area_count": len(resolved_candidate_areas),
         "archivable_legacy_area_count": sum(
             1 for row in legacy_areas if row["archive_required"]
         ),
@@ -775,12 +881,15 @@ def _ensure_no_candidate_conflicts(
     *,
     floor: WarehouseFloor,
     plan: dict,
-) -> None:
+) -> dict[str, WarehouseArea]:
     feature_ids = [row["map_feature_id"] for row in plan["candidates"]]
     area_codes = [row["area_code"] for row in plan["candidates"]]
+    candidate_by_code = {row["area_code"]: row for row in plan["candidates"]}
     existing_areas = list(
         db.scalars(
-            select(WarehouseArea).where(
+            select(WarehouseArea)
+            .options(selectinload(WarehouseArea.storage_policy))
+            .where(
                 WarehouseArea.floor_id == floor.id,
                 WarehouseArea.area_code.in_(area_codes),
             )
@@ -788,16 +897,36 @@ def _ensure_no_candidate_conflicts(
     )
     existing_policies = list(
         db.scalars(
-            select(WarehouseAreaStoragePolicy).where(
-                WarehouseAreaStoragePolicy.map_feature_id.in_(feature_ids)
-            )
+            select(WarehouseAreaStoragePolicy)
+            .options(selectinload(WarehouseAreaStoragePolicy.area))
+            .where(WarehouseAreaStoragePolicy.map_feature_id.in_(feature_ids))
         ).all()
     )
-    if existing_areas or existing_policies:
+    resolved_by_code = {
+        area.area_code: area
+        for area in existing_areas
+        if _published_candidate_area_matches(
+            area,
+            candidate=candidate_by_code[area.area_code],
+            map_revision=plan["map_revision"],
+        )
+    }
+    conflicting_areas = [
+        area for area in existing_areas if area.area_code not in resolved_by_code
+    ]
+    conflicting_policies = [
+        policy
+        for policy in existing_policies
+        if policy.area is None
+        or policy.area.area_code not in resolved_by_code
+        or resolved_by_code[policy.area.area_code].storage_policy is not policy
+    ]
+    if conflicting_areas or conflicting_policies:
         raise Floor1CandidatePlanningError(
             "候选区域已存在部分正式绑定，系统不会静默覆盖；请先核对冲突后再确认",
             status_code=409,
         )
+    return resolved_by_code
 
 
 def confirm_floor1_formal_candidate_plan(
@@ -909,12 +1038,16 @@ def confirm_floor1_formal_candidate_plan(
             locations=(),
             archived_legacy_areas=tuple(archived_legacy_areas),
         )
-    _ensure_no_candidate_conflicts(db, floor=floor, plan=plan)
+    resolved_by_code = _ensure_no_candidate_conflicts(db, floor=floor, plan=plan)
 
     next_sort = int(db.scalar(select(func.max(WarehouseLocation.sort_order))) or 0) + 1
     areas: list[WarehouseArea] = []
     locations: list[WarehouseLocation] = []
     for candidate in plan["candidates"]:
+        resolved_area = resolved_by_code.get(candidate["area_code"])
+        if resolved_area is not None:
+            areas.append(resolved_area)
+            continue
         eligible = bool(candidate["long_term_capacity_eligible"])
         area = WarehouseArea(
             floor_id=floor.id,
@@ -1032,19 +1165,6 @@ def overlay_formal_area_bindings(
     )
     areas_by_code = {area.area_code.upper(): area for area in area_rows}
     areas_by_id = {area.id: area for area in areas_by_code.values()}
-    formal_location_area_codes = {
-        str(value).strip().upper()
-        for value in db.scalars(
-            select(WarehouseLocation.area_code)
-            .where(
-                WarehouseLocation.warehouse_floor == floor.floor_number,
-                WarehouseLocation.is_active.is_(True),
-                WarehouseLocation.area_code.is_not(None),
-            )
-            .distinct()
-        ).all()
-        if str(value or "").strip()
-    }
     feature_area_code_counts: dict[str, int] = {}
     for raw in floor_layout.get("features") or []:
         if raw.get("feature_kind") != "zone":
@@ -1096,13 +1216,12 @@ def overlay_formal_area_bindings(
             # an enabled area look disabled.
             legacy_code = str(feature.get("erp_area_code") or "").strip().upper()
             legacy_area = areas_by_code.get(legacy_code)
-            direct_binding_is_proven = bool(
-                feature.get("feature_kind") == "zone"
-                and not feature.get("formal_area_id")
-                and feature_area_code_counts.get(legacy_code) == 1
-                and legacy_code in formal_location_area_codes
-                and legacy_area is not None
-                and legacy_area.storage_policy is None
+            direct_binding_is_proven = floor3_v11_map_binding_is_proven(
+                db,
+                floor=floor,
+                feature=feature,
+                area=legacy_area,
+                feature_area_code_count=feature_area_code_counts.get(legacy_code, 0),
             )
             if direct_binding_is_proven and legacy_area is not None:
                 feature["formal_area_id"] = legacy_area.id

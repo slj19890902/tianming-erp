@@ -100,6 +100,16 @@ class LayoutOneStepDraftContext:
     published_feature_version: int
 
 
+_ZONE_POLICY_FIELDS = (
+    "allowed_inventory_types",
+    "storage_layout",
+    "erp_area_code",
+    "formal_area_name",
+    "formal_area_id",
+    "formal_floor_id",
+)
+
+
 @dataclass(frozen=True)
 class _PublishedLayoutPaths:
     source: Path
@@ -271,12 +281,11 @@ def begin_warehouse_twin_one_step_publish(
     published_path: Path | None = None,
     draft_path: Path | None = None,
 ) -> LayoutOneStepDraftContext:
-    """Suspend an unrelated advanced draft before an isolated zone publish.
+    """Suspend an advanced draft before an isolated zone publish.
 
-    The one-step flow is allowed only when the selected zone itself is still
-    byte-for-byte identical to the published map. Other rack, geometry, or
-    floor edits remain protected in the suspended draft and are rebased after
-    the selected zone has been published.
+    The simplified confirmation owns only the selected zone's formal storage
+    policy.  Any unpublished rack, geometry, or other-floor edits remain in the
+    snapshot and are rebased after the selected policy has been published.
     """
 
     normalized = _normalize_floor_code(floor_code)
@@ -337,9 +346,11 @@ def begin_warehouse_twin_one_step_publish(
                 ),
                 None,
             )
-            if draft_feature != published_feature:
+            if not isinstance(draft_feature, dict) or draft_feature.get(
+                "feature_kind"
+            ) != "zone":
                 raise WarehouseTwinLayoutEditConflictError(
-                    "当前区域本身有未发布的高级维护草稿改动；请先发布或放弃该区域改动"
+                    "当前区域已在高级维护草稿中删除或改变类型；请刷新地图后重新确认"
                 )
             draft_target.unlink(missing_ok=True)
 
@@ -400,13 +411,34 @@ def rebase_warehouse_twin_advanced_draft_after_one_step(
         )
         if not isinstance(published_feature, dict) or advanced_index is None:
             raise WarehouseTwinLayoutEditError("一次确认后区域身份回读失败")
-        advanced_features[advanced_index] = deepcopy(published_feature)
+        # Keep any advanced geometry/name/subtype edits for later maintenance,
+        # but consume the selected zone's storage-policy draft.  The freshly
+        # published policy is authoritative for these fields.
+        rebased_feature = deepcopy(advanced_features[advanced_index])
+        for key in _ZONE_POLICY_FIELDS:
+            if key in published_feature:
+                rebased_feature[key] = deepcopy(published_feature[key])
+            else:
+                rebased_feature.pop(key, None)
+        rebased_feature["version"] = max(
+            int(rebased_feature.get("version") or 1),
+            int(published_feature.get("version") or 1),
+        )
+        advanced_features[advanced_index] = rebased_feature
         advanced_floor["features"] = advanced_features
 
         receipts: list[dict[str, Any]] = []
         receipt_keys: set[tuple[str, str]] = set()
+        advanced_receipts = [
+            receipt
+            for receipt in (advanced_floor.get("layout_edit_receipts") or [])
+            if not (
+                receipt.get("action") == "zone.policy.update"
+                and str((receipt.get("result") or {}).get("id") or "") == feature_id
+            )
+        ]
         for receipt in [
-            *(advanced_floor.get("layout_edit_receipts") or []),
+            *advanced_receipts,
             *(published_floor.get("layout_edit_receipts") or []),
         ]:
             key = (
@@ -420,6 +452,22 @@ def rebase_warehouse_twin_advanced_draft_after_one_step(
         advanced_floor["layout_edit_receipts"] = receipts[-100:]
         advanced_floor["revision"] = _floor_revision(advanced_floor)
         advanced["generated_at"] = _utc_iso()
+
+        # If the selected policy was the only pending edit, do not leave a
+        # meaningless global draft behind.  This keeps the simple workflow in
+        # its final operational state after one click.
+        def semantic_floors(document: dict[str, Any]) -> dict[str, Any]:
+            result: dict[str, Any] = {}
+            for code, floor in (document.get("floors") or {}).items():
+                normalized_floor = deepcopy(floor)
+                for key in ("revision", "layout_edited_at", "layout_edit_receipts"):
+                    normalized_floor.pop(key, None)
+                result[str(code)] = normalized_floor
+            return result
+
+        if semantic_floors(advanced) == semantic_floors(published):
+            draft_target.unlink(missing_ok=True)
+            return False
 
         meta = advanced.get("draft_meta")
         if not isinstance(meta, dict):

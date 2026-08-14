@@ -44,6 +44,59 @@ AREA_LOCATION_MANAGEMENT_ACTIONS = (
     "disable_empty",
     "enable_empty",
 )
+_FLOOR3_V11_MEASURED_FEATURE_CODES = {
+    "E4": "ZONE-3F-FG-001",
+}
+
+
+def floor3_v11_map_binding_is_proven(
+    db: Session,
+    *,
+    floor: WarehouseFloor,
+    feature: dict,
+    area: WarehouseArea | None,
+    feature_area_code_count: int,
+) -> bool:
+    """Recognize the already-verified measured-map identity of legacy 3F areas.
+
+    A1--F34 predate ``warehouse_area_storage_policies`` but their V11 location
+    identities were created from the same measured-map zones.  They must not
+    be treated as unrelated unbound areas when a different 3F zone is being
+    confirmed.  The proof is deliberately narrow: exact legacy feature code,
+    one same-code zone, one enabled same-floor ledger area, and only V11
+    physical locations with at least one active position.
+    """
+
+    if floor.floor_number != 3 or area is None or area.floor_id != floor.id:
+        return False
+    area_code = str(feature.get("erp_area_code") or "").strip().upper()
+    if (
+        not area_code
+        or area_code not in FLOOR3_LAYOUT_AREA_CODES
+        or feature.get("feature_kind") != "zone"
+        or str(feature.get("feature_code") or "").strip().upper()
+        != _FLOOR3_V11_MEASURED_FEATURE_CODES.get(
+            area_code, f"ZONE-3F-ERP-{area_code}"
+        )
+        or feature_area_code_count != 1
+        or area.area_code.upper() != area_code
+        or area.construction_status != "enabled"
+        or area.storage_policy is not None
+    ):
+        return False
+    rows = list(
+        db.scalars(
+            select(WarehouseLocation).where(
+                WarehouseLocation.warehouse_floor == 3,
+                func.upper(WarehouseLocation.area_code) == area_code,
+            )
+        ).all()
+    )
+    return bool(
+        rows
+        and all(row.source_version == "V11" for row in rows)
+        and any(row.is_active for row in rows)
+    )
 
 
 class WarehouseAreaActivationError(ValueError):
@@ -530,6 +583,7 @@ def set_area_location_active(
     )
     if location.is_active == is_active:
         raise WarehouseAreaActivationError("库位已处于该状态", status_code=409)
+    was_published = policy.status == "published"
     result = _set_location_active(
         db,
         location=location,
@@ -549,9 +603,10 @@ def set_area_location_active(
         or 0
     )
     area.planned_location_count = active_count
-    area.construction_status = "layout_building"
-    policy.status = "draft"
-    policy.published_map_revision = None
+    area.construction_status = "enabled" if was_published else "layout_building"
+    if not was_published:
+        policy.status = "draft"
+        policy.published_map_revision = None
     policy.version += 1
     policy.updated_by = operator_id
     db.flush()
@@ -571,6 +626,7 @@ def adjust_area_location_count(
     floor, area, policy = formal_area(
         db, floor_code=floor_code, area_code=area_code
     )
+    was_published = policy.status == "published"
     warehouse_type = location_warehouse_type(policy)
     if target_count and warehouse_type is None:
         raise WarehouseAreaActivationError(
@@ -649,7 +705,7 @@ def adjust_area_location_count(
                     sort_order=next_sort,
                     is_temporary=False,
                     source_version=AREA_LOCATION_SOURCE_VERSION,
-                    placement_status="unplaced",
+                    placement_status="placed" if was_published else "unplaced",
                 )
                 row.floor3_layout = Floor3LocationLayout(
                     left_pct=left,
@@ -690,9 +746,10 @@ def adjust_area_location_count(
             )
 
     area.planned_location_count = target_count
-    area.construction_status = "layout_building"
-    policy.status = "draft"
-    policy.published_map_revision = None
+    area.construction_status = "enabled" if was_published else "layout_building"
+    if not was_published:
+        policy.status = "draft"
+        policy.published_map_revision = None
     policy.version += 1
     policy.updated_by = operator_id
     db.flush()
@@ -718,6 +775,7 @@ def update_area_location_layout(
     floor, area, policy = formal_area(
         db, floor_code=floor_code, area_code=area_code
     )
+    was_published = policy.status == "published"
     if len({slot["location_id"] for slot in slots}) != len(slots):
         raise WarehouseAreaActivationError("批量布局不能重复同一库位")
     for slot in slots:
@@ -784,13 +842,18 @@ def update_area_location_layout(
         ).all()
     )
     area.construction_status = (
-        "layout_complete"
-        if len(active_rows) == area.planned_location_count
-        and all(row.placement_status == "placed" for row in active_rows)
-        else "layout_building"
+        "enabled"
+        if was_published
+        else (
+            "layout_complete"
+            if len(active_rows) == area.planned_location_count
+            and all(row.placement_status == "placed" for row in active_rows)
+            else "layout_building"
+        )
     )
-    policy.status = "draft"
-    policy.published_map_revision = None
+    if not was_published:
+        policy.status = "draft"
+        policy.published_map_revision = None
     policy.version += 1
     policy.updated_by = operator_id
     db.flush()
@@ -815,6 +878,7 @@ def publish_floor_area_policies(
     published_revision: str,
     operator_id: int,
     published_features: list[dict],
+    defer_location_readiness_for_feature_id: str | None = None,
 ) -> list[WarehouseAreaStoragePolicy]:
     floor = warehouse_floor_for_code(db, floor_code)
     if floor is None:
@@ -848,6 +912,13 @@ def publish_floor_area_policies(
     ] = []
     proposal_area_codes: set[str] = set()
     proposal_feature_ids: set[str] = set()
+    feature_area_code_counts: dict[str, int] = {}
+    for item in published_features:
+        if item.get("feature_kind") != "zone":
+            continue
+        code = str(item.get("erp_area_code") or "").strip().upper()
+        if code:
+            feature_area_code_counts[code] = feature_area_code_counts.get(code, 0) + 1
     for feature in published_features:
         if feature.get("feature_kind") != "zone" or not feature.get("id"):
             continue
@@ -873,9 +944,13 @@ def publish_floor_area_policies(
                 )
             if feature_policy is None:
                 continue
+            if feature_policy.status != "published":
+                # A SQL draft belonging to an unrelated advanced-map draft
+                # must not be pulled into this one-zone publish transaction.
+                # The selected zone always carries its explicit area code.
+                continue
             if (
-                feature_policy.status != "published"
-                or feature_policy.area.floor_id != floor.id
+                feature_policy.area.floor_id != floor.id
             ):
                 raise WarehouseAreaActivationError(
                     "地图区域的历史正式绑定不可用于当前楼层",
@@ -889,6 +964,25 @@ def publish_floor_area_policies(
                 "formal_area_name": feature_policy.area.area_name,
             }
             area_code = feature_policy.area.area_code.upper()
+        area = areas_by_code.get(area_code)
+        projected_legacy_binding = floor3_v11_map_binding_is_proven(
+            db,
+            floor=floor,
+            feature=feature,
+            area=area,
+            feature_area_code_count=feature_area_code_counts.get(area_code, 0),
+        )
+        has_explicit_policy_change = bool(
+            feature.get("allowed_inventory_types")
+            or feature.get("formal_area_id") not in (None, "")
+            or feature.get("formal_floor_id") not in (None, "")
+        )
+        if projected_legacy_binding and not has_explicit_policy_change:
+            # The legacy V11 zone is already an operational measured-map
+            # identity.  Publishing an unrelated new zone must leave it
+            # untouched instead of forcing all historical areas to migrate in
+            # the same transaction.
+            continue
         raw_formal_area_id = feature.get("formal_area_id")
         raw_formal_floor_id = feature.get("formal_floor_id")
         has_formal_area_id = raw_formal_area_id not in (None, "")
@@ -1015,7 +1109,11 @@ def publish_floor_area_policies(
                 area_code=area.area_code,
             )
             desired_type = location_warehouse_type_for_inventory_types(inventory_types)
-            if desired_type is not None and area.planned_location_count > 0:
+            if (
+                desired_type is not None
+                and area.planned_location_count > 0
+                and feature_id != defer_location_readiness_for_feature_id
+            ):
                 active_rows = list(
                     db.scalars(
                         select(WarehouseLocation).where(

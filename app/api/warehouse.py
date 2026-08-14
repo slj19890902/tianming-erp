@@ -106,6 +106,7 @@ from app.services.warehouse_area_activation import (
     adjust_area_location_count as adjust_activated_area_location_count,
     area_location_management_payload,
     formal_area_location_rows,
+    floor3_v11_map_binding_is_proven,
     location_warehouse_type_for_inventory_types,
     policy_location_transition_blockers,
     policy_inventory_types,
@@ -125,9 +126,9 @@ from app.services.warehouse_twin_layout import (
 from app.services.warehouse_floor1_candidate_planner import (
     Floor1CandidatePlanningError,
     build_floor1_formal_candidate_plan,
+    confirmed_capacity_slots_for_zone,
     confirm_floor1_formal_candidate_plan,
     inspect_floor1_formal_candidate_state,
-    measured_pallet_slots_for_zone,
     overlay_formal_area_bindings,
 )
 from app.services.warehouse_twin_layout_editor import (
@@ -6250,6 +6251,13 @@ def _formal_area_identity_blockers(db: Session, floor_code: str) -> list[str]:
             .options(selectinload(WarehouseAreaStoragePolicy.area))
         ).all()
     }
+    feature_area_code_counts: dict[str, int] = {}
+    for item in draft.get("features") or []:
+        if item.get("feature_kind") != "zone":
+            continue
+        code = str(item.get("erp_area_code") or "").strip().upper()
+        if code:
+            feature_area_code_counts[code] = feature_area_code_counts.get(code, 0) + 1
     blockers: list[str] = []
     for feature in draft.get("features") or []:
         if feature.get("feature_kind") != "zone" or not feature.get("id"):
@@ -6298,7 +6306,14 @@ def _formal_area_identity_blockers(db: Session, floor_code: str) -> list[str]:
             and area_by_code.storage_policy is None
             and policy is None
         ):
-            blockers.append(f"{area_code} 已是现有未绑定区域，必须返回区域设置明确选择")
+            if not floor3_v11_map_binding_is_proven(
+                db,
+                floor=floor,
+                feature=feature,
+                area=area_by_code,
+                feature_area_code_count=feature_area_code_counts.get(area_code, 0),
+            ):
+                blockers.append(f"{area_code} 已是现有未绑定区域，必须返回区域设置明确选择")
     return blockers
 
 
@@ -6348,7 +6363,12 @@ def validate_twin_layout_draft(
         return {**result.value, "applied": result.applied}
 
 
-def _formal_area_publish_blockers(db: Session, floor_code: str) -> list[str]:
+def _formal_area_publish_blockers(
+    db: Session,
+    floor_code: str,
+    *,
+    defer_location_readiness_for_feature_id: str | None = None,
+) -> list[str]:
     normalized = floor_code.strip().upper()
     floor = warehouse_floor_for_code(db, normalized)
     if floor is None:
@@ -6377,6 +6397,11 @@ def _formal_area_publish_blockers(db: Session, floor_code: str) -> list[str]:
     blockers: list[str] = []
     policies_by_feature = {policy.map_feature_id: policy for policy in policies}
     areas_by_code = {area.area_code.upper(): area for area in all_areas}
+    feature_area_code_counts: dict[str, int] = {}
+    for item in features.values():
+        code = str(item.get("erp_area_code") or "").strip().upper()
+        if code:
+            feature_area_code_counts[code] = feature_area_code_counts.get(code, 0) + 1
     for feature_id, feature in features.items():
         area_code = str(feature.get("erp_area_code") or "").strip().upper()
         if not area_code:
@@ -6411,6 +6436,20 @@ def _formal_area_publish_blockers(db: Session, floor_code: str) -> list[str]:
             continue
         if area.storage_policy is None:
             location_rows = formal_area_location_rows(db, floor=floor, area=area)
+            projected_legacy_binding = floor3_v11_map_binding_is_proven(
+                db,
+                floor=floor,
+                feature=feature,
+                area=area,
+                feature_area_code_count=feature_area_code_counts.get(area_code, 0),
+            )
+            has_explicit_policy_change = bool(
+                feature.get("allowed_inventory_types")
+                or feature.get("formal_area_id") not in (None, "")
+                or feature.get("formal_floor_id") not in (None, "")
+            )
+            if projected_legacy_binding and not has_explicit_policy_change:
+                continue
             if location_rows:
                 raw_area_id = feature.get("formal_area_id")
                 if str(raw_area_id or "") != str(area.id):
@@ -6434,7 +6473,7 @@ def _formal_area_publish_blockers(db: Session, floor_code: str) -> list[str]:
                     floor_layout=draft,
                     feature=feature,
                     area_code=area_code,
-                    fail_closed_on_mapping_error=True,
+                    fail_closed_on_mapping_error=False,
                 )
             )
             continue
@@ -6458,7 +6497,7 @@ def _formal_area_publish_blockers(db: Session, floor_code: str) -> list[str]:
                     floor_layout=draft,
                     feature=feature,
                     area_code=area_code,
-                    fail_closed_on_mapping_error=True,
+                    fail_closed_on_mapping_error=False,
                 )
             )
         for message in policy_location_transition_blockers(
@@ -6477,9 +6516,16 @@ def _formal_area_publish_blockers(db: Session, floor_code: str) -> list[str]:
             blockers.append(f"{area.area_code} 区绑定的地图区域已不存在")
             continue
         feature_area_code = str(feature.get("erp_area_code") or "").strip().upper()
+        if policy.status != "published" and not feature_area_code:
+            # Keep an unrelated advanced policy draft isolated from the
+            # current one-step area confirmation.
+            continue
         if feature_area_code and feature_area_code != area.area_code.upper():
             blockers.append(f"{area.area_code} 区的地图正式区域编号不一致")
-        if area.planned_location_count:
+        if (
+            area.planned_location_count
+            and policy.map_feature_id != defer_location_readiness_for_feature_id
+        ):
             try:
                 route = resolve_area_location_management(
                     db,
@@ -6614,8 +6660,15 @@ def _publish_twin_layout_draft_locked(
     db: Session,
     user: User,
     commit: bool = True,
+    defer_location_readiness_for_feature_id: str | None = None,
 ) -> dict:
-    blockers = _formal_area_publish_blockers(db, floor_code)
+    blockers = _formal_area_publish_blockers(
+        db,
+        floor_code,
+        defer_location_readiness_for_feature_id=(
+            defer_location_readiness_for_feature_id
+        ),
+    )
     if blockers:
         raise HTTPException(
             status_code=409,
@@ -6634,11 +6687,14 @@ def _publish_twin_layout_draft_locked(
             db,
             floor_code=floor_code,
             published_revision=str(result.value.get("published_revision") or ""),
-            operator_id=user.id,
-            published_features=list(
-                load_warehouse_twin_floor(floor_code).get("features") or []
-            ),
-        )
+                operator_id=user.id,
+                published_features=list(
+                    load_warehouse_twin_floor(floor_code).get("features") or []
+                ),
+                defer_location_readiness_for_feature_id=(
+                    defer_location_readiness_for_feature_id
+                ),
+            )
         if result.applied or published_policies:
             _twin_layout_asset_log(
             db,
@@ -6985,7 +7041,10 @@ def _update_twin_zone_storage_policy_locked(
             raise HTTPException(status_code=409, detail="所选现有区域与正式区域编号不一致")
         if formal_area is None or formal_area.id != selected_area.id:
             raise HTTPException(status_code=409, detail="正式区域编号已被其他区域占用")
-        if selected_area.storage_policy is not None:
+        if selected_area.storage_policy is not None and not (
+            selected_area.storage_policy.map_feature_id == feature_id
+            and selected_area.storage_policy.status == "draft"
+        ):
             raise HTTPException(status_code=409, detail="所选现有区域已被绑定，请刷新后重新选择")
         formal_area = selected_area
     if formal_area is None:
@@ -7061,8 +7120,12 @@ def _update_twin_zone_storage_policy_locked(
                 str(effective_floor.get('layout_id') or ''), effective_floor
             )
         except (WarehouseTwinProductionError, sqlite3.Error, OSError):
-            if formal_area is not None:
-                occupancy_blockers.append('生产任务地图占用状态暂无法核对')
+            # The isolated production projection is an optional visual aid,
+            # not the formal warehouse ledger.  Its absence must not freeze
+            # an otherwise safe area confirmation.  Real inventory, pallets,
+            # molds and printing plates are checked above; when projection
+            # data exists, pending mapped tasks remain a blocker below.
+            pass
         else:
             pending_ids = set(db.scalars(select(ProductionTask.id).where(
                 ProductionTask.status == PENDING
@@ -7220,16 +7283,15 @@ def _ensure_one_step_pallet_locations(
     location_warehouse_type = location_warehouse_type_for_inventory_types(
         [inventory_type]
     )
-    if (
-        location_warehouse_type is None
-        or storage_layout != "pallet_ground"
-        or target_count <= 0
-    ):
+    if location_warehouse_type is None or target_count <= 0:
         return [], 0
     floor = area.floor
     policy = area.storage_policy
     if floor is None or policy is None or policy.status != "published":
         raise WarehouseAreaActivationError("区域尚未完成正式发布，不能生成空货位", status_code=409)
+    desired_storage_type = (
+        "rack" if storage_layout == "rack" else "ground"
+    )
     existing = formal_area_location_rows(db, floor=floor, area=area)
     if existing:
         reusable = [
@@ -7239,7 +7301,7 @@ def _ensure_one_step_pallet_locations(
             and row.placement_status == "placed"
             and row.floor3_layout is not None
             and row.warehouse_type == location_warehouse_type
-            and row.storage_type == "ground"
+            and row.storage_type == desired_storage_type
         ]
         active_rows = [row for row in existing if row.is_active]
         if active_rows and len(reusable) == len(active_rows):
@@ -7252,27 +7314,24 @@ def _ensure_one_step_pallet_locations(
             status_code=409,
         )
     try:
-        measured_slots = measured_pallet_slots_for_zone(
+        planned_slots = confirmed_capacity_slots_for_zone(
             floor_layout,
             feature_id=feature_id,
+            target_count=target_count,
+            prefer_standard_pallet_slots=storage_layout == "pallet_ground",
         )
     except Floor1CandidatePlanningError as error:
         raise WarehouseAreaActivationError(str(error), status_code=error.status_code) from error
-    if target_count > len(measured_slots):
-        raise WarehouseAreaActivationError(
-            f"该实测区域最多可生成 {len(measured_slots)} 个标准栈板空货位；请核对容量后重试",
-            status_code=409,
-        )
     next_sort = int(db.scalar(select(func.max(WarehouseLocation.sort_order))) or 0) + 1
     created: list[WarehouseLocation] = []
-    for serial, slot in enumerate(measured_slots[:target_count], start=1):
+    for serial, slot in enumerate(planned_slots, start=1):
         row = WarehouseLocation(
             location_code=f"{floor.floor_code.upper()}-{area.area_code.upper()}-L{serial:03d}",
             location_name=f"{area.area_name} {serial:03d} 号位",
             warehouse_type=location_warehouse_type,
             warehouse_floor=floor.floor_number,
             area_code=area.area_code.upper(),
-            storage_type="ground",
+            storage_type=desired_storage_type,
             sort_order=next_sort,
             is_temporary=False,
             source_version=AREA_LOCATION_SOURCE_VERSION,
@@ -7388,6 +7447,7 @@ def confirm_twin_zone_area(
                 db=db,
                 user=user,
                 commit=False,
+                defer_location_readiness_for_feature_id=feature_id,
             )
             advanced_draft_preserved = rebase_warehouse_twin_advanced_draft_after_one_step(
                 one_step_context,

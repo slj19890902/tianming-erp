@@ -2402,7 +2402,7 @@ export function WarehouseTwinApp() {
       return;
     }
     const direction = targetCount > selectedAreaLocationCount ? "增加" : "减少";
-    if (!window.confirm(`确认把 ${selectedAreaCode} 区有效库位从 ${selectedAreaLocationCount} 个${direction}到 ${targetCount} 个吗？\n\n新增库位会自动编号并先进入待布局草稿；减少时只停用无库存、无预占、无实体栈板的空库位。`)) return;
+    if (!window.confirm(`确认把 ${selectedAreaCode} 区有效库位从 ${selectedAreaLocationCount} 个${direction}到 ${targetCount} 个吗？\n\n新增库位会自动编号、自动排列并立即可用；减少时只停用无库存、无预占、无实体栈板的空库位。`)) return;
     setLocationEditBusy(true);
     try {
       if (!areaLocationManagement?.available_actions.includes("location_count")) {
@@ -2414,24 +2414,6 @@ export function WarehouseTwinApp() {
         confirmed: true
       });
       await refreshDashboard();
-      if (result?.items.length) {
-        setLocationDrafts((current) => {
-          const next = { ...current };
-          for (const item of result.items) {
-            if (item.action !== "created" || !item.layout) continue;
-            next[item.location.id] = {
-              location_id: item.location.id,
-              expected_version: item.layout.version,
-              left_pct: item.layout.left_pct,
-              top_pct: item.layout.top_pct,
-              width_pct: item.layout.width_pct,
-              height_pct: item.layout.height_pct,
-              z_index: item.layout.z_index
-            };
-          }
-          return next;
-        });
-      }
       setLocationEditMessage(result?.message || `${selectedAreaCode} 区库位数量已更新。`);
     } catch (reason) {
       setLocationEditMessage((reason as Error).message);

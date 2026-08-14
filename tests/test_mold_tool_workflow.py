@@ -2311,7 +2311,13 @@ def test_admin_can_preview_then_once_confirm_floor1_formal_candidates(
         assert plan["excluded_out_of_bounds_count"] == 3
         assert plan["long_term_pallet_capacity"] == 70
         assert plan["formal_location_count"] == 45
-        assert plan["formal_state"]["archivable_legacy_area_count"] == 1
+        assert plan["formal_state"]["archivable_legacy_area_count"] == 0
+        dispatch_state = next(
+            row
+            for row in plan["formal_state"]["legacy_areas"]
+            if row["area_code"] == "DISPATCH"
+        )
+        assert dispatch_state["action"] == "preserve_business_anchor"
         with factory() as db:
             assert db.scalar(select(func.count(WarehouseArea.id))) == 1
             assert db.scalar(select(func.count(WarehouseLocation.id))) == 1
@@ -2330,14 +2336,14 @@ def test_admin_can_preview_then_once_confirm_floor1_formal_candidates(
         assert confirmed.status_code == 200, confirmed.text
         assert confirmed.json()["applied"] is True
         assert confirmed.json()["created_location_count"] == 45
-        assert confirmed.json()["archived_legacy_area_count"] == 1
+        assert confirmed.json()["archived_legacy_area_count"] == 0
         with factory() as db:
             old_location = db.scalar(
                 select(WarehouseLocation).where(
                     WarehouseLocation.location_code == "1F-DISPATCH-L001"
                 )
             )
-            assert old_location is not None and old_location.is_active is False
+            assert old_location is not None and old_location.is_active is True
 
         replayed = client.post(
             "/api/warehouse/twin-layout/floors/1F/formal-candidates/confirm",

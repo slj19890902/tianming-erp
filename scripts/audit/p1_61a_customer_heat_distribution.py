@@ -278,6 +278,24 @@ def _table_columns(connection: sqlite3.Connection, table: str) -> set[str]:
     }
 
 
+def _foreign_key_error_count(database: Path) -> int:
+    """Run FK introspection on a separate read-only connection.
+
+    A few Windows SQLite builds reject ``foreign_key_check`` when the main
+    query connection has a strict authorizer installed.  The auxiliary URI is
+    still ``mode=ro`` with ``query_only`` enabled, so it cannot write; the
+    primary audit connection retains both write barriers for all business SQL.
+    """
+
+    uri_path = quote(database.resolve().as_posix(), safe="/:\\\\")
+    connection = sqlite3.connect(f"file:{uri_path}?mode=ro", uri=True)
+    try:
+        connection.execute("PRAGMA query_only = ON")
+        return len(connection.execute("PRAGMA foreign_key_check").fetchall())
+    finally:
+        connection.close()
+
+
 def _validate_schema(connection: sqlite3.Connection) -> None:
     tables = {
         str(row[0])
@@ -549,11 +567,7 @@ def run_audit(
                 f"database revision mismatch: expected {expected_revision}, got {revision}"
             )
         quick_check = str(connection.execute("PRAGMA quick_check").fetchone()[0])
-        foreign_key_error_count = int(
-            connection.execute(
-                "SELECT COUNT(*) FROM pragma_foreign_key_check"
-            ).fetchone()[0]
-        )
+        foreign_key_error_count = _foreign_key_error_count(database)
         indexes = _index_inventory(connection)
         plan = _query_plan(connection, as_of)
         rows, performance = _performance_runs(

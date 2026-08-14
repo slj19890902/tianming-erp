@@ -14,10 +14,15 @@ def test_requisition_cold_entry_requests_only_pending_business_data() -> None:
     load_page = _method_block("async loadPage(page", "refreshCurrent()")
     requisition_load = _method_block(
         "async loadRequisition({skipAutoRelease=false}={})",
-        "async loadReportedDocuments()",
+        "externalPurchaseRoutingRequestIsCurrent(controller, authGeneration, userId)",
     )
 
-    assert 'if (page === "requisition") await requirePageLoad(this.loadRequisition());' in load_page
+    requisition_branch = load_page.split('if (page === "requisition") {', 1)[1].split(
+        'if (page === "incoming")', 1
+    )[0]
+    assert 'this.requisitionWorkspace === "external-packaging"' in requisition_branch
+    assert "this.loadExternalPurchaseRouting()" in requisition_branch
+    assert "this.loadRequisition()" in requisition_branch
     assert "loadCustomerOptions(force)" not in load_page.split('if (page === "requisition")')[1].split('if (page === "incoming")')[0]
     assert "loadMaterials()" not in load_page.split('if (page === "requisition")')[1].split('if (page === "incoming")')[0]
     assert 'axios.get("/api/requisition/pending", {' in requisition_load
@@ -25,6 +30,7 @@ def test_requisition_cold_entry_requests_only_pending_business_data() -> None:
     assert "/api/requisition/reported-documents" not in requisition_load
     assert "/api/requisition/merge-suggestions" not in requisition_load
     assert "/api/requisition/stock-policies" not in requisition_load
+    assert "/api/external-packaging-purchases/pending-confirmations" not in requisition_load
     assert 'beginLatestRequest("requisition:pending")' in requisition_load
 
 

@@ -33,12 +33,13 @@ def _run_node(source: str, tmp_path: Path) -> None:
 
 
 def test_production_cold_entry_requests_only_current_action_queues() -> None:
-    production = _block("async loadProduction()", "async ensureProductionLocations")
+    cold_load = _block("async loadProduction()", "async openProductionLabelMaintenance")
+    production = _block("async loadProductionPage", "async ensureProductionLocations")
 
     assert 'params: { status: "pending", page, page_size: this.pageSize }' in production
-    assert "this.loadProductionPage(this.pages.productionPending || 1)" in production
-    assert "this.loadProductionWaitingLabelPage(this.pages.productionWaitingLabels || 1)" in production
-    assert 'status:"waiting_material"' in production
+    assert "this.loadProductionPage(this.pages.productionPending || 1)" in cold_load
+    assert "this.loadProductionWaitingLabelPage(this.pages.productionWaitingLabels || 1)" not in cold_load
+    assert 'status:"waiting_material"' not in cold_load
     assert "/api/production/temporary-locations" not in production
     assert "loadProductionHistory" not in production
     assert 'this.beginLatestRequest("production:pending")' in production

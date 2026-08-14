@@ -3529,23 +3529,11 @@
                 </div>
                 <div class="toolbar-group">
                   <pager v-if="productionTab==='pending'" :page="pages.productionPending" :total="productionPendingTotal" :page-size="pageSize" :always="true" :compact="true" @change="loadProductionPage($event)"></pager>
+                  <button v-if="productionTab==='pending' && productionLabelMaintenanceEntryVisible()" class="btn small" :disabled="productionBusy" @click="openProductionLabelMaintenance">标签异常 / 维护<span v-if="productionLabelMaintenanceAnomalyCount()">（{{ productionLabelMaintenanceAnomalyCount() }}）</span></button>
                   <button class="btn" :disabled="productionBusy || productionPendingLoading" @click="loadProduction">{{ productionPendingLoading ? '读取中…' : '刷新' }}</button>
                 </div>
               </div>
               <div v-if="productionTab==='pending'" class="status blue" style="display:block;margin:8px 0">直接待送：选择后整批进入一楼待送区。全部入库：选好库位，再点顶部“批量确认入库”。</div>
-              <section v-if="productionTab==='pending'" style="margin:10px 0 14px">
-                <div class="toolbar" style="margin-bottom:6px">
-                  <div class="toolbar-group"><strong>待料标签维护</strong><span class="muted">仅维护尚未开工任务的冻结标签计划，不进入完工确认。</span></div>
-                  <div class="toolbar-group"><pager :page="pages.productionWaitingLabels" :total="productionWaitingLabelTotal" :page-size="pageSize" :always="true" :compact="true" @change="loadProductionWaitingLabelPage($event)"></pager><button class="btn small" :disabled="productionWaitingLabelLoading" @click="loadProductionWaitingLabelPage(pages.productionWaitingLabels || 1)">{{ productionWaitingLabelLoading ? '读取中…' : '刷新待料任务' }}</button></div>
-                </div>
-                <div v-if="productionWaitingLabelError" class="status orange" style="display:block;margin:6px 0">{{ productionWaitingLabelError }} <button class="btn small" @click="loadProductionWaitingLabelPage(pages.productionWaitingLabels || 1)">重试</button></div>
-                <data-panel :empty="!productionWaitingLabels.length">
-                  <table style="table-layout:fixed;width:100%">
-                    <thead><tr><th style="width:22%">订单 / 客户</th><th style="width:31%">存货编码 / 产品</th><th>冻结标签计划</th><th v-if="canProductionExecute" style="width:18%">人工维护</th></tr></thead>
-                    <tbody><tr v-for="row in productionWaitingLabels" :key="`waiting-label-${row.id}`"><td style="white-space:normal"><strong>{{ row.item_order_number || row.order_number || '-' }}</strong><br><span class="muted">{{ row.customer_name || '-' }}</span></td><td style="white-space:normal"><strong>{{ row.product_code || '-' }}</strong><br><span>{{ row.product_name || '-' }}</span></td><td style="white-space:normal"><div :class="productionLabelPlanClass(row)" style="display:block">{{ productionLabelPlanText(row) }}</div><div v-if="row.production_label_refresh_block_reason" class="muted" style="margin-top:4px">{{ row.production_label_refresh_block_reason }}</div></td><td v-if="canProductionExecute"><button v-if="canRefreshProductionLabelPlan(row)" class="btn small" :disabled="row._label_refreshing" @click="refreshProductionLabelPlan(row)">{{ row._label_refreshing ? '正在刷新…' : '按当前常用箱刷新' }}</button><span v-else class="muted">不可刷新</span></td></tr></tbody>
-                  </table>
-                </data-panel>
-              </section>
               <div v-if="productionTab==='pending' && productionPendingError" class="status orange" style="display:block;margin:8px 0">{{ productionPendingError }} <button class="btn small" @click="loadProduction">重试</button></div>
               <data-panel v-if="productionTab==='pending'" :empty="!productionPending.length">
                 <table class="production-table" style="table-layout:fixed;width:100%">
@@ -3553,7 +3541,7 @@
 	                  <tbody><tr v-for="row in productionPending" :key="row.id" :class="{'requisition-selected': productionSelected[row.id]}">
 	                    <td v-if="canProductionExecute"><input v-if="productionUsesBatchConfirmation(row)" type="checkbox" :checked="!!productionSelected[row.id]" :disabled="productionBusy || !canConfirmProductionRow(row)" @change="onProductionSelectionChange(row,$event.target.checked)" /><span v-else class="muted">{{ row._direct_submitting ? '处理中' : '-' }}</span></td>
 	                    <td style="white-space:normal"><strong>{{ row.item_order_number || row.order_number || '-' }}</strong><br><span class="muted">{{ row.customer_name || '-' }}</span></td>
-	                    <td style="white-space:normal"><div class="production-product-summary" :title="productionProductTitle(row)"><div class="production-product-line"><span v-if="row.is_component_task" class="status blue">组件</span><strong>{{ row.product_code || '-' }}</strong><span>｜{{ row.product_name || '-' }}</span></div><div :class="productionPrintingSetup(row)?'production-printing-setup':'production-product-meta'">{{ productionPrintingSetup(row) || (row.specification || '-') }}<span v-if="!productionPrintingSetup(row) && productionBoardPreparationSummary(row)">｜{{ productionBoardPreparationSummary(row) }}</span></div><div :class="productionLabelPlanClass(row)" style="display:block;margin-top:5px">{{ productionLabelPlanText(row) }}</div><button v-if="canRefreshProductionLabelPlan(row)" class="btn small" style="margin-top:5px" :disabled="row._label_refreshing" @click="refreshProductionLabelPlan(row)">{{ row._label_refreshing ? '正在刷新标签计划…' : '按当前常用箱刷新标签计划' }}</button></div></td>
+	                    <td style="white-space:normal"><div class="production-product-summary" :title="productionProductTitle(row)"><div class="production-product-line"><span v-if="row.is_component_task" class="status blue">组件</span><strong>{{ row.product_code || '-' }}</strong><span>｜{{ row.product_name || '-' }}</span></div><div :class="productionPrintingSetup(row)?'production-printing-setup':'production-product-meta'">{{ productionPrintingSetup(row) || (row.specification || '-') }}<span v-if="!productionPrintingSetup(row) && productionBoardPreparationSummary(row)">｜{{ productionBoardPreparationSummary(row) }}</span></div><div :class="productionLabelPlanClass(row)" style="display:block;margin-top:5px">{{ productionLabelPlanText(row) }}</div></div></td>
 	                    <td style="white-space:normal"><div class="production-quantity-summary"><div>订单 <strong>{{ row.order_quantity || 0 }}</strong>{{ productionOutputUnit(row) }}｜已到纸板 <strong>{{ row.material_received_quantity || 0 }}</strong>张</div><div>本次做 <strong>{{ row.planned_output_quantity || row.planned_quantity || 0 }}</strong>{{ productionOutputUnit(row) }}<span v-if="productionCuttingModeLabel(row)" class="muted">｜{{ productionCuttingModeLabel(row) }}</span></div></div></td>
 	                    <td style="white-space:normal"><div class="production-input-line"><label class="muted">用纸板</label><input class="input" type="number" min="1" v-model.number="row.actual_input_quantity" @input="syncProductionQuantities(row)" /><span class="production-input-unit">张</span></div><div class="production-input-line"><label class="muted">做成品</label><input class="input" type="number" min="1" v-model.number="row.actual_output_quantity" @input="syncProductionQuantities(row)" /><span class="production-input-unit">{{ productionOutputUnit(row) }}｜损耗 {{ productionDefectiveQuantity(row) }}</span></div></td>
 	                    <td style="white-space:normal"><div>用于订单 <strong>{{ productionOrderCoverage(row) }}</strong></div><div :class="productionSurplusQuantity(row)>0?'status orange':'muted'" style="margin-top:4px">多出 {{ productionSurplusQuantity(row) }}</div></td>
@@ -6824,6 +6812,19 @@
                 <div class="muted" style="margin-top:6px">24 小时内有效，仅可操作当前天华草稿。</div>
               </div>
             </div>
+            <div v-else-if="modal.type === 'productionLabelMaintenance'">
+              <div class="status blue" style="display:block;white-space:normal;margin-bottom:10px">这里只维护任务冻结的包装标签计划，不提供完工输入。生产数量、材料状态、库存和送货不会因这里的操作改变。</div>
+              <section v-if="productionPendingLabelMaintenanceRows().length" style="margin-bottom:16px">
+                <div class="toolbar"><strong>当前待生产页的标签异常（{{ productionPendingLabelMaintenanceRows().length }}）</strong><span class="muted">来自已加载的当前页，不额外读取待生产任务。</span></div>
+                <div class="table-wrap"><table style="table-layout:fixed;width:100%"><thead><tr><th style="width:22%">订单 / 客户</th><th style="width:28%">存货编码 / 产品</th><th>冻结标签计划</th><th v-if="canProductionExecute" style="width:18%">人工维护</th></tr></thead><tbody><tr v-for="row in productionPendingLabelMaintenanceRows()" :key="`pending-label-maintenance-${row.id}`"><td style="white-space:normal"><strong>{{ row.item_order_number || row.order_number || '-' }}</strong><br><span class="muted">{{ row.customer_name || '-' }}</span></td><td style="white-space:normal"><strong>{{ row.product_code || '-' }}</strong><br><span>{{ row.product_name || '-' }}</span></td><td style="white-space:normal"><div :class="productionLabelPlanClass(row)" style="display:block">{{ productionLabelPlanText(row) }}</div><div v-if="row.production_label_refresh_block_reason" class="muted" style="margin-top:4px">{{ row.production_label_refresh_block_reason }}</div></td><td v-if="canProductionExecute"><button v-if="canRefreshProductionLabelPlan(row)" class="btn small" :disabled="row._label_refreshing" @click="refreshProductionLabelPlan(row)">{{ row._label_refreshing ? '正在刷新…' : '按当前常用箱刷新' }}</button><span v-else class="muted">不可刷新</span></td></tr></tbody></table></div>
+              </section>
+              <section>
+                <div class="toolbar" style="margin-bottom:6px"><div class="toolbar-group"><strong>待料任务标签计划</strong><span class="muted">点击本入口后才读取；待料任务不会进入生产完工表。</span></div><div class="toolbar-group"><pager :page="pages.productionWaitingLabels" :total="productionWaitingLabelTotal" :page-size="pageSize" :always="true" :compact="true" @change="loadProductionWaitingLabelPage($event)"></pager><button class="btn small" :disabled="productionWaitingLabelLoading" @click="loadProductionWaitingLabelPage(pages.productionWaitingLabels || 1)">{{ productionWaitingLabelLoading ? '读取中…' : '刷新待料任务' }}</button></div></div>
+                <div v-if="productionWaitingLabelError" class="status orange" style="display:block;margin:6px 0">{{ productionWaitingLabelError }} <button class="btn small" @click="loadProductionWaitingLabelPage(pages.productionWaitingLabels || 1)">重试</button></div>
+                <data-panel :empty="!productionWaitingLabels.length"><table style="table-layout:fixed;width:100%"><thead><tr><th style="width:22%">订单 / 客户</th><th style="width:31%">存货编码 / 产品</th><th>冻结标签计划</th><th v-if="canProductionExecute" style="width:18%">人工维护</th></tr></thead><tbody><tr v-for="row in productionWaitingLabels" :key="`waiting-label-${row.id}`"><td style="white-space:normal"><strong>{{ row.item_order_number || row.order_number || '-' }}</strong><br><span class="muted">{{ row.customer_name || '-' }}</span></td><td style="white-space:normal"><strong>{{ row.product_code || '-' }}</strong><br><span>{{ row.product_name || '-' }}</span></td><td style="white-space:normal"><div :class="productionLabelPlanClass(row)" style="display:block">{{ productionLabelPlanText(row) }}</div><div v-if="row.production_label_refresh_block_reason" class="muted" style="margin-top:4px">{{ row.production_label_refresh_block_reason }}</div></td><td v-if="canProductionExecute"><button v-if="canRefreshProductionLabelPlan(row)" class="btn small" :disabled="row._label_refreshing" @click="refreshProductionLabelPlan(row)">{{ row._label_refreshing ? '正在刷新…' : '按当前常用箱刷新' }}</button><span v-else class="muted">不可刷新</span></td></tr></tbody></table></data-panel>
+              </section>
+              <div class="toolbar" style="justify-content:flex-end;margin-top:12px"><button class="btn primary" @click="closeModal">返回生产确认</button></div>
+            </div>
             <div v-else-if="modal.type === 'statement'">
               <div class="form-grid">
                 <div class="field"><label>客户</label><search-select v-model="statementForm.customer_id" :options="statementCustomerOptions" label-key="name" value-key="id" placeholder="搜索有对账资格的客户" @change="loadPendingStatements"></search-select></div>
@@ -7929,7 +7930,7 @@
             incomingTab: "pending", incomingPending: [], incomingPendingTotal: 0, incomingPendingLoading: false, incomingPendingError: "", incomingPendingAppliedPage: 1, incomingPendingRetryPage: 1, incomingReceived: [], incomingReceivedLoaded: false, incomingReceivedLoading: false, incomingReceivedError: "", incomingHistory: [], incomingHistoryTotal: 0, incomingLocations: [], incomingLocationsLoading: false, incomingLocationsError: "", incomingProductionCardOpening: false, incomingProductionCardAttemptId: "", incomingProductionCardRecoveryUrl: "", incomingProductionCardRecoveryMessage: "",
             externalIncomingPending: [], externalIncomingLoading: false, externalIncomingError: "", externalIncomingDrafts: {}, externalIncomingSavingId: null,
             incomingHistoryFilters: { customer_id:"", document_keyword:"", product_code:"", product_name:"", supplier_name:"", date_from:"", date_to:"", receipt_status:"" },
-            productionTab: "pending", productionPending: [], productionPendingTotal: 0, productionPendingLoading: false, productionPendingError: "", productionWaitingLabels: [], productionWaitingLabelTotal: 0, productionWaitingLabelLoading: false, productionWaitingLabelError: "", productionHistory: [], productionHistoryTotal: 0, productionLocations: [], productionLocationsLoading: false, productionLocationsError: "", productionSelected: {}, productionBusy: false,
+            productionTab: "pending", productionPending: [], productionPendingTotal: 0, productionPendingLoading: false, productionPendingError: "", productionWaitingLabels: [], productionWaitingLabelTotal: 0, productionWaitingLabelLoading: false, productionWaitingLabelError: "", productionLabelMaintenanceScrollY: 0, productionHistory: [], productionHistoryTotal: 0, productionLocations: [], productionLocationsLoading: false, productionLocationsError: "", productionSelected: {}, productionBusy: false,
             productionHistoryFilters: { customer_id:"", order_keyword:"", product_code:"", product_name:"", completed_date_from:"", completed_date_to:"", status:"" },
             productionCompletionAttempts: {}, productionDirectAttempts: {}, productionTransferAttempts: {}, productionLabelRefreshAttempts: {},
             productFormSnapshot: null, productBomSnapshot: null,
@@ -12092,6 +12093,13 @@
             this.externalPurchaseRouting = [];
             this.externalPurchaseRoutingLoading = false;
             this.externalPurchaseRoutingError = "";
+            this.productionWaitingLabels = [];
+            this.productionWaitingLabelTotal = 0;
+            this.productionWaitingLabelLoading = false;
+            this.productionWaitingLabelError = "";
+            this.productionLabelMaintenanceScrollY = 0;
+            this.productionLabelRefreshAttempts = {};
+            this.pages.productionWaitingLabels = 1;
             for (const timer of searchDebounceTimers.values()) clearTimeout(timer);
             searchDebounceTimers.clear();
             pageSearchGenerations.clear();
@@ -15257,20 +15265,49 @@
             } catch(error) { this.showToast(this.errorMessage(error),true); }
           },
           async loadProduction() {
-            const [pending, waitingLabels] = await Promise.all([
-              this.loadProductionPage(this.pages.productionPending || 1),
-              this.loadProductionWaitingLabelPage(this.pages.productionWaitingLabels || 1),
-            ]);
-            return pending !== false && waitingLabels !== false;
+            return this.loadProductionPage(this.pages.productionPending || 1);
+          },
+          async openProductionLabelMaintenance() {
+            if (!this.productionLabelMaintenanceEntryVisible()) return false;
+            this.productionLabelMaintenanceScrollY = Number(window.scrollY || document.documentElement?.scrollTop || 0);
+            this.modal = {type:"productionLabelMaintenance", title:"标签异常 / 维护"};
+            return this.loadProductionWaitingLabelPage(this.pages.productionWaitingLabels || 1);
+          },
+          productionLabelPlanNeedsMaintenance(row) {
+            const plan = this.productionLabelSnapshot(row);
+            if (this.productionLabelPlanInconsistent(row)) return true;
+            if (!plan.enabled) return plan.canRefresh;
+            return !Number.isInteger(plan.unitsPerLabel) || plan.unitsPerLabel <= 0
+              || !Number.isInteger(plan.totalQuantity) || plan.totalQuantity <= 0
+              || !Number.isInteger(plan.labelCount) || plan.labelCount <= 0
+              || !this.productionLabelTemplateSupported(plan.templateVersion);
+          },
+          productionPendingLabelMaintenanceRows() {
+            return (this.productionPending || []).filter(row => this.productionLabelPlanNeedsMaintenance(row));
+          },
+          productionLabelMaintenanceAnomalyCount() {
+            return this.productionPendingLabelMaintenanceRows().length;
+          },
+          productionLabelMaintenanceEntryVisible() {
+            return this.canAdmin || (this.canProductionExecute && this.productionLabelMaintenanceAnomalyCount() > 0);
           },
           async loadProductionWaitingLabelPage(requestedPage = 1) {
             const controller = this.beginLatestRequest("production:waiting-labels");
             const page = Math.max(Number(requestedPage || 1), 1);
+            const authGeneration = this.authGeneration;
+            const userId = Number(this.user?.id || 0);
+            const requestIsCurrent = () => (
+              latestRequestControllers.get("production:waiting-labels") === controller
+              && this.authGeneration === authGeneration
+              && Number(this.user?.id || 0) === userId
+              && this.activePage === "production"
+              && this.modal?.type === "productionLabelMaintenance"
+            );
             this.productionWaitingLabelLoading = true;
             this.productionWaitingLabelError = "";
             try {
               const {data} = await axios.get("/api/production/tasks", {params:{status:"waiting_material", page, page_size:this.pageSize}, signal:controller.signal});
-              if (latestRequestControllers.get("production:waiting-labels") !== controller) return false;
+              if (!requestIsCurrent()) return false;
               const total = Number(data.total || 0);
               const lastPage = Math.max(Math.ceil(total / Number(data.page_size || this.pageSize || 1)), 1);
               if (page > lastPage) return this.loadProductionWaitingLabelPage(lastPage);
@@ -15283,10 +15320,10 @@
               this.pages.productionWaitingLabels = Number(data.page || page);
               return true;
             } catch (error) {
-              if (!this.isCancelledRequest(error) && latestRequestControllers.get("production:waiting-labels") === controller) this.productionWaitingLabelError = `待料标签任务读取失败：${this.errorMessage(error)}`;
+              if (!this.isCancelledRequest(error) && requestIsCurrent()) this.productionWaitingLabelError = `待料标签任务读取失败：${this.errorMessage(error)}`;
               return false;
             } finally {
-              if (latestRequestControllers.get("production:waiting-labels") === controller) this.productionWaitingLabelLoading = false;
+              if (requestIsCurrent()) this.productionWaitingLabelLoading = false;
               this.finishLatestRequest("production:waiting-labels", controller);
             }
           },
@@ -26644,6 +26681,14 @@
           },
 	          closeModal() {
 	            if (this.isForcedPassword) return;
+              const productionLabelMaintenanceScrollY = this.modal?.type === "productionLabelMaintenance"
+                ? Number(this.productionLabelMaintenanceScrollY || 0)
+                : null;
+              if (productionLabelMaintenanceScrollY !== null) {
+                const controller = latestRequestControllers.get("production:waiting-labels");
+                controller?.abort();
+                if (latestRequestControllers.get("production:waiting-labels") === controller) latestRequestControllers.delete("production:waiting-labels");
+              }
               if (["supplierRequisitionDraft","requisition"].includes(this.modal?.type) && this.requisitionInventoryActionBlocked()) {
                 const message = this.requisitionInventoryActionState?.action
                   ? this.requisitionInventoryActionLabel()
@@ -26735,6 +26780,10 @@
 	              this.invoiceTaskOperationState.detailError = "";
 	            }
 	            this.modal = null;
+            if (productionLabelMaintenanceScrollY !== null) {
+              this.productionLabelMaintenanceScrollY = 0;
+              requestAnimationFrame(() => window.scrollTo(0, productionLabelMaintenanceScrollY));
+            }
             if (restoreReadOnlyOrderFocus) this.restoreModalOpenerFocus();
             this.statementDetail = null;
             this.statementEditForm = { id: null, statement_month: "" };

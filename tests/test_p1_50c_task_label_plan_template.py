@@ -510,10 +510,15 @@ def test_print_template_has_exact_current_size_and_no_silent_core_field_elision(
     assert 'plan.templateVersion === "current_40x30_v1"' in index_source
     assert "plan.productVersion === current.version" in index_source
     assert "旧任务冻结未启用｜可按当前常用箱人工刷新" in index_source
-    assert "待料标签维护" in index_source
+    assert "标签异常 / 维护" in index_source
+    assert "modal.type === 'productionLabelMaintenance'" in index_source
     assert 'status:"waiting_material"' in index_source
     assert '!["waiting_material", "pending"].includes(row?.status)' in index_source
     assert "loadProductionWaitingLabelPage(this.pages.productionWaitingLabels" in index_source
+    cold_load = index_source.split("async loadProduction()", 1)[1].split(
+        "async openProductionLabelMaintenance", 1
+    )[0]
+    assert "loadProductionWaitingLabelPage" not in cold_load
 
     node = shutil.which("node")
     assert node is not None

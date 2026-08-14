@@ -240,17 +240,47 @@ def batch_dict(db,batch):
     return {"batch_id":batch.id,"batch_number":batch.batch_number,"customer_id":batch.customer_id,"customer_name":batch.customer_name,"pre_delivery_date":batch.pre_delivery_date.isoformat() if batch.pre_delivery_date else None,"status":batch.status,"total_rows":len(items),"draft":draft_dict(db,draft) if draft else None,"items":[item_dict(i,draft_items.get(i.id)) for i in items]}
 
 
+def _batch_filename_summary(filenames: list[str]) -> str:
+    prefix=f"{len(filenames)}张："
+    summary=prefix+"、".join(filenames)
+    if len(summary)<=255:
+        return summary
+    suffix="…"
+    return summary[:255-len(suffix)].rstrip("、")+suffix
+
+
 def create_batch(db,content,filename,user_id,pre_delivery_date=None):
     target_date=pre_delivery_date or (beijing_today()+timedelta(days=1))
-    processed=[preprocess_row(db,r,target_date) for r in recognize_tianhua_image(content)]
+    if isinstance(content,(bytes,bytearray,memoryview)):
+        sources=[(bytes(content),str(filename or "upload"))]
+    else:
+        sources=[(bytes(value),str(name or "upload")) for value,name in content]
+    if not sources:
+        raise ValueError("请至少上传 1 张天华预送货图片")
+    recognized=[]
+    next_row_no=1
+    for image_content,_source_name in sources:
+        rows=recognize_tianhua_image(image_content)
+        if not rows:
+            raise ValueError("未识别到天华表格行")
+        for row in rows:
+            recognized.append(RecognizedRow(
+                row_no=next_row_no,
+                raw_text=row.raw_text,
+                stock_code=row.stock_code,
+                image_qty=row.image_qty,
+                image_order_no=row.image_order_no,
+            ))
+            next_row_no+=1
+    processed=[preprocess_row(db,row,target_date) for row in recognized]
     product_id=next((x["product_id"] for x in processed if x["product_id"]),None)
     product=db.get(Product,product_id) if product_id else None
     customer=db.get(Customer,product.customer_id) if product else db.scalar(select(Customer).where(or_(Customer.name.contains("天华"),Customer.customer_code=="天华")).order_by(Customer.id.desc()))
     if customer is None: raise ValueError("系统中未找到天华客户资料")
-    batch=TianhuaPreDeliveryImportBatch(batch_number=f"TH-{beijing_now_naive():%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6].upper()}",filename=filename,customer_id=customer.id,customer_name=customer.name,pre_delivery_date=target_date,total_rows=len(processed),created_by=user_id)
+    batch=TianhuaPreDeliveryImportBatch(batch_number=f"TH-{beijing_now_naive():%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6].upper()}",filename=_batch_filename_summary([name for _value,name in sources]),customer_id=customer.id,customer_name=customer.name,pre_delivery_date=target_date,total_rows=len(processed),created_by=user_id)
     db.add(batch); db.flush()
     for x in processed: db.add(TianhuaPreDeliveryImportItem(batch_id=batch.id,**x))
-    db.commit(); db.refresh(batch); return batch
+    db.flush(); return batch
 
 
 def _delivery_total(db: Session, delivery_id: int) -> int:

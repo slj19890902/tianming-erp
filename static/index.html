@@ -1299,13 +1299,18 @@
       }
       .product-process-field { flex:0 0 430px; }
       .product-mold-adjacent { flex:1 1 360px; min-width:320px; }
-      .product-print-status-field { flex:0 0 148px; margin-left:auto; }
-      .product-print-method-field { flex:0 0 172px; }
-      .product-print-method-note {
-        overflow:hidden;
-        text-overflow:ellipsis;
-        white-space:nowrap;
+      .product-printing-direct-workbench {
+        flex:1 1 620px;
+        min-width:620px;
+        display:flex;
+        flex-wrap:nowrap;
+        align-items:flex-start;
+        gap:8px;
+        margin-left:auto;
       }
+      .product-printing-direct-workbench:not(.has-direct-colors) { flex:0 0 148px; min-width:148px; }
+      .product-print-status-field { flex:0 0 148px; min-width:0; margin-left:0; }
+      .product-printing-direct-workbench.has-direct-colors > .product-print-status-field { margin-top:7px; }
       .product-printing-plate-config {
         flex:1 0 100%;
         display: grid;
@@ -1330,17 +1335,32 @@
       .product-printing-plate-row-order { align-self:center; font-weight:700; color:#9a3412; white-space:nowrap; }
       .product-printing-plate-parameters { display:grid; grid-template-columns:repeat(5,minmax(140px,1fr)); gap:8px 10px; }
       .product-printing-color-config {
-        flex:1 0 100%;
-        display:grid;
-        grid-template-columns:repeat(3,minmax(150px,1fr));
-        gap:8px 10px;
-        padding:10px;
+        flex:1 1 0;
+        min-width:0;
+        display:flex;
+        flex-wrap:wrap;
+        align-items:flex-end;
+        gap:8px;
+        padding:7px 8px;
         border:1px solid #bae6fd;
         border-radius:9px;
         background:#f0f9ff;
       }
-      .product-printing-color-actions { grid-column:1 / -1; display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
-      .product-printing-color-message { grid-column:1 / -1; }
+      .product-printing-color-field { flex:1 1 132px; min-width:0; max-width:190px; }
+      .product-printing-color-config > .field { margin-bottom:0; }
+      .product-printing-color-field .input { width:100%; min-width:0; }
+      .product-printing-color-preset { flex:0 0 104px; width:104px; min-width:104px; }
+      .product-printing-color-hint { flex:0 0 auto; align-self:center; white-space:nowrap; }
+      .product-printing-color-notices { flex:1 0 100%; display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+      .product-printing-color-message { min-width:0; white-space:normal; }
+      .product-editor-large .product-printing-direct-workbench { flex-basis:690px; min-width:690px; gap:9px; }
+      .product-editor-large .product-printing-color-config { gap:9px; }
+      .product-editor-large .product-printing-color-field { max-width:210px; }
+      .product-editor-large .product-print-status-field label,
+      .product-editor-large .product-printing-color-field label { font-size:15px; }
+      .product-editor-large .product-print-status-field .select,
+      .product-editor-large .product-printing-color-field .input,
+      .product-editor-large .product-printing-color-preset { min-height:42px; font-size:16px; }
       .product-production-label-config {
         flex:0 0 142px;
         display: grid;
@@ -1578,10 +1598,12 @@
         .product-process-field,
         .product-mold-adjacent,
         .product-print-status-field,
-        .product-print-method-field,
+        .product-printing-direct-workbench,
         .product-printing-color-config,
         .product-production-label-config { min-width:0; width:auto; margin-left:0; }
-        .product-printing-color-config { grid-template-columns:repeat(2,minmax(0,1fr)); grid-column:1 / -1; }
+        .product-printing-direct-workbench { grid-column:1 / -1; flex-wrap:wrap; }
+        .product-printing-direct-workbench:not(.has-direct-colors) { grid-column:auto; }
+        .product-printing-color-config { flex:1 1 480px; flex-wrap:wrap; }
         .product-production-label-config { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-column: 1 / -1; }
         .telescoping-component-grid { grid-template-columns: 1fr; }
       }
@@ -1598,7 +1620,13 @@
         .product-material-candidate-metrics { grid-template-columns: 1fr; }
         .product-material-history-row { grid-template-columns: 1fr; }
         .product-print-row { grid-template-columns:1fr; }
-        .product-printing-color-config { grid-template-columns:1fr; grid-column:1 / -1; }
+        .product-printing-direct-workbench,
+        .product-printing-direct-workbench:not(.has-direct-colors) { grid-column:1 / -1; flex-direction:column; align-items:stretch; }
+        .product-editor-large .product-printing-direct-workbench,
+        .product-editor-large .product-printing-direct-workbench:not(.has-direct-colors) { min-width:0; width:100%; flex-basis:auto; }
+        .product-printing-color-config { width:100%; flex-direction:column; align-items:stretch; }
+        .product-printing-color-field { max-width:none; }
+        .product-printing-color-preset { width:100%; }
         .product-production-label-config { grid-template-columns: 1fr; grid-column: 1 / -1; }
       }
 
@@ -4551,7 +4579,7 @@
       </div>
 
       <div v-if="modal" class="modal-mask" @click.self="onModalMaskClick">
-        <div ref="businessModal" class="modal" :class="{'order-entry-modal': modal.type === 'order', 'order-entry-large': modal.type === 'order' && isLargeUi, 'pdf-order-import-modal': modal.type === 'orderPdfImport', 'product-editor-modal': modal.type === 'product'}" :role="isAccessibleBusinessDialog ? 'dialog' : null" :aria-modal="isAccessibleBusinessDialog ? 'true' : null" :aria-labelledby="isAccessibleBusinessDialog ? 'erp-business-dialog-title' : null" :aria-describedby="isAccessibleReadOnlyOrderDialog ? 'erp-order-detail-description' : null" :tabindex="isAccessibleBusinessDialog ? -1 : null" @keydown="onModalKeydown">
+        <div ref="businessModal" class="modal" :class="{'order-entry-modal': modal.type === 'order', 'order-entry-large': modal.type === 'order' && isLargeUi, 'pdf-order-import-modal': modal.type === 'orderPdfImport', 'product-editor-modal': modal.type === 'product', 'product-editor-large': modal.type === 'product' && isLargeUi}" :role="isAccessibleBusinessDialog ? 'dialog' : null" :aria-modal="isAccessibleBusinessDialog ? 'true' : null" :aria-labelledby="isAccessibleBusinessDialog ? 'erp-business-dialog-title' : null" :aria-describedby="isAccessibleReadOnlyOrderDialog ? 'erp-order-detail-description' : null" :tabindex="isAccessibleBusinessDialog ? -1 : null" @keydown="onModalKeydown">
           <div class="modal-head"><strong :id="isAccessibleBusinessDialog ? 'erp-business-dialog-title' : null">{{ modal.title }}</strong><button v-if="!isForcedPassword" class="btn small high-frequency-action" @click="closeModal">关闭</button></div>
           <div class="modal-body">
             <div v-if="masterVersionConflict && masterVersionConflict.entity === modal.type" class="notice danger" style="margin-bottom:12px">
@@ -5071,29 +5099,32 @@
                   </div>
                 </div>
                 <div v-if="productForm.supply_mode!=='external_purchase' && productUsesMold(productForm)" class="field product-mold-adjacent"><label>生产模具 / 货架位置（必选）</label><search-select v-model="productForm.mold_tool_id" :options="moldToolSelectOptions()" label-key="_label" value-key="id" placeholder="输入模具编号、名称或位置" :allow-empty="false" @search="searchMoldTools"></search-select><div v-if="productMoldError" class="status orange" style="display:block;margin-top:4px">{{ productMoldError }}</div></div>
-                <div v-if="productForm.supply_mode!=='external_purchase'" class="field product-print-status-field"><label>印刷情况</label>
-                  <select class="select" v-model="productForm._printing_situation" @change="onProductPrintingSituationChanged">
-                    <option value="无印刷">无印刷</option>
-                    <option value="单色印刷">单色印刷</option>
-                    <option value="双色印刷">双色印刷</option>
-                    <option value="三色印刷">三色印刷</option>
-                    <option value="挂板印刷">挂板印刷</option>
-                  </select>
-                </div>
-                <div v-if="productForm.supply_mode!=='external_purchase' && productUsesDirectPrinting(productForm)" class="field product-print-method-field"><label>颜色</label>
-                  <div class="muted">{{ productPrintingColorSummary(productForm) || '颜色待完善' }}</div>
-                  <div class="status orange product-print-method-note" style="display:block;margin-top:4px" title="按图纸核对印刷内容，可能有印刷尺寸偏差">按图纸核对</div>
-                </div>
-                <div v-if="productForm.supply_mode!=='external_purchase' && productUsesDirectPrinting(productForm)" class="product-printing-color-config">
-                  <div class="field" v-for="index in productDirectPrintingColorCount(productForm)" :key="`printing-color-${index}`">
-                    <label>第{{ index }}色</label>
-                    <input class="input" maxlength="40" list="product-printing-color-suggestions" v-model="productForm._printing_colors[index-1]" :placeholder="index===1 && productForm._printing_situation==='单色印刷' ? '首次可用黑色' : `填写第${index}色`" @input="onProductPrintingColorInput" @blur="normalizeProductPrintingColor(index-1)" />
+                <div v-if="productForm.supply_mode!=='external_purchase'" class="product-printing-direct-workbench" :class="{'has-direct-colors':productUsesDirectPrinting(productForm)}">
+                  <div class="field product-print-status-field"><label>印刷情况</label>
+                    <select class="select" v-model="productForm._printing_situation" @change="onProductPrintingSituationChanged">
+                      <option value="无印刷">无印刷</option>
+                      <option value="单色印刷">单色印刷</option>
+                      <option value="双色印刷">双色印刷</option>
+                      <option value="三色印刷">三色印刷</option>
+                      <option value="挂板印刷">挂板印刷</option>
+                    </select>
                   </div>
-                  <datalist id="product-printing-color-suggestions"><option value="黑色"></option><option value="红色"></option><option value="蓝色"></option><option value="橙色"></option><option value="绿色"></option></datalist>
-                  <div v-if="productForm._printing_situation==='双色印刷'" class="product-printing-color-actions"><span class="muted">快捷填充：</span><button type="button" class="btn small" @click="applyProductPrintingColorPreset(['黑色','红色'])">黑＋红</button><button type="button" class="btn small" @click="applyProductPrintingColorPreset(['黑色','绿色'])">黑＋绿</button><button type="button" class="btn small" @click="applyProductPrintingColorPreset(['黑色','蓝色'])">黑＋蓝</button><span class="muted">填充后仍可编辑</span></div>
-                  <div v-if="productForm.print_content==='多色印刷'" class="muted product-printing-color-message">历史多色记录：{{ productForm.printing_colors || '颜色待完善' }}。当前按三色兼容显示，保存前请人工核对。</div>
-                  <div v-if="productPrintingColorsIncomplete(productForm)" class="status orange product-printing-color-message">颜色待完善</div>
-                  <div v-if="productPrintingColorError" class="status red product-printing-color-message">{{ productPrintingColorError }}</div>
+                  <div v-if="productUsesDirectPrinting(productForm)" class="product-printing-color-config">
+                    <div class="field product-printing-color-field" v-for="index in productDirectPrintingColorCount(productForm)" :key="`printing-color-${index}`">
+                      <label>第{{ index }}色</label>
+                      <input class="input" maxlength="40" list="product-printing-color-suggestions" v-model="productForm._printing_colors[index-1]" :title="productForm._printing_colors[index-1] || `第${index}色待填写`" :placeholder="index===1 && productForm._printing_situation==='单色印刷' ? '首次可用黑色' : `填写第${index}色`" @input="onProductPrintingColorInput" @blur="normalizeProductPrintingColor(index-1)" />
+                    </div>
+                    <datalist id="product-printing-color-suggestions"><option value="黑色"></option><option value="红色"></option><option value="蓝色"></option><option value="橙色"></option><option value="绿色"></option></datalist>
+                    <select v-if="productForm._printing_situation==='双色印刷'" class="select product-printing-color-preset" aria-label="双色快捷组合" title="选择后仍可修改颜色" @change="$event.target.value && applyProductPrintingColorPreset($event.target.value.split('＋')); $event.target.value=''">
+                      <option value="">双色快捷</option><option value="黑色＋红色">黑＋红</option><option value="黑色＋绿色">黑＋绿</option><option value="黑色＋蓝色">黑＋蓝</option>
+                    </select>
+                    <span class="muted product-printing-color-hint" title="按图纸核对印刷内容，可能有印刷尺寸偏差">按图纸核对</span>
+                    <div v-if="productForm.print_content==='多色印刷' || productPrintingColorsIncomplete(productForm) || productPrintingColorError" class="product-printing-color-notices">
+                      <span v-if="productForm.print_content==='多色印刷'" class="muted product-printing-color-message">历史多色记录：{{ productForm.printing_colors || '颜色待完善' }}。当前按三色兼容显示，保存前请人工核对。</span>
+                      <span v-if="productPrintingColorsIncomplete(productForm)" class="status orange product-printing-color-message">颜色待完善</span>
+                      <span v-if="productPrintingColorError" class="status red product-printing-color-message">{{ productPrintingColorError }}</span>
+                    </div>
+                  </div>
                 </div>
                 <div v-if="productForm.supply_mode!=='external_purchase' && productHasPrinting(productForm) && productForm.printing_plate_mode==='plate'" class="product-printing-plate-config">
                   <div class="product-printing-plate-actions">

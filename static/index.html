@@ -6803,10 +6803,16 @@
               <div class="panel" style="margin-bottom:12px">
                 <div class="section-title">上传天华预送货截图</div>
                 <div class="toolbar-group">
-                  <input class="input" type="file" accept=".jpg,.jpeg,.png,image/jpeg,image/png" @change="onTianhuaImageSelected" />
+                  <input class="input" type="file" multiple accept=".jpg,.jpeg,.png,image/jpeg,image/png" @change="onTianhuaImageSelected" />
                   <label class="muted">预送货日期 <input class="input" type="date" v-model="tianhuaPreimport.preDeliveryDate" /></label>
-                  <span class="muted">{{ tianhuaPreimport.fileName || "尚未选择图片" }}</span>
-                  <button class="btn primary" :disabled="!tianhuaPreimport.file || loading" @click="startTianhuaRecognition">开始识别</button>
+                  <span class="muted">{{ tianhuaPreimport.files.length ? `已选 ${tianhuaPreimport.files.length} 张（最多 10 张、合计 60MB）` : "尚未选择图片" }}</span>
+                  <button class="btn primary" :disabled="!tianhuaPreimport.files.length || loading" @click="startTianhuaRecognition">开始识别</button>
+                </div>
+                <div v-if="tianhuaPreimport.files.length" class="toolbar-group" style="margin-top:8px;align-items:flex-start">
+                  <span v-for="(file,index) in tianhuaPreimport.files" :key="`${file.name}-${file.size}-${file.lastModified}-${index}`" class="status blue" style="display:inline-flex;gap:6px;align-items:center;max-width:320px">
+                    <span style="overflow-wrap:anywhere">{{ index + 1 }}. {{ file.name }}</span>
+                    <button class="btn small" type="button" :disabled="loading" @click="removeTianhuaImage(index)" title="移除这张误选图片">移除</button>
+                  </span>
                 </div>
                 <div v-if="tianhuaPreimport.batchId" class="muted" style="margin-top:8px">识别批次：{{ tianhuaPreimport.batchNumber }}（ID {{ tianhuaPreimport.batchId }}）</div>
                 <div v-if="tianhuaPreimport.batchId" class="toolbar-group" style="margin-top:8px">
@@ -8114,7 +8120,7 @@
             deliveryRoutePlan: { origin_address:null, customer_count:0, groups:[], disclaimer:"" },
             deliveryBatchPicker: { visible: false, loading: false, keyword: "", items: [], selected: {}, page:1, page_size:10, total:0, total_pages:1, request_token:0, message: "", error: false },
             unorderedFinishedPicker: { visible: false, loading: false, keyword:"", items: [], selected:{}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message: "", error: false },
-            tianhuaPreimport: { file:null, fileName:"", preDeliveryDate:plusDays(1), batchId:null, batchNumber:"", items:[], draft:null, mobileToken:null, remark:"天华邮件截图导入" },
+            tianhuaPreimport: { files:[], preDeliveryDate:plusDays(1), batchId:null, batchNumber:"", items:[], draft:null, mobileToken:null, remark:"天华邮件截图导入" },
             statementForm: { customer_id: null, statement_month: month(), selected: {} },
             expandedStatementDeliveries: {}, statementCyclePeriod: "",
             passwordForm: { current_password: "", new_password: "", confirm_password: "" },
@@ -26764,24 +26770,37 @@
             }
           },
           openTianhuaPreimport() {
-            this.tianhuaPreimport = { file:null, fileName:"", preDeliveryDate:plusDays(1), batchId:null, batchNumber:"", items:[], draft:null, mobileToken:null, remark:"天华邮件截图导入" };
+            this.tianhuaPreimport = { files:[], preDeliveryDate:plusDays(1), batchId:null, batchNumber:"", items:[], draft:null, mobileToken:null, remark:"天华邮件截图导入" };
             this.modal = { type:"tianhuaPreimport", title:"导入天华预送货" };
           },
           onTianhuaImageSelected(event) {
-            const file = event.target.files?.[0] || null;
-            this.tianhuaPreimport.file = file;
-            this.tianhuaPreimport.fileName = file?.name || "";
+            const files = Array.from(event.target.files || []);
+            if (files.length > 10) {
+              event.target.value = "";
+              return this.showToast("天华预送货图片一次最多选择 10 张", true);
+            }
+            this.tianhuaPreimport.files = files;
             this.tianhuaPreimport.batchId = null;
             this.tianhuaPreimport.items = [];
             this.tianhuaPreimport.draft = null;
             this.tianhuaPreimport.mobileToken = null;
           },
+          removeTianhuaImage(index) {
+            if (this.loading) return false;
+            this.tianhuaPreimport.files.splice(Number(index), 1);
+            this.tianhuaPreimport.batchId = null;
+            this.tianhuaPreimport.items = [];
+            this.tianhuaPreimport.draft = null;
+            this.tianhuaPreimport.mobileToken = null;
+            return true;
+          },
           async startTianhuaRecognition() {
-            if (!this.tianhuaPreimport.file) return this.showToast("请先选择天华预送货截图", true);
+            if (this.loading) return false;
+            if (!this.tianhuaPreimport.files.length) return this.showToast("请先选择天华预送货截图", true);
             this.loading = true;
             try {
               const form = new FormData();
-              form.append("file", this.tianhuaPreimport.file);
+              this.tianhuaPreimport.files.forEach(file => form.append("files", file));
               form.append("pre_delivery_date", this.tianhuaPreimport.preDeliveryDate || plusDays(1));
               const {data} = await axios.post("/api/deliveries/tianhua-preimport/upload", form, {headers:{"Content-Type":"multipart/form-data"}});
               this.tianhuaPreimport.batchId = data.batch_id;
@@ -26789,7 +26808,8 @@
               this.tianhuaPreimport.preDeliveryDate = data.pre_delivery_date || this.tianhuaPreimport.preDeliveryDate;
               this.tianhuaPreimport.items = data.items || [];
               this.tianhuaPreimport.draft = data.draft || null;
-              this.showToast(`已识别 ${data.total_rows} 行天华预送货明细`);
+              this.showToast(`已把 ${this.tianhuaPreimport.files.length} 张图片识别为 1 个批次，共 ${data.total_rows} 行`);
+              return true;
             } catch (error) { this.showToast(this.errorMessage(error), true); }
             finally { this.loading = false; }
           },

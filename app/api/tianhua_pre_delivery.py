@@ -31,6 +31,9 @@ mobile_router=APIRouter()
 can_read=PermissionChecker("deliveries.view")
 can_operate=PermissionChecker("deliveries.execute")
 
+TIANHUA_MAX_IMAGE_COUNT = 10
+TIANHUA_MAX_TOTAL_BYTES = 60 * 1024 * 1024
+
 
 class DraftLine(BaseModel):
     item_id:int|None=Field(default=None,ge=1)
@@ -64,25 +67,59 @@ def _batch_for_user(db:Session,batch_id:int,user:User) -> TianhuaPreDeliveryImpo
 
 
 @router.post("/tianhua-preimport/upload",status_code=status.HTTP_201_CREATED)
-async def upload(file:UploadFile=File(...),pre_delivery_date:date|None=Form(default=None),db:Session=Depends(get_db),user:User=Depends(can_operate)):
+async def upload(
+    files:list[UploadFile]=File(default=[]),
+    file:UploadFile|None=File(default=None),
+    pre_delivery_date:date|None=Form(default=None),
+    db:Session=Depends(get_db),
+    user:User=Depends(can_operate),
+):
     try:
-        validated=await read_validated_upload(file,IMAGE_POLICY)
+        uploads=([file] if file is not None else [])+list(files or [])
+        if not uploads:
+            raise UploadValidationError("请至少上传 1 张天华预送货图片")
+        if len(uploads)>TIANHUA_MAX_IMAGE_COUNT:
+            raise UploadValidationError(
+                f"天华预送货图片一次最多上传 {TIANHUA_MAX_IMAGE_COUNT} 张"
+            )
+        validated=[]
+        total_bytes=0
+        hashes=set()
+        for upload_file in uploads:
+            value=await read_validated_upload(upload_file,IMAGE_POLICY)
+            total_bytes+=value.size
+            if total_bytes>TIANHUA_MAX_TOTAL_BYTES:
+                raise UploadValidationError(
+                    f"天华预送货图片总大小不能超过 {TIANHUA_MAX_TOTAL_BYTES // (1024 * 1024)}MB"
+                )
+            if value.sha256 in hashes:
+                raise UploadValidationError("同一次请求不能上传内容重复的图片")
+            hashes.add(value.sha256)
+            validated.append(value)
     except UploadValidationError as error:
+        db.rollback()
         raise HTTPException(400,str(error)) from error
-    filename=validated.original_filename
-    content=validated.content
     try:
-        batch=create_batch(db,content,filename,user.id,pre_delivery_date or beijing_today()+timedelta(days=1))
-        try:
-            require_customer_access(batch.customer_id,user,db)
-        except HTTPException:
-            # create_batch commits internally; remove the just-created batch so
-            # a scoped account cannot persist an out-of-scope import.
-            db.delete(batch)
-            db.commit()
-            raise
+        batch=create_batch(
+            db,
+            [(value.content,value.original_filename) for value in validated],
+            None,
+            user.id,
+            pre_delivery_date or beijing_today()+timedelta(days=1),
+        )
+        require_customer_access(batch.customer_id,user,db)
+        db.commit()
+        db.refresh(batch)
         return batch_dict(db,batch)
-    except ValueError as e: db.rollback(); raise HTTPException(400,str(e)) from e
+    except HTTPException:
+        db.rollback()
+        raise
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(400,str(e)) from e
+    except Exception:
+        db.rollback()
+        raise
 
 
 @router.get("/tianhua-preimport/{batch_id}")

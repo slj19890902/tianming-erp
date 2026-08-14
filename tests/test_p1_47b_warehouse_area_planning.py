@@ -2174,6 +2174,149 @@ def test_one_step_zero_capacity_marks_non_pallet_area_excluded(
         engine.dispose()
 
 
+def test_legacy_v11_area_capacity_is_projected_live_to_the_unique_published_map_zone(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    published, _draft = _isolate_layout_paths(tmp_path, monkeypatch)
+    engine, factory = _database(tmp_path)
+    try:
+        with factory() as db:
+            admin = db.scalar(select(User).where(User.username == 'p1-47b-admin'))
+            floor = db.scalar(select(WarehouseFloor).where(WarehouseFloor.floor_code == '3F'))
+            assert admin is not None
+            assert floor is not None
+            area = WarehouseArea(
+                floor_id=floor.id,
+                area_code='F1',
+                area_name='F1 历史成品区',
+                construction_status='enabled',
+                planned_location_count=2,
+                planned_pallet_capacity=8,
+                capacity_review_status='confirmed',
+                capacity_eligible=True,
+                confirmed_pallet_capacity=6,
+                capacity_reviewed_by='现场管理员',
+                capacity_reviewed_at=datetime(2026, 8, 14, 10, 30),
+            )
+            db.add(area)
+            db.flush()
+            db.add(
+                WarehouseLocation(
+                    location_code='F1-LEGACY-001',
+                    location_name='F1 历史一号位',
+                    warehouse_type='finished',
+                    is_active=True,
+                    warehouse_floor=3,
+                    area_code='F1',
+                    storage_type='ground',
+                    source_version='V11',
+                    placement_status='placed',
+                )
+            )
+            db.commit()
+            monkeypatch.setattr(
+                warehouse_api,
+                'load_warehouse_twin_floor',
+                lambda _floor_code: json.loads(published.read_text(encoding='utf-8'))[
+                    'floors'
+                ]['3F'],
+            )
+
+            first = warehouse_api.get_warehouse_twin_floor_layout('3F', db, admin)
+            feature = next(item for item in first['features'] if item['id'] == 'zone-f1')
+            assert feature['formal_area_id'] == area.id
+            assert feature['formal_floor_id'] == floor.id
+            assert feature['formal_binding_source'] == 'legacy_v11_area_code'
+            assert feature['formal_binding_status'] == 'published'
+            assert feature['formal_construction_status'] == 'enabled'
+            assert feature['capacity_review_status'] == 'confirmed'
+            assert feature['confirmed_pallet_capacity'] == 6
+
+            area.confirmed_pallet_capacity = 8
+            area.planned_pallet_capacity = 9
+            db.commit()
+            refreshed = warehouse_api.get_warehouse_twin_floor_layout('3F', db, admin)
+            refreshed_feature = next(
+                item for item in refreshed['features'] if item['id'] == 'zone-f1'
+            )
+            assert refreshed_feature['confirmed_pallet_capacity'] == 8
+            assert refreshed_feature['planned_pallet_capacity'] == 9
+    finally:
+        engine.dispose()
+
+
+def test_legacy_area_code_projection_fails_closed_without_unique_v11_identity(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    published, _draft = _isolate_layout_paths(tmp_path, monkeypatch)
+    document = json.loads(published.read_text(encoding='utf-8'))
+    duplicate = dict(document['floors']['3F']['features'][0])
+    duplicate['id'] = 'zone-f1-duplicate'
+    duplicate['feature_code'] = 'ZONE-3F-ERP-F1-DUPLICATE'
+    document['floors']['3F']['features'].append(duplicate)
+    document['floors']['3F']['revision'] = _floor_revision(document['floors']['3F'])
+    published.write_text(
+        json.dumps(document, ensure_ascii=False, separators=(',', ':')),
+        encoding='utf-8',
+    )
+    engine, factory = _database(tmp_path)
+    try:
+        with factory() as db:
+            admin = db.scalar(select(User).where(User.username == 'p1-47b-admin'))
+            floor = db.scalar(select(WarehouseFloor).where(WarehouseFloor.floor_code == '3F'))
+            assert admin is not None
+            assert floor is not None
+            db.add(
+                WarehouseArea(
+                    floor_id=floor.id,
+                    area_code='F1',
+                    area_name='F1 不可猜测区域',
+                    construction_status='enabled',
+                    planned_location_count=1,
+                    planned_pallet_capacity=1,
+                    capacity_review_status='confirmed',
+                    capacity_eligible=True,
+                    confirmed_pallet_capacity=1,
+                    capacity_reviewed_by='现场管理员',
+                    capacity_reviewed_at=datetime(2026, 8, 14, 10, 30),
+                )
+            )
+            db.add(
+                WarehouseLocation(
+                    location_code='F1-LEGACY-AMBIGUOUS',
+                    location_name='F1 身份歧义位',
+                    warehouse_type='finished',
+                    is_active=True,
+                    warehouse_floor=3,
+                    area_code='F1',
+                    storage_type='ground',
+                    source_version='V11',
+                    placement_status='placed',
+                )
+            )
+            db.commit()
+            monkeypatch.setattr(
+                warehouse_api,
+                'load_warehouse_twin_floor',
+                lambda _floor_code: json.loads(published.read_text(encoding='utf-8'))[
+                    'floors'
+                ]['3F'],
+            )
+
+            result = warehouse_api.get_warehouse_twin_floor_layout('3F', db, admin)
+            ambiguous = [
+                item for item in result['features']
+                if item.get('erp_area_code') == 'F1'
+            ]
+            assert len(ambiguous) == 2
+            assert all('formal_area_id' not in item for item in ambiguous)
+            assert all('formal_binding_status' not in item for item in ambiguous)
+    finally:
+        engine.dispose()
+
+
 def test_one_step_capacity_above_measured_slots_rolls_back_map_and_formal_records(
     tmp_path: Path,
     monkeypatch,

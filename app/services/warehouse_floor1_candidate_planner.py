@@ -1023,13 +1023,38 @@ def overlay_formal_area_bindings(
             policy_query
         ).all()
     )
-    areas_by_code = {
-        area.area_code.upper(): area
-        for area in db.scalars(
-            select(WarehouseArea).where(WarehouseArea.floor_id == floor.id)
+    area_rows = list(
+        db.scalars(
+            select(WarehouseArea)
+            .options(selectinload(WarehouseArea.storage_policy))
+            .where(WarehouseArea.floor_id == floor.id)
         ).all()
-    }
+    )
+    areas_by_code = {area.area_code.upper(): area for area in area_rows}
     areas_by_id = {area.id: area for area in areas_by_code.values()}
+    legacy_v11_area_codes = {
+        str(value).strip().upper()
+        for value in db.scalars(
+            select(WarehouseLocation.area_code)
+            .where(
+                WarehouseLocation.warehouse_floor == floor.floor_number,
+                WarehouseLocation.source_version == "V11",
+                WarehouseLocation.is_active.is_(True),
+                WarehouseLocation.area_code.is_not(None),
+            )
+            .distinct()
+        ).all()
+        if str(value or "").strip()
+    }
+    feature_area_code_counts: dict[str, int] = {}
+    for raw in floor_layout.get("features") or []:
+        if raw.get("feature_kind") != "zone":
+            continue
+        area_code = str(raw.get("erp_area_code") or "").strip().upper()
+        if area_code:
+            feature_area_code_counts[area_code] = (
+                feature_area_code_counts.get(area_code, 0) + 1
+            )
     has_draft = bool((floor_layout.get("draft_control") or {}).get("has_draft"))
     by_feature = {policy.map_feature_id: policy for policy in policies}
     features: list[dict] = []
@@ -1087,5 +1112,45 @@ def overlay_formal_area_bindings(
                 feature["capacity_review_status"] = draft_area.capacity_review_status
                 feature["capacity_eligible"] = draft_area.capacity_eligible
                 feature["confirmed_pallet_capacity"] = draft_area.confirmed_pallet_capacity
+        elif str(feature.get("erp_area_code") or "").strip():
+            # The accepted 3F V11 map predates WarehouseAreaStoragePolicy, but
+            # its published zones already carry the exact formal area code.
+            # Project that existing one-to-one identity live instead of making
+            # capacity review and the measured map behave like separate ledgers.
+            # New 1F/unbound zones remain policy-only and are never guessed.
+            legacy_code = str(feature.get("erp_area_code") or "").strip().upper()
+            legacy_area = areas_by_code.get(legacy_code)
+            legacy_binding_is_proven = bool(
+                feature.get("feature_kind") == "zone"
+                and not feature.get("formal_area_id")
+                and feature_area_code_counts.get(legacy_code) == 1
+                and legacy_code in legacy_v11_area_codes
+                and legacy_area is not None
+                and legacy_area.storage_policy is None
+            )
+            if legacy_binding_is_proven and legacy_area is not None:
+                feature["formal_area_id"] = legacy_area.id
+                feature["formal_floor_id"] = legacy_area.floor_id
+                feature["formal_binding_source"] = "legacy_v11_area_code"
+                feature["formal_binding_status"] = (
+                    "published"
+                    if legacy_area.construction_status == "enabled"
+                    else "inactive"
+                )
+                feature["formal_area_name"] = legacy_area.area_name
+                feature["formal_construction_status"] = legacy_area.construction_status
+                feature["planned_location_count"] = legacy_area.planned_location_count
+                feature["planned_pallet_capacity"] = legacy_area.planned_pallet_capacity
+                feature["capacity_review_status"] = legacy_area.capacity_review_status
+                feature["capacity_eligible"] = legacy_area.capacity_eligible
+                feature["confirmed_pallet_capacity"] = (
+                    legacy_area.confirmed_pallet_capacity
+                )
+                feature["capacity_reviewed_by"] = legacy_area.capacity_reviewed_by
+                feature["capacity_reviewed_at"] = (
+                    legacy_area.capacity_reviewed_at.isoformat()
+                    if legacy_area.capacity_reviewed_at
+                    else None
+                )
         features.append(feature)
     return {**floor_layout, "features": features}

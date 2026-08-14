@@ -170,28 +170,40 @@ def operational_location_issue(
                 WarehouseAreaStoragePolicy.area_id == area.id
             )
         )
-        if policy is None or policy.status != "published":
-            return "该库位所属区域尚未发布"
-        if not (policy.published_map_revision or "").strip():
-            return "该库位所属区域缺少已发布地图版本"
-        try:
-            allowed_types = json.loads(policy.allowed_inventory_types_json)
-        except (TypeError, ValueError, json.JSONDecodeError):
-            return "该库位所属区域的存放策略已损坏"
-        if (
-            not isinstance(allowed_types, list)
-            or not all(isinstance(value, str) for value in allowed_types)
-        ):
-            return "该库位所属区域的存放策略已损坏"
-        if required_inventory_type and required_inventory_type not in {
-            value.strip() for value in allowed_types
-        }:
-            return "该库位所属区域不允许当前库存类型"
-        if (
-            pallet_storage_only
-            and policy.storage_layout not in {"pallet_ground", "mixed"}
-        ):
-            return "该库位所属区域的正式存储布局不允许地面栈板"
+        # V11 is the accepted three-floor map that predates the new area-policy
+        # table.  Keep those real mapped slots usable until an area explicitly
+        # enters the new draft/published policy lifecycle.  New or draft-bound
+        # areas still pass the full policy gate below.
+        legacy_v11_map_location = bool(
+            policy is None
+            and require_map_geometry
+            and location.warehouse_floor == 3
+            and location.source_version == "V11"
+            and location.placement_status == "placed"
+        )
+        if not legacy_v11_map_location:
+            if policy is None or policy.status != "published":
+                return "该库位所属区域尚未发布"
+            if not (policy.published_map_revision or "").strip():
+                return "该库位所属区域缺少已发布地图版本"
+            try:
+                allowed_types = json.loads(policy.allowed_inventory_types_json)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return "该库位所属区域的存放策略已损坏"
+            if (
+                not isinstance(allowed_types, list)
+                or not all(isinstance(value, str) for value in allowed_types)
+            ):
+                return "该库位所属区域的存放策略已损坏"
+            if required_inventory_type and required_inventory_type not in {
+                value.strip() for value in allowed_types
+            }:
+                return "该库位所属区域不允许当前库存类型"
+            if (
+                pallet_storage_only
+                and policy.storage_layout not in {"pallet_ground", "mixed"}
+            ):
+                return "该库位所属区域的正式存储布局不允许地面栈板"
     if require_map_geometry:
         geometry_id = db.scalar(
             select(Floor3LocationLayout.id)

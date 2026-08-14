@@ -289,6 +289,35 @@ def _percent_slot(slot: dict, points: list, floor_bounds: dict) -> dict:
     }
 
 
+def measured_pallet_slots_for_zone(
+    floor_layout: dict,
+    *,
+    feature_id: str,
+) -> list[dict]:
+    """Return real 1200x1000 pallet slots inside one measured map zone."""
+
+    bounds = floor_layout.get("bounds_mm") or {}
+    required_bounds = {"min_x", "min_y", "max_x", "max_y"}
+    if not required_bounds.issubset(bounds):
+        raise Floor1CandidatePlanningError("实测地图缺少毫米边界，无法生成空货位", status_code=409)
+    feature = next(
+        (
+            row
+            for row in floor_layout.get("features") or []
+            if row.get("feature_kind") == "zone"
+            and str(row.get("id") or "") == str(feature_id or "")
+        ),
+        None,
+    )
+    if feature is None:
+        raise Floor1CandidatePlanningError("实测地图区域不存在", status_code=404)
+    points = feature.get("points") or []
+    if len(points) < 3 or not _zone_inside_floor_bounds(points, bounds):
+        raise Floor1CandidatePlanningError("实测区域边界无效，无法生成空货位", status_code=409)
+    slots, _orientation = _pallet_slots(points, _physical_obstacle_bounds(floor_layout))
+    return [_percent_slot(slot, points, bounds) for slot in slots]
+
+
 def _zone_inside_floor_bounds(points: list, bounds: dict) -> bool:
     if len(points) < 3:
         return False

@@ -493,6 +493,8 @@ interface OneStepAreaConfirmResponse extends LayoutDraftPublishResponse {
   area: FormalWarehouseAreaOption;
   message: string;
   advanced_draft_preserved: boolean;
+  created_location_count: number;
+  available_location_count: number;
   pallet_binding_changed: false;
 }
 
@@ -2066,7 +2068,7 @@ export function WarehouseTwinApp() {
     setMoveQuantity(source.operation === "lot_transfer" ? String(source.max_quantity || source.quantity || "") : "");
     setMoveDraftTargetLocationId("");
     setMoveTargetFloorCode((current) => current || source.source_floor_code);
-    setWarehouseOperationMessage(`已选来源：${source.source_floor_code} · ${source.source_location_name}；请选择空货位，所有操作仍是页面草稿。`);
+    setWarehouseOperationMessage(`已选货物：${source.source_floor_code} · ${source.source_location_name}；请选择要移动到的空货位。`);
   };
 
   const queueMoveDraft = (source: WarehouseMoveSource, target: DashboardLocation) => {
@@ -2701,6 +2703,13 @@ export function WarehouseTwinApp() {
     setLayoutDraftControl(null);
   };
 
+  const refreshPlanningTwinFloor = async () => {
+    const raw = await requestJson<TwinFloorDraftResponse>(`/api/warehouse/twin-layout/floors/${floorCode}/draft`);
+    showTwinFloor(raw);
+    setLayoutDraftControl(raw.draft_control);
+    setPlanningPublishedRevision(raw.draft_control.published_revision);
+  };
+
   const previewFloor1FormalCandidates = async () => {
     if (floorCode !== "1F" || !canEditLocations || floor1CandidateBusy) return;
     setFloor1CandidateBusy(true);
@@ -3272,7 +3281,7 @@ export function WarehouseTwinApp() {
       );
       if (!result) return;
       setPlanningPublishedRevision(result.published_revision);
-      await Promise.all([refreshPublishedTwinFloor(), refreshDashboard()]);
+      await Promise.all([refreshPlanningTwinFloor(), refreshDashboard()]);
       setZonePolicyDrafts({});
       setZoneGeometryDrafts({});
       setSelectedExistingAreaId("");
@@ -3527,16 +3536,16 @@ export function WarehouseTwinApp() {
               {!mergeTargetChoices.length && <small className="error">已选集合中没有通过位置门禁的目标栈板；请移除不可作为目标的栈板后重选。</small>}
             </div>}
           </> : !moveSource ? <p>先点地图上的有货位置选择整栈板或批次；一楼待送区的散存标签也可作为来源。</p> : <>
-            <div className="twin-move-source-summary"><small>当前来源 · {moveSource.operation === "pallet_move" ? "系统栈板整板" : "库存批次"}</small><b>{moveSource.inventory_code} · {moveSource.product_name}</b><span>{moveSource.source_floor_code} / {moveSource.source_area_code || "未分区"} / {moveSource.source_location_name}</span><button type="button" onClick={() => { setMoveSource(null); setMoveQuantity(""); setMoveDraftTargetLocationId(""); setWarehouseOperationMessage("已取消当前来源；已加入的页面草稿仍保留。"); }}>取消来源</button></div>
+            <div className="twin-move-source-summary"><small>已选货物 · {moveSource.operation === "pallet_move" ? "整栈板" : "库存批次"}</small><b>{moveSource.inventory_code} · {moveSource.product_name}</b><span>{moveSource.source_floor_code} / {moveSource.source_area_code || "未分区"} / {moveSource.source_location_name}</span><button type="button" onClick={() => { setMoveSource(null); setMoveQuantity(""); setMoveDraftTargetLocationId(""); setWarehouseOperationMessage("已清除本次页面选择；库存、入库来源和送货单均未改变。"); }}>重新选择货物</button></div>
             <div className="twin-move-target-cascade">
               <div className="twin-formal-operation-title"><b>选择目标空货位</b><span>楼层 → 区域 → 具体货位</span></div>
               {moveSource.operation === "lot_transfer" && <label><span>本次移动数量（可用＋预占，损坏不计）</span><input type="number" min="1" max={moveSource.max_quantity} step="1" value={moveQuantity} onChange={(event) => setMoveQuantity(event.target.value)} /></label>}
               <label><span>楼层</span><select value={moveTargetFloorCode} onChange={(event) => { setMoveTargetFloorCode(event.target.value); setMoveTargetAreaCode(""); setMoveDraftTargetLocationId(""); }}><option value="">请选择楼层</option>{moveTargetFloors.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
               <label><span>区域</span><select value={moveTargetAreaCode} disabled={!moveTargetFloorCode} onChange={(event) => { setMoveTargetAreaCode(event.target.value); setMoveDraftTargetLocationId(""); }}><option value="">请选择区域</option>{moveTargetAreas.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
-              <label><span>具体货位</span><select value={moveDraftTargetLocationId} disabled={!moveTargetAreaCode} onChange={(event) => setMoveDraftTargetLocationId(event.target.value)}><option value="">请选择已发布空货位</option>{moveTargetLocations.map((item) => <option value={item.location_id} key={item.location_id}>{item.location_name} · {item.location_code}</option>)}</select></label>
-              {moveCandidatesLoading && <small>正在读取有权限的已发布空货位…</small>}
+              <label><span>具体货位</span><select value={moveDraftTargetLocationId} disabled={!moveTargetAreaCode} onChange={(event) => setMoveDraftTargetLocationId(event.target.value)}><option value="">请选择可用空货位</option>{moveTargetLocations.map((item) => <option value={item.location_id} key={item.location_id}>{item.location_name} · {item.location_code}</option>)}</select></label>
+              {moveCandidatesLoading && <small>正在读取可用空货位…</small>}
               {moveCandidatesError && <small className="error">空货位读取失败：{moveCandidatesError}</small>}
-              {!moveCandidatesLoading && !moveCandidatesError && mappedMoveTargets.length === 0 && <small>当前没有同时满足“候选接口＋已发布地图”的空货位。</small>}
+              {!moveCandidatesLoading && !moveCandidatesError && mappedMoveTargets.length === 0 && <small>当前没有可用空货位；请先确认目标区域已启用并设有空货位。</small>}
               <button type="button" className="twin-primary-action" disabled={!selectedMoveTarget || moveBatchBusy} onClick={addSelectedMoveDraft}>加入页面草稿</button>
             </div>
           </>}
@@ -3582,7 +3591,7 @@ export function WarehouseTwinApp() {
             </button>)}
             {dispatchStagingItems.length === 0 && <p>当前没有未绑定实体栈板的待送货物。</p>}
           </div>
-          {mapMode === "move" && canExecuteWarehouse && <p className="twin-dispatch-weather-note">点击上方散存标签可作为部分移货来源；再点任意已发布空货位或在右侧位置卡中按三级选择目标。</p>}
+          {mapMode === "move" && canExecuteWarehouse && <p className="twin-dispatch-weather-note">点击上方货物，再选择楼层、区域和具体空货位即可移动；不会改变订单和后续送货关系。</p>}
           {P1_47D_ENABLED && selectedDispatchStagingItem && canEditLocations && mapMode === "move" && viewMode === "2d" && <div className="twin-formal-operation twin-dispatch-transfer">
             <div className="twin-formal-operation-title"><b>暂不送，转三楼成品区</b><span>只移动原库存</span></div>
             <label><span>本次转入数量（默认全部）</span><input type="number" min="1" max={inventoryLabelQuantity(selectedDispatchStagingItem)} step="1" value={dispatchTransferQuantity} onChange={(event) => setDispatchTransferQuantity(event.target.value)} /></label>

@@ -266,6 +266,24 @@ def test_area_planning_defaults_to_one_result_oriented_confirmation() -> None:
     assert "twin-system-footer" not in SOURCE
 
 
+def test_area_confirmation_keeps_the_current_planning_revision_for_the_next_zone() -> None:
+    assert "const refreshPlanningTwinFloor = async () =>" in SOURCE
+    assert "/api/warehouse/twin-layout/floors/${floorCode}/draft`" in SOURCE
+    assert "setLayoutDraftControl(raw.draft_control)" in SOURCE
+    assert "setPlanningPublishedRevision(raw.draft_control.published_revision)" in SOURCE
+    assert "await Promise.all([refreshPlanningTwinFloor(), refreshDashboard()])" in SOURCE
+
+
+def test_move_panel_uses_business_wording_and_keeps_delivery_linkage_clear() -> None:
+    assert "已选货物 ·" in SOURCE
+    assert "重新选择货物" in SOURCE
+    assert "库存、入库来源和送货单均未改变" in SOURCE
+    assert "请选择可用空货位" in SOURCE
+    assert "不会改变订单和后续送货关系" in SOURCE
+    assert "取消来源" not in SOURCE
+    assert "当前没有同时满足“候选接口＋已发布地图”的空货位" not in SOURCE
+
+
 def test_p1_47a_uses_typed_map_search_and_one_unified_read_only_entry() -> None:
     assert 'type WarehouseSearchType = "finished" | "mold" | "printing_plate"' in SOURCE
     assert "纸箱成品" in SOURCE

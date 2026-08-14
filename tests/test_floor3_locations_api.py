@@ -235,6 +235,108 @@ def _matched_item(customer_id: int, product_id: int, code: str) -> dict:
     }
 
 
+def test_published_candidates_keep_accepted_v11_map_locations_until_area_policy_exists(
+    floor3_app,
+) -> None:
+    from app.models.warehouse_inventory import (
+        Floor3LocationLayout,
+        WarehouseArea,
+        WarehouseAreaStoragePolicy,
+        WarehouseFloor,
+        WarehouseLocation,
+    )
+
+    app, ids, factory = floor3_app
+    with factory() as db:
+        floor = WarehouseFloor(
+            floor_code="3F",
+            floor_name="三楼",
+            floor_number=3,
+            construction_status="enabled",
+            planning_reference_pallet_capacity=0,
+        )
+        db.add(floor)
+        db.flush()
+        area = WarehouseArea(
+            floor_id=floor.id,
+            area_code="A1",
+            area_name="三楼 A1 成品区",
+            construction_status="enabled",
+        )
+        db.add(area)
+        db.flush()
+        accepted = db.get(WarehouseLocation, ids["locations"][0])
+        unplaced = db.get(WarehouseLocation, ids["locations"][1])
+        assert accepted is not None and unplaced is not None
+        accepted.placement_status = "placed"
+        unplaced.placement_status = "unplaced"
+        accepted.floor3_layout = Floor3LocationLayout(
+            left_pct=Decimal("1"),
+            top_pct=Decimal("1"),
+            width_pct=Decimal("4"),
+            height_pct=Decimal("4"),
+            z_index=0,
+            version=1,
+            source_type="seeded",
+        )
+        unplaced.floor3_layout = Floor3LocationLayout(
+            left_pct=Decimal("6"),
+            top_pct=Decimal("1"),
+            width_pct=Decimal("4"),
+            height_pct=Decimal("4"),
+            z_index=0,
+            version=1,
+            source_type="seeded",
+        )
+        db.commit()
+        area_id = area.id
+
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        response = client.get(
+            "/api/warehouse/location-candidates",
+            params={
+                "inventory_type": "finished",
+                "empty_only": True,
+                "pallet_storage_only": True,
+                "published_only": True,
+            },
+        )
+        assert response.status_code == 200, response.text
+        returned_ids = {item["id"] for item in response.json()["items"]}
+        assert ids["locations"][0] in returned_ids
+        assert ids["locations"][1] not in returned_ids
+
+    with factory() as db:
+        db.add(
+            WarehouseAreaStoragePolicy(
+                area_id=area_id,
+                map_feature_id="zone-3f-a1",
+                allowed_inventory_types_json='["finished"]',
+                storage_layout="pallet_ground",
+                status="draft",
+                version=1,
+            )
+        )
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        response = client.get(
+            "/api/warehouse/location-candidates",
+            params={
+                "inventory_type": "finished",
+                "empty_only": True,
+                "pallet_storage_only": True,
+                "published_only": True,
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert ids["locations"][0] not in {
+            item["id"] for item in response.json()["items"]
+        }
+
+
 def test_p1_16e2_merge_all_preserves_formal_lots_and_is_idempotent(
     floor3_app,
 ) -> None:

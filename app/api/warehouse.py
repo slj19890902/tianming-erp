@@ -125,6 +125,7 @@ from app.services.warehouse_floor1_candidate_planner import (
     build_floor1_formal_candidate_plan,
     confirm_floor1_formal_candidate_plan,
     inspect_floor1_formal_candidate_state,
+    measured_pallet_slots_for_zone,
     overlay_formal_area_bindings,
 )
 from app.services.warehouse_twin_layout_editor import (
@@ -7162,6 +7163,94 @@ def _update_twin_zone_storage_policy_locked(
     }
 
 
+def _ensure_one_step_pallet_locations(
+    db: Session,
+    *,
+    floor_layout: dict,
+    feature_id: str,
+    area: WarehouseArea,
+    inventory_type: str,
+    storage_layout: str,
+    target_count: int,
+    operator_id: int,
+) -> tuple[list[WarehouseLocation], int]:
+    if (
+        inventory_type not in {"finished", "semi_finished"}
+        or storage_layout != "pallet_ground"
+        or target_count <= 0
+    ):
+        return [], 0
+    floor = area.floor
+    policy = area.storage_policy
+    if floor is None or policy is None or policy.status != "published":
+        raise WarehouseAreaActivationError("区域尚未完成正式发布，不能生成空货位", status_code=409)
+    if floor.floor_number != 1:
+        return [], 0
+    existing = formal_area_location_rows(db, floor=floor, area=area)
+    if existing:
+        reusable = [
+            row
+            for row in existing
+            if row.is_active
+            and row.source_version == AREA_LOCATION_SOURCE_VERSION
+            and row.placement_status == "placed"
+            and row.floor3_layout is not None
+            and row.warehouse_type == inventory_type
+            and row.storage_type == "ground"
+        ]
+        if len(existing) == target_count and len(reusable) == target_count:
+            area.planned_location_count = target_count
+            return [], target_count
+        raise WarehouseAreaActivationError(
+            "该区域已有正式库位；数量或用途调整请在高级维护中核对，系统不会覆盖现有位置",
+            status_code=409,
+        )
+    try:
+        measured_slots = measured_pallet_slots_for_zone(
+            floor_layout,
+            feature_id=feature_id,
+        )
+    except Floor1CandidatePlanningError as error:
+        raise WarehouseAreaActivationError(str(error), status_code=error.status_code) from error
+    if target_count > len(measured_slots):
+        raise WarehouseAreaActivationError(
+            f"该实测区域最多可生成 {len(measured_slots)} 个标准栈板空货位；请核对容量后重试",
+            status_code=409,
+        )
+    next_sort = int(db.scalar(select(func.max(WarehouseLocation.sort_order))) or 0) + 1
+    created: list[WarehouseLocation] = []
+    for serial, slot in enumerate(measured_slots[:target_count], start=1):
+        row = WarehouseLocation(
+            location_code=f"{floor.floor_code.upper()}-{area.area_code.upper()}-L{serial:03d}",
+            location_name=f"{area.area_name} {serial:03d} 号位",
+            warehouse_type=inventory_type,
+            warehouse_floor=floor.floor_number,
+            area_code=area.area_code.upper(),
+            storage_type="ground",
+            sort_order=next_sort,
+            is_temporary=False,
+            source_version=AREA_LOCATION_SOURCE_VERSION,
+            placement_status="placed",
+        )
+        row.floor3_layout = Floor3LocationLayout(
+            left_pct=Decimal(str(slot["left_pct"])),
+            top_pct=Decimal(str(slot["top_pct"])),
+            width_pct=Decimal(str(slot["width_pct"])),
+            height_pct=Decimal(str(slot["height_pct"])),
+            z_index=0,
+            version=1,
+            source_type="manual",
+            created_by=operator_id,
+            updated_by=operator_id,
+        )
+        db.add(row)
+        created.append(row)
+        next_sort += 1
+    area.planned_location_count = target_count
+    db.flush()
+    return created, target_count
+
+
 @router.post('/twin-layout/floors/{floor_code}/zones/{feature_id}/confirm-area')
 def confirm_twin_zone_area(
     floor_code: str,
@@ -7287,6 +7376,16 @@ def confirm_twin_zone_area(
                 payload.max_pallet_capacity if payload.max_pallet_capacity > 0 else None
             )
             _apply_capacity_review(area, user=user, review_changed=True)
+            created_locations, available_location_count = _ensure_one_step_pallet_locations(
+                db,
+                floor_layout=load_warehouse_twin_floor(floor_code),
+                feature_id=feature_id,
+                area=area,
+                inventory_type=payload.primary_inventory_type,
+                storage_layout=payload.storage_layout,
+                target_count=payload.max_pallet_capacity,
+                operator_id=user.id,
+            )
             after_capacity = {
                 'planned_pallet_capacity': area.planned_pallet_capacity,
                 'capacity_review_status': area.capacity_review_status,
@@ -7321,6 +7420,8 @@ def confirm_twin_zone_area(
                     'primary_inventory_type': payload.primary_inventory_type,
                     'storage_layout': payload.storage_layout,
                     'max_pallet_capacity': payload.max_pallet_capacity,
+                    'created_location_count': len(created_locations),
+                    'available_location_count': available_location_count,
                     'published_revision': result.get('published_revision'),
                     'advanced_draft_preserved': advanced_draft_preserved,
                     'inventory_changed': False,
@@ -7333,8 +7434,17 @@ def confirm_twin_zone_area(
             response_payload = {
                 **result,
                 'area': area_payload,
-                'message': f'{area.area_code} {area.area_name} 已确认并启用',
+                'message': (
+                    f'{area.area_code} {area.area_name} 已确认并启用'
+                    + (
+                        f'；已生成 {available_location_count} 个可移动空货位'
+                        if available_location_count
+                        else ''
+                    )
+                ),
                 'advanced_draft_preserved': advanced_draft_preserved,
+                'created_location_count': len(created_locations),
+                'available_location_count': available_location_count,
                 'inventory_changed': False,
                 'pallet_binding_changed': False,
             }

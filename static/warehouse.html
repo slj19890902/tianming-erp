@@ -814,6 +814,7 @@
     // END IDEMPOTENCY_KEY_HELPER
 
     const state={user:null,permissions:[],readOnly:warehouseReadonlyMode,tab:"finished",lotPage:1,lotPageSize:25,lotTotal:0,locationView:"ledger",locations:[],locationLabelSelection:new Set(),finishedLocationCandidates:[],locationsLoaded:false,locationsPromise:null,warehouseFloors:[],selectedWarehouseFloorId:null,customers:[],customersLoaded:false,customersPromise:null,lots:[],molds:[],moldPage:1,moldPageSize:20,moldTotal:0,moldSelection:new Set(),moldLabelPrintAttempt:null,moldLocationOptions:[],moldLocationOptionsLoaded:false,moldSaving:false,moldCodePreviewRequestId:0,moldCodePreviewTimer:null,moldBinding:{moldId:null,customerId:null,items:[],selected:null,requestId:0,saving:false},printingPlates:[],insights:null,loadRequests:{lots:0,locations:0,insights:0,movements:0,molds:0,printingPlates:0},operationPending:new Set(),finishedProductCandidates:[],finishedProductSearchTimer:null,finishedProductSearchRequestId:0,stocktakeReviews:[],stocktakeReviewDetail:null,stocktakeReviewSelectedId:null,stocktakeReviewAttempt:{signature:"",key:null},lotEdit:{lotId:null,version:null,candidates:[],selectedProduct:null,searchTimer:null,requestId:0,sessionId:0,saving:false},stagingTransfer:{lotId:null,version:null,total:0,saving:false,sessionId:0},semiLotEdit:null,assignment:{lotId:null,items:[],selected:new Set()},onboarding:{batches:[],batch:null,lines:[],selectedBatchId:null,editingLineId:null,busy:false,submitAttempt:{signature:"",key:null}},factoryMap:{activeFloor:"3F",floor1:null,selectedZoneCode:"",selectedRackId:"",selectedRackSlot:"",loading:false,twinFloors:{},selectedTwinFeatureId:"",selectedTwinLocationId:null,twinZoom:100,twinViewBox:null,pan:{active:false,startX:0,startY:0,viewBox:null}},twinDashboard:{data:null,days:30,loading:false,requestId:0,searchTimer:null,searchRequestId:0,search:null,lastError:null},capacityForecast:{data:null,days:7,loading:false,requestId:0},floor3:{locations:[],mapLocations:[],moveLocations:[],mergeLocations:[],mergeAttempt:{signature:"",key:null},detail:null,selectedLocationId:null,selectedAreaCode:"",planZoom:100,viewMode:"overview",mapPopoverLocationId:null,mapPopoverPoint:{left:50,top:50},pendingMove:null,moveMode:false,layoutEdit:false,layoutDrag:null,layoutDraft:{},areaNavCollapsed:false,legendVisible:true,searchFocusLocationId:null,deepLinkLotId:null,searchTimer:null,searchRequestId:0,loading:false,error:"",pan:{active:false,startX:0,startY:0,scrollLeft:0,scrollTop:0},bindPanelOpen:false,bindRows:[],addCandidates:[],addCandidate:null,addSearchTimer:null,addSearchRequestId:0,addSearchKey:"",addInventoryIdempotencyKey:null,promotionKeys:{},promotionPending:new Set()}};
+    state.moldLocationOptionsLoadedAt=0;
     state.moldEditLocation={moldId:null,originalLocation:"",expectedVersion:null,syncing:false,selectionChanged:false,attempt:null};
     const $=id=>document.getElementById(id);
     const hasPermission=code=>state.user?.role==="admin"||state.permissions.includes(code);
@@ -1255,7 +1256,7 @@
           refreshInventoryFloorOptions("floorFilter",tab,"全部楼层",true);refreshInventoryAreaOptions("floorFilter","areaFilter",tab,"全部区域");refreshInventoryLocationOptions("floorFilter","areaFilter","locationFilter",tab,"全部库位");
           try{await loadLots()}catch(error){throw new Error(`库存批次加载失败：${error.message}`)}
         }catch(error){renderLotLoading(`库存页面加载失败：${error.message}`,true);toast(`库存页面加载失败：${error.message}`,true)}
-      }else if(tab==="insights")loadInsights();else if(tab==="movements")loadMovements();else if(tab==="molds")loadMolds();else if(tab==="printing_plates")loadPrintingPlates();else if(tab==="stocktake_review")loadStocktakeReviews();else if(tab==="inventory_onboarding")loadInventoryOnboardingBatches();
+      }else if(tab==="insights")loadInsights();else if(tab==="movements")loadMovements();else if(tab==="molds"){await loadMoldLocationOptions(true);loadMolds()}else if(tab==="printing_plates")loadPrintingPlates();else if(tab==="stocktake_review")loadStocktakeReviews();else if(tab==="inventory_onboarding")loadInventoryOnboardingBatches();
     }
     async function loadInsights(){
       const requestId=++state.loadRequests.insights,hadData=Boolean(state.insights);if(hadData)$("insightScope").textContent="正在刷新库存看板，保留当前结果";else $("insightActionBody").innerHTML='<tr><td colspan="7" class="empty">正在加载库存看板…</td></tr>';
@@ -1861,11 +1862,11 @@
       if(grids.some(grid=>String(grid)===previous))$("moldGridSelect").value=previous;
       $("moldGridField").classList.toggle("hidden",!(level?.grids||[]).length);buildMoldRackLocation();
     }
-    async function loadMoldLocationOptions(){
-      if(state.moldLocationOptionsLoaded){renderMoldLocationLevels();return true}
+    async function loadMoldLocationOptions(force=false){
+      if(!force&&state.moldLocationOptionsLoaded&&Date.now()-Number(state.moldLocationOptionsLoadedAt||0)<15000){renderMoldLocationLevels();return true}
       try{
-        const data=await api("/api/warehouse/molds/location-options");state.moldLocationOptions=data.racks||[];state.moldLocationOptionsLoaded=true;
-        $("moldRackSelect").innerHTML=state.moldLocationOptions.map(row=>`<option value="${h(row.rack_code)}">${h(row.rack_code)} · ${h(row.name)}</option>`).join("");renderMoldLocationLevels();return true;
+        const previous=$("moldRackSelect").value,data=await api("/api/warehouse/molds/location-options");state.moldLocationOptions=data.racks||[];state.moldLocationOptionsLoaded=true;state.moldLocationOptionsLoadedAt=Date.now();
+        $("moldRackSelect").innerHTML=state.moldLocationOptions.map(row=>`<option value="${h(row.rack_code)}">${h(row.rack_code)} · ${h(row.name)}</option>`).join("");if(state.moldLocationOptions.some(row=>row.rack_code===previous))$("moldRackSelect").value=previous;renderMoldLocationLevels();return true;
       }catch(error){$("moldLocationBuilderHint").textContent=`一楼模具货架读取失败：${error.message}；请刷新后重试，禁止猜测位置码。`;return false}
     }
     function syncMoldLocationBuilder(value){
@@ -1970,6 +1971,7 @@
       const row=state.molds.find(value=>value.id===id);if(!row)return;
       const pending=state.moldEditLocation.attempt;if(pending){toast(Number(state.moldEditLocation.moldId)===Number(id)?"这件模具的保存结果正在核对，请在当前编辑区再次点击保存":"上一件模具的位置保存结果还未确定，请先原样重试核对",true);return}
       state.moldCodePreviewRequestId+=1;state.moldEditLocation={moldId:row.id,originalLocation:row.rack_location,expectedVersion:row.location_version,syncing:false,selectionChanged:false,attempt:null};$("moldId").value=row.id;$("moldCode").value=row.mold_code;$("moldName").value=row.mold_name;$("moldRackLocation").value=row.rack_location;$("moldRemarks").value=row.remarks||"";$("moldCustomerInitials").value="";$("moldCodeHint").textContent="模具编号已生成并锁定；编辑名称不会改写编号。";syncMoldLocationBuilder(row.rack_location);setMoldLocationBuilderDisabled(false);$("moldEditLocationNotice").classList.remove("hidden");openMoldBinding(row);
+      void loadMoldLocationOptions(true).then(ok=>{if(ok&&Number(state.moldEditLocation.moldId)===Number(row.id))syncMoldLocationBuilder(row.rack_location)});
       $("moldForm").scrollIntoView({behavior:"smooth",block:"start"});
     }
     async function saveMold(event){

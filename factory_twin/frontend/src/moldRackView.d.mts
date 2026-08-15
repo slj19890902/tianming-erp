@@ -29,6 +29,23 @@ export interface MoldShelfSpine {
   rack_location: string;
 }
 
+export interface MoldLocationOptionLevel {
+  level: number;
+  kind?: string;
+  grid_count: number;
+  grids: number[];
+}
+
+export interface MoldLocationOption {
+  rack: number;
+  rack_code: string;
+  name: string;
+  zone_code?: string;
+  location_depth: "rack" | "level" | "grid";
+  grid_count: number;
+  levels: MoldLocationOptionLevel[];
+}
+
 export interface MoldRackCell<T extends MoldRackViewItem> {
   grid: number;
   items: T[];
@@ -59,3 +76,11 @@ export function moldRacksForArea<
 >(feature: TFeature | null | undefined, racks: TRack[]): TRack[];
 
 export function buildMoldShelfSpines<T extends MoldRackViewItem>(items: T[]): MoldShelfSpine[];
+
+export function buildMoldLocationTarget(
+  rack: MoldLocationOption | null | undefined,
+  levelValue: number | string,
+  gridValue: number | string
+): string | null;
+
+export function moldRackLevelUsage<T extends MoldRackViewItem>(items: T[]): Map<number, number>;

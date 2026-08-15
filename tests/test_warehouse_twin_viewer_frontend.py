@@ -564,3 +564,21 @@ def test_phase2c12_location_first_product_selection_and_collapsed_rack_details()
 def test_built_twin_entry_uses_versioned_assets() -> None:
     assert 'id="warehouse-twin-root"' in BUILT
     assert "/factory-twin-assets/assets/" in BUILT
+
+
+def test_mold_rack_move_mode_reuses_guarded_location_move_and_exposes_publish_steps() -> None:
+    assert "移动该模具" in SOURCE
+    assert '"/api/warehouse/molds/location-options"' in SOURCE
+    assert '"/api/warehouse/molds/location-movement/preview"' in SOURCE
+    assert '"/api/warehouse/molds/location-movement/confirm"' in SOURCE
+    assert "expected_version: movePreview.expected_version" in SOURCE
+    assert 'idempotency_key: moveIdempotencyKey' in SOURCE
+    assert "确认实物已搬动并保存" in SOURCE
+    assert "当前正式层格" in SOURCE
+    assert "当前草稿层格" in SOURCE
+    assert "① 保存层格到草稿" in SOURCE
+    assert "② 校验当前地图草稿" in SOURCE
+    assert "③ 发布已校验地图" in SOURCE
+    assert "只有第③步发布完成" in SOURCE
+    assert "货架总层数（含设备占用层）" in SOURCE
+    assert ".twin-mold-move-panel" in TWIN_CSS

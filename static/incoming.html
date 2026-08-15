@@ -960,6 +960,7 @@
       state.busyItemIds.add(key);
       render();
       try {
+        const surplusLocation = state.locations.find(location => Number(location.id) === Number(item.surplus_location_id));
         const result = await api(`/api/incoming/receive/${item.item_id}`, {
           method: "PUT",
           body: JSON.stringify({
@@ -967,6 +968,7 @@
             resolution_action: action,
             resolution_reason: String(item.resolution_reason || "").trim() || null,
             surplus_location_id: Number(item.surplus_location_id) || null,
+            expected_surplus_layout_version: surplusLocation?.layout_version || null,
             idempotency_key: operationKey,
           }),
         });

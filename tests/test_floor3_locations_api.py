@@ -235,6 +235,27 @@ def _matched_item(customer_id: int, product_id: int, code: str) -> dict:
     }
 
 
+def _ensure_location_layout_version(factory, location_id: int, *, left_pct: int = 10) -> int:
+    from app.models.warehouse_inventory import Floor3LocationLayout, WarehouseLocation
+
+    with factory() as db:
+        location = db.get(WarehouseLocation, location_id)
+        assert location is not None
+        if location.floor3_layout is None:
+            location.floor3_layout = Floor3LocationLayout(
+                left_pct=Decimal(left_pct),
+                top_pct=Decimal(10),
+                width_pct=Decimal(8),
+                height_pct=Decimal(8),
+                z_index=0,
+                version=1,
+                source_type="seeded",
+                layout_kind="physical_pallet",
+            )
+            db.commit()
+        return int(location.floor3_layout.version)
+
+
 def test_published_candidates_keep_accepted_v11_map_locations_until_area_policy_exists(
     floor3_app,
 ) -> None:
@@ -951,6 +972,12 @@ def test_floor3_pallet_supports_five_items_move_clear_and_history(floor3_app) ->
     )
 
     app, ids, factory = floor3_app
+    source_layout_version = _ensure_location_layout_version(
+        factory, ids["locations"][0]
+    )
+    target_layout_version = _ensure_location_layout_version(
+        factory, ids["locations"][1], left_pct=30
+    )
     with TestClient(app) as client:
         _login(client, "floor3-admin")
         items = [
@@ -961,6 +988,7 @@ def test_floor3_pallet_supports_five_items_move_clear_and_history(floor3_app) ->
             "/api/warehouse/pallets",
             json={
                 "location_id": ids["locations"][0],
+                "expected_layout_version": source_layout_version,
                 "pallet_code": "PLT-3F-TEST-001",
                 "items": items,
             },
@@ -984,6 +1012,7 @@ def test_floor3_pallet_supports_five_items_move_clear_and_history(floor3_app) ->
             json={
                 "expected_version": created.json()["pallet"]["version"],
                 "to_location_id": ids["locations"][1],
+                "expected_target_layout_version": target_layout_version,
                 "confirmed": True,
                 "idempotency_key": "move-basic-001",
                 "remarks": "现场移位",
@@ -1196,6 +1225,7 @@ def test_floor3_pallet_mutations_use_expected_version_cas(floor3_app) -> None:
             json={
                 "expected_version": 1,
                 "to_location_id": ids["locations"][1],
+                "expected_target_layout_version": 1,
                 "confirmed": True,
                 "idempotency_key": "move-stale-001",
             },
@@ -2199,6 +2229,8 @@ def test_floor3_layout_rejects_combined_overflow_and_requires_state_versions(
         )
         assert created.status_code == 201, created.text
         location_id = created.json()["location"]["id"]
+        created_version = created.json()["layout"]["version"]
+        assert created_version == 2
 
         bottom_overflow = client.patch(
             "/api/warehouse/floor3/layout/areas/A1",
@@ -2206,7 +2238,7 @@ def test_floor3_layout_rejects_combined_overflow_and_requires_state_versions(
                 "slots": [
                     {
                         "location_id": location_id,
-                        "expected_version": 1,
+                        "expected_version": created_version,
                         "left_pct": 10,
                         "top_pct": 96,
                         "width_pct": 5,
@@ -2226,10 +2258,10 @@ def test_floor3_layout_rejects_combined_overflow_and_requires_state_versions(
         assert missing_disable_version.status_code == 422
         disabled = client.post(
             f"/api/warehouse/floor3/layout/slots/{location_id}/disable",
-            json={"expected_version": 1},
+            json={"expected_version": created_version},
         )
         assert disabled.status_code == 200, disabled.text
-        assert disabled.json()["layout"]["version"] == 2
+        assert disabled.json()["layout"]["version"] == created_version + 1
 
         missing_enable_version = client.post(
             f"/api/warehouse/floor3/layout/slots/{location_id}/enable",
@@ -2238,19 +2270,19 @@ def test_floor3_layout_rejects_combined_overflow_and_requires_state_versions(
         assert missing_enable_version.status_code == 422
         enabled = client.post(
             f"/api/warehouse/floor3/layout/slots/{location_id}/enable",
-            json={"expected_version": 2},
+            json={"expected_version": created_version + 1},
         )
         assert enabled.status_code == 200, enabled.text
-        assert enabled.json()["layout"]["version"] == 3
+        assert enabled.json()["layout"]["version"] == created_version + 2
 
         stale_disable = client.post(
             f"/api/warehouse/floor3/layout/slots/{location_id}/disable",
-            json={"expected_version": 2},
+            json={"expected_version": created_version + 1},
         )
         assert stale_disable.status_code == 409, stale_disable.text
         detail = client.get(f"/api/warehouse/floor3/locations/{location_id}")
         assert detail.json()["is_active"] is True
-        assert detail.json()["layout"]["version"] == 3
+        assert detail.json()["layout"]["version"] == created_version + 2
 
     with factory() as db:
         with pytest.raises(Floor3LocationError, match="右边界") as captured:
@@ -2300,6 +2332,7 @@ def test_floor3_disable_and_occupy_race_never_leaves_disabled_occupancy(
         )
         db.commit()
         location_id = location.id
+        created_version = location.floor3_layout.version
 
     start = Barrier(2)
 
@@ -2311,7 +2344,7 @@ def test_floor3_disable_and_occupy_race_never_leaves_disabled_occupancy(
                     db,
                     location_id=location_id,
                     is_active=False,
-                    expected_version=1,
+                    expected_version=created_version,
                     operator_id=ids["admin"],
                 )
                 db.commit()
@@ -2367,10 +2400,10 @@ def test_floor3_disable_and_occupy_race_never_leaves_disabled_occupancy(
         assert not (location.is_active is False and pallet is not None)
         if location.is_active:
             assert pallet is not None
-            assert layout.version == 1
+            assert layout.version == created_version
         else:
             assert pallet is None
-            assert layout.version == 2
+            assert layout.version == created_version + 1
 
 
 def test_floor3_concurrent_duplicate_move_is_a_single_idempotent_operation(
@@ -2481,7 +2514,7 @@ def test_floor3_layout_admin_operations_do_not_change_inventory_and_non_admin_is
         assert created.status_code == 201, created.text
         location_id = created.json()["location"]["id"]
         assert created.json()["location"]["warehouse_type"] == "finished"
-        assert created.json()["layout"]["version"] == 1
+        assert created.json()["layout"]["version"] == 2
 
         detail = client.get(f"/api/warehouse/floor3/locations/{location_id}")
         assert detail.status_code == 200, detail.text
@@ -2494,7 +2527,7 @@ def test_floor3_layout_admin_operations_do_not_change_inventory_and_non_admin_is
                 "slots": [
                     {
                         "location_id": location_id,
-                        "expected_version": 1,
+                        "expected_version": 2,
                         "left_pct": 11,
                         "top_pct": 21,
                         "width_pct": 5,
@@ -2505,17 +2538,17 @@ def test_floor3_layout_admin_operations_do_not_change_inventory_and_non_admin_is
             },
         )
         assert patched.status_code == 200, patched.text
-        assert patched.json()["items"][0]["version"] == 2
+        assert patched.json()["items"][0]["version"] == 3
 
         disabled = client.post(
             f"/api/warehouse/floor3/layout/slots/{location_id}/disable",
-            json={"expected_version": 2},
+            json={"expected_version": 3},
         )
         assert disabled.status_code == 200, disabled.text
         assert disabled.json()["location"]["is_active"] is False
         enabled = client.post(
             f"/api/warehouse/floor3/layout/slots/{location_id}/enable",
-            json={"expected_version": 3},
+            json={"expected_version": 4},
         )
         assert enabled.status_code == 200, enabled.text
         assert enabled.json()["location"]["is_active"] is True
@@ -2532,6 +2565,7 @@ def test_floor3_layout_admin_operations_do_not_change_inventory_and_non_admin_is
             "/api/warehouse/pallets",
             json={
                 "location_id": location_id,
+                "expected_layout_version": enabled.json()["layout"]["version"],
                 "items": [_matched_item(ids["tianhua"], ids["products"][0], "LAYOUT-KEEP")],
             },
         )
@@ -2609,11 +2643,11 @@ def test_floor3_area_target_count_auto_codes_pending_layout_and_only_admin(
 
         reduced = client.post(
             "/api/warehouse/floor3/layout/areas/A1/location-count",
-            json={"target_count": 3, "confirmed": True},
+            json={"target_count": 4, "confirmed": True},
         )
         assert reduced.status_code == 200, reduced.text
-        assert reduced.json()["disabled_count"] == 2
-        assert reduced.json()["active_count"] == 3
+        assert reduced.json()["disabled_count"] == 1
+        assert reduced.json()["active_count"] == 4
 
     with factory() as db:
         rows = db.scalars(
@@ -2625,7 +2659,7 @@ def test_floor3_area_target_count_auto_codes_pending_layout_and_only_admin(
             )
             .order_by(WarehouseLocation.location_code)
         ).all()
-        assert sum(1 for row in rows if row.is_active) == 3
+        assert sum(1 for row in rows if row.is_active) == 4
         assert {row.location_code for row in rows} >= {"A1-L003", "A1-L004"}
         assert next(row for row in rows if row.location_code == "A1-L003").placement_status == "placed"
 
@@ -2652,10 +2686,12 @@ def test_twin_inventory_correction_is_admin_confirmed_versioned_and_audited(
         )
         assert slot.status_code == 201, slot.text
         location_id = slot.json()["location"]["id"]
+        layout_version = slot.json()["layout"]["version"]
         inbound = client.post(
             "/api/warehouse/twin-operations/finished-inbound",
             json={
                 "location_id": location_id,
+                "expected_layout_version": layout_version,
                 "customer_id": ids["tianhua"],
                 "product_id": ids["products"][0],
                 "quantity": 100,
@@ -2670,6 +2706,7 @@ def test_twin_inventory_correction_is_admin_confirmed_versioned_and_audited(
             "/api/warehouse/twin-operations/finished-inbound",
             json={
                 "location_id": location_id,
+                "expected_layout_version": layout_version,
                 "customer_id": ids["tianhua"],
                 "product_id": ids["products"][1],
                 "quantity": 30,
@@ -2685,6 +2722,7 @@ def test_twin_inventory_correction_is_admin_confirmed_versioned_and_audited(
             "/api/warehouse/twin-operations/finished-inbound",
             json={
                 "location_id": location_id,
+                "expected_layout_version": layout_version,
                 "customer_id": ids["tianhua"],
                 "product_id": ids["products"][0],
                 "quantity": 30,
@@ -3370,8 +3408,15 @@ def test_phase2c9_admin_map_inbound_and_formal_pallet_move_are_idempotent(
     floor3_app,
 ) -> None:
     app, ids, factory = floor3_app
+    source_layout_version = _ensure_location_layout_version(
+        factory, ids["locations"][0], left_pct=10
+    )
+    target_layout_version = _ensure_location_layout_version(
+        factory, ids["locations"][1], left_pct=30
+    )
     inbound_payload = {
         "location_id": ids["locations"][0],
+        "expected_layout_version": source_layout_version,
         "pallet_code": "MAP-PALLET-001",
         "customer_id": ids["tianhua"],
         "product_id": ids["products"][0],
@@ -3410,6 +3455,7 @@ def test_phase2c9_admin_map_inbound_and_formal_pallet_move_are_idempotent(
         move_payload = {
             "expected_version": pallet["version"],
             "to_location_id": ids["locations"][1],
+            "expected_target_layout_version": target_layout_version,
             "idempotency_key": "phase2c9-map-move-001",
             "confirmed": True,
             "remarks": "地图人工确认移位",
@@ -3601,6 +3647,7 @@ def test_phase2c9_non_admin_cannot_call_map_write_endpoints(floor3_app) -> None:
             "/api/warehouse/twin-operations/finished-inbound",
             json={
                 "location_id": ids["locations"][0],
+                "expected_layout_version": 1,
                 "customer_id": ids["tianhua"],
                 "product_id": ids["products"][0],
                 "quantity": 20,
@@ -3615,6 +3662,7 @@ def test_phase2c9_non_admin_cannot_call_map_write_endpoints(floor3_app) -> None:
             json={
                 "expected_version": 1,
                 "to_location_id": ids["locations"][1],
+                "expected_target_layout_version": 1,
                 "idempotency_key": "phase2c9-forbidden-move",
                 "confirmed": True,
             },
@@ -3662,6 +3710,9 @@ def test_phase2c12_empty_location_selects_staging_product_without_adding_stock(
         )
         source_id = source.id
         db.commit()
+    target_layout_version = _ensure_location_layout_version(
+        factory, ids["rack_location"], left_pct=50
+    )
 
     with TestClient(app) as client:
         _login(client, "floor3-admin")
@@ -3678,6 +3729,7 @@ def test_phase2c12_empty_location_selects_staging_product_without_adding_stock(
             f"/api/warehouse/twin-operations/staging-lots/{source_id}/place",
             json={
                 "location_id": ids["rack_location"],
+                "expected_layout_version": target_layout_version,
                 "expected_version": 1,
                 "quantity": 30,
                 "idempotency_key": "phase2c12-place-staging-001",
@@ -3689,6 +3741,7 @@ def test_phase2c12_empty_location_selects_staging_product_without_adding_stock(
             f"/api/warehouse/twin-operations/staging-lots/{source_id}/place",
             json={
                 "location_id": ids["rack_location"],
+                "expected_layout_version": target_layout_version,
                 "expected_version": 1,
                 "quantity": 30,
                 "idempotency_key": "phase2c12-place-staging-001",
@@ -3703,6 +3756,7 @@ def test_phase2c12_empty_location_selects_staging_product_without_adding_stock(
             f"/api/warehouse/twin-operations/staging-lots/{source_id}/place",
             json={
                 "location_id": ids["rack_location"],
+                "expected_layout_version": target_layout_version,
                 "expected_version": 1,
                 "quantity": 30,
                 "idempotency_key": "phase2c12-place-staging-001",
@@ -3734,8 +3788,12 @@ def test_phase2c12_admin_can_atomically_create_temporary_product_and_stock(
     from app.models.warehouse_inventory import InventoryLot, InventoryMovement
 
     app, ids, factory = floor3_app
+    target_layout_version = _ensure_location_layout_version(
+        factory, ids["rack_location"], left_pct=50
+    )
     payload = {
         "location_id": ids["rack_location"],
+        "expected_layout_version": target_layout_version,
         "customer_id": ids["tianhua"],
         "inventory_code": "TEMP-WH-001",
         "product_name": "历史未建档五层纸箱",
@@ -3877,13 +3935,17 @@ def test_phase2c9_scoped_locator_finds_mold_plate_areas_without_cross_customer_l
 def test_phase2c14_typed_search_keeps_customer_scope_and_separates_resources(
     floor3_app,
 ) -> None:
-    app, ids, _factory = floor3_app
+    app, ids, factory = floor3_app
+    target_layout_version = _ensure_location_layout_version(
+        factory, ids["rack_location"], left_pct=50
+    )
     with TestClient(app) as client:
         _login(client, "floor3-admin")
         inbound = client.post(
             "/api/warehouse/twin-operations/finished-inbound",
             json={
                 "location_id": ids["rack_location"],
+                "expected_layout_version": target_layout_version,
                 "customer_id": ids["tianhua"],
                 "product_id": ids["products"][0],
                 "quantity": 18,
@@ -3980,11 +4042,15 @@ def test_phase2c14_map_semi_finished_inbound_is_admin_only_idempotent_and_compat
             product.flute_type = "B"
             product.report_length_mm = 800
             product.report_width_mm = 600
-        db.commit()
-        location_id = location.id
+            db.commit()
+            location_id = location.id
+    target_layout_version = _ensure_location_layout_version(
+        factory, location_id, left_pct=20
+    )
 
     payload = {
         "location_id": location_id,
+        "expected_layout_version": target_layout_version,
         "customer_id": ids["tianhua"],
         "product_id": ids["products"][0],
         "quantity": 36,

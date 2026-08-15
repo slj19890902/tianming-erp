@@ -76,6 +76,7 @@ class StocktakeLineRequest(BaseModel):
 
 class StocktakeCreateRequest(BaseModel):
     location_id: int = Field(gt=0)
+    location_layout_version: int | None = Field(default=None, gt=0)
     items: list[StocktakeLineRequest] = Field(min_length=1)
     idempotency_key: str = Field(min_length=1, max_length=120)
 
@@ -207,6 +208,7 @@ def submit_stocktake(
         order = stocktake_service.create_stocktake(
             db,
             location_id=payload.location_id,
+            location_layout_version=payload.location_layout_version,
             items=items,
             idempotency_key=payload.idempotency_key,
             submitter=user,
@@ -226,6 +228,7 @@ def submit_stocktake(
             order = stocktake_service.resolve_submission_replay(
                 db,
                 location_id=payload.location_id,
+                location_layout_version=payload.location_layout_version,
                 items=items,
                 idempotency_key=payload.idempotency_key,
             )

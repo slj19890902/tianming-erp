@@ -41,6 +41,7 @@ AREA_POLICY_INVENTORY_USAGES = frozenset(
 AREA_LOCATION_MANAGEMENT_ACTIONS = (
     "location_count",
     "layout",
+    "auto_arrange",
     "disable_empty",
     "enable_empty",
 )
@@ -528,6 +529,40 @@ def _location_serial(floor_code: str, area_code: str, location_code: str) -> int
     return int(match.group(1)) if match else None
 
 
+def _advance_policy_version(
+    db: Session,
+    *,
+    policy: WarehouseAreaStoragePolicy,
+    operator_id: int,
+    status: str | None = None,
+    published_map_revision: str | None | object = ...,
+) -> None:
+    expected_version = policy.version
+    values: dict[str, object] = {
+        "version": expected_version + 1,
+        "updated_by": operator_id,
+        "updated_at": beijing_now_naive(),
+    }
+    if status is not None:
+        values["status"] = status
+    if published_map_revision is not ...:
+        values["published_map_revision"] = published_map_revision
+    result = db.execute(
+        update(WarehouseAreaStoragePolicy)
+        .where(
+            WarehouseAreaStoragePolicy.id == policy.id,
+            WarehouseAreaStoragePolicy.version == expected_version,
+        )
+        .values(**values)
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount != 1:
+        raise WarehouseAreaActivationError(
+            "区域设置已被其他操作更新，请刷新后重试", status_code=409
+        )
+    db.expire(policy)
+
+
 def _set_location_active(
     db: Session,
     *,
@@ -543,18 +578,45 @@ def _set_location_active(
         raise WarehouseAreaActivationError(
             "布局已被其他操作更新，请刷新后重试", status_code=409
         )
-    if not is_active and (
-        db.scalar(select(_active_pallet_exists(location.id)))
-        or db.scalar(select(_active_inventory_exists(location.id)))
-    ):
+    location_conditions = [WarehouseLocation.id == location.id]
+    if not is_active:
+        location_conditions.extend(
+            [
+                ~_active_pallet_exists(location.id),
+                ~_active_inventory_exists(location.id),
+            ]
+        )
+    location_update = db.execute(
+        update(WarehouseLocation)
+        .where(*location_conditions)
+        .values(is_active=is_active)
+        .execution_options(synchronize_session=False)
+    )
+    if location_update.rowcount != 1:
         raise WarehouseAreaActivationError(
             "库位仍有库存、预占或实体栈板，不能停用", status_code=409
         )
-    location.is_active = is_active
-    layout.version += 1
-    layout.updated_by = operator_id
-    layout.updated_at = beijing_now_naive()
+    current_version = layout.version
+    layout_update = db.execute(
+        update(Floor3LocationLayout)
+        .where(
+            Floor3LocationLayout.id == layout.id,
+            Floor3LocationLayout.version == current_version,
+        )
+        .values(
+            version=current_version + 1,
+            updated_by=operator_id,
+            updated_at=beijing_now_naive(),
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if layout_update.rowcount != 1:
+        raise WarehouseAreaActivationError(
+            "布局已被其他操作更新，请刷新后重试", status_code=409
+        )
     db.flush()
+    db.expire(location)
+    db.expire(layout)
     return location
 
 
@@ -604,11 +666,13 @@ def set_area_location_active(
     )
     area.planned_location_count = active_count
     area.construction_status = "enabled" if was_published else "layout_building"
-    if not was_published:
-        policy.status = "draft"
-        policy.published_map_revision = None
-    policy.version += 1
-    policy.updated_by = operator_id
+    _advance_policy_version(
+        db,
+        policy=policy,
+        operator_id=operator_id,
+        status="draft" if not was_published else None,
+        published_map_revision=None if not was_published else ...,
+    )
     db.flush()
     return result
 
@@ -653,6 +717,26 @@ def adjust_area_location_count(
     enabled: list[WarehouseLocation] = []
     disabled: list[WarehouseLocation] = []
 
+    def auto_managed_layout(row: WarehouseLocation) -> bool:
+        layout = row.floor3_layout
+        if layout is None:
+            return False
+        # Count changes never guess that a historical manual/version-1 row was
+        # system generated.  An administrator must first adopt such rows via
+        # the dedicated auto-arrange confirmation.
+        return layout.source_type == "seeded"
+
+    if target_count == current_count:
+        return AreaLocationCountResult(
+            floor_code=normalized_floor,
+            area_code=normalized_area,
+            target_count=target_count,
+            active_count=current_count,
+            created=(),
+            enabled=(),
+            disabled=(),
+        )
+
     if target_count > current_count:
         needed = target_count - current_count
         reusable = [
@@ -660,6 +744,7 @@ def adjust_area_location_count(
             for row in all_rows
             if not row.is_active
             and row.floor3_layout is not None
+            and auto_managed_layout(row)
             and not db.scalar(select(_active_pallet_exists(row.id)))
             and not db.scalar(select(_active_inventory_exists(row.id)))
         ]
@@ -714,7 +799,8 @@ def adjust_area_location_count(
                     height_pct=height,
                     z_index=0,
                     version=1,
-                    source_type="manual",
+                    source_type="seeded",
+                    layout_kind="logical_anchor",
                     created_by=operator_id,
                     updated_by=operator_id,
                 )
@@ -730,15 +816,17 @@ def adjust_area_location_count(
             row
             for row in reversed(active_rows)
             if row.floor3_layout is not None
+            and auto_managed_layout(row)
             and not db.scalar(select(_active_pallet_exists(row.id)))
             and not db.scalar(select(_active_inventory_exists(row.id)))
         ]
         if len(removable) < needed:
             raise WarehouseAreaActivationError(
-                f"只能减少 {len(removable)} 个真正空库位；有库存、预占或实体栈板的库位不会被移除",
+                f"只能减少 {len(removable)} 个空闲系统货位；占用或尚未明确接管的历史货位不会被移除，请先自动排布确认",
                 status_code=409,
             )
         for row in removable[:needed]:
+            assert row.floor3_layout is not None
             disabled.append(
                 _set_location_active(
                     db, location=row, is_active=False, operator_id=operator_id
@@ -747,11 +835,13 @@ def adjust_area_location_count(
 
     area.planned_location_count = target_count
     area.construction_status = "enabled" if was_published else "layout_building"
-    if not was_published:
-        policy.status = "draft"
-        policy.published_map_revision = None
-    policy.version += 1
-    policy.updated_by = operator_id
+    _advance_policy_version(
+        db,
+        policy=policy,
+        operator_id=operator_id,
+        status="draft" if not was_published else None,
+        published_map_revision=None if not was_published else ...,
+    )
     db.flush()
     return AreaLocationCountResult(
         floor_code=normalized_floor,
@@ -813,6 +903,7 @@ def update_area_location_layout(
                 width_pct=slot["width_pct"],
                 height_pct=slot["height_pct"],
                 z_index=slot["z_index"],
+                source_type="manual",
                 version=slot["expected_version"] + 1,
                 updated_by=operator_id,
                 updated_at=beijing_now_naive(),
@@ -851,11 +942,13 @@ def update_area_location_layout(
             else "layout_building"
         )
     )
-    if not was_published:
-        policy.status = "draft"
-        policy.published_map_revision = None
-    policy.version += 1
-    policy.updated_by = operator_id
+    _advance_policy_version(
+        db,
+        policy=policy,
+        operator_id=operator_id,
+        status="draft" if not was_published else None,
+        published_map_revision=None if not was_published else ...,
+    )
     db.flush()
     return list(
         db.scalars(
@@ -1173,6 +1266,20 @@ def publish_floor_area_policies(
             was_persistent = False
         else:
             was_persistent = True
+            expected_policy_version = policy.version
+            claim = db.execute(
+                update(WarehouseAreaStoragePolicy)
+                .where(
+                    WarehouseAreaStoragePolicy.id == policy.id,
+                    WarehouseAreaStoragePolicy.version == expected_policy_version,
+                )
+                .values(updated_at=WarehouseAreaStoragePolicy.updated_at)
+                .execution_options(synchronize_session=False)
+            )
+            if claim.rowcount != 1:
+                raise WarehouseAreaActivationError(
+                    "区域设置已被其他操作更新，请刷新后重试", status_code=409
+                )
         if (
             policy.status == "published"
             and policy.published_map_revision == published_revision

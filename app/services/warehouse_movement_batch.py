@@ -35,6 +35,7 @@ class WarehouseMovementBatchItem:
     operation: Literal["pallet_move", "lot_transfer"]
     target_location_id: int
     expected_version: int
+    expected_target_layout_version: int | None = None
     pallet_id: int | None = None
     lot_id: int | None = None
     quantity: int | None = None
@@ -58,6 +59,7 @@ def movement_batch_request_hash(
                 "operation": item.operation,
                 "target_location_id": item.target_location_id,
                 "expected_version": item.expected_version,
+                "expected_target_layout_version": item.expected_target_layout_version,
                 "pallet_id": item.pallet_id,
                 "lot_id": item.lot_id,
                 "quantity": item.quantity,
@@ -332,6 +334,7 @@ def execute_warehouse_movement_batch(
                     operator_id=operator_id,
                     idempotency_key=subkey,
                     require_published_target=True,
+                    expected_target_layout_version=item.expected_target_layout_version,
                 )
                 results.append(
                     {
@@ -353,6 +356,7 @@ def execute_warehouse_movement_batch(
                     operator_id=operator_id,
                     idempotency_key=subkey,
                     require_empty_target=True,
+                    expected_target_layout_version=item.expected_target_layout_version,
                 )
                 results.append(
                     {

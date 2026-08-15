@@ -298,6 +298,23 @@ export function buildMappedLocationPallets(features, locations, floorCode, layou
       const rotation = mappedWidthMm > 0 && mappedDepthMm > 0 && Math.abs(mappedWidthMm - mappedDepthMm) > 50
         ? (mappedWidthMm < mappedDepthMm ? 90 : 0)
         : Math.max(...ys) - Math.min(...ys) > Math.max(...xs) - Math.min(...xs) ? 90 : 0;
+      const hasMappedFootprint = mappedWidthMm > 0 && mappedDepthMm > 0;
+      const representsPhysicalPallet = hasMappedFootprint && (
+        (mappedWidthMm >= 1080 && mappedWidthMm <= 1320 && mappedDepthMm >= 900 && mappedDepthMm <= 1100)
+        || (mappedWidthMm >= 900 && mappedWidthMm <= 1100 && mappedDepthMm >= 1080 && mappedDepthMm <= 1320)
+      );
+      const isLogicalAnchor = position?.layout_kind === "logical_anchor"
+        || (position?.layout_kind !== "physical_pallet" && hasMappedFootprint && !representsPhysicalPallet);
+      // map_position is axis-aligned. Keep the historical rotation while swapping
+      // local axes so the rendered and collision-tested footprint still matches it.
+      const axisWidthMm = hasMappedFootprint
+        ? (isLogicalAnchor ? Math.min(mappedWidthMm, 400) : mappedWidthMm)
+        : 1200;
+      const axisDepthMm = hasMappedFootprint
+        ? (isLogicalAnchor ? Math.min(mappedDepthMm, 400) : mappedDepthMm)
+        : 1000;
+      const renderedWidthMm = rotation === 90 ? axisDepthMm : axisWidthMm;
+      const renderedDepthMm = rotation === 90 ? axisWidthMm : axisDepthMm;
       pallets.push({
         id: `erp-location-${location.location_id}`,
         layout_id: layoutId,
@@ -312,17 +329,18 @@ export function buildMappedLocationPallets(features, locations, floorCode, layou
         x_mm: positions[index][0],
         y_mm: positions[index][1],
         z_mm: 0,
-        width_mm: 1200,
-        depth_mm: 1000,
+        width_mm: renderedWidthMm,
+        depth_mm: renderedDepthMm,
         height_mm: occupied ? 150 : 110,
         rotation_deg: rotation,
         color: occupied ? "#0f766e" : "#a16207",
         visual_status: occupied ? "waiting" : "empty",
-        status_note: actualPalletCode
+        status_note: `${actualPalletCode
           ? `ERP正式库位 · ${actualPalletCode}`
           : palletSummary
             ? `ERP正式共享位置 · ${palletSummary} · 请在右侧逐块选择`
-            : "ERP正式空库位",
+            : "ERP正式空库位"}${isLogicalAnchor ? " · 逻辑点位（非实尺度栈板占地）" : ""}`,
+        is_logical_anchor: isLogicalAnchor,
         is_simulated: true,
         version: 1,
         snapped: false

@@ -12,8 +12,13 @@ def test_inventory_backed_short_receipt_requires_cascading_return_location() -> 
     assert "receiptLocationFloors" in INDEX
     assert "receiptAreasForFloor" in INDEX
     assert "receiptLocationsForArea" in INDEX
+    assert "onReceiptReturnLocationChange(line)" in INDEX
     assert "请选择退回货物实际存放库位" in INDEX
     assert "return_location_id:line.return_location_id || null" in INDEX
+    assert (
+        "expected_return_layout_version:line.expected_return_layout_version || null"
+        in INDEX
+    )
 
 
 def test_receipt_ui_keeps_unordered_return_automatic_and_no_extra_confirmation() -> None:

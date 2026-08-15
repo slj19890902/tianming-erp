@@ -171,6 +171,9 @@ test("mapped locations use area-relative layout coordinates and convert 2D drags
   const [pallet] = buildMappedLocationPallets([zone], [location], "3F", "layout-3f");
   assert.equal(pallet.x_mm, 2500);
   assert.equal(pallet.y_mm, 4500);
+  assert.equal(pallet.width_mm, 400);
+  assert.equal(pallet.depth_mm, 400);
+  assert.equal(pallet.is_logical_anchor, true);
   assert.deepEqual(locationLayoutGeometry(zone, location, 6500, 2250), {
     location_id: 21,
     expected_version: 7,
@@ -191,6 +194,38 @@ test("mapped pallet rotation follows each measured slot orientation", () => {
   const pallets = buildMappedLocationPallets([zone], [normal, rotated], "1F", "layout-1f");
   assert.equal(pallets[0].rotation_deg, 0);
   assert.equal(pallets[1].rotation_deg, 90);
+  assert.deepEqual(pallets.map((item) => [Math.round(item.width_mm), Math.round(item.depth_mm)]), [[1200, 1000], [1200, 1000]]);
+});
+
+test("confirmed-capacity logical positions render as small measured anchors instead of full pallet outlines", () => {
+  const zone = {id: "zone-a1", feature_kind: "zone", feature_code: "ZONE-A1", erp_area_code: "A1", points: [[0, 0], [10000, 0], [10000, 5000], [0, 5000]]};
+  const location = {
+    location_id: 41, location_code: "A1-L041", location_name: "A1逻辑位", floor_code: "3F", area_code: "A1",
+    position_status: "mapped", occupancy_status: "empty", pallet: null, loose_items: [],
+    map_position: {left_pct: 10, top_pct: 10, width_pct: 2, height_pct: 4, version: 1, z_index: 0}
+  };
+
+  const [anchor] = buildMappedLocationPallets([zone], [location], "3F", "layout-3f");
+  assert.equal(anchor.width_mm, 200);
+  assert.equal(anchor.depth_mm, 200);
+  assert.equal(anchor.is_logical_anchor, true);
+  assert.match(anchor.status_note, /逻辑点位/);
+});
+
+test("persisted layout kind overrides the bounded legacy footprint inference", () => {
+  const zone = {id: "zone-a1", feature_kind: "zone", feature_code: "ZONE-A1", erp_area_code: "A1", points: [[0, 0], [10000, 0], [10000, 5000], [0, 5000]]};
+  const base = {
+    location_code: "A1-L001", location_name: "A1点位", floor_code: "3F", area_code: "A1",
+    position_status: "mapped", occupancy_status: "empty", pallet: null, loose_items: []
+  };
+  const locations = [
+    {...base, location_id: 51, location_code: "A1-L051", map_position: {left_pct: 0, top_pct: 0, width_pct: 50, height_pct: 20, version: 1, z_index: 0, layout_kind: "physical_pallet"}},
+    {...base, location_id: 52, location_code: "A1-L052", map_position: {left_pct: 50, top_pct: 0, width_pct: 12, height_pct: 20, version: 1, z_index: 0, layout_kind: "logical_anchor"}}
+  ];
+
+  const pallets = buildMappedLocationPallets([zone], locations, "3F", "layout-3f");
+  assert.equal(pallets[0].is_logical_anchor, false);
+  assert.equal(pallets[1].is_logical_anchor, true);
 });
 
 test("mapped pallet locations detect column overlap without moving either object", () => {
@@ -227,6 +262,7 @@ test("move targets are the intersection of empty API candidates and mapped dashb
   ];
   assert.deepEqual(intersectMappedMoveTargets(candidates, dashboard).map((item) => item.location_id), [1]);
   assert.deepEqual(intersectMappedMoveTargets(candidates, dashboard, [1]), []);
+  assert.deepEqual(intersectMappedMoveTargets(candidates, dashboard, [], [1]), []);
 });
 
 test("location move source list keeps pallet order, appends loose lots, and de-duplicates lot ids", () => {
@@ -321,7 +357,7 @@ test("ordinary single-pallet location keeps the legacy one-card move path", () =
 
 test("same-floor drag resolves one published empty location without changing geometry", () => {
   const features = [{ feature_kind: "zone", erp_area_code: "A1", points: [[0, 0], [10000, 0], [10000, 5000], [0, 5000]] }];
-  const target = { location_id: 8, floor_code: "3F", area_code: "A1", occupancy_status: "empty", position_status: "mapped", map_position: { left_pct: 10, top_pct: 20, width_pct: 20, height_pct: 30 } };
+  const target = { location_id: 8, floor_code: "3F", area_code: "A1", occupancy_status: "empty", position_status: "mapped", map_position: { version: 4, left_pct: 10, top_pct: 20, width_pct: 20, height_pct: 30 } };
   const before = structuredClone(target);
   assert.equal(resolveMoveDropTarget(features, [target], "3F", 2000, 3250).target?.location_id, 8);
   assert.match(resolveMoveDropTarget(features, [target], "3F", 9000, 1000).error, /空货位|三级选择/);
@@ -332,11 +368,11 @@ test("move drafts replace one source, reject target collision, and build one con
   const base = {
     client_item_id: "client-1", source_key: "pallet:10", operation: "pallet_move", pallet_id: 10,
     expected_version: 2, source_location_id: 1, source_floor_code: "1F", source_area_code: "FIN", source_location_code: "FIN-01", source_location_name: "成品位 1",
-    target_location_id: 2, target_floor_code: "3F", target_area_code: "A1", target_location_code: "A1-01", target_location_name: "三楼 A1-01",
+    target_location_id: 2, expected_target_layout_version: 2, target_floor_code: "3F", target_area_code: "A1", target_location_code: "A1-01", target_location_name: "三楼 A1-01",
     inventory_code: "PAL-10", product_name: "整栈板", customer_name: "天华", unit: "boxes"
   };
   const first = upsertMoveDraft([], base);
-  const replacement = upsertMoveDraft(first.items, { ...base, client_item_id: "must-not-replace-stable-id", target_location_id: 3, target_location_code: "A1-02" });
+  const replacement = upsertMoveDraft(first.items, { ...base, client_item_id: "must-not-replace-stable-id", target_location_id: 3, expected_target_layout_version: 3, target_location_code: "A1-02" });
   assert.equal(replacement.items.length, 1);
   assert.equal(replacement.items[0].client_item_id, "client-1");
   assert.equal(replacement.items[0].target_location_id, 3);
@@ -344,13 +380,13 @@ test("move drafts replace one source, reject target collision, and build one con
   assert.match(collision.error, /占用/);
   assert.deepEqual(buildMoveBatchPayload("batch-key-123", [
     replacement.items[0],
-    { ...base, client_item_id: "client-2", source_key: "lot:20", operation: "lot_transfer", pallet_id: undefined, lot_id: 20, quantity: 6, target_location_id: 4 }
+    { ...base, client_item_id: "client-2", source_key: "lot:20", operation: "lot_transfer", pallet_id: undefined, lot_id: 20, quantity: 6, target_location_id: 4, expected_target_layout_version: 4 }
   ]), {
     idempotency_key: "batch-key-123",
     confirmed: true,
     items: [
-      { client_item_id: "client-1", operation: "pallet_move", pallet_id: 10, expected_version: 2, target_location_id: 3 },
-      { client_item_id: "client-2", operation: "lot_transfer", lot_id: 20, quantity: 6, expected_version: 2, target_location_id: 4 }
+      { client_item_id: "client-1", operation: "pallet_move", pallet_id: 10, expected_version: 2, target_location_id: 3, expected_target_layout_version: 3 },
+      { client_item_id: "client-2", operation: "lot_transfer", lot_id: 20, quantity: 6, expected_version: 2, target_location_id: 4, expected_target_layout_version: 4 }
     ]
   });
 });

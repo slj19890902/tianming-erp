@@ -28,6 +28,13 @@ from app.services.warehouse_area_activation import (
 
 STANDARD_PALLET_WIDTH_MM = 1200
 STANDARD_PALLET_DEPTH_MM = 1000
+LOGICAL_ANCHOR_FOOTPRINT_MM = 400
+# Percent coordinates are persisted with four decimal places.  A millimetre
+# round-trip error grows with the measured zone span.  Keep a small base for
+# floating-point ulps, then scale to more than the worst two-edge quantisation
+# error (0.0001 percent per persisted value).
+_GEOMETRY_EPSILON_MM = 0.01
+_PERCENT_ROUND_TRIP_EPSILON_FACTOR = 0.0000025
 _USAGE_BY_SUBTYPE = {
     "finished_wait_delivery": "finished",
     "semi_finished": "semi_finished",
@@ -68,6 +75,8 @@ def _area_code(feature: dict) -> str:
 def _point_in_polygon(
     point: tuple[float, float],
     polygon: list[tuple[float, float]],
+    *,
+    epsilon_mm: float = _GEOMETRY_EPSILON_MM,
 ) -> bool:
     x, y = point
     inside = False
@@ -76,10 +85,15 @@ def _point_in_polygon(
         x1, y1 = polygon[index]
         x2, y2 = polygon[(index + 1) % count]
         cross = (x - x1) * (y2 - y1) - (y - y1) * (x2 - x1)
+        segment_length = math.hypot(x2 - x1, y2 - y1)
         if (
-            abs(cross) < 0.0001
-            and min(x1, x2) <= x <= max(x1, x2)
-            and min(y1, y2) <= y <= max(y1, y2)
+            abs(cross) <= epsilon_mm * max(1.0, segment_length)
+            and min(x1, x2) - epsilon_mm
+            <= x
+            <= max(x1, x2) + epsilon_mm
+            and min(y1, y2) - epsilon_mm
+            <= y
+            <= max(y1, y2) + epsilon_mm
         ):
             return True
         if (y1 > y) != (y2 > y):
@@ -96,17 +110,56 @@ def _rect_inside_polygon(
     width: float,
     depth: float,
     polygon: list[tuple[float, float]],
+    epsilon_mm: float = _GEOMETRY_EPSILON_MM,
 ) -> bool:
-    return all(
-        _point_in_polygon(point, polygon)
-        for point in (
-            (x, y),
-            (x + width, y),
-            (x + width, y + depth),
-            (x, y + depth),
-            (x + width / 2, y + depth / 2),
-        )
+    rectangle = (
+        (x, y),
+        (x + width, y),
+        (x + width, y + depth),
+        (x, y + depth),
     )
+    if not all(
+        _point_in_polygon(point, polygon, epsilon_mm=epsilon_mm)
+        for point in (*rectangle, (x + width / 2, y + depth / 2))
+    ):
+        return False
+
+    def cross(
+        first: tuple[float, float],
+        second: tuple[float, float],
+        third: tuple[float, float],
+    ) -> float:
+        return (
+            (second[0] - first[0]) * (third[1] - first[1])
+            - (second[1] - first[1]) * (third[0] - first[0])
+        )
+
+    rectangle_edges = [
+        (rectangle[index], rectangle[(index + 1) % len(rectangle)])
+        for index in range(len(rectangle))
+    ]
+    polygon_edges = [
+        (polygon[index], polygon[(index + 1) % len(polygon)])
+        for index in range(len(polygon))
+    ]
+    for rect_start, rect_end in rectangle_edges:
+        for poly_start, poly_end in polygon_edges:
+            first = cross(rect_start, rect_end, poly_start)
+            second = cross(rect_start, rect_end, poly_end)
+            third = cross(poly_start, poly_end, rect_start)
+            fourth = cross(poly_start, poly_end, rect_end)
+            if first * second < -0.0001 and third * fourth < -0.0001:
+                return False
+    # A concave notch can enter and leave through points on the rectangle edge
+    # without producing a strict segment crossing.  A polygon vertex inside
+    # the rectangle still proves that part of its footprint lies outside.
+    if any(
+        x + 0.0001 < point_x < x + width - 0.0001
+        and y + 0.0001 < point_y < y + depth - 0.0001
+        for point_x, point_y in polygon
+    ):
+        return False
+    return True
 
 
 def _tile_polygon(
@@ -153,12 +206,55 @@ def _tile_polygon(
     return slots
 
 
-def _rectangles_overlap(left: dict, right: dict) -> bool:
+def _rectangles_overlap(
+    left: dict,
+    right: dict,
+    *,
+    epsilon_mm: float = _GEOMETRY_EPSILON_MM,
+) -> bool:
+    left_min_x = float(left.get("min_x", left.get("x_mm", 0)))
+    left_min_y = float(left.get("min_y", left.get("y_mm", 0)))
+    left_max_x = float(
+        left["max_x"]
+        if "max_x" in left
+        else left_min_x + float(left.get("width_mm", 0))
+    )
+    left_max_y = float(
+        left["max_y"]
+        if "max_y" in left
+        else left_min_y + float(left.get("depth_mm", 0))
+    )
+    right_min_x = float(right.get("min_x", right.get("x_mm", 0)))
+    right_min_y = float(right.get("min_y", right.get("y_mm", 0)))
+    right_max_x = float(
+        right["max_x"]
+        if "max_x" in right
+        else right_min_x + float(right.get("width_mm", 0))
+    )
+    right_max_y = float(
+        right["max_y"]
+        if "max_y" in right
+        else right_min_y + float(right.get("depth_mm", 0))
+    )
     return (
-        float(left["x_mm"]) < float(right["max_x"])
-        and float(left["x_mm"]) + float(left["width_mm"]) > float(right["min_x"])
-        and float(left["y_mm"]) < float(right["max_y"])
-        and float(left["y_mm"]) + float(left["depth_mm"]) > float(right["min_y"])
+        left_min_x < right_max_x - epsilon_mm
+        and left_max_x > right_min_x + epsilon_mm
+        and left_min_y < right_max_y - epsilon_mm
+        and left_max_y > right_min_y + epsilon_mm
+    )
+
+
+def _percent_round_trip_epsilon(points: list) -> float:
+    polygon = [(float(point[0]), float(point[1])) for point in points]
+    if not polygon:
+        return _GEOMETRY_EPSILON_MM
+    span = max(
+        max(point[0] for point in polygon) - min(point[0] for point in polygon),
+        max(point[1] for point in polygon) - min(point[1] for point in polygon),
+    )
+    return max(
+        _GEOMETRY_EPSILON_MM,
+        span * _PERCENT_ROUND_TRIP_EPSILON_FACTOR,
     )
 
 
@@ -181,6 +277,35 @@ def _segment_obstacle_bounds(points: list, width_mm: float) -> list[dict]:
 
 def _physical_obstacle_bounds(floor_layout: dict) -> list[dict]:
     obstacles: list[dict] = []
+    for structure in floor_layout.get("structures") or []:
+        if structure.get("kind") != "column":
+            continue
+        geometry = structure.get("geometry") or {}
+        if geometry.get("type") == "circle":
+            radius = float(geometry.get("radius_mm") or 0)
+            if radius <= 0:
+                continue
+            x = float(geometry.get("x_mm") or 0)
+            y = float(geometry.get("y_mm") or 0)
+            obstacles.append(
+                {
+                    "min_x": x - radius,
+                    "max_x": x + radius,
+                    "min_y": y - radius,
+                    "max_y": y + radius,
+                }
+            )
+        elif geometry.get("type") == "polyline":
+            points = geometry.get("points") or []
+            if len(points) >= 3:
+                obstacles.append(
+                    {
+                        "min_x": min(float(point[0]) for point in points),
+                        "max_x": max(float(point[0]) for point in points),
+                        "min_y": min(float(point[1]) for point in points),
+                        "max_y": max(float(point[1]) for point in points),
+                    }
+                )
     for row in [
         *(floor_layout.get("placements") or []),
         *(floor_layout.get("racks") or []),
@@ -224,6 +349,146 @@ def _physical_obstacle_bounds(floor_layout: dict) -> list[dict]:
                 }
             )
     return obstacles
+
+
+def _slot_center(slot: dict) -> tuple[float, float]:
+    return (
+        float(slot["x_mm"]) + float(slot["width_mm"]) / 2,
+        float(slot["y_mm"]) + float(slot["depth_mm"]) / 2,
+    )
+
+
+def _distributed_slots(
+    slots: list[dict],
+    *,
+    target_count: int,
+    anchor_slots: list[dict] | None = None,
+) -> list[dict]:
+    """Deterministically spread a subset across all usable space.
+
+    The old implementation returned the row-major prefix.  Max-min sampling
+    keeps the result stable while making every next location as far as
+    possible from already selected/fixed locations.
+    """
+
+    if target_count <= 0:
+        return []
+    if len(slots) < target_count:
+        return []
+    remaining = sorted(
+        slots,
+        key=lambda slot: (
+            round(_slot_center(slot)[1], 6),
+            round(_slot_center(slot)[0], 6),
+            round(float(slot["width_mm"]), 6),
+            round(float(slot["depth_mm"]), 6),
+        ),
+    )
+    anchor_centers = [_slot_center(slot) for slot in (anchor_slots or [])]
+    selected: list[dict] = []
+    selected_centers: list[tuple[float, float]] = []
+
+    if not anchor_centers:
+        centroid_x = sum(_slot_center(slot)[0] for slot in remaining) / len(remaining)
+        centroid_y = sum(_slot_center(slot)[1] for slot in remaining) / len(remaining)
+        first = min(
+            remaining,
+            key=lambda slot: (
+                (_slot_center(slot)[0] - centroid_x) ** 2
+                + (_slot_center(slot)[1] - centroid_y) ** 2,
+                round(_slot_center(slot)[1], 6),
+                round(_slot_center(slot)[0], 6),
+            ),
+        )
+        remaining.remove(first)
+        selected.append(first)
+        selected_centers.append(_slot_center(first))
+
+    reference_centers = [*anchor_centers, *selected_centers]
+    nearest_distances = [
+        min(
+            (center_x - anchor_x) ** 2 + (center_y - anchor_y) ** 2
+            for anchor_x, anchor_y in reference_centers
+        )
+        for center_x, center_y in map(_slot_center, remaining)
+    ]
+    while remaining and len(selected) < target_count:
+        candidate_index = max(
+            range(len(remaining)),
+            key=lambda index: (
+                nearest_distances[index],
+                -round(_slot_center(remaining[index])[1], 6),
+                -round(_slot_center(remaining[index])[0], 6),
+            ),
+        )
+        candidate = remaining.pop(candidate_index)
+        nearest_distances.pop(candidate_index)
+        selected.append(candidate)
+        candidate_center = _slot_center(candidate)
+        selected_centers.append(candidate_center)
+        for index, slot in enumerate(remaining):
+            center = _slot_center(slot)
+            distance = (
+                (center[0] - candidate_center[0]) ** 2
+                + (center[1] - candidate_center[1]) ** 2
+            )
+            nearest_distances[index] = min(nearest_distances[index], distance)
+    return selected
+
+
+def _percent_geometry_to_slot(slot: dict, points: list) -> dict:
+    polygon = [(float(point[0]), float(point[1])) for point in points]
+    min_x = min(point[0] for point in polygon)
+    max_x = max(point[0] for point in polygon)
+    min_y = min(point[1] for point in polygon)
+    max_y = max(point[1] for point in polygon)
+    width = max_x - min_x
+    height = max_y - min_y
+    epsilon_mm = _percent_round_trip_epsilon(points)
+    left_pct = float(slot["left_pct"])
+    top_pct = float(slot["top_pct"])
+    width_pct = float(slot["width_pct"])
+    height_pct = float(slot["height_pct"])
+    slot_width = width * width_pct / 100
+    slot_depth = height * height_pct / 100
+    slot_x = min_x + width * left_pct / 100
+    slot_y = max_y - height * top_pct / 100 - slot_depth
+    if abs(slot_x - min_x) <= epsilon_mm:
+        slot_x = min_x
+    if abs(slot_y - min_y) <= epsilon_mm:
+        slot_y = min_y
+    if abs(slot_x + slot_width - max_x) <= epsilon_mm:
+        slot_width = max_x - slot_x
+    if abs(slot_y + slot_depth - max_y) <= epsilon_mm:
+        slot_depth = max_y - slot_y
+    layout_kind = str(slot.get("layout_kind") or "unknown")
+    represents_physical_pallet = (
+        1080 <= slot_width <= 1320
+        and 900 <= slot_depth <= 1100
+    ) or (
+        900 <= slot_width <= 1100
+        and 1080 <= slot_depth <= 1320
+    )
+    is_logical_anchor = layout_kind == "logical_anchor" or (
+        layout_kind != "physical_pallet"
+        and slot_width > 0
+        and slot_depth > 0
+        and not represents_physical_pallet
+    )
+    if is_logical_anchor:
+        effective_width = min(slot_width, LOGICAL_ANCHOR_FOOTPRINT_MM)
+        effective_depth = min(slot_depth, LOGICAL_ANCHOR_FOOTPRINT_MM)
+        slot_x += (slot_width - effective_width) / 2
+        slot_y += (slot_depth - effective_depth) / 2
+        slot_width = effective_width
+        slot_depth = effective_depth
+    return {
+        **slot,
+        "x_mm": slot_x,
+        "y_mm": slot_y,
+        "width_mm": slot_width,
+        "depth_mm": slot_depth,
+    }
 
 
 def _pallet_slots(points: list, obstacles: list[dict]) -> tuple[list[dict], str]:
@@ -329,6 +594,7 @@ def confirmed_capacity_slots_for_zone(
     feature_id: str,
     target_count: int,
     prefer_standard_pallet_slots: bool = True,
+    reserved_slots: list[dict] | None = None,
 ) -> list[dict]:
     """Create placed logical positions for an administrator-confirmed capacity.
 
@@ -345,13 +611,6 @@ def confirmed_capacity_slots_for_zone(
         raise Floor1CandidatePlanningError("确认容量必须在 0 到 500 之间", status_code=409)
     if target_count == 0:
         return []
-    if prefer_standard_pallet_slots:
-        measured = measured_pallet_slots_for_zone(
-            floor_layout, feature_id=feature_id
-        )
-        if len(measured) >= target_count:
-            return measured[:target_count]
-
     bounds = floor_layout.get("bounds_mm") or {}
     required_bounds = {"min_x", "min_y", "max_x", "max_y"}
     if not required_bounds.issubset(bounds):
@@ -381,26 +640,64 @@ def confirmed_capacity_slots_for_zone(
     max_y = max(point[1] for point in polygon)
     width = max_x - min_x
     height = max_y - min_y
+    geometry_epsilon = _percent_round_trip_epsilon(points)
     if width <= 0 or height <= 0:
         raise Floor1CandidatePlanningError(
             "实测区域边界无效，无法生成确认容量位置", status_code=409
         )
 
+    reserved_physical = [
+        _percent_geometry_to_slot(slot, points) for slot in (reserved_slots or [])
+    ]
+    if prefer_standard_pallet_slots:
+        measured = measured_pallet_slots_for_zone(
+            floor_layout, feature_id=feature_id
+        )
+        measured = [
+            slot
+            for slot in measured
+            if not any(
+                _rectangles_overlap(
+                    slot,
+                    reserved,
+                    epsilon_mm=geometry_epsilon,
+                )
+                for reserved in reserved_physical
+            )
+        ]
+        if len(measured) >= target_count:
+            selected = _distributed_slots(
+                measured,
+                target_count=target_count,
+                anchor_slots=reserved_physical,
+            )
+            return selected
+
     aspect = max(0.05, min(20.0, width / height))
+    obstacles = _physical_obstacle_bounds(floor_layout)
     for density in range(3, 25):
-        cell_count = max(target_count * density, 16)
+        cell_count = max(
+            (target_count + len(reserved_physical)) * density,
+            16,
+        )
         columns = max(1, int(math.ceil(math.sqrt(cell_count * aspect))))
         rows = max(1, int(math.ceil(cell_count / columns)))
         cell_width = width / columns
         cell_height = height / rows
-        slot_width = cell_width * 0.68
-        slot_depth = cell_height * 0.68
+        # Logical positions are operational anchors, not full pallet claims.
+        # Generate and validate the same <=400 mm footprint rendered by the UI.
+        slot_width = min(cell_width * 0.68, LOGICAL_ANCHOR_FOOTPRINT_MM)
+        slot_depth = min(cell_height * 0.68, LOGICAL_ANCHOR_FOOTPRINT_MM)
         slots: list[dict] = []
         for row_index in range(rows):
             center_y = min_y + (row_index + 0.5) * cell_height
             for column_index in range(columns):
                 center_x = min_x + (column_index + 0.5) * cell_width
-                if not _point_in_polygon((center_x, center_y), polygon):
+                if not _point_in_polygon(
+                    (center_x, center_y),
+                    polygon,
+                    epsilon_mm=geometry_epsilon,
+                ):
                     continue
                 current_width = slot_width
                 current_depth = slot_depth
@@ -414,8 +711,9 @@ def confirmed_capacity_slots_for_zone(
                         width=current_width,
                         depth=current_depth,
                         polygon=polygon,
+                        epsilon_mm=geometry_epsilon,
                     ):
-                        candidate = {
+                        possible = {
                             "x_mm": left,
                             "y_mm": bottom,
                             "width_mm": current_width,
@@ -424,16 +722,110 @@ def confirmed_capacity_slots_for_zone(
                             "column": column_index + 1,
                             "capacity_confirmed": True,
                         }
-                        break
+                        if not any(
+                            _rectangles_overlap(
+                                possible,
+                                obstacle,
+                                epsilon_mm=geometry_epsilon,
+                            )
+                            for obstacle in [*obstacles, *reserved_physical]
+                        ):
+                            candidate = possible
+                            break
                     current_width *= 0.72
                     current_depth *= 0.72
                 if candidate is not None:
                     slots.append(_percent_slot(candidate, points, bounds))
-                    if len(slots) == target_count:
-                        return slots
+        if len(slots) >= target_count:
+            return _distributed_slots(
+                slots,
+                target_count=target_count,
+                anchor_slots=reserved_physical,
+            )
     raise Floor1CandidatePlanningError(
         "实测区域边界过窄或无效，无法生成已确认容量位置", status_code=409
     )
+
+
+def validate_capacity_layout_slots_for_zone(
+    floor_layout: dict,
+    *,
+    feature_id: str,
+    slots: list[dict],
+) -> list[dict]:
+    """Validate one complete active ground-location layout against the map.
+
+    Percentage bounds alone are insufficient for irregular zones.  This
+    converts every location back to measured millimetres and rejects a whole
+    batch when a rectangle crosses the zone, hits a physical/no-go obstacle,
+    or overlaps another location.
+    """
+
+    feature = next(
+        (
+            row
+            for row in floor_layout.get("features") or []
+            if row.get("feature_kind") == "zone"
+            and str(row.get("id") or "") == str(feature_id or "")
+        ),
+        None,
+    )
+    if feature is None:
+        raise Floor1CandidatePlanningError("实测地图区域不存在", status_code=404)
+    points = feature.get("points") or []
+    bounds = floor_layout.get("bounds_mm") or {}
+    if len(points) < 3 or not _zone_inside_floor_bounds(points, bounds):
+        raise Floor1CandidatePlanningError(
+            "实测区域边界无效，无法保存货位位置", status_code=409
+        )
+    polygon = [(float(point[0]), float(point[1])) for point in points]
+    geometry_epsilon = _percent_round_trip_epsilon(points)
+    obstacles = _physical_obstacle_bounds(floor_layout)
+    physical: list[dict] = []
+    for slot in slots:
+        try:
+            current = _percent_geometry_to_slot(slot, points)
+        except (KeyError, TypeError, ValueError) as error:
+            raise Floor1CandidatePlanningError(
+                "货位坐标无效，请刷新后重试", status_code=409
+            ) from error
+        if min(float(current[key]) for key in ("width_mm", "depth_mm")) <= 0:
+            raise Floor1CandidatePlanningError("货位尺寸必须大于零", status_code=409)
+        if not _rect_inside_polygon(
+            x=float(current["x_mm"]),
+            y=float(current["y_mm"]),
+            width=float(current["width_mm"]),
+            depth=float(current["depth_mm"]),
+            polygon=polygon,
+            epsilon_mm=geometry_epsilon,
+        ):
+            raise Floor1CandidatePlanningError(
+                f"货位 {slot.get('location_id') or ''} 超出所属区域边界",
+                status_code=409,
+            )
+        if any(
+            _rectangles_overlap(
+                current,
+                obstacle,
+                epsilon_mm=geometry_epsilon,
+            )
+            for obstacle in obstacles
+        ):
+            raise Floor1CandidatePlanningError(
+                f"货位 {slot.get('location_id') or ''} 与柱子、通道或其他禁放设施冲突",
+                status_code=409,
+            )
+        for previous in physical:
+            if _rectangles_overlap(
+                current,
+                previous,
+                epsilon_mm=geometry_epsilon,
+            ):
+                raise Floor1CandidatePlanningError(
+                    "货位之间发生重叠，请拉开后再保存", status_code=409
+                )
+        physical.append(current)
+    return physical
 
 
 def _zone_inside_floor_bounds(points: list, bounds: dict) -> bool:
@@ -1103,7 +1495,12 @@ def confirm_floor1_formal_candidate_plan(
                 height_pct=Decimal(str(slot["height_pct"])),
                 z_index=0,
                 version=1,
-                source_type="manual",
+                source_type="seeded",
+                layout_kind=(
+                    "logical_anchor"
+                    if slot.get("capacity_confirmed") is True
+                    else "physical_pallet"
+                ),
                 created_by=operator_id,
                 updated_by=operator_id,
             )

@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.core.time_contract import utc_now_naive
@@ -16,7 +17,10 @@ from app.models.warehouse_inventory import (
     InventoryReservation,
     OrderedFinishedReceiptReturn,
 )
-from app.services.location_candidates import list_operational_locations
+from app.services.location_candidates import (
+    claim_active_placed_location,
+    list_operational_locations,
+)
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     _balances,
@@ -108,6 +112,28 @@ def _next_sequence(db: Session, return_receipt_item_id: int) -> int:
         )
         or 0
     ) + 1
+
+
+def _claim_return_destination(
+    db: Session,
+    location_id: int,
+    *,
+    expected_layout_version: int | None = None,
+) -> None:
+    try:
+        claimed = claim_active_placed_location(
+            db,
+            location_id,
+            expected_layout_version=expected_layout_version,
+        )
+    except OperationalError as error:
+        raise WarehouseInventoryError(
+            "退回库位正在被其他入库、移位或布局操作使用，请稍后重试", 409
+        ) from error
+    if not claimed:
+        raise WarehouseInventoryError(
+            "退回库位已停用、尚未落位或状态已变化，请刷新后重试", 409
+        )
 
 
 def _clone_return_lot(
@@ -340,6 +366,7 @@ def restore_ordered_finished_receipt_shortage(
     actual_received_quantity: int,
     resolution_action: str | None,
     return_location_id: int | None,
+    expected_return_layout_version: int | None = None,
     stock_date: date,
     operator_id: int | None,
 ) -> list[OrderedFinishedReceiptReturn]:
@@ -357,6 +384,11 @@ def restore_ordered_finished_receipt_shortage(
         raise WarehouseInventoryError("客户短收处理方式无效", 409)
     if return_location_id is None:
         raise WarehouseInventoryError("客户短收退回请先选择实际存放库位", 400)
+    _claim_return_destination(
+        db,
+        return_location_id,
+        expected_layout_version=expected_return_layout_version,
+    )
     location_rows = list_operational_locations(
         db,
         warehouse_types={"finished", "shared"},

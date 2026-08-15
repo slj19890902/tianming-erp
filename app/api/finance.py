@@ -161,6 +161,7 @@ class ReturnReceiptLineCreate(BaseModel):
     resolution_action: str | None = None
     difference_reason: str | None = None
     return_location_id: int | None = None
+    expected_return_layout_version: int | None = Field(default=None, gt=0)
 
 
 class ReturnReceiptCreate(BaseModel):
@@ -1232,6 +1233,9 @@ def create_return_receipt(
                     actual_received_quantity=line.actual_received_quantity,
                     resolution_action=action,
                     return_location_id=line.return_location_id,
+                    expected_return_layout_version=(
+                        line.expected_return_layout_version
+                    ),
                     stock_date=payload.actual_received_date,
                     operator_id=user.id,
                 )
@@ -1252,6 +1256,9 @@ def create_return_receipt(
                     "resolution_action": action,
                     "difference_reason": reason,
                     "return_location_id": line.return_location_id,
+                    "expected_return_layout_version": (
+                        line.expected_return_layout_version
+                    ),
                 }
             )
         _refresh_receipt_order_statuses(db, affected_order_ids)
@@ -1401,6 +1408,9 @@ def update_return_receipt(
                     actual_received_quantity=line.actual_received_quantity,
                     resolution_action=action,
                     return_location_id=line.return_location_id,
+                    expected_return_layout_version=(
+                        line.expected_return_layout_version
+                    ),
                     stock_date=payload.actual_received_date,
                     operator_id=user.id,
                 )

@@ -23,6 +23,7 @@ from app.models.product import Product
 from app.models.stocktake import StocktakeOrder
 from app.models.user import User
 from app.models.warehouse_inventory import (
+    Floor3LocationLayout,
     InventoryLocationMovement,
     InventoryLot,
     InventoryMovement,
@@ -666,6 +667,53 @@ def test_posts_the_entire_mixed_batch_and_replays_without_duplicates(
         )
         == post_logs_after
     )
+    assert get_onboarding_batch(db, batch.id).status == "submitted"
+
+
+def test_post_rejects_mapped_location_changed_after_submitted_snapshot(
+    posting_db,
+) -> None:
+    db, data = posting_db
+    target = data["locations"]["E1-R01"]
+    layout = Floor3LocationLayout(
+        location_id=target.id,
+        left_pct=10,
+        top_pct=10,
+        width_pct=12,
+        height_pct=10,
+        layout_kind="physical_pallet",
+        source_type="seeded",
+        version=1,
+    )
+    db.add(layout)
+    db.commit()
+
+    batch = _submitted_batch(db, data)
+    formal_before = _formal_counts(db)
+    pallets_before = _count(db, InventoryPallet)
+    logs_before = _count(db, OperationLog)
+
+    layout.left_pct = 40
+    layout.version += 1
+    db.commit()
+
+    with pytest.raises(InventoryOnboardingPostingError) as captured:
+        posting_service.post_submitted_batch(
+            db,
+            batch_id=batch.id,
+            operator=data["admin"],
+        )
+    assert (
+        captured.value.code
+        == "INVENTORY_ONBOARDING_POSTING_LOCATION_LAYOUT_STALE"
+    )
+    db.rollback()
+    db.expire_all()
+
+    assert _formal_counts(db) == formal_before
+    assert _count(db, InventoryPallet) == pallets_before
+    assert _count(db, InventoryOnboardingPosting) == 0
+    assert _count(db, OperationLog) == logs_before
     assert get_onboarding_batch(db, batch.id).status == "submitted"
 
 

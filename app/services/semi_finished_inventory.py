@@ -26,6 +26,7 @@ from app.models.warehouse_inventory import (
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     _balances,
+    _claim_inventory_destination,
     _movement,
     _number,
     active_finished_reserved_qty,
@@ -2191,6 +2192,17 @@ def reverse_semi_finished_consumption(
         return repeated
     if stock_quantity <= 0:
         raise WarehouseInventoryError("逆转消耗数量必须大于0")
+    location_id = db.scalar(
+        select(InventoryLot.warehouse_location_id)
+        .join(
+            InventoryReservation,
+            InventoryReservation.inventory_lot_id == InventoryLot.id,
+        )
+        .where(InventoryReservation.id == reservation_id)
+    )
+    if location_id is None:
+        raise WarehouseInventoryError("半成品预占关联库位不存在", 409)
+    _claim_inventory_destination(db, int(location_id))
     with db.begin_nested():
         reservation = db.get(InventoryReservation, reservation_id)
         if reservation is None:

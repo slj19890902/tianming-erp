@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.113"
-    assert APP_VERSION_NAME == "模具货架区域关联与产品书脊修复"
+    assert APP_VERSION == "v0.22.115"
+    assert APP_VERSION_NAME == "模具地图移货与层格正式同步"
     assert APP_BUILD_DATE == "2026-08-15"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -49,14 +49,15 @@ def test_factory_update_reports_current_release_version() -> None:
     current_release = [
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
-    assert any("本次更新｜" in item and "模具实测区域" in item and "R01" in item and "每层格数" in item for item in current_release)
-    assert any("本次更新｜" in item and "正视图直达入口" in item and "正式模具台账" in item and "空架" in item for item in current_release)
-    assert any("本次更新｜" in item and "产品" in item and "书脊" in item and "正式位置" in item for item in current_release)
-    assert any("本次更新｜" in item and "未绑定产品" in item and "失败关闭" in item for item in current_release)
-    assert any("如何验证｜" in item and "R01" in item and "R02" in item and "R03" in item for item in current_release)
-    assert any("如何验证｜" in item and "82件" in item and "产品书脊" in item and "正式位置" in item for item in current_release)
-    assert any("如何验证｜" in item and "第2层" in item and "60件模具" in item and "放弃草稿" in item for item in current_release)
-    assert any("如何验证｜" in item and "v0.22.113" in item and "mm21v8x9z10" in item for item in current_release)
+    assert any("本次更新｜" in item and "移货模式" in item and "产品书脊" in item and "正式发布" in item for item in current_release)
+    assert any("本次更新｜" in item and "幂等凭证" in item and "不可变移位流水" in item for item in current_release)
+    assert any("本次更新｜" in item and "当前正式层格" in item and "当前草稿层格" in item and "保存、校验、发布" in item for item in current_release)
+    assert any("本次更新｜" in item and "刷新正式层格" in item and "失败关闭" in item for item in current_release)
+    assert any("如何验证｜" in item and "移动该模具" in item and "不要执行最后确认" in item for item in current_release)
+    assert any("如何验证｜" in item and "草稿2层每层3格" in item and "第3层仍有22件模具" in item for item in current_release)
+    assert any("如何验证｜" in item and "保存、校验、发布" in item and "最新正式层格" in item for item in current_release)
+    assert any("如何验证｜" in item and "缩掉仍在使用" in item and "移位流水均不变化" in item for item in current_release)
+    assert any("如何验证｜" in item and "v0.22.115" in item and "mm21v8x9z10" in item for item in current_release)
     assert any(item.startswith("v0.22.110：本次更新｜") for item in APP_CHANGELOG)
     assert any(item.startswith("v0.22.110：如何验证｜") for item in APP_CHANGELOG)
     assert any(item.startswith("v0.22.108：本次更新｜") for item in APP_CHANGELOG)
@@ -176,7 +177,7 @@ def test_factory_update_reports_current_release_version() -> None:
         for item in APP_CHANGELOG
     )
     assert any(
-        "如何验证｜" in item and "v0.22.113" in item and "mm21" in item
+        "如何验证｜" in item and "v0.22.115" in item and "mm21" in item
         for item in current_release
     )
     assert any(

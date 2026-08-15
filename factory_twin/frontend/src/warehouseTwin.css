@@ -451,6 +451,23 @@ body.warehouse-twin-page {
 .twin-mold-rack-item-list small { color: #789ca5; font-size: 8px; }
 .twin-mold-rack-warning { padding: 7px; border-left: 3px solid #d7a737; color: #e5c575 !important; background: #3a2d12aa; }
 .twin-rack-product-label.mold-label { min-height: 0; overflow-y: auto; }
+.twin-mold-rack-selected-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.twin-mold-rack-selected-actions button { min-height: 34px; }
+.twin-mold-rack-selected-actions button.move { border-color: #22c55e; color: #dfffe8; background: #155d37; font-weight: 900; }
+.twin-mold-move-panel { margin-top: 8px; padding: 9px; display: grid; gap: 7px; border: 1px solid #35a86b; border-radius: 4px; background: #092c25; }
+.twin-mold-move-panel > div:first-child { display: grid; gap: 2px; }
+.twin-mold-move-panel > div:first-child b { color: #86efac; font-size: 11px; }
+.twin-mold-move-panel > div:first-child small { color: #90b9ad; font-size: 8px; line-height: 1.4; }
+.twin-mold-move-panel label { display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center; gap: 6px; color: #b9ded1; font-size: 9px; font-weight: 800; }
+.twin-mold-move-panel select { min-width: 0; min-height: 34px; padding: 5px; border: 1px solid #3c806a; border-radius: 3px; color: #e8fff6; background: #113e34; }
+.twin-mold-move-target { padding: 7px; display: grid; gap: 2px; border-left: 3px solid #2dd4bf; color: #91d9cb; background: #0b3835; }
+.twin-mold-move-target b { color: #e3fffa; font: 900 11px Consolas, monospace; }
+.twin-mold-move-panel > p { margin: 0; color: #bbf7d0; font-size: 9px; line-height: 1.45; }
+.twin-mold-move-panel > p.error { color: #fecaca; }
+.twin-mold-move-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.twin-mold-move-actions button { min-height: 34px; padding: 6px; border: 1px solid #4e806e; color: #d5eee4; background: #143e33; font-size: 8px; font-weight: 900; }
+.twin-mold-move-actions button.confirm { border-color: #22c55e; color: #062c17; background: #86efac; }
+.twin-mold-move-actions button:disabled { opacity: .46; }
 .twin-mold-product-links { margin-top: 9px; display: grid; gap: 5px; }
 .twin-mold-product-links button { padding: 6px; display: grid; gap: 2px; border: 1px solid #285460; color: inherit; background: #0b2732; text-align: left; }
 .twin-mold-product-links button:hover, .twin-mold-product-links button.selected { border-color: #5eead4; background: #0d3b43; }
@@ -1259,9 +1276,18 @@ body.warehouse-twin-page {
 .twin-mold-rack-level-counts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
 .twin-mold-rack-level-counts label.blocked { opacity: .68; }
 .twin-mold-rack-level-counts label.blocked input { color: #7c6b49; background: #eee9dc; }
-.twin-mold-rack-planner-actions { display: grid; grid-template-columns: 1fr auto; gap: 6px; }
+.twin-mold-rack-publish-state { padding: 8px; display: grid; gap: 6px; border: 1px solid #b4cfd5; border-radius: 4px; background: #edf7f9; }
+.twin-mold-rack-publish-state > div { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 6px; }
+.twin-mold-rack-publish-state span { color: #607984; font-size: 8px; font-weight: 800; }
+.twin-mold-rack-publish-state b { color: #173f4d; font-size: 9px; }
+.twin-mold-rack-publish-state em { padding: 4px 6px; justify-self: start; border-radius: 10px; color: #8a4b12; background: #ffedd5; font-size: 8px; font-style: normal; font-weight: 900; }
+.twin-mold-rack-publish-state em.validated { color: #166534; background: #dcfce7; }
+.twin-mold-rack-structure-blocker { padding: 7px !important; border-left: 3px solid #dc2626; color: #991b1b !important; background: #fef2f2; font-weight: 800; }
+.twin-mold-rack-structure-editor label small { color: #7b8b91; font-size: 7px; font-weight: 600; }
+.twin-mold-rack-planner-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
 .twin-mold-rack-planner-actions button { min-height: 36px; padding: 6px 9px; border: 1px solid #9eb5bc; border-radius: 3px; color: #405862; background: #fff; font-size: 9px; font-weight: 800; }
 .twin-mold-rack-planner-actions button.primary { border-color: #0f766e; color: #fff; background: #0f766e; }
+.twin-mold-rack-planner-actions button.publish { border-color: #166534; color: #fff; background: #15803d; }
 .twin-mold-rack-structure-editor > p { margin: 0; color: #647981; font-size: 8px; line-height: 1.5; }
 
 .twin-workspace.location-editing .twin-rack-layout-editor,

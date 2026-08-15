@@ -3344,6 +3344,9 @@ def test_mold_management_frontend_has_live_refresh_search_unbind_and_paging(
         "removeMoldBinding(",
         "expected_version=${row.version}",
         "page_size=${state.moldPageSize}",
+        "moldLocationOptionsLoadedAt",
+        "loadMoldLocationOptions(true)",
+        "Date.now()-Number(state.moldLocationOptionsLoadedAt||0)<15000",
     ):
         assert marker in warehouse
     assert "min-width:320px" not in warehouse

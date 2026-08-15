@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildMoldLocationTarget,
   buildMoldRackView,
   buildMoldShelfSpines,
+  moldRackLevelUsage,
   moldRacksForArea
 } from "../src/moldRackView.mjs";
 
@@ -87,4 +89,33 @@ test("货架书脊按绑定产品展开并保留未绑定模具", () => {
     [1, 12, "21301002", "内衬"],
     [2, null, "M-2", "模具 2（未绑定产品）"]
   ]);
+});
+
+test("正式模具位置选项只生成已发布的货架层格位置", () => {
+  const option = {
+    rack_code: "R01",
+    location_depth: "grid",
+    levels: [
+      { level: 2, grid_count: 3, grids: [1, 2, 3] },
+      { level: 3, grid_count: 2, grids: [1, 2] }
+    ]
+  };
+
+  assert.equal(buildMoldLocationTarget(option, 2, 3), "1F-M-R01-L2-G03");
+  assert.equal(buildMoldLocationTarget(option, 2, 4), null);
+  assert.equal(buildMoldLocationTarget({ ...option, location_depth: "level" }, 3, 99), "1F-M-R01-L3");
+  assert.equal(buildMoldLocationTarget({ ...option, location_depth: "rack", levels: [] }, 0, 0), "1F-M-R01");
+  assert.equal(buildMoldLocationTarget({ ...option, levels: [] }, 0, 0), null);
+  assert.equal(buildMoldLocationTarget({ ...option, levels: [{ level: 2, grid_count: 0, grids: [] }] }, 2, 0), null);
+});
+
+test("层占用统计只计算已有明确层号的正式模具", () => {
+  const usage = moldRackLevelUsage([
+    mold(1, "1F-M-R01-L2-G01", { kind: "storage_grid", level: 2, grid: 1 }),
+    mold(2, "1F-M-R01-L2-D01-P01", { kind: "flat_legacy", level: 2, row: 1 }),
+    mold(3, "1F-M-R01", { kind: "storage_rack" }),
+    mold(4, "1F-M-R01-L3-G01", { kind: "storage_grid", level: 3, grid: 1 })
+  ]);
+
+  assert.deepEqual([...usage.entries()], [[2, 2], [3, 1]]);
 });

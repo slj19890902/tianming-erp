@@ -84,6 +84,35 @@ export function buildMoldShelfSpines(items) {
   });
 }
 
+export function buildMoldLocationTarget(rack, levelValue, gridValue) {
+  const rackCode = normalizedIdentity(rack?.rack_code);
+  if (!/^R\d+$/.test(rackCode)) return null;
+  const prefix = `1F-M-${rackCode}`;
+  const levels = Array.isArray(rack?.levels) ? rack.levels : [];
+  if (rack?.location_depth === "rack") return prefix;
+  if (!levels.length) return null;
+
+  const levelNumber = Math.round(Number(levelValue));
+  const level = levels.find((item) => Number(item?.level) === levelNumber);
+  if (!level) return null;
+  const grids = Array.isArray(level.grids) ? level.grids.map((value) => Number(value)) : [];
+  if (rack?.location_depth === "level") return `${prefix}-L${levelNumber}`;
+  if (!grids.length) return null;
+
+  const gridNumber = Math.round(Number(gridValue));
+  if (!grids.includes(gridNumber)) return null;
+  return `${prefix}-L${levelNumber}-G${String(gridNumber).padStart(2, "0")}`;
+}
+
+export function moldRackLevelUsage(items) {
+  const usage = new Map();
+  for (const item of items || []) {
+    const { level } = slotCoordinates(item);
+    if (level) usage.set(level, (usage.get(level) || 0) + 1);
+  }
+  return usage;
+}
+
 export function buildMoldRackView(rack, items, blockedLevels = []) {
   const counts = normalizedLevelCounts(rack);
   const blocked = new Set((blockedLevels || []).map((value) => Number(value)));

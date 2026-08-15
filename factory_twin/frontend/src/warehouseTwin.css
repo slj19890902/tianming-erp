@@ -423,10 +423,19 @@ body.warehouse-twin-page {
 .twin-mold-rack-stage .mold-level { min-height: 112px; }
 .twin-mold-rack-stage .mold-level > div { grid-auto-columns: minmax(86px, 1fr); align-items: stretch; overflow-x: auto; }
 .twin-mold-rack-stage .mold-level.blocked { flex: .55; min-height: 74px; opacity: .72; }
-.mold-rack-cell { min-width: 0; padding: 7px; display: grid; align-content: center; gap: 5px; border: 1px solid #326878; color: #8fb5bf; background: #0b2732aa; text-align: left; }
-.mold-rack-cell b { color: #9cc4cc; font-size: 9px; }
-.mold-rack-cell strong { color: #668892; font-size: 11px; }
-.mold-rack-cell span { min-height: 2.8em; color: #668892; font-size: 8px; line-height: 1.4; overflow-wrap: anywhere; }
+.mold-rack-cell { min-width: 0; padding: 7px; display: grid; grid-template-rows: auto minmax(62px, 1fr); align-content: stretch; gap: 6px; border: 1px solid #326878; color: #8fb5bf; background: #0b2732aa; text-align: left; overflow: hidden; }
+.mold-rack-cell-summary { min-width: 0; padding: 0 0 5px; display: flex; align-items: baseline; justify-content: space-between; gap: 7px; border: 0; border-bottom: 1px solid #285665; color: inherit; background: transparent; text-align: left; }
+.mold-rack-cell-summary b { color: #9cc4cc; font-size: 9px; }
+.mold-rack-cell-summary strong { color: #668892; font-size: 9px; text-align: right; }
+.mold-rack-book-spines { min-width: 0; min-height: 62px; padding: 2px 1px 5px; display: flex; align-items: stretch; gap: 3px; overflow-x: auto; overflow-y: hidden; scrollbar-color: #4c8d90 #0a252e; }
+.mold-rack-book-spines button { flex: 0 0 34px; min-width: 34px; max-height: 88px; padding: 4px 3px; display: flex; align-items: center; gap: 3px; border: 1px solid #7bc0ad; border-bottom: 3px solid #d6b65b; border-radius: 2px 2px 0 0; color: #e9fffb; background: linear-gradient(90deg, #185c56, #0e3f43 72%, #0a3037); box-shadow: inset 2px 0 #ffffff12, 1px 0 3px #0008; writing-mode: vertical-rl; text-orientation: mixed; text-align: left; overflow: hidden; }
+.mold-rack-book-spines button:nth-child(3n + 2) { border-color: #7aa8cf; border-bottom-color: #c28f70; background: linear-gradient(90deg, #244e70, #17374e 72%, #102b3c); }
+.mold-rack-book-spines button:nth-child(3n) { border-color: #b59bc9; border-bottom-color: #b7c875; background: linear-gradient(90deg, #59436b, #3b304e 72%, #2b253d); }
+.mold-rack-book-spines button:hover, .mold-rack-book-spines button.selected { border-color: #ffe082; outline: 2px solid #ffe082; outline-offset: -2px; filter: brightness(1.18); }
+.mold-rack-book-spines small { color: #a9c5c8; font: 700 7px Consolas, monospace; }
+.mold-rack-book-spines b { color: #fff; font: 800 8px Consolas, "Microsoft YaHei", sans-serif; letter-spacing: .2px; }
+.mold-rack-book-spines span { min-height: 0; color: #cce6e2; font-size: 8px; line-height: 1.25; overflow: hidden; }
+.mold-rack-empty-spine { min-height: 62px !important; display: grid; place-items: center; color: #668892 !important; font-size: 8px !important; }
 .mold-rack-cell.occupied { border-color: #30b8a9; background: linear-gradient(145deg, #0d544f, #0a3338); box-shadow: inset 0 0 18px #5eead41a; }
 .mold-rack-cell.occupied strong { color: #e2fffb; }
 .mold-rack-cell.occupied span { color: #a9ddd6; }
@@ -443,7 +452,8 @@ body.warehouse-twin-page {
 .twin-mold-rack-warning { padding: 7px; border-left: 3px solid #d7a737; color: #e5c575 !important; background: #3a2d12aa; }
 .twin-rack-product-label.mold-label { min-height: 0; overflow-y: auto; }
 .twin-mold-product-links { margin-top: 9px; display: grid; gap: 5px; }
-.twin-mold-product-links div { padding: 6px; display: grid; gap: 2px; border: 1px solid #285460; background: #0b2732; }
+.twin-mold-product-links button { padding: 6px; display: grid; gap: 2px; border: 1px solid #285460; color: inherit; background: #0b2732; text-align: left; }
+.twin-mold-product-links button:hover, .twin-mold-product-links button.selected { border-color: #5eead4; background: #0d3b43; }
 .twin-mold-product-links b { color: #8edbd1; font-size: 9px; }
 .twin-mold-product-links span { color: #a9c4ca; font-size: 8px; }
 
@@ -812,6 +822,13 @@ body.warehouse-twin-page {
 .twin-area-empty.error b,
 .twin-area-empty.error span { color: #9f2d2d; }
 .twin-area-mold-list { margin-top: 6px; max-height: 330px; overflow-y: auto; display: grid; gap: 5px; scrollbar-color: #9ab0b8 #eef2f4; }
+.twin-mold-rack-lookup-shortcuts { position: sticky; top: 0; z-index: 2; padding: 9px; display: grid; gap: 4px; border: 1px solid #8cbec1; border-radius: 4px; background: #edf9f8; box-shadow: 0 3px 9px #173f4d1a; }
+.twin-mold-rack-lookup-shortcuts > b { color: #174f52; font-size: 11px; }
+.twin-mold-rack-lookup-shortcuts > span { color: #5a777d; font-size: 8px; }
+.twin-mold-rack-lookup-shortcuts > div { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+.twin-mold-rack-lookup-shortcuts button { min-width: 0; padding: 7px; display: grid; gap: 2px; border: 1px solid #6ea9a2; border-radius: 3px; color: #075f57; background: #fff; font: 900 11px Consolas, "Microsoft YaHei", sans-serif; text-align: left; }
+.twin-mold-rack-lookup-shortcuts button:hover { border-color: #0f766e; background: #dff7f1; }
+.twin-mold-rack-lookup-shortcuts button small { overflow: hidden; color: #557078; font: 700 7px "Microsoft YaHei", sans-serif; text-overflow: ellipsis; white-space: nowrap; }
 .twin-area-mold { padding: 8px; display: grid; gap: 4px; border: 1px solid #d9e3e6; border-left: 3px solid #0f766e; border-radius: 3px; background: #fff; }
 .twin-area-mold > div { display: flex; align-items: flex-start; justify-content: space-between; gap: 7px; }
 .twin-area-mold b { color: #0f766e; font: 800 11px Consolas, "Microsoft YaHei", sans-serif; overflow-wrap: anywhere; }

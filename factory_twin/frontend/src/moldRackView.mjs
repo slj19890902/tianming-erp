@@ -27,6 +27,63 @@ function slotCoordinates(item) {
   };
 }
 
+function normalizedIdentity(value) {
+  return String(value || "").trim().toUpperCase();
+}
+
+export function moldRacksForArea(feature, racks) {
+  if (!feature) return [];
+  const featureId = String(feature.id || "").trim();
+  const areaIdentities = new Set([
+    normalizedIdentity(feature.feature_code),
+    normalizedIdentity(feature.erp_area_code)
+  ].filter(Boolean));
+  return (racks || []).filter((rack) => {
+    if (!normalizedIdentity(rack?.mold_rack_code)) return false;
+    if (featureId && String(rack?.area_feature_id || "").trim() === featureId) return true;
+    return areaIdentities.has(normalizedIdentity(rack?.area_code));
+  });
+}
+
+export function buildMoldShelfSpines(items) {
+  const sortedItems = [...(items || [])].sort((left, right) =>
+    String(left?.mold_code || "").localeCompare(String(right?.mold_code || ""), "zh-CN", { numeric: true })
+  );
+  return sortedItems.flatMap((item) => {
+    const products = [...(item?.products || [])].sort((left, right) =>
+      String(left?.product_code || left?.product_name || "").localeCompare(
+        String(right?.product_code || right?.product_name || ""),
+        "zh-CN",
+        { numeric: true }
+      ) || Number(left?.id || 0) - Number(right?.id || 0)
+    );
+    if (!products.length) {
+      return [{
+        key: `mold-${item.id}-unbound`,
+        mold_id: item.id,
+        product_id: null,
+        code: item.mold_code || "未编号模具",
+        name: `${item.mold_name || "未命名模具"}（未绑定产品）`,
+        customer_name: null,
+        mold_code: item.mold_code || "",
+        mold_name: item.mold_name || "",
+        rack_location: item.rack_location || ""
+      }];
+    }
+    return products.map((product) => ({
+      key: `mold-${item.id}-product-${product.id}`,
+      mold_id: item.id,
+      product_id: product.id,
+      code: product.product_code || "无存货编码",
+      name: product.product_name || "产品名称待补充",
+      customer_name: product.customer_name || null,
+      mold_code: item.mold_code || "",
+      mold_name: item.mold_name || "",
+      rack_location: item.rack_location || ""
+    }));
+  });
+}
+
 export function buildMoldRackView(rack, items, blockedLevels = []) {
   const counts = normalizedLevelCounts(rack);
   const blocked = new Set((blockedLevels || []).map((value) => Number(value)));

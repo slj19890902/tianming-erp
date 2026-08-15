@@ -54,6 +54,11 @@ def test_mold_rack_planning_and_lookup_use_the_live_mold_ledger() -> None:
     assert "保存层格到草稿" in SOURCE
     assert "减少已被正式模具位置使用的层或格会被系统拦截" in SOURCE
     assert "!advancedAreaMaintenanceOpen && !rack?.mold_rack_code" in SOURCE
+    assert "moldRacksForArea(selectedAreaFeature" in SOURCE
+    assert "打开模具货架正视图" in SOURCE
+    assert "当前产品书脊" in SOURCE
+    assert "点击存货编码或名称，右侧查看产品、模具和正式位置" in SOURCE
+    assert ".mold-rack-book-spines" in TWIN_CSS
     assert ".twin-mold-rack-stage" in TWIN_CSS
     assert ".twin-mold-rack-planner" in TWIN_CSS
 

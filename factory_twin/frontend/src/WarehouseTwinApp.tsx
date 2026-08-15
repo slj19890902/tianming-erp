@@ -45,7 +45,11 @@ import {
   togglePalletMergeSource
 } from "./warehousePalletMergeDraft.mjs";
 import type { PalletMergeCandidate } from "./warehousePalletMergeDraft.mjs";
-import { buildMoldRackView } from "./moldRackView.mjs";
+import {
+  buildMoldRackView,
+  buildMoldShelfSpines,
+  moldRacksForArea
+} from "./moldRackView.mjs";
 import type {
   AssetTemplate,
   CameraPreset,
@@ -845,10 +849,12 @@ function MoldRackElevation({
     .map((cell) => ({ key: `L${level.level}-G${cell.grid}`, level: level.level, grid: cell.grid, items: cell.items })));
   const [selectedSlotKey, setSelectedSlotKey] = useState<string | null>(null);
   const [selectedMoldId, setSelectedMoldId] = useState<number | null>(null);
+  const [selectedProductId, setSelectedProductId] = useState<number | null>(null);
   useEffect(() => {
     const first = occupiedCells[0];
     setSelectedSlotKey(first?.key || null);
     setSelectedMoldId(null);
+    setSelectedProductId(null);
   }, [rack.id, response?.total]);
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
@@ -861,6 +867,8 @@ function MoldRackElevation({
   }, [onClose, onPrevious, onNext]);
   const selectedSlot = occupiedCells.find((cell) => cell.key === selectedSlotKey) || null;
   const selectedMold = response?.items.find((item) => item.id === selectedMoldId) || null;
+  const selectedProduct = selectedMold?.products.find((product) => product.id === selectedProductId) || null;
+  const visibleSpines = buildMoldShelfSpines(selectedSlot?.items || response?.items || []);
   const unmatchedCount = rackView.unmatched_items.length + rackView.rack_only_items.length
     + rackView.levels.reduce((sum, level) => sum + level.level_only_items.length, 0);
   const levels = [...rackView.levels].reverse();
@@ -883,9 +891,17 @@ function MoldRackElevation({
               <div className={level.blocked || level.cell_count === 0 ? "unpartitioned" : ""}>
                 {level.blocked ? <i className="twin-unpartitioned-cell mold-blocked-cell">设备占用层</i> : level.cell_count === 0 ? <i className="twin-unpartitioned-cell">本层尚未分格</i> : level.cells.map((cell) => {
                   const key = `L${level.level}-G${cell.grid}`;
-                  return <button type="button" className={`mold-rack-cell ${cell.items.length ? "occupied" : "empty"} ${selectedSlotKey === key ? "selected" : ""}`} key={key} onClick={() => { setSelectedSlotKey(key); setSelectedMoldId(null); }}>
-                    <b>第 {cell.grid} 格</b><strong>{cell.items.length ? `${cell.items.length} 件模具` : "空格"}</strong><span>{cell.items.slice(0, 2).map((item) => item.mold_code).join("、")}{cell.items.length > 2 ? ` 等${cell.items.length}件` : ""}</span>
-                  </button>;
+                  const spines = buildMoldShelfSpines(cell.items);
+                  return <section className={`mold-rack-cell ${cell.items.length ? "occupied" : "empty"} ${selectedSlotKey === key ? "selected" : ""}`} key={key}>
+                    <button type="button" className="mold-rack-cell-summary" onClick={() => { setSelectedSlotKey(key); setSelectedMoldId(null); setSelectedProductId(null); }}><b>第 {cell.grid} 格</b><strong>{cell.items.length ? `${cell.items.length} 件模具 · ${spines.length} 个产品书脊` : "空格"}</strong></button>
+                    {spines.length ? <div className="mold-rack-book-spines">{spines.map((spine, index) => <button
+                      type="button"
+                      className={selectedMoldId === spine.mold_id && selectedProductId === spine.product_id ? "selected" : ""}
+                      key={spine.key}
+                      title={`${spine.code} · ${spine.name} · 模具 ${spine.mold_code}`}
+                      onClick={() => { setSelectedSlotKey(key); setSelectedMoldId(spine.mold_id); setSelectedProductId(spine.product_id); }}
+                    ><small>{index + 1}</small><b>{spine.code}</b><span>{spine.name}</span></button>)}</div> : <span className="mold-rack-empty-spine">尚无模具</span>}
+                  </section>;
                 })}
               </div>
             </div>)}
@@ -897,16 +913,16 @@ function MoldRackElevation({
           {loading && <><h3>正在读取正式模具台账…</h3><p>只读，不修改模具位置或绑定。</p></>}
           {!loading && error && <><h3>模具读取失败</h3><p className="error">{error}</p></>}
           {!loading && !error && selectedMold && <article className="twin-rack-product-label mold-label">
-            <span>当前模具</span><h3>{selectedMold.mold_code}</h3><strong>{selectedMold.mold_name}</strong>
-            <dl><div><dt>正式位置</dt><dd>{selectedMold.rack_location}</dd></div><div><dt>现场指引</dt><dd>{selectedMold.location_guide?.prompt || "位置指引待补充"}</dd></div><div><dt>关联产品</dt><dd>{selectedMold.product_count} 款</dd></div></dl>
-            <button type="button" className="twin-rack-detail-toggle" onClick={() => setSelectedMoldId(null)}>返回本格模具列表</button>
-            <div className="twin-mold-product-links">{selectedMold.products.length ? selectedMold.products.map((product) => <div key={product.id}><b>{product.customer_name || "客户待确认"}</b><span>{product.product_code || "无存货编码"} · {product.product_name || "产品名称待补充"}</span></div>) : <p>当前未绑定产品。</p>}</div>
+            <span>{selectedProduct ? "当前产品书脊" : "未绑定产品的模具"}</span><h3>{selectedProduct?.product_code || selectedMold.mold_code}</h3><strong>{selectedProduct?.product_name || selectedMold.mold_name}</strong>
+            <dl>{selectedProduct && <div><dt>客户</dt><dd>{selectedProduct.customer_name || "客户待确认"}</dd></div>}<div><dt>关联模具</dt><dd>{selectedMold.mold_code} · {selectedMold.mold_name}</dd></div><div><dt>正式位置</dt><dd>{selectedMold.rack_location}</dd></div><div><dt>现场指引</dt><dd>{selectedMold.location_guide?.prompt || "位置指引待补充"}</dd></div><div><dt>关联产品</dt><dd>{selectedMold.product_count} 款</dd></div></dl>
+            <button type="button" className="twin-rack-detail-toggle" onClick={() => { setSelectedMoldId(null); setSelectedProductId(null); }}>返回本格产品书脊</button>
+            <div className="twin-mold-product-links">{selectedMold.products.length ? selectedMold.products.map((product) => <button type="button" className={selectedProductId === product.id ? "selected" : ""} key={product.id} onClick={() => setSelectedProductId(product.id)}><b>{product.customer_name || "客户待确认"}</b><span>{product.product_code || "无存货编码"} · {product.product_name || "产品名称待补充"}</span></button>) : <p>当前模具尚未绑定产品。</p>}</div>
           </article>}
           {!loading && !error && !selectedMold && <>
             <h3>{selectedSlot ? `第 ${selectedSlot.level} 层 · 第 ${selectedSlot.grid} 格` : "当前货架模具"}</h3>
-            <p>同一格可登记多件模具；这里只显示正式位置，不猜测格内左右顺序。</p>
-            <strong>{selectedSlot ? `${selectedSlot.items.length} 件` : `${response?.total || 0} 件`}{unmatchedCount ? ` · ${unmatchedCount} 件未精确到当前格` : ""}</strong>
-            <div className="twin-mold-rack-item-list">{(selectedSlot?.items || response?.items || []).map((item) => <button type="button" key={item.id} onClick={() => setSelectedMoldId(item.id)}><b>{item.mold_code}</b><span>{item.mold_name}</span><small>{item.rack_location}</small></button>)}</div>
+            <p>同一格可登记多件模具；货架按绑定产品显示为书脊。点击存货编码或名称，右侧查看产品、模具和正式位置。同格顺序只为阅读，不代表现场左右次序。</p>
+            <strong>{selectedSlot ? `${selectedSlot.items.length} 件模具 · ${visibleSpines.length} 个书脊` : `${response?.total || 0} 件模具 · ${visibleSpines.length} 个书脊`}{unmatchedCount ? ` · ${unmatchedCount} 件未精确到当前格` : ""}</strong>
+            <div className="twin-mold-rack-item-list">{visibleSpines.map((spine) => <button type="button" key={spine.key} onClick={() => { setSelectedMoldId(spine.mold_id); setSelectedProductId(spine.product_id); }}><b>{spine.code}</b><span>{spine.name}</span><small>模具 {spine.mold_code} · {spine.rack_location}</small></button>)}</div>
             {response?.truncated && <p className="error">该货架超过 500 件，本页只显示前 500 件；请按模具编号查找其精确位置。</p>}
             {unmatchedCount > 0 && <p className="twin-mold-rack-warning">未精确到当前格的模具仍保留在台账中；调整层格不会自动搬动它们。</p>}
           </>}
@@ -1735,7 +1751,11 @@ export function WarehouseTwinApp() {
   const selectedLocationAreaCode = selectedLocation?.area_code?.trim() || null;
   const selectedRackAreaCode = selectedRack ? rackAreaCode(selectedRack, features) : null;
   const selectedAreaFeature = selectedFeature || features.find(
-    (item) => item.feature_kind === "zone" && featureAreaCode(item) === (selectedLocationAreaCode || selectedRackAreaCode)
+    (item) => item.feature_kind === "zone" && (
+      item.id === selectedRack?.area_feature_id
+      || featureAreaCode(item) === (selectedLocationAreaCode || selectedRackAreaCode)
+      || item.feature_code === selectedRack?.area_code
+    )
   );
   const selectedAreaBoundaryPoints = selectedAreaFeature
     ? (zoneGeometryDrafts[selectedAreaFeature.id] || selectedAreaFeature.points)
@@ -1759,8 +1779,14 @@ export function WarehouseTwinApp() {
   );
   const selectedAreaLocationCount = selectedAreaLocations.length;
   const selectedAreaPendingLocationCount = selectedAreaLocations.filter((item) => item.position_status === "unplaced").length;
-  const selectedAreaRacks = (visualLayout?.racks || []).filter((rack) => rackAreaCode(rack, features) === selectedAreaCode);
-  const selectedAreaMoldRacks = selectedAreaRacks.filter((rack) => Boolean(rack.mold_rack_code));
+  const selectedAreaRacks = (visualLayout?.racks || []).filter((rack) => (
+    (selectedAreaFeature?.id && rack.area_feature_id === selectedAreaFeature.id)
+    || (selectedAreaFeature?.feature_code && rack.area_code === selectedAreaFeature.feature_code)
+    || (selectedAreaCode && rackAreaCode(rack, features) === selectedAreaCode)
+  ));
+  const selectedAreaMoldRacks = selectedAreaFeature
+    ? moldRacksForArea(selectedAreaFeature, visualLayout?.racks || [])
+    : selectedAreaRacks.filter((rack) => Boolean(rack.mold_rack_code));
   const inferredAreaInventoryTypes = Array.from(new Set(selectedAreaLocations.flatMap((location): InventoryUsage[] => {
     if (location.warehouse_type === "semi_finished") return ["semi_finished"];
     if (location.warehouse_type === "shared") return ["finished", "semi_finished"];
@@ -4127,6 +4153,7 @@ export function WarehouseTwinApp() {
             {locationEditMode && advancedAreaMaintenanceOpen && canEditLocations && selectedAreaCode && selectedAreaHasFormalLedger && !selectedAreaCreatesInventoryLocations && <div className="twin-location-create"><p>该区域使用原料、模具、印版或临时周转台账，不生成成品/半成品库存库位；发布后按对应台账定位。</p></div>}
             {locationEditMode && advancedAreaMaintenanceOpen && canEditLocations && !selectedAreaCode && <div className="twin-location-create"><p>请先确认启用区域，之后才能生成可投入使用的库位。</p></div>}
             {selectedAreaIsMold ? <div className="twin-area-mold-list">
+              {!locationEditMode && selectedAreaMoldRacks.length > 0 && <div className="twin-mold-rack-lookup-shortcuts"><b>打开模具货架正视图</b><span>按正式模具台账读取，不显示模拟纸箱库存。</span><div>{selectedAreaMoldRacks.map((rack) => <button type="button" key={rack.id} onClick={() => { setRackFocusId(rack.id); setSelected({ kind: "rack", id: rack.id }); }}>{rack.mold_rack_code || rack.rack_code}<small>{rack.name}</small></button>)}</div></div>}
               {moldAreaLoading && <div className="twin-area-empty"><b>正在读取模具资产台账…</b><span>只读取已登记且位置属于当前实测区域的模具。</span></div>}
               {!moldAreaLoading && moldAreaError && <div className="twin-area-empty error"><b>模具台账读取失败</b><span>{moldAreaError}</span></div>}
               {!moldAreaLoading && !moldAreaError && !moldAreaResponse?.items.length && <div className="twin-area-empty"><b>当前区域没有已定位模具</b><span>未填写位置或仍使用旧自由文本位置的模具，不会被误算进该实测区域。</span></div>}

@@ -9,6 +9,24 @@ export interface MoldRackViewItem {
     grid?: number | null;
     row?: number | null;
   } | null;
+  products?: Array<{
+    id: number;
+    customer_name?: string | null;
+    product_code?: string | null;
+    product_name?: string | null;
+  }>;
+}
+
+export interface MoldShelfSpine {
+  key: string;
+  mold_id: number;
+  product_id: number | null;
+  code: string;
+  name: string;
+  customer_name: string | null;
+  mold_code: string;
+  mold_name: string;
+  rack_location: string;
 }
 
 export interface MoldRackCell<T extends MoldRackViewItem> {
@@ -34,3 +52,10 @@ export function buildMoldRackView<T extends MoldRackViewItem>(
   unmatched_items: T[];
   total_items: number;
 };
+
+export function moldRacksForArea<
+  TFeature extends { id?: string; feature_code?: string; erp_area_code?: string | null },
+  TRack extends { area_feature_id?: string | null; area_code?: string | null; mold_rack_code?: string | null }
+>(feature: TFeature | null | undefined, racks: TRack[]): TRack[];
+
+export function buildMoldShelfSpines<T extends MoldRackViewItem>(items: T[]): MoldShelfSpine[];

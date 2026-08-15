@@ -1207,7 +1207,9 @@ def test_publish_receipt_write_failure_restores_runtime_draft_and_backups_exactl
         assert not list(backups.glob('.*.tmp'))
 
 
-@pytest.mark.parametrize('failure_point', ('activation', 'audit', 'commit'))
+@pytest.mark.parametrize(
+    'failure_point', ('activation', 'spatial_validation', 'audit', 'commit')
+)
 def test_publish_failure_restores_published_draft_policy_and_audit(
     tmp_path: Path,
     monkeypatch,
@@ -1264,12 +1266,18 @@ def test_publish_failure_restores_published_draft_policy_and_audit(
 
             def fail(*_args, **_kwargs):
                 failure_hit.append(True)
-                if failure_point == 'activation':
+                if failure_point in {'activation', 'spatial_validation'}:
                     raise WarehouseAreaActivationError('activation failed', status_code=409)
                 raise RuntimeError(f'{failure_point} failed')
 
             if failure_point == 'activation':
                 monkeypatch.setattr(warehouse_api, 'publish_floor_area_policies', fail)
+            elif failure_point == 'spatial_validation':
+                monkeypatch.setattr(
+                    warehouse_api,
+                    '_validate_published_area_layouts_for_floor',
+                    fail,
+                )
             elif failure_point == 'audit':
                 monkeypatch.setattr(warehouse_api, '_twin_layout_asset_log', fail)
             else:
@@ -1280,7 +1288,11 @@ def test_publish_failure_restores_published_draft_policy_and_audit(
                 expected_draft_revision=validated.value['draft_revision'],
                 operation_key=f'p1-47b-publish-failure-{failure_point}',
             )
-            expected_error = warehouse_api.HTTPException if failure_point == 'activation' else RuntimeError
+            expected_error = (
+                warehouse_api.HTTPException
+                if failure_point in {'activation', 'spatial_validation'}
+                else RuntimeError
+            )
             with pytest.raises(expected_error):
                 warehouse_api.publish_twin_layout_draft(
                     '3F', payload, _request(), db, admin
@@ -2555,9 +2567,10 @@ def test_one_step_raw_material_area_creates_shared_pallet_positions(
             assert all(row.is_active and row.placement_status == 'placed' for row in rows)
             assert all(row.floor3_layout is not None for row in rows)
             pallet_result = warehouse_api.create_floor3_pallet(
-                warehouse_api.Floor3PalletCreatePayload(
-                    location_id=rows[0].id,
-                    pallet_code='P1-60-RAW-PALLET-001',
+                    warehouse_api.Floor3PalletCreatePayload(
+                        location_id=rows[0].id,
+                        expected_layout_version=rows[0].floor3_layout.version,
+                        pallet_code='P1-60-RAW-PALLET-001',
                     items=[
                         warehouse_api.Floor3PalletItemPayload(
                             inventory_code='RAW-BOARD-1430X516',

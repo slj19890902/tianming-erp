@@ -5,6 +5,7 @@ from hashlib import sha256
 from uuid import uuid4
 
 from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.time_contract import beijing_now_naive, utc_naive_to_api, utc_now_naive
@@ -12,11 +13,13 @@ from app.models.audit import OperationLog
 from app.models.stocktake import StocktakeItem, StocktakeOrder, StocktakeReview
 from app.models.user import User
 from app.models.warehouse_inventory import (
+    Floor3LocationLayout,
     InventoryLot,
     InventoryMovement,
     WarehouseLocation,
 )
 from app.services.location_candidates import (
+    claim_active_placed_location,
     list_operational_locations,
     operational_location_issue,
 )
@@ -150,6 +153,15 @@ def list_locations(db: Session) -> list[dict[str, object]]:
             WarehouseLocation.id,
         )
     ).all()
+    layout_versions = {
+        int(location_id): int(version)
+        for location_id, version in db.execute(
+            select(
+                Floor3LocationLayout.location_id,
+                Floor3LocationLayout.version,
+            ).where(Floor3LocationLayout.location_id.in_(candidate_by_id))
+        ).all()
+    }
     return [
         {
             "id": location.id,
@@ -184,6 +196,7 @@ def list_locations(db: Session) -> list[dict[str, object]]:
                 else None
             ),
             "placement_status": location.placement_status or "placed",
+            "layout_version": layout_versions.get(int(location.id)),
             "is_temporary": location.is_temporary,
             "active_lot_count": int(active_lot_count),
             "frozen_lot_count": int(frozen_lot_count),
@@ -255,6 +268,11 @@ def lot_payload(lot: InventoryLot) -> dict[str, object]:
 
 def get_location_detail(db: Session, location_id: int) -> dict[str, object]:
     location = _get_countable_location(db, location_id)
+    layout_version = db.scalar(
+        select(Floor3LocationLayout.version).where(
+            Floor3LocationLayout.location_id == location_id
+        )
+    )
     lots = db.scalars(_countable_lots_statement(location_id)).all()
     lot_rows = [lot_payload(lot) for lot in lots]
     pending_order = db.scalar(
@@ -272,6 +290,9 @@ def get_location_detail(db: Session, location_id: int) -> dict[str, object]:
         "location_name": location.location_name,
         "warehouse_type": location.warehouse_type,
         "area_code": location.area_code,
+        "layout_version": (
+            int(layout_version) if layout_version is not None else None
+        ),
         "is_temporary": location.is_temporary,
         "active_lot_count": sum(lot.status == "active" for lot in lots),
         "frozen_lot_count": sum(lot.status == "frozen" for lot in lots),
@@ -317,6 +338,7 @@ def resolve_submission_replay(
     db: Session,
     *,
     location_id: int,
+    location_layout_version: int | None = None,
     items: list[dict[str, object]],
     idempotency_key: str,
 ) -> StocktakeOrder | None:
@@ -334,6 +356,7 @@ def resolve_submission_replay(
     }
     if (
         existing.location_id != location_id
+        or existing.location_layout_version != location_layout_version
         or existing_snapshots != _submitted_snapshots(items)
     ):
         raise StocktakeError(
@@ -351,6 +374,7 @@ def create_stocktake(
     items: list[dict[str, object]],
     idempotency_key: str,
     submitter: User,
+    location_layout_version: int | None = None,
     ip_address: str | None = None,
     user_agent: str | None = None,
 ) -> StocktakeOrder:
@@ -360,6 +384,7 @@ def create_stocktake(
     replay = resolve_submission_replay(
         db,
         location_id=location_id,
+        location_layout_version=location_layout_version,
         items=items,
         idempotency_key=key,
     )
@@ -367,6 +392,32 @@ def create_stocktake(
         return replay
 
     location = _get_countable_location(db, location_id)
+    try:
+        claimed = claim_active_placed_location(
+            db,
+            location_id,
+            expected_layout_version=location_layout_version,
+        )
+    except OperationalError as error:
+        raise StocktakeError(
+            "盘点库位正在被其他库存或布局操作使用，请稍后刷新后重新盘点",
+            409,
+            "STOCKTAKE_LOCATION_BUSY",
+        ) from error
+    current_layout_version = db.scalar(
+        select(Floor3LocationLayout.version).where(
+            Floor3LocationLayout.location_id == location_id
+        )
+    )
+    normalized_current_layout_version = (
+        int(current_layout_version) if current_layout_version is not None else None
+    )
+    if not claimed or normalized_current_layout_version != location_layout_version:
+        raise StocktakeError(
+            "盘点库位布局或状态已变化，请重新打开该库位后发起盘点",
+            409,
+            "STOCKTAKE_LOCATION_CHANGED",
+        )
     pending_order = db.scalar(
         select(StocktakeOrder)
         .where(
@@ -437,6 +488,7 @@ def create_stocktake(
     order = StocktakeOrder(
         order_number=_order_number(),
         location_id=location.id,
+        location_layout_version=location_layout_version,
         status="draft",
         version=1,
         submitted_by=submitter.id,
@@ -483,6 +535,7 @@ def create_stocktake(
                 "order_number": order.order_number,
                 "location_id": location.id,
                 "location_code": location.location_code,
+                "location_layout_version": location_layout_version,
                 "idempotency_key": key,
                 "items": [
                     {
@@ -623,6 +676,42 @@ def approve_stocktake(
     )
     if replay is not None:
         return replay
+
+    order_location_snapshot = db.execute(
+        select(
+            StocktakeOrder.location_id,
+            StocktakeOrder.location_layout_version,
+        ).where(StocktakeOrder.id == order_id)
+    ).one_or_none()
+    if order_location_snapshot is None:
+        raise StocktakeError(
+            "盘点单或盘点库位不存在",
+            404,
+            "STOCKTAKE_LOCATION_NOT_FOUND",
+        )
+    location_id, location_layout_version = order_location_snapshot
+    try:
+        claimed = claim_active_placed_location(
+            db,
+            int(location_id),
+            expected_layout_version=(
+                int(location_layout_version)
+                if location_layout_version is not None
+                else None
+            ),
+        )
+    except OperationalError as error:
+        raise StocktakeError(
+            "盘点库位正在被其他库存或布局操作使用，请稍后重试",
+            409,
+            "STOCKTAKE_LOCATION_BUSY",
+        ) from error
+    if not claimed:
+        raise StocktakeError(
+            "盘点提交后库位已停用、尚未落位或状态已变化，请重新盘点",
+            409,
+            "STOCKTAKE_LOCATION_CHANGED",
+        )
 
     order = get_order(db, order_id, lock=True)
     if order.status != "submitted":
@@ -867,6 +956,7 @@ def order_payload(order: StocktakeOrder) -> dict[str, object]:
         "stocktake_number": order.order_number,
         "number": order.order_number,
         "location_id": order.location_id,
+        "location_layout_version": order.location_layout_version,
         "location_code": order.location.location_code,
         "location_name": order.location.location_name,
         "status": order.status,

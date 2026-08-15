@@ -302,7 +302,7 @@ class WarehouseLocation(Base):
 
 
 class Floor3LocationLayout(Base):
-    """Interactive-map placement for one physical floor-three pallet location."""
+    """Interactive-map placement for one physical or logical warehouse location."""
 
     __tablename__ = "floor3_location_layouts"
     __table_args__ = (
@@ -335,6 +335,10 @@ class Floor3LocationLayout(Base):
             "source_type IN ('seeded','manual')",
             name="ck_floor3_location_layouts_source_type",
         ),
+        CheckConstraint(
+            "layout_kind IN ('unknown','physical_pallet','logical_anchor')",
+            name="ck_floor3_location_layouts_layout_kind",
+        ),
         UniqueConstraint("location_id", name="uq_floor3_location_layouts_location"),
     )
 
@@ -354,6 +358,9 @@ class Floor3LocationLayout(Base):
     )
     source_type: Mapped[str] = mapped_column(
         String(20), default="manual", server_default="manual", nullable=False
+    )
+    layout_kind: Mapped[str] = mapped_column(
+        String(24), default="unknown", server_default="unknown", nullable=False
     )
     created_by: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
@@ -1297,6 +1304,12 @@ class WarehouseLocationDiscrepancy(Base):
     )
     observed_location_id: Mapped[int] = mapped_column(
         ForeignKey("warehouse_locations.id", ondelete="RESTRICT"), nullable=False
+    )
+    # Immutable map-version snapshot captured when the employee reported the
+    # observed point.  NULL is retained only for reports created before the
+    # version gate existed.
+    observed_location_layout_version: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
     )
     reported_lot_version: Mapped[int] = mapped_column(Integer, nullable=False)
     reported_quantity: Mapped[int] = mapped_column(Integer, nullable=False)

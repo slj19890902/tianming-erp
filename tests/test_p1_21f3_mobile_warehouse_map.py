@@ -217,6 +217,7 @@ def test_confirmed_partial_move_preserves_total_age_reservations_and_idempotency
                 "expected_version": 1,
                 "quantity": 50,
                 "target_location_id": target_location_id,
+                "expected_target_layout_version": 1,
                 "idempotency_key": "f3-move-not-confirmed",
                 "physical_move_confirmed": False,
             },
@@ -228,6 +229,7 @@ def test_confirmed_partial_move_preserves_total_age_reservations_and_idempotency
                 "expected_version": 1,
                 "quantity": 50,
                 "target_location_id": target_location_id,
+                "expected_target_layout_version": 1,
                 "idempotency_key": "f3-move-001",
                 "physical_move_confirmed": True,
             },
@@ -240,6 +242,7 @@ def test_confirmed_partial_move_preserves_total_age_reservations_and_idempotency
                 "expected_version": 1,
                 "quantity": 50,
                 "target_location_id": target_location_id,
+                "expected_target_layout_version": 1,
                 "idempotency_key": "f3-move-001",
                 "physical_move_confirmed": True,
             },
@@ -252,6 +255,7 @@ def test_confirmed_partial_move_preserves_total_age_reservations_and_idempotency
                 "expected_version": 1,
                 "quantity": 1,
                 "target_location_id": target_location_id,
+                "expected_target_layout_version": 1,
                 "idempotency_key": "f3-move-stale-version",
                 "physical_move_confirmed": True,
             },
@@ -309,6 +313,7 @@ def test_employee_report_is_read_only_until_authorized_correction(
                 "expected_lot_version": 1,
                 "reported_quantity": 10,
                 "observed_location_id": target_location_id,
+                "observed_location_layout_version": 1,
                 "reason": "现场货物与系统登记位置不一致",
                 "idempotency_key": "f3-report-001",
             },
@@ -316,6 +321,7 @@ def test_employee_report_is_read_only_until_authorized_correction(
         assert reported.status_code == 201, reported.text
         report = reported.json()["report"]
         assert report["status"] == "open"
+        assert report["observed_location_layout_version"] == 1
         assert report["registered_location"]["location_code"] == "C1-L01"
         assert client.get("/api/mobile/erp/warehouse/location-discrepancies").status_code == 403
         denied = client.post(
@@ -346,6 +352,7 @@ def test_employee_report_is_read_only_until_authorized_correction(
         row = db.scalar(select(WarehouseLocationDiscrepancy))
         source = db.get(InventoryLot, source_lot_id)
         assert row is not None and row.status == "resolved"
+        assert row.observed_location_layout_version == 1
         assert row.resolution_transfer_id is not None
         assert source is not None
         assert source.quantity_available + source.quantity_reserved == 70
@@ -356,6 +363,66 @@ def test_employee_report_is_read_only_until_authorized_correction(
             and lot.warehouse_location_id
             in {row.registered_location_id, row.observed_location_id}
         ) == 100
+
+
+def test_delayed_discrepancy_correction_rejects_changed_observed_layout(
+    mobile_erp_app,
+) -> None:
+    from app.models.warehouse_inventory import (
+        Floor3LocationLayout,
+        InventoryLotTransfer,
+        WarehouseLocationDiscrepancy,
+    )
+
+    app, _ids, factory = mobile_erp_app
+    source_lot_id, target_location_id = _add_map_target(
+        factory, code="C1-L03-STALE"
+    )
+    with TestClient(app) as client:
+        _login(client, "mobile-scoped")
+        reported = client.post(
+            "/api/mobile/erp/warehouse/location-discrepancies",
+            json={
+                "inventory_lot_id": source_lot_id,
+                "expected_lot_version": 1,
+                "reported_quantity": 10,
+                "observed_location_id": target_location_id,
+                "observed_location_layout_version": 1,
+                "reason": "现场位置待复核",
+                "idempotency_key": "f3-report-stale-layout",
+            },
+        )
+        assert reported.status_code == 201, reported.text
+        report_id = reported.json()["report"]["id"]
+
+        with factory() as db:
+            layout = db.scalar(
+                select(Floor3LocationLayout).where(
+                    Floor3LocationLayout.location_id == target_location_id
+                )
+            )
+            assert layout is not None
+            layout.version = 2
+            db.commit()
+
+        _login(client, "mobile-admin")
+        corrected = client.post(
+            f"/api/mobile/erp/warehouse/location-discrepancies/{report_id}/resolve",
+            json={
+                "expected_version": 1,
+                "expected_lot_version": 1,
+                "idempotency_key": "f3-correct-stale-layout",
+                "resolution_note": "复核后尝试纠正",
+            },
+        )
+        assert corrected.status_code == 409
+        assert "刷新" in corrected.text
+
+    with factory() as db:
+        report = db.get(WarehouseLocationDiscrepancy, report_id)
+        assert report is not None and report.status == "open"
+        assert report.observed_location_layout_version == 1
+        assert db.scalar(select(func.count(InventoryLotTransfer.id))) == 0
 
 
 def test_whole_move_releases_source_projection_and_binds_target(
@@ -377,6 +444,7 @@ def test_whole_move_releases_source_projection_and_binds_target(
                 "expected_version": 1,
                 "quantity": 80,
                 "target_location_id": target_location_id,
+                "expected_target_layout_version": 1,
                 "idempotency_key": "f3-whole-move-001",
                 "physical_move_confirmed": True,
             },
@@ -464,6 +532,8 @@ def test_mobile_map_frontend_defers_reads_and_writes_only_after_final_confirm(
         "现场搬运完成，最终确认",
         "只上报位置不符，不改库存",
         "physical_move_confirmed: true",
+        "expected_target_layout_version: target.geometry.version",
+        "observed_location_layout_version: target.geometry.version",
         "warehouse/location-discrepancies",
         "待纠正位置报告",
     ):

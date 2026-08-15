@@ -53,6 +53,12 @@ class StocktakeOrder(Base):
     location_id: Mapped[int] = mapped_column(
         ForeignKey("warehouse_locations.id", ondelete="RESTRICT"), nullable=False
     )
+    # Snapshot of the map point the counter selected.  Historical and
+    # deliberately unmapped locations remain NULL; a mapped empty location
+    # must carry a positive version before approval may create live stock.
+    location_layout_version: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
     status: Mapped[str] = mapped_column(
         String(20), default="draft", server_default="draft", nullable=False
     )

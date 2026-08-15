@@ -32,6 +32,7 @@ from app.models.production import (
 )
 from app.models.user import User
 from app.models.warehouse_inventory import (
+    Floor3LocationLayout,
     FinishedGoodsInventoryDetail,
     InventoryLot,
     InventoryMovement,
@@ -726,6 +727,7 @@ def _complete(
     expected_version: int = 1,
     location_id: int | None = None,
     remarks: str | None = None,
+    expected_layout_version: int | None = None,
 ):
     return client.post(
         "/api/production/completion-batches",
@@ -737,11 +739,82 @@ def _complete(
                     "expected_version": expected_version,
                     "disposition": disposition,
                     "location_id": location_id,
+                    "expected_layout_version": expected_layout_version,
                     "remarks": remarks,
                 }
             ],
         },
     )
+
+
+def test_stock_completion_requires_selected_location_layout_version(
+    production_app,
+) -> None:
+    app, factory, ids = production_app
+    with factory() as db:
+        db.add(
+            Floor3LocationLayout(
+                location_id=ids["temp3"],
+                left_pct=10,
+                top_pct=10,
+                width_pct=12,
+                height_pct=10,
+                layout_kind="physical_pallet",
+                source_type="seeded",
+                version=1,
+            )
+        )
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client)
+        locations = client.get("/api/production/temporary-locations")
+        assert locations.status_code == 200, locations.text
+        selected = next(
+            row
+            for row in locations.json()["items"]
+            if row["id"] == ids["temp3"]
+        )
+        assert selected["layout_version"] == 1
+
+        with factory() as db:
+            layout = db.scalar(
+                select(Floor3LocationLayout).where(
+                    Floor3LocationLayout.location_id == ids["temp3"]
+                )
+            )
+            layout.left_pct = 40
+            layout.version = 2
+            db.commit()
+
+        stale = _complete(
+            client,
+            ids,
+            "idem",
+            idempotency_key="mapped-stock-stale",
+            disposition="stock",
+            location_id=ids["temp3"],
+            expected_layout_version=1,
+        )
+        assert stale.status_code == 409, stale.text
+
+        current = _complete(
+            client,
+            ids,
+            "idem",
+            idempotency_key="mapped-stock-current",
+            disposition="stock",
+            location_id=ids["temp3"],
+            expected_layout_version=2,
+        )
+        assert current.status_code == 200, current.text
+
+    with factory() as db:
+        assert db.scalar(
+            select(func.count(ProductionCompletion.id)).where(
+                ProductionCompletion.task_id == ids["cases"]["idem"]["task"]
+            )
+        ) == 1
 
 
 def test_production_tasks_paged_contract_matches_legacy_and_customer_scope(

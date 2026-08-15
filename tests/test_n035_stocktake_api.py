@@ -24,6 +24,7 @@ from app.models.stocktake import StocktakeItem, StocktakeOrder, StocktakeReview
 from app.models.user import User
 from app.models.warehouse_inventory import (
     FinishedGoodsInventoryDetail,
+    Floor3LocationLayout,
     InventoryLot,
     InventoryMovement,
     WarehouseLocation,
@@ -258,6 +259,7 @@ def _submission_payload(
     lots = response.json()["lots"]
     return {
         "location_id": location_id,
+        "location_layout_version": response.json()["layout_version"],
         "items": [
             {
                 "inventory_lot_id": row["inventory_lot_id"],
@@ -640,6 +642,207 @@ def test_approve_applies_difference_preserves_reserved_and_writes_audit(
                 OperationLog.action == "STOCKTAKE_APPROVE"
             )
         ) == 1
+
+
+def test_approve_rejects_inventory_restore_after_location_is_disabled(
+    stocktake_api,
+) -> None:
+    application, factory, ids = stocktake_api
+    with factory() as db:
+        location = WarehouseLocation(
+            location_code="N035-ZERO-BALANCE",
+            location_name="N035 zero-balance history location",
+            warehouse_type="finished",
+            placement_status="placed",
+            is_active=True,
+        )
+        db.add(location)
+        db.flush()
+        lot = InventoryLot(
+            lot_number="N035-ZERO-BALANCE-LOT",
+            inventory_type="finished",
+            warehouse_location_id=location.id,
+            quantity_available=0,
+            quantity_reserved=0,
+            quantity_consumed=10,
+            quantity_damaged=0,
+            quantity_scrapped=0,
+            unit="boxes",
+            status="active",
+            source_type="manual",
+            stock_date=date(2026, 7, 18),
+            last_movement_at=datetime(2026, 7, 18, 5, 0),
+            version=1,
+            created_by=ids["workshop"],
+        )
+        db.add(lot)
+        db.commit()
+        location_id = location.id
+        lot_id = lot.id
+
+    with TestClient(application) as client:
+        _login(client, "n035-workshop")
+        payload = _submission_payload(
+            client,
+            location_id,
+            key="n035-disabled-before-approve-submit",
+            counts={lot_id: 5},
+        )
+        submitted = client.post("/api/warehouse/stocktakes", json=payload)
+        assert submitted.status_code == 201, submitted.text
+        order_id = submitted.json()["id"]
+        _logout(client)
+
+        with factory() as db:
+            changed_location = db.get(WarehouseLocation, location_id)
+            changed_location.is_active = False
+            changed_location.placement_status = "unplaced"
+            db.commit()
+
+        _login(client, "n035-admin")
+        rejected = client.post(
+            f"/api/warehouse/stocktakes/{order_id}/approve",
+            json={"idempotency_key": "n035-disabled-before-approve-review"},
+        )
+        assert rejected.status_code == 409, rejected.text
+        assert rejected.json()["detail"]["code"] == "STOCKTAKE_LOCATION_CHANGED"
+
+    with factory() as db:
+        unchanged_lot = db.get(InventoryLot, lot_id)
+        assert (
+            unchanged_lot.quantity_available,
+            unchanged_lot.quantity_reserved,
+            unchanged_lot.version,
+        ) == (0, 0, 1)
+        assert db.get(StocktakeOrder, order_id).status == "submitted"
+        assert db.scalar(select(func.count(InventoryMovement.id))) == 0
+        assert db.scalar(select(func.count(StocktakeReview.id))) == 0
+        assert db.scalar(
+            select(func.count(OperationLog.id)).where(
+                OperationLog.action == "STOCKTAKE_APPROVE"
+            )
+        ) == 0
+
+
+def test_approve_rejects_stale_and_historical_missing_layout_snapshots(
+    stocktake_api,
+) -> None:
+    application, factory, ids = stocktake_api
+    with factory() as db:
+        template = db.get(InventoryLot, ids["lot1"])
+        assert template is not None and template.finished_detail is not None
+        created: list[tuple[int, int, bool]] = []
+        for suffix, mapped in (("STALE", True), ("HISTORICAL", False)):
+            location = WarehouseLocation(
+                location_code=f"N035-{suffix}",
+                location_name=f"N035 {suffix} zero-balance location",
+                warehouse_type="finished",
+                is_active=True,
+            )
+            db.add(location)
+            db.flush()
+            lot = InventoryLot(
+                lot_number=f"N035-{suffix}-LOT",
+                inventory_type="finished",
+                warehouse_location_id=location.id,
+                quantity_available=0,
+                quantity_reserved=0,
+                quantity_consumed=0,
+                quantity_damaged=0,
+                quantity_scrapped=0,
+                unit="boxes",
+                status="active",
+                source_type="manual",
+                stock_date=date(2026, 8, 15),
+                last_movement_at=datetime(2026, 8, 15, 1, 0),
+                version=1,
+                created_by=ids["workshop"],
+            )
+            detail = template.finished_detail
+            lot.finished_detail = FinishedGoodsInventoryDetail(
+                owner_customer_id=detail.owner_customer_id,
+                owner_customer_name_snapshot=detail.owner_customer_name_snapshot,
+                is_general=detail.is_general,
+                product_id=detail.product_id,
+                inventory_code_snapshot=detail.inventory_code_snapshot,
+                product_name_snapshot=detail.product_name_snapshot,
+                length_mm=detail.length_mm,
+                width_mm=detail.width_mm,
+                height_mm=detail.height_mm,
+            )
+            db.add(lot)
+            db.flush()
+            if mapped:
+                db.add(
+                    Floor3LocationLayout(
+                        location_id=location.id,
+                        left_pct=10,
+                        top_pct=10,
+                        width_pct=10,
+                        height_pct=10,
+                        source_type="manual",
+                        version=1,
+                    )
+                )
+            created.append((location.id, lot.id, mapped))
+        db.commit()
+
+    orders: list[tuple[int, int, bool]] = []
+    with TestClient(application) as client:
+        _login(client, "n035-workshop")
+        for location_id, lot_id, mapped in created:
+            payload = _submission_payload(
+                client,
+                location_id,
+                key=f"n035-layout-snapshot-{location_id}",
+                counts={lot_id: 5},
+            )
+            assert payload["location_layout_version"] == (1 if mapped else None)
+            submitted = client.post("/api/warehouse/stocktakes", json=payload)
+            assert submitted.status_code == 201, submitted.text
+            orders.append((submitted.json()["id"], lot_id, mapped))
+
+        with factory() as db:
+            stale_layout = db.scalar(
+                select(Floor3LocationLayout).where(
+                    Floor3LocationLayout.location_id == created[0][0]
+                )
+            )
+            assert stale_layout is not None
+            stale_layout.version = 2
+            db.add(
+                Floor3LocationLayout(
+                    location_id=created[1][0],
+                    left_pct=40,
+                    top_pct=10,
+                    width_pct=10,
+                    height_pct=10,
+                    source_type="manual",
+                    version=1,
+                )
+            )
+            db.commit()
+
+        _logout(client)
+        _login(client, "n035-admin")
+        for order_id, _lot_id, mapped in orders:
+            response = client.post(
+                f"/api/warehouse/stocktakes/{order_id}/approve",
+                json={
+                    "idempotency_key": (
+                        f"n035-layout-approve-{'stale' if mapped else 'historical'}"
+                    )
+                },
+            )
+            assert response.status_code == 409
+            assert response.json()["detail"]["code"] == "STOCKTAKE_LOCATION_CHANGED"
+
+    with factory() as db:
+        for order_id, lot_id, _mapped in orders:
+            assert db.get(StocktakeOrder, order_id).status == "submitted"
+            lot = db.get(InventoryLot, lot_id)
+            assert lot is not None and lot.quantity_available == 0
+        assert db.scalar(select(func.count(InventoryMovement.id))) == 0
 
 
 def test_approve_rejects_count_below_reserved_without_writes(stocktake_api) -> None:

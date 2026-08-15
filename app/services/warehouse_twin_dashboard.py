@@ -184,6 +184,8 @@ def _location_position(row: WarehouseLocation) -> tuple[str, dict | None]:
                 "height_pct": _number(layout.height_pct),
                 "z_index": layout.z_index,
                 "version": layout.version,
+                "source_type": layout.source_type,
+                "layout_kind": layout.layout_kind,
             },
         )
     if row.warehouse_floor and row.area_code:
@@ -409,6 +411,8 @@ def _location_payload(
                 "height_pct": _number(row.floor3_layout.height_pct),
                 "z_index": row.floor3_layout.z_index,
                 "version": row.floor3_layout.version,
+                "source_type": row.floor3_layout.source_type,
+                "layout_kind": row.floor3_layout.layout_kind,
             }
             if row.floor3_layout is not None and position_status == "unplaced"
             else None

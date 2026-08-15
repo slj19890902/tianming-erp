@@ -24,6 +24,7 @@ export interface MoveDashboardLocation {
   occupancy_status: "occupied" | "empty";
   position_status: string;
   map_position: {
+    version: number;
     left_pct: number;
     top_pct: number;
     width_pct: number;
@@ -45,6 +46,7 @@ export interface WarehouseMoveDraft {
   source_location_code: string;
   source_location_name: string;
   target_location_id: number;
+  expected_target_layout_version: number;
   target_floor_code: string;
   target_area_code: string | null;
   target_location_code: string;
@@ -56,7 +58,7 @@ export interface WarehouseMoveDraft {
 }
 
 export function moveLocationBounds(features: LayoutFeature[], location: MoveDashboardLocation): { left: number; right: number; bottom: number; top: number } | null;
-export function intersectMappedMoveTargets<T extends MoveDashboardLocation>(candidates: MoveCandidate[], dashboardLocations: T[], reservedTargetIds?: number[]): T[];
+export function intersectMappedMoveTargets<T extends MoveDashboardLocation>(candidates: MoveCandidate[], dashboardLocations: T[], reservedTargetIds?: number[], blockedTargetIds?: number[]): T[];
 export function mergeLocationInventoryItems<T extends { lot_id?: number | null }>(palletItems?: T[], looseItems?: T[]): T[];
 export function resolveMoveDropTarget<T extends MoveDashboardLocation>(features: LayoutFeature[], locations: T[], floorCode: string, xMm: number, yMm: number): { target: T | null; error: string | null };
 export function upsertMoveDraft<T extends WarehouseMoveDraft>(drafts: T[], draft: T): { items: T[]; error: string | null };

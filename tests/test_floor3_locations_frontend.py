@@ -69,7 +69,8 @@ def test_floor3_api_contract_paths_and_payloads_are_wired() -> None:
     assert "function floor3ExpectedVersion(palletId)" in WAREHOUSE_HTML
     assert "expected_version:expectedVersion" in WAREHOUSE_HTML
     assert "to_location_id:Number(targetId)" in WAREHOUSE_HTML
-    assert "expected_version:expectedVersion,to_location_id:Number(targetId),remarks" in WAREHOUSE_HTML
+    assert "expected_version:expectedVersion,to_location_id:Number(targetId)" in WAREHOUSE_HTML
+    assert "expected_target_layout_version:targetLayoutVersion" in WAREHOUSE_HTML
     assert "confirmed:true" in WAREHOUSE_HTML
     assert "idempotency_key:createIdempotencyKey()" in WAREHOUSE_HTML
     assert "needs_relocation:Boolean(needsRelocation)" in WAREHOUSE_HTML
@@ -985,7 +986,9 @@ def test_floor3_overview_empty_slot_can_open_the_shared_bind_panel() -> None:
     assert "selection.appendChild(panel)" in opener
     assert "state.floor3.selectedLocationId=Number(locationId)" in opener
     assert "floor3ReturnBindPanelHome()" in WAREHOUSE_HTML
-    assert 'const locationId=Number(state.floor3.selectedLocationId),overview=state.floor3.viewMode==="overview"' in save
+    assert "const locationId=Number(state.floor3.selectedLocationId),layoutVersion=floor3LayoutVersionForLocation(locationId)" in save
+    assert 'overview=state.floor3.viewMode==="overview"' in save
+    assert "expected_layout_version:layoutVersion" in save
     assert "if(overview)state.floor3.mapPopoverLocationId=locationId" in save
     assert ".floor3-overview-selection #floor3BindPanel{max-height:none" in WAREHOUSE_HTML
 

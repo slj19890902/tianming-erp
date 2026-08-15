@@ -36,7 +36,7 @@ export function moveLocationBounds(features, location) {
   return { left: Math.min(left, right), right: Math.max(left, right), bottom: Math.min(bottom, top), top: Math.max(bottom, top) };
 }
 
-export function intersectMappedMoveTargets(candidates, dashboardLocations, reservedTargetIds = []) {
+export function intersectMappedMoveTargets(candidates, dashboardLocations, reservedTargetIds = [], blockedTargetIds = []) {
   const candidateIds = new Set(
     (candidates || [])
       .filter((item) => item?.is_empty !== false && item?.occupied !== true)
@@ -44,12 +44,14 @@ export function intersectMappedMoveTargets(candidates, dashboardLocations, reser
       .filter(Boolean)
   );
   const reserved = new Set((reservedTargetIds || []).map(normalizedId).filter(Boolean));
+  const blocked = new Set((blockedTargetIds || []).map(normalizedId).filter(Boolean));
   return (dashboardLocations || [])
     .filter((location) => candidateIds.has(normalizedId(location?.location_id)))
     .filter((location) => location?.is_active !== false)
     .filter((location) => location?.occupancy_status === "empty")
     .filter((location) => location?.position_status === "mapped" && location?.map_position)
     .filter((location) => !reserved.has(normalizedId(location?.location_id)))
+    .filter((location) => !blocked.has(normalizedId(location?.location_id)))
     .sort((left, right) =>
       String(left.floor_code || "").localeCompare(String(right.floor_code || ""), "zh-CN", { numeric: true })
       || String(left.area_code || "").localeCompare(String(right.area_code || ""), "zh-CN", { numeric: true })
@@ -107,7 +109,8 @@ export function buildMoveBatchPayload(idempotencyKey, drafts) {
       operation: draft.operation,
       ...(draft.operation === "pallet_move" ? { pallet_id: draft.pallet_id } : { lot_id: draft.lot_id, quantity: draft.quantity }),
       expected_version: draft.expected_version,
-      target_location_id: draft.target_location_id
+      target_location_id: draft.target_location_id,
+      expected_target_layout_version: draft.expected_target_layout_version
     }))
   };
 }

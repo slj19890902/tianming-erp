@@ -8,7 +8,7 @@ from math import ceil
 from typing import Literal, Sequence
 
 from sqlalchemy import String, case, cast, func, or_, select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.core.time_contract import (
@@ -52,6 +52,7 @@ from app.services.composite_bom_workflow import (
     kit_availability,
 )
 from app.services.location_candidates import (
+    claim_active_placed_location,
     has_space_ledger,
     location_has_live_inventory,
     list_operational_locations,
@@ -108,6 +109,29 @@ class ProductionWorkflowError(ValueError):
     def __init__(self, message: str, status_code: int = 400) -> None:
         super().__init__(message)
         self.status_code = status_code
+
+
+def _claim_production_destination(
+    db: Session,
+    location_id: int,
+    *,
+    expected_layout_version: int | None = None,
+) -> None:
+    try:
+        claimed = claim_active_placed_location(
+            db,
+            location_id,
+            expected_layout_version=expected_layout_version,
+        )
+    except OperationalError as error:
+        raise ProductionWorkflowError(
+            "目标库位正在被其他入库、移位或布局操作使用，请稍后重试", 409
+        ) from error
+    if not claimed:
+        raise ProductionWorkflowError(
+            "目标库位已停用、尚未完成空间放置或地图状态已变化，请刷新后重试",
+            409,
+        )
 
 
 def _validate_task_status_quantity(status: str, planned_quantity: int) -> None:
@@ -364,6 +388,7 @@ class CompletionCommand:
     defective_quantity: int | None = None
     direct_delivery_quantity: int | None = None
     location_id: int | None = None
+    expected_layout_version: int | None = None
     pallet_id: int | None = None
     pallet_code: str | None = None
     remarks: str | None = None
@@ -373,6 +398,7 @@ class CompletionCommand:
 class StockTransferCommand:
     location_id: int
     idempotency_key: str
+    expected_layout_version: int | None = None
     pallet_id: int | None = None
     pallet_code: str | None = None
     remarks: str | None = None
@@ -1332,6 +1358,11 @@ def list_temporary_locations(db: Session) -> list[dict]:
                 "area_name": candidate.area.area_name if candidate.area else None,
                 "location_code": location.location_code,
                 "location_name": location.location_name,
+                "layout_version": (
+                    int(location.floor3_layout.version)
+                    if location.floor3_layout is not None
+                    else None
+                ),
                 "pallet_id": pallet.id if pallet is not None else None,
                 "pallet_code": pallet.pallet_code if pallet is not None else None,
                 "is_empty": not occupied,
@@ -1633,6 +1664,11 @@ def _stock_completion_lot(
         ),
         require_empty_pallet=True,
         movement_reason=movement_reason,
+        expected_layout_version=(
+            None
+            if location_id_override is not None
+            else command.expected_layout_version
+        ),
     )
     if snapshot is None:
         reserve_quantity = max(
@@ -1736,6 +1772,25 @@ def complete_production_batch(
     if existing_batch is not None:
         return _replay_completion_batch(
             db, batch=existing_batch, request_hash=request_hash
+        )
+
+    destination_versions: dict[int, set[int | None]] = {}
+    for command in commands:
+        if command.location_id is not None:
+            destination_versions.setdefault(
+                int(command.location_id), set()
+            ).add(command.expected_layout_version)
+    for location_id in sorted(destination_versions):
+        versions = destination_versions[location_id]
+        if len(versions) != 1:
+            raise ProductionWorkflowError(
+                "同一目标库位的地图版本不一致，请刷新后重试",
+                409,
+            )
+        _claim_production_destination(
+            db,
+            location_id,
+            expected_layout_version=next(iter(versions)),
         )
 
     task_ids = [command.task_id for command in commands]
@@ -2141,6 +2196,13 @@ def transfer_direct_completion_to_stock(
         if repeated.completion_id != completion_id or repeated.request_hash != request_hash:
             raise ProductionWorkflowError("同一幂等键对应的转库存内容不一致", 409)
         return StockTransferResult(repeated, True)
+
+    if command.location_id is not None:
+        _claim_production_destination(
+            db,
+            int(command.location_id),
+            expected_layout_version=command.expected_layout_version,
+        )
 
     completion = db.get(ProductionCompletion, completion_id)
     if completion is None:

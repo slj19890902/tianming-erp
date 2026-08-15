@@ -45,6 +45,19 @@ def test_operational_twin_reuses_formal_inventory_and_does_not_fake_rack_positio
     assert "ERP任务、数量和状态未修改" in SOURCE
 
 
+def test_mold_rack_planning_and_lookup_use_the_live_mold_ledger() -> None:
+    assert "/api/warehouse/molds/by-map-rack?${params.toString()}" in SOURCE
+    assert "LIVE MOLD ASSET ELEVATION" in SOURCE
+    assert "同一格可登记多件模具" in SOURCE
+    assert "关联产品</dt>" in SOURCE
+    assert "直接选择货架，设置层数和每层格数" in SOURCE
+    assert "保存层格到草稿" in SOURCE
+    assert "减少已被正式模具位置使用的层或格会被系统拦截" in SOURCE
+    assert "!advancedAreaMaintenanceOpen && !rack?.mold_rack_code" in SOURCE
+    assert ".twin-mold-rack-stage" in TWIN_CSS
+    assert ".twin-mold-rack-planner" in TWIN_CSS
+
+
 def test_operational_twin_uses_erp_session_for_real_production_and_manual_mapping() -> None:
     assert 'credentials: "same-origin"' in SOURCE
     assert "只读定位，不改数量和状态" in SOURCE

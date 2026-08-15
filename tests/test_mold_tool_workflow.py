@@ -531,6 +531,78 @@ def test_mold_list_supports_server_pagination_and_preserves_search(mold_app) -> 
         assert resource["map_status"] == "mapped"
 
 
+def test_mold_rack_front_view_reads_live_molds_from_published_rack(
+    mold_app,
+    monkeypatch,
+) -> None:
+    app, factory = mold_app
+    from app.api import warehouse
+    from app.models.mold_tool import MoldTool
+
+    with factory() as db:
+        db.add_all(
+            [
+                MoldTool(
+                    mold_code="RACK-LIVE-001",
+                    mold_name="同格模具一",
+                    rack_location="1F-M-R01-L2-G01",
+                    created_by=1,
+                ),
+                MoldTool(
+                    mold_code="RACK-LIVE-002",
+                    mold_name="同格模具二",
+                    rack_location="1F-M-R01-L2-G01",
+                    created_by=1,
+                ),
+                MoldTool(
+                    mold_code="RACK-OTHER-001",
+                    mold_name="其他货架模具",
+                    rack_location="1F-M-R02-L2-G01",
+                    created_by=1,
+                ),
+            ]
+        )
+        db.commit()
+
+    monkeypatch.setattr(
+        warehouse,
+        "load_warehouse_twin_floor",
+        lambda floor_code: {
+            "floor_code": floor_code,
+            "racks": [
+                {
+                    "id": "rack-r01",
+                    "rack_code": "RACK-1F-MOLD-R01",
+                    "mold_rack_code": "R01",
+                    "name": "一号模具架",
+                    "area_code": "ZONE-1F-MOLD-002",
+                    "levels": 3,
+                    "bays": 1,
+                    "level_cell_counts": [0, 3, 2],
+                }
+            ],
+        },
+    )
+
+    with TestClient(app) as client:
+        _login(client, "admin")
+        response = client.get(
+            "/api/warehouse/molds/by-map-rack",
+            params={"floor_code": "1F", "rack_id": "rack-r01"},
+        )
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["rack"]["mold_rack_code"] == "R01"
+        assert payload["rack"]["level_cell_counts"] == [0, 3, 2]
+        assert payload["rack"]["blocked_levels"] == [1]
+        assert payload["total"] == 2
+        assert [row["mold_code"] for row in payload["items"]] == [
+            "RACK-LIVE-001",
+            "RACK-LIVE-002",
+        ]
+        assert all(row["location_guide"]["grid"] == 1 for row in payload["items"])
+
+
 def test_scoped_account_only_reads_allowed_mold_products_and_labels(mold_app) -> None:
     app, factory = mold_app
     from app.models.access_control import UserCustomerScope
@@ -2483,6 +2555,66 @@ def test_mold_location_options_use_each_published_level_cell_count(monkeypatch) 
         mold_location.normalize_mold_location_code("1f-m-r01-l2")
     with pytest.raises(mold_location.MoldLocationError, match="该层未配置格数"):
         mold_location.normalize_mold_location_code("1f-m-r01-l3-g01")
+
+
+def test_mold_rack_structure_change_blocks_only_positions_it_would_invalidate(
+    mold_app,
+) -> None:
+    _app, factory = mold_app
+    from app.models.mold_tool import MoldTool
+    from app.services.mold_location import mold_rack_layout_usage_blockers
+
+    with factory() as db:
+        db.add_all(
+            [
+                MoldTool(
+                    mold_code="GRID-USED-003",
+                    mold_name="使用第三格的模具",
+                    rack_location="1F-M-R01-L2-G03",
+                    created_by=1,
+                ),
+                MoldTool(
+                    mold_code="LEVEL-ONLY-001",
+                    mold_name="只定位到层的历史模具",
+                    rack_location="1F-M-R01-L3",
+                    created_by=1,
+                ),
+            ]
+        )
+        db.commit()
+
+        reduced = mold_rack_layout_usage_blockers(
+            db,
+            {
+                "racks": [
+                    {
+                        "id": "rack-r01",
+                        "mold_rack_code": "R01",
+                        "levels": 3,
+                        "level_cell_counts": [0, 2, 1],
+                    }
+                ]
+            },
+        )
+        assert len(reduced) == 1
+        assert "第2层只剩2格" in reduced[0]
+        assert "GRID-USED-003" in reduced[0]
+        assert "LEVEL-ONLY-001" not in reduced[0]
+
+        expanded = mold_rack_layout_usage_blockers(
+            db,
+            {
+                "racks": [
+                    {
+                        "id": "rack-r01",
+                        "mold_rack_code": "R01",
+                        "levels": 3,
+                        "level_cell_counts": [0, 3, 4],
+                    }
+                ]
+            },
+        )
+        assert expanded == []
 
 
 def test_order_response_exposes_current_mold_location_to_workshop(mold_app) -> None:

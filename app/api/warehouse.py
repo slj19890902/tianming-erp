@@ -265,6 +265,8 @@ from app.services.mold_location import (
     MoldLocationPreview,
     confirm_mold_location_move,
     describe_mold_location,
+    mold_rack_layout_usage_blockers,
+    mold_rack_structure,
     mold_location_feature_codes,
     one_floor_mold_location_options,
     preview_mold_location_move,
@@ -6332,6 +6334,16 @@ def validate_twin_layout_draft(
                 status_code=409,
                 detail="正式区域身份核验未通过：" + "；".join(identity_blockers[:5]),
             )
+        if floor_code.strip().upper() == "1F":
+            mold_blockers = mold_rack_layout_usage_blockers(
+                db,
+                load_effective_warehouse_twin_floor_for_edit("1F"),
+            )
+            if mold_blockers:
+                raise HTTPException(
+                    status_code=409,
+                    detail="模具货架结构会使现有位置失效：" + "；".join(mold_blockers[:5]),
+                )
         draft_snapshot = snapshot_warehouse_twin_layout_draft()
         result = None
         try:
@@ -6662,6 +6674,16 @@ def _publish_twin_layout_draft_locked(
     commit: bool = True,
     defer_location_readiness_for_feature_id: str | None = None,
 ) -> dict:
+    if floor_code.strip().upper() == "1F":
+        mold_blockers = mold_rack_layout_usage_blockers(
+            db,
+            load_effective_warehouse_twin_floor_for_edit("1F"),
+        )
+        if mold_blockers:
+            raise HTTPException(
+                status_code=409,
+                detail="模具货架结构会使现有位置失效：" + "；".join(mold_blockers[:5]),
+            )
     blockers = _formal_area_publish_blockers(
         db,
         floor_code,
@@ -10335,6 +10357,66 @@ def list_mold_tools_by_map_area(
         "total": total,
         "page": page,
         "page_size": page_size,
+    }
+
+
+@router.get("/molds/by-map-rack")
+def list_mold_tools_by_map_rack(
+    floor_code: Literal["1F", "3F"] = Query(default="1F"),
+    rack_id: str = Query(min_length=1, max_length=100),
+    q: str | None = Query(default=None, max_length=150),
+    db: Session = Depends(get_db),
+    user: User = Depends(_can_locate_twin),
+) -> dict:
+    """Project real mold masters into one published measured-map rack."""
+
+    try:
+        floor = load_warehouse_twin_floor(floor_code)
+    except WarehouseTwinLayoutNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    rack = next(
+        (
+            row
+            for row in (floor.get("racks") or [])
+            if str(row.get("id") or "") == rack_id.strip()
+        ),
+        None,
+    )
+    if rack is None:
+        raise HTTPException(status_code=404, detail="实测地图货架不存在")
+    structure = mold_rack_structure(rack)
+    rack_code = str(structure.get("mold_rack_code") or "").strip().upper()
+    if not rack_code:
+        raise HTTPException(status_code=422, detail="该货架不是模具资产货架")
+
+    query, allowed_customer_ids = _mold_tools_query(
+        db=db,
+        user=user,
+        q=q,
+        include_inactive=False,
+    )
+    normalized_location = func.upper(func.trim(MoldTool.rack_location))
+    prefix = f"{floor_code}-M-{rack_code}"
+    query = query.where(
+        or_(
+            normalized_location == prefix,
+            normalized_location.like(f"{prefix}-%"),
+        )
+    )
+    total = int(
+        db.scalar(select(func.count()).select_from(query.order_by(None).subquery()))
+        or 0
+    )
+    rows = db.scalars(
+        query.order_by(MoldTool.rack_location, MoldTool.mold_code, MoldTool.id)
+        .limit(500)
+    ).unique().all()
+    return {
+        "floor_code": floor_code,
+        "rack": structure,
+        "items": [_mold_tool_dict(row, allowed_customer_ids) for row in rows],
+        "total": total,
+        "truncated": total > len(rows),
     }
 
 

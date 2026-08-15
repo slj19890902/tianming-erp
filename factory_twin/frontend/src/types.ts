@@ -87,6 +87,7 @@ export interface Rack {
   version: number;
   area_feature_id?: string;
   area_code?: string;
+  mold_rack_code?: string;
 }
 
 export interface Pallet {

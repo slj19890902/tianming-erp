@@ -216,6 +216,129 @@ def one_floor_mold_location_options(
     return options
 
 
+def mold_rack_structure(rack: dict) -> dict:
+    """Return the published/draft layer-grid contract for one mold rack.
+
+    ``bays`` is retained only as the legacy uniform fallback.  A configured
+    ``level_cell_counts`` list is authoritative, including explicit zeroes.
+    Machine-blocked bottom levels remain visible in the rack drawing but can
+    never become selectable mold positions.
+    """
+
+    rack_code = str(rack.get("mold_rack_code") or "").strip().upper()
+    confirmed = next(
+        (
+            row
+            for row in ONE_FLOOR_MOLD_RACKS
+            if str(row.get("rack_code") or "").upper() == rack_code
+        ),
+        None,
+    )
+    levels = max(1, int(rack.get("levels") or 1))
+    raw_counts = rack.get("level_cell_counts")
+    uses_legacy_bays = not (
+        isinstance(raw_counts, list)
+        and len(raw_counts) == levels
+        and all(
+            isinstance(value, int)
+            and not isinstance(value, bool)
+            and 0 <= value <= 50
+            for value in raw_counts
+        )
+    )
+    counts = (
+        [max(0, min(50, int(value))) for value in raw_counts]
+        if not uses_legacy_bays
+        else [max(1, min(50, int(rack.get("bays") or 1)))] * levels
+    )
+    blocked_levels = sorted(
+        int(value) for value in ((confirmed or {}).get("blocked_levels") or ())
+    )
+    return {
+        "rack_id": str(rack.get("id") or ""),
+        "rack_code": str(rack.get("rack_code") or ""),
+        "mold_rack_code": rack_code,
+        "name": str(rack.get("name") or rack_code or "模具货架"),
+        "area_code": str(rack.get("area_code") or ""),
+        "levels": levels,
+        "level_cell_counts": counts,
+        "blocked_levels": blocked_levels,
+        "uses_legacy_bays": uses_legacy_bays,
+    }
+
+
+def mold_rack_layout_usage_blockers(
+    db: Session,
+    floor_layout: dict,
+) -> list[str]:
+    """Reject a rack draft that would invalidate a current mold location.
+
+    Existing molds are never redistributed when a rack gains more cells.  A
+    coarser rack-only or level-only historical location therefore remains
+    valid and is displayed as not yet assigned to a precise cell.  Only a
+    missing rack/level or a recorded grid/row outside the proposed structure
+    is a blocker.
+    """
+
+    rack_by_code = {
+        str(row.get("mold_rack_code") or "").strip().upper(): row
+        for row in (floor_layout.get("racks") or [])
+        if str(row.get("mold_rack_code") or "").strip()
+    }
+    issue_molds: dict[tuple[str, str], list[str]] = {}
+    rows = db.scalars(
+        select(MoldTool)
+        .where(MoldTool.is_active.is_(True))
+        .order_by(MoldTool.mold_code, MoldTool.id)
+    ).all()
+    for mold in rows:
+        guide = describe_mold_location(mold.rack_location)
+        if guide.get("floor") != "1F" or not guide.get("rack"):
+            continue
+        rack_code = f"R{int(guide['rack']):02d}"
+        rack = rack_by_code.get(rack_code)
+        if rack is None:
+            issue_molds.setdefault(
+                (rack_code, "草稿中缺少该模具货架"), []
+            ).append(mold.mold_code)
+            continue
+        structure = mold_rack_structure(rack)
+        level = guide.get("level")
+        if level is None:
+            continue
+        level = int(level)
+        if level < 1 or level > int(structure["levels"]):
+            issue_molds.setdefault(
+                (rack_code, f"第{level}层已被删除"), []
+            ).append(mold.mold_code)
+            continue
+        if level in set(structure["blocked_levels"]):
+            issue_molds.setdefault(
+                (rack_code, f"第{level}层是设备占用层，不能存放模具"), []
+            ).append(mold.mold_code)
+            continue
+        grid = guide.get("grid")
+        if grid is None and guide.get("kind") in {"flat", "flat_legacy"}:
+            grid = guide.get("row")
+        if grid is None:
+            continue
+        grid = int(grid)
+        grid_count = int(structure["level_cell_counts"][level - 1])
+        if grid_count < grid:
+            issue_molds.setdefault(
+                (rack_code, f"第{level}层只剩{grid_count}格，不能保留第{grid}格"), []
+            ).append(mold.mold_code)
+
+    blockers = []
+    for (rack_code, reason), mold_codes in sorted(issue_molds.items()):
+        examples = "、".join(mold_codes[:3])
+        suffix = f"等{len(mold_codes)}件" if len(mold_codes) > 3 else ""
+        blockers.append(
+            f"{rack_code} {reason}；仍有模具 {examples}{suffix} 使用该位置"
+        )
+    return blockers
+
+
 def _rack_prompt(floor: str, rack: int) -> str:
     if floor == "1F" and rack in _ONE_FLOOR_RACKS_BY_NUMBER:
         item = _ONE_FLOOR_RACKS_BY_NUMBER[rack]

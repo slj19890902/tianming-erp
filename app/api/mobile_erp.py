@@ -1715,6 +1715,7 @@ class MobileWarehouseMovePayload(BaseModel):
     expected_version: int = Field(gt=0)
     quantity: int = Field(gt=0)
     target_location_id: int = Field(gt=0)
+    expected_target_layout_version: int = Field(gt=0)
     idempotency_key: str = Field(min_length=1, max_length=100)
     physical_move_confirmed: bool
 
@@ -1732,6 +1733,7 @@ class MobileWarehouseDiscrepancyPayload(BaseModel):
     expected_lot_version: int = Field(gt=0)
     reported_quantity: int = Field(gt=0)
     observed_location_id: int = Field(gt=0)
+    observed_location_layout_version: int = Field(gt=0)
     reason: str = Field(min_length=1, max_length=500)
     idempotency_key: str = Field(min_length=1, max_length=120)
 
@@ -2089,6 +2091,7 @@ def mobile_move_warehouse_lot(
             expected_version=payload.expected_version,
             quantity=payload.quantity,
             location_id=payload.target_location_id,
+            expected_target_layout_version=payload.expected_target_layout_version,
             operator_id=user.id,
             idempotency_key=payload.idempotency_key,
         )
@@ -2113,6 +2116,9 @@ def mobile_move_warehouse_lot(
                     "target_lot_id": result.target_lot.id,
                     "source_location_id": result.transfer.source_location_id,
                     "target_location_id": result.transfer.target_location_id,
+                    "expected_target_layout_version": (
+                        payload.expected_target_layout_version
+                    ),
                     "quantity": payload.quantity,
                     "idempotency_key": payload.idempotency_key,
                 },
@@ -2155,6 +2161,7 @@ def _mobile_discrepancy_payload(
             "location_code": observed.location_code,
             "location_name": observed.location_name,
         },
+        "observed_location_layout_version": row.observed_location_layout_version,
         "reported_quantity": row.reported_quantity,
         "reason": row.reason,
         "reported_at": utc_naive_to_api(row.reported_at),
@@ -2190,6 +2197,15 @@ def report_mobile_warehouse_location_discrepancy(
     registered = lot.location
     if observed is None or not _mobile_location_is_published(db, observed):
         raise HTTPException(status_code=409, detail="现场观察位置尚未正式发布")
+    if (
+        observed.floor3_layout is None
+        or int(observed.floor3_layout.version)
+        != payload.observed_location_layout_version
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="现场观察位置布局已变化，请刷新地图后重新上报",
+        )
     if observed.id == registered.id:
         raise HTTPException(status_code=409, detail="观察位置与系统登记位置相同")
     existing = db.scalar(
@@ -2201,6 +2217,8 @@ def report_mobile_warehouse_location_discrepancy(
         if (
             existing.inventory_lot_id != lot.id
             or existing.observed_location_id != observed.id
+            or existing.observed_location_layout_version
+            != payload.observed_location_layout_version
             or existing.reported_quantity != payload.reported_quantity
         ):
             raise HTTPException(status_code=409, detail="同一请求标识已用于其他位置不符上报")
@@ -2224,6 +2242,7 @@ def report_mobile_warehouse_location_discrepancy(
         inventory_lot_id=lot.id,
         registered_location_id=registered.id,
         observed_location_id=observed.id,
+        observed_location_layout_version=payload.observed_location_layout_version,
         reported_lot_version=lot.version,
         reported_quantity=payload.reported_quantity,
         reason=payload.reason,
@@ -2252,6 +2271,9 @@ def report_mobile_warehouse_location_discrepancy(
                 "inventory_lot_id": lot.id,
                 "registered_location_id": registered.id,
                 "observed_location_id": observed.id,
+                "observed_location_layout_version": (
+                    payload.observed_location_layout_version
+                ),
                 "reported_quantity": payload.reported_quantity,
             },
         )
@@ -2358,6 +2380,11 @@ def resolve_mobile_warehouse_location_discrepancy(
             expected_version=payload.expected_lot_version,
             quantity=row.reported_quantity,
             location_id=observed.id,
+            expected_target_layout_version=(
+                int(row.observed_location_layout_version)
+                if row.observed_location_layout_version is not None
+                else None
+            ),
             operator_id=user.id,
             idempotency_key=correction_key,
         )
@@ -2386,6 +2413,9 @@ def resolve_mobile_warehouse_location_discrepancy(
                 "inventory_lot_id": lot.id,
                 "registered_location_id": row.registered_location_id,
                 "observed_location_id": row.observed_location_id,
+                "observed_location_layout_version": (
+                    row.observed_location_layout_version
+                ),
                 "quantity": row.reported_quantity,
                 "transfer_id": result.transfer.id,
             },

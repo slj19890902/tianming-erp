@@ -190,6 +190,7 @@ def test_execute_and_reverse_component_allocations(monkeypatch) -> None:
     )
     lot = SimpleNamespace(
         id=71,
+        warehouse_location_id=501,
         quantity_available=0,
         quantity_reserved=4,
         quantity_consumed=0,
@@ -226,6 +227,12 @@ def test_execute_and_reverse_component_allocations(monkeypatch) -> None:
         "scrapped": row.quantity_scrapped,
     })
     monkeypatch.setattr(workflow, "_movement", lambda *_args, **_kwargs: SimpleNamespace(id=101))
+    claimed_location_ids = []
+    monkeypatch.setattr(
+        workflow,
+        "_claim_inventory_destination",
+        lambda _db, location_id: claimed_location_ids.append(location_id),
+    )
 
     result = workflow.execute_delivery_component_consumption(
         db,
@@ -241,7 +248,7 @@ def test_execute_and_reverse_component_allocations(monkeypatch) -> None:
     assert direct.consumed_quantity == 2
     assert stock.consumed_stock_quantity == 4
 
-    db.scalar_rows = [[direct], [stock]]
+    db.scalar_rows = [[501], [direct], [stock]]
     workflow.reverse_delivery_component_allocations(
         db,
         delivery_item_id=55,
@@ -250,6 +257,7 @@ def test_execute_and_reverse_component_allocations(monkeypatch) -> None:
     )
     assert direct.status == "reversed"
     assert stock.status == "reversed"
+    assert claimed_location_ids == [501]
     assert (reservation.consumed_stock_quantity, lot.quantity_reserved, lot.quantity_consumed) == (0, 4, 0)
 
 

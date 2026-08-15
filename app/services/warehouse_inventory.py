@@ -9,6 +9,7 @@ import unicodedata
 from uuid import uuid4
 
 from sqlalchemy import case, delete, func, or_, select, update
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.core.time_contract import beijing_now_naive, beijing_today, utc_now_naive
@@ -47,13 +48,39 @@ from app.services.inventory_cost_snapshot import (
     estimate_finished_product_cost,
     estimate_semi_finished_cost,
 )
-from app.services.location_candidates import operational_location_issue
+from app.services.location_candidates import (
+    claim_active_placed_location,
+    operational_location_issue,
+)
 
 
 class WarehouseInventoryError(ValueError):
     def __init__(self, message: str, status_code: int = 400) -> None:
         super().__init__(message)
         self.status_code = status_code
+
+
+def _claim_inventory_destination(
+    db: Session,
+    location_id: int,
+    *,
+    expected_layout_version: int | None = None,
+) -> None:
+    try:
+        claimed = claim_active_placed_location(
+            db,
+            location_id,
+            expected_layout_version=expected_layout_version,
+        )
+    except OperationalError as error:
+        raise WarehouseInventoryError(
+            "目标库位正在被其他入库、移位或布局操作使用，请稍后重试", 409
+        ) from error
+    if not claimed:
+        raise WarehouseInventoryError(
+            "目标库位已停用、尚未完成空间放置或地图状态已变化，请刷新后重试",
+            409,
+        )
 
 
 def _delivery_pallet_release_key(delivery_id: int, pallet_id: int) -> str:
@@ -181,6 +208,7 @@ def restore_auto_released_pallets_after_delivery_cancel(
         target_location_id = clear_movement.from_location_id
         if target_location_id is None:
             raise WarehouseInventoryError("空栈板缺少原库位，无法安全取消发货", 409)
+        _claim_inventory_destination(db, int(target_location_id))
         target_location = db.get(WarehouseLocation, target_location_id)
         if target_location is None or not target_location.is_active:
             raise WarehouseInventoryError("空栈板原库位已停用，无法安全取消发货", 409)
@@ -677,6 +705,7 @@ def _transfer_finished_lot_location(
     idempotency_key: str,
     require_staging_source: bool,
     require_empty_target: bool = False,
+    expected_target_layout_version: int | None = None,
 ) -> FinishedLotLocationTransferResult:
     """Move all or part of a finished lot without changing stock totals.
 
@@ -709,6 +738,12 @@ def _transfer_finished_lot_location(
         if source is None or target is None:
             raise WarehouseInventoryError("已完成的库位转移记录不完整", 409)
         return FinishedLotLocationTransferResult(repeated, source, target, True)
+
+    _claim_inventory_destination(
+        db,
+        location_id,
+        expected_layout_version=expected_target_layout_version,
+    )
 
     lot = db.get(InventoryLot, lot_id)
     if lot is None or lot.finished_detail is None:
@@ -1065,6 +1100,7 @@ def transfer_staging_finished_lot(
     location_id: int,
     operator_id: int | None,
     idempotency_key: str,
+    expected_target_layout_version: int | None = None,
 ) -> FinishedLotLocationTransferResult:
     return _transfer_finished_lot_location(
         db,
@@ -1075,6 +1111,7 @@ def transfer_staging_finished_lot(
         operator_id=operator_id,
         idempotency_key=idempotency_key,
         require_staging_source=True,
+        expected_target_layout_version=expected_target_layout_version,
     )
 
 
@@ -1088,6 +1125,7 @@ def transfer_finished_lot_between_locations(
     operator_id: int | None,
     idempotency_key: str,
     require_empty_target: bool = False,
+    expected_target_layout_version: int | None = None,
 ) -> FinishedLotLocationTransferResult:
     return _transfer_finished_lot_location(
         db,
@@ -1099,6 +1137,7 @@ def transfer_finished_lot_between_locations(
         idempotency_key=idempotency_key,
         require_staging_source=False,
         require_empty_target=require_empty_target,
+        expected_target_layout_version=expected_target_layout_version,
     )
 
 
@@ -1123,12 +1162,18 @@ def manual_finished_in(
     stock_date_accuracy: str = "exact",
     stock_date_original_text: str | None = None,
     is_general: bool = False,
+    expected_layout_version: int | None = None,
 ) -> InventoryLot:
     existing = _idempotent_lot(db, idempotency_key)
     if existing:
         return existing
     if quantity <= 0:
         raise WarehouseInventoryError("入库数量必须大于0")
+    _claim_inventory_destination(
+        db,
+        location_id,
+        expected_layout_version=expected_layout_version,
+    )
     location = _location(db, location_id, "finished")
     customer = db.get(Customer, customer_id) if customer_id is not None else None
     product = db.get(Product, product_id)
@@ -2245,6 +2290,17 @@ def reverse_finished_consumption(
         return repeated
     if stock_quantity <= 0:
         raise WarehouseInventoryError("成品逆转数量必须大于0")
+    location_id = db.scalar(
+        select(InventoryLot.warehouse_location_id)
+        .join(
+            InventoryReservation,
+            InventoryReservation.inventory_lot_id == InventoryLot.id,
+        )
+        .where(InventoryReservation.id == reservation_id)
+    )
+    if location_id is None:
+        raise WarehouseInventoryError("成品库存预占关联库位不存在", 409)
+    _claim_inventory_destination(db, int(location_id))
     with db.begin_nested():
         reservation = db.get(InventoryReservation, reservation_id)
         allocation = db.get(DeliveryInventoryAllocation, allocation_id)
@@ -2506,6 +2562,7 @@ def manual_semi_finished_in(
     stock_date_accuracy: str = "exact",
     stock_date_original_text: str | None = None,
     allow_raw_material_staging: bool = False,
+    expected_layout_version: int | None = None,
 ) -> InventoryLot:
     existing = _idempotent_lot(db, idempotency_key)
     if existing:
@@ -2517,6 +2574,11 @@ def manual_semi_finished_in(
         raise WarehouseInventoryError("半成品组件仅允许整片、天地盖盖片或底片")
     if pieces_per_box <= 0 or stock_yield_per_sheet <= 0:
         raise WarehouseInventoryError("每箱片数和每库存张产出片数必须大于0")
+    _claim_inventory_destination(
+        db,
+        location_id,
+        expected_layout_version=expected_layout_version,
+    )
     material = db.get(Material, material_id) if material_id else None
     if material_id and (material is None or not material.is_active):
         raise WarehouseInventoryError("材质主数据不存在或已停用", 404)
@@ -2907,6 +2969,7 @@ def _finished_lot_edit_request(
     product_id: int,
     quantity_available: int,
     location_id: int,
+    expected_layout_version: int | None = None,
     stock_date: date,
     confirm_stock_date_exact: bool,
 ) -> dict[str, object]:
@@ -2917,6 +2980,7 @@ def _finished_lot_edit_request(
         "product_id": product_id,
         "quantity_available": quantity_available,
         "location_id": location_id,
+        "expected_layout_version": expected_layout_version,
         "stock_date": stock_date.isoformat(),
         "confirm_stock_date_exact": confirm_stock_date_exact,
     }
@@ -3001,6 +3065,7 @@ def edit_finished_lot(
     product_id: int,
     quantity_available: int,
     location_id: int,
+    expected_layout_version: int | None = None,
     stock_date: date,
     operator_id: int | None,
     idempotency_key: str,
@@ -3019,6 +3084,7 @@ def edit_finished_lot(
         product_id=product_id,
         quantity_available=quantity_available,
         location_id=location_id,
+        expected_layout_version=expected_layout_version,
         stock_date=stock_date,
         confirm_stock_date_exact=confirm_stock_date_exact,
     )
@@ -3030,6 +3096,12 @@ def edit_finished_lot(
     )
     if existing is not None:
         return existing
+
+    _claim_inventory_destination(
+        db,
+        location_id,
+        expected_layout_version=expected_layout_version,
+    )
 
     lot = db.get(InventoryLot, lot_id)
     if (
@@ -3171,6 +3243,7 @@ def edit_finished_lot(
                 remarks=FINISHED_LOT_EDIT_REASON,
                 operator_id=operator_id,
                 idempotency_key=move_key,
+                expected_target_layout_version=expected_layout_version,
             )
         except Floor3LocationError as error:
             raise WarehouseInventoryError(str(error), error.status_code) from error
@@ -3299,6 +3372,15 @@ def mutate_lot(
     existing = _idempotent_lot(db, idempotency_key)
     if existing:
         return existing
+    if operation == "adjust" and quantity > 0:
+        location_id = db.scalar(
+            select(InventoryLot.warehouse_location_id).where(
+                InventoryLot.id == lot_id
+            )
+        )
+        if location_id is None:
+            raise WarehouseInventoryError("库存批次或关联库位不存在", 404)
+        _claim_inventory_destination(db, int(location_id))
     lot = db.get(InventoryLot, lot_id)
     if lot is None:
         raise WarehouseInventoryError("库存批次不存在", 404)

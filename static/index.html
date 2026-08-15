@@ -6724,7 +6724,7 @@
             <div v-else-if="modal.type === 'receipt'">
               <div class="notice" style="margin-bottom:10px"><strong>客户：{{ receiptForm.customer_name || '客户未登记' }}</strong><span style="margin-left:12px">送货单：{{ receiptForm.delivery_number || '-' }}</span></div>
               <div class="form-grid"><div class="field"><label>实际签收日期</label><input class="input" type="date" v-model="receiptForm.actual_received_date" /></div><div class="field"><label>签收人</label><input class="input" v-model.trim="receiptForm.signed_by" /></div></div>
-              <table><thead><tr><th>产品</th><th>发货数</th><th>实际签收数</th><th>差异处理</th><th>退回放哪里</th><th>差异备注（可选）</th></tr></thead><tbody><tr v-for="line in receiptForm.items" :key="line.delivery_item_id" :class="{'warning-row':Number(line.actual_received_quantity)!==Number(line.delivered_quantity)}"><td>{{ line.product_code }} / {{ line.product_name }}</td><td>{{ line.delivered_quantity }}</td><td><input class="input compact-input" type="number" min="0" v-model.number="line.actual_received_quantity" @change="normalizeReceiptResolution(line)" /></td><td><select v-if="Number(line.actual_received_quantity)<Number(line.delivered_quantity)" class="select" v-model="line.resolution_action"><option value="">请选择短收处理</option><option value="continue_delivery">保留剩余数量，继续待送</option><option value="accept_short">按本次实收数量结单</option></select><select v-else-if="Number(line.actual_received_quantity)>Number(line.delivered_quantity)" class="select" v-model="line.resolution_action"><option value="">请选择超收处理</option><option value="accept_over">确认按实际超收数量入账</option></select><span v-else class="muted">无差异</span></td><td><div v-if="receiptLineNeedsReturnLocation(line)" class="receipt-return-location-picker"><select class="select" v-model.number="line.return_floor_number" @change="onReceiptReturnFloorChange(line)"><option :value="null">先选楼层</option><option v-for="floor in receiptLocationFloors(line)" :key="floor.number" :value="floor.number">{{ floor.label }}</option></select><select class="select" v-model="line.return_area_code" :disabled="!line.return_floor_number" @change="onReceiptReturnAreaChange(line)"><option value="">再选区域</option><option v-for="area in receiptAreasForFloor(line,line.return_floor_number)" :key="area.code" :value="area.code">{{ area.code }}</option></select><select class="select" v-model.number="line.return_location_id" :disabled="!line.return_area_code"><option :value="null">再选库位</option><option v-for="location in receiptLocationsForArea(line,line.return_floor_number,line.return_area_code)" :key="location.id" :value="location.id">{{ location.location_code }}</option></select></div><span v-else-if="Number(line.actual_received_quantity)<Number(line.delivered_quantity) && line.source_type==='unordered_finished'" class="muted">自动退回原批次</span><span v-else class="muted">无需退回</span></td><td><input class="input" v-model.trim="line.difference_reason" placeholder="可选" /></td></tr></tbody></table>
+              <table><thead><tr><th>产品</th><th>发货数</th><th>实际签收数</th><th>差异处理</th><th>退回放哪里</th><th>差异备注（可选）</th></tr></thead><tbody><tr v-for="line in receiptForm.items" :key="line.delivery_item_id" :class="{'warning-row':Number(line.actual_received_quantity)!==Number(line.delivered_quantity)}"><td>{{ line.product_code }} / {{ line.product_name }}</td><td>{{ line.delivered_quantity }}</td><td><input class="input compact-input" type="number" min="0" v-model.number="line.actual_received_quantity" @change="normalizeReceiptResolution(line)" /></td><td><select v-if="Number(line.actual_received_quantity)<Number(line.delivered_quantity)" class="select" v-model="line.resolution_action"><option value="">请选择短收处理</option><option value="continue_delivery">保留剩余数量，继续待送</option><option value="accept_short">按本次实收数量结单</option></select><select v-else-if="Number(line.actual_received_quantity)>Number(line.delivered_quantity)" class="select" v-model="line.resolution_action"><option value="">请选择超收处理</option><option value="accept_over">确认按实际超收数量入账</option></select><span v-else class="muted">无差异</span></td><td><div v-if="receiptLineNeedsReturnLocation(line)" class="receipt-return-location-picker"><select class="select" v-model.number="line.return_floor_number" @change="onReceiptReturnFloorChange(line)"><option :value="null">先选楼层</option><option v-for="floor in receiptLocationFloors(line)" :key="floor.number" :value="floor.number">{{ floor.label }}</option></select><select class="select" v-model="line.return_area_code" :disabled="!line.return_floor_number" @change="onReceiptReturnAreaChange(line)"><option value="">再选区域</option><option v-for="area in receiptAreasForFloor(line,line.return_floor_number)" :key="area.code" :value="area.code">{{ area.code }}</option></select><select class="select" v-model.number="line.return_location_id" :disabled="!line.return_area_code" @change="onReceiptReturnLocationChange(line)"><option :value="null">再选库位</option><option v-for="location in receiptLocationsForArea(line,line.return_floor_number,line.return_area_code)" :key="location.id" :value="location.id">{{ location.location_code }}</option></select></div><span v-else-if="Number(line.actual_received_quantity)<Number(line.delivered_quantity) && line.source_type==='unordered_finished'" class="muted">自动退回原批次</span><span v-else class="muted">无需退回</span></td><td><input class="input" v-model.trim="line.difference_reason" placeholder="可选" /></td></tr></tbody></table>
             </div>
             <div v-else-if="modal.type === 'deliveryRoute'">
               <div class="status orange" style="display:block;white-space:normal;margin-bottom:10px">{{ deliveryRoutePlan.disclaimer }}</div>
@@ -16122,6 +16122,7 @@
                 defective_quantity: this.productionDefectiveQuantity(row),
                 direct_delivery_quantity: row.completion_mode === "direct" ? Number(row.actual_output_quantity) : 0,
                 location_id: location ? Number(location.id) : null,
+                expected_layout_version: location?.layout_version || null,
                 pallet_id: location?.pallet_id ? Number(location.pallet_id) : null,
                 pallet_code: location?.pallet_code || null,
               };
@@ -16218,6 +16219,7 @@
               await axios.post(`/api/production/completions/${row.id}/stock-transfers`, {
                 idempotency_key: idempotencyKey,
                 location_id: Number(location.id),
+                expected_layout_version: location.layout_version || null,
                 pallet_id: location.pallet_id ? Number(location.pallet_id) : null,
                 pallet_code: location.pallet_code || null,
               });
@@ -16266,6 +16268,7 @@
                   actual_output_quantity:output,
                   defective_quantity:theoretical-output,
                   location_id:Number(location.id),
+                  expected_layout_version:location.layout_version || null,
                   pallet_id:location.pallet_id ? Number(location.pallet_id) : null,
                   pallet_code:location.pallet_code || null,
                   remarks:null,
@@ -16617,7 +16620,8 @@
             if (action==="transfer_to_semi_inventory" && this.incomingLocationsLoading) throw new Error("正在读取半成品库位，请稍候再确认");
             if (action==="transfer_to_semi_inventory" && this.incomingLocationsError) throw new Error(this.incomingLocationsError);
             if (action==="transfer_to_semi_inventory" && !Number(row.surplus_location_id)) throw new Error("余量转半成品库存时必须选择库位");
-            return {item_id:row.item_id,received_quantity:Number(row.incoming_quantity),resolution_action:action,resolution_reason:row.resolution_reason?.trim()||null,surplus_location_id:Number(row.surplus_location_id)||null};
+            const surplusLocation=this.incomingLocations.find(location=>Number(location.id)===Number(row.surplus_location_id));
+            return {item_id:row.item_id,received_quantity:Number(row.incoming_quantity),resolution_action:action,resolution_reason:row.resolution_reason?.trim()||null,surplus_location_id:Number(row.surplus_location_id)||null,expected_surplus_layout_version:surplusLocation?.layout_version||null};
           },
           canReceiveIncoming(row) {
             return row?.material_status === "pending" && ["已报料", "供应商已排单"].includes(row?.requisition_status);
@@ -25925,6 +25929,7 @@
               line.return_floor_number = null;
               line.return_area_code = "";
               line.return_location_id = null;
+              line.expected_return_layout_version = null;
             }
           },
           receiptLineNeedsReturnLocation(line) {
@@ -25968,9 +25973,17 @@
           onReceiptReturnFloorChange(line) {
             line.return_area_code = "";
             line.return_location_id = null;
+            line.expected_return_layout_version = null;
           },
           onReceiptReturnAreaChange(line) {
             line.return_location_id = null;
+            line.expected_return_layout_version = null;
+          },
+          onReceiptReturnLocationChange(line) {
+            const location = (this.productionLocations || []).find(
+              candidate => Number(candidate.id) === Number(line.return_location_id)
+            );
+            line.expected_return_layout_version = location?.layout_version || null;
           },
           validateReceiptForm() {
             for (let index = 0; index < (this.receiptForm.items || []).length; index += 1) {
@@ -26019,6 +26032,7 @@
                   source_type:item.source_type || "order",
                   requires_return_location:saved.get(item.id)?.requires_return_location ?? !!item.requires_return_location,
                   return_location_id:saved.get(item.id)?.return_location_id || null,
+                  expected_return_layout_version:this.productionLocations.find(location => Number(location.id) === Number(saved.get(item.id)?.return_location_id))?.layout_version || null,
                   return_floor_number:this.productionLocationFloorNumber(this.productionLocations.find(location => Number(location.id) === Number(saved.get(item.id)?.return_location_id))) || defaultFloor,
                   return_area_code:this.productionLocationAreaCode(this.productionLocations.find(location => Number(location.id) === Number(saved.get(item.id)?.return_location_id))) || ""
                 }))
@@ -26057,7 +26071,8 @@
               signed_by:this.receiptForm.signed_by,
               items:(this.receiptForm.items || []).map(({product_code,product_name,delivered_quantity,source_type,requires_return_location,return_floor_number,return_area_code,...line}) => ({
                 ...line, difference_reason:line.difference_reason || null,
-                return_location_id:line.return_location_id || null
+                return_location_id:line.return_location_id || null,
+                expected_return_layout_version:line.expected_return_layout_version || null
               }))
             };
             this.receiptOperationState = {action:"save",deliveryId,receiptId,deliveryNumber};

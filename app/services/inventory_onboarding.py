@@ -840,8 +840,28 @@ def _resolve_location(
         "warehouse_type": location.warehouse_type,
         "placement_status": location.placement_status,
         "is_active": location.is_active,
+        **_location_layout_evidence(location),
     }
     return location
+
+
+def _location_layout_evidence(
+    location: WarehouseLocation,
+) -> dict[str, object]:
+    layout = location.floor3_layout
+    if layout is None:
+        return {
+            "layout_version": None,
+            "layout_kind": None,
+        }
+    return {
+        "layout_version": int(layout.version),
+        "layout_kind": str(layout.layout_kind),
+        "layout_left_pct": str(layout.left_pct),
+        "layout_top_pct": str(layout.top_pct),
+        "layout_width_pct": str(layout.width_pct),
+        "layout_height_pct": str(layout.height_pct),
+    }
 
 
 def _ownership_customer_id(
@@ -1050,6 +1070,7 @@ def _resolve_exported_existing_lot(
                 "target_location_id": target.id,
                 "target_location_code": target.location_code,
                 "move_required": False,
+                **_location_layout_evidence(target),
             }
         elif (
             target is not None
@@ -1081,6 +1102,7 @@ def _resolve_exported_existing_lot(
                     "expected_current_pallet_id": (
                         occupied.id if occupied is not None else None
                     ),
+                    **_location_layout_evidence(target),
                 }
         else:
             _append_once(warnings, "EXISTING_LOCATION_NEEDS_REVIEW")
@@ -1111,6 +1133,7 @@ def _resolve_exported_existing_lot(
         "warehouse_type": location.warehouse_type,
         "placement_status": location.placement_status,
         "is_active": location.is_active,
+        **_location_layout_evidence(location),
     }
     evidence["existing_lot"] = _lot_evidence(lot)
     evidence["exported_inventory"] = {

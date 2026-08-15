@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5174",
-    "test": "node --test tests/factoryVisuals.test.mjs tests/featureCodes.test.mjs tests/floor1CandidateBlockers.test.mjs tests/formalAreaOptions.test.mjs tests/layoutGeometry.test.mjs tests/operationalView.test.mjs tests/palletSnap.test.mjs tests/rackFront.test.mjs tests/referenceOverlay.test.mjs tests/warehouseInventory.test.mjs",
+    "test": "node --test tests/factoryVisuals.test.mjs tests/featureCodes.test.mjs tests/floor1CandidateBlockers.test.mjs tests/formalAreaOptions.test.mjs tests/layoutGeometry.test.mjs tests/operationalView.test.mjs tests/palletSnap.test.mjs tests/rackFront.test.mjs tests/referenceOverlay.test.mjs tests/warehouseInventory.test.mjs tests/warehousePlanningUi.test.mjs",
     "build": "tsc --noEmit -p tsconfig.app.json && vite build",
     "preview": "vite preview --host 127.0.0.1 --port 4174"
   },

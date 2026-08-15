@@ -1087,6 +1087,7 @@
             expected_version: source.good.lot_version,
             quantity,
             target_location_id: target.location_id,
+            expected_target_layout_version: target.geometry.version,
             idempotency_key: warehouseRequestKey("mobile-map-move"),
             physical_move_confirmed: true,
           });
@@ -1112,6 +1113,7 @@
             expected_lot_version: source.good.lot_version,
             reported_quantity: quantity,
             observed_location_id: target.location_id,
+            observed_location_layout_version: target.geometry.version,
             reason: reason.trim(),
             idempotency_key: warehouseRequestKey("mobile-map-report"),
           });

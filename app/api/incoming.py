@@ -331,6 +331,7 @@ class ReceiveRequest(BaseModel):
     resolution_action: str | None = None
     resolution_reason: str | None = None
     surplus_location_id: int | None = Field(default=None, gt=0)
+    expected_surplus_layout_version: int | None = Field(default=None, gt=0)
     idempotency_key: str | None = Field(default=None, max_length=100)
 
     @field_validator("received_quantity")
@@ -347,6 +348,7 @@ class BatchReceiveLine(BaseModel):
     resolution_action: str | None = None
     resolution_reason: str | None = None
     surplus_location_id: int | None = Field(default=None, gt=0)
+    expected_surplus_layout_version: int | None = Field(default=None, gt=0)
     idempotency_key: str | None = Field(default=None, max_length=100)
 
     @field_validator("received_quantity")
@@ -2455,6 +2457,11 @@ def surplus_inventory_locations(
                 "location_code": row.location_code,
                 "location_name": row.location_name,
                 "warehouse_type": row.warehouse_type,
+                "layout_version": (
+                    int(row.floor3_layout.version)
+                    if row.floor3_layout is not None
+                    else None
+                ),
             }
             for row in rows
         ]
@@ -2693,6 +2700,9 @@ def receive_item(
             resolution_action=(payload.resolution_action if payload else None),
             resolution_reason=(payload.resolution_reason if payload else None),
             surplus_location_id=(payload.surplus_location_id if payload else None),
+            expected_surplus_layout_version=(
+                payload.expected_surplus_layout_version if payload else None
+            ),
             idempotency_key=(payload.idempotency_key if payload else None),
             audit_context={"request": request},
         )
@@ -2746,6 +2756,9 @@ def batch_receive_items(
                     resolution_action=line.resolution_action,
                     resolution_reason=line.resolution_reason,
                     surplus_location_id=line.surplus_location_id,
+                    expected_surplus_layout_version=(
+                        line.expected_surplus_layout_version
+                    ),
                     idempotency_key=(
                         line.idempotency_key
                         or (

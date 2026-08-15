@@ -285,6 +285,7 @@ def _claim_empty_active_location(
     *,
     allowed_inventory_lot_id: int | None = None,
     require_no_live_inventory: bool = False,
+    expected_layout_version: int | None = None,
 ) -> None:
     """Serialize occupancy with slot disabling using the SQLite writer lock."""
     claim_conditions = [
@@ -304,17 +305,44 @@ def _claim_empty_active_location(
                 excluded_lot_id=allowed_inventory_lot_id,
             )
         )
-    result = db.execute(
-        update(WarehouseLocation)
-        .where(*claim_conditions)
-        .values(
-            # This guarded no-op is the first write in an occupancy operation.
-            # It acquires SQLite's single-writer lock without changing timestamps.
-            is_active=WarehouseLocation.is_active,
-            updated_at=WarehouseLocation.updated_at,
-        )
-        .execution_options(synchronize_session=False)
+    layout_exists = (
+        select(Floor3LocationLayout.id)
+        .where(Floor3LocationLayout.location_id == WarehouseLocation.id)
+        .exists()
     )
+    if expected_layout_version is not None:
+        claim_conditions.append(
+            select(Floor3LocationLayout.id)
+            .where(
+                Floor3LocationLayout.location_id == WarehouseLocation.id,
+                Floor3LocationLayout.version == expected_layout_version,
+            )
+            .exists()
+        )
+    else:
+        claim_conditions.append(
+            or_(
+                ~layout_exists,
+                _active_inventory_exists(location.id),
+            )
+        )
+    try:
+        result = db.execute(
+            update(WarehouseLocation)
+            .where(*claim_conditions)
+            .values(
+                # This guarded no-op is the first write in an occupancy operation.
+                # It acquires SQLite's single-writer lock without changing timestamps.
+                is_active=WarehouseLocation.is_active,
+                updated_at=WarehouseLocation.updated_at,
+            )
+            .execution_options(synchronize_session=False)
+        )
+    except OperationalError as error:
+        raise Floor3LocationError(
+            "目标货位正在被其他入库、移位或布局操作使用，请稍后重试",
+            status_code=409,
+        ) from error
     if result.rowcount == 1:
         return
     is_active = db.scalar(
@@ -370,6 +398,8 @@ def create_layout_slot(
     z_index: int,
     operator_id: int,
     placement_status: str = "placed",
+    layout_kind: str = "unknown",
+    source_type: str = "manual",
 ) -> WarehouseLocation:
     area = area_code.strip().upper()
     code = location_code.strip()
@@ -397,6 +427,10 @@ def create_layout_slot(
     ) + 1
     if placement_status not in {"placed", "unplaced"}:
         raise Floor3LocationError("库位布局状态无效")
+    if layout_kind not in {"unknown", "physical_pallet", "logical_anchor"}:
+        raise Floor3LocationError("货位点位类型无效")
+    if source_type not in {"manual", "seeded"}:
+        raise Floor3LocationError("货位点位来源无效")
     location = WarehouseLocation(
         location_code=code,
         location_name=location_name.strip(),
@@ -415,8 +449,12 @@ def create_layout_slot(
         width_pct=width_pct,
         height_pct=height_pct,
         z_index=z_index,
-        version=1,
-        source_type="manual",
+        # A freshly hand-created point is already an explicit fixed fact.  Use
+        # version 2 so it can never be confused with the historical system
+        # layouts that older releases mistakenly stored as manual/version 1.
+        version=2 if source_type == "manual" else 1,
+        source_type=source_type,
+        layout_kind=layout_kind,
         created_by=operator_id,
         updated_by=operator_id,
     )
@@ -469,6 +507,7 @@ def update_layout_area(
                 width_pct=slot["width_pct"],
                 height_pct=slot["height_pct"],
                 z_index=slot["z_index"],
+                source_type="manual",
                 version=slot["expected_version"] + 1,
                 updated_by=operator_id,
                 updated_at=beijing_now_naive(),
@@ -690,6 +729,24 @@ def adjust_area_location_count(
     enabled: list[WarehouseLocation] = []
     disabled: list[WarehouseLocation] = []
 
+    def auto_managed_layout(row: WarehouseLocation) -> bool:
+        layout = row.floor3_layout
+        if layout is None:
+            return False
+        # Count changes never infer provenance from manual/version 1.  Historical
+        # candidates become seeded only after the separate auto-arrange consent.
+        return layout.source_type == "seeded"
+
+    if target_count == current_count:
+        return Floor3AreaLocationCountResult(
+            area_code=area,
+            target_count=target_count,
+            active_count=current_count,
+            created=(),
+            enabled=(),
+            disabled=(),
+        )
+
     if target_count > current_count:
         needed = target_count - current_count
         reusable = [
@@ -697,6 +754,7 @@ def adjust_area_location_count(
             for row in all_rows
             if not row.is_active
             and row.floor3_layout is not None
+            and auto_managed_layout(row)
             and db.scalar(
                 select(InventoryPallet.id).where(
                     InventoryPallet.location_id == row.id,
@@ -704,11 +762,8 @@ def adjust_area_location_count(
                 ).limit(1)
             ) is None
             and db.scalar(
-                select(InventoryLot.id).where(
-                    InventoryLot.warehouse_location_id == row.id,
-                    InventoryLot.status.in_(("active", "frozen")),
-                ).limit(1)
-            ) is None
+                select(_active_inventory_exists(row.id))
+            ) is not True
         ]
         for row in reusable[:needed]:
             enabled.append(
@@ -750,6 +805,8 @@ def adjust_area_location_count(
                     z_index=0,
                     operator_id=operator_id,
                     placement_status="unplaced",
+                    layout_kind="logical_anchor",
+                    source_type="seeded",
                 )
                 created.append(row)
                 existing_serials.add(next_serial)
@@ -764,20 +821,19 @@ def adjust_area_location_count(
                     InventoryPallet.is_current.is_(True),
                 ).limit(1)
             ) is not None
-            has_inventory = db.scalar(
-                select(InventoryLot.id).where(
-                    InventoryLot.warehouse_location_id == row.id,
-                    InventoryLot.status.in_(("active", "frozen")),
-                ).limit(1)
-            ) is not None
+            has_inventory = bool(
+                db.scalar(select(_active_inventory_exists(row.id)))
+            )
             if not has_pallet and not has_inventory and row.floor3_layout is not None:
-                removable.append(row)
+                if auto_managed_layout(row):
+                    removable.append(row)
         if len(removable) < needed:
             raise Floor3LocationError(
-                f"只能减少 {len(removable)} 个空库位；有库存、预占或实体栈板的库位不会被移除",
+                f"只能减少 {len(removable)} 个空闲系统货位；占用或尚未明确接管的历史货位不会被移除，请先自动排布确认",
                 status_code=409,
             )
         for row in removable[:needed]:
+            assert row.floor3_layout is not None
             disabled.append(
                 set_layout_slot_active(
                     db,
@@ -1174,6 +1230,7 @@ def create_pallet(
     required_inventory_type: str | None = None,
     allowed_inventory_lot_id: int | None = None,
     require_no_live_inventory: bool = False,
+    expected_layout_version: int | None = None,
 ) -> InventoryPallet:
     official_items = [
         item for item in items if item.get("create_finished_inventory") is True
@@ -1189,6 +1246,7 @@ def create_pallet(
             ],
             remarks=remarks,
             operator_id=operator_id,
+            expected_layout_version=expected_layout_version,
         )
     location = (
         _operational_pallet_location(
@@ -1206,6 +1264,7 @@ def create_pallet(
             location,
             allowed_inventory_lot_id=allowed_inventory_lot_id,
             require_no_live_inventory=require_no_live_inventory,
+            expected_layout_version=expected_layout_version,
         )
     except Floor3LocationError as error:
         if str(error) == "目标货位已有当前栈板":
@@ -1272,6 +1331,7 @@ def _create_pallet_with_official_items(
     snapshot_items: list[dict],
     remarks: str | None,
     operator_id: int | None,
+    expected_layout_version: int | None,
 ) -> InventoryPallet:
     from app.services.warehouse_inventory import manual_finished_in
 
@@ -1326,6 +1386,7 @@ def _create_pallet_with_official_items(
             pallet_id=pallet_id,
             pallet_code=pallet_code if index == 0 else None,
             require_empty_pallet=pallet_id is None,
+            expected_layout_version=expected_layout_version,
         )
         pallet_item = db.scalar(
             select(InventoryPalletItem).where(
@@ -1987,6 +2048,7 @@ def move_pallet(
     operator_id: int | None,
     idempotency_key: str,
     require_published_target: bool = False,
+    expected_target_layout_version: int | None = None,
 ) -> Floor3MoveResult:
     existing = _movement_by_idempotency_key(db, idempotency_key)
     if existing is not None:
@@ -2042,6 +2104,7 @@ def move_pallet(
             db,
             target,
             require_no_live_inventory=require_published_target,
+            expected_layout_version=expected_target_layout_version,
         )
 
         # A duplicate may have committed while this request waited for that

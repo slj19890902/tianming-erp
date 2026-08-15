@@ -243,8 +243,9 @@ export function buildRackVisual(
 
 export function buildPalletVisual(pallet: Pallet, viewMode: ViewMode, violated: boolean) {
   const group = new THREE.Group();
-  const width = Math.max(pallet.width_mm, 400);
-  const depth = Math.max(pallet.depth_mm, 400);
+  const minimumFootprint = pallet.is_logical_anchor ? 180 : 400;
+  const width = Math.max(pallet.width_mm, minimumFootprint);
+  const depth = Math.max(pallet.depth_mm, minimumFootprint);
   const height = Math.max(pallet.height_mm, 90);
   const wood = violated ? "#dc2626" : pallet.color || "#b7793f";
   const darkWood = violated ? "#991b1b" : "#75431f";
@@ -300,8 +301,9 @@ export function buildPalletVisual(pallet: Pallet, viewMode: ViewMode, violated: 
 }
 
 export function palletMarkerSpec(pallet: Pallet, viewMode: ViewMode, violated: boolean) {
-  const width = Math.max(pallet.width_mm, 400);
-  const depth = Math.max(pallet.depth_mm, 400);
+  const minimumFootprint = pallet.is_logical_anchor ? 180 : 400;
+  const width = Math.max(pallet.width_mm, minimumFootprint);
+  const depth = Math.max(pallet.depth_mm, minimumFootprint);
   const state = palletStatusInfo(pallet.visual_status);
   const statusColor = violated ? "#dc2626" : state.color;
   const baseColor = violated ? "#991b1b" : pallet.color || "#9a6a3a";

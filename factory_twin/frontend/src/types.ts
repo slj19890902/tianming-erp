@@ -106,6 +106,7 @@ export interface Pallet {
   color: string;
   visual_status: "empty" | "waiting" | "in_process" | "completed" | "abnormal";
   status_note: string;
+  is_logical_anchor?: boolean;
   is_simulated: boolean;
   version: number;
   snapped: boolean;

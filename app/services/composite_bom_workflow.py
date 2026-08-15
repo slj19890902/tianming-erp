@@ -40,7 +40,13 @@ from app.services.production_label_strategy import (
     ProductionLabelStrategyError,
     build_new_task_production_label_snapshot,
 )
-from app.services.warehouse_inventory import _balances, _movement, utc_now_naive
+from app.services.warehouse_inventory import (
+    WarehouseInventoryError,
+    _balances,
+    _claim_inventory_destination,
+    _movement,
+    utc_now_naive,
+)
 
 
 DIRECT_DISPOSITION = "direct"  # existing database/API value; means direct kit.
@@ -1211,6 +1217,29 @@ def reverse_delivery_component_allocations(
     """Reverse only N039 snapshot-bound allocations for a cancelled delivery item."""
     if not operation_key or not operation_key.strip():
         raise CompositeBomWorkflowError("组件送货撤销缺少操作标识")
+    location_ids = db.scalars(
+            select(InventoryLot.warehouse_location_id)
+            .join(
+                InventoryReservation,
+                InventoryReservation.inventory_lot_id == InventoryLot.id,
+            )
+            .join(
+                DeliveryInventoryAllocation,
+                DeliveryInventoryAllocation.reservation_id
+                == InventoryReservation.id,
+            )
+            .where(
+                DeliveryInventoryAllocation.delivery_item_id == delivery_item_id,
+                DeliveryInventoryAllocation.status.in_(ACTIVE_RESERVATION_STATUSES),
+                InventoryReservation.sales_order_item_bom_component_id.is_not(None),
+            )
+            .distinct()
+        ).all()
+    try:
+        for location_id in sorted({int(value) for value in location_ids}):
+            _claim_inventory_destination(db, location_id)
+    except WarehouseInventoryError as error:
+        raise CompositeBomWorkflowError(str(error)) from error
     with db.begin_nested():
         direct_rows = db.scalars(
             select(BomComponentDirectDeliveryAllocation).where(

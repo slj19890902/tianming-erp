@@ -5,7 +5,8 @@ from hashlib import sha256
 import json
 from typing import Iterable
 
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.core.time_contract import (
@@ -34,6 +35,7 @@ from app.services import (
     inventory_onboarding,
     stocktake as stocktake_service,
 )
+from app.services.location_candidates import claim_active_placed_location
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     manual_finished_in,
@@ -364,18 +366,47 @@ def _lock_and_recheck(
     )
     if not location_ids:
         return get_posting_for_batch(db, batch.id)
-    parameters = {
-        f"location_{index}": location_id
-        for index, location_id in enumerate(location_ids)
-    }
-    placeholders = ", ".join(f":{key}" for key in parameters)
-    db.execute(
-        text(
-            "UPDATE warehouse_locations SET id = id "
-            f"WHERE id IN ({placeholders})"
-        ),
-        parameters,
-    )
+    expected_versions: dict[int, set[int | None]] = defaultdict(set)
+    for line in lines:
+        location_id = int(target_location_ids[line.id])
+        evidence = (
+            line.match_evidence_json
+            if isinstance(line.match_evidence_json, dict)
+            else {}
+        )
+        location_evidence = evidence.get("location")
+        expected_version: int | None = None
+        if (
+            isinstance(location_evidence, dict)
+            and int(location_evidence.get("id") or 0) == location_id
+            and location_evidence.get("layout_version") is not None
+        ):
+            expected_version = int(location_evidence["layout_version"])
+        expected_versions[location_id].add(expected_version)
+    for location_id in location_ids:
+        versions = expected_versions.get(location_id, {None})
+        if len(versions) != 1:
+            raise _error(
+                "同一目标库位的地图版本快照不一致，请重新盘点",
+                code="INVENTORY_ONBOARDING_POSTING_LOCATION_LAYOUT_STALE",
+            )
+        expected_version = next(iter(versions))
+        try:
+            claimed = claim_active_placed_location(
+                db,
+                location_id,
+                expected_layout_version=expected_version,
+            )
+        except OperationalError as error:
+            raise _error(
+                "目标库位正在被其他操作更新，请稍后重试",
+                code="INVENTORY_ONBOARDING_POSTING_LOCATION_BUSY",
+            ) from error
+        if not claimed:
+            raise _error(
+                "目标库位状态或地图位置已变化，请重新盘点后再正式入账",
+                code="INVENTORY_ONBOARDING_POSTING_LOCATION_LAYOUT_STALE",
+            )
 
     replay = get_posting_for_batch(db, batch.id)
     if replay is not None:
@@ -583,6 +614,7 @@ def _manual_in(
     pallet: InventoryPallet,
     operator: User,
     target_location_id: int,
+    expected_layout_version: int | None,
 ) -> tuple[InventoryLot, InventoryMovement, InventoryPalletItem]:
     stock_date = source.stock_date or source.stocktake_date
     if stock_date is None:
@@ -616,6 +648,7 @@ def _manual_in(
                 stock_date_accuracy=str(source.stock_date_accuracy),
                 stock_date_original_text=source.stock_date_original_text,
                 is_general=is_general,
+                expected_layout_version=expected_layout_version,
             )
         else:
             lot = manual_semi_finished_in(
@@ -655,6 +688,7 @@ def _manual_in(
                 movement_reason=MOVEMENT_REASON,
                 stock_date_accuracy=str(source.stock_date_accuracy),
                 stock_date_original_text=source.stock_date_original_text,
+                expected_layout_version=expected_layout_version,
             )
     except (TypeError, WarehouseInventoryError) as error:
         raise _error(
@@ -718,6 +752,7 @@ def _apply_existing_stocktakes(
     relocation_pallet_ids: list[int] = []
     for pallet_id, pallet_lines in sorted(pallet_groups.items()):
         target_ids: set[int] = set()
+        target_layout_versions: set[int | None] = set()
         expected_versions: set[int] = set()
         mark_relocation = False
         for line in pallet_lines:
@@ -743,6 +778,11 @@ def _apply_existing_stocktakes(
                 target_id = requested_location.get("target_location_id")
                 if requested_location.get("move_required") and target_id:
                     target_ids.add(int(target_id))
+                    target_layout_versions.add(
+                        int(requested_location["layout_version"])
+                        if requested_location.get("layout_version") is not None
+                        else None
+                    )
                 mark_relocation = mark_relocation or bool(
                     requested_location.get("mark_needs_relocation")
                 )
@@ -756,6 +796,11 @@ def _apply_existing_stocktakes(
                 "同一栈板不能填写多个现场目标库位",
                 code="INVENTORY_ONBOARDING_POSTING_PALLET_TARGET_CONFLICT",
             )
+        if len(target_layout_versions) > 1:
+            raise _error(
+                "同一目标库位的地图版本快照不一致，请重新导出盘点表",
+                code="INVENTORY_ONBOARDING_POSTING_LOCATION_LAYOUT_STALE",
+            )
         expected_version = next(iter(expected_versions))
         try:
             if target_ids:
@@ -768,6 +813,11 @@ def _apply_existing_stocktakes(
                     operator_id=operator.id,
                     idempotency_key=(
                         f"n081-post-b{batch.id}-p{pallet_id}-move"
+                    ),
+                    expected_target_layout_version=(
+                        next(iter(target_layout_versions))
+                        if target_layout_versions
+                        else None
                     ),
                 )
                 location_movement_ids.append(move.movement.id)
@@ -807,6 +857,28 @@ def _apply_existing_stocktakes(
     order_ids: list[int] = []
     results: list[dict[str, object]] = []
     for location_id, location_lines in sorted(grouped.items()):
+        location_layout_versions: set[int | None] = set()
+        for line in location_lines:
+            evidence = (
+                line.match_evidence_json
+                if isinstance(line.match_evidence_json, dict)
+                else {}
+            )
+            location_evidence = evidence.get("location")
+            snapshot_version: int | None = None
+            if (
+                isinstance(location_evidence, dict)
+                and int(location_evidence.get("id") or 0) == location_id
+                and location_evidence.get("layout_version") is not None
+            ):
+                snapshot_version = int(location_evidence["layout_version"])
+            location_layout_versions.add(snapshot_version)
+        if len(location_layout_versions) != 1:
+            raise _error(
+                "同一盘点位置的地图版本快照不一致，请重新导出盘点表",
+                code="INVENTORY_ONBOARDING_POSTING_LOCATION_LAYOUT_STALE",
+            )
+        location_layout_version = next(iter(location_layout_versions))
         by_lot = {
             int(line.existing_lot_id): line for line in location_lines
         }
@@ -849,6 +921,7 @@ def _apply_existing_stocktakes(
                     f"n081-post-b{batch.id}-loc{location_id}-count"
                 ),
                 submitter=operator,
+                location_layout_version=location_layout_version,
             )
             order = stocktake_service.approve_stocktake(
                 db,
@@ -1028,6 +1101,18 @@ def post_submitted_batch(
     line_results: list[dict[str, object]] = list(existing_line_results)
     for source in new_lines:
         pallet = pallets[str(source.pallet_code)]
+        source_evidence = (
+            source.match_evidence_json
+            if isinstance(source.match_evidence_json, dict)
+            else {}
+        )
+        location_evidence = source_evidence.get("location")
+        expected_layout_version = (
+            int(location_evidence["layout_version"])
+            if isinstance(location_evidence, dict)
+            and location_evidence.get("layout_version") is not None
+            else None
+        )
         lot, movement, item = _manual_in(
             db,
             batch=batch,
@@ -1035,6 +1120,7 @@ def post_submitted_batch(
             pallet=pallet,
             operator=operator,
             target_location_id=target_location_ids[source.id],
+            expected_layout_version=expected_layout_version,
         )
         lot_ids.append(lot.id)
         movement_ids.append(movement.id)

@@ -1189,6 +1189,17 @@ body.warehouse-twin-page {
 .twin-zone-simple-planner > button.confirm:disabled { cursor: not-allowed; opacity: .45; }
 .twin-zone-simple-planner > p { margin: 0; color: #5e737b; font-size: 9px; line-height: 1.45; text-align: center; }
 .twin-zone-simple-planner > button.advanced-toggle { min-height: 30px; border: 0; border-top: 1px solid #c9ddd9; color: #667b82; background: transparent; font-size: 9px; }
+.twin-zone-simple-planner > button.advanced-toggle:disabled { cursor: not-allowed; opacity: .45; }
+.twin-location-point-planner { padding: 10px; display: grid; gap: 8px; border: 1px solid #9fc8c2; border-radius: 5px; background: #fff; }
+.twin-location-point-planner > div:first-child { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.twin-location-point-planner b { color: #164d56; font-size: 11px; }
+.twin-location-point-planner small { color: #687b83; font-size: 8px; text-align: right; }
+.twin-location-point-planner .actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.twin-location-point-planner button { min-height: 38px; padding: 6px 8px; border: 1px solid #0f766e; border-radius: 4px; color: #0f665f; background: #fff; font-size: 10px; font-weight: 900; }
+.twin-location-point-planner button.save,
+.twin-location-point-planner button.auto { color: #fff; background: #0f766e; }
+.twin-location-point-planner button:disabled { cursor: not-allowed; opacity: .45; }
+.twin-location-point-planner p { margin: 0; color: #705b22; font-size: 9px; line-height: 1.55; }
 
 .twin-workspace.location-editing .twin-rack-layout-editor,
 .twin-workspace.location-editing .twin-zone-policy-editor { padding: 13px; }

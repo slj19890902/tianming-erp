@@ -840,6 +840,7 @@ def _create_surplus_lot(
     location_id: int,
     user_id: int,
     reason: str | None,
+    expected_layout_version: int | None = None,
 ) -> InventoryLot:
     item = target.order_item
     snapshot = getattr(target, "bom_snapshot", None)
@@ -908,6 +909,7 @@ def _create_surplus_lot(
             source_ref_type="incoming_receipt_item",
             source_ref_id=receipt_item.id,
             material_id=material_id,
+            expected_layout_version=expected_layout_version,
         )
     except WarehouseInventoryError as error:
         raise IncomingReceiptError(str(error), error.status_code) from error
@@ -1191,6 +1193,7 @@ def receive_one(
     resolution_reason: str | None,
     surplus_location_id: int | None,
     idempotency_key: str | None,
+    expected_surplus_layout_version: int | None = None,
     audit_context: dict[str, object] | None = None,
 ) -> IncomingReceiptItem:
     key = (idempotency_key or "").strip() or uuid4().hex
@@ -1282,6 +1285,7 @@ def receive_one(
             location_id=int(surplus_location_id or 0),
             user_id=user.id,
             reason=resolution_reason,
+            expected_layout_version=expected_surplus_layout_version,
         )
         receipt_item.surplus_inventory_lot_id = lot.id
 

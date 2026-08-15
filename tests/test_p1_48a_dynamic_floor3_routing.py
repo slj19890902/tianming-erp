@@ -10,12 +10,14 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.api import warehouse as warehouse_api
 from app.api.auth import router as auth_router
 from app.api.deps import get_db
 from app.api.warehouse import router as warehouse_router
 from app.core.database import create_sqlite_engine
 from app.core.security import hash_password
 from app.models import Base
+from app.models.audit import OperationLog
 from app.models.user import User
 from app.models.warehouse_inventory import (
     Floor3LocationLayout,
@@ -168,17 +170,26 @@ def test_dynamic_floor3_area_uses_formal_lifecycle_and_keeps_location_ids(
             "area_code": "FG-004",
             "management_mode": "formal_area",
             "source_version": "TWIN_V1",
-            "available_actions": [
-                "location_count",
-                "layout",
-                "disable_empty",
-                "enable_empty",
-            ],
-        }
+                "available_actions": [
+                    "location_count",
+                    "layout",
+                    "auto_arrange",
+                    "disable_empty",
+                    "enable_empty",
+                ],
+                "policy_version": 1,
+                "published_map_revision": None,
+                "requires_area_confirmation": False,
+            }
 
         created = client.post(
             "/api/warehouse/spatial-layout/floors/3F/areas/FG-004/location-count",
-            json={"target_count": 2, "confirmed": True},
+            json={
+                "target_count": 2,
+                "confirmed": True,
+                "expected_policy_version": 1,
+                "expected_layout_versions": {},
+            },
         )
         assert created.status_code == 200, created.text
         created_body = created.json()
@@ -193,7 +204,15 @@ def test_dynamic_floor3_area_uses_formal_lifecycle_and_keeps_location_ids(
         }
         replay = client.post(
             "/api/warehouse/spatial-layout/floors/3F/areas/FG-004/location-count",
-            json={"target_count": 2, "confirmed": True},
+            json={
+                "target_count": 2,
+                "confirmed": True,
+                "expected_policy_version": created_body["policy_version"],
+                "expected_layout_versions": {
+                    str(item["location"]["id"]): item["layout"]["version"]
+                    for item in created_body["items"]
+                },
+            },
         )
         assert replay.status_code == 200, replay.text
         assert replay.json()["created_count"] == 0
@@ -223,20 +242,29 @@ def test_dynamic_floor3_area_uses_formal_lifecycle_and_keeps_location_ids(
             )
         layout_response = client.patch(
             "/api/warehouse/spatial-layout/floors/3F/areas/FG-004",
-            json={"slots": slots},
+            json={
+                "expected_policy_version": created_body["policy_version"],
+                "slots": slots,
+            },
         )
         assert layout_response.status_code == 200, layout_response.text
         first_version = layout_response.json()["items"][0]["version"]
         disabled = client.post(
             f"/api/warehouse/spatial-layout/locations/{location_ids[0]}/disable",
-            json={"expected_version": first_version},
+            json={
+                "expected_version": first_version,
+                "expected_policy_version": layout_response.json()["policy_version"],
+            },
         )
         assert disabled.status_code == 200, disabled.text
         assert disabled.json()["location"]["id"] == location_ids[0]
         assert disabled.json()["location"]["is_active"] is False
         enabled = client.post(
             f"/api/warehouse/spatial-layout/locations/{location_ids[0]}/enable",
-            json={"expected_version": disabled.json()["layout"]["version"]},
+            json={
+                "expected_version": disabled.json()["layout"]["version"],
+                "expected_policy_version": disabled.json()["policy_version"],
+            },
         )
         assert enabled.status_code == 200, enabled.text
         assert enabled.json()["location"]["id"] == location_ids[0]
@@ -271,8 +299,37 @@ def test_dynamic_floor3_area_uses_formal_lifecycle_and_keeps_location_ids(
             assert [row.location.id for row in candidates if row.location.area_code == "FG-004"] == location_ids
 
 
-def test_old_floor3_area_stays_v11_and_unified_endpoint_delegates(routing_app) -> None:
+def test_old_floor3_area_stays_v11_and_unified_endpoint_delegates(
+    routing_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     app, factory = routing_app
+    monkeypatch.setattr(
+        warehouse_api,
+        "load_warehouse_twin_floor",
+        lambda _floor_code: {
+            "floor_code": "3F",
+            "revision": "old-v11",
+            "bounds_mm": {"min_x": 0, "min_y": 0, "max_x": 10_000, "max_y": 10_000},
+            "structures": [],
+            "placements": [],
+            "racks": [],
+            "features": [
+                {
+                    "id": "zone-3f-a1",
+                    "feature_kind": "zone",
+                    "feature_code": "ZONE-3F-ERP-A1",
+                    "points": [[0, 0], [10_000, 0], [10_000, 10_000], [0, 10_000]],
+                }
+            ],
+        },
+    )
+    with factory() as db:
+        old_location = db.scalar(
+            select(WarehouseLocation).where(WarehouseLocation.area_code == "A1")
+        )
+        assert old_location is not None and old_location.floor3_layout is not None
+        old_snapshot = {str(old_location.id): old_location.floor3_layout.version}
     with TestClient(app) as client:
         _login(client, "p1-48a-admin")
         route = client.get(
@@ -282,7 +339,13 @@ def test_old_floor3_area_stays_v11_and_unified_endpoint_delegates(routing_app) -
         assert route.json()["management_mode"] == "floor3_v11"
         grown = client.post(
             "/api/warehouse/spatial-layout/floors/3F/areas/A1/location-count",
-            json={"target_count": 2, "confirmed": True},
+            json={
+                "target_count": 2,
+                "confirmed": True,
+                "expected_map_revision": "old-v11",
+                "expected_policy_version": route.json()["policy_version"],
+                "expected_layout_versions": old_snapshot,
+            },
         )
         assert grown.status_code == 200, grown.text
         assert grown.json()["management_mode"] == "floor3_v11"
@@ -294,6 +357,149 @@ def test_old_floor3_area_stays_v11_and_unified_endpoint_delegates(routing_app) -
                     WarehouseLocation.is_active.is_(True),
                 )
             ) == 2
+
+
+def test_published_v11_area_auto_count_and_manual_layout_share_one_safe_contract(
+    routing_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, factory = routing_app
+    measured_layout = {
+        "floor_code": "3F",
+        "revision": "old-v11",
+        "bounds_mm": {"min_x": 0, "min_y": 0, "max_x": 10_000, "max_y": 10_000},
+        "structures": [],
+        "placements": [],
+        "racks": [],
+        "features": [
+            {
+                "id": "zone-3f-a1",
+                "feature_kind": "zone",
+                "feature_code": "ZONE-3F-ERP-A1",
+                "points": [[0, 0], [10_000, 0], [10_000, 10_000], [0, 10_000]],
+            }
+        ],
+    }
+    monkeypatch.setattr(
+        warehouse_api,
+        "load_warehouse_twin_floor",
+        lambda _floor_code: measured_layout,
+    )
+
+    with TestClient(app) as client:
+        _login(client, "p1-48a-admin")
+        management = client.get(
+            "/api/warehouse/spatial-layout/floors/3F/areas/A1/management"
+        ).json()
+        with factory() as db:
+            location = db.scalar(
+                select(WarehouseLocation).where(
+                    WarehouseLocation.area_code == "A1",
+                    WarehouseLocation.source_version == "V11",
+                )
+            )
+            assert location is not None and location.floor3_layout is not None
+            location_id = location.id
+            version = location.floor3_layout.version
+
+        arranged = client.post(
+            "/api/warehouse/spatial-layout/floors/3F/areas/A1/auto-arrange",
+            json={
+                "confirmed": True,
+                "adopt_historical_layouts": True,
+                "expected_map_revision": management["published_map_revision"],
+                "expected_policy_version": management["policy_version"],
+                "expected_layout_versions": {str(location_id): version},
+            },
+        )
+        assert arranged.status_code == 200, arranged.text
+        assert arranged.json()["auto_arranged_count"] == 1
+        assert arranged.json()["historical_adopted_count"] == 1
+        arranged_layout = arranged.json()["items"][0]
+        assert arranged_layout["layout_kind"] == "physical_pallet"
+
+        stale = client.post(
+            "/api/warehouse/spatial-layout/floors/3F/areas/A1/auto-arrange",
+            json={
+                "confirmed": True,
+                "expected_map_revision": "old-v11",
+                "expected_policy_version": 1,
+                "expected_layout_versions": {str(location_id): version},
+            },
+        )
+        assert stale.status_code == 409
+
+        manual = client.patch(
+            "/api/warehouse/spatial-layout/floors/3F/areas/A1",
+            json={
+                "expected_map_revision": "old-v11",
+                "expected_policy_version": arranged.json()["policy_version"],
+                "slots": [
+                    {
+                        "location_id": location_id,
+                        "expected_version": arranged_layout["version"],
+                        "left_pct": 5,
+                        "top_pct": 5,
+                        "width_pct": arranged_layout["width_pct"],
+                        "height_pct": arranged_layout["height_pct"],
+                        "z_index": 0,
+                    }
+                ],
+            },
+        )
+        assert manual.status_code == 200, manual.text
+        manual_layout = manual.json()["items"][0]
+        assert manual_layout["source_type"] == "manual"
+        assert manual_layout["version"] == arranged_layout["version"] + 1
+
+        grown = client.post(
+            "/api/warehouse/spatial-layout/floors/3F/areas/A1/location-count",
+            json={
+                "target_count": 2,
+                "confirmed": True,
+                "expected_map_revision": "old-v11",
+                "expected_policy_version": manual.json()["policy_version"],
+                "expected_layout_versions": {
+                    str(location_id): manual_layout["version"]
+                },
+            },
+        )
+        assert grown.status_code == 200, grown.text
+        assert grown.json()["created_count"] == 1
+        assert grown.json()["active_count"] == 2
+
+        with factory() as db:
+            sources = set(
+                db.scalars(
+                    select(WarehouseLocation.source_version).where(
+                        WarehouseLocation.area_code == "A1"
+                    )
+                ).all()
+            )
+            assert sources == {"V11"}
+            manual_log = db.scalar(
+                select(OperationLog)
+                .where(OperationLog.entity_id == location_id)
+                .order_by(OperationLog.id.desc())
+            )
+            assert manual_log is not None
+            details = json.loads(manual_log.details)
+            assert details["before"]["version"] == arranged_layout["version"]
+            assert details["after"]["version"] == manual_layout["version"]
+
+        _login(client, "p1-48a-workshop")
+        forbidden = client.post(
+            "/api/warehouse/spatial-layout/floors/3F/areas/A1/auto-arrange",
+            json={
+                "confirmed": True,
+                "expected_map_revision": "old-v11",
+                "expected_policy_version": 1,
+                "expected_layout_versions": {
+                    str(location_id): manual_layout["version"]
+                },
+            },
+        )
+        assert forbidden.status_code == 403
 
 
 def test_dynamic_floor3_raw_policy_creates_shared_pallet_location(
@@ -332,7 +538,12 @@ def test_dynamic_floor3_raw_policy_creates_shared_pallet_location(
         _login(client, "p1-48a-admin")
         response = client.post(
             "/api/warehouse/spatial-layout/floors/3F/areas/RAW-001/location-count",
-            json={"target_count": 1, "confirmed": True},
+            json={
+                "target_count": 1,
+                "confirmed": True,
+                "expected_policy_version": 1,
+                "expected_layout_versions": {},
+            },
         )
         assert response.status_code == 200, response.text
         assert response.json()["created_count"] == 1
@@ -392,7 +603,12 @@ def test_dynamic_floor3_inventory_policy_controls_candidate_type(
         _login(client, "p1-48a-admin")
         created = client.post(
             f"/api/warehouse/spatial-layout/floors/3F/areas/{area_code}/location-count",
-            json={"target_count": 1, "confirmed": True},
+            json={
+                "target_count": 1,
+                "confirmed": True,
+                "expected_policy_version": 1,
+                "expected_layout_versions": {},
+            },
         )
         assert created.status_code == 200, created.text
         item = created.json()["items"][0]
@@ -401,6 +617,7 @@ def test_dynamic_floor3_inventory_policy_controls_candidate_type(
         placed = client.patch(
             f"/api/warehouse/spatial-layout/floors/3F/areas/{area_code}",
             json={
+                "expected_policy_version": created.json()["policy_version"],
                 "slots": [
                     {
                         "location_id": location_id,
@@ -448,7 +665,12 @@ def test_nonempty_dynamic_location_cannot_be_disabled(routing_app) -> None:
         _login(client, "p1-48a-admin")
         created = client.post(
             "/api/warehouse/spatial-layout/floors/3F/areas/FG-004/location-count",
-            json={"target_count": 1, "confirmed": True},
+            json={
+                "target_count": 1,
+                "confirmed": True,
+                "expected_policy_version": 1,
+                "expected_layout_versions": {},
+            },
         )
         assert created.status_code == 200, created.text
         item = created.json()["items"][0]
@@ -479,7 +701,10 @@ def test_nonempty_dynamic_location_cannot_be_disabled(routing_app) -> None:
         _login(client, "p1-48a-admin")
         response = client.post(
             f"/api/warehouse/spatial-layout/locations/{location_id}/disable",
-            json={"expected_version": expected_version},
+            json={
+                "expected_version": expected_version,
+                "expected_policy_version": created.json()["policy_version"],
+            },
         )
         assert response.status_code == 409, response.text
         assert "库存" in response.text

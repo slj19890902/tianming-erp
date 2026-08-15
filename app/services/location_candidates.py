@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 
-from sqlalchemy import and_, exists, func, or_, select
+from sqlalchemy import and_, exists, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.models.warehouse_inventory import (
@@ -85,6 +85,71 @@ def location_has_live_inventory(db: Session, location_id: int) -> bool:
             .limit(1)
         )
     )
+
+
+def _current_pallet_exists(location_id_expression):
+    return exists(
+        select(InventoryPallet.id).where(
+            InventoryPallet.location_id == location_id_expression,
+            InventoryPallet.is_current.is_(True),
+        )
+    )
+
+
+def claim_active_placed_location(
+    db: Session,
+    location_id: int,
+    *,
+    expected_layout_version: int | None = None,
+) -> bool:
+    """Serialize a destination write with layout/state changes on one location.
+
+    The guarded no-op is deliberately the first physical write in inventory
+    workflows.  SQLite obtains its writer lock here; databases with row-level
+    locking serialize on the same warehouse-location row.
+    """
+
+    conditions = [
+        WarehouseLocation.id == location_id,
+        WarehouseLocation.is_active.is_(True),
+        _placed_condition(),
+    ]
+    layout_exists = exists(
+        select(Floor3LocationLayout.id).where(
+            Floor3LocationLayout.location_id == WarehouseLocation.id,
+        )
+    )
+    if expected_layout_version is not None:
+        conditions.append(
+            exists(
+                select(Floor3LocationLayout.id).where(
+                    Floor3LocationLayout.location_id == WarehouseLocation.id,
+                    Floor3LocationLayout.version == expected_layout_version,
+                )
+            )
+        )
+    else:
+        # A mapped empty slot is allowed to move automatically.  Any workflow
+        # that would make it occupied must therefore prove which map version
+        # the operator selected. Existing occupied slots are already fixed and
+        # may accept same-location quantity changes without a map token.
+        conditions.append(
+            or_(
+                ~layout_exists,
+                _live_inventory_exists(WarehouseLocation.id),
+                _current_pallet_exists(WarehouseLocation.id),
+            )
+        )
+    result = db.execute(
+        update(WarehouseLocation)
+        .where(*conditions)
+        .values(
+            is_active=WarehouseLocation.is_active,
+            updated_at=WarehouseLocation.updated_at,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    return result.rowcount == 1
 
 
 def operational_location_condition(
@@ -413,6 +478,11 @@ def operational_location_payload(row: OperationalLocationRow) -> dict:
         "storage_type": location.storage_type,
         "is_temporary": bool(location.is_temporary),
         "placement_status": location.placement_status or "placed",
+        "layout_version": (
+            int(location.floor3_layout.version)
+            if location.floor3_layout is not None
+            else None
+        ),
         "sort_order": int(location.sort_order or 0),
         "occupied": row.occupied,
         "is_empty": not row.occupied,

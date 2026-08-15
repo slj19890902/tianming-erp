@@ -17,6 +17,7 @@ from app.models.warehouse_inventory import (
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     _balances,
+    _claim_inventory_destination,
     _movement,
 )
 
@@ -181,6 +182,14 @@ def _restore_allocation_quantity(
     )
     if quantity <= 0 or quantity > remaining:
         raise WarehouseInventoryError("库存冲回数量超过本次送货原批次余额", 409)
+    location_id = db.scalar(
+        select(InventoryLot.warehouse_location_id).where(
+            InventoryLot.id == allocation.inventory_lot_id
+        )
+    )
+    if location_id is None:
+        raise WarehouseInventoryError("冲回库存批次或关联库位不存在", 409)
+    _claim_inventory_destination(db, int(location_id))
     lot = _validated_customer_lot(
         db,
         delivery=delivery,

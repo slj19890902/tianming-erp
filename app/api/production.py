@@ -73,6 +73,7 @@ class CompletionBatchItem(BaseModel):
     defective_quantity: int | None = Field(default=None, ge=0)
     direct_delivery_quantity: int | None = Field(default=None, ge=0)
     location_id: int | None = Field(default=None, gt=0)
+    expected_layout_version: int | None = Field(default=None, gt=0)
     pallet_id: int | None = Field(default=None, gt=0)
     pallet_code: str | None = Field(default=None, max_length=100)
     remarks: str | None = Field(default=None, max_length=1000)
@@ -117,6 +118,7 @@ class CompletionBatchRequest(BaseModel):
 class StockTransferRequest(BaseModel):
     idempotency_key: str = Field(min_length=1, max_length=120)
     location_id: int = Field(gt=0)
+    expected_layout_version: int | None = Field(default=None, gt=0)
     pallet_id: int | None = Field(default=None, gt=0)
     pallet_code: str | None = Field(default=None, max_length=100)
     remarks: str | None = Field(default=None, max_length=1000)
@@ -519,6 +521,7 @@ def post_completion_batch(
                     defective_quantity=item.defective_quantity,
                     direct_delivery_quantity=item.direct_delivery_quantity,
                     location_id=item.location_id,
+                    expected_layout_version=item.expected_layout_version,
                     pallet_id=item.pallet_id,
                     pallet_code=item.pallet_code,
                     remarks=item.remarks,
@@ -636,6 +639,7 @@ def post_completion_stock_transfer(
             command=StockTransferCommand(
                 location_id=payload.location_id,
                 idempotency_key=payload.idempotency_key,
+                expected_layout_version=payload.expected_layout_version,
                 pallet_id=payload.pallet_id,
                 pallet_code=payload.pallet_code,
                 remarks=payload.remarks,

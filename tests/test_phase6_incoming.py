@@ -913,6 +913,98 @@ def test_surplus_inventory_in_use_blocks_receipt_revert(
         assert session.get(OrderItem, 1).material_status == "received"
 
 
+def test_over_receipt_requires_selected_location_layout_version(
+    incoming_api_app,
+) -> None:
+    from app.models.incoming_receipt import IncomingReceipt
+    from app.models.order import OrderItem
+    from app.models.warehouse_inventory import (
+        Floor3LocationLayout,
+        WarehouseLocation,
+    )
+
+    app, session_factory = incoming_api_app
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        item.requisition_qty = 100
+        item.cardboard_len = 1200
+        item.cardboard_width = 800
+        item.layer_count = 5
+        item.flute_type = "AB"
+        item.snapshot_material = "K616K"
+        location = WarehouseLocation(
+            location_code="N005-SI-MAPPED",
+            location_name="N005半成品地图位",
+            warehouse_type="semi_finished",
+            warehouse_floor=3,
+            placement_status="placed",
+            is_active=True,
+        )
+        session.add(location)
+        session.flush()
+        layout = Floor3LocationLayout(
+            location_id=location.id,
+            left_pct=10,
+            top_pct=10,
+            width_pct=12,
+            height_pct=10,
+            layout_kind="physical_pallet",
+            source_type="seeded",
+            version=1,
+        )
+        session.add(layout)
+        session.commit()
+        location_id = location.id
+
+    with TestClient(app) as client:
+        _login(client, "workshop")
+        candidates = client.get("/api/incoming/surplus-locations")
+        assert candidates.status_code == 200, candidates.text
+        selected = next(
+            row
+            for row in candidates.json()["items"]
+            if row["id"] == location_id
+        )
+        assert selected["layout_version"] == 1
+
+        with session_factory() as session:
+            layout = session.scalar(
+                select(Floor3LocationLayout).where(
+                    Floor3LocationLayout.location_id == location_id
+                )
+            )
+            layout.left_pct = 40
+            layout.version = 2
+            session.commit()
+
+        stale = client.put(
+            "/api/incoming/receive/1",
+            json={
+                "received_quantity": 102,
+                "resolution_action": "transfer_to_semi_inventory",
+                "surplus_location_id": location_id,
+                "expected_surplus_layout_version": 1,
+                "idempotency_key": "over-to-mapped-stale",
+            },
+        )
+        assert stale.status_code == 409, stale.text
+
+        current = client.put(
+            "/api/incoming/receive/1",
+            json={
+                "received_quantity": 102,
+                "resolution_action": "transfer_to_semi_inventory",
+                "surplus_location_id": location_id,
+                "expected_surplus_layout_version": 2,
+                "idempotency_key": "over-to-mapped-current",
+            },
+        )
+        assert current.status_code == 200, current.text
+
+    with session_factory() as session:
+        assert int(session.scalar(select(func.count(IncomingReceipt.id))) or 0) == 1
+
+
 def test_over_receipt_all_to_production_does_not_create_inventory(
     incoming_api_app,
 ) -> None:

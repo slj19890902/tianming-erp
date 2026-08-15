@@ -256,7 +256,10 @@ def test_area_planning_defaults_to_one_result_oriented_confirmation() -> None:
     assert 'max_pallet_capacity: capacity' in SOURCE
     assert 'setPlanningPublishedRevision(result.published_revision)' in SOURCE
     assert "原有高级维护草稿已保留，没有随本次确认发布" in SOURCE
-    assert 'palletEditingOnly={(locationEditMode && advancedAreaMaintenanceOpen) || warehouseMoveModeActive}' in SOURCE
+    assert 'palletEditingOnly={(locationEditMode && (advancedAreaMaintenanceOpen || Boolean(locationPointEditAreaCode))) || warehouseMoveModeActive}' in SOURCE
+    assert "调整货位点位" in SOURCE
+    assert "自动均匀排布空闲系统货位" in SOURCE
+    assert "逻辑货位点（非实尺度）" in SOURCE
     assert 'rackEditingEnabled={locationEditMode && advancedAreaMaintenanceOpen}' in SOURCE
     assert '区域规划 · 一次确认' in SOURCE
     assert "advancedAreaMaintenanceOpen && <div className=\"twin-layout-draft-workflow\"" in SOURCE
@@ -332,7 +335,8 @@ def test_phase2c8_keeps_location_layout_editing_in_2d_and_25d_read_only() -> Non
     assert "available_actions" in SOURCE
     assert "系统按区域自动生成内部唯一编码" in SOURCE
     assert "/api/warehouse/spatial-layout/locations/${selectedLocation.location_id}/disable" in SOURCE
-    assert "palletEditingOnly={(locationEditMode && advancedAreaMaintenanceOpen) || warehouseMoveModeActive}" in SOURCE
+    assert "palletEditingOnly={(locationEditMode && (advancedAreaMaintenanceOpen || Boolean(locationPointEditAreaCode))) || warehouseMoveModeActive}" in SOURCE
+    assert 'readOnly={(!locationEditMode || (!advancedAreaMaintenanceOpen && !locationPointEditAreaCode)) && !warehouseMoveModeActive}' in SOURCE
     assert "rackEditingEnabled={locationEditMode && advancedAreaMaintenanceOpen}" in SOURCE
     assert "featureEditingEnabled={locationEditMode && advancedAreaMaintenanceOpen && areaPolicyEditMode}" in SOURCE
     assert "选择区域或设备" not in SOURCE

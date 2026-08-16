@@ -73,6 +73,7 @@ from app.models.warehouse_inventory import (
     WarehouseLocation,
 )
 from app.services.history_orders import build_display_registry, display_order_number
+from app.services.fulfillment_reminders import list_delivery_reminders
 from app.services.location_candidates import is_operational_location
 from app.services.warehouse_floor1_candidate_planner import (
     overlay_formal_area_bindings,
@@ -1558,6 +1559,7 @@ def _pending_query(
             Order.customer_po,
             Order.customer_id,
             Customer.name.label("customer_name"),
+            Product.id.label("product_id"),
             Product.product_code,
             OrderItem.snapshot_product_name.label("product_name"),
             OrderItem.snapshot_spec.label("specification"),
@@ -6627,6 +6629,25 @@ def pending_delivery_customer_options(
             pending_summaries=summaries,
         )
     }
+
+
+@router.get("/fulfillment-reminders")
+def get_delivery_fulfillment_reminders(
+    customer_id: int = Query(gt=0),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=100, ge=1, le=100),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    """Return the current customer's internal delivery reminders in one page."""
+
+    require_customer_access(customer_id, user, db)
+    return list_delivery_reminders(
+        db,
+        customer_id=customer_id,
+        page=page,
+        page_size=page_size,
+    )
 
 
 @router.get("/pending-items/search")

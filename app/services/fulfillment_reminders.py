@@ -692,6 +692,68 @@ def list_receipt_reminders(
     }
 
 
+def list_delivery_reminders(
+    db: Session,
+    *,
+    customer_id: int,
+    page: int,
+    page_size: int,
+) -> dict:
+    """Project active due reminders into the delivery workbench.
+
+    Receipt-only notes intentionally stop at the source receipt.  Delivery
+    operators receive customer and exact-product reminders in one bounded
+    query; matching the returned product ids to draft lines is a client-side
+    concern and must never mutate the delivery draft.
+    """
+
+    today = beijing_today()
+    conditions = [
+        FulfillmentReminder.customer_id == customer_id,
+        FulfillmentReminder.status == "active",
+        FulfillmentReminder.source_valid.is_(True),
+        FulfillmentReminder.scope_type.in_({"customer", "product"}),
+        FulfillmentReminder.reminder_type.in_(
+            {"replenishment", "delivery_attention"}
+        ),
+        or_(
+            FulfillmentReminder.remind_on.is_(None),
+            FulfillmentReminder.remind_on <= today,
+        ),
+    ]
+    total = int(
+        db.scalar(
+            select(func.count(FulfillmentReminder.id)).where(*conditions)
+        )
+        or 0
+    )
+    due_rank = case(
+        (FulfillmentReminder.remind_on < today, 0),
+        (FulfillmentReminder.remind_on == today, 1),
+        else_=2,
+    )
+    rows = db.scalars(
+        select(FulfillmentReminder)
+        .where(*conditions)
+        .order_by(
+            due_rank,
+            FulfillmentReminder.scope_type,
+            FulfillmentReminder.reminder_type,
+            FulfillmentReminder.created_at,
+            FulfillmentReminder.id,
+        )
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    ).all()
+    return {
+        "items": [reminder_response(row) for row in rows],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "as_of": today,
+    }
+
+
 def reminder_product_options(
     db: Session,
     *,

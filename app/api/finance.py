@@ -38,6 +38,7 @@ from app.models.finance import (
     Statement,
     StatementItem,
 )
+from app.models.fulfillment_reminder import FulfillmentReminder
 from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.user import User
@@ -47,6 +48,21 @@ from app.models.warehouse_inventory import (
     UnorderedFinishedDeliveryReversal,
 )
 from app.services.audit_log import append_audit_event
+from app.services.fulfillment_reminders import (
+    MAX_INITIAL_REMINDERS,
+    FulfillmentReminderError,
+    create_reminder,
+    create_reminder_with_replay,
+    fulfillment_reminder_write_guard,
+    list_receipt_reminders,
+    record_mutation,
+    reminder_product_options,
+    replay_mutation,
+    request_hash as fulfillment_reminder_request_hash,
+    sync_receipt_source,
+    transition_reminder_with_replay,
+    update_reminder_with_replay,
+)
 from app.services.history_orders import build_display_registry, display_order_number
 from app.services.unordered_finished_delivery import (
     reconsume_unordered_finished_receipt_returns,
@@ -135,6 +151,72 @@ def _return_receipt_for_user(
     return receipt
 
 
+def _fulfillment_reminder_for_user(
+    db: Session,
+    reminder_id: int,
+    user: User,
+) -> FulfillmentReminder:
+    visible_customer_ids = _visible_customer_ids(user, db)
+    query = select(FulfillmentReminder).where(
+        FulfillmentReminder.id == reminder_id
+    )
+    if visible_customer_ids is not None:
+        if not visible_customer_ids:
+            raise HTTPException(status_code=404, detail="备忘不存在")
+        query = query.where(
+            FulfillmentReminder.customer_id.in_(visible_customer_ids)
+        )
+    reminder = db.scalar(query)
+    if reminder is None:
+        raise HTTPException(status_code=404, detail="备忘不存在")
+    return reminder
+
+
+def _delivery_for_reminder_user(
+    db: Session,
+    delivery_id: int,
+    user: User,
+) -> Delivery:
+    visible_customer_ids = _visible_customer_ids(user, db)
+    query = select(Delivery).where(Delivery.id == delivery_id)
+    if visible_customer_ids is not None:
+        if not visible_customer_ids:
+            raise HTTPException(status_code=404, detail="送货单不存在")
+        query = query.where(Delivery.customer_id.in_(visible_customer_ids))
+    delivery = db.scalar(query)
+    if delivery is None:
+        raise HTTPException(status_code=404, detail="送货单不存在")
+    return delivery
+
+
+def _return_receipt_for_reminder_user(
+    db: Session,
+    receipt_id: int,
+    user: User,
+) -> ReturnReceipt:
+    visible_customer_ids = _visible_customer_ids(user, db)
+    query = (
+        select(ReturnReceipt)
+        .join(Delivery, Delivery.id == ReturnReceipt.delivery_id)
+        .where(ReturnReceipt.id == receipt_id)
+    )
+    if visible_customer_ids is not None:
+        if not visible_customer_ids:
+            raise HTTPException(status_code=404, detail="回单不存在")
+        query = query.where(Delivery.customer_id.in_(visible_customer_ids))
+    receipt = db.scalar(query)
+    if receipt is None:
+        raise HTTPException(status_code=404, detail="回单不存在")
+    return receipt
+
+
+def _raise_fulfillment_reminder_error(error: FulfillmentReminderError) -> None:
+    raise HTTPException(
+        status_code=error.status_code,
+        detail=error.detail,
+    ) from error
+
+
 def _customer_abbr(name: str) -> str:
     for prefix in _CITY_PREFIXES:
         if name.startswith(prefix):
@@ -164,11 +246,55 @@ class ReturnReceiptLineCreate(BaseModel):
     expected_return_layout_version: int | None = Field(default=None, gt=0)
 
 
+class FulfillmentReminderDraft(BaseModel):
+    scope_type: str
+    reminder_type: str
+    content: str
+    suggested_quantity: Decimal | None = None
+    cadence: str
+    remind_on: date | None = None
+    product_id: int | None = None
+
+
+class FulfillmentReminderCreate(FulfillmentReminderDraft):
+    idempotency_key: str = Field(min_length=8, max_length=120)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def normalize_idempotency_key(cls, value: str) -> str:
+        return value.strip()
+
+
+class FulfillmentReminderUpdate(FulfillmentReminderDraft):
+    expected_version: int = Field(gt=0)
+    idempotency_key: str = Field(min_length=8, max_length=120)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def normalize_idempotency_key(cls, value: str) -> str:
+        return value.strip()
+
+
+class FulfillmentReminderTransition(BaseModel):
+    expected_version: int = Field(gt=0)
+    idempotency_key: str = Field(min_length=8, max_length=120)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def normalize_idempotency_key(cls, value: str) -> str:
+        return value.strip()
+
+
 class ReturnReceiptCreate(BaseModel):
     delivery_id: int
     actual_received_date: date
     signed_by: str | None = None
     items: list[ReturnReceiptLineCreate]
+    reminders: list[FulfillmentReminderDraft] = Field(default_factory=list)
+    reminder_bundle_idempotency_key: str | None = Field(
+        default=None,
+        max_length=120,
+    )
 
     @field_validator("items")
     @classmethod
@@ -179,6 +305,18 @@ class ReturnReceiptCreate(BaseModel):
         if len(ids) != len(set(ids)):
             raise ValueError("回单明细不能重复")
         return value
+
+    @model_validator(mode="after")
+    def validate_reminder_bundle(self):
+        if len(self.reminders) > MAX_INITIAL_REMINDERS:
+            raise ValueError(f"一张回单最多新增{MAX_INITIAL_REMINDERS}条备忘")
+        key = (self.reminder_bundle_idempotency_key or "").strip()
+        if self.reminders and len(key) < 8:
+            raise ValueError("回单含备忘时必须提供幂等键")
+        if not self.reminders and key:
+            raise ValueError("没有备忘时不要提交备忘幂等键")
+        self.reminder_bundle_idempotency_key = key or None
+        return self
 
 
 class ReturnReceiptUpdate(BaseModel):
@@ -1110,6 +1248,191 @@ def _receipt_response(db: Session, receipt_id: int) -> dict:
     }
 
 
+@router.get("/deliveries/{delivery_id}/reminder-product-options")
+def get_fulfillment_reminder_product_options(
+    delivery_id: int,
+    q: str = Query(default="", max_length=100),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=100),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    delivery = _delivery_for_reminder_user(db, delivery_id, user)
+    return reminder_product_options(
+        db,
+        delivery_id=delivery.id,
+        customer_id=delivery.customer_id,
+        query_text=q,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.get("/return_receipts/{receipt_id}/reminders")
+def get_return_receipt_reminders(
+    receipt_id: int,
+    history: bool = False,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    _return_receipt_for_reminder_user(db, receipt_id, user)
+    return list_receipt_reminders(
+        db,
+        receipt_id=receipt_id,
+        history=history,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.post(
+    "/return_receipts/{receipt_id}/reminders",
+    status_code=status.HTTP_201_CREATED,
+)
+def add_return_receipt_reminder(
+    receipt_id: int,
+    payload: FulfillmentReminderCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+    _write_guard: None = Depends(fulfillment_reminder_write_guard),
+) -> dict:
+    del _write_guard
+    receipt = _return_receipt_for_reminder_user(db, receipt_id, user)
+    try:
+        response, _replayed = create_reminder_with_replay(
+            db,
+            receipt=receipt,
+            value=payload.model_dump(exclude={"idempotency_key"}),
+            actor=user,
+            idempotency_key=payload.idempotency_key,
+        )
+        db.commit()
+        return response
+    except FulfillmentReminderError as error:
+        db.rollback()
+        _raise_fulfillment_reminder_error(error)
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="备忘幂等键或版本已被另一操作使用",
+        ) from error
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.put("/fulfillment-reminders/{reminder_id}")
+def update_fulfillment_reminder(
+    reminder_id: int,
+    payload: FulfillmentReminderUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+    _write_guard: None = Depends(fulfillment_reminder_write_guard),
+) -> dict:
+    del _write_guard
+    _fulfillment_reminder_for_user(db, reminder_id, user)
+    try:
+        response, _replayed = update_reminder_with_replay(
+            db,
+            reminder_id=reminder_id,
+            value=payload.model_dump(
+                exclude={"expected_version", "idempotency_key"}
+            ),
+            expected_version=payload.expected_version,
+            actor=user,
+            visible_customer_ids=_visible_customer_ids(user, db),
+            idempotency_key=payload.idempotency_key,
+        )
+        db.commit()
+        return response
+    except FulfillmentReminderError as error:
+        db.rollback()
+        _raise_fulfillment_reminder_error(error)
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="备忘幂等键或版本已被另一操作使用",
+        ) from error
+    except Exception:
+        db.rollback()
+        raise
+
+
+def _transition_fulfillment_reminder(
+    *,
+    reminder_id: int,
+    payload: FulfillmentReminderTransition,
+    action: str,
+    db: Session,
+    user: User,
+) -> dict:
+    _fulfillment_reminder_for_user(db, reminder_id, user)
+    try:
+        response, _replayed = transition_reminder_with_replay(
+            db,
+            reminder_id=reminder_id,
+            expected_version=payload.expected_version,
+            action=action,
+            actor=user,
+            visible_customer_ids=_visible_customer_ids(user, db),
+            idempotency_key=payload.idempotency_key,
+        )
+        db.commit()
+        return response
+    except FulfillmentReminderError as error:
+        db.rollback()
+        _raise_fulfillment_reminder_error(error)
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="备忘幂等键或版本已被另一操作使用",
+        ) from error
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.post("/fulfillment-reminders/{reminder_id}/resolve")
+def resolve_fulfillment_reminder(
+    reminder_id: int,
+    payload: FulfillmentReminderTransition,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+    _write_guard: None = Depends(fulfillment_reminder_write_guard),
+) -> dict:
+    del _write_guard
+    return _transition_fulfillment_reminder(
+        reminder_id=reminder_id,
+        payload=payload,
+        action="resolve",
+        db=db,
+        user=user,
+    )
+
+
+@router.post("/fulfillment-reminders/{reminder_id}/cancel")
+def cancel_fulfillment_reminder(
+    reminder_id: int,
+    payload: FulfillmentReminderTransition,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+    _write_guard: None = Depends(fulfillment_reminder_write_guard),
+) -> dict:
+    del _write_guard
+    return _transition_fulfillment_reminder(
+        reminder_id=reminder_id,
+        payload=payload,
+        action="cancel",
+        db=db,
+        user=user,
+    )
+
+
 @router.get("/return_receipts/{receipt_id}")
 def get_return_receipt(
     receipt_id: int,
@@ -1125,9 +1448,28 @@ def create_return_receipt(
     payload: ReturnReceiptCreate,
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
+    _write_guard: None = Depends(fulfillment_reminder_write_guard),
 ) -> dict:
+    del _write_guard
     _delivery_for_user(db, payload.delivery_id, user)
     try:
+        reminder_bundle_key = payload.reminder_bundle_idempotency_key
+        reminder_bundle_hash = None
+        if reminder_bundle_key:
+            reminder_bundle_hash = fulfillment_reminder_request_hash(
+                payload.model_dump(
+                    exclude={"reminder_bundle_idempotency_key"}
+                )
+            )
+            replay = replay_mutation(
+                db,
+                idempotency_key=reminder_bundle_key,
+                request_hash_value=reminder_bundle_hash,
+                action="receipt_create_bundle",
+                actor=user,
+            )
+            if replay is not None:
+                return replay
         # 与取消发货竞争时，先对同一送货单执行条件写并取得写锁。
         # 第二个事务等待后会重新判断状态，不能同时确认回单和取消发货。
         claimed = db.execute(
@@ -1276,8 +1618,44 @@ def create_return_receipt(
             },
             description="确认客户送货回单",
         )
+        created_reminders: list[dict] = []
+        if payload.reminders:
+            assert reminder_bundle_key is not None
+            assert reminder_bundle_hash is not None
+            for reminder_draft in payload.reminders:
+                reminder = create_reminder(
+                    db,
+                    receipt=receipt,
+                    value=reminder_draft.model_dump(),
+                    actor=user,
+                    idempotency_key=reminder_bundle_key,
+                )
+                created_reminders.append(
+                    {
+                        "id": reminder.id,
+                        "version": reminder.version,
+                        "scope_type": reminder.scope_type,
+                        "reminder_type": reminder.reminder_type,
+                    }
+                )
+        response = _receipt_response(db, receipt.id)
+        response["created_reminders"] = created_reminders
+        if reminder_bundle_key:
+            record_mutation(
+                db,
+                reminder_id=None,
+                return_receipt_id=receipt.id,
+                idempotency_key=reminder_bundle_key,
+                request_hash_value=reminder_bundle_hash,
+                action="receipt_create_bundle",
+                actor=user,
+                response=response,
+            )
         db.commit()
-        return _receipt_response(db, receipt.id)
+        return response
+    except FulfillmentReminderError as error:
+        db.rollback()
+        _raise_fulfillment_reminder_error(error)
     except HTTPException:
         db.rollback()
         raise
@@ -1301,7 +1679,9 @@ def update_return_receipt(
     payload: ReturnReceiptUpdate,
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
+    _write_guard: None = Depends(fulfillment_reminder_write_guard),
 ) -> dict:
+    del _write_guard
     receipt = _return_receipt_for_user(db, receipt_id, user)
     claimed_status = receipt.status
     if claimed_status not in {"confirmed", "cancelled"}:
@@ -1432,6 +1812,13 @@ def update_return_receipt(
     receipt.actual_received_date = payload.actual_received_date
     receipt.signed_by = (payload.signed_by or "").strip() or None
     receipt.status = "confirmed"
+    sync_receipt_source(
+        db,
+        receipt_id=receipt.id,
+        source_valid=True,
+        received_date=payload.actual_received_date,
+        actor=user,
+    )
     _refresh_receipt_order_statuses(db, affected_order_ids)
     _audit(
         db,
@@ -3293,7 +3680,9 @@ def cancel_return_receipt(
     receipt_id: int,
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
+    _write_guard: None = Depends(fulfillment_reminder_write_guard),
 ) -> dict:
+    del _write_guard
     receipt = _return_receipt_for_user(db, receipt_id, user)
     if receipt.status != "confirmed":
         raise HTTPException(status_code=409, detail="回单状态已变化，不能重复取消")
@@ -3370,6 +3759,13 @@ def cancel_return_receipt(
         if order_id is not None:
             affected_order_ids.add(order_id)
     receipt.signed_by = None
+    sync_receipt_source(
+        db,
+        receipt_id=receipt.id,
+        source_valid=False,
+        received_date=receipt.actual_received_date,
+        actor=user,
+    )
     _refresh_receipt_order_statuses(db, affected_order_ids)
     _audit(
         db,

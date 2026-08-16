@@ -6828,6 +6828,30 @@
               <div class="notice" style="margin-bottom:10px"><strong>客户：{{ receiptForm.customer_name || '客户未登记' }}</strong><span style="margin-left:12px">送货单：{{ receiptForm.delivery_number || '-' }}</span></div>
               <div class="form-grid"><div class="field"><label>实际签收日期</label><input class="input" type="date" v-model="receiptForm.actual_received_date" /></div><div class="field"><label>签收人</label><input class="input" v-model.trim="receiptForm.signed_by" /></div></div>
               <table><thead><tr><th>产品</th><th>发货数</th><th>实际签收数</th><th>差异处理</th><th>退回放哪里</th><th>差异备注（可选）</th></tr></thead><tbody><tr v-for="line in receiptForm.items" :key="line.delivery_item_id" :class="{'warning-row':Number(line.actual_received_quantity)!==Number(line.delivered_quantity)}"><td>{{ line.product_code }} / {{ line.product_name }}</td><td>{{ line.delivered_quantity }}</td><td><input class="input compact-input" type="number" min="0" v-model.number="line.actual_received_quantity" @change="normalizeReceiptResolution(line)" /></td><td><select v-if="Number(line.actual_received_quantity)<Number(line.delivered_quantity)" class="select" v-model="line.resolution_action"><option value="">请选择短收处理</option><option value="continue_delivery">保留剩余数量，继续待送</option><option value="accept_short">按本次实收数量结单</option></select><select v-else-if="Number(line.actual_received_quantity)>Number(line.delivered_quantity)" class="select" v-model="line.resolution_action"><option value="">请选择超收处理</option><option value="accept_over">确认按实际超收数量入账</option></select><span v-else class="muted">无差异</span></td><td><div v-if="receiptLineNeedsReturnLocation(line)" class="receipt-return-location-picker"><select class="select" v-model.number="line.return_floor_number" @change="onReceiptReturnFloorChange(line)"><option :value="null">先选楼层</option><option v-for="floor in receiptLocationFloors(line)" :key="floor.number" :value="floor.number">{{ floor.label }}</option></select><select class="select" v-model="line.return_area_code" :disabled="!line.return_floor_number" @change="onReceiptReturnAreaChange(line)"><option value="">再选区域</option><option v-for="area in receiptAreasForFloor(line,line.return_floor_number)" :key="area.code" :value="area.code">{{ area.code }}</option></select><select class="select" v-model.number="line.return_location_id" :disabled="!line.return_area_code" @change="onReceiptReturnLocationChange(line)"><option :value="null">再选库位</option><option v-for="location in receiptLocationsForArea(line,line.return_floor_number,line.return_area_code)" :key="location.id" :value="location.id">{{ location.location_code }}</option></select></div><span v-else-if="Number(line.actual_received_quantity)<Number(line.delivered_quantity) && line.source_type==='unordered_finished'" class="muted">自动退回原批次</span><span v-else class="muted">无需退回</span></td><td><input class="input" v-model.trim="line.difference_reason" placeholder="可选" /></td></tr></tbody></table>
+              <div class="panel" style="margin-top:12px;max-height:48vh;overflow:auto" aria-label="内部履约备忘">
+                <div class="toolbar" style="margin-bottom:8px"><div><strong>内部履约备忘</strong><div class="muted">只供厂内后续送货、生产和印刷核对；不会出现在客户打印、对账或开票资料中。</div></div><div class="toolbar-group"><button class="btn small" type="button" :disabled="receiptReminderState.saving" @click="openReceiptReminderEditor()">新增备忘</button><button v-if="receiptForm.id" class="btn small" type="button" :disabled="receiptReminderState.loading" @click="toggleReceiptReminderHistory">{{ receiptReminderState.historyMode ? '返回有效备忘' : '查看已处理历史' }}</button></div></div>
+                <div v-if="receiptReminderState.editorVisible" class="panel" style="margin:8px 0;background:var(--surface-subtle,#f7f8fa)">
+                  <div class="form-grid">
+                    <div class="field"><label>提醒范围</label><select class="select" v-model="receiptReminderEditor.scope_type"><option value="receipt">仅本次回单</option><option value="customer">该客户</option><option value="product">该客户的指定常用箱</option></select></div>
+                    <div v-if="receiptReminderEditor.scope_type==='product'" class="field"><label>正式常用箱</label><div class="toolbar-group"><input class="input" v-model.trim="receiptReminderState.productQuery" placeholder="编码 / 产品名" @keyup.enter.prevent="loadReceiptReminderProducts(receiptReminderState.productQuery)" /><button class="btn small" type="button" :disabled="receiptReminderState.productsLoading" @click="loadReceiptReminderProducts(receiptReminderState.productQuery)">{{ receiptReminderState.productsLoading ? '查询中…' : '查询' }}</button></div><select class="select" v-model.number="receiptReminderEditor.product_id"><option :value="null">请选择</option><option v-for="product in receiptReminderState.products" :key="product.id" :value="product.id" :disabled="!product.can_select">{{ product.is_in_delivery ? '本次｜' : '' }}{{ product.product_code }}｜{{ product.product_name }}{{ product.can_select ? '' : '（已停用）' }}</option></select><div v-if="receiptReminderState.productsError" class="status orange">{{ receiptReminderState.productsError }}</div></div>
+                    <div class="field"><label>类型</label><select class="select" v-model="receiptReminderEditor.reminder_type"><option value="replenishment">补送</option><option value="delivery_attention">送货注意</option><option value="production_attention">生产 / 印刷注意</option><option value="other">其他</option></select></div>
+                    <div class="field"><label>提醒方式</label><select class="select" v-model="receiptReminderEditor.cadence"><option value="one_time">一次性（需人工处理）</option><option value="continuous">持续提醒（需人工结束）</option></select></div>
+                    <div class="field"><label>建议数量（可空）</label><input class="input" type="number" min="0.001" step="0.001" v-model="receiptReminderEditor.suggested_quantity" /></div>
+                    <div class="field"><label>提醒日期（可空）</label><input class="input" type="date" v-model="receiptReminderEditor.remind_on" /></div>
+                  </div>
+                  <div class="field"><label>内部内容</label><textarea class="input" rows="3" maxlength="1000" v-model.trim="receiptReminderEditor.content" placeholder="例如：下次送货前联系仓库；此款印刷位置要再核对。不要填写客户可见备注。"></textarea></div>
+                  <div class="toolbar-group" style="justify-content:flex-end"><button class="btn" type="button" :disabled="receiptReminderState.saving" @click="cancelReceiptReminderEditor">取消</button><button class="btn primary" type="button" :disabled="receiptReminderState.saving" @click="saveReceiptReminder">{{ receiptReminderState.saving ? '保存中…' : (receiptReminderEditor.id || receiptReminderEditor.local_key ? '保存修改' : '加入备忘') }}</button></div>
+                </div>
+                <div v-if="receiptReminderState.loading" class="empty">正在读取内部备忘…</div>
+                <div v-else-if="receiptReminderState.error" class="notice error">{{ receiptReminderState.error }} <button class="btn small" type="button" @click="loadReceiptReminders({history:receiptReminderState.historyMode,page:receiptReminderState.page})">重试</button></div>
+                <template v-else>
+                  <div v-if="!receiptForm.id && !(receiptForm.reminder_drafts || []).length" class="empty">本次没有备忘时可直接保存回单，不增加额外步骤。</div>
+                  <div v-if="!receiptForm.id" v-for="row in receiptForm.reminder_drafts || []" :key="row.local_key" class="panel" style="padding:8px;margin:6px 0"><div class="toolbar"><div><span class="status blue">{{ receiptReminderScopeLabel(row) }}</span> <span class="status gray">{{ receiptReminderTypeLabel(row.reminder_type) }}</span> <span class="status green">{{ receiptReminderCadenceLabel(row.cadence) }}</span><div style="white-space:pre-wrap;overflow-wrap:anywhere;margin-top:6px">{{ row.content }}</div><div class="muted">{{ receiptReminderMetaText(row) }}</div></div><div class="toolbar-group"><button class="btn small" type="button" @click="openReceiptReminderEditor(row)">编辑</button><button class="btn small danger" type="button" @click="removeReceiptReminderDraft(row.local_key)">移除</button></div></div></div>
+                  <div v-if="receiptForm.id && !receiptReminderState.items.length" class="empty">{{ receiptReminderState.historyMode ? '暂无已处理或已取消备忘' : '暂无有效备忘' }}</div>
+                  <div v-if="receiptForm.id" v-for="row in receiptReminderState.items" :key="row.id" class="panel" style="padding:8px;margin:6px 0"><div class="toolbar"><div><span :class="['status',row.source_valid ? 'blue' : 'orange']">{{ row.source_valid ? receiptReminderScopeLabel(row) : '来源回单已失效' }}</span> <span class="status gray">{{ receiptReminderTypeLabel(row.reminder_type) }}</span> <span class="status green">{{ receiptReminderCadenceLabel(row.cadence) }}</span><div style="white-space:pre-wrap;overflow-wrap:anywhere;margin-top:6px">{{ row.content }}</div><div class="muted">{{ receiptReminderMetaText(row) }}｜记录人 {{ row.created_by_name || '-' }}｜版本 {{ row.version }}</div></div><div v-if="row.status==='active'" class="toolbar-group"><button class="btn small" type="button" :disabled="receiptReminderState.actionId===row.id" @click="openReceiptReminderEditor(row)">编辑</button><button class="btn small success" type="button" :disabled="receiptReminderState.actionId===row.id" @click="transitionReceiptReminder(row,'resolve')">{{ row.cadence==='continuous' ? '结束持续提醒' : '本次已处理' }}</button><button class="btn small danger" type="button" :disabled="receiptReminderState.actionId===row.id" @click="transitionReceiptReminder(row,'cancel')">取消备忘</button></div></div></div>
+                  <div v-if="receiptForm.id && receiptReminderState.total>10" class="toolbar-group" style="justify-content:flex-end"><button class="btn small" type="button" :disabled="receiptReminderState.page<=1" @click="loadReceiptReminders({history:receiptReminderState.historyMode,page:receiptReminderState.page-1})">上一页</button><span class="muted">第 {{ receiptReminderState.page }} 页 / 共 {{ receiptReminderState.total }} 条</span><button class="btn small" type="button" :disabled="receiptReminderState.page*10>=receiptReminderState.total" @click="loadReceiptReminders({history:receiptReminderState.historyMode,page:receiptReminderState.page+1})">下一页</button></div>
+                </template>
+              </div>
             </div>
             <div v-else-if="modal.type === 'deliveryRoute'">
               <div class="status orange" style="display:block;white-space:normal;margin-bottom:10px">{{ deliveryRoutePlan.disclaimer }}</div>
@@ -7857,6 +7881,12 @@
         visible:false, loading:false, entity:null, entityId:null, title:"",
         currentVersion:null, items:[], error:"", returnToConfirmation:false
       });
+      const blankReceiptReminderEditor = () => ({
+        id:null, version:null, local_key:"", scope_type:"receipt",
+        reminder_type:"delivery_attention", content:"",
+        suggested_quantity:null, cadence:"one_time", remind_on:"",
+        product_id:null,
+      });
       let quotationLineKey = 0;
       const blankQuotationLine = () => ({
         _key: ++quotationLineKey,
@@ -8022,7 +8052,7 @@
             // v0.19.2-B 楞型加价规则
             fluteRules: [], showFluteRuleModal: false, fluteRuleLoading: false, fluteRuleError: "", fluteRuleAction:{action:"",ruleId:null},
             fluteRuleForm: { id: null, supplier_name: "", layer_count: 3, flute_type: "A", price_delta: "0", effective_date: "", remark: "", is_active: true },
-            deliveries: [], pendingDeliveryItems: [], deliveryCustomerCandidates: [], deliveryPickTasks: [], deliveryPickers: [], expandedDeliveryRows: {}, deliveryDetailState: {}, deliveryDetailRequestSequence:0, deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false, request_token:0 }, deliveryPendingState:{loading:false,error:"",request_token:0}, deliveryCandidateLoading:false, deliveryCandidateError:"", deliveryCandidateRequestSequence:0, deliveryBatchRequestSequence:0, unorderedFinishedRequestSequence:0, deliveryOperationState:{action:"",deliveryId:null,deliveryNumber:""}, deliverySaveState:{saving:false,committed:false,outcomeUncertain:false,result:null}, receiptOperationState:{action:"",deliveryId:null,receiptId:null,deliveryNumber:""}, statements: [], invoices: [], moldTools: [], printingPlates: [],
+            deliveries: [], pendingDeliveryItems: [], deliveryCustomerCandidates: [], deliveryPickTasks: [], deliveryPickers: [], expandedDeliveryRows: {}, deliveryDetailState: {}, deliveryDetailRequestSequence:0, deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false, request_token:0 }, deliveryPendingState:{loading:false,error:"",request_token:0}, deliveryCandidateLoading:false, deliveryCandidateError:"", deliveryCandidateRequestSequence:0, deliveryBatchRequestSequence:0, unorderedFinishedRequestSequence:0, deliveryOperationState:{action:"",deliveryId:null,deliveryNumber:""}, deliverySaveState:{saving:false,committed:false,outcomeUncertain:false,result:null}, receiptOperationState:{action:"",deliveryId:null,receiptId:null,deliveryNumber:""}, receiptReminderState:{loading:false,error:"",items:[],total:0,page:1,historyMode:false,editorVisible:false,saving:false,actionId:null,productsLoading:false,productsError:"",products:[],productQuery:"",bundleAttempt:null,mutationAttempt:null}, receiptReminderEditor:blankReceiptReminderEditor(), statements: [], invoices: [], moldTools: [], printingPlates: [],
             invoiceTasks: [], invoiceTaskFilters:{customer_id:"",statement_month:"",status:""}, invoiceTaskState:{loading:false,error:""},
             invoiceTaskDetail:null, invoiceTaskResult:{task_id:null,status:"issued",invoice_number:"",invoice_date:"",failure_reason:"",expected_version:null},
             invoiceTaskOperationState:{detailLoading:false,detailError:"",detailTaskId:null,detailTaskNumber:"",confirmingTaskId:null,resultSaving:false},
@@ -8126,7 +8156,7 @@
               selected:{}, selection_sequence:0, request_id:0,
             },
             requisitionForm: { supplier_name: "", items: [] },
-            receiptForm: { items: [] }, orderItemForm: {}, estimatedCostForm:{},
+            receiptForm: { items: [], reminder_drafts:[] }, orderItemForm: {}, estimatedCostForm:{},
             costPanelTab:"gaps",
             costGapState:{loading:false,error:"",scope_label:"",total_items:0,returned_items:0,truncated:false,categories:[],items:[],filter:"all"},
             costReviewState:{loading:false,loaded:false,error:"",scope_label:"",evaluated_items:0,total_items:0,returned_items:0,truncated:false,summary:[],items:[]},
@@ -12324,6 +12354,9 @@
             this.deliveryDetailRequestSequence += 1;
             this.deliveryDetailState = {};
             this.expandedDeliveryRows = {};
+            this.receiptForm = {items:[],reminder_drafts:[]};
+            this.receiptReminderState = {loading:false,error:"",items:[],total:0,page:1,historyMode:false,editorVisible:false,saving:false,actionId:null,productsLoading:false,productsError:"",products:[],productQuery:"",bundleAttempt:null,mutationAttempt:null};
+            this.receiptReminderEditor = blankReceiptReminderEditor();
             this.requisitionWorkspace = "board";
             this.incomingWorkspace = "board";
             this.requisitionTab = "pending";
@@ -26325,6 +26358,222 @@
             }
             return "";
           },
+          receiptReminderScopeLabel(row) {
+            if (row?.scope_type === "customer") return "该客户";
+            if (row?.scope_type === "product") return `指定常用箱${row?.product_code ? `｜${row.product_code}` : ""}`;
+            return "仅本次回单";
+          },
+          receiptReminderTypeLabel(value) {
+            return ({replenishment:"补送",delivery_attention:"送货注意",production_attention:"生产 / 印刷注意",other:"其他"})[value] || "其他";
+          },
+          receiptReminderCadenceLabel(value) {
+            return value === "continuous" ? "持续提醒" : "一次性";
+          },
+          receiptReminderMetaText(row) {
+            const parts = [];
+            if (row?.suggested_quantity !== null && row?.suggested_quantity !== undefined && row?.suggested_quantity !== "") parts.push(`建议数量 ${row.suggested_quantity}`);
+            if (row?.remind_on) parts.push(`提醒日期 ${row.remind_on}`);
+            if (row?.scope_type === "product" && row?.product_name) parts.push(row.product_name);
+            return parts.join("｜") || "未设数量和日期";
+          },
+          receiptReminderPayload(source=this.receiptReminderEditor) {
+            const quantity = source?.suggested_quantity;
+            return {
+              scope_type:String(source?.scope_type || "receipt"),
+              reminder_type:String(source?.reminder_type || "delivery_attention"),
+              content:String(source?.content || "").trim(),
+              suggested_quantity:quantity === "" || quantity === null || quantity === undefined ? null : Number(quantity),
+              cadence:String(source?.cadence || "one_time"),
+              remind_on:String(source?.remind_on || "").trim() || null,
+              product_id:source?.scope_type === "product" ? (Number(source?.product_id) || null) : null,
+            };
+          },
+          validateReceiptReminder(source=this.receiptReminderEditor) {
+            const payload = this.receiptReminderPayload(source);
+            if (!["receipt","customer","product"].includes(payload.scope_type)) return "请选择备忘范围";
+            if (!["replenishment","delivery_attention","production_attention","other"].includes(payload.reminder_type)) return "请选择备忘类型";
+            if (!["one_time","continuous"].includes(payload.cadence)) return "请选择提醒方式";
+            if (!payload.content) return "请填写内部备忘内容";
+            if (payload.content.length > 1000) return "内部备忘不能超过1000个字符";
+            if (payload.scope_type === "product" && !payload.product_id) return "产品级备忘必须选择正式常用箱";
+            if (payload.suggested_quantity !== null && (!Number.isFinite(payload.suggested_quantity) || payload.suggested_quantity <= 0)) return "建议数量必须是大于0的数字";
+            return "";
+          },
+          receiptReminderRequestIsCurrent(key, controller, authGeneration, userId, receiptId, deliveryId) {
+            return (
+              latestRequestControllers.get(key) === controller
+              && !controller.signal.aborted
+              && authGeneration === this.authGeneration
+              && userId === (this.user?.id ?? null)
+              && this.modal?.type === "receipt"
+              && Number(this.receiptForm?.id || 0) === Number(receiptId || 0)
+              && Number(this.receiptForm?.delivery_id || 0) === Number(deliveryId || 0)
+            );
+          },
+          resetReceiptReminderModalState() {
+            this.cancelLatestRequest("receipt:reminder-products");
+            this.cancelLatestRequest("receipt:reminders");
+            this.receiptReminderState = {loading:false,error:"",items:[],total:0,page:1,historyMode:false,editorVisible:false,saving:false,actionId:null,productsLoading:false,productsError:"",products:[],productQuery:"",bundleAttempt:null,mutationAttempt:null};
+            this.receiptReminderEditor = blankReceiptReminderEditor();
+          },
+          handleReceiptReminderPermissionLoss(message="回单权限或客户范围已变化，请重新进入") {
+            this.resetPagePerformanceState();
+            this.resetModalA11ySession?.({discardModal:true});
+            this.showToast(message, true);
+            return false;
+          },
+          async loadReceiptReminderProducts(query="") {
+            const deliveryId = Number(this.receiptForm?.delivery_id || 0);
+            if (!deliveryId || this.modal?.type !== "receipt") return false;
+            const receiptId = Number(this.receiptForm?.id || 0);
+            const key = "receipt:reminder-products";
+            const controller = this.beginLatestRequest(key);
+            const authGeneration = this.authGeneration;
+            const userId = this.user?.id ?? null;
+            const sessionIsCurrent = () => authGeneration === this.authGeneration && userId === (this.user?.id ?? null);
+            this.receiptReminderState.productsLoading = true;
+            this.receiptReminderState.productsError = "";
+            this.receiptReminderState.productQuery = String(query || "").trim();
+            try {
+              const {data} = await axios.get(`/api/finance/deliveries/${deliveryId}/reminder-product-options`, {params:{q:this.receiptReminderState.productQuery,page:1,page_size:100},signal:controller.signal});
+              if (!this.receiptReminderRequestIsCurrent(key,controller,authGeneration,userId,receiptId,deliveryId)) return false;
+              this.receiptReminderState.products = Array.isArray(data?.items) ? data.items : [];
+              return true;
+            } catch(error) {
+              if (this.isCancelledRequest(error)) return false;
+              if (error?.response?.status === 403 && sessionIsCurrent()) return this.handleReceiptReminderPermissionLoss();
+              if (this.receiptReminderRequestIsCurrent(key,controller,authGeneration,userId,receiptId,deliveryId)) this.receiptReminderState.productsError = this.errorMessage(error);
+              return false;
+            } finally {
+              if (this.receiptReminderRequestIsCurrent(key,controller,authGeneration,userId,receiptId,deliveryId)) this.receiptReminderState.productsLoading = false;
+              this.finishLatestRequest(key,controller);
+            }
+          },
+          async loadReceiptReminders({history=false,page=1}={}) {
+            const receiptId = Number(this.receiptForm?.id || 0);
+            const deliveryId = Number(this.receiptForm?.delivery_id || 0);
+            if (!receiptId || !deliveryId || this.modal?.type !== "receipt") return false;
+            const key = "receipt:reminders";
+            const controller = this.beginLatestRequest(key);
+            const authGeneration = this.authGeneration;
+            const userId = this.user?.id ?? null;
+            const sessionIsCurrent = () => authGeneration === this.authGeneration && userId === (this.user?.id ?? null);
+            this.receiptReminderState.loading = true;
+            this.receiptReminderState.error = "";
+            try {
+              const {data} = await axios.get(`/api/finance/return_receipts/${receiptId}/reminders`, {params:{history:!!history,page:Math.max(1,Number(page || 1)),page_size:10},signal:controller.signal});
+              if (!this.receiptReminderRequestIsCurrent(key,controller,authGeneration,userId,receiptId,deliveryId)) return false;
+              this.receiptReminderState.items = Array.isArray(data?.items) ? data.items : [];
+              this.receiptReminderState.total = Number(data?.total || 0);
+              this.receiptReminderState.page = Number(data?.page || page || 1);
+              this.receiptReminderState.historyMode = !!history;
+              return true;
+            } catch(error) {
+              if (this.isCancelledRequest(error)) return false;
+              if (error?.response?.status === 403 && sessionIsCurrent()) return this.handleReceiptReminderPermissionLoss();
+              if (this.receiptReminderRequestIsCurrent(key,controller,authGeneration,userId,receiptId,deliveryId)) this.receiptReminderState.error = this.errorMessage(error);
+              return false;
+            } finally {
+              if (this.receiptReminderRequestIsCurrent(key,controller,authGeneration,userId,receiptId,deliveryId)) this.receiptReminderState.loading = false;
+              this.finishLatestRequest(key,controller);
+            }
+          },
+          async toggleReceiptReminderHistory() {
+            return this.loadReceiptReminders({history:!this.receiptReminderState.historyMode,page:1});
+          },
+          openReceiptReminderEditor(row=null) {
+            const source = row || blankReceiptReminderEditor();
+            this.receiptReminderEditor = {
+              id:source.id || null, version:source.version || null, local_key:source.local_key || "",
+              scope_type:source.scope_type || "receipt", reminder_type:source.reminder_type || "delivery_attention",
+              content:source.content || "", suggested_quantity:source.suggested_quantity ?? null,
+              cadence:source.cadence || "one_time", remind_on:source.remind_on || "", product_id:source.product_id || null,
+            };
+            if (source.product_id && !(this.receiptReminderState.products || []).some(product => Number(product.id) === Number(source.product_id))) {
+              this.receiptReminderState.products = [{id:source.product_id,product_code:source.product_code || "历史产品",product_name:source.product_name || "历史快照",can_select:false,is_in_delivery:false},...(this.receiptReminderState.products || [])];
+            }
+            this.receiptReminderState.editorVisible = true;
+          },
+          cancelReceiptReminderEditor() {
+            this.receiptReminderEditor = blankReceiptReminderEditor();
+            this.receiptReminderState.editorVisible = false;
+          },
+          removeReceiptReminderDraft(localKey) {
+            this.receiptForm.reminder_drafts = (this.receiptForm.reminder_drafts || []).filter(row => row.local_key !== localKey);
+            if (this.receiptReminderEditor.local_key === localKey) this.cancelReceiptReminderEditor();
+            this.receiptReminderState.bundleAttempt = null;
+          },
+          async saveReceiptReminder() {
+            if (this.receiptReminderState.saving) return false;
+            const errorText = this.validateReceiptReminder();
+            if (errorText) {
+              this.showToast(errorText, true);
+              return false;
+            }
+            const payload = this.receiptReminderPayload();
+            const product = (this.receiptReminderState.products || []).find(row => Number(row.id) === Number(payload.product_id));
+            if (!this.receiptForm.id) {
+              const localKey = this.receiptReminderEditor.local_key || `receipt-reminder-${createIdempotencyKey()}`;
+              const draft = {...payload,local_key:localKey,product_code:product?.product_code || null,product_name:product?.product_name || null};
+              const existingIndex = (this.receiptForm.reminder_drafts || []).findIndex(row => row.local_key === localKey);
+              if (existingIndex >= 0) this.receiptForm.reminder_drafts.splice(existingIndex,1,draft);
+              else this.receiptForm.reminder_drafts.push(draft);
+              this.receiptReminderState.bundleAttempt = null;
+              this.cancelReceiptReminderEditor();
+              return true;
+            }
+            const reminderId = Number(this.receiptReminderEditor.id || 0);
+            const action = reminderId ? "update" : "create";
+            const signature = JSON.stringify({action,receipt_id:Number(this.receiptForm.id),reminder_id:reminderId || null,expected_version:this.receiptReminderEditor.version || null,payload});
+            if (this.receiptReminderState.mutationAttempt?.signature !== signature) this.receiptReminderState.mutationAttempt = {signature,idempotency_key:createIdempotencyKey()};
+            const attempt = this.receiptReminderState.mutationAttempt;
+            const authGeneration = this.authGeneration;
+            const userId = this.user?.id ?? null;
+            const sessionIsCurrent = () => authGeneration === this.authGeneration && userId === (this.user?.id ?? null) && this.receiptReminderState.mutationAttempt === attempt;
+            this.receiptReminderState.saving = true;
+            try {
+              if (reminderId) await axios.put(`/api/finance/fulfillment-reminders/${reminderId}`, {...payload,expected_version:Number(this.receiptReminderEditor.version),idempotency_key:attempt.idempotency_key});
+              else await axios.post(`/api/finance/return_receipts/${this.receiptForm.id}/reminders`, {...payload,idempotency_key:attempt.idempotency_key});
+              if (!sessionIsCurrent() || this.modal?.type !== "receipt") return false;
+              this.receiptReminderState.mutationAttempt = null;
+              this.cancelReceiptReminderEditor();
+              await this.loadReceiptReminders({history:false,page:1});
+              this.showToast(reminderId ? "内部备忘已更新" : "内部备忘已新增");
+              return true;
+            } catch(error) {
+              if (error?.response?.status === 403 && sessionIsCurrent()) return this.handleReceiptReminderPermissionLoss();
+              if (sessionIsCurrent()) this.showToast(this.errorMessage(error), true);
+              return false;
+            } finally {
+              if (sessionIsCurrent()) this.receiptReminderState.saving = false;
+            }
+          },
+          async transitionReceiptReminder(row, action) {
+            if (!row?.id || this.receiptReminderState.actionId) return false;
+            const actionLabel = action === "resolve" ? (row.cadence === "continuous" ? "结束这条持续提醒" : "标记本次已处理") : "取消这条备忘";
+            if (!confirm(`确认${actionLabel}吗？`)) return false;
+            const signature = JSON.stringify({action,id:Number(row.id),expected_version:Number(row.version)});
+            if (this.receiptReminderState.mutationAttempt?.signature !== signature) this.receiptReminderState.mutationAttempt = {signature,idempotency_key:createIdempotencyKey()};
+            const attempt = this.receiptReminderState.mutationAttempt;
+            const authGeneration = this.authGeneration;
+            const userId = this.user?.id ?? null;
+            const sessionIsCurrent = () => authGeneration === this.authGeneration && userId === (this.user?.id ?? null) && this.receiptReminderState.mutationAttempt === attempt;
+            this.receiptReminderState.actionId = row.id;
+            try {
+              await axios.post(`/api/finance/fulfillment-reminders/${row.id}/${action}`, {expected_version:Number(row.version),idempotency_key:attempt.idempotency_key});
+              if (!sessionIsCurrent() || this.modal?.type !== "receipt") return false;
+              this.receiptReminderState.mutationAttempt = null;
+              await this.loadReceiptReminders({history:this.receiptReminderState.historyMode,page:this.receiptReminderState.page});
+              this.showToast(action === "resolve" ? "备忘已处理" : "备忘已取消");
+              return true;
+            } catch(error) {
+              if (error?.response?.status === 403 && sessionIsCurrent()) return this.handleReceiptReminderPermissionLoss();
+              if (sessionIsCurrent()) this.showToast(this.errorMessage(error), true);
+              return false;
+            } finally {
+              if (sessionIsCurrent()) this.receiptReminderState.actionId = null;
+            }
+          },
           async openReceipt(row) {
             if (this.deliveryOperationState.action || this.receiptOperationState.action) return false;
             const deliveryId = Number(row?.id || 0);
@@ -26334,6 +26583,7 @@
               this.showToast("送货单不存在，无法打开回单", true);
               return false;
             }
+            this.resetReceiptReminderModalState();
             this.receiptOperationState = {action:"open",deliveryId,receiptId,deliveryNumber};
             try {
               const delivery = (await axios.get(`/api/deliveries/${deliveryId}`)).data;
@@ -26350,6 +26600,7 @@
                 customer_name:delivery.customer_name || row?.customer_name || "客户未登记",
                 delivery_number:delivery.delivery_number || deliveryNumber,
                 actual_received_date:receipt?.actual_received_date || today(), signed_by:receipt?.signed_by || "客户签收",
+                reminder_drafts:[],
                 items:(delivery.items || []).map(item => ({
                   delivery_item_id:item.id, product_code:item.product_code, product_name:item.product_name,
                   delivered_quantity:item.delivered_quantity,
@@ -26366,6 +26617,10 @@
               };
               const isConfirmed = receipt?.status === "confirmed";
               this.modal={type:"receipt",title: isConfirmed ? "编辑送货回单（进入对账后锁定）" : "确认送货回单"};
+              await Promise.all([
+                this.loadReceiptReminderProducts(),
+                receipt?.id ? this.loadReceiptReminders({history:false,page:1}) : Promise.resolve(true),
+              ]);
               return true;
             } catch (error) {
               this.showToast(this.errorMessage(error), true);
@@ -26402,6 +26657,13 @@
                 expected_return_layout_version:line.expected_return_layout_version || null
               }))
             };
+            if (!receiptId && (this.receiptForm.reminder_drafts || []).length) {
+              const reminders = this.receiptForm.reminder_drafts.map(row => this.receiptReminderPayload(row));
+              const signature = JSON.stringify({delivery_id:deliveryId,payload,reminders});
+              if (this.receiptReminderState.bundleAttempt?.signature !== signature) this.receiptReminderState.bundleAttempt = {signature,idempotency_key:createIdempotencyKey()};
+              payload.reminders = reminders;
+              payload.reminder_bundle_idempotency_key = this.receiptReminderState.bundleAttempt.idempotency_key;
+            }
             this.receiptOperationState = {action:"save",deliveryId,receiptId,deliveryNumber};
             try {
               try {
@@ -26411,6 +26673,7 @@
                 this.showToast(this.errorMessage(error), true);
                 return false;
               }
+              this.receiptReminderState.bundleAttempt = null;
               this.invalidateDeliveryListDetail(deliveryId);
               this.closeModal();
               try {
@@ -27445,6 +27708,10 @@
                 this.showToast("送货草稿正在保存，请稍候", true);
                 return;
               }
+              if (this.modal?.type === "receipt" && (this.receiptReminderState.saving || this.receiptReminderState.actionId)) {
+                this.showToast("内部备忘正在保存，请稍候", true);
+                return;
+              }
               if (this.modal?.type === "orderItem" && this.orderItemSaveState.saving) {
                 this.showToast("订单明细正在保存，请稍候", true);
                 return;
@@ -27497,6 +27764,11 @@
               && this.deliveryFormHasUnsavedChanges()
               && !confirm("送货草稿有未保存的修改，确定要关闭吗？")
             ) return;
+            if (
+              this.modal?.type === "receipt"
+              && ((this.receiptForm.reminder_drafts || []).length || String(this.receiptReminderEditor?.content || "").trim())
+              && !confirm("回单或内部备忘还有未保存内容，确定要关闭吗？")
+            ) return;
             if (this._productFormDirty()) {
               if (!confirm("表单有未保存的修改，确定要关闭吗？")) return;
             }
@@ -27507,6 +27779,10 @@
 	              return;
 	            }
 	            if (this.modal?.type === "order") this.resetOrderCommonBoxPicker();
+              if (this.modal?.type === "receipt") {
+                this.resetReceiptReminderModalState();
+                this.receiptForm = {items:[],reminder_drafts:[]};
+              }
               if (this.modal?.type === "auditDetail") {
                 this.auditLogState.detail = null;
                 this.auditLogState.detailError = "";

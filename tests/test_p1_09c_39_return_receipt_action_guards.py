@@ -47,7 +47,10 @@ def test_open_save_and_cancel_receipt_are_single_flight_and_freeze_targets(
     tmp_path: Path,
 ) -> None:
     open_body = _method_body("async openReceipt(row) {", "async saveReceipt() {")
-    save_body = _method_body("async saveReceipt() {", "createDeliveryLine(overrides = {}) {")
+    save_body = _method_body(
+        "async saveReceipt() {",
+        "resetDeliveryReminderState({preserveAcknowledgement=false} = {}) {",
+    )
     cancel_body = _method_body("async cancelReceipt(row) {", "exportStatement(row) {")
     script = f"""
 const AsyncFunction = Object.getPrototypeOf(async function(){{}}).constructor;
@@ -131,7 +134,10 @@ vm.cancelReceipt = new AsyncFunction("row", {json.dumps(cancel_body, ensure_asci
 
 
 def test_receipt_success_is_not_misreported_when_refresh_fails(tmp_path: Path) -> None:
-    save_body = _method_body("async saveReceipt() {", "createDeliveryLine(overrides = {}) {")
+    save_body = _method_body(
+        "async saveReceipt() {",
+        "resetDeliveryReminderState({preserveAcknowledgement=false} = {}) {",
+    )
     cancel_body = _method_body("async cancelReceipt(row) {", "exportStatement(row) {")
     script = f"""
 const AsyncFunction = Object.getPrototypeOf(async function(){{}}).constructor;

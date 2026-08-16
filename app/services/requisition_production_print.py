@@ -29,6 +29,10 @@ from app.models.supplier_requisition_order import (
 )
 from app.services.box_type_rules import box_type_code, canonical_box_style
 from app.services.history_orders import build_display_registry, display_order_number
+from app.services.fulfillment_reminders import (
+    matching_production_reminders,
+    production_reminders_by_customer,
+)
 from app.services.production_workflow import _task_printing_snapshot
 
 
@@ -589,6 +593,7 @@ def build_supplier_requisition_production_package(
             "component_label": component_label,
             "display_order": display_order,
             "product_code": product_code or None,
+            "_product_id": int(item.product_id) if item.product_id is not None else None,
             "product_name": item.product_name,
             "specification": specification,
             "planned_finished_quantity": int(item.quantity or 0),
@@ -736,6 +741,10 @@ def build_supplier_requisition_production_package(
             )
 
     cards = list(grouped.values())
+    reminders_by_customer = production_reminders_by_customer(
+        db,
+        {int(card.get("customer_id") or 0) for card in cards},
+    )
     for card in cards:
         card.pop("_planned_quantity_keys", None)
         layout_kinds = card.pop("_layout_kinds", set())
@@ -793,6 +802,18 @@ def build_supplier_requisition_production_package(
             )
         )
         card["status_label"] = "需核对" if card["review_required"] else "待来料"
+        customer_id = int(card.get("customer_id") or 0)
+        product_ids = {
+            int(component.get("_product_id") or 0)
+            for component in card["components"]
+            if component.get("_product_id")
+        }
+        card["fulfillment_reminders"] = matching_production_reminders(
+            reminders_by_customer.get(customer_id, []),
+            product_ids=product_ids,
+        )
+        for component in card["components"]:
+            component.pop("_product_id", None)
     immutable_payload = {
         "supplier_order_id": order.id,
         "supplier_order_number": order.order_number,
@@ -801,7 +822,13 @@ def build_supplier_requisition_production_package(
             {
                 key: value
                 for key, value in card.items()
-                if key not in {"review_required", "review_messages", "status_label"}
+                if key
+                not in {
+                    "review_required",
+                    "review_messages",
+                    "status_label",
+                    "fulfillment_reminders",
+                }
             }
             for card in cards
         ],

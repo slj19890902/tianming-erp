@@ -754,6 +754,136 @@ def list_delivery_reminders(
     }
 
 
+def _production_reminder_conditions(
+    *,
+    customer_ids: set[int],
+) -> list[Any]:
+    today = beijing_today()
+    return [
+        FulfillmentReminder.customer_id.in_(customer_ids),
+        FulfillmentReminder.status == "active",
+        FulfillmentReminder.source_valid.is_(True),
+        FulfillmentReminder.scope_type.in_({"customer", "product"}),
+        FulfillmentReminder.reminder_type == "production_attention",
+        or_(
+            FulfillmentReminder.remind_on.is_(None),
+            FulfillmentReminder.remind_on <= today,
+        ),
+    ]
+
+
+def _production_reminder_ordering() -> tuple[Any, ...]:
+    today = beijing_today()
+    due_rank = case(
+        (FulfillmentReminder.remind_on < today, 0),
+        (FulfillmentReminder.remind_on == today, 1),
+        else_=2,
+    )
+    return (
+        due_rank,
+        FulfillmentReminder.scope_type,
+        FulfillmentReminder.created_at,
+        FulfillmentReminder.id,
+    )
+
+
+def list_order_production_reminders(
+    db: Session,
+    *,
+    customer_id: int,
+    page: int,
+    page_size: int,
+) -> dict:
+    """Return current production reminders for one order-entry customer.
+
+    The response intentionally includes all customer and product scoped rows
+    for that customer. Order entry can then match formal product identifiers
+    locally without issuing a request per draft line.
+    """
+
+    conditions = _production_reminder_conditions(customer_ids={customer_id})
+    total = int(
+        db.scalar(select(func.count(FulfillmentReminder.id)).where(*conditions))
+        or 0
+    )
+    rows = db.scalars(
+        select(FulfillmentReminder)
+        .where(*conditions)
+        .order_by(*_production_reminder_ordering())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    ).all()
+    return {
+        "items": [reminder_response(row) for row in rows],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "as_of": beijing_today(),
+    }
+
+
+def production_reminders_by_customer(
+    db: Session,
+    customer_ids: set[int] | list[int],
+) -> dict[int, list[dict]]:
+    """Load current production reminders for many visible customers once."""
+
+    normalized_ids = {int(value) for value in customer_ids if value}
+    if not normalized_ids:
+        return {}
+    rows = db.scalars(
+        select(FulfillmentReminder)
+        .where(*_production_reminder_conditions(customer_ids=normalized_ids))
+        .order_by(
+            FulfillmentReminder.customer_id,
+            *_production_reminder_ordering(),
+        )
+    ).all()
+    result: dict[int, list[dict]] = {customer_id: [] for customer_id in normalized_ids}
+    for row in rows:
+        result.setdefault(int(row.customer_id), []).append(reminder_response(row))
+    return result
+
+
+def matching_production_reminders(
+    reminders: list[dict],
+    *,
+    product_ids: set[int] | list[int],
+) -> list[dict]:
+    """Keep customer reminders and exact formal-product reminders only."""
+
+    normalized_product_ids = {int(value) for value in product_ids if value}
+    return [
+        row
+        for row in reminders
+        if row.get("scope_type") == "customer"
+        or (
+            row.get("scope_type") == "product"
+            and int(row.get("product_id") or 0) in normalized_product_ids
+        )
+    ]
+
+
+def annotate_production_reminders(
+    db: Session,
+    items: list[dict],
+) -> list[dict]:
+    """Append reminder projections to production task rows without N+1 reads."""
+
+    by_customer = production_reminders_by_customer(
+        db,
+        {int(item.get("customer_id") or 0) for item in items},
+    )
+    for item in items:
+        customer_id = int(item.get("customer_id") or 0)
+        product_id = int(item.get("product_id") or 0)
+        item["fulfillment_reminders"] = matching_production_reminders(
+            by_customer.get(customer_id, []),
+            product_ids={product_id} if product_id else set(),
+        )
+    return items
+
+
 def reminder_product_options(
     db: Session,
     *,

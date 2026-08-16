@@ -354,6 +354,87 @@ def test_package_keeps_split_components_and_two_half_page_layout(
     assert before == after == 1
 
 
+def test_internal_production_print_adds_current_customer_handoff_without_changing_plan_fingerprint(
+    production_print_app,
+):
+    from app.models.delivery import Delivery
+    from app.models.finance import ReturnReceipt
+    from app.models.fulfillment_reminder import FulfillmentReminder
+    from app.models.product import Product
+    from app.models.supplier_requisition_order import SupplierRequisitionOrder
+    from app.models.user import User
+    from app.services.requisition_production_print import (
+        build_supplier_requisition_production_package,
+    )
+
+    with production_print_app["session_factory"]() as db:
+        supplier = db.get(
+            SupplierRequisitionOrder,
+            production_print_app["supplier_order_id"],
+        )
+        product = db.get(Product, production_print_app["product_id"])
+        actor = db.query(User).filter(User.username == "p132a2-admin").one()
+        before = build_supplier_requisition_production_package(db, supplier)
+        delivery = Delivery(
+            delivery_number="DH-P165C-PRINT",
+            customer_id=product.customer_id,
+            delivery_date=date(2026, 8, 15),
+            status="dispatched",
+            total_quantity=1,
+        )
+        db.add(delivery)
+        db.flush()
+        receipt = ReturnReceipt(
+            delivery_id=delivery.id,
+            actual_received_date=date(2026, 8, 16),
+            signed_by="王经理",
+            status="confirmed",
+            created_by=actor.id,
+        )
+        db.add(receipt)
+        db.flush()
+        db.add(
+            FulfillmentReminder(
+                source_return_receipt_id=receipt.id,
+                source_return_receipt_id_snapshot=receipt.id,
+                source_delivery_id_snapshot=delivery.id,
+                source_delivery_number_snapshot=delivery.delivery_number,
+                source_received_date_snapshot=receipt.actual_received_date,
+                source_valid=True,
+                customer_id=product.customer_id,
+                customer_name_snapshot="半页任务单客户",
+                product_id=product.id,
+                product_id_snapshot=product.id,
+                product_code_snapshot=product.product_code,
+                product_name_snapshot=product.product_name,
+                scope_type="product",
+                reminder_type="production_attention",
+                content="客户回单交代：首件生产后先留样核对",
+                cadence="continuous",
+                remind_on=date(2026, 8, 16),
+                status="active",
+                version=1,
+                created_by=actor.id,
+                created_by_name_snapshot=actor.display_name,
+            )
+        )
+        db.commit()
+        after = build_supplier_requisition_production_package(db, supplier)
+        product_id = product.id
+
+    assert after["plan_fingerprint"] == before["plan_fingerprint"]
+    projected = [
+        reminder
+        for card in after["cards"]
+        for reminder in card["fulfillment_reminders"]
+    ]
+    assert projected
+    assert {row["content"] for row in projected} == {
+        "客户回单交代：首件生产后先留样核对"
+    }
+    assert {row["product_id"] for row in projected} == {product_id}
+
+
 def test_package_api_is_read_only_scoped_and_fails_closed(
     production_print_app,
 ):

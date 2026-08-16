@@ -350,6 +350,19 @@
         ].join("");
       }
 
+      function fulfillmentReminderHtml(card) {
+        const reminders = Array.isArray(card && card.fulfillment_reminders) ? card.fulfillment_reminders : [];
+        if (!reminders.length) return "";
+        const rows = reminders.map((row) => {
+          const scope = row.scope_type === "product"
+            ? `指定常用箱：${row.product_code || "-"} / ${row.product_name || "-"}`
+            : "该客户";
+          const quantity = row.suggested_quantity ? `｜建议数量 ${row.suggested_quantity}` : "";
+          return `<div class="detail-row"><span class="label">${escapeHtml(scope)}</span><span class="value">${escapeHtml(row.content || "-")}<br><small>来源 ${escapeHtml(row.source_delivery_number || "-")}｜回单日 ${escapeHtml(row.source_received_date || "-")}${escapeHtml(quantity)}｜记录人 ${escapeHtml(row.created_by_name || "-")}</small></span></div>`;
+        }).join("");
+        return `<section class="printing-block internal-only"><div class="printing-block-title">客户回单交代（仅内部）</div>${rows}</section>`;
+      }
+
       function structureHtml(card) {
         const drawing = card.structure_reference;
         let body = '<div class="structure-empty">未登记结构图纸<br>请按文字尺寸与工艺要求生产</div>';
@@ -393,6 +406,7 @@
           <div class="product-strip"><div><span class="field-label">产品 / 存货编码</span><span class="field-value">${escapeHtml(productLine)}</span></div><div><span class="field-label">${card.layout_kind === "liner" ? "衬板尺寸" : card.layout_kind === "die_cut" ? "纸板净片尺寸" : "成品内尺寸"}</span><span class="field-value${card.layout_kind === "carton" ? " production-key-value" : ""}">${escapeHtml(card.layout_kind === "die_cut" ? textList(componentSizes(card)) : finishedSize(card))}</span></div></div>
           ${processHtml(card)}
           <div class="detail-grid"><div class="detail-list">${detailHtml(card)}</div>${structureHtml(card)}</div>
+          ${fulfillmentReminderHtml(card)}
           ${warnings}
           <footer class="foot internal-only"><span>报料单 ${escapeHtml(packageData.supplier_order_number || "-")} · 版本 ${escapeHtml(String(packageData.plan_fingerprint || "").slice(0, 12))}</span><span>生成 ${escapeHtml(packageData.created_at || "-")}</span></footer>
           <footer class="foot safe-only">${safeNote}<span>尺寸单位：mm</span></footer>

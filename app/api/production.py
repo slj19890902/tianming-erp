@@ -54,6 +54,7 @@ from app.services.production_label_operations import (
     production_label_write_guard,
     refresh_task_label_plan,
 )
+from app.services.fulfillment_reminders import annotate_production_reminders
 from app.services.warehouse_inventory import WarehouseInventoryError
 
 
@@ -304,7 +305,12 @@ def get_production_tasks(
                 allowed_customer_ids=allowed_customer_ids,
                 status=task_status,
             )
-        return {"items": annotate_task_label_plans(db, items, hydrate=False)}
+        return {
+            "items": annotate_production_reminders(
+                db,
+                annotate_task_label_plans(db, items, hydrate=False),
+            )
+        }
 
     resolved_page = page or 1
     resolved_page_size = page_size or 25
@@ -316,7 +322,10 @@ def get_production_tasks(
             page_size=resolved_page_size,
         )
     return {
-        "items": annotate_task_label_plans(db, items, hydrate=False),
+        "items": annotate_production_reminders(
+            db,
+            annotate_task_label_plans(db, items, hydrate=False),
+        ),
         "total": count_production_tasks(
             db,
             allowed_customer_ids=allowed_customer_ids,

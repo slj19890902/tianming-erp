@@ -3709,7 +3709,7 @@
 	                  <tbody><tr v-for="row in productionPending" :key="row.id" :class="{'requisition-selected': productionSelected[row.id]}">
 	                    <td v-if="canProductionExecute"><input v-if="productionUsesBatchConfirmation(row)" type="checkbox" :checked="!!productionSelected[row.id]" :disabled="productionBusy || !canConfirmProductionRow(row)" @change="onProductionSelectionChange(row,$event.target.checked)" /><span v-else class="muted">{{ row._direct_submitting ? '处理中' : '-' }}</span></td>
 	                    <td style="white-space:normal"><strong>{{ row.item_order_number || row.order_number || '-' }}</strong><br><span class="muted">{{ row.customer_name || '-' }}</span></td>
-	                    <td style="white-space:normal"><div class="production-product-summary" :title="productionProductTitle(row)"><div class="production-product-line"><span v-if="row.is_component_task" class="status blue">组件</span><strong>{{ row.product_code || '-' }}</strong><span>｜{{ row.product_name || '-' }}</span></div><div :class="productionPrintingSetup(row)?'production-printing-setup':'production-product-meta'">{{ productionPrintingSetup(row) || (row.specification || '-') }}<span v-if="!productionPrintingSetup(row) && productionBoardPreparationSummary(row)">｜{{ productionBoardPreparationSummary(row) }}</span></div><div :class="productionLabelPlanClass(row)" style="display:block;margin-top:5px">{{ productionLabelPlanText(row) }}</div></div></td>
+	                    <td style="white-space:normal"><div class="production-product-summary" :title="productionProductTitle(row)"><div class="production-product-line"><span v-if="row.is_component_task" class="status blue">组件</span><strong>{{ row.product_code || '-' }}</strong><span>｜{{ row.product_name || '-' }}</span></div><div :class="productionPrintingSetup(row)?'production-printing-setup':'production-product-meta'">{{ productionPrintingSetup(row) || (row.specification || '-') }}<span v-if="!productionPrintingSetup(row) && productionBoardPreparationSummary(row)">｜{{ productionBoardPreparationSummary(row) }}</span></div><div :class="productionLabelPlanClass(row)" style="display:block;margin-top:5px">{{ productionLabelPlanText(row) }}</div><div v-if="row.fulfillment_reminders?.length" class="status orange" style="display:block;margin-top:6px;white-space:normal"><strong>客户回单交代</strong><div v-for="reminder in row.fulfillment_reminders" :key="reminder.id" style="overflow-wrap:anywhere">{{ reminder.content }}<span class="muted">｜{{ reminder.scope_type==='product' ? (reminder.product_code || '指定常用箱') : '该客户' }}｜{{ reminder.source_delivery_number || '-' }}</span></div></div></div></td>
 	                    <td style="white-space:normal"><div class="production-quantity-summary"><div>订单 <strong>{{ row.order_quantity || 0 }}</strong>{{ productionOutputUnit(row) }}｜已到纸板 <strong>{{ row.material_received_quantity || 0 }}</strong>张</div><div>本次做 <strong>{{ row.planned_output_quantity || row.planned_quantity || 0 }}</strong>{{ productionOutputUnit(row) }}<span v-if="productionCuttingModeLabel(row)" class="muted">｜{{ productionCuttingModeLabel(row) }}</span></div></div></td>
 	                    <td style="white-space:normal"><div class="production-input-line"><label class="muted">用纸板</label><input class="input" type="number" min="1" v-model.number="row.actual_input_quantity" @input="syncProductionQuantities(row)" /><span class="production-input-unit">张</span></div><div class="production-input-line"><label class="muted">做成品</label><input class="input" type="number" min="1" v-model.number="row.actual_output_quantity" @input="syncProductionQuantities(row)" /><span class="production-input-unit">{{ productionOutputUnit(row) }}｜损耗 {{ productionDefectiveQuantity(row) }}</span></div></td>
 	                    <td style="white-space:normal"><div>用于订单 <strong>{{ productionOrderCoverage(row) }}</strong></div><div :class="productionSurplusQuantity(row)>0?'status orange':'muted'" style="margin-top:4px">多出 {{ productionSurplusQuantity(row) }}</div></td>
@@ -5436,6 +5436,21 @@
                     <span :class="['status',importDraftSaveStatusClass(draft)]">{{ importDraftSaveStatusText(draft) }}</span>
                   </div>
                 </div>
+                <div v-if="draft.matched_customer_id" class="panel" aria-label="PDF草稿内部生产提醒" style="margin-bottom:10px;border-color:var(--warning,#d99000)">
+                  <div class="toolbar"><div><strong>客户回单交代</strong><span v-if="orderImportReminderDisplayRows(draft).length" class="status orange" style="margin-left:8px">{{ orderImportReminderDisplayRows(draft).length }} 条</span><div class="muted">同一客户批量读取一次；只供内部核对，不写入订单备注。</div></div><button v-if="draft._reminder_error" class="btn small" type="button" @click="loadOrderImportReminderForDraft(draft,{force:true})">重试</button></div>
+                  <div v-if="draft._reminder_loading" class="muted">正在读取生产提醒…</div>
+                  <div v-else-if="draft._reminder_error" class="status orange">{{ draft._reminder_error }}</div>
+                  <div v-else-if="!orderImportReminderDisplayRows(draft).length" class="muted">当前客户和已匹配正式产品没有到期的生产提醒。</div>
+                  <div v-if="draft._reminder_visible">
+                    <div v-for="row in orderImportReminderDisplayRows(draft)" :key="row.id" :class="['panel',{'warning-row':importDraftReminderMatchesProduct(draft,row)}]" style="padding:8px;margin:6px 0">
+                      <span class="status blue">{{ orderReminderScopeLabel(row) }}</span><span v-if="importDraftReminderMatchesProduct(draft,row)" class="status orange" style="margin-left:5px">当前草稿匹配</span>
+                      <div style="white-space:pre-wrap;overflow-wrap:anywhere;margin-top:6px">{{ row.content }}</div>
+                      <div class="muted">来源 {{ row.source_delivery_number || '-' }}｜回单日 {{ row.source_received_date || '-' }}｜记录人 {{ row.created_by_name || '-' }}</div>
+                    </div>
+                    <button class="btn primary small" type="button" @click="acknowledgeImportDraftReminders(draft)">知道了，继续确认草稿</button>
+                  </div>
+                  <button v-else-if="orderImportReminderDisplayRows(draft).length" class="btn small" type="button" @click="draft._reminder_visible=true">重新查看</button>
+                </div>
                 <div
                   v-if="draft._save_status && draft._save_status !== 'idle'"
                   :class="['status',importDraftSaveStatusClass(draft)]"
@@ -5858,6 +5873,20 @@
                 系统编号预览：<span class="sys-num" style="font-size:12px">{{ orderNumberPreview || "-" }}</span>
                 <span style="margin:0 6px">/</span>
                 <span class="sys-num" style="font-size:12px">{{ orderForm.items.map((item,index)=>itemOrderNumberPreview(index)).join(" · ") }}</span>
+              </div>
+              <div v-if="orderForm.customer_id" class="panel" aria-label="内部生产提醒" style="margin:0 0 10px;border-color:var(--warning,#d99000)">
+                <div class="toolbar"><div><strong>客户回单交代</strong><span v-if="orderReminderDisplayRows().length" class="status orange" style="margin-left:8px">{{ orderReminderDisplayRows().length }} 条</span><div class="muted">仅供订单与生产内部核对，不会写入订单备注、客户单据或自动修改数量。</div></div><div class="toolbar-group"><button v-if="orderReminderDisplayRows().length && !orderReminderState.visible" class="btn small" type="button" @click="reopenOrderReminderSummary">重新查看</button><button v-if="orderReminderState.error" class="btn small" type="button" @click="loadOrderRemindersForCustomer(orderForm.customer_id)">重试</button></div></div>
+                <div v-if="orderReminderState.loading" class="muted">正在一次性读取该客户的生产提醒…</div>
+                <div v-else-if="orderReminderState.error" class="status orange" style="white-space:normal">{{ orderReminderState.error }}</div>
+                <div v-else-if="!orderReminderDisplayRows().length" class="muted">当前客户和已选正式产品没有到期的生产提醒。</div>
+                <div v-if="orderReminderState.visible" class="panel" role="dialog" aria-modal="true" aria-label="订单生产提醒汇总" style="margin-top:10px">
+                  <div class="toolbar" style="margin-bottom:8px"><div><strong>保存前请核对 {{ orderReminderDisplayRows().length }} 条提醒</strong><div class="muted">指定常用箱的提醒会随当前正式产品即时出现，手工尺寸只匹配客户级提醒。</div></div><button class="btn primary" type="button" @click="acknowledgeOrderReminders">知道了，继续保存</button></div>
+                  <div v-for="row in orderReminderDisplayRows()" :key="row.id" :class="['panel',{'warning-row':orderReminderMatchesCurrentProducts(row)}]" style="padding:8px;margin:6px 0">
+                    <span class="status blue">{{ orderReminderScopeLabel(row) }}</span><span v-if="orderReminderMatchesCurrentProducts(row)" class="status orange" style="margin-left:5px">当前订单匹配</span>
+                    <div style="white-space:pre-wrap;overflow-wrap:anywhere;margin-top:6px">{{ row.content }}</div>
+                    <div class="muted">来源 {{ row.source_delivery_number || '-' }}｜回单日 {{ row.source_received_date || '-' }}｜记录人 {{ row.created_by_name || '-' }}</div>
+                  </div>
+                </div>
               </div>
               <div v-if="orderForm.requisition_strategy==='wait_previous_batch'" class="notice" style="margin:0 0 10px">
                 <div class="toolbar-group"><strong>等候报料预检</strong><span class="muted">正常唯一上一批会自动带出；多候选、缺编码或规格材质差异请逐行选择后再保存。</span><button class="btn small" type="button" :disabled="orderRequisitionPreview.loading || !orderForm.customer_id" @click="previewOrderRequisitionHolds">{{ orderRequisitionPreview.loading ? '预检中…' : '重新预检' }}</button></div>
@@ -7458,7 +7487,7 @@
             <button v-if="modal?.type === 'delivery' && deliveryForm.editingId && !deliveryFormIsDirty()" class="btn" :disabled="loading || deliverySaveState.saving || !deliveryForm.pick_task || !!deliveryOperationState.action" :title="deliveryForm.pick_task ? '打印款号、名称、尺寸、数量和具体位置' : '请先点拿货生成库位计划'" @click="openCurrentDeliveryPickPrint">打印仓库找货单</button>
             <span v-if="modal?.type === 'delivery' && deliveryForm.editingId && !deliveryFormIsDirty() && !deliveryForm.pick_task" class="muted">先点“拿货”生成库位计划，再打印找货单</span>
             <button v-if="canSaveModal && modal?.type==='quotationConvert'" class="btn primary" :disabled="loading || quotationConversionState.saving || quotationConversionState.committed || quotationConversionState.outcomeUncertain || !!quotationConvertCreaseMismatch" @click="saveModal()">{{ quotationConversionState.saving ? '正在转入…' : (quotationConversionState.committed ? '已转入常用箱' : '保存') }}</button>
-            <button v-if="canSaveModal && modal?.type==='order'" class="btn primary" :disabled="loading || orderCreateSaveState.saving || orderCreateSaveState.committed || orderCreateSaveState.outcomeUncertain" @click="saveModal()">{{ orderCreateSaveState.saving ? '正在保存订单…' : (orderCreateSaveState.committed ? '订单已保存' : '保存') }}</button>
+            <button v-if="canSaveModal && modal?.type==='order'" class="btn primary" :disabled="loading || orderCreateSaveState.saving || orderCreateSaveState.committed || orderCreateSaveState.outcomeUncertain || orderReminderBlocking()" @click="saveModal()">{{ orderCreateSaveState.saving ? '正在保存订单…' : (orderCreateSaveState.committed ? '订单已保存' : '保存') }}</button>
             <button v-if="canSaveModal && modal?.type==='orderEdit'" class="btn primary" :disabled="loading || orderGroupSaveState.saving || orderGroupSaveState.committed || orderGroupSaveState.outcomeUncertain" @click="saveModal()">{{ orderGroupSaveState.saving ? '正在保存订单组…' : (orderGroupSaveState.committed ? '订单组已保存' : '保存') }}</button>
             <button v-if="canSaveModal && modal?.type==='orderItem'" class="btn primary" :disabled="loading || orderItemSaveState.saving || orderItemSaveState.committed || orderItemSaveState.outcomeUncertain || finishedReservationActionBlocked() || !!orderItemCreaseMismatch" @click="saveModal()">{{ orderItemSaveState.saving ? '正在保存明细…' : (orderItemSaveState.committed ? '订单明细已保存' : '保存') }}</button>
             <button v-if="canSaveModal && !['quotationConvert','order','orderEdit','orderItem'].includes(modal?.type)" class="btn primary" :class="{'delivery-guide-target':modal?.type==='delivery' && ['review','save','print'].includes(deliveryGuideStage)}" :disabled="loading || masterSavePending || (['supplierRequisitionDraft','requisition'].includes(modal?.type) && requisitionInventoryActionBlocked()) || (modal?.type==='supplierRequisitionDraft' && (supplierRequisitionSaveState.saving || supplierRequisitionSaveState.committed)) || (modal?.type==='requisition' && (compositeRequisitionSaveState.saving || compositeRequisitionSaveState.committed)) || (modal?.type==='stockReplenishment' && (stockReplenishmentSaveState.saving || stockReplenishmentSaveState.committed)) || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError || !!productPrintingPlateError || !!productPrintingColorError || !!productProductionLabelError)) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && (deliverySaveState.saving || deliverySaveState.outcomeUncertain || !!deliveryValidationError || !!deliveryOperationState.action)) || (modal?.type==='receipt' && !!receiptOperationState.action) || (modal?.type==='requisitionHold' && requisitionHoldSaveBlocked)" @click="modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()">{{ ['customer','product','material','supplier'].includes(modal?.type) && masterSavePending ? '保存中…' : (modal?.type==='delivery' ? (deliverySaveState.saving ? '正在保存草稿…' : deliveryPrimaryLabel()) : (modal?.type==='receipt' ? (receiptOperationState.action==='save' ? '保存中…' : '保存回单') : (modal?.type==='supplierRequisitionDraft' ? (supplierRequisitionSaveState.saving ? '正在生成采购单…' : (supplierRequisitionSaveState.committed ? '采购单已生成' : '确认生成正式采购单')) : (modal?.type==='requisition' ? (compositeRequisitionSaveState.saving ? '正在生成组合报料…' : (compositeRequisitionSaveState.committed ? '组合报料已生成' : '确认生成正式采购单')) : (modal?.type==='requisitionHold' ? '确认暂缓' : (modal?.type==='stockReplenishment' ? (stockReplenishmentSaveState.saving ? '正在保存补库草稿…' : (stockReplenishmentSaveState.committed ? '补库草稿已保存' : (stockReplenishmentForm.source_type==='stock_warning' ? '保存报料草稿' : '保存补库报料草稿'))) : '保存')))))) }}</button>
@@ -8282,6 +8311,7 @@
             materialForm: blankMaterial(),
             orderForm: { customer_id: null, customer_po: "", order_date: today(), delivery_date: plusDays(7), requisition_strategy:"normal", remark: "", items: [] },
             orderCreateSaveState:{saving:false,committed:false,outcomeUncertain:false,result:null},
+            orderReminderState:{loading:false,loaded:false,error:"",items:[],total:0,customerId:null,visible:false,acknowledgedCustomerId:null,acknowledgedSignature:""},
             orderBomDemandSaveState:{saving:false,outcomeUncertain:false,itemId:null,componentId:null,result:null},
             orderGroupSaveState:{saving:false,committed:false,outcomeUncertain:false,result:null},
             orderRequisitionPreview: { loading:false, error:"", checked:false, items:[] },
@@ -8290,6 +8320,7 @@
             orderNumberPreview: "",
             orderImportBatch: { files: [], status: "idle", retryDraft: null },
             orderImportDrafts: [],
+            orderImportReminderCache: {},
             pdfWarehouseLocator: {
               visible:false, url:"", title:"", draftKey:"", focusId:"",
               modalScrollTop:0, tableScrollTop:0, historyPushed:false,
@@ -12365,6 +12396,11 @@
             this.orderTraceEventDetailLoadingKey = "";
             this.orderTraceReturnContext = null;
             this.orderForm = { customer_id:null, customer_po:"", order_date:today(), delivery_date:plusDays(7), requisition_strategy:"normal", remark:"", items:[] };
+            this.orderReminderState = {loading:false,loaded:false,error:"",items:[],total:0,customerId:null,visible:false,acknowledgedCustomerId:null,acknowledgedSignature:""};
+            this.orderImportDrafts = [];
+            this.orderImportReminderCache = {};
+            this.orderImportBatch = {files:[],status:"idle",retryDraft:null};
+            this.orderProductOptions = {};
             this.orderItemForm = {};
             this.deliveryDetailRequestSequence += 1;
             this.deliveryDetailState = {};
@@ -23388,9 +23424,208 @@
               },
             });
           },
+	          resetOrderReminderState({preserveAcknowledgement=false} = {}) {
+	            this.cancelLatestRequest?.("orders:fulfillment-reminders");
+	            const acknowledgedCustomerId = preserveAcknowledgement
+	              ? this.orderReminderState?.acknowledgedCustomerId ?? null
+	              : null;
+	            this.orderReminderState = {loading:false,loaded:false,error:"",items:[],total:0,customerId:null,visible:false,acknowledgedCustomerId,acknowledgedSignature:preserveAcknowledgement ? String(this.orderReminderState?.acknowledgedSignature || "") : ""};
+	          },
+	          orderReminderRequestIsCurrent(customerId, controller, authGeneration, userId) {
+	            return (
+	              latestRequestControllers.get("orders:fulfillment-reminders") === controller
+	              && authGeneration === this.authGeneration
+	              && userId === (this.user?.id ?? null)
+	              && this.modal?.type === "order"
+	              && Number(this.orderForm.customer_id || 0) === Number(customerId)
+	            );
+	          },
+	          async loadOrderRemindersForCustomer(customerId = this.orderForm.customer_id) {
+	            customerId = Number(customerId || 0);
+	            if (!customerId || this.modal?.type !== "order") {
+	              this.resetOrderReminderState();
+	              return false;
+	            }
+	            const previous = this.orderReminderState || {};
+	            const acknowledgedCustomerId = Number(previous.acknowledgedCustomerId || 0) === customerId
+	              ? customerId
+	              : null;
+	            const acknowledgedSignature = acknowledgedCustomerId ? String(previous.acknowledgedSignature || "") : "";
+	            const controller = this.beginLatestRequest("orders:fulfillment-reminders");
+	            const authGeneration = this.authGeneration;
+	            const userId = this.user?.id ?? null;
+	            this.orderReminderState = {...previous,loading:true,loaded:false,error:"",customerId,visible:false,acknowledgedCustomerId,acknowledgedSignature};
+	            try {
+	              const {data} = await axios.get("/api/orders/fulfillment-reminders", {
+	                params:{customer_id:customerId,page:1,page_size:100},
+	                signal:controller.signal,
+	              });
+	              if (!this.orderReminderRequestIsCurrent(customerId,controller,authGeneration,userId)) return false;
+	              const items = Array.isArray(data?.items) ? data.items : [];
+	              this.orderReminderState = {
+	                ...this.orderReminderState,loading:false,loaded:true,error:"",items,
+	                total:Number(data?.total || items.length),customerId,visible:false,
+	              };
+	              this.syncOrderReminderVisibility();
+	              return true;
+	            } catch (error) {
+	              if (this.isCancelledRequest(error)) return false;
+	              const sessionIsCurrent = authGeneration === this.authGeneration && userId === (this.user?.id ?? null);
+	              if (error?.response?.status === 403 && sessionIsCurrent) {
+	                this.resetPagePerformanceState();
+	                this.resetModalA11ySession({discardModal:true});
+	                this.showToast("订单生产提醒权限或客户范围已变化，请重新进入订单页面", true);
+	                return false;
+	              }
+	              if (!this.orderReminderRequestIsCurrent(customerId,controller,authGeneration,userId)) return false;
+	              this.orderReminderState = {...this.orderReminderState,loading:false,error:`生产提醒读取失败：${this.errorMessage(error)}`};
+	              return false;
+	            } finally {
+	              this.finishLatestRequest("orders:fulfillment-reminders",controller);
+	            }
+	          },
+	          orderReminderMatchesCurrentProducts(row) {
+	            if (row?.scope_type === "customer") return true;
+	            const productId = Number(row?.product_id || 0);
+	            if (!productId) return false;
+	            return (this.orderForm.items || []).some(item => !item?.manual_size_entry && Number(item?.product_id || 0) === productId);
+	          },
+	          orderReminderDisplayRows() {
+	            return (this.orderReminderState?.items || []).filter(row => this.orderReminderMatchesCurrentProducts(row));
+	          },
+	          orderReminderSignature() {
+	            return this.orderReminderDisplayRows().map(row => Number(row.id || 0)).filter(Boolean).sort((left,right)=>left-right).join(",");
+	          },
+	          syncOrderReminderVisibility() {
+	            const signature = this.orderReminderSignature();
+	            this.orderReminderState.visible = !!signature && signature !== String(this.orderReminderState.acknowledgedSignature || "");
+	            return this.orderReminderState.visible;
+	          },
+	          orderReminderScopeLabel(row) {
+	            return row?.scope_type === "product"
+	              ? `指定常用箱：${row.product_code || "-"} / ${row.product_name || "-"}`
+	              : "该客户";
+	          },
+	          acknowledgeOrderReminders() {
+	            const customerId = Number(this.orderReminderState.customerId || this.orderForm.customer_id || 0);
+	            if (!customerId) return false;
+	            this.orderReminderState.acknowledgedCustomerId = customerId;
+	            this.orderReminderState.acknowledgedSignature = this.orderReminderSignature();
+	            this.orderReminderState.visible = false;
+	            return true;
+	          },
+	          reopenOrderReminderSummary() {
+	            if (!this.orderReminderDisplayRows().length) return false;
+	            this.orderReminderState.visible = true;
+	            return true;
+	          },
+	          orderReminderBlocking() {
+	            if (!this.orderForm?.customer_id) return false;
+	            const state = this.orderReminderState || {};
+	            const customerId = Number(this.orderForm.customer_id || 0);
+	            const signature = this.orderReminderSignature();
+	            return !!(
+	              state.loading || state.error || !state.loaded
+	              || Number(state.customerId || 0) !== customerId
+	              || (!!signature && signature !== String(state.acknowledgedSignature || ""))
+	            );
+	          },
+	          prepareImportDraftReminderState(draft) {
+	            return Object.assign(draft, {
+	              _reminder_loading:false,_reminder_error:"",_reminder_items:[],_reminder_total:0,
+	              _reminder_loaded:false,_reminder_customer_id:Number(draft?.matched_customer_id || 0) || null,
+	              _reminder_visible:false,_reminder_acknowledged:false,_reminder_acknowledged_signature:"",
+	            });
+	          },
+	          applyOrderImportReminderRows(customerId, rows, total) {
+	            (this.orderImportDrafts || []).filter(draft => Number(draft?.matched_customer_id || 0) === Number(customerId)).forEach(draft => {
+	              const previousCustomerId = Number(draft._reminder_customer_id || 0);
+	              const acknowledgedSignature = previousCustomerId === Number(customerId) ? String(draft._reminder_acknowledged_signature || "") : "";
+	              draft._reminder_loading = false;
+	              draft._reminder_error = "";
+	              draft._reminder_items = rows;
+	              draft._reminder_total = Number(total || rows.length);
+	              draft._reminder_loaded = true;
+	              draft._reminder_customer_id = Number(customerId);
+	              draft._reminder_acknowledged_signature = acknowledgedSignature;
+	              this.syncOrderImportReminderVisibility(draft);
+	            });
+	          },
+	          async loadOrderImportRemindersForCustomer(customerId,{force=false}={}) {
+	            customerId = Number(customerId || 0);
+	            if (!customerId || this.modal?.type !== "orderPdfImport") return false;
+	            const cache = this.orderImportReminderCache?.[String(customerId)];
+	            if (!force && cache?.loaded) {
+	              this.applyOrderImportReminderRows(customerId,cache.items,cache.total);
+	              return true;
+	            }
+	            const matchingDrafts = (this.orderImportDrafts || []).filter(draft => Number(draft?.matched_customer_id || 0) === customerId);
+	            matchingDrafts.forEach(draft => { draft._reminder_loading=true; draft._reminder_error=""; draft._reminder_customer_id=customerId; });
+	            const requestKey = `orders:import-reminders:${customerId}`;
+	            const controller = this.beginLatestRequest(requestKey);
+	            const authGeneration = this.authGeneration;
+	            const userId = this.user?.id ?? null;
+	            try {
+	              const {data} = await axios.get("/api/orders/fulfillment-reminders", {params:{customer_id:customerId,page:1,page_size:100},signal:controller.signal});
+	              if (latestRequestControllers.get(requestKey)!==controller || authGeneration!==this.authGeneration || userId!==(this.user?.id ?? null) || this.modal?.type!=="orderPdfImport") return false;
+	              const items = Array.isArray(data?.items) ? data.items : [];
+	              this.orderImportReminderCache[String(customerId)] = {loaded:true,items,total:Number(data?.total || items.length)};
+	              this.applyOrderImportReminderRows(customerId,items,Number(data?.total || items.length));
+	              return true;
+	            } catch(error) {
+	              if (this.isCancelledRequest(error)) return false;
+	              const sessionIsCurrent = authGeneration===this.authGeneration && userId===(this.user?.id ?? null);
+	              if (error?.response?.status===403 && sessionIsCurrent) {
+	                this.resetPagePerformanceState();
+	                this.resetModalA11ySession({discardModal:true});
+	                this.showToast("订单生产提醒权限或客户范围已变化，请重新进入订单页面",true);
+	                return false;
+	              }
+	              if (latestRequestControllers.get(requestKey)!==controller || this.modal?.type!=="orderPdfImport") return false;
+	              matchingDrafts.filter(draft => Number(draft?.matched_customer_id || 0)===customerId).forEach(draft => {draft._reminder_loading=false;draft._reminder_error=`生产提醒读取失败：${this.errorMessage(error)}`;});
+	              return false;
+	            } finally {
+	              this.finishLatestRequest(requestKey,controller);
+	            }
+	          },
+	          async loadOrderImportReminders() {
+	            const customerIds = [...new Set((this.orderImportDrafts || []).map(draft => Number(draft?.matched_customer_id || 0)).filter(Boolean))];
+	            return Promise.all(customerIds.map(customerId => this.loadOrderImportRemindersForCustomer(customerId)));
+	          },
+	          async loadOrderImportReminderForDraft(draft,{force=false}={}) {
+	            const customerId = Number(draft?.matched_customer_id || 0);
+	            if (!customerId) { this.prepareImportDraftReminderState(draft); return false; }
+	            return this.loadOrderImportRemindersForCustomer(customerId,{force});
+	          },
+	          importDraftReminderMatchesProduct(draft,row) {
+	            if (row?.scope_type === "customer") return true;
+	            const productId = Number(row?.product_id || 0);
+	            return !!productId && (draft?.items || []).some(item => !item?.is_new_product && Number(item?.matched_product_id || 0) === productId);
+	          },
+	          orderImportReminderDisplayRows(draft) {
+	            return (draft?._reminder_items || []).filter(row => this.importDraftReminderMatchesProduct(draft,row));
+	          },
+	          orderImportReminderSignature(draft) {
+	            return this.orderImportReminderDisplayRows(draft).map(row => Number(row.id || 0)).filter(Boolean).sort((left,right)=>left-right).join(",");
+	          },
+	          syncOrderImportReminderVisibility(draft) {
+	            if (!draft) return false;
+	            const signature = this.orderImportReminderSignature(draft);
+	            draft._reminder_acknowledged = !!signature && signature === String(draft._reminder_acknowledged_signature || "");
+	            draft._reminder_visible = !!signature && !draft._reminder_acknowledged;
+	            return draft._reminder_visible;
+	          },
+	          acknowledgeImportDraftReminders(draft) {
+	            if (!draft?._reminder_loaded) return false;
+	            draft._reminder_acknowledged_signature = this.orderImportReminderSignature(draft);
+	            draft._reminder_acknowledged = !!draft._reminder_acknowledged_signature;
+	            draft._reminder_visible = false;
+	            return true;
+	          },
 	          async openOrder() {
 	            if (!this.customerOptions.length) await this.loadCustomerOptions();
 	            this.orderCreateSaveState = {saving:false,committed:false,outcomeUncertain:false,result:null};
+	            this.resetOrderReminderState();
 	            this.orderForm = { customer_id:null, customer_po:"", order_date:today(), delivery_date:plusDays(7), requisition_strategy:"normal", remark:"", items:[] };
 	            this.resetOrderRequisitionPreview();
 	            this.orderNumberPreview = "";
@@ -23576,6 +23811,7 @@
 	          openOrderPdfImport() {
             this.orderImportBatch = { files:[], status:"idle" };
             this.orderImportDrafts = [];
+            this.orderImportReminderCache = {};
             this.modal = { type:"orderPdfImport", title:"识别采购订单 PDF" };
           },
           pdfCorrectionItemFromDraft(item, index) {
@@ -23696,7 +23932,7 @@
               const form = new FormData();
               this.orderImportBatch.files.forEach(file => form.append("files", file));
               const { data } = await axios.post("/api/orders/pdf-preview-batch", form);
-              this.orderImportDrafts = (data.drafts || []).map(draft => ({
+              this.orderImportDrafts = (data.drafts || []).map(draft => this.prepareImportDraftReminderState({
                 ...draft,
                 confirmed:false,
                 _correction_open:false,
@@ -23708,6 +23944,8 @@
                 _save_message:"",
                 items:(draft.items || []).map(item => this.preparePdfImportItem(item))
               }));
+              await this.loadOrderImportReminders();
+              if (this.modal?.type !== "orderPdfImport") return;
               await Promise.all(this.orderImportDrafts.map(draft => Promise.all((draft.items || []).filter(item => item.matched_product_id).map(item => this.loadOrderLineInventory(item,draft.matched_customer_id)))));
               this.orderImportBatch.status = "recognized";
             } catch (error) {
@@ -23775,6 +24013,12 @@
             const reasons = [];
             if (!draft?.preview_safety_token) reasons.push("PDF预览安全确认缺失，请重新识别。");
             if (!draft?.matched_customer_id) reasons.push("客户未确认。");
+            if (draft?.matched_customer_id && draft?._reminder_loading) reasons.push("生产提醒仍在读取，请稍候。");
+            else if (draft?.matched_customer_id && (!draft?._reminder_loaded || draft?._reminder_error)) reasons.push("生产提醒未读取成功，请重试。");
+            else {
+              const reminderSignature = this.orderImportReminderSignature(draft);
+              if (reminderSignature && reminderSignature !== String(draft?._reminder_acknowledged_signature || "")) reasons.push("请先查看并确认客户回单交代。");
+            }
             if (!draft?.items?.length) reasons.push("没有识别到明细。");
             if (draft?.duplicate_status === "duplicate_skipped") reasons.push("重复订单已跳过。");
             if (draft?.integrity_check?.integrity_status !== "passed") reasons.push("PDF识别完整性未通过或缺失，请重新识别并处理完整性异常。");
@@ -23855,6 +24099,7 @@
             this.invalidateImportDraftConfirmation(draft);
             const index = (draft?.items || []).indexOf(item);
             if (index >= 0) draft.items.splice(index, 1);
+	            this.syncOrderImportReminderVisibility(draft);
           },
           toggleNewProduct(draft, item) {
             if (this.isImportDraftLocked(draft)) return;
@@ -23866,6 +24111,7 @@
             } else {
               this.recalculateImportCost(item);
             }
+	            this.syncOrderImportReminderVisibility(draft);
           },
           async rematchImportDraft(index) {
             const draft = this.orderImportDrafts[index];
@@ -23881,7 +24127,7 @@
               preview_safety_token:draft.preview_safety_token,
             });
             data.items.forEach((item,itemIndex) => Object.assign(item, preserved[itemIndex] || {}));
-            this.orderImportDrafts[index] = {
+            this.orderImportDrafts[index] = this.prepareImportDraftReminderState({
               ...data,
               confirmed:false,
               _correction_open:false,
@@ -23892,7 +24138,8 @@
                _save_status:"idle",
                _save_message:"",
                items:(data.items || []).map(item => this.preparePdfImportItem(item))
-             };
+             });
+            await this.loadOrderImportReminderForDraft(this.orderImportDrafts[index]);
             await Promise.all(this.orderImportDrafts[index].items.filter(item => item.matched_product_id).map(item => this.loadOrderLineInventory(item,this.orderImportDrafts[index].matched_customer_id)));
           },
           async selectImportProduct(draft, item) {
@@ -23932,6 +24179,7 @@
             }
             await this.recalculateImportCost(item);
             this.refreshOrderLineInventory(item);
+	            this.syncOrderImportReminderVisibility(draft);
           },
           pdfItemMaterialText(item) {
             const code = (item.material_base_code || "").split("-")[0];
@@ -24057,6 +24305,14 @@
             };
             this.orderProductOptions = {};
             this.modal = { type:"order", title:"新建多明细订单（PDF草稿）" };
+            this.orderReminderState = {
+              loading:false,loaded:!!draft._reminder_loaded,error:"",items:Array.isArray(draft._reminder_items) ? draft._reminder_items : [],
+              total:Number(draft._reminder_total || 0),customerId:Number(draft.matched_customer_id || 0) || null,
+              visible:false,
+              acknowledgedCustomerId:draft._reminder_acknowledged ? Number(draft.matched_customer_id || 0) : null,
+	              acknowledgedSignature:String(draft._reminder_acknowledged_signature || ""),
+            };
+	            this.syncOrderReminderVisibility();
              for (let index = 0; index < this.orderForm.items.length; index += 1) {
                await this.searchOrderProducts(index, this.orderForm.items[index].product_code || "");
                if (this.orderForm.items[index].product_id) await this.loadOrderDraftBom(this.orderForm.items[index], this.orderForm.items[index].product_id);
@@ -24266,6 +24522,7 @@
               await this.searchOrderProducts(index, item.product_code || item.product_name || item.specification || "");
             }
             this.refreshOrderNumberPreview();
+            await this.loadOrderRemindersForCustomer(this.orderForm.customer_id);
           },
           async refreshOrderNumberPreview() {
             if (!this.orderForm.customer_id) {
@@ -24497,6 +24754,7 @@
             if (this.orderForm.items.length > 1) {
               this.orderForm.items.splice(index,1);
               this.reallocateAllDraftInventory();
+	              this.syncOrderReminderVisibility();
               if (this.modal?.type === "order") this.refreshOrderNumberPreview();
             }
           },
@@ -24524,6 +24782,7 @@
             this.orderForm.items = this.orderForm.items.filter(item => item?.combination_group_key !== groupKey);
             if (!this.orderForm.items.length) this.addOrderItem();
             this.reallocateAllDraftInventory();
+	            this.syncOrderReminderVisibility();
             if (this.modal?.type === "order") this.refreshOrderNumberPreview();
           },
           _componentPricedGroupKey() {
@@ -24640,7 +24899,10 @@
 	            }));
 	          },
           async selectOrderProduct(index, productId) {
-            if (!productId) return;
+            if (!productId) {
+	            this.syncOrderReminderVisibility();
+	            return;
+	          }
             const { data } = await axios.get(`/api/master/products/${productId}`);
             const item = this.orderForm.items[index];
             const previousLine = { ...item };
@@ -24652,6 +24914,7 @@
                 Object.assign(item, previousLine);
                 this.showToast(`组合展开失败，未保留半展开明细：${this.errorMessage(error)}`, true);
               }
+              this.syncOrderReminderVisibility();
               return;
             }
             item.is_new_product = false;
@@ -24685,6 +24948,7 @@
             item._original_product = { specification: this.spec(data), sale_unit_price: data.sale_unit_price, layer_count: data.layer_count, flute_type: data.flute_type, version:data.version };
             await this.recalculateOrderCost(index);
             this.refreshOrderLineInventory(item, this.orderForm.customer_id);
+	            this.syncOrderReminderVisibility();
           },
           async selectOrderMaterial(index) {
             const item=this.orderForm.items[index];
@@ -27949,7 +28213,16 @@
               this.returnFromCommonBoxEditor(this.productEditReturnContext.productId, { saved:false });
 	              return;
 	            }
-	            if (this.modal?.type === "order") this.resetOrderCommonBoxPicker();
+	            if (this.modal?.type === "order") {
+	              this.resetOrderCommonBoxPicker();
+	              this.resetOrderReminderState();
+	            }
+              if (this.modal?.type === "orderPdfImport") {
+                Object.keys(this.orderImportReminderCache || {}).forEach(customerId => this.cancelLatestRequest(`orders:import-reminders:${customerId}`));
+                this.orderImportReminderCache = {};
+                this.orderImportDrafts = [];
+                this.orderImportBatch = {files:[],status:"idle",retryDraft:null};
+              }
               if (this.modal?.type === "receipt") {
                 this.resetReceiptReminderModalState();
                 this.receiptForm = {items:[],reminder_drafts:[]};
@@ -28167,6 +28440,10 @@
           async saveModal() {
             if (this.modal?.type === "estimatedCost") return this.saveEstimatedCost();
             if (this.modal?.type === "receipt") return this.saveReceipt();
+            if (this.modal?.type === "order" && this.orderReminderBlocking()) {
+              this.showToast(this.orderReminderState.error ? "生产提醒读取失败，请先重试" : "请先查看并确认客户回单交代", true);
+              return false;
+            }
             if (["supplierRequisitionDraft","requisition"].includes(this.modal?.type) && this.requisitionInventoryActionBlocked()) {
               this.showToast(
                 this.requisitionInventoryActionState?.action

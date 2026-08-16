@@ -96,6 +96,7 @@ from app.services.history_orders import (
     sanitize_user_text,
     serialize_order_number_fields,
 )
+from app.services.fulfillment_reminders import list_order_production_reminders
 from app.services.flute_mapping import (
     normalize_flute_type,
     seven_layer_code_error,
@@ -3277,6 +3278,25 @@ def list_customer_heat_orders(
         "page_size": result["page_size"],
         "items": result["items"],
     }
+
+
+@router.get("/fulfillment-reminders")
+def get_order_fulfillment_reminders(
+    customer_id: int = Query(gt=0),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=100, ge=1, le=100),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    """Return active internal production reminders for order entry."""
+
+    require_customer_access(customer_id, user, db)
+    return list_order_production_reminders(
+        db,
+        customer_id=customer_id,
+        page=page,
+        page_size=page_size,
+    )
 
 
 @router.get("/number-preview")

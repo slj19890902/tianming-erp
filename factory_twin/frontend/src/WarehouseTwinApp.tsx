@@ -24,7 +24,9 @@ import {
   inventoryLocationPallets,
   inventoryUnitLabel,
   locationLayoutGeometry,
+  normalizeStandardPalletContract,
   searchHighlightAreaCodes,
+  standardPalletContractsMatch,
   warehouseSearchFloorSummaries,
   warehouseSearchLocationSummaries,
   warehouseSearchProductKey,
@@ -219,6 +221,7 @@ interface AuthResponse {
 interface TwinDashboard {
   generated_at: string;
   read_only: boolean;
+  standard_pallet: StandardPalletContract;
   scope: { notice: string };
   summary: {
     active_lots: number;
@@ -229,6 +232,13 @@ interface TwinDashboard {
   floors: Array<{ floor_code: string; occupied_locations: number; active_lots: number }>;
   locations: DashboardLocation[];
   distribution: { areas: AreaDistribution[] };
+}
+
+interface StandardPalletContract {
+  contract_version: "standard-pallet-v1";
+  width_mm: number;
+  depth_mm: number;
+  height_mm: number;
 }
 
 interface SearchItem extends InventoryItem {
@@ -517,6 +527,7 @@ interface TwinFloorResponse {
   source_updated_at?: string;
   revision: string;
   projection_notice: string;
+  standard_pallet: StandardPalletContract;
 }
 
 interface LayoutDraftControl {
@@ -1239,6 +1250,7 @@ export function WarehouseTwinApp() {
   const [cameraPreset, setCameraPreset] = useState<CameraPreset>("fit");
   const [viewResetToken, setViewResetToken] = useState(0);
   const [layout, setLayout] = useState<Layout | null>(null);
+  const [layoutStandardPallet, setLayoutStandardPallet] = useState<StandardPalletContract | null>(null);
   const [layoutDraftControl, setLayoutDraftControl] = useState<LayoutDraftControl | null>(null);
   const [planningPublishedRevision, setPlanningPublishedRevision] = useState("");
   const [assets, setAssets] = useState<AssetTemplate[]>([]);
@@ -1422,10 +1434,12 @@ export function WarehouseTwinApp() {
     setLocationEditMode(false);
     setAreaPolicyEditMode(false);
     setFloor1CandidatePlan(null);
+    setLayoutStandardPallet(null);
     requestJson<TwinFloorResponse>(`/api/warehouse/twin-layout/floors/${floorCode}`)
       .then((raw) => {
         if (!active) return;
         setLayout(hydrateLayout(raw));
+        setLayoutStandardPallet(normalizeStandardPalletContract(raw.standard_pallet));
         setAssets(raw.assets || []);
       })
       .catch((reason: Error) => active && setError(reason.message))
@@ -1534,6 +1548,15 @@ export function WarehouseTwinApp() {
   }, [layout, pendingAreaCode]);
 
   const features = stableTwinFeatures(layout) as TwinFeature[];
+  const standardPallet = useMemo(
+    () => standardPalletContractsMatch(layoutStandardPallet, dashboard?.standard_pallet)
+      ? normalizeStandardPalletContract(layoutStandardPallet)
+      : null,
+    [layoutStandardPallet, dashboard?.standard_pallet]
+  );
+  const standardPalletError = layout && dashboard && !standardPallet
+    ? "标准栈板尺寸合同缺失或前后端不一致，系统已停止绘制实体栈板；请刷新或联系管理员。"
+    : "";
   const warehouseMoveModeActive = mapMode === "move" && moveAction === "relocate" && canExecuteWarehouse && viewMode === "2d";
   const currentFloor = dashboard?.floors.find((item) => item.floor_code === floorCode);
   const visualLocations = useMemo<DashboardLocation[]>(() => (dashboard?.locations || []).map((location) => {
@@ -1592,11 +1615,11 @@ export function WarehouseTwinApp() {
   }, [locationEditMode, advancedAreaMaintenanceOpen, floorCode, dashboard?.locations]);
   const mappedLocationPallets = useMemo(
     () => [
-      ...buildMappedLocationPallets(features, visualLocations, floorCode, layout?.id)
+      ...buildMappedLocationPallets(features, visualLocations, floorCode, standardPallet, layout?.id)
         .filter((pallet) => pallet.id !== `erp-location-${dispatchStagingLocation?.location_id || 0}`),
-      ...buildMeasuredDispatchPallets(features, dispatchStagingLocation, floorCode, layout?.id)
+      ...buildMeasuredDispatchPallets(features, dispatchStagingLocation, floorCode, standardPallet, layout?.id)
     ],
-    [features, visualLocations, dispatchStagingLocation, floorCode, layout?.id]
+    [features, visualLocations, dispatchStagingLocation, floorCode, standardPallet, layout?.id]
   );
   const palletColumnConflicts = useMemo(
     () => layout ? findPalletColumnConflicts(mappedLocationPallets, layout.structures, features) : [],
@@ -1719,7 +1742,10 @@ export function WarehouseTwinApp() {
         ? { ...feature, points: zoneGeometryDrafts[feature.id] }
         : feature),
       racks: layout.racks.map((rack) => rackDrafts[rack.id] || rack),
-      pallets: [...layout.pallets, ...movePreviewPallets],
+      // The operational map renders only ERP inventory projections.  Historical
+      // editor/demo pallets remain in the measured source for provenance, but can
+      // never become a second pallet-size or inventory truth on this screen.
+      pallets: movePreviewPallets,
       violations: [
         ...layout.violations,
         ...palletColumnConflicts.map((item) => ({
@@ -3396,6 +3422,7 @@ export function WarehouseTwinApp() {
 
   const showTwinFloor = (raw: TwinFloorResponse) => {
     setLayout(hydrateLayout(raw));
+    setLayoutStandardPallet(normalizeStandardPalletContract(raw.standard_pallet));
     setAssets(raw.assets || []);
   };
 
@@ -4189,7 +4216,8 @@ export function WarehouseTwinApp() {
         <div className="twin-stage-heading"><div><small>{floorCode} · MEASURED LAYOUT</small><b>{layout?.name || floorTitle}</b></div><span>{viewMode === "2d" ? "平移：按住左键拖动 · 滚轮缩放" : "平移：左键拖动 · 旋转：右键拖动 · 滚轮缩放"}</span></div>
         {loading && <div className="twin-loading">正在加载实测布局…</div>}
         {error && <div className="twin-error"><b>地图加载失败</b><span>{error}</span><button type="button" onClick={() => window.location.reload()}>重新加载</button></div>}
-        {visualLayout && !loading && <EditorCanvas
+        {standardPalletError && <div className="twin-error"><b>栈板尺寸读取失败</b><span>{standardPalletError}</span><button type="button" onClick={() => window.location.reload()}>重新加载</button></div>}
+        {visualLayout && !loading && !standardPalletError && <EditorCanvas
           layout={visualLayout}
           assets={assets}
           viewMode={viewMode}

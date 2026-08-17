@@ -394,6 +394,12 @@ def test_dashboard_keeps_native_units_and_hides_unconfirmed_capacity_metrics(
         response = client.get("/api/warehouse/twin-dashboard/overview?days=30")
     assert response.status_code == 200, response.text
     payload = response.json()
+    assert payload["standard_pallet"] == {
+        "contract_version": "standard-pallet-v1",
+        "width_mm": 1200,
+        "depth_mm": 1000,
+        "height_mm": 150,
+    }
     quantities = {row["key"]: row for row in payload["summary"]["quantities"]}
     assert quantities["finished:boxes"]["available"] == 215
     assert quantities["semi_finished:sheets"]["available"] == 60

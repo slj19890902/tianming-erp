@@ -117,10 +117,27 @@ export function singleLocationPallet(
   location?: InventoryProjectionLocation | null
 ): InventoryProjectionPallet | null;
 
+export interface StandardPalletContract {
+  contract_version: "standard-pallet-v1";
+  width_mm: number;
+  depth_mm: number;
+  height_mm: number;
+}
+
+export function normalizeStandardPalletContract(
+  value?: Partial<StandardPalletContract> | null
+): StandardPalletContract | null;
+
+export function standardPalletContractsMatch(
+  left?: Partial<StandardPalletContract> | null,
+  right?: Partial<StandardPalletContract> | null
+): boolean;
+
 export function buildMeasuredDispatchPallets(
   features: Array<{ id: string; feature_kind: string; feature_code: string; subtype?: string | null; points: number[][] }>,
   dispatchLocation?: InventoryProjectionLocation | null,
   floorCode?: string,
+  standardPallet?: StandardPalletContract | null,
   layoutId?: string
 ): import("./types").Pallet[];
 
@@ -128,6 +145,7 @@ export function buildMappedLocationPallets(
   features: Array<{ id: string; feature_kind: string; feature_code: string; erp_area_code?: string | null; points: number[][] }>,
   locations: InventoryProjectionLocation[],
   floorCode: string,
+  standardPallet?: StandardPalletContract | null,
   layoutId?: string
 ): import("./types").Pallet[];
 

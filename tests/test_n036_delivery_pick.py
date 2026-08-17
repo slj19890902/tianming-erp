@@ -433,6 +433,7 @@ def test_phase2c9_map_locator_exposes_assigned_delivery_pick_route(pick_app) -> 
         assert overview.json()["scope"]["customer_restricted"] is True
         layout = client.get("/api/warehouse/twin-layout/floors/3F")
         assert layout.status_code == 200, layout.text
+        assert layout.json()["standard_pallet"] == overview.json()["standard_pallet"]
 
 
 def test_p1_21c_picker_only_sees_assigned_task_and_dispatch_can_reassign(pick_app) -> None:

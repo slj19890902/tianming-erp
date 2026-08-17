@@ -126,6 +126,7 @@ from app.services.warehouse_twin_layout import (
     WarehouseTwinLayoutNotFoundError,
     load_warehouse_twin_floor,
 )
+from app.services.warehouse_pallet_standard import standard_pallet_contract
 from app.services.warehouse_floor1_candidate_planner import (
     Floor1CandidatePlanningError,
     build_floor1_formal_candidate_plan,
@@ -7027,11 +7028,12 @@ def get_warehouse_twin_floor_layout(
     _user: User = Depends(_can_locate_twin),
 ) -> dict:
     try:
-        return overlay_formal_area_bindings(
+        layout = overlay_formal_area_bindings(
             db,
             floor_code=floor_code,
             floor_layout=load_warehouse_twin_floor(floor_code),
         )
+        return {**layout, "standard_pallet": standard_pallet_contract()}
     except WarehouseTwinLayoutNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
 
@@ -7043,12 +7045,13 @@ def get_warehouse_twin_floor_layout_draft(
     _user: User = Depends(admin_only),
 ) -> dict:
     try:
-        return overlay_formal_area_bindings(
+        layout = overlay_formal_area_bindings(
             db,
             floor_code=floor_code,
             floor_layout=load_warehouse_twin_layout_draft(floor_code),
             include_draft=True,
         )
+        return {**layout, "standard_pallet": standard_pallet_contract()}
     except WarehouseTwinLayoutEditError as error:
         _handle_twin_layout_edit_error(error)
 

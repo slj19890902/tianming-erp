@@ -1,7 +1,7 @@
 """freeze mold label paper template version
 
-Revision ID: rr26v8x9z15
-Revises: qq25v8x9z14
+Revision ID: ss27v8x9z16
+Revises: rr26v8x9z15
 Create Date: 2026-08-17
 """
 
@@ -11,8 +11,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "rr26v8x9z15"
-down_revision = "qq25v8x9z14"
+revision = "ss27v8x9z16"
+down_revision = "rr26v8x9z15"
 branch_labels = None
 depends_on = None
 

@@ -9,8 +9,8 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PARENT = "qq25v8x9z14"
-TARGET = "rr26v8x9z15"
+PARENT = "rr26v8x9z15"
+TARGET = "ss27v8x9z16"
 JOBS = "mold_label_print_jobs"
 
 
@@ -22,7 +22,7 @@ def _config(monkeypatch: pytest.MonkeyPatch, path: Path) -> Config:
     return config
 
 
-def test_rr26_backfills_legacy_template_and_refuses_losing_80x40_facts(
+def test_ss27_backfills_legacy_template_and_refuses_losing_80x40_facts(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:

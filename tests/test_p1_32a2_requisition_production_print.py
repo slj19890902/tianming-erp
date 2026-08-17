@@ -617,6 +617,14 @@ def test_legacy_missing_process_snapshot_uses_current_common_box_joining_method(
         item = db.get(OrderItem, production_print_app["order_item_id"])
         assert product is not None
         assert item is not None
+        product.production_process = None
+        item.snapshot_production_notes = None
+        db.flush()
+        defaulted = build_supplier_requisition_production_package(db, order)
+        defaulted_card = defaulted["cards"][0]
+        assert defaulted_card["joining_method"] == "无需结合"
+        assert defaulted_card["joining_method_source"] == "default_no_joining"
+
         product.production_process = "粘贴"
         item.snapshot_production_notes = None
         db.flush()
@@ -743,9 +751,11 @@ def test_print_page_and_erp_entry_keep_purchase_and_receipt_prints_separate():
     )
     assert 'detailRow("压线尺寸", crease, "production-key-fact")' in print_html
     assert (
-        'detailRow("结合方式", card.joining_method || "待确认", "production-key-fact")'
+        'detailRow("结合方式", card.joining_method || "无需结合", "production-key-fact")'
         in print_html
     )
+    assert 'detailRow("是否粘贴", "不需要 / 待确认")' not in print_html
+    assert '["工艺待确认"]' not in print_html
     liner_layout = print_html.split('if (card.layout_kind === "liner") {', 1)[1].split(
         'if (card.layout_kind === "die_cut") {', 1
     )[0]

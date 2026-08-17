@@ -6,6 +6,7 @@ from pydantic import ValidationError
 
 from app.api.products import (
     ProductPayload,
+    _canonical_common_box_production_process,
     _validate_changed_product_crease_widths,
     _validate_product_crease_widths,
 )
@@ -189,9 +190,14 @@ def test_legacy_common_box_mismatch_only_blocks_report_or_crease_edits() -> None
 
 def test_common_box_processes_remove_double_and_drawings_are_independent_of_print() -> None:
     source = _source()
+    process_row = source.split("结合方式（三选一，模切可另选）", 1)[1].split(
+        'class="field product-mold-adjacent"', 1
+    )[0]
 
-    for process in ("粘贴", "打钉", "模切", "其他"):
-        assert f'value="{process}"' in source
+    for process in ("粘贴", "打钉", "无需结合", "模切"):
+        assert f'value="{process}"' in process_row
+    assert 'value="其他"' not in process_row
+    assert "结合方式（三选一，模切可另选）" in source
     assert 'value="双拼"' not in source
     assert 'v-model="productForm._production_processes"' in source
 
@@ -217,6 +223,18 @@ def test_common_box_processes_remove_double_and_drawings_are_independent_of_prin
     assert 'v-if="productHasPrinting(productForm)"' not in final_row
     assert '@click="previewProductDrawing(row)"' in source
     assert "serializeProductionProcesses" in source
+
+
+def test_common_box_joining_method_is_canonical_and_exclusive() -> None:
+    assert _canonical_common_box_production_process(None) == "无需结合"
+    assert _canonical_common_box_production_process("其他") == "无需结合"
+    assert _canonical_common_box_production_process("模切") == "模切,无需结合"
+    assert _canonical_common_box_production_process("开槽、钉箱") == "开槽,打钉"
+    assert _canonical_common_box_production_process("糊盒、模切") == "粘贴,模切"
+    with pytest.raises(ValueError, match="只能三选一"):
+        _canonical_common_box_production_process("粘贴,打钉")
+    with pytest.raises(ValueError, match="只能三选一"):
+        _canonical_common_box_production_process("打钉,无需结合")
 
 
 def test_common_box_second_row_contains_splice_flap_report_and_crease() -> None:

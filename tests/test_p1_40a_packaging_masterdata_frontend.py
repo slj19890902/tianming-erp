@@ -94,7 +94,7 @@ def test_supplier_groups_and_external_product_editor_are_explicit() -> None:
     assert "supplierPriceProduct?.category_code==='paper_corner_guard'" in INDEX
 
     assert "v-if=\"productForm.supply_mode!=='external_purchase'\"" in product_modal
-    assert product_modal.count("productForm.supply_mode!=='external_purchase'") >= 8
+    assert product_modal.count("productForm.supply_mode!=='external_purchase'") >= 7
     assert "<label>图纸</label>" in product_modal
     candidate_table = product_modal.split(
         'v-else-if="productExternalSupplyOptions.length"',

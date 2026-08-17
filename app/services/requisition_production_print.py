@@ -120,7 +120,11 @@ def _explicit_joining_method(values: list[object]) -> str | None:
         methods.append("打钉")
     if any(token in text for token in ("粘贴", "粘箱", "粘合", "糊盒")):
         methods.append("粘贴")
-    return " / ".join(methods) or None
+    if methods:
+        return " / ".join(methods)
+    if any(token in text for token in ("无需结合", "无需", "不需结合", "其他")):
+        return "无需结合"
+    return None
 
 
 def _json_list(value: str | None) -> list[object]:
@@ -592,6 +596,9 @@ def build_supplier_requisition_production_package(
             joining_method = _explicit_joining_method([product.production_process])
             if joining_method:
                 joining_method_source = "current_common_box_fallback"
+        if joining_method is None:
+            joining_method = "无需结合"
+            joining_method_source = "default_no_joining"
         component_printing_colors = printing_snapshot["printing_colors"]
         component = {
             "supplier_order_item_id": item.id,

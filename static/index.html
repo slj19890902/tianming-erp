@@ -5193,12 +5193,12 @@
               </div>
 
               <div class="product-form-row product-print-row">
-                <div v-if="productForm.supply_mode!=='external_purchase'" class="field product-process-field"><label>生产工艺（可多选）</label>
+                <div v-if="productForm.supply_mode!=='external_purchase'" class="field product-process-field"><label>结合方式（三选一，模切可另选）</label>
                   <div class="process-options">
                     <label class="process-option"><input type="checkbox" value="粘贴" v-model="productForm._production_processes" @change="onProductProcessesChanged" />粘贴</label>
                     <label class="process-option"><input type="checkbox" value="打钉" v-model="productForm._production_processes" @change="onProductProcessesChanged" />打钉</label>
+                    <label class="process-option"><input type="checkbox" value="无需结合" v-model="productForm._production_processes" @change="onProductProcessesChanged" />无需结合</label>
                     <label class="process-option"><input type="checkbox" value="模切" v-model="productForm._production_processes" @change="onProductProcessesChanged" />模切</label>
-                    <label class="process-option"><input type="checkbox" value="其他" v-model="productForm._production_processes" @change="onProductProcessesChanged" />其他</label>
                   </div>
                 </div>
                 <div v-if="productForm.supply_mode!=='external_purchase' && productUsesMold(productForm)" class="field product-mold-adjacent"><label>生产模具 / 货架位置（必选）</label><search-select v-model="productForm.mold_tool_id" :options="moldToolSelectOptions()" label-key="_label" value-key="id" placeholder="输入模具编号、名称或位置" :allow-empty="false" @search="searchMoldTools"></search-select><div v-if="productMoldError" class="status orange" style="display:block;margin-top:4px">{{ productMoldError }}</div></div>
@@ -7860,7 +7860,7 @@
         printing_plates: [], plate_alignment_value_mm: null, plate_mount_value_mm: null,
         machine_set_length_mm: null, machine_set_width_mm: null, machine_set_height_mm: null,
         production_label_enabled: false, production_label_units_per_label: null,
-        production_process: "", _production_processes: [], _production_process_legacy: "", unit: "只", sale_unit_price: "0",
+        production_process: "", _production_processes: ["无需结合"], _production_process_legacy: "", unit: "只", sale_unit_price: "0",
         sale_unit_price_no_tax: null, cost_unit_price: null, board_price: null,
         suggested_price: null, die_cut_path: null, mold_tool_id: null, mold_tool: null, drawings: [],
         remark: "", is_active: true,
@@ -20823,18 +20823,32 @@
             return form;
           },
           parseProductionProcesses(value) {
-            const allowed = ["粘贴", "打钉", "模切", "其他"];
-            const aliases = { "粘箱":"粘贴", "糊箱":"粘贴", "钉箱":"打钉", "打钉箱":"打钉" };
+            const joining = ["粘贴", "打钉", "无需结合"];
+            const allowed = [...joining, "模切"];
+            const aliases = {
+              "粘合":"粘贴", "粘箱":"粘贴", "糊箱":"粘贴", "糊盒":"粘贴",
+              "钉箱":"打钉", "打钉箱":"打钉", "钉合":"打钉",
+              "其他":"无需结合", "无需":"无需结合", "不需结合":"无需结合", "不需要结合":"无需结合"
+            };
             const values = String(value || "").split(/[，、,]/).map(item => item.trim()).filter(Boolean);
             const normalized = values.map(item => aliases[item] || item).filter(item => allowed.includes(item));
-            if (values.length && !normalized.length) normalized.push("其他");
-            return [...new Set(normalized)];
+            const selectedJoining = normalized.find(item => joining.includes(item)) || "无需结合";
+            return [selectedJoining, ...(normalized.includes("模切") ? ["模切"] : [])];
+          },
+          unmanagedProductionProcesses(value) {
+            const managed = new Set([
+              "粘贴", "粘合", "粘箱", "糊箱", "糊盒",
+              "打钉", "钉箱", "打钉箱", "钉合",
+              "无需结合", "无需", "不需结合", "不需要结合", "其他", "模切"
+            ]);
+            return [...new Set(String(value || "").split(/[，、,]/).map(item => item.trim()).filter(item => item && !managed.has(item)))];
           },
           serializeProductionProcesses(values, legacyValue="") {
-            if ((values || []).length === 1 && values[0] === "其他" && legacyValue) {
-              return legacyValue;
-            }
-            return [...new Set((values || []).filter(Boolean))].join(",");
+            const joining = ["粘贴", "打钉", "无需结合"];
+            const selected = (values || []).find(item => joining.includes(item)) || "无需结合";
+            const managed = [selected, ...((values || []).includes("模切") ? ["模切"] : [])];
+            const legacy = String(legacyValue || "").split(/[，、,]/).map(item => item.trim()).filter(Boolean);
+            return [...new Set([...managed, ...legacy])].join(",");
           },
           productUsesMold(form) {
             if (!form) return false;
@@ -21071,7 +21085,23 @@
             if (!form.production_label_enabled || (Number.isInteger(Number(form.production_label_units_per_label)) && Number(form.production_label_units_per_label) > 0)) return;
             form.production_label_units_per_label = this.productionLabelDefaultUnits(form.box_style);
           },
-          onProductProcessesChanged() {
+          onProductProcessesChanged(event = null) {
+            const joining = ["粘贴", "打钉", "无需结合"];
+            const changed = String(event?.target?.value || "");
+            const checked = event?.target?.checked === true;
+            let values = Array.isArray(this.productForm._production_processes)
+              ? [...this.productForm._production_processes]
+              : [];
+            if (joining.includes(changed) && checked) {
+              values = values.filter(value => !joining.includes(value) || value === changed);
+            }
+            const selected = joining.filter(value => values.includes(value));
+            if (!selected.length) values.push("无需结合");
+            if (selected.length > 1) {
+              const keep = joining.includes(changed) && checked ? changed : selected[0];
+              values = values.filter(value => !joining.includes(value) || value === keep);
+            }
+            this.productForm._production_processes = [...new Set(values)];
             if (!this.productUsesMold(this.productForm)) {
               this.productForm.mold_tool_id=null;
               this.productForm.mold_tool=null;
@@ -21176,12 +21206,9 @@
             form._base_crease_type_manual = !!form.base_crease_type;
             form._recommendation_message = "";
             form._production_processes = this.parseProductionProcesses(form.production_process);
-            form._production_process_legacy =
-              form._production_processes.length === 1 &&
-              form._production_processes[0] === "其他" &&
-              form.production_process !== "其他"
-                ? String(form.production_process || "")
-                : "";
+            form._production_process_legacy = this.unmanagedProductionProcesses(
+              form.production_process
+            ).join(",");
             return this.normalizeProductDimensions(form);
           },
           drawingDisplayName(drawing) {

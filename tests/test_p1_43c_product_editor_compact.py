@@ -52,7 +52,7 @@ def test_product_editor_uses_compact_rows_and_keeps_mold_next_to_process() -> No
     assert 'class="product-material-details"' in PRODUCT_MODAL
     assert 'class="product-secondary-disclosure"' in PRODUCT_MODAL
 
-    process = PRODUCT_MODAL.index("生产工艺（可多选）")
+    process = PRODUCT_MODAL.index("结合方式（三选一，模切可另选）")
     mold = PRODUCT_MODAL.index("生产模具 / 货架位置（必选）")
     printing = PRODUCT_MODAL.index("印刷情况")
     price = PRODUCT_MODAL.index("默认单价")
@@ -232,6 +232,7 @@ vm.onProductProcessesChanged=new Function(
 ).bind(vm);
 vm.onProductProcessesChanged();
 if (vm.productForm.mold_tool_id !== null) throw new Error("turning off die-cut kept a stale mold");
+if (vm.productForm._production_processes.join(",") !== "无需结合") throw new Error("empty joining method did not default to no-joining");
 """
     _run_node(tmp_path, source)
 
@@ -256,3 +257,38 @@ if (vm.productForm.mold_tool_id !== null) throw new Error("turning off die-cut k
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_joining_method_checkboxes_are_exclusive_and_keep_die_cut(
+    tmp_path: Path,
+) -> None:
+    bindings = []
+    for name in (
+        "parseProductionProcesses",
+        "unmanagedProductionProcesses",
+        "serializeProductionProcesses",
+        "onProductProcessesChanged",
+    ):
+        params, body = _method(name)
+        bindings.append(
+            f"vm.{name}=new Function({json.dumps(params)},"
+            f"{json.dumps(body, ensure_ascii=False)}).bind(vm);"
+        )
+    source = f"""
+const vm={{
+  productForm:{{_production_processes:["无需结合","模切"],mold_tool_id:19,mold_tool:{{id:19}}}},
+  productUsesMold(form){{return (form._production_processes||[]).includes("模切");}}
+}};
+{chr(10).join(bindings)}
+if (vm.parseProductionProcesses("").join(",") !== "无需结合") throw new Error("blank process did not hydrate no-joining");
+if (vm.parseProductionProcesses("开槽、其他、模切").join(",") !== "无需结合,模切") throw new Error("legacy other did not map to no-joining");
+if (vm.unmanagedProductionProcesses("开槽、其他、模切").join(",") !== "开槽") throw new Error("unmanaged process was not preserved");
+if (vm.serializeProductionProcesses(["无需结合","模切"],"开槽") !== "无需结合,模切,开槽") throw new Error("serialization lost legacy or mold facts");
+vm.productForm._production_processes=["无需结合","粘贴","模切"];
+vm.onProductProcessesChanged({{target:{{value:"粘贴",checked:true}}}});
+if (vm.productForm._production_processes.join(",") !== "粘贴,模切") throw new Error("glue did not replace no-joining while preserving die-cut");
+vm.productForm._production_processes=["模切"];
+vm.onProductProcessesChanged({{target:{{value:"粘贴",checked:false}}}});
+if (vm.productForm._production_processes.join(",") !== "模切,无需结合") throw new Error("unchecking the only joining method did not restore no-joining");
+"""
+    _run_node(tmp_path, source)

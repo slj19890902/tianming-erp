@@ -145,7 +145,60 @@ def _production_process_tokens(value: str | None) -> set[str]:
     }
 
 
-_GLUE_PROCESS_TOKENS = {"粘合", "粘贴", "粘箱", "糊箱"}
+_GLUE_PROCESS_TOKENS = {"粘合", "粘贴", "粘箱", "糊箱", "糊盒"}
+_STAPLE_PROCESS_TOKENS = {"打钉", "钉箱", "打钉箱", "钉合"}
+_NO_JOINING_PROCESS_TOKENS = {
+    "无需结合", "无需", "不需结合", "不需要结合", "其他"
+}
+
+
+def _canonical_common_box_production_process(value: str | None) -> str:
+    """Keep unrelated process facts while enforcing one joining method."""
+
+    raw_tokens = [
+        item.strip()
+        for item in re.split(r"[,，、;；]", str(value or ""))
+        if item.strip()
+    ]
+    token_set = set(raw_tokens)
+    uses_glue = bool(token_set.intersection(_GLUE_PROCESS_TOKENS))
+    uses_staple = bool(token_set.intersection(_STAPLE_PROCESS_TOKENS))
+    uses_no_joining = bool(token_set.intersection(_NO_JOINING_PROCESS_TOKENS))
+    if sum((uses_glue, uses_staple, uses_no_joining)) > 1:
+        raise ValueError("结合方式只能三选一：粘贴、打钉或无需结合")
+
+    joining_method = (
+        "粘贴" if uses_glue else "打钉" if uses_staple else "无需结合"
+    )
+    managed_tokens = (
+        _GLUE_PROCESS_TOKENS
+        | _STAPLE_PROCESS_TOKENS
+        | _NO_JOINING_PROCESS_TOKENS
+    )
+    normalized: list[str] = []
+    joining_inserted = False
+    for token in raw_tokens:
+        if token in managed_tokens:
+            if not joining_inserted:
+                normalized.append(joining_method)
+                joining_inserted = True
+            continue
+        if token not in normalized:
+            normalized.append(token)
+    if not joining_inserted:
+        normalized.append(joining_method)
+    return ",".join(normalized)
+
+
+def _normalize_product_joining_method(payload: ProductPayload) -> None:
+    if payload.supply_mode == "external_purchase" or payload.is_virtual_composite_parent:
+        return
+    try:
+        payload.production_process = _canonical_common_box_production_process(
+            payload.production_process
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 def _production_process_uses_mold(value: str | None) -> bool:
@@ -1071,6 +1124,11 @@ def _validated_product_versioned_updates(
             detail="虚拟组合套装已有 BOM，不能直接改为实体产品；请保留虚拟父件标记",
         )
     supply_updates = _normalize_product_external_supply(db, payload=payload, existing=product)
+    if not (
+        product.supply_mode == "external_purchase"
+        and not _external_supply_requested(payload)
+    ):
+        _normalize_product_joining_method(payload)
     _normalize_product_mold_binding(payload)
     printing_configuration_unchanged = _product_printing_configuration_unchanged(
         product,
@@ -2063,6 +2121,7 @@ def create_product(
 ) -> dict:
     require_customer_access(payload.customer_id, current_user=user, db=db)
     supply_updates = _normalize_product_external_supply(db, payload=payload)
+    _normalize_product_joining_method(payload)
     _normalize_product_mold_binding(payload)
     _normalize_product_printing_configuration_for_api(payload)
     _validate_references(
@@ -2374,6 +2433,13 @@ def sync_product_fields(
                 status_code=409,
                 detail="虚拟组合套装父件不能从订单同步材质、尺寸、报料或生产字段",
             )
+    if "production_process" in fields:
+        try:
+            fields["production_process"] = _canonical_common_box_production_process(
+                fields["production_process"]
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
     if not fields:
         raise HTTPException(status_code=400, detail="没有可同步的字段")
     changed = _changed_updates(product, fields)

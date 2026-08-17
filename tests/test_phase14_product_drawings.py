@@ -241,6 +241,7 @@ def test_no_print_product_can_upload_and_view_reference_image(
     assert uploaded.status_code == 201, uploaded.text
     assert detail.status_code == 200, detail.text
     assert detail.json()["print_content"] == "无印刷"
+    assert detail.json()["production_process"] == "无需结合"
     assert len(detail.json()["drawings"]) == 1
     assert viewed.status_code == 200
 
@@ -268,6 +269,10 @@ def test_common_box_process_and_print_type_round_trip_without_drawing(
     }
     with TestClient(drawing_app) as client:
         _login(client, "admin")
+        rejected = client.put("/api/master/products/1", json=payload)
+        assert rejected.status_code == 400, rejected.text
+        assert "只能三选一" in rejected.json()["detail"]
+        payload["production_process"] = "粘贴"
         updated = client.put("/api/master/products/1", json=payload)
         if updated.status_code == 409:
             payload["confirmation_token"] = updated.json()["detail"]["confirmation_token"]
@@ -277,6 +282,6 @@ def test_common_box_process_and_print_type_round_trip_without_drawing(
     assert updated.status_code == 200, updated.text
     assert detail.status_code == 200, detail.text
     body = detail.json()
-    assert body["production_process"] == "粘贴,打钉"
+    assert body["production_process"] == "粘贴"
     assert body["print_content"] == "双色印刷"
     assert body["drawings"] == []

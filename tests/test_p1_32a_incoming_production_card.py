@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 ROOT = Path(__file__).resolve().parents[1]
 INDEX = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
-CARD = (ROOT / "static" / "incoming-production-card.html").read_text(
+CARD = (ROOT / "static" / "requisition-production-print.html").read_text(
     encoding="utf-8"
 )
 
@@ -99,7 +99,8 @@ def test_incoming_production_card_has_same_origin_root_route() -> None:
 
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
-    assert "纸板生产随料卡" in response.text
+    assert "生产任务单" in response.text
+    assert "receiptMode" in response.text
 
 
 def test_incoming_received_and_history_expose_read_only_recoverable_entry() -> None:
@@ -241,19 +242,20 @@ def test_logout_reset_clears_all_production_card_open_state() -> None:
 
 
 def test_card_page_is_a4_large_print_and_has_no_business_write() -> None:
-    assert "纸板生产随料卡" in CARD
+    assert "生产任务单" in CARD
     assert "@page { size:A4 portrait" in CARD
-    assert "本垛实收纸板" in CARD
-    assert "本垛最多可生产" in CARD
-    assert "生产顺序" in CARD
-    assert "工艺待确认" in CARD
+    assert "待来料计划版" in CARD
+    assert "本次实收" in CARD
+    assert "本批最多生产" in CARD
+    assert "一笔实收事实一张卡" in CARD
     assert "/api/incoming/receipt-items/${encodeURIComponent(receiptItemId)}/production-card" in CARD
-    assert 'credentials:"same-origin"' in CARD
+    assert 'credentials:"include"' in CARD
     assert "window.opener" not in CARD
     assert "localStorage.clear" not in CARD
     assert "sessionStorage.clear" not in CARD
     assert "method:\"POST\"" not in CARD
     assert "method:\"PUT\"" not in CARD
+    assert not (ROOT / "static" / "incoming-production-card.html").exists()
 
 
 def test_card_inline_javascript_is_valid(tmp_path: Path) -> None:

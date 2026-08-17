@@ -861,7 +861,8 @@ expect(printingHtml({{components:[{{printing_situation:'无印刷',printing_plat
     assert ".single-page .task-card.printing-heavy" in TASK_PRINT
     assert "element.scrollHeight > element.clientHeight + 1" in TASK_PRINT
     assert "element.scrollWidth > element.clientWidth + 1" in TASK_PRINT
-    assert "toolbarNote.textContent = fullPageCount" in TASK_PRINT
+    assert "toolbarNote.textContent = receiptMode" in TASK_PRINT
+    assert "fullPageCount" in TASK_PRINT
     assert "黑白打印 · ${fullPageCount} 款复杂印刷任务单独占 A4" in TASK_PRINT
 
     assert "task.printing_colors_frozen === false" in mobile

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import socket
 from datetime import date, datetime, timedelta
@@ -77,6 +78,9 @@ from app.services.production_workflow import (
 )
 from app.services.composite_bom_workflow import is_composite_order_item
 from app.services.audit_log import append_audit_event
+from app.services.requisition_production_print import (
+    build_receipt_production_print_package,
+)
 
 
 router = APIRouter()
@@ -2250,6 +2254,163 @@ def _production_card_steps(notes: str | None) -> list[str]:
     return steps
 
 
+def _legacy_receipt_production_package(card: dict) -> dict:
+    """Keep old receipt facts printable through the unified task-card layout."""
+
+    output_factor = max(int(card.get("output_factor") or 1), 1)
+    receipt_item_id = int(card["receipt_item_id"])
+    component = {
+        "supplier_order_item_id": card.get("requisition_item_id"),
+        "source_identity": f"legacy-receipt:{receipt_item_id}",
+        "component_label": card.get("component_type") or "整片",
+        "display_order": 1,
+        "product_code": card.get("product_code"),
+        "product_name": card.get("product_name"),
+        "specification": card.get("specification"),
+        "planned_finished_quantity": card.get("production_capacity_quantity"),
+        "finished_unit": card.get("production_unit") or "只",
+        "requisition_quantity": card.get("planned_sheet_quantity")
+        or card.get("received_sheet_quantity"),
+        "requisition_unit": "张",
+        "report_length_mm": card.get("board_length_mm"),
+        "report_width_mm": card.get("board_width_mm"),
+        "cutting_mode": card.get("cutting_mode"),
+        "pieces_per_box": output_factor,
+        "required_piece_quantity": card.get("production_capacity_quantity"),
+        "material_code": None,
+        "layer_count": card.get("layer_count"),
+        "flute_type": card.get("flute_type"),
+        "crease_type": card.get("crease_type"),
+        "crease_display": " + ".join(
+            str(value)
+            for value in (
+                card.get("crease_left_mm"),
+                card.get("crease_middle_mm"),
+                card.get("crease_right_mm"),
+            )
+            if value is not None
+        )
+        or None,
+        "production_notes": (
+            [card["production_notes"]] if card.get("production_notes") else []
+        ),
+        "drawing_reference": None,
+        "drawing_url": card.get("drawing_path"),
+        "drawing_kind": "pdf" if card.get("drawing_is_pdf") else "image",
+        "drawing_source": "订单冻结图纸" if card.get("drawing_path") else None,
+        "mold_code": card.get("mold_tool_code"),
+        "mold_name": card.get("mold_tool_name"),
+        "joining_method": "无需结合",
+        "production_task_id": card.get("production_task_id"),
+        "production_task_version": card.get("production_task_version"),
+        "output_factor": output_factor,
+        "print_content": None,
+        "printing_situation": None,
+        "printing_colors": [],
+        "printing_colors_frozen": False,
+        "printing_plate_mode": "no_plate",
+        "printing_plates": [],
+    }
+    unified_card = {
+        "supplier_order_item_id": card.get("requisition_item_id"),
+        "source_identity": component["source_identity"],
+        "component_label": component["component_label"],
+        "customer_name": card.get("customer_name"),
+        "product_code": card.get("product_code"),
+        "product_name": card.get("product_name"),
+        "specifications": [card["specification"]]
+        if card.get("specification")
+        else [],
+        "order_numbers": [card["order_number"]]
+        if card.get("order_number")
+        else [],
+        "item_order_numbers": [],
+        "customer_pos": [card["customer_po"]] if card.get("customer_po") else [],
+        "delivery_dates": [card["delivery_date"]]
+        if card.get("delivery_date")
+        else [],
+        "planned_finished_quantity": card.get("production_capacity_quantity"),
+        "requisition_quantity": card.get("received_sheet_quantity"),
+        "paper_phase": "actual_receipt",
+        "paper_phase_label": "历史实收版",
+        "paper_version_key": f"actual:receipt:{receipt_item_id}",
+        "planned_sheet_quantity": card.get("planned_sheet_quantity")
+        or card.get("received_sheet_quantity"),
+        "received_sheet_quantity": card.get("received_sheet_quantity"),
+        "cumulative_received_sheet_quantity": card.get(
+            "cumulative_received_sheet_quantity"
+        )
+        or card.get("received_sheet_quantity"),
+        "production_capacity_quantity": card.get("production_capacity_quantity"),
+        "output_factor": output_factor,
+        "receipt_number": card.get("receipt_number"),
+        "receipt_item_id": receipt_item_id,
+        "received_at": card.get("received_at"),
+        "variance_type": card.get("variance_type"),
+        "layout_kind": "carton",
+        "box_style": None,
+        "box_type_code": None,
+        "printing_colors": [],
+        "joining_method": "无需结合",
+        "production_steps": list(card.get("process_steps") or []),
+        "review_required": not bool(card.get("process_steps")),
+        "review_messages": (
+            [] if card.get("process_steps") else ["历史任务工艺待人工核对"]
+        ),
+        "status_label": "历史实收版",
+        "components": [component],
+        "structure_reference": (
+            {
+                "name": "订单冻结图纸",
+                "url": card.get("drawing_path"),
+                "kind": "pdf" if card.get("drawing_is_pdf") else "image",
+                "source": "订单冻结图纸",
+            }
+            if card.get("drawing_path")
+            else None
+        ),
+        "fulfillment_reminders": [],
+    }
+    paper_fingerprint = hashlib.sha256(
+        json.dumps(
+            {
+                "paper_version_key": unified_card["paper_version_key"],
+                "received_sheet_quantity": card.get("received_sheet_quantity"),
+                "receipt_number": card.get("receipt_number"),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+    return {
+        "supplier_order_id": None,
+        "supplier_order_number": card.get("requisition_number"),
+        "status": "posted",
+        "status_label": "历史实收版",
+        "created_at": card.get("received_at"),
+        "plan_fingerprint": None,
+        "paper_fingerprint": paper_fingerprint,
+        "paper_phase": "actual_receipt",
+        "paper_phase_label": "历史实收版",
+        "paper_version_key": unified_card["paper_version_key"],
+        "reuses_planned_card": False,
+        "reprint_required": True,
+        "receipt_item_id": receipt_item_id,
+        "card_count": 1,
+        "page_count": 1,
+        "review_required": unified_card["review_required"],
+        "review_messages": unified_card["review_messages"],
+        "layout_overflow": False,
+        "printable": True,
+        "production_label_task_count": 0,
+        "production_label_count": 0,
+        "cards": [unified_card],
+        "pages": [{"page_number": 1, "top": unified_card, "bottom": None}],
+    }
+
+
 @router.get("/receipt-items/{receipt_item_id}/production-card")
 def incoming_production_card(
     receipt_item_id: int,
@@ -2348,7 +2509,7 @@ def incoming_production_card(
         else None
     )
     receipt_number = str(row.get("receipt_number") or "").strip()
-    return {
+    legacy_card = {
         "card_type": "incoming_production_material_card",
         "card_version": 1,
         "card_number": f"SC-{receipt_number}-{receipt_item_id}",
@@ -2373,7 +2534,15 @@ def incoming_production_card(
         "component_type": row.get("component_type") or "single",
         "delivery_date": row.get("delivery_date"),
         "received_at": utc_naive_to_api(fact.receipt.received_at),
+        "planned_sheet_quantity": int(fact.planned_quantity),
         "received_sheet_quantity": int(fact.received_quantity),
+        "cumulative_received_sheet_quantity": int(
+            fact.cumulative_received_quantity
+        ),
+        "variance_sheet_quantity": int(fact.variance_quantity),
+        "variance_type": fact.variance_type,
+        "resolution_status": fact.resolution_status,
+        "resolution_action": fact.resolution_action,
         "output_factor": output_factor,
         "production_capacity_quantity": int(fact.received_quantity) * output_factor,
         "production_unit": product.unit if product is not None else "只",
@@ -2434,6 +2603,10 @@ def incoming_production_card(
         "printed_by": user.real_name or user.display_name or user.username,
         "generated_at": utc_naive_to_api(_utc_now()),
     }
+    package = build_receipt_production_print_package(db, fact)
+    if package is None:
+        package = _legacy_receipt_production_package(legacy_card)
+    return {**legacy_card, **package}
 
 
 @router.get("/surplus-locations")

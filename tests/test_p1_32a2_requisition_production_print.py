@@ -677,6 +677,7 @@ def test_posted_receipt_marks_preprint_for_review(production_print_app):
     from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
     from app.models.supplier_requisition_order import SupplierRequisitionOrder
     from app.services.requisition_production_print import (
+        build_receipt_production_print_package,
         build_supplier_requisition_production_package,
     )
 
@@ -689,8 +690,7 @@ def test_posted_receipt_marks_preprint_for_review(production_print_app):
         )
         db.add(receipt)
         db.flush()
-        db.add(
-            IncomingReceiptItem(
+        receipt_item = IncomingReceiptItem(
                 receipt_id=receipt.id,
                 order_id=production_print_app["sales_order_id"],
                 order_item_id=production_print_app["order_item_id"],
@@ -705,19 +705,143 @@ def test_posted_receipt_marks_preprint_for_review(production_print_app):
                 resolution_action="await_supplier",
                 status="posted",
             )
-        )
+        db.add(receipt_item)
         db.commit()
         order = db.get(
             SupplierRequisitionOrder,
             production_print_app["supplier_order_id"],
         )
         package = build_supplier_requisition_production_package(db, order)
+        actual = build_receipt_production_print_package(db, receipt_item)
 
     assert package["review_required"] is True
-    assert any("已有实收" in text for text in package["review_messages"])
+    assert any("计划版不可冒充实收版" in text for text in package["review_messages"])
+    assert actual is not None
+    assert actual["paper_phase"] == "actual_receipt"
+    assert actual["paper_version_key"] == f"actual:receipt:{receipt_item.id}"
+    assert actual["reuses_planned_card"] is False
+    assert actual["reprint_required"] is True
+    assert actual["cards"][0]["received_sheet_quantity"] == 80
+    assert actual["cards"][0]["production_capacity_quantity"] == 80
 
 
-def test_print_page_and_erp_entry_keep_purchase_and_receipt_prints_separate():
+def test_single_exact_receipt_reuses_immutable_planned_card(production_print_app):
+    from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
+    from app.models.supplier_requisition_order import SupplierRequisitionOrder
+    from app.services.requisition_production_print import (
+        build_receipt_production_print_package,
+        build_supplier_requisition_production_package,
+    )
+
+    with production_print_app["session_factory"]() as db:
+        order = db.get(
+            SupplierRequisitionOrder,
+            production_print_app["supplier_order_id"],
+        )
+        before = build_supplier_requisition_production_package(db, order)
+        receipt = IncomingReceipt(
+            receipt_number="IR-P164A-MATCHED",
+            status="posted",
+            received_at=datetime(2026, 8, 17, 9, 0, 0),
+            idempotency_key="p164a-matched",
+        )
+        db.add(receipt)
+        db.flush()
+        receipt_item = IncomingReceiptItem(
+            receipt_id=receipt.id,
+            order_id=production_print_app["sales_order_id"],
+            order_item_id=production_print_app["order_item_id"],
+            supplier_order_id=production_print_app["supplier_order_id"],
+            supplier_order_item_id=production_print_app["supplier_item_id"],
+            planned_quantity=100,
+            received_quantity=100,
+            cumulative_received_quantity=100,
+            variance_quantity=0,
+            variance_type="matched",
+            resolution_status="not_required",
+            status="posted",
+        )
+        db.add(receipt_item)
+        db.commit()
+        after = build_supplier_requisition_production_package(db, order)
+        received = build_receipt_production_print_package(db, receipt_item)
+
+    assert after["plan_fingerprint"] == before["plan_fingerprint"]
+    target = next(
+        row
+        for row in after["cards"]
+        if row["supplier_order_item_id"]
+        == production_print_app["supplier_item_id"]
+    )
+    assert target["receipt_match_status"] == "matched_reuse_plan"
+    assert target["review_required"] is False
+    assert received is not None
+    assert received["paper_phase"] == "planned"
+    assert received["reuses_planned_card"] is True
+    assert received["reprint_required"] is False
+    assert received["paper_version_key"] == target["paper_version_key"]
+    assert received["paper_fingerprint"] == after["plan_fingerprint"]
+    assert "received_sheet_quantity" not in received["cards"][0]
+
+
+def test_split_receipts_keep_one_actual_card_per_fact(production_print_app):
+    from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
+    from app.services.requisition_production_print import (
+        build_receipt_production_print_package,
+    )
+
+    facts = []
+    with production_print_app["session_factory"]() as db:
+        for index, (quantity, cumulative, variance_type) in enumerate(
+            ((40, 40, "short"), (60, 100, "matched")),
+            start=1,
+        ):
+            receipt = IncomingReceipt(
+                receipt_number=f"IR-P164A-SPLIT-{index}",
+                status="posted",
+                received_at=datetime(2026, 8, 17, 10 + index, 0, 0),
+                idempotency_key=f"p164a-split-{index}",
+            )
+            db.add(receipt)
+            db.flush()
+            fact = IncomingReceiptItem(
+                receipt_id=receipt.id,
+                order_id=production_print_app["sales_order_id"],
+                order_item_id=production_print_app["order_item_id"],
+                supplier_order_id=production_print_app["supplier_order_id"],
+                supplier_order_item_id=production_print_app["supplier_item_id"],
+                planned_quantity=100,
+                received_quantity=quantity,
+                cumulative_received_quantity=cumulative,
+                variance_quantity=cumulative - 100,
+                variance_type=variance_type,
+                resolution_status=(
+                    "pending" if cumulative < 100 else "not_required"
+                ),
+                resolution_action=("await_supplier" if cumulative < 100 else None),
+                status="posted",
+            )
+            db.add(fact)
+            facts.append(fact)
+        db.commit()
+        packages = [build_receipt_production_print_package(db, fact) for fact in facts]
+
+    assert all(package is not None for package in packages)
+    assert [package["cards"][0]["received_sheet_quantity"] for package in packages] == [
+        40,
+        60,
+    ]
+    assert [package["cards"][0]["paper_phase_label"] for package in packages] == [
+        "分批实收版 1/2",
+        "分批实收版 2/2",
+    ]
+    assert [package["paper_version_key"] for package in packages] == [
+        f"actual:receipt:{facts[0].id}",
+        f"actual:receipt:{facts[1].id}",
+    ]
+
+
+def test_print_page_and_erp_entry_use_one_layout_for_plan_and_receipt_phases():
     index_html = Path("static/index.html").read_text(encoding="utf-8")
     print_html = Path("static/requisition-production-print.html").read_text(
         encoding="utf-8"
@@ -730,6 +854,12 @@ def test_print_page_and_erp_entry_keep_purchase_and_receipt_prints_separate():
     assert 'window.open(url, "_blank", "noopener")' in index_html
     assert "/requisition-production-print.html" in main_source
     assert "_conditional_file_endpoint(requisition_production_print_path)" in main_source
+    assert "incoming_production_card_path = (" in main_source
+    assert '/ "requisition-production-print.html"' in main_source
+    assert "receiptMode" in print_html
+    assert "/api/incoming/receipt-items/${encodeURIComponent(receiptItemId)}/production-card" in print_html
+    assert "待来料计划版" in print_html
+    assert "一笔实收事实一张卡" in print_html
     assert "@page { size:A4 portrait;" in print_html
     assert "grid-template-rows:140.5mm 140.5mm" in print_html
     assert 'class="task-card half-card blank"' in print_html
@@ -762,7 +892,7 @@ def test_print_page_and_erp_entry_keep_purchase_and_receipt_prints_separate():
     assert 'detailRow("开料方式", cutting)' in liner_layout
     assert "filter:grayscale(1)" in print_html
     assert "structure_reference" in print_html
-    assert "计划已变化 / 请核对并重打" in print_html
+    assert "请核对后再打印" in print_html
     assert "card.scrollHeight > card.clientHeight + 1" in print_html
     assert "任务内容超过页面容量，已停止打印" in print_html
     assert 'credentials:"include"' in print_html
@@ -861,8 +991,8 @@ def test_p1_67_task_sheet_prioritizes_identity_fields_and_process_order() -> Non
     card = source[source.index("function cardHtml"):source.index("function applyMode")]
     assert card.index("<span>存货编码</span>") < card.index("<span>产品名称</span>")
     strip = card[card.index('<div class="product-strip">'):]
-    assert strip.index("成品内尺寸") < strip.index("<span class=\"field-label\">数量")
-    assert strip.index("<span class=\"field-label\">数量") < strip.index("<span class=\"field-label\">交期")
+    assert strip.index("成品内尺寸") < strip.index("quantityLabel")
+    assert strip.index("quantityLabel") < strip.index("<span class=\"field-label\">交期")
     assert "生产数量" not in card
     assert "产品 / 存货编码" not in card
 

@@ -336,10 +336,12 @@ def create_app() -> FastAPI:
         route.path == "/incoming-production-card.html"
         for route in application.routes
     ):
+        # Historical receipt-card links stay valid, while both paper phases
+        # are rendered by the single production-task template.
         incoming_production_card_path = (
             Path(__file__).resolve().parents[1]
             / "static"
-            / "incoming-production-card.html"
+            / "requisition-production-print.html"
         )
         application.add_api_route(
             "/incoming-production-card.html",

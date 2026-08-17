@@ -5,14 +5,15 @@ import json
 import math
 import re
 from collections import OrderedDict
+from copy import deepcopy
 from pathlib import PurePath
 
 from sqlalchemy import or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.time_contract import utc_naive_to_api
 from app.models.customer import Customer
-from app.models.incoming_receipt import IncomingReceiptItem
+from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
 from app.models.mold_tool import MoldTool
 from app.models.order import Order, OrderItem
 from app.models.product import Product
@@ -27,13 +28,17 @@ from app.models.supplier_requisition_order import (
     SupplierRequisitionOrder,
     SupplierRequisitionOrderItem,
 )
+from app.models.warehouse_inventory import InventoryLot, InventoryPalletItem
 from app.services.box_type_rules import box_type_code, canonical_box_style
 from app.services.history_orders import build_display_registry, display_order_number
 from app.services.fulfillment_reminders import (
     matching_production_reminders,
     production_reminders_by_customer,
 )
-from app.services.production_workflow import _task_printing_snapshot
+from app.services.production_workflow import (
+    _task_printing_snapshot,
+    cutting_output_factor,
+)
 
 
 _REQUISITION_ITEM_SOURCE = re.compile(r"^requisition_item:(\d+)$")
@@ -405,17 +410,78 @@ def build_supplier_requisition_production_package(
         select(
             IncomingReceiptItem.supplier_order_item_id,
             IncomingReceiptItem.id,
+            IncomingReceipt.receipt_number,
+            IncomingReceipt.received_at,
+            IncomingReceiptItem.planned_quantity,
+            IncomingReceiptItem.received_quantity,
+            IncomingReceiptItem.cumulative_received_quantity,
+            IncomingReceiptItem.variance_quantity,
+            IncomingReceiptItem.variance_type,
+            IncomingReceiptItem.resolution_status,
+            IncomingReceiptItem.resolution_action,
+            IncomingReceiptItem.received_inventory_lot_id,
+            IncomingReceiptItem.surplus_inventory_lot_id,
         ).where(
+            IncomingReceipt.id == IncomingReceiptItem.receipt_id,
             IncomingReceiptItem.status == "posted",
             or_(
                 IncomingReceiptItem.supplier_order_id == order.id,
                 IncomingReceiptItem.supplier_order_item_id.in_(supplier_item_ids),
             ),
-        )
+        ).order_by(IncomingReceiptItem.id.asc())
     ).all() if supplier_item_ids else []
-    receipt_item_ids = {
-        int(row[0]) for row in receipt_rows if row[0] is not None
+    receipts_by_supplier_item: dict[int, list[dict]] = {}
+    for row in receipt_rows:
+        if row.supplier_order_item_id is None:
+            continue
+        receipts_by_supplier_item.setdefault(
+            int(row.supplier_order_item_id), []
+        ).append(
+            {
+                "receipt_item_id": int(row.id),
+                "receipt_number": row.receipt_number,
+                "received_at": utc_naive_to_api(row.received_at),
+                "planned_sheet_quantity": int(row.planned_quantity),
+                "received_sheet_quantity": int(row.received_quantity),
+                "cumulative_received_sheet_quantity": int(
+                    row.cumulative_received_quantity
+                ),
+                "variance_sheet_quantity": int(row.variance_quantity),
+                "variance_type": row.variance_type,
+                "resolution_status": row.resolution_status,
+                "resolution_action": row.resolution_action,
+                "received_inventory_lot_id": row.received_inventory_lot_id,
+                "surplus_inventory_lot_id": row.surplus_inventory_lot_id,
+            }
+        )
+    receipt_lot_ids = {
+        int(lot_id)
+        for versions in receipts_by_supplier_item.values()
+        for version in versions
+        for lot_id in (
+            version.get("received_inventory_lot_id"),
+            version.get("surplus_inventory_lot_id"),
+        )
+        if lot_id is not None
     }
+    receipt_lots = (
+        {
+            int(row.id): row
+            for row in db.scalars(
+                select(InventoryLot)
+                .options(
+                    selectinload(InventoryLot.semi_finished_detail),
+                    selectinload(InventoryLot.pallet_item).selectinload(
+                        InventoryPalletItem.pallet
+                    ),
+                    selectinload(InventoryLot.location),
+                )
+                .where(InventoryLot.id.in_(receipt_lot_ids))
+            ).all()
+        }
+        if receipt_lot_ids
+        else {}
+    )
     receipt_without_line = any(row[0] is None for row in receipt_rows)
 
     registry = build_display_registry(db)
@@ -535,6 +601,11 @@ def build_supplier_requisition_production_package(
                 "delivery_dates": [],
                 "planned_finished_quantity": 0,
                 "requisition_quantity": 0,
+                "paper_phase": "planned",
+                "paper_phase_label": "待来料计划版",
+                "paper_version_key": None,
+                "receipt_versions": [],
+                "receipt_match_status": "not_received",
                 "layout_kind": layout_kind,
                 "box_style": canonical_box_style(box_style),
                 "box_type_code": box_type_code(box_style),
@@ -669,6 +740,11 @@ def build_supplier_requisition_production_package(
             "joining_method_source": joining_method_source,
             "production_task_id": task.id if task is not None else None,
             "production_task_version": task.version if task is not None else None,
+            "output_factor": max(
+                int(task.output_factor if task is not None else 0)
+                or cutting_output_factor(item.cutting_mode or order.cutting_mode),
+                1,
+            ),
             "production_label_units_per_bundle": (
                 int(task.production_label_units_per_label_snapshot)
                 if task is not None
@@ -741,18 +817,85 @@ def build_supplier_requisition_production_package(
             or not component["flute_type"]
             or not str(item.source_key or "").strip()
         )
-        received = receipt_without_line or int(item.id) in receipt_item_ids
+        receipt_versions = receipts_by_supplier_item.get(int(item.id), [])
+        if receipt_versions:
+            is_split = len(receipt_versions) > 1
+            for version_index, version in enumerate(receipt_versions, start=1):
+                lot_id = version.get("received_inventory_lot_id") or version.get(
+                    "surplus_inventory_lot_id"
+                )
+                lot = receipt_lots.get(int(lot_id or 0))
+                semi_detail = lot.semi_finished_detail if lot is not None else None
+                actual_length = (
+                    int(semi_detail.board_length_mm)
+                    if semi_detail is not None
+                    else None
+                )
+                actual_width = (
+                    int(semi_detail.board_width_mm)
+                    if semi_detail is not None
+                    else None
+                )
+                planned_length = int(component["report_length_mm"] or 0) or None
+                planned_width = int(component["report_width_mm"] or 0) or None
+                specification_changed = bool(
+                    actual_length
+                    and actual_width
+                    and planned_length
+                    and planned_width
+                    and (actual_length, actual_width)
+                    != (planned_length, planned_width)
+                )
+                pallet = (
+                    lot.pallet_item.pallet
+                    if lot is not None and lot.pallet_item is not None
+                    else None
+                )
+                version["version_number"] = version_index
+                version["version_count"] = len(receipt_versions)
+                version["inventory_lot_number"] = (
+                    lot.lot_number if lot is not None else None
+                )
+                version["pallet_code"] = (
+                    pallet.pallet_code if pallet is not None else None
+                )
+                version["warehouse_location"] = (
+                    lot.location.location_code
+                    if lot is not None and lot.location is not None
+                    else None
+                )
+                version["actual_board_length_mm"] = actual_length
+                version["actual_board_width_mm"] = actual_width
+                version["specification_changed"] = specification_changed
+                version["requires_actual_card"] = bool(
+                    is_split
+                    or version["variance_type"] != "matched"
+                    or version["received_sheet_quantity"]
+                    != version["planned_sheet_quantity"]
+                    or specification_changed
+                )
+                version["paper_version_key"] = (
+                    f"actual:receipt:{version['receipt_item_id']}"
+                    if version["requires_actual_card"]
+                    else None
+                )
+            card["receipt_versions"] = receipt_versions
+            if any(row["requires_actual_card"] for row in receipt_versions):
+                card["receipt_match_status"] = "actual_required"
+            else:
+                card["receipt_match_status"] = "matched_reuse_plan"
+        received = receipt_without_line or bool(receipt_versions)
         if incomplete:
             card["review_required"] = True
             card["review_messages"] = _unique_text(
                 [*card["review_messages"], "历史报料快照不完整，请人工核对"]
             )
-        if received:
+        if received and card["receipt_match_status"] != "matched_reuse_plan":
             card["review_required"] = True
             card["review_messages"] = _unique_text(
                 [
                     *card["review_messages"],
-                    "该报料单已有实收，请改用实收随料卡并核对重打",
+                    "已有实收差异或分批版本，计划版不可冒充实收版",
                 ]
             )
         if task is None:
@@ -858,6 +1001,8 @@ def build_supplier_requisition_production_package(
                     "review_messages",
                     "status_label",
                     "fulfillment_reminders",
+                    "receipt_versions",
+                    "receipt_match_status",
                 }
             }
             for card in cards
@@ -872,6 +1017,15 @@ def build_supplier_requisition_production_package(
             default=str,
         ).encode("utf-8")
     ).hexdigest()
+    for card in cards:
+        card["paper_version_key"] = (
+            f"planned:supplier-order:{order.id}:"
+            f"{card['supplier_order_item_id']}:{plan_fingerprint}"
+        )
+        if card.get("receipt_match_status") == "matched_reuse_plan":
+            card["paper_phase_label"] = "计划版（实收一致，沿用本卡）"
+            if not card.get("review_required"):
+                card["status_label"] = "实收一致"
     pages = [
         {
             "page_number": index // 2 + 1,
@@ -918,4 +1072,182 @@ def build_supplier_requisition_production_package(
         ),
         "cards": cards,
         "pages": pages,
+    }
+
+
+def _actual_receipt_label(version: dict) -> str:
+    if version.get("specification_changed"):
+        return "规格差异实收版"
+    if int(version.get("version_count") or 0) > 1:
+        return (
+            f"分批实收版 {int(version.get('version_number') or 1)}"
+            f"/{int(version.get('version_count') or 1)}"
+        )
+    return {
+        "short": "短收实收版",
+        "over": "超收实收版",
+    }.get(str(version.get("variance_type") or ""), "实收版")
+
+
+def build_receipt_production_print_package(
+    db: Session,
+    receipt_item: IncomingReceiptItem,
+) -> dict | None:
+    """Project one posted receipt fact onto its frozen production-task card.
+
+    This intentionally reuses the same card projection and page layout as the
+    pre-receipt package.  A single exact receipt keeps the planned paper
+    version; quantity/specification differences and split receipts receive one
+    immutable response version per receipt fact.  No print or workflow fact is
+    written here.
+    """
+
+    if (
+        receipt_item.status != "posted"
+        or receipt_item.supplier_order_id is None
+        or receipt_item.supplier_order_item_id is None
+    ):
+        return None
+    order = db.get(SupplierRequisitionOrder, int(receipt_item.supplier_order_id))
+    if order is None or order.status != "confirmed":
+        return None
+    base = build_supplier_requisition_production_package(db, order)
+    source_card = next(
+        (
+            row
+            for row in base.get("cards", [])
+            if int(row.get("supplier_order_item_id") or 0)
+            == int(receipt_item.supplier_order_item_id)
+        ),
+        None,
+    )
+    if source_card is None:
+        return None
+    version = next(
+        (
+            row
+            for row in source_card.get("receipt_versions", [])
+            if int(row.get("receipt_item_id") or 0) == int(receipt_item.id)
+        ),
+        None,
+    )
+    if version is None:
+        return None
+
+    card = deepcopy(source_card)
+    receipt_warning = "已有实收差异或分批版本，计划版不可冒充实收版"
+    card["review_messages"] = [
+        message
+        for message in card.get("review_messages", [])
+        if message != receipt_warning
+    ]
+    card["review_required"] = bool(card["review_messages"])
+    requires_actual = bool(version.get("requires_actual_card"))
+    if requires_actual:
+        output_factor = max(
+            (
+                int(card["components"][0].get("output_factor") or 0)
+                if card.get("components")
+                else 0
+            )
+            or 1,
+            1,
+        )
+        card.update(
+            {
+                "paper_phase": "actual_receipt",
+                "paper_phase_label": _actual_receipt_label(version),
+                "paper_version_key": version["paper_version_key"],
+                "status_label": _actual_receipt_label(version),
+                "planned_sheet_quantity": int(
+                    version["planned_sheet_quantity"]
+                ),
+                "received_sheet_quantity": int(
+                    version["received_sheet_quantity"]
+                ),
+                "cumulative_received_sheet_quantity": int(
+                    version["cumulative_received_sheet_quantity"]
+                ),
+                "production_capacity_quantity": int(
+                    version["received_sheet_quantity"]
+                )
+                * output_factor,
+                "output_factor": output_factor,
+                "receipt_number": version.get("receipt_number"),
+                "receipt_item_id": int(version["receipt_item_id"]),
+                "received_at": version.get("received_at"),
+                "variance_sheet_quantity": int(
+                    version["variance_sheet_quantity"]
+                ),
+                "variance_type": version.get("variance_type"),
+                "resolution_status": version.get("resolution_status"),
+                "resolution_action": version.get("resolution_action"),
+                "inventory_lot_number": version.get("inventory_lot_number"),
+                "pallet_code": version.get("pallet_code"),
+                "warehouse_location": version.get("warehouse_location"),
+                "actual_board_length_mm": version.get(
+                    "actual_board_length_mm"
+                ),
+                "actual_board_width_mm": version.get("actual_board_width_mm"),
+                "specification_changed": bool(
+                    version.get("specification_changed")
+                ),
+            }
+        )
+    else:
+        card["paper_phase"] = "planned"
+        card["paper_phase_label"] = "计划版（实收一致，沿用本卡）"
+        card["status_label"] = (
+            "需核对" if card["review_required"] else "实收一致"
+        )
+
+    immutable_receipt = {
+        "plan_fingerprint": base["plan_fingerprint"],
+        "paper_version_key": card["paper_version_key"],
+        "receipt_item_id": int(receipt_item.id),
+        "receipt_number": version.get("receipt_number"),
+        "received_sheet_quantity": int(version["received_sheet_quantity"]),
+        "cumulative_received_sheet_quantity": int(
+            version["cumulative_received_sheet_quantity"]
+        ),
+        "variance_type": version.get("variance_type"),
+        "inventory_lot_number": version.get("inventory_lot_number"),
+        "pallet_code": version.get("pallet_code"),
+    }
+    paper_fingerprint = (
+        hashlib.sha256(
+            json.dumps(
+                immutable_receipt,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+        ).hexdigest()
+        if requires_actual
+        else base["plan_fingerprint"]
+    )
+    return {
+        **{
+            key: value
+            for key, value in base.items()
+            if key not in {"cards", "pages", "review_messages"}
+        },
+        "paper_phase": card["paper_phase"],
+        "paper_phase_label": card["paper_phase_label"],
+        "paper_version_key": card["paper_version_key"],
+        "paper_fingerprint": paper_fingerprint,
+        "reuses_planned_card": not requires_actual,
+        "reprint_required": requires_actual,
+        "receipt_item_id": int(receipt_item.id),
+        "card_count": 1,
+        "page_count": 1,
+        "review_required": bool(card["review_required"]),
+        "review_messages": list(card["review_messages"]),
+        "layout_overflow": len(card.get("components", [])) > 6,
+        "printable": len(card.get("components", [])) <= 6,
+        "cards": [card],
+        "pages": [
+            {"page_number": 1, "top": card, "bottom": None}
+        ],
     }

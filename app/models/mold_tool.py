@@ -37,6 +37,14 @@ class MoldTool(Base):
             name="ck_mold_tools_archive_status",
         ),
         CheckConstraint(
+            "repair_status IN ('normal', 'needs_repair')",
+            name="ck_mold_tools_repair_status",
+        ),
+        CheckConstraint(
+            "repair_version >= 1",
+            name="ck_mold_tools_repair_version",
+        ),
+        CheckConstraint(
             "((archive_status = 'active' AND archived_at IS NULL "
             "AND archived_by IS NULL AND archive_reason IS NULL "
             "AND pre_archive_location IS NULL) OR "
@@ -56,6 +64,12 @@ class MoldTool(Base):
         default=1,
         server_default="1",
         nullable=False,
+    )
+    repair_status: Mapped[str] = mapped_column(
+        String(20), default="normal", server_default="normal", nullable=False
+    )
+    repair_version: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1", nullable=False
     )
     last_location_confirmed_at: Mapped[datetime | None] = mapped_column(
         DateTime,
@@ -111,6 +125,11 @@ class MoldTool(Base):
         back_populates="mold_tool",
         passive_deletes=True,
         order_by="MoldScanEvent.id",
+    )
+    repair_events: Mapped[list["MoldRepairEvent"]] = relationship(
+        back_populates="mold_tool",
+        passive_deletes=True,
+        order_by="MoldRepairEvent.id",
     )
     last_location_confirmer: Mapped["User | None"] = relationship(
         foreign_keys=[last_location_confirmed_by],
@@ -176,6 +195,62 @@ class MoldLocationMovement(Base):
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     mold_tool: Mapped["MoldTool"] = relationship(back_populates="location_movements")
+    actor: Mapped["User | None"] = relationship(foreign_keys=[actor_id])
+
+
+class MoldRepairEvent(Base):
+    """Immutable ledger for independent mold repair-state transitions."""
+
+    __tablename__ = "mold_repair_events"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_mold_repair_events_idempotency_key"),
+        CheckConstraint(
+            "before_status IN ('normal', 'needs_repair')",
+            name="ck_mold_repair_events_before_status",
+        ),
+        CheckConstraint(
+            "after_status IN ('normal', 'needs_repair')",
+            name="ck_mold_repair_events_after_status",
+        ),
+        CheckConstraint(
+            "before_status <> after_status",
+            name="ck_mold_repair_events_actual_change",
+        ),
+        CheckConstraint(
+            "expected_version >= 1",
+            name="ck_mold_repair_events_expected_version",
+        ),
+        CheckConstraint(
+            "resulting_version = expected_version + 1",
+            name="ck_mold_repair_events_resulting_version",
+        ),
+        CheckConstraint(
+            "length(request_hash) = 64",
+            name="ck_mold_repair_events_request_hash",
+        ),
+        Index("ix_mold_repair_events_mold_time", "mold_tool_id", "occurred_at", "id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    mold_tool_id: Mapped[int] = mapped_column(
+        ForeignKey("mold_tools.id", ondelete="RESTRICT"), nullable=False
+    )
+    mold_code_snapshot: Mapped[str] = mapped_column(String(100), nullable=False)
+    before_status: Mapped[str] = mapped_column(String(20), nullable=False)
+    after_status: Mapped[str] = mapped_column(String(20), nullable=False)
+    actor_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    actor_username_snapshot: Mapped[str] = mapped_column(String(100), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    expected_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    resulting_version: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    mold_tool: Mapped["MoldTool"] = relationship(back_populates="repair_events")
     actor: Mapped["User | None"] = relationship(foreign_keys=[actor_id])
 
 

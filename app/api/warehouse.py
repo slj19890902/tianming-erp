@@ -46,6 +46,7 @@ from app.models.mold_tool import (
     MoldLabelPrintJob,
     MoldLabelPrintJobItem,
     MoldLocationMovement,
+    MoldRepairEvent,
     MoldScanEvent,
     MoldTool,
 )
@@ -244,6 +245,10 @@ from app.services.warehouse_capacity_forecast import (
     serialize_capacity_forecast_plan,
 )
 from app.services.audit_log import append_audit_event
+from app.services.mold_repair import (
+    MoldRepairError,
+    change_mold_repair_status,
+)
 from app.services.location_candidates import (
     list_operational_locations,
     operational_location_issue,
@@ -1145,6 +1150,18 @@ class MoldRestoreConfirmPayload(BaseModel):
     @field_validator("target_location", "idempotency_key")
     @classmethod
     def strip_restore_fields(cls, value: str) -> str:
+        return value.strip()
+
+
+class MoldRepairStatusPayload(BaseModel):
+    target_status: Literal["normal", "needs_repair"]
+    expected_version: int = Field(gt=0)
+    idempotency_key: str = Field(min_length=8, max_length=120)
+    confirmed: Literal[True]
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def strip_repair_idempotency_key(cls, value: str) -> str:
         return value.strip()
 
 
@@ -11206,6 +11223,9 @@ def _mold_tool_dict(
         "rack_location": row.rack_location,
         "location_guide": describe_mold_location(row.rack_location),
         "location_version": row.location_version,
+        "repair_status": row.repair_status,
+        "repair_status_label": "待维修" if row.repair_status == "needs_repair" else "正常",
+        "repair_version": row.repair_version,
         "last_location_confirmed_at": (
             utc_naive_to_api(row.last_location_confirmed_at)
             if row.last_location_confirmed_at
@@ -11748,6 +11768,91 @@ def _mold_archive_response(result: MoldArchiveResult) -> dict:
         "movement": _mold_location_movement_dict(result.movement),
         "idempotent_replay": result.replayed,
     }
+
+
+def _mold_repair_event_dict(row: MoldRepairEvent) -> dict:
+    return {
+        "id": row.id,
+        "mold_tool_id": row.mold_tool_id,
+        "mold_code": row.mold_code_snapshot,
+        "before_status": row.before_status,
+        "after_status": row.after_status,
+        "expected_version": row.expected_version,
+        "resulting_version": row.resulting_version,
+        "operator_id": row.actor_id,
+        "operator_name": row.actor_username_snapshot,
+        "occurred_at": beijing_naive_to_api(row.occurred_at),
+        "idempotency_key": row.idempotency_key,
+    }
+
+
+@router.post("/molds/{mold_id}/repair-status")
+def update_mold_repair_status(
+    mold_id: int,
+    payload: MoldRepairStatusPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    row = db.scalar(
+        select(MoldTool)
+        .options(selectinload(MoldTool.products))
+        .where(MoldTool.id == mold_id)
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="模具不存在")
+    _require_mold_customer_scope(row, _mold_customer_scope(user, db), include_historical=True)
+    try:
+        result = change_mold_repair_status(
+            db,
+            mold_id=mold_id,
+            target_status=payload.target_status,
+            expected_version=payload.expected_version,
+            idempotency_key=payload.idempotency_key,
+            actor=user,
+        )
+        if not result.replayed:
+            append_audit_event(
+                db,
+                request=request,
+                actor=user,
+                event_category="business",
+                result="success",
+                source="web",
+                module_code="warehouse",
+                action_code=(
+                    "mold.repair.start"
+                    if payload.target_status == "needs_repair"
+                    else "mold.repair.complete"
+                ),
+                legacy_action="MOLD_REPAIR_STATUS",
+                resource="MoldTool",
+                entity_type="mold_tool",
+                entity_id=mold_id,
+                object_ref=result.mold.mold_code,
+                description=("模具标记待维修" if payload.target_status == "needs_repair" else "模具维修完毕"),
+                details={
+                    "event_id": result.event.id,
+                    "before_status": result.event.before_status,
+                    "after_status": result.event.after_status,
+                    "expected_version": result.event.expected_version,
+                    "resulting_version": result.event.resulting_version,
+                    "idempotency_key": result.event.idempotency_key,
+                },
+            )
+        db.commit()
+        return {
+            "message": "模具已标记待维修" if payload.target_status == "needs_repair" else "模具维修已完成",
+            "mold": _mold_tool_dict(result.mold),
+            "event": _mold_repair_event_dict(result.event),
+            "idempotent_replay": result.replayed,
+        }
+    except MoldRepairError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="模具维修状态已变化，请刷新后重试") from error
 
 
 def _append_mold_archive_log(
@@ -13043,6 +13148,9 @@ def get_mold_live_status(
             "rack_location": row.rack_location,
             "location_guide": basics["location_guide"],
             "location_version": row.location_version,
+            "repair_status": row.repair_status,
+            "repair_status_label": "待维修" if row.repair_status == "needs_repair" else "正常",
+            "repair_version": row.repair_version,
             "is_active": row.is_active,
             "archive_status": row.archive_status,
         },

@@ -269,6 +269,11 @@ from app.services.requisition_quantities import (
     purchase_sheet_quantity,
     required_piece_quantity,
 )
+from app.services.mold_repair import (
+    issue_order_mold_repair_confirmation,
+    repair_warnings_for_products,
+    require_order_mold_repair_confirmation,
+)
 
 
 router = APIRouter()
@@ -573,6 +578,7 @@ class PdfImportConfirmation(BaseModel):
 
 
 class OrderItemUpdate(BaseModel):
+    mold_repair_confirmation_token: str | None = Field(default=None, max_length=4000)
     quantity: int
     unit_price: Decimal
     product_code: str
@@ -664,6 +670,7 @@ class OrderCreate(BaseModel):
     import_integrity_errors: list[str] | None = None
     import_draft: bool = False
     pdf_import_confirmation: PdfImportConfirmation | None = None
+    mold_repair_confirmation_token: str | None = Field(default=None, max_length=4000)
 
     # legacy single-line compatibility payload
     product_archive_id: int | None = None
@@ -1455,6 +1462,86 @@ class OrderUpdate(BaseModel):
     customer_po: str | None = None
     delivery_date: date | None = None
     remark: str | None = None
+    mold_repair_confirmation_token: str | None = Field(default=None, max_length=4000)
+
+
+class MoldRepairPreviewRequest(BaseModel):
+    product_ids: list[int] = Field(default_factory=list, max_length=500)
+    order_ids: list[int] = Field(default_factory=list, max_length=500)
+    order_item_ids: list[int] = Field(default_factory=list, max_length=500)
+
+    @model_validator(mode="after")
+    def require_target(self) -> "MoldRepairPreviewRequest":
+        if not self.product_ids and not self.order_ids and not self.order_item_ids:
+            raise ValueError("至少提供一个订单、订单明细或常用箱")
+        if any(value <= 0 for value in (*self.product_ids, *self.order_ids, *self.order_item_ids)):
+            raise ValueError("订单维修提醒对象无效")
+        return self
+
+
+def _order_product_ids(
+    db: Session,
+    *,
+    order_ids: list[int] | None = None,
+    order_item_ids: list[int] | None = None,
+) -> list[int]:
+    conditions = []
+    if order_ids:
+        conditions.append(OrderItem.order_id.in_(set(order_ids)))
+    if order_item_ids:
+        conditions.append(OrderItem.id.in_(set(order_item_ids)))
+    if not conditions:
+        return []
+    return sorted(
+        {
+            int(value)
+            for value in db.scalars(
+                select(OrderItem.product_id).where(
+                    or_(*conditions),
+                    OrderItem.product_id.is_not(None),
+                )
+            ).all()
+            if value is not None
+        }
+    )
+
+
+def _require_product_scope_for_warning(
+    db: Session,
+    *,
+    product_ids: list[int],
+    user: User,
+) -> None:
+    customer_ids = set(
+        db.scalars(select(Product.customer_id).where(Product.id.in_(product_ids))).all()
+    ) if product_ids else set()
+    for customer_id in customer_ids:
+        require_customer_access(customer_id, current_user=user, db=db)
+
+
+@router.post("/mold-repair-preview")
+def preview_order_mold_repairs(
+    payload: MoldRepairPreviewRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    product_ids = sorted(
+        set(payload.product_ids)
+        | set(
+            _order_product_ids(
+                db,
+                order_ids=payload.order_ids,
+                order_item_ids=payload.order_item_ids,
+            )
+        )
+    )
+    _require_product_scope_for_warning(db, product_ids=product_ids, user=user)
+    warnings = repair_warnings_for_products(db, product_ids)
+    return {
+        "required": bool(warnings),
+        "warnings": warnings,
+        "confirmation_token": issue_order_mold_repair_confirmation(warnings=warnings, user=user),
+    }
 
 
 class DraftRematchRequest(BaseModel):
@@ -5673,6 +5760,12 @@ def update_order(
     if order is None:
         raise HTTPException(status_code=404, detail="订单不存在")
     require_customer_access(order.customer_id, current_user=user, db=db)
+    require_order_mold_repair_confirmation(
+        db,
+        product_ids=[item.product_id for item in order.items if item.product_id],
+        confirmation_token=payload.mold_repair_confirmation_token,
+        user=user,
+    )
 
     before = {
         "customer_po": order.customer_po,
@@ -6072,6 +6165,13 @@ def _create_order_impl(
     _set_order_save_stage(observability, "customer_scope")
     if payload.customer_id is not None:
         require_customer_access(payload.customer_id, current_user=user, db=db)
+    if payload.items:
+        require_order_mold_repair_confirmation(
+            db,
+            product_ids=[item.product_id for item in payload.items if item.product_id],
+            confirmation_token=payload.mold_repair_confirmation_token,
+            user=user,
+        )
     if payload.items is None:
         _set_order_save_stage(observability, "legacy_create")
         return _legacy_create(payload, user)
@@ -7159,6 +7259,12 @@ def update_order_item(
         raise HTTPException(status_code=404, detail="订单不存在")
     require_customer_access(
         order_for_scope.customer_id, current_user=user, db=db
+    )
+    require_order_mold_repair_confirmation(
+        db,
+        product_ids=[item.product_id] if item.product_id else [],
+        confirmation_token=payload.mold_repair_confirmation_token,
+        user=user,
     )
     if payload.sync_product and not item.product_id:
         raise HTTPException(status_code=409, detail="当前订单明细未关联常用箱")

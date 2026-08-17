@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.118"
-    assert APP_VERSION_NAME == "天地盖部分报料身份修复"
+    assert APP_VERSION == "v0.22.119"
+    assert APP_VERSION_NAME == "天地盖报料单盖底分行修复"
     assert APP_BUILD_DATE == "2026-08-17"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -49,15 +49,17 @@ def test_factory_update_reports_current_release_version() -> None:
     current_release = [
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
-    assert any("本次更新｜" in item and "盖片" in item and "底片" in item and "cover/base" in item for item in current_release)
-    assert any("本次更新｜" in item and "200套" in item and "各剩100片" in item and "待报料" in item for item in current_release)
-    assert any("本次更新｜" in item and "重复物理材料" in item and "幂等" in item and "客户范围" in item for item in current_release)
-    assert any("本次更新｜" in item and "无数据库迁移" in item and "TD010" in item and "不修改" in item for item in current_release)
-    assert any("如何验证｜" in item and "思迈尔TD010" in item and "盖片" in item and "底片" in item for item in current_release)
-    assert any("如何验证｜" in item and "已报各100片" in item and "剩余各100片" in item for item in current_release)
-    assert any("如何验证｜" in item and "whole" in item and "不得重复" in item for item in current_release)
-    assert any("如何验证｜" in item and "超量" in item and "长宽填反" in item and "重复提交" in item for item in current_release)
-    assert any("如何验证｜" in item and "v0.22.118" in item and "oo23v8x9z12" in item for item in current_release)
+    assert any("本次更新｜" in item and "重建" in item and "盖底尺寸" in item and "合并显示" in item for item in current_release)
+    assert any("本次更新｜" in item and "每条正式明细" in item and "同规格盖底" in item and "不合并" in item for item in current_release)
+    assert any("本次更新｜" in item and "SRO-20260817-0003" in item and "盖2145×1055" in item and "底2120×1035" in item for item in current_release)
+    assert any("本次更新｜" in item and "无数据库迁移" in item and "不修改既有报料明细" in item for item in current_release)
+    assert any("如何验证｜" in item and "SRO-20260817-0003" in item and "100张" in item for item in current_release)
+    assert any("如何验证｜" in item and "合计采购量仍为200张" in item and "不得显示为200张" in item for item in current_release)
+    assert any("如何验证｜" in item and "同采购规格" in item and "不得合并" in item for item in current_release)
+    assert any("如何验证｜" in item and "超量" in item and "重复提交" in item and "不得新建" in item for item in current_release)
+    assert any("如何验证｜" in item and "v0.22.119" in item and "oo23v8x9z12" in item for item in current_release)
+    assert any(item.startswith("v0.22.118：本次更新｜") and "cover/base" in item for item in APP_CHANGELOG)
+    assert any(item.startswith("v0.22.118：如何验证｜") and "v0.22.118" in item and "oo23v8x9z12" in item for item in APP_CHANGELOG)
     assert any(item.startswith("v0.22.117：本次更新｜") and "履约备忘" in item for item in APP_CHANGELOG)
     assert any(item.startswith("v0.22.117：如何验证｜") and "v0.22.117" in item and "oo23v8x9z12" in item for item in APP_CHANGELOG)
     assert any(item.startswith("v0.22.115：本次更新｜") and "移动该模具" in item for item in APP_CHANGELOG)
@@ -181,7 +183,7 @@ def test_factory_update_reports_current_release_version() -> None:
         for item in APP_CHANGELOG
     )
     assert any(
-        "如何验证｜" in item and "v0.22.118" in item and "oo23" in item
+        "如何验证｜" in item and "v0.22.119" in item and "oo23" in item
         for item in current_release
     )
     assert any(

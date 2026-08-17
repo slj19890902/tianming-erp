@@ -653,8 +653,18 @@ def test_a3_supplier_draft_treats_400_sheets_as_two_200_sheet_components(
         item.snapshot_product_name = "A3 订单 200 只"
         item.snapshot_report_length_mm = 2145
         item.snapshot_report_width_mm = 1055
-        item.snapshot_base_report_length_mm = 2120
-        item.snapshot_base_report_width_mm = 1035
+        # Even if the physical purchase specs happen to be identical, cover
+        # and base must remain separate sources instead of collapsing to 400.
+        item.snapshot_base_report_length_mm = 2145
+        item.snapshot_base_report_width_mm = 1055
+        item.snapshot_crease_type = "压线"
+        item.snapshot_crease_left_mm = 310
+        item.snapshot_crease_middle_mm = 435
+        item.snapshot_crease_right_mm = 310
+        item.snapshot_base_crease_type = "压线"
+        item.snapshot_base_crease_left_mm = 310
+        item.snapshot_base_crease_middle_mm = 435
+        item.snapshot_base_crease_right_mm = 310
         item.snapshot_splice_mode = "single"
         item.snapshot_pieces_per_box = 1
         session.commit()
@@ -731,6 +741,14 @@ def test_a3_supplier_draft_allows_cover_and_base_partial_100_of_200(
         item.snapshot_report_width_mm = 1055
         item.snapshot_base_report_length_mm = 2120
         item.snapshot_base_report_width_mm = 1035
+        item.snapshot_crease_type = "压线"
+        item.snapshot_crease_left_mm = 310
+        item.snapshot_crease_middle_mm = 435
+        item.snapshot_crease_right_mm = 310
+        item.snapshot_base_crease_type = "压线"
+        item.snapshot_base_crease_left_mm = 300
+        item.snapshot_base_crease_middle_mm = 435
+        item.snapshot_base_crease_right_mm = 300
         item.snapshot_splice_mode = "single"
         item.snapshot_pieces_per_box = 1
         session.commit()
@@ -749,10 +767,26 @@ def test_a3_supplier_draft_allows_cover_and_base_partial_100_of_200(
         for line in draft["supplier_groups"][0]["lines"]:
             line["requisition_qty"] = 100
         saved = _save_supplier_order_draft(client, draft)
+        supplier_order_id = saved.json()["created_orders"][0]["supplier_order_id"]
+        detail = client.get(f"/api/requisition/supplier-orders/{supplier_order_id}")
         pending = client.get("/api/requisition/pending")
         next_draft = _preview_supplier_order_draft(client, [selection])
 
     assert saved.status_code == 201, saved.text
+    assert detail.status_code == 200, detail.text
+    printed_lines = detail.json()["items"]
+    assert len(printed_lines) == 2
+    printed_by_component = {
+        line["component_type"]: line for line in printed_lines
+    }
+    assert printed_by_component["cover"]["report_length_mm"] == 2145
+    assert printed_by_component["cover"]["report_width_mm"] == 1055
+    assert printed_by_component["cover"]["crease_display"] == "310+435+310"
+    assert printed_by_component["cover"]["requisition_qty"] == 100
+    assert printed_by_component["base"]["report_length_mm"] == 2120
+    assert printed_by_component["base"]["report_width_mm"] == 1035
+    assert printed_by_component["base"]["crease_display"] == "300+435+300"
+    assert printed_by_component["base"]["requisition_qty"] == 100
     next_by_component = {
         line["source_items"][0]["component_type"]: line
         for line in next_draft["supplier_groups"][0]["lines"]

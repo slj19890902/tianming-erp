@@ -5069,6 +5069,7 @@ def _purchase_line_spec_from_entry(entry: dict) -> dict:
     flute_type = _clean_supplier_flute(order_item.flute_type)
     clean_material_code = _clean_supplier_material_code(material_code, layer_count)
     return {
+        "component_type": component_type,
         "material_id": material_id,
         "material_code": clean_material_code,
         "material_display": _format_supplier_material(
@@ -5093,6 +5094,9 @@ def _purchase_line_spec_from_entry(entry: dict) -> dict:
 def _purchase_line_key(supplier_name: str | None, spec: dict) -> str:
     key_payload = {
         "supplier_name": (supplier_name or "").strip(),
+        # A3 盖片与底片是两条独立物理来源；即使采购规格偶然相同，
+        # 也不能在报料单重建时合并成一条虚假数量。
+        "component_type": spec.get("component_type") or "whole",
         "material_id": spec.get("material_id"),
         "material_code": spec.get("material_code") or "",
         "material_display": spec.get("material_display") or "",
@@ -12608,6 +12612,7 @@ def _source_items_from_supplier_order(order: SupplierRequisitionOrder) -> list[d
         {
             "id": item.id,
             "order_item_id": item.order_item_id,
+            "component_type": _supplier_order_item_component_type(item),
             "order_number": item.order_number,
             "product_code": item.product_code,
             "product_name": item.product_name,
@@ -12626,6 +12631,22 @@ def _source_items_from_supplier_order(order: SupplierRequisitionOrder) -> list[d
     ]
 
 
+def _supplier_order_item_component_type(
+    item: SupplierRequisitionOrderItem,
+) -> str:
+    source_key = str(item.source_key or "").strip().lower()
+    if source_key.endswith(":cover"):
+        return "cover"
+    if source_key.endswith(":base"):
+        return "base"
+    product_name = str(item.product_name or "").strip()
+    if product_name.endswith("-盖"):
+        return "cover"
+    if product_name.endswith("-底"):
+        return "base"
+    return "whole"
+
+
 def _supplier_order_purchase_lines(
     order: SupplierRequisitionOrder,
     db: Session,
@@ -12633,47 +12654,54 @@ def _supplier_order_purchase_lines(
     line_map: dict[str, dict] = {}
     for item in order.items:
         order_item = db.get(OrderItem, item.order_item_id) if item.order_item_id else None
-        material_id = order_item.material_id if order_item and order_item.material_id else order.material_id
+        component_type = _supplier_order_item_component_type(item)
+        material_id = item.material_id or (
+            order_item.material_id if order_item and order_item.material_id else order.material_id
+        )
         material = db.get(Material, material_id) if material_id else None
         layer_count = (
-            order_item.layer_count
-            if order_item is not None and order_item.layer_count
-            else order.layer_count or (material.layer_count if material else None)
+            item.layer_count_snapshot
+            or (
+                order_item.layer_count
+                if order_item is not None and order_item.layer_count
+                else order.layer_count or (material.layer_count if material else None)
+            )
         )
         flute_type = _clean_supplier_flute(
-            order_item.flute_type if order_item is not None and order_item.flute_type else order.flute_type
+            item.flute_type_snapshot
+            or (
+                order_item.flute_type
+                if order_item is not None and order_item.flute_type
+                else order.flute_type
+            )
         )
-        material_code = material.code if material else (order_item.snapshot_material if order_item else None)
+        material_code = (
+            item.material_code_snapshot
+            or (material.code if material else None)
+            or (order_item.snapshot_material if order_item else None)
+        )
         report_length = _first_int_value(
+            item.report_length_mm,
             order_item.cardboard_len if order_item is not None else None,
             order_item.snapshot_report_length_mm if order_item is not None else None,
             order.report_length_mm,
         )
         report_width = _first_int_value(
+            item.report_width_mm,
             order_item.cardboard_width if order_item is not None else None,
             order_item.snapshot_report_width_mm if order_item is not None else None,
             order.report_width_mm,
         )
-        crease_type = (
-            order_item.snapshot_crease_type
-            if order_item is not None and order_item.snapshot_crease_type
-            else order.crease_type
-        )
-        crease_left = (
-            order_item.snapshot_crease_left_mm
-            if order_item is not None and order_item.snapshot_crease_left_mm is not None
-            else order.crease_left_mm
-        )
-        crease_middle = (
-            order_item.snapshot_crease_middle_mm
-            if order_item is not None and order_item.snapshot_crease_middle_mm is not None
-            else order.crease_middle_mm
-        )
-        crease_right = (
-            order_item.snapshot_crease_right_mm
-            if order_item is not None and order_item.snapshot_crease_right_mm is not None
-            else order.crease_right_mm
-        )
+        if order_item is not None:
+            crease_type, crease_left, crease_middle, crease_right = _component_crease(
+                order_item,
+                component_type,
+            )
+        else:
+            crease_type = order.crease_type
+            crease_left = order.crease_left_mm
+            crease_middle = order.crease_middle_mm
+            crease_right = order.crease_right_mm
         cutting_mode = item.cutting_mode or (
             order_item.special_process if order_item is not None else None
         ) or order.cutting_mode or DEFAULT_CUTTING_MODE
@@ -12687,6 +12715,7 @@ def _supplier_order_purchase_lines(
             fallback_text=order_item.snapshot_material if order_item is not None else None,
         )
         spec = {
+            "component_type": component_type,
             "material_id": material_id,
             "material_code": _clean_supplier_material_code(material_code, layer_count),
             "material_display": material_display,
@@ -12738,6 +12767,7 @@ def _supplier_order_purchase_lines(
             {
                 "id": item.id,
                 "order_item_id": item.order_item_id,
+                "component_type": component_type,
                 "order_number": item.order_number,
                 "product_code": item.product_code,
                 "product_name": item.product_name,

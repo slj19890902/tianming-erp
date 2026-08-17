@@ -9,8 +9,8 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PARENT = "pp24v8x9z13"
-TARGET = "qq25v8x9z14"
+PARENT = "qq25v8x9z14"
+TARGET = "rr26v8x9z15"
 
 
 def _config(monkeypatch: pytest.MonkeyPatch, path: Path) -> Config:

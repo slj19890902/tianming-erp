@@ -41,7 +41,12 @@ def test_p1_66a_is_linear_and_round_trips_without_v2_facts(
     database = tmp_path / "p1-66a-roundtrip.sqlite3"
     config = _config(monkeypatch, database)
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == [TARGET]
+    heads = script.get_heads()
+    assert len(heads) == 1
+    assert TARGET in {
+        revision.revision
+        for revision in script.iterate_revisions(heads[0], PARENT)
+    }
     assert script.get_revision(TARGET).down_revision == PARENT
 
     command.upgrade(config, PARENT)

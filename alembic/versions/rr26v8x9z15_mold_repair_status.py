@@ -1,7 +1,7 @@
 """add independent mold repair status and immutable events
 
-Revision ID: qq25v8x9z14
-Revises: pp24v8x9z13
+Revision ID: rr26v8x9z15
+Revises: qq25v8x9z14
 Create Date: 2026-08-17
 """
 
@@ -11,8 +11,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "qq25v8x9z14"
-down_revision = "pp24v8x9z13"
+revision = "rr26v8x9z15"
+down_revision = "qq25v8x9z14"
 branch_labels = None
 depends_on = None
 

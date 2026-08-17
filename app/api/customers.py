@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+import re
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
@@ -51,6 +52,7 @@ class CustomerPayload(BaseModel):
     customer_number: int = Field(gt=0)
     customer_code: str = Field(min_length=1, max_length=50)
     name: str = Field(min_length=1, max_length=200)
+    chinese_short_name: str | None = Field(default=None, max_length=30)
     payment_term_days: int = Field(default=0, ge=0)
     statement_cycle_start_day: int = Field(default=20, ge=1, le=28)
     credit_limit: Decimal = Field(default=Decimal("0"), ge=0)
@@ -64,6 +66,18 @@ class CustomerPayload(BaseModel):
     bank_account: str | None = None
     remark: str | None = None
     status: str = "active"
+
+    @field_validator("chinese_short_name", mode="before")
+    @classmethod
+    def normalize_chinese_short_name(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        short_name = str(value).strip()
+        if not short_name:
+            return None
+        if not re.search(r"[\u3400-\u9fff]", short_name):
+            raise ValueError("标签中文简称必须至少包含一个中文字符")
+        return short_name
 
 
 class CustomerResponse(CustomerPayload):
@@ -150,8 +164,17 @@ class CustomerQuoteEstimatePayload(BaseModel):
         return cleaned.upper()
 
 
-def _customer_write_data(payload: CustomerPayload) -> dict:
+def _customer_write_data(
+    payload: CustomerPayload,
+    *,
+    existing: Customer | None = None,
+) -> dict:
     data = payload.model_dump(include=set(CustomerPayload.model_fields))
+    # Older full-update clients do not know this new optional field.  Omission
+    # must preserve the operator-maintained value instead of silently clearing
+    # it through the Pydantic default.
+    if existing is not None and "chinese_short_name" not in payload.model_fields_set:
+        data.pop("chinese_short_name", None)
     data.update(
         customer_code=clean_code(payload.customer_code),
         name=payload.name.strip(),
@@ -267,6 +290,7 @@ def list_customers(
             or_(
                 Customer.name.like(pattern),
                 Customer.customer_code.like(pattern),
+                Customer.chinese_short_name.like(pattern),
             )
         )
     total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
@@ -527,7 +551,7 @@ def preview_customer_update(
 ) -> dict:
     require_customer_access(customer_id, current_user=user, db=db)
     customer = _customer_or_404(db, customer_id)
-    updates = _customer_write_data(payload)
+    updates = _customer_write_data(payload, existing=customer)
     return preview_versioned_update(
         db,
         object_type="customer",
@@ -548,7 +572,7 @@ def update_customer(
     require_customer_access(customer_id, current_user=user, db=db)
     customer = _customer_or_404(db, customer_id)
     before = CustomerResponse.model_validate(customer).model_dump()
-    updates = _customer_write_data(payload)
+    updates = _customer_write_data(payload, existing=customer)
     changed = _changed_updates(customer, updates)
     try:
         apply_versioned_update(

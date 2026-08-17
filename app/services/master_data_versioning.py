@@ -48,6 +48,7 @@ _CUSTOMER_FIELDS = (
     "customer_number",
     "customer_code",
     "name",
+    "chinese_short_name",
     "payment_term_days",
     "statement_cycle_start_day",
     "credit_limit",

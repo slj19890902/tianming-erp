@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from typing import Annotated, Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import and_, exists, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
@@ -172,6 +172,17 @@ from app.services.requisition_production_print import (
 from app.services.production_packaging_label import (
     build_supplier_requisition_packaging_label_package,
 )
+from app.services.production_packaging_label_layout import (
+    ProductionPackagingLabelLayoutConflict,
+    ProductionPackagingLabelLayoutError,
+    admin_state as production_packaging_label_layout_admin_state,
+    effective_layout as effective_production_packaging_label_layout,
+    layout_diff_summary,
+    publish_draft as publish_production_packaging_label_layout_draft,
+    restore_default as restore_default_production_packaging_label_layout,
+    rollback_release as rollback_production_packaging_label_layout,
+    save_draft as save_production_packaging_label_layout_draft,
+)
 from app.services.production_label_operations import (
     ProductionLabelOperationError,
     confirm_packaging_label_job_printed,
@@ -189,6 +200,7 @@ can_operate = PermissionChecker("requisition.execute")
 can_reserve = PermissionChecker("warehouse.reserve")
 can_read_production_labels = PermissionChecker("orders.view")
 admin_rollback = RoleChecker(["admin"])
+admin_production_label_layout = RoleChecker(["admin"])
 _FINISHED_STOCK_POLICY_WRITE_LOCK = Lock()
 _SUPPLIER_ORDER_CREATE_WRITE_LOCK = Lock()
 
@@ -211,6 +223,52 @@ class ProductionPackagingLabelPrintConfirmationRequest(BaseModel):
     @field_validator("idempotency_key")
     @classmethod
     def trim_label_confirmation_key(cls, value: str) -> str:
+        return value.strip()
+
+
+class ProductionPackagingLabelLayoutPaperPayload(BaseModel):
+    width_mm: float
+    height_mm: float
+
+
+class ProductionPackagingLabelLayoutElementPayload(BaseModel):
+    id: str = Field(min_length=1, max_length=50)
+    kind: Literal["text", "qr"]
+    x_mm: float
+    y_mm: float
+    width_mm: float
+    height_mm: float
+    font_size_mm: float | None = None
+    font_weight: int | None = None
+    text_align: Literal["left", "center", "right"] | None = None
+    visible: bool
+
+
+class ProductionPackagingLabelLayoutPayload(BaseModel):
+    catalog_version: str = Field(min_length=1, max_length=40)
+    paper: ProductionPackagingLabelLayoutPaperPayload
+    elements: list[ProductionPackagingLabelLayoutElementPayload]
+
+
+class ProductionPackagingLabelLayoutDraftRequest(BaseModel):
+    operation_key: str = Field(min_length=1, max_length=120)
+    expected_draft_version: int = Field(ge=0)
+    layout: ProductionPackagingLabelLayoutPayload
+
+    @field_validator("operation_key")
+    @classmethod
+    def trim_layout_operation_key(cls, value: str) -> str:
+        return value.strip()
+
+
+class ProductionPackagingLabelLayoutReleaseRequest(BaseModel):
+    operation_key: str = Field(min_length=1, max_length=120)
+    expected_draft_version: int = Field(ge=0)
+    expected_release_version: int = Field(ge=0)
+
+    @field_validator("operation_key")
+    @classmethod
+    def trim_layout_release_operation_key(cls, value: str) -> str:
         return value.strip()
 
 
@@ -15783,6 +15841,203 @@ def get_supplier_order_production_print_package(
     return package
 
 
+def _apply_production_packaging_label_layout_write(
+    db: Session,
+    *,
+    request: Request,
+    user: User,
+    operation_kind: Literal["save_draft", "publish", "restore_default", "rollback"],
+    payload: (
+        ProductionPackagingLabelLayoutDraftRequest
+        | ProductionPackagingLabelLayoutReleaseRequest
+    ),
+    _retry_integrity: bool = True,
+) -> dict:
+    try:
+        before = production_packaging_label_layout_admin_state(db)
+        if operation_kind == "save_draft":
+            if not isinstance(payload, ProductionPackagingLabelLayoutDraftRequest):
+                raise ProductionPackagingLabelLayoutError("标签布局草稿请求无效")
+            result = save_production_packaging_label_layout_draft(
+                db,
+                layout=payload.layout.model_dump(),
+                expected_draft_version=payload.expected_draft_version,
+                operation_key=payload.operation_key,
+                actor_id=user.id,
+            )
+            before_layout = before["draft"]["layout"]
+            after_layout = result["draft"]["layout"]
+        else:
+            if not isinstance(payload, ProductionPackagingLabelLayoutReleaseRequest):
+                raise ProductionPackagingLabelLayoutError("标签布局发布请求无效")
+            common = {
+                "expected_draft_version": payload.expected_draft_version,
+                "expected_release_version": payload.expected_release_version,
+                "operation_key": payload.operation_key,
+                "actor_id": user.id,
+            }
+            if operation_kind == "publish":
+                result = publish_production_packaging_label_layout_draft(db, **common)
+            elif operation_kind == "restore_default":
+                result = restore_default_production_packaging_label_layout(db, **common)
+            else:
+                result = rollback_production_packaging_label_layout(db, **common)
+            before_layout = before["published"]["layout"]
+            after_layout = result["published"]["layout"]
+        if not result["replayed"]:
+            descriptions = {
+                "save_draft": "保存生产包装标签布局草稿",
+                "publish": "发布生产包装标签布局",
+                "restore_default": "恢复并发布生产包装标签默认布局",
+                "rollback": "回滚并发布上一版生产包装标签布局",
+            }
+            append_audit_event(
+                db,
+                event_category="business",
+                result="success",
+                source="web",
+                module_code="production",
+                action_code=f"production.packaging_label_layout.{operation_kind}",
+                legacy_action="PACKAGING_LABEL_LAYOUT",
+                resource="ProductionPackagingLabelLayoutRevision",
+                request=request,
+                actor=user,
+                entity_type="production_packaging_label_layout",
+                object_ref="production_packaging_label_layout:global",
+                batch_id=payload.operation_key,
+                description=descriptions[operation_kind],
+                details={
+                    "operation_kind": operation_kind,
+                    "draft_version": result["draft"]["version"],
+                    "release_version": result["published"]["version"],
+                    "layout_hash": (
+                        result["draft"]["layout_hash"]
+                        if operation_kind == "save_draft"
+                        else result["published"]["layout_hash"]
+                    ),
+                    "diff": layout_diff_summary(before_layout, after_layout),
+                },
+            )
+        db.commit()
+        return result
+    except ProductionPackagingLabelLayoutConflict as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except ProductionPackagingLabelLayoutError as error:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except IntegrityError as error:
+        db.rollback()
+        if _retry_integrity:
+            return _apply_production_packaging_label_layout_write(
+                db,
+                request=request,
+                user=user,
+                operation_kind=operation_kind,
+                payload=payload,
+                _retry_integrity=False,
+            )
+        raise HTTPException(
+            status_code=409,
+            detail="标签布局已被其他请求更新，请重新加载",
+        ) from error
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.get("/production-packaging-label-layout")
+def get_effective_production_packaging_label_layout(
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_read_production_labels),
+) -> dict:
+    """Return the released layout used by the next v2 print job."""
+
+    try:
+        return effective_production_packaging_label_layout(db)
+    except ProductionPackagingLabelLayoutError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@router.get("/production-packaging-label-layout/admin")
+def get_production_packaging_label_layout_admin_state(
+    db: Session = Depends(get_db),
+    _user: User = Depends(admin_production_label_layout),
+) -> dict:
+    try:
+        return production_packaging_label_layout_admin_state(db)
+    except ProductionPackagingLabelLayoutError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@router.put("/production-packaging-label-layout/admin/draft")
+def put_production_packaging_label_layout_draft(
+    payload: ProductionPackagingLabelLayoutDraftRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_production_label_layout),
+    _write_guard: None = Depends(production_label_write_guard),
+) -> dict:
+    return _apply_production_packaging_label_layout_write(
+        db,
+        request=request,
+        user=user,
+        operation_kind="save_draft",
+        payload=payload,
+    )
+
+
+@router.post("/production-packaging-label-layout/admin/publish")
+def post_production_packaging_label_layout_publish(
+    payload: ProductionPackagingLabelLayoutReleaseRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_production_label_layout),
+    _write_guard: None = Depends(production_label_write_guard),
+) -> dict:
+    return _apply_production_packaging_label_layout_write(
+        db,
+        request=request,
+        user=user,
+        operation_kind="publish",
+        payload=payload,
+    )
+
+
+@router.post("/production-packaging-label-layout/admin/restore-default")
+def post_production_packaging_label_layout_restore_default(
+    payload: ProductionPackagingLabelLayoutReleaseRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_production_label_layout),
+    _write_guard: None = Depends(production_label_write_guard),
+) -> dict:
+    return _apply_production_packaging_label_layout_write(
+        db,
+        request=request,
+        user=user,
+        operation_kind="restore_default",
+        payload=payload,
+    )
+
+
+@router.post("/production-packaging-label-layout/admin/rollback")
+def post_production_packaging_label_layout_rollback(
+    payload: ProductionPackagingLabelLayoutReleaseRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_production_label_layout),
+    _write_guard: None = Depends(production_label_write_guard),
+) -> dict:
+    return _apply_production_packaging_label_layout_write(
+        db,
+        request=request,
+        user=user,
+        operation_kind="rollback",
+        payload=payload,
+    )
+
+
 @router.get("/supplier-orders/{order_id}/production-packaging-label-package")
 def get_supplier_order_production_packaging_label_package(
     order_id: int,
@@ -15801,7 +16056,13 @@ def get_supplier_order_production_packaging_label_package(
             status_code=409,
             detail="只有正式有效的报料单可以打印生产包装标签",
         )
-    package = build_supplier_requisition_packaging_label_package(db, order)
+    try:
+        package = build_supplier_requisition_packaging_label_package(db, order)
+    except ProductionPackagingLabelLayoutError as error:
+        raise HTTPException(
+            status_code=409,
+            detail=f"生产包装标签布局不可用：{error}",
+        ) from error
     if package["review_required"]:
         raise HTTPException(
             status_code=409,
@@ -15876,6 +16137,12 @@ def post_supplier_order_production_packaging_label_job(
             result.package,
             replayed=result.replayed,
         )
+    except ProductionPackagingLabelLayoutError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=f"生产包装标签布局不可用：{error}",
+        ) from error
     except ProductionLabelOperationError as error:
         db.rollback()
         raise HTTPException(status_code=error.status_code, detail=str(error)) from error

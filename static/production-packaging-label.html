@@ -61,6 +61,24 @@
     .quantity-row .field-name { color:#000; font-size:2.35mm; }
     .quantity-number { font-family:"Arial","Microsoft YaHei",sans-serif; font-size:5.3mm; font-weight:900; line-height:1; }
     .quantity-unit { font-size:2.8mm; font-weight:900; }
+    html[data-template="current_40x30_v2"] .label-card { grid-template-rows:4.8mm 6.4mm 4.8mm 4.8mm 8.6mm; }
+    html[data-template="current_40x30_v2"] .compact-row { display:flex; align-items:center; justify-content:center; min-width:0; min-height:0; padding:.25mm .7mm; border-bottom:.2mm solid #6b7280; }
+    html[data-template="current_40x30_v2"] .compact-customer { border-bottom:.25mm solid #000; }
+    html[data-template="current_40x30_v2"] .compact-customer .fit-value { font-size:3.65mm; font-weight:900; }
+    html[data-template="current_40x30_v2"] .compact-code { border-bottom:.25mm solid #000; }
+    html[data-template="current_40x30_v2"] .compact-code .fit-value { font-family:"Arial","Microsoft YaHei",sans-serif; font-size:3.6mm; font-weight:900; word-break:break-all; }
+    html[data-template="current_40x30_v2"] .compact-detail .fit-value { font-size:2.85mm; }
+    html[data-template="current_40x30_v2"] .quantity-row { padding:.35mm .65mm .25mm; }
+    html[data-template="current_40x30_v2"] .quantity-number { font-size:6.1mm; }
+    html[data-template="current_40x30_v2"] .quantity-unit { font-size:3.05mm; }
+    .label-card.layout-driven { position:relative; display:block; overflow:hidden; }
+    .layout-print-element { position:absolute; display:flex; align-items:center; min-width:0; min-height:0; overflow:hidden; line-height:1.02; overflow-wrap:anywhere; word-break:break-word; }
+    .layout-print-element.align-left { justify-content:flex-start; text-align:left; }
+    .layout-print-element.align-center { justify-content:center; text-align:center; }
+    .layout-print-element.align-right { justify-content:flex-end; text-align:right; }
+    .layout-print-element.code { font-family:"Arial","Microsoft YaHei",sans-serif; word-break:break-all; }
+    .layout-print-element.quantity { gap:.7mm; line-height:1; }
+    .layout-print-element.quantity .layout-unit { font-size:.5em; font-weight:900; }
     html[data-template="legacy_65x45_v1"] .label-card { grid-template-rows:6.4mm 9.8mm 6.3mm 6.3mm 1fr; border-width:.35mm; border-radius:1.4mm; }
     html[data-template="legacy_65x45_v1"] .customer-row,
     html[data-template="legacy_65x45_v1"] .code-row,
@@ -72,14 +90,39 @@
     html[data-template="legacy_65x45_v1"] .quantity-row .field-name { font-size:3mm; }
     html[data-template="legacy_65x45_v1"] .quantity-number { font-size:7.2mm; }
     html[data-template="legacy_65x45_v1"] .quantity-unit { font-size:3.6mm; }
+    .layout-editor { position:fixed; inset:0; z-index:20; display:flex; align-items:center; justify-content:center; padding:18px; background:rgb(15 23 42 / 72%); }
+    .layout-editor-shell { width:min(1040px,96vw); max-height:94vh; overflow:auto; border:1px solid #64748b; border-radius:8px; background:#f8fafc; box-shadow:0 18px 55px rgb(15 23 42 / 35%); }
+    .layout-editor-header { position:sticky; top:0; z-index:2; display:flex; align-items:center; gap:10px; padding:12px 16px; border-bottom:1px solid #cbd5e1; background:#fff; }
+    .layout-editor-header h2 { margin:0; font-size:18px; }
+    .layout-editor-header .version-note { margin-left:auto; color:#475569; font-size:12px; }
+    .layout-editor-body { display:grid; grid-template-columns:minmax(510px,1fr) 330px; gap:18px; padding:18px; }
+    .layout-preview-wrap { min-width:0; }
+    .layout-preview-title { margin:0 0 8px; color:#334155; font-size:13px; }
+    .layout-stage-frame { display:inline-block; padding:18px; border:1px solid #94a3b8; background:#e2e8f0; }
+    .layout-stage { position:relative; width:480px; height:360px; overflow:hidden; border:3px solid #111827; background:#fff; touch-action:none; user-select:none; }
+    .layout-editor-element { position:absolute; display:flex; align-items:center; overflow:hidden; border:1px dashed #64748b; background:rgb(255 255 255 / 72%); line-height:1.02; overflow-wrap:anywhere; word-break:break-word; cursor:move; }
+    .layout-editor-element.selected { border:2px solid #2563eb; background:rgb(219 234 254 / 78%); }
+    .layout-editor-element.qr-placeholder { align-items:center; justify-content:center; border-style:dotted; color:#64748b; background:repeating-linear-gradient(45deg,#f8fafc,#f8fafc 6px,#e2e8f0 6px,#e2e8f0 12px); font-size:12px; text-align:center; }
+    .layout-panel { display:flex; flex-direction:column; gap:12px; min-width:0; }
+    .layout-help { margin:0; padding:9px 10px; border-left:4px solid #2563eb; background:#eff6ff; color:#1e3a8a; font-size:12px; line-height:1.55; }
+    .layout-form-grid { display:grid; grid-template-columns:1fr 1fr; gap:9px; }
+    .layout-field { display:flex; flex-direction:column; gap:4px; color:#334155; font-size:12px; }
+    .layout-field.full { grid-column:1 / -1; }
+    .layout-field input,.layout-field select { width:100%; border:1px solid #94a3b8; border-radius:4px; background:#fff; padding:7px 8px; color:#111827; font:14px/1.2 inherit; }
+    .layout-actions { display:flex; flex-wrap:wrap; gap:8px; padding-top:4px; }
+    .layout-status { min-height:36px; margin:0; padding:8px 10px; border:1px solid #cbd5e1; border-radius:5px; background:#fff; color:#334155; font-size:12px; line-height:1.45; }
+    .layout-status.error { color:#7f1d1d; border-color:#b91c1c; }
+    .layout-status.success { color:#14532d; border-color:#15803d; }
     [hidden] { display:none !important; }
     @page { size: 40mm 30mm; margin: 0; }
     @media (max-width:680px) {
       .toolbar-note { width:100%; margin-left:0; text-align:left; }
+      .layout-editor-body { grid-template-columns:1fr; }
+      .layout-stage-frame { max-width:100%; overflow:auto; }
     }
     @media print {
       html,body { width:var(--label-width); min-height:0; background:#fff; }
-      .toolbar,.message { display:none !important; }
+      .toolbar,.message,.layout-editor { display:none !important; }
       .label-list { display:block; padding:0; }
       .label-card { width:var(--label-width); height:var(--label-height); margin:0; box-shadow:none; break-after:page; page-break-after:always; }
       .label-card:last-child { break-after:auto; page-break-after:auto; }
@@ -91,6 +134,7 @@
   <nav class="toolbar">
     <button id="retryButton" type="button">重新加载</button>
     <button id="printButton" class="primary" type="button" disabled>打印包装标签</button>
+    <button id="layoutButton" type="button" hidden>编辑标签布局</button>
     <button id="confirmPrintedButton" class="confirm" type="button" hidden>确认已实际打印</button>
     <a id="latestJobLink" class="button-link" href="#" hidden>补打最近已登记作业</a>
     <button id="closeButton" type="button">关闭</button>
@@ -98,15 +142,50 @@
   </nav>
   <div id="message" class="message">正在读取冻结的生产包装标签计划……</div>
   <main id="labelList" class="label-list" aria-live="polite"></main>
+  <section id="layoutEditor" class="layout-editor" hidden aria-modal="true" role="dialog" aria-labelledby="layoutEditorTitle">
+    <div class="layout-editor-shell">
+      <header class="layout-editor-header">
+        <h2 id="layoutEditorTitle">40 × 30 mm 标签布局编辑</h2>
+        <span id="layoutVersionNote" class="version-note"></span>
+        <button id="layoutCloseButton" type="button">关闭</button>
+      </header>
+      <div class="layout-editor-body">
+        <div class="layout-preview-wrap">
+          <p class="layout-preview-title">按住元素拖动；蓝框表示当前选中元素。尺寸和位置单位均为毫米。</p>
+          <div class="layout-stage-frame"><div id="layoutStage" class="layout-stage" aria-label="标签布局预览"></div></div>
+        </div>
+        <aside class="layout-panel">
+          <p class="layout-help">“保存草稿”不会影响打印；只有“发布为下次打印布局”后，新创建的打印作业才使用新布局。已经冻结的历史作业继续使用旧布局。</p>
+          <div class="layout-form-grid">
+            <label class="layout-field full">元素<select id="layoutElementSelect"></select></label>
+            <label class="layout-field">X 位置<input id="layoutX" data-layout-field="x_mm" type="number" min="0" max="40" step="0.1"></label>
+            <label class="layout-field">Y 位置<input id="layoutY" data-layout-field="y_mm" type="number" min="0" max="30" step="0.1"></label>
+            <label class="layout-field">总体宽度<input id="layoutWidth" data-layout-field="width_mm" type="number" min="0.1" max="40" step="0.1"></label>
+            <label class="layout-field">总体高度<input id="layoutHeight" data-layout-field="height_mm" type="number" min="0.1" max="30" step="0.1"></label>
+            <label id="layoutFontField" class="layout-field">字体大小<input id="layoutFontSize" data-layout-field="font_size_mm" type="number" min="1" max="10" step="0.05"></label>
+            <label id="layoutAlignField" class="layout-field">文字对齐<select id="layoutAlign" data-layout-field="text_align"><option value="left">左对齐</option><option value="center">居中</option><option value="right">右对齐</option></select></label>
+          </div>
+          <p id="layoutStatus" class="layout-status">尚未修改。</p>
+          <div class="layout-actions">
+            <button id="layoutSaveButton" class="primary" type="button">保存草稿</button>
+            <button id="layoutPublishButton" class="confirm" type="button">保存并用于下次打印</button>
+            <button id="layoutDefaultButton" type="button">恢复默认并发布</button>
+            <button id="layoutRollbackButton" type="button">回滚上一发布版</button>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </section>
   <script>
     (() => {
       "use strict";
 
       const TEMPLATE_DEFINITIONS = Object.freeze({
+        current_40x30_v2: Object.freeze({ widthMm:40, heightMm:30, label:"40 × 30 mm 精简版" }),
         current_40x30_v1: Object.freeze({ widthMm:40, heightMm:30, label:"40 × 30 mm" }),
         legacy_65x45_v1: Object.freeze({ widthMm:65, heightMm:45, label:"65 × 45 mm（历史作业）" }),
       });
-      const CURRENT_TEMPLATE_VERSION = "current_40x30_v1";
+      const CURRENT_TEMPLATE_VERSION = "current_40x30_v2";
       const LEGACY_TEMPLATE_VERSION = "legacy_65x45_v1";
       const MIN_TEXT_SIZE_PX = 5;
 
@@ -114,11 +193,30 @@
       const labelList = document.getElementById("labelList");
       const retryButton = document.getElementById("retryButton");
       const printButton = document.getElementById("printButton");
+      const layoutButton = document.getElementById("layoutButton");
       const confirmPrintedButton = document.getElementById("confirmPrintedButton");
       const latestJobLink = document.getElementById("latestJobLink");
       const closeButton = document.getElementById("closeButton");
       const toolbarNote = document.getElementById("toolbarNote");
       const legacyPageSize = document.getElementById("legacyPageSize");
+      const layoutEditor = document.getElementById("layoutEditor");
+      const layoutCloseButton = document.getElementById("layoutCloseButton");
+      const layoutVersionNote = document.getElementById("layoutVersionNote");
+      const layoutStage = document.getElementById("layoutStage");
+      const layoutElementSelect = document.getElementById("layoutElementSelect");
+      const layoutX = document.getElementById("layoutX");
+      const layoutY = document.getElementById("layoutY");
+      const layoutWidth = document.getElementById("layoutWidth");
+      const layoutHeight = document.getElementById("layoutHeight");
+      const layoutFontSize = document.getElementById("layoutFontSize");
+      const layoutAlign = document.getElementById("layoutAlign");
+      const layoutFontField = document.getElementById("layoutFontField");
+      const layoutAlignField = document.getElementById("layoutAlignField");
+      const layoutStatus = document.getElementById("layoutStatus");
+      const layoutSaveButton = document.getElementById("layoutSaveButton");
+      const layoutPublishButton = document.getElementById("layoutPublishButton");
+      const layoutDefaultButton = document.getElementById("layoutDefaultButton");
+      const layoutRollbackButton = document.getElementById("layoutRollbackButton");
       const params = new URLSearchParams(window.location.search);
       const supplierOrderId = Number(params.get("id"));
       const requestedJobId = Number(params.get("job_id"));
@@ -129,6 +227,23 @@
       let prepareAttempt = null;
       let confirmationAttempt = null;
       let printing = false;
+      let layoutAdminState = null;
+      let editorLayout = null;
+      let selectedLayoutElementId = "customer_short_name";
+      let layoutMutationAttempt = null;
+      let layoutOperationBusy = false;
+      let layoutDrag = null;
+
+      const LAYOUT_CATALOG_VERSION = "p1-66b-v1";
+      const LAYOUT_ELEMENT_LABELS = Object.freeze({
+        customer_short_name:"客户中文简称",
+        product_code:"存货编码",
+        product_name:"产品名称",
+        specification:"规格",
+        quantity:"数量（只/捆）",
+        product_qr:"产品二维码（暂未启用）",
+      });
+      const REQUIRED_LAYOUT_IDS = Object.freeze(Object.keys(LAYOUT_ELEMENT_LABELS));
 
       const escapeHtml = (value) => String(value ?? "")
         .replaceAll("&", "&amp;")
@@ -139,6 +254,47 @@
       const positiveInteger = (value) => Number.isInteger(Number(value)) && Number(value) > 0;
       const requiredText = (value) => typeof value === "string" && value.trim() ? value.trim() : "";
       const newIdempotencyKey = (prefix) => `${prefix}-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
+      const deepClone = (value) => JSON.parse(JSON.stringify(value));
+      const finiteNumber = (value) => Number.isFinite(Number(value)) ? Number(value) : null;
+      const roundedMm = (value) => Math.round(Number(value) * 1000) / 1000;
+      const clipped = (value, minimum, maximum) => Math.min(maximum, Math.max(minimum, value));
+
+      function validateLayoutEnvelope(envelope) {
+        const layout = envelope?.layout;
+        if (!layout || layout.catalog_version !== LAYOUT_CATALOG_VERSION) {
+          throw new Error("标签布局目录版本不受支持，已停止打印");
+        }
+        if (Number(layout.paper?.width_mm) !== 40 || Number(layout.paper?.height_mm) !== 30) {
+          throw new Error("标签布局纸张不是40×30毫米，已停止打印");
+        }
+        if (!Array.isArray(layout.elements) || layout.elements.length !== REQUIRED_LAYOUT_IDS.length) {
+          throw new Error("标签布局元素不完整，已停止打印");
+        }
+        const seen = new Set();
+        layout.elements.forEach((element) => {
+          if (!REQUIRED_LAYOUT_IDS.includes(element?.id) || seen.has(element.id)) {
+            throw new Error("标签布局包含未登记或重复元素，已停止打印");
+          }
+          seen.add(element.id);
+          const x = finiteNumber(element.x_mm);
+          const y = finiteNumber(element.y_mm);
+          const width = finiteNumber(element.width_mm);
+          const height = finiteNumber(element.height_mm);
+          if ([x, y, width, height].includes(null) || x < 0 || y < 0 || width <= 0 || height <= 0 || x + width > 40.001 || y + height > 30.001) {
+            throw new Error(`${LAYOUT_ELEMENT_LABELS[element.id]}超出40×30毫米纸张，已停止打印`);
+          }
+          if (element.id !== "product_qr") {
+            const fontSize = finiteNumber(element.font_size_mm);
+            if (element.visible !== true || fontSize === null || fontSize < 1 || fontSize > 10 || ![400, 700, 800, 900].includes(element.font_weight) || !["left", "center", "right"].includes(element.text_align)) {
+              throw new Error(`${LAYOUT_ELEMENT_LABELS[element.id]}的布局参数无效，已停止打印`);
+            }
+          } else if (element.visible) {
+            throw new Error("产品二维码数据源尚未启用，已停止打印");
+          }
+        });
+        if (seen.size !== REQUIRED_LAYOUT_IDS.length) throw new Error("标签布局缺少必要元素，已停止打印");
+        return layout;
+      }
 
       function errorMessage(status, payload) {
         const detail = payload && typeof payload === "object" ? payload.detail : null;
@@ -220,14 +376,20 @@
           if (Number(label.label_number) > Number(label.label_count) || Number(label.quantity) > Number(label.units_per_label)) {
             throw new Error("包装标签序号或数量异常，已停止打印");
           }
+          const customerField = packageData.template_version === CURRENT_TEMPLATE_VERSION
+            ? ["客户中文简称", label.customer_short_name]
+            : ["客户名称", label.customer_name];
           const missing = [
-            ["客户名称", label.customer_name],
+            customerField,
             ["存货编码", label.product_code],
             ["产品名称", label.product_name],
             ["规格", label.specification],
           ].filter(([, value]) => !requiredText(value)).map(([name]) => name);
           if (missing.length) throw new Error(`包装标签缺少${missing.join("、")}，已停止打印`);
         });
+        if (packageData.template_version === CURRENT_TEMPLATE_VERSION && packageData.label_layout) {
+          validateLayoutEnvelope(packageData.label_layout);
+        }
       }
 
       function applyTemplate(templateVersion) {
@@ -242,7 +404,51 @@
         toolbarNote.textContent = `${template.label}｜缩放选 100%“实际大小”｜关闭“适合页面”、自动旋转和页眉页脚`;
       }
 
-      function labelHtml(label) {
+      function compactLabelHtml(label) {
+        return `<article class="label-card" aria-label="生产包装标签 ${escapeHtml(label.label_number)}/${escapeHtml(label.label_count)}">
+          <div class="compact-row compact-customer"><span class="fit-cell"><strong class="fit-value" title="${escapeHtml(label.customer_short_name)}">${escapeHtml(label.customer_short_name)}</strong></span></div>
+          <div class="compact-row compact-code"><span class="fit-cell"><strong class="fit-value" title="${escapeHtml(label.product_code)}">${escapeHtml(label.product_code)}</strong></span></div>
+          <div class="compact-row compact-detail"><span class="fit-cell"><strong class="fit-value" title="${escapeHtml(label.product_name)}">${escapeHtml(label.product_name)}</strong></span></div>
+          <div class="compact-row compact-detail"><span class="fit-cell"><strong class="fit-value" title="${escapeHtml(label.specification)}">${escapeHtml(label.specification)}</strong></span></div>
+          <div class="quantity-row"><strong class="quantity-number">${escapeHtml(label.quantity)}</strong><span class="quantity-unit">只/捆</span></div>
+        </article>`;
+      }
+
+      function layoutElementValue(label, elementId) {
+        if (elementId === "customer_short_name") return requiredText(label.customer_short_name);
+        if (elementId === "product_code") return requiredText(label.product_code);
+        if (elementId === "product_name") return requiredText(label.product_name);
+        if (elementId === "specification") return requiredText(label.specification);
+        if (elementId === "quantity") return String(label.quantity);
+        return "";
+      }
+
+      function layoutDrivenLabelHtml(label, layout) {
+        const elements = layout.elements.filter((element) => element.visible).map((element) => {
+          const value = layoutElementValue(label, element.id);
+          const style = [
+            `left:${element.x_mm}mm`,
+            `top:${element.y_mm}mm`,
+            `width:${element.width_mm}mm`,
+            `height:${element.height_mm}mm`,
+            `font-size:${element.font_size_mm}mm`,
+            `font-weight:${element.font_weight}`,
+          ].join(";");
+          const classes = [
+            "layout-print-element",
+            `align-${element.text_align}`,
+            element.id === "product_code" ? "code" : "",
+            element.id === "quantity" ? "quantity" : "",
+          ].filter(Boolean).join(" ");
+          const content = element.id === "quantity"
+            ? `<strong>${escapeHtml(value)}</strong><span class="layout-unit">只/捆</span>`
+            : `<strong>${escapeHtml(value)}</strong>`;
+          return `<div class="${classes}" data-layout-element="${escapeHtml(element.id)}" style="${style}" title="${escapeHtml(value)}">${content}</div>`;
+        }).join("");
+        return `<article class="label-card layout-driven" aria-label="生产包装标签 ${escapeHtml(label.label_number)}/${escapeHtml(label.label_count)}">${elements}</article>`;
+      }
+
+      function legacyLabelHtml(label) {
         return `<article class="label-card" aria-label="生产包装标签 ${escapeHtml(label.label_number)}/${escapeHtml(label.label_count)}">
           <div class="customer-row"><span class="field-name">客户名称</span><span class="fit-cell"><strong class="fit-value customer-name" title="${escapeHtml(label.customer_name)}">${escapeHtml(label.customer_name)}</strong></span></div>
           <div class="code-row"><span class="field-name">存货编码</span><span class="fit-cell"><strong class="fit-value product-code" title="${escapeHtml(label.product_code)}">${escapeHtml(label.product_code)}</strong></span></div>
@@ -250,6 +456,15 @@
           <div class="detail-row"><span class="field-name">规格</span><span class="fit-cell"><strong class="fit-value detail-value" title="${escapeHtml(label.specification)}">${escapeHtml(label.specification)}</strong></span></div>
           <div class="quantity-row"><span class="field-name">本标签数量</span><strong class="quantity-number">${escapeHtml(label.quantity)}</strong><span class="quantity-unit">只</span></div>
         </article>`;
+      }
+
+      function labelHtml(label, packageData) {
+        const editableLayout = packageData.template_version === CURRENT_TEMPLATE_VERSION && packageData.label_layout
+          ? validateLayoutEnvelope(packageData.label_layout)
+          : null;
+        return label.template_version === CURRENT_TEMPLATE_VERSION
+          ? (editableLayout ? layoutDrivenLabelHtml(label, editableLayout) : compactLabelHtml(label))
+          : legacyLabelHtml(label);
       }
 
       function fitElement(element) {
@@ -264,10 +479,13 @@
 
       function validateRenderedLabels() {
         const textFits = [...labelList.querySelectorAll(".fit-value")].every(fitElement);
+        const layoutTextFits = [...labelList.querySelectorAll(".layout-print-element")].every((element) =>
+          element.scrollWidth <= element.clientWidth + 1 && element.scrollHeight <= element.clientHeight + 1
+        );
         const cardsFit = [...labelList.querySelectorAll(".label-card")].every((card) =>
           card.scrollWidth <= card.clientWidth + 1 && card.scrollHeight <= card.clientHeight + 1
         );
-        if (!textFits || !cardsFit) {
+        if (!textFits || !layoutTextFits || !cardsFit) {
           throw new Error("核心字段过长，无法在当前纸型完整显示；已停止打印，请先缩短主档字段或联系管理员调整模板");
         }
       }
@@ -296,11 +514,215 @@
           : "补打最近已登记作业";
       }
 
+      function showLayoutStatus(text, kind = "") {
+        layoutStatus.textContent = text;
+        layoutStatus.className = `layout-status${kind ? ` ${kind}` : ""}`;
+      }
+
+      function setLayoutEditorBusy(busy) {
+        layoutOperationBusy = busy;
+        [layoutSaveButton, layoutPublishButton, layoutDefaultButton, layoutRollbackButton, layoutCloseButton].forEach((button) => {
+          button.disabled = busy;
+        });
+        layoutRollbackButton.disabled = busy || !layoutAdminState?.can_rollback;
+      }
+
+      function currentEditorElement() {
+        return editorLayout?.elements?.find((element) => element.id === selectedLayoutElementId) || null;
+      }
+
+      function layoutPreviewValue(elementId) {
+        const sample = loadedPackage?.labels?.[0] || {};
+        const value = layoutElementValue(sample, elementId);
+        if (value) return value;
+        const examples = {
+          customer_short_name:"思迈",
+          product_code:"SM-380260220",
+          product_name:"三层瓦楞外箱",
+          specification:"380×260×220mm",
+          quantity:"50",
+        };
+        return examples[elementId] || "";
+      }
+
+      function editorElementHtml(element) {
+        const selected = element.id === selectedLayoutElementId ? " selected" : "";
+        const left = Number(element.x_mm) * 12;
+        const top = Number(element.y_mm) * 12;
+        const width = Number(element.width_mm) * 12;
+        const height = Number(element.height_mm) * 12;
+        if (element.kind === "qr") {
+          return `<div class="layout-editor-element qr-placeholder${selected}" data-layout-editor-id="${escapeHtml(element.id)}" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;opacity:${element.visible ? 1 : .58}">二维码位置<br>数据源待启用</div>`;
+        }
+        const value = layoutPreviewValue(element.id);
+        const quantity = element.id === "quantity" ? `${value} 只/捆` : value;
+        return `<div class="layout-editor-element${selected}" data-layout-editor-id="${escapeHtml(element.id)}" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;font-size:${Number(element.font_size_mm) * 12}px;font-weight:${element.font_weight};justify-content:${element.text_align === "left" ? "flex-start" : element.text_align === "right" ? "flex-end" : "center"};text-align:${element.text_align}">${escapeHtml(quantity)}</div>`;
+      }
+
+      function renderLayoutEditor() {
+        if (!editorLayout || !layoutAdminState) return;
+        validateLayoutEnvelope({layout:editorLayout});
+        layoutStage.innerHTML = editorLayout.elements.map(editorElementHtml).join("");
+        layoutElementSelect.innerHTML = editorLayout.elements.map((element) =>
+          `<option value="${escapeHtml(element.id)}">${escapeHtml(LAYOUT_ELEMENT_LABELS[element.id])}</option>`
+        ).join("");
+        layoutElementSelect.value = selectedLayoutElementId;
+        const element = currentEditorElement();
+        if (!element) return;
+        layoutX.value = element.x_mm;
+        layoutY.value = element.y_mm;
+        layoutWidth.value = element.width_mm;
+        layoutHeight.value = element.height_mm;
+        const isText = element.kind === "text";
+        layoutFontField.hidden = !isText;
+        layoutAlignField.hidden = !isText;
+        layoutFontSize.value = isText ? element.font_size_mm : "";
+        layoutAlign.value = isText ? element.text_align : "center";
+        layoutVersionNote.textContent = `草稿 v${layoutAdminState.draft.version}｜已发布 v${layoutAdminState.published.version}`;
+        layoutRollbackButton.disabled = layoutOperationBusy || !layoutAdminState.can_rollback;
+      }
+
+      function closeLayoutEditor(force = false) {
+        if (layoutOperationBusy && !force) return;
+        layoutEditor.hidden = true;
+        editorLayout = null;
+        layoutDrag = null;
+        layoutMutationAttempt = null;
+      }
+
+      async function refreshLayoutAdminState() {
+        layoutButton.hidden = true;
+        layoutAdminState = null;
+        if (!loadedPackage || loadedPackage.template_version !== CURRENT_TEMPLATE_VERSION || positiveInteger(loadedJob?.id)) return false;
+        try {
+          const state = await requestJson("/api/requisition/production-packaging-label-layout/admin", {method:"GET"});
+          if (!loadedPackage || loadedPackage.template_version !== CURRENT_TEMPLATE_VERSION || positiveInteger(loadedJob?.id)) return false;
+          validateLayoutEnvelope({layout:state?.draft?.layout});
+          validateLayoutEnvelope({layout:state?.published?.layout});
+          layoutAdminState = state;
+          layoutButton.hidden = false;
+          return true;
+        } catch (error) {
+          if (error?.status !== 403) console.warn("包装标签布局管理状态不可用", error);
+          return false;
+        }
+      }
+
+      async function openLayoutEditor() {
+        if (positiveInteger(loadedJob?.id)) {
+          showMessage("历史打印作业布局已经冻结，不能在补打页面修改。", "message error");
+          return;
+        }
+        const available = layoutAdminState || await refreshLayoutAdminState();
+        if (!available || !layoutAdminState) return;
+        editorLayout = deepClone(layoutAdminState.draft.layout);
+        selectedLayoutElementId = editorLayout.elements.some((element) => element.id === selectedLayoutElementId)
+          ? selectedLayoutElementId
+          : editorLayout.elements[0].id;
+        showLayoutStatus("可拖动元素，也可直接输入毫米数值。保存草稿后仍需发布才会影响下次打印。");
+        setLayoutEditorBusy(false);
+        renderLayoutEditor();
+        layoutEditor.hidden = false;
+      }
+
+      function updateEditorLayoutField(field, rawValue) {
+        const element = currentEditorElement();
+        if (!element) return;
+        if (field === "text_align") {
+          if (["left", "center", "right"].includes(rawValue)) element.text_align = rawValue;
+        } else {
+          const number = finiteNumber(rawValue);
+          if (number === null) return;
+          if (field === "x_mm") element.x_mm = roundedMm(clipped(number, 0, 40 - Number(element.width_mm)));
+          if (field === "y_mm") element.y_mm = roundedMm(clipped(number, 0, 30 - Number(element.height_mm)));
+          if (field === "width_mm") element.width_mm = roundedMm(clipped(number, .1, 40 - Number(element.x_mm)));
+          if (field === "height_mm") element.height_mm = roundedMm(clipped(number, .1, 30 - Number(element.y_mm)));
+          if (field === "font_size_mm" && element.kind === "text") element.font_size_mm = roundedMm(clipped(number, 1, 10));
+        }
+        showLayoutStatus("布局有未保存修改。先保存草稿，再发布给后续打印使用。");
+        renderLayoutEditor();
+      }
+
+      function layoutMutationKey(signature, prefix) {
+        if (!layoutMutationAttempt || layoutMutationAttempt.signature !== signature) {
+          layoutMutationAttempt = {signature, operationKey:newIdempotencyKey(prefix)};
+        }
+        return layoutMutationAttempt.operationKey;
+      }
+
+      async function saveLayoutDraft({quiet=false} = {}) {
+        if (!editorLayout || !layoutAdminState || layoutOperationBusy) return false;
+        validateLayoutEnvelope({layout:editorLayout});
+        const signature = `draft|${layoutAdminState.draft.version}|${JSON.stringify(editorLayout)}`;
+        setLayoutEditorBusy(true);
+        try {
+          const result = await requestJson("/api/requisition/production-packaging-label-layout/admin/draft", {
+            method:"PUT",
+            body:JSON.stringify({
+              operation_key:layoutMutationKey(signature, "p166b-layout-draft"),
+              expected_draft_version:layoutAdminState.draft.version,
+              layout:editorLayout,
+            }),
+          });
+          layoutMutationAttempt = null;
+          layoutAdminState = result;
+          editorLayout = deepClone(result.draft.layout);
+          if (!quiet) showLayoutStatus(`草稿 v${result.draft.version} 已保存；打印仍使用已发布 v${result.published.version}。`, "success");
+          return true;
+        } catch (error) {
+          showLayoutStatus(error instanceof TypeError ? "无法连接 ERP 服务，重试会复用同一操作编号。" : error?.message || "保存草稿失败", "error");
+          return false;
+        } finally {
+          setLayoutEditorBusy(false);
+          renderLayoutEditor();
+        }
+      }
+
+      async function runReleaseOperation(operation, endpoint, confirmationText) {
+        if (!layoutAdminState || layoutOperationBusy || !window.confirm(confirmationText)) return false;
+        const signature = `${operation}|${layoutAdminState.draft.version}|${layoutAdminState.published.version}`;
+        setLayoutEditorBusy(true);
+        try {
+          const result = await requestJson(endpoint, {
+            method:"POST",
+            body:JSON.stringify({
+              operation_key:layoutMutationKey(signature, `p166b-layout-${operation}`),
+              expected_draft_version:layoutAdminState.draft.version,
+              expected_release_version:layoutAdminState.published.version,
+            }),
+          });
+          layoutMutationAttempt = null;
+          layoutAdminState = result;
+          editorLayout = deepClone(result.draft.layout);
+          closeLayoutEditor(true);
+          await loadPackage();
+          showMessage(`标签布局已发布为 v${result.published.version}；从下一次新建打印作业起生效，历史作业不变。`, "message success");
+          return true;
+        } catch (error) {
+          showLayoutStatus(error instanceof TypeError ? "无法连接 ERP 服务，重试会复用同一操作编号。" : error?.message || "发布布局失败", "error");
+          return false;
+        } finally {
+          setLayoutEditorBusy(false);
+          if (!layoutEditor.hidden) renderLayoutEditor();
+        }
+      }
+
+      async function publishLayout() {
+        if (!editorLayout || !layoutAdminState || layoutOperationBusy) return;
+        const draftMatches = JSON.stringify(editorLayout) === JSON.stringify(layoutAdminState.draft.layout);
+        if (!draftMatches && !(await saveLayoutDraft({quiet:true}))) return;
+        await runReleaseOperation(
+          "publish",
+          "/api/requisition/production-packaging-label-layout/admin/publish",
+          "确认发布当前草稿吗？发布后只影响下一次新建的打印作业，历史作业保持原布局。",
+        );
+      }
+
       async function render(normalized, {isPrepared=false, showPrintConfirmation=false} = {}) {
         const packageData = normalized.packageData;
         validatePackage(packageData);
         applyTemplate(packageData.template_version);
-        labelList.innerHTML = packageData.labels.map((label) => labelHtml(label)).join("");
+        labelList.innerHTML = packageData.labels.map((label) => labelHtml(label, packageData)).join("");
         if (document.fonts?.ready) await document.fonts.ready;
         await new Promise((resolve) => requestAnimationFrame(resolve));
         validateRenderedLabels();
@@ -315,6 +737,7 @@
         } else {
           message.hidden = true;
         }
+        void refreshLayoutAdminState();
       }
 
       function resetView() {
@@ -323,6 +746,8 @@
         printButton.disabled = true;
         confirmPrintedButton.hidden = true;
         latestJobLink.hidden = true;
+        layoutButton.hidden = true;
+        layoutAdminState = null;
         labelList.innerHTML = "";
         showMessage("正在读取冻结的生产包装标签计划……");
       }
@@ -438,8 +863,69 @@
         }
       }
 
+      layoutElementSelect.addEventListener("change", () => {
+        if (!editorLayout || !REQUIRED_LAYOUT_IDS.includes(layoutElementSelect.value)) return;
+        selectedLayoutElementId = layoutElementSelect.value;
+        renderLayoutEditor();
+      });
+      [layoutX, layoutY, layoutWidth, layoutHeight, layoutFontSize].forEach((input) => {
+        input.addEventListener("change", () => updateEditorLayoutField(input.dataset.layoutField, input.value));
+      });
+      layoutAlign.addEventListener("change", () => updateEditorLayoutField("text_align", layoutAlign.value));
+      layoutStage.addEventListener("pointerdown", (event) => {
+        const target = event.target.closest("[data-layout-editor-id]");
+        if (!target || !editorLayout || layoutOperationBusy) return;
+        selectedLayoutElementId = target.dataset.layoutEditorId;
+        const element = currentEditorElement();
+        if (!element) return;
+        layoutDrag = {
+          pointerId:event.pointerId,
+          startClientX:event.clientX,
+          startClientY:event.clientY,
+          startX:Number(element.x_mm),
+          startY:Number(element.y_mm),
+        };
+        layoutStage.setPointerCapture?.(event.pointerId);
+        renderLayoutEditor();
+        event.preventDefault();
+      });
+      layoutStage.addEventListener("pointermove", (event) => {
+        if (!layoutDrag || event.pointerId !== layoutDrag.pointerId || !editorLayout) return;
+        const element = currentEditorElement();
+        if (!element) return;
+        const rect = layoutStage.getBoundingClientRect();
+        const scaleX = rect.width / 40;
+        const scaleY = rect.height / 30;
+        element.x_mm = roundedMm(clipped(layoutDrag.startX + (event.clientX - layoutDrag.startClientX) / scaleX, 0, 40 - Number(element.width_mm)));
+        element.y_mm = roundedMm(clipped(layoutDrag.startY + (event.clientY - layoutDrag.startClientY) / scaleY, 0, 30 - Number(element.height_mm)));
+        showLayoutStatus("布局有未保存修改。先保存草稿，再发布给后续打印使用。");
+        renderLayoutEditor();
+        event.preventDefault();
+      });
+      const endLayoutDrag = (event) => {
+        if (!layoutDrag || event.pointerId !== layoutDrag.pointerId) return;
+        try { layoutStage.releasePointerCapture?.(event.pointerId); } catch (_error) { /* no-op */ }
+        layoutDrag = null;
+      };
+      layoutStage.addEventListener("pointerup", endLayoutDrag);
+      layoutStage.addEventListener("pointercancel", endLayoutDrag);
+
       retryButton.addEventListener("click", loadPackage);
       printButton.addEventListener("click", startPrint);
+      layoutButton.addEventListener("click", openLayoutEditor);
+      layoutCloseButton.addEventListener("click", () => closeLayoutEditor());
+      layoutSaveButton.addEventListener("click", () => saveLayoutDraft());
+      layoutPublishButton.addEventListener("click", publishLayout);
+      layoutDefaultButton.addEventListener("click", () => runReleaseOperation(
+        "restore-default",
+        "/api/requisition/production-packaging-label-layout/admin/restore-default",
+        "确认恢复默认布局并立即发布吗？当前草稿不会继续用于打印。",
+      ));
+      layoutRollbackButton.addEventListener("click", () => runReleaseOperation(
+        "rollback",
+        "/api/requisition/production-packaging-label-layout/admin/rollback",
+        "确认把上一版已发布布局重新发布为当前布局吗？",
+      ));
       confirmPrintedButton.addEventListener("click", confirmPrinted);
       closeButton.addEventListener("click", () => window.close());
       loadPackage();

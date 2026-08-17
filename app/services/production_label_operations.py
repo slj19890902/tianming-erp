@@ -671,7 +671,11 @@ def prepare_packaging_label_job(
     if package.get("plan_fingerprint") != expected_plan_fingerprint:
         raise ProductionLabelOperationError("标签计划已变化，请刷新预览后重试")
     template_version = str(package.get("template_version") or "")
-    if template_version not in {"legacy_65x45_v1", "current_40x30_v1"}:
+    if template_version not in {
+        "legacy_65x45_v1",
+        "current_40x30_v1",
+        CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION,
+    }:
         raise ProductionLabelOperationError("标签模板版本不受支持")
 
     frozen_json = _canonical_json(package)

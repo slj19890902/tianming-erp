@@ -59,6 +59,7 @@ def production_print_app(tmp_path: Path):
             customer_number=3201,
             customer_code="P132A2-A",
             name="半页任务单客户",
+            chinese_short_name="半页客户",
         )
         other_customer = Customer(
             customer_number=3202,

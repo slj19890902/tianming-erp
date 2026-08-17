@@ -185,6 +185,7 @@ from app.models.production import (  # noqa: E402,F401
 )
 from app.models.production_label_print import (  # noqa: E402,F401
     ProductionLabelPlanRefresh,
+    ProductionPackagingLabelLayoutRevision,
     ProductionPackagingLabelPrintJob,
     ProductionPackagingLabelPrintJobTask,
 )

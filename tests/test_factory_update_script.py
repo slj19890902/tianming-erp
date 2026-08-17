@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.120"
-    assert APP_VERSION_NAME == "模具扫码生产追溯与任务单优化"
+    assert APP_VERSION == "v0.22.121"
+    assert APP_VERSION_NAME == "实体模具扫码信息精简"
     assert APP_BUILD_DATE == "2026-08-17"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -49,16 +49,14 @@ def test_factory_update_reports_current_release_version() -> None:
     current_release = [
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
-    assert any("本次更新｜" in item and "存货编码" in item and "成品内尺寸" in item and "工序顺序" in item for item in current_release)
-    assert any("本次更新｜" in item and "固定模具二维码" in item and "唯一任务" in item and "不会猜测订单" in item for item in current_release)
-    assert any("本次更新｜" in item and "不可变模具扫码历史" in item and "幂等键" in item for item in current_release)
-    assert any("本次更新｜" in item and "不自动开工" in item and "修改订单" in item for item in current_release)
-    assert any("本次更新｜" in item and "pp24v8x9z13" in item and "不批量回填" in item for item in current_release)
-    assert any("如何验证｜" in item and "主字段顺序" in item and "模具编号" in item and "正式位置" in item for item in current_release)
-    assert any("如何验证｜" in item and "模具、印刷、粘贴顺序" in item for item in current_release)
-    assert any("如何验证｜" in item and "唯一待来料任务" in item and "同模具多任务" in item for item in current_release)
-    assert any("如何验证｜" in item and "同一幂等键" in item and "无半写入" in item for item in current_release)
-    assert any("如何验证｜" in item and "v0.22.120" in item and "pp24v8x9z13" in item for item in current_release)
+    assert any("本次更新｜" in item and "模具编号" in item and "本次扫码已登记" in item for item in current_release)
+    assert any("本次更新｜" in item and "客户订单号" in item and "具体进度状态" in item for item in current_release)
+    assert any("本次更新｜" in item and "材质代码" in item and "北京时间到分钟" in item for item in current_release)
+    assert any("本次更新｜" in item and "权限" in item and "库存" in item and "不改变" in item for item in current_release)
+    assert any("如何验证｜" in item and "首格位置不变" in item and "信息格" in item for item in current_release)
+    assert any("如何验证｜" in item and "客户名称" in item and "已完成/计划进度" in item for item in current_release)
+    assert any("如何验证｜" in item and "克重" in item and "时区偏移" in item for item in current_release)
+    assert any("如何验证｜" in item and "v0.22.121" in item and "pp24v8x9z13" in item for item in current_release)
     assert any(item.startswith("v0.22.119：本次更新｜") and "盖底尺寸" in item and "合并显示" in item for item in APP_CHANGELOG)
     assert any(item.startswith("v0.22.119：如何验证｜") and "v0.22.119" in item and "oo23v8x9z12" in item for item in APP_CHANGELOG)
     assert any(item.startswith("v0.22.118：本次更新｜") and "cover/base" in item for item in APP_CHANGELOG)
@@ -186,7 +184,7 @@ def test_factory_update_reports_current_release_version() -> None:
         for item in APP_CHANGELOG
     )
     assert any(
-        "如何验证｜" in item and "v0.22.120" in item and "pp24" in item
+        "如何验证｜" in item and "v0.22.121" in item and "pp24" in item
         for item in current_release
     )
     assert any(

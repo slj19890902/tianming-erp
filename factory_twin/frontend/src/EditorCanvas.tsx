@@ -5,6 +5,7 @@ import { formatDistanceMm, niceScaleLengthMm } from "./factoryVisuals.mjs";
 import {
   addGroupOutlines,
   buildEquipmentVisual,
+  buildPalletMarkerVisual,
   buildPalletVisual,
   buildRackVisual,
   createGroundArrow,
@@ -908,6 +909,9 @@ export function EditorCanvas({
             && (!draggablePalletIdSet || draggablePalletIdSet.has(pallet.id))
         };
         if (warehouseTheme) {
+          if (pallet.is_logical_anchor) {
+            group.add(buildPalletMarkerVisual(pallet, viewMode, violated));
+          }
           group.add(warehousePalletPickProxy(pallet, viewMode, violated));
         } else {
           group.add(buildPalletVisual(pallet, viewMode, violated));
@@ -919,10 +923,10 @@ export function EditorCanvas({
         group.position.set(position.x, 0, position.z);
         group.rotation.y = THREE.MathUtils.degToRad(-pallet.rotation_deg);
         if (allowPalletSelection || palletEditingOnly || operationalEntitySelectable(visualTheme, "pallet")) {
-          interactive.push(warehouseTheme ? group.children[0] : group);
+          interactive.push(warehouseTheme ? group.children[group.children.length - 1] : group);
         }
         scene.add(group);
-        if (warehouseTheme) {
+        if (warehouseTheme && !pallet.is_logical_anchor) {
           warehousePalletInstances.push({ pallet, position, rotationY: group.rotation.y, violated });
         }
         if (layers.labels) {

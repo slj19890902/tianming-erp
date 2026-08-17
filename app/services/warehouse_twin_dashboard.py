@@ -26,6 +26,7 @@ from app.models.warehouse_inventory import (
     WarehouseFloor,
     WarehouseLocation,
 )
+from app.services.warehouse_pallet_standard import standard_pallet_contract
 
 
 AGE_BUCKETS = (
@@ -831,6 +832,7 @@ def build_warehouse_twin_dashboard(
         "schema_version": "P1-29-v1",
         "mode": "erp_business_twin",
         "read_only": True,
+        "standard_pallet": standard_pallet_contract(),
         "generated_at": utc_naive_to_api(utc_now_naive()),
         "as_of_date": as_of.isoformat(),
         "days": days,

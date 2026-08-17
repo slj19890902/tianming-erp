@@ -213,7 +213,51 @@ function dispatchPalletItemQuantity(item) {
   );
 }
 
-export function buildMeasuredDispatchPallets(features, dispatchLocation, floorCode, layoutId = "erp-twin") {
+export function normalizeStandardPalletContract(value) {
+  if (!value || typeof value !== "object") return null;
+  const contractVersion = String(value.contract_version || "").trim();
+  const widthMm = Number(value.width_mm);
+  const depthMm = Number(value.depth_mm);
+  const heightMm = Number(value.height_mm);
+  if (
+    contractVersion !== "standard-pallet-v1"
+    || !Number.isFinite(widthMm)
+    || !Number.isFinite(depthMm)
+    || !Number.isFinite(heightMm)
+    || widthMm <= 0
+    || depthMm <= 0
+    || heightMm <= 0
+  ) return null;
+  return {
+    contract_version: contractVersion,
+    width_mm: widthMm,
+    depth_mm: depthMm,
+    height_mm: heightMm
+  };
+}
+
+export function standardPalletContractsMatch(left, right) {
+  const normalizedLeft = normalizeStandardPalletContract(left);
+  const normalizedRight = normalizeStandardPalletContract(right);
+  return Boolean(
+    normalizedLeft
+    && normalizedRight
+    && normalizedLeft.contract_version === normalizedRight.contract_version
+    && normalizedLeft.width_mm === normalizedRight.width_mm
+    && normalizedLeft.depth_mm === normalizedRight.depth_mm
+    && normalizedLeft.height_mm === normalizedRight.height_mm
+  );
+}
+
+export function buildMeasuredDispatchPallets(
+  features,
+  dispatchLocation,
+  floorCode,
+  standardPallet,
+  layoutId = "erp-twin"
+) {
+  const standard = normalizeStandardPalletContract(standardPallet);
+  if (!standard) return [];
   if (floorCode !== "1F" || dispatchLocation?.location_code !== "F1-DISPATCH-01") return [];
   const zones = (features || [])
     .filter((feature) => feature.feature_kind === "zone"
@@ -250,9 +294,9 @@ export function buildMeasuredDispatchPallets(features, dispatchLocation, floorCo
         x_mm: points[palletIndex][0],
         y_mm: points[palletIndex][1],
         z_mm: 0,
-        width_mm: 1200,
-        depth_mm: 1000,
-        height_mm: 160,
+        width_mm: standard.width_mm,
+        depth_mm: standard.depth_mm,
+        height_mm: standard.height_mm,
         rotation_deg: 0,
         color: "#ea580c",
         visual_status: "waiting",
@@ -265,7 +309,15 @@ export function buildMeasuredDispatchPallets(features, dispatchLocation, floorCo
   });
 }
 
-export function buildMappedLocationPallets(features, locations, floorCode, layoutId = "erp-twin") {
+export function buildMappedLocationPallets(
+  features,
+  locations,
+  floorCode,
+  standardPallet,
+  layoutId = "erp-twin"
+) {
+  const standard = normalizeStandardPalletContract(standardPallet);
+  if (!standard) return [];
   const zoneByArea = new Map(
     features
       .filter((feature) => feature.feature_kind === "zone" && feature.erp_area_code && feature.points?.length >= 3)
@@ -305,16 +357,15 @@ export function buildMappedLocationPallets(features, locations, floorCode, layou
       );
       const isLogicalAnchor = position?.layout_kind === "logical_anchor"
         || (position?.layout_kind !== "physical_pallet" && hasMappedFootprint && !representsPhysicalPallet);
-      // map_position is axis-aligned. Keep the historical rotation while swapping
-      // local axes so the rendered and collision-tested footprint still matches it.
-      const axisWidthMm = hasMappedFootprint
-        ? (isLogicalAnchor ? Math.min(mappedWidthMm, 400) : mappedWidthMm)
-        : 1200;
-      const axisDepthMm = hasMappedFootprint
-        ? (isLogicalAnchor ? Math.min(mappedDepthMm, 400) : mappedDepthMm)
-        : 1000;
-      const renderedWidthMm = rotation === 90 ? axisDepthMm : axisWidthMm;
-      const renderedDepthMm = rotation === 90 ? axisWidthMm : axisDepthMm;
+      // The measured rectangle remains authoritative for the location centre and
+      // orientation.  A physical pallet never inherits or scales to that legacy
+      // rectangle: rotation may swap axes, while the one backend contract owns size.
+      const renderedWidthMm = isLogicalAnchor
+        ? (hasMappedFootprint ? Math.min(mappedWidthMm, 400) : 400)
+        : standard.width_mm;
+      const renderedDepthMm = isLogicalAnchor
+        ? (hasMappedFootprint ? Math.min(mappedDepthMm, 400) : 400)
+        : standard.depth_mm;
       pallets.push({
         id: `erp-location-${location.location_id}`,
         layout_id: layoutId,
@@ -331,7 +382,7 @@ export function buildMappedLocationPallets(features, locations, floorCode, layou
         z_mm: 0,
         width_mm: renderedWidthMm,
         depth_mm: renderedDepthMm,
-        height_mm: occupied ? 150 : 110,
+        height_mm: isLogicalAnchor ? 90 : standard.height_mm,
         rotation_deg: rotation,
         color: occupied ? "#0f766e" : "#a16207",
         visual_status: occupied ? "waiting" : "empty",

@@ -330,6 +330,23 @@ export function buildPalletMarkerVisual(pallet: Pallet, viewMode: ViewMode, viol
   const group = new THREE.Group();
   const spec = palletMarkerSpec(pallet, viewMode, violated);
 
+  if (pallet.is_logical_anchor) {
+    const markerColor = violated ? 0xdc2626 : new THREE.Color(spec.loadColor).getHex();
+    const diameter = Math.min(Math.max(spec.width, spec.depth, 180), 260);
+    const base = new THREE.Mesh(
+      new THREE.CylinderGeometry(diameter / 2, diameter / 2, viewMode === "2d" ? 28 : 42, 24),
+      new THREE.MeshBasicMaterial({ color: markerColor, transparent: true, opacity: 0.82 })
+    );
+    base.position.y = viewMode === "2d" ? 14 : 21;
+    const stem = new THREE.Mesh(
+      new THREE.CylinderGeometry(18, 18, viewMode === "2d" ? 70 : 180, 12),
+      new THREE.MeshBasicMaterial({ color: markerColor, transparent: true, opacity: 0.9 })
+    );
+    stem.position.y = viewMode === "2d" ? 62 : 125;
+    group.add(base, stem);
+    return group;
+  }
+
   addBox(group, [spec.width, spec.baseHeight, spec.depth], [0, spec.baseY, 0], spec.baseColor, 0.84);
   addBox(
     group,

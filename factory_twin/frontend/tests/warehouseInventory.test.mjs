@@ -12,7 +12,9 @@ import {
   inventoryLocationPallets,
   inventoryUnitLabel,
   locationLayoutGeometry,
+  normalizeStandardPalletContract,
   searchHighlightAreaCodes,
+  standardPalletContractsMatch,
   warehouseSearchFloorSummaries,
   warehouseSearchLocationSummaries,
   warehouseSearchProductKey,
@@ -32,6 +34,43 @@ import {
   palletMergeTargetChoices,
   togglePalletMergeSource
 } from "../src/warehousePalletMergeDraft.mjs";
+
+const STANDARD_PALLET = {
+  contract_version: "standard-pallet-v1",
+  width_mm: 1200,
+  depth_mm: 1000,
+  height_mm: 150
+};
+
+test("standard pallet contract fails closed when missing malformed or inconsistent", () => {
+  assert.deepEqual(normalizeStandardPalletContract(STANDARD_PALLET), STANDARD_PALLET);
+  assert.equal(normalizeStandardPalletContract(null), null);
+  assert.equal(normalizeStandardPalletContract({ ...STANDARD_PALLET, height_mm: 0 }), null);
+  assert.equal(standardPalletContractsMatch(STANDARD_PALLET, { ...STANDARD_PALLET }), true);
+  assert.equal(standardPalletContractsMatch(STANDARD_PALLET, { ...STANDARD_PALLET, height_mm: 160 }), false);
+
+  const zone = {
+    id: "zone-fin",
+    feature_kind: "zone",
+    feature_code: "ZONE-1F-FIN",
+    erp_area_code: "FIN",
+    points: [[0, 0], [12000, 0], [12000, 6000], [0, 6000]]
+  };
+  const location = {
+    location_id: 99,
+    location_code: "FIN-L099",
+    location_name: "成品位",
+    floor_code: "1F",
+    area_code: "FIN",
+    position_status: "mapped",
+    occupancy_status: "occupied",
+    map_position: { left_pct: 0, top_pct: 0, width_pct: 10, height_pct: 20, layout_kind: "physical_pallet" },
+    pallet: null,
+    pallets: [],
+    loose_items: []
+  };
+  assert.deepEqual(buildMappedLocationPallets([zone], [location], "1F", null, "layout-1f"), []);
+});
 
 const locations = [
   {
@@ -150,8 +189,8 @@ test("every visible mapped location receives one stable read-only pallet simulat
     { location_id: 3, location_code: "A1-PENDING", location_name: "待布局", floor_code: "3F", area_code: "A1", occupancy_status: "occupied", position_status: "unplaced", pallet: null, loose_items: [] },
     { location_id: 4, location_code: "X1", location_name: "无区域", floor_code: "3F", area_code: "X1", occupancy_status: "empty", position_status: "area_only", pallet: null, loose_items: [] }
   ];
-  const first = buildMappedLocationPallets(features, mappedLocations, "3F", "layout-3f");
-  const second = buildMappedLocationPallets(features, mappedLocations, "3F", "layout-3f");
+  const first = buildMappedLocationPallets(features, mappedLocations, "3F", STANDARD_PALLET, "layout-3f");
+  const second = buildMappedLocationPallets(features, mappedLocations, "3F", STANDARD_PALLET, "layout-3f");
   assert.deepEqual(first, second);
   assert.deepEqual(first.map((item) => item.id), ["erp-location-1", "erp-location-2"]);
   assert.deepEqual(first.map((item) => item.pallet_code), ["A1-L01", "A1-L02"]);
@@ -168,7 +207,7 @@ test("mapped locations use area-relative layout coordinates and convert 2D drags
     position_status: "mapped", occupancy_status: "empty", pallet: null, loose_items: [],
     map_position: {left_pct: 0, top_pct: 0, width_pct: 50, height_pct: 20, version: 7, z_index: 0}
   };
-  const [pallet] = buildMappedLocationPallets([zone], [location], "3F", "layout-3f");
+  const [pallet] = buildMappedLocationPallets([zone], [location], "3F", STANDARD_PALLET, "layout-3f");
   assert.equal(pallet.x_mm, 2500);
   assert.equal(pallet.y_mm, 4500);
   assert.equal(pallet.width_mm, 400);
@@ -191,10 +230,90 @@ test("mapped pallet rotation follows each measured slot orientation", () => {
   const normal = {...base, location_id: 31, map_position: {left_pct: 0, top_pct: 0, width_pct: 50, height_pct: 20, version: 1, z_index: 0}};
   const rotated = {...base, location_id: 32, location_code: "FIN-L002", map_position: {left_pct: 0, top_pct: 20, width_pct: 41.6667, height_pct: 24, version: 1, z_index: 0}};
 
-  const pallets = buildMappedLocationPallets([zone], [normal, rotated], "1F", "layout-1f");
+  const pallets = buildMappedLocationPallets([zone], [normal, rotated], "1F", STANDARD_PALLET, "layout-1f");
   assert.equal(pallets[0].rotation_deg, 0);
   assert.equal(pallets[1].rotation_deg, 90);
   assert.deepEqual(pallets.map((item) => [Math.round(item.width_mm), Math.round(item.depth_mm)]), [[1200, 1000], [1200, 1000]]);
+});
+
+test("physical pallet locations ignore legacy footprint sizes and use one backend standard", () => {
+  const zone = {
+    id: "zone-fin",
+    feature_kind: "zone",
+    feature_code: "ZONE-1F-FIN",
+    erp_area_code: "FIN",
+    points: [[0, 0], [12000, 0], [12000, 6000], [0, 6000]]
+  };
+  const base = {
+    location_name: "成品位",
+    floor_code: "1F",
+    area_code: "FIN",
+    position_status: "mapped",
+    occupancy_status: "occupied",
+    pallet: { pallet_code: "ERP-PALLET", items: [] },
+    loose_items: []
+  };
+  const locations = [
+    {
+      ...base,
+      location_id: 61,
+      location_code: "FIN-L061",
+      map_position: { left_pct: 0, top_pct: 0, width_pct: 2, height_pct: 3, version: 1, z_index: 0, layout_kind: "physical_pallet" }
+    },
+    {
+      ...base,
+      location_id: 62,
+      location_code: "FIN-L062",
+      map_position: { left_pct: 20, top_pct: 0, width_pct: 40, height_pct: 50, version: 1, z_index: 0, layout_kind: "physical_pallet" }
+    },
+    {
+      ...base,
+      location_id: 63,
+      location_code: "FIN-L063",
+      map_position: { left_pct: 70, top_pct: 0, width_pct: 8.333333, height_pct: 20, version: 1, z_index: 0, layout_kind: "physical_pallet" }
+    }
+  ];
+  const standard = {
+    contract_version: "standard-pallet-v1",
+    width_mm: 1200,
+    depth_mm: 1000,
+    height_mm: 150
+  };
+
+  const pallets = buildMappedLocationPallets([zone], locations, "1F", standard, "layout-1f");
+
+  assert.deepEqual(
+    pallets.map((item) => [item.width_mm, item.depth_mm, item.height_mm]),
+    [[1200, 1000, 150], [1200, 1000, 150], [1200, 1000, 150]]
+  );
+  assert.equal(new Set(pallets.map((item) => item.layout_id)).size, 1);
+  assert.equal(pallets[0].layout_id, "layout-1f");
+});
+
+test("dispatch pallets consume the same standard instead of a local height fallback", () => {
+  const features = [{
+    id: "dispatch-zone",
+    feature_kind: "zone",
+    feature_code: "ZONE-1F-DISPATCH",
+    subtype: "finished_wait_delivery",
+    points: [[0, 0], [6000, 0], [6000, 3000], [0, 3000]]
+  }];
+  const dispatchLocation = {
+    location_code: "F1-DISPATCH-01",
+    pallets: [{ pallet_id: 7, pallet_code: "PAL-007", version: 2, items: [] }],
+    loose_items: []
+  };
+  const standard = {
+    contract_version: "standard-pallet-v1",
+    width_mm: 1200,
+    depth_mm: 1000,
+    height_mm: 150
+  };
+
+  const [pallet] = buildMeasuredDispatchPallets(features, dispatchLocation, "1F", standard, "layout-1f");
+
+  assert.deepEqual([pallet.width_mm, pallet.depth_mm, pallet.height_mm], [1200, 1000, 150]);
+  assert.equal(pallet.layout_id, "layout-1f");
 });
 
 test("confirmed-capacity logical positions render as small measured anchors instead of full pallet outlines", () => {
@@ -205,7 +324,7 @@ test("confirmed-capacity logical positions render as small measured anchors inst
     map_position: {left_pct: 10, top_pct: 10, width_pct: 2, height_pct: 4, version: 1, z_index: 0}
   };
 
-  const [anchor] = buildMappedLocationPallets([zone], [location], "3F", "layout-3f");
+  const [anchor] = buildMappedLocationPallets([zone], [location], "3F", STANDARD_PALLET, "layout-3f");
   assert.equal(anchor.width_mm, 200);
   assert.equal(anchor.depth_mm, 200);
   assert.equal(anchor.is_logical_anchor, true);
@@ -223,7 +342,7 @@ test("persisted layout kind overrides the bounded legacy footprint inference", (
     {...base, location_id: 52, location_code: "A1-L052", map_position: {left_pct: 50, top_pct: 0, width_pct: 12, height_pct: 20, version: 1, z_index: 0, layout_kind: "logical_anchor"}}
   ];
 
-  const pallets = buildMappedLocationPallets([zone], locations, "3F", "layout-3f");
+  const pallets = buildMappedLocationPallets([zone], locations, "3F", STANDARD_PALLET, "layout-3f");
   assert.equal(pallets[0].is_logical_anchor, false);
   assert.equal(pallets[1].is_logical_anchor, true);
 });
@@ -301,7 +420,7 @@ test("shared dispatch location keeps every system pallet without fabricating map
   assert.equal(singleLocationPallet(shared), null);
   assert.deepEqual(inventoryLocationItems(shared).map((item) => item.lot_id), [101, 202, 303]);
 
-  const mapped = buildMappedLocationPallets([zone], [shared], "1F", "layout-1f");
+  const mapped = buildMappedLocationPallets([zone], [shared], "1F", STANDARD_PALLET, "layout-1f");
   assert.equal(mapped.length, 1);
   assert.equal(mapped[0].id, "erp-location-49");
   assert.match(mapped[0].name, /2 块系统栈板/);
@@ -335,8 +454,8 @@ test("measured dispatch zones project every real system pallet with live product
     loose_items: []
   };
 
-  const first = buildMeasuredDispatchPallets(zones, dispatch, "1F", "layout-1f");
-  const second = buildMeasuredDispatchPallets(zones, dispatch, "1F", "layout-1f");
+  const first = buildMeasuredDispatchPallets(zones, dispatch, "1F", STANDARD_PALLET, "layout-1f");
+  const second = buildMeasuredDispatchPallets(zones, dispatch, "1F", STANDARD_PALLET, "layout-1f");
   assert.deepEqual(first, second);
   assert.deepEqual(first.map((item) => item.id), ["erp-dispatch-pallet-10", "erp-dispatch-pallet-12", "erp-dispatch-pallet-11"]);
   assert.deepEqual(first.map((item) => item.zone_code), ["FIN-001", "FIN-001", "FIN-002"]);
@@ -345,7 +464,7 @@ test("measured dispatch zones project every real system pallet with live product
   assert.ok(first.every((item) => item.is_simulated === false));
   assert.ok(first.slice(0, 2).every((item) => item.x_mm > 0 && item.x_mm < 10000 && item.y_mm > 0 && item.y_mm < 5000));
   assert.ok(first.slice(2).every((item) => item.x_mm > 12000 && item.x_mm < 22000 && item.y_mm > 0 && item.y_mm < 5000));
-  assert.deepEqual(buildMeasuredDispatchPallets(zones, dispatch, "3F", "layout-3f"), []);
+  assert.deepEqual(buildMeasuredDispatchPallets(zones, dispatch, "3F", STANDARD_PALLET, "layout-3f"), []);
 });
 
 test("ordinary single-pallet location keeps the legacy one-card move path", () => {

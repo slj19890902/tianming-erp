@@ -24,10 +24,12 @@ from app.services.warehouse_area_activation import (
     AREA_LOCATION_SOURCE_VERSION,
     floor3_v11_map_binding_is_proven,
 )
+from app.services.warehouse_pallet_standard import (
+    STANDARD_PALLET_DEPTH_MM,
+    STANDARD_PALLET_WIDTH_MM,
+)
 
 
-STANDARD_PALLET_WIDTH_MM = 1200
-STANDARD_PALLET_DEPTH_MM = 1000
 LOGICAL_ANCHOR_FOOTPRINT_MM = 400
 # Percent coordinates are persisted with four decimal places.  A millimetre
 # round-trip error grows with the measured zone span.  Keep a small base for

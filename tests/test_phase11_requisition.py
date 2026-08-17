@@ -771,6 +771,20 @@ def test_a3_supplier_draft_allows_cover_and_base_partial_100_of_200(
         detail = client.get(f"/api/requisition/supplier-orders/{supplier_order_id}")
         pending = client.get("/api/requisition/pending")
         next_draft = _preview_supplier_order_draft(client, [selection])
+        hold_created = client.post(
+            "/api/requisition/holds",
+            json={
+                "items": [
+                    {
+                        "order_item_id": 1,
+                        "release_mode": "expected_date",
+                        "expected_requisition_date": "2099-12-31",
+                    }
+                ]
+            },
+        )
+        waiting = client.get("/api/requisition/holds")
+        pending_after_hold = client.get("/api/requisition/pending")
 
     assert saved.status_code == 201, saved.text
     assert detail.status_code == 200, detail.text
@@ -801,6 +815,25 @@ def test_a3_supplier_draft_allows_cover_and_base_partial_100_of_200(
     )
     assert pending_row["already_requisitioned_qty"] == 200
     assert pending_row["remaining_requisition_qty"] == 200
+    assert hold_created.status_code == 201, hold_created.text
+    assert hold_created.json()["success_count"] == 1
+    assert waiting.status_code == 200, waiting.text
+    waiting_row = waiting.json()["items"][0]
+    assert waiting_row["order_item_id"] == 1
+    assert waiting_row["physical_requisition_qty"] == 200
+    waiting_by_component = {
+        row["component_type"]: row
+        for row in waiting_row["component_requirements"]
+    }
+    assert set(waiting_by_component) == {"cover", "base"}
+    for component in ("cover", "base"):
+        assert waiting_by_component[component]["requisition_qty"] == 100
+    assert pending_after_hold.status_code == 200, pending_after_hold.text
+    assert all(
+        row.get("item_id") != 1
+        for row in pending_after_hold.json()["items"]
+        if not row.get("is_merge_group")
+    )
 
     with session_factory() as session:
         item = session.get(OrderItem, 1)

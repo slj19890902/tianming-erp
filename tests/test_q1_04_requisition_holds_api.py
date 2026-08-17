@@ -1410,7 +1410,7 @@ def test_manual_release_and_update_close_hold_when_eligibility_changed(
             for item_id in (ids["current"], ids["other_current"]):
                 item = session.get(OrderItem, item_id)
                 assert item is not None
-                item.requisition_status = "已报料"
+                item.material_status = "received"
             session.commit()
 
         release = client.post(
@@ -1457,6 +1457,63 @@ def test_manual_release_and_update_close_hold_when_eligibility_changed(
                 "manual_release_eligibility_changed",
                 "manual_update_eligibility_changed",
             }
+
+
+def test_fully_reported_item_cannot_be_moved_to_waiting(hold_api) -> None:
+    from app.models.order import OrderItem
+    from app.models.supplier_requisition_order import (
+        SupplierRequisitionOrder,
+        SupplierRequisitionOrderItem,
+    )
+
+    app, factory, ids = hold_api
+    with factory() as session:
+        item = session.get(OrderItem, ids["current"])
+        assert item is not None
+        supplier_order = SupplierRequisitionOrder(
+            order_number="Q1-FULLY-REPORTED-001",
+            supplier_name="Q1 供应商",
+            total_quantity=100,
+            requisition_qty=100,
+            status="confirmed",
+        )
+        session.add(supplier_order)
+        session.flush()
+        session.add(
+            SupplierRequisitionOrderItem(
+                supplier_order_id=supplier_order.id,
+                order_item_id=item.id,
+                source_key=f"order_item:{item.id}",
+                product_id=item.product_id,
+                quantity=100,
+                requisition_qty=100,
+            )
+        )
+        item.requisition_status = "已报料"
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client)
+        response = client.post(
+            "/api/requisition/holds",
+            json={
+                "items": [
+                    {
+                        "order_item_id": ids["current"],
+                        "release_mode": "expected_date",
+                        "expected_requisition_date": (
+                            date.today() + timedelta(days=30)
+                        ).isoformat(),
+                    }
+                ]
+            },
+        )
+
+    assert response.status_code == 201, response.text
+    payload = response.json()
+    assert payload["success_count"] == 0
+    assert payload["failed_count"] == 1
+    assert "已经全部正式报料" in payload["items"][0]["message"]
 
 
 def test_direct_hold_id_checks_customer_scope_before_status_response(hold_api) -> None:

@@ -53,6 +53,7 @@ from app.services.production_workflow import (
     find_pending_production_task_lookup_rows,
     list_production_tasks,
 )
+from app.services.printing_colors import parse_printing_colors
 from app.services.secure_uploads import resolve_stored_reference, stored_file_metadata
 from app.services.ui_layout_settings import LAYOUT_ROLES, effective_layout
 from app.models.warehouse_inventory import (
@@ -1507,6 +1508,277 @@ def lookup_pending_production_tasks(
         "as_of": datetime.now(_BEIJING).isoformat(timespec="seconds"),
         "read_only": True,
     }
+
+
+_PRODUCT_TASK_STATUS_LABELS = {
+    "waiting_material": "待收料",
+    "pending": "待生产",
+}
+_PRODUCT_GLUE_TOKENS = {"粘合", "粘贴", "粘箱", "糊箱", "糊盒"}
+_PRODUCT_STAPLE_TOKENS = {"打钉", "钉箱", "打钉箱", "钉合"}
+_PRODUCT_NO_JOINING_TOKENS = {"无需结合", "无需", "不需结合", "不需要结合", "其他"}
+
+
+def _product_joining_summary(value: str | None) -> tuple[str, str | None]:
+    tokens = {
+        item.strip()
+        for item in re.split(r"[,，、;；]", str(value or ""))
+        if item.strip()
+    }
+    matches = [
+        label
+        for label, candidates in (
+            ("粘贴", _PRODUCT_GLUE_TOKENS),
+            ("打钉", _PRODUCT_STAPLE_TOKENS),
+            ("无需结合", _PRODUCT_NO_JOINING_TOKENS),
+        )
+        if tokens.intersection(candidates)
+    ]
+    if len(matches) > 1:
+        return "结合方式冲突", "当前主档同时包含多个结合方式，请先在客户常用箱中核对"
+    return (matches[0] if matches else "无需结合"), None
+
+
+def _current_product_task_ids(db: Session, product_id: int) -> list[int]:
+    return list(
+        db.scalars(
+            select(ProductionTask.id)
+            .join(OrderItem, OrderItem.id == ProductionTask.order_item_id)
+            .outerjoin(
+                SalesOrderItemBomComponent,
+                SalesOrderItemBomComponent.id
+                == ProductionTask.sales_order_item_bom_component_id,
+            )
+            .where(
+                ProductionTask.status.in_(tuple(_PRODUCT_TASK_STATUS_LABELS)),
+                or_(
+                    and_(
+                        ProductionTask.sales_order_item_bom_component_id.is_(None),
+                        OrderItem.product_id == product_id,
+                    ),
+                    SalesOrderItemBomComponent.component_product_id == product_id,
+                ),
+            )
+            .order_by(ProductionTask.id.desc())
+            .limit(21)
+        ).all()
+    )
+
+
+def _current_product_printing_plates(
+    product: Product,
+    *,
+    show_location: bool,
+) -> list[dict]:
+    result: list[dict] = []
+    for plate in (
+        product.printing_plate_1,
+        product.printing_plate_2,
+        product.printing_plate_3,
+    ):
+        if plate is None:
+            continue
+        result.append(
+            {
+                "plate_code": plate.plate_code,
+                "plate_name": plate.plate_name,
+                "color_name": plate.color_name,
+                "status": plate.status,
+                "current_location": plate.rack_location if show_location else None,
+            }
+        )
+    return result
+
+
+def _product_overview_headers(response: Response) -> None:
+    response.headers["Cache-Control"] = "private, no-store, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Vary"] = "Cookie"
+    response.headers["X-Robots-Tag"] = "noindex, nofollow"
+
+
+@router.get("/products/{product_id}/production-overview")
+def product_production_overview(
+    product_id: int,
+    response: Response,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read_orders),
+) -> dict:
+    """Return a current, read-only and price-free product production view."""
+
+    _product_overview_headers(response)
+    _require_mobile_production_station(user)
+    try:
+        product = _require_visible_product(
+            db,
+            product_id=product_id,
+            visible_customer_ids=_visible_customer_ids(user, db),
+        )
+    except HTTPException as error:
+        error.headers = {
+            **(error.headers or {}),
+            "Cache-Control": "private, no-store, max-age=0",
+            "X-Robots-Tag": "noindex, nofollow",
+        }
+        raise
+
+    task_ids = _current_product_task_ids(db, product.id)
+    task_rows = list_production_tasks(
+        db,
+        allowed_customer_ids=_visible_customer_ids(user, db),
+        task_ids=task_ids,
+    )
+    task_rows = [
+        row
+        for row in task_rows
+        if str(row.get("status") or "") in _PRODUCT_TASK_STATUS_LABELS
+    ][:20]
+    joining_method, joining_warning = _product_joining_summary(
+        product.production_process
+    )
+    location_allowed = has_permission(user, "warehouse.view") or has_permission(
+        user, "production.die_cut.view"
+    )
+    printing_location_allowed = has_permission(
+        user, "warehouse.view"
+    ) or has_permission(user, "production.printing.view")
+    latest_drawing = product.drawings[0] if product.drawings else None
+    material_code = (
+        product.default_material_code
+        or (product.material.code if product.material is not None else None)
+        or product.legacy_material_text
+    )
+    mold = product.mold_tool
+    return {
+        "view": "current_product",
+        "view_label": "当前资料",
+        "read_only": True,
+        "product": {
+            "id": int(product.id),
+            "version": int(product.version),
+            "customer_id": int(product.customer_id),
+            "customer_name": product.customer.name,
+            "customer_code": product.customer.customer_code,
+            "product_code": product.product_code,
+            "customer_material_code": product.customer_material_code,
+            "product_name": product.product_name,
+            "specification": _product_specification(product),
+            "report_specification": (
+                f"{product.report_length_mm}×{product.report_width_mm}mm"
+                if product.report_length_mm and product.report_width_mm
+                else None
+            ),
+            "material_code": material_code,
+            "flute_type": product.flute_type
+            or (product.material.flute_type if product.material is not None else None),
+            "layer_count": product.layer_count
+            or (product.material.layer_count if product.material is not None else None),
+            "box_style": product.box_style,
+            "crease_type": product.crease_type,
+            "crease_values_mm": [
+                value
+                for value in (
+                    product.crease_left_mm,
+                    product.crease_middle_mm,
+                    product.crease_right_mm,
+                )
+                if value is not None
+            ],
+            "print_content": product.print_content or "无印刷",
+            "printing_colors": parse_printing_colors(product.printing_colors),
+            "printing_plate_mode": product.printing_plate_mode,
+            "printing_plates": _current_product_printing_plates(
+                product,
+                show_location=printing_location_allowed,
+            ),
+            "joining_method": joining_method,
+            "joining_warning": joining_warning,
+            "drawing_available": bool(latest_drawing or product.die_cut_path),
+            "drawing_url": (
+                f"/api/mobile/erp/products/{product.id}/drawing"
+                if latest_drawing or product.die_cut_path
+                else None
+            ),
+            "mold": (
+                {
+                    "mold_code": mold.mold_code,
+                    "mold_name": mold.mold_name,
+                    "current_location": mold.rack_location,
+                    "is_active": bool(mold.is_active),
+                }
+                if mold is not None and location_allowed
+                else {"visibility": "hidden_by_permission"}
+                if mold is not None
+                else None
+            ),
+        },
+        "current_tasks": {
+            "items": [
+                {
+                    "production_task_id": int(row["id"]),
+                    "production_task_version": int(row["version"]),
+                    "order_number": row.get("order_number"),
+                    "item_order_number": row.get("item_order_number"),
+                    "status": row.get("status"),
+                    "status_label": _PRODUCT_TASK_STATUS_LABELS.get(
+                        str(row.get("status") or ""), str(row.get("status") or "")
+                    ),
+                    "planned_quantity": int(row.get("planned_quantity") or 0),
+                    "actual_output_quantity": int(
+                        row.get("actual_output_quantity") or 0
+                    ),
+                    "production_quantity_unit": row.get(
+                        "production_quantity_unit"
+                    ),
+                }
+                for row in task_rows
+            ],
+            "has_more": len(task_ids) > 20,
+        },
+        "as_of": datetime.now(_BEIJING).isoformat(timespec="seconds"),
+    }
+
+
+@router.get("/products/{product_id}/drawing")
+def product_production_drawing(
+    product_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read_orders),
+) -> FileResponse:
+    _require_mobile_production_station(user)
+    product = _require_visible_product(
+        db,
+        product_id=product_id,
+        visible_customer_ids=_visible_customer_ids(user, db),
+    )
+    reference = (
+        product.drawings[0].image_path
+        if product.drawings
+        else product.die_cut_path
+    )
+    if not reference:
+        raise HTTPException(status_code=404, detail="当前产品没有可查看的图纸")
+    try:
+        path = resolve_stored_reference(reference)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail="当前产品图纸文件不存在") from error
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="当前产品图纸文件不存在")
+    metadata = stored_file_metadata(path)
+    return FileResponse(
+        path,
+        media_type=str(
+            metadata.get("content_type")
+            or mimetypes.guess_type(path.name)[0]
+            or "application/octet-stream"
+        ),
+        headers={
+            "Cache-Control": "private, no-store, max-age=0",
+            "Pragma": "no-cache",
+            "X-Content-Type-Options": "nosniff",
+            "X-Robots-Tag": "noindex, nofollow",
+        },
+    )
 
 
 @router.get("/products")

@@ -1163,6 +1163,12 @@ def test_posted_receipt_production_card_is_read_only_and_uses_frozen_process(
     assert payload["board_width_mm"] == 800
     assert payload["process_steps"] == ["印刷", "开槽", "模切", "粘箱"]
     assert payload["production_notes"] == "先印刷，再开槽，开槽后模切，最后粘箱"
+    assert payload["paper_phase"] == "actual_receipt"
+    assert payload["paper_version_key"] == f"actual:receipt:{receipt_item_id}"
+    assert payload["card_count"] == payload["page_count"] == 1
+    assert payload["cards"][0]["receipt_item_id"] == receipt_item_id
+    assert payload["cards"][0]["received_sheet_quantity"] == 20
+    assert payload["cards"][0]["production_capacity_quantity"] == 40
     assert "unit_price" not in payload
     assert "cost" not in card.text.lower()
     assert repeated.json()["card_number"] == payload["card_number"]

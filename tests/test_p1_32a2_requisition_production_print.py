@@ -300,7 +300,7 @@ def _login(client: TestClient, username: str) -> None:
     assert response.status_code == 200, response.text
 
 
-def test_package_keeps_split_components_and_two_half_page_layout(
+def test_package_keeps_one_formal_requisition_detail_per_task_card(
     production_print_app,
 ):
     from app.models.supplier_requisition_order import SupplierRequisitionOrder
@@ -321,29 +321,51 @@ def test_package_keeps_split_components_and_two_half_page_layout(
         second = build_supplier_requisition_production_package(db, order)
         order.items[-1].product_code = order.items[-2].product_code
         db.flush()
-        three_card_package = build_supplier_requisition_production_package(db, order)
+        same_code_package = build_supplier_requisition_production_package(db, order)
         db.rollback()
         after = db.scalar(
             select(func.count()).select_from(SupplierRequisitionOrder)
         )
 
-    assert first["card_count"] == 4
-    assert first["page_count"] == 2
-    assert all(page["top"] and page["bottom"] for page in first["pages"])
-    assert three_card_package["card_count"] == 3
-    assert three_card_package["page_count"] == 2
-    assert three_card_package["pages"][-1]["top"] is not None
-    assert three_card_package["pages"][-1]["bottom"] is None
-    split = first["cards"][0]
-    assert split["layout_kind"] == "carton"
-    assert split["product_name"] == "天地盖测试箱"
-    assert split["planned_finished_quantity"] == 200
-    assert split["requisition_quantity"] == 200
-    assert [row["component_label"] for row in split["components"]] == ["盖", "底"]
-    assert [row["report_length_mm"] for row in split["components"]] == [700, 650]
-    assert split["components"][0]["print_content"] == "单色印刷"
-    assert split["components"][0]["production_task_version"] == 2
-    assert set(split["components"][1]["production_notes"]) == {
+    assert first["card_count"] == 5
+    assert first["page_count"] == 3
+    assert all(page["top"] and page["bottom"] for page in first["pages"][:-1])
+    assert first["pages"][-1]["top"] is not None
+    assert first["pages"][-1]["bottom"] is None
+    assert same_code_package["card_count"] == 5
+    assert same_code_package["page_count"] == 3
+    cover, base = first["cards"][:2]
+    assert cover["supplier_order_item_id"] != base["supplier_order_item_id"]
+    assert [cover["source_identity"], base["source_identity"]] == [
+        f"order_item:{production_print_app['order_item_id']}:cover",
+        f"order_item:{production_print_app['order_item_id']}:base",
+    ]
+    assert [cover["component_label"], base["component_label"]] == ["盖", "底"]
+    assert cover["layout_kind"] == base["layout_kind"] == "carton"
+    assert [cover["product_name"], base["product_name"]] == [
+        "天地盖测试箱-盖",
+        "天地盖测试箱-底",
+    ]
+    assert [
+        cover["planned_finished_quantity"],
+        base["planned_finished_quantity"],
+    ] == [200, 200]
+    assert [
+        cover["requisition_quantity"],
+        base["requisition_quantity"],
+    ] == [100, 100]
+    assert [len(cover["components"]), len(base["components"])] == [1, 1]
+    assert [
+        cover["components"][0]["component_label"],
+        base["components"][0]["component_label"],
+    ] == ["盖", "底"]
+    assert [
+        cover["components"][0]["report_length_mm"],
+        base["components"][0]["report_length_mm"],
+    ] == [700, 650]
+    assert cover["components"][0]["print_content"] == "单色印刷"
+    assert cover["components"][0]["production_task_version"] == 2
+    assert set(base["components"][0]["production_notes"]) == {
         "底料要求",
         "印刷后模切",
     }
@@ -352,6 +374,43 @@ def test_package_keeps_split_components_and_two_half_page_layout(
         second, ensure_ascii=False, sort_keys=True, default=str
     )
     assert before == after == 1
+
+
+def test_distinct_formal_details_never_merge_even_when_code_and_size_match(
+    production_print_app,
+):
+    from app.models.supplier_requisition_order import SupplierRequisitionOrder
+    from app.services.requisition_production_print import (
+        build_supplier_requisition_production_package,
+    )
+
+    with production_print_app["session_factory"]() as db:
+        order = db.get(
+            SupplierRequisitionOrder,
+            production_print_app["supplier_order_id"],
+        )
+        cover, base = sorted(order.items, key=lambda row: row.id)[:2]
+        base.report_length_mm = cover.report_length_mm
+        base.report_width_mm = cover.report_width_mm
+        package = build_supplier_requisition_production_package(db, order)
+        db.rollback()
+
+    matching_cards = [
+        card
+        for card in package["cards"]
+        if card["product_code"] == "P132A2-SPLIT"
+    ]
+    assert len(matching_cards) == 2
+    assert len({card["supplier_order_item_id"] for card in matching_cards}) == 2
+    assert all(len(card["components"]) == 1 for card in matching_cards)
+    assert [card["component_label"] for card in matching_cards] == ["盖", "底"]
+    assert [
+        (
+            card["components"][0]["report_length_mm"],
+            card["components"][0]["report_width_mm"],
+        )
+        for card in matching_cards
+    ] == [(700, 500), (700, 500)]
 
 
 def test_internal_production_print_adds_current_customer_handoff_without_changing_plan_fingerprint(
@@ -459,7 +518,7 @@ def test_package_api_is_read_only_scoped_and_fails_closed(
             f"/api/requisition/supplier-orders/{order_id}/production-print-package"
         )
         assert success.status_code == 200, success.text
-        assert success.json()["card_count"] == 4
+        assert success.json()["card_count"] == 5
         reported = client.get(
             "/api/requisition/reported-documents",
             params={"page": 1, "page_size": 20},
@@ -511,11 +570,23 @@ def test_package_api_is_read_only_scoped_and_fails_closed(
                     )
                 )
             db.commit()
-        overflow = client.get(
+        expanded = client.get(
             f"/api/requisition/supplier-orders/{order_id}/production-print-package"
         )
-        assert overflow.status_code == 409
-        assert "超过半页容量" in overflow.text
+        assert expanded.status_code == 200, expanded.text
+        expanded_package = expanded.json()
+        assert expanded_package["card_count"] == 10
+        assert expanded_package["page_count"] == 5
+        assert len(
+            {
+                card["supplier_order_item_id"]
+                for card in expanded_package["cards"]
+            }
+        ) == 10
+        assert all(
+            len(card["components"]) == 1
+            for card in expanded_package["cards"]
+        )
 
         with production_print_app["session_factory"]() as db:
             order = db.get(SupplierRequisitionOrder, order_id)

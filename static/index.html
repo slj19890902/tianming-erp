@@ -26164,6 +26164,7 @@
                     source_type: source.source_type,
                     order_item_id: source.order_item_id,
                     merge_group_id: source.merge_group_id || null,
+                    component_type: source.component_type || null,
                     source_quantity: Number(source.source_quantity || source.quantity || 0),
                     requisition_qty: Number(source.requisition_qty || 0),
                   })),

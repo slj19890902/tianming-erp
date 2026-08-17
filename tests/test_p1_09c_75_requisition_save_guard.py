@@ -60,6 +60,43 @@ def test_formal_supplier_order_save_freezes_payload_and_marks_commit_before_refr
     assert "_refresh_failed:refreshFailed" in block
 
 
+def test_a3_component_identity_survives_real_frontend_save_payload(
+    tmp_path: Path,
+) -> None:
+    block = _method_body(
+        "async saveSupplierRequisitionDraft() {",
+        "supplierRequisitionSelectionSignature(selections) {",
+    )
+    script = f"""
+const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
+let captured=null;
+global.axios={{post:async(url,payload)=>{{captured={{url,payload}};return {{data:{{created_orders:[]}}}};}}}};
+const vm={{
+  supplierRequisitionSaveState:{{saving:false,committed:false,uncertain:false,result:null}},
+  supplierRequisitionDraft:{{supplier_groups:[{{supplier_name:"苏州纸板供应商",request_key:"a3partial100sets",lines:[
+    {{line_key:"cover",source_type:"normal",report_length_mm:2145,report_width_mm:1055,cutting_mode:"一开一",requisition_qty:100,source_items:[{{source_type:"order_item",order_item_id:9865,component_type:"cover",source_quantity:200,requisition_qty:200}}]}},
+    {{line_key:"base",source_type:"normal",report_length_mm:2120,report_width_mm:1035,cutting_mode:"一开一",requisition_qty:100,source_items:[{{source_type:"order_item",order_item_id:9865,component_type:"base",source_quantity:200,requisition_qty:200}}]}}
+  ]}}]}},
+  requisitionSelected:{{td010:true}},selectedPendingKeys:["td010"],supplierRequisitionSelections:[{{type:"order_item",order_item_id:9865}}],supplierOrders:[],modal:{{type:"supplierRequisitionDraft"}},
+  validateSupplierRequisitionDraft(){{return "";}},draftGroupLines(group){{return group.lines;}},
+  loadRequisition:async()=>true,loadSupplierOrders:async()=>true,
+  openSupplierOrderPrint(){{throw new Error("empty created_orders must not print");}},showToast(){{}}
+}};
+vm.saveSupplierRequisitionDraft=new AsyncFunction({json.dumps(block, ensure_ascii=False)}).bind(vm);
+const expect=(value,message)=>{{if(!value)throw new Error(message)}};
+(async()=>{{
+  await vm.saveSupplierRequisitionDraft();
+  expect(captured?.url==="/api/requisition/supplier-orders/from-pending-selection","wrong save endpoint");
+  const lines=captured.payload.supplier_groups[0].lines;
+  expect(lines.length===2,"A3 cover/base lines were not preserved");
+  expect(lines[0].source_items[0].component_type==="cover","cover identity was dropped");
+  expect(lines[1].source_items[0].component_type==="base","base identity was dropped");
+  expect(lines[0].requisition_qty===100&&lines[1].requisition_qty===100,"partial quantities changed");
+}})().catch(error=>{{console.error(error);process.exit(1);}});
+"""
+    _run_node(script, tmp_path, "requisition-a3-component-round-trip.js")
+
+
 def test_same_draft_is_single_flight_and_committed_result_is_not_reposted(tmp_path: Path) -> None:
     block = _method_body(
         "async saveSupplierRequisitionDraft() {",

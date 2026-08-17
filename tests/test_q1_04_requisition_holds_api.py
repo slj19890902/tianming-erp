@@ -673,6 +673,7 @@ def test_a3_hold_shows_cover_base_demand_and_restores_to_reportable_pending(
 
     with TestClient(app) as client:
         _login(client)
+        expected_requisition_date = (date.today() + timedelta(days=30)).isoformat()
         created = client.post(
             "/api/requisition/holds",
             json={
@@ -680,7 +681,7 @@ def test_a3_hold_shows_cover_base_demand_and_restores_to_reportable_pending(
                     {
                         "order_item_id": ids["current"],
                         "release_mode": "expected_date",
-                        "expected_requisition_date": "2026-08-15",
+                        "expected_requisition_date": expected_requisition_date,
                     }
                 ]
             },

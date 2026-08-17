@@ -710,6 +710,82 @@ def test_a3_supplier_draft_treats_400_sheets_as_two_200_sheet_components(
         ]
 
 
+def test_a3_supplier_draft_allows_cover_and_base_partial_100_of_200(
+    requisition_app,
+) -> None:
+    from app.models.order import OrderItem
+    from app.models.product import Product
+    from app.models.supplier_requisition_order import (
+        SupplierRequisitionOrder,
+        SupplierRequisitionOrderItem,
+    )
+
+    app, session_factory = requisition_app
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        product = session.get(Product, item.product_id)
+        product.box_style = "A3 天地盖"
+        item.quantity = 200
+        item.snapshot_product_name = "TD010 订单 200 套"
+        item.snapshot_report_length_mm = 2145
+        item.snapshot_report_width_mm = 1055
+        item.snapshot_base_report_length_mm = 2120
+        item.snapshot_base_report_width_mm = 1035
+        item.snapshot_splice_mode = "single"
+        item.snapshot_pieces_per_box = 1
+        session.commit()
+
+    selection = {
+        "type": "order_item",
+        "order_item_id": 1,
+        "supplier_name": "苏州纸板供应商",
+        "report_length_mm": 2145,
+        "report_width_mm": 1055,
+        "cutting_mode": "一开一",
+    }
+    with TestClient(app) as client:
+        _login(client, "sales")
+        draft = _preview_supplier_order_draft(client, [selection])
+        for line in draft["supplier_groups"][0]["lines"]:
+            line["requisition_qty"] = 100
+        saved = _save_supplier_order_draft(client, draft)
+        pending = client.get("/api/requisition/pending")
+        next_draft = _preview_supplier_order_draft(client, [selection])
+
+    assert saved.status_code == 201, saved.text
+    next_by_component = {
+        line["source_items"][0]["component_type"]: line
+        for line in next_draft["supplier_groups"][0]["lines"]
+    }
+    assert set(next_by_component) == {"cover", "base"}
+    for component in ("cover", "base"):
+        assert next_by_component[component]["already_requisitioned_qty"] == 100
+        assert next_by_component[component]["remaining_requisition_qty"] == 100
+        assert next_by_component[component]["requisition_qty"] == 100
+    pending_row = next(
+        row for row in pending.json()["items"] if row.get("item_id") == 1
+    )
+    assert pending_row["already_requisitioned_qty"] == 200
+    assert pending_row["remaining_requisition_qty"] == 200
+
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        supplier_order = session.query(SupplierRequisitionOrder).one()
+        supplier_lines = (
+            session.query(SupplierRequisitionOrderItem)
+            .order_by(SupplierRequisitionOrderItem.id)
+            .all()
+        )
+        assert item.quantity == 200
+        assert item.requisition_qty == 200
+        assert supplier_order.requisition_qty == 200
+        assert [row.requisition_qty for row in supplier_lines] == [100, 100]
+        assert [row.source_key for row in supplier_lines] == [
+            "order_item:1:cover",
+            "order_item:1:base",
+        ]
+
+
 def test_preview_supplier_order_draft_supports_multiple_regular_pending_items(
     requisition_app,
 ) -> None:

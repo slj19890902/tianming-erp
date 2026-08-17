@@ -2440,6 +2440,55 @@ def _requires_supplier_purchase(requirements: dict) -> bool:
     )
 
 
+def _remaining_supplier_requisition_summary(
+    db: Session,
+    item: OrderItem,
+    *,
+    summary: dict | None = None,
+) -> dict:
+    """Subtract active formal reports without collapsing cover/base identity."""
+
+    current = dict(summary or _current_requisition_summary(db, item))
+    remaining_components: list[dict] = []
+    theoretical_total = 0
+    already_requisitioned_total = 0
+    remaining_total = 0
+    for requirement in current.get("component_requirements") or [current]:
+        component = dict(requirement)
+        component_type = str(
+            component.get("component_type") or "whole"
+        ).strip().lower()
+        theoretical_qty = int(component.get("requisition_qty") or 0)
+        active_facts = _active_supplier_requisition_facts(
+            db,
+            item=item,
+            component_type=component_type,
+        )
+        already_requisitioned_qty = int(active_facts.get("quantity") or 0)
+        remaining_qty = max(theoretical_qty - already_requisitioned_qty, 0)
+        component.update(
+            {
+                "theoretical_requisition_qty": theoretical_qty,
+                "already_requisitioned_qty": already_requisitioned_qty,
+                "requisition_qty": remaining_qty,
+            }
+        )
+        remaining_components.append(component)
+        theoretical_total += theoretical_qty
+        already_requisitioned_total += already_requisitioned_qty
+        remaining_total += remaining_qty
+
+    current.update(
+        {
+            "theoretical_requisition_qty": theoretical_total,
+            "already_requisitioned_qty": already_requisitioned_total,
+            "requisition_qty": remaining_total,
+            "component_requirements": remaining_components,
+        }
+    )
+    return current
+
+
 _LATE_SEMI_REVIEWABLE_DIFFERENCES = {
     "pieces_per_box",
     "stock_yield_per_sheet",
@@ -3278,7 +3327,9 @@ def _order_item_still_requires_requisition(
     if bom_components:
         sources = [_bom_pending_parent_requirement(db, item), *bom_components]
         return any(bool(source.get("can_requisition")) for source in sources)
-    return _requires_supplier_purchase(_current_requisition_summary(db, item))
+    return _requires_supplier_purchase(
+        _remaining_supplier_requisition_summary(db, item)
+    )
 
 
 def _order_item_has_formal_downstream_facts(
@@ -3337,10 +3388,11 @@ def _ensure_requisition_hold_eligible(
         raise HTTPException(status_code=409, detail="强制结档明细不能设置等候报料")
     if item.material_status != "pending":
         raise HTTPException(status_code=409, detail="已有来料事实，不能设置等候报料")
-    if item.requisition_status != "未报料":
-        raise HTTPException(status_code=409, detail="订单明细已经正式报料")
-    if _active_supplier_order_item_exists(db, item.id):
-        raise HTTPException(status_code=409, detail="订单明细已经存在有效供应商报料单")
+    if item.requisition_status not in {"未报料", "已报料"}:
+        raise HTTPException(
+            status_code=409,
+            detail="订单明细当前不在待报料范围，不能设置等候报料",
+        )
     if _order_item_has_formal_downstream_facts(db, item.id):
         raise HTTPException(
             status_code=409,
@@ -3351,6 +3403,14 @@ def _ensure_requisition_hold_eligible(
     if not allow_existing_hold and _active_requisition_hold(db, item.id) is not None:
         raise HTTPException(status_code=409, detail="订单明细已经在等候报料中")
     if not _order_item_still_requires_requisition(db, item):
+        active_facts = _active_requisition_facts_by_item_ids(db, [item.id]).get(
+            item.id, {}
+        )
+        if int(active_facts.get("quantity") or 0) > 0:
+            raise HTTPException(
+                status_code=409,
+                detail="当前采购需求已经全部正式报料，没有剩余数量可转入等候报料",
+            )
         raise HTTPException(status_code=409, detail="该明细已由库存覆盖，无需再报料")
     _ensure_order_item_crease_width(item)
     return item, order, customer, product
@@ -3756,6 +3816,12 @@ def _requisition_hold_requirement_preview(
 
     try:
         summary = _current_requisition_summary(db, item, product=product)
+        if not _bom_pending_component_requirements(db, item):
+            summary = _remaining_supplier_requisition_summary(
+                db,
+                item,
+                summary=summary,
+            )
     except HTTPException as error:
         detail = str(error.detail or "当前订单资料无法计算报料数量")
         fallback.update(
@@ -4363,25 +4429,6 @@ def _validate_merge_member_rows(
             raise HTTPException(status_code=409, detail="已报料明细不能创建待报料合并组")
         _ensure_order_item_crease_width(item)
     return ordered_rows
-
-
-def _active_supplier_order_item_exists(db: Session, order_item_id: int) -> bool:
-    return (
-        db.scalar(
-            select(SupplierRequisitionOrderItem.id)
-            .join(
-                SupplierRequisitionOrder,
-                SupplierRequisitionOrder.id
-                == SupplierRequisitionOrderItem.supplier_order_id,
-            )
-            .where(
-                SupplierRequisitionOrderItem.order_item_id == order_item_id,
-                SupplierRequisitionOrder.status != "voided",
-            )
-            .limit(1)
-        )
-        is not None
-    )
 
 
 def _supplier_requisition_source_key(

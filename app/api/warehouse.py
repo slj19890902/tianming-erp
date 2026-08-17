@@ -249,6 +249,11 @@ from app.services.mold_repair import (
     MoldRepairError,
     change_mold_repair_status,
 )
+from app.services.mold_label_template import (
+    MOLD_LABEL_TEMPLATE_40X30,
+    MOLD_LABEL_TEMPLATE_80X40,
+    mold_label_template_label,
+)
 from app.services.location_candidates import (
     list_operational_locations,
     operational_location_issue,
@@ -1168,6 +1173,9 @@ class MoldRepairStatusPayload(BaseModel):
 class MoldLabelPrintRegisterPayload(BaseModel):
     mold_ids: list[int] = Field(min_length=1, max_length=100)
     source: Literal["single", "batch"]
+    template_version: Literal["mold_40x30_v1", "mold_80x40_v1"] = (
+        MOLD_LABEL_TEMPLATE_40X30
+    )
     idempotency_key: str = Field(min_length=8, max_length=120)
 
     @field_validator("idempotency_key")
@@ -12152,6 +12160,7 @@ _LABEL_PRINTABLE_IDENTITY_LIMIT = 24
 def _mold_label_printability_error(
     row: MoldTool,
     products: list[Product],
+    template_version: str = MOLD_LABEL_TEMPLATE_40X30,
 ) -> str | None:
     """Return a human-fixable reason instead of printing clipped facts."""
 
@@ -12165,12 +12174,45 @@ def _mold_label_printability_error(
             f"模具 {row.mold_code} 的客户名称+模具编号过长，"
             "请先按“客户中文简写+编号”维护模具名称"
         )
+    if template_version == MOLD_LABEL_TEMPLATE_80X40:
+        if len(products) != 1:
+            return (
+                f"模具 {row.mold_code} 当前绑定 {len(products)} 款常用箱；"
+                "40×80 标签尚未确认一模多款版式，拒绝猜测打印"
+            )
+        product = products[0]
+        customer = _label_customer(row, products)[0]
+        inventory_code = str(product.product_code or "").strip()
+        product_name = str(product.product_name or "").strip()
+        product_size = _label_dimension(products, "specification")
+        board_size = _label_dimension(products, "report_specification")
+        flute_type = _label_flute_type(products)
+        missing = [
+            label
+            for label, value in (
+                ("客户中文简称", customer if customer != "待完善" else ""),
+                ("存货编码", inventory_code),
+                ("产品名称", product_name),
+                ("产品尺寸", product_size),
+                ("片料尺寸", board_size),
+                ("楞型", flute_type),
+            )
+            if not value
+        ]
+        if missing:
+            return f"模具 {row.mold_code} 的{'、'.join(missing)}待完善，不能打印 40×80 标签"
+        if len(customer) > 12 or len(inventory_code) > 34 or len(product_name) > 40:
+            return (
+                f"模具 {row.mold_code} 的客户简称、存货编码或产品名称超出已验证版式，"
+                "请先人工核对，系统不会静默裁切"
+            )
     return None
 
 
 def _mold_label_dict(
     row: MoldTool,
     allowed_customer_ids: set[int] | None,
+    template_version: str = MOLD_LABEL_TEMPLATE_40X30,
 ) -> dict:
     products = _visible_mold_products(row, allowed_customer_ids)
     lookup_url = _mold_live_url(row.id)
@@ -12197,10 +12239,11 @@ def _mold_label_dict(
     printability_error = _mold_label_printability_error(
         row,
         products,
+        template_version,
     )
     if printability_error:
         raise HTTPException(status_code=409, detail=printability_error)
-    return {
+    result = {
         "mold_code": row.mold_code,
         "rack_location": row.rack_location,
         "location_guide": basics["location_guide"],
@@ -12222,6 +12265,20 @@ def _mold_label_dict(
             + base64.b64encode(buffer.getvalue()).decode("ascii")
         ),
     }
+    if template_version == MOLD_LABEL_TEMPLATE_80X40:
+        result.update(
+            {
+                "template_version": template_version,
+                "template_label": mold_label_template_label(template_version),
+                "label_inventory_code": str(
+                    products[0].product_code or ""
+                ).strip(),
+                "label_product_name": str(
+                    products[0].product_name or ""
+                ).strip(),
+            }
+        )
+    return result
 
 
 _MOLD_TASK_STATUS_LABELS = {
@@ -13356,6 +13413,9 @@ def register_mold_scan_event(
 def get_mold_labels(
     response: Response,
     mold_ids: str = Query(min_length=1, max_length=1200),
+    template_version: Literal["mold_40x30_v1", "mold_80x40_v1"] = Query(
+        default=MOLD_LABEL_TEMPLATE_40X30
+    ),
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
@@ -13391,10 +13451,11 @@ def get_mold_labels(
         _require_mold_customer_scope(row, allowed_customer_ids)
     return {
         "items": [
-            _mold_label_dict(row, allowed_customer_ids)
+            _mold_label_dict(row, allowed_customer_ids, template_version)
             for row in ordered_rows
         ],
         "count": len(ordered_rows),
+        "template_version": template_version,
     }
 
 
@@ -13406,6 +13467,8 @@ def _mold_label_print_job_dict(
     return {
         "print_job_id": job.id,
         "source": job.source,
+        "template_version": job.template_version,
+        "template_label": mold_label_template_label(job.template_version),
         "count": job.item_count,
         "mold_ids": [item.mold_tool_id for item in job.items],
         "printed_at": utc_naive_to_api(job.printed_at) if job.printed_at else None,
@@ -13434,7 +13497,11 @@ def register_mold_label_print(
     )
     if existing is not None:
         existing_ids = [item.mold_tool_id for item in existing.items]
-        if existing.source != payload.source or existing_ids != payload.mold_ids:
+        if (
+            existing.source != payload.source
+            or existing.template_version != payload.template_version
+            or existing_ids != payload.mold_ids
+        ):
             raise HTTPException(
                 status_code=409,
                 detail="该打印凭证已用于另一组模具，请刷新列表后重新操作",
@@ -13458,12 +13525,13 @@ def register_mold_label_print(
         # Reuse the existing label serializer as the single source of truth for
         # active/binding/size/identity printability.  No print fact is written
         # when any selected label is invalid.
-        _mold_label_dict(row, allowed_customer_ids)
+        _mold_label_dict(row, allowed_customer_ids, payload.template_version)
 
     job = MoldLabelPrintJob(
         idempotency_key=payload.idempotency_key,
         source=payload.source,
         item_count=len(ordered_rows),
+        template_version=payload.template_version,
         printed_by=user.id,
         printed_by_username=user.username,
     )
@@ -13495,6 +13563,7 @@ def register_mold_label_print(
                 details=json.dumps(
                     {
                         "source": payload.source,
+                        "template_version": payload.template_version,
                         "mold_ids": payload.mold_ids,
                         "mold_codes": [row.mold_code for row in ordered_rows],
                         "idempotency_key": payload.idempotency_key,
@@ -13527,7 +13596,11 @@ def register_mold_label_print(
         if replay is None:
             raise
         replay_ids = [item.mold_tool_id for item in replay.items]
-        if replay.source != payload.source or replay_ids != payload.mold_ids:
+        if (
+            replay.source != payload.source
+            or replay.template_version != payload.template_version
+            or replay_ids != payload.mold_ids
+        ):
             raise HTTPException(
                 status_code=409,
                 detail="该打印凭证已用于另一组模具，请刷新列表后重新操作",
@@ -13541,6 +13614,9 @@ def register_mold_label_print(
 def get_mold_label(
     mold_id: int,
     response: Response,
+    template_version: Literal["mold_40x30_v1", "mold_80x40_v1"] = Query(
+        default=MOLD_LABEL_TEMPLATE_40X30
+    ),
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
@@ -13564,7 +13640,7 @@ def get_mold_label(
             detail="实体模具标签仅允许全客户范围的仓库账号打印",
         )
     _require_mold_customer_scope(row, allowed_customer_ids)
-    return _mold_label_dict(row, allowed_customer_ids)
+    return _mold_label_dict(row, allowed_customer_ids, template_version)
 
 
 @router.get("/molds/code-preview")

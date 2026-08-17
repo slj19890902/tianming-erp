@@ -39,6 +39,7 @@ from app.services.production_workflow import (
     _task_printing_snapshot,
     cutting_output_factor,
 )
+from app.services.product_qr import product_qr_payload
 
 
 _REQUISITION_ITEM_SOURCE = re.compile(r"^requisition_item:(\d+)$")
@@ -1025,6 +1026,27 @@ def build_supplier_requisition_production_package(
             reminders_by_customer.get(customer_id, []),
             product_ids=product_ids,
         )
+        qr_candidates = [
+            products[product_id]
+            for product_id in sorted(product_ids)
+            if product_id in products
+            and products[product_id].is_active
+            and products[product_id].deleted_at is None
+        ]
+        if len(product_ids) == 1 and len(qr_candidates) == 1:
+            card["product_id"] = int(qr_candidates[0].id)
+            card["product_qr"] = product_qr_payload(qr_candidates[0].id)
+            card["product_qr_unavailable_reason"] = None
+        else:
+            card["product_id"] = None
+            card["product_qr"] = None
+            card["product_qr_unavailable_reason"] = (
+                "临时任务没有正式产品二维码"
+                if not product_ids
+                else "当前产品已停用，不生成二维码"
+                if len(product_ids) == 1
+                else "多产品任务不生成单一产品二维码"
+            )
         for component in card["components"]:
             component.pop("_product_id", None)
     immutable_payload = {

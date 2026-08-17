@@ -85,7 +85,7 @@ def _private_no_store_file_endpoint(path: Path):
             request,
             path,
             headers={
-                "Cache-Control": "no-store, max-age=0",
+                "Cache-Control": "private, no-store, max-age=0",
                 "Pragma": "no-cache",
                 "Referrer-Policy": "no-referrer",
                 "X-Robots-Tag": "noindex, nofollow",
@@ -436,6 +436,18 @@ def create_app() -> FastAPI:
         application.add_api_route(
             "/M/{mold_id}",
             _private_no_store_file_endpoint(mold_live_path),
+            methods=["GET"],
+            include_in_schema=False,
+        )
+    if not any(route.path == "/P/{product_id}" for route in application.routes):
+        product_live_path = (
+            Path(__file__).resolve().parents[1]
+            / "static"
+            / "mobile_product_live.html"
+        )
+        application.add_api_route(
+            "/P/{product_id}",
+            _private_no_store_file_endpoint(product_live_path),
             methods=["GET"],
             include_in_schema=False,
         )

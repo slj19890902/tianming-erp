@@ -743,8 +743,11 @@ def test_package_projects_explicit_box_layout_current_mold_and_secure_drawing(
         assert card["layout_kind"] == "die_cut"
         assert card["box_style"] == "模切内盒"
         assert card["printing_colors"] == ["黑色"]
+        assert component["mold_tool_id"] == mold.id
         assert component["mold_code"] == "MD-P132A2"
         assert component["mold_location"] == "1F-M-R02-L2-P08"
+        assert component["mold_location_version"] == 1
+        assert component["mold_binding_basis"] == "current_product_binding"
         assert component["drawing_kind"] == "pdf"
         assert component["drawing_url"] == (
             f"/api/orders/items/{production_print_app['order_item_id']}"
@@ -768,6 +771,29 @@ def test_package_projects_explicit_box_layout_current_mold_and_secure_drawing(
         assert {row["cutting_mode"] for row in liner_card["components"]} == {"一开12"}
         assert liner_card["production_label_units_per_bundle"] == 50
         assert liner_card["estimated_bundle_count"] == 4
+
+
+def test_p1_67_task_sheet_prioritizes_identity_fields_and_process_order() -> None:
+    source = Path("static/requisition-production-print.html").read_text(
+        encoding="utf-8"
+    )
+    card = source[source.index("function cardHtml"):source.index("function applyMode")]
+    assert card.index("<span>存货编码</span>") < card.index("<span>产品名称</span>")
+    strip = card[card.index('<div class="product-strip">'):]
+    assert strip.index("成品内尺寸") < strip.index("<span class=\"field-label\">数量")
+    assert strip.index("<span class=\"field-label\">数量") < strip.index("<span class=\"field-label\">交期")
+    assert "生产数量" not in card
+    assert "产品 / 存货编码" not in card
+
+    process_steps = source[source.index("function processSteps"):source.index("function processHtml")]
+    assert process_steps.index('add("模具")') < process_steps.index('add("印刷")')
+    assert process_steps.index('add("印刷")') < process_steps.index('add("粘贴")')
+    process_details = source[source.index("function processDetailsHtml"):source.index("function cardHtml")]
+    assert process_details.index("moldHtml(card)") < process_details.index("printingHtml(card)")
+    assert process_details.index("printingHtml(card)") < process_details.index("joiningHtml(card)")
+    assert "模具编号与现场位置" in source
+    assert "扫描模具上的固定二维码" in source
+    assert "扫码不会自动开工" in source
 
 
 def test_production_packaging_labels_deduplicate_split_rows_and_keep_remainder(

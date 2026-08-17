@@ -107,6 +107,11 @@ class MoldTool(Base):
         passive_deletes=True,
         order_by="MoldLabelPrintJobItem.id",
     )
+    scan_events: Mapped[list["MoldScanEvent"]] = relationship(
+        back_populates="mold_tool",
+        passive_deletes=True,
+        order_by="MoldScanEvent.id",
+    )
     last_location_confirmer: Mapped["User | None"] = relationship(
         foreign_keys=[last_location_confirmed_by],
     )
@@ -172,6 +177,128 @@ class MoldLocationMovement(Base):
 
     mold_tool: Mapped["MoldTool"] = relationship(back_populates="location_movements")
     actor: Mapped["User | None"] = relationship(foreign_keys=[actor_id])
+
+
+class MoldScanEvent(Base):
+    """Immutable proof that an operator scanned a mold for a specific task."""
+
+    __tablename__ = "mold_scan_events"
+    __table_args__ = (
+        UniqueConstraint(
+            "idempotency_key",
+            name="uq_mold_scan_events_idempotency_key",
+        ),
+        CheckConstraint(
+            "length(request_hash) = 64",
+            name="ck_mold_scan_events_request_hash",
+        ),
+        CheckConstraint(
+            "mold_location_version_snapshot >= 1",
+            name="ck_mold_scan_events_location_version",
+        ),
+        CheckConstraint(
+            "production_task_version_snapshot >= 1",
+            name="ck_mold_scan_events_task_version",
+        ),
+        CheckConstraint(
+            "source = 'fixed_qr'",
+            name="ck_mold_scan_events_source",
+        ),
+        Index(
+            "ix_mold_scan_events_mold_scanned_id",
+            "mold_tool_id",
+            "scanned_at",
+            "id",
+        ),
+        Index(
+            "ix_mold_scan_events_task_scanned_id",
+            "production_task_id_snapshot",
+            "scanned_at",
+            "id",
+        ),
+        Index(
+            "ix_mold_scan_events_order_scanned_id",
+            "sales_order_id_snapshot",
+            "scanned_at",
+            "id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    mold_tool_id: Mapped[int] = mapped_column(
+        ForeignKey("mold_tools.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    mold_code_snapshot: Mapped[str] = mapped_column(String(100), nullable=False)
+    mold_location_snapshot: Mapped[str] = mapped_column(String(250), nullable=False)
+    mold_location_version_snapshot: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    production_task_id: Mapped[int | None] = mapped_column(
+        ForeignKey("production_tasks.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    production_task_id_snapshot: Mapped[int] = mapped_column(Integer, nullable=False)
+    production_task_version_snapshot: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    production_task_status_snapshot: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+    )
+    linkage_basis_snapshot: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+    )
+    sales_order_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sales_orders.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    sales_order_id_snapshot: Mapped[int] = mapped_column(Integer, nullable=False)
+    sales_order_number_snapshot: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+    )
+    sales_order_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sales_order_items.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    sales_order_item_id_snapshot: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    customer_id_snapshot: Mapped[int] = mapped_column(Integer, nullable=False)
+    customer_name_snapshot: Mapped[str] = mapped_column(String(200), nullable=False)
+    product_code_snapshot: Mapped[str | None] = mapped_column(
+        String(150),
+        nullable=True,
+    )
+    product_name_snapshot: Mapped[str | None] = mapped_column(
+        String(250),
+        nullable=True,
+    )
+    scanned_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    scanned_by_name_snapshot: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+    )
+    scanned_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    source: Mapped[str] = mapped_column(
+        String(20),
+        default="fixed_qr",
+        server_default="fixed_qr",
+        nullable=False,
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    mold_tool: Mapped["MoldTool"] = relationship(back_populates="scan_events")
+    scanner: Mapped["User | None"] = relationship(foreign_keys=[scanned_by])
 
 
 class MoldLabelPrintJob(Base):

@@ -618,6 +618,7 @@ def build_supplier_requisition_production_package(
             "drawing_url": drawing_url,
             "drawing_kind": drawing_kind,
             "drawing_source": drawing_source,
+            "mold_tool_id": int(mold_id) if mold_id is not None else None,
             "mold_code": (
                 component_snapshot.snapshot_mold_tool_code
                 if component_snapshot is not None
@@ -634,6 +635,22 @@ def build_supplier_requisition_production_package(
             ),
             "mold_location": (
                 current_mold.rack_location if current_mold is not None else None
+            ),
+            "mold_location_version": (
+                int(current_mold.location_version)
+                if current_mold is not None
+                else None
+            ),
+            "mold_is_active": (
+                bool(current_mold.is_active) if current_mold is not None else None
+            ),
+            "mold_binding_basis": (
+                "bom_order_snapshot"
+                if component_snapshot is not None
+                and component_snapshot.snapshot_mold_tool_id is not None
+                else "current_product_binding"
+                if current_mold is not None
+                else None
             ),
             "joining_method": joining_method,
             "joining_method_source": joining_method_source,

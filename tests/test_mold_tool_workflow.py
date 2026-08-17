@@ -1249,7 +1249,7 @@ def test_mold_live_status_reads_current_order_receipt_and_material_location(
     from app.core.time_contract import utc_now_naive
     from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
     from app.models.master_data_object_version import MasterDataObjectVersion
-    from app.models.mold_tool import MoldTool
+    from app.models.mold_tool import MoldScanEvent, MoldTool
     from app.models.order import Order, OrderItem
     from app.models.product import Product
     from app.models.production import ProductionTask
@@ -1410,6 +1410,7 @@ def test_mold_live_status_reads_current_order_receipt_and_material_location(
         )
         db.commit()
         mold_id = mold.id
+        task_id = task.id
 
     before = _protected_business_state(factory)
     with TestClient(app) as client:
@@ -1422,11 +1423,92 @@ def test_mold_live_status_reads_current_order_receipt_and_material_location(
         assert data["mode"] == "current_orders"
         assert data["mold"]["label_identity"] == "模具联动测试客户61452621"
         task = data["current_orders"]["items"][0]
+        assert task["production_task_id"] == task_id
+        assert task["production_task_version"] == 1
         assert task["order_number"] == "SO-MOLD-LIVE-001"
         assert task["order_quantity"] == 1000
+        assert task["product_code"] == "61452621R1F"
+        assert task["specification"] == "430 × 68"
         assert task["material"]["state"] == "partially_received"
         assert task["material"]["received_quantity"] == 400
         assert task["material"]["locations"][0]["location_code"] == "1F-RAW-01"
+
+        first_scan = client.post(
+            f"/api/warehouse/molds/live/{mold_id}/scan-events",
+            json={
+                "production_task_id": task_id,
+                "expected_mold_location_version": 1,
+                "idempotency_key": "mold-live-scan-unique-001",
+            },
+        )
+        assert first_scan.status_code == 200, first_scan.text
+        assert first_scan.headers["cache-control"] == "private, no-store, max-age=0"
+        assert first_scan.json()["replayed"] is False
+        event = first_scan.json()["event"]
+        assert event["production_task_id"] == task_id
+        assert event["order_number"] == "SO-MOLD-LIVE-001"
+        assert event["product_code"] == "61452621R1F"
+        assert event["linkage_basis"] == "versioned_current_product_binding"
+        assert event["mold_location"] == "1F-M-R01-L2-G01"
+        assert event["scanned_by"] == "workshop"
+
+        replay = client.post(
+            f"/api/warehouse/molds/live/{mold_id}/scan-events",
+            json={
+                "production_task_id": task_id,
+                "expected_mold_location_version": 1,
+                "idempotency_key": "mold-live-scan-unique-001",
+            },
+        )
+        assert replay.status_code == 200, replay.text
+        assert replay.json()["replayed"] is True
+        assert replay.json()["event"]["id"] == event["id"]
+
+        conflicting_reuse = client.post(
+            f"/api/warehouse/molds/live/{mold_id}/scan-events",
+            json={
+                "production_task_id": task_id + 999,
+                "expected_mold_location_version": 1,
+                "idempotency_key": "mold-live-scan-unique-001",
+            },
+        )
+        assert conflicting_reuse.status_code == 409
+        invalid_task = client.post(
+            f"/api/warehouse/molds/live/{mold_id}/scan-events",
+            json={
+                "production_task_id": task_id + 999,
+                "expected_mold_location_version": 1,
+                "idempotency_key": "mold-live-scan-invalid-001",
+            },
+        )
+        assert invalid_task.status_code == 409
+        stale_location = client.post(
+            f"/api/warehouse/molds/live/{mold_id}/scan-events",
+            json={
+                "production_task_id": task_id,
+                "expected_mold_location_version": 2,
+                "idempotency_key": "mold-live-scan-stale-location-001",
+            },
+        )
+        assert stale_location.status_code == 409
+
+        refreshed = client.get(f"/api/warehouse/molds/live/{mold_id}")
+        assert refreshed.status_code == 200, refreshed.text
+        assert refreshed.json()["scan_history"]["total"] == 1
+        assert refreshed.json()["scan_history"]["items"][0]["id"] == event["id"]
+    with TestClient(app) as client:
+        _login(client, "sales")
+        denied = client.post(
+            f"/api/warehouse/molds/live/{mold_id}/scan-events",
+            json={
+                "production_task_id": task_id,
+                "expected_mold_location_version": 1,
+                "idempotency_key": "mold-live-scan-denied-001",
+            },
+        )
+        assert denied.status_code == 403
+    with factory() as db:
+        assert db.query(MoldScanEvent).count() == 1
     assert _protected_business_state(factory) == before
 
 

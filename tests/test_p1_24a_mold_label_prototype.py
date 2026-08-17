@@ -93,18 +93,55 @@ def test_p1_24a_keeps_authentication_and_role_based_return_links() -> None:
     assert "当前账号无订单与模切任务查看权限" in live
 
 
-def test_mold_live_page_is_read_only_and_never_caches_business_data() -> None:
+def test_mold_live_page_records_only_task_scan_history_and_never_caches() -> None:
     live = (ROOT / "static" / "mobile_mold_live.html").read_text(
         encoding="utf-8"
     )
     assert "/api/warehouse/molds/live/${moldId}" in live
     assert 'cache:"no-store"' in live
-    assert "实时只读" in live
+    assert "实时读取 ERP" in live
+    assert "/scan-events" in live
+    assert 'method:"POST"' in live
+    assert "本次扫码已登记" in live
+    assert "该记录只表示领模/核对，不会自动开工" in live
+    assert "查看待来料任务单其余信息" in live
+    assert "扫码生产历史" in live
+    assert "orders.length===1&&!scanEvent" in live
+    assert "orders.length>1" in live
+    assert "系统不会猜测" in live
+    assert "production_task_id:productionTaskId" in live
+    assert "expected_mold_location_version:latestData.mold.location_version" in live
+    assert "idempotency_key:scanSessionKey" in live
     assert "当前没有可显示的材料库位" in live
     assert "movePanel" not in live
     assert "warehouse.execute" not in live
     assert "localStorage" not in live
     assert '/^\\d+$/' in live
+
+
+def test_mold_live_inline_javascript_is_valid(tmp_path: Path) -> None:
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed")
+    live = (ROOT / "static" / "mobile_mold_live.html").read_text(
+        encoding="utf-8"
+    )
+    scripts = [
+        match.group(1)
+        for match in re.finditer(r"<script>(.*?)</script>", live, re.DOTALL)
+        if match.group(1).strip()
+    ]
+    assert len(scripts) == 1
+    target = tmp_path / "p1-67-mobile-mold-live-inline.js"
+    target.write_text(scripts[0], encoding="utf-8")
+    result = subprocess.run(
+        [node, "--check", str(target)],
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_mold_private_response_middleware_covers_success_and_error_paths() -> None:

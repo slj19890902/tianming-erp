@@ -46,6 +46,7 @@ from app.models.mold_tool import (
     MoldLabelPrintJob,
     MoldLabelPrintJobItem,
     MoldLocationMovement,
+    MoldScanEvent,
     MoldTool,
 )
 from app.models.printing_plate import (
@@ -1169,6 +1170,20 @@ class MoldLabelPrintRegisterPayload(BaseModel):
         if self.source == "single" and len(self.mold_ids) != 1:
             raise ValueError("单个打印一次只能选择一件模具")
         return self
+
+
+class MoldScanEventPayload(BaseModel):
+    production_task_id: int = Field(gt=0)
+    expected_mold_location_version: int = Field(gt=0)
+    idempotency_key: str = Field(min_length=8, max_length=120)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def strip_mold_scan_idempotency_key(cls, value: str) -> str:
+        text = value.strip()
+        if len(text) < 8:
+            raise ValueError("幂等键去除首尾空白后至少需要 8 个字符")
+        return text
 
 
 class PrintingPlateCreatePayload(BaseModel):
@@ -12818,6 +12833,10 @@ def _mold_live_tasks(
             material = _material_facts_for_task(db, task=task, item=item)
         result.append(
             {
+                "production_task_id": int(task.id),
+                "production_task_version": int(task.version),
+                "order_id": int(order.id),
+                "order_item_id": int(item.id),
                 "order_number": order.order_number,
                 "order_status": order.status,
                 "order_status_label": _MOLD_ORDER_STATUS_LABELS.get(
@@ -12828,6 +12847,20 @@ def _mold_live_tasks(
                 else None,
                 "product_code": payload.get("product_code"),
                 "product_name": payload.get("product_name"),
+                "customer_id": payload.get("customer_id"),
+                "customer_name": payload.get("customer_name"),
+                "item_order_number": payload.get("item_order_number"),
+                "specification": payload.get("specification"),
+                "material_specification": payload.get("material"),
+                "flute_type": payload.get("flute"),
+                "special_process": payload.get("special_process"),
+                "production_process": payload.get("production_process"),
+                "production_notes": payload.get("production_notes"),
+                "printing_situation": payload.get("printing_situation"),
+                "printing_plate_mode": payload.get("printing_plate_mode"),
+                "printing_colors": payload.get("printing_colors") or [],
+                "printing_colors_frozen": payload.get("printing_colors_frozen"),
+                "printing_plates": payload.get("printing_plates") or [],
                 "is_component_task": bool(payload.get("is_component_task")),
                 "order_quantity": int(payload.get("order_quantity") or 0),
                 "parent_order_quantity": int(
@@ -12853,6 +12886,59 @@ def _mold_live_tasks(
             }
         )
     return result
+
+
+def _mold_scan_event_dict(row: MoldScanEvent) -> dict:
+    return {
+        "id": int(row.id),
+        "mold_tool_id": int(row.mold_tool_id),
+        "mold_code": row.mold_code_snapshot,
+        "mold_location": row.mold_location_snapshot,
+        "mold_location_version": int(row.mold_location_version_snapshot),
+        "production_task_id": int(row.production_task_id_snapshot),
+        "production_task_version": int(row.production_task_version_snapshot),
+        "production_task_status": row.production_task_status_snapshot,
+        "linkage_basis": row.linkage_basis_snapshot,
+        "order_id": int(row.sales_order_id_snapshot),
+        "order_number": row.sales_order_number_snapshot,
+        "order_item_id": int(row.sales_order_item_id_snapshot),
+        "customer_id": int(row.customer_id_snapshot),
+        "customer_name": row.customer_name_snapshot,
+        "product_code": row.product_code_snapshot,
+        "product_name": row.product_name_snapshot,
+        "scanned_by": row.scanned_by_name_snapshot,
+        "scanned_at": beijing_naive_to_api(row.scanned_at),
+        "source": row.source,
+    }
+
+
+def _mold_scan_history(
+    db: Session,
+    *,
+    mold_id: int,
+    allowed_customer_ids: set[int] | None,
+) -> dict:
+    conditions = [MoldScanEvent.mold_tool_id == mold_id]
+    if allowed_customer_ids is not None:
+        conditions.append(
+            MoldScanEvent.customer_id_snapshot.in_(allowed_customer_ids)
+        )
+    total = int(
+        db.scalar(
+            select(func.count(MoldScanEvent.id)).where(*conditions)
+        )
+        or 0
+    )
+    rows = db.scalars(
+        select(MoldScanEvent)
+        .where(*conditions)
+        .order_by(MoldScanEvent.scanned_at.desc(), MoldScanEvent.id.desc())
+        .limit(50)
+    ).all()
+    return {
+        "total": total,
+        "items": [_mold_scan_event_dict(row) for row in rows],
+    }
 
 
 @router.get("/molds/live/{mold_id}")
@@ -12928,8 +13014,17 @@ def get_mold_live_status(
             allowed_customer_ids=allowed_customer_ids,
             include_incoming=has_permission(user, "incoming.view"),
         )
+    scan_history = (
+        _mold_scan_history(
+            db,
+            mold_id=row.id,
+            allowed_customer_ids=allowed_customer_ids,
+        )
+        if dynamic_allowed
+        else {"total": None, "items": []}
+    )
     return {
-        "schema_version": "mold-live-v1",
+        "schema_version": "mold-live-v2",
         "as_of": beijing_naive_to_api(beijing_now_naive()),
         "read_only": True,
         "mode": (
@@ -12959,8 +13054,194 @@ def get_mold_live_status(
             "total": len(tasks) if dynamic_allowed else None,
             "items": tasks if dynamic_allowed else [],
         },
+        "scan_recording_allowed": dynamic_allowed,
+        "scan_history": scan_history,
         "warnings": warnings,
     }
+
+
+@router.post("/molds/live/{mold_id}/scan-events")
+def register_mold_scan_event(
+    mold_id: int,
+    payload: MoldScanEventPayload,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    """Record one authenticated fixed-QR scan without changing production state."""
+
+    response.headers["Cache-Control"] = "private, no-store, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Vary"] = "Cookie"
+    if not (
+        has_permission(user, "orders.view")
+        and has_permission(user, "production.die_cut.view")
+    ):
+        raise HTTPException(status_code=403, detail="当前账号无模具生产任务扫码权限")
+
+    row = db.scalar(
+        select(MoldTool)
+        .options(
+            selectinload(MoldTool.products).selectinload(Product.customer),
+            selectinload(MoldTool.products).selectinload(Product.material),
+        )
+        .where(MoldTool.id == mold_id)
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="查询对象不存在")
+    allowed_customer_ids = _mold_customer_scope(user, db)
+    products = _visible_mold_products(row, allowed_customer_ids)
+    task_ids, _warnings = _mold_live_task_ids(
+        db,
+        mold=row,
+        products=products,
+        allowed_customer_ids=allowed_customer_ids,
+    )
+    if allowed_customer_ids is not None and not products and not task_ids:
+        raise HTTPException(status_code=404, detail="查询对象不存在")
+
+    request_hash = hashlib.sha256(
+        json.dumps(
+            {
+                "mold_tool_id": int(row.id),
+                "production_task_id": int(payload.production_task_id),
+                "expected_mold_location_version": int(
+                    payload.expected_mold_location_version
+                ),
+                "scanned_by": int(user.id),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+    def replay(existing: MoldScanEvent) -> dict:
+        if existing.request_hash != request_hash:
+            raise HTTPException(
+                status_code=409,
+                detail="扫码凭证已用于另一笔任务，请重新扫描模具二维码",
+            )
+        return {"replayed": True, "event": _mold_scan_event_dict(existing)}
+
+    existing = db.scalar(
+        select(MoldScanEvent).where(
+            MoldScanEvent.idempotency_key == payload.idempotency_key
+        )
+    )
+    if existing is not None:
+        return replay(existing)
+    if int(row.location_version) != payload.expected_mold_location_version:
+        raise HTTPException(
+            status_code=409,
+            detail="模具位置已变化，请刷新并重新核对现场位置后再登记",
+        )
+    if payload.production_task_id not in task_ids:
+        raise HTTPException(
+            status_code=409,
+            detail="该生产任务已变化、已结束或没有可证明的模具绑定，请刷新后重新选择",
+        )
+
+    task_payloads = _mold_live_tasks(
+        db,
+        task_ids=[payload.production_task_id],
+        allowed_customer_ids=allowed_customer_ids,
+        include_incoming=False,
+    )
+    if len(task_payloads) != 1:
+        raise HTTPException(status_code=409, detail="生产任务已变化，请刷新后重新选择")
+    task_payload = task_payloads[0]
+    event = MoldScanEvent(
+        mold_tool_id=row.id,
+        mold_code_snapshot=row.mold_code,
+        mold_location_snapshot=row.rack_location,
+        mold_location_version_snapshot=int(row.location_version),
+        production_task_id=int(task_payload["production_task_id"]),
+        production_task_id_snapshot=int(task_payload["production_task_id"]),
+        production_task_version_snapshot=int(
+            task_payload["production_task_version"]
+        ),
+        production_task_status_snapshot=str(task_payload["task_status"]),
+        linkage_basis_snapshot=str(task_payload["linkage_basis"]),
+        sales_order_id=int(task_payload["order_id"]),
+        sales_order_id_snapshot=int(task_payload["order_id"]),
+        sales_order_number_snapshot=str(task_payload["order_number"]),
+        sales_order_item_id=int(task_payload["order_item_id"]),
+        sales_order_item_id_snapshot=int(task_payload["order_item_id"]),
+        customer_id_snapshot=int(task_payload["customer_id"]),
+        customer_name_snapshot=str(task_payload["customer_name"]),
+        product_code_snapshot=task_payload.get("product_code"),
+        product_name_snapshot=task_payload.get("product_name"),
+        scanned_by=user.id,
+        scanned_by_name_snapshot=user.username,
+        scanned_at=beijing_now_naive(),
+        source="fixed_qr",
+        idempotency_key=payload.idempotency_key,
+        request_hash=request_hash,
+    )
+    try:
+        db.add(event)
+        db.flush()
+        db.add(
+            OperationLog(
+                user_id=user.id,
+                username=user.username,
+                role=user.role,
+                action="SCAN",
+                resource=f"warehouse/molds/{row.id}/scan-events",
+                entity_type="mold_scan_event",
+                entity_id=event.id,
+                description="扫描固定模具二维码并关联生产任务",
+                details=json.dumps(
+                    {
+                        "mold_tool_id": row.id,
+                        "mold_code": row.mold_code,
+                        "mold_location": row.rack_location,
+                        "mold_location_version": row.location_version,
+                        "production_task_id": task_payload["production_task_id"],
+                        "production_task_version": task_payload[
+                            "production_task_version"
+                        ],
+                        "linkage_basis": task_payload["linkage_basis"],
+                        "order_id": task_payload["order_id"],
+                        "order_number": task_payload["order_number"],
+                        "idempotency_key": payload.idempotency_key,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"),
+                event_category="business_operation",
+                result="success",
+                source="mobile_qr",
+                module_code="warehouse_mold",
+                action_code="MOLD_TASK_QR_SCAN",
+                actor_user_id_snapshot=user.id,
+                operator_name_snapshot=user.username,
+                object_ref=f"mold_scan_event:{event.id}",
+                customer_id_snapshot=int(task_payload["customer_id"]),
+                customer_name_snapshot=str(task_payload["customer_name"]),
+                schema_version=1,
+            )
+        )
+        db.commit()
+        db.refresh(event)
+    except IntegrityError as error:
+        db.rollback()
+        concurrent = db.scalar(
+            select(MoldScanEvent).where(
+                MoldScanEvent.idempotency_key == payload.idempotency_key
+            )
+        )
+        if concurrent is not None:
+            return replay(concurrent)
+        raise HTTPException(
+            status_code=409,
+            detail="扫码任务已变化，请刷新后重新扫描",
+        ) from error
+    return {"replayed": False, "event": _mold_scan_event_dict(event)}
 
 
 @router.get("/molds/labels")

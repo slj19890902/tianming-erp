@@ -24357,6 +24357,10 @@
                 && !["saving","success"].includes(draft._save_status)
             );
             if (!drafts.length) { this.showToast("请先确认至少一份完整草稿", true); return; }
+            const repairConfirmation = await this.prepareMoldRepairConfirmation({
+              product_ids:drafts.flatMap(draft => (draft.items || []).map(item => item.is_new_product ? null : item.matched_product_id)),
+            });
+            if (!repairConfirmation.confirmed) return;
             this.loading = true;
             const succeeded = [];
             const failed = [];
@@ -24383,6 +24387,7 @@
                       preview_safety_token:draft.preview_safety_token,
                       confirmed:!!draft.confirmed,
                     },
+                    mold_repair_confirmation_token:repairConfirmation.confirmation_token,
                     items:draft.items.map(item => {
                       // 优先使用常用箱数据，回退到 PDF 原始识别
                       const useStd = !!(item.matched_product_id && !item.is_new_product);
@@ -28299,10 +28304,41 @@
             );
             return true;
           },
+          moldRepairWarningText(warnings) {
+            const rows = Array.isArray(warnings) ? warnings : [];
+            const details = rows.map(row => {
+              const products = (row.products || []).map(item =>
+                [item.customer_name, item.product_code, item.product_name].filter(Boolean).join(" / ")
+              ).filter(Boolean).join("；");
+              return `模具 ${row.mold_code || row.mold_name || row.mold_id}：待维修${products ? `\n关联 ${products}` : ""}`;
+            });
+            return `以下订单关联模具处于待维修状态：\n\n${details.join("\n\n")}\n\n是否仍要保存订单？此提醒不会自动改变模具、订单或生产状态。`;
+          },
+          async prepareMoldRepairConfirmation(targets) {
+            const body = {
+              product_ids:Array.from(new Set((targets?.product_ids || []).map(Number).filter(value => Number.isInteger(value) && value > 0))),
+              order_ids:Array.from(new Set((targets?.order_ids || []).map(Number).filter(value => Number.isInteger(value) && value > 0))),
+              order_item_ids:Array.from(new Set((targets?.order_item_ids || []).map(Number).filter(value => Number.isInteger(value) && value > 0))),
+            };
+            if (!body.product_ids.length && !body.order_ids.length && !body.order_item_ids.length) {
+              return {confirmed:true,confirmation_token:null};
+            }
+            const {data} = await axios.post("/api/orders/mold-repair-preview", body);
+            if (!data?.required) return {confirmed:true,confirmation_token:null};
+            if (!window.confirm(this.moldRepairWarningText(data.warnings))) {
+              return {confirmed:false,confirmation_token:null};
+            }
+            return {confirmed:true,confirmation_token:data.confirmation_token || null};
+          },
           async saveNewOrder(orderPayload) {
             const state = this.orderCreateSaveState || {};
             if (state.saving || state.committed || state.outcomeUncertain) return {_in_flight:true};
             const payload = JSON.parse(JSON.stringify(orderPayload));
+            const repairConfirmation = await this.prepareMoldRepairConfirmation({
+              product_ids:(payload.items || []).map(item => item.product_id),
+            });
+            if (!repairConfirmation.confirmed) return {_cancelled:true};
+            payload.mold_repair_confirmation_token = repairConfirmation.confirmation_token;
             this.orderCreateSaveState = {saving:true,committed:false,outcomeUncertain:false,result:null};
             let data;
             try {
@@ -28344,6 +28380,9 @@
             const frozenItemId = Number(orderItemId);
             if (!Number.isInteger(frozenItemId) || frozenItemId <= 0) throw new Error("订单明细不存在，不能保存");
             const payload = JSON.parse(JSON.stringify(orderItemPayload || {}));
+            const repairConfirmation = await this.prepareMoldRepairConfirmation({order_item_ids:[frozenItemId]});
+            if (!repairConfirmation.confirmed) return {_cancelled:true};
+            payload.mold_repair_confirmation_token = repairConfirmation.confirmation_token;
             this.orderItemSaveState = {saving:true,committed:false,outcomeUncertain:false,result:null};
             let response;
             try {
@@ -28401,6 +28440,9 @@
             ));
             if (!frozenIds.length) throw new Error("订单组没有可保存的正式订单");
             const payload = JSON.parse(JSON.stringify(orderPayload || {}));
+            const repairConfirmation = await this.prepareMoldRepairConfirmation({order_ids:frozenIds});
+            if (!repairConfirmation.confirmed) return {_cancelled:true};
+            payload.mold_repair_confirmation_token = repairConfirmation.confirmation_token;
             this.orderGroupSaveState = {saving:true,committed:false,outcomeUncertain:false,result:null};
             const results = await Promise.allSettled(
               frozenIds.map(orderId => axios.put(
@@ -28772,7 +28814,7 @@
                 };
                 try {
                   const createdOrder = await this.saveNewOrder(orderPayload);
-                  if (createdOrder?._in_flight) return false;
+                  if (createdOrder?._in_flight || createdOrder?._cancelled) return false;
                   return true;
                 } catch (error) {
                   if (!error?._orderCreateOutcomeUncertain) {
@@ -28792,7 +28834,7 @@
                   remark: this.orderEditForm.remark || null,
                 };
                 const savedGroup = await this.saveOrderGroup(this.orderEditForm.order_ids, payload);
-                if (savedGroup?._in_flight) return false;
+                if (savedGroup?._in_flight || savedGroup?._cancelled) return false;
                 return true;
               }
               if (this.modal.type === "orderItem") {
@@ -28838,7 +28880,7 @@
                   this.orderItemForm.id,
                   payload,
                 );
-                if (orderItemSaved?._in_flight || !orderItemSaved) return false;
+                if (orderItemSaved?._in_flight || orderItemSaved?._cancelled || !orderItemSaved) return false;
                 return true;
               }
               if (this.modal.type === "requisitionMaterial") {

@@ -13,7 +13,7 @@ from app.core.time_contract import beijing_naive_to_api, beijing_today, utc_naiv
 from app.models.customer import Customer
 from app.models.audit import OperationLog
 from app.models.master_data_object_version import MasterDataObjectVersion
-from app.models.mold_tool import MoldLocationMovement, MoldTool
+from app.models.mold_tool import MoldLocationMovement, MoldRepairEvent, MoldTool
 from app.models.order import Order, OrderItem
 from app.models.printing_plate import PrintingPlate, PrintingPlateLocationMovement
 from app.models.product import Product
@@ -1046,6 +1046,31 @@ def build_mold_detail_timeline(
                 "operator_id": movement.actor_id,
                 "expected_version": movement.expected_version,
                 "resulting_version": movement.resulting_version,
+            }
+        )
+    repair_events = db.scalars(
+        select(MoldRepairEvent)
+        .where(MoldRepairEvent.mold_tool_id == mold.id)
+        .order_by(MoldRepairEvent.occurred_at, MoldRepairEvent.id)
+    ).all()
+    for repair_event in repair_events:
+        events.append(
+            {
+                "event_type": "mold_repair_status",
+                "label": "标记待维修" if repair_event.after_status == "needs_repair" else "维修完毕",
+                "occurred_at": _api_time(repair_event.occurred_at),
+                "basis": "mold_repair_event",
+                "repair_event_id": repair_event.id,
+                "before_status": repair_event.before_status,
+                "after_status": repair_event.after_status,
+                "operator_id": repair_event.actor_id,
+                "operator_name": (
+                    repair_event.actor_username_snapshot
+                    if allowed_customer_ids is None
+                    else None
+                ),
+                "expected_version": repair_event.expected_version,
+                "resulting_version": repair_event.resulting_version,
             }
         )
     if mold.last_location_confirmed_at is not None and not movements:

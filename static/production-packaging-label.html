@@ -71,7 +71,16 @@
     html[data-template="current_40x30_v2"] .quantity-row { padding:.35mm .65mm .25mm; }
     html[data-template="current_40x30_v2"] .quantity-number { font-size:6.1mm; }
     html[data-template="current_40x30_v2"] .quantity-unit { font-size:3.05mm; }
-    .label-card.layout-driven { position:relative; display:block; overflow:hidden; }
+    .label-card.layout-driven { position:relative; display:block; overflow:hidden; border:0; }
+    .label-card.layout-driven::after {
+      content:"";
+      position:absolute;
+      inset:0;
+      z-index:2;
+      border:.3mm solid #000;
+      border-radius:.8mm;
+      pointer-events:none;
+    }
     .layout-print-element { position:absolute; display:flex; align-items:center; min-width:0; min-height:0; overflow:hidden; line-height:1.02; overflow-wrap:anywhere; word-break:break-word; }
     .layout-print-element.align-left { justify-content:flex-start; text-align:left; }
     .layout-print-element.align-center { justify-content:center; text-align:center; }

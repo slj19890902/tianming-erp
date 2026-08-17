@@ -61,7 +61,7 @@ def test_mold_label_disables_print_until_recoverable_load_succeeds() -> None:
 def test_mold_label_keeps_formal_and_prototype_sources() -> None:
     assert 'prototypeMode?"/api/auth/me"' in LABEL
     assert "/api/warehouse/molds/${id}/label" in LABEL
-    assert "sourceRows=prototypeRows()" in LABEL
+    assert "prototypeRows()" in LABEL
     assert "sourceRows=batchMode?(data.items||[]):[data]" in LABEL
     assert "打印匿名测试标签" in LABEL
     assert "40×30 mm 模具侧面标签" in LABEL

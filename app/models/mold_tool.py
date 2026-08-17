@@ -393,6 +393,10 @@ class MoldLabelPrintJob(Base):
             "item_count >= 1 AND item_count <= 100",
             name="ck_mold_label_print_jobs_item_count",
         ),
+        CheckConstraint(
+            "template_version IN ('mold_40x30_v1','mold_80x40_v1')",
+            name="ck_mold_label_print_jobs_template_version",
+        ),
         Index("ix_mold_label_print_jobs_printed_at", "printed_at"),
     )
 
@@ -400,6 +404,12 @@ class MoldLabelPrintJob(Base):
     idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
     source: Mapped[str] = mapped_column(String(20), nullable=False)
     item_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    template_version: Mapped[str] = mapped_column(
+        String(30),
+        default="mold_40x30_v1",
+        server_default="mold_40x30_v1",
+        nullable=False,
+    )
     printed_by: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"),
         nullable=False,

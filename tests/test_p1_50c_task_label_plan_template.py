@@ -19,7 +19,7 @@ from tests.test_p1_32a2_requisition_production_print import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CURRENT_TEMPLATE = "current_40x30_v1"
+CURRENT_TEMPLATE = "current_40x30_v2"
 LEGACY_TEMPLATE = "legacy_65x45_v1"
 
 
@@ -491,6 +491,7 @@ def test_print_template_has_exact_current_size_and_no_silent_core_field_elision(
     )
     compact = re.sub(r"\s+", "", source)
     assert "@page{size:40mm30mm;margin:0" in compact
+    assert "current_40x30_v2" in source
     assert "current_40x30_v1" in source
     assert "legacy_65x45_v1" in source
     assert "customer_name" in source
@@ -507,7 +508,7 @@ def test_print_template_has_exact_current_size_and_no_silent_core_field_elision(
 
     index_source = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
     assert "productionLabelPlanInconsistent(row)" in index_source
-    assert 'plan.templateVersion === "current_40x30_v1"' in index_source
+    assert 'plan.templateVersion === "current_40x30_v2"' in index_source
     assert "plan.productVersion === current.version" in index_source
     assert "旧任务冻结未启用｜可按当前常用箱人工刷新" in index_source
     assert "标签异常 / 维护" in index_source

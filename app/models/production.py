@@ -65,14 +65,15 @@ class ProductionTask(Base):
         ),
         CheckConstraint(
             "production_label_template_version_snapshot IN "
-            "('legacy_65x45_v1','current_40x30_v1')",
+            "('legacy_65x45_v1','current_40x30_v1','current_40x30_v2')",
             name="ck_production_tasks_label_template_version",
         ),
         CheckConstraint(
             "((production_label_template_version_snapshot = 'legacy_65x45_v1' "
             "AND (production_label_product_version_snapshot IS NULL OR "
             "production_label_product_version_snapshot >= 1)) OR "
-            "(production_label_template_version_snapshot = 'current_40x30_v1' "
+            "(production_label_template_version_snapshot IN "
+            "('current_40x30_v1','current_40x30_v2') "
             "AND production_label_product_version_snapshot IS NOT NULL "
             "AND production_label_product_version_snapshot >= 1))",
             name="ck_production_tasks_label_product_version",

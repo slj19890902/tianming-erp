@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from math import ceil
+import re
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -16,6 +17,10 @@ from app.models.supplier_requisition_order import SupplierRequisitionOrder
 from app.services.requisition_production_print import (
     build_supplier_requisition_production_package,
 )
+from app.services.production_label_strategy import (
+    CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION,
+)
+from app.services.production_packaging_label_layout import effective_layout
 
 
 class ProductionPackagingLabelError(ValueError):
@@ -23,14 +28,41 @@ class ProductionPackagingLabelError(ValueError):
 
 
 ALLOWED_TEMPLATE_VERSIONS = frozenset(
-    {"legacy_65x45_v1", "current_40x30_v1"}
+    {
+        "legacy_65x45_v1",
+        "current_40x30_v1",
+        CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION,
+    }
 )
+
+def _customer_label_fields(
+    template_version: str,
+    customer_short_name: object,
+) -> dict[str, str]:
+    # Adding fields to a legacy plan would change the frozen fingerprint and
+    # break immutable historical reprints.  Only v2 carries the manually
+    # maintained customer short name.
+    if template_version != CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION:
+        return {}
+    short_name = str(customer_short_name or "").strip()
+    if (
+        not short_name
+        or len(short_name) > 30
+        or not re.search(r"[\u3400-\u9fff]", short_name)
+    ):
+        raise ProductionPackagingLabelError(
+            "客户资料未填写有效的标签中文简称，请先到客户资料补录"
+        )
+    return {"customer_short_name": short_name}
 
 
 def template_dimensions(template_version: str) -> dict[str, int]:
     if template_version == "legacy_65x45_v1":
         return {"width_mm": 65, "height_mm": 45}
-    if template_version == "current_40x30_v1":
+    if template_version in {
+        "current_40x30_v1",
+        CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION,
+    }:
         return {"width_mm": 40, "height_mm": 30}
     raise ProductionPackagingLabelError("生产包装标签模板版本不受支持")
 
@@ -85,8 +117,8 @@ def build_supplier_requisition_packaging_label_package(
         for card, _component in task_sources.values()
         if card.get("customer_id") is not None
     }
-    customer_codes = {
-        int(customer.id): customer.customer_code
+    customers_by_id = {
+        int(customer.id): customer
         for customer in (
             db.scalars(select(Customer).where(Customer.id.in_(customer_ids))).all()
             if customer_ids
@@ -132,7 +164,7 @@ def build_supplier_requisition_packaging_label_package(
                 and bool(product.production_label_enabled)
                 and task.status in {"waiting_material", "pending"}
                 and task.production_label_template_version_snapshot
-                == "current_40x30_v1"
+                == CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION
                 and task.production_label_product_version_snapshot
                 == int(product.version)
             ):
@@ -188,6 +220,22 @@ def build_supplier_requisition_packaging_label_package(
                 f"生产任务 #{task_id} 的包装标签数量异常，请核对"
             )
             continue
+        customer_name = card.get("customer_name")
+        customer = (
+            customers_by_id.get(int(card["customer_id"]))
+            if card.get("customer_id") is not None
+            else None
+        )
+        try:
+            customer_label_fields = _customer_label_fields(
+                template_version,
+                customer.chinese_short_name if customer is not None else None,
+            )
+        except ProductionPackagingLabelError as exc:
+            package_review_messages.append(
+                f"生产任务 #{task_id} 的{exc}"
+            )
+            continue
         plans.append(
             {
                 "production_task_id": task_id,
@@ -196,10 +244,8 @@ def build_supplier_requisition_packaging_label_package(
                 "product_version": task.production_label_product_version_snapshot,
                 "template_version": template_version,
                 "customer_id": card.get("customer_id"),
-                "customer_name": card.get("customer_name"),
-                "customer_code": customer_codes.get(int(card["customer_id"]))
-                if card.get("customer_id") is not None
-                else None,
+                "customer_name": customer_name,
+                "customer_code": customer.customer_code if customer is not None else None,
                 "product_code": component.get("product_code") or card.get("product_code"),
                 "product_name": component.get("product_name") or card.get("product_name"),
                 "specification": component.get("specification")
@@ -210,6 +256,7 @@ def build_supplier_requisition_packaging_label_package(
                 "units_per_label": units_per_label,
                 "label_count": frozen_count,
                 "label_quantities": quantities,
+                **customer_label_fields,
             }
         )
 
@@ -224,32 +271,40 @@ def build_supplier_requisition_packaging_label_package(
     labels: list[dict] = []
     for plan in plans:
         for index, quantity in enumerate(plan["label_quantities"], start=1):
-            labels.append(
-                {
-                    "production_task_id": plan["production_task_id"],
-                    "production_task_version": plan["production_task_version"],
-                    "template_version": plan["template_version"],
-                    "customer_id": plan["customer_id"],
-                    "customer_name": plan["customer_name"],
-                    "customer_code": plan["customer_code"],
-                    "product_code": plan["product_code"],
-                    "product_name": plan["product_name"],
-                    "specification": plan["specification"],
-                    "order_numbers": plan["order_numbers"],
-                    "customer_pos": plan["customer_pos"],
-                    "quantity": quantity,
-                    "total_quantity": plan["total_quantity"],
-                    "units_per_label": plan["units_per_label"],
-                    "label_number": index,
-                    "label_count": plan["label_count"],
-                }
-            )
+            label = {
+                "production_task_id": plan["production_task_id"],
+                "production_task_version": plan["production_task_version"],
+                "template_version": plan["template_version"],
+                "customer_id": plan["customer_id"],
+                "customer_name": plan["customer_name"],
+                "customer_code": plan["customer_code"],
+                "product_code": plan["product_code"],
+                "product_name": plan["product_name"],
+                "specification": plan["specification"],
+                "order_numbers": plan["order_numbers"],
+                "customer_pos": plan["customer_pos"],
+                "quantity": quantity,
+                "total_quantity": plan["total_quantity"],
+                "units_per_label": plan["units_per_label"],
+                "label_number": index,
+                "label_count": plan["label_count"],
+            }
+            if plan["template_version"] == CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION:
+                label["customer_short_name"] = plan["customer_short_name"]
+            labels.append(label)
 
+    label_layout = (
+        effective_layout(db)
+        if template_version == CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION
+        else None
+    )
     fingerprint_payload = {
         "supplier_order_id": int(order.id),
         "supplier_order_number": order.order_number,
         "plans": plans,
     }
+    if label_layout is not None:
+        fingerprint_payload["label_layout"] = label_layout
     fingerprint = hashlib.sha256(
         json.dumps(
             fingerprint_payload,
@@ -260,7 +315,7 @@ def build_supplier_requisition_packaging_label_package(
         ).encode("utf-8")
     ).hexdigest()
     review_messages = list(dict.fromkeys(str(value) for value in package_review_messages if value))
-    return {
+    result = {
         "supplier_order_id": int(order.id),
         "supplier_order_number": order.order_number,
         "status": order.status,
@@ -278,3 +333,6 @@ def build_supplier_requisition_packaging_label_package(
         "plans": plans,
         "labels": labels,
     }
+    if label_layout is not None:
+        result["label_layout"] = label_layout
+    return result

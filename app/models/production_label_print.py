@@ -94,7 +94,8 @@ class ProductionPackagingLabelPrintJob(Base):
             name="ck_production_packaging_label_print_jobs_hashes",
         ),
         CheckConstraint(
-            "template_version IN ('legacy_65x45_v1','current_40x30_v1')",
+            "template_version IN "
+            "('legacy_65x45_v1','current_40x30_v1','current_40x30_v2')",
             name="ck_production_packaging_label_print_jobs_template",
         ),
         CheckConstraint(
@@ -169,7 +170,8 @@ class ProductionPackagingLabelPrintJobTask(Base):
             name="ck_production_packaging_label_print_job_tasks_product_version",
         ),
         CheckConstraint(
-            "template_version IN ('legacy_65x45_v1','current_40x30_v1')",
+            "template_version IN "
+            "('legacy_65x45_v1','current_40x30_v1','current_40x30_v2')",
             name="ck_production_packaging_label_print_job_tasks_template",
         ),
         Index(
@@ -196,3 +198,64 @@ class ProductionPackagingLabelPrintJobTask(Base):
     product_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     template_version: Mapped[str] = mapped_column(String(30), nullable=False)
     snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class ProductionPackagingLabelLayoutRevision(Base):
+    """Append-only draft or released 40x30 packaging-label layout."""
+
+    __tablename__ = "production_packaging_label_layout_revisions"
+    __table_args__ = (
+        UniqueConstraint(
+            "stream",
+            "version",
+            name="uq_production_packaging_label_layout_stream_version",
+        ),
+        UniqueConstraint(
+            "operation_key",
+            name="uq_production_packaging_label_layout_operation_key",
+        ),
+        CheckConstraint(
+            "stream IN ('draft','release')",
+            name="ck_production_packaging_label_layout_stream",
+        ),
+        CheckConstraint(
+            "version >= 1 AND base_release_version >= 0",
+            name="ck_production_packaging_label_layout_versions",
+        ),
+        CheckConstraint(
+            "length(payload_hash) = 64 AND "
+            "(request_hash IS NULL OR length(request_hash) = 64)",
+            name="ck_production_packaging_label_layout_hashes",
+        ),
+        CheckConstraint(
+            "source_release_version IS NULL OR source_release_version >= 1",
+            name="ck_production_packaging_label_layout_source_version",
+        ),
+        Index(
+            "ix_production_packaging_label_layout_stream_version",
+            "stream",
+            "version",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    stream: Mapped[str] = mapped_column(String(10), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    catalog_version: Mapped[str] = mapped_column(String(40), nullable=False)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+    payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    base_release_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    operation_kind: Mapped[str] = mapped_column(String(30), nullable=False)
+    operation_key: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    request_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_release_version: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )

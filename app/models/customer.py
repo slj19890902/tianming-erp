@@ -48,6 +48,10 @@ class Customer(Base):
         nullable=True,
     )
     name: Mapped[str] = mapped_column(String(200), unique=True, index=True)
+    chinese_short_name: Mapped[str | None] = mapped_column(
+        String(30),
+        nullable=True,
+    )
     payment_term_days: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     statement_cycle_start_day: Mapped[int] = mapped_column(
         Integer,

@@ -1744,13 +1744,14 @@
         }
         .customer-list-table .customer-col-number { width: 8%; }
         .customer-list-table .customer-col-code { width: 8%; }
-        .customer-list-table .customer-col-name { width: 17%; }
-        .customer-list-table .customer-col-contact { width: 10%; }
-        .customer-list-table .customer-col-phone { width: 13%; }
+        .customer-list-table .customer-col-label-short { width: 10%; }
+        .customer-list-table .customer-col-name { width: 14%; }
+        .customer-list-table .customer-col-contact { width: 8%; }
+        .customer-list-table .customer-col-phone { width: 11%; }
         .customer-list-table .customer-col-term { width: 8%; }
         .customer-list-table .customer-col-delivery { width: 10%; }
         .customer-list-table .customer-col-status { width: 8%; }
-        .customer-list-table .customer-col-actions { width: 18%; }
+        .customer-list-table .customer-col-actions { width: 15%; }
         .customer-list-actions { min-width: 0; gap: 4px; align-items: flex-start; }
         .customer-list-actions .btn {
           max-width: 100%; min-width: 0; padding-left: 7px; padding-right: 7px;
@@ -2490,9 +2491,9 @@
                 <div class="toolbar-group"><button class="btn" :disabled="customerPhoneGovernanceExporting" @click="exportCustomerPhoneGovernance">{{ customerPhoneGovernanceExporting ? '生成清单中…' : '导出电话待核对清单' }}</button><label><input type="checkbox" v-model="filters.showInactive" @change="runExplicitPageListLoad('customers',{resetPage:true})" /> 显示已停用客户</label><input class="input" v-model="filters.customerKeyword" @input="queuePageSearch('customers')" @keyup.enter="runExplicitPageListLoad('customers',{resetPage:true})" /><button class="btn" @click="runExplicitPageListLoad('customers',{resetPage:true})">查询</button></div>
               </div>
               <data-panel :empty="!customers.length">
-                <table class="customer-list-table"><colgroup><col class="customer-col-number" /><col class="customer-col-code" /><col class="customer-col-name" /><col class="customer-col-contact" /><col class="customer-col-phone" /><col class="customer-col-term" /><col class="customer-col-delivery" /><col class="customer-col-status" /><col class="customer-col-actions" /></colgroup><thead><tr><th>客户编号</th><th>客户缩写</th><th>客户名称</th><th>联系人</th><th>电话</th><th>账期</th><th>送货方式</th><th>状态</th><th>操作</th></tr></thead>
+                <table class="customer-list-table"><colgroup><col class="customer-col-number" /><col class="customer-col-code" /><col class="customer-col-label-short" /><col class="customer-col-name" /><col class="customer-col-contact" /><col class="customer-col-phone" /><col class="customer-col-term" /><col class="customer-col-delivery" /><col class="customer-col-status" /><col class="customer-col-actions" /></colgroup><thead><tr><th>客户编号</th><th>客户缩写</th><th>标签中文简称</th><th>客户名称</th><th>联系人</th><th>电话</th><th>账期</th><th>送货方式</th><th>状态</th><th>操作</th></tr></thead>
                 <tbody><tr v-for="row in customers" :key="row.id">
-                  <td>{{ row.customer_number }}</td><td>{{ row.customer_code }}</td><td>{{ row.name }}</td><td>{{ row.contact_person || "-" }}</td><td><span>{{ customerPhoneDisplay(row.phone) || "-" }}</span><span v-if="customerPhoneAnalysis(row.phone).needs_review" class="phone-review-note">疑似占位，待核对</span></td>
+                  <td>{{ row.customer_number }}</td><td>{{ row.customer_code }}</td><td><span :class="row.chinese_short_name ? '' : 'status orange'">{{ row.chinese_short_name || "待补录" }}</span></td><td>{{ row.name }}</td><td>{{ row.contact_person || "-" }}</td><td><span>{{ customerPhoneDisplay(row.phone) || "-" }}</span><span v-if="customerPhoneAnalysis(row.phone).needs_review" class="phone-review-note">疑似占位，待核对</span></td>
                   <td>{{ row.payment_term_days }} 天</td><td>{{ row.delivery_method }}</td><td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td>
                   <td class="toolbar-group customer-list-actions"><button v-if="canViewQuotations" class="btn small primary" @click="openCustomerQuotations(row)">报价</button><button v-if="canViewContracts" class="btn small primary" @click="openCustomerContracts(row)">合同</button><button class="btn small" @click="openCustomer(row)">{{ canEditCustomers ? "查看/编辑" : "查看" }}</button><button class="btn small" @click="openMasterVersionHistory('customer',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateCustomers" :class="['btn','small',row.is_active ? 'danger' : 'success']" :disabled="customerLifecycleBusy()" @click="toggleCustomerStatus(row)">{{ customerLifecyclePending('status',row.id) ? '处理中…' : (row.is_active ? "停用" : "启用") }}</button></td>
                 </tr></tbody></table>
@@ -4726,6 +4727,7 @@
                 <div class="field"><label>客户编号</label><input class="input" type="number" v-model.number="customerForm.customer_number" /></div>
                 <div class="field"><label>客户缩写</label><input class="input" v-model.trim="customerForm.customer_code" /></div>
                 <div class="field"><label>客户名称</label><input class="input" v-model.trim="customerForm.name" /></div>
+                <div class="field"><label>标签中文简称（人工）</label><input class="input" maxlength="30" v-model.trim="customerForm.chinese_short_name" placeholder="例如：思迈包装" /><div class="muted" style="margin-top:4px">包装标签会原样使用；留空时精简标签不能打印，系统不会自动截字。</div></div>
                 <div class="field"><label>联系人</label><input class="input" v-model.trim="customerForm.contact_person" /></div>
                 <div class="field"><label>电话</label><input class="input" v-model.trim="customerForm.phone" /></div>
                 <div class="field"><label>账期天数</label><input class="input" type="number" v-model.number="customerForm.payment_term_days" /></div>
@@ -7805,7 +7807,7 @@
         deliveries: "deliveries.view", finance: "finance.view", contracts: "contracts.view", audit: "audit.view", system: "system.backup", permissions: "users.manage",
       };
       const blankCustomer = () => ({
-        id: null, version: null, customer_number: 1, customer_code: "", name: "",
+        id: null, version: null, customer_number: 1, customer_code: "", name: "", chinese_short_name: "",
         payment_term_days: 30, delivery_method: "配送", contact_person: "",
         statement_cycle_start_day: 20,
         phone: "", address: "", default_tax_rate: "0.13", invoice_title: "",
@@ -9652,7 +9654,7 @@
               customer: {
                 label:"客户", api:"customers", formKey:"customerForm", collection:"customers",
                 fields:[
-                  ["customer_number","客户编号"], ["customer_code","客户缩写"], ["name","客户名称"],
+                  ["customer_number","客户编号"], ["customer_code","客户缩写"], ["name","客户名称"], ["chinese_short_name","标签中文简称"],
                   ["contact_person","联系人"], ["phone","电话"], ["payment_term_days","账期天数"],
                   ["statement_cycle_start_day","对账结转日"], ["delivery_method","送货方式"],
                   ["address","地址"], ["status","状态"], ["remark","备注"]
@@ -16119,17 +16121,18 @@
           },
           productionLabelTemplateText(templateVersion) {
             return ({
-              current_40x30_v1:"40×30mm",
+              current_40x30_v2:"40×30mm 精简版",
+              current_40x30_v1:"40×30mm 旧版",
               legacy_65x45_v1:"旧版65×45mm",
             })[String(templateVersion || "").trim()] || "模板待核对";
           },
           productionLabelTemplateSupported(templateVersion) {
-            return ["current_40x30_v1", "legacy_65x45_v1"].includes(String(templateVersion || "").trim());
+            return ["current_40x30_v2", "current_40x30_v1", "legacy_65x45_v1"].includes(String(templateVersion || "").trim());
           },
           productionLabelPlanInconsistent(row) {
             const plan = this.productionLabelSnapshot(row);
             const current = this.productionLabelCurrentProduct(row);
-            return !plan.enabled && current.enabled && plan.templateVersion === "current_40x30_v1" && plan.productVersion > 0 && plan.productVersion === current.version;
+            return !plan.enabled && current.enabled && plan.templateVersion === "current_40x30_v2" && plan.productVersion > 0 && plan.productVersion === current.version;
           },
           productionLabelPlanText(row) {
             const plan = this.productionLabelSnapshot(row);

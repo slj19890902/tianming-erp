@@ -415,7 +415,11 @@ def build_supplier_requisition_production_package(
     receipt_without_line = any(row[0] is None for row in receipt_rows)
 
     registry = build_display_registry(db)
-    grouped: OrderedDict[tuple[object, str], dict] = OrderedDict()
+    # A physical pre-receipt task card is identified by the immutable formal
+    # supplier requisition detail, not by customer/product code.  Cover/base,
+    # BOM sources, or repeated rows may share the same product code and even
+    # the same dimensions while still being distinct material tasks.
+    grouped: OrderedDict[int, dict] = OrderedDict()
     for item in items:
         context = order_context.get(int(item.order_item_id or 0))
         order_item, sales_order, customer = (
@@ -501,19 +505,21 @@ def build_supplier_requisition_production_package(
                 str(plate.get("plate_code") or "").strip()
             )
         product_code = str(item.product_code or "").strip()
-        customer_key: object = customer.id if customer is not None else item.customer_name
-        group_key = (
-            customer_key,
-            product_code.casefold() if product_code else f"__item_{item.id}",
-        )
+        group_key = int(item.id)
         header_product_name = (
-            order_item.snapshot_product_name
-            if order_item is not None and component_snapshot is None
-            else item.product_name
+            item.product_name
+            or (
+                order_item.snapshot_product_name
+                if order_item is not None and component_snapshot is None
+                else None
+            )
         )
         card = grouped.get(group_key)
         if card is None:
             card = {
+                "supplier_order_item_id": int(item.id),
+                "source_identity": source_identity,
+                "component_label": component_label,
                 "customer_id": customer.id if customer is not None else None,
                 "customer_name": item.customer_name or (customer.name if customer else None),
                 "product_code": product_code or None,

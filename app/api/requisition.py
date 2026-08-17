@@ -169,6 +169,14 @@ from app.services.requisition_quantities import (
 from app.services.requisition_production_print import (
     build_supplier_requisition_production_package,
 )
+from app.services.requisition_production_print_batch import (
+    ProductionPrintBatchError,
+    build_selected_production_print_package,
+    canonical_batch_items,
+    production_print_batch_guard,
+    production_print_batch_id,
+    production_print_batch_request_hash,
+)
 from app.services.production_packaging_label import (
     build_supplier_requisition_packaging_label_package,
 )
@@ -211,6 +219,34 @@ class ProductionPackagingLabelPrintConfirmationRequest(BaseModel):
     @field_validator("idempotency_key")
     @classmethod
     def trim_label_confirmation_key(cls, value: str) -> str:
+        return value.strip()
+
+
+class ProductionPrintTaskVersion(BaseModel):
+    task_id: int = Field(gt=0)
+    version: int = Field(gt=0)
+
+
+class ProductionPrintBatchItem(BaseModel):
+    supplier_order_id: int = Field(gt=0)
+    source_identity: str = Field(min_length=1, max_length=160)
+    selection_fingerprint: str = Field(min_length=64, max_length=64)
+    task_versions: list[ProductionPrintTaskVersion] = Field(min_length=1, max_length=6)
+
+    @field_validator("source_identity", "selection_fingerprint")
+    @classmethod
+    def trim_production_print_item_values(cls, value: str) -> str:
+        return value.strip()
+
+
+class ProductionPrintBatchRequest(BaseModel):
+    idempotency_key: str = Field(min_length=8, max_length=120)
+    confirmed: Literal[True]
+    items: list[ProductionPrintBatchItem] = Field(min_length=1, max_length=20)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def trim_production_print_batch_key(cls, value: str) -> str:
         return value.strip()
 
 
@@ -15779,6 +15815,212 @@ def get_supplier_order_production_print_package(
         raise HTTPException(
             status_code=409,
             detail="同一存货编码的物理组件超过半页容量，请先核对并拆分报料后再打印",
+        )
+    return package
+
+
+_PRODUCTION_PRINT_BATCH_ACTION = "requisition.production_print_batch.prepared"
+
+
+def _production_print_batch_log(
+    db: Session,
+    batch_id: str,
+) -> OperationLog | None:
+    return db.scalar(
+        select(OperationLog)
+        .where(
+            OperationLog.action_code == _PRODUCTION_PRINT_BATCH_ACTION,
+            OperationLog.batch_id == batch_id,
+            OperationLog.result == "success",
+        )
+        .order_by(OperationLog.id.desc())
+    )
+
+
+def _production_print_batch_details(log: OperationLog) -> dict:
+    try:
+        details = json.loads(log.details or "{}")
+    except (TypeError, ValueError) as error:
+        raise HTTPException(
+            status_code=409,
+            detail="批量打印回执损坏，已停止补打，请重新选择任务",
+        ) from error
+    if not isinstance(details, dict) or details.get("_truncated"):
+        raise HTTPException(
+            status_code=409,
+            detail="批量打印回执不完整，已停止补打，请重新选择任务",
+        )
+    return details
+
+
+def _production_print_batch_orders(
+    db: Session,
+    user: User,
+    selections: list[dict],
+) -> dict[int, SupplierRequisitionOrder]:
+    order_ids = sorted(
+        {int(item.get("supplier_order_id") or 0) for item in selections}
+    )
+    orders = {
+        int(order.id): order
+        for order in db.scalars(
+            select(SupplierRequisitionOrder).where(
+                SupplierRequisitionOrder.id.in_(order_ids)
+            )
+        ).all()
+    }
+    if len(orders) != len(order_ids):
+        raise HTTPException(
+            status_code=409,
+            detail="所选生产任务已撤销、作废或不存在，请刷新后重新勾选",
+        )
+    for order_id in order_ids:
+        _require_supplier_order_customer_access(orders[order_id], user, db)
+    return orders
+
+
+def _production_print_batch_response(
+    package: dict,
+    *,
+    replayed: bool,
+) -> dict:
+    batch_id = str(package["batch_id"])
+    return {
+        **package,
+        "replayed": replayed,
+        "print_url": (
+            "/requisition-production-print.html?batch_id="
+            f"{batch_id}"
+        ),
+    }
+
+
+def _raise_production_print_batch_error(error: ProductionPrintBatchError) -> None:
+    detail: str | dict = str(error)
+    if error.invalid_items:
+        detail = {
+            "code": "production_print_batch_invalid_items",
+            "message": str(error),
+            "invalid_items": error.invalid_items,
+        }
+    raise HTTPException(status_code=error.status_code, detail=detail) from error
+
+
+@router.post("/production-print-batches/prepare")
+def prepare_production_print_batch(
+    payload: ProductionPrintBatchRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+    _write_guard: None = Depends(production_print_batch_guard),
+) -> dict:
+    """Freeze one explicit selection without advancing any business state."""
+
+    try:
+        items = canonical_batch_items(
+            [item.model_dump() for item in payload.items]
+        )
+        batch_id = production_print_batch_id(payload.idempotency_key)
+        request_hash = production_print_batch_request_hash(items)
+        existing = _production_print_batch_log(db, batch_id)
+        if existing is not None:
+            details = _production_print_batch_details(existing)
+            if int(existing.actor_user_id_snapshot or 0) != int(user.id):
+                raise HTTPException(
+                    status_code=409,
+                    detail="该批量打印幂等键已由其他操作员使用",
+                )
+            if str(details.get("request_hash") or "") != request_hash:
+                raise HTTPException(
+                    status_code=409,
+                    detail="该批量打印幂等键已用于不同的任务选择",
+                )
+            stored_items = canonical_batch_items(details.get("items") or [])
+            orders = _production_print_batch_orders(db, user, stored_items)
+            package = build_selected_production_print_package(
+                db,
+                selections=stored_items,
+                orders=orders,
+                batch_id=batch_id,
+            )
+            if package["package_fingerprint"] != details.get(
+                "package_fingerprint"
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="已生成批次对应的生产任务内容已变化，请重新选择并生成",
+                )
+            return _production_print_batch_response(package, replayed=True)
+
+        orders = _production_print_batch_orders(db, user, items)
+        package = build_selected_production_print_package(
+            db,
+            selections=items,
+            orders=orders,
+            batch_id=batch_id,
+        )
+        append_audit_event(
+            db,
+            event_category="business",
+            result="success",
+            source="web",
+            module_code="requisition",
+            action_code=_PRODUCTION_PRINT_BATCH_ACTION,
+            legacy_action="PREPARE_PRODUCTION_PRINT",
+            resource="ProductionPrintBatch",
+            actor=user,
+            entity_type="production_print_batch",
+            object_ref=f"production_print_batch:{batch_id}",
+            batch_id=batch_id,
+            description="冻结勾选的待来料生产任务打印包",
+            details={
+                "request_hash": request_hash,
+                "items": items,
+                "package_fingerprint": package["package_fingerprint"],
+                "card_count": package["card_count"],
+                "page_count": package["page_count"],
+            },
+        )
+        db.commit()
+        return _production_print_batch_response(package, replayed=False)
+    except ProductionPrintBatchError as error:
+        db.rollback()
+        _raise_production_print_batch_error(error)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.get("/production-print-batches/{batch_id}")
+def get_production_print_batch(
+    batch_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    normalized_batch_id = str(batch_id or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", normalized_batch_id):
+        raise HTTPException(status_code=404, detail="批量打印任务不存在")
+    log = _production_print_batch_log(db, normalized_batch_id)
+    if log is None or int(log.actor_user_id_snapshot or 0) != int(user.id):
+        raise HTTPException(status_code=404, detail="批量打印任务不存在")
+    details = _production_print_batch_details(log)
+    try:
+        items = canonical_batch_items(details.get("items") or [])
+        orders = _production_print_batch_orders(db, user, items)
+        package = build_selected_production_print_package(
+            db,
+            selections=items,
+            orders=orders,
+            batch_id=normalized_batch_id,
+        )
+    except ProductionPrintBatchError as error:
+        _raise_production_print_batch_error(error)
+    if package["package_fingerprint"] != details.get("package_fingerprint"):
+        raise HTTPException(
+            status_code=409,
+            detail="批量打印包对应的任务内容已变化，请回到 ERP 重新选择",
         )
     return package
 

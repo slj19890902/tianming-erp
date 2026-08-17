@@ -59,6 +59,46 @@ def _unique_text(values: list[object]) -> list[str]:
     return result
 
 
+def production_print_card_task_versions(card: dict) -> list[dict[str, int]]:
+    """Return the exact formal task/version set represented by one paper card."""
+
+    versions = {
+        (
+            int(component["production_task_id"]),
+            int(component["production_task_version"]),
+        )
+        for component in card.get("components") or []
+        if component.get("production_task_id") is not None
+        and component.get("production_task_version") is not None
+    }
+    return [
+        {"task_id": task_id, "version": version}
+        for task_id, version in sorted(versions)
+    ]
+
+
+def production_print_card_fingerprint(card: dict) -> str:
+    """Hash one displayed card without coupling it to unrelated order cards."""
+
+    payload = deepcopy(card)
+    for key in (
+        "paper_version_key",
+        "selection_fingerprint",
+        "selection_eligible",
+        "selection_block_reasons",
+    ):
+        payload.pop(key, None)
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
 def _file_name(value: str | None) -> str | None:
     text = str(value or "").strip().replace("\\", "/")
     if not text:
@@ -1026,6 +1066,19 @@ def build_supplier_requisition_production_package(
             card["paper_phase_label"] = "计划版（实收一致，沿用本卡）"
             if not card.get("review_required"):
                 card["status_label"] = "实收一致"
+        card["production_task_versions"] = production_print_card_task_versions(card)
+        selection_block_reasons: list[str] = []
+        if not card["production_task_versions"] or len(
+            card["production_task_versions"]
+        ) != len(card.get("components") or []):
+            selection_block_reasons.append("生产任务版本缺失，请先核对任务")
+        if card.get("receipt_versions"):
+            selection_block_reasons.append("任务已有实收事实，请从对应实收版处理")
+        if len(card.get("components") or []) > 6:
+            selection_block_reasons.append("物理组件超过单张纸面容量")
+        card["selection_block_reasons"] = selection_block_reasons
+        card["selection_eligible"] = not selection_block_reasons
+        card["selection_fingerprint"] = production_print_card_fingerprint(card)
     pages = [
         {
             "page_number": index // 2 + 1,

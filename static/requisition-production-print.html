@@ -166,6 +166,8 @@
       const closeButton = document.getElementById("closeButton");
       const toolbarNote = document.getElementById("toolbarNote");
       const params = new URLSearchParams(window.location.search);
+      const batchId = (params.get("batch_id") || "").trim().toLowerCase();
+      const batchMode = /^[0-9a-f]{64}$/.test(batchId);
       const receiptMode = window.location.pathname.endsWith("/incoming-production-card.html")
         || params.has("receipt_item_id");
       const sourceId = Number(params.get("receipt_item_id") || params.get("id"));
@@ -481,7 +483,7 @@
           <div class="detail-grid"><div class="detail-list">${detailHtml(card)}</div>${structureHtml(card)}</div>
           ${fulfillmentReminderHtml(card)}
           ${warnings}
-          <footer class="foot internal-only"><span>报料单 ${escapeHtml(packageData.supplier_order_number || "-")} · 纸面版本 ${escapeHtml(String(card.paper_version_key || packageData.plan_fingerprint || "").slice(-20))}</span><span>生成 ${escapeHtml(card.received_at || packageData.created_at || "-")}</span></footer>
+          <footer class="foot internal-only"><span>报料单 ${escapeHtml(card.supplier_order_number || packageData.supplier_order_number || "-")} · 纸面版本 ${escapeHtml(String(card.paper_version_key || packageData.plan_fingerprint || "").slice(-20))}</span><span>生成 ${escapeHtml(card.received_at || packageData.created_at || "-")}</span></footer>
           <footer class="foot safe-only">${safeNote}<span>尺寸单位：mm</span></footer>
         </section>`;
       }
@@ -502,7 +504,9 @@
         ).join("");
         const fullPageCount = layouts.filter((layout) => layout.fullPage).length;
         const singleCard = packageData.card_count === 1 && layouts.length === 1;
-        toolbarNote.textContent = receiptMode
+        toolbarNote.textContent = batchMode
+          ? `已冻结 ${packageData.card_count || 0} 项人工选择 · 共 ${layouts.length} 页 · 本批次不会随页面后续勾选改变`
+          : receiptMode
           ? (packageData.reuses_planned_card
             ? "实收与计划完全一致 · 沿用原计划卡即可，不强制重复打印"
             : `${packageData.paper_phase_label || "实收版"} · 一笔实收事实一张卡`)
@@ -528,9 +532,9 @@
         message.hidden = true;
         printButton.disabled = !layouts.length || packageData.printable === false;
         const labelCount = Number(packageData.production_label_count || 0);
-        labelButton.hidden = receiptMode;
+        labelButton.hidden = receiptMode || batchMode;
         labelButton.textContent = labelCount > 0 ? `生产包装标签（${labelCount}张）` : "未启用包装标签";
-        labelButton.disabled = receiptMode || labelCount <= 0 || packageData.review_required === true;
+        labelButton.disabled = receiptMode || batchMode || labelCount <= 0 || packageData.review_required === true;
       }
 
       async function loadPackage() {
@@ -543,14 +547,16 @@
         pagesHost.innerHTML = "";
         message.hidden = false;
         message.className = "message";
-        message.textContent = receiptMode ? "正在读取同一生产任务的实收纸面版本…" : "正在读取正式报料快照…";
-        if (!Number.isInteger(sourceId) || sourceId <= 0) {
+        message.textContent = batchMode ? "正在核验已冻结的批量打印任务…" : receiptMode ? "正在读取同一生产任务的实收纸面版本…" : "正在读取正式报料快照…";
+        if (!batchMode && (!Number.isInteger(sourceId) || sourceId <= 0)) {
           message.className = "message error";
           message.textContent = receiptMode ? "来料实收明细编号无效" : "报料单编号无效";
           return;
         }
         try {
-          const endpoint = receiptMode
+          const endpoint = batchMode
+            ? `/api/requisition/production-print-batches/${encodeURIComponent(batchId)}`
+            : receiptMode
             ? `/api/incoming/receipt-items/${encodeURIComponent(receiptItemId)}/production-card`
             : `/api/requisition/supplier-orders/${encodeURIComponent(orderId)}/production-print-package`;
           const response = await fetch(endpoint, {
@@ -574,10 +580,10 @@
       retryButton.addEventListener("click", loadPackage);
       printButton.addEventListener("click", () => { if (loadedPackage) window.print(); });
       modeButton.addEventListener("click", () => { customerSafe = !customerSafe; applyMode(); });
-      labelButton.addEventListener("click", () => { if (loadedPackage && !receiptMode) window.open(`/production-packaging-label.html?id=${encodeURIComponent(orderId)}`, "_blank", "noopener"); });
+      labelButton.addEventListener("click", () => { if (loadedPackage && !receiptMode && !batchMode) window.open(`/production-packaging-label.html?id=${encodeURIComponent(orderId)}`, "_blank", "noopener"); });
       closeButton.addEventListener("click", () => window.close());
       applyMode();
-      document.title = receiptMode ? "生产任务单 · 实收版" : "生产任务单 · 计划版";
+      document.title = batchMode ? "生产任务单 · 批量勾选" : receiptMode ? "生产任务单 · 实收版" : "生产任务单 · 计划版";
       loadPackage();
     })();
   </script>

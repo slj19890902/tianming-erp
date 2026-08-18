@@ -532,6 +532,22 @@ class OrderItemCreate(BaseModel):
     length_mm: int | None = Field(default=None, gt=0)
     width_mm: int | None = Field(default=None, gt=0)
     height_mm: int | None = Field(default=None, gt=0)
+    report_length_mm: int | None = Field(default=None, gt=0)
+    report_width_mm: int | None = Field(default=None, gt=0)
+    crease_type: str | None = Field(default=None, max_length=20)
+    crease_left_mm: int | None = Field(default=None, ge=0)
+    crease_middle_mm: int | None = Field(default=None, ge=0)
+    crease_right_mm: int | None = Field(default=None, ge=0)
+    base_report_length_mm: int | None = Field(default=None, gt=0)
+    base_report_width_mm: int | None = Field(default=None, gt=0)
+    base_crease_type: str | None = Field(default=None, max_length=20)
+    base_crease_left_mm: int | None = Field(default=None, ge=0)
+    base_crease_middle_mm: int | None = Field(default=None, ge=0)
+    base_crease_right_mm: int | None = Field(default=None, ge=0)
+    splice_mode: str | None = Field(default=None, max_length=20)
+    pieces_per_box: int | None = Field(default=None, ge=1)
+    flap_mm: int | None = Field(default=None, gt=0)
+    default_cutting_mode: str | None = Field(default=None, max_length=20)
     material_id: int | None = None
     layer_count: int | None = None   # v0.19.2-B: 常用箱层数（自动带出）
     flute_type: str | None = None    # v0.19.2-B: 常用箱实际楞型（自动带出）
@@ -1602,6 +1618,26 @@ def _order_item_cost_totals(
     }
 
 
+def _order_item_material_margin(
+    *,
+    subtotal: Decimal,
+    material_total: object,
+) -> dict[str, str | None]:
+    """Project material-only gross profit without treating it as full profit."""
+
+    total = Decimal(str(material_total))
+    gross = subtotal - total
+    margin = gross / subtotal if subtotal > 0 else None
+    return {
+        "material_sales_amount": str(subtotal.quantize(MONEY_QUANTUM)),
+        "material_gross_profit": str(gross.quantize(MONEY_QUANTUM)),
+        "material_gross_margin": (
+            str(margin.quantize(Decimal("0.0001"))) if margin is not None else None
+        ),
+        "material_gross_scope_label": "材料毛利（未扣加工、人工、运输和损耗）",
+    }
+
+
 def _product_combination_mode(product: Product) -> str:
     """Read the explicit mode while keeping old composite rows compatible."""
     if not product.is_composite:
@@ -2289,6 +2325,26 @@ def _order_response(
                 ),
                 **cost_reference,
         }
+        if (
+            may_view_cost
+            and _can_view_order_sales_amount(user)
+            and item_data.get("estimated_material_total_cost") is not None
+        ):
+            item_data.update(
+                _order_item_material_margin(
+                    subtotal=Decimal(str(item.subtotal)),
+                    material_total=item_data["estimated_material_total_cost"],
+                )
+            )
+        elif may_view_cost:
+            item_data.update(
+                {
+                    "material_sales_amount": None,
+                    "material_gross_profit": None,
+                    "material_gross_margin": None,
+                    "material_gross_scope_label": "材料毛利（未扣加工、人工、运输和损耗）",
+                }
+            )
         if may_view_cost and item_data.get("estimated_cost") is not None:
             unit_cost = Decimal(item_data["estimated_cost"])
             item_data.update(
@@ -6273,6 +6329,22 @@ def _create_order_impl(
                             layer_count=item_payload.layer_count,
                             flute_type=item_payload.flute_type,
                             sale_unit_price=Decimal(str(item_payload.unit_price)),
+                            report_length_mm=item_payload.report_length_mm,
+                            report_width_mm=item_payload.report_width_mm,
+                            crease_type=item_payload.crease_type,
+                            crease_left_mm=item_payload.crease_left_mm,
+                            crease_middle_mm=item_payload.crease_middle_mm,
+                            crease_right_mm=item_payload.crease_right_mm,
+                            base_report_length_mm=item_payload.base_report_length_mm,
+                            base_report_width_mm=item_payload.base_report_width_mm,
+                            base_crease_type=item_payload.base_crease_type,
+                            base_crease_left_mm=item_payload.base_crease_left_mm,
+                            base_crease_middle_mm=item_payload.base_crease_middle_mm,
+                            base_crease_right_mm=item_payload.base_crease_right_mm,
+                            splice_mode=item_payload.splice_mode,
+                            pieces_per_box=item_payload.pieces_per_box,
+                            flap_mm=item_payload.flap_mm,
+                            default_cutting_mode=item_payload.default_cutting_mode,
                         ),
                         user=user,
                     )
@@ -6280,10 +6352,15 @@ def _create_order_impl(
                     # order snapshot.  Do not route this through the legacy
                     # decimal display helper, which is only a product-read
                     # convenience and may shorten trailing integer zeroes.
-                    item_payload.specification = (
-                        f"{item_payload.length_mm}×{item_payload.width_mm}×"
-                        f"{item_payload.height_mm}mm"
-                    )
+                    item_payload.specification = "×".join(
+                        str(value)
+                        for value in (
+                            item_payload.length_mm,
+                            item_payload.width_mm,
+                            item_payload.height_mm,
+                        )
+                        if value is not None
+                    ) + "mm"
                 except ManualSizeProductError as error:
                     raise HTTPException(
                         status_code=400, detail=f"第{index}条{error}"

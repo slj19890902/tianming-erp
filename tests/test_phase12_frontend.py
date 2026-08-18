@@ -331,7 +331,7 @@ def test_order_search_highlights_visible_text_without_html_injection() -> None:
     assert "orderSearchHighlightParts(item.item_order_number || '-')" not in order_page_block
     assert "orderSearchHighlightParts(plainProductText(item.snapshot_product_code))" in order_page_block
     assert "orderSearchHighlightParts(plainProductText(item.snapshot_product_name))" in order_page_block
-    assert "orderSearchHighlightParts(item.snapshot_spec || '-')" in order_page_block
+    assert "orderSearchHighlightParts(orderSpecificationText(item.snapshot_spec))" in order_page_block
     assert "{{ part.text }}" in order_page_block
 
 

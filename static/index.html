@@ -3333,7 +3333,7 @@
                                   <th class="col-order-item-sequence">序号</th>
                                   <th>存货编码</th>
                                   <th>产品名称</th>
-                                  <th>规格 / 尺寸</th>
+                                  <th>规格mm</th>
                                   <th>材质 / 楞型</th>
                                   <th class="cell-right">数量 / 送货</th>
                                   <th v-if="canViewSalesAmounts" class="sensitive-price cell-right">单价</th>
@@ -3350,7 +3350,7 @@
                                     <td class="col-order-item-sequence">{{ item.item_sequence || itemIndex + 1 }}</td>
                                     <td><span v-for="(part,index) in orderSearchHighlightParts(plainProductText(item.snapshot_product_code))" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span></td>
                                     <td><span v-for="(part,index) in orderSearchHighlightParts(plainProductText(item.snapshot_product_name))" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span><div v-if="item.combination_role==='priced_component'" class="status blue" style="margin-top:3px">{{ combinationGroupLabel(item) }}</div><div v-if="hasExternalPackagingRequirements(item)" :class="['status', row.external_packaging_purchase_summary?.status==='confirmed' ? 'green' : (row.external_packaging_purchase_summary?.status==='cancelled' ? 'red' : 'orange')]" style="margin-top:3px;white-space:normal">{{ row.external_packaging_purchase_summary?.status==='confirmed' ? `外购包装已确认 ${row.external_packaging_purchase_summary.purchase_numbers.join('、')}` : (row.external_packaging_purchase_summary?.status==='cancelled' ? '原外购包装采购已作废，请新建正确订单' : `下一步：核对外购包装 ${item.external_packaging_requirements.length} 项`) }}</div><div v-if="item.mold_location" class="muted" style="font-size:11px">模具：{{ moldLocationText(item) }}</div></td>
-                                    <td><span v-for="(part,index) in orderSearchHighlightParts(item.snapshot_spec || '-')" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span></td>
+                                    <td><span v-for="(part,index) in orderSearchHighlightParts(orderSpecificationText(item.snapshot_spec))" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span></td>
                                     <td style="white-space:normal;word-break:break-all;max-width:140px;font-size:12px"><span v-for="(part,index) in orderSearchHighlightParts(orderItemMaterialText(item, false))" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span></td>
                                     <td class="cell-right"><strong>{{ item.quantity }}</strong><div v-if="Number(item.business_delivered_quantity || 0) > 0" class="order-delivery-compact">已送 {{ item.business_delivered_quantity }}/{{ item.quantity }}</div></td>
                                     <td v-if="canViewSalesAmounts" class="sensitive-price cell-right">{{ money(item.unit_price) }}</td>
@@ -3401,7 +3401,7 @@
                 <table><thead><tr><th>主操作</th><th></th><th>旧版系统列</th><th>客户单号</th><th>客户</th><th>下单日期</th><th>交货日期</th><th>明细数</th><th>订单数量</th><th>已送数量</th><th>来料</th><th>状态</th><th v-if="canViewSalesAmounts" class="sensitive-price">金额</th></tr></thead>
                 <tbody v-if="filters.orderView === 'plain'"><template v-for="row in orders" :key="row.id">
                   <tr><td><div class="toolbar-group"><button class="btn small" @click="openOrderDetail(row)">查看详情</button><button v-if="canSales && row.items.length" class="btn primary small" @click="openOrderItem(row,row.items[0])">编辑订单</button></div></td><td><button class="btn small" @click="toggleOrder(row)">{{ expandedOrders[row.id] ? "收起" : "展开" }}</button></td><td><div><strong>{{ displayOrderNumber(row) }}</strong><div v-if="row.is_history_order" class="status blue" style="margin-top:4px">历史订单</div></div></td><td>{{ row.customer_po || "-" }}</td><td>{{ row.customer_name }}</td><td>{{ row.order_date }}</td><td>{{ row.delivery_date || "-" }}</td><td>{{ row.items.length }}</td><td>{{ sum(row.items,'quantity') }}</td><td>{{ row.business_delivery_progress?.delivered_quantity || 0 }}</td><td><status-tag :value="row.items.every(i=>i.material_status==='received') ? 'received' : 'pending'"></status-tag></td><td><div v-if="row.is_history_order" class="status blue">历史归档</div><status-tag v-else :value="orderDisplayStatusKey(row)"></status-tag></td><td v-if="canViewSalesAmounts" class="sensitive-price">¥ {{ money(row.total_amount) }}</td></tr>
-                  <tr v-if="expandedOrders[row.id]" class="order-detail-row"><td :colspan="canViewSalesAmounts ? 14 : 13"><div class="order-detail-box"><table><thead><tr><th class="col-order-item-sequence">序号</th><th>存货编码</th><th>名称</th><th>材质</th><th>规格</th><th>数量 / 送货</th><th>状态</th><th>报料状态</th><th v-if="canViewSalesAmounts" class="sensitive-price">客户销售单价</th><th v-if="canViewCosts" class="cost-sensitive">预计成本</th><th v-if="canViewCosts" class="cost-sensitive">预计利润</th><th>操作</th></tr></thead><tbody><tr v-for="(item,itemIndex) in row.items" :key="item.id"><td class="col-order-item-sequence">{{ item.item_sequence || itemIndex + 1 }}</td><td>{{ plainProductText(item.snapshot_product_code) }}</td><td>{{ plainProductText(item.snapshot_product_name) }}<div v-if="hasBomComponents(item)" class="bom-preview-box"><div class="bom-preview-title">本订单 BOM 明细 / 组件需求（只改本订单）</div><div v-if="orderBomDemandSaveState.outcomeUncertain && Number(orderBomDemandSaveState.itemId)===Number(item.id)" class="notice warning" style="margin:6px 0">上次组件数量保存结果暂不确定，请点击上方“刷新”核对后再操作。</div><div class="bom-preview-list"><div v-for="component in item.bom_components" :key="component.id || component.component_product_id || component.internal_code" class="bom-preview-item"><div>{{ bomPreviewComponentLabel(component) }}</div><div v-if="canSales" class="toolbar-group" style="margin-top:4px"><input class="input" style="width:110px" type="number" min="1" :disabled="orderBomDemandSaveState.saving || orderBomDemandSaveState.outcomeUncertain" :value="component._demand_quantity ?? component.effective_required_piece_quantity ?? component.required_piece_quantity" @input="component._demand_quantity=Number($event.target.value)" /><button class="btn small" :disabled="orderBomDemandSaveState.saving || orderBomDemandSaveState.outcomeUncertain" @click="saveOrderBomComponentDemand(item,component)">{{ orderBomDemandSaveState.saving && Number(orderBomDemandSaveState.itemId)===Number(item.id) && Number(orderBomDemandSaveState.componentId)===Number(component.id) ? "保存中…" : "保存本订单需求" }}</button></div></div></div></div></td><td style="white-space:normal;word-break:break-all;max-width:130px;font-size:12px">{{ orderItemMaterialText(item, false) }}</td><td>{{ item.snapshot_spec || "-" }}</td><td>{{ item.quantity }}<div v-if="Number(item.business_delivered_quantity || 0) > 0" class="order-delivery-compact">已送 {{ item.business_delivered_quantity }}/{{ item.quantity }}</div></td><td><status-tag :value="itemBusinessStatusKey(item)"></status-tag></td><td><status-tag :value="item.requisition_status"></status-tag></td><td v-if="canViewSalesAmounts" class="sensitive-price">{{ money(item.unit_price) }}</td><td v-if="canViewCosts" class="cost-sensitive"><strong>{{ item.total_estimated_cost ? money(item.total_estimated_cost) : "-" }}</strong><div v-if="item.estimated_cost_health_label" :class="['status',item.estimated_cost_health_tone]" style="margin-top:3px">{{ item.estimated_cost_health_label }}</div></td><td v-if="canViewCosts" class="cost-sensitive"><strong>{{ item.total_estimated_gross_profit !== null && item.total_estimated_gross_profit !== undefined ? money(item.total_estimated_gross_profit) : "-" }}</strong><div v-if="item.estimated_margin_rate !== null && item.estimated_margin_rate !== undefined" class="muted">{{ (Number(item.estimated_margin_rate) * 100).toFixed(1) }}%</div></td><td class="toolbar-group"><button class="btn small primary" @click="openOrderTrace(row,item)">追溯</button><button v-if="canSales" class="btn small" @click="openOrderItem(row,item)">编辑</button><a v-if="item.drawing_file || item.product_drawing_file" href="#" class="btn small" @click.prevent="previewDrawingFile(item.drawing_file || item.product_drawing_file)" title="查看图纸">图纸</a></td></tr></tbody></table></div></td></tr>
+                  <tr v-if="expandedOrders[row.id]" class="order-detail-row"><td :colspan="canViewSalesAmounts ? 14 : 13"><div class="order-detail-box"><table><thead><tr><th class="col-order-item-sequence">序号</th><th>存货编码</th><th>名称</th><th>材质</th><th>规格mm</th><th>数量 / 送货</th><th>状态</th><th>报料状态</th><th v-if="canViewSalesAmounts" class="sensitive-price">客户销售单价</th><th v-if="canViewCosts" class="cost-sensitive">预计成本</th><th v-if="canViewCosts" class="cost-sensitive">预计利润</th><th>操作</th></tr></thead><tbody><tr v-for="(item,itemIndex) in row.items" :key="item.id"><td class="col-order-item-sequence">{{ item.item_sequence || itemIndex + 1 }}</td><td>{{ plainProductText(item.snapshot_product_code) }}</td><td>{{ plainProductText(item.snapshot_product_name) }}<div v-if="hasBomComponents(item)" class="bom-preview-box"><div class="bom-preview-title">本订单 BOM 明细 / 组件需求（只改本订单）</div><div v-if="orderBomDemandSaveState.outcomeUncertain && Number(orderBomDemandSaveState.itemId)===Number(item.id)" class="notice warning" style="margin:6px 0">上次组件数量保存结果暂不确定，请点击上方“刷新”核对后再操作。</div><div class="bom-preview-list"><div v-for="component in item.bom_components" :key="component.id || component.component_product_id || component.internal_code" class="bom-preview-item"><div>{{ bomPreviewComponentLabel(component) }}</div><div v-if="canSales" class="toolbar-group" style="margin-top:4px"><input class="input" style="width:110px" type="number" min="1" :disabled="orderBomDemandSaveState.saving || orderBomDemandSaveState.outcomeUncertain" :value="component._demand_quantity ?? component.effective_required_piece_quantity ?? component.required_piece_quantity" @input="component._demand_quantity=Number($event.target.value)" /><button class="btn small" :disabled="orderBomDemandSaveState.saving || orderBomDemandSaveState.outcomeUncertain" @click="saveOrderBomComponentDemand(item,component)">{{ orderBomDemandSaveState.saving && Number(orderBomDemandSaveState.itemId)===Number(item.id) && Number(orderBomDemandSaveState.componentId)===Number(component.id) ? "保存中…" : "保存本订单需求" }}</button></div></div></div></div></td><td style="white-space:normal;word-break:break-all;max-width:130px;font-size:12px">{{ orderItemMaterialText(item, false) }}</td><td>{{ orderSpecificationText(item.snapshot_spec) }}</td><td>{{ item.quantity }}<div v-if="Number(item.business_delivered_quantity || 0) > 0" class="order-delivery-compact">已送 {{ item.business_delivered_quantity }}/{{ item.quantity }}</div></td><td><status-tag :value="itemBusinessStatusKey(item)"></status-tag></td><td><status-tag :value="item.requisition_status"></status-tag></td><td v-if="canViewSalesAmounts" class="sensitive-price">{{ money(item.unit_price) }}</td><td v-if="canViewCosts" class="cost-sensitive"><strong>{{ item.total_estimated_cost ? money(item.total_estimated_cost) : "-" }}</strong><div v-if="item.estimated_cost_health_label" :class="['status',item.estimated_cost_health_tone]" style="margin-top:3px">{{ item.estimated_cost_health_label }}</div></td><td v-if="canViewCosts" class="cost-sensitive"><strong>{{ item.total_estimated_gross_profit !== null && item.total_estimated_gross_profit !== undefined ? money(item.total_estimated_gross_profit) : "-" }}</strong><div v-if="item.estimated_margin_rate !== null && item.estimated_margin_rate !== undefined" class="muted">{{ (Number(item.estimated_margin_rate) * 100).toFixed(1) }}%</div></td><td class="toolbar-group"><button class="btn small primary" @click="openOrderTrace(row,item)">追溯</button><button v-if="canSales" class="btn small" @click="openOrderItem(row,item)">编辑</button><a v-if="item.drawing_file || item.product_drawing_file" href="#" class="btn small" @click.prevent="previewDrawingFile(item.drawing_file || item.product_drawing_file)" title="查看图纸">图纸</a></td></tr></tbody></table></div></td></tr>
                 </template></tbody>
                 <tbody v-else><template v-for="group in groupedOrderRows" :key="group.key">
                   <tr>
@@ -5803,7 +5803,7 @@
                         <div style="border:1px solid #e2e8f0;border-radius:8px;padding:12px;background:#fafafa">
                           <div class="form-grid">
                             <div class="field"><label>产品名称</label><input class="input" v-model.trim="item._edit.product_name" /></div>
-                            <div class="field"><label>规格</label><input class="input" v-model.trim="item._edit.specification" /></div>
+                            <div class="field"><label>规格mm</label><input class="input" v-model.trim="item._edit.specification" /></div>
                             <div class="field"><label>客户单价</label><input class="input" type="number" step="0.0001" v-model="item._edit.unit_price" /></div>
                             <div class="field"><label>生产说明</label><input class="input" v-model.trim="item._edit.production_notes" /></div>
                             <!-- 材质联动 -->
@@ -6005,7 +6005,7 @@
               <table class="line-items order-entry-table"><thead><tr>
                 <th class="order-entry-code">存货编码</th>
                 <th class="order-entry-name">产品名称</th>
-                <th class="order-entry-spec">规格</th>
+                <th class="order-entry-spec">规格mm</th>
                 <th class="order-entry-material">材质楞型</th>
                 <th class="order-entry-quantity">数量</th>
                 <th v-if="canViewSalesAmounts" class="order-entry-price sensitive-price">单价</th>
@@ -6187,7 +6187,7 @@
                 <div class="field"><label>实际数量</label><input class="input" type="number" min="1" step="1" v-model.number="orderItemForm.quantity" @input="syncOrderBomDemandsForQuantity(orderItemForm)" /></div>
                 <div v-if="canViewSalesAmounts" class="field sensitive-price"><label>客户单价</label><input class="input" type="number" min="0" step="0.01" v-model.number="orderItemForm.unit_price" /></div>
                 <div v-if="canViewSalesAmounts" class="field sensitive-price"><label>销售金额</label><strong>¥ {{ money(orderItemSaleAmount(orderItemForm)) }}</strong></div>
-                <div class="field"><label>规格型号</label><input class="input" v-model.trim="orderItemForm.specification" /></div>
+                <div class="field"><label>规格mm</label><input class="input" v-model.trim="orderItemForm.specification" /></div>
               </div>
               <div class="product-form-row order-item-material-row">
                 <div class="field"><label>材质供应商</label>
@@ -6312,7 +6312,7 @@
                 <div class="field"><label>序号</label><div><strong>{{ orderTrace.item.item_sequence || "-" }}</strong></div></div>
                 <div class="field"><label>存货编码</label><div>{{ orderTrace.item.product_code || "-" }}</div></div>
                 <div class="field"><label>产品</label><div>{{ orderTrace.item.product_name || "-" }}</div></div>
-                <div class="field"><label>规格</label><div>{{ orderTrace.item.specification || "-" }}</div></div>
+                <div class="field"><label>规格mm</label><div>{{ orderSpecificationText(orderTrace.item.specification) }}</div></div>
                 <div class="field"><label>订单数量</label><div>{{ orderTrace.item.quantity }}</div></div>
                 <div v-if="!isWorkshop" class="field"><label>明细系统单号</label><div class="sys-num">{{ orderTrace.item.item_order_number || "-" }}</div></div>
               </div>
@@ -6393,7 +6393,7 @@
                 <table>
                   <thead><tr>
                     <th class="col-order-item-sequence">序号</th><th>明细系统单号</th>
-                    <th>存货编码</th><th>产品名称</th><th>规格</th><th>材质</th>
+                    <th>存货编码</th><th>产品名称</th><th>规格mm</th><th>材质</th>
                     <th>生产说明</th><th>订单数量</th><th>成品抵扣</th><th>需生产</th>
                     <th>报料尺寸</th><th>压线</th>
                     <th v-if="canViewSalesAmounts" class="sensitive-price">客户销售单价</th>
@@ -6414,7 +6414,7 @@
                         </div>
                       </div>
                     </td>
-                    <td>{{ item.snapshot_spec || "-" }}</td>
+                    <td>{{ orderSpecificationText(item.snapshot_spec) }}</td>
                     <td style="white-space:normal;word-break:break-all;font-size:12px;max-width:160px">{{ orderItemMaterialText(item) }}</td>
                     <td>{{ item.snapshot_production_notes || "-" }}<div v-if="item.mold_location" class="status blue" style="margin-top:4px;white-space:normal">模具：{{ moldLocationText(item) }}</div></td>
                     <td>{{ item.quantity }}</td>
@@ -6549,7 +6549,7 @@
               </div>
               <div class="section-title">只读订单详情</div>
               <table><thead><tr>
-                <th>明细系统单号</th><th>存货编码</th><th>产品名称</th><th>规格</th>
+                <th>明细系统单号</th><th>存货编码</th><th>产品名称</th><th>规格mm</th>
                 <th>材质</th><th>生产说明</th><th>订单数量</th><th>成品抵扣</th><th>需生产</th>
                 <th>报料尺寸</th><th>压线</th>
                 <th v-if="canViewSalesAmounts" class="sensitive-price">客户销售单价</th>
@@ -6572,7 +6572,7 @@
                     <details><summary>查看材料成本依据与预计总成本</summary><div><strong>{{ orderMaterialCostSummary(item) }}</strong> · {{ item.material_cost_history_label }}</div><div class="muted">{{ item.material_cost_scope_label || '材料成本（未计生产损耗和加工费）' }}</div><div v-for="(component,index) in item.material_cost_components || []" :key="`${item.id}-cost-${index}`">{{ orderMaterialCostComponentText(component) }}</div><div v-if="item.estimated_cost_breakdown">损耗材料 ¥ {{ money(item.estimated_cost_breakdown.loss_material_total_cost) }} · 加工 ¥ {{ money(item.estimated_cost_breakdown.processing_total_cost) }} · 一次性费用 ¥ {{ money(item.estimated_cost_breakdown.one_time_fee_total) }}</div><div v-for="missing in item.material_cost_missing_items || []" :key="missing" class="missing">材料待补：{{ missing }}</div><div v-for="missing in item.estimated_cost_missing_items || []" :key="`estimated-${missing}`" class="missing">成本待补：{{ missing }}</div><div class="muted">损耗 {{ Number(item.estimated_loss_rate || 0) * 100 }}% · {{ item.estimated_total_cost_scope_label || '预计成本，非实际成本' }}</div></details>
                   </div>
                 </td>
-                <td>{{ item.snapshot_spec || "-" }}</td>
+                <td>{{ orderSpecificationText(item.snapshot_spec) }}</td>
                 <td style="white-space:normal;word-break:break-all;font-size:12px;max-width:160px">{{ orderItemMaterialText(item) }}</td>
                 <td>{{ item.snapshot_production_notes || "-" }}<div v-if="item.mold_location" class="status blue" style="margin-top:4px;white-space:normal">模具：{{ moldLocationText(item) }}</div></td>
                 <td>{{ item.quantity }}</td>
@@ -7635,7 +7635,7 @@
             <div class="order-common-box-filters">
               <div class="field"><label>存货编码</label><input class="input" v-model.trim="orderCommonBoxPicker.filters.product_code" placeholder="输入编码" @keyup.enter="searchOrderCommonBoxes" /></div>
               <div class="field"><label>产品名称</label><input class="input" v-model.trim="orderCommonBoxPicker.filters.product_name" placeholder="输入名称" @keyup.enter="searchOrderCommonBoxes" /></div>
-              <div class="field"><label>规格</label><input class="input" v-model.trim="orderCommonBoxPicker.filters.spec" placeholder="如 470×600×300" @keyup.enter="searchOrderCommonBoxes" /></div>
+              <div class="field"><label>规格mm</label><input class="input" v-model.trim="orderCommonBoxPicker.filters.spec" placeholder="如 470×600×300" @keyup.enter="searchOrderCommonBoxes" /></div>
               <button class="btn primary" type="button" :disabled="orderCommonBoxPicker.loading" @click="searchOrderCommonBoxes">{{ orderCommonBoxPicker.loading ? "查询中…" : "查询" }}</button>
             </div>
             <div v-if="orderCommonBoxPicker.error" class="notice danger" style="margin-bottom:10px">{{ orderCommonBoxPicker.error }}</div>
@@ -7645,7 +7645,7 @@
                   <th style="width:54px">选择</th>
                   <th style="width:130px">存货编码</th>
                   <th>产品名称</th>
-                  <th style="width:150px">规格</th>
+                  <th style="width:150px">规格mm</th>
                   <th style="width:135px">材质楞型</th>
                   <th class="sensitive-price" style="width:95px">单价</th>
                   <th style="width:95px">资料状态</th>
@@ -7656,7 +7656,7 @@
                     <td><input type="checkbox" :checked="isOrderCommonBoxSelected(row.id)" @change="toggleOrderCommonBoxSelection(row,$event.target.checked)" /></td>
                     <td><strong>{{ row.product_code || "-" }}</strong></td>
                     <td>{{ row.product_name || "-" }}</td>
-                    <td>{{ spec(row) }}</td>
+                    <td>{{ orderSpecificationText(spec(row)) }}</td>
                     <td>{{ orderCommonBoxMaterialText(row) }}</td>
                     <td class="sensitive-price">{{ money(row.sale_unit_price) }}</td>
                     <td><span :class="['status',commonBoxReadiness(row).ready ? 'green' : 'orange']">{{ commonBoxReadiness(row).ready ? "已完善" : "待完善" }}</span></td>
@@ -10903,6 +10903,12 @@
             const dimensions = [row.length_mm,row.width_mm];
             if (row.height_mm !== null && row.height_mm !== undefined && Number(row.height_mm) > 0) dimensions.push(row.height_mm);
             return `${dimensions.map(fmt).join("×")}mm`;
+          },
+          orderSpecificationText(value, emptyValue = "-") {
+            const text = String(value ?? "").trim();
+            if (!text) return emptyValue;
+            const dimensionWithUnit = /^\d+(?:\.\d+)?\s*[xX×*]\s*\d+(?:\.\d+)?(?:\s*[xX×*]\s*\d+(?:\.\d+)?)?\s*mm$/i;
+            return dimensionWithUnit.test(text) ? text.replace(/\s*mm\s*$/i, "").trim() : text;
           },
           statusTone(value) {
             if (["received","dispatched","settled","active","delivered","completed","archived","closed","confirmed","accepted","converted","已入库","已结算"].includes(value)) return "green";
@@ -23723,6 +23729,7 @@
           preparePdfImportItem(item) {
             const prepared = {
               ...item,
+              specification:this.orderSpecificationText(item?.specification, ""),
               client_line_id:item.client_line_id || createIdempotencyKey(),
               _inventory:item._inventory || this.newOrderInventoryState(),
             };
@@ -24526,7 +24533,7 @@
 	                this.orderProductOptions[index] = [{
 	                  ...product,
 	                  _compact_label:[product.product_code, product.product_name].filter(Boolean).join("｜") || "未命名常用箱",
-	                  _label:`${product.product_code || "-"} · ${product.product_name || "-"} · ${this.spec(product)}`,
+	                  _label:`${product.product_code || "-"} · ${product.product_name || "-"} · ${this.orderSpecificationText(this.spec(product))}`,
 	                }];
 	                this.orderForm.items[index].quantity = Number.isFinite(quantity) && quantity > 0 ? quantity : null;
 	                await this.selectOrderProduct(index, product.id);
@@ -24910,7 +24917,7 @@
               try {
                 const { data } = await axios.get(`/api/master/products/${item.matched_product_id}`);
                 item.product_name = data.product_name || "";
-                 item.specification = this.spec(data) !== "-" ? this.spec(data) : (item.raw_spec_model || "");
+                 item.specification = this.spec(data) !== "-" ? this.orderSpecificationText(this.spec(data), "") : this.orderSpecificationText(item.raw_spec_model, "");
                 item.layer_count = data.layer_count || null;
                 item.flute_type = data.flute_type || null;
                 item.material_base_code = (data.material_code || "").split("-")[0];
@@ -25550,7 +25557,7 @@
               product_code: product.product_code || "", product_name: product.product_name || "",
               material_id: product.material_id || null,
               material: product.material_code || this.materialName(product.material_id, product.legacy_material_text),
-              specification: this.spec(product), production_notes: "",
+              specification: this.orderSpecificationText(this.spec(product), ""), production_notes: "",
               _layer_filter: product.layer_count || null, _flute_filter: product.flute_type || null,
               _material_supplier: "", quantity: sets * perSet, unit_price: this.money(product.sale_unit_price),
               cost_status: "pending", estimated_cost: null, _from_product: true,
@@ -25561,7 +25568,7 @@
               temp_drawing_preview_url: null, drawing_save_option: "order_only",
               client_line_id: createIdempotencyKey(), _inventory: this.newOrderInventoryState(),
               _inventory_product: product,
-              _original_product: { specification: this.spec(product), sale_unit_price: product.sale_unit_price, layer_count: product.layer_count, flute_type: product.flute_type, version: product.version },
+              _original_product: { specification: this.orderSpecificationText(this.spec(product), ""), sale_unit_price: product.sale_unit_price, layer_count: product.layer_count, flute_type: product.flute_type, version: product.version },
               combination_mode_snapshot: "component_priced", combination_role: "priced_component",
               combination_group_key: groupKey, combination_parent_product_id: parent.id,
               combination_parent_name_snapshot: parent.product_name || "组合父件",
@@ -25650,7 +25657,7 @@
 	            this.orderProductOptions[index] = data.items.map(p => ({
 	              ...p,
 	              _compact_label:[p.product_code, p.product_name].filter(Boolean).join("｜") || "未命名常用箱",
-	              _label:`${p.product_code} · ${p.product_name} · ${this.spec(p)}`,
+	              _label:`${p.product_code} · ${p.product_name} · ${this.orderSpecificationText(this.spec(p))}`,
 	            }));
 	          },
           async selectOrderProduct(index, productId) {
@@ -25678,7 +25685,7 @@
             item.product_name = data.product_name || "";
             item.material_id = data.material_id || null;
             item.material = data.material_code || this.materialName(data.material_id, data.legacy_material_text);
-            item.specification = this.spec(data);
+            item.specification = this.orderSpecificationText(this.spec(data), "");
             item.unit_price = this.money(data.sale_unit_price);
             // v0.19.2-B: 常用箱自动带出层数/楞型/材质快照，锁定不允许直接修改
             item._from_product = true;
@@ -25700,7 +25707,7 @@
             }
             item._common_box_readiness = this.commonBoxReadiness(data);
             // 保存原始常用箱字段，用于提交时比对是否需要同步
-            item._original_product = { specification: this.spec(data), sale_unit_price: data.sale_unit_price, layer_count: data.layer_count, flute_type: data.flute_type, version:data.version };
+            item._original_product = { specification: this.orderSpecificationText(this.spec(data), ""), sale_unit_price: data.sale_unit_price, layer_count: data.layer_count, flute_type: data.flute_type, version:data.version };
             await this.recalculateOrderCost(index);
             this.refreshOrderLineInventory(item, this.orderForm.customer_id);
 	            this.syncOrderReminderVisibility();
@@ -26305,7 +26312,7 @@
                 id:itemSnapshot.id, product_id:itemSnapshot.product_id || null, order_number:this.displayOrderNumber(orderSnapshot),
                 customer_name:orderSnapshot.customer_name || "", product_code:itemSnapshot.snapshot_product_code || "",
                 product_name:itemSnapshot.snapshot_product_name || "", material:itemSnapshot.display_material || this.displayMaterialText(itemSnapshot.snapshot_material) || "",
-                specification:itemSnapshot.snapshot_spec || "", production_notes:itemSnapshot.snapshot_production_notes || "",
+                specification:this.orderSpecificationText(itemSnapshot.snapshot_spec, ""), production_notes:itemSnapshot.snapshot_production_notes || "",
                 quantity:itemSnapshot.quantity, unit_price:this.money(itemSnapshot.unit_price),
                 requisition_status:itemSnapshot.requisition_status || "未报料",
                 finished_inventory_reserved_qty:Number(itemSnapshot.finished_inventory_reserved_qty || 0),

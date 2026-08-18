@@ -1,5 +1,8 @@
 from decimal import Decimal
+import json
 from pathlib import Path
+import shutil
+import subprocess
 
 from app.services.product_specification import (
     dimension_specification,
@@ -59,6 +62,56 @@ def test_common_box_frontend_does_not_require_height_for_specification() -> None
     assert "[row.length_mm,row.width_mm,row.height_mm].every" not in body
     assert 'dimensions.map(fmt).join("×")' in body
     assert "Number(row.height_mm) > 0" in body
+
+
+def test_order_page_moves_mm_unit_to_heading_and_keeps_values_compact(tmp_path: Path) -> None:
+    assert "<th>规格 / 尺寸</th>" not in INDEX
+    assert INDEX.count("规格mm") >= 8
+    assert "orderSearchHighlightParts(orderSpecificationText(item.snapshot_spec))" in INDEX
+    assert "{{ orderSpecificationText(item.snapshot_spec) }}" in INDEX
+    assert "{{ orderSpecificationText(orderTrace.item.specification) }}" in INDEX
+    assert "{{ orderSpecificationText(spec(row)) }}" in INDEX
+    assert 'specification:this.orderSpecificationText(itemSnapshot.snapshot_spec, "")' in INDEX
+
+    start = INDEX.index('          orderSpecificationText(value, emptyValue = "-") {')
+    end = INDEX.index("          statusTone(value) {", start)
+    method = INDEX[start:end].strip()
+    script = f"""
+const methods = {{
+{method}
+}};
+const values = [
+  methods.orderSpecificationText("778×1137mm"),
+  methods.orderSpecificationText("520×350×300 MM"),
+  methods.orderSpecificationText("客户冻结规格 26×45"),
+  methods.orderSpecificationText("客户专用规格mm"),
+  methods.orderSpecificationText(null),
+  methods.orderSpecificationText("mm"),
+  methods.orderSpecificationText(null, ""),
+];
+console.log(JSON.stringify(values));
+"""
+    node = shutil.which("node")
+    assert node is not None, "Node.js is required for the order specification display test"
+    target = tmp_path / "order-specification-display.js"
+    target.write_text(script, encoding="utf-8")
+    result = subprocess.run(
+        [node, str(target)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == [
+        "778×1137",
+        "520×350×300",
+        "客户冻结规格 26×45",
+        "客户专用规格mm",
+        "-",
+        "mm",
+        "",
+    ]
 
 
 def test_contract_and_mobile_views_keep_two_dimensional_products_visible() -> None:

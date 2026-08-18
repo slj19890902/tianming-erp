@@ -3128,6 +3128,196 @@ def test_telescoping_lid_batch_accepts_separate_cover_and_base_quantities(
         assert [row.requisition_qty for row in rows] == [100, 100]
 
 
+def test_formal_supplier_a3_incoming_keeps_cover_base_physical_lines_until_sets(
+    requisition_app,
+) -> None:
+    """Regression for SME TD010: receipts are sheets; production is sets."""
+
+    from app.models.incoming_receipt import IncomingReceiptItem
+    from app.models.order import OrderItem
+    from app.models.product import Product
+    from app.models.production import ProductionTask
+    from app.models.requisition import RequisitionItem
+    from app.models.supplier_requisition_order import (
+        SupplierRequisitionOrder,
+        SupplierRequisitionOrderItem,
+    )
+    from app.services.production_workflow import create_or_refresh_production_task
+
+    app, session_factory = requisition_app
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        product = session.get(Product, item.product_id)
+        product.box_style = "A3 天地盖"
+        product.product_name = "TD010纸箱150*41.5*31"
+        item.quantity = 200
+        item.snapshot_product_code = "CPN087079"
+        item.snapshot_product_name = "TD010纸箱150*41.5*31"
+        item.snapshot_material = "J616D"
+        item.flute_type = "AB"
+        item.layer_count = 5
+        item.requisition_status = "已报料"
+        item.requisition_qty = 200
+        item.cardboard_len = 2145
+        item.cardboard_width = 1055
+        item.snapshot_report_length_mm = 2145
+        item.snapshot_report_width_mm = 1055
+        item.snapshot_base_report_length_mm = 2120
+        item.snapshot_base_report_width_mm = 1035
+        item.snapshot_splice_mode = "single"
+        item.snapshot_pieces_per_box = 1
+        item.special_process = "一开一"
+        supplier_order = SupplierRequisitionOrder(
+            order_number="SRO-TD010-100SETS",
+            supplier_name="苏州纸板供应商",
+            layer_count=5,
+            flute_type="AB",
+            total_quantity=200,
+            requisition_qty=200,
+            status="confirmed",
+        )
+        session.add(supplier_order)
+        session.flush()
+        item.supplier_order_number = supplier_order.order_number
+        cover = SupplierRequisitionOrderItem(
+            supplier_order_id=supplier_order.id,
+            order_item_id=item.id,
+            source_key=f"order_item:{item.id}:cover",
+            product_id=product.id,
+            material_code_snapshot="J616D",
+            supplier_name_snapshot="苏州纸板供应商",
+            layer_count_snapshot=5,
+            flute_type_snapshot="AB",
+            order_number=item.item_order_number,
+            product_code="CPN087079",
+            product_name="TD010纸箱150*41.5*31-盖",
+            report_length_mm=2145,
+            report_width_mm=1055,
+            quantity=100,
+            requisition_qty=100,
+            required_piece_qty=100,
+            cutting_mode="一开一",
+            pieces_per_box=1,
+            customer_name="苏州思迈尔包装有限公司",
+        )
+        base = SupplierRequisitionOrderItem(
+            supplier_order_id=supplier_order.id,
+            order_item_id=item.id,
+            source_key=f"order_item:{item.id}:base",
+            product_id=product.id,
+            material_code_snapshot="J616D",
+            supplier_name_snapshot="苏州纸板供应商",
+            layer_count_snapshot=5,
+            flute_type_snapshot="AB",
+            order_number=item.item_order_number,
+            product_code="CPN087079",
+            product_name="TD010纸箱150*41.5*31-底",
+            report_length_mm=2120,
+            report_width_mm=1035,
+            quantity=100,
+            requisition_qty=100,
+            required_piece_qty=100,
+            cutting_mode="一开一",
+            pieces_per_box=1,
+            customer_name="苏州思迈尔包装有限公司",
+        )
+        session.add_all([cover, base])
+        session.flush()
+        create_or_refresh_production_task(session, item.id)
+        session.commit()
+        cover_key = f"so{cover.id}"
+        base_key = f"so{base.id}"
+
+        assert (
+            session.query(RequisitionItem)
+            .filter_by(order_item_id=item.id)
+            .count()
+            == 0
+        )
+
+    with TestClient(app) as client:
+        _login(client, "workshop")
+        pending = client.get("/api/incoming/pending?page=1&page_size=20")
+        pending_page_1 = client.get("/api/incoming/pending?page=1&page_size=1")
+        pending_page_2 = client.get("/api/incoming/pending?page=2&page_size=1")
+        parent_receive = client.put("/api/incoming/receive/1")
+        cover_receive = client.put(
+            f"/api/incoming/receive/{cover_key}",
+            json={"idempotency_key": "td010-cover-100"},
+        )
+        pending_after_cover = client.get("/api/incoming/pending?page=1&page_size=20")
+        base_receive = client.put(
+            f"/api/incoming/receive/{base_key}",
+            json={"idempotency_key": "td010-base-100"},
+        )
+        pending_after_all = client.get("/api/incoming/pending?page=1&page_size=20")
+        history = client.get("/api/incoming/history")
+
+    assert pending.status_code == 200, pending.text
+    assert pending.json()["total"] == 2
+    rows = pending.json()["items"]
+    assert [row["item_id"] for row in rows] == [cover_key, base_key]
+    assert pending_page_1.status_code == 200
+    assert pending_page_2.status_code == 200
+    assert pending_page_1.json()["total"] == 2
+    assert pending_page_2.json()["total"] == 2
+    assert [row["item_id"] for row in pending_page_1.json()["items"]] == [
+        cover_key
+    ]
+    assert [row["item_id"] for row in pending_page_2.json()["items"]] == [
+        base_key
+    ]
+    assert [row["component_type"] for row in rows] == ["cover", "base"]
+    assert [row["incoming_quantity"] for row in rows] == [100, 100]
+    assert [row["requisition_qty"] for row in rows] == [100, 100]
+    assert [row["product_name"] for row in rows] == [
+        "TD010纸箱150*41.5*31-盖",
+        "TD010纸箱150*41.5*31-底",
+    ]
+    assert [
+        (int(row["cardboard_len"]), int(row["cardboard_width"]))
+        for row in rows
+    ] == [(2145, 1055), (2120, 1035)]
+    assert parent_receive.status_code == 409, parent_receive.text
+    assert "按每条报料明细分别收料" in parent_receive.json()["detail"]
+    assert cover_receive.status_code == 200, cover_receive.text
+    assert cover_receive.json()["supplier_order_item_id"] == int(cover_key[2:])
+    assert pending_after_cover.status_code == 200
+    assert pending_after_cover.json()["total"] == 1
+    assert [row["item_id"] for row in pending_after_cover.json()["items"]] == [
+        base_key
+    ]
+    assert base_receive.status_code == 200, base_receive.text
+    assert base_receive.json()["supplier_order_item_id"] == int(base_key[2:])
+    assert pending_after_all.status_code == 200
+    assert pending_after_all.json()["total"] == 0
+    assert pending_after_all.json()["items"] == []
+    assert history.status_code == 200
+    received_rows = history.json()["items"]
+    assert [row["item_id"] for row in received_rows[:2]] == [base_key, cover_key]
+    assert [row["planned_quantity"] for row in received_rows[:2]] == [100, 100]
+
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        task = session.scalar(
+            select(ProductionTask).where(ProductionTask.order_item_id == item.id)
+        )
+        facts = session.scalars(
+            select(IncomingReceiptItem).order_by(IncomingReceiptItem.id)
+        ).all()
+        assert item.material_status == "received"
+        assert [fact.supplier_order_item_id for fact in facts] == [
+            int(cover_key[2:]),
+            int(base_key[2:]),
+        ]
+        assert [fact.planned_quantity for fact in facts] == [100, 100]
+        assert task.status == "pending"
+        assert task.material_received_quantity == 200
+        assert task.material_input_quantity == 100
+        assert task.planned_quantity == 100
+        assert task.readiness_basis == "incoming_receipt"
+
+
 
 def test_phase11_migration_is_additive_and_preserves_order_items(
     monkeypatch: pytest.MonkeyPatch,

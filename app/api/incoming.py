@@ -61,12 +61,15 @@ from app.services.location_candidates import list_operational_locations
 from app.services.incoming_receipts import (
     IncomingReceiptError,
     accept_short,
+    current_supplier_order_items,
     receipt_history,
     receipt_item_dict,
     receive_one,
     revert_receipt_item,
     source_summary_for_item,
     stock_source_summary,
+    supplier_order_item_component_type,
+    supplier_order_item_key,
 )
 from app.services.production_workflow import (
     ProductionWorkflowError,
@@ -131,7 +134,7 @@ class _PendingIncomingReadContext:
             kind, _source_id = key
             if kind == "stock":
                 planned = int(row.get("quantity") or 0)
-            elif kind == "requisition":
+            elif kind in {"requisition", "supplier_order_item"}:
                 planned = int(row.get("requisition_qty") or 0)
             else:
                 planned = int(
@@ -152,6 +155,11 @@ class _PendingIncomingReadContext:
             for kind, source_id in self._handled_keys
             if kind == "requisition"
         }
+        supplier_order_item_ids = {
+            source_id
+            for kind, source_id in self._handled_keys
+            if kind == "supplier_order_item"
+        }
         stock_item_ids = {
             source_id
             for kind, source_id in self._handled_keys
@@ -163,11 +171,21 @@ class _PendingIncomingReadContext:
                 (
                     IncomingReceiptItem.order_item_id.in_(order_item_ids)
                     & IncomingReceiptItem.requisition_item_id.is_(None)
+                    & IncomingReceiptItem.supplier_order_item_id.is_(None)
                 )
             )
         if requisition_item_ids:
             source_filters.append(
                 IncomingReceiptItem.requisition_item_id.in_(requisition_item_ids)
+            )
+        if supplier_order_item_ids:
+            source_filters.append(
+                (
+                    IncomingReceiptItem.supplier_order_item_id.in_(
+                        supplier_order_item_ids
+                    )
+                    & IncomingReceiptItem.requisition_item_id.is_(None)
+                )
             )
         if stock_item_ids:
             source_filters.append(
@@ -192,6 +210,19 @@ class _PendingIncomingReadContext:
             ):
                 key = ("stock", int(receipt_item.stock_replenishment_item_id))
             elif (
+                receipt_item.supplier_order_item_id is not None
+                and receipt_item.requisition_item_id is None
+                and (
+                    "supplier_order_item",
+                    int(receipt_item.supplier_order_item_id),
+                )
+                in self._handled_keys
+            ):
+                key = (
+                    "supplier_order_item",
+                    int(receipt_item.supplier_order_item_id),
+                )
+            elif (
                 receipt_item.requisition_item_id is not None
                 and ("requisition", int(receipt_item.requisition_item_id))
                 in self._handled_keys
@@ -200,6 +231,7 @@ class _PendingIncomingReadContext:
             elif (
                 receipt_item.order_item_id is not None
                 and receipt_item.requisition_item_id is None
+                and receipt_item.supplier_order_item_id is None
                 and ("order", int(receipt_item.order_item_id))
                 in self._handled_keys
             ):
@@ -269,6 +301,13 @@ class _PendingIncomingReadContext:
             return (
                 ("stock", int(source_id))
                 if source_id is not None and item_id == f"sr{int(source_id)}"
+                else None
+            )
+        if isinstance(item_id, str) and item_id.startswith("so"):
+            source_id = row.get("supplier_order_item_id")
+            return (
+                ("supplier_order_item", int(source_id))
+                if source_id is not None and item_id == f"so{int(source_id)}"
                 else None
             )
         if isinstance(item_id, str) and item_id.startswith("r"):
@@ -421,6 +460,17 @@ def _is_stock_replenishment_key(value: int | str) -> bool:
     return text.startswith("sr") and text[2:].isdigit()
 
 
+def _is_supplier_order_item_key(value: int | str) -> bool:
+    text = str(value)
+    return text.startswith("so") and text[2:].isdigit()
+
+
+def _supplier_order_item_route_id(value: int | str) -> int:
+    if not _is_supplier_order_item_key(value):
+        raise ValueError("供应商报料明细ID无效")
+    return int(str(value)[2:])
+
+
 def _component_id(value: int | str) -> int:
     if _is_component_key(value):
         return int(str(value)[1:])
@@ -433,6 +483,82 @@ def _apply_component_crease(data: dict, component: str) -> None:
         data["snapshot_crease_left_mm"] = data.get("snapshot_base_crease_left_mm")
         data["snapshot_crease_middle_mm"] = data.get("snapshot_base_crease_middle_mm")
         data["snapshot_crease_right_mm"] = data.get("snapshot_base_crease_right_mm")
+
+
+def _supplier_order_item_overlay(
+    db: Session,
+    supplier_item: SupplierRequisitionOrderItem,
+) -> dict:
+    """Project one formal supplier line as one physical incoming route."""
+
+    supplier_order = db.get(
+        SupplierRequisitionOrder,
+        supplier_item.supplier_order_id,
+    )
+    component = supplier_order_item_component_type(supplier_item)
+    length = supplier_item.report_length_mm
+    width = supplier_item.report_width_mm
+    return {
+        "item_id": supplier_order_item_key(supplier_item.id),
+        "order_item_id": supplier_item.order_item_id,
+        "supplier_order_id": supplier_item.supplier_order_id,
+        "supplier_order_item_id": supplier_item.id,
+        "source_type": "supplier_order_item",
+        "component_type": component,
+        "product_id": supplier_item.product_id,
+        "product_code": supplier_item.product_code,
+        "product_name": supplier_item.product_name,
+        "specification": (
+            f"{length or '-'}×{width or '-'}"
+        ),
+        "material": supplier_item.material_code_snapshot,
+        "flute_type": supplier_item.flute_type_snapshot,
+        "requisition_qty": int(supplier_item.requisition_qty or 0),
+        "incoming_quantity": int(supplier_item.requisition_qty or 0),
+        "cardboard_len": length,
+        "cardboard_width": width,
+        "snapshot_supplier_name": (
+            supplier_item.supplier_name_snapshot
+            or (supplier_order.supplier_name if supplier_order else None)
+        ),
+        "supplier_order_number": (
+            supplier_order.order_number if supplier_order else None
+        ),
+        "special_process": supplier_item.cutting_mode,
+    }
+
+
+def _open_supplier_order_items(
+    db: Session,
+    supplier_items: list[SupplierRequisitionOrderItem],
+) -> list[SupplierRequisitionOrderItem]:
+    """Keep only physical supplier lines that still require a receipt fact."""
+
+    if not supplier_items:
+        return []
+    item_ids = [item.id for item in supplier_items]
+    facts_by_item: dict[int, list[IncomingReceiptItem]] = {}
+    for fact in db.scalars(
+        select(IncomingReceiptItem)
+        .where(
+            IncomingReceiptItem.supplier_order_item_id.in_(item_ids),
+            IncomingReceiptItem.requisition_item_id.is_(None),
+            IncomingReceiptItem.status == "posted",
+        )
+        .order_by(IncomingReceiptItem.id)
+    ).all():
+        facts_by_item.setdefault(int(fact.supplier_order_item_id), []).append(fact)
+    open_items: list[SupplierRequisitionOrderItem] = []
+    for item in supplier_items:
+        facts = facts_by_item.get(item.id, [])
+        received = sum(int(fact.received_quantity or 0) for fact in facts)
+        latest = facts[-1] if facts else None
+        if received >= int(item.requisition_qty or 0):
+            continue
+        if latest is not None and latest.resolution_action == "accept_short":
+            continue
+        open_items.append(item)
+    return open_items
 
 
 def _component_receive_times(
@@ -536,6 +662,20 @@ def _preflight_item_customer_access(
         )
         if customer_id is not None:
             require_customer_access(customer_id, user, db)
+        return
+    if _is_supplier_order_item_key(item_id):
+        order_item_id = db.scalar(
+            select(SupplierRequisitionOrderItem.order_item_id).where(
+                SupplierRequisitionOrderItem.id
+                == _supplier_order_item_route_id(item_id)
+            )
+        )
+        if order_item_id is not None:
+            _require_order_item_customer_access(
+                db,
+                order_item_id=int(order_item_id),
+                user=user,
+            )
         return
     if _is_component_key(item_id):
         order_item_id = db.scalar(
@@ -843,6 +983,8 @@ _DASHBOARD_PENDING_INCOMING_KEYS = (
     "item_id",
     "order_item_id",
     "requisition_item_id",
+    "supplier_order_id",
+    "supplier_order_item_id",
     "stock_replenishment_item_id",
     "customer_id",
     "customer_name",
@@ -903,6 +1045,7 @@ def _pending_incoming_route_rows(db: Session, user: User) -> list[dict]:
     order_item_ids = [row["item_id"] for row in base_rows]
     order_items_with_requisitions: set[int] = set()
     active_by_order_item: dict[int, list[RequisitionItem]] = {}
+    supplier_by_order_item: dict[int, list[SupplierRequisitionOrderItem]] = {}
     if order_item_ids:
         order_items_with_requisitions = set(
             db.scalars(
@@ -918,6 +1061,14 @@ def _pending_incoming_route_rows(db: Session, user: User) -> list[dict]:
             active_by_order_item.setdefault(
                 requisition_item.order_item_id, []
             ).append(requisition_item)
+        for supplier_item in _open_supplier_order_items(
+            db,
+            current_supplier_order_items(db, order_item_ids),
+        ):
+            if supplier_item.order_item_id is not None:
+                supplier_by_order_item.setdefault(
+                    int(supplier_item.order_item_id), []
+                ).append(supplier_item)
 
     rows: list[dict] = []
     for data in base_rows:
@@ -947,6 +1098,13 @@ def _pending_incoming_route_rows(db: Session, user: User) -> list[dict]:
                 component_data["cardboard_len"] = requisition_item.cardboard_len
                 component_data["cardboard_width"] = requisition_item.cardboard_width
                 component_data["requisition_qty"] = requisition_item.requisition_qty
+                rows.append(component_data)
+        elif supplier_rows := supplier_by_order_item.get(data["item_id"], []):
+            for supplier_item in supplier_rows:
+                component_data = dict(data)
+                component_data.update(
+                    _supplier_order_item_overlay(db, supplier_item)
+                )
                 rows.append(component_data)
         elif data["item_id"] not in order_items_with_requisitions:
             rows.append(data)
@@ -1038,7 +1196,10 @@ def dashboard_pending_incoming_rows(db: Session, user: User) -> list[dict]:
     # expose their identity through ``item_id`` only.  The internal route plan
     # retains ``order_item_id`` for F1's exact production-detail navigation.
     for row in projection:
-        if row.get("requisition_item_id") is None:
+        if (
+            row.get("requisition_item_id") is None
+            and row.get("supplier_order_item_id") is None
+        ):
             row["order_item_id"] = None
     return projection
 
@@ -1057,6 +1218,7 @@ def _rows(
     selected_order_item_ids: set[int] | None = None
     selected_ordinary_item_ids: set[int] | None = None
     selected_requisition_item_ids: set[int] | None = None
+    selected_supplier_order_item_ids: set[int] | None = None
     selected_stock_item_ids: set[int] | None = None
     if selected_pending_routes is not None:
         selected_route_ids = [row["item_id"] for row in selected_pending_routes]
@@ -1075,6 +1237,11 @@ def _rows(
             int(row["requisition_item_id"])
             for row in selected_pending_routes
             if row.get("requisition_item_id") is not None
+        }
+        selected_supplier_order_item_ids = {
+            int(row["supplier_order_item_id"])
+            for row in selected_pending_routes
+            if row.get("supplier_order_item_id") is not None
         }
         selected_stock_item_ids = {
             int(row["stock_replenishment_item_id"])
@@ -1278,6 +1445,7 @@ def _rows(
             rows.append(component_data)
 
     component_requisition_items: dict[int, list[RequisitionItem]] = {}
+    supplier_order_items: dict[int, list[SupplierRequisitionOrderItem]] = {}
     order_items_with_requisitions: set[int] = set()
     order_item_ids = [row["item_id"] for row in base_rows if row.get("item_id")]
     if order_item_ids:
@@ -1311,6 +1479,21 @@ def _rows(
             ):
                 continue
             component_requisition_items.setdefault(req.order_item_id, []).append(req)
+        if received_since is None:
+            for supplier_item in _open_supplier_order_items(
+                db,
+                current_supplier_order_items(db, order_item_ids),
+            ):
+                if supplier_item.order_item_id is None:
+                    continue
+                if (
+                    selected_supplier_order_item_ids is not None
+                    and supplier_item.id not in selected_supplier_order_item_ids
+                ):
+                    continue
+                supplier_order_items.setdefault(
+                    int(supplier_item.order_item_id), []
+                ).append(supplier_item)
     component_types_by_requisition_item.update(
         _source_component_types(
             db,
@@ -1356,6 +1539,17 @@ def _rows(
                 component_data["special_process"] = req.special_process
                 component_data["requisition_remark"] = req.remark or data.get("requisition_remark")
                 _apply_component_crease(component_data, component)
+                rows.append(component_data)
+        elif supplier_rows := supplier_order_items.get(data["item_id"], []):
+            for supplier_item in supplier_rows:
+                component_data = dict(data)
+                component_data.update(
+                    _supplier_order_item_overlay(db, supplier_item)
+                )
+                _apply_component_crease(
+                    component_data,
+                    component_data["component_type"],
+                )
                 rows.append(component_data)
         elif data["item_id"] in order_items_with_requisitions:
             continue
@@ -1446,7 +1640,11 @@ def _rows(
         product_drawing_reference = product_drawing.image_path if product_drawing else None
         order_drawing_reference = (row.get("order_item_drawing_file") or "").strip() or None
         product_drawing_path = _product_drawing_url(product_drawing)
-        order_drawing_path = _order_drawing_url(row["item_id"], order_drawing_reference)
+        drawing_order_item_id = row.get("order_item_id") or row["item_id"]
+        order_drawing_path = _order_drawing_url(
+            int(drawing_order_item_id),
+            order_drawing_reference,
+        )
         final_path = order_drawing_path or product_drawing_path
         row["order_drawing_path"] = order_drawing_path
         row["product_drawing_path"] = product_drawing_path
@@ -1618,6 +1816,50 @@ def _component_response(db: Session, requisition_item_id: int) -> dict:
         ),
         "material_received_by": order_item.material_received_by,
         "component_status": requisition_item.status,
+    }
+
+
+def _supplier_order_item_response(
+    db: Session,
+    supplier_order_item_id: int,
+) -> dict:
+    row = db.execute(
+        select(
+            SupplierRequisitionOrderItem,
+            SupplierRequisitionOrder,
+            OrderItem,
+        )
+        .join(
+            SupplierRequisitionOrder,
+            SupplierRequisitionOrder.id
+            == SupplierRequisitionOrderItem.supplier_order_id,
+        )
+        .join(
+            OrderItem,
+            OrderItem.id == SupplierRequisitionOrderItem.order_item_id,
+        )
+        .where(SupplierRequisitionOrderItem.id == supplier_order_item_id)
+    ).one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="供应商报料明细不存在")
+    supplier_item, supplier_order, order_item = row
+    return {
+        "item_id": supplier_order_item_key(supplier_item.id),
+        "order_item_id": order_item.id,
+        "supplier_order_id": supplier_order.id,
+        "supplier_order_item_id": supplier_item.id,
+        "component_type": supplier_order_item_component_type(supplier_item),
+        "material_status": order_item.material_status,
+        "requisition_status": order_item.requisition_status,
+        "requisition_qty": int(supplier_item.requisition_qty or 0),
+        "incoming_quantity": int(supplier_item.requisition_qty or 0),
+        "material_received_at": (
+            utc_naive_to_api(order_item.material_received_at)
+            if order_item.material_received_at
+            else None
+        ),
+        "material_received_by": order_item.material_received_by,
+        "supplier_order_number": supplier_order.order_number,
     }
 
 
@@ -1996,19 +2238,43 @@ def _receipt_fact_rows(
             if fact.requisition_item_id
             else None
         )
+        supplier_item = (
+            db.get(SupplierRequisitionOrderItem, fact.supplier_order_item_id)
+            if fact.supplier_order_item_id
+            else None
+        )
+        supplier_order = (
+            db.get(SupplierRequisitionOrder, fact.supplier_order_id)
+            if fact.supplier_order_id
+            else None
+        )
         component = (
-            _requisition_component_kind(db, requisition_item)
+            supplier_order_item_component_type(supplier_item)
+            if supplier_item is not None
+            else _requisition_component_kind(db, requisition_item)
             if requisition_item is not None
             else ""
         )
         product_code = (
-            requisition_item.product_code_snapshot if requisition_item else None
+            supplier_item.product_code
+            if supplier_item is not None
+            else requisition_item.product_code_snapshot
+            if requisition_item
+            else None
         ) or item.snapshot_product_code or (product.product_code if product else None)
         product_name = (
-            requisition_item.product_name_snapshot if requisition_item else None
+            supplier_item.product_name
+            if supplier_item is not None
+            else requisition_item.product_name_snapshot
+            if requisition_item
+            else None
         ) or item.snapshot_product_name
         material_code = (
-            requisition_item.material_snapshot if requisition_item else None
+            supplier_item.material_code_snapshot
+            if supplier_item is not None
+            else requisition_item.material_snapshot
+            if requisition_item
+            else None
         ) or item.snapshot_material or ""
         display_number = display_order_number(order, registry)
         drawing_reference = (item.drawing_file or "").strip() or None
@@ -2024,14 +2290,26 @@ def _receipt_fact_rows(
         receiver = db.get(User, fact.receipt.received_by) if fact.receipt.received_by else None
         row = {
             "history_key": f"receipt-{fact.id}",
-            "item_id": f"r{fact.requisition_item_id}" if fact.requisition_item_id else fact.order_item_id,
+            "item_id": (
+                supplier_order_item_key(fact.supplier_order_item_id)
+                if fact.supplier_order_item_id
+                else f"r{fact.requisition_item_id}"
+                if fact.requisition_item_id
+                else fact.order_item_id
+            ),
             "order_item_id": fact.order_item_id,
             "requisition_item_id": fact.requisition_item_id,
+            "supplier_order_id": fact.supplier_order_id,
+            "supplier_order_item_id": fact.supplier_order_item_id,
             "receipt_id": fact.receipt_id,
             "receipt_item_id": fact.id,
             "receipt_number": fact.receipt.receipt_number,
             "receipt_status": fact.status,
-            "product_id": item.product_id,
+            "product_id": (
+                supplier_item.product_id
+                if supplier_item is not None and supplier_item.product_id is not None
+                else item.product_id
+            ),
             "order_id": order.id,
             "customer_id": order.customer_id,
             "order_number": display_number,
@@ -2041,12 +2319,20 @@ def _receipt_fact_rows(
             "product_name": product_name,
             "product_code": product_code,
             "specification": (
-                requisition_item.specification_snapshot if requisition_item else None
+                f"{supplier_item.report_length_mm or '-'}×{supplier_item.report_width_mm or '-'}"
+                if supplier_item is not None
+                else requisition_item.specification_snapshot
+                if requisition_item
+                else None
             )
             or item.snapshot_spec,
             "material": material_code,
             "material_code": material_code,
-            "flute_type": item.flute_type or (product.flute_type if product else None),
+            "flute_type": (
+                supplier_item.flute_type_snapshot
+                if supplier_item is not None
+                else item.flute_type
+            ) or (product.flute_type if product else None),
             "material_display": (
                 f"{material_code} / {item.flute_type}" if material_code and item.flute_type else material_code
             ),
@@ -2072,10 +2358,18 @@ def _receipt_fact_rows(
             "requisition_date": item.requisition_date,
             "requisition_spec": item.requisition_spec,
             "cardboard_len": (
-                requisition_item.cardboard_len if requisition_item else item.cardboard_len
+                supplier_item.report_length_mm
+                if supplier_item is not None
+                else requisition_item.cardboard_len
+                if requisition_item
+                else item.cardboard_len
             ),
             "cardboard_width": (
-                requisition_item.cardboard_width if requisition_item else item.cardboard_width
+                supplier_item.report_width_mm
+                if supplier_item is not None
+                else requisition_item.cardboard_width
+                if requisition_item
+                else item.cardboard_width
             ),
             "snapshot_crease_type": item.snapshot_crease_type,
             "snapshot_crease_left_mm": item.snapshot_crease_left_mm,
@@ -2085,15 +2379,27 @@ def _receipt_fact_rows(
             "snapshot_base_crease_left_mm": item.snapshot_base_crease_left_mm,
             "snapshot_base_crease_middle_mm": item.snapshot_base_crease_middle_mm,
             "snapshot_base_crease_right_mm": item.snapshot_base_crease_right_mm,
-            "snapshot_supplier_name": item.snapshot_supplier_name,
+            "snapshot_supplier_name": (
+                supplier_item.supplier_name_snapshot
+                if supplier_item is not None
+                else item.snapshot_supplier_name
+            ) or (supplier_order.supplier_name if supplier_order else None),
             "requisition_remark": (
                 requisition_item.remark if requisition_item else item.requisition_remark
             ),
             "special_process": (
-                requisition_item.special_process if requisition_item else item.special_process
+                supplier_item.cutting_mode
+                if supplier_item is not None
+                else requisition_item.special_process
+                if requisition_item
+                else item.special_process
             ),
             "supplier_delivery_time": item.supplier_delivery_time,
-            "supplier_order_number": item.supplier_order_number,
+            "supplier_order_number": (
+                supplier_order.order_number
+                if supplier_order is not None
+                else item.supplier_order_number
+            ),
             "material_received_at": fact.receipt.received_at,
             "material_received_by": fact.receipt.received_by,
             "received_by_name": receiver.real_name if receiver else None,
@@ -2122,9 +2428,20 @@ def _received_rows(
         include_reversed=include_reversed,
     )
     fact_keys = {str(row["item_id"]) for row in facts}
+    fact_order_item_ids = {
+        int(row["order_item_id"])
+        for row in facts
+        if row.get("order_item_id") is not None
+    }
     legacy = [
         row for row in _rows(db, user=user, received_since=received_since)
         if str(row["item_id"]) not in fact_keys
+        and int(
+            row.get("order_item_id")
+            or (row.get("item_id") if isinstance(row.get("item_id"), int) else 0)
+            or 0
+        )
+        not in fact_order_item_ids
     ]
     combined = [*facts, *legacy]
     combined.sort(
@@ -2804,12 +3121,16 @@ def _new_receipt_response(db: Session, fact: IncomingReceiptItem) -> dict:
         response.update(stock_source_summary(db, f"sr{fact.stock_replenishment_item_id}"))
         return response
     item_key: int | str = (
-        f"r{fact.requisition_item_id}"
+        supplier_order_item_key(fact.supplier_order_item_id)
+        if fact.supplier_order_item_id
+        else f"r{fact.requisition_item_id}"
         if fact.requisition_item_id
         else fact.order_item_id
     )
     response = (
-        _component_response(db, fact.requisition_item_id)
+        _supplier_order_item_response(db, fact.supplier_order_item_id)
+        if fact.supplier_order_item_id
+        else _component_response(db, fact.requisition_item_id)
         if fact.requisition_item_id
         else _item_response(db, fact.order_item_id)
     )

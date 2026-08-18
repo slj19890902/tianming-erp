@@ -187,9 +187,10 @@ def test_pending_incoming_ordinary_rows_scale_without_writes(tmp_path: Path) -> 
         not statement.startswith(("insert", "update", "delete"))
         for statement in [*small_sql, *large_sql]
     )
-    # Receipt facts and stock-replenishment sources are fetched in constant
-    # batches; the total must remain independent of the number of rows.
-    assert _select_count(small_sql) == 13
+    # Receipt facts, physical supplier-order lines and stock-replenishment
+    # sources are fetched in constant batches; the total must remain
+    # independent of the number of rows.
+    assert _select_count(small_sql) == 14
     assert _select_count(large_sql) == _select_count(small_sql)
     row = large["items"][0]
     assert {

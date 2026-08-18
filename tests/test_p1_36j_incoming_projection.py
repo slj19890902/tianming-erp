@@ -12,6 +12,8 @@ PROJECTION_KEYS = (
     "item_id",
     "order_item_id",
     "requisition_item_id",
+    "supplier_order_id",
+    "supplier_order_item_id",
     "stock_replenishment_item_id",
     "customer_id",
     "customer_name",

@@ -74,11 +74,72 @@ class IncomingTarget:
     planned_quantity: int
     component_type: str
     bom_snapshot: SalesOrderItemBomComponent | None = None
+    supplier_order: SupplierRequisitionOrder | None = None
+    supplier_order_item: SupplierRequisitionOrderItem | None = None
 
 
 def _stock_item_id(item_key: int | str) -> int | None:
     text = str(item_key)
     return int(text[2:]) if text.startswith("sr") and text[2:].isdigit() else None
+
+
+def supplier_order_item_key(item_id: int) -> str:
+    return f"so{int(item_id)}"
+
+
+def _supplier_order_item_id(item_key: int | str) -> int | None:
+    text = str(item_key)
+    return int(text[2:]) if text.startswith("so") and text[2:].isdigit() else None
+
+
+def supplier_order_item_component_type(
+    item: SupplierRequisitionOrderItem,
+) -> str:
+    source_tail = str(item.source_key or "").strip().lower().rsplit(":", 1)[-1]
+    if source_tail in {"whole", "cover", "base"}:
+        return source_tail
+    return _component_kind(item.product_name)
+
+
+def current_supplier_order_items(
+    db: Session,
+    order_item_ids: list[int],
+) -> list[SupplierRequisitionOrderItem]:
+    """Return physical lines from each order item's current confirmed SRO.
+
+    The sales order item stores the immutable supplier order number selected by
+    the requisition workflow.  Matching by that number prevents an older or
+    voided supplier order from silently becoming receivable again.
+    """
+
+    if not order_item_ids:
+        return []
+    return list(
+        db.scalars(
+            select(SupplierRequisitionOrderItem)
+            .join(
+                SupplierRequisitionOrder,
+                SupplierRequisitionOrder.id
+                == SupplierRequisitionOrderItem.supplier_order_id,
+            )
+            .join(
+                OrderItem,
+                (OrderItem.id == SupplierRequisitionOrderItem.order_item_id)
+                & (
+                    OrderItem.supplier_order_number
+                    == SupplierRequisitionOrder.order_number
+                ),
+            )
+            .where(
+                OrderItem.id.in_(order_item_ids),
+                SupplierRequisitionOrder.status == "confirmed",
+            )
+            .order_by(
+                SupplierRequisitionOrderItem.order_item_id,
+                SupplierRequisitionOrderItem.id,
+            )
+        ).all()
+    )
 
 
 def _stock_target(
@@ -456,6 +517,54 @@ def _target(
     db: Session, item_key: int | str, *, allow_closed: bool = False
 ) -> IncomingTarget:
     text = str(item_key)
+    supplier_item_id = _supplier_order_item_id(text)
+    if supplier_item_id is not None:
+        row = db.execute(
+            select(
+                SupplierRequisitionOrderItem,
+                SupplierRequisitionOrder,
+                OrderItem,
+                Order,
+            )
+            .join(
+                SupplierRequisitionOrder,
+                SupplierRequisitionOrder.id
+                == SupplierRequisitionOrderItem.supplier_order_id,
+            )
+            .join(
+                OrderItem,
+                OrderItem.id == SupplierRequisitionOrderItem.order_item_id,
+            )
+            .join(Order, Order.id == OrderItem.order_id)
+            .where(SupplierRequisitionOrderItem.id == supplier_item_id)
+        ).one_or_none()
+        if row is None:
+            raise IncomingReceiptError("供应商报料明细不存在", 404)
+        supplier_item, supplier_order, order_item, order = row
+        if (
+            supplier_order.status != "confirmed"
+            or order_item.supplier_order_number != supplier_order.order_number
+        ):
+            raise IncomingReceiptError("该供应商报料明细不是当前有效报料单", 409)
+        if not allow_closed and (
+            order_item.material_status != "pending"
+            or order_item.requisition_status not in {"已报料", "供应商已排单"}
+        ):
+            raise IncomingReceiptError(
+                "该明细当前不可入库，可能已入库、已作废或状态已变化", 409
+            )
+        planned = int(supplier_item.requisition_qty or 0)
+        return IncomingTarget(
+            item_key=text,
+            order=order,
+            order_item=order_item,
+            requisition_item=None,
+            planned_quantity=planned,
+            component_type=supplier_order_item_component_type(supplier_item),
+            supplier_order=supplier_order,
+            supplier_order_item=supplier_item,
+        )
+
     if text.startswith("r") and text[1:].isdigit():
         requisition_item_id = int(text[1:])
         row = db.execute(
@@ -556,6 +665,33 @@ def _target(
         )
     ):
         raise IncomingReceiptError("天地盖来料必须分别按盖片和底片确认实收", 409)
+    current_supplier_lines = current_supplier_order_items(db, [order_item.id])
+    if current_supplier_lines:
+        if (
+            len(current_supplier_lines) == 1
+            and supplier_order_item_component_type(current_supplier_lines[0])
+            == "whole"
+        ):
+            supplier_item = current_supplier_lines[0]
+            supplier_order = db.get(
+                SupplierRequisitionOrder,
+                supplier_item.supplier_order_id,
+            )
+            if supplier_order is not None:
+                return IncomingTarget(
+                    item_key=text,
+                    order=order,
+                    order_item=order_item,
+                    requisition_item=None,
+                    planned_quantity=int(supplier_item.requisition_qty or 0),
+                    component_type="whole",
+                    supplier_order=supplier_order,
+                    supplier_order_item=supplier_item,
+                )
+        raise IncomingReceiptError(
+            "该订单已有正式供应商报料明细，请刷新后按每条报料明细分别收料",
+            409,
+        )
     planned = int(order_item.requisition_qty or order_item.quantity or 0)
     return IncomingTarget(
         item_key=text,
@@ -568,11 +704,20 @@ def _target(
 
 
 def _source_filter(target: IncomingTarget):
+    if target.supplier_order_item is not None:
+        return (
+            (
+                IncomingReceiptItem.supplier_order_item_id
+                == target.supplier_order_item.id
+            )
+            & IncomingReceiptItem.requisition_item_id.is_(None)
+        )
     if target.requisition_item is not None:
         return IncomingReceiptItem.requisition_item_id == target.requisition_item.id
     return (
         (IncomingReceiptItem.order_item_id == target.order_item.id)
         & IncomingReceiptItem.requisition_item_id.is_(None)
+        & IncomingReceiptItem.supplier_order_item_id.is_(None)
     )
 
 
@@ -712,6 +857,36 @@ def _supplier_link(
     return supplier_order.id, supplier_item.id
 
 
+def _all_current_supplier_order_items_closed(
+    db: Session,
+    order_item: OrderItem,
+) -> bool:
+    supplier_items = current_supplier_order_items(db, [order_item.id])
+    if not supplier_items:
+        return False
+    for supplier_item in supplier_items:
+        facts = list(
+            db.scalars(
+                select(IncomingReceiptItem)
+                .where(
+                    IncomingReceiptItem.supplier_order_item_id == supplier_item.id,
+                    IncomingReceiptItem.requisition_item_id.is_(None),
+                    IncomingReceiptItem.status == "posted",
+                )
+                .order_by(IncomingReceiptItem.id)
+            ).all()
+        )
+        if not facts:
+            return False
+        received = sum(int(fact.received_quantity or 0) for fact in facts)
+        latest = facts[-1]
+        if received < int(supplier_item.requisition_qty or 0) and (
+            latest.resolution_action != "accept_short"
+        ):
+            return False
+    return True
+
+
 def _mark_order_progress(db: Session, target: IncomingTarget, *, closed: bool, user_id: int) -> None:
     item = target.order_item
     now = utc_now_naive()
@@ -735,6 +910,8 @@ def _mark_order_progress(db: Session, target: IncomingTarget, *, closed: bool, u
             closed = closed and remaining_components == 0
         else:
             closed = closed and bom_sources_received
+    if target.supplier_order_item is not None:
+        closed = closed and _all_current_supplier_order_items_closed(db, item)
     if closed:
         item.material_status = "received"
         item.requisition_status = "已入库"
@@ -778,10 +955,23 @@ def _mark_order_progress(db: Session, target: IncomingTarget, *, closed: bool, u
 
 
 def _surplus_dimensions(target: IncomingTarget) -> tuple[int, int]:
+    supplier_item = target.supplier_order_item
     req = target.requisition_item
     item = target.order_item
-    length = req.cardboard_len if req is not None else item.cardboard_len
-    width = req.cardboard_width if req is not None else item.cardboard_width
+    length = (
+        supplier_item.report_length_mm
+        if supplier_item is not None
+        else req.cardboard_len
+        if req is not None
+        else item.cardboard_len
+    )
+    width = (
+        supplier_item.report_width_mm
+        if supplier_item is not None
+        else req.cardboard_width
+        if req is not None
+        else item.cardboard_width
+    )
     if length is None or width is None:
         raise IncomingReceiptError("缺少纸板报料长宽，不能把超收余量转库存")
     return int(round(Decimal(length))), int(round(Decimal(width)))
@@ -844,32 +1034,43 @@ def _create_surplus_lot(
 ) -> InventoryLot:
     item = target.order_item
     snapshot = getattr(target, "bom_snapshot", None)
+    supplier_item = target.supplier_order_item
     length, width = _surplus_dimensions(target)
     crease_type, sheet_type, crease_left, crease_middle, crease_right = (
         _surplus_crease(target)
     )
     material_code = (
-        snapshot.snapshot_component_material
+        supplier_item.material_code_snapshot
+        if supplier_item is not None
+        else snapshot.snapshot_component_material
         if snapshot is not None
         else item.snapshot_material
     )
     layer_count = (
-        snapshot.snapshot_component_layer_count
+        supplier_item.layer_count_snapshot
+        if supplier_item is not None
+        else snapshot.snapshot_component_layer_count
         if snapshot is not None
         else item.layer_count
     )
     flute_type = (
-        snapshot.snapshot_component_flute_type
+        supplier_item.flute_type_snapshot
+        if supplier_item is not None
+        else snapshot.snapshot_component_flute_type
         if snapshot is not None
         else item.flute_type
     )
     supplier_name = (
-        snapshot.snapshot_component_supplier_name
+        supplier_item.supplier_name_snapshot
+        if supplier_item is not None
+        else snapshot.snapshot_component_supplier_name
         if snapshot is not None
         else item.snapshot_supplier_name
     )
     material_id = (
-        snapshot.snapshot_component_material_id
+        supplier_item.material_id
+        if supplier_item is not None
+        else snapshot.snapshot_component_material_id
         if snapshot is not None
         else item.material_id
     )
@@ -891,7 +1092,8 @@ def _create_surplus_lot(
             sheet_type=sheet_type,
             component_type=target.component_type,
             pieces_per_box=int(
-                (target.requisition_item.pieces_per_box if target.requisition_item else None)
+                (supplier_item.pieces_per_box if supplier_item is not None else None)
+                or (target.requisition_item.pieces_per_box if target.requisition_item else None)
                 or item.snapshot_pieces_per_box
                 or 1
             ),
@@ -989,9 +1191,11 @@ def _idempotent_receipt_item(
     row = receipt.items[0]
     text = str(item_key)
     requested_stock_item_id = _stock_item_id(text)
+    requested_supplier_item_id = _supplier_order_item_id(text)
     requested_requisition_id = (
         int(text[1:])
         if requested_stock_item_id is None
+        and requested_supplier_item_id is None
         and text.startswith("r")
         and text[1:].isdigit()
         else None
@@ -999,7 +1203,9 @@ def _idempotent_receipt_item(
     try:
         requested_order_item_id = (
             None
-            if requested_stock_item_id is not None or requested_requisition_id
+            if requested_stock_item_id is not None
+            or requested_supplier_item_id is not None
+            or requested_requisition_id
             else int(text)
         )
     except ValueError as error:
@@ -1009,13 +1215,35 @@ def _idempotent_receipt_item(
             row.stock_replenishment_item_id == requested_stock_item_id
             and row.order_item_id is None
         )
+    elif requested_supplier_item_id is not None:
+        same_target = (
+            row.supplier_order_item_id == requested_supplier_item_id
+            and row.requisition_item_id is None
+            and row.stock_replenishment_item_id is None
+        )
     elif requested_requisition_id is not None:
         same_target = row.requisition_item_id == requested_requisition_id
     else:
+        compatible_supplier_item_id: int | None = None
+        if row.supplier_order_item_id is not None:
+            try:
+                compatible_target = _target(db, text, allow_closed=True)
+            except IncomingReceiptError:
+                compatible_target = None
+            if compatible_target is not None and (
+                compatible_target.supplier_order_item is not None
+            ):
+                compatible_supplier_item_id = (
+                    compatible_target.supplier_order_item.id
+                )
         same_target = (
             row.requisition_item_id is None
             and row.stock_replenishment_item_id is None
             and row.order_item_id == requested_order_item_id
+            and (
+                row.supplier_order_item_id is None
+                or row.supplier_order_item_id == compatible_supplier_item_id
+            )
         )
     normalized_action = (resolution_action or "").strip() or None
     normalized_reason = (resolution_reason or "").strip() or None
@@ -1252,7 +1480,13 @@ def receive_one(
     )
     db.add(receipt)
     db.flush()
-    supplier_order_id, supplier_order_item_id = _supplier_link(db, target.order_item.id)
+    if target.supplier_order_item is not None and target.supplier_order is not None:
+        supplier_order_id = target.supplier_order.id
+        supplier_order_item_id = target.supplier_order_item.id
+    else:
+        supplier_order_id, supplier_order_item_id = _supplier_link(
+            db, target.order_item.id
+        )
     receipt_item = IncomingReceiptItem(
         receipt_id=receipt.id,
         order_id=target.order.id,
@@ -1342,7 +1576,14 @@ def accept_short(
             "补库来料短收请继续等待供应商补货，暂不支持按短收数量直接结单。",
             409,
         )
-    target = _target(db, f"r{row.requisition_item_id}" if row.requisition_item_id else row.order_item_id)
+    target = _target(
+        db,
+        supplier_order_item_key(row.supplier_order_item_id)
+        if row.supplier_order_item_id is not None
+        else f"r{row.requisition_item_id}"
+        if row.requisition_item_id
+        else row.order_item_id,
+    )
     latest = db.scalar(
         select(IncomingReceiptItem)
         .where(_source_filter(target), IncomingReceiptItem.status == "posted")
@@ -1469,7 +1710,9 @@ def revert_receipt_item(
         raise IncomingReceiptError("订单已发货，禁止撤回来料", 409)
     target = _target(
         db,
-        f"r{receipt_item.requisition_item_id}"
+        supplier_order_item_key(receipt_item.supplier_order_item_id)
+        if receipt_item.supplier_order_item_id is not None
+        else f"r{receipt_item.requisition_item_id}"
         if receipt_item.requisition_item_id
         else receipt_item.order_item_id,
         allow_closed=True,
@@ -1561,6 +1804,8 @@ def receipt_item_dict(row: IncomingReceiptItem) -> dict:
         "stock_replenishment_item_id": row.stock_replenishment_item_id,
         "requisition_id": row.requisition_id,
         "requisition_item_id": row.requisition_item_id,
+        "supplier_order_id": row.supplier_order_id,
+        "supplier_order_item_id": row.supplier_order_item_id,
         "planned_quantity": row.planned_quantity,
         "received_quantity_this_time": row.received_quantity,
         "cumulative_received_quantity": row.cumulative_received_quantity,

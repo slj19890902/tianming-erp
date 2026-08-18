@@ -27,6 +27,34 @@ def test_receipt_card_keeps_packaging_label_entry_and_uses_supplier_order_id() -
     assert "packageData.review_required === true" not in TASK_PRINT
 
 
+def test_a4_layout_overflow_does_not_block_independent_packaging_labels() -> None:
+    render_start = TASK_PRINT.index("async function render(packageData)")
+    label_actions = TASK_PRINT.index(
+        "applyProductionLabelActions(packageData)",
+        render_start,
+    )
+    qr_wait = TASK_PRINT.index("await waitForProductQrImages()", render_start)
+    overflow_gate = TASK_PRINT.index("if (overflowingCards.length)", render_start)
+    helper_start = TASK_PRINT.index("function applyProductionLabelActions(packageData)")
+    helper_end = TASK_PRINT.index("async function waitForProductQrImages()", helper_start)
+    label_count = TASK_PRINT.index(
+        "const labelCount = Number(packageData.production_label_count || 0)",
+        helper_start,
+    )
+    label_gate = TASK_PRINT.index(
+        "labelButton.disabled = batchMode || labelCount <= 0",
+        helper_start,
+    )
+    refresh_gate = TASK_PRINT.index(
+        "labelRefreshButton.hidden = batchMode || labelCount > 0 || !refreshable.length",
+        helper_start,
+    )
+
+    assert label_count < label_gate < helper_end
+    assert refresh_gate < helper_end
+    assert label_actions < qr_wait < overflow_gate
+
+
 def test_task_card_offers_explicit_audited_refresh_instead_of_current_product_fallback() -> None:
     assert 'id="labelRefreshButton"' in TASK_PRINT
     assert "/api/production/tasks/${encodeURIComponent(row.task_id)}/label-plan-refresh" in TASK_PRINT

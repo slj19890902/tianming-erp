@@ -513,6 +513,23 @@
         window.history.replaceState(null, "", next);
       }
 
+      function applyProductionLabelActions(packageData) {
+        const labelCount = Number(packageData.production_label_count || 0);
+        const refreshOptions = Array.isArray(packageData.production_label_refresh_options)
+          ? packageData.production_label_refresh_options : [];
+        const refreshable = refreshOptions.filter((row) => row && row.can_refresh === true && row.current_enabled === true);
+        labelButton.hidden = batchMode;
+        labelButton.textContent = labelCount > 0 ? `生产包装标签（${labelCount}张）` : "未启用包装标签";
+        // Packaging labels use their own frozen plan and do not depend on the
+        // A4 production paper's QR-image or page-overflow checks.
+        labelButton.disabled = batchMode || labelCount <= 0;
+        labelRefreshButton.hidden = batchMode || labelCount > 0 || !refreshable.length;
+        labelRefreshButton.disabled = labelRefreshButton.hidden;
+        labelRefreshButton.textContent = refreshable.length > 1
+          ? `按常用箱刷新 ${refreshable.length} 款标签计划`
+          : "按常用箱刷新标签计划";
+      }
+
       async function waitForProductQrImages() {
         const images = Array.from(pagesHost.querySelectorAll("img[alt='扫码查看当前产品资料']"));
         await Promise.all(images.map((image) => image.decode
@@ -532,6 +549,7 @@
           ? `<article class="page single-page" data-page="${index + 1}">${cardHtml(layout.top, packageData, true)}</article>`
           : `<article class="page batch-page" data-page="${index + 1}">${cardHtml(layout.top, packageData)}${cardHtml(layout.bottom, packageData)}</article>`
         ).join("");
+        applyProductionLabelActions(packageData);
         await waitForProductQrImages();
         const fullPageCount = layouts.filter((layout) => layout.fullPage).length;
         const singleCard = packageData.card_count === 1 && layouts.length === 1;
@@ -562,21 +580,6 @@
         }
         message.hidden = true;
         printButton.disabled = !layouts.length || packageData.printable === false;
-        const labelCount = Number(packageData.production_label_count || 0);
-        const refreshOptions = Array.isArray(packageData.production_label_refresh_options)
-          ? packageData.production_label_refresh_options : [];
-        const refreshable = refreshOptions.filter((row) => row && row.can_refresh === true && row.current_enabled === true);
-        labelButton.hidden = batchMode;
-        labelButton.textContent = labelCount > 0 ? `生产包装标签（${labelCount}张）` : "未启用包装标签";
-        // The packaging-label endpoint performs its own frozen-plan checks.
-        // A production-paper review warning must not hide an otherwise valid
-        // label plan, especially on the posted-receipt card.
-        labelButton.disabled = batchMode || labelCount <= 0;
-        labelRefreshButton.hidden = batchMode || labelCount > 0 || !refreshable.length;
-        labelRefreshButton.disabled = labelRefreshButton.hidden;
-        labelRefreshButton.textContent = refreshable.length > 1
-          ? `按常用箱刷新 ${refreshable.length} 款标签计划`
-          : "按常用箱刷新标签计划";
       }
 
       async function loadPackage() {

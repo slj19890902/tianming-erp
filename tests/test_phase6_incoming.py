@@ -518,6 +518,129 @@ def test_pending_incoming_uses_current_confirmed_supplier_group_only(
     }
 
 
+def test_fully_received_partial_supplier_order_stays_hidden_until_next_report(
+    incoming_api_app,
+) -> None:
+    """A closed 200-sheet SRO must not masquerade as the held 100 remainder."""
+
+    from app.models.order import OrderItem
+    from app.models.supplier_requisition_order import (
+        SupplierRequisitionOrder,
+        SupplierRequisitionOrderItem,
+    )
+
+    app, session_factory = incoming_api_app
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        item.quantity = 300
+        item.requisition_qty = 200
+        item.material_status = "pending"
+        item.requisition_status = "已报料"
+        first_order = SupplierRequisitionOrder(
+            order_number="SRO-PARTIAL-200",
+            status="confirmed",
+            total_quantity=300,
+            requisition_qty=200,
+        )
+        session.add(first_order)
+        session.flush()
+        first_line = SupplierRequisitionOrderItem(
+            supplier_order_id=first_order.id,
+            order_item_id=item.id,
+            source_key=f"order_item:{item.id}",
+            product_id=item.product_id,
+            product_code="MK005",
+            product_name="MK005 carton",
+            quantity=300,
+            requisition_qty=200,
+        )
+        session.add(first_line)
+        item.supplier_order_number = first_order.order_number
+        session.commit()
+        first_line_id = first_line.id
+
+    with TestClient(app) as client:
+        _login(client, "workshop")
+        before_first_receipt = client.get("/api/incoming/pending")
+        first_receipt = client.put(f"/api/incoming/receive/so{first_line_id}")
+
+    # The order still has 100 sheets that were never reported.  The order-item
+    # lifecycle therefore remains pending while the first physical SRO line is
+    # already closed, exactly like MK005 / SRO-20260818-0002.
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        item.material_status = "pending"
+        item.requisition_status = "已报料"
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client, "workshop")
+        after_first_receipt = client.get("/api/incoming/pending")
+
+    assert before_first_receipt.status_code == 200
+    assert f"so{first_line_id}" in {
+        row["item_id"] for row in before_first_receipt.json()["items"]
+    }
+    assert first_receipt.status_code == 200, first_receipt.text
+    assert first_receipt.json()["planned_quantity"] == 200
+    assert first_receipt.json()["cumulative_received_quantity"] == 200
+    assert first_receipt.json()["remaining_quantity"] == 0
+    assert 1 not in {
+        int(row.get("order_item_id") or row["item_id"])
+        for row in after_first_receipt.json()["items"]
+        if row.get("order_item_id") is not None or isinstance(row["item_id"], int)
+    }
+
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        second_order = SupplierRequisitionOrder(
+            order_number="SRO-REMAINDER-100",
+            status="confirmed",
+            total_quantity=300,
+            requisition_qty=100,
+        )
+        session.add(second_order)
+        session.flush()
+        second_line = SupplierRequisitionOrderItem(
+            supplier_order_id=second_order.id,
+            order_item_id=item.id,
+            source_key=f"order_item:{item.id}",
+            product_id=item.product_id,
+            product_code="MK005",
+            product_name="MK005 carton",
+            quantity=300,
+            requisition_qty=100,
+        )
+        session.add(second_line)
+        item.supplier_order_number = second_order.order_number
+        item.material_status = "pending"
+        item.requisition_status = "已报料"
+        session.commit()
+        second_line_id = second_line.id
+
+    with TestClient(app) as client:
+        _login(client, "workshop")
+        after_second_report = client.get("/api/incoming/pending")
+        second_receipt = client.put(f"/api/incoming/receive/so{second_line_id}")
+        after_second_receipt = client.get("/api/incoming/pending")
+
+    second_pending = next(
+        row
+        for row in after_second_report.json()["items"]
+        if row["item_id"] == f"so{second_line_id}"
+    )
+    assert second_pending["planned_quantity"] == 100
+    assert second_pending["cumulative_received_quantity"] == 0
+    assert second_pending["remaining_quantity"] == 100
+    assert second_receipt.status_code == 200, second_receipt.text
+    assert second_receipt.json()["planned_quantity"] == 100
+    assert second_receipt.json()["cumulative_received_quantity"] == 100
+    assert second_receipt.json()["remaining_quantity"] == 0
+    assert f"so{second_line_id}" not in {
+        row["item_id"] for row in after_second_receipt.json()["items"]
+    }
+
+
 def test_incoming_api_hides_legacy_history_prefix_in_order_number(
     incoming_api_app,
 ) -> None:

@@ -1063,6 +1063,7 @@ def _pending_incoming_route_rows(db: Session, user: User) -> list[dict]:
     base_rows = [dict(row._mapping) for row in db.execute(query)]
     order_item_ids = [row["item_id"] for row in base_rows]
     order_items_with_requisitions: set[int] = set()
+    order_items_with_current_supplier_orders: set[int] = set()
     active_by_order_item: dict[int, list[RequisitionItem]] = {}
     supplier_by_order_item: dict[int, list[SupplierRequisitionOrderItem]] = {}
     if order_item_ids:
@@ -1080,11 +1081,19 @@ def _pending_incoming_route_rows(db: Session, user: User) -> list[dict]:
             active_by_order_item.setdefault(
                 requisition_item.order_item_id, []
             ).append(requisition_item)
+        current_supplier_items = current_supplier_order_items(db, order_item_ids)
+        order_items_with_current_supplier_orders = {
+            int(supplier_item.order_item_id)
+            for supplier_item in current_supplier_items
+            if supplier_item.order_item_id is not None
+        }
         for supplier_item in _open_supplier_order_items(
             db,
-            current_supplier_order_items(db, order_item_ids),
+            current_supplier_items,
         ):
             if supplier_item.order_item_id is not None:
+                if int(supplier_item.order_item_id) in order_items_with_requisitions:
+                    continue
                 supplier_by_order_item.setdefault(
                     int(supplier_item.order_item_id), []
                 ).append(supplier_item)
@@ -1125,7 +1134,10 @@ def _pending_incoming_route_rows(db: Session, user: User) -> list[dict]:
                     _supplier_order_item_overlay(db, supplier_item)
                 )
                 rows.append(component_data)
-        elif data["item_id"] not in order_items_with_requisitions:
+        elif (
+            data["item_id"] not in order_items_with_requisitions
+            and data["item_id"] not in order_items_with_current_supplier_orders
+        ):
             rows.append(data)
 
     history_order_ids = {
@@ -1466,6 +1478,7 @@ def _rows(
     component_requisition_items: dict[int, list[RequisitionItem]] = {}
     supplier_order_items: dict[int, list[SupplierRequisitionOrderItem]] = {}
     order_items_with_requisitions: set[int] = set()
+    order_items_with_current_supplier_orders: set[int] = set()
     order_item_ids = [row["item_id"] for row in base_rows if row.get("item_id")]
     if order_item_ids:
         order_items_with_requisitions = set(
@@ -1499,11 +1512,22 @@ def _rows(
                 continue
             component_requisition_items.setdefault(req.order_item_id, []).append(req)
         if received_since is None:
+            current_supplier_items = current_supplier_order_items(
+                db,
+                order_item_ids,
+            )
+            order_items_with_current_supplier_orders = {
+                int(supplier_item.order_item_id)
+                for supplier_item in current_supplier_items
+                if supplier_item.order_item_id is not None
+            }
             for supplier_item in _open_supplier_order_items(
                 db,
-                current_supplier_order_items(db, order_item_ids),
+                current_supplier_items,
             ):
                 if supplier_item.order_item_id is None:
+                    continue
+                if int(supplier_item.order_item_id) in order_items_with_requisitions:
                     continue
                 if (
                     selected_supplier_order_item_ids is not None
@@ -1570,7 +1594,10 @@ def _rows(
                     component_data["component_type"],
                 )
                 rows.append(component_data)
-        elif data["item_id"] in order_items_with_requisitions:
+        elif (
+            data["item_id"] in order_items_with_requisitions
+            or data["item_id"] in order_items_with_current_supplier_orders
+        ):
             continue
         elif (
             selected_ordinary_item_ids is not None

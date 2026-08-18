@@ -7,6 +7,7 @@
 - 修复提交 `77c64b2078f5756985d9444db8c08d45a18d8d34` 已快进合并并推送 `factory-current-baseline`。完整报料回归 `50 passed`，暂缓专项 `33 passed`，版本与发布安全门禁 `23 passed`；Python 编译与 `git diff --check` 通过。
 - 正式发布版本 `v0.22.128～分批报料剩余数量可独立暂缓`，无 migration，revision 保持 `ss27v8x9z16`。发布报告 `docs/migration_reports/release_runtime_20260818_123626.json` 状态 `completed`；发布备份 `data/backups/carton_erp_before_release_20260818_123627.sqlite3`，SHA-256 `e1c9a893669d0c64807196d3e994f71d2985ee3e9267a33082453774182bac29`，`integrity_check=ok`、外键违规 0，源库/备份/演练核心表计数一致。
 - 发布后 `/api/health` 返回 HTTP 200。正式库使用 `PRAGMA query_only=ON` 回放：订单明细 9864 的暂缓资格通过，`order=TM20260728006 / product=CPN087063 / already_requisitioned_qty=200 / remaining_requisition_qty=100 / requisition_qty=100`。本轮未自动创建暂缓记录，因为恢复条件属于老板本次操作选择；需在正式页面重新点击“暂不报料”完成业务验收，预期成功 1 条、等候列表显示整单 300 与当前待报 100。
+- 老板要求该规则不得再次回退。现有自动化门禁已固定重放“整单 300 → 报料/收料/生产/交付 200 → 剩余 100 转入等候 → 修改等候条件 → 恢复待报料”的完整链路，并逐项断言已报 200、剩余 100、本次建议 100；任何恢复“已有下游事实就整单禁止暂缓”的改动都会使发布回归失败。2026-08-18 再次单独执行该防回退用例，结果 `1 passed`。
 
 ## 2026-08-15 模具货架层格与实时正视图联通（授权提交推送发布）
 

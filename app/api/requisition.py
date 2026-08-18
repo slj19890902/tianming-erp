@@ -16556,6 +16556,11 @@ def list_reported_items(
             and document.get("status") == "confirmed"
             and line.get("status") == "active"
         )
+        active_item_count = sum(
+            1
+            for document_line in document.get("line_items") or []
+            if document_line.get("status") == "active"
+        )
         items.append(
             {
                 "sequence": offset,
@@ -16594,6 +16599,7 @@ def list_reported_items(
                 ),
                 "can_print_task": is_current_supplier_item,
                 "can_print_label": is_current_supplier_item,
+                "active_item_count": active_item_count,
                 "pdf_url": document.get("pdf_url"),
                 "production_print_url": document.get("production_print_url"),
             }

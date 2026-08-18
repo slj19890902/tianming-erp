@@ -42,7 +42,8 @@ def test_requisition_secondary_tabs_and_tools_load_on_demand() -> None:
     assert "if (tab === \"submitted\")" in tab_switch
     assert "this.loadReportedDocuments()" in tab_switch
     assert "this.loadReportedCustomerOptions()" in tab_switch
-    assert 'beginLatestRequest("requisition:reported")' in INDEX
+    assert 'requestKey = "requisition:reported-items"' in INDEX
+    assert 'axios.get("/api/requisition/reported-items"' in INDEX
     assert 'beginLatestRequest("requisition:merge-suggestions")' in merge_open
     assert 'axios.get("/api/requisition/merge-suggestions", {signal:controller.signal})' in merge_open
     assert "mergeSuggestionsError" in merge_open

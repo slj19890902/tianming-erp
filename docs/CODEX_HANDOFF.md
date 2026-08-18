@@ -4120,3 +4120,10 @@ legacy_ruida_* 原始层
 - 已获授权将家庭候选 `a393977887b1c0f2d39ac490db8d2e52fef236e5` 合并到独立整合分支；整合提交为 `ea96a81c`（后续文档提交会更新 SHA）。候选无 migration，Alembic head 仍为 `ss27v8x9z16`。
 - 回归曾因测试子进程误指向正式 `data/carton_erp.sqlite3` 而触发保护检查；已保存事故快照 `data/backups/carton_erp_before_test_incident_20260818_103806.sqlite3`（SHA-256 `48460F52AECB8B44AAC19DF6988ABC743072F7032D50D7F30FB513222FA26A37`），停服后从已验证发布前备份 `carton_erp_before_release_20260818_102630.sqlite3` 恢复，恢复 SHA-256 `3936C6F74B86EA42E83EC3534607C8BB412E689B512DDF0A2822B25BA4A7C5CD`，完整性通过、外键违规 0、revision `ss27v8x9z16`。
 - 隔离工作树回归 14 项通过；`compileall`、`git diff --check` 和 Alembic 唯一 head 检查通过。正式发布仍须重新执行发布脚本的备份、验证、应用和重启门禁。
+
+## 2026-08-18 P0-6 聚晟达生产包装标签正式发布完成
+
+- 正式分支已整合并推送完整 SHA `f5e2c125934d79fffccee453897f7e6355bdf547`，包含 P0-6 候选 `a393977887b1c0f2d39ac490db8d2e52fef236e5`；版本 `v0.22.124`。
+- 发布报告 `docs/migration_reports/release_runtime_20260818_104207.json`，SHA-256 `CAA0031EC8ECEE7520F7C0DC9C59EF6C69C91C7B1E2989C7F02B62618D69491C`；状态 `completed`，revision `ss27v8x9z16`，本次无迁移。
+- 正式备份 `data/backups/carton_erp_before_release_20260818_104208.sqlite3`，SHA-256 `3936C6F74B86EA42E83EC3534607C8BB412E689B512DDF0A2822B25BA4A7C5CD`；`integrity_check=ok`，外键违规 0，应用后 SHA 与备份一致。
+- ERP 已重启；本机与局域网健康接口、首页及生产包装标签入口均返回 HTTP 200。人工业务验收仍需按 P0-6 清单检查两张实体标签及刷新/拒绝历史任务规则。

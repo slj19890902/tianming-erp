@@ -1126,6 +1126,52 @@ def build_supplier_requisition_production_package(
         and bool(task.production_label_enabled_snapshot)
         and int(task.production_label_count_snapshot or 0) > 0
     }
+    # This maintenance projection is deliberately kept outside the immutable
+    # paper fingerprint above.  It does not change historical task cards; it
+    # only gives the operator enough current version information to invoke the
+    # existing, audited per-task refresh command when an older task froze the
+    # label plan before the common-box policy was enabled.
+    label_plan_refresh_options: list[dict] = []
+    if used_task_ids:
+        # Local import avoids the intentional production-label module cycle:
+        # job creation imports this read projection, while task maintenance
+        # imports the packaging-label job service.
+        from app.services.production_label_operations import (
+            annotate_task_label_plans,
+        )
+
+        task_by_id = {int(task.id): task for task in tasks}
+        maintenance_rows = annotate_task_label_plans(
+            db,
+            [{"id": task_id} for task_id in sorted(used_task_ids)],
+        )
+        for row in maintenance_rows:
+            task_id = int(row["id"])
+            task = task_by_id[task_id]
+            current = row.get("current_production_label_product") or {}
+            product_id = current.get("product_id")
+            product = db.get(Product, int(product_id)) if product_id else None
+            current_enabled = bool(current.get("enabled"))
+            refresh_allowed = bool(
+                row.get("can_refresh_production_label_plan") and current_enabled
+            )
+            block_reason = row.get("production_label_refresh_block_reason")
+            if not current_enabled:
+                block_reason = "当前常用箱未启用生产包装标签"
+            label_plan_refresh_options.append(
+                {
+                    "task_id": task_id,
+                    "expected_task_version": int(task.version),
+                    "product_id": int(product_id) if product_id else None,
+                    "expected_product_version": current.get("version"),
+                    "product_code": product.product_code if product is not None else None,
+                    "product_name": product.product_name if product is not None else None,
+                    "current_enabled": current_enabled,
+                    "current_units_per_label": current.get("units_per_label"),
+                    "can_refresh": refresh_allowed,
+                    "block_reason": block_reason,
+                }
+            )
     return {
         "supplier_order_id": order.id,
         "supplier_order_number": order.order_number,
@@ -1145,6 +1191,7 @@ def build_supplier_requisition_production_package(
             int(task.production_label_count_snapshot or 0)
             for task in label_tasks.values()
         ),
+        "production_label_refresh_options": label_plan_refresh_options,
         "cards": cards,
         "pages": pages,
     }

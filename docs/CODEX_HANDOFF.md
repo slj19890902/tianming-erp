@@ -4140,3 +4140,8 @@ legacy_ruida_* 原始层
 - 在备份 `data/backups/carton_erp_before_incoming_dimension_fix_20260818_110348.sqlite3`（SHA-256 `ED761223C2FD416B2DD0F7E9CFC838E0B1E564C2243208A32F68256E453AD103`）后，仅更新 `supplier_requisition_order_items.id=77/78`，补齐为 `992×1061`；表行数未变化，完整性通过、外键违规 0。
 - 正式发布报告 `docs/migration_reports/release_runtime_20260818_110441.json`，SHA-256 `E6E61642B9EB7B020764C50937C6F2AD8169F843AFF287A859F0049F2A1B478D`；状态 `completed`，无 migration，revision `ss27v8x9z16`，ERP 已重启。
 - 本机与局域网健康接口、首页和 `incoming.html` 均 HTTP 200；既有收料历史 fixture 测试在基线和修复分支均同样失败，未归因于本修复。
+
+## 2026-08-18 收料明细外部操作时间线补记
+
+- 在本轮诊断与发布窗口内，`supplier_order_item_id=77/78` 已由外部 ERP 操作完成收料，生成 `incoming_receipt_items.id=204/205`，时间为 2026-08-18 10:58:41（本地时间）；对应订单明细 9756/9750 当前为 `received`。
+- 未回滚或改动这两笔真实收料；已补齐的供应商尺寸仍为 `992×1061`，后续收料历史显示以正式收料事实为准。

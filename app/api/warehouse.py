@@ -12530,6 +12530,7 @@ def _current_requisition_source_ids(
                 == item.supplier_order_number,
                 SupplierRequisitionOrder.status == "confirmed",
                 SupplierRequisitionOrderItem.order_item_id == item.id,
+                SupplierRequisitionOrderItem.status == "active",
             )
             .limit(1)
         ) is not None

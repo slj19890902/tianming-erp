@@ -561,7 +561,6 @@ def _open_supplier_order_items(
         select(IncomingReceiptItem)
         .where(
             IncomingReceiptItem.supplier_order_item_id.in_(item_ids),
-            IncomingReceiptItem.requisition_item_id.is_(None),
             IncomingReceiptItem.status == "posted",
         )
         .order_by(IncomingReceiptItem.id)
@@ -829,7 +828,10 @@ def _confirmed_supplier_order_item_ids(
                 (SupplierRequisitionOrderItem.supplier_order_id == SupplierRequisitionOrder.id)
                 & (SupplierRequisitionOrderItem.order_item_id == OrderItem.id),
             )
-            .where(OrderItem.id.in_(order_item_ids))
+            .where(
+                OrderItem.id.in_(order_item_ids),
+                SupplierRequisitionOrderItem.status == "active",
+            )
             .distinct()
         ).all()
     )

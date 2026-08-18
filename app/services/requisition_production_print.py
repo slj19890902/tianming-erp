@@ -304,7 +304,10 @@ def build_supplier_requisition_production_package(
     product master fields and never advances receiving, production or inventory.
     """
 
-    items = sorted(order.items, key=lambda row: row.id)
+    items = sorted(
+        (row for row in order.items if row.status == "active"),
+        key=lambda row: row.id,
+    )
     order_item_ids = {
         int(item.order_item_id)
         for item in items

@@ -211,6 +211,7 @@ admin_rollback = RoleChecker(["admin"])
 admin_production_label_layout = RoleChecker(["admin"])
 _FINISHED_STOCK_POLICY_WRITE_LOCK = Lock()
 _SUPPLIER_ORDER_CREATE_WRITE_LOCK = Lock()
+_SUPPLIER_ORDER_ITEM_VOID_WRITE_LOCK = Lock()
 
 
 class ProductionPackagingLabelJobRequest(BaseModel):
@@ -604,6 +605,17 @@ class SupplierSchedulePayload(BaseModel):
 
 class CancelPayload(BaseModel):
     reason: str | None = Field(default=None, max_length=500)
+
+
+class SupplierRequisitionItemVoidPayload(BaseModel):
+    expected_version: int = Field(ge=1)
+    idempotency_key: str = Field(min_length=1, max_length=120)
+    confirmed: Literal[True]
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def trim_idempotency_key(cls, value: str) -> str:
+        return value.strip()
 
 
 class MergeGroupCreatePayload(BaseModel):
@@ -4636,6 +4648,7 @@ def _active_supplier_requisition_facts(
         .where(
             SupplierRequisitionOrderItem.order_item_id == item.id,
             SupplierRequisitionOrder.status != "voided",
+            SupplierRequisitionOrderItem.status == "active",
         )
         .order_by(
             SupplierRequisitionOrder.created_at.asc(),
@@ -4758,6 +4771,7 @@ def _active_requisition_facts_by_item_ids(
         .where(
             SupplierRequisitionOrderItem.order_item_id.in_(clean_ids),
             SupplierRequisitionOrder.status != "voided",
+            SupplierRequisitionOrderItem.status == "active",
         )
         .order_by(
             SupplierRequisitionOrder.created_at.asc(),
@@ -13204,6 +13218,7 @@ def _source_items_from_supplier_order(order: SupplierRequisitionOrder) -> list[d
             "delivery_date": item.delivery_date,
         }
         for item in order.items
+        if item.status == "active"
     ]
 
 
@@ -13229,6 +13244,8 @@ def _supplier_order_purchase_lines(
 ) -> list[dict]:
     line_map: dict[str, dict] = {}
     for item in order.items:
+        if item.status != "active":
+            continue
         order_item = db.get(OrderItem, item.order_item_id) if item.order_item_id else None
         component_type = _supplier_order_item_component_type(item)
         material_id = item.material_id or (
@@ -14624,6 +14641,9 @@ def _build_reported_document_candidates(db: Session, user: User) -> list[dict]:
                 SupplierRequisitionOrderItem.requisition_qty.label(
                     "requisition_qty"
                 ),
+                SupplierRequisitionOrderItem.status.label("item_status"),
+                SupplierRequisitionOrderItem.version.label("item_version"),
+                SupplierRequisitionOrderItem.voided_at.label("item_voided_at"),
                 Order.customer_id.label("customer_id"),
             )
             .outerjoin(
@@ -14673,6 +14693,9 @@ def _build_reported_document_candidates(db: Session, user: User) -> list[dict]:
                     ),
                     "flute_type": item["flute_type_snapshot"]
                     or header["document_flute_type"],
+                    "_item_status": item["item_status"],
+                    "_item_version": item["item_version"],
+                    "_item_voided_at": item["item_voided_at"],
                 }
             )
         documents.append(
@@ -15182,7 +15205,17 @@ def _decorate_reported_document_candidates(candidates: list[dict]) -> list[dict]
                         "flute_type": line.get("flute_type"),
                         "requisition_qty": int(line.get("_requisition_qty") or 0),
                         "unit": "张",
-                        "status": candidate["status"],
+                        "status": (
+                            line.get("_item_status")
+                            if candidate["status"] == "confirmed"
+                            else candidate["status"]
+                        ),
+                        "version": int(line.get("_item_version") or 1),
+                        "voided_at": (
+                            beijing_naive_to_api(line["_item_voided_at"])
+                            if line.get("_item_voided_at")
+                            else None
+                        ),
                     },
                     line,
                 )
@@ -15550,7 +15583,15 @@ def _build_reported_documents(
                 "flute_type": item.flute_type_snapshot or order.flute_type,
                 "requisition_qty": int(item.requisition_qty or 0),
                 "unit": "张",
-                "status": order.status,
+                "status": (
+                    item.status if order.status == "confirmed" else order.status
+                ),
+                "version": int(item.version or 1),
+                "voided_at": (
+                    beijing_naive_to_api(item.voided_at)
+                    if item.voided_at
+                    else None
+                ),
             }
             for item in order.items
         ]
@@ -16361,7 +16402,11 @@ def list_reported_items(
     for document in candidates:
         if source_type and document["source_type"] != source_type:
             continue
-        if normalized["status"] and document.get("status") != normalized["status"]:
+        if (
+            normalized["status"]
+            and document["source_type"] != "supplier_order"
+            and document.get("status") != normalized["status"]
+        ):
             continue
         created_at = document.get("created_at")
         created_date = created_at.date() if created_at else None
@@ -16378,6 +16423,14 @@ def list_reported_items(
         ):
             continue
         for line_order, line in enumerate(document.get("line_items") or [], start=1):
+            effective_line_status = (
+                line.get("_item_status")
+                if document["source_type"] == "supplier_order"
+                and document.get("status") == "confirmed"
+                else document.get("status")
+            )
+            if normalized["status"] and effective_line_status != normalized["status"]:
+                continue
             customer_projection = customer_names.get(int(line["customer_id"])) if line.get("customer_id") is not None else None
             effective_customer_name = (
                 (customer_projection or {}).get("customer_name")
@@ -16501,6 +16554,7 @@ def list_reported_items(
         is_current_supplier_item = (
             candidate["source_type"] == "supplier_order"
             and document.get("status") == "confirmed"
+            and line.get("status") == "active"
         )
         items.append(
             {
@@ -16532,7 +16586,12 @@ def list_reported_items(
                 "supplier_name": document.get("supplier_name"),
                 "status": line.get("status") or document.get("status"),
                 "can_view_supplier_order": candidate["source_type"] == "supplier_order",
-                "can_void_item": False,
+                "version": line.get("version"),
+                "voided_at": line.get("voided_at"),
+                "can_void_item": (
+                    is_current_supplier_item
+                    and has_permission(user, "requisition.execute")
+                ),
                 "can_print_task": is_current_supplier_item,
                 "can_print_label": is_current_supplier_item,
                 "pdf_url": document.get("pdf_url"),
@@ -17202,6 +17261,404 @@ def confirm_production_packaging_label_job_endpoint(
     except Exception:
         db.rollback()
         raise
+
+
+def _supplier_requisition_item_void_hash(
+    item_id: int,
+    payload: SupplierRequisitionItemVoidPayload,
+) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            {
+                "item_id": int(item_id),
+                "expected_version": int(payload.expected_version),
+                "confirmed": True,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _supplier_requisition_item_completion_id(
+    db: Session,
+    item: SupplierRequisitionOrderItem,
+) -> int | None:
+    if item.order_item_id is None:
+        return None
+    source_key = str(item.source_key or "").strip().lower()
+    requisition_source = re.fullmatch(r"requisition_item:(\d+)", source_key)
+    task_query = (
+        select(ProductionCompletion.id)
+        .join(ProductionTask, ProductionTask.id == ProductionCompletion.task_id)
+        .where(
+            ProductionCompletion.status == "posted",
+            ProductionTask.order_item_id == item.order_item_id,
+        )
+    )
+    if requisition_source:
+        source = db.scalar(
+            select(RequisitionItemBomSource).where(
+                RequisitionItemBomSource.requisition_item_id
+                == int(requisition_source.group(1))
+            )
+        )
+        if source is not None:
+            task_query = task_query.where(
+                ProductionTask.sales_order_item_bom_component_id
+                == source.sales_order_item_bom_component_id
+            )
+    else:
+        component_type = _supplier_order_item_component_type(item)
+        if component_type == "whole":
+            task_query = task_query.where(
+                ProductionTask.sales_order_item_bom_component_id.is_(None)
+            )
+        elif item.product_id is not None:
+            task_query = task_query.join(
+                SalesOrderItemBomComponent,
+                SalesOrderItemBomComponent.id
+                == ProductionTask.sales_order_item_bom_component_id,
+            ).where(
+                SalesOrderItemBomComponent.component_product_id == item.product_id
+            )
+    return db.scalar(task_query.limit(1))
+
+
+def _supplier_requisition_item_void_response(
+    db: Session,
+    item: SupplierRequisitionOrderItem,
+    order: SupplierRequisitionOrder,
+) -> dict:
+    order_item = (
+        db.get(OrderItem, item.order_item_id)
+        if item.order_item_id is not None
+        else None
+    )
+    return {
+        "item": {
+            "id": item.id,
+            "supplier_order_id": item.supplier_order_id,
+            "status": item.status,
+            "version": item.version,
+            "voided_at": (
+                beijing_naive_to_api(item.voided_at) if item.voided_at else None
+            ),
+            "order_item_id": item.order_item_id,
+            "source_key": item.source_key,
+            "requisition_qty": int(item.requisition_qty or 0),
+        },
+        "supplier_order": {
+            "id": order.id,
+            "order_number": order.order_number,
+            "status": order.status,
+            "total_quantity": int(order.total_quantity or 0),
+            "stock_deduction_qty": int(order.stock_deduction_qty or 0),
+            "requisition_qty": int(order.requisition_qty or 0),
+        },
+        "order_item": (
+            {
+                "id": order_item.id,
+                "requisition_status": order_item.requisition_status,
+                "requisition_qty": order_item.requisition_qty,
+                "supplier_order_number": order_item.supplier_order_number,
+            }
+            if order_item is not None
+            else None
+        ),
+    }
+
+
+def _recompute_supplier_order_after_item_void(
+    db: Session,
+    order: SupplierRequisitionOrder,
+) -> list[SupplierRequisitionOrderItem]:
+    active_items = list(
+        db.scalars(
+            select(SupplierRequisitionOrderItem)
+            .where(
+                SupplierRequisitionOrderItem.supplier_order_id == order.id,
+                SupplierRequisitionOrderItem.status == "active",
+            )
+            .order_by(SupplierRequisitionOrderItem.id)
+        ).all()
+    )
+    order.total_quantity = sum(int(row.quantity or 0) for row in active_items)
+    order.stock_deduction_qty = sum(
+        int(row.stock_deduction_qty or 0) for row in active_items
+    )
+    order.requisition_qty = sum(
+        int(row.requisition_qty or 0) for row in active_items
+    )
+    order.required_piece_qty = sum(
+        int(row.required_piece_qty or 0) for row in active_items
+    )
+    if active_items:
+        order.status = "confirmed"
+        order.voided_at = None
+    else:
+        order.status = "voided"
+        order.voided_at = beijing_now_naive()
+    return active_items
+
+
+def _recompute_order_item_after_supplier_item_void(
+    db: Session,
+    order_item: OrderItem,
+) -> None:
+    active_supplier_rows = db.execute(
+        select(SupplierRequisitionOrderItem, SupplierRequisitionOrder)
+        .join(
+            SupplierRequisitionOrder,
+            SupplierRequisitionOrder.id
+            == SupplierRequisitionOrderItem.supplier_order_id,
+        )
+        .where(
+            SupplierRequisitionOrderItem.order_item_id == order_item.id,
+            SupplierRequisitionOrderItem.status == "active",
+            SupplierRequisitionOrder.status != "voided",
+        )
+        .order_by(
+            SupplierRequisitionOrder.created_at.asc(),
+            SupplierRequisitionOrder.id.asc(),
+            SupplierRequisitionOrderItem.id.asc(),
+        )
+    ).all()
+    legacy_quantity = int(
+        db.scalar(
+            select(func.coalesce(func.sum(RequisitionItem.requisition_qty), 0)).where(
+                RequisitionItem.order_item_id == order_item.id,
+                RequisitionItem.status == "有效",
+            )
+        )
+        or 0
+    )
+    supplier_quantity = sum(
+        int(line.requisition_qty or 0) for line, _supplier_order in active_supplier_rows
+    )
+    remaining_quantity = supplier_quantity + legacy_quantity
+    order_item.requisition_qty = remaining_quantity or None
+    if remaining_quantity > 0:
+        order_item.requisition_status = "已报料"
+        if active_supplier_rows:
+            order_item.supplier_order_number = active_supplier_rows[-1][1].order_number
+    else:
+        order_item.requisition_status = "未报料"
+        order_item.special_process = DEFAULT_CUTTING_MODE
+        order_item.requisition_spec = None
+        order_item.cardboard_len = None
+        order_item.cardboard_width = None
+        order_item.requisition_date = None
+        order_item.supplier_delivery_time = None
+        order_item.supplier_order_number = None
+        order_item.requisition_remark = None
+
+
+@router.put("/supplier-order-items/{item_id}/void")
+def void_supplier_requisition_item(
+    item_id: int,
+    payload: SupplierRequisitionItemVoidPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    request_hash = _supplier_requisition_item_void_hash(item_id, payload)
+    with _SUPPLIER_ORDER_ITEM_VOID_WRITE_LOCK:
+        try:
+            item = db.get(SupplierRequisitionOrderItem, item_id)
+            if item is None:
+                raise HTTPException(status_code=404, detail="供应商报料明细不存在")
+            order = db.get(SupplierRequisitionOrder, item.supplier_order_id)
+            if order is None:
+                raise HTTPException(status_code=409, detail="供应商报料单不存在")
+            _require_supplier_order_customer_access(order, user, db)
+
+            existing_key_item = db.scalar(
+                select(SupplierRequisitionOrderItem).where(
+                    SupplierRequisitionOrderItem.void_idempotency_key
+                    == payload.idempotency_key
+                )
+            )
+            if existing_key_item is not None:
+                if (
+                    existing_key_item.id != item.id
+                    or existing_key_item.void_request_hash != request_hash
+                    or existing_key_item.voided_by != user.id
+                    or existing_key_item.status != "voided"
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="该幂等键已用于另一笔撤销或请求内容不一致",
+                    )
+                return _supplier_requisition_item_void_response(db, item, order)
+            if item.status != "active":
+                raise HTTPException(status_code=409, detail="该报料明细已经撤销")
+            if item.version != payload.expected_version:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "SUPPLIER_REQUISITION_ITEM_VERSION_CONFLICT",
+                        "message": "报料明细版本已变化，请刷新后重试",
+                        "current_version": item.version,
+                    },
+                )
+
+            claimed = db.execute(
+                update(SupplierRequisitionOrderItem)
+                .where(
+                    SupplierRequisitionOrderItem.id == item.id,
+                    SupplierRequisitionOrderItem.status == "active",
+                    SupplierRequisitionOrderItem.version == payload.expected_version,
+                )
+                .values(version=SupplierRequisitionOrderItem.version)
+            )
+            if claimed.rowcount != 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail="报料明细已被其他操作处理，请刷新后重试",
+                )
+            db.flush()
+            db.expire_all()
+            item = db.get(SupplierRequisitionOrderItem, item_id)
+            order = db.get(SupplierRequisitionOrder, item.supplier_order_id)
+            if item is None or order is None or item.status != "active":
+                raise HTTPException(
+                    status_code=409,
+                    detail="报料明细已被其他操作处理，请刷新后重试",
+                )
+            _require_supplier_order_customer_access(order, user, db)
+            if order.status != "confirmed":
+                raise HTTPException(status_code=409, detail="该报料单当前不能逐明细撤销")
+
+            receipt_id = db.scalar(
+                select(IncomingReceiptItem.id)
+                .where(
+                    IncomingReceiptItem.supplier_order_item_id == item.id,
+                    IncomingReceiptItem.status == "posted",
+                )
+                .limit(1)
+            )
+            if receipt_id is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"该明细已有有效来料实收 #{receipt_id}，不能撤销",
+                )
+            completion_id = _supplier_requisition_item_completion_id(db, item)
+            if completion_id is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"该明细关联生产完工 #{completion_id}，不能撤销",
+                )
+
+            before = {
+                "status": item.status,
+                "version": item.version,
+                "supplier_order_status": order.status,
+                "supplier_order_requisition_qty": int(order.requisition_qty or 0),
+            }
+            now = beijing_now_naive()
+            item.status = "voided"
+            item.version += 1
+            item.voided_at = now
+            item.voided_by = user.id
+            item.void_idempotency_key = payload.idempotency_key
+            item.void_request_hash = request_hash
+            db.flush()
+
+            source_match = re.fullmatch(
+                r"requisition_item:(\d+)", str(item.source_key or "").strip()
+            )
+            if source_match:
+                remaining_same_source = db.scalar(
+                    select(SupplierRequisitionOrderItem.id)
+                    .join(
+                        SupplierRequisitionOrder,
+                        SupplierRequisitionOrder.id
+                        == SupplierRequisitionOrderItem.supplier_order_id,
+                    )
+                    .where(
+                        SupplierRequisitionOrderItem.source_key == item.source_key,
+                        SupplierRequisitionOrderItem.status == "active",
+                        SupplierRequisitionOrder.status != "voided",
+                    )
+                    .limit(1)
+                )
+                if remaining_same_source is None:
+                    requisition_item_id = int(source_match.group(1))
+                    requisition_item = db.get(RequisitionItem, requisition_item_id)
+                    if requisition_item is not None:
+                        requisition_item.status = "已取消"
+                    db.execute(
+                        update(RequisitionItemBomSource)
+                        .where(
+                            RequisitionItemBomSource.requisition_item_id
+                            == requisition_item_id
+                        )
+                        .values(active_guard=None)
+                    )
+
+            active_items = _recompute_supplier_order_after_item_void(db, order)
+            order_item = (
+                db.get(OrderItem, item.order_item_id)
+                if item.order_item_id is not None
+                else None
+            )
+            if order_item is not None:
+                _recompute_order_item_after_supplier_item_void(db, order_item)
+
+            customer_ids, customer_names = _supplier_order_audit_customers(db, order)
+            append_audit_event(
+                db,
+                event_category="business",
+                result="success",
+                source="web",
+                module_code="requisition",
+                action_code="requisition.supplier_order_item.void",
+                legacy_action="VOID_REQUISITION_ITEM",
+                resource="SupplierRequisitionOrderItem",
+                request=request,
+                actor=user,
+                entity_type="supplier_requisition_order_item",
+                entity_id=item.id,
+                object_ref=f"supplier_requisition_order_item:{item.id}",
+                customer_id=customer_ids[0] if len(customer_ids) == 1 else None,
+                customer_name=customer_names[0] if len(customer_names) == 1 else None,
+                batch_id=payload.idempotency_key,
+                description="逐明细撤销供应商报料事实",
+                details={
+                    "before": before,
+                    "after": {
+                        "status": item.status,
+                        "version": item.version,
+                        "supplier_order_status": order.status,
+                        "supplier_order_requisition_qty": int(
+                            order.requisition_qty or 0
+                        ),
+                        "active_item_ids": [row.id for row in active_items],
+                    },
+                    "source_key": item.source_key,
+                    "order_item_id": item.order_item_id,
+                    "requisition_qty": int(item.requisition_qty or 0),
+                    "customer_ids": customer_ids,
+                    "customer_names": customer_names,
+                },
+            )
+            db.commit()
+            db.refresh(item)
+            db.refresh(order)
+            return _supplier_requisition_item_void_response(db, item, order)
+        except HTTPException:
+            db.rollback()
+            raise
+        except IntegrityError as error:
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="报料明细已被其他操作处理，请刷新后重试",
+            ) from error
+        except Exception:
+            db.rollback()
+            raise
 
 
 @router.put("/supplier-orders/{order_id}/void")

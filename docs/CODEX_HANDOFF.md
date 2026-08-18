@@ -4265,3 +4265,12 @@ legacy_ruida_* 原始层
 - 最新正式基线上的验证：规格/版本/发布门禁与关键来料、盘点 `32 passed`；完整订单与送货 `109 passed`；完整来料 `45 passed`；报料、财务、开票、合同、生产纸面、库存地图和天华预送货 `127 passed, 1 skipped`。Python 编译、差异检查和 Alembic 唯一 head `tt28v8x9z17` 通过。
 - 另有 `test_p1_21f4_mobile_pre_delivery.py::test_pick_plan_maps_published_location_on_a_non_third_floor` 因测试夹具未满足现行库位空间启用门禁而失败；在未含本候选的正式 `v0.22.132` 同样复现，不是规格修复回归，未通过放宽正式库位门禁来掩盖。
 - 版本确定为 `v0.22.133｜产品规格二维三维全流程统一显示`，无 migration。当前交付目标仅为提交并推送独立候选；尚未整合正式分支、停服、重启或发布，也未写正式业务数据。
+
+## 2026-08-18 v0.22.133 产品规格二维三维全流程统一显示正式完成
+
+- 老板已授权整合并正式发布。候选最终提交 `294f938489e3779b303dfed6324935532b9510c6` 已从正式 `v0.22.132@b51d35a0eaad36c07629ee4228187fbd61875515` 线性快进到 `factory-current-baseline`，并在发布前确认本地、候选远端和正式远端 SHA 一致。
+- 发布前规格、版本及发布安全门禁 `30 passed`；先前完整验证保持为订单与送货 `109 passed`、来料 `45 passed`、报料/财务/开票/合同/生产纸面/库存地图/天华预送货 `127 passed, 1 skipped`。Alembic 唯一 head 仍为 `tt28v8x9z17`，本版无 migration。
+- 两阶段正式发布报告 `docs/migration_reports/release_runtime_20260818_155821.json` 状态为 `completed`。发布备份 `data/backups/carton_erp_before_release_20260818_155822.sqlite3` 的 SHA-256 为 `fd0f4921035cc4e30acd64beb5250d37dbc6b7c3ce8cac46076fc760fdce3730`，`integrity_check=ok`、外键违规 0；源库、备份、隔离演练和正式应用的 15 张核心表计数完全一致，revision 前后均为 `tt28v8x9z17`。
+- ERP 已重启并恢复访问：本机与局域网 `/api/health` 均为 HTTP 200，带 `release=v0.22.133` 的局域网页面为 HTTP 200；启动后版本说明门禁回读为 `v0.22.133｜产品规格二维三维全流程统一显示`。
+- 发布后正式库再次以 SQLite `mode=ro/query_only` 复核：revision `tt28v8x9z17`、`integrity_check=ok`、外键违规 0、连接 `total_changes=0`。本次发布只更新规格读取、打印与以后新建快照的表达规则，没有批量回写订单、报料、来料、生产、送货、库存或财务历史事实。
+- 现场仍需老板强制刷新后抽查：衬板、隔板、刀卡显示 `长×宽mm`，普通纸箱显示 `长×宽×高mm`；订单 `TM20260818002 / item 10049` 与送货单 `YL-20260818-006 / item 187` 应显示 `778×1137mm`。发布报告的人工业务验收状态保持 `not_recorded`，不得提前登记为已验收。

@@ -23,7 +23,12 @@ def _css_block(source: str, selector: str) -> str:
 def test_header_and_footer_remove_unneeded_dot_matrix_rules() -> None:
     source = _source()
 
-    for selector in (".factory-address", ".meta-value", ".copies", ".remark-notes"):
+    for selector in (
+        ".factory-address",
+        ".meta-value",
+        ".remark-notes",
+        ".footer-detail",
+    ):
         assert "border-top" not in _css_block(source, selector)
         assert "border-bottom" not in _css_block(source, selector)
 
@@ -45,11 +50,10 @@ def test_signature_fields_share_one_row_in_requested_order() -> None:
     assert signatures is not None
     body = signatures.group("body")
 
-    assert body.index("送货人：") < body.index("经手人：") < body.index(
-        "收货单位(签章)："
-    )
+    assert body.index("送货人：") < body.index("收货单位(签章)：")
+    assert "经手人：" not in body
     assert body.count('class="signature-line"') == 1
-    assert "grid-template-columns: 1fr 1.5fr 1fr" in source
+    assert "grid-template-columns: 1fr 1.8fr" in source
 
 
 def test_print_fonts_are_one_step_larger_without_adding_a_blank_page() -> None:
@@ -58,6 +62,7 @@ def test_print_fonts_are_one_step_larger_without_adding_a_blank_page() -> None:
     assert "font-size: 21px" in _css_block(source, ".company")
     assert "font-size: 18px" in _css_block(source, ".document-title")
     assert "font-size: 12px" in _css_block(source, ".meta")
+    assert "font-size: 13px" in _css_block(source, "table")
     assert "font-size: 13px" in _css_block(source, ".total")
     assert "font-size: 11px" in _css_block(source, ".signatures")
 
@@ -133,10 +138,13 @@ def test_print_page_keeps_auth_and_network_errors_inside_print_tab() -> None:
     assert "window.location = '/'" not in source
 
 
-def test_printed_product_name_and_specification_share_a_two_line_cell() -> None:
+def test_printed_product_name_and_specification_use_separate_columns() -> None:
     source = _source()
 
-    assert "产品名称 / 规格" in source
-    assert 'class="product-spec"' in source
+    assert "产品名称 / 规格" not in source
+    assert "<th>产品名称</th>" in source
+    assert "<th>规格</th>" in source
+    assert 'class="product-specification"' in source
+    assert 'class="product-spec"' not in source
     assert 'item.specification || ""' in source
     assert "规格未登记" in source

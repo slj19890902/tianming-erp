@@ -128,14 +128,15 @@ def test_print_total_uses_all_actual_goods_without_creating_a_price_line() -> No
 
     assert "Array.isArray(data.actual_goods_items)" in source
     assert 'item.line_type === "component"' in source
-    assert "本页数量（实际货物）：" in source
-    assert "计价主件总数：" in source
-    assert "实际货物总数：" in source
-    assert 'getField(sheet, "pricedQuantity").textContent = data.total_quantity ?? 0' in source
+    assert "本页数量：" in source
+    assert "总数：" in source
+    assert "计价主件总数：" not in source
+    assert "实际货物总数：" not in source
+    assert 'getField(sheet, "totalQuantity").textContent = data.total_actual_goods_quantity' in source
     assert "total_actual_goods_quantity: actualGoodsTotalQuantity" in source
     assert "const actualGoodsTotalQuantity = normalizedItems.reduce(" in source
     assert "(total, item) => total + (Number(item.quantity) || 0)" in source
-    assert "套内子件，不单独计价" in source
+    assert "套内子件，不单独计价" not in source
     assert "pricing_included: false" in source
     assert "<th>单价</th>" not in source
     assert "<th>金额</th>" not in source

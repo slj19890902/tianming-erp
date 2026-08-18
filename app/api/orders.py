@@ -172,6 +172,7 @@ from app.services.product_import import (
     parse_dimensions,
     resolve_or_create_product,
 )
+from app.services.product_specification import resolved_product_specification
 from app.services.manual_size_product import (
     ManualSizeProductError,
     ManualSizeProductInput,
@@ -1754,13 +1755,6 @@ def _validate_combination_group_consistency(
             )
 
 
-def _snapshot_spec(product: Product) -> str | None:
-    dimensions = (product.length_mm, product.width_mm, product.height_mm)
-    if any(value is None for value in dimensions):
-        return None
-    return "脳".join(_plain_decimal(value) or "0" for value in dimensions) + "mm"
-
-
 def _display_material(value: str | None) -> str | None:
     text = sanitize_user_text(value)
     if not text:
@@ -2212,7 +2206,10 @@ def _order_response(
                 ),
                 "snapshot_product_code": item.snapshot_product_code,
                 "snapshot_product_name": item.snapshot_product_name,
-                "snapshot_spec": item.snapshot_spec,
+                "snapshot_spec": resolved_product_specification(
+                    item.snapshot_spec,
+                    item.product,
+                ),
                 "snapshot_material": item.snapshot_material,
                 "snapshot_original_material_code": item.snapshot_original_material_code,
                 "snapshot_customer_model": item.snapshot_customer_model,  # v0.19.1
@@ -6493,8 +6490,10 @@ def _create_order_impl(
                     validated_quantities[index],
                     str(Decimal(str(item.unit_price)).quantize(Decimal("0.0001"))),
                     (
-                        (item.specification or "").strip()
-                        or _snapshot_spec(resolved_products[index])
+                        resolved_product_specification(
+                            item.specification,
+                            resolved_products[index],
+                        )
                         or ""
                     ),
                 )
@@ -6636,8 +6635,9 @@ def _create_order_impl(
                 snapshot_product_name=(
                     (item_payload.product_name or "").strip() or product.product_name
                 ),
-                snapshot_spec=(
-                    (item_payload.specification or "").strip() or _snapshot_spec(product)
+                snapshot_spec=resolved_product_specification(
+                    item_payload.specification,
+                    product,
                 ),
                 snapshot_material=initial_material_code,
                 snapshot_original_material_code=original_material_code,
@@ -7767,7 +7767,10 @@ def update_order_item(
         if selected_material is not None
         else ((payload.material or "").strip() or None)
     )
-    item.snapshot_spec = (payload.specification or "").strip() or None
+    item.snapshot_spec = resolved_product_specification(
+        payload.specification,
+        current_product,
+    )
     if payload.production_notes is not None:
         item.snapshot_production_notes = (
             payload.production_notes.strip() or None
@@ -8003,7 +8006,10 @@ def update_order_item(
         "snapshot_product_name": item.snapshot_product_name,
         "snapshot_material": item.snapshot_material,
         "snapshot_original_material_code": item.snapshot_original_material_code,
-        "snapshot_spec": item.snapshot_spec,
+        "snapshot_spec": resolved_product_specification(
+            item.snapshot_spec,
+            current_product,
+        ),
         "snapshot_customer_model": item.snapshot_customer_model,  # v0.19.1
         "snapshot_production_notes": item.snapshot_production_notes,  # v0.19.2-A
         "snapshot_report_length_mm": item.snapshot_report_length_mm,

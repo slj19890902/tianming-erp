@@ -851,11 +851,12 @@ def test_delivery_freezes_product_name_and_specification_at_draft_creation(
         assert item["specification"] == "520×350×300mm"
 
 
-def test_legacy_delivery_missing_own_and_order_snapshots_does_not_guess_product(
+def test_delivery_placeholder_specification_uses_structured_two_dimensional_size(
     delivery_api_app,
 ) -> None:
     from app.models.delivery import DeliveryItem
     from app.models.order import OrderItem
+    from app.models.product import Product
 
     app, session_factory = delivery_api_app
     with TestClient(app) as client:
@@ -877,7 +878,11 @@ def test_legacy_delivery_missing_own_and_order_snapshots_does_not_guess_product(
             delivery_item.specification_snapshot = None
             order_item.snapshot_product_code = None
             order_item.snapshot_product_name = ""
-            order_item.snapshot_spec = None
+            order_item.snapshot_spec = "-"
+            product = session.get(Product, order_item.product_id)
+            product.length_mm = Decimal("778")
+            product.width_mm = Decimal("1137")
+            product.height_mm = None
             session.commit()
 
         printed = client.get(f"/api/deliveries/{delivery_id}/print")
@@ -889,7 +894,46 @@ def test_legacy_delivery_missing_own_and_order_snapshots_does_not_guess_product(
         item = response["items"][0]
         assert item["product_code"] == "存货编码未登记"
         assert item["product_name"] == "产品名称未登记"
-        assert item["specification"] == "规格未登记"
+        assert item["specification"] == "778×1137mm"
+
+
+def test_delivery_placeholder_keeps_meaningful_order_snapshot(
+    delivery_api_app,
+) -> None:
+    from app.models.delivery import DeliveryItem
+    from app.models.order import OrderItem
+    from app.models.product import Product
+
+    app, session_factory = delivery_api_app
+    with TestClient(app) as client:
+        _login(client, "admin")
+        created = client.post("/api/deliveries", json=_create_payload())
+        assert created.status_code == 201, created.text
+        delivery_id = created.json()["id"]
+
+        with session_factory() as session:
+            delivery_item = session.scalar(
+                select(DeliveryItem).where(
+                    DeliveryItem.delivery_id == delivery_id,
+                    DeliveryItem.order_item_id == 1,
+                )
+            )
+            order_item = session.get(OrderItem, 1)
+            product = session.get(Product, order_item.product_id)
+            delivery_item.specification_snapshot = "-"
+            order_item.snapshot_spec = "订单冻结规格"
+            product.length_mm = Decimal("778")
+            product.width_mm = Decimal("1137")
+            product.height_mm = None
+            session.commit()
+
+        printed = client.get(f"/api/deliveries/{delivery_id}/print")
+        detail = client.get(f"/api/deliveries/{delivery_id}")
+
+    assert printed.status_code == 200, printed.text
+    assert detail.status_code == 200, detail.text
+    for response in (printed.json(), detail.json()):
+        assert response["items"][0]["specification"] == "订单冻结规格"
 
 
 def test_clearing_customer_remark_hides_it_from_detail_and_print(

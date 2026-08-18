@@ -90,6 +90,10 @@ from app.services.delivery_snapshots import (
     build_order_delivery_snapshot,
     ensure_order_delivery_snapshot,
 )
+from app.services.product_specification import (
+    product_dimension_specification,
+    resolved_product_specification,
+)
 from app.services.production_workflow import (
     ProductionWorkflowError,
     lock_order_rows_for_production_transition,
@@ -2252,10 +2256,8 @@ def _inventory_sources_for_order_item(
 def _delivery_item_rows(db: Session, delivery_ids: list[int]) -> list[dict]:
     if not delivery_ids:
         return []
-    return [
-        dict(row._mapping)
-        for row in db.execute(
-            select(
+    rows = db.execute(
+        select(
                 DeliveryItem.id,
                 DeliveryItem.delivery_id,
                 DeliveryItem.source_type,
@@ -2281,24 +2283,40 @@ def _delivery_item_rows(db: Session, delivery_ids: list[int]) -> list[dict]:
                     DeliveryItem.product_name_snapshot,
                     OrderItem.snapshot_product_name,
                 ).label("product_name"),
-                func.coalesce(
-                    DeliveryItem.specification_snapshot,
-                    OrderItem.snapshot_spec,
-                ).label("specification"),
+                DeliveryItem.specification_snapshot.label(
+                    "delivery_specification_snapshot"
+                ),
+                OrderItem.snapshot_spec.label("order_specification_snapshot"),
+                Product.length_mm.label("product_length_mm"),
+                Product.width_mm.label("product_width_mm"),
+                Product.height_mm.label("product_height_mm"),
                 DeliveryItem.unit_snapshot,
                 OrderItem.snapshot_production_notes.label("production_notes"),
-            )
-            .outerjoin(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
-            .outerjoin(Order, Order.id == OrderItem.order_id)
-            .outerjoin(
-                Product,
-                Product.id
-                == func.coalesce(DeliveryItem.product_id, OrderItem.product_id),
-            )
-            .where(DeliveryItem.delivery_id.in_(delivery_ids))
-            .order_by(DeliveryItem.delivery_id, DeliveryItem.id)
-        ).all()
-    ]
+        )
+        .outerjoin(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
+        .outerjoin(Order, Order.id == OrderItem.order_id)
+        .outerjoin(
+            Product,
+            Product.id
+            == func.coalesce(DeliveryItem.product_id, OrderItem.product_id),
+        )
+        .where(DeliveryItem.delivery_id.in_(delivery_ids))
+        .order_by(DeliveryItem.delivery_id, DeliveryItem.id)
+    ).all()
+    result: list[dict] = []
+    for row in rows:
+        mapping = dict(row._mapping)
+        mapping["specification"] = resolved_product_specification(
+            mapping.pop("delivery_specification_snapshot", None),
+            fallback_snapshots=(
+                mapping.pop("order_specification_snapshot", None),
+            ),
+            length_mm=mapping.pop("product_length_mm", None),
+            width_mm=mapping.pop("product_width_mm", None),
+            height_mm=mapping.pop("product_height_mm", None),
+        )
+        result.append(mapping)
+    return result
 
 
 def _delivery_pick_task_summary(
@@ -4508,7 +4526,10 @@ def _build_pick_task(
                     else line.product_name_snapshot
                 ),
                 specification_snapshot=(
-                    order_item.snapshot_spec
+                    resolved_product_specification(
+                        order_item.snapshot_spec,
+                        product,
+                    )
                     if order_item
                     else line.specification_snapshot
                 ),
@@ -5689,17 +5710,7 @@ def _store_unordered_finished_items(
 
 
 def _product_specification(product: Product) -> str | None:
-    dimensions = [
-        value
-        for value in (product.length_mm, product.width_mm, product.height_mm)
-        if value is not None
-    ]
-    if not dimensions:
-        return None
-    return "×".join(
-        str(int(value)) if value == int(value) else str(value)
-        for value in dimensions
-    )
+    return product_dimension_specification(product)
 
 
 def _unordered_finished_customer_summaries(
@@ -8249,10 +8260,13 @@ def get_delivery_print_data(
                 DeliveryItem.product_name_snapshot,
                 OrderItem.snapshot_product_name,
             ).label("product_name"),
-            func.coalesce(
-                DeliveryItem.specification_snapshot,
-                OrderItem.snapshot_spec,
-            ).label("specification"),
+            DeliveryItem.specification_snapshot.label(
+                "delivery_specification_snapshot"
+            ),
+            OrderItem.snapshot_spec.label("order_specification_snapshot"),
+            Product.length_mm.label("product_length_mm"),
+            Product.width_mm.label("product_width_mm"),
+            Product.height_mm.label("product_height_mm"),
             DeliveryItem.unit_snapshot,
             DeliveryItem.delivered_quantity.label("quantity"),
             DeliveryItem.ordered_quantity_snapshot,
@@ -8288,9 +8302,13 @@ def get_delivery_print_data(
         product_name = (
             str(row.product_name or "").strip() or "产品名称未登记"
         )
-        specification = (
-            str(row.specification or "").strip() or "规格未登记"
-        )
+        specification = resolved_product_specification(
+            row.delivery_specification_snapshot,
+            fallback_snapshots=(row.order_specification_snapshot,),
+            length_mm=row.product_length_mm,
+            width_mm=row.product_width_mm,
+            height_mm=row.product_height_mm,
+        ) or "规格未登记"
         is_unordered = row.source_type == "unordered_finished"
         order_item = (
             db.get(OrderItem, row.order_item_id)

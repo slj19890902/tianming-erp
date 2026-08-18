@@ -4309,3 +4309,11 @@ legacy_ruida_* 原始层
 - 两阶段正式发布报告 `docs/migration_reports/release_runtime_20260818_185031.json` 状态 `completed`，报告 SHA-256 `d2c08aa8686eb2ca59a0cba4afd96fa0c8ee988a928ebe18fa828c4063a329be`；正式备份 `data/backups/carton_erp_before_release_20260818_185032.sqlite3`，SHA-256 `bcc6a13693080e440368983d36f2cd1d3751dfa3fc3b0c37ff3b97355bd72731`。源库、备份、演练及正式应用均为 `uu29v8x9z18`，完整性正常、外键违规 0、核心表计数一致。
 - 发布后 ERP 已以单 worker 重启；本机与局域网 `/api/health` 均 HTTP 200，首页 HTTP 200，版本回读为 `v0.22.134`。正式数据库 SHA-256 仍为 `589b37d8991efffef5f6a46f3e2caf189dc98e30b0e2f0b35f3cc2832a78a0b1`，本轮无迁移、无订单/报料/采购/库存/生产/送货/财务业务事实写入。
 - P1-75 仍需老板在外部 Chrome 完成人工验收：全箱型材料成本/毛利、手工 A1/A3/衬板报料与压线同步、异步推荐晚到保护、权限脱敏及保存后冻结快照一致性；联合发布报告 `human_acceptance_status` 保持 `not_recorded`。
+
+## 2026-08-18 P1-76/P1-77/P1-78 家庭推送整合正式完成
+
+- 家庭端三个精确候选均基于正式 `d5900bf46c6f1223764b8f7eeb14584ddc91366b`，按 P1-76 → P1-77 → P1-78 顺序安全重放：`84903fdeefecf2aa323384f35c12435081babe01`、`fb2acdf1162d8dc6ec056e8706697776123b627c`、`6a9a07c43b34d1d0eb2c90deab51f91d9f21177a`。整合后正式 SHA：`6c0094d103fe4ffa615a309e0529a38bbb7de4ba`。
+- P1-76 新增 `/mobile/` 独立现场查询门户并保留旧入口；P1-77 将送货单客户内容限制在 215mm 安全区并重排底栏；P1-78 让订单队列只保留主滚动、标准模式 12 行/大字模式 7 行。均未修改业务写接口、权限口径或正式历史事实。
+- 无新增 migration，Alembic 唯一 head 仍为 `uu29v8x9z18`。隔离专项回归 `72 passed`，编译、差异检查和发布安全门禁通过；测试仅使用临时 SQLite 副本。
+- 两阶段发布报告 `docs/migration_reports/release_runtime_20260818_213446.json` 状态 `completed`，报告 SHA-256：`22a9596057d46496654e7df1af2ff167a2ec467c5a3eac6cbcfdaeee6d874147`；正式备份 `data/backups/carton_erp_before_release_20260818_213447.sqlite3`，SHA-256：`bcc6a13693080e440368983d36f2cd1d3751dfa3fc3b0c37ff3b97355bd72731`。源库与备份 `integrity_check=ok`、外键违规 `0`、核心表计数一致，revision 保持 `uu29v8x9z18`。
+- ERP 单 worker 已重启；`127.0.0.1:8000` 与 `192.168.3.80:8000` 健康接口均 HTTP 200，首页、`/mobile/`、送货打印页均 HTTP 200。发布报告 `human_acceptance_status` 仍为 `not_recorded`，待工厂外部浏览器/真机和 EPSON 实体打印人工验收。

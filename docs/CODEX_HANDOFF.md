@@ -1,5 +1,13 @@
 # Codex 项目交接
 
+## 2026-08-18 v0.22.128 分批报料剩余数量可独立暂缓正式发布
+
+- 老板反馈订单明细 `9864 / CPN087063` 已报料、收料、生产 200 只后，剩余 100 只点击“暂不报料”被旧规则以“已有来料、生产或正式送货事实”拒绝。根因是暂缓资格错误地按整张订单是否存在下游事实判断，没有按当前仍需报料的剩余数量判断。
+- 已移除该整单下游事实禁用条件，同时保留取消/死单/结单/归档、强制结案、已无剩余需求、库存已完全覆盖、已在合并报料或已存在暂缓记录等安全门禁。已有 200 只报料、收料、生产和交付事实不撤销、不改写；“暂不报料”只暂停实时计算出的剩余 100 只，恢复后继续按最新库存和正式报料事实计算。
+- 修复提交 `77c64b2078f5756985d9444db8c08d45a18d8d34` 已快进合并并推送 `factory-current-baseline`。完整报料回归 `50 passed`，暂缓专项 `33 passed`，版本与发布安全门禁 `23 passed`；Python 编译与 `git diff --check` 通过。
+- 正式发布版本 `v0.22.128～分批报料剩余数量可独立暂缓`，无 migration，revision 保持 `ss27v8x9z16`。发布报告 `docs/migration_reports/release_runtime_20260818_123626.json` 状态 `completed`；发布备份 `data/backups/carton_erp_before_release_20260818_123627.sqlite3`，SHA-256 `e1c9a893669d0c64807196d3e994f71d2985ee3e9267a33082453774182bac29`，`integrity_check=ok`、外键违规 0，源库/备份/演练核心表计数一致。
+- 发布后 `/api/health` 返回 HTTP 200。正式库使用 `PRAGMA query_only=ON` 回放：订单明细 9864 的暂缓资格通过，`order=TM20260728006 / product=CPN087063 / already_requisitioned_qty=200 / remaining_requisition_qty=100 / requisition_qty=100`。本轮未自动创建暂缓记录，因为恢复条件属于老板本次操作选择；需在正式页面重新点击“暂不报料”完成业务验收，预期成功 1 条、等候列表显示整单 300 与当前待报 100。
+
 ## 2026-08-15 模具货架层格与实时正视图联通（授权提交推送发布）
 
 - 独立 worktree：`D:\tm-worktrees\erp-mold-rack-live-link-20260815`；候选分支：`codex/mold-rack-live-link-20260815`；基线：`31cbe19160033ed43e6aa982c796c187f9d0851c`。

@@ -8,7 +8,7 @@ import re
 import unicodedata
 from uuid import uuid4
 
-from sqlalchemy import case, delete, func, or_, select, update
+from sqlalchemy import and_, case, delete, func, or_, select, update
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
@@ -1307,6 +1307,79 @@ def active_finished_reservations_by_item_ids(
             0,
         )
     return result
+
+
+def requisition_finished_inventory_coverage_by_item_ids(
+    db: Session,
+    order_item_ids: list[int],
+) -> dict[int, int]:
+    """Return finished-stock coverage that can replace supplier material.
+
+    A finished lot produced by the same order item is an output of material
+    already reported for that order, not an independent stock deduction.
+    Counting both its consumed reservation and the supplier report hides the
+    still-unreported remainder after a partial production/delivery cycle.
+    Pre-existing stock and production output from another order remain valid
+    coverage.
+    """
+
+    clean_ids = sorted(
+        {int(order_item_id) for order_item_id in order_item_ids if order_item_id}
+    )
+    if not clean_ids:
+        return {}
+    rows = db.execute(
+        select(
+            InventoryReservation,
+            ProductionCompletion.order_item_id.label(
+                "source_completion_order_item_id"
+            ),
+        )
+        .join(
+            InventoryLot,
+            InventoryLot.id == InventoryReservation.inventory_lot_id,
+        )
+        .outerjoin(
+            ProductionCompletion,
+            and_(
+                InventoryLot.source_ref_type == "production_completion",
+                InventoryLot.source_ref_id == ProductionCompletion.id,
+            ),
+        )
+        .where(
+            InventoryReservation.order_item_id.in_(clean_ids),
+            InventoryReservation.reservation_type == "finished_order",
+            InventoryReservation.sales_order_item_bom_component_id.is_(None),
+            InventoryReservation.status != "cancelled",
+        )
+        .order_by(InventoryReservation.id)
+    ).all()
+    result: dict[int, int] = {}
+    for reservation, source_completion_order_item_id in rows:
+        order_item_id = int(reservation.order_item_id or 0)
+        if order_item_id <= 0:
+            continue
+        if (
+            source_completion_order_item_id is not None
+            and int(source_completion_order_item_id) == order_item_id
+        ):
+            continue
+        result[order_item_id] = result.get(order_item_id, 0) + max(
+            int(reservation.credited_requirement_quantity or 0)
+            - int(reservation.released_requirement_quantity or 0),
+            0,
+        )
+    return result
+
+
+def requisition_finished_inventory_coverage_qty(
+    db: Session,
+    order_item_id: int,
+) -> int:
+    return requisition_finished_inventory_coverage_by_item_ids(
+        db,
+        [order_item_id],
+    ).get(int(order_item_id), 0)
 
 
 def active_finished_component_reserved_qty(db: Session, snapshot_id: int) -> int:

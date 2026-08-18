@@ -1699,7 +1699,22 @@ def test_receiving_partial_supplier_order_keeps_unreported_remainder_pending(
 
     from app.models.incoming_receipt import IncomingReceiptItem
     from app.models.order import OrderItem
+    from app.models.production import (
+        ProductionCompletion,
+        ProductionCompletionBatch,
+        ProductionTask,
+    )
     from app.models.supplier_requisition_order import SupplierRequisitionOrderItem
+    from app.models.warehouse_inventory import (
+        InventoryLot,
+        InventoryReservation,
+        WarehouseLocation,
+    )
+    from app.services.warehouse_inventory import (
+        active_finished_reserved_qty,
+        requisition_finished_inventory_coverage_qty,
+    )
+    from app.core.time_contract import utc_now_naive
 
     app, session_factory = requisition_app
     with session_factory() as session:
@@ -1740,6 +1755,119 @@ def test_receiving_partial_supplier_order_keeps_unreported_remainder_pending(
             json={"idempotency_key": "partial-300-receive-200"},
         )
         assert received.status_code == 200, received.text
+
+        # Match the formal incident: the first 200 were produced, reserved and
+        # consumed for delivery.  That same-order output proves fulfilment but
+        # is not another material deduction on top of the 200-sheet report.
+        with session_factory() as session:
+            task = session.scalar(
+                select(ProductionTask).where(ProductionTask.order_item_id == 1)
+            )
+            now = utc_now_naive()
+            if task is None:
+                task = ProductionTask(
+                    order_item_id=1,
+                    status="completed",
+                    planned_quantity=200,
+                    ordered_quantity_snapshot=300,
+                    material_received_quantity=200,
+                    material_input_quantity=200,
+                    readiness_basis="material_received",
+                    ready_at=now,
+                    version=1,
+                )
+                session.add(task)
+                session.flush()
+            batch = ProductionCompletionBatch(
+                idempotency_key="partial-300-completion-batch",
+                request_hash="a" * 64,
+                item_count=1,
+                completed_by=1,
+                completed_at=now,
+            )
+            session.add(batch)
+            session.flush()
+            completion = ProductionCompletion(
+                batch_id=batch.id,
+                task_id=task.id,
+                order_item_id=1,
+                expected_version=max(int(task.version or 1), 1),
+                quantity=200,
+                completion_type="primary",
+                material_input_quantity=200,
+                planned_output_quantity=200,
+                actual_output_quantity=200,
+                defective_quantity=0,
+                order_reserved_quantity=200,
+                direct_delivery_quantity=200,
+                stock_quantity=0,
+                surplus_finished_quantity=0,
+                initial_disposition="direct",
+                warehouse_location_id=None,
+                inventory_lot_id=None,
+                status="posted",
+                completed_by=1,
+                completed_at=now,
+            )
+            session.add(completion)
+            session.flush()
+            location = WarehouseLocation(
+                location_code="FG-PARTIAL-300-200",
+                location_name="partial-production-history",
+                warehouse_type="finished",
+                is_active=True,
+                warehouse_floor=1,
+                storage_type="ground",
+                placement_status="placed",
+            )
+            session.add(location)
+            session.flush()
+            lot = InventoryLot(
+                lot_number="FG-PARTIAL-300-200",
+                inventory_type="finished",
+                warehouse_location_id=location.id,
+                quantity_available=0,
+                quantity_reserved=0,
+                quantity_consumed=200,
+                quantity_damaged=0,
+                quantity_scrapped=0,
+                unit="boxes",
+                status="active",
+                source_type="production_completion",
+                source_ref_type="production_completion",
+                source_ref_id=completion.id,
+                stock_date=date(2026, 8, 18),
+                last_movement_at=now,
+                version=1,
+                created_by=1,
+            )
+            session.add(lot)
+            session.flush()
+            session.add(
+                InventoryReservation(
+                    reservation_number="PRS-PARTIAL-300-200",
+                    inventory_lot_id=lot.id,
+                    reservation_type="finished_order",
+                    order_id=1,
+                    order_item_id=1,
+                    reserved_stock_quantity=200,
+                    credited_requirement_quantity=200,
+                    yield_factor=1,
+                    consumed_stock_quantity=200,
+                    released_stock_quantity=0,
+                    consumed_requirement_quantity=200,
+                    released_requirement_quantity=0,
+                    status="consumed",
+                    reserved_by=1,
+                    reserved_at=now,
+                    consumed_by=1,
+                    consumed_at=now,
+                    idempotency_key="partial-300-finished-reserve",
+                )
+            )
+            session.commit()
+            assert active_finished_reserved_qty(session, 1) == 200
+            assert requisition_finished_inventory_coverage_qty(session, 1) == 0
 
         _login(client, "sales")
         pending = client.get("/api/requisition/pending")

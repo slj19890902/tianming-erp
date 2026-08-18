@@ -117,13 +117,13 @@ from app.services.flute_mapping import (
 from app.services.report_crease import crease_width_error
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
-    active_finished_reserved_qty,
-    active_finished_reservations_by_item_ids,
     component_inventory_coverage,
     finished_inventory_candidates,
     has_unconsumed_inventory_reservations,
     inventory_fifo_sort_key,
     normalize_material_code,
+    requisition_finished_inventory_coverage_by_item_ids,
+    requisition_finished_inventory_coverage_qty,
     release_active_finished_reservations_for_items,
     reserve_finished_inventory,
 )
@@ -2421,7 +2421,7 @@ def _current_requisition_requirements(
         int(
             finished_reserved_qty
             if finished_reserved_qty is not None
-            else active_finished_reserved_qty(db, item.id)
+            else requisition_finished_inventory_coverage_qty(db, item.id)
         ),
         0,
     )
@@ -6975,7 +6975,10 @@ def _pending_requisition_eligible_rows(db: Session, user: User) -> list[dict]:
         for _requisition_item, item, order, customer, product in group_rows
     )
     item_ids = [int(item.id) for item, *_ in context_rows]
-    reservation_map = active_finished_reservations_by_item_ids(db, item_ids)
+    reservation_map = requisition_finished_inventory_coverage_by_item_ids(
+        db,
+        item_ids,
+    )
     context = _PendingRequisitionReadContext(
         db,
         context_rows,
@@ -7128,7 +7131,7 @@ def _pending_requisitions_full_payload(
             if is_history_order_number(order.order_number)
         )
         registry = build_display_registry_for_order_ids(db, history_order_ids)
-    reservation_map = active_finished_reservations_by_item_ids(
+    reservation_map = requisition_finished_inventory_coverage_by_item_ids(
         db, [item.id for item, *_ in rows]
     )
     read_context = _PendingRequisitionReadContext(db, rows)
@@ -12064,7 +12067,7 @@ def merge_suggestions(
         query = query.where(Order.customer_id.in_(allowed))
     rows = db.execute(query).all()
 
-    reservation_map = active_finished_reservations_by_item_ids(
+    reservation_map = requisition_finished_inventory_coverage_by_item_ids(
         db, [item.id for item, *_ in rows]
     )
     read_context = _PendingRequisitionReadContext(db, rows)
@@ -12207,7 +12210,7 @@ def create_merge_group(
     rows = _validate_merge_member_rows(db, payload.member_item_ids)
     for item, _order, _customer, _product in rows:
         _require_order_item_customer_access(db, item, user)
-    reservation_map = active_finished_reservations_by_item_ids(
+    reservation_map = requisition_finished_inventory_coverage_by_item_ids(
         db, [item.id for item, *_ in rows]
     )
     supplier_name = (payload.supplier_name or "").strip()

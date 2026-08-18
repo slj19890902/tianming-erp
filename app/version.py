@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.132"
-APP_VERSION_NAME = "来料材质与楞型分离显示"
+APP_VERSION = "v0.22.133"
+APP_VERSION_NAME = "产品规格二维三维全流程统一显示"
 APP_BUILD_DATE = "2026-08-18"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -130,18 +130,33 @@ _V022131_VERIFICATION_STEPS = [
 ]
 
 
-APP_CHANGES = [
+_V022132_CHANGES = [
     "来料页面把材质代码和楞型分开显示；高泰 3D50067 由错误的 K9C7J-AB/EB / AB 修正为 K9C7J / AB。",
     "以后生成供应商报料明细时，无论产品是否绑定历史报价材质主档，都只冻结按层数清洗后的纯材质代码，不再把 -AB/EB 等楞型适用范围尾巴写入材质快照。",
     "既有供应商报料历史快照继续保留原始资料，来料投影会防御性清洗，因此当前待收明细无需改数据库即可正确显示。",
     "本版无数据库迁移，不修改材质主档、产品、订单、报料、来料、库存或生产事实。",
 ]
 
-APP_VERIFICATION_STEPS = [
+_V022132_VERIFICATION_STEPS = [
     "强制刷新来料页面，找到高泰 3D50067 / SRO-20260818-0005，确认材质显示为 K9C7J / AB，不再出现 K9C7J-AB/EB / AB。",
     "核对该明细的产品、数量 200、规格和供应商保持不变；本次只修材质与楞型的展示和新快照写入。",
     "以后对绑定 J6C7E-AB/EB 或 K9C7J-AB/EB 历史材质主档的产品重新报料，确认新供应商明细只保存纯材质代码并单独显示实际楞型。",
     "进入系统备份 → 系统版本，确认版本为 v0.22.132、数据库 revision 仍为 tt28v8x9z17。",
+]
+
+
+APP_CHANGES = [
+    "订单、报料、来料、生产、送货、合同、对账、开票、库存、盘点和移动端统一使用同一产品规格规则，不再由各页面各自拼接尺寸。",
+    "衬板、隔板、刀卡等只有长宽的产品显示为长×宽mm；已登记高度的纸箱显示为长×宽×高mm，不再因为缺少高度而显示空白、未登记或×0。",
+    "有效历史冻结规格继续优先保留；历史值为空、横线或未登记时，读取常用箱结构化长宽高补全展示，纯数字尺寸同时统一×号和mm单位。",
+    "本版无数据库迁移，不批量改写订单、报料、来料、生产、送货、库存或财务历史事实，只修正读取、打印和以后新建快照的规格表达。",
+]
+
+APP_VERIFICATION_STEPS = [
+    "强制刷新订单与送货页面，核对 TM20260818002 中二维组件，以及送货单 YL-20260818-006 的30入装衬板6片，均显示778×1137mm。",
+    "抽查一个普通纸箱，确认订单、生产任务单和送货单均显示长×宽×高mm；再抽查衬板、隔板或刀卡，确认只显示长×宽mm。",
+    "进入待报料、待来料、合同/报价、对账/开票、库存地图或盘点及手机查货，确认同一产品规格一致，不出现空白、未登记、×0或旧式分隔符。",
+    "进入系统备份 → 系统版本，确认版本为 v0.22.133、数据库 revision 仍为 tt28v8x9z17；订单数量、金额、报料、收料、生产和库存数量均未变化。",
 ]
 
 
@@ -235,6 +250,8 @@ def current_release_metadata(
 APP_CHANGELOG = [
     *(f"{APP_VERSION}：本次更新｜{item}" for item in APP_CHANGES),
     *(f"{APP_VERSION}：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.132：本次更新｜{item}" for item in _V022132_CHANGES),
+    *(f"v0.22.132：如何验证｜{item}" for item in _V022132_VERIFICATION_STEPS),
     *(f"v0.22.131：本次更新｜{item}" for item in _V022131_CHANGES),
     *(f"v0.22.131：如何验证｜{item}" for item in _V022131_VERIFICATION_STEPS),
     *(f"v0.22.130：本次更新｜{item}" for item in _V022130_CHANGES),

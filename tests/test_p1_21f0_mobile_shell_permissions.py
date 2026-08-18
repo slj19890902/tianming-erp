@@ -34,7 +34,8 @@ def test_shell_entries_are_backend_permission_derived_and_read_only(
         assert response.status_code == 200
         payload = response.json()
         entries = _entries(payload)
-        assert list(entries) == ["incoming", "warehouse", "production", "pre_delivery"]
+        assert list(entries) == ["lookup", "incoming", "warehouse", "production", "pre_delivery"]
+        assert entries["lookup"]["can_execute"] is False
         assert entries["incoming"]["can_execute"] is True
         assert entries["warehouse"]["can_execute"] is True
         assert entries["production"]["stations"] == ["printing", "die_cut"]
@@ -55,7 +56,7 @@ def test_shell_entries_are_backend_permission_derived_and_read_only(
     with TestClient(app) as client:
         _login(client, "mobile-scoped")
         payload = client.get("/api/mobile/erp/shell").json()
-        assert list(_entries(payload)) == ["incoming", "warehouse", "production"]
+        assert list(_entries(payload)) == ["lookup", "incoming", "warehouse", "production"]
 
     with TestClient(app) as client:
         _login(client, "mobile-picker")
@@ -117,6 +118,7 @@ def test_printing_and_die_cut_station_permissions_are_independent(
 
 def test_shared_mobile_shell_is_lazy_and_preserves_entry_state() -> None:
     for marker in (
+        'data-page="lookup">查询',
         'data-page="incoming">收料',
         'data-page="warehouse">仓库',
         'data-page="production">生产',

@@ -39,7 +39,7 @@ from app.core.time_contract import (
 )
 from app.models.customer import Customer
 from app.models.mold_tool import MoldTool
-from app.models.order import OrderItem
+from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.product_drawing import ProductDrawing
 from app.models.production import ProductionTask
@@ -52,6 +52,7 @@ from app.services.production_workflow import (
     count_production_tasks,
     find_pending_production_task_lookup_rows,
     list_production_tasks,
+    list_production_task_dashboard_rows,
 )
 from app.services.printing_colors import parse_printing_colors
 from app.services.product_specification import (
@@ -95,10 +96,49 @@ can_correct_inventory = PermissionChecker("warehouse.correct")
 can_read_orders = PermissionChecker("orders.view")
 can_read_incoming = PermissionChecker("incoming.view")
 _BEIJING = ZoneInfo("Asia/Shanghai")
+_MOBILE_SEARCH_CATEGORIES = (
+    "orders",
+    "materials",
+    "molds",
+    "production",
+    "inventory",
+)
+_MOBILE_SEARCH_LABELS = {
+    "orders": "订单",
+    "materials": "待收材料",
+    "molds": "模具",
+    "production": "生产任务",
+    "inventory": "产品与库存",
+}
 
 
 def _no_store(response: Response) -> None:
     response.headers["Cache-Control"] = "private, no-store"
+
+
+def _mobile_search_categories(user: User) -> list[str]:
+    permissions = effective_permissions(user)
+    categories: list[str] = []
+    if "orders.view" in permissions:
+        categories.append("orders")
+    if "incoming.view" in permissions:
+        categories.append("materials")
+    if (
+        "warehouse.view" in permissions
+        or "production.die_cut.view" in permissions
+    ):
+        categories.append("molds")
+    if (
+        "orders.view" in permissions
+        and (
+            "production.printing.view" in permissions
+            or "production.die_cut.view" in permissions
+        )
+    ):
+        categories.append("production")
+    if "warehouse.view" in permissions:
+        categories.append("inventory")
+    return [category for category in _MOBILE_SEARCH_CATEGORIES if category in categories]
 
 
 @router.get("/shell")
@@ -132,6 +172,18 @@ def mobile_shell(
     printing_allowed = "production.printing.view" in permissions
     die_cut_allowed = "production.die_cut.view" in permissions
     entries: list[dict] = []
+    search_categories = _mobile_search_categories(user)
+
+    if search_categories:
+        entries.append(
+            {
+                "id": "lookup",
+                "label": "现场查询",
+                "summary": "订单、材料、模具、生产和库存按权限统一查找",
+                "categories": search_categories,
+                "can_execute": False,
+            }
+        )
 
     if "incoming.view" in permissions:
         entries.append(
@@ -198,6 +250,7 @@ def mobile_shell(
             "role": user.role,
         },
         "entries": entries,
+        "search_categories": search_categories,
         "management_summary_allowed": "dashboard.view" in permissions,
         "layout_version": layout_version,
         "as_of": datetime.now(_BEIJING).isoformat(timespec="seconds"),
@@ -1777,6 +1830,471 @@ def product_production_drawing(
             "X-Robots-Tag": "noindex, nofollow",
         },
     )
+
+
+def _mobile_group_payload(
+    category: str,
+    *,
+    total: int,
+    page: int,
+    page_size: int,
+    items: list[dict],
+) -> dict:
+    return {
+        "id": category,
+        "label": _MOBILE_SEARCH_LABELS[category],
+        "total": int(total),
+        "page": int(page),
+        "page_size": int(page_size),
+        "has_more": page * page_size < total,
+        "items": items,
+    }
+
+
+def _resolved_mobile_page(total: int, page: int, page_size: int) -> int:
+    last_page = max(1, (int(total) + page_size - 1) // page_size)
+    return min(max(int(page), 1), last_page)
+
+
+def _mobile_order_search_group(
+    db: Session,
+    *,
+    user: User,
+    keyword: str,
+    page: int,
+    page_size: int,
+) -> dict:
+    pattern = _escaped_like(keyword)
+    statement = (
+        select(OrderItem, Order, Customer)
+        .join(Order, Order.id == OrderItem.order_id)
+        .join(Customer, Customer.id == Order.customer_id)
+        .where(
+            or_(
+                Order.order_number.ilike(pattern, escape="\\"),
+                Order.customer_po.ilike(pattern, escape="\\"),
+                OrderItem.item_order_number.ilike(pattern, escape="\\"),
+                OrderItem.snapshot_product_code.ilike(pattern, escape="\\"),
+                OrderItem.snapshot_product_name.ilike(pattern, escape="\\"),
+                OrderItem.snapshot_spec.ilike(pattern, escape="\\"),
+                Customer.name.ilike(pattern, escape="\\"),
+                Customer.chinese_short_name.ilike(pattern, escape="\\"),
+                Customer.customer_code.ilike(pattern, escape="\\"),
+            )
+        )
+    )
+    visible_customer_ids = _visible_customer_ids(user, db)
+    if visible_customer_ids is not None:
+        statement = statement.where(Order.customer_id.in_(visible_customer_ids))
+    total = int(
+        db.scalar(
+            select(func.count()).select_from(statement.order_by(None).subquery())
+        )
+        or 0
+    )
+    resolved_page = _resolved_mobile_page(total, page, page_size)
+    normalized = keyword.casefold()
+    exact_rank = case(
+        (func.lower(Order.order_number) == normalized, 0),
+        (func.lower(OrderItem.item_order_number) == normalized, 0),
+        (func.lower(OrderItem.snapshot_product_code) == normalized, 0),
+        (func.lower(Order.customer_po) == normalized, 0),
+        else_=1,
+    )
+    rows = db.execute(
+        statement.order_by(
+            exact_rank,
+            Order.delivery_date.is_(None),
+            Order.delivery_date,
+            Order.id.desc(),
+            OrderItem.id,
+        )
+        .offset((resolved_page - 1) * page_size)
+        .limit(page_size)
+    ).all()
+    items = [
+        {
+            "order_id": order.id,
+            "order_item_id": item.id,
+            "order_number": order.order_number,
+            "item_order_number": item.item_order_number,
+            "customer_po": order.customer_po,
+            "customer_name": customer.chinese_short_name or customer.name,
+            "product_code": item.snapshot_product_code,
+            "product_name": item.snapshot_product_name,
+            "specification": item.snapshot_spec,
+            "quantity": int(item.quantity or 0),
+            "remaining_quantity": max(
+                int(item.quantity or 0) - int(item.delivered_quantity or 0), 0
+            ),
+            "delivery_date": order.delivery_date.isoformat()
+            if order.delivery_date
+            else None,
+            "status": order.status,
+        }
+        for item, order, customer in rows
+    ]
+    return _mobile_group_payload(
+        "orders",
+        total=total,
+        page=resolved_page,
+        page_size=page_size,
+        items=items,
+    )
+
+
+def _mobile_material_search_group(
+    db: Session,
+    *,
+    user: User,
+    keyword: str,
+    page: int,
+    page_size: int,
+) -> dict:
+    normalized = keyword.casefold()
+    matches: list[dict] = []
+    for route in _pending_incoming_route_rows(db, user):
+        fields = (
+            route.get("customer_name"),
+            route.get("customer_code"),
+            route.get("order_number"),
+            route.get("item_order_number"),
+            route.get("product_code"),
+            route.get("product_name"),
+            route.get("cardboard_len"),
+            route.get("cardboard_width"),
+        )
+        compact_dimensions = "×".join(
+            value
+            for value in (
+                _number_text(route.get("cardboard_len")),
+                _number_text(route.get("cardboard_width")),
+            )
+            if value
+        ).casefold()
+        compact_query = re.sub(r"\s+", "", normalized).replace("x", "×")
+        if not (
+            any(normalized in str(value or "").casefold() for value in fields)
+            or (compact_query and compact_query in compact_dimensions)
+        ):
+            continue
+        matches.append(route)
+    total = len(matches)
+    resolved_page = _resolved_mobile_page(total, page, page_size)
+    selected = matches[
+        (resolved_page - 1) * page_size : resolved_page * page_size
+    ]
+    items = [
+        {
+            "route_id": str(route.get("item_id")),
+            "customer_name": route.get("customer_name"),
+            "customer_code": route.get("customer_code"),
+            "order_number": route.get("order_number"),
+            "item_order_number": route.get("item_order_number"),
+            "product_code": route.get("product_code"),
+            "product_name": route.get("product_name"),
+            "report_length_mm": _number_text(route.get("cardboard_len")),
+            "report_width_mm": _number_text(route.get("cardboard_width")),
+            "material": route.get("material"),
+            "flute_type": route.get("flute_type"),
+            "crease_type": route.get("snapshot_crease_type"),
+            "crease_values_mm": [
+                _number_text(value)
+                for value in (
+                    route.get("snapshot_crease_left_mm"),
+                    route.get("snapshot_crease_middle_mm"),
+                    route.get("snapshot_crease_right_mm"),
+                )
+                if value is not None
+            ],
+            "pending_quantity": route.get("pending_quantity")
+            or route.get("remaining_quantity")
+            or route.get("requisition_qty"),
+            "unit": route.get("unit") or "张",
+        }
+        for route in selected
+    ]
+    return _mobile_group_payload(
+        "materials",
+        total=total,
+        page=resolved_page,
+        page_size=page_size,
+        items=items,
+    )
+
+
+def _mobile_mold_search_group(
+    db: Session,
+    *,
+    user: User,
+    keyword: str,
+    page: int,
+    page_size: int,
+) -> dict:
+    pattern = _escaped_like(keyword)
+    visible_customer_ids = _visible_customer_ids(user, db)
+    visible_product = [
+        Product.mold_tool_id == MoldTool.id,
+        Product.is_active.is_(True),
+        Product.deleted_at.is_(None),
+    ]
+    if visible_customer_ids is not None:
+        visible_product.append(Product.customer_id.in_(visible_customer_ids))
+    visible_product_exists = exists(
+        select(1).select_from(Product).where(*visible_product)
+    )
+    linked_match = exists(
+        select(1)
+        .select_from(Product)
+        .join(Customer, Customer.id == Product.customer_id)
+        .where(
+            Product.mold_tool_id == MoldTool.id,
+            Product.is_active.is_(True),
+            Product.deleted_at.is_(None),
+            or_(
+                Product.product_code.ilike(pattern, escape="\\"),
+                Product.customer_material_code.ilike(pattern, escape="\\"),
+                Product.product_name.ilike(pattern, escape="\\"),
+                Customer.name.ilike(pattern, escape="\\"),
+                Customer.chinese_short_name.ilike(pattern, escape="\\"),
+            ),
+            *(
+                [Product.customer_id.in_(visible_customer_ids)]
+                if visible_customer_ids is not None
+                else []
+            ),
+        )
+    )
+    statement = (
+        select(MoldTool)
+        .options(selectinload(MoldTool.products).selectinload(Product.customer))
+        .where(
+            or_(
+                MoldTool.mold_code.ilike(pattern, escape="\\"),
+                MoldTool.mold_name.ilike(pattern, escape="\\"),
+                MoldTool.rack_location.ilike(pattern, escape="\\"),
+                linked_match,
+            )
+        )
+    )
+    if visible_customer_ids is not None:
+        statement = statement.where(visible_product_exists)
+    total = int(
+        db.scalar(
+            select(func.count()).select_from(statement.order_by(None).subquery())
+        )
+        or 0
+    )
+    resolved_page = _resolved_mobile_page(total, page, page_size)
+    molds = list(
+        db.scalars(
+            statement.order_by(MoldTool.mold_code, MoldTool.id)
+            .offset((resolved_page - 1) * page_size)
+            .limit(page_size)
+        ).unique().all()
+    )
+    items: list[dict] = []
+    for mold in molds:
+        products = [
+            product
+            for product in mold.products
+            if product.is_active
+            and product.deleted_at is None
+            and (
+                visible_customer_ids is None
+                or product.customer_id in visible_customer_ids
+            )
+        ]
+        items.append(
+            {
+                "mold_id": mold.id,
+                "mold_code": mold.mold_code,
+                "mold_name": mold.mold_name,
+                "rack_location": mold.rack_location,
+                "is_active": bool(mold.is_active),
+                "archive_status": mold.archive_status,
+                "repair_status": mold.repair_status,
+                "products": [
+                    {
+                        "product_id": product.id,
+                        "customer_name": product.customer.chinese_short_name
+                        or product.customer.name,
+                        "product_code": product.product_code,
+                        "product_name": product.product_name,
+                    }
+                    for product in products[:5]
+                ],
+                "lookup_url": f"/mobile/mold-lookup?q={mold.mold_code}&readonly=1",
+            }
+        )
+    return _mobile_group_payload(
+        "molds",
+        total=total,
+        page=resolved_page,
+        page_size=page_size,
+        items=items,
+    )
+
+
+def _mobile_production_search_group(
+    db: Session,
+    *,
+    user: User,
+    keyword: str,
+    page: int,
+    page_size: int,
+) -> dict:
+    normalized = keyword.casefold()
+    rows = list_production_task_dashboard_rows(
+        db,
+        allowed_customer_ids=_visible_customer_ids(user, db),
+        status="pending",
+    )
+    matched = [
+        row
+        for row in rows
+        if any(
+            normalized in str(row.get(field) or "").casefold()
+            for field in ("id", "customer_name", "order_number", "product_code")
+        )
+    ]
+    total = len(matched)
+    resolved_page = _resolved_mobile_page(total, page, page_size)
+    selected = matched[
+        (resolved_page - 1) * page_size : resolved_page * page_size
+    ]
+    selected_ids = [int(row["id"]) for row in selected]
+    full_rows = list_production_tasks(
+        db,
+        allowed_customer_ids=_visible_customer_ids(user, db),
+        status="pending",
+        task_ids=selected_ids,
+    )
+    if {int(row["id"]) for row in full_rows} != set(selected_ids):
+        raise HTTPException(status_code=409, detail="生产任务状态已变化，请重新查询")
+    station: Literal["printing", "die_cut"] = (
+        "printing"
+        if has_permission(user, "production.printing.view")
+        else "die_cut"
+    )
+    projected = _production_station_task_payloads(
+        db,
+        tasks=full_rows,
+        station=station,
+        mold_map_allowed=has_permission(user, "warehouse.view"),
+    )
+    projected_by_id = {int(row["task_id"]): row for row in projected}
+    items = [projected_by_id[task_id] for task_id in selected_ids]
+    return _mobile_group_payload(
+        "production",
+        total=total,
+        page=resolved_page,
+        page_size=page_size,
+        items=items,
+    )
+
+
+def _mobile_inventory_search_group(
+    db: Session,
+    *,
+    user: User,
+    keyword: str,
+    page: int,
+    page_size: int,
+) -> dict:
+    statement = _product_query(db).where(_product_search_condition(keyword))
+    visible_customer_ids = _visible_customer_ids(user, db)
+    if visible_customer_ids is not None:
+        statement = statement.where(Product.customer_id.in_(visible_customer_ids))
+    total = int(
+        db.scalar(
+            select(func.count()).select_from(statement.order_by(None).subquery())
+        )
+        or 0
+    )
+    resolved_page = _resolved_mobile_page(total, page, page_size)
+    normalized = keyword.casefold()
+    exact_rank = case(
+        (func.lower(Product.customer_material_code) == normalized, 0),
+        (func.lower(Product.product_code) == normalized, 0),
+        (func.lower(Customer.customer_code) == normalized, 1),
+        else_=2,
+    )
+    products = list(
+        db.scalars(
+            statement.order_by(exact_rank, Customer.name, Product.id)
+            .offset((resolved_page - 1) * page_size)
+            .limit(page_size)
+        ).all()
+    )
+    summaries = _product_inventory_summaries(db, products)
+    return _mobile_group_payload(
+        "inventory",
+        total=total,
+        page=resolved_page,
+        page_size=page_size,
+        items=[
+            _product_payload(product, inventory_summary=summaries[product.id])
+            for product in products
+        ],
+    )
+
+
+@router.get("/search")
+def search_mobile_portal(
+    response: Response,
+    q: str = Query(min_length=1, max_length=100),
+    category: Literal[
+        "all", "orders", "materials", "molds", "production", "inventory"
+    ] = Query(default="all"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=20),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Search only the business groups currently authorized for this account."""
+
+    _no_store(response)
+    response.headers["X-ERP-Session-Identity"] = f"{user.id}:{user.auth_version}"
+    keyword = q.strip()
+    if not keyword:
+        raise HTTPException(status_code=422, detail="请输入订单、客户、产品、模具或尺寸")
+    allowed_categories = _mobile_search_categories(user)
+    if not allowed_categories:
+        raise HTTPException(status_code=403, detail="当前账号没有可用的现场查询权限")
+    if category != "all" and category not in allowed_categories:
+        raise HTTPException(status_code=403, detail="当前账号没有该类现场资料的查看权限")
+
+    requested_categories = (
+        allowed_categories if category == "all" else [category]
+    )
+    resolved_page = 1 if category == "all" else page
+    resolved_page_size = min(page_size, 5) if category == "all" else page_size
+    builders = {
+        "orders": _mobile_order_search_group,
+        "materials": _mobile_material_search_group,
+        "molds": _mobile_mold_search_group,
+        "production": _mobile_production_search_group,
+        "inventory": _mobile_inventory_search_group,
+    }
+    groups = [
+        builders[group](
+            db,
+            user=user,
+            keyword=keyword,
+            page=resolved_page,
+            page_size=resolved_page_size,
+        )
+        for group in requested_categories
+    ]
+    return {
+        "query": keyword,
+        "category": category,
+        "allowed_categories": allowed_categories,
+        "groups": groups,
+        "read_only": True,
+        "as_of": datetime.now(_BEIJING).isoformat(timespec="seconds"),
+    }
 
 
 @router.get("/products")

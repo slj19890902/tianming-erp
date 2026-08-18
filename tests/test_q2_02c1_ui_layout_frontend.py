@@ -56,7 +56,7 @@ def test_layout_loads_on_login_and_mode_switch_without_blocking_login() -> None:
     assert 'setUiMode("mobile")' not in INDEX
     assert 'state.shell = await apiGet("/api/mobile/erp/shell")' in MOBILE
     assert '"layout_version": layout_version' in (ROOT / "app/api/mobile_erp.py").read_text(encoding="utf-8")
-    assert '["home", "incoming", "warehouse", "production", "pre_delivery"].forEach(page =>' in MOBILE
+    assert '["home", "lookup", "incoming", "warehouse", "production", "pre_delivery"].forEach(page =>' in MOBILE
     assert "navContainer.append(button)" in MOBILE
 
 

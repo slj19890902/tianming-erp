@@ -18,15 +18,16 @@ def test_mobile_shell_hides_navigation_until_permissions_are_known() -> None:
 
 def test_mobile_shell_keeps_only_safe_authorized_page_targets() -> None:
     assert "function safeRequestedPage()" in MOBILE_HTML
-    assert 'new Set(["home", "incoming", "warehouse", "production", "pre_delivery"])' in MOBILE_HTML
+    assert 'new Set(["home", "lookup", "incoming", "warehouse", "production", "pre_delivery"])' in MOBILE_HTML
     assert 'const requested = raw === "search" ? "warehouse" : raw;' in MOBILE_HTML
     assert "window.location.hash" in MOBILE_HTML
     assert "window.history.replaceState" in MOBILE_HTML
     assert 'window.addEventListener("hashchange"' in MOBILE_HTML
-    assert 'const firstPage = state.allowedPages.has(requestedPage) ? requestedPage : "home";' in MOBILE_HTML
-    assert 'target === "/mobile/erp.html"' in INDEX_HTML
+    assert "state.allowedPages.has(requestedPage)" in MOBILE_HTML
+    assert "state.allowedPages.has(restoredPage)" in MOBILE_HTML
+    assert '["/mobile/", "/mobile/erp.html"].includes(target)' in INDEX_HTML
     assert 'new URLSearchParams(window.location.search).get("mobile_page")' in INDEX_HTML
-    assert '["home", "incoming", "warehouse", "production", "pre_delivery"].includes(safeMobilePage)' in INDEX_HTML
+    assert '["home", "lookup", "incoming", "warehouse", "production", "pre_delivery"].includes(safeMobilePage)' in INDEX_HTML
 
 
 def test_mobile_shell_retries_without_parallel_initialization_or_home_requests() -> None:

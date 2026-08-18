@@ -475,12 +475,19 @@ def create_app() -> FastAPI:
             methods=["GET"],
             include_in_schema=False,
         )
-    if not any(route.path == "/mobile/erp.html" for route in application.routes):
-        mobile_erp_path = (
-            Path(__file__).resolve().parents[1]
-            / "static"
-            / "mobile_erp.html"
+    mobile_erp_path = (
+        Path(__file__).resolve().parents[1]
+        / "static"
+        / "mobile_erp.html"
+    )
+    if not any(route.path == "/mobile/" for route in application.routes):
+        application.add_api_route(
+            "/mobile/",
+            lambda: FileResponse(mobile_erp_path),
+            methods=["GET"],
+            include_in_schema=False,
         )
+    if not any(route.path == "/mobile/erp.html" for route in application.routes):
         application.add_api_route(
             "/mobile/erp.html",
             lambda: FileResponse(mobile_erp_path),

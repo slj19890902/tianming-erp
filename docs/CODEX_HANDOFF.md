@@ -4163,3 +4163,11 @@ legacy_ruida_* 原始层
 - 正式库仅以 SQLite `mode=ro` 与 `PRAGMA query_only=ON` 核对：聚晟达客户 `id=93` 的 `chinese_short_name='聚晟达'`；报料单 `SRO-20260817-0002` 的任务 `246/248` 分别冻结 40 张与 4 张，但 `production_label_template_version_snapshot` 均仍为 `current_40x30_v1`；两任务无标签计划刷新回执、该报料单无包装标签打印作业，布局修订表也为空。
 - 当前预览按任务冻结模板版本路由：v2 只显示内容与中文简称，v1 仍显示旧抬头和正式客户名。因此现场旧样式来自两条旧任务尚未受控刷新，而不是代码未同步。现页面又在 `production_label_count > 0` 时隐藏刷新按钮，使已有 44 张 v1 标签的合资格任务没有升级入口，这是待修的前端闭环缺口。
 - 本轮未刷新任务、未创建打印作业、未迁移、未修改正式业务数据；仅更新本交接记录。后续须经老板明确授权，在备份与校验后增加可见的旧模板升级入口，并逐任务刷新 `246/248`，再做 40×30 实体打印人工验收与知识库收口。
+
+## 2026-08-18 P0-7 SRO-20260818-0002 部分报料剩余 100 只恢复完成
+
+- 正式库只读核对确认：供应商报料单 `SRO-20260818-0002` 的订单明细 `9864 / CPN087063` 冻结需求 300 只，正式报料 200 只、收料 200 只、生产及交付 200 只；原状态却被提前写成 `material_status=received / requisition_status=已入库`，导致未报的 100 只从待报料消失。
+- 根因有两层：收料关闭只核对当前供应商明细 200/200，没有核对整笔冻结需求 300；同时待报料把这 200 只材料生产出来的同订单成品预留再次当作额外库存抵扣，形成“报料 200 + 同单成品 200”的重复覆盖。修复后仍保留普通既有成品库存和跨订单成品复用，只排除本订单自身产出的重复抵扣。
+- 第一阶段代码提交 `2859042cfa2cbc8c7db47aaa093e9e39378bff54` 修复部分收料关闭状态，并以 `v0.22.125` 发布；在专用备份 `data/backups/carton_erp_20260818_112724_288155_BEFORE_P0_7_PARTIAL_REQUISITION_STATUS.sqlite3`（SHA-256 `c70fc6fa57e6083175615ae230b052b8b037e5153d911e04e19eae7a07dabade`，`integrity_check=ok`，外键违规 0）后，只修正订单明细 9864 的两项错误状态并清空错误收料关闭人/时间，保留所有数量事实。审计日志 `id=7347 / action_code=requisition.partial_receipt_status.reconcile` 记录修复前后和保留事实。
+- 第二阶段最终代码提交 `36e89606` 修复同单成品重复抵扣；整套报料回归 `50 passed`，成品库存与发布门禁联合 `42 passed`，Python 编译和 `git diff --check` 通过。正式库候选和发布后均以 `PRAGMA query_only=ON` 回放：通用履约成品覆盖仍为 200，报料专用成品覆盖为 0；待报料精确返回需求 300、已报 200、剩余 100、本次建议 100。
+- 最终版本 `v0.22.126｜部分报料与同单成品重复抵扣修复`，无 migration，revision 仍为 `ss27v8x9z16`。正式发布报告 `docs/migration_reports/release_runtime_20260818_115022.json` 状态 `completed`；发布备份 `data/backups/carton_erp_before_release_20260818_115023.sqlite3`，SHA-256 `0a9e8403d53e2b22fc7e36f2f896119221dbcf48136adfdf83954f1c043f780f`，完整性正常、外键违规 0、核心表计数一致。ERP 已恢复，`/api/health` 返回 HTTP 200。

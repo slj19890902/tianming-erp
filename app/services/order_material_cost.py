@@ -127,10 +127,12 @@ def _component(
     sheets = purchase_sheet_quantity(required_piece_qty, 0, mode) + max(
         int(spare_sheet_quantity or 0), 0
     )
-    area = (length * width / SQUARE_MM_PER_M2).quantize(
+    raw_area = length * width / SQUARE_MM_PER_M2
+    area = raw_area.quantize(
         AREA_QUANTUM, rounding=ROUND_HALF_UP
     )
-    total = (area * Decimal(sheets) * square_price).quantize(
+    sheet_cost = raw_area * square_price
+    total = (sheet_cost * Decimal(sheets)).quantize(
         COST_QUANTUM, rounding=ROUND_HALF_UP
     )
     return {
@@ -158,6 +160,9 @@ def _component(
         "flute_rule_id": price_detail.get("rule_id"),
         "effective_square_price": str(
             square_price.quantize(PRICE_QUANTUM, rounding=ROUND_HALF_UP)
+        ),
+        "estimated_sheet_cost": str(
+            sheet_cost.quantize(COST_QUANTUM, rounding=ROUND_HALF_UP)
         ),
         "estimated_material_cost": str(total),
     }, []

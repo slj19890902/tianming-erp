@@ -7884,19 +7884,17 @@ def _supplier_item_snapshot_values(
         else fallback_material_id
     )
     material = db.get(Material, material_id) if material_id is not None else None
-    material_code = (
+    layer_count = (
+        order_item.layer_count
+        if order_item is not None and order_item.layer_count is not None
+        else material.layer_count if material is not None else fallback_layer_count
+    )
+    material_code = _clean_supplier_material_code(
         material.code
         if material is not None
-        else _clean_supplier_material_code(
-            order_item.snapshot_material if order_item is not None else None,
-            (
-                order_item.layer_count
-                if order_item is not None and order_item.layer_count is not None
-                else fallback_layer_count
-            ),
-        )
-        or None
-    )
+        else order_item.snapshot_material if order_item is not None else None,
+        layer_count,
+    ) or None
     supplier_name = (
         (material.supplier_name if material is not None else None)
         or (
@@ -7911,15 +7909,7 @@ def _supplier_item_snapshot_values(
         "material_id": material_id,
         "material_code_snapshot": material_code,
         "supplier_name_snapshot": supplier_name,
-        "layer_count_snapshot": (
-            order_item.layer_count
-            if order_item is not None and order_item.layer_count is not None
-            else (
-                material.layer_count
-                if material is not None
-                else fallback_layer_count
-            )
-        ),
+        "layer_count_snapshot": layer_count,
         "flute_type_snapshot": (
             order_item.flute_type
             if order_item is not None and order_item.flute_type

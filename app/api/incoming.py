@@ -84,6 +84,7 @@ from app.services.audit_log import append_audit_event
 from app.services.requisition_production_print import (
     build_receipt_production_print_package,
 )
+from app.services.supplier_material_display import clean_supplier_material_code
 
 
 router = APIRouter()
@@ -530,7 +531,10 @@ def _supplier_order_item_overlay(
         "specification": (
             f"{length or '-'}×{width or '-'}"
         ),
-        "material": supplier_item.material_code_snapshot,
+        "material": clean_supplier_material_code(
+            supplier_item.material_code_snapshot,
+            supplier_item.layer_count_snapshot,
+        ),
         "flute_type": supplier_item.flute_type_snapshot,
         "requisition_qty": int(supplier_item.requisition_qty or 0),
         "incoming_quantity": int(supplier_item.requisition_qty or 0),

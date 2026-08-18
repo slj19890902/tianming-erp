@@ -26,6 +26,7 @@ def _supplier_item(**overrides):
         "report_length_mm": None,
         "report_width_mm": None,
         "material_code_snapshot": "W618K",
+        "layer_count_snapshot": 5,
         "flute_type_snapshot": "BE",
         "requisition_qty": 5,
         "supplier_name_snapshot": None,
@@ -66,3 +67,25 @@ def test_supplier_overlay_preserves_explicit_one_sided_supplier_dimension():
 
     assert row["cardboard_len"] == 1000
     assert row["cardboard_width"] == 1061
+
+
+def test_supplier_overlay_removes_legacy_flute_suffix_from_material():
+    order_item = SimpleNamespace(
+        cardboard_len=1410,
+        cardboard_width=500,
+        snapshot_report_length_mm=1410,
+        snapshot_report_width_mm=500,
+    )
+
+    row = _supplier_order_item_overlay(
+        _FakeDb(order_item),
+        _supplier_item(
+            product_code="3D50067",
+            material_code_snapshot="K9C7J-AB/EB",
+            flute_type_snapshot="AB",
+            layer_count_snapshot=5,
+        ),
+    )
+
+    assert row["material"] == "K9C7J"
+    assert row["flute_type"] == "AB"

@@ -17,6 +17,7 @@ from app.api.requisition import (
     _clean_supplier_material_code,
     _format_supplier_material,
     _purchase_line_key,
+    _supplier_item_snapshot_values,
 )
 
 
@@ -58,6 +59,45 @@ def test_supplier_material_code_uses_layer_specific_length(
     expected,
 ):
     assert _clean_supplier_material_code(raw_code, layer_count) == expected
+
+
+def test_supplier_item_snapshot_cleans_material_master_flute_suffix():
+    from types import SimpleNamespace
+
+    from app.models.material import Material
+
+    material = SimpleNamespace(
+        id=46,
+        code="K9C7J-AB/EB",
+        supplier_name="supplier",
+        layer_count=5,
+    )
+    order_item = SimpleNamespace(
+        product_id=2467,
+        material_id=46,
+        snapshot_material="K9C7J",
+        snapshot_supplier_name="supplier",
+        layer_count=5,
+        flute_type="AB",
+    )
+
+    class _Db:
+        def get(self, model, identifier):
+            assert model is Material
+            assert identifier == 46
+            return material
+
+    snapshot = _supplier_item_snapshot_values(
+        _Db(),
+        order_item,
+        fallback_material_id=None,
+        fallback_supplier_name=None,
+        fallback_layer_count=None,
+        fallback_flute_type=None,
+    )
+
+    assert snapshot["material_code_snapshot"] == "K9C7J"
+    assert snapshot["flute_type_snapshot"] == "AB"
 
 
 def test_supplier_purchase_line_key_keeps_aaa_and_abc_separate():

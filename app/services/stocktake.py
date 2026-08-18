@@ -23,6 +23,7 @@ from app.services.location_candidates import (
     list_operational_locations,
     operational_location_issue,
 )
+from app.services.product_specification import dimension_specification
 
 
 COUNTABLE_LOT_STATUSES = frozenset({"active", "frozen"})
@@ -224,14 +225,11 @@ def _lot_identity(lot: InventoryLot) -> dict[str, object]:
         product_name = detail.product_name_snapshot
         inventory_code = detail.inventory_code_snapshot
         material_code = detail.material_code_snapshot
-        dimensions = (
+        specification = dimension_specification(
             detail.length_mm,
             detail.width_mm,
             detail.height_mm,
         )
-        specification = " × ".join(
-            str(value) for value in dimensions if value is not None
-        ) or None
 
     return {
         "customer_id": customer_id,

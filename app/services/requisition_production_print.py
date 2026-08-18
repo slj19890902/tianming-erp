@@ -40,6 +40,7 @@ from app.services.production_workflow import (
     cutting_output_factor,
 )
 from app.services.product_qr import product_qr_payload
+from app.services.product_specification import resolved_product_specification
 
 
 _REQUISITION_ITEM_SOURCE = re.compile(r"^requisition_item:(\d+)$")
@@ -672,10 +673,11 @@ def build_supplier_requisition_production_package(
             }
             grouped[group_key] = card
 
-        specification = (
+        specification = resolved_product_specification(
             component_snapshot.snapshot_component_spec
             if component_snapshot is not None
-            else (order_item.snapshot_spec if order_item is not None else None)
+            else (order_item.snapshot_spec if order_item is not None else None),
+            product,
         )
         production_notes = _unique_text(
             [

@@ -20,6 +20,7 @@ from app.models.finance import (
 )
 from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
 from app.models.order import Order, OrderItem
+from app.models.product import Product
 from app.models.production import (
     ProductionCompletion,
     ProductionStockTransfer,
@@ -39,6 +40,7 @@ from app.models.warehouse_inventory import (
     WarehouseLocation,
 )
 from app.services.order_business_status import BUSINESS_STATUS_LABELS
+from app.services.product_specification import resolved_product_specification
 
 logger = logging.getLogger(__name__)
 
@@ -214,6 +216,7 @@ def build_order_item_document_trace(
 ) -> dict[str, Any]:
     """Build a read-only trace from exact foreign-key facts at OrderItem grain."""
 
+    product = db.get(Product, item.product_id) if item.product_id is not None else None
     events: list[dict[str, Any]] = []
     lot_ids: set[int] = set()
     sequence = 0
@@ -841,7 +844,7 @@ def build_order_item_document_trace(
             "item_order_number": item.item_order_number,
             "product_code": item.snapshot_product_code,
             "product_name": item.snapshot_product_name,
-            "specification": item.snapshot_spec,
+            "specification": resolved_product_specification(item.snapshot_spec, product),
             "quantity": item.quantity,
             "delivered_quantity": item.delivered_quantity,
         },

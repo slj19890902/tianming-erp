@@ -1252,11 +1252,11 @@
             stationFact("正式模具位置", task.mold_location || "未登记")
           );
         } else {
-          const cartonSize = [task.carton_length_mm, task.carton_width_mm, task.carton_height_mm].map(value => value ?? "-").join("×");
+          const cartonSize = [task.carton_length_mm, task.carton_width_mm, task.carton_height_mm].filter(value => value !== null && value !== undefined && value !== "").join("×");
           const reportSize = [task.report_length_mm, task.report_width_mm].map(value => value ?? "-").join("×");
           facts.append(
             stationFact("订单数量", `${task.order_quantity || 0}只`),
-            stationFact("纸箱长宽高", `${cartonSize}mm`),
+            stationFact("产品尺寸", cartonSize ? `${cartonSize}mm` : "未填写"),
             stationFact("报料长宽", `${reportSize}mm`),
             stationFact("压线", [task.crease_type, ...(task.crease_values_mm || [])].filter(Boolean).join(" / ") || "未填写")
           );

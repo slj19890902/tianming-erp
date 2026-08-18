@@ -20,6 +20,7 @@ from app.models.product import Product
 from app.api.materials import _parse_layer_weights
 from app.services.pricing import PricingError, calculate_price
 from app.services.product_readiness import material_comparison, product_readiness
+from app.services.product_specification import product_dimension_specification
 from app.services.composite_bom import order_selectable_product_condition
 from app.services.template_regex import safe_regex_finditer, safe_regex_search
 
@@ -2485,10 +2486,9 @@ def _product_candidate(product: Product) -> dict:
 
 
 def _product_spec(product: Product) -> str | None:
-    values = (product.length_mm, product.width_mm, product.height_mm)
-    if any(value is None for value in values):
-        return _extract_spec_dimensions(product.product_name or product.product_code or "") or None
-    return "×".join(format(value, "f").rstrip("0").rstrip(".") for value in values) + "mm"
+    return product_dimension_specification(product) or (
+        _extract_spec_dimensions(product.product_name or product.product_code or "") or None
+    )
 
 
 def _preferred_item_product_code(item: dict) -> str:

@@ -85,6 +85,7 @@ from app.services.requisition_production_print import (
     build_receipt_production_print_package,
 )
 from app.services.supplier_material_display import clean_supplier_material_code
+from app.services.product_specification import resolved_product_specification
 
 
 router = APIRouter()
@@ -1043,6 +1044,9 @@ def _pending_incoming_route_rows(db: Session, user: User) -> list[dict]:
             ).label("product_code"),
             OrderItem.snapshot_product_name.label("product_name"),
             OrderItem.snapshot_spec.label("specification"),
+            Product.length_mm.label("product_length_mm"),
+            Product.width_mm.label("product_width_mm"),
+            Product.height_mm.label("product_height_mm"),
             OrderItem.snapshot_material.label("material"),
             OrderItem.flute_type,
             OrderItem.cardboard_len,
@@ -1064,7 +1068,16 @@ def _pending_incoming_route_rows(db: Session, user: User) -> list[dict]:
         query = query.where(Order.customer_id.in_(visible_customer_ids))
     query = _pending_order_item_query(query)
 
-    base_rows = [dict(row._mapping) for row in db.execute(query)]
+    base_rows = []
+    for row in db.execute(query):
+        data = dict(row._mapping)
+        data["specification"] = resolved_product_specification(
+            data.get("specification"),
+            length_mm=data.pop("product_length_mm", None),
+            width_mm=data.pop("product_width_mm", None),
+            height_mm=data.pop("product_height_mm", None),
+        )
+        base_rows.append(data)
     order_item_ids = [row["item_id"] for row in base_rows]
     order_items_with_requisitions: set[int] = set()
     order_items_with_current_supplier_orders: set[int] = set()
@@ -1119,9 +1132,9 @@ def _pending_incoming_route_rows(db: Session, user: User) -> list[dict]:
                     requisition_item.product_name_snapshot
                     or data.get("product_name")
                 )
-                component_data["specification"] = (
-                    requisition_item.specification_snapshot
-                    or data.get("specification")
+                component_data["specification"] = resolved_product_specification(
+                    requisition_item.specification_snapshot,
+                    fallback_snapshots=(data.get("specification"),),
                 )
                 component_data["material"] = (
                     requisition_item.material_snapshot
@@ -1301,6 +1314,9 @@ def _rows(
                 Product.product_code,
             ).label("product_code"),
             OrderItem.snapshot_spec.label("specification"),
+            Product.length_mm.label("product_length_mm"),
+            Product.width_mm.label("product_width_mm"),
+            Product.height_mm.label("product_height_mm"),
             OrderItem.snapshot_material.label("material"),
             OrderItem.flute_type,
             OrderItem.quantity,
@@ -1359,6 +1375,12 @@ def _rows(
     base_rows = []
     for row in db.execute(query):
         data = dict(row._mapping)
+        data["specification"] = resolved_product_specification(
+            data.get("specification"),
+            length_mm=data.pop("product_length_mm", None),
+            width_mm=data.pop("product_width_mm", None),
+            height_mm=data.pop("product_height_mm", None),
+        )
         data["incoming_quantity"] = (
             data["requisition_qty"]
             if data.get("requisition_qty") is not None
@@ -1444,7 +1466,11 @@ def _rows(
                 "product_code": req.product_code_snapshot
                 or item.snapshot_product_code
                 or product.product_code,
-                "specification": req.specification_snapshot or item.snapshot_spec,
+                "specification": resolved_product_specification(
+                    req.specification_snapshot,
+                    product,
+                    fallback_snapshots=(item.snapshot_spec,),
+                ),
                 "material": req.material_snapshot or item.snapshot_material,
                 "flute_type": item.flute_type,
                 "quantity": item.quantity,
@@ -2371,11 +2397,17 @@ def _receipt_fact_rows(
             "specification": (
                 f"{supplier_item.report_length_mm or '-'}×{supplier_item.report_width_mm or '-'}"
                 if supplier_item is not None
-                else requisition_item.specification_snapshot
-                if requisition_item
+                else resolved_product_specification(
+                    requisition_item.specification_snapshot
+                    if requisition_item
+                    else None,
+                    product,
+                    fallback_snapshots=(item.snapshot_spec,),
+                )
+                if product is not None or requisition_item is not None
                 else None
             )
-            or item.snapshot_spec,
+            or resolved_product_specification(item.snapshot_spec, product),
             "material": material_code,
             "material_code": material_code,
             "flute_type": (

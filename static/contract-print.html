@@ -51,10 +51,11 @@
     const money = value => value === null || value === undefined || value === "" ? "-" : Number(value).toFixed(2);
     const compactNumber = value => Number.isFinite(Number(value)) ? String(Math.round(Number(value))) : String(value || "");
     const specification = item => {
-      const dimensions = [item.length_mm,item.width_mm,item.height_mm];
-      if (dimensions.every(value => value !== null && value !== undefined && value !== "")) return dimensions.map(compactNumber).join("×");
+      const dimensions = [item.length_mm,item.width_mm]
+        .filter(value => value !== null && value !== undefined && value !== "");
+      if (item.height_mm !== null && item.height_mm !== undefined && item.height_mm !== "") dimensions.push(item.height_mm);
+      if (dimensions.length >= 2) return `${dimensions.map(compactNumber).join("×")}mm`;
       return String(item.specification || "-")
-        .replace(/mm/gi, "")
         .replace(/-?\d+(?:\.\d+)?/g, value => compactNumber(value));
     };
     const formatDate = value => {

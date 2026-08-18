@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
+import re
 from typing import Any
 
 from app.models.product import Product
@@ -14,6 +15,11 @@ _MISSING_SPECIFICATIONS = {
     "未登记",
     "规格未登记",
 }
+_DIMENSION_SPECIFICATION = re.compile(
+    r"^\s*(\d+(?:\.\d+)?)\s*[xX×*]\s*(\d+(?:\.\d+)?)"
+    r"(?:\s*[xX×*]\s*(\d+(?:\.\d+)?))?\s*(?:mm)?\s*$",
+    re.IGNORECASE,
+)
 
 
 def _positive_decimal(value: Any) -> Decimal | None:
@@ -61,6 +67,19 @@ def product_dimension_specification(product: Product | None) -> str | None:
     )
 
 
+def normalized_specification_text(value: Any) -> str | None:
+    """Normalize a pure 2D/3D size while preserving non-dimensional text."""
+
+    text = str(value or "").strip()
+    if text in _MISSING_SPECIFICATIONS:
+        return None
+    match = _DIMENSION_SPECIFICATION.fullmatch(text)
+    if match is None:
+        return text
+    dimensions = [Decimal(part) for part in match.groups() if part is not None]
+    return "×".join(_compact_decimal(part) for part in dimensions) + "mm"
+
+
 def resolved_product_specification(
     snapshot: Any,
     product: Product | None = None,
@@ -73,9 +92,9 @@ def resolved_product_specification(
     """Keep a meaningful frozen value; repair only missing placeholders."""
 
     for candidate in (snapshot, *fallback_snapshots):
-        text = str(candidate or "").strip()
-        if text not in _MISSING_SPECIFICATIONS:
-            return text
+        normalized = normalized_specification_text(candidate)
+        if normalized is not None:
+            return normalized
     if product is not None:
         return product_dimension_specification(product)
     return dimension_specification(length_mm, width_mm, height_mm)

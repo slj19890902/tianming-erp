@@ -74,6 +74,7 @@ from app.services.ordered_finished_receipt_return import (
     restore_ordered_finished_receipt_shortage,
 )
 from app.services.warehouse_inventory import WarehouseInventoryError
+from app.services.product_specification import resolved_product_specification
 
 
 router = APIRouter()
@@ -641,6 +642,9 @@ def _statement_detail_response(
                 DeliveryItem.specification_snapshot,
                 OrderItem.snapshot_spec,
             ).label("specification"),
+            Product.length_mm.label("product_length_mm"),
+            Product.width_mm.label("product_width_mm"),
+            Product.height_mm.label("product_height_mm"),
             OrderItem.snapshot_material.label("material"),
             DeliveryItem.ordered_quantity_snapshot,
             DeliveryItem.delivered_quantity.label("actual_delivery_quantity"),
@@ -689,6 +693,16 @@ def _statement_detail_response(
             SettlementRecord.account,
         ).where(SettlementRecord.statement_id == statement.id)
     ).all()
+    statement_items = []
+    for item in items:
+        data = dict(item._mapping)
+        data["specification"] = resolved_product_specification(
+            data.get("specification"),
+            length_mm=data.pop("product_length_mm", None),
+            width_mm=data.pop("product_width_mm", None),
+            height_mm=data.pop("product_height_mm", None),
+        )
+        statement_items.append(data)
     return _redact_statement_costs(
         {
             "id": statement.id,
@@ -707,12 +721,7 @@ def _statement_detail_response(
             "item_count": len(items),
             "invoice_count": len(invoices),
             "settlement_count": len(settlements),
-            "items": [
-                {
-                    **dict(item._mapping),
-                }
-                for item in items
-            ],
+            "items": statement_items,
             "invoices": [dict(row._mapping) for row in invoices],
             "settlements": [dict(row._mapping) for row in settlements],
         },
@@ -761,6 +770,9 @@ def export_statement_excel(
                 DeliveryItem.specification_snapshot,
                 OrderItem.snapshot_spec,
             ).label("snapshot_spec"),
+            Product.length_mm.label("product_length_mm"),
+            Product.width_mm.label("product_width_mm"),
+            Product.height_mm.label("product_height_mm"),
             OrderItem.snapshot_material,
             DeliveryItem.ordered_quantity_snapshot,
             DeliveryItem.delivered_quantity.label("actual_delivery_quantity"),
@@ -781,6 +793,11 @@ def export_statement_excel(
         .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
         .outerjoin(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
         .outerjoin(Order, Order.id == OrderItem.order_id)
+        .outerjoin(
+            Product,
+            Product.id
+            == func.coalesce(DeliveryItem.product_id, OrderItem.product_id),
+        )
         .where(StatementItem.statement_id == statement.id)
         .order_by(Delivery.delivery_date, Delivery.delivery_number)
     ).all()
@@ -866,7 +883,12 @@ def export_statement_excel(
                 line.delivery_date,
                 line.delivery_number,
                 line.snapshot_product_name,
-                line.snapshot_spec,
+                resolved_product_specification(
+                    line.snapshot_spec,
+                    length_mm=line.product_length_mm,
+                    width_mm=line.product_width_mm,
+                    height_mm=line.product_height_mm,
+                ),
                 line.snapshot_material,
                 line.ordered_quantity_snapshot,
                 line.actual_delivery_quantity,
@@ -1877,6 +1899,9 @@ def _pending_statement_query(
                 DeliveryItem.specification_snapshot,
                 OrderItem.snapshot_spec,
             ).label("specification"),
+            Product.length_mm.label("product_length_mm"),
+            Product.width_mm.label("product_width_mm"),
+            Product.height_mm.label("product_height_mm"),
             DeliveryItem.ordered_quantity_snapshot,
             DeliveryItem.delivered_quantity.label("actual_delivery_quantity"),
             DeliveryItem.over_delivery_quantity,
@@ -1955,6 +1980,12 @@ def _pending_statement_groups(
     }
     grouped: dict[int, dict] = {}
     for data in raw_rows:
+        data["specification"] = resolved_product_specification(
+            data.get("specification"),
+            length_mm=data.pop("product_length_mm", None),
+            width_mm=data.pop("product_width_mm", None),
+            height_mm=data.pop("product_height_mm", None),
+        )
         receivable = Decimal(str(data["receivable_amount"] or 0)).quantize(
             MONEY,
             rounding=ROUND_HALF_UP,

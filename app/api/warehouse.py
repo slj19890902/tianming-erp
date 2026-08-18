@@ -261,6 +261,7 @@ from app.services.location_candidates import (
     operational_location_payload,
 )
 from app.services.requisition_quantities import cutting_factor
+from app.services.product_specification import product_dimension_specification
 from app.services.master_data_versioning import (
     apply_versioned_update,
     record_versioned_create,
@@ -3293,11 +3294,7 @@ def _semi_lot_assignment_response(
                 "product_code": product.product_code,
                 "customer_material_code": product.customer_material_code,
                 "product_name": product.product_name,
-                "specification": " × ".join(
-                    str(round(value))
-                    for value in (product.length_mm, product.width_mm, product.height_mm)
-                    if value is not None
-                ),
+                "specification": product_dimension_specification(product),
                 "report_length_mm": report_length,
                 "report_width_mm": report_width,
                 "material_code": material_code or None,
@@ -5212,11 +5209,7 @@ def floor3_product_candidates(
                 "product_code": product.product_code,
                 "customer_material_code": product.customer_material_code,
                 "product_name": product.product_name,
-                "specification": " × ".join(
-                    str(round(value))
-                    for value in (product.length_mm, product.width_mm, product.height_mm)
-                    if value is not None
-                ),
+                "specification": product_dimension_specification(product),
                 "matched_order_numbers": sorted(
                     set(orders_by_product.get(product.id, []))
                 )[:10],
@@ -10315,11 +10308,7 @@ def reference_products(
                 "id": row.id,
                 "product_code": row.product_code,
                 "product_name": row.product_name,
-                "specification": " × ".join(
-                    str(round(value))
-                    for value in (row.length_mm, row.width_mm, row.height_mm)
-                    if value is not None
-                ),
+                "specification": product_dimension_specification(row),
             }
             for row in rows
         ]
@@ -14169,15 +14158,7 @@ def search_template_locations(
                 "mold_tool_id": mold_tool.id if mold_tool else None,
                 "mold_code": mold_tool.mold_code if mold_tool else None,
                 "mold_name": mold_tool.mold_name if mold_tool else None,
-                "specification": " × ".join(
-                    str(round(value))
-                    for value in (
-                        product.length_mm,
-                        product.width_mm,
-                        product.height_mm,
-                    )
-                    if value is not None
-                ),
+                "specification": product_dimension_specification(product),
                 "template_location": (
                     mold_tool.rack_location if mold_tool else product.die_cut_path
                 ),
@@ -14403,21 +14384,27 @@ def list_lots(
         )
         spec_parts = normalized_spec.split("×")
         try:
-            length_mm, width_mm, height_mm = (int(part) for part in spec_parts)
+            dimensions = [int(part) for part in spec_parts]
         except ValueError as error:
             raise HTTPException(
                 status_code=422,
-                detail="成品规格请按 长×宽×高（毫米）填写",
+                detail="成品规格请按 长×宽 或 长×宽×高（毫米）填写",
             ) from error
-        if len(spec_parts) != 3 or min(length_mm, width_mm, height_mm) <= 0:
-            raise HTTPException(status_code=422, detail="成品规格请按 长×宽×高（毫米）填写")
+        if len(dimensions) not in {2, 3} or min(dimensions) <= 0:
+            raise HTTPException(
+                status_code=422,
+                detail="成品规格请按 长×宽 或 长×宽×高（毫米）填写",
+            )
         finished_conditions.extend(
             (
-                FinishedGoodsInventoryDetail.length_mm == length_mm,
-                FinishedGoodsInventoryDetail.width_mm == width_mm,
-                FinishedGoodsInventoryDetail.height_mm == height_mm,
+                FinishedGoodsInventoryDetail.length_mm == dimensions[0],
+                FinishedGoodsInventoryDetail.width_mm == dimensions[1],
             )
         )
+        if len(dimensions) == 3:
+            finished_conditions.append(
+                FinishedGoodsInventoryDetail.height_mm == dimensions[2]
+            )
     if finished_conditions:
         query = query.where(
             InventoryLot.id.in_(

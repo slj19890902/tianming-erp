@@ -4935,7 +4935,7 @@
                 <div class="field"><label>正式存货编码</label><input class="input" v-model.trim="quotationConvertForm.product_code" /></div>
                 <div class="field"><label>产品名称</label><input class="input" v-model.trim="quotationConvertForm.product_name" /></div>
                 <div class="field"><label>箱型</label><div class="input" style="background:#f5f7fa">{{ quotationConvertForm.box_type || "-" }}</div></div>
-                <div class="field"><label>纸箱规格</label><div class="input" style="background:#f5f7fa">{{ quotationConvertForm.length_mm || "-" }} × {{ quotationConvertForm.width_mm || "-" }} × {{ quotationConvertForm.height_mm || "-" }} mm</div></div>
+                <div class="field"><label>产品规格</label><div class="input" style="background:#f5f7fa">{{ spec(quotationConvertForm) }}</div></div>
               </div>
               <div class="product-form-row order-item-material-row">
                 <div class="field"><label>材质</label><div class="input" style="background:#f5f7fa">{{ quotationConvertForm.material_display || "-" }}</div></div>
@@ -19056,10 +19056,12 @@
             const compact = value => String(value || "")
               .replace(/mm/gi, "")
               .replace(/-?\d+(?:\.\d+)?/g, number => String(Math.round(Number(number))));
-            if (row?.specification) return compact(row.specification);
+            const stored = String(row?.specification || "").trim();
+            if (stored && !["-", "—", "－", "未登记", "规格未登记"].includes(stored)) return compact(stored);
             const values = [row?.length_mm, row?.width_mm, row?.height_mm];
-            if (!values.every(value => value !== null && value !== undefined && value !== "")) return "-";
-            return values.map(value => Math.round(Number(value))).join("×");
+            if (values.slice(0, 2).some(value => value === null || value === undefined || value === "")) return "-";
+            return values.filter(value => value !== null && value !== undefined && value !== "")
+              .map(value => Math.round(Number(value))).join("×");
           },
           contractMaterialText(row) {
             if (!row) return "";
@@ -24493,7 +24495,7 @@
               try {
                 const { data } = await axios.get(`/api/master/products/${item.matched_product_id}`);
                 item.product_name = data.product_name || "";
-                item.specification = data.length_mm ? `${Math.round(data.length_mm)}×${Math.round(data.width_mm)}×${Math.round(data.height_mm)}` : (item.raw_spec_model || "");
+                 item.specification = this.spec(data) !== "-" ? this.spec(data) : (item.raw_spec_model || "");
                 item.layer_count = data.layer_count || null;
                 item.flute_type = data.flute_type || null;
                 item.material_base_code = (data.material_code || "").split("-")[0];

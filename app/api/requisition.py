@@ -114,6 +114,7 @@ from app.services.flute_mapping import (
     seven_layer_code_error,
     validate_flute_for_write,
 )
+from app.services.product_specification import resolved_product_specification
 from app.services.report_crease import crease_width_error
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
@@ -1754,7 +1755,10 @@ class _PendingRequisitionReadContext:
             "parent_order_item_id": item.id,
             "product_code": item.snapshot_product_code,
             "product_name": item.snapshot_product_name,
-            "specification": item.snapshot_spec,
+            "specification": resolved_product_specification(
+                item.snapshot_spec,
+                self._product_by_item_id.get(item.id),
+            ),
             "material": item.snapshot_material,
             "supplier_name": item.snapshot_supplier_name,
             "layer_count": item.layer_count,
@@ -2460,7 +2464,7 @@ def _bom_pending_parent_requirement(
         "parent_order_item_id": item.id,
         "product_code": item.snapshot_product_code,
         "product_name": item.snapshot_product_name,
-        "specification": item.snapshot_spec,
+        "specification": resolved_product_specification(item.snapshot_spec, item.product),
         "material": item.snapshot_material,
         "supplier_name": item.snapshot_supplier_name,
         "layer_count": item.layer_count,
@@ -4093,6 +4097,12 @@ def _requisition_hold_dict(
         if release_ready
         else "waiting"
     )
+    order_item = db.get(OrderItem, hold.order_item_id) if hold.order_item_id else None
+    product = (
+        db.get(Product, order_item.product_id)
+        if order_item is not None and order_item.product_id is not None
+        else None
+    )
     return {
         "id": hold.id,
         "order_item_id": hold.order_item_id,
@@ -4103,7 +4113,11 @@ def _requisition_hold_dict(
         "item_sequence": hold.order_item_sequence_snapshot,
         "product_code": hold.product_code_snapshot,
         "product_name": hold.product_name_snapshot,
-        "specification": hold.specification_snapshot,
+        "specification": resolved_product_specification(
+            hold.specification_snapshot,
+            product,
+            fallback_snapshots=(order_item.snapshot_spec if order_item else None,),
+        ),
         "quantity": hold.quantity_snapshot,
         "release_mode": hold.release_mode,
         "previous_order_item_id": hold.previous_order_item_id,
@@ -4440,7 +4454,11 @@ def _merge_group_dict(
                 "customer_name": customer.name,
                 "product_code": product_code,
                 "product_name": product_name,
-                "specification": req_item.specification_snapshot or order_item.snapshot_spec,
+                "specification": resolved_product_specification(
+                    req_item.specification_snapshot,
+                    product,
+                    fallback_snapshots=(order_item.snapshot_spec,),
+                ),
                 "quantity": order_item.quantity,
                 "finished_inventory_reserved_qty": finished_reserved_qty,
                 "production_required_qty": production_required_qty,
@@ -6435,7 +6453,7 @@ def preview_order_entry_holds(
         ).order_by(OrderItem.created_at.desc(), OrderItem.id.desc()).limit(20)).all()
         candidates = [{"order_item_id": item.id, "order_number": order.order_number,
                        "item_order_number": item.item_order_number, "remaining_quantity": max(int(item.quantity)-int(item.delivered_quantity), 0),
-                       "specification": item.snapshot_spec, "material": item.snapshot_material, "flute_type": item.flute_type}
+                       "specification": resolved_product_specification(item.snapshot_spec, item.product), "material": item.snapshot_material, "flute_type": item.flute_type}
                       for item, order in rows]
         warnings: list[str] = []
         selected = None
@@ -6520,7 +6538,7 @@ def create_requisition_holds(
             continue
         seen_item_ids.add(selection.order_item_id)
         try:
-            item, order, customer, _product = _ensure_requisition_hold_eligible(
+            item, order, customer, product = _ensure_requisition_hold_eligible(
                 db,
                 selection.order_item_id,
                 user=user,
@@ -6551,7 +6569,10 @@ def create_requisition_holds(
                 order_item_sequence_snapshot=item.item_sequence,
                 product_code_snapshot=item.snapshot_product_code,
                 product_name_snapshot=item.snapshot_product_name,
-                specification_snapshot=item.snapshot_spec,
+                specification_snapshot=resolved_product_specification(
+                    item.snapshot_spec,
+                    product,
+                ),
                 quantity_snapshot=int(item.quantity or 0),
                 release_mode=selection.release_mode,
                 previous_order_item_id=previous_item.id if previous_item else None,
@@ -7218,7 +7239,7 @@ def _pending_requisitions_full_payload(
                     "product_version": product.version,
                     "product_code": item.snapshot_product_code or product.product_code,
                     "product_name": item.snapshot_product_name,
-                    "specification": item.snapshot_spec,
+                    "specification": resolved_product_specification(item.snapshot_spec, product),
                     "material": item.snapshot_material,
                     "customer_material_code": item.snapshot_original_material_code
                     or item.snapshot_material,
@@ -7354,7 +7375,7 @@ def _pending_requisitions_full_payload(
                     "product_version": product.version,
                     "product_code": item.snapshot_product_code or product.product_code,
                     "product_name": item.snapshot_product_name,
-                    "specification": item.snapshot_spec,
+                    "specification": resolved_product_specification(item.snapshot_spec, product),
                     "material": item.snapshot_material,
                     "customer_material_code": item.snapshot_original_material_code
                     or item.snapshot_material,
@@ -7457,7 +7478,7 @@ def _pending_requisitions_full_payload(
                 "product_version": product.version,
                 "product_code": item.snapshot_product_code or product.product_code,
                 "product_name": item.snapshot_product_name,
-                "specification": item.snapshot_spec,
+                "specification": resolved_product_specification(item.snapshot_spec, product),
                 "material": item.snapshot_material,
                 "customer_material_code": item.snapshot_original_material_code
                 or item.snapshot_material,
@@ -9730,7 +9751,7 @@ def list_requisition_items(
                 "product_id": product.id,
                 "product_code": item.snapshot_product_code or product.product_code,
                 "product_name": item.snapshot_product_name,
-                "specification": item.snapshot_spec,
+                "specification": resolved_product_specification(item.snapshot_spec, product),
                 "material": item.snapshot_material,
                 "quantity": item.quantity,
                 "delivery_date": order.delivery_date,
@@ -9974,7 +9995,10 @@ def create_batch(
                             material_snapshot=item.snapshot_material,
                             product_code_snapshot=item.snapshot_product_code,
                             product_name_snapshot=item.snapshot_product_name,
-                            specification_snapshot=item.snapshot_spec,
+                            specification_snapshot=resolved_product_specification(
+                                item.snapshot_spec,
+                                product,
+                            ),
                             remark=(line.remark or "").strip() or None,
                             status="有效",
                         )
@@ -10295,7 +10319,10 @@ def create_batch(
                         if len(components) > 1
                         else item.snapshot_product_name
                     ),
-                    specification_snapshot=item.snapshot_spec,
+                    specification_snapshot=resolved_product_specification(
+                        item.snapshot_spec,
+                        product,
+                    ),
                     remark=component_remark,
                     status="有效",
                 )
@@ -12450,7 +12477,7 @@ def search_history(
                     item.snapshot_product_code or product.product_code
                 ),
                 "product_name": item.snapshot_product_name,
-                "specification": item.snapshot_spec,
+                "specification": resolved_product_specification(item.snapshot_spec, product),
                 "material_id": product.material_id,
                 "material": item.snapshot_material,
                 "cardboard_len": item.cardboard_len,
@@ -12553,7 +12580,7 @@ def merge_suggestions(
             "customer_name": customer.name,
             "product_code": item.snapshot_product_code or product.product_code,
             "product_name": item.snapshot_product_name,
-            "specification": item.snapshot_spec,
+            "specification": resolved_product_specification(item.snapshot_spec, product),
             "material_id": item.material_id,
             "material_display": _format_supplier_material(
                 material.code if material else item.snapshot_material,
@@ -12678,7 +12705,10 @@ def create_merge_group(
                     material_snapshot=item.snapshot_material,
                     product_code_snapshot=item.snapshot_product_code or product.product_code,
                     product_name_snapshot=item.snapshot_product_name,
-                    specification_snapshot=item.snapshot_spec,
+                    specification_snapshot=resolved_product_specification(
+                        item.snapshot_spec,
+                        product,
+                    ),
                     remark=(payload.remark or "").strip() or None,
                     status="merged_pending",
                 )

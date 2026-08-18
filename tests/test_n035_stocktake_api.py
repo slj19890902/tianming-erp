@@ -369,7 +369,7 @@ def test_countable_lots_include_only_finished_and_keep_real_specification_snapsh
             ids["lot2"],
         }
         assert all(row["inventory_type"] == "finished" for row in lots)
-        assert all(row["specification"] == "500 × 300 × 200" for row in lots)
+        assert all(row["specification"] == "500×300×200mm" for row in lots)
 
         order = _submit(client, ids, key="n035-finished-only-submit")
         assert {item["inventory_lot_id"] for item in order["items"]} == {
@@ -377,7 +377,7 @@ def test_countable_lots_include_only_finished_and_keep_real_specification_snapsh
             ids["lot2"],
         }
         assert all(
-            item["specification"] == "500 × 300 × 200"
+            item["specification"] == "500×300×200mm"
             for item in order["items"]
         )
 
@@ -389,7 +389,7 @@ def test_countable_lots_include_only_finished_and_keep_real_specification_snapsh
             ids["lot2"],
         }
         assert all(
-            item.specification_snapshot == "500 × 300 × 200"
+            item.specification_snapshot == "500×300×200mm"
             for item in row.items
         )
 

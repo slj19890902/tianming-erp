@@ -28,6 +28,7 @@ from app.models.order import OrderItem
 from app.models.product import Product
 from app.models.user import User
 from app.services.master_data_versioning import apply_versioned_update
+from app.services.product_specification import product_dimension_specification
 from app.services.requisition_quantities import (
     DEFAULT_CUTTING_MODE,
     cutting_factor,
@@ -274,11 +275,7 @@ def _bom_row_values(row: Any, *, parent_code: str, fallback_position: int) -> di
 
 
 def _component_product_summary(product: Product) -> dict[str, Any]:
-    spec = "×".join(
-        str(value)
-        for value in (product.length_mm, product.width_mm, product.height_mm)
-        if value is not None
-    ) or None
+    spec = product_dimension_specification(product)
     return {
         "id": product.id,
         "customer_id": product.customer_id,
@@ -782,11 +779,7 @@ def _snapshot_kwargs(
         and relation.get("mold_tool_id") == component.mold_tool_id
     ):
         selected_mold = component.mold_tool
-    spec = "×".join(
-        str(value)
-        for value in (component.length_mm, component.width_mm, component.height_mm)
-        if value is not None
-    ) or None
+    spec = product_dimension_specification(component)
     semantic_values = [
         (("sales_order_item_id", "order_item_id"), order_item.id),
         (("parent_product_id",), parent.id),

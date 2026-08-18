@@ -27,6 +27,7 @@ from app.models.warehouse_inventory import (
     WarehouseLocation,
 )
 from app.services.warehouse_pallet_standard import standard_pallet_contract
+from app.services.product_specification import dimension_specification
 
 
 AGE_BUCKETS = (
@@ -91,12 +92,11 @@ def _lot_business_fields(row: InventoryLot) -> dict:
             "product_name": detail.product_name_snapshot,
             "customer_id": detail.owner_customer_id,
             "customer_name": detail.owner_customer_name_snapshot or "通用库存",
-            "specification": "×".join(
-                str(value)
-                for value in (detail.length_mm, detail.width_mm, detail.height_mm)
-                if value is not None
-            )
-            or None,
+            "specification": dimension_specification(
+                detail.length_mm,
+                detail.width_mm,
+                detail.height_mm,
+            ),
             "material": detail.material_code_snapshot,
         }
     if row.semi_finished_detail is not None:

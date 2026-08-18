@@ -6129,7 +6129,10 @@ def _create_wait_previous_batch_holds(
             customer_id_snapshot=order.customer_id, customer_name_snapshot="",
             order_number_snapshot=order.order_number, order_item_sequence_snapshot=item.item_sequence,
             product_code_snapshot=code, product_name_snapshot=item.snapshot_product_name or "",
-            specification_snapshot=item.snapshot_spec, quantity_snapshot=item.quantity,
+            specification_snapshot=resolved_product_specification(
+                item.snapshot_spec,
+                db.get(Product, item.product_id),
+            ), quantity_snapshot=item.quantity,
             release_mode="previous_batch_completed", previous_order_item_id=previous.id,
             previous_order_item_id_snapshot=previous.id, status="active", version=1,
             created_by=user.id, updated_by=user.id,

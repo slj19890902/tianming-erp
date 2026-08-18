@@ -25,6 +25,7 @@ from app.models.user import User
 from app.services.tianhua_pre_delivery import STATUS_LABELS, batch_dict, create_batch, draft_dict, ensure_draft_delivery, save_draft
 from app.services.delivery_numbering import DeliveryNumberingError
 from app.services.secure_uploads import IMAGE_POLICY, UploadValidationError, read_validated_upload
+from app.services.product_specification import resolved_product_specification
 
 router=APIRouter()
 mobile_router=APIRouter()
@@ -170,18 +171,10 @@ def _token_scope(token:str,db:Session) -> tuple[TianhuaPreDeliveryImportBatch,Ti
 
 
 def _mobile_specification(order_item:OrderItem|None,product:Product|None) -> str:
-    if order_item is not None and (order_item.snapshot_spec or "").strip():
-        return order_item.snapshot_spec.strip()
-    if product is None:
-        return ""
-    dimensions=(product.length_mm,product.width_mm,product.height_mm)
-    if any(value is None for value in dimensions):
-        return ""
-    formatted=[]
-    for value in dimensions:
-        number=float(value)
-        formatted.append(str(int(number)) if number.is_integer() else f"{number:g}")
-    return f"{'×'.join(formatted)}mm"
+    return resolved_product_specification(
+        order_item.snapshot_spec if order_item is not None else None,
+        product,
+    ) or ""
 
 
 def _mobile_finished_inventory_sources(

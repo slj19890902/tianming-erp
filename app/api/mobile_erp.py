@@ -54,6 +54,10 @@ from app.services.production_workflow import (
     list_production_tasks,
 )
 from app.services.printing_colors import parse_printing_colors
+from app.services.product_specification import (
+    dimension_specification,
+    product_dimension_specification,
+)
 from app.services.secure_uploads import resolve_stored_reference, stored_file_metadata
 from app.services.ui_layout_settings import LAYOUT_ROLES, effective_layout
 from app.models.warehouse_inventory import (
@@ -671,13 +675,7 @@ def _incoming_search_match(
 
 
 def _product_specification(product: Product) -> str:
-    dimensions = [
-        _number_text(product.length_mm),
-        _number_text(product.width_mm),
-        _number_text(product.height_mm),
-    ]
-    present = [value for value in dimensions if value is not None]
-    return "×".join(present) + ("mm" if present else "")
+    return product_dimension_specification(product) or ""
 
 
 def _product_payload(product: Product, *, inventory_summary: dict | None = None) -> dict:
@@ -2102,11 +2100,11 @@ def _mobile_location_is_published(db: Session, location: WarehouseLocation) -> b
 def _mobile_goods_payload(lot: InventoryLot) -> dict:
     if lot.finished_detail is not None:
         detail = lot.finished_detail
-        specification = "×".join(
-            str(value)
-            for value in (detail.length_mm, detail.width_mm, detail.height_mm)
-            if value is not None
-        )
+        specification = dimension_specification(
+            detail.length_mm,
+            detail.width_mm,
+            detail.height_mm,
+        ) or ""
         customer_name = detail.owner_customer_name_snapshot
         product_code = detail.inventory_code_snapshot
         product_name = detail.product_name_snapshot

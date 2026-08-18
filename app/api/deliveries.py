@@ -1567,6 +1567,9 @@ def _pending_query(
             Product.product_code,
             OrderItem.snapshot_product_name.label("product_name"),
             OrderItem.snapshot_spec.label("specification"),
+            Product.length_mm.label("product_length_mm"),
+            Product.width_mm.label("product_width_mm"),
+            Product.height_mm.label("product_height_mm"),
             OrderItem.snapshot_material.label("material"),
             OrderItem.flute_type,
             OrderItem.snapshot_production_notes.label("production_notes"),
@@ -4508,7 +4511,8 @@ def _build_pick_task(
             if line.order_item_id is not None
             else None
         )
-        product = db.get(Product, order_item.product_id) if order_item else None
+        product_id = order_item.product_id if order_item else line.product_id
+        product = db.get(Product, product_id) if product_id is not None else None
         db.add(
             DeliveryPickTaskItem(
                 task_id=task.id,
@@ -4531,7 +4535,10 @@ def _build_pick_task(
                         product,
                     )
                     if order_item
-                    else line.specification_snapshot
+                    else resolved_product_specification(
+                        line.specification_snapshot,
+                        product,
+                    )
                 ),
             )
         )
@@ -6524,8 +6531,15 @@ def _pending_delivery_item_payload(
             planned_delivery_quantity=remaining_quantity,
         )
 
+    base_payload = dict(mapping)
+    base_payload["specification"] = resolved_product_specification(
+        base_payload.get("specification"),
+        length_mm=base_payload.pop("product_length_mm", None),
+        width_mm=base_payload.pop("product_width_mm", None),
+        height_mm=base_payload.pop("product_height_mm", None),
+    )
     payload = {
-        **dict(mapping),
+        **base_payload,
         "remaining_quantity": remaining_quantity,
         **quantity_facts,
         "order_number": display,

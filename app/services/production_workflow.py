@@ -63,6 +63,7 @@ from app.services.production_label_strategy import (
     build_new_task_production_label_snapshot,
 )
 from app.services.printing_colors import parse_printing_colors
+from app.services.product_specification import resolved_product_specification
 from app.services.requisition_quantities import cutting_factor
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
@@ -2784,7 +2785,7 @@ def _item_product_snapshot(item: OrderItem, product: Product) -> dict:
         "product_id": item.product_id,
         "product_code": item.snapshot_product_code or product.product_code,
         "product_name": item.snapshot_product_name or product.product_name,
-        "specification": item.snapshot_spec,
+        "specification": resolved_product_specification(item.snapshot_spec, product),
         "material": item.snapshot_material,
         "flute": item.flute_type,
         "special_process": item.special_process,
@@ -2835,8 +2836,9 @@ def _task_product_snapshot(
             if snapshot is not None
             else parent_product.product_name
         ),
-        "specification": (
-            snapshot.snapshot_component_spec if snapshot is not None else item.snapshot_spec
+        "specification": resolved_product_specification(
+            snapshot.snapshot_component_spec if snapshot is not None else item.snapshot_spec,
+            component or parent_product,
         ),
         "material": (
             snapshot.snapshot_component_material

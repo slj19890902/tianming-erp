@@ -35,6 +35,7 @@ from reportlab.platypus import (
 from app.core.config import PROJECT_ROOT
 from app.models.company_config import CompanyConfig
 from app.models.customer_contract import CustomerContract, CustomerContractItem
+from app.services.product_specification import dimension_specification
 
 
 CONTRACT_PDF_TEMPLATE_VERSION = "p1-35a-v1"
@@ -177,10 +178,11 @@ def _date_text(value: date | None) -> str:
 
 
 def _specification(item: CustomerContractItem) -> str:
-    dimensions = (item.length_mm, item.width_mm, item.height_mm)
-    if all(value is not None for value in dimensions):
-        return "×".join(_compact_decimal(value) for value in dimensions)
-    return _plain_text(item.specification).replace("mm", "").replace("MM", "")
+    return dimension_specification(
+        item.length_mm,
+        item.width_mm,
+        item.height_mm,
+    ) or _plain_text(item.specification)
 
 
 def _payment_terms(value: str | None) -> str:

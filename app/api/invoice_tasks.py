@@ -54,6 +54,7 @@ from app.services.invoice_tax_template import (
     InvoiceTaxTemplateError,
     generate_invoice_tax_template,
 )
+from app.services.product_specification import resolved_product_specification
 
 
 router = APIRouter()
@@ -587,7 +588,11 @@ def _snapshot_for_statement(
             continue
         code = delivery_item.product_code_snapshot or (order_item.snapshot_product_code if order_item else None) or (product.product_code if product else None)
         name = delivery_item.product_name_snapshot or (order_item.snapshot_product_name if order_item else None) or (product.product_name if product else None)
-        spec = delivery_item.specification_snapshot or (order_item.snapshot_spec if order_item else None)
+        spec = resolved_product_specification(
+            delivery_item.specification_snapshot,
+            product,
+            fallback_snapshots=(order_item.snapshot_spec if order_item else None,),
+        )
         if not all((_text(rule.project_name), _text(rule.tax_classification_code), _text(rule.unit), rule.tax_rate is not None, statement_item.receivable_amount is not None)):
             missing.append(f"对账明细 {statement_item.id} 的项目名称/税收编码/单位/税率")
             continue

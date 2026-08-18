@@ -4114,3 +4114,9 @@ legacy_ruida_* 原始层
 - 已获取家庭紧急候选 `a393977887b1c0f2d39ac490db8d2e52fef236e5`（聚晟达生产包装标签恢复），基线为当前正式 `04a1ff7cebc36570f8598445af4d25a6bc68d2e2`。
 - 只读差异确认仅涉及服务、前端和测试文件，无 Alembic、模型或版本迁移；候选隔离回归 14 项通过，另一选择性打印测试在当前 Python 3.10 下存在既有 f-string 语法兼容错误，未归因于本候选。
 - 本轮未合并正式分支、未停服、未写入正式数据库；按任务回执保留候选等待正式发布授权。既有 stash 未触碰。
+
+## 2026-08-18 P0-6 授权整合与正式发布前核验
+
+- 已获授权将家庭候选 `a393977887b1c0f2d39ac490db8d2e52fef236e5` 合并到独立整合分支；整合提交为 `ea96a81c`（后续文档提交会更新 SHA）。候选无 migration，Alembic head 仍为 `ss27v8x9z16`。
+- 回归曾因测试子进程误指向正式 `data/carton_erp.sqlite3` 而触发保护检查；已保存事故快照 `data/backups/carton_erp_before_test_incident_20260818_103806.sqlite3`（SHA-256 `48460F52AECB8B44AAC19DF6988ABC743072F7032D50D7F30FB513222FA26A37`），停服后从已验证发布前备份 `carton_erp_before_release_20260818_102630.sqlite3` 恢复，恢复 SHA-256 `3936C6F74B86EA42E83EC3534607C8BB412E689B512DDF0A2822B25BA4A7C5CD`，完整性通过、外键违规 0、revision `ss27v8x9z16`。
+- 隔离工作树回归 14 项通过；`compileall`、`git diff --check` 和 Alembic 唯一 head 检查通过。正式发布仍须重新执行发布脚本的备份、验证、应用和重启门禁。

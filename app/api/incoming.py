@@ -498,6 +498,25 @@ def _supplier_order_item_overlay(
     component = supplier_order_item_component_type(supplier_item)
     length = supplier_item.report_length_mm
     width = supplier_item.report_width_mm
+    # Historical supplier-order lines created before per-line dimension
+    # snapshots were persisted can have NULL dimensions even though the
+    # originating order line still has its immutable report-size snapshot.
+    # Keep an explicitly stored supplier value, and fall back independently
+    # for each missing edge so one-sided legacy data is still displayed.
+    order_item = (
+        db.get(OrderItem, supplier_item.order_item_id)
+        if supplier_item.order_item_id is not None
+        else None
+    )
+    if order_item is not None:
+        length = length or (
+            order_item.cardboard_len
+            or order_item.snapshot_report_length_mm
+        )
+        width = width or (
+            order_item.cardboard_width
+            or order_item.snapshot_report_width_mm
+        )
     return {
         "item_id": supplier_order_item_key(supplier_item.id),
         "order_item_id": supplier_item.order_item_id,

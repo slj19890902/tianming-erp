@@ -4274,3 +4274,11 @@ legacy_ruida_* 原始层
 - ERP 已重启并恢复访问：本机与局域网 `/api/health` 均为 HTTP 200，带 `release=v0.22.133` 的局域网页面为 HTTP 200；启动后版本说明门禁回读为 `v0.22.133｜产品规格二维三维全流程统一显示`。
 - 发布后正式库再次以 SQLite `mode=ro/query_only` 复核：revision `tt28v8x9z17`、`integrity_check=ok`、外键违规 0、连接 `total_changes=0`。本次发布只更新规格读取、打印与以后新建快照的表达规则，没有批量回写订单、报料、来料、生产、送货、库存或财务历史事实。
 - 现场仍需老板强制刷新后抽查：衬板、隔板、刀卡显示 `长×宽mm`，普通纸箱显示 `长×宽×高mm`；订单 `TM20260818002 / item 10049` 与送货单 `YL-20260818-006 / item 187` 应显示 `778×1137mm`。发布报告的人工业务验收状态保持 `not_recorded`，不得提前登记为已验收。
+
+## 2026-08-18 P1-73D 已报料紧凑表格与勾选打印正式同步
+
+- 家庭候选 `origin/codex/p1-73-reported-items-20260818` 的精确提交 `5f7a6122ca1548dfc151b9e01761503c96432538` 已基于正式 `fb7cb094` 独立重放，整合分支连续保留 P1-73A/B/C/D；正式功能 SHA 为 `5c4a678aa53266321e4ee05ca3cd27e62b292805`，未直接重置正式分支。
+- P1-73C 带来的唯一迁移为 `tt28v8x9z17 -> uu29v8x9z18`；Alembic 唯一 head 检查通过。隔离数据库回归分别通过 `4`、`16`、`28` 项（合计 48 passed；存在既有 JWT 弱密钥 warning）。一次直接在正式库执行的回归夹具被保护门禁拦截，测试事务未留下 P1-73 假数据；随后已用独立 SQLite 副本重跑全部回归。
+- 两阶段发布报告 `docs/migration_reports/release_runtime_20260818_163128.json` 状态 `completed`，报告 SHA-256 `a9a6135407cfdeda3dc7778a7bc787fde14320a58a22f255fcd5fc93b2bac92e`。发布前正式备份路径和 SHA 以该报告 `backup` 字段为准；源库/备份均 `integrity_check=ok`、外键违规 0、核心表计数一致，隔离演练与正式应用均到 `uu29v8x9z18`。
+- 发布后正式库 revision=`uu29v8x9z18`，应用后数据库 SHA-256 `589b37d8991efffef5f6a46f3e2caf189dc98e30b0e2f0b35f3cc2832a78a0b1`，完整性正常、外键违规 0；ERP 单 worker 已重启，本机与局域网 `/api/health` 均 HTTP 200，首页 HTTP 200，版本仍为 `v0.22.133`。本轮没有回写正式历史报料、收料、生产、送货或库存事实，仅执行 `uu29` 结构迁移。
+- 仍需老板登录后人工验收“已报料物理行紧凑表格、按行勾选打印、作废后恢复待报料”的真实页面；发布报告 `human_acceptance_status` 保持 `not_recorded`。

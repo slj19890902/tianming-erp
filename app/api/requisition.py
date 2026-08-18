@@ -3426,42 +3426,6 @@ def _order_item_still_requires_requisition(
     )
 
 
-def _order_item_has_formal_downstream_facts(
-    db: Session,
-    order_item_id: int,
-) -> bool:
-    incoming_exists = db.scalar(
-        select(IncomingReceiptItem.id)
-        .where(
-            IncomingReceiptItem.order_item_id == order_item_id,
-            IncomingReceiptItem.status == "posted",
-        )
-        .limit(1)
-    )
-    if incoming_exists is not None:
-        return True
-    production_exists = db.scalar(
-        select(ProductionCompletion.id)
-        .where(
-            ProductionCompletion.order_item_id == order_item_id,
-            ProductionCompletion.status == "posted",
-        )
-        .limit(1)
-    )
-    if production_exists is not None:
-        return True
-    delivery_exists = db.scalar(
-        select(DeliveryItem.id)
-        .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
-        .where(
-            DeliveryItem.order_item_id == order_item_id,
-            Delivery.status == "dispatched",
-        )
-        .limit(1)
-    )
-    return delivery_exists is not None
-
-
 def _ensure_requisition_hold_eligible(
     db: Session,
     order_item_id: int,
@@ -3486,11 +3450,6 @@ def _ensure_requisition_hold_eligible(
         raise HTTPException(
             status_code=409,
             detail="订单明细当前不在待报料范围，不能设置等候报料",
-        )
-    if _order_item_has_formal_downstream_facts(db, item.id):
-        raise HTTPException(
-            status_code=409,
-            detail="订单明细已有来料、生产或正式送货事实，不能设置或修改等候报料",
         )
     if _order_item_in_merged_pending_group(db, item.id):
         raise HTTPException(status_code=409, detail="订单明细已在合并报料草稿中，请先退出合并组")

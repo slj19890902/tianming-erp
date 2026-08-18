@@ -1872,6 +1872,38 @@ def test_receiving_partial_supplier_order_keeps_unreported_remainder_pending(
         _login(client, "sales")
         pending = client.get("/api/requisition/pending")
         next_draft = _preview_supplier_order_draft(client, [selection])
+        held = client.post(
+            "/api/requisition/holds",
+            json={
+                "items": [
+                    {
+                        "order_item_id": 1,
+                        "release_mode": "expected_date",
+                        "expected_requisition_date": "2099-12-31",
+                    }
+                ]
+            },
+        )
+        assert held.status_code == 201, held.text
+        assert held.json()["success_count"] == 1
+        hold = held.json()["items"][0]["hold"]
+        waiting = client.get("/api/requisition/holds")
+        pending_while_held = client.get("/api/requisition/pending")
+        updated = client.put(
+            f"/api/requisition/holds/{hold['id']}",
+            json={
+                "expected_version": hold["version"],
+                "release_mode": "expected_date",
+                "expected_requisition_date": "2099-12-30",
+            },
+        )
+        assert updated.status_code == 200, updated.text
+        released = client.post(
+            f"/api/requisition/holds/{hold['id']}/release",
+            json={"expected_version": updated.json()["version"]},
+        )
+        assert released.status_code == 200, released.text
+        pending_after_release = client.get("/api/requisition/pending")
 
     assert pending.status_code == 200, pending.text
     pending_row = next(
@@ -1884,6 +1916,25 @@ def test_receiving_partial_supplier_order_keeps_unreported_remainder_pending(
     assert next_line["already_requisitioned_qty"] == 200
     assert next_line["remaining_requisition_qty"] == 100
     assert next_line["requisition_qty"] == 100
+    assert waiting.status_code == 200, waiting.text
+    waiting_row = waiting.json()["items"][0]
+    assert waiting_row["order_quantity"] == 300
+    assert waiting_row["physical_requisition_qty"] == 100
+    assert waiting_row["component_requirements"][0]["requisition_qty"] == 100
+    assert pending_while_held.status_code == 200, pending_while_held.text
+    assert all(
+        row.get("item_id") != 1
+        for row in pending_while_held.json()["items"]
+        if not row.get("is_merge_group")
+    )
+    restored_row = next(
+        row
+        for row in pending_after_release.json()["items"]
+        if row.get("item_id") == 1
+    )
+    assert restored_row["already_requisitioned_qty"] == 200
+    assert restored_row["remaining_requisition_qty"] == 100
+    assert restored_row["requisition_qty"] == 100
 
     with session_factory() as session:
         item = session.get(OrderItem, 1)

@@ -144,7 +144,7 @@ def test_create_multi_item_order_is_atomic_and_snapshots_products(
     assert body["items"][1]["item_order_number"] == "TM20260613001-002"
     assert body["items"][1]["item_sequence"] == 2
     assert body["items"][0]["snapshot_product_name"] == "五层加强纸箱"
-    assert body["items"][0]["snapshot_spec"] == "520脳350脳300mm"
+    assert body["items"][0]["snapshot_spec"] == "520×350×300mm"
     assert body["items"][0]["snapshot_material"] == "K=A-BC"
     assert body["items"][0]["snapshot_production_notes"] == "粘贴"
     assert body["items"][0]["material_status"] == "pending"
@@ -152,6 +152,39 @@ def test_create_multi_item_order_is_atomic_and_snapshots_products(
     with session_factory() as session:
         assert session.scalar(select(func.count()).select_from(Order)) == 1
         assert session.scalar(select(func.count()).select_from(OrderItem)) == 2
+
+
+def test_create_two_dimensional_liner_order_snapshots_length_and_width(
+    order_api_app,
+) -> None:
+    from app.models.product import Product
+
+    app, session_factory = order_api_app
+    with session_factory() as session:
+        product = session.get(Product, 1)
+        assert product is not None
+        product.product_name = "测试衬板"
+        product.box_style = "衬板"
+        product.length_mm = Decimal("778")
+        product.width_mm = Decimal("1137")
+        product.height_mm = None
+        session.commit()
+
+    payload = _payload()
+    payload["items"] = [
+        {
+            "product_id": 1,
+            "quantity": 100,
+            "unit_price": "3.60",
+            "specification": "-",
+        }
+    ]
+    with TestClient(app) as client:
+        _login(client)
+        response = client.post("/api/orders", json=payload)
+
+    assert response.status_code == 201, response.text
+    assert response.json()["items"][0]["snapshot_spec"] == "778×1137mm"
 
 
 def test_new_order_rejects_disabled_or_unknown_supplier_from_legacy_material_id(

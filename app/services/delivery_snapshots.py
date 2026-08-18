@@ -7,27 +7,12 @@ from sqlalchemy.orm import Session
 from app.models.delivery import DeliveryItem
 from app.models.order import OrderItem
 from app.models.product import Product
+from app.services.product_specification import resolved_product_specification
 
 
 def _text(value: Any) -> str | None:
     normalized = str(value or "").strip()
     return normalized or None
-
-
-def _product_specification(product: Product | None) -> str | None:
-    if product is None:
-        return None
-    dimensions = [
-        value
-        for value in (product.length_mm, product.width_mm, product.height_mm)
-        if value is not None
-    ]
-    if not dimensions:
-        return None
-    return "×".join(
-        str(int(value)) if value == int(value) else str(value)
-        for value in dimensions
-    )
 
 
 def build_order_delivery_snapshot(
@@ -46,8 +31,9 @@ def build_order_delivery_snapshot(
             _text(order_item.snapshot_product_name)
             or _text(product.product_name if product else None)
         ),
-        "specification_snapshot": (
-            _text(order_item.snapshot_spec) or _product_specification(product)
+        "specification_snapshot": resolved_product_specification(
+            order_item.snapshot_spec,
+            product,
         ),
     }
 

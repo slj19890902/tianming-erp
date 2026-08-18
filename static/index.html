@@ -10856,9 +10856,11 @@
           },
           spec(row) {
             if (row?.supply_mode === "external_purchase") return row.external_packaging_specification_summary || "外购包材规格待完善";
-            if (![row.length_mm,row.width_mm,row.height_mm].every(v => v !== null && v !== undefined)) return "-";
+            if (![row.length_mm,row.width_mm].every(v => v !== null && v !== undefined && Number(v) > 0)) return "-";
             const fmt = v => { const n = parseFloat(v); return Number.isInteger(n) ? String(n) : n.toFixed(1).replace(/\.0$/,""); };
-            return `${fmt(row.length_mm)}×${fmt(row.width_mm)}×${fmt(row.height_mm)}mm`;
+            const dimensions = [row.length_mm,row.width_mm];
+            if (row.height_mm !== null && row.height_mm !== undefined && Number(row.height_mm) > 0) dimensions.push(row.height_mm);
+            return `${dimensions.map(fmt).join("×")}mm`;
           },
           statusTone(value) {
             if (["received","dispatched","settled","active","delivered","completed","archived","closed","confirmed","accepted","converted","已入库","已结算"].includes(value)) return "green";

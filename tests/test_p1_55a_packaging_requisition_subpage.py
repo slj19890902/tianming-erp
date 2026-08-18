@@ -64,7 +64,8 @@ def test_board_and_external_packaging_are_distinct_requisition_views() -> None:
     assert "pagedExternalPurchaseRouting" not in board
     assert "合并报料" in board
     assert "暂不报料" in board
-    assert "库存补库" in board
+    assert "新增库存单请从订单页进入" in board
+    assert '@click="openStockReplenishment"' not in board
 
 
 def test_refreshable_subpage_url_restores_external_packaging_and_return_clears_it(
@@ -294,6 +295,7 @@ const FunctionCtor=Function;
 global.latestRequestControllers=new Map();
 global.searchDebounceTimers=new Map();global.pageSearchGenerations=new Map();global.pinyinSearchTextCache=new Map();
 global.today=()=>"2026-08-14";global.plusDays=()=>"2026-08-21";
+global.blankReceiptReminderEditor=()=>({{}});
 global.axios={{get:async()=>{{throw Object.assign(new Error("forbidden"),{{response:{{status:403}}}});}}}};
 const vm={{
   authGeneration:5,user:{{id:22}},activePage:"requisition",requisitionWorkspace:"external-packaging",

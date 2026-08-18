@@ -47,7 +47,7 @@ def test_requisition_secondary_tabs_and_tools_load_on_demand() -> None:
     assert 'axios.get("/api/requisition/merge-suggestions", {signal:controller.signal})' in merge_open
     assert "mergeSuggestionsError" in merge_open
     assert 'beginLatestRequest("requisition:stock-replenishment-bootstrap")' in replenishment_open
-    assert 'axios.get("/api/requisition/stock-policies", {params:{warning_only:true}, signal:controller.signal})' in replenishment_open
+    assert 'axios.get("/api/requisition/stock-policies", {params:{warning_only:true,target_inventory_type:"finished"}, signal:controller.signal})' in replenishment_open
     assert '/api/requisition/stock-replenishment/locations' not in replenishment_open
     assert "if (!this.allMaterials.length) tasks.push(this.loadMaterials());" in replenishment_open
 

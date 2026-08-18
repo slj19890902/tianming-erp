@@ -4,9 +4,17 @@ from pathlib import Path
 INDEX = Path("static/index.html").read_text(encoding="utf-8")
 
 
-def test_requisition_page_exposes_stock_replenishment_entry_and_warning_count() -> None:
+def test_order_page_exposes_stock_replenishment_entry_and_warning_count() -> None:
+    orders = INDEX.split(
+        '<template v-else-if="activePage === \'orders\'">', 1
+    )[1].split('<template v-else-if="activePage === \'orders_legacy\'">', 1)[0]
+    requisition = INDEX.split(
+        '<template v-else-if="activePage === \'requisition\'">', 1
+    )[1].split('<template v-else-if="activePage === \'incoming\'">', 1)[0]
+    assert '@click="openStockReplenishment">库存单</button>' in orders
+    assert '@click="openStockReplenishment"' not in requisition
     assert "手动库存补库" in INDEX
-    assert "stockPolicyWarnings.length" in INDEX
+    assert "stockPolicyCustomerGroups.length" in INDEX
     assert "addStockPolicyDraft(policy)" in INDEX
 
 
@@ -20,7 +28,7 @@ def test_legacy_historical_purchase_workbench_is_not_exposed() -> None:
 
 def test_replenishment_form_always_saves_a_draft_before_stocking() -> None:
     assert "保存后立即进入仓库可用库存" not in INDEX
-    assert "当前只是库存补库报料草稿" in INDEX
+    assert "库存单只生成补库报料草稿" in INDEX
     assert "到料后进入客户专用纸板备料" in INDEX
     assert "本次报料张数（可多报）" in INDEX
     assert "stockWarningExtraSheets(line)" in INDEX
@@ -62,7 +70,7 @@ def test_manual_replenishment_uses_common_box_and_material_supplier() -> None:
 
 def test_saved_replenishment_is_reopenable_from_reported_history() -> None:
     assert 'row.source_type === "stock_replenishment"' in INDEX
-    assert 'return "库存补库单"' in INDEX
+    assert 'return "库存单（补库）"' in INDEX
     assert "去仓库来料入库" in INDEX
     assert "voidReportedReplenishment(row)" in INDEX
     assert "/stock-replenishment/orders/\"+orderId+\"/void" in INDEX

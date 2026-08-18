@@ -3157,6 +3157,7 @@
                       <template v-if="orderWorkspace === 'queue'">
                         <button v-if="canCreateOrders" class="btn primary" @click="openOrder">新建订单</button>
                         <button v-if="canCreateOrders" class="btn" @click="openOrderPdfImport">识别PDF订单</button>
+                        <button v-if="canRequisition" class="btn success" @click="openStockReplenishment">库存单</button>
                       </template>
                     </div>
                     <div class="toolbar-group">
@@ -3465,7 +3466,7 @@
               <div class="page-head requisition-page-head">
                 <div>
                   <h2>纸板报料</h2>
-                  <p>纸板订单报料、库存抵扣和库存补库统一先生成可核对草稿；外购包材请进入独立子页处理。</p>
+                  <p>纸板订单报料与库存抵扣统一先生成可核对草稿；新增库存单请从订单页进入，外购包材请进入独立子页处理。</p>
                 </div>
               </div>
               <div class="toolbar requisition-page-actionbar">
@@ -3476,7 +3477,6 @@
                 </div>
                 <div class="requisition-page-actions">
                   <button v-if="canRequisition" class="btn warning" :disabled="requisitionTab!=='pending' || !selectedPendingKeys.length || requisitionInventoryActionBlocked() || requisitionVoidActionBlocked()" @click="openRequisitionHold()">暂不报料</button>
-                  <button v-if="canRequisition" class="btn primary" :disabled="requisitionInventoryActionBlocked() || requisitionVoidActionBlocked()" @click="openStockReplenishment">库存补库<span v-if="stockPolicyWarnings.length">（预警 {{ stockPolicyWarnings.length }}）</span></button>
                   <button :class="['btn',{primary:requisitionTab==='waiting'}]" :disabled="requisitionInventoryActionBlocked() || requisitionVoidActionBlocked()" @click="selectRequisitionTab('waiting')">等候报料 {{ requisitionHoldSummary.total }}<span v-if="requisitionHoldSummary.due_count">（到期 {{ requisitionHoldSummary.due_count }}）</span></button>
                   <button class="btn" type="button" @click="openExternalPackagingRequisition">包材报料</button>
                   <button class="btn" :disabled="!!requisitionInventoryActionState.action || !!requisitionVoidActionState.action || requisitionPendingLoading" @click="requisitionInventoryActionBlocked() ? refreshRequisitionInventoryState() : (requisitionVoidActionBlocked() ? refreshRequisitionVoidState() : refreshRequisitionTab())">{{ requisitionInventoryActionBlocked() ? '核对待报料库存状态' : (requisitionVoidActionBlocked() ? '核对报料状态' : (requisitionPendingLoading ? '读取中…' : '刷新')) }}</button>
@@ -6776,7 +6776,9 @@
               <div style="margin-top:10px"><a :href="mobileEntry.url" target="_blank">{{ mobileEntry.url }}</a></div>
             </div>
             <div v-else-if="modal.type === 'stockReplenishment'">
-              <div class="status blue" style="display:block;white-space:normal;margin-bottom:10px">当前只是库存补库报料草稿。优先选择客户和常用箱，由系统带出材质、尺寸和供应商；保存不会增加库存。供应商实际到料确认后只进入“客户专用纸板备料”，生产完成后才形成具体款号成品。</div>
+              <div class="status blue" style="display:block;white-space:normal;margin-bottom:10px">库存单只生成补库报料草稿，不生成客户订单号，也不进入待送货。优先选择客户和常用箱，由系统带出材质、尺寸和供应商；供应商实际到料确认后只进入“客户专用纸板备料”，生产完成后才形成具体款号成品。</div>
+              <div v-if="stockReplenishmentBootstrapLoading" class="status blue" style="display:block;white-space:normal;margin-bottom:10px">正在按客户读取当前库存预警…</div>
+              <div v-if="stockReplenishmentBootstrapError" class="notice error" style="margin-bottom:10px">{{ stockReplenishmentBootstrapError }} <button class="btn small" type="button" :disabled="stockReplenishmentBootstrapLoading" @click="openStockReplenishment({preserveDraft:true})">重试</button></div>
               <div v-if="stockReplenishmentForm.source_type==='stock_warning' && stockReplenishmentCompanions.length" class="stock-warning-companions">
                 <strong>同客户、同材质和同报料尺寸的其他款</strong>
                 <div class="muted">印刷内容不同，不会自动增加各款成品。多报纸板统一作为客户专用纸板备料，可供下列同规格款号共用；只有点击“同时加入”才增加该款的计划补货。</div>
@@ -6785,18 +6787,26 @@
                   <button class="btn small success" type="button" :disabled="!Number(row.suggested_new_requisition_sheet_quantity || 0) || !row.draft_item?.draft_ready" @click="addCompatibleStockDraft(row)">{{ row.warning_triggered ? "同时加入预警款" : "顺带补到目标" }}</button>
                 </div>
               </div>
-              <div v-if="stockReplenishmentForm.source_type!=='stock_warning' && stockPolicyWarnings.length" class="panel" style="margin-bottom:12px">
-                <div class="section-title">库存预警</div>
-                <table style="font-size:12px"><thead><tr><th>策略</th><th>类型</th><th>可用 / 预警 / 目标</th><th>建议补库</th><th>默认库位</th><th>操作</th></tr></thead><tbody>
-                  <tr v-for="policy in stockPolicyWarnings" :key="policy.id">
-                    <td><strong>{{ policy.policy_name }}</strong><div class="muted">{{ policy.product_code || policy.material_code || '-' }}</div></td>
-                    <td>{{ policy.target_inventory_type === 'finished' ? '成品' : '半成品' }}</td>
-                    <td>{{ policy.available_quantity }} / {{ policy.warning_quantity }} / {{ policy.target_quantity }}</td>
-                    <td><strong>{{ policy.suggested_new_requisition_sheet_quantity ?? policy.suggested_replenishment_quantity }}</strong> 张</td>
-                    <td>{{ policy.default_location ? policy.default_location.location_code + ' ' + policy.default_location.location_name : '未设置' }}</td>
-                    <td><button class="btn small success" type="button" @click="addStockPolicyDraft(policy)">按预警补库</button></td>
-                  </tr>
-                </tbody></table>
+              <div v-if="stockReplenishmentForm.source_type!=='stock_warning' && stockPolicyCustomerGroups.length" class="panel" style="margin-bottom:12px">
+                <div class="section-title">按客户查看库存预警</div>
+                <div class="low-stock-customer-list">
+                  <div v-for="group in stockPolicyCustomerGroups" :key="group.key" class="low-stock-customer-card">
+                    <div class="low-stock-customer-head">
+                      <span class="low-stock-customer-title"><strong>{{ group.customer_name }}</strong><span class="status orange">库存不足 {{ group.items.length }} 款</span></span>
+                      <span class="low-stock-customer-summary">建议新报 {{ group.total_new_requisition_sheets }} 张</span>
+                    </div>
+                    <div class="table-wrap"><table style="font-size:12px"><thead><tr><th>常用箱</th><th>类型</th><th>可用 / 预警 / 目标</th><th>建议补成品</th><th>本次新报</th><th>操作</th></tr></thead><tbody>
+                      <tr v-for="policy in group.items" :key="policy.id">
+                        <td><strong>{{ policy.product_code || '-' }}</strong><div class="muted">{{ policy.product_name || policy.policy_name }}</div></td>
+                        <td>{{ policy.target_inventory_type === 'finished' ? '成品' : '半成品' }}</td>
+                        <td>{{ policy.available_quantity }} / {{ policy.warning_quantity }} / {{ policy.target_quantity }}</td>
+                        <td><strong>{{ policy.suggested_replenishment_quantity || 0 }}</strong> 只</td>
+                        <td><strong>{{ policy.suggested_new_requisition_sheet_quantity || 0 }}</strong> 张</td>
+                        <td><button class="btn small success" type="button" :disabled="!Number(policy.suggested_new_requisition_sheet_quantity || 0)" @click="addStockPolicyDraft(policy)">加入库存单</button></td>
+                      </tr>
+                    </tbody></table></div>
+                  </div>
+                </div>
               </div>
               <div v-if="stockReplenishmentForm.source_type!=='stock_warning'" class="toolbar" style="margin-bottom:10px">
                 <div class="muted">不再从旧采购工作簿复制参数。请选择客户和常用箱，系统使用当前已维护资料；历史报料事实仍在原单据中只读保留。</div>
@@ -8244,6 +8254,7 @@
             compositeRequisitionSaveState:{saving:false, committed:false, uncertain:false, result:null},
             stockReplenishmentSaveState:{saving:false, committed:false, uncertain:false, result:null},
             stockReplenishmentVoidState:{orderId:null, documentNumber:"", uncertainIds:{}},
+            stockReplenishmentBootstrapLoading:false, stockReplenishmentBootstrapError:"",
             stockPolicyWarnings: [], stockReplenishmentProducts: [], stockReplenishmentCompanions: [],
             stockReplenishmentForm: { source_type:"customer_request", idempotency_key:null, supplier_name:"", customer_id:null, remark:"", stock_now:false, items:[] },
             lowStockExpandedCustomers: {},
@@ -8860,6 +8871,32 @@
                 ),
               }))
               .sort((a,b) => b.items.length - a.items.length || b.total_suggested_quantity - a.total_suggested_quantity || a.customer_name.localeCompare(b.customer_name,"zh-CN"));
+          },
+          stockPolicyCustomerGroups() {
+            const groups = new Map();
+            for (const item of (this.stockPolicyWarnings || [])) {
+              const key = String(item.customer_id || item.customer_name || "unknown");
+              if (!groups.has(key)) {
+                groups.set(key, {
+                  key,
+                  customer_name:item.customer_name || "未指定客户",
+                  items:[],
+                  total_new_requisition_sheets:0,
+                });
+              }
+              const group = groups.get(key);
+              group.items.push(item);
+              group.total_new_requisition_sheets += Number(item.suggested_new_requisition_sheet_quantity || 0);
+            }
+            return [...groups.values()]
+              .map(group => ({
+                ...group,
+                items:group.items.slice().sort((a,b) =>
+                  Number(b.suggested_replenishment_quantity || 0) - Number(a.suggested_replenishment_quantity || 0)
+                  || String(a.product_code || "").localeCompare(String(b.product_code || ""), "zh-CN", {numeric:true})
+                ),
+              }))
+              .sort((a,b) => b.items.length - a.items.length || b.total_new_requisition_sheets - a.total_new_requisition_sheets || a.customer_name.localeCompare(b.customer_name,"zh-CN"));
           },
           isWorkshop() { return this.user?.role === "workshop"; },
           canAdmin() { return this.user?.role === "admin"; },
@@ -12533,6 +12570,8 @@
             this.supplierRequisitionSaveState = {saving:false,committed:false,uncertain:false,result:null};
             this.stockReplenishmentSaveState = {saving:false,committed:false,uncertain:false,result:null};
             this.stockReplenishmentVoidState = {orderId:null,documentNumber:"",uncertainIds:{}};
+            this.stockReplenishmentBootstrapLoading = false;
+            this.stockReplenishmentBootstrapError = "";
             this.stockPolicyWarnings = [];
             this.stockReplenishmentProducts = [];
             this.stockReplenishmentCompanions = [];
@@ -15789,7 +15828,7 @@
               this.showToast(message);
               return;
             }
-            await this.go("requisition");
+            await this.go("orders");
             await this.openStockReplenishment({ warningOnly:true });
             await this.addStockPolicyDraft({ id:item.policy_id });
           },
@@ -15799,27 +15838,56 @@
             this.warehouseFrameRevision += 1;
             await this.go("warehouse");
           },
+          stockReplenishmentBootstrapRequestIsCurrent(controller, authGeneration, userId, {sessionOnly=false}={}) {
+            const sessionCurrent = (
+              latestRequestControllers.get("requisition:stock-replenishment-bootstrap") === controller
+              && authGeneration === this.authGeneration
+              && userId === (this.user?.id ?? null)
+            );
+            return sessionCurrent && (sessionOnly || this.modal?.type === "stockReplenishment");
+          },
           async openStockReplenishment(options={}) {
             if (!this.canRequisition) return;
             const warningOnly = !!options.warningOnly;
+            const preserveDraft = !!options.preserveDraft && this.modal?.type === "stockReplenishment";
             const controller = this.beginLatestRequest("requisition:stock-replenishment-bootstrap");
-            this.stockReplenishmentSaveState = {saving:false, committed:false, uncertain:false, result:null};
-            this.stockReplenishmentForm = { source_type:warningOnly ? "stock_warning" : "customer_request", idempotency_key:createIdempotencyKey(), supplier_name:"", customer_id:null, remark:"", stock_now:false, items:[] };
-            this.stockReplenishmentProducts = [];
-            this.stockReplenishmentCompanions = [];
-            this.modal = { type:"stockReplenishment", title:warningOnly ? "按库存预警生成报料草稿" : "手动库存补库报料" };
+            const authGeneration = this.authGeneration;
+            const userId = this.user?.id ?? null;
+            if (!preserveDraft) {
+              this.stockReplenishmentSaveState = {saving:false, committed:false, uncertain:false, result:null};
+              this.stockReplenishmentForm = { source_type:warningOnly ? "stock_warning" : "customer_request", idempotency_key:createIdempotencyKey(), supplier_name:"", customer_id:null, remark:"", stock_now:false, items:[] };
+              this.stockReplenishmentProducts = [];
+              this.stockReplenishmentCompanions = [];
+              this.modal = { type:"stockReplenishment", title:warningOnly ? "按库存预警生成库存单" : "库存单" };
+            }
+            this.stockReplenishmentBootstrapLoading = true;
+            this.stockReplenishmentBootstrapError = "";
             try {
               const tasks = [
-                axios.get("/api/requisition/stock-policies", {params:{warning_only:true}, signal:controller.signal}),
+                axios.get("/api/requisition/stock-policies", {params:{warning_only:true,target_inventory_type:"finished"}, signal:controller.signal}),
               ];
               if (!this.customerOptions.length) tasks.push(this.loadCustomerOptions());
               // 补库详细参数中的材质 search-select 需要完整材质集合；只在实际打开弹窗时补齐。
               if (!this.allMaterials.length) tasks.push(this.loadMaterials());
               const [policies] = await Promise.all(tasks);
+              if (!this.stockReplenishmentBootstrapRequestIsCurrent(controller, authGeneration, userId)) return false;
               this.stockPolicyWarnings = policies.data.items || [];
+              return true;
             } catch (error) {
-              if (!this.isCancelledRequest(error)) this.showToast("补库基础数据加载失败：" + this.errorMessage(error), true);
+              if (this.isCancelledRequest(error) || !this.stockReplenishmentBootstrapRequestIsCurrent(controller, authGeneration, userId, {sessionOnly:true})) return false;
+              if (error?.response?.status === 403) {
+                this.resetPagePerformanceState();
+                this.resetModalA11ySession?.({discardModal:true});
+                this.syncDesktopWorkspaceUrl?.(this.activePage || "dashboard");
+                return false;
+              }
+              if (this.stockReplenishmentBootstrapRequestIsCurrent(controller, authGeneration, userId)) {
+                this.stockReplenishmentBootstrapError = "库存预警读取失败：" + this.errorMessage(error);
+                this.showToast(this.stockReplenishmentBootstrapError, true);
+              }
+              return false;
             } finally {
+              if (this.stockReplenishmentBootstrapRequestIsCurrent(controller, authGeneration, userId)) this.stockReplenishmentBootstrapLoading = false;
               this.finishLatestRequest("requisition:stock-replenishment-bootstrap", controller);
             }
           },
@@ -22370,7 +22438,7 @@
           },
           reportedSourceLabel(row) {
             if (row.source_type === "supplier_order") return "供应商报料单";
-            if (row.source_type === "stock_replenishment") return "库存补库单";
+            if (row.source_type === "stock_replenishment") return "库存单（补库）";
             if (row.source_type === "composite_bom_requisition") return "组合 BOM 报料单";
             return "旧报料单";
           },

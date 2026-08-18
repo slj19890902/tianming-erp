@@ -51,8 +51,14 @@ def test_order_second_row_keeps_creation_left_and_refresh_right() -> None:
         '<div class="order-page-actionbar">',
         '<div class="order-filter-card">',
     )
-    assert actionbar.index(">新建订单<") < actionbar.index(">识别PDF订单<") < actionbar.index(">刷新<")
+    assert (
+        actionbar.index(">新建订单<")
+        < actionbar.index(">识别PDF订单<")
+        < actionbar.index(">库存单<")
+        < actionbar.index(">刷新<")
+    )
     assert actionbar.count('v-if="canCreateOrders"') == 2
+    assert 'v-if="canRequisition"' in actionbar
     assert "<h2" not in actionbar
 
 
@@ -75,14 +81,14 @@ def test_requisition_actions_are_separated_and_fixed_in_requested_order() -> Non
     )
     markers = [
         ">暂不报料<",
-        '@click="openStockReplenishment">库存补库',
         ">等候报料 ",
         "refreshRequisitionTab())",
     ]
     positions = [actions.index(marker) for marker in markers]
     assert positions == sorted(positions)
     assert "requisitionTab!=='pending' || !selectedPendingKeys.length" in actions
-    assert actions.count('v-if="canRequisition"') == 2
+    assert actions.count('v-if="canRequisition"') == 1
+    assert '@click="openStockReplenishment"' not in actions
     assert "手动库存补库" not in actions
 
 

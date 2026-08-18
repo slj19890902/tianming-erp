@@ -302,7 +302,7 @@ def test_half_full_and_odd_card_pagination_is_deterministic() -> None:
     assert pages[2]["bottom"] is None
 
 
-def test_erp_selection_ui_and_print_page_keep_explicit_read_only_contract() -> None:
+def test_erp_selection_ui_and_print_page_keep_explicit_mutation_allowlist() -> None:
     for marker in (
         "productionPrintSelections",
         "loadProductionPrintCandidates",
@@ -319,7 +319,10 @@ def test_erp_selection_ui_and_print_page_keep_explicit_read_only_contract() -> N
     assert "batch_id" in PRINT_PAGE
     assert "/api/requisition/production-print-batches/" in PRINT_PAGE
     assert 'method:"GET"' in PRINT_PAGE
-    assert 'method:"POST"' not in PRINT_PAGE
+    assert PRINT_PAGE.count('method:"POST"') == 1
+    assert "/api/production/tasks/${encodeURIComponent(row.task_id)}/label-plan-refresh" in PRINT_PAGE
+    assert "expected_task_version:row.expected_task_version" in PRINT_PAGE
+    assert "expected_product_version:row.expected_product_version" in PRINT_PAGE
     assert PRINT_PAGE.count("window.print()") == 1
     _, loader = _method_body(
         "loadProductionPrintCandidates", "toggleProductionPrintCandidate"

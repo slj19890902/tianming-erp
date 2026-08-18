@@ -157,6 +157,7 @@
     <button id="printButton" class="primary" type="button" disabled>打印</button>
     <button id="modeButton" type="button">切换客户随货版</button>
     <button id="labelButton" type="button" disabled>生产包装标签</button>
+    <button id="labelRefreshButton" type="button" hidden disabled>按常用箱刷新标签计划</button>
     <button id="closeButton" type="button">关闭</button>
     <span id="toolbarNote" class="toolbar-note">黑白打印 · 批量每张 A4 上下两款</span>
   </div>
@@ -171,6 +172,7 @@
       const printButton = document.getElementById("printButton");
       const modeButton = document.getElementById("modeButton");
       const labelButton = document.getElementById("labelButton");
+      const labelRefreshButton = document.getElementById("labelRefreshButton");
       const closeButton = document.getElementById("closeButton");
       const toolbarNote = document.getElementById("toolbarNote");
       const params = new URLSearchParams(window.location.search);
@@ -561,9 +563,20 @@
         message.hidden = true;
         printButton.disabled = !layouts.length || packageData.printable === false;
         const labelCount = Number(packageData.production_label_count || 0);
-        labelButton.hidden = receiptMode || batchMode;
+        const refreshOptions = Array.isArray(packageData.production_label_refresh_options)
+          ? packageData.production_label_refresh_options : [];
+        const refreshable = refreshOptions.filter((row) => row && row.can_refresh === true && row.current_enabled === true);
+        labelButton.hidden = batchMode;
         labelButton.textContent = labelCount > 0 ? `生产包装标签（${labelCount}张）` : "未启用包装标签";
-        labelButton.disabled = receiptMode || batchMode || labelCount <= 0 || packageData.review_required === true;
+        // The packaging-label endpoint performs its own frozen-plan checks.
+        // A production-paper review warning must not hide an otherwise valid
+        // label plan, especially on the posted-receipt card.
+        labelButton.disabled = batchMode || labelCount <= 0;
+        labelRefreshButton.hidden = batchMode || labelCount > 0 || !refreshable.length;
+        labelRefreshButton.disabled = labelRefreshButton.hidden;
+        labelRefreshButton.textContent = refreshable.length > 1
+          ? `按常用箱刷新 ${refreshable.length} 款标签计划`
+          : "按常用箱刷新标签计划";
       }
 
       async function loadPackage() {
@@ -573,6 +586,7 @@
         loadedPackage = null;
         printButton.disabled = true;
         labelButton.disabled = true;
+        labelRefreshButton.disabled = true;
         pagesHost.innerHTML = "";
         message.hidden = false;
         message.className = "message";
@@ -609,7 +623,58 @@
       retryButton.addEventListener("click", loadPackage);
       printButton.addEventListener("click", () => { if (loadedPackage) window.print(); });
       modeButton.addEventListener("click", () => { customerSafe = !customerSafe; applyMode(); });
-      labelButton.addEventListener("click", () => { if (loadedPackage && !receiptMode && !batchMode) window.open(`/production-packaging-label.html?id=${encodeURIComponent(orderId)}`, "_blank", "noopener"); });
+      labelButton.addEventListener("click", () => {
+        const supplierOrderId = Number(loadedPackage && loadedPackage.supplier_order_id);
+        if (loadedPackage && !batchMode && Number.isInteger(supplierOrderId) && supplierOrderId > 0) {
+          window.open(`/production-packaging-label.html?id=${encodeURIComponent(supplierOrderId)}`, "_blank", "noopener");
+        }
+      });
+      labelRefreshButton.addEventListener("click", async () => {
+        const packageSnapshot = loadedPackage;
+        const refreshable = Array.isArray(packageSnapshot && packageSnapshot.production_label_refresh_options)
+          ? packageSnapshot.production_label_refresh_options.filter((row) => row && row.can_refresh === true && row.current_enabled === true)
+          : [];
+        if (!refreshable.length) return;
+        const productText = refreshable.map((row) => row.product_code || row.product_name || `任务 ${row.task_id}`).join("、");
+        if (!window.confirm(`确认这些任务尚未开始生产、也没有打印过包装标签，并按当前常用箱设置刷新标签计划吗？\n${productText}`)) return;
+        labelRefreshButton.disabled = true;
+        labelButton.disabled = true;
+        let refreshed = 0;
+        try {
+          for (const row of refreshable) {
+            const key = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+              ? crypto.randomUUID()
+              : `label-refresh-${Date.now()}-${row.task_id}-${Math.random().toString(16).slice(2)}`;
+            const response = await fetch(`/api/production/tasks/${encodeURIComponent(row.task_id)}/label-plan-refresh`, {
+              method:"POST",
+              credentials:"include",
+              headers:{"Accept":"application/json", "Content-Type":"application/json"},
+              body:JSON.stringify({
+                idempotency_key:key,
+                expected_task_version:row.expected_task_version,
+                expected_product_version:row.expected_product_version,
+                confirmed_not_started:true,
+                confirmed_no_prior_print:true,
+              }),
+            });
+            let payload = null;
+            try { payload = await response.json(); } catch (_error) { payload = null; }
+            if (!response.ok) throw new Error(errorMessage(response.status, payload));
+            refreshed += 1;
+          }
+          await loadPackage();
+          if (loadedPackage && Number(loadedPackage.production_label_count || 0) > 0) {
+            message.hidden = false;
+            message.className = "message";
+            message.textContent = `已按当前常用箱刷新 ${refreshed} 款标签计划，现在可以打印生产包装标签。`;
+          }
+        } catch (error) {
+          await loadPackage();
+          message.hidden = false;
+          message.className = "message error";
+          message.textContent = `${refreshed ? `已成功刷新 ${refreshed} 款；` : ""}${error && error.message ? error.message : "标签计划刷新失败，请重试"}`;
+        }
+      });
       closeButton.addEventListener("click", () => window.close());
       applyMode();
       document.title = batchMode ? "生产任务单 · 批量勾选" : receiptMode ? "生产任务单 · 实收版" : "生产任务单 · 计划版";

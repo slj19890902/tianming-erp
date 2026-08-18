@@ -72,7 +72,7 @@ def test_waiting_material_task_page_opens_separate_packaging_label_page() -> Non
     assert 'id="labelButton"' in TASK_PRINT
     assert "生产包装标签" in TASK_PRINT
     assert "/production-packaging-label.html?id=" in TASK_PRINT
-    assert 'window.open(`/production-packaging-label.html?id=${encodeURIComponent(orderId)}`, "_blank", "noopener")' in TASK_PRINT
+    assert 'window.open(`/production-packaging-label.html?id=${encodeURIComponent(supplierOrderId)}`, "_blank", "noopener")' in TASK_PRINT
     assert "window.opener" not in TASK_PRINT
 
 

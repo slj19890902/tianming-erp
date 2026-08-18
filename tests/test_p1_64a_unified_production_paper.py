@@ -55,10 +55,13 @@ def test_receipt_projection_is_read_only_and_legacy_facts_fail_closed() -> None:
     assert "db.flush(" not in endpoint
 
 
-def test_unified_page_only_reads_and_prints() -> None:
+def test_unified_page_only_allows_explicit_audited_label_plan_refresh() -> None:
     assert 'method:"GET"' in PRINT_PAGE
     assert "window.print()" in PRINT_PAGE
-    assert 'method:"POST"' not in PRINT_PAGE
+    assert PRINT_PAGE.count('method:"POST"') == 1
+    assert "/api/production/tasks/${encodeURIComponent(row.task_id)}/label-plan-refresh" in PRINT_PAGE
+    assert "confirmed_not_started:true" in PRINT_PAGE
+    assert "confirmed_no_prior_print:true" in PRINT_PAGE
     assert 'method:"PUT"' not in PRINT_PAGE
     assert 'method:"DELETE"' not in PRINT_PAGE
     assert PRINT_PAGE.count("window.print()") == 1

@@ -1,0 +1,98 @@
+{
+  "schema_version": "p1-73a-v1",
+  "cases": [
+    {
+      "case_id": "same_order_three_lines_void_middle",
+      "description": "同一供应商报料单三条未收料明细，仅撤销中间行",
+      "supplier_order_item_ids": [1101, 1102, 1103],
+      "target_item_id": 1102,
+      "before": {
+        "active_item_ids": [1101, 1102, 1103],
+        "supplier_order_active_quantity": 300,
+        "target_effective_coverage": 100,
+        "target_remaining_demand": 0
+      },
+      "after": {
+        "active_item_ids": [1101, 1103],
+        "supplier_order_active_quantity": 200,
+        "target_effective_coverage": 0,
+        "target_remaining_demand": 100,
+        "supplier_order_status": "confirmed"
+      },
+      "void_allowed": true
+    },
+    {
+      "case_id": "same_order_item_two_partial_requisitions",
+      "description": "同一订单明细分两次各报100张，撤销一次只恢复100张需求",
+      "supplier_order_item_ids": [1201, 1202],
+      "target_item_id": 1202,
+      "demand_quantity": 200,
+      "before": {
+        "active_item_ids": [1201, 1202],
+        "effective_coverage": 200,
+        "remaining_demand": 0
+      },
+      "after": {
+        "active_item_ids": [1201],
+        "effective_coverage": 100,
+        "remaining_demand": 100,
+        "order_item_requisition_status": "已报料"
+      },
+      "void_allowed": true
+    },
+    {
+      "case_id": "a3_cover_base_are_independent",
+      "description": "A3盖片100张、底片100张，撤盖不影响底",
+      "supplier_order_item_ids": [1301, 1302],
+      "target_item_id": 1301,
+      "before": {
+        "cover_coverage": 100,
+        "base_coverage": 100,
+        "cover_remaining_demand": 0,
+        "base_remaining_demand": 0
+      },
+      "after": {
+        "cover_coverage": 0,
+        "base_coverage": 100,
+        "cover_remaining_demand": 100,
+        "base_remaining_demand": 0
+      },
+      "void_allowed": true
+    },
+    {
+      "case_id": "partially_received_line_is_blocked",
+      "description": "正式明细已累计收料40张，报料页不得撤销",
+      "supplier_order_item_ids": [1401],
+      "target_item_id": 1401,
+      "before": {
+        "planned_quantity": 100,
+        "posted_received_quantity": 40,
+        "effective_coverage": 100
+      },
+      "after": {
+        "planned_quantity": 100,
+        "posted_received_quantity": 40,
+        "effective_coverage": 100
+      },
+      "void_allowed": false,
+      "blocked_reason": "已有有效来料实收"
+    },
+    {
+      "case_id": "last_unreceived_line_voids_header",
+      "description": "采购单最后一条有效且未收料明细撤销后，采购单进入全部已撤销",
+      "supplier_order_item_ids": [1501],
+      "target_item_id": 1501,
+      "before": {
+        "active_item_ids": [1501],
+        "supplier_order_active_quantity": 80,
+        "supplier_order_status": "confirmed"
+      },
+      "after": {
+        "active_item_ids": [],
+        "supplier_order_active_quantity": 0,
+        "supplier_order_status": "voided"
+      },
+      "void_allowed": true
+    }
+  ]
+}

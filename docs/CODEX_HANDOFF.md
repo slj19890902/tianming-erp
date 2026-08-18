@@ -4302,3 +4302,11 @@ legacy_ruida_* 原始层
 - 两阶段正式发布报告 `docs/migration_reports/release_runtime_20260818_184724.json` 状态 `completed`，SHA-256 为 `B983B9C9496D72BDB878039B74811512709A290C3A8EB32CF65ECEB8F1F5B6A3`。发布备份 `data/backups/carton_erp_before_release_20260818_184725.sqlite3` 的 SHA-256 为 `BCC6A13693080E440368983D36F2CD1D3751DFA3FC3B0C37FF3B97355BD72731`；源库、备份、隔离演练与正式应用均为 `uu29v8x9z18`，完整性正常、外键违规 0、15 张核心表计数一致。
 - ERP 已以单 worker 进程链恢复；本机与局域网 `/api/health`、带 `release=v0.22.134` 的局域网页面均为 HTTP 200，启动后版本说明门禁回读为 `v0.22.134｜订单规格单位表头简化`。
 - 本版没有新增迁移或业务数据修复，正式数据库应用前后 SHA-256 均为 `589b37d8991efffef5f6a46f3e2caf189dc98e30b0e2f0b35f3cc2832a78a0b1`；未批量改写订单、产品、报料、来料、生产、送货、库存或财务历史事实。发布报告的 `human_acceptance_status` 仍为 `not_recorded`，须由老板强制刷新后确认订单表头为“规格mm”、尺寸数值不再重复显示 `mm`，其他单据仍保持完整规格。
+
+## 2026-08-18 P1-75 与 v0.22.134 规格单位更新联合正式完成
+
+- 远端并行更新 `f7f864f58fbcc198d2b01907c63cd731a7a1f7a6`（v0.22.134 订单规格单位表头）与家庭 P1-75 `5d6451b0555245d4872a99ac872f99a02bb41611` 均基于 `1de31cb8`；已在工厂非破坏性整合，联合功能提交链最终为 `32be0a2529f8e2231e6ce2c92eff3acbb504e4a2`。
+- 联合隔离回归：P1-75 专项 `15 passed`；v0.22.134 规格、版本、发布安全及关键订单定向 `34 passed`；Python 编译、`git diff --check`、Alembic 唯一 head 均通过。唯一 warning 为既有 JWT 弱密钥/弃用提示。
+- 两阶段正式发布报告 `docs/migration_reports/release_runtime_20260818_185031.json` 状态 `completed`，报告 SHA-256 `d2c08aa8686eb2ca59a0cba4afd96fa0c8ee988a928ebe18fa828c4063a329be`；正式备份 `data/backups/carton_erp_before_release_20260818_185032.sqlite3`，SHA-256 `bcc6a13693080e440368983d36f2cd1d3751dfa3fc3b0c37ff3b97355bd72731`。源库、备份、演练及正式应用均为 `uu29v8x9z18`，完整性正常、外键违规 0、核心表计数一致。
+- 发布后 ERP 已以单 worker 重启；本机与局域网 `/api/health` 均 HTTP 200，首页 HTTP 200，版本回读为 `v0.22.134`。正式数据库 SHA-256 仍为 `589b37d8991efffef5f6a46f3e2caf189dc98e30b0e2f0b35f3cc2832a78a0b1`，本轮无迁移、无订单/报料/采购/库存/生产/送货/财务业务事实写入。
+- P1-75 仍需老板在外部 Chrome 完成人工验收：全箱型材料成本/毛利、手工 A1/A3/衬板报料与压线同步、异步推荐晚到保护、权限脱敏及保存后冻结快照一致性；联合发布报告 `human_acceptance_status` 保持 `not_recorded`。

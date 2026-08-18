@@ -255,6 +255,8 @@ interface SearchResponse {
   result_count: number;
   inventory_result_count: number;
   resource_result_count: number;
+  search_total?: number;
+  search_truncated?: boolean;
   items: SearchItem[];
   resources: LocateResource[];
   notice: string;
@@ -268,6 +270,9 @@ interface SearchProductGroup {
   product_name: string;
   specification: string | null;
   total_quantity: number;
+  available_quantity: number;
+  reserved_quantity: number;
+  damaged_quantity: number;
   unit: string;
   location_count: number;
   floor_summaries: Array<{ floor_code: string; quantity: number; location_count: number }>;
@@ -738,6 +743,9 @@ function groupSearchProducts(items: SearchItem[]): SearchProductGroup[] {
       product_name: item.product_name || "产品名称待补充",
       specification: item.specification || null,
       total_quantity: 0,
+      available_quantity: 0,
+      reserved_quantity: 0,
+      damaged_quantity: 0,
       unit: item.unit || "boxes",
       location_count: 0,
       floor_summaries: [],
@@ -745,6 +753,9 @@ function groupSearchProducts(items: SearchItem[]): SearchProductGroup[] {
       items: [] as SearchItem[]
     };
     current.total_quantity += Number(item.quantity ?? inventoryLabelQuantity(item));
+    current.available_quantity += Number(item.available_quantity || 0);
+    current.reserved_quantity += Number(item.reserved_quantity || 0);
+    current.damaged_quantity += Number(item.damaged_quantity || 0);
     current.items.push(item);
     current.location_count = new Set(current.items.map((row) => row.location_id || `text:${row.location_name}`)).size;
     current.floor_summaries = warehouseSearchFloorSummaries(current.items);
@@ -1259,8 +1270,11 @@ export function WarehouseTwinApp() {
   const [layers, setLayers] = useState<LayerVisibility>(DEFAULT_LAYERS);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [search, setSearch] = useState("");
-  const [searchType, setSearchType] = useState<WarehouseSearchType>("finished");
+  const [search, setSearch] = useState(query.get("keyword")?.trim() || "");
+  const [searchType, setSearchType] = useState<WarehouseSearchType>(() => {
+    const requested = query.get("search_type");
+    return requested === "mold" || requested === "printing_plate" ? requested : "finished";
+  });
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState("");
   const [searchRetryToken, setSearchRetryToken] = useState(0);
@@ -2396,6 +2410,32 @@ export function WarehouseTwinApp() {
     const focusedIds = new Set(focused.map((item) => item.lot_id));
     return [...focused, ...filteredSelectedInventory.filter((item) => !focusedIds.has(item.lot_id))].slice(0, 5);
   }, [areaInventoryDetailsOpen, areaInventorySearch, filteredSelectedInventory, focusedSearchItem?.lot_id, focusedSearchProductKey]);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    params.set("floor", floorCode);
+    params.set("view", viewMode);
+    params.set("mode", mapMode);
+    params.set("search_type", searchType);
+    if (search.trim()) params.set("keyword", search.trim());
+    else params.delete("keyword");
+    if (selectedLocation?.location_id) params.set("location_id", String(selectedLocation.location_id));
+    else params.delete("location_id");
+    if (selectedAreaCode) params.set("area_code", selectedAreaCode);
+    else params.delete("area_code");
+    const next = `${window.location.pathname}?${params.toString()}${window.location.hash}`;
+    window.history.replaceState(window.history.state, "", next);
+  }, [floorCode, viewMode, mapMode, searchType, search, selectedLocation?.location_id, selectedAreaCode]);
+  const ledgerLinkUrl = (() => {
+    const currentItem = focusedSearchItem || focusedSearchProduct?.items[0] || selectedLocationItems[0];
+    const params = new URLSearchParams({
+      tab: currentItem?.inventory_type === "semi_finished" ? "semi_finished" : "finished",
+      warehouse_floor: floorCode === "1F" ? "1" : "3",
+    });
+    if (search.trim()) params.set("keyword", search.trim());
+    if (selectedLocation?.location_id) params.set("location_id", String(selectedLocation.location_id));
+    if (focusedSearchItem?.lot_id) params.set("lot_id", String(focusedSearchItem.lot_id));
+    return `/warehouse-ledger.html?${params.toString()}`;
+  })();
   const selectedAreaQuantitySummary = selectedArea?.quantities.length
     ? selectedArea.quantities.map((item) => `${formatNumber(item.available)} ${inventoryUnitLabel(item.unit)}`).join(" / ")
     : "0";
@@ -3491,8 +3531,30 @@ export function WarehouseTwinApp() {
     }
   };
 
+  const hasUnsubmittedWarehouseMoveState = Boolean(
+    moveDrafts.length || mergeSources.length || moveSource || mergeTarget
+  );
+  const confirmLeavingWarehouseMoveMode = () => (
+    !hasUnsubmittedWarehouseMoveState
+    || window.confirm("切换模式会清空尚未提交的移货 / 合并页面草稿。正式库存尚未改变，确认离开吗？")
+  );
+  const resetWarehouseMoveWorkbench = () => {
+    setMoveSource(null);
+    setMoveQuantity("");
+    setMoveTargetFloorCode("");
+    setMoveTargetAreaCode("");
+    setMoveDraftTargetLocationId("");
+    setMoveDrafts([]);
+    setMoveBatchIdempotencyKey(operationKey("warehouse-move-batch"));
+    setMergeSources([]);
+    setMergeTarget(null);
+    setMergeBatchIdempotencyKey(operationKey("warehouse-pallet-merge-batch"));
+    setWarehouseOperationMessage("");
+  };
+
   const toggleLayoutEditor = async () => {
     if (!canEditLocations || spatialEditBusy) return;
+    if (mapMode === "move" && !confirmLeavingWarehouseMoveMode()) return;
     setSpatialEditBusy(true);
     setLocationEditMessage("");
     try {
@@ -3515,6 +3577,7 @@ export function WarehouseTwinApp() {
       setLayoutDraftControl(raw.draft_control);
       setPlanningPublishedRevision(raw.draft_control.published_revision);
       setMapMode('planning');
+      resetWarehouseMoveWorkbench();
       setViewMode('2d');
       setSearchPanelOpen(false);
       setLocationEditMode(true);
@@ -3537,6 +3600,7 @@ export function WarehouseTwinApp() {
 
   const returnToLookupMode = async () => {
     if (spatialEditBusy) return;
+    if (mapMode === "move" && !confirmLeavingWarehouseMoveMode()) return;
     setSpatialEditBusy(true);
     try {
       await refreshPublishedTwinFloor();
@@ -3546,6 +3610,7 @@ export function WarehouseTwinApp() {
       setLocationPointEditAreaCode(null);
       setRackDrafts({}); setZonePolicyDrafts({}); setZoneGeometryDrafts({});
       setLocationDrafts({}); setSwapSourceLocationId(null);
+      resetWarehouseMoveWorkbench();
       setMapMode('lookup'); setSearchPanelOpen(true);
       setLocationEditMessage('已返回查货模式，当前只显示已发布地图。');
     } catch (reason) {
@@ -4135,24 +4200,25 @@ export function WarehouseTwinApp() {
     />}
     <header className={`twin-command-bar ${embedded ? "embedded" : ""}`}>
       <div className="twin-brand"><div><small>TIANMING WAREHOUSE</small><h1>天明智慧仓储</h1></div><nav className="twin-floor-switch" aria-label="楼层切换">
-        <button type="button" className={floorCode === "1F" ? "active" : ""} onClick={() => switchWarehouseFloor("1F")}><b>1F</b><span>生产车间</span></button>
-        <button type="button" className={floorCode === "3F" ? "active" : ""} onClick={() => switchWarehouseFloor("3F")}><b>3F</b><span>成品仓库</span></button>
+        <button type="button" aria-current={floorCode === "1F" ? "page" : undefined} className={floorCode === "1F" ? "active" : ""} onClick={() => switchWarehouseFloor("1F")}><b>1F</b><span>生产车间</span></button>
+        <button type="button" aria-current={floorCode === "3F" ? "page" : undefined} className={floorCode === "3F" ? "active" : ""} onClick={() => switchWarehouseFloor("3F")}><b>3F</b><span>成品仓库</span></button>
       </nav>{selectedAreaCode && <div className="twin-header-area-summary"><small>当前区域</small><b>{selectedAreaCode} · {selectedAreaFeature?.name || "仓储区域"}</b><span>{selectedAreaFeature?.area_mm2 ? `${(selectedAreaFeature.area_mm2 / 1_000_000).toFixed(1)} m²` : "面积待确认"} · {selectedAreaLocationCount} 库位 · {selectedArea?.lot_count || 0} 批次</span></div>}<p>{floorTitle} · 正式仓库作业层</p></div>
       <div className="twin-command-status"><span className="live">{mapMode === "planning" ? locationPointEditAreaCode ? `区域规划 · ${locationPointEditAreaCode} 点位调整` : advancedAreaMaintenanceOpen ? "区域规划 · 高级维护" : "区域规划 · 一次确认" : mapMode === "move" ? moveAction === "merge" ? `移货 · 合并栈板 · ${mergeSources.length} 块已选` : `移货 · ${moveDrafts.length} 条页面草稿` : "查货模式 · 只读"}</span><b>{currentFloor?.active_lots || 0}</b><small>当前层有效批次</small></div>
-      <a className="twin-ledger-link" href="/warehouse-ledger.html?tab=finished" target="_top">库存台账</a>
+      <a className="twin-ledger-link" href={ledgerLinkUrl} target="_top">带当前条件看台账</a>
     </header>
 
     <section className="twin-toolbar">
       <div className="twin-operation-modes" role="tablist" aria-label="仓库地图操作模式">
-        <button type="button" className={mapMode === "lookup" ? "active" : ""} onClick={returnToLookupMode}>查货</button>
-        {canExecuteWarehouse && <button type="button" className={mapMode === "move" ? "active" : ""} disabled={spatialEditBusy} onClick={enterWarehouseMoveMode}>移货 / 盘点</button>}
-        {canEditLocations && <button type="button" className={mapMode === 'planning' ? 'active' : ''} disabled={spatialEditBusy} onClick={toggleLayoutEditor}>区域规划</button>}
+        <button type="button" role="tab" aria-selected={mapMode === "lookup"} className={mapMode === "lookup" ? "active" : ""} onClick={returnToLookupMode}>查货</button>
+        {canExecuteWarehouse && <button type="button" role="tab" aria-selected={mapMode === "move"} className={mapMode === "move" ? "active" : ""} disabled={spatialEditBusy} onClick={enterWarehouseMoveMode}>移货 / 盘点</button>}
+        {canEditLocations && <button type="button" role="tab" aria-selected={mapMode === "planning"} className={mapMode === 'planning' ? 'active' : ''} disabled={spatialEditBusy} onClick={toggleLayoutEditor}>区域规划</button>}
       </div>
       <button type="button" className={`twin-layer-toggle ${layerPanelOpen ? "active" : ""}`} aria-expanded={layerPanelOpen} onClick={() => setLayerPanelOpen((value) => !value)}>图层</button>
-      <div className="twin-segmented" aria-label="视图模式">
-        <button type="button" className={viewMode === "2d" ? "active" : ""} onClick={() => setViewMode("2d")}>二维平面</button>
-        <button type="button" className={viewMode === "25d" ? "active" : ""} disabled={locationEditMode || mapMode === "move"} title={mapMode === "move" ? "移货 / 盘点使用二维地图；页面草稿不会丢失" : locationEditMode ? "请先退出、发布或放弃布局草稿" : ""} onClick={() => setViewMode("25d")}>2.5D 等距</button>
+      <div className="twin-segmented" role="tablist" aria-label="视图模式">
+        <button type="button" role="tab" aria-selected={viewMode === "2d"} className={viewMode === "2d" ? "active" : ""} onClick={() => setViewMode("2d")}>二维平面</button>
+        <button type="button" role="tab" aria-selected={viewMode === "25d"} aria-describedby={(locationEditMode || mapMode === "move") ? "twin-view-mode-help" : undefined} className={viewMode === "25d" ? "active" : ""} disabled={locationEditMode || mapMode === "move"} title={mapMode === "move" ? "移货 / 盘点使用二维地图；页面草稿不会丢失" : locationEditMode ? "请先退出、发布或放弃布局草稿" : ""} onClick={() => setViewMode("25d")}>2.5D 等距</button>
       </div>
+      <span id="twin-view-mode-help" className="twin-sr-only">移货和区域规划必须使用二维平面；退出当前作业模式后才能切换 2.5D。</span>
       {viewMode === "25d" && <div className="twin-camera-presets">
         <button type="button" onClick={() => setCameraPreset("north_east")}>东北</button>
         <button type="button" onClick={() => setCameraPreset("north_west")}>西北</button>
@@ -4189,9 +4255,9 @@ export function WarehouseTwinApp() {
         <section className="twin-global-search">
           <div className="twin-context-heading"><b>统一查货</b>{search && <button type="button" onClick={() => { setSearch(""); setSearchResponse(null); setSearchError(""); setFocusedSearchItem(null); setFocusedSearchProductKey(null); setFocusedResource(null); setCameraFocusTarget(null); setAreaInventorySearch(""); }}>清除</button>}</div>
           <div className="twin-search-type-grid" role="tablist" aria-label="全仓查找类型">
-            <button type="button" className={searchType === "finished" ? "active" : ""} onClick={() => { setSearchType("finished"); setSearch(""); setSearchResponse(null); setFocusedResource(null); setFocusedSearchProductKey(null); }}>纸箱成品</button>
-            <button type="button" className={searchType === "mold" ? "active" : ""} onClick={() => { setSearchType("mold"); setSearchResponse(null); setFocusedSearchItem(null); setFocusedSearchProductKey(null); }}>模具</button>
-            <button type="button" className={searchType === "printing_plate" ? "active" : ""} onClick={() => { setSearchType("printing_plate"); setSearchResponse(null); setFocusedSearchItem(null); setFocusedSearchProductKey(null); }}>印刷版</button>
+            <button type="button" role="tab" aria-selected={searchType === "finished"} className={searchType === "finished" ? "active" : ""} onClick={() => { setSearchType("finished"); setSearch(""); setSearchResponse(null); setFocusedResource(null); setFocusedSearchProductKey(null); }}>纸箱成品</button>
+            <button type="button" role="tab" aria-selected={searchType === "mold"} className={searchType === "mold" ? "active" : ""} onClick={() => { setSearchType("mold"); setSearchResponse(null); setFocusedSearchItem(null); setFocusedSearchProductKey(null); }}>模具</button>
+            <button type="button" role="tab" aria-selected={searchType === "printing_plate"} className={searchType === "printing_plate" ? "active" : ""} onClick={() => { setSearchType("printing_plate"); setSearchResponse(null); setFocusedSearchItem(null); setFocusedSearchProductKey(null); }}>印刷版</button>
           </div>
           {searchType === "finished" ? <>
             <label className="twin-search-step"><span>客户、简写、存货编码、产品名称或规格</span><input value={search} onChange={(event) => { setSearch(event.target.value); setFocusedSearchProductKey(null); }} placeholder="例如：天华、TH、TM-FG、加强纸箱、520×350×300" autoFocus /></label>
@@ -4201,13 +4267,14 @@ export function WarehouseTwinApp() {
             <small>{search.trim().length < 2 ? "至少输入 2 个字符" : searchResponse ? `${searchResponse.resource_result_count} 条真实定位结果` : "正在查找…"}</small>
           </>}
           {searchError && <div className="twin-search-error"><b>查货失败</b><span>{searchError}</span><button type="button" onClick={() => setSearchRetryToken((value) => value + 1)}>重试</button></div>}
+          {searchResponse?.search_truncated && <div className="twin-search-limit-warning" role="status"><b>结果较多，已防止静默漏货</b><span>实际匹配 {searchResponse.search_total} 个批次，地图先显示前 {searchResponse.inventory_result_count} 个；请补充客户、编码或规格缩小范围。</span></div>}
           {searchResponse && <div className="twin-search-result-list">
-            {searchType === "finished" && searchProductGroups.slice(0, 80).map((group) => <button type="button" className={focusedSearchProductKey === group.key ? "selected product-selected" : ""} key={group.key} onClick={() => focusSearchProduct(group)}><b>{group.inventory_code}</b><strong>{group.product_name}</strong><span>{group.customer_name}{group.specification ? ` · ${group.specification}` : ""}</span><small><em>{formatNumber(group.total_quantity)} {inventoryUnitLabel(group.unit)}</em> · {group.location_count} 个实际位置</small><small className="twin-search-floor-line">{group.floor_summaries.map((floor) => `${floor.floor_code === "UNLOCATED" ? "待定位" : floor.floor_code} ${formatNumber(floor.quantity)} ${inventoryUnitLabel(group.unit)} / ${floor.location_count}处`).join(" · ")}</small></button>)}
+            {searchType === "finished" && searchProductGroups.slice(0, 80).map((group) => <button type="button" className={focusedSearchProductKey === group.key ? "selected product-selected" : ""} key={group.key} onClick={() => focusSearchProduct(group)}><b>{group.inventory_code}</b><strong>{group.product_name}</strong><span>{group.customer_name}{group.specification ? ` · ${group.specification}` : ""}</span><small><em>实物 {formatNumber(group.total_quantity)} {inventoryUnitLabel(group.unit)}</em> · 可用 {formatNumber(group.available_quantity)} · 预占 {formatNumber(group.reserved_quantity)}{group.damaged_quantity ? ` · 报损待处置 ${formatNumber(group.damaged_quantity)}` : ""}</small><small>{group.location_count} 个实际位置</small><small className="twin-search-floor-line">{group.floor_summaries.map((floor) => `${floor.floor_code === "UNLOCATED" ? "待定位" : floor.floor_code} ${formatNumber(floor.quantity)} ${inventoryUnitLabel(group.unit)} / ${floor.location_count}处`).join(" · ")}</small></button>)}
             {searchType !== "finished" && searchResponse.resources.slice(0, 60).map((item) => <button type="button" className={focusedResource?.resource_id === item.resource_id ? "selected" : ""} key={item.resource_id} onClick={() => focusLocateResource(item)}><b>{item.primary_code || item.location_code || "功能区域"}</b><strong>{item.title}</strong><span>{item.subtitle}</span><small>{item.floor_code === "TEXT" ? "文字位置" : item.floor_code} · {item.map_status === "mapped" ? "点击定位到地图" : "仅有文字位置"}</small></button>)}
             {searchType === "finished" && !searchProductGroups.length && <div className="twin-area-empty"><b>没有匹配的成品库存</b><span>可改用客户全称/简写、存货编码片段、产品名称或规格。</span></div>}
             {searchType !== "finished" && !searchResponse.resources.length && <div className="twin-area-empty"><b>没有匹配结果</b><span>请更换编码、名称或区域关键词。</span></div>}
           </div>}
-          {focusedSearchProduct && <div className="twin-search-focus-note product-focus"><b>全部真实位置已选中</b><span>{focusedSearchProduct.customer_name} · {focusedSearchProduct.inventory_code} · 共 {formatNumber(focusedSearchProduct.total_quantity)} {inventoryUnitLabel(focusedSearchProduct.unit)} · {focusedSearchProduct.location_count} 个位置</span><div className="twin-search-floor-actions">{focusedSearchProduct.floor_summaries.map((floor) => <button type="button" key={floor.floor_code} disabled={!(["1F", "3F"].includes(floor.floor_code))} className={floorCode === floor.floor_code ? "active" : ""} onClick={() => focusSearchFloor(focusedSearchProduct, floor.floor_code)}>{floor.floor_code === "UNLOCATED" ? "待定位" : floor.floor_code} · {formatNumber(floor.quantity)} {inventoryUnitLabel(focusedSearchProduct.unit)} · {floor.location_count}处</button>)}</div><div className="twin-search-location-list">{focusedSearchProduct.location_summaries.map((location) => <button type="button" key={location.key} disabled={!(["1F", "3F"].includes(location.floor_code))} onClick={() => focusSearchLocation(focusedSearchProduct, location)}><b>{location.floor_code === "UNLOCATED" ? "待定位" : location.floor_code} · {location.area_code || "区域待确认"}</b><span>{location.location_name}</span><em>{formatNumber(location.quantity)} {inventoryUnitLabel(focusedSearchProduct.unit)} · {location.position_status === "mapped" ? "地图可定位" : "真实文字位置"}</em></button>)}</div></div>}
+          {focusedSearchProduct && <div className="twin-search-focus-note product-focus"><b>全部真实位置已选中</b><span>{focusedSearchProduct.customer_name} · {focusedSearchProduct.inventory_code} · 实物 {formatNumber(focusedSearchProduct.total_quantity)} {inventoryUnitLabel(focusedSearchProduct.unit)}（可用 {formatNumber(focusedSearchProduct.available_quantity)}，预占 {formatNumber(focusedSearchProduct.reserved_quantity)}{focusedSearchProduct.damaged_quantity ? `，报损待处置 ${formatNumber(focusedSearchProduct.damaged_quantity)}` : ""}）· {focusedSearchProduct.location_count} 个位置</span><div className="twin-search-floor-actions">{focusedSearchProduct.floor_summaries.map((floor) => <button type="button" key={floor.floor_code} disabled={!(["1F", "3F"].includes(floor.floor_code))} className={floorCode === floor.floor_code ? "active" : ""} onClick={() => focusSearchFloor(focusedSearchProduct, floor.floor_code)}>{floor.floor_code === "UNLOCATED" ? "待定位" : floor.floor_code} · {formatNumber(floor.quantity)} {inventoryUnitLabel(focusedSearchProduct.unit)} · {floor.location_count}处</button>)}</div><div className="twin-search-location-list">{focusedSearchProduct.location_summaries.map((location) => <button type="button" key={location.key} disabled={!(["1F", "3F"].includes(location.floor_code))} onClick={() => focusSearchLocation(focusedSearchProduct, location)}><b>{location.floor_code === "UNLOCATED" ? "待定位" : location.floor_code} · {location.area_code || "区域待确认"}</b><span>{location.location_name}</span><em>{formatNumber(location.quantity)} {inventoryUnitLabel(focusedSearchProduct.unit)} · {location.position_status === "mapped" ? "地图可定位" : "真实文字位置"}</em></button>)}</div></div>}
           {focusedResource && <div className="twin-search-focus-note"><b>{focusedResource.map_status === "mapped" ? "地图定位指引" : "文字定位指引"}</b><span>{focusedResource.prompt}</span></div>}
         </section>
       </aside>}
@@ -4257,6 +4324,7 @@ export function WarehouseTwinApp() {
 
       <aside className="twin-inspector">
         <header><small>ERP INVENTORY</small><h2>库存与库位</h2></header>
+        {!selected && !focusedSearchProduct && !focusedResource && !floor1CandidatePlan && <section className="twin-empty-selection"><b>从查货开始，或直接点地图</b><span>① 输入客户、存货编码或产品；② 点结果定位真实库位；③ 右侧核对可用、预占和实物总数；④ 需要操作时再切换“移货 / 盘点”。</span><small>地图只是库存台账的空间投影，不会因查看而写入数量。</small></section>}
         {floor1CandidatePlan && <section className="twin-floor1-candidate-panel">
           <div className="twin-floor1-candidate-title"><div><small>1F · 实测地图候选</small><b>一次确认区域与库位</b></div><button type="button" disabled={floor1CandidateBusy} onClick={() => setFloor1CandidatePlan(null)}>关闭</button></div>
           <div className="twin-floor1-candidate-summary"><span><b>{floor1CandidatePlan.candidate_count}</b> 个区域</span><span><b>{floor1CandidatePlan.long_term_pallet_capacity}</b> 个长期栈板位</span><span><b>{floor1CandidatePlan.formal_location_count}</b> 个正式库存库位</span></div>
@@ -4700,7 +4768,7 @@ export function WarehouseTwinApp() {
             <button type="button" disabled={moveBatchBusy} onClick={() => removeMoveDraft(item.client_item_id)}>撤销</button>
           </article>)}
         </div>
-        <div className="twin-move-draft-actions"><button type="button" disabled={!moveDrafts.length || moveBatchBusy} onClick={clearMoveDrafts}>清空草稿</button><button type="button" className="confirm" disabled={!moveDrafts.length || moveBatchBusy} onClick={confirmMoveDrafts}>{moveBatchBusy ? "正在整批提交…" : `一次确认 ${moveDrafts.length || ""} 条`}</button></div>
+        <div className="twin-move-draft-actions"><button type="button" disabled={!moveDrafts.length || moveBatchBusy} onClick={clearMoveDrafts}>清空草稿</button><button type="button" className="confirm" disabled={!moveDrafts.length || moveBatchBusy} onClick={confirmMoveDrafts}>{moveBatchBusy ? "正在整批提交…" : moveDrafts.length ? `一次确认 ${moveDrafts.length} 条` : "先加入移货草稿"}</button></div>
       </>}
     </section>}
   </main>;

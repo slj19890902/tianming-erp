@@ -137,7 +137,10 @@ def test_embedded_warehouse_shell_has_a_definite_visible_height() -> None:
 
 
 def test_embedded_twin_opens_the_ledger_in_the_top_level_page() -> None:
-    assert '<a className="twin-ledger-link" href="/warehouse-ledger.html?tab=finished" target="_top">库存台账</a>' in SOURCE
+    assert 'const ledgerLinkUrl = (() =>' in SOURCE
+    assert 'warehouse_floor: floorCode === "1F" ? "1" : "3"' in SOURCE
+    assert 'params.set("location_id", String(selectedLocation.location_id))' in SOURCE
+    assert '<a className="twin-ledger-link" href={ledgerLinkUrl} target="_top">带当前条件看台账</a>' in SOURCE
 
 
 def test_operational_twin_keeps_fixed_objects_locked_and_only_adds_location_pallet_interaction() -> None:
@@ -323,7 +326,7 @@ def test_p1_47a_uses_typed_map_search_and_one_unified_read_only_entry() -> None:
     assert "查货模式 · 只读" in SOURCE
     assert "P1-47C 独立阶段启用" not in SOURCE
     assert 'setCanExecuteWarehouse(value.permissions.includes("warehouse.execute"))' in SOURCE
-    assert '{canExecuteWarehouse && <button type="button" className={mapMode === "move" ? "active" : ""} disabled={spatialEditBusy} onClick={enterWarehouseMoveMode}>移货 / 盘点</button>}' in SOURCE
+    assert '{canExecuteWarehouse && <button type="button" role="tab" aria-selected={mapMode === "move"} className={mapMode === "move" ? "active" : ""} disabled={spatialEditBusy} onClick={enterWarehouseMoveMode}>移货 / 盘点</button>}' in SOURCE
     assert "区域规划" in SOURCE
     assert "P1-47B 独立阶段启用" not in SOURCE
     assert 'mapMode === "move"' in SOURCE

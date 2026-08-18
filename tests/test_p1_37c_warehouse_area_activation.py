@@ -597,4 +597,6 @@ def test_inventory_ledger_link_escapes_the_embedded_map_frame() -> None:
         ROOT / "factory_twin" / "frontend" / "src" / "WarehouseTwinApp.tsx"
     ).read_text(encoding="utf-8")
 
-    assert 'href="/warehouse-ledger.html?tab=finished" target="_top"' in source
+    assert 'const ledgerLinkUrl = (() =>' in source
+    assert 'href={ledgerLinkUrl} target="_top"' in source
+    assert 'params.set("lot_id", String(focusedSearchItem.lot_id))' in source

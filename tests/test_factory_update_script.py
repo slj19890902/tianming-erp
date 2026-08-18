@@ -36,9 +36,9 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.123"
-    assert APP_VERSION_NAME == "结合方式三选一与待来料无需结合"
-    assert APP_BUILD_DATE == "2026-08-17"
+    assert APP_VERSION == "v0.22.124"
+    assert APP_VERSION_NAME == "仓库地图与库存台账联合治理"
+    assert APP_BUILD_DATE == "2026-08-18"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
     assert metadata["external_acceptance_required"] is True
@@ -49,14 +49,14 @@ def test_factory_update_reports_current_release_version() -> None:
     current_release = [
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
-    assert any("本次更新｜" in item and "三选一" in item and "模切" in item for item in current_release)
-    assert any("本次更新｜" in item and "历史空工艺" in item and "不批量回写" in item for item in current_release)
-    assert any("本次更新｜" in item and "待来料任务单" in item and "待确认" in item for item in current_release)
-    assert any("本次更新｜" in item and "无数据库迁移" in item and "二次粘合" in item for item in current_release)
-    assert any("如何验证｜" in item and "普通纸箱" in item and "只能保留一项" in item for item in current_release)
-    assert any("如何验证｜" in item and "历史空工艺" in item and "开槽" in item for item in current_release)
-    assert any("如何验证｜" in item and "待来料任务单" in item and "纸面无待确认" in item for item in current_release)
-    assert any("如何验证｜" in item and "v0.22.123" in item and "pp24v8x9z13" in item for item in current_release)
+    assert any("本次更新｜" in item and "互相跳转" in item and "查找上下文" in item for item in current_release)
+    assert any("本次更新｜" in item and "数据库先筛选" in item and "前2500条" in item for item in current_release)
+    assert any("本次更新｜" in item and "实物" in item and "库存流水" in item for item in current_release)
+    assert any("本次更新｜" in item and "1200×1000×150" in item and "无数据库迁移" in item for item in current_release)
+    assert any("如何验证｜" in item and "1366" in item and "1920" in item for item in current_release)
+    assert any("如何验证｜" in item and "带当前条件看台账" in item and "反向跳转" in item for item in current_release)
+    assert any("如何验证｜" in item and "Tab" in item and "Shift+Tab" in item for item in current_release)
+    assert any("如何验证｜" in item and "v0.22.124" in item and "revision 不变" in item for item in current_release)
     assert any(item.startswith("v0.22.122：本次更新｜") and "部分正式报料" in item for item in APP_CHANGELOG)
     assert any(item.startswith("v0.22.122：如何验证｜") and "v0.22.122" in item and "pp24v8x9z13" in item for item in APP_CHANGELOG)
     assert any(item.startswith("v0.22.121：本次更新｜") and "模具编号" in item and "本次扫码已登记" in item for item in APP_CHANGELOG)
@@ -188,7 +188,7 @@ def test_factory_update_reports_current_release_version() -> None:
         for item in APP_CHANGELOG
     )
     assert any(
-        "如何验证｜" in item and "v0.22.123" in item and "pp24" in item
+        "如何验证｜" in item and "v0.22.124" in item and "revision 不变" in item
         for item in current_release
     )
     assert any(

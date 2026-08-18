@@ -16,7 +16,7 @@ from urllib.parse import urlsplit, urlunsplit
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 import qrcode
 from pydantic import BaseModel, Field, field_validator, model_validator
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import String, and_, cast, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -235,7 +235,6 @@ from app.services.inventory_insights import build_inventory_insights
 from app.services.warehouse_twin_dashboard import (
     build_inventory_code_search_results,
     build_warehouse_twin_dashboard,
-    inventory_search_matches,
     suppress_capacity_metrics_until_all_confirmed,
     warehouse_capacity_summary,
 )
@@ -2038,6 +2037,141 @@ def _lot_query():
             ),
         )
     )
+
+
+def _normalized_inventory_search_expression(column):
+    """Mirror the employee-facing warehouse search normalization in SQL."""
+
+    expression = func.lower(func.coalesce(cast(column, String), ""))
+    for source, target in (
+        (" ", ""),
+        ("\t", ""),
+        ("\r", ""),
+        ("\n", ""),
+        ("X", "×"),
+        ("x", "×"),
+        ("*", "×"),
+        ("毫米", ""),
+        ("mm", ""),
+    ):
+        expression = func.replace(expression, source, target)
+    return expression
+
+
+def _inventory_search_lot_condition(keyword: str):
+    """Build a scoped SQL predicate before applying any result cap.
+
+    The old implementation loaded the first 2,500 lots and searched them in
+    Python.  A valid later lot could therefore disappear without any warning.
+    SQL pre-filtering keeps the existing customer-scope predicate on the parent
+    query and makes the cap apply to actual matches instead of arbitrary rows.
+    """
+
+    normalized = (
+        "".join(str(keyword or "").split())
+        .replace("X", "×")
+        .replace("x", "×")
+        .replace("*", "×")
+        .replace("毫米", "")
+        .replace("mm", "")
+        .casefold()
+    )
+    escaped = (
+        normalized.replace("\\", "\\\\")
+        .replace("%", "\\%")
+        .replace("_", "\\_")
+    )
+    pattern = f"%{escaped}%"
+
+    def matches(column):
+        return _normalized_inventory_search_expression(column).like(
+            pattern, escape="\\"
+        )
+
+    finished_specification = (
+        func.coalesce(cast(FinishedGoodsInventoryDetail.length_mm, String), "")
+        + "×"
+        + func.coalesce(cast(FinishedGoodsInventoryDetail.width_mm, String), "")
+        + "×"
+        + func.coalesce(cast(FinishedGoodsInventoryDetail.height_mm, String), "")
+    )
+    semi_specification = (
+        func.coalesce(cast(SemiFinishedInventoryDetail.board_length_mm, String), "")
+        + "×"
+        + func.coalesce(cast(SemiFinishedInventoryDetail.board_width_mm, String), "")
+    )
+    finished_lot_ids = (
+        select(FinishedGoodsInventoryDetail.inventory_lot_id)
+        .outerjoin(Customer, Customer.id == FinishedGoodsInventoryDetail.owner_customer_id)
+        .where(
+            or_(
+                matches(FinishedGoodsInventoryDetail.inventory_code_snapshot),
+                matches(FinishedGoodsInventoryDetail.product_name_snapshot),
+                matches(FinishedGoodsInventoryDetail.owner_customer_name_snapshot),
+                matches(FinishedGoodsInventoryDetail.material_code_snapshot),
+                matches(FinishedGoodsInventoryDetail.flute_type_snapshot),
+                matches(finished_specification),
+                matches(Customer.name),
+                matches(Customer.chinese_short_name),
+                matches(Customer.customer_code),
+            )
+        )
+    )
+    semi_lot_ids = (
+        select(SemiFinishedInventoryDetail.inventory_lot_id)
+        .outerjoin(Customer, Customer.id == SemiFinishedInventoryDetail.owner_customer_id)
+        .where(
+            or_(
+                matches(SemiFinishedInventoryDetail.supplier_name),
+                matches(SemiFinishedInventoryDetail.owner_customer_name_snapshot),
+                matches(SemiFinishedInventoryDetail.material_code_snapshot),
+                matches(SemiFinishedInventoryDetail.flute_type),
+                matches(semi_specification),
+                matches(Customer.name),
+                matches(Customer.chinese_short_name),
+                matches(Customer.customer_code),
+            )
+        )
+    )
+    location_lot_ids = select(InventoryLot.id).join(
+        WarehouseLocation,
+        WarehouseLocation.id == InventoryLot.warehouse_location_id,
+    ).where(
+        or_(
+            matches(WarehouseLocation.location_code),
+            matches(WarehouseLocation.location_name),
+            matches(WarehouseLocation.area_code),
+        )
+    )
+    pallet_lot_ids = (
+        select(InventoryPalletItem.inventory_lot_id)
+        .join(InventoryPallet, InventoryPallet.id == InventoryPalletItem.pallet_id)
+        .where(matches(InventoryPallet.pallet_code))
+    )
+    return or_(
+        matches(InventoryLot.lot_number),
+        InventoryLot.id.in_(finished_lot_ids),
+        InventoryLot.id.in_(semi_lot_ids),
+        InventoryLot.id.in_(location_lot_ids),
+        InventoryLot.id.in_(pallet_lot_ids),
+    )
+
+
+def _inventory_search_page(
+    db: Session,
+    query,
+    *,
+    keyword: str,
+    limit: int = 500,
+) -> tuple[list[InventoryLot], int]:
+    filtered = query.where(_inventory_search_lot_condition(keyword))
+    total = int(
+        db.scalar(select(func.count()).select_from(filtered.order_by(None).subquery())) or 0
+    )
+    rows = list(
+        db.scalars(filtered.order_by(InventoryLot.id).limit(limit)).unique().all()
+    )
+    return rows, total
 
 
 def _visible_lot_condition(visible_customer_ids: set[int]):
@@ -9469,16 +9603,17 @@ def search_warehouse_twin_inventory(
     visible_customer_ids = _visible_customer_ids(user, db)
     if visible_customer_ids is not None:
         query = query.where(_visible_lot_condition(visible_customer_ids))
-    candidates = list(db.scalars(query.order_by(InventoryLot.id).limit(2500)).unique().all())
     today = beijing_today()
-    lots = [
-        row for row in candidates
-        if inventory_search_matches(row, effective_keyword, today)
-    ][:500]
+    lots, search_total = _inventory_search_page(
+        db,
+        query,
+        keyword=effective_keyword,
+    )
     return build_inventory_code_search_results(
         lots=lots,
         keyword=effective_keyword,
         as_of=today,
+        search_total=search_total,
     )
 
 
@@ -9809,27 +9944,36 @@ def locate_warehouse_twin_objects(
         query = query.where(_visible_lot_condition(visible_customer_ids))
     if search_type == "finished":
         query = query.where(InventoryLot.inventory_type == "finished")
-    today = beijing_today()
-    lots = [
-        row
-        for row in db.scalars(query.order_by(InventoryLot.id).limit(2500)).unique().all()
-        if (
-            (customer_id is None or (
-                row.finished_detail is not None
-                and row.finished_detail.owner_customer_id == customer_id
-            ))
-            and (
-                not effective_keyword
-                or inventory_search_matches(row, effective_keyword, today)
+    if customer_id is not None:
+        query = query.where(
+            InventoryLot.id.in_(
+                select(FinishedGoodsInventoryDetail.inventory_lot_id).where(
+                    FinishedGoodsInventoryDetail.owner_customer_id == customer_id
+                )
             )
         )
-    ][:500]
+    today = beijing_today()
+    if effective_keyword:
+        lots, search_total = _inventory_search_page(
+            db,
+            query,
+            keyword=effective_keyword,
+        )
+    else:
+        search_total = int(
+            db.scalar(select(func.count()).select_from(query.order_by(None).subquery())) or 0
+        )
+        lots = list(
+            db.scalars(query.order_by(InventoryLot.id).limit(500)).unique().all()
+        )
     if search_type in {"mold", "printing_plate"}:
         lots = []
+        search_total = 0
     inventory = build_inventory_code_search_results(
         lots=lots,
         keyword=effective_keyword,
         as_of=today,
+        search_total=search_total,
     )
     pick_resources: list[dict] = []
     pick_tasks: list[dict] = []

@@ -1402,3 +1402,104 @@ body.warehouse-twin-page {
   .twin-move-draft-list { grid-column: 1 / -1; grid-row: 2; }
   .twin-move-draft-heading > span { display: none; }
 }
+
+/* P1-71: warehouse map and inventory-ledger joint ergonomics. */
+.warehouse-twin-shell,
+.warehouse-twin-shell.move-mode { grid-template-rows: 66px auto minmax(0, 1fr) auto; }
+.twin-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.twin-toolbar button,
+.twin-ledger-link,
+.twin-search-type-grid button,
+.twin-context-heading button,
+.twin-detail-toggle,
+.twin-primary-action,
+.twin-move-action-tabs button,
+.twin-move-source-panel button,
+.twin-move-pallet-list button,
+.twin-move-lot-list button,
+.twin-move-draft-actions button,
+.twin-move-draft-list article button {
+  min-height: 44px;
+  box-sizing: border-box;
+  font-size: 11px;
+}
+.twin-search-step input,
+.twin-search-step select,
+.twin-move-target-cascade input,
+.twin-move-target-cascade select { min-height: 44px; font-size: 11px; }
+.twin-toolbar button:focus-visible,
+.twin-ledger-link:focus-visible,
+.twin-inspector button:focus-visible,
+.twin-context-rail button:focus-visible,
+.twin-context-rail input:focus-visible,
+.twin-inspector input:focus-visible,
+.twin-inspector select:focus-visible {
+  outline: 3px solid #f59e0b;
+  outline-offset: 2px;
+}
+.twin-empty-selection {
+  margin: 10px;
+  padding: 12px;
+  display: grid;
+  gap: 7px;
+  border: 1px dashed #9db4bd;
+  border-radius: 4px;
+  color: #405966;
+  background: #f8fafb;
+}
+.twin-empty-selection b { color: #17384a; font-size: 13px; }
+.twin-empty-selection span { font-size: 11px; line-height: 1.65; }
+.twin-empty-selection small { color: #64748b; font-size: 10px; line-height: 1.5; }
+.twin-search-limit-warning {
+  padding: 8px;
+  display: grid;
+  gap: 3px;
+  border: 1px solid #f5bd58;
+  border-left: 4px solid #f59e0b;
+  color: #78350f;
+  background: #fff7df;
+}
+.twin-search-limit-warning b { font-size: 11px; }
+.twin-search-limit-warning span { font-size: 10px; line-height: 1.5; }
+.twin-location-item-summary > span,
+.twin-location-item-summary > strong,
+.twin-location-readonly-note,
+.twin-formal-operation label,
+.twin-map-target-title,
+.twin-move-source-summary span,
+.twin-move-source-panel > p,
+.twin-move-draft-heading > span,
+.twin-move-draft-list article span,
+.twin-move-draft-list article strong,
+.twin-move-draft-list article small { font-size: 10px; }
+.twin-location-item-summary small,
+.twin-formal-operation-title span,
+.twin-move-source-summary small,
+.twin-move-source-panel button small { font-size: 9px; }
+.twin-detail-toggle { padding: 8px; }
+.twin-move-draft-list article { min-width: 320px; padding: 8px 10px; }
+.twin-move-draft-heading small { font-size: 9px; }
+.twin-move-draft-heading b { font-size: 15px; }
+.twin-move-draft-actions { min-width: 160px; }
+
+@media (max-width: 1180px) {
+  .twin-toolbar-summary span:nth-child(2),
+  .twin-toolbar-summary span:nth-child(4) { display: inline-flex; align-items: center; gap: 3px; }
+  .twin-toolbar-summary span { padding: 3px 4px; }
+}
+
+@media (max-width: 880px) {
+  .warehouse-twin-shell,
+  .warehouse-twin-shell.move-mode { grid-template-rows: auto auto minmax(0, 1fr) auto; }
+  .twin-toolbar-summary { display: none; }
+}

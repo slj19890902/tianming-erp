@@ -921,6 +921,7 @@ def build_inventory_code_search_results(
     lots: list[InventoryLot],
     keyword: str,
     as_of: date,
+    search_total: int | None = None,
 ) -> dict:
     results = []
     floor_counts: dict[str, dict] = {}
@@ -968,14 +969,19 @@ def build_inventory_code_search_results(
         )
     summaries.sort(key=lambda row: row["floor_code"])
     results.sort(key=lambda row: (row["floor_code"], row["area_code"] or "", row["location_code"] or ""))
+    effective_total = len(results) if search_total is None else int(search_total)
     return {
         "keyword": keyword,
         "generated_at": utc_naive_to_api(utc_now_naive()),
         "result_count": len(results),
+        "search_total": effective_total,
+        "search_truncated": effective_total > len(results),
         "floor_summaries": summaries,
         "items": results,
         "notice": (
-            "命中库存缺少已发布坐标时只显示文字位置，不生成虚假地图点。"
+            f"共匹配 {effective_total} 个有权查看的库存批次；当前地图显示前 {len(results)} 个，请缩小关键词后再定位。"
+            if effective_total > len(results)
+            else "命中库存缺少已发布坐标时只显示文字位置，不生成虚假地图点。"
             if any(row["position_status"] != "mapped" for row in results)
             else "全部命中均可定位到已发布地图位置。"
         ),

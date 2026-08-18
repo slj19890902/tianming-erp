@@ -94,7 +94,7 @@ def test_manual_size_only_uses_active_saved_customer_quote_preferences() -> None
     assert "manualSizeFluteOptions(item)" in block
     assert "manualSizeSupplierOptions(item)" in block
     assert "manualSizePreferenceSelectOptions(item)" in block
-    assert "该客户没有已保存并启用的 A1 报价偏好" in INDEX
+    assert "该客户没有已保存并启用的箱型报价偏好" in INDEX
     assert "必须从该客户已保存并启用的报价偏好中选择" in INDEX
     assert ':options="materialSelectOptions(\'\',null,null)"' not in block
 

@@ -136,8 +136,8 @@ def test_manual_size_requires_explicit_a1_dimensions_material_and_matching_flute
     app, session_factory = order_api_app
     _make_fixture_material_valid_for_manual_a1(session_factory)
     invalid_cases = [
-        ({"box_type": "A3"}, "目前仅支持 A1 箱型"),
-        ({"length_mm": None}, "必须填写正数的长、宽、高"),
+        ({"box_type": "A3"}, "已保存并启用"),
+        ({"length_mm": None}, "必须填写正数的长"),
         ({"material_id": None}, "必须明确选择材质"),
         ({"layer_count": 3}, "层数必须与所选材质真实层数一致"),
         ({"flute_type": "BE"}, "已保存并启用"),

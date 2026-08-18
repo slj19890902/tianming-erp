@@ -93,10 +93,13 @@ from app.services.location_candidates import (
 )
 from app.services.audit_log import append_audit_event
 from app.services.stock_replenishment import (
+    RAW_SHEET_SCOPE_MARKER_PREFIX,
     StockReplenishmentError,
+    compatible_customer_product_ids,
     finished_product_quantity_summary,
     next_replenishment_order_number,
     product_replenishment_defaults,
+    raw_sheet_scope_marker,
     product_replenishment_signature,
     replenishment_order_dict,
     stock_policy_dict,
@@ -840,6 +843,7 @@ class StockReplenishmentItemPayload(BaseModel):
     material_id: int | None = None
     product_code: str | None = Field(default=None, max_length=150)
     product_name: str | None = Field(default=None, max_length=250)
+    raw_sheet_scope: str | None = None
     material_code: str | None = Field(default=None, max_length=100)
     layer_count: int | None = None
     flute_type: str | None = Field(default=None, max_length=20)
@@ -866,6 +870,16 @@ class StockReplenishmentItemPayload(BaseModel):
     def valid_item_target_type(cls, value: str) -> str:
         return StockPolicyPayload.valid_target_type(value)
 
+    @field_validator("raw_sheet_scope")
+    @classmethod
+    def valid_raw_sheet_scope(cls, value: str | None) -> str | None:
+        normalized = str(value or "").strip().lower()
+        if not normalized:
+            return None
+        if normalized not in {"customer", "general"}:
+            raise ValueError("片料归属只允许 customer 或 general")
+        return normalized
+
     @field_validator("flute_type")
     @classmethod
     def normalize_item_flute(cls, value: str | None) -> str | None:
@@ -883,6 +897,20 @@ class StockReplenishmentItemPayload(BaseModel):
 
     @model_validator(mode="after")
     def normalize_crease_fields(self) -> "StockReplenishmentItemPayload":
+        historical_fields = (
+            self.historical_workbook,
+            self.historical_sheet,
+            self.historical_row,
+        )
+        if self.raw_sheet_scope and any(value is not None for value in historical_fields):
+            raise ValueError("直接输入片料不能伪装成历史采购行")
+        if (
+            not self.raw_sheet_scope
+            and str(self.historical_search_text or "").strip().startswith(
+                RAW_SHEET_SCOPE_MARKER_PREFIX
+            )
+        ):
+            raise ValueError("历史采购搜索内容不能使用系统保留标记")
         aliases = {"毛": "毛片", "净": "净料"}
         crease_type = aliases.get(str(self.crease_type or "").strip(), str(self.crease_type or "").strip())
         self.crease_type = crease_type or None
@@ -11914,7 +11942,11 @@ def _build_replenishment_item(
         historical_workbook=payload.historical_workbook,
         historical_sheet=payload.historical_sheet,
         historical_row=payload.historical_row,
-        historical_search_text=payload.historical_search_text,
+        historical_search_text=(
+            raw_sheet_scope_marker(payload.raw_sheet_scope)
+            if payload.raw_sheet_scope
+            else payload.historical_search_text
+        ),
         remark=payload.remark,
     )
 
@@ -11981,6 +12013,77 @@ def create_stock_replenishment_order(
             )
             for item in payload.items
         ]
+        direct_raw_pairs = [
+            (item, payload_item)
+            for item, payload_item in zip(items, payload.items, strict=True)
+            if payload_item.raw_sheet_scope is not None
+        ]
+        direct_raw_items = [item for item, _payload_item in direct_raw_pairs]
+        if direct_raw_items:
+            if payload.source_type != "customer_request":
+                raise StockReplenishmentError(
+                    "直接输入片料只能使用手动库存单。", 409
+                )
+            if len(direct_raw_items) != len(items):
+                raise StockReplenishmentError(
+                    "直接输入片料不能与常用箱补库混在同一张库存单，请分开保存。",
+                    409,
+                )
+            raw_customer_ids = {item.customer_id for item in direct_raw_items}
+            if len(raw_customer_ids) != 1:
+                raise StockReplenishmentError(
+                    "一张片料库存单只能选择一个指定客户，或全部使用通用片料。",
+                    409,
+                )
+            raw_customer_id = next(iter(raw_customer_ids))
+            if payload.customer_id != raw_customer_id:
+                raise StockReplenishmentError(
+                    "片料库存单抬头客户与明细归属不一致，请刷新后重试。",
+                    409,
+                )
+            for item in direct_raw_items:
+                crease_type = str(item.crease_type or "").strip()
+                if (
+                    item.material_id is None
+                    or item.sheet_type != "raw_board"
+                    or crease_type not in {"", "毛", "毛片"}
+                    or any(
+                        value is not None
+                        for value in (
+                            item.crease_left_mm,
+                            item.crease_middle_mm,
+                            item.crease_right_mm,
+                        )
+                    )
+                    or int(item.pieces_per_box or 0) != 1
+                ):
+                    scope_label = (
+                        "通用片料" if item.customer_id is None else "指定客户片料"
+                    )
+                    raise StockReplenishmentError(
+                        f"{scope_label}必须选择正式材质，只能是未压线 raw board，"
+                        "每箱片数固定为1。",
+                        409,
+                    )
+            for item, payload_item in direct_raw_pairs:
+                if item.product_id is not None:
+                    raise StockReplenishmentError(
+                        "直接输入片料不能绑定成品存货编码。", 409
+                    )
+                if (
+                    payload_item.raw_sheet_scope == "customer"
+                    and item.customer_id is None
+                ):
+                    raise StockReplenishmentError(
+                        "指定客户片料必须选择客户。", 409
+                    )
+                if (
+                    payload_item.raw_sheet_scope == "general"
+                    and item.customer_id is not None
+                ):
+                    raise StockReplenishmentError(
+                        "通用片料不能绑定客户。", 409
+                    )
         if payload.source_type == "stock_warning":
             for item in items:
                 if (
@@ -12085,14 +12188,31 @@ def create_stock_replenishment_order(
         payload_supplier = (payload.supplier_name or "").strip()
         if payload_supplier:
             payload_supplier = _require_active_supplier(db, payload_supplier)
+        effective_supplier = derived_supplier or payload_supplier or None
+        if direct_raw_items and not effective_supplier:
+            raise StockReplenishmentError(
+                "片料库存单必须通过正式材质或供应商主数据确定供应商。", 409
+            )
+        for item in direct_raw_items:
+            if item.customer_id is None:
+                continue
+            compatible_product_ids = compatible_customer_product_ids(
+                db,
+                item,
+                supplier_name=effective_supplier,
+            )
+            if not compatible_product_ids:
+                raise StockReplenishmentError(
+                    "指定客户片料没有任何物理签名完全一致的启用常用箱；"
+                    "请核对材质、楞型、长宽和每张可抵片数。",
+                    409,
+                )
         order = StockReplenishmentOrder(
             order_number=(
                 idempotent_order_number
                 or next_replenishment_order_number()
             ),
-            supplier_name=derived_supplier
-            or payload_supplier
-            or None,
+            supplier_name=effective_supplier,
             customer_id=payload.customer_id,
             source_type=payload.source_type,
             status="confirmed",

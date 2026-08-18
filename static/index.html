@@ -6809,15 +6809,15 @@
                 </div>
               </div>
               <div v-if="stockReplenishmentForm.source_type!=='stock_warning'" class="toolbar" style="margin-bottom:10px">
-                <div class="muted">不再从旧采购工作簿复制参数。请选择客户和常用箱，系统使用当前已维护资料；历史报料事实仍在原单据中只读保留。</div>
-                <button class="btn primary" type="button" @click="addBlankStockReplenishmentLine">新增补库行</button>
+                <div class="muted">不再从旧采购工作簿复制参数。请选择客户和常用箱，系统使用当前已维护资料；历史报料事实仍在原单据中只读保留。片料可直接输入报料尺寸，并明确选择指定客户或通用范围。</div>
+                <div class="toolbar-group"><button class="btn primary" type="button" title="新增补库行" @click="addBlankStockReplenishmentLine">新增常用箱补库行</button><button class="btn warning" type="button" @click="addRawStockReplenishmentLine">新增片料行</button></div>
               </div>
               <div class="form-grid" style="margin-bottom:10px">
                 <div class="field"><label>补库来源</label><input class="input" :value="stockReplenishmentForm.source_type==='stock_warning' ? '库存预警' : '手动库存补库'" disabled /></div>
                 <div class="field"><label>供应商（随材质联动）</label><select class="select" v-model="stockReplenishmentForm.supplier_name" :disabled="stockReplenishmentMaterialSuppliers().length === 1"><option value="">请选择供应商</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ supplierDisplayName(s) }}</option></select><div v-if="stockReplenishmentMaterialSuppliers().length === 1" class="muted">已按材质主数据自动确定</div><div v-else-if="stockReplenishmentMaterialSuppliers().length > 1" class="status orange">存在多个材质供应商，请拆分补库单</div></div>
                 <div class="status green">只保存报料草稿；到料后进入客户专用纸板备料，不直接增加成品库存</div>
               </div>
-              <div v-if="!stockReplenishmentForm.items.length" class="empty">点击“新增补库行”，再选择客户和常用箱。</div>
+              <div v-if="!stockReplenishmentForm.items.length" class="empty">可新增常用箱补库行，或直接新增指定客户/通用片料。</div>
               <div v-else class="stock-replenishment-lines">
                 <div v-for="(line,index) in stockReplenishmentForm.items" :key="line._key" class="stock-replenishment-line-card">
                   <div class="stock-replenishment-line-head"><div><strong>补库明细 {{ index + 1 }}</strong><span class="muted" style="margin-left:10px">{{ line.material_supplier_name || stockReplenishmentForm.supplier_name || '供应商待确认' }}｜{{ line.material_code || '材质待选择' }}</span></div><button class="btn small danger" type="button" @click="removeStockReplenishmentLine(index)">删除行</button></div>
@@ -6830,19 +6830,22 @@
                   <details :open="stockReplenishmentForm.source_type!=='stock_warning' || !line.draft_ready" :class="{'stock-warning-advanced':stockReplenishmentForm.source_type==='stock_warning'}">
                     <summary v-if="stockReplenishmentForm.source_type==='stock_warning'">查看详细参数</summary>
                     <div class="stock-replenishment-line-grid">
-                    <div class="field stock-span-2"><label>到料去向</label><select class="select" v-model="line.target_inventory_type" disabled><option value="semi_finished">客户专用纸板备料</option></select></div>
-                    <div class="field stock-span-3"><label>客户</label><select class="select" v-model.number="line.customer_id" @change="onStockCustomerChanged(line)"><option :value="null">通用 / 未指定</option><option v-for="c in activeCustomerOptions" :key="c.id" :value="c.id">{{ c.name }}</option></select></div>
-                    <div class="field stock-span-4"><label>存货编码 / 常用箱</label><search-select v-model="line.product_id" :options="stockProductSelectOptions(line.customer_id)" label-key="_label" value-key="id" :placeholder="line.customer_id ? '输入存货编码、产品名称或规格' : '请先选择客户'" :allow-empty="true" :disabled="!line.customer_id" @search="searchStockProducts(line.customer_id,$event)" @change="applyStockProduct(line)"></search-select><input v-if="line.target_inventory_type==='semi_finished' && !line.product_id" class="input" v-model.trim="line.product_name" placeholder="未关联常用箱时填写片料名称" /></div>
+                    <div class="field stock-span-2"><label>到料去向</label><select class="select" v-model="line.target_inventory_type" disabled><option value="semi_finished">{{ line._entry_mode === 'raw_sheet' ? '原料片料库存' : '客户专用纸板备料' }}</option></select></div>
+                    <div v-if="line._entry_mode === 'raw_sheet'" class="field stock-span-3"><label>片料归属</label><select class="select" v-model="line._raw_sheet_scope" @change="onRawSheetScopeChanged(line)"><option value="customer">指定客户片料</option><option value="general" :disabled="!user?.unrestricted_customer_access">通用片料（仅全部客户范围账号）</option></select><div v-if="!user?.unrestricted_customer_access" class="muted">当前账号只能建立指定客户片料，不能建立跨客户通用片料。</div></div>
+                    <div class="field stock-span-3"><label>客户</label><select class="select" v-model.number="line.customer_id" :disabled="line._entry_mode === 'raw_sheet' && line._raw_sheet_scope === 'general'" @change="onStockCustomerChanged(line)"><option :value="null">{{ line._entry_mode === 'raw_sheet' ? '通用片料不指定客户' : '通用 / 未指定' }}</option><option v-for="c in activeCustomerOptions" :key="c.id" :value="c.id">{{ c.name }}</option></select></div>
+                    <div v-if="line._entry_mode !== 'raw_sheet'" class="field stock-span-4"><label>存货编码 / 常用箱</label><search-select v-model="line.product_id" :options="stockProductSelectOptions(line.customer_id)" label-key="_label" value-key="id" :placeholder="line.customer_id ? '输入存货编码、产品名称或规格' : '请先选择客户'" :allow-empty="true" :disabled="!line.customer_id" @search="searchStockProducts(line.customer_id,$event)" @change="applyStockProduct(line)"></search-select><input v-if="line.target_inventory_type==='semi_finished' && !line.product_id" class="input" v-model.trim="line.product_name" placeholder="未关联常用箱时填写片料名称" /></div>
+                    <div v-else class="field stock-span-4"><label>片料身份</label><div :class="['status',line._raw_sheet_scope === 'general' ? 'orange' : 'blue']">{{ line._raw_sheet_scope === 'general' ? '通用片料｜可跨客户精确匹配，使用时必须人工确认' : '指定客户片料｜只供该客户完全兼容的常用箱使用' }}</div></div>
                     <div class="field stock-span-3"><label>数量（必填）</label><input class="input" type="number" min="1" step="1" v-model.number="line.quantity" placeholder="请人工填写" /></div>
                     <div class="field stock-span-4"><label>材质（供应商联动）</label><search-select v-model="line.material_id" :options="materialSelectOptions('',line.layer_count,line.flute_type)" label-key="_label" value-key="id" placeholder="选择材质主数据" :allow-empty="true" @change="applyStockMaterial(line)"></search-select><div class="muted">{{ line.material_supplier_name || '供应商待确认' }}｜{{ line.material_code || '材质待选择' }}</div></div>
                     <div class="field stock-span-2"><label>层数</label><select class="select" v-model.number="line.layer_count" @change="onStockLayerChanged(line)"><option :value="3">三层</option><option :value="5">五层</option><option :value="7">七层</option></select></div>
                     <div class="field stock-span-2"><label>楞型</label><select class="select" v-model="line.flute_type"><option value="">请选择楞型</option><option v-for="f in orderItemFluteOptions(line.layer_count)" :key="f" :value="f">{{ f }}</option></select></div>
                     <div class="field stock-span-4"><label>报料长宽</label><div class="stock-paired-inputs"><input class="input" type="number" min="1" v-model.number="line.report_length_mm" /><span>×</span><input class="input" type="number" min="1" v-model.number="line.report_width_mm" /></div></div>
-                    <div class="field stock-span-2"><label>压线类型</label><select class="select" v-model="line.crease_type" @change="onStockCreaseTypeChanged(line)"><option :value="null">未指定</option><option value="压线">压线</option><option value="净料">净</option><option value="毛片">毛</option></select></div>
+                    <template v-if="line._entry_mode !== 'raw_sheet'"><div class="field stock-span-2"><label>压线类型</label><select class="select" v-model="line.crease_type" @change="onStockCreaseTypeChanged(line)"><option :value="null">未指定</option><option value="压线">压线</option><option value="净料">净</option><option value="毛片">毛</option></select></div>
                     <div class="field stock-span-6"><label>压线尺寸</label><div v-if="line.crease_type==='压线'" class="stock-crease-inputs"><label>上摇盖<input class="input" type="number" min="0" v-model.number="line.crease_left_mm" @input="syncStockReportWidthFromCrease(line)" /></label><span>+</span><label>高<input class="input" type="number" min="1" v-model.number="line.crease_middle_mm" @input="syncStockReportWidthFromCrease(line)" /></label><span>+</span><label>下摇盖<input class="input" type="number" min="0" v-model.number="line.crease_right_mm" @input="syncStockReportWidthFromCrease(line)" /></label></div><div v-else class="muted">{{ line.crease_type || '无需压线分段' }}</div></div>
-                    <div v-if="stockCreaseMismatch(line)" class="status orange stock-span-full" style="white-space:normal">{{ stockCreaseMismatch(line) }}</div>
+                    <div v-if="stockCreaseMismatch(line)" class="status orange stock-span-full" style="white-space:normal">{{ stockCreaseMismatch(line) }}</div></template>
+                    <template v-else><div class="field stock-span-2"><label>片料类型</label><div class="status green">未压线 raw board</div></div><div class="field stock-span-2"><label>每张可抵片数</label><input class="input" type="number" min="1" step="1" v-model.number="line.stock_yield_per_sheet" /></div></template>
                     <div class="field stock-span-4"><label>片料到厂去向</label><div class="status blue">系统自动进入一楼 A1 原料暂存区，无需在报料时选择库位。</div></div>
-                    <div class="field stock-span-4"><label>库存预警</label><button class="btn" type="button" @click="saveStockPolicyFromLine(line)">保存为预警模板</button></div>
+                    <div v-if="line._entry_mode !== 'raw_sheet'" class="field stock-span-4"><label>库存预警</label><button class="btn" type="button" @click="saveStockPolicyFromLine(line)">保存为预警模板</button></div>
                     </div>
                   </details>
                 </div>
@@ -15893,13 +15896,49 @@
           },
           addBlankStockReplenishmentLine() {
             this.stockReplenishmentForm.items.push({
-              _key:createIdempotencyKey(), stock_policy_id:null, target_inventory_type:"semi_finished",
+              _key:createIdempotencyKey(), _entry_mode:"common_box", stock_policy_id:null, target_inventory_type:"semi_finished",
               product_id:null, customer_id:null, product_code:"", product_name:"", material_id:null, material_code:"", material_supplier_name:"",
               layer_count:5, flute_type:"AB", report_length_mm:null, report_width_mm:null,
               crease_type:null, crease_text:"", crease_left_mm:null, crease_middle_mm:null, crease_right_mm:null,
               sheet_type:"raw_board", component_type:"whole", pieces_per_box:1, stock_yield_per_sheet:1,
               quantity:null, location_id:null, remark:"",
             });
+          },
+          addRawStockReplenishmentLine() {
+            this.stockReplenishmentForm.items.push({
+              _key:createIdempotencyKey(), _entry_mode:"raw_sheet", _raw_sheet_scope:"customer",
+              stock_policy_id:null, target_inventory_type:"semi_finished",
+              product_id:null, customer_id:null, product_code:"", product_name:"客户专用片料",
+              material_id:null, material_code:"", material_supplier_name:"",
+              layer_count:5, flute_type:"AB", report_length_mm:null, report_width_mm:null,
+              crease_type:null, crease_text:"", crease_left_mm:null, crease_middle_mm:null, crease_right_mm:null,
+              sheet_type:"raw_board", component_type:"whole", pieces_per_box:1, stock_yield_per_sheet:1,
+              quantity:null, location_id:null, remark:"",
+            });
+            this.syncStockReplenishmentCustomer();
+          },
+          onRawSheetScopeChanged(line) {
+            if (!line || line._entry_mode !== "raw_sheet") return;
+            if (line._raw_sheet_scope === "general" && !this.user?.unrestricted_customer_access) {
+              line._raw_sheet_scope = "customer";
+              this.showToast("当前账号只有指定客户范围，不能建立跨客户通用片料", true);
+            }
+            line.product_id = null;
+            line.product_code = "";
+            line.pieces_per_box = 1;
+            line.sheet_type = "raw_board";
+            line.crease_type = null;
+            line.crease_left_mm = null;
+            line.crease_middle_mm = null;
+            line.crease_right_mm = null;
+            if (line._raw_sheet_scope === "general") {
+              line.customer_id = null;
+              line.product_name = "通用片料";
+            } else {
+              line._raw_sheet_scope = "customer";
+              line.product_name = "客户专用片料";
+            }
+            this.syncStockReplenishmentCustomer();
           },
           async addStockPolicyDraft(policy) {
             try {
@@ -15970,6 +16009,7 @@
               line.crease_left_mm=null; line.crease_middle_mm=null; line.crease_right_mm=null;
             }
             if (line.customer_id) this.loadStockProducts(line.customer_id);
+            this.syncStockReplenishmentCustomer();
             this.syncStockReplenishmentSupplier();
           },
           stockProductsForCustomer(customerId) {
@@ -16031,7 +16071,17 @@
           },
           removeStockReplenishmentLine(index) {
             this.stockReplenishmentForm.items.splice(index,1);
+            this.syncStockReplenishmentCustomer();
             this.syncStockReplenishmentSupplier();
+          },
+          syncStockReplenishmentCustomer() {
+            const customerIds = [...new Set((this.stockReplenishmentForm.items || [])
+              .map(line => Number(line.customer_id || 0))
+              .filter(value => value > 0))];
+            const hasGeneralRaw = (this.stockReplenishmentForm.items || []).some(line =>
+              line._entry_mode === "raw_sheet" && line._raw_sheet_scope === "general"
+            );
+            this.stockReplenishmentForm.customer_id = !hasGeneralRaw && customerIds.length === 1 ? customerIds[0] : null;
           },
           onStockLayerChanged(line) {
             const allowed = this.orderItemFluteOptions(line.layer_count);
@@ -16085,11 +16135,26 @@
             if (this.stockReplenishmentForm.stock_now) return "库存补库只能先生成报料草稿，不能保存后直接写入库存";
             const suppliers=this.stockReplenishmentMaterialSuppliers();
             if (suppliers.length > 1) return "一张库存补库单只能包含同一供应商的材质，请拆分后保存";
+            const rawLines=this.stockReplenishmentForm.items.filter(line=>line._entry_mode==="raw_sheet");
+            if (rawLines.length && rawLines.length!==this.stockReplenishmentForm.items.length) return "片料不能与常用箱补库混在同一张库存单，请分开保存";
+            if (rawLines.some(line=>line._raw_sheet_scope==="general") && !this.user?.unrestricted_customer_access) return "当前账号只有指定客户范围，不能建立跨客户通用片料";
+            const rawScopes=[...new Set(rawLines.map(line=>line._raw_sheet_scope))];
+            if (rawScopes.length>1) return "指定客户片料和通用片料不能混在同一张库存单，请分开保存";
+            const rawCustomerIds=[...new Set(rawLines.map(line=>Number(line.customer_id||0)))];
+            if (rawLines.length && rawCustomerIds.length>1) return "一张指定客户片料库存单只能选择一个客户";
             for (let i=0;i<this.stockReplenishmentForm.items.length;i+=1) {
               const line=this.stockReplenishmentForm.items[i], label=`第 ${i+1} 行`;
               if (!Number.isInteger(Number(line.quantity)) || Number(line.quantity)<=0) return `${label}数量必须是大于0的整数`;
-              if (line.target_inventory_type !== "semi_finished") return `${label}库存补库到料只能进入客户专用纸板备料`;
-              if (this.stockReplenishmentForm.source_type === "customer_request" && (!line.customer_id || !line.product_id)) return `${label}请先选择客户和常用箱`;
+              if (line.target_inventory_type !== "semi_finished") return `${label}库存补库到料只能进入纸板备料或原料片料库存`;
+              if (line._entry_mode === "raw_sheet") {
+                if (line.product_id) return `${label}片料不能绑定成品存货编码`;
+                if (line._raw_sheet_scope === "customer" && !line.customer_id) return `${label}指定客户片料必须选择客户`;
+                if (line._raw_sheet_scope === "general" && line.customer_id) return `${label}通用片料不能绑定客户`;
+                if (!line.material_id) return `${label}${line._raw_sheet_scope === "general" ? "通用片料" : "指定客户片料"}必须选择正式材质`;
+                if (line.sheet_type !== "raw_board" || ![null,"","毛","毛片"].includes(line.crease_type) || [line.crease_left_mm,line.crease_middle_mm,line.crease_right_mm].some(value=>value!==null&&value!==undefined&&value!=="")) return `${label}通用片料和指定客户片料只能是未压线 raw board`;
+                if (Number(line.pieces_per_box||0)!==1) return `${label}片料每箱片数必须固定为1`;
+                if (!Number.isInteger(Number(line.stock_yield_per_sheet)) || Number(line.stock_yield_per_sheet)<=0) return `${label}每张可抵片数必须是大于0的整数`;
+              } else if (this.stockReplenishmentForm.source_type === "customer_request" && (!line.customer_id || !line.product_id)) return `${label}请先选择客户和常用箱`;
               if (this.stockReplenishmentForm.source_type === "stock_warning") {
                 if (!line.customer_id || !line.product_id) return `${label}客户专用纸板备料必须关联客户和常用箱`;
                 if (!line.material_code || !line.layer_count || !line.flute_type || !(Number(line.report_length_mm)>0) || !(Number(line.report_width_mm)>0)) return `${label}常用箱必须先补全材质、层数、楞型和报料长宽`;
@@ -26488,7 +26553,10 @@
               stock_now:false,
               items:this.stockReplenishmentForm.items.map(line => {
                 const item={...line};
+                if (item._entry_mode === "raw_sheet") item.raw_sheet_scope=item._raw_sheet_scope;
                 delete item._key;
+                delete item._entry_mode;
+                delete item._raw_sheet_scope;
                 delete item.crease_text;
                 delete item.material_supplier_name;
                 delete item.suggested_finished_quantity;

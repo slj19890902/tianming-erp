@@ -45,6 +45,25 @@ from app.services.semi_finished_inventory import (
 )
 
 
+RAW_SHEET_SCOPE_MARKER_PREFIX = "stock_replenishment:raw_sheet_scope:"
+
+
+def raw_sheet_scope_marker(scope: str) -> str:
+    """Persist the raw-sheet discriminator without adding a second ledger."""
+
+    return f"{RAW_SHEET_SCOPE_MARKER_PREFIX}{scope}"
+
+
+def replenishment_item_raw_sheet_scope(
+    item: StockReplenishmentOrderItem,
+) -> str | None:
+    value = str(item.historical_search_text or "").strip()
+    if not value.startswith(RAW_SHEET_SCOPE_MARKER_PREFIX):
+        return None
+    scope = value[len(RAW_SHEET_SCOPE_MARKER_PREFIX) :]
+    return scope if scope in {"customer", "general"} else None
+
+
 class StockReplenishmentError(ValueError):
     def __init__(self, message: str, status_code: int = 400) -> None:
         super().__init__(message)
@@ -178,6 +197,71 @@ def product_replenishment_signature(product: Product) -> tuple | None:
     )
 
 
+def _product_raw_sheet_signature(product: Product) -> tuple | None:
+    """Return the exact raw-board facts that can be shared by one stock lot.
+
+    ``pieces_per_box`` belongs to the finished-product demand conversion, not
+    to the physical sheet.  It must not prevent two products from sharing the
+    same unprocessed board.  The sheet yield remains part of the signature so
+    stock quantities continue to convert into requirement pieces correctly.
+    """
+
+    defaults = product_replenishment_defaults(product)
+    if not defaults["draft_ready"]:
+        return None
+    crease_type = str(defaults["crease_type"] or "").strip()
+    if crease_type not in {"", "毛", "毛片"}:
+        return None
+    return (
+        product.customer_id,
+        normalize_material_code(defaults["material_code"]),
+        defaults["material_supplier_name"] or "",
+        int(defaults["layer_count"]),
+        defaults["flute_type"],
+        int(defaults["report_length_mm"]),
+        int(defaults["report_width_mm"]),
+        int(defaults["output_per_sheet"]),
+    )
+
+
+def _item_raw_sheet_signature(
+    item: StockReplenishmentOrderItem,
+    *,
+    supplier_name: str | None,
+) -> tuple | None:
+    crease_type = str(item.crease_type or "").strip()
+    if (
+        item.customer_id is None
+        or item.sheet_type != "raw_board"
+        or crease_type not in {"", "毛", "毛片"}
+        or any(
+            value is not None
+            for value in (
+                item.crease_left_mm,
+                item.crease_middle_mm,
+                item.crease_right_mm,
+            )
+        )
+        or not item.normalized_material_code
+        or not item.layer_count
+        or not item.flute_type
+        or not item.report_length_mm
+        or not item.report_width_mm
+        or not item.stock_yield_per_sheet
+    ):
+        return None
+    return (
+        item.customer_id,
+        item.normalized_material_code,
+        str(supplier_name or "").strip(),
+        int(item.layer_count),
+        str(item.flute_type).strip().upper(),
+        int(item.report_length_mm),
+        int(item.report_width_mm),
+        int(item.stock_yield_per_sheet),
+    )
+
+
 def theoretical_requisition_quantity(
     finished_quantity: int,
     cutting_mode: str | None,
@@ -189,6 +273,8 @@ def theoretical_requisition_quantity(
 def compatible_customer_product_ids(
     db: Session,
     item: StockReplenishmentOrderItem,
+    *,
+    supplier_name: str | None = None,
 ) -> list[int]:
     """Return products that may use one customer-dedicated board lot.
 
@@ -197,8 +283,36 @@ def compatible_customer_product_ids(
     one finished product.  The existing lot-level hard bindings record every
     compatible product without increasing finished-goods inventory.
     """
-    if item.customer_id is None or item.product_id is None:
+    if item.customer_id is None:
         return []
+    if item.product_id is None:
+        signature = _item_raw_sheet_signature(
+            item,
+            supplier_name=(
+                supplier_name
+                if supplier_name is not None
+                else item.order.supplier_name
+                if item.order is not None
+                else None
+            ),
+        )
+        if signature is None:
+            return []
+        products = db.scalars(
+            select(Product)
+            .options(selectinload(Product.material))
+            .where(
+                Product.customer_id == item.customer_id,
+                Product.is_active.is_(True),
+                Product.deleted_at.is_(None),
+            )
+            .order_by(Product.product_code, Product.id)
+        ).all()
+        return [
+            product.id
+            for product in products
+            if _product_raw_sheet_signature(product) == signature
+        ]
     primary = db.scalar(
         select(Product)
         .options(selectinload(Product.material))
@@ -730,6 +844,7 @@ def replenishment_item_dict(item: StockReplenishmentOrderItem) -> dict:
         "customer_id": item.customer_id,
         "product_code": item.product_code_snapshot,
         "product_name": item.product_name_snapshot,
+        "raw_sheet_scope": replenishment_item_raw_sheet_scope(item),
         "material_id": item.material_id,
         "material_code": item.material_code_snapshot,
         "layer_count": item.layer_count,
@@ -876,7 +991,10 @@ def receive_replenishment_item(
     customer_board_preparation = (
         item.target_inventory_type == "semi_finished"
         and item.customer_id is not None
-        and item.product_id is not None
+        and (
+            item.product_id is not None
+            or replenishment_item_raw_sheet_scope(item) == "customer"
+        )
     )
     common = {
         "location_id": destination_location_id,
@@ -920,6 +1038,16 @@ def receive_replenishment_item(
                 raise StockReplenishmentError(
                     "半成品补库明细缺少材质、层数、楞型或报料长宽。"
                 )
+            raw_sheet_scope = replenishment_item_raw_sheet_scope(item)
+            cutting_note = item.remark
+            if raw_sheet_scope:
+                cutting_note = raw_sheet_scope_marker(raw_sheet_scope) + (
+                    f"\n{item.remark}" if item.remark else ""
+                )
+            elif str(cutting_note or "").strip().startswith(
+                RAW_SHEET_SCOPE_MARKER_PREFIX
+            ):
+                cutting_note = f"用户备注：{cutting_note}"
             lot = manual_semi_finished_in(
                 db,
                 material_code=item.material_code_snapshot or "",
@@ -938,7 +1066,7 @@ def receive_replenishment_item(
                 crease_left_mm=item.crease_left_mm,
                 crease_middle_mm=item.crease_middle_mm,
                 crease_right_mm=item.crease_right_mm,
-                cutting_note=item.remark,
+                cutting_note=cutting_note,
                 movement_reason=(
                     "库存预警到料转客户专用纸板备料"
                     if customer_board_preparation
@@ -948,7 +1076,11 @@ def receive_replenishment_item(
                 **common,
             )
             if customer_board_preparation:
-                allowed_product_ids = compatible_customer_product_ids(db, item)
+                allowed_product_ids = compatible_customer_product_ids(
+                    db,
+                    item,
+                    supplier_name=order.supplier_name,
+                )
                 if not allowed_product_ids:
                     raise StockReplenishmentError(
                         "客户专用纸板备料没有可绑定的同规格成品款号。"

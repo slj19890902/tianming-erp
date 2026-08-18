@@ -46,6 +46,7 @@ VALID_COMPONENT_TYPES = {"whole", "cover", "base"}
 SIGNATURE_OVERRIDE_WARNING = "SEMI_SIGNATURE_OVERRIDE"
 MANUAL_CONFIRM_WARNING = "MANUAL_DEDUCTION_CONFIRM_REQUIRED"
 GENERAL_SEMI_FINISHED_STOCK = "GENERAL_SEMI_FINISHED_STOCK"
+_RAW_SHEET_MARKER_PREFIX = "stock_replenishment:raw_sheet_scope:"
 
 
 @dataclass(frozen=True)
@@ -368,6 +369,46 @@ def _physical_signature_differences(
     )
 
 
+def _stock_replenishment_raw_sheet_scope(
+    detail: SemiFinishedInventoryDetail,
+) -> str | None:
+    value = str(detail.cutting_note or "").strip()
+    if not value.startswith(_RAW_SHEET_MARKER_PREFIX):
+        return None
+    scope = value[len(_RAW_SHEET_MARKER_PREFIX) :].splitlines()[0]
+    return scope if scope in {"customer", "general"} else None
+
+
+def _raw_sheet_signature_differences(
+    expected: SemiFinishedSignature,
+    detail: SemiFinishedInventoryDetail,
+) -> tuple[str, ...]:
+    return tuple(
+        name
+        for name in _signature_differences_from_signature(expected, detail)
+        if name not in {"customer", "pieces_per_box"}
+    )
+
+
+def _unprocessed_raw_board_issue(
+    detail: SemiFinishedInventoryDetail,
+) -> str | None:
+    if detail.sheet_type != "raw_board":
+        return "通用片料必须是未加工 raw board"
+    if str(detail.crease_type or "").strip() not in {"", "毛", "毛片"}:
+        return "通用片料不能带净料或压线加工事实"
+    if any(
+        value is not None
+        for value in (
+            detail.crease_left_mm,
+            detail.crease_middle_mm,
+            detail.crease_right_mm,
+        )
+    ):
+        return "通用片料不能带压线尺寸"
+    return None
+
+
 def _requirement_product_id(db: Session, requirement: OrderItemSemiRequirement) -> int:
     item = db.get(OrderItem, requirement.order_item_id)
     snapshot = (
@@ -418,9 +459,18 @@ def _lot_eligibility_scope(
     if detail.component_type != expected.component_type:
         return None
     if detail.owner_customer_id is None:
+        is_stock_order_general = (
+            _stock_replenishment_raw_sheet_scope(detail) == "general"
+        )
+        if is_stock_order_general and _unprocessed_raw_board_issue(detail):
+            return None
         return (
             "general"
-            if not _physical_signature_differences(expected, detail)
+            if not (
+                _raw_sheet_signature_differences(expected, detail)
+                if is_stock_order_general
+                else _physical_signature_differences(expected, detail)
+            )
             else None
         )
     if detail.owner_customer_id != customer_id or lot.id not in allowed_lot_ids:
@@ -449,7 +499,21 @@ def ensure_semi_finished_lot_eligibility(
     if detail.component_type != expected.component_type:
         raise WarehouseInventoryError("半成品库存组件与订单需求不一致", 409)
     if detail.owner_customer_id is None:
-        differences = _physical_signature_differences(expected, detail)
+        is_stock_order_general = (
+            _stock_replenishment_raw_sheet_scope(detail) == "general"
+        )
+        raw_board_issue = (
+            _unprocessed_raw_board_issue(detail)
+            if is_stock_order_general
+            else None
+        )
+        if raw_board_issue is not None:
+            raise WarehouseInventoryError(raw_board_issue, 409)
+        differences = (
+            _raw_sheet_signature_differences(expected, detail)
+            if is_stock_order_general
+            else _physical_signature_differences(expected, detail)
+        )
         if differences:
             raise WarehouseInventoryError(
                 "通用半成品库存物理规格与订单需求不一致："
@@ -711,7 +775,11 @@ def _semi_finished_candidates_for_signature(
         if signature is None:
             continue
         learned_rule = learned.get(signature)
-        exact_heuristic = signature == expected
+        exact_heuristic = (
+            not _raw_sheet_signature_differences(expected, detail)
+            if _stock_replenishment_raw_sheet_scope(detail) == "customer"
+            else signature == expected
+        )
         if learned_rule is not None:
             source = "learned"
             match_rule_id = learned_rule.id
@@ -798,7 +866,11 @@ def browse_semi_finished_inventory(
             )
         else:
             source = "manual"
-            differences = _signature_differences(requirement, detail)
+            differences = (
+                _raw_sheet_signature_differences(expected, detail)
+                if _stock_replenishment_raw_sheet_scope(detail) == "customer"
+                else _signature_differences(requirement, detail)
+            )
             warning_codes = (MANUAL_CONFIRM_WARNING, SIGNATURE_OVERRIDE_WARNING)
             warning_messages = (
                 "每次半成品库存抵扣都必须人工确认。",
@@ -956,7 +1028,9 @@ def confirm_semi_finished_match(
         expected=requirement_signature(requirement),
     )
     differences = (
-        _physical_signature_differences(requirement_signature(requirement), detail)
+        _raw_sheet_signature_differences(requirement_signature(requirement), detail)
+        if _stock_replenishment_raw_sheet_scope(detail) in {"customer", "general"}
+        else _physical_signature_differences(requirement_signature(requirement), detail)
         if scope == "general"
         else _signature_differences(requirement, detail)
     )

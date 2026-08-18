@@ -4133,3 +4133,10 @@ legacy_ruida_* 原始层
 - 发现的两条待收料路线为供应商报料单 `SRO-20260713-0004` 的明细 `supplier_order_item_id=77/78`，对应产品 `21301861`、`21301852`，订单明细 `9756/9750`；没有新增订单或新增产品主档。
 - 订单明细及报料明细均有有效尺寸 `992×1061`，但供应商明细 77/78 的 `report_length_mm/report_width_mm` 均为 NULL；该供应商单创建于 2026-07-13，属于早期明细快照未写入尺寸的历史数据。
 - `app/api/incoming.py` 的 `_supplier_order_item_overlay` 当前直接用供应商明细空尺寸覆盖收料卡片字段，因此页面显示为无报料尺寸。仅做只读核对，未修复、未写入正式数据库。
+
+## 2026-08-18 收料尺寸回退与两条历史明细修复完成
+
+- 修复代码已整合为 `be292f92f2e3800d52706a313dd01bae22720860`：供应商明细尺寸为空时，收料投影回退到订单明细报料尺寸；新增回归测试 2 项通过。
+- 在备份 `data/backups/carton_erp_before_incoming_dimension_fix_20260818_110348.sqlite3`（SHA-256 `ED761223C2FD416B2DD0F7E9CFC838E0B1E564C2243208A32F68256E453AD103`）后，仅更新 `supplier_requisition_order_items.id=77/78`，补齐为 `992×1061`；表行数未变化，完整性通过、外键违规 0。
+- 正式发布报告 `docs/migration_reports/release_runtime_20260818_110441.json`，SHA-256 `E6E61642B9EB7B020764C50937C6F2AD8169F843AFF287A859F0049F2A1B478D`；状态 `completed`，无 migration，revision `ss27v8x9z16`，ERP 已重启。
+- 本机与局域网健康接口、首页和 `incoming.html` 均 HTTP 200；既有收料历史 fixture 测试在基线和修复分支均同样失败，未归因于本修复。

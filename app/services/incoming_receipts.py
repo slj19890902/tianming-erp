@@ -41,6 +41,7 @@ from app.services.production_workflow import (
     refresh_order_production_status,
     refresh_production_task,
 )
+from app.services.requisition_quantities import purchase_sheet_quantity
 from app.services.stock_replenishment import (
     StockReplenishmentError,
     receive_replenishment_item,
@@ -887,6 +888,84 @@ def _all_current_supplier_order_items_closed(
     return True
 
 
+def _all_required_supplier_demand_requisitioned(
+    db: Session,
+    order_item: OrderItem,
+) -> bool:
+    """Return whether every frozen physical source has been fully reported.
+
+    A supplier order can intentionally cover only part of an order item's
+    demand.  Receiving every sheet on that one supplier order therefore must
+    not close the sales-order item while another report is still required.
+    Each partial supplier line keeps the full required-piece snapshot, so the
+    active reported quantity can be compared with the maximum frozen target
+    for the same physical source without changing any receipt facts.
+    """
+
+    rows = list(
+        db.scalars(
+            select(SupplierRequisitionOrderItem)
+            .join(
+                SupplierRequisitionOrder,
+                SupplierRequisitionOrder.id
+                == SupplierRequisitionOrderItem.supplier_order_id,
+            )
+            .where(
+                SupplierRequisitionOrderItem.order_item_id == order_item.id,
+                SupplierRequisitionOrder.status != "voided",
+            )
+            .order_by(SupplierRequisitionOrderItem.id)
+        ).all()
+    )
+    if not rows:
+        return False
+
+    source_totals: dict[str, dict[str, int]] = {}
+    for row in rows:
+        component_type = supplier_order_item_component_type(row)
+        source_key = str(row.source_key or "").strip().lower()
+        identity = source_key or f"legacy:{component_type}"
+        source = source_totals.setdefault(
+            identity,
+            {"reported": 0, "required": 0, "has_snapshot": 0},
+        )
+        source["reported"] += max(int(row.requisition_qty or 0), 0)
+
+        required_piece_qty = max(int(row.required_piece_qty or 0), 0)
+        if required_piece_qty <= 0:
+            continue
+        semi_reserved_qty = max(
+            int(
+                active_semi_reserved_piece_qty(
+                    db,
+                    order_item_id=order_item.id,
+                    component_type=component_type,
+                )
+                or 0
+            ),
+            0,
+        )
+        target = purchase_sheet_quantity(
+            max(required_piece_qty - semi_reserved_qty, 0),
+            0,
+            row.cutting_mode,
+        )
+        source["required"] = max(source["required"], int(target))
+        source["has_snapshot"] = 1
+
+    authoritative_sources = [
+        source for source in source_totals.values() if source["has_snapshot"]
+    ]
+    if not authoritative_sources:
+        # Historical supplier lines may not carry a demand snapshot.  Preserve
+        # their established closure behaviour instead of inventing a target.
+        return True
+    return all(
+        source["reported"] >= source["required"]
+        for source in authoritative_sources
+    )
+
+
 def _mark_order_progress(db: Session, target: IncomingTarget, *, closed: bool, user_id: int) -> None:
     item = target.order_item
     now = utc_now_naive()
@@ -911,7 +990,11 @@ def _mark_order_progress(db: Session, target: IncomingTarget, *, closed: bool, u
         else:
             closed = closed and bom_sources_received
     if target.supplier_order_item is not None:
-        closed = closed and _all_current_supplier_order_items_closed(db, item)
+        closed = (
+            closed
+            and _all_current_supplier_order_items_closed(db, item)
+            and _all_required_supplier_demand_requisitioned(db, item)
+        )
     if closed:
         item.material_status = "received"
         item.requisition_status = "已入库"

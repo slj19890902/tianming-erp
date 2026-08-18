@@ -1692,6 +1692,80 @@ def test_supplier_draft_partial_quantity_stays_pending_and_retry_is_idempotent(
         assert session.get(OrderItem, 1).requisition_status == "已报料"
 
 
+def test_receiving_partial_supplier_order_keeps_unreported_remainder_pending(
+    requisition_app,
+) -> None:
+    """Receiving 200 of a 300-sheet demand must leave the final 100 reportable."""
+
+    from app.models.incoming_receipt import IncomingReceiptItem
+    from app.models.order import OrderItem
+    from app.models.supplier_requisition_order import SupplierRequisitionOrderItem
+
+    app, session_factory = requisition_app
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        item.quantity = 300
+        item.snapshot_pieces_per_box = 1
+        item.special_process = "一开一"
+        session.commit()
+
+    selection = {
+        "type": "order_item",
+        "order_item_id": 1,
+        "supplier_name": "苏州纸板供应商",
+        "report_length_mm": 1000,
+        "report_width_mm": 800,
+        "cutting_mode": "一开一",
+    }
+    with TestClient(app) as client:
+        _login(client, "sales")
+        draft = _preview_supplier_order_draft(client, [selection])
+        line = draft["supplier_groups"][0]["lines"][0]
+        assert line["theoretical_requisition_qty"] == 300
+        line["requisition_qty"] = 200
+        saved = _save_supplier_order_draft(client, draft)
+        assert saved.status_code == 201, saved.text
+
+        with session_factory() as session:
+            supplier_line_id = session.scalar(
+                select(SupplierRequisitionOrderItem.id).where(
+                    SupplierRequisitionOrderItem.order_item_id == 1,
+                )
+            )
+        assert supplier_line_id is not None
+
+        _login(client, "workshop")
+        received = client.put(
+            f"/api/incoming/receive/so{supplier_line_id}",
+            json={"idempotency_key": "partial-300-receive-200"},
+        )
+        assert received.status_code == 200, received.text
+
+        _login(client, "sales")
+        pending = client.get("/api/requisition/pending")
+        next_draft = _preview_supplier_order_draft(client, [selection])
+
+    assert pending.status_code == 200, pending.text
+    pending_row = next(
+        row for row in pending.json()["items"] if row.get("item_id") == 1
+    )
+    assert pending_row["already_requisitioned_qty"] == 200
+    assert pending_row["remaining_requisition_qty"] == 100
+    assert pending_row["requisition_qty"] == 100
+    next_line = next_draft["supplier_groups"][0]["lines"][0]
+    assert next_line["already_requisitioned_qty"] == 200
+    assert next_line["remaining_requisition_qty"] == 100
+    assert next_line["requisition_qty"] == 100
+
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        facts = session.scalars(select(IncomingReceiptItem)).all()
+        assert item.material_status == "pending"
+        assert item.requisition_status == "已报料"
+        assert item.requisition_qty == 200
+        assert sum(int(row.received_quantity or 0) for row in facts) == 200
+
+
 def test_pending_reconciles_effective_legacy_material_requisition_facts(
     requisition_app,
 ) -> None:

@@ -4127,3 +4127,9 @@ legacy_ruida_* 原始层
 - 发布报告 `docs/migration_reports/release_runtime_20260818_104207.json`，SHA-256 `CAA0031EC8ECEE7520F7C0DC9C59EF6C69C91C7B1E2989C7F02B62618D69491C`；状态 `completed`，revision `ss27v8x9z16`，本次无迁移。
 - 正式备份 `data/backups/carton_erp_before_release_20260818_104208.sqlite3`，SHA-256 `3936C6F74B86EA42E83EC3534607C8BB412E689B512DDF0A2822B25BA4A7C5CD`；`integrity_check=ok`，外键违规 0，应用后 SHA 与备份一致。
 - ERP 已重启；本机与局域网健康接口、首页及生产包装标签入口均返回 HTTP 200。人工业务验收仍需按 P0-6 清单检查两张实体标签及刷新/拒绝历史任务规则。
+
+## 2026-08-18 纸板收料两条无报料尺寸记录只读诊断
+
+- 发现的两条待收料路线为供应商报料单 `SRO-20260713-0004` 的明细 `supplier_order_item_id=77/78`，对应产品 `21301861`、`21301852`，订单明细 `9756/9750`；没有新增订单或新增产品主档。
+- 订单明细及报料明细均有有效尺寸 `992×1061`，但供应商明细 77/78 的 `report_length_mm/report_width_mm` 均为 NULL；该供应商单创建于 2026-07-13，属于早期明细快照未写入尺寸的历史数据。
+- `app/api/incoming.py` 的 `_supplier_order_item_overlay` 当前直接用供应商明细空尺寸覆盖收料卡片字段，因此页面显示为无报料尺寸。仅做只读核对，未修复、未写入正式数据库。

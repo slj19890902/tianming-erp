@@ -31,6 +31,8 @@ from app.services.production_label_strategy import (
     build_new_task_production_label_snapshot,
 )
 from app.services.production_packaging_label import (
+    ProductionPackagingLabelError,
+    apply_packaging_label_print_counts,
     build_supplier_requisition_packaging_label_package,
 )
 from app.services.warehouse_inventory import active_finished_reserved_qty
@@ -629,6 +631,7 @@ def prepare_packaging_label_job(
     order: SupplierRequisitionOrder,
     idempotency_key: str,
     expected_plan_fingerprint: str,
+    requested_print_counts: dict[int, int] | None = None,
     operator_id: int,
 ) -> PackagingLabelJobResult:
     key = idempotency_key.strip()
@@ -637,6 +640,14 @@ def prepare_packaging_label_job(
             "supplier_order_id": int(order.id),
             "idempotency_key": key,
             "plan_fingerprint": expected_plan_fingerprint,
+            "print_counts": (
+                [
+                    [int(task_id), requested_print_counts[task_id]]
+                    for task_id in sorted(requested_print_counts)
+                ]
+                if requested_print_counts is not None
+                else "legacy_all_planned"
+            ),
         }
     )
     repeated = db.scalar(
@@ -656,6 +667,11 @@ def prepare_packaging_label_job(
         raise ProductionLabelOperationError("该报料单没有启用生产包装标签的任务")
     if package.get("plan_fingerprint") != expected_plan_fingerprint:
         raise ProductionLabelOperationError("标签计划已变化，请刷新预览后重试")
+    if requested_print_counts is None:
+        requested_print_counts = {
+            int(plan["production_task_id"]): int(plan["label_count"])
+            for plan in package.get("plans") or []
+        }
     plan_versions = {
         int(plan["production_task_id"]): int(plan["production_task_version"])
         for plan in package.get("plans") or []
@@ -670,6 +686,10 @@ def prepare_packaging_label_job(
     package = build_supplier_requisition_packaging_label_package(db, order)
     if package.get("plan_fingerprint") != expected_plan_fingerprint:
         raise ProductionLabelOperationError("标签计划已变化，请刷新预览后重试")
+    try:
+        package = apply_packaging_label_print_counts(package, requested_print_counts)
+    except ProductionPackagingLabelError as error:
+        raise ProductionLabelOperationError(str(error)) from error
     template_version = str(package.get("template_version") or "")
     if template_version not in {
         "legacy_65x45_v1",

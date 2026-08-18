@@ -24,6 +24,16 @@
     .message { max-width:760px; margin:18px auto; padding:12px 16px; border:1px solid #94a3b8; border-radius:6px; color:#334155; background:#fff; text-align:center; }
     .message.error { color:#7f1d1d; border-color:#991b1b; }
     .message.success { color:#14532d; border-color:#15803d; }
+    .print-plan-panel { max-width:1120px; margin:14px auto 0; padding:12px; border:1px solid #94a3b8; border-radius:7px; background:#fff; }
+    .print-plan-actions { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:10px; }
+    .print-plan-summary { margin-left:auto; color:#0f172a; font-weight:700; }
+    .print-plan-table-wrap { overflow:auto; }
+    .print-plan-table { width:100%; border-collapse:collapse; font-size:13px; }
+    .print-plan-table th,.print-plan-table td { padding:7px 8px; border:1px solid #cbd5e1; text-align:left; vertical-align:middle; }
+    .print-plan-table th { background:#f1f5f9; white-space:nowrap; }
+    .print-count-input { width:92px; padding:6px 7px; border:1px solid #64748b; border-radius:4px; font:15px/1.2 inherit; }
+    .print-count-input.invalid { border-color:#b91c1c; background:#fef2f2; }
+    .skip-note { color:#b45309; font-weight:700; }
     .label-list { display:grid; gap:14px; justify-items:center; padding:18px; }
     .label-card {
       width:var(--label-width);
@@ -131,7 +141,7 @@
     }
     @media print {
       html,body { width:var(--label-width); min-height:0; background:#fff; }
-      .toolbar,.message,.layout-editor { display:none !important; }
+      .toolbar,.message,.print-plan-panel,.layout-editor { display:none !important; }
       .label-list { display:block; padding:0; }
       .label-card { width:var(--label-width); height:var(--label-height); margin:0; box-shadow:none; break-after:page; page-break-after:always; }
       .label-card:last-child { break-after:auto; page-break-after:auto; }
@@ -150,6 +160,19 @@
     <span id="toolbarNote" class="toolbar-note">40 × 30 mm｜缩放选 100%“实际大小”｜关闭“适合页面”、自动旋转和页眉页脚</span>
   </nav>
   <div id="message" class="message">正在读取冻结的生产包装标签计划……</div>
+  <section id="printPlanPanel" class="print-plan-panel" hidden aria-label="本次打印标签张数">
+    <div class="print-plan-actions">
+      <button id="allPlannedButton" type="button">全部按计划</button>
+      <button id="allZeroButton" type="button">全部设为 0</button>
+      <span id="printPlanSummary" class="print-plan-summary"></span>
+    </div>
+    <div class="print-plan-table-wrap">
+      <table class="print-plan-table">
+        <thead><tr><th>客户简称</th><th>存货编码</th><th>产品名称</th><th>计划成品只数</th><th>每张只数</th><th>系统计划张数</th><th>本次打印张数</th><th>结果</th></tr></thead>
+        <tbody id="printPlanBody"></tbody>
+      </table>
+    </div>
+  </section>
   <main id="labelList" class="label-list" aria-live="polite"></main>
   <section id="layoutEditor" class="layout-editor" hidden aria-modal="true" role="dialog" aria-labelledby="layoutEditorTitle">
     <div class="layout-editor-shell">
@@ -199,6 +222,11 @@
       const MIN_TEXT_SIZE_PX = 5;
 
       const message = document.getElementById("message");
+      const printPlanPanel = document.getElementById("printPlanPanel");
+      const printPlanBody = document.getElementById("printPlanBody");
+      const printPlanSummary = document.getElementById("printPlanSummary");
+      const allPlannedButton = document.getElementById("allPlannedButton");
+      const allZeroButton = document.getElementById("allZeroButton");
       const labelList = document.getElementById("labelList");
       const retryButton = document.getElementById("retryButton");
       const printButton = document.getElementById("printButton");
@@ -236,6 +264,8 @@
       let prepareAttempt = null;
       let confirmationAttempt = null;
       let printing = false;
+      let plannedPackage = null;
+      let printCounts = new Map();
       let layoutAdminState = null;
       let editorLayout = null;
       let selectedLayoutElementId = "customer_short_name";
@@ -399,6 +429,84 @@
         if (packageData.template_version === CURRENT_TEMPLATE_VERSION && packageData.label_layout) {
           validateLayoutEnvelope(packageData.label_layout);
         }
+      }
+
+      function parsePrintCount(value, maximum) {
+        const text = String(value ?? "").trim();
+        if (!/^\d+$/.test(text)) throw new Error(`本次打印张数必须是 0～${maximum} 的整数`);
+        const count = Number(text);
+        if (!Number.isSafeInteger(count) || count < 0 || count > maximum) {
+          throw new Error(`本次打印张数必须是 0～${maximum} 的整数`);
+        }
+        return count;
+      }
+
+      function selectedPrintPackage() {
+        if (!plannedPackage) return null;
+        const selected = deepClone(plannedPackage);
+        const counts = new Map([...printCounts.entries()].map(([key, value]) => [Number(key), Number(value)]));
+        selected.plans = selected.plans.filter((plan) => (counts.get(Number(plan.production_task_id)) || 0) > 0);
+        selected.labels = selected.labels.filter((label) => Number(label.label_number) <= (counts.get(Number(label.production_task_id)) || 0));
+        selected.label_count = selected.labels.length;
+        selected.production_task_count = selected.plans.length;
+        return selected;
+      }
+
+      function renderSelectedLabels() {
+        const selected = selectedPrintPackage();
+        labelList.innerHTML = selected?.labels?.map((label) => labelHtml(label, selected)).join("") || "";
+        const total = selected?.labels?.length || 0;
+        const products = selected?.plans?.length || 0;
+        printPlanSummary.textContent = `本次 ${products} 款，共 ${total} 张标签`;
+        printButton.disabled = total === 0;
+        if (total === 0) showMessage("本次未选择需要打印的标签");
+        else message.hidden = true;
+      }
+
+      function renderPrintPlanEditor(packageData) {
+        plannedPackage = deepClone(packageData);
+        printCounts = new Map((packageData.plans || []).map((plan) => [Number(plan.production_task_id), Number(plan.label_count)]));
+        printPlanBody.innerHTML = (packageData.plans || []).map((plan) => `<tr data-task-id="${escapeHtml(plan.production_task_id)}">
+          <td>${escapeHtml(plan.customer_short_name || plan.customer_name || "-")}</td>
+          <td>${escapeHtml(plan.product_code || "-")}</td>
+          <td>${escapeHtml(plan.product_name || "-")}</td>
+          <td>${escapeHtml(plan.total_quantity)}</td>
+          <td>${escapeHtml(plan.units_per_label)}</td>
+          <td>${escapeHtml(plan.label_count)}</td>
+          <td><input class="print-count-input" type="number" inputmode="numeric" min="0" max="${escapeHtml(plan.label_count)}" step="1" value="${escapeHtml(plan.label_count)}" aria-label="${escapeHtml(plan.product_code || plan.production_task_id)}本次打印标签张数"></td>
+          <td class="print-count-result">按计划打印</td>
+        </tr>`).join("");
+        printPlanBody.querySelectorAll("tr").forEach((row) => {
+          const taskId = Number(row.dataset.taskId);
+          const plan = packageData.plans.find((item) => Number(item.production_task_id) === taskId);
+          const input = row.querySelector(".print-count-input");
+          input.addEventListener("input", () => {
+            try {
+              const count = parsePrintCount(input.value, Number(plan.label_count));
+              input.classList.remove("invalid");
+              printCounts.set(taskId, count);
+              row.querySelector(".print-count-result").innerHTML = count === 0 ? '<span class="skip-note">本次跳过</span>' : count < Number(plan.label_count) ? `少印 ${Number(plan.label_count) - count} 张` : "按计划打印";
+              prepareAttempt = null;
+              renderSelectedLabels();
+            } catch (error) {
+              input.classList.add("invalid");
+              printButton.disabled = true;
+              row.querySelector(".print-count-result").textContent = error.message;
+            }
+          });
+        });
+        printPlanPanel.hidden = false;
+        renderSelectedLabels();
+      }
+
+      function setAllPrintCounts(mode) {
+        printPlanBody.querySelectorAll("tr").forEach((row) => {
+          const taskId = Number(row.dataset.taskId);
+          const plan = plannedPackage.plans.find((item) => Number(item.production_task_id) === taskId);
+          const input = row.querySelector(".print-count-input");
+          input.value = mode === "planned" ? String(plan.label_count) : "0";
+          input.dispatchEvent(new Event("input", {bubbles:true}));
+        });
       }
 
       function applyTemplate(templateVersion) {
@@ -731,7 +839,14 @@
         const packageData = normalized.packageData;
         validatePackage(packageData);
         applyTemplate(packageData.template_version);
-        labelList.innerHTML = packageData.labels.map((label) => labelHtml(label, packageData)).join("");
+        if (isPrepared) {
+          printPlanPanel.hidden = true;
+          plannedPackage = null;
+          printCounts = new Map();
+          labelList.innerHTML = packageData.labels.map((label) => labelHtml(label, packageData)).join("");
+        } else {
+          renderPrintPlanEditor(packageData);
+        }
         if (document.fonts?.ready) await document.fonts.ready;
         await new Promise((resolve) => requestAnimationFrame(resolve));
         validateRenderedLabels();
@@ -742,7 +857,10 @@
         printButton.disabled = false;
         confirmPrintedButton.hidden = !(showPrintConfirmation && isPrepared && loadedJob && !loadedJob.printed_at && loadedJob.status !== "printed");
         if (isPrepared && !showPrintConfirmation) {
-          showMessage("已载入冻结打印作业；本次补打不会改写原标签计划。", "message");
+          const summary = packageData.print_summary;
+          showMessage(summary
+            ? `已载入冻结打印作业：本次 ${summary.print_label_count} 张 / 系统计划 ${summary.system_label_count} 张；补打数量不会自动扩大。`
+            : "已载入冻结打印作业；本次补打不会改写原标签计划。", "message");
         } else {
           message.hidden = true;
         }
@@ -752,6 +870,9 @@
       function resetView() {
         loadedPackage = null;
         loadedJob = null;
+        plannedPackage = null;
+        printCounts = new Map();
+        printPlanPanel.hidden = true;
         printButton.disabled = true;
         confirmPrintedButton.hidden = true;
         latestJobLink.hidden = true;
@@ -795,7 +916,12 @@
       async function preparePrintJob() {
         const fingerprint = planFingerprint(loadedPackage);
         if (!fingerprint) throw new Error("标签计划缺少校验指纹，已停止创建打印作业；请重新加载");
-        const signature = `${supplierOrderId}|${loadedPackage.template_version}|${fingerprint}`;
+        const items = (plannedPackage?.plans || []).map((plan) => ({
+          production_task_id:Number(plan.production_task_id),
+          print_label_count:parsePrintCount(printCounts.get(Number(plan.production_task_id)), Number(plan.label_count)),
+        }));
+        if (!items.some((item) => item.print_label_count > 0)) throw new Error("本次未选择需要打印的标签");
+        const signature = `${supplierOrderId}|${loadedPackage.template_version}|${fingerprint}|${JSON.stringify(items)}`;
         if (!prepareAttempt || prepareAttempt.signature !== signature) {
           prepareAttempt = {signature, idempotencyKey:newIdempotencyKey("p150c-label-job")};
         }
@@ -805,6 +931,7 @@
             idempotency_key:prepareAttempt.idempotencyKey,
             confirmed:true,
             plan_fingerprint:fingerprint,
+            items,
           }),
         });
         const normalized = normalizeResponse(payload);
@@ -819,6 +946,7 @@
         printButton.disabled = true;
         confirmPrintedButton.hidden = true;
         try {
+          if (!positiveInteger(loadedJob?.id) && !(selectedPrintPackage()?.labels?.length)) throw new Error("本次未选择需要打印的标签");
           validateRenderedLabels();
           const hasFrozenJob = positiveInteger(loadedJob?.id);
           if (!hasFrozenJob) {
@@ -840,9 +968,12 @@
             : `${error?.message || "打印准备失败"}；本次未登记实际打印`, "message error");
         } finally {
           printing = false;
-          printButton.disabled = !loadedPackage;
+          printButton.disabled = !loadedPackage || (!positiveInteger(loadedJob?.id) && !(selectedPrintPackage()?.labels?.length));
         }
       }
+
+      allPlannedButton.addEventListener("click", () => setAllPrintCounts("planned"));
+      allZeroButton.addEventListener("click", () => setAllPrintCounts("zero"));
 
       async function confirmPrinted() {
         const jobId = Number(loadedJob?.id || 0);
@@ -862,7 +993,9 @@
           loadedJob.status = "printed";
           loadedJob.printed_at = new Date().toISOString();
           confirmPrintedButton.hidden = true;
-          showMessage(`打印作业 #${jobId} 已登记为“实际打印”；标签计划与生产状态均未改变。`, "message success");
+          const summary = loadedPackage?.print_summary;
+          const countText = summary ? `本次 ${summary.print_label_count} 张 / 系统计划 ${summary.system_label_count} 张；` : "";
+          showMessage(`打印作业 #${jobId} 已登记为“实际打印”；${countText}标签计划与生产状态均未改变。`, "message success");
         } catch (error) {
           confirmationAttempt.submitting = false;
           confirmPrintedButton.disabled = false;

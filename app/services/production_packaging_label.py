@@ -4,6 +4,7 @@ import hashlib
 import json
 from math import ceil
 import re
+from collections.abc import Mapping
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -73,6 +74,80 @@ def _positive_int(value: object) -> int:
     except (TypeError, ValueError):
         return 0
     return number if number > 0 else 0
+
+
+def apply_packaging_label_print_counts(
+    package: dict,
+    requested_counts: Mapping[int, int],
+) -> dict:
+    """Freeze an operator's per-task print quantity without changing the plan."""
+
+    plans = list(package.get("plans") or [])
+    expected_task_ids = {int(plan["production_task_id"]) for plan in plans}
+    actual_task_ids = {int(task_id) for task_id in requested_counts}
+    if actual_task_ids != expected_task_ids:
+        raise ProductionPackagingLabelError(
+            "本次打印任务清单与当前标签计划不一致，请刷新后重试"
+        )
+
+    frozen = json.loads(json.dumps(package, ensure_ascii=False, default=str))
+    selected_plans: list[dict] = []
+    selection: list[dict] = []
+    for plan in frozen.get("plans") or []:
+        task_id = int(plan["production_task_id"])
+        system_count = int(plan.get("label_count") or 0)
+        requested = requested_counts[task_id]
+        if isinstance(requested, bool) or not isinstance(requested, int):
+            raise ProductionPackagingLabelError("本次打印标签张数必须为整数")
+        if requested < 0 or requested > system_count:
+            raise ProductionPackagingLabelError(
+                f"生产任务 #{task_id} 本次打印张数必须在 0～{system_count} 之间"
+            )
+        selection.append(
+            {
+                "production_task_id": task_id,
+                "print_label_count": requested,
+                "system_label_count": system_count,
+            }
+        )
+        if requested == 0:
+            continue
+        plan["system_label_count"] = system_count
+        plan["print_label_count"] = requested
+        selected_plans.append(plan)
+
+    if not selected_plans:
+        raise ProductionPackagingLabelError("本次未选择需要打印的标签")
+
+    selected_by_task = {
+        int(plan["production_task_id"]): int(plan["print_label_count"])
+        for plan in selected_plans
+    }
+    labels = [
+        label
+        for label in (frozen.get("labels") or [])
+        if int(label["production_task_id"]) in selected_by_task
+        and int(label["label_number"])
+        <= selected_by_task[int(label["production_task_id"])]
+    ]
+    frozen["system_production_task_count"] = int(
+        package.get("production_task_count") or len(plans)
+    )
+    frozen["system_label_count"] = int(
+        package.get("label_count") or len(package.get("labels") or [])
+    )
+    frozen["production_task_count"] = len(selected_plans)
+    frozen["label_count"] = len(labels)
+    frozen["plans"] = selected_plans
+    frozen["labels"] = labels
+    frozen["print_selection"] = selection
+    frozen["print_summary"] = {
+        "printed_task_count": len(selected_plans),
+        "print_label_count": len(labels),
+        "system_task_count": len(plans),
+        "system_label_count": int(package.get("label_count") or 0),
+    }
+    return frozen
 
 
 def build_supplier_requisition_packaging_label_package(

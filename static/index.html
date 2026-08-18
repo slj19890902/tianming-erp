@@ -348,6 +348,13 @@
         background: #fafafe;
       }
       .order-group-detail-card table th { position: static; background: #f0f0f5; }
+      /* P1-78: order rows grow with the page so .main is the only vertical
+         fallback scroller on short screens; horizontal overflow stays usable. */
+      .order-list-panel .table-wrap {
+        max-height: none;
+        overflow-x: auto;
+        overflow-y: visible;
+      }
       .col-order-item-sequence {
         width: 4em;
         min-width: 4em;
@@ -3222,7 +3229,7 @@
                       <button v-for="chip in orderActiveFilterChips" :key="chip.key" class="btn small" @click="removeOrderFilter(chip.key)">{{ chip.label }}：{{ chip.value }} ×</button>
                       <button class="btn small muted" @click="resetOrderFilters()">一键清空</button>
                     </div>
-                    <pager v-if="orderWorkspace === 'queue'" :page="pages.orders" :total="ordersTotal" :page-size="pageSize" :always="true" :compact="true" :filter-count="orderActiveFilterChips.length" @change="pages.orders=$event; runExplicitPageListLoad('orders')"></pager>
+                    <pager v-if="orderWorkspace === 'queue'" :page="pages.orders" :total="ordersTotal" :page-size="orderListPageSize()" :always="true" :compact="true" :filter-count="orderActiveFilterChips.length" :order-layout="true" @change="pages.orders=$event; runExplicitPageListLoad('orders')"></pager>
                     <pager v-else :page="pages.customerHeat" :total="customerHeatTotal" :page-size="pageSize" :always="true" :compact="true" :filter-count="orderActiveFilterChips.length" @change="pages.customerHeat=$event; runExplicitPageListLoad('orders')"></pager>
                   </div>
                 </div>
@@ -3282,6 +3289,7 @@
                 <div class="muted" style="margin-top:6px">热力口径 {{ customerHeatThresholdVersion || '-' }}｜候选状态 {{ customerHeatThresholdStatus || 'prototype_pending_p1_61c_acceptance' }}，待正式 ERP 人工验收后定稿。</div>
               </template>
               <template v-else>
+              <div class="order-list-panel">
               <data-panel :empty="!orders.length">
                 <table class="order-group-table">
                   <thead>
@@ -3379,7 +3387,7 @@
                   </tbody>
                 </table>
               </data-panel>
-              <pager :page="pages.orders" :total="ordersTotal" :page-size="pageSize" @change="pages.orders=$event; runExplicitPageListLoad('orders')"></pager>
+              </div>
               </template>
             </template>
 
@@ -7858,6 +7866,8 @@
 
       const { createApp } = Vue;
       const PAGE_CACHE_TTL_MS = 30_000;
+      const ORDER_LIST_PAGE_SIZE_STANDARD = 12;
+      const ORDER_LIST_PAGE_SIZE_LARGE = 7;
       const latestRequestControllers = new Map();
       const searchDebounceTimers = new Map();
       const pageSearchGenerations = new Map();
@@ -9708,6 +9718,7 @@
               if (!data?.ok || !data?.user) throw new Error("显示模式保存失败");
               this.user = {...this.user, ...data.user, ui_mode:data.user.ui_mode || mode};
               await this.loadEffectiveUiLayout();
+              await this.reloadOrdersForUiModeChange(previousMode, this.uiMode);
               this.showToast(mode === "large" ? "已切换为大字模式" : "已切换为标准模式");
             } catch (error) {
               if (requestGeneration !== this.authGeneration || this.user?.id !== requestUserId) return;
@@ -9716,6 +9727,18 @@
             } finally {
               if (requestGeneration === this.authGeneration) this.uiModeSaving = false;
             }
+          },
+          orderListPageSize(mode=this.uiMode) {
+            return mode === "large" ? ORDER_LIST_PAGE_SIZE_LARGE : ORDER_LIST_PAGE_SIZE_STANDARD;
+          },
+          async reloadOrdersForUiModeChange(previousMode, nextMode) {
+            if (previousMode === nextMode) return true;
+            this.pages.orders = 1;
+            this.invalidatePageCache("orders");
+            if (this.activePage === "orders" && this.orderWorkspace === "queue") {
+              return this.runExplicitPageListLoad("orders");
+            }
+            return true;
           },
           hasPermission(code) {
             if (this.user?.role === "admin") return true;
@@ -15035,7 +15058,11 @@
             this.customerHeatOrders = {};
           },
           async loadOrders() {
-            const params = { page: this.pages.orders, page_size: this.pageSize };
+            const requestedPage = Math.max(1, Number(this.pages.orders || 1));
+            const effectivePageSize = this.activePage === "orders" && this.orderWorkspace === "queue"
+              ? this.orderListPageSize()
+              : this.pageSize;
+            const params = { page: requestedPage, page_size: effectivePageSize };
             if (this.activePage === "orders") params.detail_level = "summary";
             if (this.filters.orderCustomer) params.customer_id = this.filters.orderCustomer;
             if (this.filters.orderNumber) params.order_number = this.filters.orderNumber;
@@ -15062,7 +15089,14 @@
             try {
               const { data } = await axios.get("/api/orders", { params, signal:controller.signal });
               if (latestRequestControllers.get("orders:list") !== controller) return false;
-              this.orders = data.items; this.ordersTotal = data.total; this.ordersUnfinishedTotal = data.unfinished_total || 0;
+              const total = Math.max(0, Number(data.total || 0));
+              const responsePageSize = Math.max(1, Number(data.page_size || effectivePageSize));
+              const lastPage = Math.max(1, Math.ceil(total / responsePageSize));
+              if (this.activePage === "orders" && this.orderWorkspace === "queue" && requestedPage > lastPage) {
+                this.pages.orders = lastPage;
+                return this.loadOrders();
+              }
+              this.orders = data.items; this.ordersTotal = total; this.ordersUnfinishedTotal = data.unfinished_total || 0;
               this.cancelOrderGroupDetailRequests();
               this.orderListGeneration += 1;
               this.expandedOrders = {};
@@ -31203,10 +31237,18 @@
           pages() { return Math.max(1, Math.ceil(Number(this.total || 0) / Number(this.pageSize || 50))); }
         },
         template: `<div v-if="always || total > pageSize" :class="['pager',{top:compact}]">
-          <span v-if="compact">筛选查找｜已筛选 {{ filterCount == null ? 0 : filterCount }} 项｜第 {{ page }}/{{ pages }} 页</span>
-          <span v-else>共 {{ total }} 条，第 {{ page }} / {{ pages }} 页</span>
-          <button class="btn small" :disabled="page <= 1" @click="$emit('change', page - 1)">上一页</button>
-          <button class="btn small" :disabled="page >= pages" @click="$emit('change', page + 1)">下一页</button>
+          <template v-if="$attrs['order-layout']">
+            <span>筛选查找｜已筛选 {{ filterCount == null ? 0 : filterCount }} 项｜</span>
+            <button class="btn small" :disabled="page <= 1" @click="$emit('change', page - 1)">上一页</button>
+            <span>｜第 {{ page }}/{{ pages }} 页｜</span>
+            <button class="btn small" :disabled="page >= pages" @click="$emit('change', page + 1)">下一页</button>
+          </template>
+          <template v-else>
+            <span v-if="compact">筛选查找｜已筛选 {{ filterCount == null ? 0 : filterCount }} 项｜第 {{ page }}/{{ pages }} 页</span>
+            <span v-else>共 {{ total }} 条，第 {{ page }} / {{ pages }} 页</span>
+            <button class="btn small" :disabled="page <= 1" @click="$emit('change', page - 1)">上一页</button>
+            <button class="btn small" :disabled="page >= pages" @click="$emit('change', page + 1)">下一页</button>
+          </template>
         </div>`
       });
       app.component("status-tag", {

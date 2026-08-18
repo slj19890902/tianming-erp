@@ -364,8 +364,12 @@ def test_delivery_visibility_filters_only_customer_goods_lines() -> None:
 def test_order_and_requisition_sources_freeze_and_respect_virtual_parent_marker() -> None:
     create_source = inspect.getsource(orders._create_order_impl)
     requisition_source = inspect.getsource(requisition._pending_requisitions_full_payload)
+    suppression_source = inspect.getsource(
+        requisition._composite_parent_requisition_is_suppressed
+    )
     assert "is_virtual_composite_parent_snapshot=bool" in create_source
-    assert "is_virtual_composite_parent_snapshot" in requisition_source
+    assert "_composite_parent_requisition_is_suppressed" in requisition_source
+    assert "is_virtual_composite_parent_snapshot" in suppression_source
 
 
 def test_p1_43a_migration_upgrade_downgrade_upgrade_and_defaults(

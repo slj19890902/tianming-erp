@@ -9,13 +9,15 @@ from alembic import command
 from alembic.config import Config
 from fastapi import HTTPException
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.api import requisition
+from app.api import incoming, requisition
 from app.api.requisition import (
     PendingMaterialUpdate,
     PendingVirtualCompositeParentUpdate,
+    RequisitionBatchCreate,
+    RequisitionLinePayload,
 )
 from app.models import Base
 from app.models.customer import Customer
@@ -24,6 +26,7 @@ from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.product_bom import SalesOrderItemBomComponent
 from app.models.product_bom import RequisitionItemBomSource
+from app.models.production import ProductionTask
 from app.models.requisition import Requisition, RequisitionItem
 from app.models.supplier import Supplier
 from app.models.user import User
@@ -271,6 +274,149 @@ def test_pending_component_material_updates_component_snapshot_not_parent(
         assert item.material_id is None
         assert item.snapshot_material is None
         assert item.snapshot_supplier_name is None
+
+
+def _component_only_batch_payload(
+    session: Session,
+    *,
+    item: OrderItem,
+    snapshot: SalesOrderItemBomComponent,
+    supplier_name: str,
+) -> RequisitionBatchCreate:
+    requirements = requisition._bom_snapshot_requirements(session, snapshot)
+    return RequisitionBatchCreate(
+        supplier_name=supplier_name,
+        items=[
+            RequisitionLinePayload(
+                order_item_id=item.id,
+                bom_snapshot_id=snapshot.id,
+                component_type="whole",
+                requisition_qty=int(requirements["requisition_qty"]),
+                cardboard_len=Decimal(str(requirements["report_length_mm"])),
+                cardboard_width=Decimal(str(requirements["report_width_mm"])),
+                special_process=str(requirements["cutting_mode"]),
+            )
+        ],
+    )
+
+
+def test_physical_composite_parent_still_requires_parent_board_line(
+    isolated_engine,
+) -> None:
+    """The virtual-parent fix must not weaken ordinary composite products."""
+
+    Base.metadata.create_all(isolated_engine)
+    with Session(isolated_engine) as session:
+        user, _parent, _component, item, snapshot, old_material, _new_material = (
+            _seed_composite_pending_item(session)
+        )
+        session.commit()
+        payload = _component_only_batch_payload(
+            session,
+            item=item,
+            snapshot=snapshot,
+            supplier_name=old_material.supplier_name,
+        )
+
+        with pytest.raises(HTTPException) as error:
+            requisition.create_batch(payload, session, user)
+
+        assert error.value.status_code == 400
+        assert error.value.detail == "复合产品报料必须同时包含父件外包装盒"
+        assert session.scalar(select(Requisition.id)) is None
+
+
+def test_virtual_parent_component_only_batch_runs_through_incoming_and_is_idempotent(
+    isolated_engine,
+) -> None:
+    """Exercise the operator path through formal save and pending incoming."""
+
+    Base.metadata.create_all(isolated_engine)
+    with Session(isolated_engine) as session:
+        user, parent, _component, item, snapshot, _old_material, new_material = (
+            _seed_composite_pending_item(session)
+        )
+        snapshot.snapshot_component_material_id = new_material.id
+        snapshot.snapshot_component_material = new_material.code
+        snapshot.snapshot_component_supplier_name = new_material.supplier_name
+        snapshot.snapshot_component_layer_count = new_material.layer_count
+        snapshot.snapshot_component_flute_type = new_material.flute_type
+        item.is_virtual_composite_parent_snapshot = True
+        item.material_id = None
+        item.snapshot_material = None
+        item.snapshot_supplier_name = None
+        item.layer_count = None
+        item.flute_type = None
+        parent.is_virtual_composite_parent = True
+        parent.material_id = None
+        parent.layer_count = None
+        parent.flute_type = None
+        session.commit()
+
+        pending = requisition._pending_requisitions_full_payload(session, user)
+        row = next(row for row in pending["items"] if row["item_id"] == item.id)
+        assert row["suppress_parent_requisition"] is True
+        assert row["parent_requirement"]["can_requisition"] is False
+        assert [source["snapshot_id"] for source in row["bom_requisition_sources"]] == [
+            snapshot.id
+        ]
+
+        payload = _component_only_batch_payload(
+            session,
+            item=item,
+            snapshot=snapshot,
+            supplier_name=new_material.supplier_name,
+        )
+        before_task_count = int(
+            session.scalar(
+                select(func.count(ProductionTask.id)).where(
+                    ProductionTask.order_item_id == item.id
+                )
+            )
+            or 0
+        )
+        result = requisition.create_batch(payload, session, user)
+
+        assert result["status"] == "已报料"
+        created_items = session.scalars(
+            select(RequisitionItem).where(RequisitionItem.order_item_id == item.id)
+        ).all()
+        assert len(created_items) == 1
+        assert created_items[0].product_code_snapshot == "KIT-C1"
+        assert created_items[0].product_code_snapshot != item.snapshot_product_code
+        source = session.scalar(
+            select(RequisitionItemBomSource).where(
+                RequisitionItemBomSource.requisition_item_id == created_items[0].id
+            )
+        )
+        assert source is not None
+        assert source.sales_order_item_bom_component_id == snapshot.id
+        assert source.component_type == "whole"
+        assert item.requisition_status == "已报料"
+
+        pending_incoming = incoming.pending_items(session, user)["items"]
+        incoming_rows = [
+            row for row in pending_incoming if row.get("order_item_id") == item.id
+        ]
+        assert len(incoming_rows) == 1
+        assert incoming_rows[0]["product_code"] == "KIT-C1"
+
+        with pytest.raises(HTTPException) as duplicate:
+            requisition.create_batch(payload, session, user)
+        assert duplicate.value.status_code == 409
+        assert int(
+            session.scalar(
+                select(func.count(ProductionTask.id)).where(
+                    ProductionTask.order_item_id == item.id
+                )
+            )
+            or 0
+        ) == before_task_count
+        assert len(
+            session.scalars(
+                select(RequisitionItem).where(RequisitionItem.order_item_id == item.id)
+            ).all()
+        ) == 1
 
 
 def test_tt28_migration_allows_pending_material_only_and_locks_after_fact(

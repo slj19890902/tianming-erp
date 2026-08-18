@@ -1122,6 +1122,23 @@ def _is_set_only_a3_surround_bom(
     )
 
 
+def _composite_parent_requisition_is_suppressed(
+    item: OrderItem,
+    snapshots: list[SalesOrderItemBomComponent],
+) -> bool:
+    """Return whether the parent is a commercial set identity, not a board source.
+
+    This predicate is shared by pending-list projection, completion checks and
+    the formal requisition write path.  Keeping those paths on one rule avoids
+    showing component-only demand in the UI and then requiring a hidden parent
+    board again when the operator saves the reviewed draft.
+    """
+
+    return bool(
+        getattr(item, "is_virtual_composite_parent_snapshot", False)
+    ) or _is_set_only_a3_surround_bom(snapshots)
+
+
 def _requisition_item_component(item: RequisitionItem | None) -> str:
     name = (item.product_name_snapshot if item is not None else "") or ""
     if name.endswith("-底"):
@@ -2370,7 +2387,7 @@ def _bom_order_item_is_fully_requisitioned(
     snapshots: list[SalesOrderItemBomComponent],
 ) -> bool:
     parent_ready = (
-        _is_set_only_a3_surround_bom(snapshots)
+        _composite_parent_requisition_is_suppressed(item, snapshots)
         or _bom_parent_has_active_requisition(db, item.id)
         or int(
             _current_requisition_requirements(
@@ -6968,9 +6985,7 @@ def _dashboard_pending_requisition_item_is_eligible(
             item,
             finished_reserved_qty=finished_reserved_qty,
         )
-        if bool(
-            getattr(item, "is_virtual_composite_parent_snapshot", False)
-        ) or _is_set_only_a3_surround_bom(bom_snapshots):
+        if _composite_parent_requisition_is_suppressed(item, bom_snapshots):
             parent_requirement["already_requisitioned"] = True
             parent_requirement["can_requisition"] = False
         return any(
@@ -7303,9 +7318,10 @@ def _pending_requisitions_full_payload(
                 item,
                 finished_reserved_qty=reservation_map.get(item.id, 0),
             )
-            suppress_parent_requisition = bool(
-                getattr(item, "is_virtual_composite_parent_snapshot", False)
-            ) or _is_set_only_a3_surround_bom(bom_snapshots)
+            suppress_parent_requisition = _composite_parent_requisition_is_suppressed(
+                item,
+                bom_snapshots,
+            )
             if suppress_parent_requisition:
                 parent_requirement["already_requisitioned"] = True
                 parent_requirement["can_requisition"] = False
@@ -9824,8 +9840,11 @@ def create_batch(
             )
             bom_snapshots = _bom_snapshots_for_order_item(db, item.id)
             if bom_snapshots:
-                suppress_parent_requisition = _is_set_only_a3_surround_bom(
-                    bom_snapshots
+                suppress_parent_requisition = (
+                    _composite_parent_requisition_is_suppressed(
+                        item,
+                        bom_snapshots,
+                    )
                 )
                 if item.material_status == "received":
                     raise HTTPException(

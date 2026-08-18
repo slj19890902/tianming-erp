@@ -510,6 +510,14 @@ def test_reported_items_preserve_source_specific_action_and_print_boundaries(
     assert supplier["status"] == "active"
     assert supplier["version"] == 1
     assert supplier["can_void_item"] is True
+    same_supplier_order = [
+        row
+        for row in response.json()["items"]
+        if row["source_type"] == "supplier_order"
+        and row["document_id"] == supplier["document_id"]
+        and row["status"] == "active"
+    ]
+    assert supplier["active_item_count"] == len(same_supplier_order)
     assert legacy["can_view_supplier_order"] is False
     assert legacy["can_print_task"] is False
     assert legacy["can_print_label"] is False

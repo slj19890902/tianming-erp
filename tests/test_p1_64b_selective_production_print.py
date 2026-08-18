@@ -309,7 +309,7 @@ def test_erp_selection_ui_and_print_page_keep_explicit_mutation_allowlist() -> N
         "toggleProductionPrintCandidate",
         "clearProductionPrintSelections",
         "prepareProductionPrintBatch",
-        "批量打印待来料任务单",
+        "打印待来料任务单",
         "/api/requisition/production-print-batches/prepare",
         "selection_fingerprint",
         "production_task_versions",

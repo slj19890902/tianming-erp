@@ -1670,14 +1670,16 @@ def test_migration_roundtrip_and_duplicate_preflight_are_repeatable(
     assert failed_state["active_index_count"] == 0
 
 
-def test_reported_composite_lines_are_collapsed_and_individually_voidable() -> None:
+def test_reported_composite_history_is_not_routed_through_supplier_item_void() -> None:
     source = (
         Path(__file__).resolve().parents[1] / "static/index.html"
     ).read_text(encoding="utf-8")
-    assert "reportedExpanded[row.source_type + '-' + row.id]" in source
-    assert "v-for=\"line in row.line_items || []\"" in source
-    assert "line_items" in source
-    assert "撤销本条" in source
+    assert 'v-for="row in requisitionItems" :key="row.stable_id"' in source
+    assert 'row.source_type === "supplier_order"' in source
+    assert "/api/requisition/supplier-order-items/${attempt.itemId}/void" in source
+    assert "row.source_type !== \"supplier_order\"" in source
+    # The legacy composite endpoint remains available to its existing guarded
+    # callers, but the new physical supplier-line button never invokes it.
     assert "const targetId = Number(line?.id || 0)" in source
     assert "/api/requisition/batch-items/${targetId}/void" in source
     assert "executeRequisitionVoidAction" in source

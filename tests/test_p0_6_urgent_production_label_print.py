@@ -46,13 +46,93 @@ def test_a4_layout_overflow_does_not_block_independent_packaging_labels() -> Non
         helper_start,
     )
     refresh_gate = TASK_PRINT.index(
-        "labelRefreshButton.hidden = batchMode || labelCount > 0 || !refreshable.length",
+        "labelRefreshButton.hidden = batchMode || !refreshAction.options.length",
         helper_start,
     )
 
     assert label_count < label_gate < helper_end
     assert refresh_gate < helper_end
     assert label_actions < qr_wait < overflow_gate
+
+
+def test_existing_v1_labels_offer_only_the_explicit_compact_upgrade(tmp_path: Path) -> None:
+    helper = re.search(
+        r"(function productionLabelRefreshAction\(packageData\) \{[\s\S]*?\n      \})\n\n      function applyProductionLabelActions",
+        TASK_PRINT,
+    )
+    assert helper is not None
+    assert "升级到无抬头中文简称版" in TASK_PRINT
+    assert "labelCount > 0 || !refreshable.length" not in TASK_PRINT
+
+    target = tmp_path / "p0-6-label-refresh-action.js"
+    target.write_text(
+        helper.group(1)
+        + """
+const assert = require("assert");
+const v1 = {task_id:246, can_refresh:true, current_enabled:true, frozen_template_version:"current_40x30_v1"};
+const v2 = {task_id:999, can_refresh:true, current_enabled:true, frozen_template_version:"current_40x30_v2"};
+const blockedV1 = {task_id:248, can_refresh:false, current_enabled:true, frozen_template_version:"current_40x30_v1"};
+const upgrade = productionLabelRefreshAction({production_label_count:44, production_label_refresh_options:[v1, v2, blockedV1]});
+assert.strictEqual(upgrade.kind, "upgrade_compact");
+assert.deepStrictEqual(upgrade.options.map((row) => row.task_id), [246]);
+const current = productionLabelRefreshAction({production_label_count:44, production_label_refresh_options:[v2]});
+assert.strictEqual(current.kind, "none");
+assert.deepStrictEqual(current.options, []);
+const firstEnable = productionLabelRefreshAction({production_label_count:0, production_label_refresh_options:[v2]});
+assert.strictEqual(firstEnable.kind, "refresh");
+assert.deepStrictEqual(firstEnable.options.map((row) => row.task_id), [999]);
+""",
+        encoding="utf-8",
+    )
+    import subprocess
+
+    subprocess.run(["node", str(target)], check=True)
+
+
+def test_existing_v1_label_count_projects_an_audited_upgrade_option(
+    production_print_app,
+) -> None:
+    from app.models.product import Product
+    from app.models.production import ProductionTask
+
+    fixture = production_print_app
+    _production_router_app(fixture)
+    with fixture["session_factory"]() as db:
+        product = db.get(Product, fixture["product_id"])
+        task = db.scalar(
+            select(ProductionTask).where(
+                ProductionTask.order_item_id == fixture["order_item_id"]
+            )
+        )
+        assert product is not None and task is not None
+        product.production_label_enabled = True
+        product.production_label_units_per_label = 50
+        product.version = int(product.version) + 1
+        task.production_label_enabled_snapshot = True
+        task.production_label_units_per_label_snapshot = 50
+        task.production_label_total_quantity_snapshot = 200
+        task.production_label_count_snapshot = 4
+        task.production_label_template_version_snapshot = "current_40x30_v1"
+        task.production_label_product_version_snapshot = int(product.version)
+        db.commit()
+        task_id = int(task.id)
+
+    with TestClient(fixture["app"]) as client:
+        _login(client, "p132a2-admin")
+        response = client.get(
+            f"/api/requisition/supplier-orders/{fixture['supplier_order_id']}/production-print-package"
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["production_label_count"] == 4
+    option = next(
+        row
+        for row in payload["production_label_refresh_options"]
+        if row["task_id"] == task_id
+    )
+    assert option["can_refresh"] is True
+    assert option["frozen_template_version"] == "current_40x30_v1"
 
 
 def test_task_card_offers_explicit_audited_refresh_instead_of_current_product_fallback() -> None:
@@ -109,6 +189,7 @@ def test_old_disabled_task_projects_refresh_and_becomes_printable(
         assert option["can_refresh"] is True
         assert option["expected_task_version"] == task_version
         assert option["expected_product_version"] == product_version
+        assert "frozen_template_version" in option
 
         refreshed = client.post(
             f"/api/production/tasks/{task_id}/label-plan-refresh",

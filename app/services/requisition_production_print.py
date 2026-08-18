@@ -1166,6 +1166,9 @@ def build_supplier_requisition_production_package(
                     "expected_product_version": current.get("version"),
                     "product_code": product.product_code if product is not None else None,
                     "product_name": product.product_name if product is not None else None,
+                    "frozen_template_version": (
+                        task.production_label_template_version_snapshot
+                    ),
                     "current_enabled": current_enabled,
                     "current_units_per_label": current.get("units_per_label"),
                     "can_refresh": refresh_allowed,

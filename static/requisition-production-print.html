@@ -513,20 +513,30 @@
         window.history.replaceState(null, "", next);
       }
 
-      function applyProductionLabelActions(packageData) {
+      function productionLabelRefreshAction(packageData) {
         const labelCount = Number(packageData.production_label_count || 0);
         const refreshOptions = Array.isArray(packageData.production_label_refresh_options)
           ? packageData.production_label_refresh_options : [];
         const refreshable = refreshOptions.filter((row) => row && row.can_refresh === true && row.current_enabled === true);
+        if (labelCount <= 0) return {kind:"refresh", options:refreshable};
+        const compactUpgrades = refreshable.filter((row) => row.frozen_template_version === "current_40x30_v1");
+        return {kind:compactUpgrades.length ? "upgrade_compact" : "none", options:compactUpgrades};
+      }
+
+      function applyProductionLabelActions(packageData) {
+        const labelCount = Number(packageData.production_label_count || 0);
+        const refreshAction = productionLabelRefreshAction(packageData);
         labelButton.hidden = batchMode;
         labelButton.textContent = labelCount > 0 ? `生产包装标签（${labelCount}张）` : "未启用包装标签";
         // Packaging labels use their own frozen plan and do not depend on the
         // A4 production paper's QR-image or page-overflow checks.
         labelButton.disabled = batchMode || labelCount <= 0;
-        labelRefreshButton.hidden = batchMode || labelCount > 0 || !refreshable.length;
+        labelRefreshButton.hidden = batchMode || !refreshAction.options.length;
         labelRefreshButton.disabled = labelRefreshButton.hidden;
-        labelRefreshButton.textContent = refreshable.length > 1
-          ? `按常用箱刷新 ${refreshable.length} 款标签计划`
+        labelRefreshButton.textContent = refreshAction.kind === "upgrade_compact"
+          ? `升级到无抬头中文简称版${refreshAction.options.length > 1 ? `（${refreshAction.options.length}款）` : ""}`
+          : refreshAction.options.length > 1
+          ? `按常用箱刷新 ${refreshAction.options.length} 款标签计划`
           : "按常用箱刷新标签计划";
       }
 
@@ -634,12 +644,14 @@
       });
       labelRefreshButton.addEventListener("click", async () => {
         const packageSnapshot = loadedPackage;
-        const refreshable = Array.isArray(packageSnapshot && packageSnapshot.production_label_refresh_options)
-          ? packageSnapshot.production_label_refresh_options.filter((row) => row && row.can_refresh === true && row.current_enabled === true)
-          : [];
+        const refreshAction = productionLabelRefreshAction(packageSnapshot || {});
+        const refreshable = refreshAction.options;
         if (!refreshable.length) return;
         const productText = refreshable.map((row) => row.product_code || row.product_name || `任务 ${row.task_id}`).join("、");
-        if (!window.confirm(`确认这些任务尚未开始生产、也没有打印过包装标签，并按当前常用箱设置刷新标签计划吗？\n${productText}`)) return;
+        const actionText = refreshAction.kind === "upgrade_compact"
+          ? "升级到无抬头中文简称版"
+          : "按当前常用箱设置刷新标签计划";
+        if (!window.confirm(`确认这些任务尚未开始生产、也没有打印过包装标签，并${actionText}吗？\n${productText}`)) return;
         labelRefreshButton.disabled = true;
         labelButton.disabled = true;
         let refreshed = 0;
@@ -669,7 +681,9 @@
           if (loadedPackage && Number(loadedPackage.production_label_count || 0) > 0) {
             message.hidden = false;
             message.className = "message";
-            message.textContent = `已按当前常用箱刷新 ${refreshed} 款标签计划，现在可以打印生产包装标签。`;
+            message.textContent = refreshAction.kind === "upgrade_compact"
+              ? `已将 ${refreshed} 款标签计划升级到无抬头中文简称版，现在可以打印生产包装标签。`
+              : `已按当前常用箱刷新 ${refreshed} 款标签计划，现在可以打印生产包装标签。`;
           }
         } catch (error) {
           await loadPackage();

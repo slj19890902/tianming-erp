@@ -3508,6 +3508,7 @@
               <div v-if="requisitionTab==='pending' && filteredRequisitionPending.some(row => row.is_composite_bom)" class="bom-requisition-components" style="margin:8px 0">
                 <div v-for="row in filteredRequisitionPending.filter(item => item.is_composite_bom)" :key="`bom-components-${row.item_id}`" class="bom-requisition-component">
                   <div class="toolbar-group" style="justify-content:space-between">
+                    <button v-if="!row.suppress_parent_requisition" class="btn small success" type="button" @click="markPendingCompositeParentVirtual(row)">父件只计整套数量和价格</button>
                     <strong>{{ displayOrderNumber(row) }}｜{{ row.product_code }}｜{{ row.product_name }}</strong>
                     <button class="btn small" type="button" @click="requisitionComponentExpanded[row.item_id] = !requisitionComponentExpanded[row.item_id]">{{ requisitionComponentExpanded[row.item_id] ? '收起明细' : `展开父件与组件（${compositeRequisitionSources(row).length}）` }}</button>
                   </div>
@@ -3516,8 +3517,8 @@
                       <tr v-for="source in compositeRequisitionSources(row)" :key="source.source_key" :class="{muted:!source.can_requisition}">
                         <td><span v-if="source.source_kind==='parent'">随订单</span><input v-else type="checkbox" :checked="isBomSnapshotSelected(source)" :disabled="!source.can_requisition" @change="toggleBomSnapshot(row,source,$event.target.checked)" /></td>
                         <td>{{ displayOrderNumber(row) }}</td><td>{{ source.source_kind==='parent' ? '父件' : source.component_type === 'cover' ? '组件·盖' : source.component_type === 'base' ? '组件·底' : '组件' }}</td>
-                        <td><strong>{{ source.product_code || '-' }}｜{{ source.product_name || '-' }}</strong><span v-if="source.already_requisitioned" class="status green">已报料</span></td>
-                        <td class="requisition-demand-cell"><template v-if="source.source_kind==='component'"><div>需求：{{ source.required_piece_quantity || 0 }} 个</div><div class="semi-deducted">成品库存：{{ source.finished_component_reserved_piece_qty || 0 }} 个</div><div class="semi-deducted">半成品库存：{{ source.semi_finished_reserved_piece_qty || 0 }} 个</div><div class="remaining-demand">剩余：{{ source.remaining_required_piece_qty || 0 }} 个</div><div class="purchase-demand">理论报料：{{ source.requisition_qty || 0 }} 张</div></template><template v-else><div>需求：{{ source.required_piece_quantity || 0 }} 个</div><div class="purchase-demand">理论报料：{{ source.requisition_qty || 0 }} 张</div></template></td><td>{{ source.cutting_mode || '一开一' }}</td><td>{{ source.yield_per_sheet || source.cutting_factor || 1 }} 个</td><td>{{ source.report_length_mm || '-' }} × {{ source.report_width_mm || '-' }}</td><td><button v-if="source.source_kind==='component' && source.can_requisition && Number(source.remaining_required_piece_qty || 0)>0" class="btn small success" type="button" :disabled="source._auto_cover_loading" @click="autoCoverBomComponent(row,source)">{{ source._auto_cover_loading ? '正在使用库存…' : '自动使用可匹配库存' }}</button><div v-if="source._auto_cover_error" class="status orange" style="margin-top:4px;white-space:normal">{{ source._auto_cover_error }}</div></td>
+                        <td><strong>{{ source.product_code || '-' }}｜{{ source.product_name || '-' }}</strong><span v-if="source.already_requisitioned" class="status green">已报料</span><div class="muted">{{ supplierDisplayName(source.supplier_name || '未设置供应商') }}｜{{ source.material || '-' }} / {{ source.flute_type || '-' }}</div></td>
+                        <td class="requisition-demand-cell"><template v-if="source.source_kind==='component'"><div>需求：{{ source.required_piece_quantity || 0 }} 个</div><div class="semi-deducted">成品库存：{{ source.finished_component_reserved_piece_qty || 0 }} 个</div><div class="semi-deducted">半成品库存：{{ source.semi_finished_reserved_piece_qty || 0 }} 个</div><div class="remaining-demand">剩余：{{ source.remaining_required_piece_qty || 0 }} 个</div><div class="purchase-demand">理论报料：{{ source.requisition_qty || 0 }} 张</div></template><template v-else><div>需求：{{ source.required_piece_quantity || 0 }} 个</div><div class="purchase-demand">理论报料：{{ source.requisition_qty || 0 }} 张</div></template></td><td>{{ source.cutting_mode || '一开一' }}</td><td>{{ source.yield_per_sheet || source.cutting_factor || 1 }} 个</td><td>{{ source.report_length_mm || '-' }} × {{ source.report_width_mm || '-' }}</td><td><div class="toolbar-group"><button v-if="source.source_kind==='component' && !source.already_requisitioned" class="btn small" type="button" @click="openRequisitionMaterialChange(row,source)">更换供应商/材质</button><button v-if="source.source_kind==='component' && source.can_requisition && Number(source.remaining_required_piece_qty || 0)>0" class="btn small success" type="button" :disabled="source._auto_cover_loading" @click="autoCoverBomComponent(row,source)">{{ source._auto_cover_loading ? '正在使用库存…' : '自动使用可匹配库存' }}</button></div><div v-if="source._auto_cover_error" class="status orange" style="margin-top:4px;white-space:normal">{{ source._auto_cover_error }}</div></td>
                       </tr>
                     </tbody></table>
                   </div>
@@ -5356,11 +5357,12 @@
                 </div>
                 <div class="field" style="max-width:340px;margin:0 0 8px">
                   <label>组合计价方式</label>
-                  <select class="select" v-model="productForm.combination_mode">
+                  <select class="select" v-model="productForm.combination_mode" @change="productForm.is_virtual_composite_parent = productForm.combination_mode === 'parent_priced_set' ? productForm.is_virtual_composite_parent : false">
                     <option value="parent_priced_set">整套统一计价（推荐）</option>
                     <option value="component_priced">组件分别计价</option>
                   </select>
                 </div>
+                <label v-if="bomEditor.enabled && productForm.combination_mode === 'parent_priced_set'" class="remember-line" style="margin:0 0 10px"><input type="checkbox" v-model="productForm.is_virtual_composite_parent" /> 父件只表示整套数量和价格，不报料、不生产</label>
                 <div v-if="!productForm.id" class="status blue" style="display:block;white-space:normal">请先保存父产品，再维护内部组件 BOM。</div>
                 <div v-else-if="bomEditor.error" class="status orange" style="display:block;white-space:normal">{{ bomEditor.error }}</div>
                 <div v-else-if="bomEditor.notice" class="muted" style="margin-bottom:8px">{{ bomEditor.notice }}</div>
@@ -6730,9 +6732,9 @@
             </div>
             <div v-else-if="modal.type === 'requisitionMaterial'">
               <div class="form-grid">
-                <div class="field"><label>当前明细</label><div>{{ shortCustomerName(requisitionMaterialForm.customer_name) }}｜{{ requisitionMaterialForm.product_code }} {{ requisitionMaterialForm.product_name }}</div></div>
+                <div class="field"><label>{{ requisitionMaterialForm.is_bom_component ? '当前组件' : '当前明细' }}</label><div>{{ shortCustomerName(requisitionMaterialForm.customer_name) }}｜{{ requisitionMaterialForm.product_code }} {{ requisitionMaterialForm.product_name }}</div></div>
                 <div class="field"><label>客户原始材质代码</label><div>{{ requisitionMaterialForm.customer_material_code || '未提供' }}</div><div v-if="requisitionMaterialForm.original_material_confidence === 'legacy_fallback'" class="status orange" style="display:inline-block;margin-top:4px">历史原始值未冻结</div></div>
-                <div class="field wide material-candidate-section">
+                <div v-if="!requisitionMaterialForm.is_bom_component" class="field wide material-candidate-section">
                   <div class="material-candidate-heading"><strong>推荐材质候选</strong><span class="muted">点击候选回填下方手工表单</span></div>
                   <div v-if="requisitionMaterialForm.candidate_loading" class="muted">正在加载候选…</div>
                   <div v-else-if="requisitionMaterialForm.candidate_error" class="status orange" style="display:block;white-space:normal">{{ requisitionMaterialForm.candidate_error }}（仍可手工选择）</div>
@@ -6745,7 +6747,7 @@
                     </button>
                   </div>
                 </div>
-                <div class="field wide material-candidate-section">
+                <div v-if="!requisitionMaterialForm.is_bom_component" class="field wide material-candidate-section">
                   <div class="material-candidate-heading"><strong>本明细选择历史</strong><span class="muted">只追加，不覆盖历史事实</span></div>
                   <div v-if="requisitionMaterialForm.history_loading" class="muted">正在加载历史…</div>
                   <div v-else-if="requisitionMaterialForm.history_error" class="status orange" style="display:block;white-space:normal">{{ requisitionMaterialForm.history_error }}</div>
@@ -6763,7 +6765,8 @@
                 <div class="field"><label>层数</label><select class="select" v-model.number="requisitionMaterialForm.layer_count" @change="onRequisitionLayerChange"><option :value="3">三层</option><option :value="5">五层</option><option :value="7">七层</option></select></div>
                 <div class="field"><label>楞型</label><select class="select" v-model="requisitionMaterialForm.flute_type" @change="clearRequisitionMaterialCandidate"><option value="">请选择楞型</option><option v-for="opt in orderItemFluteOptions(requisitionMaterialForm.layer_count)" :key="opt" :value="opt">{{ opt }}</option></select></div>
                 <div class="field wide"><label>选择说明（可选）</label><input class="input" v-model.trim="requisitionMaterialForm.selection_reason" placeholder="可补充本次选择原因" /></div>
-                <div v-if="requisitionMaterialForm.product_id" class="muted">保存后自动同步订单关联的常用箱，避免下次报料恢复旧材质。</div>
+                <div v-if="requisitionMaterialForm.product_id && !requisitionMaterialForm.is_bom_component" class="muted">保存后自动同步订单关联的常用箱，避免下次报料恢复旧材质。</div>
+                <div v-if="requisitionMaterialForm.product_id && requisitionMaterialForm.is_bom_component" class="muted">保存后自动同步组件常用箱，避免下次报料恢复旧材质。</div>
                 <div v-if="requisitionMaterialForm._product_error" class="status orange" style="display:block;white-space:normal">{{ requisitionMaterialForm._product_error }}</div>
               </div>
             </div>
@@ -7935,7 +7938,7 @@
         flute_type: null, layer_count: null, surface_paper_type: null,
         _material_supplier: "全部供应商",
         splice_mode: "single", pieces_per_box: 1, default_cutting_mode: "一开一", flap_mm: 30,
-        combination_mode: "parent_priced_set",
+        combination_mode: "parent_priced_set", is_virtual_composite_parent: false,
         report_length_mm: null, report_width_mm: null,
         crease_type: null, crease_left_mm: null, crease_middle_mm: null, crease_right_mm: null,
         report_notes: null,
@@ -8233,7 +8236,7 @@
             requisitionHoldForm: { id:null, version:null, rows:[], release_mode:"previous_batch_completed", expected_requisition_date:"", previous_order_item_ids:{}, error:"" },
             requisitionHoldCandidates: {}, requisitionHoldCandidateLoading: {},
             requisitionSupplierFilter: "", requisitionSupplierCounts: [],
-            requisitionMaterialForm: { item_id:null, supplier_name:"", material_id:null, layer_count:null, flute_type:null, sync_product:false, customer_material_code:"", original_material_confidence:"", candidate_options:[], candidate_loading:false, candidate_error:"", candidate_id:null, source_type:"manual", source_reference:null, selection_reason:"", selection_history:[], history_loading:false, history_error:"" },
+            requisitionMaterialForm: { item_id:null, bom_snapshot_id:null, is_bom_component:false, supplier_name:"", material_id:null, layer_count:null, flute_type:null, sync_product:false, customer_material_code:"", original_material_confidence:"", candidate_options:[], candidate_loading:false, candidate_error:"", candidate_id:null, source_type:"manual", source_reference:null, selection_reason:"", selection_history:[], history_loading:false, history_error:"" },
             mergeSuggestions: [], mergeSuggestionsLoading: false, mergeSuggestionsError: "", mergeSuggestionsExpanded: {}, mergeSuggestionsDeduction: {}, requisitionMergeExpanded: {}, requisitionComponentExpanded: {},
             supplierOrders: [],
             supplierRequisitionDraft: { supplier_groups: [] }, supplierRequisitionSelections: [], supplierRequisitionPreviewLoading:false,
@@ -12514,7 +12517,7 @@
             this.requisitionHoldCandidateLoading = {};
             this.requisitionSupplierFilter = "";
             this.requisitionSupplierCounts = [];
-            this.requisitionMaterialForm = {item_id:null,supplier_name:"",material_id:null,layer_count:null,flute_type:null,sync_product:false,customer_material_code:"",original_material_confidence:"",candidate_options:[],candidate_loading:false,candidate_error:"",candidate_id:null,source_type:"manual",source_reference:null,selection_reason:"",selection_history:[],history_loading:false,history_error:""};
+            this.requisitionMaterialForm = {item_id:null,bom_snapshot_id:null,is_bom_component:false,supplier_name:"",material_id:null,layer_count:null,flute_type:null,sync_product:false,customer_material_code:"",original_material_confidence:"",candidate_options:[],candidate_loading:false,candidate_error:"",candidate_id:null,source_type:"manual",source_reference:null,selection_reason:"",selection_history:[],history_loading:false,history_error:""};
             this.mergeSuggestions = [];
             this.mergeSuggestionsLoading = false;
             this.mergeSuggestionsError = "";
@@ -21326,6 +21329,7 @@
               splice_mode: f.splice_mode, pieces_per_box: f.pieces_per_box,
               default_cutting_mode: f.default_cutting_mode, flap_mm: f.flap_mm,
               combination_mode: f.combination_mode,
+              is_virtual_composite_parent: f.is_virtual_composite_parent === true,
               report_length_mm: f.report_length_mm, report_width_mm: f.report_width_mm,
               crease_type: f.crease_type, crease_left_mm: f.crease_left_mm,
               crease_middle_mm: f.crease_middle_mm, crease_right_mm: f.crease_right_mm,
@@ -22162,33 +22166,45 @@
           },
           async openRequisitionMaterialChange(row) {
             if (!this.canRequisition) return;
+            const componentSource = arguments[1] || null;
+            if (!componentSource && row?.is_composite_bom && row?.suppress_parent_requisition) {
+              this.showToast("父件只表示整套数量和价格；请在展开的实体组件中修改供应商和材质", true);
+              return;
+            }
             try {
               await this.ensureRequisitionMaterials();
             } catch (error) {
               this.showToast("材质主数据加载失败：" + this.errorMessage(error), true);
               return;
             }
-            let productVersion = row.product_version || null;
-            if (row.product_id && !productVersion) {
+            const isBomComponent = componentSource?.source_kind === "component";
+            const materialRow = isBomComponent ? componentSource : row;
+            const productId = materialRow.product_id || null;
+            let productVersion = materialRow.product_version || null;
+            if (productId && !productVersion) {
               try {
-                productVersion = (await axios.get(`/api/master/products/${row.product_id}`)).data.version || null;
+                productVersion = (await axios.get(`/api/master/products/${productId}`)).data.version || null;
               } catch (error) {
                 this.showToast("常用箱版本读取失败，本次只能修改订单报料快照", true);
               }
             }
             this.requisitionMaterialForm = {
               item_id: row.item_id,
+              bom_snapshot_id: isBomComponent ? materialRow.snapshot_id : null,
+              is_bom_component: isBomComponent,
               customer_name: row.customer_name || "",
-              product_code: row.product_code || "",
-              product_name: row.product_name || "",
-              customer_material_code: row.customer_material_code || row.customer_original_material_code || row.original_material_code || "",
+              product_code: materialRow.product_code || row.product_code || "",
+              product_name: materialRow.product_name || row.product_name || "",
+              customer_material_code: isBomComponent
+                ? (materialRow.material || "")
+                : (row.customer_material_code || row.customer_original_material_code || row.original_material_code || ""),
               original_material_confidence: "",
-              supplier_name: row.snapshot_supplier_name || "",
-              material_id: row.material_id || null,
-              _original_material_id: row.material_id || null,
-              layer_count: row.layer_count || null,
-              flute_type: row.flute_type || null,
-              product_id: row.product_id || null,
+              supplier_name: materialRow.snapshot_supplier_name || materialRow.supplier_name || "",
+              material_id: materialRow.material_id || null,
+              _original_material_id: materialRow.material_id || null,
+              layer_count: materialRow.layer_count || null,
+              flute_type: materialRow.flute_type || null,
+              product_id: productId,
               product_version: productVersion,
               sync_product: !!row.product_id,
               _product_error: "",
@@ -22197,15 +22213,38 @@
               candidate_error: "",
               candidate_id: null,
               source_type: "manual",
-              source_reference: row.item_order_number || row.order_number || null,
+              source_reference: isBomComponent
+                ? `bom-component:${materialRow.snapshot_id}`
+                : (row.item_order_number || row.order_number || null),
               selection_reason: "",
               selection_history: [],
               history_loading: false,
               history_error: "",
             };
-            this.modal = { type:"requisitionMaterial", title:"更换供应商 / 材质" };
-            this.loadRequisitionMaterialCandidates(row.item_id);
-            this.loadRequisitionMaterialHistory(row.item_id);
+            this.modal = { type:"requisitionMaterial", title:isBomComponent ? "更换组件供应商 / 材质" : "更换供应商 / 材质" };
+            if (isBomComponent) {
+              this.requisitionMaterialForm.candidate_error = "组件按当前订单快照修改";
+            } else {
+              this.loadRequisitionMaterialCandidates(row.item_id);
+              this.loadRequisitionMaterialHistory(row.item_id);
+            }
+          },
+          async markPendingCompositeParentVirtual(row) {
+            if (!this.canRequisition || !row?.item_id || !row?.product_id) return false;
+            if (!confirm("确认父件只表示整套数量和价格，不再单独报料和生产吗？实体组件仍会分别报料和生产。")) return false;
+            const result = await this.putIndirectProductUpdate(
+              `/api/requisition/pending/${row.item_id}/virtual-composite-parent`,
+              {
+                product_expected_version:Number(row.product_version),
+                confirmed:true,
+              },
+              row,
+              "把父件改为只计价、不报料、不生产",
+            );
+            if (!result) return false;
+            await Promise.all([this.loadRequisition(), this.loadProducts()]);
+            this.showToast(result.data?.message || "父件已改为只计价父件");
+            return true;
           },
           async loadRequisitionMaterialCandidates(itemId) {
             const form = this.requisitionMaterialForm;
@@ -29154,8 +29193,11 @@
                 if (!form.flute_type) throw new Error("请选择楞型");
                 const syncProduct = !!form.product_id;
                 if (syncProduct && !form.product_version) throw new Error("常用箱版本读取失败，请关闭后重新打开");
+                const materialUpdateUrl = form.is_bom_component
+                  ? `/api/requisition/pending/${form.item_id}/bom-components/${form.bom_snapshot_id}/material`
+                  : `/api/requisition/pending/${form.item_id}/material`;
                 const requisitionMaterialSaved = await this.putIndirectProductUpdate(
-                  `/api/requisition/pending/${form.item_id}/material`,
+                  materialUpdateUrl,
                   {
                   material_id:form.material_id,
                   layer_count:form.layer_count || null,
@@ -29168,7 +29210,7 @@
                   selection_reason:String(form.selection_reason || "").trim() || null,
                   },
                   form,
-                  "保存报料材质并同步常用箱",
+                  form.is_bom_component ? "保存组件材质并同步组件常用箱" : "保存报料材质并同步常用箱",
                 );
                 if (!requisitionMaterialSaved) return false;
                 const { data } = requisitionMaterialSaved;

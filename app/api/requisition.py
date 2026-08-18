@@ -47,7 +47,7 @@ from app.models.customer_material import (
 from app.models.material import Material
 from app.models.order import Order, OrderItem
 from app.models.product import Product
-from app.models.production import ProductionCompletion
+from app.models.production import ProductionCompletion, ProductionTask
 from app.models.product_bom import (
     RequisitionItemBomSource,
     SalesOrderItemBomComponent,
@@ -485,6 +485,12 @@ class PendingMaterialUpdate(BaseModel):
     def normalize_flute(cls, value: str | None) -> str | None:
         normalized = str(value or "").strip().upper()
         return normalized or None
+
+
+class PendingVirtualCompositeParentUpdate(BaseModel):
+    product_expected_version: int = Field(ge=1)
+    product_confirmation_token: str | None = Field(default=None, max_length=2000)
+    confirmed: Literal[True]
 
 
 class CustomerMaterialCandidateCreate(BaseModel):
@@ -2168,6 +2174,19 @@ def _bom_snapshot_requirements(
     )
     return {
         "snapshot_id": snapshot.id,
+        "product_id": snapshot.component_product_id,
+        "product_version": (
+            component_product.version
+            if (
+                component_product := db.get(
+                    Product,
+                    snapshot.component_product_id,
+                )
+            )
+            is not None
+            else snapshot.component_product_version
+        ),
+        "material_id": snapshot.snapshot_component_material_id,
         "component_type": component,
         "effective_set_quantity": effective_sets,
         "quantity_per_set": quantity_per_set,
@@ -2234,6 +2253,66 @@ def _bom_snapshot_has_active_requisition(
         )
         is not None
     )
+
+
+def _bom_snapshot_material_correction_blocker(
+    db: Session,
+    snapshot: SalesOrderItemBomComponent,
+) -> str | None:
+    if any(
+        _bom_snapshot_has_active_requisition(
+            db,
+            snapshot.id,
+            component_type=component_type,
+        )
+        for component_type in _bom_snapshot_component_types(snapshot)
+    ):
+        return "该组件已经正式报料，不能再更换供应商或材质"
+
+    posted_receipt = db.scalar(
+        select(IncomingReceiptItem.id)
+        .join(
+            RequisitionItemBomSource,
+            RequisitionItemBomSource.requisition_item_id
+            == IncomingReceiptItem.requisition_item_id,
+        )
+        .where(
+            RequisitionItemBomSource.sales_order_item_bom_component_id
+            == snapshot.id,
+            IncomingReceiptItem.status == "posted",
+        )
+        .limit(1)
+    )
+    if posted_receipt is not None:
+        return "该组件已经产生正式收料记录，不能再更换供应商或材质"
+
+    has_component_reservation = db.scalar(
+        select(InventoryReservation.id)
+        .where(
+            InventoryReservation.order_item_id == snapshot.sales_order_item_id,
+            InventoryReservation.sales_order_item_bom_component_id
+            == snapshot.id,
+            InventoryReservation.status != "cancelled",
+            InventoryReservation.reserved_stock_quantity
+            > InventoryReservation.consumed_stock_quantity
+            + InventoryReservation.released_stock_quantity,
+        )
+        .limit(1)
+    )
+    if has_component_reservation is not None:
+        return "该组件已有未消耗库存预占，请先释放预占后再修改材质"
+
+    completion = db.scalar(
+        select(ProductionCompletion.id)
+        .join(ProductionTask, ProductionTask.id == ProductionCompletion.task_id)
+        .where(
+            ProductionTask.sales_order_item_bom_component_id == snapshot.id,
+        )
+        .limit(1)
+    )
+    if completion is not None:
+        return "该组件已经产生生产完工记录，不能再更换供应商或材质"
+    return None
 
 
 def _bom_snapshot_is_fully_requisitioned(
@@ -9220,6 +9299,381 @@ def update_pending_material(
             f"已将该明细改为 {material.supplier_name or '未设置供应商'} / "
             f"{material.code} / {flute_type or '-'}"
         ),
+    }
+
+
+@router.put("/pending/{item_id}/bom-components/{snapshot_id}/material")
+def update_pending_bom_component_material(
+    item_id: int,
+    snapshot_id: int,
+    payload: PendingMaterialUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    """Update one still-unreported BOM component and its linked common box.
+
+    The parent order item is only the commercial set.  Component material facts
+    therefore belong to the frozen component row, not to the parent snapshot.
+    """
+
+    item = _item_or_404(db, item_id)
+    _, customer = _order_customer_for_item(db, item, user)
+    snapshot = db.get(SalesOrderItemBomComponent, snapshot_id)
+    if snapshot is None or snapshot.sales_order_item_id != item.id:
+        raise HTTPException(status_code=404, detail="订单组件不存在")
+    correction_blocker = _bom_snapshot_material_correction_blocker(db, snapshot)
+    if correction_blocker:
+        raise HTTPException(status_code=409, detail=correction_blocker)
+
+    material = db.get(Material, payload.material_id)
+    if material is None or not material.is_active:
+        raise HTTPException(status_code=404, detail="所选材质不存在或已停用")
+    _require_active_material_supplier(db, material)
+    if payload.candidate_id is not None:
+        candidate = _candidate_or_404(db, payload.candidate_id)
+        if not candidate.is_active or candidate.customer_id != customer.id:
+            raise HTTPException(status_code=400, detail="所选材质候选不属于当前客户")
+        if candidate.actual_material_id != material.id:
+            raise HTTPException(status_code=400, detail="所选材质候选与材质不一致")
+    if payload.layer_count is not None and payload.layer_count != material.layer_count:
+        raise HTTPException(status_code=400, detail="请求层数与所选材质真实层数不一致")
+    layer_count = material.layer_count
+    flute_type = (
+        payload.flute_type
+        if "flute_type" in payload.model_fields_set
+        else snapshot.snapshot_component_flute_type
+    )
+    flute_type, flute_error = _business_flute_error(layer_count, flute_type)
+    if flute_error:
+        raise HTTPException(status_code=400, detail=flute_error)
+
+    product = db.get(Product, snapshot.component_product_id)
+    if product is None or not product.is_active:
+        raise HTTPException(status_code=409, detail="组件关联的常用箱不存在或已停用")
+    if product.customer_id != customer.id:
+        raise HTTPException(status_code=409, detail="组件常用箱与当前订单客户不一致")
+    product_updates = {
+        field_name: value
+        for field_name, value in {
+            "material_id": material.id,
+            "layer_count": layer_count,
+            "flute_type": flute_type,
+        }.items()
+        if getattr(product, field_name) != value
+    }
+    component_values_changed = any(
+        (
+            snapshot.snapshot_component_material_id != material.id,
+            snapshot.snapshot_component_material != material.code,
+            snapshot.snapshot_component_supplier_name != material.supplier_name,
+            snapshot.snapshot_component_layer_count != layer_count,
+            (snapshot.snapshot_component_flute_type or "").strip().upper()
+            != (flute_type or "").strip().upper(),
+        )
+    )
+    if not component_values_changed and not product_updates:
+        return {
+            "item_id": item.id,
+            "bom_snapshot_id": snapshot.id,
+            "material_id": material.id,
+            "material_code": material.code,
+            "supplier_name": material.supplier_name,
+            "layer_count": layer_count,
+            "flute_type": flute_type,
+            "product_id": product.id,
+            "product_version": product.version,
+            "message": "组件材质未变化，无需重复保存",
+        }
+    if product_updates:
+        if not has_permission(user, "products.edit"):
+            raise HTTPException(status_code=403, detail="缺少 products.edit 权限")
+        if payload.product_expected_version is None:
+            raise HTTPException(
+                status_code=400,
+                detail="同步组件常用箱必须提供 product_expected_version",
+            )
+        from app.services.master_data_versioning import apply_versioned_update
+
+        apply_versioned_update(
+            db,
+            object_type="product",
+            entity=product,
+            updates=product_updates,
+            expected_version=payload.product_expected_version,
+            user=user,
+            reason=(payload.product_change_reason or "").strip() or None,
+            source=(
+                "requisition.pending-bom-material.sync-product:"
+                f"{item.id}:{snapshot.id}"
+            ),
+            confirmation_token=payload.product_confirmation_token,
+        )
+
+    before = {
+        "material_id": snapshot.snapshot_component_material_id,
+        "material": snapshot.snapshot_component_material,
+        "supplier_name": snapshot.snapshot_component_supplier_name,
+        "layer_count": snapshot.snapshot_component_layer_count,
+        "flute_type": snapshot.snapshot_component_flute_type,
+        "component_product_version": snapshot.component_product_version,
+    }
+    snapshot.snapshot_component_material_id = material.id
+    snapshot.snapshot_component_material = material.code
+    snapshot.snapshot_component_supplier_name = material.supplier_name
+    snapshot.snapshot_component_layer_count = layer_count
+    snapshot.snapshot_component_flute_type = flute_type
+    snapshot.component_product_version = product.version
+    _audit(
+        db,
+        user=user,
+        action="UPDATE_PENDING_BOM_MATERIAL",
+        entity_id=item.id,
+        details={
+            "bom_snapshot_id": snapshot.id,
+            "component_product_id": product.id,
+            "before": before,
+            "after": {
+                "material_id": material.id,
+                "material": material.code,
+                "supplier_name": material.supplier_name,
+                "layer_count": layer_count,
+                "flute_type": flute_type,
+                "component_product_version": product.version,
+            },
+        },
+        description="更换未报料组件的供应商和材质",
+    )
+    try:
+        db.commit()
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="组件供应商或材质在保存前已产生业务事实，请刷新后核对",
+        ) from error
+    return {
+        "item_id": item.id,
+        "bom_snapshot_id": snapshot.id,
+        "material_id": material.id,
+        "material_code": material.code,
+        "supplier_name": material.supplier_name,
+        "layer_count": layer_count,
+        "flute_type": flute_type,
+        "product_id": product.id,
+        "product_version": product.version,
+        "message": (
+            f"已将组件“{snapshot.snapshot_component_product_name}”改为 "
+            f"{material.supplier_name or '未设置供应商'} / {material.code} / "
+            f"{flute_type or '-'}"
+        ),
+    }
+
+
+@router.put("/pending/{item_id}/virtual-composite-parent")
+def mark_pending_composite_parent_virtual(
+    item_id: int,
+    payload: PendingVirtualCompositeParentUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    """Convert an untouched set parent to commercial-only parent semantics."""
+
+    if not has_permission(user, "products.edit"):
+        raise HTTPException(status_code=403, detail="缺少 products.edit 权限")
+    item = _item_or_404(db, item_id)
+    _order_customer_for_item(db, item, user)
+    product = db.get(Product, item.product_id)
+    if product is None or not product.is_active:
+        raise HTTPException(status_code=409, detail="父件常用箱不存在或已停用")
+    snapshots = list(
+        db.scalars(
+            select(SalesOrderItemBomComponent)
+            .where(SalesOrderItemBomComponent.sales_order_item_id == item.id)
+            .order_by(SalesOrderItemBomComponent.display_order)
+        ).all()
+    )
+    if not snapshots or not bool(getattr(product, "is_composite", False)):
+        raise HTTPException(status_code=409, detail="该订单明细不是组合产品父件")
+    if (item.combination_mode_snapshot or product.combination_mode) != "parent_priced_set":
+        raise HTTPException(status_code=409, detail="只有父件按套计价可以改为只计价父件")
+
+    direct_requisition = db.scalar(
+        select(RequisitionItem.id)
+        .where(
+            RequisitionItem.order_item_id == item.id,
+            func.lower(RequisitionItem.status).notin_(
+                INACTIVE_REQUISITION_ITEM_STATUSES
+            ),
+            ~exists().where(
+                RequisitionItemBomSource.requisition_item_id
+                == RequisitionItem.id
+            ),
+        )
+        .limit(1)
+    )
+    if direct_requisition is not None:
+        raise HTTPException(status_code=409, detail="父件已经正式报料，不能改为只计价父件")
+    direct_receipt = db.scalar(
+        select(IncomingReceiptItem.id)
+        .where(
+            IncomingReceiptItem.order_item_id == item.id,
+            IncomingReceiptItem.status == "posted",
+            or_(
+                IncomingReceiptItem.requisition_item_id.is_(None),
+                ~exists().where(
+                    RequisitionItemBomSource.requisition_item_id
+                    == IncomingReceiptItem.requisition_item_id
+                ),
+            ),
+        )
+        .limit(1)
+    )
+    if direct_receipt is not None:
+        raise HTTPException(status_code=409, detail="父件已经产生正式收料，不能改为只计价父件")
+    parent_reservation = db.scalar(
+        select(InventoryReservation.id)
+        .where(
+            InventoryReservation.order_item_id == item.id,
+            InventoryReservation.sales_order_item_bom_component_id.is_(None),
+            InventoryReservation.status != "cancelled",
+            InventoryReservation.reserved_stock_quantity
+            > InventoryReservation.consumed_stock_quantity
+            + InventoryReservation.released_stock_quantity,
+        )
+        .limit(1)
+    )
+    if parent_reservation is not None:
+        raise HTTPException(status_code=409, detail="父件已有库存预占，请先释放后再转换")
+    parent_task = db.scalar(
+        select(ProductionTask.id)
+        .where(
+            ProductionTask.order_item_id == item.id,
+            ProductionTask.sales_order_item_bom_component_id.is_(None),
+        )
+        .limit(1)
+    )
+    if parent_task is not None:
+        raise HTTPException(status_code=409, detail="父件已有生产任务，不能直接改为只计价父件")
+
+    from app.api.products import _VIRTUAL_COMPOSITE_PARENT_PHYSICAL_FIELDS
+    from app.services.master_data_versioning import apply_versioned_update
+
+    product_updates = {
+        field_name: None
+        for field_name in _VIRTUAL_COMPOSITE_PARENT_PHYSICAL_FIELDS
+        if field_name != "die_cut_path"
+    }
+    product_updates.update(
+        {
+            "is_virtual_composite_parent": True,
+            "box_category": "normal",
+            "supply_mode": "corrugated_production",
+            "external_packaging_category_code": None,
+            "external_packaging_specification_json": None,
+            "external_packaging_specification_summary": None,
+            "external_packaging_purchase_unit": None,
+            "external_packaging_candidate_snapshot_json": None,
+            "splice_mode": "single",
+            "pieces_per_box": 1,
+            "default_cutting_mode": DEFAULT_CUTTING_MODE,
+            "printing_plate_mode": "no_plate",
+            "printing_plate_1_id": None,
+            "printing_plate_2_id": None,
+            "printing_plate_3_id": None,
+            "plate_alignment_value_mm": None,
+            "plate_mount_value_mm": None,
+            "machine_set_length_mm": None,
+            "machine_set_width_mm": None,
+            "machine_set_height_mm": None,
+            "production_label_enabled": False,
+            "production_label_units_per_label": None,
+            "cost_unit_price": None,
+            "board_price": None,
+            "suggested_price": None,
+            "combination_mode": "parent_priced_set",
+        }
+    )
+    apply_versioned_update(
+        db,
+        object_type="product",
+        entity=product,
+        updates=product_updates,
+        expected_version=payload.product_expected_version,
+        user=user,
+        reason="组合父件改为只体现整套数量和价格",
+        source=f"requisition.pending.virtual-composite-parent:{item.id}",
+        confirmation_token=payload.product_confirmation_token,
+    )
+
+    item_before = {
+        "is_virtual_composite_parent_snapshot": bool(
+            item.is_virtual_composite_parent_snapshot
+        ),
+        "material_id": item.material_id,
+        "snapshot_material": item.snapshot_material,
+        "snapshot_supplier_name": item.snapshot_supplier_name,
+        "layer_count": item.layer_count,
+        "flute_type": item.flute_type,
+    }
+    item.is_virtual_composite_parent_snapshot = True
+    item.material_id = None
+    item.snapshot_material = None
+    item.snapshot_original_material_code = None
+    item.snapshot_production_notes = None
+    item.snapshot_supplier_name = None
+    item.snapshot_weight = None
+    item.layer_count = None
+    item.flute_type = None
+    item.drawing_file = None
+    item.requisition_qty = None
+    item.requisition_spec = None
+    item.cardboard_len = None
+    item.cardboard_width = None
+    item.requisition_date = None
+    item.supplier_delivery_time = None
+    item.supplier_order_number = None
+    item.requisition_remark = None
+    item.special_process = DEFAULT_CUTTING_MODE
+    for field_name in (
+        "snapshot_report_length_mm",
+        "snapshot_report_width_mm",
+        "snapshot_crease_type",
+        "snapshot_crease_left_mm",
+        "snapshot_crease_middle_mm",
+        "snapshot_crease_right_mm",
+        "snapshot_report_notes",
+        "snapshot_base_report_length_mm",
+        "snapshot_base_report_width_mm",
+        "snapshot_base_crease_type",
+        "snapshot_base_crease_left_mm",
+        "snapshot_base_crease_middle_mm",
+        "snapshot_base_crease_right_mm",
+        "snapshot_base_report_notes",
+        "snapshot_splice_mode",
+        "snapshot_pieces_per_box",
+        "snapshot_flap_mm",
+    ):
+        setattr(item, field_name, None)
+    _audit(
+        db,
+        user=user,
+        action="MARK_PENDING_PARENT_VIRTUAL",
+        entity_id=item.id,
+        details={
+            "product_id": product.id,
+            "product_version": product.version,
+            "before": item_before,
+            "bom_snapshot_ids": [snapshot.id for snapshot in snapshots],
+        },
+        description="将未产生业务事实的组合父件改为只计价父件",
+    )
+    db.commit()
+    return {
+        "item_id": item.id,
+        "product_id": product.id,
+        "product_version": product.version,
+        "is_virtual_composite_parent": True,
+        "message": "父件已改为只体现整套数量和价格；请分别核对实体组件供应商和材质",
     }
 
 

@@ -341,13 +341,20 @@ def build_order_item_document_trace(
             )
         ).all()
         for supplier_item, supplier_order in supplier_rows:
-            effective = supplier_order.status != "voided"
+            effective = (
+                supplier_order.status != "voided"
+                and supplier_item.status == "active"
+            )
             add_event(
                 stage="requisition",
                 source_type="supplier_requisition_order",
                 source_id=supplier_item.id,
                 document_number=supplier_order.order_number,
-                status=supplier_order.status,
+                status=(
+                    supplier_item.status
+                    if supplier_order.status == "confirmed"
+                    else supplier_order.status
+                ),
                 occurred_at=supplier_order.created_at,
                 quantity=supplier_item.requisition_qty,
                 unit="张",
@@ -358,14 +365,15 @@ def build_order_item_document_trace(
                     "order_item_id": item.id,
                 },
             )
-            if supplier_order.voided_at is not None:
+            item_voided_at = supplier_item.voided_at or supplier_order.voided_at
+            if item_voided_at is not None:
                 add_event(
                     stage="requisition",
                     source_type="supplier_requisition_void",
                     source_id=supplier_item.id,
                     document_number=supplier_order.order_number,
                     status="voided",
-                    occurred_at=supplier_order.voided_at,
+                    occurred_at=item_voided_at,
                     quantity=supplier_item.requisition_qty,
                     unit="张",
                     is_effective=False,

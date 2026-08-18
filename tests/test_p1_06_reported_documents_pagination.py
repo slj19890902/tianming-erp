@@ -507,7 +507,9 @@ def test_reported_items_preserve_source_specific_action_and_print_boundaries(
     assert supplier["can_view_supplier_order"] is True
     assert supplier["can_print_task"] is True
     assert supplier["can_print_label"] is True
-    assert supplier["can_void_item"] is False
+    assert supplier["status"] == "active"
+    assert supplier["version"] == 1
+    assert supplier["can_void_item"] is True
     assert legacy["can_view_supplier_order"] is False
     assert legacy["can_print_task"] is False
     assert legacy["can_print_label"] is False

@@ -5,6 +5,7 @@ from datetime import date, datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     Date,
     ForeignKey,
@@ -12,6 +13,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -71,6 +73,32 @@ class SupplierRequisitionOrderItem(Base):
             "ix_supplier_requisition_order_items_material_id",
             "material_id",
         ),
+        Index(
+            "ix_supplier_requisition_order_items_order_status",
+            "supplier_order_id",
+            "status",
+            "id",
+        ),
+        UniqueConstraint(
+            "void_idempotency_key",
+            name="uq_supplier_requisition_order_items_void_idempotency",
+        ),
+        CheckConstraint(
+            "status IN ('active','voided')",
+            name="ck_supplier_requisition_order_items_status",
+        ),
+        CheckConstraint(
+            "version >= 1",
+            name="ck_supplier_requisition_order_items_version",
+        ),
+        CheckConstraint(
+            "((status = 'active' AND voided_at IS NULL AND voided_by IS NULL "
+            "AND void_idempotency_key IS NULL AND void_request_hash IS NULL) OR "
+            "(status = 'voided' AND voided_at IS NOT NULL "
+            "AND void_idempotency_key IS NOT NULL "
+            "AND length(void_request_hash) = 64))",
+            name="ck_supplier_requisition_order_items_void_fact",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -108,6 +136,28 @@ class SupplierRequisitionOrderItem(Base):
     required_piece_qty: Mapped[int | None] = mapped_column(Integer, nullable=True)
     customer_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     delivery_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(20), default="active", server_default="active", nullable=False
+    )
+    version: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1", nullable=False
+    )
+    voided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    voided_by: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey(
+            "users.id",
+            ondelete="SET NULL",
+            name="fk_supplier_requisition_order_items_voided_by_users",
+        ),
+        nullable=True,
+    )
+    void_idempotency_key: Mapped[str | None] = mapped_column(
+        String(120), nullable=True
+    )
+    void_request_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
 
     supplier_order: Mapped["SupplierRequisitionOrder"] = relationship(
         "SupplierRequisitionOrder", back_populates="items"

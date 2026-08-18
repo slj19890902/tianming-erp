@@ -49,17 +49,19 @@ def test_p1_73a_golden_fixture_covers_the_five_required_business_shapes() -> Non
     assert last["after"]["supplier_order_status"] == "voided"
 
 
-def test_p1_73a_latest_formal_model_requires_a_minimal_item_state_migration() -> None:
+def test_p1_73a_item_state_schema_preserves_history_and_supports_safe_voiding() -> None:
     columns = SupplierRequisitionOrderItem.__table__.columns
     assert "id" in columns
     assert "supplier_order_id" in columns
     assert "source_key" in columns
 
-    # This is an audit finding, not a desired final schema assertion.  P1-73C
-    # replaces it with migration/behaviour tests once the line state exists.
-    missing = {
-        name
-        for name in ("status", "version", "voided_at", "voided_by")
-        if name not in columns
-    }
-    assert missing == {"status", "version", "voided_at", "voided_by"}
+    assert {
+        "status",
+        "version",
+        "voided_at",
+        "voided_by",
+        "void_idempotency_key",
+        "void_request_hash",
+    }.issubset(columns.keys())
+    assert columns["status"].default.arg == "active"
+    assert columns["version"].default.arg == 1

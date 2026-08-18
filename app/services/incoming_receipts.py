@@ -134,6 +134,7 @@ def current_supplier_order_items(
             .where(
                 OrderItem.id.in_(order_item_ids),
                 SupplierRequisitionOrder.status == "confirmed",
+                SupplierRequisitionOrderItem.status == "active",
             )
             .order_by(
                 SupplierRequisitionOrderItem.order_item_id,
@@ -471,6 +472,7 @@ def _uses_confirmed_supplier_order(db: Session, order_item: OrderItem) -> bool:
             == order_item.supplier_order_number,
             SupplierRequisitionOrder.status == "confirmed",
             SupplierRequisitionOrderItem.order_item_id == order_item.id,
+            SupplierRequisitionOrderItem.status == "active",
         )
         .limit(1)
     ) is not None
@@ -515,7 +517,11 @@ def _open_requisition_status(db: Session, row: RequisitionItem) -> str:
 
 
 def _target(
-    db: Session, item_key: int | str, *, allow_closed: bool = False
+    db: Session,
+    item_key: int | str,
+    *,
+    allow_closed: bool = False,
+    claim_for_receipt: bool = False,
 ) -> IncomingTarget:
     text = str(item_key)
     supplier_item_id = _supplier_order_item_id(text)
@@ -542,7 +548,47 @@ def _target(
         if row is None:
             raise IncomingReceiptError("供应商报料明细不存在", 404)
         supplier_item, supplier_order, order_item, order = row
+        if claim_for_receipt:
+            claimed = db.execute(
+                update(SupplierRequisitionOrderItem)
+                .where(
+                    SupplierRequisitionOrderItem.id == supplier_item.id,
+                    SupplierRequisitionOrderItem.status == "active",
+                    SupplierRequisitionOrderItem.version == supplier_item.version,
+                )
+                .values(version=SupplierRequisitionOrderItem.version)
+            )
+            if claimed.rowcount != 1:
+                raise IncomingReceiptError(
+                    "该供应商报料明细已被撤销或状态已变化，请刷新后重试", 409
+                )
+            db.flush()
+            db.expire_all()
+            row = db.execute(
+                select(
+                    SupplierRequisitionOrderItem,
+                    SupplierRequisitionOrder,
+                    OrderItem,
+                    Order,
+                )
+                .join(
+                    SupplierRequisitionOrder,
+                    SupplierRequisitionOrder.id
+                    == SupplierRequisitionOrderItem.supplier_order_id,
+                )
+                .join(
+                    OrderItem,
+                    OrderItem.id == SupplierRequisitionOrderItem.order_item_id,
+                )
+                .join(Order, Order.id == OrderItem.order_id)
+                .where(SupplierRequisitionOrderItem.id == supplier_item_id)
+            ).one_or_none()
+            if row is None:
+                raise IncomingReceiptError("供应商报料明细不存在", 404)
+            supplier_item, supplier_order, order_item, order = row
         if (
+            supplier_item.status != "active"
+            or
             supplier_order.status != "confirmed"
             or order_item.supplier_order_number != supplier_order.order_number
         ):
@@ -843,6 +889,7 @@ def _supplier_link(
         .where(
             SupplierRequisitionOrderItem.order_item_id == order_item_id,
             SupplierRequisitionOrder.status == "confirmed",
+            SupplierRequisitionOrderItem.status == "active",
         )
         .order_by(
             (
@@ -871,7 +918,6 @@ def _all_current_supplier_order_items_closed(
                 select(IncomingReceiptItem)
                 .where(
                     IncomingReceiptItem.supplier_order_item_id == supplier_item.id,
-                    IncomingReceiptItem.requisition_item_id.is_(None),
                     IncomingReceiptItem.status == "posted",
                 )
                 .order_by(IncomingReceiptItem.id)
@@ -913,6 +959,7 @@ def _all_required_supplier_demand_requisitioned(
             .where(
                 SupplierRequisitionOrderItem.order_item_id == order_item.id,
                 SupplierRequisitionOrder.status != "voided",
+                SupplierRequisitionOrderItem.status == "active",
             )
             .order_by(SupplierRequisitionOrderItem.id)
         ).all()
@@ -1535,7 +1582,7 @@ def receive_one(
             audit_context=audit_context,
         )
 
-    target = _target(db, item_key)
+    target = _target(db, item_key, claim_for_receipt=True)
     quantity = int(
         target.planned_quantity if received_quantity is None else received_quantity
     )

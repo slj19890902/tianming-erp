@@ -19,7 +19,6 @@
     .page { width:210mm; height:297mm; padding:8mm 10mm; background:#fff; box-shadow:0 2px 12px rgba(0,0,0,.16); overflow:hidden; break-after:page; page-break-after:always; }
     .page:last-child { break-after:auto; page-break-after:auto; }
     .batch-page { display:grid; grid-template-rows:140.5mm 140.5mm; }
-    .single-page { display:grid; grid-template-rows:1fr; }
     .task-card { min-height:0; padding:4mm 2mm 3mm; overflow:hidden; break-inside:avoid; page-break-inside:avoid; }
     .batch-page .task-card:first-child { border-bottom:.35mm dashed #555; }
     .task-card.blank { visibility:hidden; }
@@ -28,16 +27,20 @@
     .card-head { display:grid; grid-template-columns:1fr auto; gap:4mm; align-items:start; border-bottom:.55mm solid #111; padding-bottom:1.5mm; }
     .brand { font-size:8pt; font-weight:800; letter-spacing:.3mm; }
     h1 { margin:.8mm 0 0; font-size:15pt; line-height:1.15; letter-spacing:.5mm; }
-    .product-qr { width:22mm; min-height:22mm; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; font-size:5.8pt; line-height:1.15; overflow-wrap:anywhere; }
+    .product-qr { width:19.5mm; min-height:19.5mm; display:flex; align-items:center; justify-content:center; text-align:center; font-size:5.8pt; line-height:1.15; overflow-wrap:anywhere; }
     .product-qr img { display:block; width:19mm; height:19mm; image-rendering:pixelated; }
-    .product-qr span { margin-top:.5mm; }
     .product-qr-missing { border:.3mm solid #777; padding:1.5mm; color:#444; }
     .status { display:inline-block; min-width:18mm; padding:1mm 2mm; border:.3mm solid #111; border-radius:3mm; text-align:center; color:#111; font-size:8pt; font-weight:800; }
     .status.warn { border-width:.55mm; }
-    .headline-metrics { display:grid; grid-template-columns:1.1fr .9fr .9fr; gap:2mm; margin:2.3mm 0; }
+    .headline-metrics { display:grid; grid-template-columns:1.24fr .62fr 1.14fr; gap:1.5mm; margin:1.7mm 0; }
     .headline-metric { border:.28mm solid #777; border-radius:2mm; padding:1.4mm 2mm; min-width:0; }
     .headline-metric span { display:block; color:#444; font-size:7pt; }
     .headline-metric strong { display:block; margin-top:.5mm; font-size:12pt; line-height:1.15; overflow-wrap:anywhere; }
+    .customer-metric strong { white-space:nowrap; font-size:11.5pt; }
+    .code-metric strong { font-size:10.5pt; letter-spacing:-.08mm; }
+    .name-metric strong { font-size:11.5pt; }
+    .headline-metric strong.fit-long { font-size:9.2pt; letter-spacing:-.12mm; }
+    .headline-metric strong.fit-very-long { white-space:normal; font-size:8pt; line-height:1.08; }
     .product-strip { display:grid; grid-template-columns:1.1fr .65fr .85fr; gap:3mm; padding:1.5mm 0 1.8mm; border-bottom:.28mm solid #888; }
     .field-label { display:block; color:#444; font-size:7pt; }
     .field-value { display:block; margin-top:.5mm; font-weight:800; font-size:9.5pt; overflow-wrap:anywhere; }
@@ -75,73 +78,50 @@
     .safe-only { display:none !important; }
     body.customer-safe .internal-only { display:none !important; }
     body.customer-safe .safe-only { display:inline !important; }
-    .single-page .task-card { padding:8mm 7mm 6mm; display:flex; flex-direction:column; }
-    .single-page .brand { font-size:10pt; }
-    .single-page h1 { margin-top:1.5mm; font-size:25pt; }
-    .single-page .product-qr { width:30mm; min-height:30mm; font-size:8pt; }
-    .single-page .product-qr img { width:27mm; height:27mm; }
-    .single-page .status { padding:1.6mm 4mm; font-size:11pt; }
-    .single-page .headline-metrics { gap:4mm; margin:6mm 0; }
-    .single-page .headline-metric { padding:4mm 5mm; border-radius:3mm; }
-    .single-page .headline-metric span,.single-page .field-label { font-size:10pt; }
-    .single-page .headline-metric strong { margin-top:1.5mm; font-size:20pt; }
-    .single-page .product-strip { gap:8mm; padding:3mm 0 4mm; }
-    .single-page .field-value { margin-top:1.5mm; font-size:15pt; }
-    .single-page .production-key-value,.single-page .detail-row.production-key-fact .value { font-size:20pt; line-height:1.15; }
-    .single-page .process-title { margin:5mm 0 2mm; font-size:10pt; }
-    .single-page .process-route { gap:3mm; }
-    .single-page .process-route li { padding:3mm; border-radius:5mm; font-size:12pt; }
-    .single-page .detail-grid { flex:1 1 auto; margin-top:5mm; min-height:102mm; border-radius:3mm; }
-    .single-page .detail-list { padding:7mm 8mm; }
-    .single-page .detail-row { grid-template-columns:34mm 1fr; gap:5mm; padding:2.4mm 0; font-size:12pt; }
-    .single-page .structure { padding:7mm; }
-    .single-page .structure-title { font-size:10pt; }
-    .single-page .structure-body { margin-top:4mm; }
-    .single-page .structure-body img,.single-page .structure-body object { max-height:122mm; }
-    .single-page .structure-empty { padding:8mm; font-size:11pt; }
-    .single-page .warning { margin-top:4mm; padding:3mm 4mm; font-size:10pt; }
-    .single-page .receipt-facts { gap:3mm; margin:4mm 0; padding:3mm 4mm; }
-    .single-page .receipt-fact span { font-size:9pt; }
-    .single-page .receipt-fact strong { margin-top:1mm; font-size:13pt; }
-    .single-page .foot { margin-top:4mm; font-size:8pt; }
-    .single-page .task-card.printing-heavy { padding:4mm 3mm 3mm; }
-    .single-page .task-card.printing-heavy h1 { font-size:18pt; }
-    .single-page .task-card.printing-heavy .product-qr { width:23mm; min-height:23mm; font-size:6pt; }
-    .single-page .task-card.printing-heavy .product-qr img { width:21mm; height:21mm; }
-    .single-page .task-card.printing-heavy .status { padding:1mm 2.5mm; font-size:9pt; }
-    .single-page .task-card.printing-heavy .headline-metrics { gap:2.5mm; margin:2.5mm 0; }
-    .single-page .task-card.printing-heavy .headline-metric { padding:2mm 3mm; }
-    .single-page .task-card.printing-heavy .headline-metric span,
-    .single-page .task-card.printing-heavy .field-label { font-size:8pt; }
-    .single-page .task-card.printing-heavy .headline-metric strong { margin-top:.8mm; font-size:14pt; }
-    .single-page .task-card.printing-heavy .product-strip { gap:5mm; padding:2mm 0 2.5mm; }
-    .single-page .task-card.printing-heavy .field-value { margin-top:.8mm; font-size:11pt; }
-    .single-page .task-card.printing-heavy .production-key-value,
-    .single-page .task-card.printing-heavy .detail-row.production-key-fact .value { font-size:13pt; }
-    .single-page .task-card.printing-heavy .process-title { margin:2.5mm 0 1mm; font-size:8.5pt; }
-    .single-page .task-card.printing-heavy .process-route { gap:1.5mm; }
-    .single-page .task-card.printing-heavy .process-route li { padding:1.5mm 2mm; font-size:9pt; }
-    .single-page .task-card.printing-heavy .detail-grid { grid-template-columns:1.4fr .6fr; margin-top:2.5mm; min-height:0; }
-    .single-page .task-card.printing-heavy .detail-list { padding:2.5mm 3mm; }
-    .single-page .task-card.printing-heavy .detail-row { grid-template-columns:27mm 1fr; gap:2.5mm; padding:.8mm 0; font-size:8.5pt; line-height:1.22; }
-    .single-page .task-card.printing-heavy .printing-block { margin:.4mm 0; padding:.4mm 0; }
-    .single-page .task-card.printing-heavy .printing-block-title { margin:.2mm 0; font-size:8pt; }
-    .single-page .mold-focus { padding:2.5mm 3mm; }
-    .single-page .mold-focus-title { font-size:10pt; }
-    .single-page .mold-focus-code { font-size:18pt; }
-    .single-page .mold-focus-location { font-size:15pt; }
-    .single-page .mold-focus-note { font-size:9pt; }
-    .single-page .task-card.printing-heavy .structure { padding:3mm; }
-    .single-page .task-card.printing-heavy .structure-title { font-size:8pt; }
-    .single-page .task-card.printing-heavy .structure-body { margin-top:2mm; }
-    .single-page .task-card.printing-heavy .structure-body img,
-    .single-page .task-card.printing-heavy .structure-body object { max-height:105mm; }
-    .single-page .task-card.printing-heavy .structure-empty { padding:3mm; font-size:8.5pt; }
-    .single-page .task-card.printing-heavy .warning { margin-top:2mm; padding:1.5mm 2mm; font-size:8pt; }
-    .single-page .task-card.printing-heavy .foot { margin-top:2mm; font-size:7pt; }
-    .single-page .task-card.actual-card .receipt-facts { gap:1.5mm; margin:2mm 0; padding:1.5mm 2mm; }
-    .single-page .task-card.actual-card .receipt-fact span { font-size:7.5pt; }
-    .single-page .task-card.actual-card .receipt-fact strong { margin-top:.5mm; font-size:10pt; line-height:1.2; }
+    .task-card.printing-heavy { padding:2.2mm 1.5mm 1.5mm; }
+    .task-card.printing-heavy .card-head { gap:2mm; padding-bottom:.8mm; }
+    .task-card.printing-heavy .brand { font-size:6.8pt; }
+    .task-card.printing-heavy h1 { margin-top:.3mm; font-size:12.5pt; }
+    .task-card.printing-heavy .product-qr { width:16.5mm; min-height:16.5mm; font-size:5.2pt; }
+    .task-card.printing-heavy .product-qr img { width:16mm; height:16mm; }
+    .task-card.printing-heavy .headline-metrics { gap:1mm; margin:1mm 0; }
+    .task-card.printing-heavy .headline-metric { padding:.7mm 1.1mm; }
+    .task-card.printing-heavy .headline-metric span,
+    .task-card.printing-heavy .field-label { font-size:6pt; }
+    .task-card.printing-heavy .headline-metric strong { margin-top:.2mm; font-size:9pt; line-height:1.05; }
+    .task-card.printing-heavy .headline-metric strong.fit-long { font-size:7.8pt; }
+    .task-card.printing-heavy .headline-metric strong.fit-very-long { font-size:6.8pt; }
+    .task-card.printing-heavy .product-strip { gap:1.5mm; padding:.6mm 0 .8mm; }
+    .task-card.printing-heavy .field-value { margin-top:.2mm; font-size:7.8pt; }
+    .task-card.printing-heavy .production-key-value,
+    .task-card.printing-heavy .detail-row.production-key-fact .value { font-size:9.5pt; }
+    .task-card.printing-heavy .process-title { margin:.7mm 0 .3mm; font-size:6.3pt; }
+    .task-card.printing-heavy .process-route { gap:.7mm; }
+    .task-card.printing-heavy .process-route li { padding:.5mm .8mm; border-radius:2mm; font-size:6.6pt; }
+    .task-card.printing-heavy .process-detail-stack { gap:.35mm; margin-top:.5mm; }
+    .task-card.printing-heavy .mold-focus { padding:.6mm 1mm; border-width:.35mm; }
+    .task-card.printing-heavy .mold-focus-title { font-size:6.2pt; }
+    .task-card.printing-heavy .mold-focus-row { gap:1mm; margin-top:.25mm; }
+    .task-card.printing-heavy .mold-focus-code { font-size:9pt; }
+    .task-card.printing-heavy .mold-focus-location { font-size:8pt; }
+    .task-card.printing-heavy .mold-focus-note { margin-top:.25mm; font-size:5.8pt; line-height:1.1; }
+    .task-card.printing-heavy .printing-block,
+    .task-card.printing-heavy .joining-block { margin:.2mm 0; padding:.2mm 0; }
+    .task-card.printing-heavy .printing-block-title { margin:.1mm 0; font-size:6.2pt; }
+    .task-card.printing-heavy .detail-grid { grid-template-columns:1.35fr .65fr; margin-top:.7mm; min-height:25mm; }
+    .task-card.printing-heavy .detail-list { padding:.7mm 1mm; }
+    .task-card.printing-heavy .detail-row { grid-template-columns:20mm 1fr; gap:1mm; padding:.2mm 0; font-size:6.4pt; line-height:1.12; }
+    .task-card.printing-heavy .structure { padding:.8mm; }
+    .task-card.printing-heavy .structure-title { font-size:6.2pt; }
+    .task-card.printing-heavy .structure-body { margin-top:.3mm; }
+    .task-card.printing-heavy .structure-body img,
+    .task-card.printing-heavy .structure-body object { max-height:23mm; }
+    .task-card.printing-heavy .structure-empty { padding:1mm; font-size:6.3pt; line-height:1.2; }
+    .task-card.printing-heavy .warning { margin-top:.5mm; padding:.4mm .8mm; font-size:6.2pt; }
+    .task-card.printing-heavy .foot { margin-top:.4mm; font-size:5.6pt; }
+    .task-card.actual-card .receipt-facts { gap:.7mm; margin:.7mm 0; padding:.6mm .8mm; }
+    .task-card.actual-card .receipt-fact span { font-size:5.6pt; }
+    .task-card.actual-card .receipt-fact strong { margin-top:.15mm; font-size:7pt; line-height:1.1; }
     @page { size:A4 portrait; margin:0; }
     @media print {
       body { background:#fff; }
@@ -159,7 +139,7 @@
     <button id="labelButton" type="button" disabled>生产包装标签</button>
     <button id="labelRefreshButton" type="button" hidden disabled>按常用箱刷新标签计划</button>
     <button id="closeButton" type="button">关闭</button>
-    <span id="toolbarNote" class="toolbar-note">黑白打印 · 批量每张 A4 上下两款</span>
+    <span id="toolbarNote" class="toolbar-note">黑白打印 · 每个生产任务固定半张 A4 · 每页上下两款</span>
   </div>
   <div id="message" class="message">正在读取正式报料快照…</div>
   <main id="pages" class="pages" aria-live="polite"></main>
@@ -326,7 +306,7 @@
         }, 0);
       }
 
-      function cardNeedsFullPage(card) {
+      function cardNeedsCompactLayout(card) {
         const components = Array.isArray(card && card.components) ? card.components : [];
         const printableComponents = components.filter((component) => {
           const content = String(component && (component.printing_situation || component.print_content) || "").trim();
@@ -336,26 +316,15 @@
       }
 
       function printPageLayouts(cards) {
-        if (Array.isArray(cards) && cards.length === 1) {
-          return [{ fullPage:true, top:cards[0], bottom:null }];
-        }
         const layouts = [];
-        let pending = null;
-        (Array.isArray(cards) ? cards : []).forEach((card) => {
-          if (cardNeedsFullPage(card)) {
-            if (pending) {
-              layouts.push({ fullPage:false, top:pending, bottom:null });
-              pending = null;
-            }
-            layouts.push({ fullPage:true, top:card, bottom:null });
-          } else if (pending) {
-            layouts.push({ fullPage:false, top:pending, bottom:card });
-            pending = null;
-          } else {
-            pending = card;
-          }
-        });
-        if (pending) layouts.push({ fullPage:false, top:pending, bottom:null });
+        const source = Array.isArray(cards) ? cards : [];
+        for (let index = 0; index < source.length; index += 2) {
+          layouts.push({
+            fullPage:false,
+            top:source[index],
+            bottom:source[index + 1] || null,
+          });
+        }
         return layouts;
       }
 
@@ -468,30 +437,39 @@
       function productQrHtml(card) {
         const qr = card.product_qr;
         if (qr && qr.qr_data_url && qr.product_id) {
-          return `<div class="product-qr"><img src="${escapeHtml(qr.qr_data_url)}" alt="扫码查看当前产品资料"><span>扫码看当前资料</span></div>`;
+          return `<div class="product-qr"><img src="${escapeHtml(qr.qr_data_url)}" alt="扫码查看当前产品资料"></div>`;
         }
         return `<div class="product-qr product-qr-missing">${escapeHtml(card.product_qr_unavailable_reason || "无正式产品二维码")}</div>`;
       }
 
-      function cardHtml(card, packageData, fullPage = false) {
+      function headlineValueHtml(value, kind) {
+        const text = String(value || "-");
+        const length = Array.from(text).length;
+        const longAt = kind === "code" ? 13 : kind === "customer" ? 15 : 14;
+        const veryLongAt = kind === "code" ? 20 : kind === "customer" ? 24 : 22;
+        const fitClass = length > veryLongAt ? " fit-very-long" : length > longAt ? " fit-long" : "";
+        return `<strong class="${kind}-value${fitClass}">${escapeHtml(text)}</strong>`;
+      }
+
+      function cardHtml(card, packageData) {
         if (!card) return '<section class="task-card half-card blank" aria-hidden="true"></section>';
         const warnings = card.review_required ? `<div class="warning">请核对后再打印：${escapeHtml(textList(card.review_messages))}</div>` : "";
         const denseClass = (card.components || []).length > 3 ? " dense" : "";
         const quantityUnit = card.layout_kind === "liner" ? "张" : "只";
         const actualPhase = card.paper_phase === "actual_receipt";
-        const printingClass = cardNeedsFullPage(card) || actualPhase ? " printing-heavy" : "";
+        const printingClass = cardNeedsCompactLayout(card) || actualPhase ? " printing-heavy" : "";
         const actualClass = actualPhase ? " actual-card" : "";
         const displayQuantity = actualPhase
           ? card.production_capacity_quantity
           : card.planned_finished_quantity;
         const quantityLabel = actualPhase ? "本批最多生产" : "数量";
         const safeNote = '<span class="safe-only">客户随货版 · 已隐藏内部任务及资产定位信息</span>';
-        return `<section class="task-card half-card${fullPage ? " full-card" : ""}${denseClass}${printingClass}${actualClass}" data-layout="${escapeHtml(card.layout_kind || "carton")}">
+        return `<section class="task-card half-card${denseClass}${printingClass}${actualClass}" data-layout="${escapeHtml(card.layout_kind || "carton")}">
           <header class="card-head"><div><div class="brand">TM 天明包装 · ${escapeHtml(card.paper_phase_label || "待来料计划版")}</div><h1>${escapeHtml(titleFor(card))}</h1></div>${productQrHtml(card)}</header>
           <div class="headline-metrics">
-            <div class="headline-metric"><span>客户</span><strong>${escapeHtml(card.customer_name || "-")}</strong></div>
-            <div class="headline-metric"><span>存货编码</span><strong>${escapeHtml(card.product_code || "-")}</strong></div>
-            <div class="headline-metric"><span>产品名称</span><strong>${escapeHtml(card.product_name || "-")}</strong></div>
+            <div class="headline-metric customer-metric"><span>客户</span>${headlineValueHtml(card.customer_name, "customer")}</div>
+            <div class="headline-metric code-metric"><span>存货编码</span>${headlineValueHtml(card.product_code, "code")}</div>
+            <div class="headline-metric name-metric"><span>产品名称</span>${headlineValueHtml(card.product_name, "name")}</div>
           </div>
           <div class="product-strip"><div><span class="field-label">成品内尺寸</span><span class="field-value production-key-value">${escapeHtml(finishedSize(card))}</span></div><div><span class="field-label">${escapeHtml(quantityLabel)}</span><span class="field-value production-key-value">${escapeHtml(displayQuantity || 0)} ${quantityUnit}</span></div><div><span class="field-label">交期</span><span class="field-value">${escapeHtml(textList((card.delivery_dates || []).map(dateText)))}</span></div></div>
           ${receiptFactsHtml(card)}
@@ -545,25 +523,18 @@
 
       async function render(packageData) {
         const layouts = printPageLayouts(packageData.cards || []);
-        pagesHost.innerHTML = layouts.map((layout, index) => layout.fullPage
-          ? `<article class="page single-page" data-page="${index + 1}">${cardHtml(layout.top, packageData, true)}</article>`
-          : `<article class="page batch-page" data-page="${index + 1}">${cardHtml(layout.top, packageData)}${cardHtml(layout.bottom, packageData)}</article>`
+        pagesHost.innerHTML = layouts.map((layout, index) =>
+          `<article class="page batch-page" data-page="${index + 1}">${cardHtml(layout.top, packageData)}${cardHtml(layout.bottom, packageData)}</article>`
         ).join("");
         applyProductionLabelActions(packageData);
         await waitForProductQrImages();
-        const fullPageCount = layouts.filter((layout) => layout.fullPage).length;
-        const singleCard = packageData.card_count === 1 && layouts.length === 1;
         toolbarNote.textContent = batchMode
-          ? `已冻结 ${packageData.card_count || 0} 项人工选择 · 共 ${layouts.length} 页 · 本批次不会随页面后续勾选改变`
+          ? `已冻结 ${packageData.card_count || 0} 项人工选择 · 每个生产任务固定半张 A4 · 共 ${layouts.length} 页`
           : receiptMode
           ? (packageData.reuses_planned_card
             ? "实收与计划完全一致 · 沿用原计划卡即可，不强制重复打印"
-            : `${packageData.paper_phase_label || "实收版"} · 一笔实收事实一张卡`)
-          : (fullPageCount
-            ? `黑白打印 · ${fullPageCount} 款复杂印刷任务单独占 A4，其余每页上下两款`
-            : (singleCard
-              ? "黑白打印 · 单张任务单独占一张 A4"
-              : "黑白打印 · 批量每张 A4 上下两款"));
+            : `${packageData.paper_phase_label || "实收版"} · 每个生产任务固定半张 A4`)
+          : "黑白打印 · 每个生产任务固定半张 A4 · 每页上下两款";
         applyMode();
         const overflowingCards = Array.from(pagesHost.querySelectorAll(".task-card:not(.blank)")).filter((card) => {
           if (card.scrollHeight > card.clientHeight + 1 || card.scrollWidth > card.clientWidth + 1) return true;

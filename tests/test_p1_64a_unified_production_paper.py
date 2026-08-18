@@ -66,5 +66,6 @@ def test_unified_page_only_allows_explicit_audited_label_plan_refresh() -> None:
     assert 'method:"DELETE"' not in PRINT_PAGE
     assert PRINT_PAGE.count("window.print()") == 1
     assert 'const actualClass = actualPhase ? " actual-card" : "";' in PRINT_PAGE
-    assert ".single-page .task-card.actual-card .receipt-facts" in PRINT_PAGE
-    assert "cardNeedsFullPage(card) || actualPhase" in PRINT_PAGE
+    assert ".task-card.actual-card .receipt-facts" in PRINT_PAGE
+    assert "cardNeedsCompactLayout(card) || actualPhase" in PRINT_PAGE
+    assert "single-page" not in PRINT_PAGE

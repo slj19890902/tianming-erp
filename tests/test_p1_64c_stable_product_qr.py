@@ -219,7 +219,8 @@ def test_product_scan_page_and_task_paper_are_read_only_and_fail_closed() -> Non
         assert forbidden not in PRODUCT_PAGE
 
     assert "productQrHtml(card)" in PRINT_PAGE
-    assert "扫码看当前资料" in PRINT_PAGE
+    assert 'alt="扫码查看当前产品资料"' in PRINT_PAGE
+    assert "扫码看当前资料</span>" not in PRINT_PAGE
     assert "waitForProductQrImages" in PRINT_PAGE
     assert "card.status_label" not in PRINT_PAGE[
         PRINT_PAGE.index("function cardHtml") : PRINT_PAGE.index(

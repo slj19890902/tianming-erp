@@ -107,80 +107,15 @@ def production_print_batch_id(idempotency_key: str) -> str:
     return sha256(f"production-print-batch:{key}".encode("utf-8")).hexdigest()
 
 
-def _printing_complexity(card: dict) -> int:
-    total = 0
-    for component in card.get("components") or []:
-        content = str(
-            component.get("printing_situation")
-            or component.get("print_content")
-            or ""
-        ).strip()
-        if not content or content in {"无印刷", "无", "否", "不印刷"}:
-            continue
-        if component.get("printing_plate_mode") != "plate":
-            total += 2
-        else:
-            total += 4 + len(component.get("printing_plates") or []) * 2
-    return total
-
-
-def _card_needs_full_page(card: dict) -> bool:
-    printed_components = 0
-    for component in card.get("components") or []:
-        content = str(
-            component.get("printing_situation")
-            or component.get("print_content")
-            or ""
-        ).strip()
-        if content and content not in {"无印刷", "无", "否", "不印刷"}:
-            printed_components += 1
-    return _printing_complexity(card) >= 6 or printed_components > 1
-
-
 def production_print_batch_pages(cards: list[dict]) -> list[dict]:
-    if len(cards) == 1:
-        return [{"page_number": 1, "full_page": True, "top": cards[0], "bottom": None}]
     pages: list[dict] = []
-    pending: dict | None = None
-    for card in cards:
-        if _card_needs_full_page(card):
-            if pending is not None:
-                pages.append(
-                    {
-                        "page_number": len(pages) + 1,
-                        "full_page": False,
-                        "top": pending,
-                        "bottom": None,
-                    }
-                )
-                pending = None
-            pages.append(
-                {
-                    "page_number": len(pages) + 1,
-                    "full_page": True,
-                    "top": card,
-                    "bottom": None,
-                }
-            )
-        elif pending is not None:
-            pages.append(
-                {
-                    "page_number": len(pages) + 1,
-                    "full_page": False,
-                    "top": pending,
-                    "bottom": card,
-                }
-            )
-            pending = None
-        else:
-            pending = card
-    if pending is not None:
+    for offset in range(0, len(cards), 2):
         pages.append(
             {
                 "page_number": len(pages) + 1,
                 "full_page": False,
-                "top": pending,
-                "bottom": None,
+                "top": cards[offset],
+                "bottom": cards[offset + 1] if offset + 1 < len(cards) else None,
             }
         )
     return pages

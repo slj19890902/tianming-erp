@@ -270,7 +270,7 @@ def test_stale_task_version_or_voided_order_stops_whole_batch_without_audit(
         ) == 0
 
 
-def test_half_full_and_odd_card_pagination_is_deterministic() -> None:
+def test_fixed_half_page_pagination_is_deterministic() -> None:
     from app.services.requisition_production_print_batch import (
         production_print_batch_pages,
     )
@@ -292,14 +292,14 @@ def test_half_full_and_odd_card_pagination_is_deterministic() -> None:
     pages = production_print_batch_pages(
         [simple("one"), simple("two"), complex_card, simple("three")]
     )
-    assert len(pages) == 3
+    assert len(pages) == 2
     assert [pages[0]["top"]["source_identity"], pages[0]["bottom"]["source_identity"]] == [
         "one",
         "two",
     ]
-    assert pages[1]["full_page"] is True
+    assert pages[1]["full_page"] is False
     assert pages[1]["top"]["source_identity"] == "complex"
-    assert pages[2]["bottom"] is None
+    assert pages[1]["bottom"]["source_identity"] == "three"
 
 
 def test_erp_selection_ui_and_print_page_keep_explicit_mutation_allowlist() -> None:

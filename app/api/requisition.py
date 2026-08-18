@@ -16266,6 +16266,289 @@ def list_reported_documents(
     }
 
 
+@router.get("/reported-items")
+def list_reported_items(
+    customer_id: int | None = None,
+    keyword: str | None = None,
+    document_number: str | None = None,
+    order_number: str | None = None,
+    product_code: str | None = None,
+    product_name: str | None = None,
+    material_code: str | None = None,
+    flute_type: str | None = None,
+    report_length_mm: int | None = Query(default=None, ge=1),
+    report_width_mm: int | None = Query(default=None, ge=1),
+    supplier_name: str | None = None,
+    status_filter: str | None = Query(default=None, alias="status"),
+    source_type: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    sort_by: Literal[
+        "reported_at", "report_length_mm", "report_width_mm", "requisition_qty"
+    ] = "reported_at",
+    sort_direction: Literal["asc", "desc"] = "desc",
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_read),
+) -> dict:
+    """Return one scope-safe reported physical line per paging unit.
+
+    The legacy ``reported-documents`` endpoint remains intact for existing
+    clients.  This projection flattens its lightweight candidates before
+    sorting/paging, then decorates only documents represented on the current
+    item page.  It never reconstructs historical dimensions from live product
+    master data.
+    """
+
+    user = _user
+    if customer_id is not None:
+        require_customer_access(customer_id, user, db)
+    allowed_source_types = {
+        "supplier_order",
+        "stock_replenishment",
+        "composite_bom_requisition",
+        "legacy_material_requisition",
+    }
+    if source_type and source_type not in allowed_source_types:
+        raise HTTPException(status_code=422, detail="不支持的报料来源类型")
+
+    normalized = {
+        "keyword": str(keyword or "").strip().casefold(),
+        "document_number": str(document_number or "").strip().casefold(),
+        "order_number": str(order_number or "").strip().casefold(),
+        "product_code": str(product_code or "").strip().casefold(),
+        "product_name": str(product_name or "").strip().casefold(),
+        "material_code": str(material_code or "").strip().casefold(),
+        "flute_type": str(flute_type or "").strip().casefold(),
+        "supplier_name": str(supplier_name or "").strip().casefold(),
+        "status": str(status_filter or "").strip(),
+    }
+
+    candidates = _build_reported_document_candidates(db, user)
+    customer_ids = {
+        int(line["customer_id"])
+        for candidate in candidates
+        for line in candidate.get("line_items") or []
+        if line.get("customer_id") is not None
+    }
+    customer_names = (
+        {
+            int(row.id): {
+                "customer_name": row.name,
+                "customer_short_name": row.chinese_short_name or row.name,
+            }
+            for row in db.scalars(
+                select(Customer).where(Customer.id.in_(customer_ids))
+            ).all()
+        }
+        if customer_ids
+        else {}
+    )
+
+    def contains(value: object, needle: str) -> bool:
+        return needle in str(value or "").casefold()
+
+    def same_dimension(value: object, expected: int | None) -> bool:
+        if expected is None:
+            return True
+        try:
+            return int(value) == expected
+        except (TypeError, ValueError):
+            return False
+
+    item_candidates: list[dict] = []
+    for document in candidates:
+        if source_type and document["source_type"] != source_type:
+            continue
+        if normalized["status"] and document.get("status") != normalized["status"]:
+            continue
+        created_at = document.get("created_at")
+        created_date = created_at.date() if created_at else None
+        if date_from is not None and (created_date is None or created_date < date_from):
+            continue
+        if date_to is not None and (created_date is None or created_date > date_to):
+            continue
+        if normalized["document_number"] and not contains(
+            document.get("document_number"), normalized["document_number"]
+        ):
+            continue
+        if normalized["supplier_name"] and not contains(
+            document.get("supplier_name"), normalized["supplier_name"]
+        ):
+            continue
+        for line_order, line in enumerate(document.get("line_items") or [], start=1):
+            customer_projection = customer_names.get(int(line["customer_id"])) if line.get("customer_id") is not None else None
+            effective_customer_name = (
+                (customer_projection or {}).get("customer_name")
+                or line.get("customer_name")
+            )
+            effective_customer_short_name = (
+                (customer_projection or {}).get("customer_short_name")
+                or effective_customer_name
+            )
+            if customer_id is not None and line.get("customer_id") != customer_id:
+                continue
+            if normalized["order_number"] and not contains(
+                line.get("order_number"), normalized["order_number"]
+            ):
+                continue
+            if normalized["product_code"] and not contains(
+                line.get("product_code"), normalized["product_code"]
+            ):
+                continue
+            if normalized["product_name"] and not contains(
+                line.get("product_name"), normalized["product_name"]
+            ):
+                continue
+            if normalized["material_code"] and not contains(
+                line.get("material_code"), normalized["material_code"]
+            ):
+                continue
+            if normalized["flute_type"] and not contains(
+                line.get("flute_type"), normalized["flute_type"]
+            ):
+                continue
+            if not same_dimension(line.get("report_length_mm"), report_length_mm):
+                continue
+            if not same_dimension(line.get("report_width_mm"), report_width_mm):
+                continue
+            if normalized["keyword"] and not any(
+                contains(value, normalized["keyword"])
+                for value in (
+                    document.get("document_number"),
+                    document.get("supplier_name"),
+                    effective_customer_name,
+                    effective_customer_short_name,
+                    line.get("order_number"),
+                    line.get("product_code"),
+                    line.get("product_name"),
+                    line.get("material_code"),
+                    line.get("flute_type"),
+                )
+            ):
+                continue
+            item_candidates.append(
+                {
+                    "source_type": str(document["source_type"]),
+                    "document_id": int(document["id"]),
+                    "item_id": int(line["_item_id"]),
+                    "line_order": line_order,
+                    "reported_at": created_at,
+                    "report_length_mm": line.get("report_length_mm"),
+                    "report_width_mm": line.get("report_width_mm"),
+                    "requisition_qty": int(
+                        line.get("_requisition_qty")
+                        or line.get("_quantity")
+                        or line.get("requisition_qty")
+                        or 0
+                    ),
+                    "customer_name": effective_customer_name,
+                    "customer_short_name": effective_customer_short_name,
+                    "candidate_document": document,
+                }
+            )
+
+    # Stable tie order is always: latest document, newest document identity,
+    # then the immutable physical line order inside that document.
+    item_candidates.sort(key=lambda row: row["line_order"])
+    item_candidates.sort(key=lambda row: row["document_id"], reverse=True)
+    item_candidates.sort(key=lambda row: row["reported_at"] or datetime.min, reverse=True)
+    if sort_by != "reported_at":
+        item_candidates.sort(
+            key=lambda row: int(row.get(sort_by) or 0),
+            reverse=sort_direction == "desc",
+        )
+    elif sort_direction == "asc":
+        item_candidates.sort(key=lambda row: row["reported_at"] or datetime.min)
+
+    total = len(item_candidates)
+    start = (page - 1) * page_size
+    page_candidates = item_candidates[start : start + page_size]
+    selected_documents: list[dict] = []
+    selected_document_keys: set[tuple[str, int]] = set()
+    for item_candidate in page_candidates:
+        key = (item_candidate["source_type"], item_candidate["document_id"])
+        if key in selected_document_keys:
+            continue
+        selected_document_keys.add(key)
+        selected_documents.append(item_candidate["candidate_document"])
+    _load_reported_document_candidate_page_facts(db, selected_documents)
+    decorated_documents = _decorate_reported_document_candidates(selected_documents)
+    decorated_lines = {
+        (str(document["source_type"]), int(document["id"]), int(line["id"])): (
+            document,
+            line,
+        )
+        for document in decorated_documents
+        for line in document.get("line_items") or []
+    }
+
+    items: list[dict] = []
+    for offset, candidate in enumerate(page_candidates, start=start + 1):
+        line_key = (
+            candidate["source_type"],
+            candidate["document_id"],
+            candidate["item_id"],
+        )
+        decorated = decorated_lines.get(line_key)
+        if decorated is None:
+            raise HTTPException(
+                status_code=409,
+                detail="已报料明细数据已变化，请刷新重试",
+            )
+        document, line = decorated
+        is_current_supplier_item = (
+            candidate["source_type"] == "supplier_order"
+            and document.get("status") == "confirmed"
+        )
+        items.append(
+            {
+                "sequence": offset,
+                "stable_id": line.get("stable_id"),
+                "source_type": candidate["source_type"],
+                "document_id": candidate["document_id"],
+                "document_number": document.get("document_number"),
+                "item_id": candidate["item_id"],
+                "line_order": candidate["line_order"],
+                "order_number": line.get("order_number"),
+                "customer_id": line.get("customer_id"),
+                "customer_name": candidate["customer_name"],
+                "customer_short_name": candidate["customer_short_name"],
+                "product_code": line.get("product_code"),
+                "product_name": line.get("product_name"),
+                "report_length_mm": line.get("report_length_mm"),
+                "report_width_mm": line.get("report_width_mm"),
+                "crease_display": line.get("crease_display") or "-",
+                "requisition_qty": int(line.get("requisition_qty") or 0),
+                "unit": line.get("unit") or "张",
+                "material_code": line.get("material_code"),
+                "flute_type": line.get("flute_type"),
+                "reported_at": (
+                    utc_naive_to_api(candidate["reported_at"])
+                    if candidate["reported_at"]
+                    else None
+                ),
+                "supplier_name": document.get("supplier_name"),
+                "status": line.get("status") or document.get("status"),
+                "can_view_supplier_order": candidate["source_type"] == "supplier_order",
+                "can_void_item": False,
+                "can_print_task": is_current_supplier_item,
+                "can_print_label": is_current_supplier_item,
+                "pdf_url": document.get("pdf_url"),
+                "production_print_url": document.get("production_print_url"),
+            }
+        )
+    return {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "sort_by": sort_by,
+        "sort_direction": sort_direction,
+        "items": items,
+    }
+
+
 @router.get("/supplier-orders/{order_id}")
 def get_supplier_order(
     order_id: int,

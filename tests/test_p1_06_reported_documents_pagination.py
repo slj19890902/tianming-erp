@@ -58,11 +58,13 @@ def reported_documents_app(tmp_path: Path):
             customer_number=1,
             customer_code="P106-A",
             name="P106 客户 A",
+            chinese_short_name="客户甲",
         )
         customer_b = Customer(
             customer_number=2,
             customer_code="P106-B",
             name="P106 客户 B",
+            chinese_short_name="客户乙",
         )
         db.add_all([admin, sales, customer_a, customer_b])
         db.flush()
@@ -376,3 +378,137 @@ def test_reported_customer_options_only_include_visible_reported_customers(
     assert options.status_code == searched.status_code == 200
     assert [row["customer_code"] for row in options.json()] == ["P106-A"]
     assert searched.json()[0]["label"] == "P106-A｜P106 客户 A"
+
+
+def test_reported_items_use_one_physical_line_as_the_paging_unit(
+    reported_documents_app,
+) -> None:
+    with TestClient(reported_documents_app) as client:
+        _login(client, "admin", "AdminPass123!")
+        first = client.get(
+            "/api/requisition/reported-items", params={"page": 1, "page_size": 3}
+        )
+        second = client.get(
+            "/api/requisition/reported-items", params={"page": 2, "page_size": 3}
+        )
+        third = client.get(
+            "/api/requisition/reported-items", params={"page": 3, "page_size": 3}
+        )
+
+    assert first.status_code == second.status_code == third.status_code == 200
+    assert first.json()["total"] == second.json()["total"] == third.json()["total"] == 7
+    rows = first.json()["items"] + second.json()["items"] + third.json()["items"]
+    assert len(rows) == 7
+    assert len({row["stable_id"] for row in rows}) == 7
+    assert [row["sequence"] for row in rows] == list(range(1, 8))
+    stock_a = [
+        row
+        for row in rows
+        if row["document_number"] == "SR-P106-A"
+    ]
+    assert len(stock_a) == 2
+    assert [row["line_order"] for row in stock_a] == [1, 2]
+
+
+def test_reported_items_filter_scope_and_short_name_are_line_exact(
+    reported_documents_app,
+) -> None:
+    with TestClient(reported_documents_app) as client:
+        _login(client, "sales-a", "SalesPass123!")
+        scoped = client.get(
+            "/api/requisition/reported-items", params={"page_size": 20}
+        )
+        material = client.get(
+            "/api/requisition/reported-items",
+            params={"material_code": "A+B", "page_size": 20},
+        )
+        short_name = client.get(
+            "/api/requisition/reported-items",
+            params={"keyword": "客户甲", "page_size": 20},
+        )
+        cross_sibling = client.get(
+            "/api/requisition/reported-items",
+            params={
+                "source_type": "stock_replenishment",
+                "report_length_mm": 500,
+                "report_width_mm": 400,
+            },
+        )
+
+    assert scoped.status_code == material.status_code == short_name.status_code == 200
+    assert scoped.json()["total"] == 4
+    assert all(row["customer_short_name"] == "客户甲" for row in scoped.json()["items"])
+    assert {row["document_number"] for row in material.json()["items"]} == {
+        "SRO-P106-A",
+        "SR-P106-A",
+    }
+    assert short_name.json()["total"] == 4
+    assert cross_sibling.status_code == 200
+    assert cross_sibling.json()["total"] == 0
+
+
+def test_reported_items_sort_all_results_before_paging(
+    reported_documents_app,
+) -> None:
+    with TestClient(reported_documents_app) as client:
+        _login(client, "admin", "AdminPass123!")
+        ascending = client.get(
+            "/api/requisition/reported-items",
+            params={
+                "sort_by": "report_width_mm",
+                "sort_direction": "asc",
+                "page": 1,
+                "page_size": 4,
+            },
+        )
+        descending = client.get(
+            "/api/requisition/reported-items",
+            params={
+                "sort_by": "report_width_mm",
+                "sort_direction": "desc",
+                "page": 1,
+                "page_size": 4,
+            },
+        )
+
+    assert ascending.status_code == descending.status_code == 200
+    assert [row["report_width_mm"] for row in ascending.json()["items"]] == [
+        300,
+        300,
+        300,
+        400,
+    ]
+    assert [row["report_width_mm"] for row in descending.json()["items"]] == [
+        500,
+        500,
+        500,
+        400,
+    ]
+
+
+def test_reported_items_preserve_source_specific_action_and_print_boundaries(
+    reported_documents_app,
+) -> None:
+    with TestClient(reported_documents_app) as client:
+        _login(client, "admin", "AdminPass123!")
+        response = client.get(
+            "/api/requisition/reported-items", params={"page_size": 20}
+        )
+
+    assert response.status_code == 200
+    supplier = next(
+        row for row in response.json()["items"] if row["source_type"] == "supplier_order"
+    )
+    legacy = next(
+        row
+        for row in response.json()["items"]
+        if row["source_type"] == "legacy_material_requisition"
+    )
+    assert supplier["can_view_supplier_order"] is True
+    assert supplier["can_print_task"] is True
+    assert supplier["can_print_label"] is True
+    assert supplier["can_void_item"] is False
+    assert legacy["can_view_supplier_order"] is False
+    assert legacy["can_print_task"] is False
+    assert legacy["can_print_label"] is False
+    assert legacy["can_void_item"] is False

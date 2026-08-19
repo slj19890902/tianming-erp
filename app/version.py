@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.136"
-APP_VERSION_NAME = "模具40×80卷纸方向修复"
+APP_VERSION = "v0.22.137"
+APP_VERSION_NAME = "模具80×40驱动纸型修复"
 APP_BUILD_DATE = "2026-08-19"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -190,18 +190,33 @@ _V022135_VERIFICATION_STEPS = [
 ]
 
 
-APP_CHANGES = [
+_V022136_CHANGES = [
     "模具40×80标签按40mm打印头宽度、80mm走纸长度生成物理页面；页面内部的80×40横向内容旋转90度，不再依赖打印驱动自动换向。",
     "产品存货编码主字号由5.2mm放大到6.3mm，长编码档位同步放大；客户中文简称由3.15mm放大到4mm。",
     "原40×30模具标签、13.9mm二维码、模板标识和打印记录规则保持不变。",
     "本版无数据库迁移，不修改模具、产品、订单、生产、库存或既有打印事实。",
 ]
 
-APP_VERIFICATION_STEPS = [
+_V022136_VERIFICATION_STEPS = [
     "在40mm宽标签机选择40×80横向标签，确认实际出纸宽40mm、走纸长80mm，文字沿80mm方向横向阅读。",
     "核对产品存货编码与客户中文简称已明显放大，片料、产品尺寸、楞型、产品名称和二维码均未裁切。",
     "抽打一张原40×30模具标签，确认纸张方向、字号、二维码和内容保持原样。",
     "进入系统备份 → 系统版本，确认版本为v0.22.136、数据库revision仍为uu29v8x9z18；发布过程不产生业务数据或打印事实。",
+]
+
+
+APP_CHANGES = [
+    "模具长标签恢复为打印机驱动实际支持的80×40页面规格，不再发送驱动不存在的40×80网页纸型，避免自动回退到默认40×30。",
+    "80×40页面直接横向排版；Gprinter按40mm卷纸宽度、80mm走纸长度出纸时，不再叠加网页90度旋转。",
+    "保留v0.22.136已放大的产品存货编码6.3mm和客户中文简称4mm；片料、产品尺寸、楞型、产品名称与二维码布局保持不变。",
+    "原40×30模具标签、打印登记和业务数据保持不变；本版无数据库迁移。",
+]
+
+APP_VERIFICATION_STEPS = [
+    "在模具标签选择80×40横向样式，打印窗口选择Gprinter及80 x 40纸张、纵向、缩放100%，确认不再回退40×30。",
+    "核对实际卷纸宽40mm、走纸长度80mm，内容横向阅读；存货编码和客户中文简称比旧版明显更大且没有裁切。",
+    "抽打一张原40×30模具标签，确认纸型、方向、字号、二维码和内容未改变。",
+    "进入系统备份 → 系统版本，确认版本为v0.22.137、数据库revision仍为uu29v8x9z18；发布过程不产生业务数据或打印事实。",
 ]
 
 
@@ -295,6 +310,8 @@ def current_release_metadata(
 APP_CHANGELOG = [
     *(f"{APP_VERSION}：本次更新｜{item}" for item in APP_CHANGES),
     *(f"{APP_VERSION}：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.136：本次更新｜{item}" for item in _V022136_CHANGES),
+    *(f"v0.22.136：如何验证｜{item}" for item in _V022136_VERIFICATION_STEPS),
     *(f"v0.22.135：本次更新｜{item}" for item in _V022135_CHANGES),
     *(f"v0.22.135：如何验证｜{item}" for item in _V022135_VERIFICATION_STEPS),
     *(f"v0.22.134：本次更新｜{item}" for item in _V022134_CHANGES),

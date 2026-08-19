@@ -5,6 +5,7 @@ from decimal import Decimal
 import json
 from pathlib import Path
 
+from fastapi import Response
 import pytest
 from sqlalchemy import event
 from sqlalchemy.orm import sessionmaker
@@ -373,7 +374,7 @@ def test_combined_dashboard_matches_legacy_full_sources_with_fewer_queries(
         return requisition_api.pending_requisitions(db=db, _user=user)["items"]
 
     def legacy_incoming(*, db, user):
-        return incoming_api.pending_items(db=db, user=user)["items"]
+        return incoming_api.pending_items(response=Response(), db=db, user=user)["items"]
 
     def legacy_production(db, *, allowed_customer_ids, status="pending"):
         return production_api.get_production_tasks(

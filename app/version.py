@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.137"
-APP_VERSION_NAME = "模具80×40驱动纸型修复"
+APP_VERSION = "v0.22.138"
+APP_VERSION_NAME = "手机待收料身份响应修复"
 APP_BUILD_DATE = "2026-08-19"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -205,18 +205,33 @@ _V022136_VERIFICATION_STEPS = [
 ]
 
 
-APP_CHANGES = [
+_V022137_CHANGES = [
     "模具长标签恢复为打印机驱动实际支持的80×40页面规格，不再发送驱动不存在的40×80网页纸型，避免自动回退到默认40×30。",
     "80×40页面直接横向排版；Gprinter按40mm卷纸宽度、80mm走纸长度出纸时，不再叠加网页90度旋转。",
     "保留v0.22.136已放大的产品存货编码6.3mm和客户中文简称4mm；片料、产品尺寸、楞型、产品名称与二维码布局保持不变。",
     "原40×30模具标签、打印登记和业务数据保持不变；本版无数据库迁移。",
 ]
 
-APP_VERIFICATION_STEPS = [
+_V022137_VERIFICATION_STEPS = [
     "在模具标签选择80×40横向样式，打印窗口选择Gprinter及80 x 40纸张、纵向、缩放100%，确认不再回退40×30。",
     "核对实际卷纸宽40mm、走纸长度80mm，内容横向阅读；存货编码和客户中文简称比旧版明显更大且没有裁切。",
     "抽打一张原40×30模具标签，确认纸型、方向、字号、二维码和内容未改变。",
     "进入系统备份 → 系统版本，确认版本为v0.22.137、数据库revision仍为uu29v8x9z18；发布过程不产生业务数据或打印事实。",
+]
+
+
+APP_CHANGES = [
+    "修复待收料接口虽然返回真实数据、却没有把当前登录身份写入HTTP响应头，导致手机页面按防串号规则丢弃全部待收料的问题。",
+    "待收料响应现在稳定返回当前用户ID与登录版本；手机页面只接受与本次登录完全一致的数据，切换账号时仍会拒绝旧响应。",
+    "待收料响应明确禁止浏览器和中间缓存，并按Cookie区分；今日已收、收料执行、客户范围和来料权限规则保持不变。",
+    "本版无数据库迁移，不修改订单、报料、来料、库存或生产事实，只修正读取响应和发布验证。",
+]
+
+APP_VERIFICATION_STEPS = [
+    "手机强制刷新后进入收料，确认待收料显示正式系统当前5条，今日已收继续显示原有数据。",
+    "分别用管理员、老板和车间账号读取待收料，确认响应身份与当前账号一致；切换账号或旧请求晚到时不得串出其他账号数据。",
+    "在待收料中查询客户名称或纸板尺寸并翻页，确认列表、总数、收料操作权限和每页20条保持不变。",
+    "进入系统备份 → 系统版本，确认版本为v0.22.138、数据库revision仍为uu29v8x9z18；发布过程不产生报料、收料、库存或生产事实。",
 ]
 
 
@@ -310,6 +325,8 @@ def current_release_metadata(
 APP_CHANGELOG = [
     *(f"{APP_VERSION}：本次更新｜{item}" for item in APP_CHANGES),
     *(f"{APP_VERSION}：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.137：本次更新｜{item}" for item in _V022137_CHANGES),
+    *(f"v0.22.137：如何验证｜{item}" for item in _V022137_VERIFICATION_STEPS),
     *(f"v0.22.136：本次更新｜{item}" for item in _V022136_CHANGES),
     *(f"v0.22.136：如何验证｜{item}" for item in _V022136_VERIFICATION_STEPS),
     *(f"v0.22.135：本次更新｜{item}" for item in _V022135_CHANGES),

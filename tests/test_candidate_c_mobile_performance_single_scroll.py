@@ -108,12 +108,12 @@ def test_performance_diagnostics_are_sanitized_and_mark_first_content() -> None:
     assert "window.requestAnimationFrame" in INCOMING
 
 
-def test_candidate_c_release_note_is_visible_and_pending_formal_acceptance() -> None:
-    assert "手机来料" in VERSION
-    assert "单滚动" in VERSION
-    assert "性能" in VERSION
-    assert "正式 ERP 人工验收待完成" in VERSION
-    assert "无新增 migration" in VERSION
+def test_current_mobile_incoming_release_note_covers_identity_fix() -> None:
+    assert "手机待收料身份响应修复" in VERSION
+    assert "待收料接口" in VERSION
+    assert "HTTP响应头" in VERSION
+    assert "登录版本" in VERSION
+    assert "无数据库迁移" in VERSION
 
 
 def test_initial_pending_never_applies_before_authorization(tmp_path: Path) -> None:
@@ -229,6 +229,9 @@ def test_session_identity_is_returned_by_auth_and_pending_contracts() -> None:
     for source in (incoming_api, mobile_api):
         assert 'response.headers["X-ERP-Session-Identity"]' in source
         assert 'f"{user.id}:{user.auth_version}"' in source
+    pending_signature = incoming_api.split("def pending_items(", 1)[1].split(") -> dict:", 1)[0]
+    assert "response: Response" in pending_signature
+    assert "response: Response = None" not in pending_signature
 
 
 def test_later_pending_refresh_also_rejects_cookie_identity_switch(tmp_path: Path) -> None:

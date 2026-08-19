@@ -4,6 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 
+from fastapi import Response
 from sqlalchemy import event, select
 from sqlalchemy.orm import sessionmaker
 
@@ -139,7 +140,7 @@ def _read_and_count(factory, user_id: int):
         with factory() as db:
             user = db.get(User, user_id)
             assert user is not None
-            response = pending_items(db, user)
+            response = pending_items(Response(), db, user)
     finally:
         event.remove(engine, "before_cursor_execute", record_sql)
     return response, statements

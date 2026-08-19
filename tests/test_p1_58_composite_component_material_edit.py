@@ -7,7 +7,7 @@ import sqlite3
 
 from alembic import command
 from alembic.config import Config
-from fastapi import HTTPException
+from fastapi import HTTPException, Response
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -394,7 +394,7 @@ def test_virtual_parent_component_only_batch_runs_through_incoming_and_is_idempo
         assert source.component_type == "whole"
         assert item.requisition_status == "已报料"
 
-        pending_incoming = incoming.pending_items(session, user)["items"]
+        pending_incoming = incoming.pending_items(Response(), session, user)["items"]
         incoming_rows = [
             row for row in pending_incoming if row.get("order_item_id") == item.id
         ]

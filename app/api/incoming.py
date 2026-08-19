@@ -11,7 +11,7 @@ from typing import Annotated
 from uuid import uuid4
 
 import qrcode
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session, aliased, selectinload
@@ -3044,14 +3044,16 @@ def surplus_inventory_locations(
 
 @router.get("/pending")
 def pending_items(
+    response: Response,
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
     page: Annotated[int | None, Query(ge=1)] = None,
     page_size: Annotated[int | None, Query(ge=1, le=200)] = None,
-    response: Response = None,
 ) -> dict:
-    if response is not None:
-        response.headers["X-ERP-Session-Identity"] = f"{user.id}:{user.auth_version}"
+    response.headers["X-ERP-Session-Identity"] = f"{user.id}:{user.auth_version}"
+    response.headers["Cache-Control"] = "private, no-store"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Vary"] = "Cookie"
     if page is None and page_size is None:
         return {
             "items": [

@@ -4,7 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.testclient import TestClient
 from sqlalchemy import event
 from sqlalchemy.orm import sessionmaker
@@ -240,7 +240,7 @@ def _read(factory, user_id: int, **kwargs) -> dict:
     with factory() as db:
         user = db.get(User, user_id)
         assert user is not None
-        return pending_items(db, user, **kwargs)
+        return pending_items(Response(), db, user, **kwargs)
 
 
 def test_pages_reassemble_legacy_routes_with_deep_equal_rows(tmp_path: Path) -> None:
@@ -314,6 +314,16 @@ def test_http_rejects_invalid_page_bounds(tmp_path: Path) -> None:
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[incoming_api.can_read] = override_user
     with TestClient(app) as client:
+        with factory() as db:
+            user = db.get(User, user_id)
+            assert user is not None
+            expected_identity = f"{user.id}:{user.auth_version}"
+        valid = client.get("/api/incoming/pending?page=1&page_size=20")
+        assert valid.status_code == 200
+        assert valid.headers["X-ERP-Session-Identity"] == expected_identity
+        assert valid.headers["Cache-Control"] == "private, no-store"
+        assert valid.headers["Pragma"] == "no-cache"
+        assert valid.headers["Vary"] == "Cookie"
         assert client.get("/api/incoming/pending?page=0").status_code == 422
         assert client.get("/api/incoming/pending?page_size=0").status_code == 422
         assert client.get("/api/incoming/pending?page_size=201").status_code == 422

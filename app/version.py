@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.135"
-APP_VERSION_NAME = "手机收料与生产工位修复"
+APP_VERSION = "v0.22.136"
+APP_VERSION_NAME = "模具40×80卷纸方向修复"
 APP_BUILD_DATE = "2026-08-19"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -175,18 +175,33 @@ _V022134_VERIFICATION_STEPS = [
 ]
 
 
-APP_CHANGES = [
+_V022135_CHANGES = [
     "手机门户收料页与预送货页仅在带embedded=1时允许同源嵌入；独立打开及其他页面继续禁止被框架加载，不放宽跨站安全边界。",
     "手机生产印刷和模切工位的空列表重试不再把点击事件对象当作页码；页码在发出请求前统一收口为有效正整数。",
     "管理员、老板和车间账号继续按既有权限与客户范围读取手机现场资料；本版不增加写操作，也不改变生产工位权限。",
     "本版无数据库迁移，不批量改写订单、来料、生产、库存、送货或财务历史事实。",
 ]
 
-APP_VERIFICATION_STEPS = [
+_V022135_VERIFICATION_STEPS = [
     "手机强制刷新后进入收料，确认正式待收纸板能够在门户内显示，不再出现浏览器拒绝连接；独立打开收料页仍正常。",
     "进入手机生产的印刷工位和模切工位；当前没有任务时点击重试，确认继续显示真实空态且不再出现HTTP 422。",
     "核对正式服务请求中的page始终为正整数；切换印刷、模切及翻页时权限、客户范围和每页20条保持不变。",
     "进入系统备份 → 系统版本，确认版本为v0.22.135、数据库revision仍为uu29v8x9z18；发布过程不产生收料、生产或库存事实。",
+]
+
+
+APP_CHANGES = [
+    "模具40×80标签按40mm打印头宽度、80mm走纸长度生成物理页面；页面内部的80×40横向内容旋转90度，不再依赖打印驱动自动换向。",
+    "产品存货编码主字号由5.2mm放大到6.3mm，长编码档位同步放大；客户中文简称由3.15mm放大到4mm。",
+    "原40×30模具标签、13.9mm二维码、模板标识和打印记录规则保持不变。",
+    "本版无数据库迁移，不修改模具、产品、订单、生产、库存或既有打印事实。",
+]
+
+APP_VERIFICATION_STEPS = [
+    "在40mm宽标签机选择40×80横向标签，确认实际出纸宽40mm、走纸长80mm，文字沿80mm方向横向阅读。",
+    "核对产品存货编码与客户中文简称已明显放大，片料、产品尺寸、楞型、产品名称和二维码均未裁切。",
+    "抽打一张原40×30模具标签，确认纸张方向、字号、二维码和内容保持原样。",
+    "进入系统备份 → 系统版本，确认版本为v0.22.136、数据库revision仍为uu29v8x9z18；发布过程不产生业务数据或打印事实。",
 ]
 
 
@@ -280,6 +295,8 @@ def current_release_metadata(
 APP_CHANGELOG = [
     *(f"{APP_VERSION}：本次更新｜{item}" for item in APP_CHANGES),
     *(f"{APP_VERSION}：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.135：本次更新｜{item}" for item in _V022135_CHANGES),
+    *(f"v0.22.135：如何验证｜{item}" for item in _V022135_VERIFICATION_STEPS),
     *(f"v0.22.134：本次更新｜{item}" for item in _V022134_CHANGES),
     *(f"v0.22.134：如何验证｜{item}" for item in _V022134_VERIFICATION_STEPS),
     *(f"v0.22.133：本次更新｜{item}" for item in _V022133_CHANGES),

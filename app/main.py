@@ -142,11 +142,16 @@ class HSTSMiddleware(BaseHTTPMiddleware):
             response.headers["Strict-Transport-Security"] = "max-age=63072000"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        embedded_warehouse = (
-            request.url.path == "/warehouse.html"
+        same_origin_embedded_paths = {
+            "/warehouse.html",
+            "/incoming.html",
+            "/mobile/delivery-pick.html",
+        }
+        same_origin_embedded = (
+            request.url.path in same_origin_embedded_paths
             and request.query_params.get("embedded") == "1"
         )
-        if embedded_warehouse:
+        if same_origin_embedded:
             response.headers["X-Frame-Options"] = "SAMEORIGIN"
             response.headers["Content-Security-Policy"] = "frame-ancestors 'self'"
         else:

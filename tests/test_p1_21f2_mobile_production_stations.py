@@ -179,6 +179,14 @@ def test_mobile_station_ui_is_paged_latest_wins_and_read_only() -> None:
     ):
         assert marker in MOBILE_HTML
     assert "generation !== state.productionStationGeneration" in MOBILE_HTML
+    assert 'button.addEventListener("click", () => retry());' in MOBILE_HTML
+    assert (
+        'showStatus("productionStationState", "当前没有待生产任务。", "empty", '
+        "() => loadProductionStation(1));"
+    ) in MOBILE_HTML
+    assert '"empty", loadProductionStation);' not in MOBILE_HTML
+    assert "const parsedPage = Number(page);" in MOBILE_HTML
+    assert "page: String(safePage)" in MOBILE_HTML
     assert MOBILE_HTML.count('method: "POST"') == 2
     assert "/api/mobile/erp/production/tasks/" not in MOBILE_HTML.split("apiPost", 1)[-1]
     assert 'fetch("/api/auth/logout"' in MOBILE_HTML

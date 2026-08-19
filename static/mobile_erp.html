@@ -721,7 +721,7 @@
         if (retry) {
           const button = node("button", "retry", "重试");
           button.type = "button";
-          button.addEventListener("click", retry);
+          button.addEventListener("click", () => retry());
           target.append(button);
         }
       }
@@ -1605,7 +1605,7 @@
         if (!state.productionStationItems.length) {
           container.hidden = true;
           byId("productionStationPager").hidden = true;
-          showStatus("productionStationState", "当前没有待生产任务。", "empty", loadProductionStation);
+          showStatus("productionStationState", "当前没有待生产任务。", "empty", () => loadProductionStation(1));
           return;
         }
         state.productionStationItems.forEach(task => container.append(productionStationCard(task)));
@@ -1620,13 +1620,19 @@
 
       async function loadProductionStation(page = state.productionStationPage || 1) {
         if (!state.productionStation) return;
+        const parsedPage = Number(page);
+        const safePage = Number.isInteger(parsedPage) && parsedPage >= 1
+          ? parsedPage
+          : (Number.isInteger(state.productionStationPage) && state.productionStationPage >= 1
+            ? state.productionStationPage
+            : 1);
         state.productionStationController?.abort();
         const controller = new AbortController();
         state.productionStationController = controller;
         const generation = ++state.productionStationGeneration;
         showStatus("productionStationState", `正在读取${state.productionStation === "printing" ? "印刷" : "模切"}待生产任务…`, "");
         try {
-          const params = new URLSearchParams({ station: state.productionStation, page: String(page), page_size: "20" });
+          const params = new URLSearchParams({ station: state.productionStation, page: String(safePage), page_size: "20" });
           const data = await apiGet(`/api/mobile/erp/production/tasks?${params}`, { signal: controller.signal });
           if (generation !== state.productionStationGeneration) return;
           state.productionStationItems = Array.isArray(data.items) ? data.items : [];
@@ -1636,7 +1642,7 @@
           renderProductionStation();
         } catch (error) {
           if (error.name === "AbortError" || generation !== state.productionStationGeneration) return;
-          showStatus("productionStationState", `${error.message || "工位任务读取失败"}${state.productionStationItems.length ? "；仍保留上次成功结果" : ""}`, "error", () => loadProductionStation(page));
+          showStatus("productionStationState", `${error.message || "工位任务读取失败"}${state.productionStationItems.length ? "；仍保留上次成功结果" : ""}`, "error", () => loadProductionStation(safePage));
         }
       }
 

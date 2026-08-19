@@ -4317,3 +4317,16 @@ legacy_ruida_* 原始层
 - 无新增 migration，Alembic 唯一 head 仍为 `uu29v8x9z18`。隔离专项回归 `72 passed`，编译、差异检查和发布安全门禁通过；测试仅使用临时 SQLite 副本。
 - 两阶段发布报告 `docs/migration_reports/release_runtime_20260818_213446.json` 状态 `completed`，报告 SHA-256：`22a9596057d46496654e7df1af2ff167a2ec467c5a3eac6cbcfdaeee6d874147`；正式备份 `data/backups/carton_erp_before_release_20260818_213447.sqlite3`，SHA-256：`bcc6a13693080e440368983d36f2cd1d3751dfa3fc3b0c37ff3b97355bd72731`。源库与备份 `integrity_check=ok`、外键违规 `0`、核心表计数一致，revision 保持 `uu29v8x9z18`。
 - ERP 单 worker 已重启；`127.0.0.1:8000` 与 `192.168.3.80:8000` 健康接口均 HTTP 200，首页、`/mobile/`、送货打印页均 HTTP 200。发布报告 `human_acceptance_status` 仍为 `not_recorded`，待工厂外部浏览器/真机和 EPSON 实体打印人工验收。
+
+## 2026-08-19 手机门户收料页空白只读诊断
+
+- 老板反馈电脑版来料页面存在 5 条待收料明细，但从 `/mobile/#incoming` 进入收料后没有纸板。正式库以 `PRAGMA query_only=ON` 回放：管理员、老板及两个车间账号均精确返回同一 5 条待收料路线，`integrity_check=ok`、外键违规 0；数据、客户范围和 `incoming.view/incoming.execute` 权限均正常。
+- 根因在正式生产安全响应头：手机门户把收料页加载为 `/incoming.html?embedded=1` iframe，但 `HSTSMiddleware` 目前只允许 `/warehouse.html?embedded=1` 同源嵌入。实测收料页响应 `X-Frame-Options: DENY`、无 `frame-ancestors 'self'`，浏览器因此阻止 iframe；作为对照，仓库页正确返回 `SAMEORIGIN` 与 `frame-ancestors 'self'`。同一缺口也影响 `/mobile/delivery-pick.html?embedded=1`。
+- 本轮仅诊断并记录，未修改安全中间件、前端、权限、正式数据库或业务事实。建议后续最小修复为：在生产安全中间件中建立明确的同源嵌入路径白名单，仅放行带 `embedded=1` 的收料页和手机拣货页，同时保留所有页面独立打开时的 `DENY`；增加正式生产响应头及手机门户 iframe 联合回归后再受控发布。
+
+## 2026-08-19 手机生产印刷/模切工位 HTTP 422 只读诊断
+
+- 老板反馈手机生产页进入印刷、模切工位后出现“读取失败（HTTP 422）”。正式服务访问日志精确记录 7 次失败请求，查询参数均为 `page=%5Bobject+PointerEvent%5D`；同一设备在失败前对印刷、模切的正常首次请求 `page=1` 均返回 HTTP 200。
+- 根因是空态重试回调直接传入 `loadProductionStation`：`showStatus()` 将浏览器点击事件作为第一个参数传给该函数，函数又把该参数序列化为页码，最终形成 `page=[object PointerEvent]`，被后端整数页码校验拒绝为 422。印刷/模切工位代码、权限与正式数据库本身没有返回 422。
+- 使用短时本机只读会话分别以管理员和两个车间账号调用正式印刷、模切接口，六次均为 HTTP 200，当前均为 0 条待生产任务；使用 SQLAlchemy `PRAGMA query_only=ON` 直接回放同样通过，连接 `total_changes=0`。这说明问题只发生在空列表的“重试”按钮事件传参链路。
+- 本轮仅诊断并记录，未修改手机页面、后端、权限、生产任务或正式数据库。后续最小修复应把空态重试改为显式零参数包装（例如 `() => loadProductionStation(1)`），并在加载函数入口把页码收口为有效正整数；新增模拟 PointerEvent 点击的前端回归，防止同类事件对象再次进入分页参数。

@@ -247,21 +247,33 @@ def test_lan_http_production_keeps_host_origin_and_security_header_gates(
     assert untrusted_host.status_code == 400
 
 
-def test_production_only_allows_same_origin_embedded_warehouse_frame(
+def test_production_only_allows_explicit_same_origin_embedded_frames(
     monkeypatch,
     tmp_path,
 ):
     app = _production_app(monkeypatch, tmp_path)
     with TestClient(app, base_url="https://testserver") as client:
-        embedded = client.get("/warehouse.html?embedded=1")
-        standalone = client.get("/warehouse.html")
+        embedded_responses = [
+            client.get("/warehouse.html?embedded=1"),
+            client.get("/incoming.html?embedded=1"),
+            client.get("/mobile/delivery-pick.html?embedded=1"),
+        ]
+        standalone_responses = [
+            client.get("/warehouse.html"),
+            client.get("/incoming.html"),
+            client.get("/mobile/delivery-pick.html"),
+            client.get("/incoming.html?embedded=0"),
+        ]
         dashboard = client.get("/")
 
-    assert embedded.status_code == 200
-    assert embedded.headers["x-frame-options"] == "SAMEORIGIN"
-    assert embedded.headers["content-security-policy"] == "frame-ancestors 'self'"
-    assert standalone.headers["x-frame-options"] == "DENY"
-    assert "content-security-policy" not in standalone.headers
+    for embedded in embedded_responses:
+        assert embedded.status_code == 200
+        assert embedded.headers["x-frame-options"] == "SAMEORIGIN"
+        assert embedded.headers["content-security-policy"] == "frame-ancestors 'self'"
+    for standalone in standalone_responses:
+        assert standalone.status_code == 200
+        assert standalone.headers["x-frame-options"] == "DENY"
+        assert "content-security-policy" not in standalone.headers
     assert dashboard.headers["x-frame-options"] == "DENY"
 
 

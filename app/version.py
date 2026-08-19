@@ -11,9 +11,9 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.134"
-APP_VERSION_NAME = "订单规格单位表头简化"
-APP_BUILD_DATE = "2026-08-18"
+APP_VERSION = "v0.22.135"
+APP_VERSION_NAME = "手机收料与生产工位修复"
+APP_BUILD_DATE = "2026-08-19"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
 _V022124_CHANGES = [
@@ -160,18 +160,33 @@ _V022133_VERIFICATION_STEPS = [
 ]
 
 
-APP_CHANGES = [
+_V022134_CHANGES = [
     "订单页面的规格列统一命名为“规格mm”，毫米单位只在表头出现；二维和三维规格数值不再重复显示末尾mm。",
     "订单列表、整组详情、只读详情、追溯、订单编辑、PDF导入和常用箱选择器共用同一紧凑显示规则。",
     "只移除规格末尾的mm单位，客户自定义文字规格原样保留；后台仍保存标准规格，报料、来料、生产、送货等其他单据口径不变。",
     "本版无数据库迁移，不批量改写订单、产品、报料、来料、生产、送货、库存或财务历史事实。",
 ]
 
-APP_VERIFICATION_STEPS = [
+_V022134_VERIFICATION_STEPS = [
     "强制刷新订单页面，确认原“规格 / 尺寸”及订单详情“规格”列均显示为“规格mm”。",
     "核对二维规格778×1137mm在订单页面显示为778×1137，普通三维纸箱520×350×300mm显示为520×350×300。",
     "打开订单编辑、订单追溯和导入常用箱，确认规格输入与选择结果不带末尾mm；保存后重新打开仍显示一致。",
     "抽查送货、报料或生产任务页面仍按各自单据规则显示完整规格；进入系统版本确认v0.22.134、数据库revision仍为uu29v8x9z18。",
+]
+
+
+APP_CHANGES = [
+    "手机门户收料页与预送货页仅在带embedded=1时允许同源嵌入；独立打开及其他页面继续禁止被框架加载，不放宽跨站安全边界。",
+    "手机生产印刷和模切工位的空列表重试不再把点击事件对象当作页码；页码在发出请求前统一收口为有效正整数。",
+    "管理员、老板和车间账号继续按既有权限与客户范围读取手机现场资料；本版不增加写操作，也不改变生产工位权限。",
+    "本版无数据库迁移，不批量改写订单、来料、生产、库存、送货或财务历史事实。",
+]
+
+APP_VERIFICATION_STEPS = [
+    "手机强制刷新后进入收料，确认正式待收纸板能够在门户内显示，不再出现浏览器拒绝连接；独立打开收料页仍正常。",
+    "进入手机生产的印刷工位和模切工位；当前没有任务时点击重试，确认继续显示真实空态且不再出现HTTP 422。",
+    "核对正式服务请求中的page始终为正整数；切换印刷、模切及翻页时权限、客户范围和每页20条保持不变。",
+    "进入系统备份 → 系统版本，确认版本为v0.22.135、数据库revision仍为uu29v8x9z18；发布过程不产生收料、生产或库存事实。",
 ]
 
 
@@ -265,6 +280,8 @@ def current_release_metadata(
 APP_CHANGELOG = [
     *(f"{APP_VERSION}：本次更新｜{item}" for item in APP_CHANGES),
     *(f"{APP_VERSION}：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.134：本次更新｜{item}" for item in _V022134_CHANGES),
+    *(f"v0.22.134：如何验证｜{item}" for item in _V022134_VERIFICATION_STEPS),
     *(f"v0.22.133：本次更新｜{item}" for item in _V022133_CHANGES),
     *(f"v0.22.133：如何验证｜{item}" for item in _V022133_VERIFICATION_STEPS),
     *(f"v0.22.132：本次更新｜{item}" for item in _V022132_CHANGES),

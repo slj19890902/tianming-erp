@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.138"
-APP_VERSION_NAME = "手机待收料身份响应修复"
+APP_VERSION = "v0.22.139"
+APP_VERSION_NAME = "模具40×80走纸方向修复"
 APP_BUILD_DATE = "2026-08-19"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -235,6 +235,24 @@ APP_VERIFICATION_STEPS = [
 ]
 
 
+_V022138_CHANGES = APP_CHANGES
+_V022138_VERIFICATION_STEPS = APP_VERIFICATION_STEPS
+
+APP_CHANGES = [
+    "模具长标签改为向驱动发送 40mm 宽、80mm 走纸的真实物理页面；80×40 的横向版式在页面内旋转，避免驱动把不存在的纸型回退为旧 40×30。",
+    "新增独立的 Gprinter 40×80 标签队列，保留原有 40×30 队列及其默认设置不变。",
+    "存货编码 6.3mm、客户中文简称 4mm 的放大版式继续保留；二维码、产品名称、规格、楞型和原 40×30 模板不变。",
+    "本版无数据库迁移，不修改模具、产品、订单、生产、库存或既有打印事实。",
+]
+
+APP_VERIFICATION_STEPS = [
+    "打开模具 40×80 标签，打印窗口选择“Gprinter GP-3120TU - 40x80标签”，纸张尺寸应为 40×80，缩放保持 100%。",
+    "确认实体出纸宽 40mm、走纸长 80mm，文字沿长边横向排版，存货编码与客户中文简称放大且二维码完整。",
+    "抽打原 40×30 模具标签，确认其纸型、方向、字体和二维码完全不受新队列影响。",
+    "进入系统备份 → 系统版本，确认版本为 v0.22.139、数据库 revision 仍为 uu29v8x9z18，发布过程不产生业务数据或打印事实。",
+]
+
+
 def _validated_text_items(
     value: Any,
     *,
@@ -325,6 +343,8 @@ def current_release_metadata(
 APP_CHANGELOG = [
     *(f"{APP_VERSION}：本次更新｜{item}" for item in APP_CHANGES),
     *(f"{APP_VERSION}：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.138：本次更新｜{item}" for item in _V022138_CHANGES),
+    *(f"v0.22.138：如何验证｜{item}" for item in _V022138_VERIFICATION_STEPS),
     *(f"v0.22.137：本次更新｜{item}" for item in _V022137_CHANGES),
     *(f"v0.22.137：如何验证｜{item}" for item in _V022137_VERIFICATION_STEPS),
     *(f"v0.22.136：本次更新｜{item}" for item in _V022136_CHANGES),

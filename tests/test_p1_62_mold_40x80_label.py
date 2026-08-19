@@ -163,10 +163,14 @@ def test_page_and_warehouse_select_one_frozen_paper_template() -> None:
         assert marker in WAREHOUSE
     for marker in (
         'const TEMPLATE_40X30="mold_40x30_v1",TEMPLATE_80X40="mold_80x40_v1"',
-        "@page{size:${wideTemplate?\"80mm 40mm\":\"40mm 30mm\"};margin:0}",
-        ".label.template-80x40{width:80mm;height:40mm",
+        "@page{size:${wideTemplate?\"40mm 80mm\":\"40mm 30mm\"};margin:0}",
+        ".label.template-80x40{width:40mm;height:80mm",
+        ".template-80x40 .wide-canvas{position:absolute;left:0;top:0;width:80mm;height:40mm",
+        "transform:translateX(40mm) rotate(90deg)",
         "width:13.9mm;height:13.9mm",
-        ".label.template-80x40>*{transform:none}",
+        ".label.template-80x40 .wide-canvas>*{transform:none}",
+        '.template-80x40 .wide-inventory{font:900 6.3mm/.95',
+        ".template-80x40 .wide-customer{font-size:4mm",
         "label_inventory_code",
         "label_product_name",
         "wide-inventory",
@@ -180,18 +184,18 @@ def test_page_and_warehouse_select_one_frozen_paper_template() -> None:
 
 
 @pytest.mark.parametrize("label_count", (1, 2, 100))
-def test_80x40_pdf_has_exactly_one_landscape_page_per_label(
+def test_40x80_roll_pdf_has_one_rotated_horizontal_canvas_per_label(
     label_count: int,
     headless_browser: Path,
     tmp_path: Path,
 ) -> None:
     qr = _qr_data_url()
     labels = "".join(
-        f'''<article class="label template-80x40">
+        f'''<article class="label template-80x40"><div class="wide-canvas">
         <div class="wide-board">1100 × 760</div>
         <div class="wide-product-row"><div class="wide-product">520 × 350 × 300</div><div class="wide-flute">BC</div></div>
         <div class="wide-identity"><div class="wide-inventory">SME-LONG-CODE-{index:03d}</div><div class="wide-meta"><span class="wide-customer">思迈尔</span><span class="wide-name">五层加强纸箱横向标签样例</span></div></div>
-        <img class="qr" src="{qr}" alt="二维码"></article>'''
+        <img class="qr" src="{qr}" alt="二维码"></div></article>'''
         for index in range(1, label_count + 1)
     )
     fixture = tmp_path / f"p1-62-{label_count}.html"
@@ -199,7 +203,7 @@ def test_80x40_pdf_has_exactly_one_landscape_page_per_label(
     fixture.write_text(
         '<!doctype html><html class="template-80x40"><head><meta charset="utf-8">'
         + _current_print_styles()
-        + '<style>@page{size:80mm 40mm;margin:0}</style></head>'
+        + '<style>@page{size:40mm 80mm;margin:0}</style></head>'
         + f'<body class="template-80x40"><section id="previewContent"><main id="labels" class="labels">{labels}</main></section></body></html>',
         encoding="utf-8",
     )
@@ -209,9 +213,9 @@ def test_80x40_pdf_has_exactly_one_landscape_page_per_label(
     for page_number, page in enumerate(reader.pages, start=1):
         width_mm = float(page.mediabox.width) * POINTS_TO_MM
         height_mm = float(page.mediabox.height) * POINTS_TO_MM
-        assert width_mm == pytest.approx(80.0, abs=0.25)
-        assert height_mm == pytest.approx(40.0, abs=0.25)
-        assert width_mm > height_mm
+        assert width_mm == pytest.approx(40.0, abs=0.25)
+        assert height_mm == pytest.approx(80.0, abs=0.25)
+        assert height_mm > width_mm
         text = page.extract_text() or ""
         for expected in (
             "1100 × 760",

@@ -163,10 +163,10 @@ def test_page_and_warehouse_select_one_frozen_paper_template() -> None:
         assert marker in WAREHOUSE
     for marker in (
         'const TEMPLATE_40X30="mold_40x30_v1",TEMPLATE_80X40="mold_80x40_v1"',
-        "@page{size:${wideTemplate?\"80mm 40mm\":\"40mm 30mm\"};margin:0}",
+        "@page{size:${wideTemplate?\"40mm 80mm\":\"40mm 30mm\"};margin:0}",
         ".label.template-80x40{width:80mm;height:40mm",
         "width:13.9mm;height:13.9mm",
-        ".label.template-80x40>*{transform:none}",
+        "transform:translateX(40mm) rotate(90deg)!important",
         '.template-80x40 .wide-inventory{font:900 6.3mm/.95',
         ".template-80x40 .wide-customer{font-size:4mm",
         "label_inventory_code",
@@ -177,14 +177,14 @@ def test_page_and_warehouse_select_one_frozen_paper_template() -> None:
         "window.print()",
     ):
         assert marker in LABEL
-    assert "40mm 80mm" not in LABEL
-    assert "rotate(90deg)" not in LABEL
+    assert "40mm 80mm" in LABEL
+    assert "rotate(90deg)" in LABEL
     assert "--print-x-compensation:2mm" in LABEL
     assert "body,html{width:40mm;height:auto" in LABEL
 
 
 @pytest.mark.parametrize("label_count", (1, 2, 100))
-def test_80x40_driver_paper_has_exactly_one_landscape_page_per_label(
+def test_40x80_feed_paper_has_exactly_one_rotated_page_per_label(
     label_count: int,
     headless_browser: Path,
     tmp_path: Path,
@@ -203,7 +203,7 @@ def test_80x40_driver_paper_has_exactly_one_landscape_page_per_label(
     fixture.write_text(
         '<!doctype html><html class="template-80x40"><head><meta charset="utf-8">'
         + _current_print_styles()
-        + '<style>@page{size:80mm 40mm;margin:0}</style></head>'
+        + '<style>@page{size:40mm 80mm;margin:0}</style></head>'
         + f'<body class="template-80x40"><section id="previewContent"><main id="labels" class="labels">{labels}</main></section></body></html>',
         encoding="utf-8",
     )
@@ -213,9 +213,9 @@ def test_80x40_driver_paper_has_exactly_one_landscape_page_per_label(
     for page_number, page in enumerate(reader.pages, start=1):
         width_mm = float(page.mediabox.width) * POINTS_TO_MM
         height_mm = float(page.mediabox.height) * POINTS_TO_MM
-        assert width_mm == pytest.approx(80.0, abs=0.25)
-        assert height_mm == pytest.approx(40.0, abs=0.25)
-        assert width_mm > height_mm
+        assert width_mm == pytest.approx(40.0, abs=0.25)
+        assert height_mm == pytest.approx(80.0, abs=0.25)
+        assert height_mm > width_mm
         text = page.extract_text() or ""
         for expected in (
             "1100 × 760",

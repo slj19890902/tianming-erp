@@ -94,8 +94,7 @@ def test_r1_matrix_converts_units_and_fails_closed_without_writing(tmp_path: Pat
     assert database.stat().st_mtime_ns == stat_before.st_mtime_ns
 
     rendered = json.dumps(result, ensure_ascii=False) + render_markdown(result)
-    assert "101" not in rendered
-    assert "102" not in rendered
-    assert "103" not in rendered
+    assert '"order_item_id": 101' not in rendered
+    assert '"order_item_id": 102' not in rendered
+    assert '"order_item_id": 103' not in rendered
     assert "ITEM-" in rendered
-

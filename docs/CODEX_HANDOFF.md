@@ -4398,3 +4398,11 @@ legacy_ruida_* 原始层
 - 新迁移 `vv30v8x9z19_composite_fulfillment_mode.py` 线性接在正式 `uu29v8x9z18` 后；隔离迁移升级、降级、再升级已通过，Alembic 当前唯一 head 为 `vv30v8x9z19`。正式库只读回读仍为 `uu29v8x9z18`，`integrity_check=ok`、外键异常 0、连接 `total_changes=0`，本轮没有迁移或写入正式订单、报料、来料、生产、库存、送货及标签事实。
 - 组合产品、整组撤销、交付、标签、生产与迁移扩大回归共 `87 passed`；另一个从过老 revision 建库的既有降级夹具因缺少后来新增的 `customers.chinese_short_name` 字段失败，未归因于本候选。数字孪生前端 Node `69 passed`，TypeScript/Vite 正式构建通过；Python 编译、差异检查通过。正式静态包已随当前源码重建为 `warehouseTwin-BXAPVk7i.js`。
 - 当前基于正式 `v0.22.138@6598c99ccb4ec499f342d5d2b6497ad16b600e47`，已收口为 `v0.22.139｜组合产品交付与仓储模式` 候选；提交、推送、停服、备份、隔离迁移演练与正式发布仍须按两阶段门禁依次执行。模具 40×80 走纸方向候选 `e8bc2a1988accd7e4637d05c0eb27cd16799498f` 继续保留在独立分支，未混入本组合产品候选。
+
+## 2026-08-20 v0.22.139 组合产品交付与仓储模式正式完成
+
+- 候选分支 `codex/v0.22.139-composite-fulfillment-20260820` 与正式基线均已推送；正式功能 SHA 为 `2ab33c5ff3624040123e2c3e49947183df2a388e`。组合产品按 `component_delivery / parent_delivery` 冻结订单交付模式，报料仍按真实子件，标签、送货及成品仓储按所选模式收口；数字孪生查货可投影父件成套库存，移货仍操作真实子件事实。
+- 发布前组合业务回归 `28 passed`、版本与发布门禁 `23 passed`、数字孪生 Node `69 passed`；TypeScript/Vite 正式构建、Python 编译、差异检查与 Alembic 唯一 head `vv30v8x9z19` 均通过。一个从过老 `ee13` 建库却直接使用当前客户模型的既有降级夹具仍因缺少后来新增的 `customers.chinese_short_name` 失败，不属于正式 `uu29 -> vv30` 路径。
+- 两阶段发布报告 `docs/migration_reports/release_runtime_20260820_114338.json` 状态 `completed`，最终 SHA-256 `1934ee91917caad7f206ebb0d96093882de6a76cdb249f70721e9b3c883638bf`。正式备份 `data/backups/carton_erp_before_release_20260820_114339.sqlite3`，SHA-256 `017094c4c980747895b6a58d2f0c1ad8de2dc719d783fe04ac1eae6cc968827b`；源库、备份和隔离演练均完整性正常、外键异常 0，15 张核心表计数一致。
+- 正式库已由 `uu29v8x9z18` 精确迁移到 `vv30v8x9z19`，应用后 SHA-256 `2a4e0f299d80bb8fbff73f9f70e2db3fdbb03d16df5ba17b210c4dc95f03c7a2`。ERP 单 worker 重启成功，`/api/health` HTTP 200，启动后版本门禁回读为 `v0.22.139｜组合产品交付与仓储模式`。
+- 正式库只读回读：启用组合产品 `component_delivery=15`、`parent_delivery=1`；既有 BOM 订单快照 `component_delivery=2`；Z.001.000205 的三个同编码产品均为 `component_delivery`。迁移没有新增报料、来料、生产、库存、送货或标签事实，只读连接 `total_changes=0`；自动报告的人工验收状态仍为 `not_recorded`。

@@ -163,10 +163,11 @@ def test_page_and_warehouse_select_one_frozen_paper_template() -> None:
         assert marker in WAREHOUSE
     for marker in (
         'const TEMPLATE_40X30="mold_40x30_v1",TEMPLATE_80X40="mold_80x40_v1"',
-        "@page{size:${wideTemplate?\"40mm 80mm\":\"40mm 30mm\"};margin:0}",
+        "@page{size:${wideTemplate?\"80mm 40mm\":\"40mm 30mm\"};margin:0}",
         ".label.template-80x40{width:80mm;height:40mm",
         "width:13.9mm;height:13.9mm",
-        "transform:translateX(40mm) rotate(90deg)!important",
+        "body.template-80x40 #previewContent,body.template-80x40 #labels{width:80mm!important}",
+        "transform:none!important",
         '.template-80x40 .wide-inventory{font:900 6.3mm/.95',
         ".template-80x40 .wide-customer{font-size:4mm",
         "label_inventory_code",
@@ -177,14 +178,14 @@ def test_page_and_warehouse_select_one_frozen_paper_template() -> None:
         "window.print()",
     ):
         assert marker in LABEL
-    assert "40mm 80mm" in LABEL
-    assert "rotate(90deg)" in LABEL
+    assert "80mm 40mm" in LABEL
+    assert "rotate(90deg)" not in LABEL
     assert "--print-x-compensation:2mm" in LABEL
     assert "body,html{width:40mm;height:auto" in LABEL
 
 
 @pytest.mark.parametrize("label_count", (1, 2, 100))
-def test_40x80_feed_paper_has_exactly_one_rotated_page_per_label(
+def test_40x80_feed_uses_one_landscape_page_without_web_double_rotation(
     label_count: int,
     headless_browser: Path,
     tmp_path: Path,
@@ -203,7 +204,7 @@ def test_40x80_feed_paper_has_exactly_one_rotated_page_per_label(
     fixture.write_text(
         '<!doctype html><html class="template-80x40"><head><meta charset="utf-8">'
         + _current_print_styles()
-        + '<style>@page{size:40mm 80mm;margin:0}</style></head>'
+        + '<style>@page{size:80mm 40mm;margin:0}</style></head>'
         + f'<body class="template-80x40"><section id="previewContent"><main id="labels" class="labels">{labels}</main></section></body></html>',
         encoding="utf-8",
     )
@@ -213,9 +214,9 @@ def test_40x80_feed_paper_has_exactly_one_rotated_page_per_label(
     for page_number, page in enumerate(reader.pages, start=1):
         width_mm = float(page.mediabox.width) * POINTS_TO_MM
         height_mm = float(page.mediabox.height) * POINTS_TO_MM
-        assert width_mm == pytest.approx(40.0, abs=0.25)
-        assert height_mm == pytest.approx(80.0, abs=0.25)
-        assert height_mm > width_mm
+        assert width_mm == pytest.approx(80.0, abs=0.25)
+        assert height_mm == pytest.approx(40.0, abs=0.25)
+        assert width_mm > height_mm
         text = page.extract_text() or ""
         for expected in (
             "1100 × 760",
@@ -226,3 +227,47 @@ def test_40x80_feed_paper_has_exactly_one_rotated_page_per_label(
             "五层加强纸箱横向标签样例",
         ):
             assert expected in text
+
+
+def test_40x80_landscape_pixels_keep_content_inside_printable_width(
+    headless_browser: Path,
+    tmp_path: Path,
+) -> None:
+    fitz = pytest.importorskip("fitz")
+    qr = _qr_data_url()
+    fixture = tmp_path / "p1-62-visible-bounds.html"
+    output = tmp_path / "p1-62-visible-bounds.pdf"
+    fixture.write_text(
+        '<!doctype html><html class="template-80x40"><head><meta charset="utf-8">'
+        + _current_print_styles()
+        + '<style>@page{size:80mm 40mm;margin:0}</style></head>'
+        + f'''<body class="template-80x40"><section id="previewContent"><main id="labels" class="labels">
+        <article class="label template-80x40">
+          <div class="wide-board">705 × 700</div>
+          <div class="wide-product-row"><div class="wide-product">180 × 160 × 110</div><div class="wide-flute">B</div></div>
+          <div class="wide-identity"><div class="wide-inventory">3.D30257</div><div class="wide-meta"><span class="wide-customer">高泰</span><span class="wide-name">纸箱16×18×11内箱</span></div></div>
+          <img class="qr" src="{qr}" alt="二维码">
+        </article></main></section></body></html>''',
+        encoding="utf-8",
+    )
+    _print_to_pdf(headless_browser, fixture, output, tmp_path)
+
+    document = fitz.open(output)
+    page = document[0]
+    pixmap = page.get_pixmap(matrix=fitz.Matrix(300 / 72, 300 / 72), colorspace=fitz.csGRAY)
+    dark_pixels = [
+        (index % pixmap.width, index // pixmap.width)
+        for index, value in enumerate(pixmap.samples)
+        if value < 180
+    ]
+    assert dark_pixels, "40×80 标签渲染后不应为空白"
+    left = min(point[0] for point in dark_pixels)
+    right = max(point[0] for point in dark_pixels)
+    top = min(point[1] for point in dark_pixels)
+    bottom = max(point[1] for point in dark_pixels)
+    pixels_per_mm = 300 / 25.4
+    assert left >= 0.7 * pixels_per_mm
+    assert right <= pixmap.width - 0.7 * pixels_per_mm
+    assert top >= 0.5 * pixels_per_mm
+    assert bottom <= pixmap.height - 0.5 * pixels_per_mm
+    assert (right - left) / pixels_per_mm >= 60

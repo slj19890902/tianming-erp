@@ -74,6 +74,7 @@ interface Props {
   onMeasurePoint: (xMm: number, yMm: number) => void;
   readOnly?: boolean;
   visualTheme?: "editor" | "warehouse";
+  showInternalCodes?: boolean;
 }
 
 export interface CanvasFocusTarget {
@@ -381,7 +382,8 @@ export function EditorCanvas({
   onDrawPoint,
   onMeasurePoint,
   readOnly = false,
-  visualTheme = "editor"
+  visualTheme = "editor",
+  showInternalCodes = true
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasMountRef = useRef<HTMLDivElement>(null);
@@ -818,9 +820,16 @@ export function EditorCanvas({
           ? feature.elevation_mm + feature.storage_height_mm + 260
           : viewMode === "25d" ? 500 : 90;
         const labelAt = worldPoint(average[0] / feature.points.length, average[1] / feature.points.length, labelHeight);
-        const levelLabel = feature.feature_kind === "zone" && feature.storage_mode !== "floor"
-          ? `${feature.feature_code} ↑${feature.elevation_mm}mm`
-          : feature.feature_code;
+        const employeeFeatureLabel = feature.subtype === "finished_wait_delivery"
+          ? "一楼成品合并暂存区"
+          : feature.name || "区域名称待完善";
+        const levelLabel = showInternalCodes
+          ? feature.feature_kind === "zone" && feature.storage_mode !== "floor"
+            ? `${feature.feature_code} ↑${feature.elevation_mm}mm`
+            : feature.feature_code
+          : feature.feature_kind === "zone" && feature.storage_mode !== "floor"
+            ? `${employeeFeatureLabel} · 离地 ${feature.elevation_mm}mm`
+            : employeeFeatureLabel;
         const label = textSprite(levelLabel, color, 1700, 320, warehouseTheme);
         label.position.copy(labelAt);
         group.add(label);
@@ -931,7 +940,9 @@ export function EditorCanvas({
         }
         if (layers.labels) {
           const label = textSprite(
-            `${pallet.pallet_code} · ${palletState.label} · ${pallet.zone_code}`,
+            showInternalCodes
+              ? `${pallet.pallet_code} · ${palletState.label} · ${pallet.zone_code}`
+              : `${pallet.name || "位置名称待完善"} · ${palletState.label}`,
             violated ? "#dc2626" : palletState.color,
             2400,
             340,
@@ -1424,7 +1435,7 @@ export function EditorCanvas({
       });
       renderer.dispose();
     };
-  }, [layout, assets, viewMode, cameraPreset, viewResetToken, layers, referenceLayout, referenceOverlay, productionProjections, palletEditingOnly, rackEditingEnabled, featureEditingEnabled, allowPalletSelection, draggablePalletIds, palletSnapEnabled, palletSnapThresholdMm, drawMode, drawPoints, measureMode, measurePoints, readOnly, visualTheme]);
+  }, [layout, assets, viewMode, cameraPreset, viewResetToken, layers, referenceLayout, referenceOverlay, productionProjections, palletEditingOnly, rackEditingEnabled, featureEditingEnabled, allowPalletSelection, draggablePalletIds, palletSnapEnabled, palletSnapThresholdMm, drawMode, drawPoints, measureMode, measurePoints, readOnly, visualTheme, showInternalCodes]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;

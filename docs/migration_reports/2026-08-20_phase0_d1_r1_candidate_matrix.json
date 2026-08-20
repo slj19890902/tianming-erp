@@ -1,0 +1,864 @@
+{
+  "report_kind": "phase0_d1_r1_readonly_candidate_matrix",
+  "generated_at": "2026-08-20T07:19:59.926094+00:00",
+  "database": {
+    "sha256_before": "3e1ba7fbce2d8be2ab76b926af2c2282d046c61130404680f9b4d3024f07dd91",
+    "sha256_after": "3e1ba7fbce2d8be2ab76b926af2c2282d046c61130404680f9b4d3024f07dd91",
+    "alembic_revision": "vv30v8x9z19",
+    "query_only": 1,
+    "write_probe_denied": true,
+    "total_changes_before": 0,
+    "total_changes_after": 0,
+    "quick_check": "ok",
+    "foreign_key_violations": 0
+  },
+  "counts": {
+    "normalized_posted_receipt_no_task": 12,
+    "legacy_material_status_no_task": 41,
+    "automatic_apply_allowed": 0
+  },
+  "decision": {
+    "normalized_rows": "manual_frozen_snapshot_review_required",
+    "legacy_rows": "manual_receipt_source_reconstruction",
+    "apply_executed": false
+  },
+  "normalized_candidates": [
+    {
+      "candidate_key": "phase0-d1:r1-normalized-receipt:20157c0fb049cbb9fd26e573",
+      "item_token": "ITEM-30ec1ae05d7d5ea8",
+      "source_class": "normalized_posted_receipt",
+      "business_shape": {
+        "supply_mode_snapshot": "corrugated_production",
+        "combination_role": "standalone",
+        "virtual_composite_parent": false
+      },
+      "quantity_facts": {
+        "receipt_sheet_quantity": 5,
+        "latest_planned_sheet_quantity": 5,
+        "allowed_production_input_sheet_quantity": 5,
+        "frozen_cutting_output_factor": 1,
+        "frozen_pieces_per_box": 1,
+        "projected_finished_box_quantity": 5,
+        "order_finished_box_quantity": 5,
+        "posted_receipt_line_count": 1
+      },
+      "gates": {
+        "formal_posted_receipt_present": true,
+        "immutable_conversion_facts_present": true,
+        "standalone_non_virtual_shape": true,
+        "immutable_task_printing_label_snapshot_proven": false
+      },
+      "classification": "manual_frozen_snapshot_review_required",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "formal production-task creation is outside read-only authorization",
+        "current product master data must not be used as a historical printing or label snapshot"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-normalized-receipt:c1b194396d6b73da8a249219",
+      "item_token": "ITEM-07e1906a4c417ea7",
+      "source_class": "normalized_posted_receipt",
+      "business_shape": {
+        "supply_mode_snapshot": "corrugated_production",
+        "combination_role": "standalone",
+        "virtual_composite_parent": false
+      },
+      "quantity_facts": {
+        "receipt_sheet_quantity": 7,
+        "latest_planned_sheet_quantity": 7,
+        "allowed_production_input_sheet_quantity": 7,
+        "frozen_cutting_output_factor": 1,
+        "frozen_pieces_per_box": 1,
+        "projected_finished_box_quantity": 7,
+        "order_finished_box_quantity": 7,
+        "posted_receipt_line_count": 1
+      },
+      "gates": {
+        "formal_posted_receipt_present": true,
+        "immutable_conversion_facts_present": true,
+        "standalone_non_virtual_shape": true,
+        "immutable_task_printing_label_snapshot_proven": false
+      },
+      "classification": "manual_frozen_snapshot_review_required",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "formal production-task creation is outside read-only authorization",
+        "current product master data must not be used as a historical printing or label snapshot"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-normalized-receipt:c3f199f3981f397feb664dbf",
+      "item_token": "ITEM-c0f2600a243d0390",
+      "source_class": "normalized_posted_receipt",
+      "business_shape": {
+        "supply_mode_snapshot": "corrugated_production",
+        "combination_role": "standalone",
+        "virtual_composite_parent": false
+      },
+      "quantity_facts": {
+        "receipt_sheet_quantity": 40,
+        "latest_planned_sheet_quantity": 40,
+        "allowed_production_input_sheet_quantity": 40,
+        "frozen_cutting_output_factor": 1,
+        "frozen_pieces_per_box": 1,
+        "projected_finished_box_quantity": 40,
+        "order_finished_box_quantity": 40,
+        "posted_receipt_line_count": 1
+      },
+      "gates": {
+        "formal_posted_receipt_present": true,
+        "immutable_conversion_facts_present": true,
+        "standalone_non_virtual_shape": true,
+        "immutable_task_printing_label_snapshot_proven": false
+      },
+      "classification": "manual_frozen_snapshot_review_required",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "formal production-task creation is outside read-only authorization",
+        "current product master data must not be used as a historical printing or label snapshot"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-normalized-receipt:c375d216fe322bad669e1c2d",
+      "item_token": "ITEM-a29dc99a7700c4b8",
+      "source_class": "normalized_posted_receipt",
+      "business_shape": {
+        "supply_mode_snapshot": "corrugated_production",
+        "combination_role": "standalone",
+        "virtual_composite_parent": false
+      },
+      "quantity_facts": {
+        "receipt_sheet_quantity": 40,
+        "latest_planned_sheet_quantity": 40,
+        "allowed_production_input_sheet_quantity": 40,
+        "frozen_cutting_output_factor": 1,
+        "frozen_pieces_per_box": 1,
+        "projected_finished_box_quantity": 40,
+        "order_finished_box_quantity": 40,
+        "posted_receipt_line_count": 1
+      },
+      "gates": {
+        "formal_posted_receipt_present": true,
+        "immutable_conversion_facts_present": true,
+        "standalone_non_virtual_shape": true,
+        "immutable_task_printing_label_snapshot_proven": false
+      },
+      "classification": "manual_frozen_snapshot_review_required",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "formal production-task creation is outside read-only authorization",
+        "current product master data must not be used as a historical printing or label snapshot"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-normalized-receipt:ae65e7f49f4ba0527e462ead",
+      "item_token": "ITEM-dc753f4188908987",
+      "source_class": "normalized_posted_receipt",
+      "business_shape": {
+        "supply_mode_snapshot": "corrugated_production",
+        "combination_role": "standalone",
+        "virtual_composite_parent": false
+      },
+      "quantity_facts": {
+        "receipt_sheet_quantity": 16,
+        "latest_planned_sheet_quantity": 16,
+        "allowed_production_input_sheet_quantity": 16,
+        "frozen_cutting_output_factor": 1,
+        "frozen_pieces_per_box": 2,
+        "projected_finished_box_quantity": 8,
+        "order_finished_box_quantity": 8,
+        "posted_receipt_line_count": 1
+      },
+      "gates": {
+        "formal_posted_receipt_present": true,
+        "immutable_conversion_facts_present": true,
+        "standalone_non_virtual_shape": true,
+        "immutable_task_printing_label_snapshot_proven": false
+      },
+      "classification": "manual_frozen_snapshot_review_required",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "formal production-task creation is outside read-only authorization",
+        "current product master data must not be used as a historical printing or label snapshot"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-normalized-receipt:3898b3194bd7fb82dd81f5a8",
+      "item_token": "ITEM-44c875a35e8cb3ab",
+      "source_class": "normalized_posted_receipt",
+      "business_shape": {
+        "supply_mode_snapshot": "corrugated_production",
+        "combination_role": "standalone",
+        "virtual_composite_parent": false
+      },
+      "quantity_facts": {
+        "receipt_sheet_quantity": 2,
+        "latest_planned_sheet_quantity": 2,
+        "allowed_production_input_sheet_quantity": 2,
+        "frozen_cutting_output_factor": 1,
+        "frozen_pieces_per_box": 1,
+        "projected_finished_box_quantity": 2,
+        "order_finished_box_quantity": 2,
+        "posted_receipt_line_count": 1
+      },
+      "gates": {
+        "formal_posted_receipt_present": true,
+        "immutable_conversion_facts_present": true,
+        "standalone_non_virtual_shape": true,
+        "immutable_task_printing_label_snapshot_proven": false
+      },
+      "classification": "manual_frozen_snapshot_review_required",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "formal production-task creation is outside read-only authorization",
+        "current product master data must not be used as a historical printing or label snapshot"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-normalized-receipt:dbac010e53663725bace1539",
+      "item_token": "ITEM-85432a9890aa5071",
+      "source_class": "normalized_posted_receipt",
+      "business_shape": {
+        "supply_mode_snapshot": "corrugated_production",
+        "combination_role": "standalone",
+        "virtual_composite_parent": false
+      },
+      "quantity_facts": {
+        "receipt_sheet_quantity": 4,
+        "latest_planned_sheet_quantity": 4,
+        "allowed_production_input_sheet_quantity": 4,
+        "frozen_cutting_output_factor": 1,
+        "frozen_pieces_per_box": 1,
+        "projected_finished_box_quantity": 4,
+        "order_finished_box_quantity": 4,
+        "posted_receipt_line_count": 1
+      },
+      "gates": {
+        "formal_posted_receipt_present": true,
+        "immutable_conversion_facts_present": true,
+        "standalone_non_virtual_shape": true,
+        "immutable_task_printing_label_snapshot_proven": false
+      },
+      "classification": "manual_frozen_snapshot_review_required",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "formal production-task creation is outside read-only authorization",
+        "current product master data must not be used as a historical printing or label snapshot"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-normalized-receipt:a923f535e4fb6077e97ce3be",
+      "item_token": "ITEM-db23c4ed48e68d62",
+      "source_class": "normalized_posted_receipt",
+      "business_shape": {
+        "supply_mode_snapshot": "corrugated_production",
+        "combination_role": "standalone",
+        "virtual_composite_parent": false
+      },
+      "quantity_facts": {
+        "receipt_sheet_quantity": 50,
+        "latest_planned_sheet_quantity": 50,
+        "allowed_production_input_sheet_quantity": 50,
+        "frozen_cutting_output_factor": 1,
+        "frozen_pieces_per_box": 1,
+        "projected_finished_box_quantity": 50,
+        "order_finished_box_quantity": 50,
+        "posted_receipt_line_count": 1
+      },
+      "gates": {
+        "formal_posted_receipt_present": true,
+        "immutable_conversion_facts_present": true,
+        "standalone_non_virtual_shape": true,
+        "immutable_task_printing_label_snapshot_proven": false
+      },
+      "classification": "manual_frozen_snapshot_review_required",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "formal production-task creation is outside read-only authorization",
+        "current product master data must not be used as a historical printing or label snapshot"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-normalized-receipt:0c5facb1f1bf8fc299812ecc",
+      "item_token": "ITEM-0f31c318c80aefd4",
+      "source_class": "normalized_posted_receipt",
+      "business_shape": {
+        "supply_mode_snapshot": "corrugated_production",
+        "combination_role": "standalone",
+        "virtual_composite_parent": false
+      },
+      "quantity_facts": {
+        "receipt_sheet_quantity": 50,
+        "latest_planned_sheet_quantity": 50,
+        "allowed_production_input_sheet_quantity": 50,
+        "frozen_cutting_output_factor": 1,
+        "frozen_pieces_per_box": 1,
+        "projected_finished_box_quantity": 50,
+        "order_finished_box_quantity": 50,
+        "posted_receipt_line_count": 1
+      },
+      "gates": {
+        "formal_posted_receipt_present": true,
+        "immutable_conversion_facts_present": true,
+        "standalone_non_virtual_shape": true,
+        "immutable_task_printing_label_snapshot_proven": false
+      },
+      "classification": "manual_frozen_snapshot_review_required",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "formal production-task creation is outside read-only authorization",
+        "current product master data must not be used as a historical printing or label snapshot"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-normalized-receipt:76e2194fb211d5a1a901aa80",
+      "item_token": "ITEM-e92395b2a412ec51",
+      "source_class": "normalized_posted_receipt",
+      "business_shape": {
+        "supply_mode_snapshot": "corrugated_production",
+        "combination_role": "standalone",
+        "virtual_composite_parent": false
+      },
+      "quantity_facts": {
+        "receipt_sheet_quantity": 125,
+        "latest_planned_sheet_quantity": 125,
+        "allowed_production_input_sheet_quantity": 125,
+        "frozen_cutting_output_factor": 1,
+        "frozen_pieces_per_box": 1,
+        "projected_finished_box_quantity": 125,
+        "order_finished_box_quantity": 125,
+        "posted_receipt_line_count": 1
+      },
+      "gates": {
+        "formal_posted_receipt_present": true,
+        "immutable_conversion_facts_present": true,
+        "standalone_non_virtual_shape": true,
+        "immutable_task_printing_label_snapshot_proven": false
+      },
+      "classification": "manual_frozen_snapshot_review_required",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "formal production-task creation is outside read-only authorization",
+        "current product master data must not be used as a historical printing or label snapshot"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-normalized-receipt:b012e7508465fbb5299eb36c",
+      "item_token": "ITEM-4dd6251d5060ed98",
+      "source_class": "normalized_posted_receipt",
+      "business_shape": {
+        "supply_mode_snapshot": "corrugated_production",
+        "combination_role": "standalone",
+        "virtual_composite_parent": false
+      },
+      "quantity_facts": {
+        "receipt_sheet_quantity": 10,
+        "latest_planned_sheet_quantity": 10,
+        "allowed_production_input_sheet_quantity": 10,
+        "frozen_cutting_output_factor": 1,
+        "frozen_pieces_per_box": 1,
+        "projected_finished_box_quantity": 10,
+        "order_finished_box_quantity": 5,
+        "posted_receipt_line_count": 1
+      },
+      "gates": {
+        "formal_posted_receipt_present": true,
+        "immutable_conversion_facts_present": true,
+        "standalone_non_virtual_shape": true,
+        "immutable_task_printing_label_snapshot_proven": false
+      },
+      "classification": "manual_frozen_snapshot_review_required",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "formal production-task creation is outside read-only authorization",
+        "current product master data must not be used as a historical printing or label snapshot"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-normalized-receipt:bf853c21cd83b9e79e7b60c0",
+      "item_token": "ITEM-9a5ae524ce0cfeac",
+      "source_class": "normalized_posted_receipt",
+      "business_shape": {
+        "supply_mode_snapshot": "corrugated_production",
+        "combination_role": "standalone",
+        "virtual_composite_parent": false
+      },
+      "quantity_facts": {
+        "receipt_sheet_quantity": 18,
+        "latest_planned_sheet_quantity": 18,
+        "allowed_production_input_sheet_quantity": 18,
+        "frozen_cutting_output_factor": 1,
+        "frozen_pieces_per_box": 1,
+        "projected_finished_box_quantity": 18,
+        "order_finished_box_quantity": 18,
+        "posted_receipt_line_count": 1
+      },
+      "gates": {
+        "formal_posted_receipt_present": true,
+        "immutable_conversion_facts_present": true,
+        "standalone_non_virtual_shape": true,
+        "immutable_task_printing_label_snapshot_proven": false
+      },
+      "classification": "manual_frozen_snapshot_review_required",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "formal production-task creation is outside read-only authorization",
+        "current product master data must not be used as a historical printing or label snapshot"
+      ]
+    }
+  ],
+  "legacy_candidates": [
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:baecd3badd9b5b10da35f085",
+      "item_token": "ITEM-f7cc0e8b019506df",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:9d9589d83f14f70fd36e2d62",
+      "item_token": "ITEM-ccddcd7ec696cfcc",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:ddcf935f5e74567adf3dab13",
+      "item_token": "ITEM-3deb322a10088c08",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:2f2cce2ad2d53de77fe327b0",
+      "item_token": "ITEM-477bcd0d2a1ad057",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:be206836258152daf347ebc4",
+      "item_token": "ITEM-b191d203978d17e6",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:972aac4edc192bc4b8655953",
+      "item_token": "ITEM-88552e1c2d4d53c9",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:4ed595670a9190c0e4fb7f1e",
+      "item_token": "ITEM-beff790a9715a7da",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:13ebebcb51a34dbaa70322f6",
+      "item_token": "ITEM-41907372481ad56f",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:b733d97cd718ffbac9f4c51e",
+      "item_token": "ITEM-a81ec31c9dbeee36",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:e9db16b2f5475bce7f34f34a",
+      "item_token": "ITEM-989956402ad7deae",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:68cab14206e8a25c6d63f33c",
+      "item_token": "ITEM-661edc0299e0ea11",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:fbf158fa2a3919dc325c180e",
+      "item_token": "ITEM-03104caedbe6126a",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:956700a125f058dd5e3dfa12",
+      "item_token": "ITEM-ee2aff0f5389caba",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:1f49155d8ec4121ec6ce6d3c",
+      "item_token": "ITEM-53dc7a5135e96bcb",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:2298f62bdf3e2895c589ddd9",
+      "item_token": "ITEM-716a3ef91adceabf",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:6495556fe1b2d1181c931f80",
+      "item_token": "ITEM-8ead779ed58cd437",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:e79a9be280854f6599d67b07",
+      "item_token": "ITEM-5bd563f1f52bfc4a",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:f165706a98edeff0ee57db1b",
+      "item_token": "ITEM-c697e6a764c19509",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:47b840d41371951e617a47f6",
+      "item_token": "ITEM-f93cf7884ae4933d",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:8bb74446d2150f9032bb8aad",
+      "item_token": "ITEM-1b1d53b5645e6d25",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:cdbdeb7b7357a2a69d4ac085",
+      "item_token": "ITEM-f3750fa96c10c43f",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:c44608c930db8acf89092da7",
+      "item_token": "ITEM-02ca5d77cb438c1c",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:64acc8bd932b0b7c3e8ca979",
+      "item_token": "ITEM-2306c899cdd84c7c",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:5075ab61d0af72cb7d29667a",
+      "item_token": "ITEM-73352dbe01eaf5e0",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:9b35b7216ab8ec72f890a5ef",
+      "item_token": "ITEM-496340ac78217783",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:bce958ca558a2547c82cd7cf",
+      "item_token": "ITEM-75567d38a76f47b1",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:7a9e8d031fd8df557989bb0a",
+      "item_token": "ITEM-236308af6029b1ee",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:283880ec8bc440a9980eab0b",
+      "item_token": "ITEM-bc0c6c4258070d39",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:1239f13106a0f460c4ca6729",
+      "item_token": "ITEM-03314112b449d57c",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:311d58a8c664742f57bcecc5",
+      "item_token": "ITEM-e2dab25fae5d9647",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:388608231a4ce8754fc01448",
+      "item_token": "ITEM-866c973cb5ecf4b1",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:947d04c496ded3bae05fbafc",
+      "item_token": "ITEM-f1a5b03e2328be22",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:7396e08abf8a6308a640ae68",
+      "item_token": "ITEM-a78c718ff6f22bc0",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:3c7e78b6abf7f9fafbe42ff9",
+      "item_token": "ITEM-3f117a187cdaeb3e",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:3a47cd3226d6a16fe59adb42",
+      "item_token": "ITEM-d729564426a4d3e7",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:39db525b28e5d9fbc494e59a",
+      "item_token": "ITEM-3d236245b6c67615",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:0fe9fc422ce63ba0f37ea434",
+      "item_token": "ITEM-b6d1489d546d7895",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:c841263653244f0013a9d17c",
+      "item_token": "ITEM-52fdbbe8ee4add45",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:eb9af7a8c067f32359aa051a",
+      "item_token": "ITEM-d3c549ceb09c0d8b",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:8c2a76883baa1dc6d7dceabd",
+      "item_token": "ITEM-5f9e3d4a0fa6f44a",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    },
+    {
+      "candidate_key": "phase0-d1:r1-legacy-status:7f6f6b448251bd28729c1755",
+      "item_token": "ITEM-57e7113182a6457a",
+      "source_class": "legacy_material_status_only",
+      "classification": "manual_receipt_source_reconstruction",
+      "automatic_apply_allowed": false,
+      "stop_reasons": [
+        "no normalized posted receipt proves the physical material quantity",
+        "formal production-task creation is outside read-only authorization"
+      ]
+    }
+  ]
+}

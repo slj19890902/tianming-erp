@@ -260,7 +260,7 @@ from app.services.location_candidates import (
     operational_location_issue,
     operational_location_payload,
 )
-from app.services.requisition_quantities import cutting_factor
+from app.services.requisition_quantities import cutting_factor, normalize_cutting_mode
 from app.services.product_specification import product_dimension_specification
 from app.services.master_data_versioning import (
     apply_versioned_update,
@@ -12146,6 +12146,18 @@ def _label_flute_type(products: list[Product]) -> str:
     return values[0]
 
 
+def _label_cutting_mode(products: list[Product]) -> str:
+    values = [
+        normalize_cutting_mode(product.default_cutting_mode)
+        for product in products
+    ]
+    if not values:
+        return ""
+    if len(set(values)) != 1:
+        return "多款见扫码"
+    return values[0]
+
+
 _LABEL_PRINTABLE_IDENTITY_LIMIT = 24
 
 
@@ -12179,6 +12191,7 @@ def _mold_label_printability_error(
         product_size = _label_dimension(products, "specification")
         board_size = _label_dimension(products, "report_specification")
         flute_type = _label_flute_type(products)
+        cutting_mode = _label_cutting_mode(products)
         missing = [
             label
             for label, value in (
@@ -12188,6 +12201,7 @@ def _mold_label_printability_error(
                 ("产品尺寸", product_size),
                 ("片料尺寸", board_size),
                 ("楞型", flute_type),
+                ("开料方式", cutting_mode),
             )
             if not value
         ]
@@ -12251,6 +12265,7 @@ def _mold_label_dict(
             products, "report_specification"
         ),
         "label_flute_type": _label_flute_type(products),
+        "label_cutting_mode": _label_cutting_mode(products),
         "lookup_url": lookup_url,
         "qr_data_url": (
             "data:image/png;base64,"

@@ -46,6 +46,7 @@ def _complete_mold(factory, *, suffix: str = "1") -> int:
                 report_length_mm=1100,
                 report_width_mm=760,
                 flute_type="BC",
+                default_cutting_mode="一开二",
                 mold_tool_id=mold.id,
             )
         )
@@ -75,6 +76,7 @@ def test_80x40_projection_and_print_fact_are_explicit_and_idempotent(mold_app) -
         assert body["label_product_specification"] == "520 × 350 × 300"
         assert body["label_report_specification"] == "1100 × 760"
         assert body["label_flute_type"] == "BC"
+        assert body["label_cutting_mode"] == "一开二"
         assert body["lookup_url"] == legacy.json()["lookup_url"]
         assert body["qr_data_url"] == legacy.json()["qr_data_url"]
 
@@ -151,6 +153,64 @@ def test_80x40_fails_closed_for_multiple_bindings_without_writing_fact(mold_app)
         assert db.scalar(select(func.count(MoldLabelPrintJob.id))) == 0
 
 
+def test_rm9_hash_name_uses_verified_short_customer_and_prints_wide_label(mold_app) -> None:
+    from app.models.customer import Customer
+    from app.models.mold_tool import MoldTool
+    from app.models.product import Product
+
+    app, factory = mold_app
+    with factory() as db:
+        customer = Customer(
+            customer_number=9902,
+            customer_code="RM",
+            name="苏州瑞明香氛科技股份有限公司",
+            payment_term_days=30,
+            credit_limit=0,
+        )
+        mold = MoldTool(
+            mold_code="RM-9",
+            mold_name="瑞明#9",
+            rack_location="1F-M-R01-L3-G01",
+        )
+        db.add_all((customer, mold))
+        db.flush()
+        db.add(
+            Product(
+                customer_id=customer.id,
+                product_code="9#",
+                customer_material_code="9#",
+                product_name="纸箱19*10.5*13.5",
+                length_mm=190,
+                width_mm=105,
+                height_mm=135,
+                report_length_mm=625,
+                report_width_mm=500,
+                flute_type="A",
+                default_cutting_mode="一开二",
+                mold_tool_id=mold.id,
+            )
+        )
+        db.commit()
+        mold_id = mold.id
+
+    with TestClient(app) as client:
+        _login(client, "workshop")
+        response = client.get(
+            f"/api/warehouse/molds/{mold_id}/label",
+            params={"template_version": "mold_80x40_v1"},
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["label_customer_name"] == "瑞明"
+    assert body["label_mold_number"] == "9"
+    assert body["label_inventory_code"] == "9#"
+    assert body["label_product_name"] == "纸箱19*10.5*13.5"
+    assert body["label_product_specification"] == "190 × 105 × 135"
+    assert body["label_flute_type"] == "A"
+    assert body["label_cutting_mode"] == "一开二"
+
+
 def test_page_and_warehouse_select_one_frozen_paper_template() -> None:
     for marker in (
         'value="mold_40x30_v1"',
@@ -175,6 +235,8 @@ def test_page_and_warehouse_select_one_frozen_paper_template() -> None:
         "label_product_name",
         "wide-inventory",
         "wide-flute",
+        "wide-cutting",
+        "label_cutting_mode",
         "waitForQrImages",
         "window.print()",
     ):
@@ -195,7 +257,7 @@ def test_40x80_feed_uses_one_portrait_page_with_one_inner_rotation(
     labels = "".join(
         f'''<article class="label template-80x40">
         <div class="wide-board">1100 × 760</div>
-        <div class="wide-product-row"><div class="wide-product">520 × 350 × 300</div><div class="wide-flute">BC</div></div>
+        <div class="wide-product-row"><div class="wide-product">520 × 350 × 300</div><div class="wide-flute">BC</div><div class="wide-cutting">一开二</div></div>
         <div class="wide-identity"><div class="wide-inventory">SME-LONG-CODE-{index:03d}</div><div class="wide-meta"><span class="wide-customer">思迈尔</span><span class="wide-name">五层加强纸箱横向标签样例</span></div></div>
         <img class="qr" src="{qr}" alt="二维码"></article>'''
         for index in range(1, label_count + 1)
@@ -223,6 +285,7 @@ def test_40x80_feed_uses_one_portrait_page_with_one_inner_rotation(
             "1100 × 760",
             "520 × 350 × 300",
             "BC",
+            "一开二",
             f"SME-LONG-CODE-{page_number:03d}",
             "思迈尔",
             "五层加强纸箱横向标签样例",
@@ -245,7 +308,7 @@ def test_40x80_portrait_pixels_keep_rotated_content_inside_physical_page(
         + f'''<body class="template-80x40"><section id="previewContent"><main id="labels" class="labels">
         <article class="label template-80x40">
           <div class="wide-board">705 × 700</div>
-          <div class="wide-product-row"><div class="wide-product">180 × 160 × 110</div><div class="wide-flute">B</div></div>
+          <div class="wide-product-row"><div class="wide-product">180 × 160 × 110</div><div class="wide-flute">B</div><div class="wide-cutting">一开二</div></div>
           <div class="wide-identity"><div class="wide-inventory">3.D30257</div><div class="wide-meta"><span class="wide-customer">高泰</span><span class="wide-name">纸箱16×18×11内箱</span></div></div>
           <img class="qr" src="{qr}" alt="二维码">
         </article></main></section></body></html>''',

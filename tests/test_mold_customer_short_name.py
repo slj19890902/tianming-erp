@@ -16,6 +16,26 @@ def test_mold_customer_short_name_uses_explicit_label_prefix() -> None:
     )
 
 
+def test_mold_customer_short_name_accepts_hash_separated_mold_number() -> None:
+    assert (
+        mold_customer_short_name(
+            "瑞明#9",
+            "苏州瑞明香氛科技股份有限公司",
+            "RM",
+        )
+        == "瑞明"
+    )
+    assert (
+        mold_label_display_number(
+            "瑞明#9",
+            "RM-9",
+            "苏州瑞明香氛科技股份有限公司",
+            "RM",
+        )
+        == "9"
+    )
+
+
 def test_mold_customer_short_name_does_not_guess_from_descriptive_mold_name() -> None:
     assert (
         mold_customer_short_name("手机查找测试模", "模具客户", "MJKH")

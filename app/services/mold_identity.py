@@ -10,11 +10,11 @@ from app.models.mold_tool import MoldTool
 
 
 _MOLD_NAME_PATTERN = re.compile(
-    r"^(?P<customer>.*?)[\s:：_-]*(?P<inventory>[A-Za-z0-9][A-Za-z0-9._/+\-]*)$"
+    r"^(?P<customer>.*?)[\s:：_#＃-]*(?P<inventory>[A-Za-z0-9][A-Za-z0-9._/+\-]*)$"
 )
 _INITIALS_PATTERN = re.compile(r"^[A-Z0-9]{1,20}$")
 _LEADING_CHINESE_LABEL_PATTERN = re.compile(
-    r"^(?P<label>[\u3400-\u9fff]{2,8})[\s:：_-]*(?=[A-Za-z0-9])"
+    r"^(?P<label>[\u3400-\u9fff]{2,8})[\s:：_#＃-]*(?=[A-Za-z0-9])"
 )
 
 
@@ -82,7 +82,7 @@ def mold_label_display_number(
     )
     match = _MOLD_NAME_PATTERN.fullmatch(name)
     if match is not None and short_name:
-        maintained_customer = match.group("customer").strip(" -_:：")
+        maintained_customer = match.group("customer").strip(" -_:：#＃")
         inventory_code = match.group("inventory").strip()
         if maintained_customer == short_name and inventory_code:
             return inventory_code

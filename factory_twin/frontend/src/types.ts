@@ -107,6 +107,9 @@ export interface Pallet {
   color: string;
   visual_status: "empty" | "waiting" | "in_process" | "completed" | "abnormal";
   status_note: string;
+  visual_kind?: "location_anchor" | "physical_pallet";
+  display_label?: string;
+  operational_group_id?: string;
   is_logical_anchor?: boolean;
   is_simulated: boolean;
   version: number;

@@ -67,7 +67,7 @@ def _seed_floor_and_admin(db) -> None:
 def test_floor1_candidate_plan_uses_confirmed_map_geometry() -> None:
     plan = build_floor1_formal_candidate_plan(load_warehouse_twin_floor("1F"))
 
-    assert plan["candidate_count"] == 19
+    assert plan["candidate_count"] == 16
     assert plan["excluded_out_of_bounds_count"] == 3
     assert {
         row["feature_code"] for row in plan["excluded_out_of_bounds"]
@@ -77,11 +77,21 @@ def test_floor1_candidate_plan_uses_confirmed_map_geometry() -> None:
         "ZONE-1F-OUT-S-001",
     }
     assert plan["obstacle_count"] > 0
-    assert plan["formal_location_count"] == 45
-    assert plan["long_term_pallet_capacity"] == 70
+    assert plan["formal_location_count"] == 16
+    assert plan["long_term_pallet_capacity"] == 41
     by_code = {row["area_code"]: row for row in plan["candidates"]}
-    assert by_code["FIN-001"]["formal_location_count"] == 10
-    assert by_code["FIN-003"]["formal_location_count"] == 15
+    assert {"FIN-001", "FIN-002", "FIN-003"}.isdisjoint(by_code)
+    dispatch_features = [
+        row
+        for row in load_warehouse_twin_floor("1F")["features"]
+        if row.get("subtype") == "finished_wait_delivery"
+    ]
+    assert plan["combined_dispatch_projection"] == {
+        "location_code": "F1-DISPATCH-01",
+        "location_name": "一楼成品合并暂存区",
+        "map_feature_ids": [row["id"] for row in dispatch_features],
+        "creates_formal_locations": False,
+    }
     assert by_code["SEMI-001"]["formal_location_count"] == 9
     assert by_code["RAW-004"]["measured_pallet_slots"] == 0
     assert by_code["RAW-004"]["long_term_capacity_eligible"] is False
@@ -97,14 +107,10 @@ def test_floor1_candidate_plan_uses_confirmed_map_geometry() -> None:
         for row in plan["candidates"]
         for slot in row["slots"]
     )
-    fin_slot = by_code["FIN-001"]["slots"][0]
-    assert fin_slot["left_pct"] == 0
-    assert fin_slot["top_pct"] == pytest.approx(82.6087)
-    assert fin_slot["width_pct"] == pytest.approx(48.9796)
-    assert fin_slot["height_pct"] == pytest.approx(17.3913)
+    assert by_code["SEMI-001"]["slots"]
 
 
-def test_floor1_candidate_plan_excludes_confirmed_physical_obstacles() -> None:
+def test_finished_staging_outline_is_projection_only_and_creates_no_locations() -> None:
     layout = {
         "floor_code": "1F",
         "revision": "obstacle-test-revision",
@@ -131,15 +137,29 @@ def test_floor1_candidate_plan_excludes_confirmed_physical_obstacles() -> None:
                 "status": "confirmed",
                 "storage_mode": "floor",
                 "points": [[0, 0], [2400, 0], [2400, 1000], [0, 1000]],
-            }
+            },
+            {
+                "id": "zone-semi-test",
+                "feature_code": "ZONE-1F-SEMI-TEST",
+                "feature_kind": "zone",
+                "name": "半成品候选对照区",
+                "subtype": "semi_finished",
+                "status": "confirmed",
+                "storage_mode": "floor",
+                "points": [[0, 0], [2400, 0], [2400, 1000], [0, 1000]],
+            },
         ],
     }
 
     plan = build_floor1_formal_candidate_plan(layout)
-    candidate = plan["candidates"][0]
-    assert candidate["measured_pallet_slots"] == 1
-    assert candidate["formal_location_count"] == 1
-    assert candidate["slots"][0]["x_mm"] == 1200
+    assert [row["area_code"] for row in plan["candidates"]] == ["SEMI-TEST"]
+    assert plan["formal_location_count"] == 1
+    assert plan["combined_dispatch_projection"] == {
+        "location_code": "F1-DISPATCH-01",
+        "location_name": "一楼成品合并暂存区",
+        "map_feature_ids": ["zone-fin-test"],
+        "creates_formal_locations": False,
+    }
 
 
 def test_floor1_candidate_confirmation_is_atomic_and_idempotent(tmp_path: Path) -> None:
@@ -160,15 +180,15 @@ def test_floor1_candidate_confirmation_is_atomic_and_idempotent(tmp_path: Path) 
                 reviewer_name="一楼候选测试管理员",
             )
             assert result.applied is True
-            assert len(result.areas) == 19
-            assert len(result.locations) == 45
+            assert len(result.areas) == 16
+            assert len(result.locations) == 16
             db.commit()
 
         with factory() as db:
-            assert db.scalar(select(func.count(WarehouseArea.id))) == 19
-            assert db.scalar(select(func.count(WarehouseAreaStoragePolicy.id))) == 19
-            assert db.scalar(select(func.count(WarehouseLocation.id))) == 45
-            assert len(list_operational_locations(db)) == 45
+            assert db.scalar(select(func.count(WarehouseArea.id))) == 16
+            assert db.scalar(select(func.count(WarehouseAreaStoragePolicy.id))) == 16
+            assert db.scalar(select(func.count(WarehouseLocation.id))) == 16
+            assert len(list_operational_locations(db)) == 16
             raw = db.scalar(
                 select(WarehouseArea).where(WarehouseArea.area_code == "RAW-003")
             )
@@ -193,7 +213,7 @@ def test_floor1_candidate_confirmation_is_atomic_and_idempotent(tmp_path: Path) 
                 reviewer_name="一楼候选测试管理员",
             )
             assert replay.applied is False
-            assert len(replay.areas) == 19
+            assert len(replay.areas) == 16
             assert len(replay.locations) == 0
 
             republished = publish_floor_area_policies(
@@ -203,7 +223,7 @@ def test_floor1_candidate_confirmation_is_atomic_and_idempotent(tmp_path: Path) 
                 operator_id=1,
                 published_features=list(layout["features"]),
             )
-            assert len(republished) == 19
+            assert len(republished) == 16
             assert all(
                 policy.published_map_revision == "next-map-revision"
                 for policy in republished
@@ -226,7 +246,7 @@ def test_floor1_candidate_confirmation_refuses_partial_existing_binding(
             db.add(
                 WarehouseArea(
                     floor_id=floor.id,
-                    area_code="FIN-001",
+                    area_code="SEMI-001",
                     area_name="人工既有区域",
                     planned_location_count=0,
                     planned_pallet_capacity=0,
@@ -309,8 +329,8 @@ def test_floor1_confirmation_reuses_published_manual_region_without_overwrite(
                 reviewer_name="一楼候选测试管理员",
             )
             assert result.applied is True
-            assert len(result.areas) == 19
-            assert len(result.locations) == 45
+            assert len(result.areas) == 16
+            assert len(result.locations) == 16
             db.commit()
 
         with factory() as db:
@@ -323,8 +343,8 @@ def test_floor1_confirmation_reuses_published_manual_region_without_overwrite(
             assert json.loads(preserved.storage_policy.allowed_inventory_types_json) == [
                 "finished"
             ]
-            assert db.scalar(select(func.count(WarehouseArea.id))) == 19
-            assert db.scalar(select(func.count(WarehouseAreaStoragePolicy.id))) == 19
+            assert db.scalar(select(func.count(WarehouseArea.id))) == 16
+            assert db.scalar(select(func.count(WarehouseAreaStoragePolicy.id))) == 16
     finally:
         engine.dispose()
 
@@ -386,7 +406,7 @@ def test_floor1_confirmation_archives_only_empty_unmapped_legacy_area(
             assert legacy.construction_status == "ledger_building"
             assert legacy.capacity_review_status == "excluded"
             assert legacy.planned_location_count == 0
-            assert len(result.locations) == 45
+            assert len(result.locations) == 16
     finally:
         engine.dispose()
 

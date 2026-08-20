@@ -344,8 +344,8 @@ def test_p1_47a_uses_typed_map_search_and_one_unified_read_only_entry() -> None:
     assert "筛选该客户常用箱" in SOURCE
     assert "同客户、同存货产品且类型兼容时可合并" in SOURCE
     assert "/api/warehouse/twin-operations/semi-finished-inbound" in SOURCE
-    assert "selectedLocation.location_name" in SOURCE
-    assert "内部库位编码只在详情中保留" in SOURCE
+    assert "employeeLocationName(selectedLocation)" in SOURCE
+    assert "内部库位编码只在详情中保留" not in SOURCE
     assert ".twin-location-item.warehouse-search-hit" in TWIN_CSS
     assert ".twin-area-lot.product-search-hit" in TWIN_CSS
 
@@ -409,7 +409,7 @@ def test_phase2c9_admin_operations_and_read_only_locating_share_the_measured_map
     assert "/api/warehouse/twin-operations/pallets/${selectedLocation.pallet.pallet_id}/move" in SOURCE
     assert "地图选点入仓 / 差异补录" in SOURCE
     assert "正式栈板移位" in SOURCE
-    assert "仅 admin" in SOURCE
+    assert "仅管理员" in SOURCE
     assert "confirmed: true" in SOURCE
     assert "idempotency_key: inboundIdempotencyKey" in SOURCE
     assert "idempotency_key: moveIdempotencyKey" in SOURCE
@@ -433,15 +433,17 @@ def test_phase2c9_admin_operations_and_read_only_locating_share_the_measured_map
 def test_phase2c9_right_side_selection_summarizes_location_and_collapses_secondary_facts() -> None:
     assert 'const [locationDetailOpen, setLocationDetailOpen] = useState(false)' in SOURCE
     assert 'const [locationItemsExpanded, setLocationItemsExpanded] = useState(false)' in SOURCE
-    assert "当前位置 · {selectedLocation.location_code}" in SOURCE
-    assert "selectedLocation.location_name" in SOURCE
+    assert "当前位置 · {selectedLocation.location_code}" not in SOURCE
+    assert "<small>当前位置</small><b>{employeeLocationName(selectedLocation)}</b>" in SOURCE
+    assert 'showInternalCodes={mapMode === "planning" && canEditLocations}' in SOURCE
+    assert "showInternalCodes?: boolean" in CANVAS
     assert "货物</small><b>{selectedLocationItems.length} 条" in SOURCE
     assert "产品名称待补充" in SOURCE
     assert "客户" in SOURCE
     assert 'aria-expanded={locationDetailOpen}' in SOURCE
     assert 'locationDetailOpen ? "收起位置与栈板详情" : "位置与栈板详情"' in SOURCE
     assert 'locationDetailOpen && <div className="twin-location-secondary"' in SOURCE
-    assert "区域与库位" in SOURCE
+    assert "<dt>位置</dt><dd>{employeeLocationName(selectedLocation)}</dd>" in SOURCE
     assert "地图状态" in SOURCE
     assert "实体栈板" in SOURCE
     assert "库存明细" in SOURCE
@@ -449,7 +451,9 @@ def test_phase2c9_right_side_selection_summarizes_location_and_collapses_seconda
 
 def test_right_side_area_summary_hides_duplicate_labels_but_keeps_full_ledger_accessible() -> None:
     assert 'const [areaInventoryDetailsOpen, setAreaInventoryDetailsOpen] = useState(false)' in SOURCE
-    assert "当前区域 · {selectedAreaCode || selectedAreaFeature.feature_code}" in SOURCE
+    assert "当前区域 · {selectedAreaCode || selectedAreaFeature.feature_code}" not in SOURCE
+    assert "当前规划区域 · ${selectedAreaCode || selectedAreaFeature.feature_code}" in SOURCE
+    assert 'mapMode === "planning" && canEditLocations' in SOURCE
     assert "selectedAreaFeature.name" in SOURCE
     assert "区域状态" in SOURCE
     assert "最大容量" in SOURCE
@@ -457,7 +461,8 @@ def test_right_side_area_summary_hides_duplicate_labels_but_keeps_full_ledger_ac
     assert "0 · 当前无货" in SOURCE
     assert "selectedAreaQuantitySummary" in SOURCE
     assert "areaInventoryDetailsOpen && <div className=\"twin-area-lot-details\"" in SOURCE
-    assert "内部码 {item.location_code || \"未编\"}" in SOURCE
+    assert "内部码 {item.location_code || \"未编\"}" not in SOURCE
+    assert '{item.location_name || "位置名称待完善"}' in SOURCE
     assert "inventoryAgeLabel(item.age_days)" in SOURCE
     assert "item.location_guide?.prompt" in SOURCE
     assert "item.rack_location" not in SOURCE[SOURCE.index('className="twin-area-mold"'):SOURCE.index('className="twin-area-mold-pagination"')]
@@ -539,7 +544,8 @@ def test_phase2c11_adds_rack_navigation_auto_locations_and_admin_corrections() -
     assert "WarehouseRackElevation" in SOURCE
     assert "rack.rack_code.match" in SOURCE
     assert "return candidate || null" in SOURCE
-    assert 'area?.area_code || areaCode || "未匹配区域"' in SOURCE
+    assert "仓储货架正视图" in SOURCE
+    assert 'area?.area_code || areaCode || "未匹配区域"' not in SOURCE
     assert "上一个同区域货架" in SOURCE
     assert "下一个同区域货架" in SOURCE
     assert "ERP PRODUCT LABEL" in SOURCE

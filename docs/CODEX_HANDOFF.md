@@ -4414,3 +4414,11 @@ legacy_ruida_* 原始层
 - 两阶段发布报告 `docs/migration_reports/release_runtime_20260820_114338.json` 状态 `completed`，最终 SHA-256 `1934ee91917caad7f206ebb0d96093882de6a76cdb249f70721e9b3c883638bf`。正式备份 `data/backups/carton_erp_before_release_20260820_114339.sqlite3`，SHA-256 `017094c4c980747895b6a58d2f0c1ad8de2dc719d783fe04ac1eae6cc968827b`；源库、备份和隔离演练均完整性正常、外键异常 0，15 张核心表计数一致。
 - 正式库已由 `uu29v8x9z18` 精确迁移到 `vv30v8x9z19`，应用后 SHA-256 `2a4e0f299d80bb8fbff73f9f70e2db3fdbb03d16df5ba17b210c4dc95f03c7a2`。ERP 单 worker 重启成功，`/api/health` HTTP 200，启动后版本门禁回读为 `v0.22.139｜组合产品交付与仓储模式`。
 - 正式库只读回读：启用组合产品 `component_delivery=15`、`parent_delivery=1`；既有 BOM 订单快照 `component_delivery=2`；Z.001.000205 的三个同编码产品均为 `component_delivery`。迁移没有新增报料、来料、生产、库存、送货或标签事实，只读连接 `total_changes=0`；自动报告的人工验收状态仍为 `not_recorded`。
+
+## 2026-08-20 v0.22.140 模具 40×80 走纸方向修复正式完成
+
+- 原候选 `e8bc2a1988accd7e4637d05c0eb27cd16799498f` 已接到 v0.22.139 最新正式头并顺延发布；候选及正式功能 SHA 为 `928787ca2e70a9129d4900a4787658feb57eb5f6`，分支 `codex/v0.22.140-mold-40x80-feed-20260820` 与 `factory-current-baseline` 均已推送。
+- 模具长标签正式页现在声明 `40mm × 80mm` 物理页面，并将 80×40 横向内容在页内旋转 90°；独立打印队列 `Gprinter GP-3120TU - 40x80标签` 对应 40mm 出纸宽、80mm 走纸长。原 40×30 模板、6.3mm 存货编码、4mm 客户简称及二维码规则保持不变。
+- 标签、PDF、版本和发布安全联合回归 `29 passed`，Python 编译、差异检查及 Alembic 唯一 head `vv30v8x9z19` 均通过。两阶段发布报告 `docs/migration_reports/release_runtime_20260820_115546.json` 状态 `completed`，最终 SHA-256 `901626dbd323d8eadd31e75d786b0fcd51d9dba48f13e9b606010f624b77efc3`。
+- 第二轮正式备份 `data/backups/carton_erp_before_release_20260820_115547.sqlite3`，SHA-256 `6cbc578b7654bef5474f10d1d11906e652bbb0054e46b41cd1c71373cf31d45d`；正式源库、备份和隔离副本均为 `vv30v8x9z19`，完整性正常、外键异常 0、15 张核心表计数一致。
+- ERP 单 worker 重启成功，`/api/health` 与 `/mold-label.html` 均 HTTP 200；正式页面回读确认 `40mm 80mm=True`、`translateX(40mm) rotate(90deg)=True`、旧 `40mm 30mm=True`。本版无迁移，正式数据库发布前后 SHA-256 均为 `2a4e0f299d80bb8fbff73f9f70e2db3fdbb03d16df5ba17b210c4dc95f03c7a2`，只读连接 `total_changes=0`；未产生打印、模具、订单、生产或库存事实。实体标签方向仍由老板在新队列上抽打一张完成最终人工验收，自动报告状态保持 `not_recorded`。

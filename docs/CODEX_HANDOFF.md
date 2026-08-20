@@ -4464,3 +4464,76 @@ legacy_ruida_* 原始层
 - 每个子任务不再全文读取总需求、完整交接或能力台账；只读 NAS `AI_START.md`、任务卡、一个模块上下文和被路由的总需求/章程章节。旧 `BUSINESS_RULES.md`、`ERP_PROJECT_STATE.md` 已标为历史资料。
 - 新确认业务规则：`FIN-001～003` 是一个业务暂存组内的三个独立真实物理区域；片料优先复用现有半成品/原料暂存区，原料过多时才临时放成品区域；共享模具保持一个本体，标签最多显示两个主客户简称并以 `/` 分隔；实际采购价格与当前主档参考价分离并按收料行冻结，P1-11D 继续暂停。
 - 本候选只调整治理文档，不修改业务代码、migration、数据库、版本或正式运行服务；后续子任务须从实时正式基线建立独立工作区。
+
+## 2026-08-20 总任务阶段 0 工厂数据门槛只读审计
+
+- 老板明确授权只读审计、禁止正式数据写入、迁移、legacy 刷新、历史修复、停服重启、提交与推送；完整报告为 `docs/migration_reports/2026-08-20_PHASE0_FACTORY_DATA_GATE_READONLY_AUDIT.md`，审计脚本 SHA-256 为 `4741da188ccb06b19ee0f78c9a48c65cb3e3b50355fc75c22fbcb9f8bfc3d968`。
+- 最终一致性窗口 `2026-08-20 13:18:48–13:18:50 +08:00` 直接读取正式 `data/carton_erp.sqlite3`：`mode=ro`、`query_only=1`、authorizer 拦写、`total_changes=0`、`quick_check=ok`、外键异常 0，窗口前后库 SHA-256 同为 `f51666a060feb3a60123a4e4a18bc60ed9f01532e9d4697deac0ef248c9ab752`。在线服务在早期扫描与最终窗口之间有其他会话写入，因此报告只对最终时间点负责。
+- 代码、实时远端、本地与服务均为 `a9973e6e53b63f5abbdd3c6ba84a9f1f733dde53 / v0.22.141`，Alembic current/唯一 head 均为 `vv30v8x9z19`；但上一节仍把 v0.22.141 记为候选，正式发布状态未闭环。当前基线还缺 NAS 启动规则要求的 `docs/CODEX_START.md`、`docs/TIANMING_ERP_MASTER_REQUIREMENTS.md`、`docs/CODEX_EXECUTION_CHARTER.md`。
+- 最终扫描 79 个未完成订单、250 条明细：已收料无任务 53（规范化收料 12、旧状态 41），追溯中断 54，已完工无库存批次/入库流水 27，工位错路由 21，印刷颜色保存异常 72；可证实的有库存无法送货、送货后库存未扣、重复成品和完工用途不平衡均为 0。`22000110/item9831` 是已完工无库存流水金样本，`Z.001.000205/item10050` 是有正式收料但组件任务仍等待材料金样本。
+- FIN-001/002/003 分别绑定不同已发布地图要素和真实物理边界，结论为三个真实区域而非一个区域投影；`A1` 必须带楼层，`1FA` 与 `SF-TEMP` 当前停用，正式半成品策略区为一楼 SEMI-001 与三楼 SEMI-006。
+- 当前瓦楞纸板只读取 `materials.quote_price`（空时回退 `rule_base_price` 并应用楞型加价）作为 current reference；正式供应商报料明细与收料行没有实际采购价快照。收料材质身份通过供应商明细快照追溯，但无法证明本次成交价或保存“收料时改材质”的交易级前后价格事实。
+- 阶段 0 门槛未通过。本轮未修改正式业务数据、legacy、迁移、库存、任务或订单状态，未停服重启、提交或推送；等待家庭端基于正式库副本制作候选，并由老板确认正式发布与现场业务事实后再授权。
+
+## 2026-08-20 模具 40×80 实体复打失败后的打印队列修正
+
+- 老板实体复打确认 v0.22.140 的输出方向和面积仍与原 40×30 一致，人工验收不通过。正式网页已具备 `@page 40mm 80mm` 与页内 90° 旋转，因此继续改网页不能解决驱动回退。
+- Windows 正式机只读核对发现专用队列 `Gprinter GP-3120TU - 40x80标签` 虽已创建，但真实 PrintTicket 仍是 `User defined 90×60 / Portrait`；这就是网页40×80请求无法匹配、实体继续回退的直接根因。
+- 已仅修正专用队列为驱动内置纸型 `80×40（ns0000:User0000000268）/ Landscape`，驱动能力表确认该纸型为 `80000×40000 μm`，横向后的有效物理页面为40mm出纸宽、80mm走纸长。修正后重新读取票据验证通过。
+- 原队列 `Gprinter  GP-3120TU` 仍保持 `40×30（ns0000:User0000000257）/ Portrait`，未修改、未设为默认。下一次实体复打必须在打印窗口明确选择专用队列；本轮未修改代码、迁移或正式数据库，也未创建打印事实、提交或推送。
+
+## 2026-08-20 v0.22.142 模具 40×80 标签单次旋转修复正式完成
+
+- 老板明确授权直接发布。候选提交 `36b2a2d7ec334dc0744a1313ee075aea7dc2b6b4` 已按 fast-forward 更新并推送到 `factory-current-baseline`；本地、正式远端与运行代码 SHA 一致，未修改 `origin/main`。
+- 发布前模具标签、PDF、版本、启动与发布安全联合回归 `49 passed`，Python 编译与差异检查通过。本版无 migration，Alembic revision 保持唯一 `vv30v8x9z19`。
+- 两阶段正式发布报告 `docs/migration_reports/release_runtime_20260820_140235.json` 状态 `completed`，SHA-256 `6058F146C638A829D9BC65D2A3F51E4857F3927C7E06A2E26FACD7326E883FD1`。正式备份 `data/backups/carton_erp_before_release_20260820_140237.sqlite3`，SHA-256 `6D9AA4752937F1F9B3A4620BA30309455871AF99E2D619FB3C17BC1EDCFB0CDA`；备份与隔离演练均 `integrity_check=ok`、外键异常 0、15 张核心表计数一致。
+- 正式数据库发布前后 SHA-256 均为 `6F0467F958DB08915148CA6615F22B8B2950C5B404893C100C17931902BFC6CF`，revision 仍为 `vv30v8x9z19`；只读回读 `query_only=1`、`integrity_check=ok`、外键异常 0、`total_changes=0`，本次发布未改写模具、产品、订单、生产、库存或打印事实。
+- ERP 已重启，本机与局域网 `/api/health` 均 HTTP 200；正式 `/mold-label.html` 回读确认页面为原生 `80mm×40mm`、不存在 `rotate(90deg)`、含单次旋转说明。专用队列仍为 `User0000000268 / Landscape`，原 40×30 队列未修改。
+- 阶段 0 审计在途文件发布前保护于 stash `4bf53548eeb8fe7c186e27ae420739678c919371`，发布后已恢复并保留原报告；技术发布完成，`human_acceptance_status=not_recorded`。老板须强制刷新后用专用队列抽打一张完成最终实体方向验收。
+
+## 2026-08-20 v0.22.143 模具 40×80 物理打印轴修复正式完成
+
+- 老板确认 v0.22.142 实体仍沿短边打印并要求继续。Chrome 实际打印设置只读回读确认目的地为专用队列、纸型 80×40、缩放 100%，排除操作错误；根因为 `Landscape` 将 80mm 映射到仅 40mm 的打印头横向轴。
+- 修复提交与正式 SHA 均为 `649dd5abc0040b61cc4681125bc1bb2b8681127d`。专用队列已改为 `User0000000268 / Portrait`；正式网页使用 40×80 物理页并在页内旋转一次。原 40×30 队列未修改。
+- 发布前联合回归 `49 passed`；300 DPI 像素验收用实体照片同款内容确认 40×80 纵向页、长边内容完整。两阶段发布报告 `docs/migration_reports/release_runtime_20260820_142011.json` 状态 `completed`，SHA-256 `0AAC680AE4253573AEE87336380E5DDEB00C0BAE362DCF29C74692B9989A99D1`。
+- 正式备份 `data/backups/carton_erp_before_release_20260820_142012.sqlite3`，SHA-256 `79B45AE7D6644E7200DB41A2CD748014AFEF11441C0346D0942A1F08A8873F1F`；正式库发布前后 SHA-256 均为 `1beda3cd25011e723c83efeb3d4ea3b527afda7db6eaa4fde8e26a66314c1ebb`，revision 保持 `vv30v8x9z19`，完整性检查正常、外键异常 0、15 张核心表计数一致，未改写业务数据。
+- ERP 本机与局域网健康检查均为 HTTP 200；正式页面的 40×80 物理页、页内单次旋转和 Portrait 提示均已回读确认，专用队列也回读为 Portrait。阶段 0 审计文件已从保护 stash `27510e1da3ecaed3d40086d7698f7f10ef33091c` 恢复；技术发布完成，`human_acceptance_status=not_recorded`，仍需老板强制刷新后实体抽打一张确认。
+
+## 2026-08-20 v0.22.144 模具 40×80 真实纵向纸型正式完成
+
+- 老板确认 v0.22.143 实体输出仍无变化。最终根因已由 Chrome 实际能力缓存和驱动 PrintTicket 共同证实：旧专用队列仍向浏览器声明宽80mm、高40mm，浏览器会自动旋转网页40×80页面，抵消此前方向修复。
+- 正式专用队列与新增队列 `Gprinter GP-3120TU - 40x80纵向标签` 均已改为驱动 `User0000000256 / 40000×80000 / Portrait` 并回读通过；原40×30队列未修改。正式页面明确要求选择新纵向队列，避免Chrome继续复用旧能力缓存。
+- 正式提交 `e7994493562b99dd564ab4221f9045ecf22da829` 已推送 `factory-current-baseline`。发布前标签、版本、启动、数据库路径和发布安全回归 `46 passed`；本版无migration，revision保持 `vv30v8x9z19`。
+- 两阶段发布报告 `docs/migration_reports/release_runtime_20260820_144526.json` 状态 `completed`，SHA-256 `8CA5775E623EA71F75E707C78DDF3E8CF9D49D19ABA48F97BF13FB69E39057AF`。正式备份 `data/backups/carton_erp_before_release_20260820_144527.sqlite3`，SHA-256 `3e1ba7fbce2d8be2ab76b926af2c2282d046c61130404680f9b4d3024f07dd91`；正式库发布前后SHA均为 `7059700c6f0b47e6859bc37aa4498b978873b1b09f59e35bf48d88700cd508ed`，完整性正常、外键异常0、核心表计数一致。
+- ERP本机与局域网健康检查均HTTP 200；正式页面回读包含新纵向队列名称和40×80物理页。技术发布完成，`human_acceptance_status=not_recorded`；老板须关闭旧打印窗口、强刷标签页并选择新队列做一张实体复打。
+
+## 2026-08-20 D1 工厂正式库新副本三文件包交付完成
+
+- 按 NAS `2026-08-20_D1工厂正式库新副本导出与家庭只读复现输入任务书.md`，在工厂主机 `PC-20250926DZYH` 使用既有 `scripts/admin/export_weekly_home_uat.ps1` 和 SQLite Backup API 生成新包 `factory-20260820-144653-e7994493`。导出代码、实时远端和正式基线 SHA 均为 `e7994493562b99dd564ab4221f9045ecf22da829`，代码唯一 head 与正式库 revision 均为 `vv30v8x9z19`。
+- 本地包 `D:\tm-weekly-uat-exports\factory-20260820-144653-e7994493` 已完整复制到 `Z:\sata1-18015598002\BoxERP\weekly_home_uat_exports\2026-08-20\factory-20260820-144653-e7994493`。两端均恰好包含数据库快照、`manifest.json`、`manifest.sha256` 三文件；逐文件大小与 SHA `3/3` 一致，NAS 再验签 `ok=true`、数据库 SHA `3e1ba7fbce2d8be2ab76b926af2c2282d046c61130404680f9b4d3024f07dd91`、完整性正常、外键异常 0、必需表齐全。
+- 正式源库导出前、导出后和 NAS 验签后三次大小均为 `219447296` bytes、SHA-256 均为 `7059700c6f0b47e6859bc37aa4498b978873b1b09f59e35bf48d88700cd508ed`，revision、完整性、外键和 15 张核心表计数完全一致。D1 未写正式数据库、未迁移、未刷新 legacy、未修改业务事实、未停服重启、未提交或推送。
+- NAS 独立回执：`04_开发记录/任务回执/2026-08-20_工厂_D1正式库新副本导出与家庭只读复现输入交付.md`。当前正式基线仍缺 D1 任务书指定的 `docs/CODEX_START.md` 和 `docs/context/PLATFORM.md`，本轮没有用旧文件替代，已在回执中列为启动资料治理缺口。
+- 家庭端现在可从上述 NAS 路径先验签，再只在 received 只读收到件或专用副本中按“已收料无任务 → 追溯中断 → 已完工无库存流水”顺序复现分类；新计数允许不同于阶段 0 时点 `53/54/27`，不得连接或修复工厂正式库。
+
+## 2026-08-20 瑞明模具标签无法打印只读复核
+
+- 正式库以 SQLite `mode=ro/query_only` 核对到 3 款瑞明模具：RM-7、RM-9、RM-11；三者均启用、各绑定一款有效产品，产品尺寸、片料尺寸、楞型和开料方式完整，连接 `total_changes=0`。
+- 正式 v0.22.144 对 `瑞明#7 / 瑞明#9 / 瑞明#11` 均未把 `#` 识别为简称与编号分隔符，错误回退为完整客户名 `苏州瑞明香氛科技股份有限公司`，继而触发 40×80 标签客户简称 12 字保护。已推送但未发布的候选 `codex/v0.22.145-mold-label-content-20260820@c25b3402` 对三者分别解析为 `瑞明 / 7`、`瑞明 / 9`、`瑞明 / 11`。
+- 当前不能打印的直接原因是正式 ERP 尚未合入或发布该候选，而不是瑞明产品台账缺项。本轮只读诊断未创建打印事实、未修改正式数据库、未提交或发布代码。
+
+## 2026-08-20 v0.22.145 模具标签内容与瑞明打印修复正式完成
+
+- 功能提交 `611833ed`、交接提交 `c25b3402` 与版本提交 `0765fa719b79fc67232b3684a83d92d0e7b5bbec` 已线性整合并推送到 `factory-current-baseline`；正式、远端与运行代码 SHA 一致，版本为 `v0.22.145｜模具标签内容与瑞明打印修复`。
+- 40×80 标签现将产品规格、楞型和开料方式依次放在同一行；`# / ＃` 可作为客户简称与模具编号分隔符。RM-7、RM-9、RM-11 分别稳定解析为 `瑞明 / 7`、`瑞明 / 9`、`瑞明 / 11`，真实超长内容仍拒绝打印，40×80方向和原40×30模板不变。
+- 发布前模具标签、PDF、打印状态、版本、启动与发布安全联合回归 `61 passed`，Python 编译与差异检查通过；本版无 migration，唯一 revision 保持 `vv30v8x9z19`。
+- 两阶段正式发布报告 `docs/migration_reports/release_runtime_20260820_152531.json` 状态 `completed`，SHA-256 `A153D08B0BBDC60D23082CD79639DC0A9A6F05F0E428F50BB1669D3648CD70D7`。正式备份 `data/backups/carton_erp_before_release_20260820_152532.sqlite3`，SHA-256 `BF7CDF6BC0DC450E771D563AFA5DCC50A13DFDA23EECA0938D3D7D1412D7D55B`；备份和隔离副本完整性正常、外键异常0、15张核心表计数一致。
+- ERP 已重启，局域网 `/api/health` HTTP 200；正式页面回读包含 `label_cutting_mode`、`wide-cutting` 和新纵向队列。正式库发布前后 SHA-256 均为 `E185421D6A18422021939CF1CF372990F196B6A1A399D5062847477962E1DD4C`，只读回读 `query_only=1`、`integrity_check=ok`、外键异常0、`total_changes=0`，未改写模具、产品、订单、库存或打印事实。
+- 阶段0审计交接与未跟踪报告已从保护 stash `0eb5556adbc4cd3d52f6b354fbb4e624e18ef6e3` 恢复；stash继续保留未删除。技术发布完成，`human_acceptance_status=not_recorded`，老板须强刷后分别打开RM-7、RM-9、RM-11，并抽打一张完成最终人工验收。
+
+## 2026-08-20 家庭 P0-15/P1-46A/D1-R1-R2-R3 更新整合正式完成
+
+- 基于正式 `0765fa719b79fc67232b3684a83d92d0e7b5bbec` 整合 P0-15 `d3d0ffded7ed64f843e1dab4fa8c45cf5c969631`、P1-46A `9bb1303ab302ed121d8ee3d51e434f4dbe4da109`，并合并 D1-R1/R2/R3 顺序候选 `036b61b6b4b1401eb2cf86309fab93f0ca04b9e5`；最终正式代码 SHA 为 `b3c2574fd29722bfc57c5b98c5f96c5975bc3919`。
+- P0-15 仅新增只读未完成订单链扫描；P1-46A 修复合并报料开料方式联动；D1-R2 仅修复虚拟组合父项收料投影门槛，R1/R3 保持匿名审计与动作矩阵，未自动创建任务、库存或追溯流水。无 migration，唯一 head `vv30v8x9z19`。
+- 隔离专项及相邻回归 `116 passed`，Python 编译、差异检查通过。发布报告 `docs/migration_reports/release_runtime_20260820_181832.json` 状态 `completed`，报告 SHA-256 `0C40CE5C0771B4821201A58D1986E828264F6B9D3C62C7C538132F9B0AACC46F`。
+- 正式备份 `data/backups/carton_erp_before_release_20260820_181833.sqlite3`，SHA-256 `FE3F05291EAA2323979C27ED708EB31C2E0C57F607CA7A3231BD9CADD7C12311`；revision `vv30v8x9z19`、完整性 `ok`、外键违规 `0`、核心表计数一致。ERP 已重启，本机与局域网健康接口、首页、手机入口和模具标签页均 HTTP 200。
+- 正式业务数据未写入，正式库 SHA-256 保持 `2915b0ef237843a5d7673158247d4dae89726810cf0d5661d91093bf3a95f3f3`；保护性 stash `protect-before-home-sync-20260820` 已用 `stash apply` 恢复且继续保留，阶段 0 审计报告未删除。外部人工验收仍待完成。

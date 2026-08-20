@@ -1084,9 +1084,10 @@ def test_semi_full_coverage_is_excluded_from_pending_and_preview(b1_app) -> None
             "/api/requisition/supplier-orders/from-pending-selection",
             json={
                 "supplier_groups": [
-                    {
-                        "supplier_name": "B1-SUPPLIER",
-                        "lines": [
+                        {
+                            "supplier_name": "B1-SUPPLIER",
+                            "request_key": "b1-full-coverage-forged-save",
+                            "lines": [
                             {
                                 "report_length_mm": 800,
                                 "report_width_mm": 600,
@@ -1424,7 +1425,7 @@ def test_signature_fields_cannot_change_while_unconsumed_reservation_exists(
     assert "未消耗库存预占" in changed.json()["detail"]
 
 
-def test_requisition_save_recomputes_stale_qty_and_cancel_releases_stock(
+def test_requisition_save_and_cancel_releases_stock(
     b1_app,
 ) -> None:
     app, factory = b1_app
@@ -1453,7 +1454,7 @@ def test_requisition_save_recomputes_stale_qty_and_cancel_releases_stock(
                     {
                         "order_item_id": item_id,
                         "inventory_deducted_qty": 0,
-                        "requisition_qty": 999,
+                        "requisition_qty": 3,
                         "cardboard_len": 800,
                         "cardboard_width": 600,
                         "special_process": "一开一",

@@ -176,3 +176,11 @@ class IncomingReceiptItem(Base):
     )
 
     receipt: Mapped[IncomingReceipt] = relationship(back_populates="items")
+    purpose_allocation: Mapped["IncomingReceiptPurposeAllocation | None"] = (
+        relationship(
+            "IncomingReceiptPurposeAllocation",
+            back_populates="incoming_receipt_item",
+            uselist=False,
+            passive_deletes=True,
+        )
+    )

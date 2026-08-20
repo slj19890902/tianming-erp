@@ -309,13 +309,18 @@ def _delivery_remaining_quantity(db: Session, order_item: OrderItem) -> int:
         db, order_item.id
     ):
         return 0
-    if is_composite_order_item(db, order_item.id):
+    has_receipt_auto_finished = _has_receipt_auto_finished_fact(db, order_item.id)
+    if is_composite_order_item(db, order_item.id) and not has_receipt_auto_finished:
         return int(kit_availability(db, order_item.id)["available_sets"])
-    task = db.scalar(
-        select(ProductionTask).where(
-            ProductionTask.order_item_id == order_item.id,
-        )
+    task_query = select(ProductionTask).where(
+        ProductionTask.order_item_id == order_item.id,
     )
+    if has_receipt_auto_finished:
+        task_query = task_query.where(
+            ProductionTask.sales_order_item_bom_component_id.is_(None),
+            ProductionTask.task_role == "order_main",
+        )
+    task = db.scalar(task_query.order_by(ProductionTask.id))
     if order_item.supply_mode_snapshot == "external_purchase":
         return max(
             int(order_item.quantity or 0) - int(order_item.delivered_quantity or 0),
@@ -335,6 +340,24 @@ def _delivery_remaining_quantity(db: Session, order_item: OrderItem) -> int:
     elif order_item.material_status != "received" and not inventory_covered:
         return 0
     return max(max_deliverable - int(order_item.delivered_quantity or 0), 0)
+
+
+def _has_receipt_auto_finished_fact(db: Session, order_item_id: int) -> bool:
+    """Choose the parent finished ledger for P1-81 composite receipts.
+
+    Historical composite orders have no receipt-auto completion and continue
+    to consume their component inventory exactly as before.
+    """
+
+    return db.scalar(
+        select(ProductionCompletion.id)
+        .where(
+            ProductionCompletion.order_item_id == int(order_item_id),
+            ProductionCompletion.status == "posted",
+            ProductionCompletion.origin == "receipt_auto",
+        )
+        .limit(1)
+    ) is not None
 
 
 def _delivery_quantity_facts(db: Session, order_item: OrderItem) -> dict[str, int]:
@@ -2049,7 +2072,16 @@ def _delivery_kit_metadata(
             "missing_components": [],
             "component_lines": [],
         }
+    receipt_auto_finished = _has_receipt_auto_finished_fact(db, order_item.id)
     availability = kit_availability(db, order_item.id)
+    if receipt_auto_finished:
+        available_finished = _delivery_remaining_quantity(db, order_item)
+        availability = {
+            **availability,
+            "available_sets": available_finished,
+            "missing_components": [],
+            "fulfillment_basis": "receipt_auto_finished",
+        }
     planned_quantity = (
         int(availability.get("available_sets") or 0)
         if planned_delivery_quantity is None
@@ -2084,11 +2116,12 @@ def _inventory_sources_for_order_item(
     dispatched: bool = False,
     composite_hint: bool | None = None,
 ) -> list[dict]:
-    if (
+    composite_source_mode = (
         composite_hint
         if composite_hint is not None
         else is_composite_order_item(db, order_item.id)
-    ):
+    ) and not _has_receipt_auto_finished_fact(db, order_item.id)
+    if composite_source_mode:
         return _composite_inventory_sources_for_order_item(
             db,
             order_item=order_item,
@@ -7418,7 +7451,9 @@ def dispatch_delivery(
             operation_key = (
                 f"d{delivery_id}-{dispatched_at:%Y%m%d%H%M%S%f}-i{line.id}"
             )
-            if is_composite_order_item(db, order_item.id):
+            if is_composite_order_item(
+                db, order_item.id
+            ) and not _has_receipt_auto_finished_fact(db, order_item.id):
                 execute_delivery_component_consumption(
                     db,
                     delivery_item_id=line.id,
@@ -8058,7 +8093,9 @@ def cancel_delivery(
             operation_key = (
                 f"c{delivery_id}-{cancelled_at:%Y%m%d%H%M%S%f}-i{line.id}"
             )
-            if is_composite_order_item(db, order_item.id):
+            if is_composite_order_item(
+                db, order_item.id
+            ) and not _has_receipt_auto_finished_fact(db, order_item.id):
                 reverse_delivery_component_allocations(
                     db,
                     delivery_item_id=line.id,

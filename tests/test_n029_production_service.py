@@ -935,7 +935,9 @@ def test_production_tasks_paging_limits_payload_and_query_families(
     assert len(one.json()["items"]) == 1
     assert len(twenty.json()["items"]) == 20
     assert one_selects == twenty_selects
-    assert one_selects <= 9
+    # P1-81 adds one bounded receipt-purpose summary query; pagination must
+    # still use the same query count for one row and twenty rows.
+    assert one_selects <= 10
     assert len(twenty.content) < len(legacy.content)
 
 
@@ -1588,7 +1590,7 @@ def test_permissions_customer_scope_locations_and_snapshot_fields(production_app
     direct_row = next(row for row in rows if row["id"] == ids["cases"]["direct"]["task"])
     assert direct_row["product_code"] == "SNAP-direct"
     assert direct_row["product_name"] == "快照-direct"
-    assert direct_row["specification"] == "500x300x200"
+    assert direct_row["specification"] == "500×300×200mm"
     assert direct_row["material"] == "K=A"
     assert direct_row["flute"] == "A"
     assert direct_row["production_notes"] == "先压线后模切"

@@ -209,6 +209,7 @@ def test_order_component_override_caps_multi_delivery_and_cancel(
             task = ProductionTask(
                 order_item_id=order_item.id,
                 sales_order_item_bom_component_id=snapshot.id,
+                task_role="component_internal",
                 status="completed",
                 planned_quantity=2700,
                 finished_coverage_snapshot=0,

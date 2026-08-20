@@ -12,7 +12,7 @@ from alembic import command
 from alembic.config import Config
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 
@@ -525,6 +525,23 @@ def _preview_supplier_order_draft(client: TestClient, selections: list[dict]) ->
     )
     assert response.status_code == 200, response.text
     return response.json()
+
+
+def _mark_all_purchase_sources_as_legacy(session_factory) -> None:
+    """Build explicit pre-P1-80 rows for legacy incoming compatibility tests."""
+    from app.models.requisition import RequisitionItem
+    from app.models.supplier_requisition_order import (
+        PurchasePurposeSourceSnapshot,
+        SupplierRequisitionOrderItem,
+    )
+
+    with session_factory() as session:
+        session.execute(delete(PurchasePurposeSourceSnapshot))
+        for row in session.scalars(select(RequisitionItem)).all():
+            row.purpose_contract_status = "legacy_unset"
+        for row in session.scalars(select(SupplierRequisitionOrderItem)).all():
+            row.purpose_contract_status = "legacy_unset"
+        session.commit()
 
 
 def _save_supplier_order_draft(client: TestClient, draft: dict):
@@ -1382,6 +1399,7 @@ def test_supplier_order_void_requires_receipt_reversal_first(
         supplier_order_id = created.json()["created_orders"][0][
             "supplier_order_id"
         ]
+        _mark_all_purchase_sources_as_legacy(session_factory)
         client.post("/api/auth/logout")
         _login(client, "admin")
         received = client.put(
@@ -1851,6 +1869,7 @@ def test_receiving_partial_supplier_order_keeps_unreported_remainder_pending(
             )
         assert supplier_line_id is not None
 
+        _mark_all_purchase_sources_as_legacy(session_factory)
         _login(client, "workshop")
         received = client.put(
             f"/api/incoming/receive/so{supplier_line_id}",
@@ -3302,6 +3321,7 @@ def test_telescoping_lid_requisition_splits_cover_and_base_rows(
                 .order_by(RequisitionItem.id)
                 .all()
             ]
+        _mark_all_purchase_sources_as_legacy(session_factory)
         client.post("/api/auth/logout")
         _login(client, "workshop")
         received_cover = client.put(f"/api/incoming/receive/r{component_ids[0]}")
@@ -3389,6 +3409,7 @@ def test_telescoping_lid_incoming_keeps_cover_and_base_as_separate_rows(
         _login(client, "sales")
         created = client.post("/api/requisition/batches", json=payload)
         assert created.status_code == 201, created.text
+        _mark_all_purchase_sources_as_legacy(session_factory)
         client.post("/api/auth/logout")
         _login(client, "workshop")
         pending = client.get("/api/incoming/pending")

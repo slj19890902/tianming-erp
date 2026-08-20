@@ -43,6 +43,7 @@ const vm={{
   supplierRequisitionSelections:[],supplierRequisitionDraft:{{supplier_groups:[]}},modal:null,
   selectedPendingRows(){{return currentRows;}},isPendingRowSelectable(){{return true;}},
   pendingSupplierSelectionPayload(row){{return {{type:"order_item",order_item_id:row.id,supplier_name:row.supplier_name,report_length_mm:row.length,report_width_mm:row.width,cutting_mode:row.cutting_mode,remark:row.remark||null}};}},
+  initializeSupplierPurchasePurposeDraft(data){{return data;}},
   openCompositeRequisition:async()=>true,supplierDraftLateFinishedSources:()=>[],supplierDraftSemiInventoryOptions:()=>[],
   beginLatestRequest(key){{global.latestRequestControllers.get(key)?.abort();const controller={{signal:{{}},abort(){{this.aborted=true;}}}};global.latestRequestControllers.set(key,controller);return controller;}},
   finishLatestRequest(key,controller){{if(global.latestRequestControllers.get(key)===controller)global.latestRequestControllers.delete(key);}},

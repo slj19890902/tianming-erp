@@ -17,6 +17,7 @@ from app.core.time_contract import (
 )
 from app.models.customer import Customer
 from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
+from app.models.purchase_receipt import IncomingReceiptPurposeAllocation
 from app.models.order import Order, OrderItem
 from app.models.product_bom import (
     RequisitionItemBomSource,
@@ -41,6 +42,12 @@ from app.services.production_workflow import (
     refresh_order_production_status,
     refresh_production_task,
 )
+from app.services.receipt_purpose_distribution import (
+    ReceiptPurposeFlowError,
+    post_receipt_purpose_allocation,
+    resolve_receipt_purpose_context,
+    reverse_receipt_purpose_allocation,
+)
 from app.services.requisition_quantities import purchase_sheet_quantity
 from app.services.stock_replenishment import (
     StockReplenishmentError,
@@ -61,9 +68,16 @@ from app.services.audit_log import append_audit_event
 
 
 class IncomingReceiptError(ValueError):
-    def __init__(self, message: str, status_code: int = 400) -> None:
+    def __init__(
+        self,
+        message: str,
+        status_code: int = 400,
+        *,
+        code: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.code = code
 
 
 @dataclass(frozen=True)
@@ -517,6 +531,47 @@ def _open_requisition_status(db: Session, row: RequisitionItem) -> str:
     )
 
 
+def _claim_incoming_source(
+    db: Session,
+    *,
+    order_id: int,
+    supplier_item_id: int | None = None,
+    requisition_item_id: int | None = None,
+) -> None:
+    """Serialize all receipt sources for one order, including SQLite."""
+
+    try:
+        lock_order_rows_for_production_transition(db, [order_id])
+    except ProductionWorkflowError as error:
+        raise IncomingReceiptError(str(error), error.status_code) from error
+    if supplier_item_id is not None:
+        claimed = db.execute(
+            update(SupplierRequisitionOrderItem)
+            .where(
+                SupplierRequisitionOrderItem.id == supplier_item_id,
+                SupplierRequisitionOrderItem.status == "active",
+            )
+            .values(version=SupplierRequisitionOrderItem.version)
+        )
+    elif requisition_item_id is not None:
+        claimed = db.execute(
+            update(RequisitionItem)
+            .where(
+                RequisitionItem.id == requisition_item_id,
+                RequisitionItem.status.in_(
+                    ["有效", "supplier_requisition_created", "已入库"]
+                ),
+            )
+            .values(version=RequisitionItem.version)
+        )
+    else:
+        claimed = None
+    if claimed is not None and claimed.rowcount != 1:
+        raise IncomingReceiptError("报料来源已撤销或状态已变化，请刷新后重试", 409)
+    db.flush()
+    db.expire_all()
+
+
 def _target(
     db: Session,
     item_key: int | str,
@@ -550,43 +605,12 @@ def _target(
             raise IncomingReceiptError("供应商报料明细不存在", 404)
         supplier_item, supplier_order, order_item, order = row
         if claim_for_receipt:
-            claimed = db.execute(
-                update(SupplierRequisitionOrderItem)
-                .where(
-                    SupplierRequisitionOrderItem.id == supplier_item.id,
-                    SupplierRequisitionOrderItem.status == "active",
-                    SupplierRequisitionOrderItem.version == supplier_item.version,
-                )
-                .values(version=SupplierRequisitionOrderItem.version)
+            _claim_incoming_source(
+                db,
+                order_id=order.id,
+                supplier_item_id=supplier_item.id,
             )
-            if claimed.rowcount != 1:
-                raise IncomingReceiptError(
-                    "该供应商报料明细已被撤销或状态已变化，请刷新后重试", 409
-                )
-            db.flush()
-            db.expire_all()
-            row = db.execute(
-                select(
-                    SupplierRequisitionOrderItem,
-                    SupplierRequisitionOrder,
-                    OrderItem,
-                    Order,
-                )
-                .join(
-                    SupplierRequisitionOrder,
-                    SupplierRequisitionOrder.id
-                    == SupplierRequisitionOrderItem.supplier_order_id,
-                )
-                .join(
-                    OrderItem,
-                    OrderItem.id == SupplierRequisitionOrderItem.order_item_id,
-                )
-                .join(Order, Order.id == OrderItem.order_id)
-                .where(SupplierRequisitionOrderItem.id == supplier_item_id)
-            ).one_or_none()
-            if row is None:
-                raise IncomingReceiptError("供应商报料明细不存在", 404)
-            supplier_item, supplier_order, order_item, order = row
+            return _target(db, text, allow_closed=allow_closed)
         if (
             supplier_item.status != "active"
             or
@@ -624,6 +648,13 @@ def _target(
         if row is None:
             raise IncomingReceiptError("报料明细不存在", 404)
         requisition_item, order_item, order = row
+        if claim_for_receipt:
+            _claim_incoming_source(
+                db,
+                order_id=order.id,
+                requisition_item_id=requisition_item.id,
+            )
+            return _target(db, text, allow_closed=allow_closed)
         can_receive = _requisition_can_receive(db, requisition_item, order_item)
         if not can_receive and not (
             allow_closed and requisition_item.status == "已入库"
@@ -726,6 +757,17 @@ def _target(
                 supplier_item.supplier_order_id,
             )
             if supplier_order is not None:
+                if claim_for_receipt:
+                    _claim_incoming_source(
+                        db,
+                        order_id=order.id,
+                        supplier_item_id=supplier_item.id,
+                    )
+                    return _target(
+                        db,
+                        f"so{supplier_item.id}",
+                        allow_closed=allow_closed,
+                    )
                 return IncomingTarget(
                     item_key=text,
                     order=order,
@@ -741,6 +783,9 @@ def _target(
             409,
         )
     planned = int(order_item.requisition_qty or order_item.quantity or 0)
+    if claim_for_receipt:
+        _claim_incoming_source(db, order_id=order.id)
+        return _target(db, text, allow_closed=allow_closed)
     return IncomingTarget(
         item_key=text,
         order=order,
@@ -1316,10 +1361,66 @@ def _idempotent_receipt_item(
     resolution_action: str | None,
     resolution_reason: str | None,
     surplus_location_id: int | None,
+    user: User,
+    expected_receipt_fact_version: int | None = None,
+    purchase_purpose_source_snapshot_id: int | None = None,
+    expected_purpose_snapshot_version: int | None = None,
+    receipt_plan_fingerprint: str | None = None,
+    expected_actual_material_version: int | None = None,
+    actual_material_fingerprint: str | None = None,
 ) -> IncomingReceiptItem:
     if len(receipt.items) != 1:
         raise IncomingReceiptError("幂等键已用于其他入库操作", 409)
     row = receipt.items[0]
+    allocation = db.scalar(
+        select(IncomingReceiptPurposeAllocation).where(
+            IncomingReceiptPurposeAllocation.incoming_receipt_item_id == row.id
+        )
+    )
+    if allocation is not None:
+        if int(receipt.received_by or 0) != int(user.id):
+            raise IncomingReceiptError(
+                "同一收料幂等键不能由不同操作者重放",
+                409,
+                code="INCOMING_IDEMPOTENCY_ACTOR_MISMATCH",
+            )
+        fact = allocation.purchase_receipt_fact_id
+        if (
+            expected_receipt_fact_version is None
+            or purchase_purpose_source_snapshot_id is None
+            or expected_purpose_snapshot_version is None
+            or receipt_plan_fingerprint is None
+            or expected_actual_material_version is None
+            or actual_material_fingerprint is None
+        ):
+            raise IncomingReceiptError(
+                "同一收料幂等键的冻结事实字段不完整",
+                409,
+                code="INCOMING_IDEMPOTENCY_CONFLICT",
+            )
+        from app.models.purchase_receipt import PurchaseReceiptFact
+
+        receipt_fact = db.get(PurchaseReceiptFact, fact)
+        if (
+            receipt_fact is None
+            or int(receipt_fact.receipt_fact_version)
+            != int(expected_receipt_fact_version)
+            or int(receipt_fact.purchase_purpose_source_snapshot_id)
+            != int(purchase_purpose_source_snapshot_id)
+            or int(receipt_fact.purpose_snapshot_version)
+            != int(expected_purpose_snapshot_version)
+            or int(receipt_fact.actual_material_version)
+            != int(expected_actual_material_version)
+            or str(receipt_fact.receipt_plan_fingerprint).lower()
+            != str(receipt_plan_fingerprint).strip().lower()
+            or str(receipt_fact.actual_material_fingerprint).lower()
+            != str(actual_material_fingerprint).strip().lower()
+        ):
+            raise IncomingReceiptError(
+                "同一收料幂等键已用于不同冻结事实",
+                409,
+                code="INCOMING_IDEMPOTENCY_CONFLICT",
+            )
     text = str(item_key)
     requested_stock_item_id = _stock_item_id(text)
     requested_supplier_item_id = _supplier_order_item_id(text)
@@ -1378,6 +1479,19 @@ def _idempotent_receipt_item(
         )
     normalized_action = (resolution_action or "").strip() or None
     normalized_reason = (resolution_reason or "").strip() or None
+    if allocation is not None:
+        # Frozen-purpose clients do not submit the server-derived pending
+        # marker.  Compare only client-controlled fields on replay.
+        same_resolution = (
+            normalized_action is None
+            and normalized_reason is None
+            and surplus_location_id is None
+        )
+    else:
+        same_resolution = (
+            row.resolution_action == normalized_action
+            and row.resolution_reason == normalized_reason
+        )
     expected_quantity = (
         row.planned_quantity if received_quantity is None else int(received_quantity)
     )
@@ -1403,11 +1517,18 @@ def _idempotent_receipt_item(
     if not (
         same_target
         and row.received_quantity == expected_quantity
-        and row.resolution_action == normalized_action
-        and row.resolution_reason == normalized_reason
+        and same_resolution
         and same_location
     ):
-        raise IncomingReceiptError("幂等键已用于其他入库操作", 409)
+        raise IncomingReceiptError(
+            "幂等键已用于其他入库操作",
+            409,
+            code=(
+                "INCOMING_IDEMPOTENCY_CONFLICT"
+                if allocation is not None
+                else None
+            ),
+        )
     return row
 
 
@@ -1553,9 +1674,16 @@ def receive_one(
     surplus_location_id: int | None,
     idempotency_key: str | None,
     expected_surplus_layout_version: int | None = None,
+    expected_receipt_fact_version: int | None = None,
+    purchase_purpose_source_snapshot_id: int | None = None,
+    expected_purpose_snapshot_version: int | None = None,
+    receipt_plan_fingerprint: str | None = None,
+    expected_actual_material_version: int | None = None,
+    actual_material_fingerprint: str | None = None,
     audit_context: dict[str, object] | None = None,
 ) -> IncomingReceiptItem:
-    key = (idempotency_key or "").strip() or uuid4().hex
+    submitted_key = (idempotency_key or "").strip()
+    key = submitted_key or uuid4().hex
     existing_receipt = db.scalar(
         select(IncomingReceipt).where(IncomingReceipt.idempotency_key == key)
     )
@@ -1568,6 +1696,13 @@ def receive_one(
             resolution_action=resolution_action,
             resolution_reason=resolution_reason,
             surplus_location_id=surplus_location_id,
+            user=user,
+            expected_receipt_fact_version=expected_receipt_fact_version,
+            purchase_purpose_source_snapshot_id=purchase_purpose_source_snapshot_id,
+            expected_purpose_snapshot_version=expected_purpose_snapshot_version,
+            receipt_plan_fingerprint=receipt_plan_fingerprint,
+            expected_actual_material_version=expected_actual_material_version,
+            actual_material_fingerprint=actual_material_fingerprint,
         )
 
     if _stock_item_id(item_key) is not None:
@@ -1583,7 +1718,60 @@ def receive_one(
             audit_context=audit_context,
         )
 
-    target = _target(db, item_key, claim_for_receipt=True)
+    target = _target(
+        db,
+        item_key,
+        allow_closed=True,
+        claim_for_receipt=True,
+    )
+    existing_receipt = db.scalar(
+        select(IncomingReceipt).where(IncomingReceipt.idempotency_key == key)
+    )
+    if existing_receipt is not None:
+        return _idempotent_receipt_item(
+            db,
+            receipt=existing_receipt,
+            item_key=item_key,
+            received_quantity=received_quantity,
+            resolution_action=resolution_action,
+            resolution_reason=resolution_reason,
+            surplus_location_id=surplus_location_id,
+            user=user,
+            expected_receipt_fact_version=expected_receipt_fact_version,
+            purchase_purpose_source_snapshot_id=purchase_purpose_source_snapshot_id,
+            expected_purpose_snapshot_version=expected_purpose_snapshot_version,
+            receipt_plan_fingerprint=receipt_plan_fingerprint,
+            expected_actual_material_version=expected_actual_material_version,
+            actual_material_fingerprint=actual_material_fingerprint,
+        )
+    try:
+        purpose_context = resolve_receipt_purpose_context(
+            db,
+            target=target,
+            expected_receipt_fact_version=expected_receipt_fact_version,
+            purchase_purpose_source_snapshot_id=purchase_purpose_source_snapshot_id,
+            expected_purpose_snapshot_version=expected_purpose_snapshot_version,
+            receipt_plan_fingerprint=receipt_plan_fingerprint,
+            expected_actual_material_version=expected_actual_material_version,
+            actual_material_fingerprint=actual_material_fingerprint,
+        )
+    except ReceiptPurposeFlowError as error:
+        raise IncomingReceiptError(
+            str(error), error.status_code, code=error.code
+        ) from error
+    if purpose_context is not None and not submitted_key:
+        raise IncomingReceiptError(
+            "正式采购用途收料必须提交非空幂等键",
+            409,
+            code="INCOMING_IDEMPOTENCY_KEY_REQUIRED",
+        )
+    if purpose_context is None and (
+        target.order_item.material_status != "pending"
+        or target.order_item.requisition_status not in {"已报料", "供应商已排单"}
+    ):
+        raise IncomingReceiptError(
+            "该明细当前不可入库，可能已入库、已作废或状态已变化", 409
+        )
     quantity = int(
         target.planned_quantity if received_quantity is None else received_quantity
     )
@@ -1591,13 +1779,29 @@ def receive_one(
         raise IncomingReceiptError("入库数量必须大于0")
     before = cumulative_received(db, target)
     cumulative = before + quantity
-    resolution_status, action = _validate_decision(
-        planned=target.planned_quantity,
-        cumulative=cumulative,
-        action=resolution_action,
-        reason=resolution_reason,
-        surplus_location_id=surplus_location_id,
-    )
+    if purpose_context is not None:
+        if (
+            (resolution_action or "").strip()
+            or (resolution_reason or "").strip()
+            or surplus_location_id is not None
+        ):
+            raise IncomingReceiptError(
+                "冻结采购用途由系统自动分配，不能再提交人工差异用途或库位。",
+                409,
+                code="INCOMING_RECEIPT_PLAN_TAMPERED",
+            )
+        resolution_status = (
+            "pending" if cumulative < target.planned_quantity else "not_required"
+        )
+        action = "await_supplier" if cumulative < target.planned_quantity else None
+    else:
+        resolution_status, action = _validate_decision(
+            planned=target.planned_quantity,
+            cumulative=cumulative,
+            action=resolution_action,
+            reason=resolution_reason,
+            surplus_location_id=surplus_location_id,
+        )
     variance = cumulative - target.planned_quantity
     variance_type = "matched" if variance == 0 else "short" if variance < 0 else "over"
     now = utc_now_naive()
@@ -1640,7 +1844,22 @@ def receive_one(
     )
     receipt.items.append(receipt_item)
     db.flush()
-    if action == "transfer_to_semi_inventory":
+    purpose_allocation = None
+    if purpose_context is not None:
+        try:
+            purpose_allocation = post_receipt_purpose_allocation(
+                db,
+                target=target,
+                receipt_item=receipt_item,
+                context=purpose_context,
+                operator_id=user.id,
+                idempotency_key=key,
+            )
+        except ReceiptPurposeFlowError as error:
+            raise IncomingReceiptError(
+                str(error), error.status_code, code=error.code
+            ) from error
+    elif action == "transfer_to_semi_inventory":
         surplus = cumulative - target.planned_quantity
         lot = _create_surplus_lot(
             db,
@@ -1683,6 +1902,24 @@ def receive_one(
             "variance_quantity": variance,
             "resolution_action": action,
             "surplus_inventory_lot_id": receipt_item.surplus_inventory_lot_id,
+            "purpose_allocation_id": (
+                purpose_allocation.id if purpose_allocation is not None else None
+            ),
+            "order_purpose_sheet_qty": (
+                purpose_allocation.receipt_order_purpose_sheet_qty
+                if purpose_allocation is not None
+                else None
+            ),
+            "reserve_purpose_sheet_qty": (
+                purpose_allocation.receipt_reserve_purpose_sheet_qty
+                if purpose_allocation is not None
+                else None
+            ),
+            "theoretical_finished_quantity": (
+                purpose_allocation.finished_output_qty_after
+                if purpose_allocation is not None
+                else None
+            ),
         },
         audit_context=audit_context,
     )
@@ -1715,6 +1952,22 @@ def accept_short(
         if row.requisition_item_id
         else row.order_item_id,
     )
+    formal_source = target.supplier_order_item or target.requisition_item
+    frozen_allocation = db.scalar(
+        select(IncomingReceiptPurposeAllocation.id).where(
+            IncomingReceiptPurposeAllocation.incoming_receipt_item_id == row.id
+        )
+    )
+    if (
+        frozen_allocation is not None
+        or str(getattr(formal_source, "purpose_contract_status", "legacy_unset"))
+        == "frozen"
+    ):
+        raise IncomingReceiptError(
+            "冻结采购用途必须保留计划差额，不能通过短收结单绕过。",
+            409,
+            code="FROZEN_PURCHASE_SHORT_ACCEPT_FORBIDDEN",
+        )
     latest = db.scalar(
         select(IncomingReceiptItem)
         .where(_source_filter(target), IncomingReceiptItem.status == "posted")
@@ -1810,9 +2063,14 @@ def revert_receipt_item(
     user: User,
     receipt_item_id: int,
     reason: str,
+    idempotency_key: str | None = None,
     audit_context: dict[str, object] | None = None,
 ) -> IncomingReceiptItem:
     clean_reason = (reason or "").strip() or "撤回来料实收（系统记录）"
+    stable_idempotency_key = (
+        str(idempotency_key or "").strip()
+        or f"incoming-revert:receipt_item:{receipt_item_id}"
+    )
     receipt_item = db.get(IncomingReceiptItem, receipt_item_id)
     if receipt_item is None:
         raise IncomingReceiptError("来料实收记录不存在", 404)
@@ -1848,7 +2106,26 @@ def revert_receipt_item(
         else receipt_item.order_item_id,
         allow_closed=True,
     )
-    if has_production_completion_facts(db, [target.order_item.id]):
+    purpose_allocation = db.scalar(
+        select(IncomingReceiptPurposeAllocation).where(
+            IncomingReceiptPurposeAllocation.incoming_receipt_item_id
+            == receipt_item.id
+        )
+    )
+    formal_source = target.supplier_order_item or target.requisition_item
+    if (
+        purpose_allocation is None
+        and str(getattr(formal_source, "purpose_contract_status", "legacy_unset"))
+        == "frozen"
+    ):
+        raise IncomingReceiptError(
+            "冻结采购用途收料缺少不可变用途分配事实，禁止回退到旧撤销流程。",
+            409,
+            code="FROZEN_RECEIPT_ALLOCATION_MISSING",
+        )
+    if purpose_allocation is None and has_production_completion_facts(
+        db, [target.order_item.id]
+    ):
         raise IncomingReceiptError("订单明细已有生产完工事实，不能撤销来料实收", 409)
     latest = db.scalar(
         select(IncomingReceiptItem)
@@ -1860,9 +2137,24 @@ def revert_receipt_item(
             "同一来料来源存在更晚的实收记录，请先撤销最新一笔",
             409,
         )
-    _reverse_surplus_lot(
-        db, receipt_item=receipt_item, user=user, reason=clean_reason
-    )
+    purpose_reversal = None
+    if purpose_allocation is not None:
+        try:
+            purpose_reversal = reverse_receipt_purpose_allocation(
+                db,
+                receipt_item=receipt_item,
+                operator_id=user.id,
+                reason=clean_reason,
+                idempotency_key=stable_idempotency_key,
+            )
+        except ReceiptPurposeFlowError as error:
+            raise IncomingReceiptError(
+                str(error), error.status_code, code=error.code
+            ) from error
+    else:
+        _reverse_surplus_lot(
+            db, receipt_item=receipt_item, user=user, reason=clean_reason
+        )
     now = utc_now_naive()
     receipt_item.status = "reversed"
     receipt_item.reversal_reason = clean_reason
@@ -1911,6 +2203,10 @@ def revert_receipt_item(
             "before_status": "posted",
             "after_status": receipt_item.status,
             "remaining_cumulative_received_quantity": remaining,
+            "purpose_reversal_id": (
+                purpose_reversal.id if purpose_reversal is not None else None
+            ),
+            "idempotency_key": stable_idempotency_key,
         },
         audit_context=audit_context,
     )

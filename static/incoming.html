@@ -155,6 +155,7 @@
       revertingItemId: null,
       busyItemIds: new Set(),
       receiveIdempotencyKeys: new Map(),
+      revertIdempotencyKeys: new Map(),
       revertSubmitting: false,
       expandedIds: new Set(),
       authGeneration: 0,
@@ -234,6 +235,7 @@
       state.locationsLoading = false;
       state.busyItemIds.clear();
       state.receiveIdempotencyKeys.clear();
+      state.revertIdempotencyKeys.clear();
       state.revertingItemId = null;
       state.revertSubmitting = false;
       state.expandedIds = new Set();
@@ -525,23 +527,29 @@
       const projected = cumulative + Number(item.incoming_quantity || 0) - planned;
       const locations = state.locations
         .filter(row => ["semi_finished", "shared"].includes(row.warehouse_type))
-        .map(row => `<option value="${row.id}" ${Number(item.surplus_location_id) === Number(row.id) ? "selected" : ""}>${escapeHtml(row.location_code)}｜${escapeHtml(row.location_name)}</option>`)
+        .map(row => `<option value="${row.id}" ${Number(item.surplus_location_id) === Number(row.id) ? "selected" : ""}>${escapeHtml(row.location_name || "位置名称待完善")}</option>`)
         .join("");
-      const decisionBlock = !isPending ? "" : projected < 0
-        ? `<div class="mt-2 rounded-lg bg-amber-50 p-2"><p class="text-sm font-bold text-amber-900">还差 ${Math.abs(projected)} 张</p><select data-resolution="${key}" class="mt-1 w-full rounded-lg border p-2" ${canOperate() && !disabled ? "" : "disabled"}><option value="">少收怎么处理</option><option value="await_supplier" ${item.resolution_action === "await_supplier" ? "selected" : ""}>继续等补货</option>${isStockReplenishment ? "" : `<option value="accept_short" ${item.resolution_action === "accept_short" ? "selected" : ""}>按已收数结单</option>`}</select></div>`
-        : projected > 0
-          ? isStockReplenishment
-            ? `<div class="mt-2 rounded-lg bg-red-50 p-2 text-sm font-bold text-red-800">补库来料不能超过原报料数量，请核对后另建补库单处理超收</div>`
-            : `<div class="mt-2 rounded-lg bg-amber-50 p-2"><p class="text-sm font-bold text-amber-900">多收 ${projected} 张</p><select data-resolution="${key}" class="mt-1 w-full rounded-lg border p-2" ${canOperate() && !disabled ? "" : "disabled"}><option value="">多收怎么处理</option><option value="all_to_production" ${item.resolution_action === "all_to_production" ? "selected" : ""}>全部用于本单</option><option value="transfer_to_semi_inventory" ${item.resolution_action === "transfer_to_semi_inventory" ? "selected" : ""}>余量存半成品仓</option></select>${item.resolution_action === "transfer_to_semi_inventory" ? `<select data-surplus-location="${key}" class="mt-1 w-full rounded-lg border p-2" ${canOperate() && !disabled ? "" : "disabled"}><option value="">余量放哪个库位</option>${locations}</select>` : ""}</div>`
-          : `<div class="mt-2 rounded-lg bg-green-50 p-2 text-sm font-bold text-green-800">数量刚好</div>`;
+      const frozenPurpose = item.purpose_status !== "legacy_unset";
+      const decisionBlock = !isPending ? "" : frozenPurpose
+        ? `<div class="mt-2 rounded-lg ${item.receipt_fact_ready ? "bg-green-50 text-green-900" : "bg-amber-50 text-amber-900"} p-2 text-sm"><p class="font-bold">${escapeHtml(item.receipt_fact_ready ? "用途与正式采购价已冻结" : (item.purpose_issue || "请先在电脑端确认实际材质和正式采购价"))}</p><p>预计订单用途 ${escapeHtml(item.expected_order_purpose_sheet_qty || 0)} 张</p><p>预计片料备库 ${escapeHtml(item.expected_reserve_purpose_sheet_qty || 0)} 张</p><p>预计形成成品 ${escapeHtml(item.expected_finished_output_qty || 0)} 只</p>${item.finished_location_name ? `<p>成品：${escapeHtml(item.finished_location_name)}</p>` : ""}${item.finished_capacity_warning ? `<p class="mt-1 font-bold text-amber-800">容量提醒：${escapeHtml(item.finished_capacity_warning)}</p>` : ""}${item.reserve_location_name ? `<p>片料：${escapeHtml(item.reserve_location_name)}</p>` : ""}</div>`
+        : projected < 0
+          ? `<div class="mt-2 rounded-lg bg-amber-50 p-2"><p class="text-sm font-bold text-amber-900">还差 ${Math.abs(projected)} 张</p><select data-resolution="${key}" class="mt-1 w-full rounded-lg border p-2" ${canOperate() && !disabled ? "" : "disabled"}><option value="">少收怎么处理</option><option value="await_supplier" ${item.resolution_action === "await_supplier" ? "selected" : ""}>继续等补货</option>${isStockReplenishment ? "" : `<option value="accept_short" ${item.resolution_action === "accept_short" ? "selected" : ""}>按已收数结单</option>`}</select></div>`
+          : projected > 0
+            ? isStockReplenishment
+              ? `<div class="mt-2 rounded-lg bg-red-50 p-2 text-sm font-bold text-red-800">补库来料不能超过原报料数量，请核对后另建补库单处理超收</div>`
+              : `<div class="mt-2 rounded-lg bg-amber-50 p-2"><p class="text-sm font-bold text-amber-900">多收 ${projected} 张</p><select data-resolution="${key}" class="mt-1 w-full rounded-lg border p-2" ${canOperate() && !disabled ? "" : "disabled"}><option value="">多收怎么处理</option><option value="all_to_production" ${item.resolution_action === "all_to_production" ? "selected" : ""}>全部用于本单</option><option value="transfer_to_semi_inventory" ${item.resolution_action === "transfer_to_semi_inventory" ? "selected" : ""}>余量存半成品仓</option></select>${item.resolution_action === "transfer_to_semi_inventory" ? `<select data-surplus-location="${key}" class="mt-1 w-full rounded-lg border p-2" ${canOperate() && !disabled ? "" : "disabled"}><option value="">余量放哪个库位</option>${locations}</select>` : ""}</div>`
+            : `<div class="mt-2 rounded-lg bg-green-50 p-2 text-sm font-bold text-green-800">数量刚好</div>`;
       const receiptLocationBlock = isPending && isStockReplenishment
         ? `<div class="mt-2 rounded-lg bg-blue-50 p-2 text-sm font-bold text-blue-900">片料到厂后由系统自动进入一楼 A1 原料暂存区，无需选择具体库位</div>`
+        : "";
+      const receivedPurposeBlock = !isPending && item.purpose_allocation
+        ? `<div class="mt-2 rounded-lg bg-indigo-50 p-2 text-sm text-indigo-950"><p class="font-bold">本次用途分流</p><p>订单用途 ${escapeHtml(item.purpose_allocation.order_sheet_delta || 0)} 张｜片料备库 ${escapeHtml(item.purpose_allocation.reserve_sheet_delta || 0)} 张｜形成成品 ${escapeHtml(item.purpose_allocation.theoretical_finished_delta || 0)} 只</p>${item.purpose_allocation.finished_location_name ? `<p>成品：${escapeHtml(item.purpose_allocation.finished_location_name)}</p>` : ""}${item.purpose_allocation.reserve_location_name ? `<p>片料：${escapeHtml(item.purpose_allocation.reserve_location_name)}</p>` : ""}${item.purpose_reversal ? `<p class="mt-1 font-bold text-red-700">本次收料已撤销</p>` : ""}</div>`
         : "";
 
       const primaryAction = !canOperate()
         ? `<div class="rounded-lg bg-slate-100 px-4 py-2 text-center text-sm font-semibold text-slate-500">只读查看</div>`
         : isPending
-          ? `<button data-receive="${key}" ${disabled ? "disabled" : ""} class="min-h-12 w-full rounded-xl bg-green-700 px-4 text-base font-bold text-white disabled:bg-slate-400">确认实收</button>${item.pending_receipt_item_id && !isStockReplenishment ? `<button data-accept-short="${key}" ${disabled ? "disabled" : ""} class="mt-2 min-h-12 w-full rounded-xl bg-amber-700 px-4 text-base font-bold text-white disabled:bg-slate-400">不再补货，短收结单</button>` : ""}`
+          ? `<button data-receive="${key}" ${disabled || (frozenPurpose && !item.receipt_fact_ready) ? "disabled" : ""} class="min-h-12 w-full rounded-xl bg-green-700 px-4 text-base font-bold text-white disabled:bg-slate-400">确认实收</button>${item.purpose_status === "legacy_unset" && item.pending_receipt_item_id && !isStockReplenishment ? `<button data-accept-short="${key}" ${disabled ? "disabled" : ""} class="mt-2 min-h-12 w-full rounded-xl bg-amber-700 px-4 text-base font-bold text-white disabled:bg-slate-400">不再补货，短收结单</button>` : ""}`
           : "";
 
       const expandedSection = expanded ? `
@@ -580,6 +588,7 @@
             ${searchMatchBlock}
             ${decisionBlock}
             ${receiptLocationBlock}
+            ${receivedPurposeBlock}
             ${primaryAction ? `<div class="mt-1.5">${primaryAction}</div>` : ""}
             <p class="mt-1 text-center text-xs text-slate-400">${expanded ? "点击卡片收起" : "点击卡片查看更多详情"}</p>
             ${expandedSection}
@@ -937,24 +946,29 @@
       }
       const planned = Number(item.planned_quantity ?? item.requisition_qty ?? item.quantity ?? 0);
       const projectedVariance = Number(item.cumulative_received_quantity || 0) + quantity - planned;
-      const action = projectedVariance === 0 ? null : (item.resolution_action || null);
-      if (projectedVariance < 0 && !["await_supplier", "accept_short"].includes(action)) {
-        showToast("短收时请选择继续等待补货或按当前数量结单", true);
+      let action = null;
+      if (item.purpose_status === "legacy_unset") {
+        action = projectedVariance === 0 ? null : (item.resolution_action || null);
+        if (projectedVariance < 0 && !["await_supplier", "accept_short"].includes(action)) {
+          showToast("短收时请选择继续等待补货或按当前数量结单", true);
+          return;
+        }
+        if (projectedVariance > 0 && !["all_to_production", "transfer_to_semi_inventory"].includes(action)) {
+          showToast("超收时请选择全部投入生产或余量转半成品库存", true);
+          return;
+        }
+        if (action === "transfer_to_semi_inventory" && state.locationsLoading) {
+          showToast("正在读取半成品库位，请稍候再确认", true);
+          return;
+        }
+        if (action === "transfer_to_semi_inventory" && !Number(item.surplus_location_id)) {
+          showToast("余量转半成品库存时必须选择库位", true);
+          return;
+        }
+      } else if (!item.receipt_fact_ready) {
+        showToast(item.purpose_issue || "请先在电脑端确认实际材质和正式采购价格", true);
         return;
       }
-      if (projectedVariance > 0 && !["all_to_production", "transfer_to_semi_inventory"].includes(action)) {
-        showToast("超收时请选择全部投入生产或余量转半成品库存", true);
-        return;
-      }
-      if (action === "transfer_to_semi_inventory" && state.locationsLoading) {
-        showToast("正在读取半成品库位，请稍候再确认", true);
-        return;
-      }
-      if (action === "transfer_to_semi_inventory" && !Number(item.surplus_location_id)) {
-        showToast("余量转半成品库存时必须选择库位", true);
-        return;
-      }
-      if (!window.confirm(`确认该批 ${quantity} 张纸板已经到厂并完成入库吗？`)) return;
       const operationKey = state.receiveIdempotencyKeys.get(key) || createIdempotencyKey();
       state.receiveIdempotencyKeys.set(key, operationKey);
       state.busyItemIds.add(key);
@@ -969,18 +983,27 @@
             resolution_reason: String(item.resolution_reason || "").trim() || null,
             surplus_location_id: Number(item.surplus_location_id) || null,
             expected_surplus_layout_version: surplusLocation?.layout_version || null,
+            purchase_purpose_source_snapshot_id: item.purchase_purpose_source_snapshot_id ?? null,
+            expected_receipt_fact_version: item.expected_receipt_fact_version ?? null,
+            expected_purpose_snapshot_version: item.expected_purpose_snapshot_version ?? null,
+            receipt_plan_fingerprint: item.receipt_plan_fingerprint || null,
+            expected_actual_material_version: item.expected_actual_material_version ?? null,
+            actual_material_fingerprint: item.actual_material_fingerprint || null,
             idempotency_key: operationKey,
           }),
         });
         const refreshed = await refreshAfterIncomingWrite();
         if (refreshed) {
           state.receiveIdempotencyKeys.delete(key);
-          showToast(result.material_status === "pending" ? `已记录实收，仍待补 ${result.remaining_quantity} 张` : "入库成功");
+          const purpose = result.purpose_allocation;
+          const purposeMessage = purpose
+            ? `；订单用途 ${purpose.order_sheet_delta || 0} 张，片料备库 ${purpose.reserve_sheet_delta || 0} 张，形成成品 ${purpose.theoretical_finished_delta || 0} 只`
+            : "";
+          showToast((result.material_status === "pending" ? `已记录实收，仍待补 ${result.remaining_quantity} 张` : "入库成功") + purposeMessage);
         } else {
           showToast("入库已提交，但列表刷新失败；请点击刷新，勿重复录入", true);
         }
       } catch (error) {
-        if (error?.status && error.status < 500) state.receiveIdempotencyKeys.delete(key);
         showToast(toChineseMessage(error), true);
       } finally {
         state.busyItemIds.delete(key);
@@ -1112,10 +1135,13 @@
         const url = item?.receipt_item_id
           ? `/api/incoming/receipt-items/${item.receipt_item_id}/revert`
           : `/api/incoming/revert/${item?.item_id ?? itemId}`;
+        const revertKey = state.revertIdempotencyKeys.get(key) || createIdempotencyKey();
+        state.revertIdempotencyKeys.set(key, revertKey);
         await api(url, {
           method: "PUT",
-          body: JSON.stringify({}),
+          body: JSON.stringify({idempotency_key: revertKey}),
         });
+        state.revertIdempotencyKeys.delete(key);
         showToast("已撤回，任务返回待收料");
         await refreshAfterIncomingWrite();
       } catch (error) {

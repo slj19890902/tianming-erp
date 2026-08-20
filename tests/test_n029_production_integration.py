@@ -1435,6 +1435,7 @@ def test_ordered_inventory_short_receipt_requires_current_return_layout_version(
 def test_accept_short_returns_customer_stock_and_statement_uses_received_quantity(
     n029_delivery_app,
 ) -> None:
+    from app.models.customer import Customer
     from app.models.order import OrderItem
     from app.models.warehouse_inventory import (
         InventoryLot,
@@ -1442,6 +1443,10 @@ def test_accept_short_returns_customer_stock_and_statement_uses_received_quantit
     )
 
     app, factory, ids = n029_delivery_app
+    with factory() as db:
+        customer = db.get(Customer, ids["customer"])
+        customer.statement_cycle_start_day = 1
+        db.commit()
     with TestClient(app) as client:
         _login(client)
         created = client.post(

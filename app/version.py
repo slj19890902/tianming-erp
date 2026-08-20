@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.144"
-APP_VERSION_NAME = "模具40×80真实纵向纸型"
+APP_VERSION = "v0.22.145"
+APP_VERSION_NAME = "模具标签内容与瑞明打印修复"
 APP_BUILD_DATE = "2026-08-20"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -305,18 +305,32 @@ _V022143_VERIFICATION_STEPS = [
     "再抽打一张原 40×30 标签；进入系统版本确认 v0.22.143、数据库 revision 仍为 vv30v8x9z19。",
 ]
 
-APP_CHANGES = [
+_V022144_CHANGES = [
     "实体复打证明浏览器仍把旧专用队列识别为宽80mm、高40mm，并自动旋转网页的40×80页面，导致前两次修改在实体输出中被抵消。",
     "正式机已把40×80专用队列改为驱动自定义的真实宽40mm、高80mm纸型，并新增无旧缓存的新队列“Gprinter GP-3120TU - 40x80纵向标签”。",
     "模具标签页面明确要求选择新纵向队列；40×80页面和页内横版内容保持原比例，不再依赖浏览器猜测纸张方向。原40×30队列和模板保持不变。",
     "本版无数据库迁移，不修改模具、产品、订单、生产、库存或既有打印事实。",
 ]
 
-APP_VERIFICATION_STEPS = [
+_V022144_VERIFICATION_STEPS = [
     "关闭当前打印窗口并强制刷新模具标签页；重新点击打印，在打印窗口选择“Gprinter GP-3120TU - 40x80纵向标签”。",
     "确认纸张尺寸显示为40×80、缩放100%，不要手工改变方向；若仍显示80×40，说明选中的仍是旧缓存队列，不要打印。",
     "抽打一张3.D30257或同等长内容，确认出纸宽40mm、走纸长80mm，705×700、180×160×110、存货编码、客户、产品名称和二维码全部完整。",
     "再抽打一张原40×30标签；进入系统版本确认v0.22.144、数据库revision仍为vv30v8x9z19。",
+]
+
+APP_CHANGES = [
+    "40×80模具标签把产品规格、楞型和开料方式依次放在同一行；开料方式读取产品主档，不再需要人工补写标签文字。",
+    "模具名称支持使用#或＃分隔客户中文简称与模具编号；瑞明#7、瑞明#9、瑞明#11会正确显示简称“瑞明”和对应编号。",
+    "客户简称、存货编码或产品名称真正超出已验证版式时仍拒绝打印，继续禁止静默裁切；40×80纵向纸型、打印方向和原40×30模板保持不变。",
+    "本版无数据库迁移，不修改模具、产品、订单、生产、库存或既有打印事实。",
+]
+
+APP_VERIFICATION_STEPS = [
+    "强制刷新模具标签页，分别打开RM-7、RM-9和RM-11，确认不再出现“客户简称、存货编码或产品名称超出已验证版式”提示。",
+    "选择40×80标签，确认第二行按产品规格、楞型、开料方式顺序显示，例如190×105×135、A、一开二。",
+    "使用“Gprinter GP-3120TU - 40x80纵向标签”抽打一张瑞明标签，确认方向、二维码、客户简称、存货编码和产品名称完整且未裁切。",
+    "再抽查原40×30标签；进入系统版本确认v0.22.145、数据库revision仍为vv30v8x9z19。",
 ]
 
 
@@ -410,6 +424,8 @@ def current_release_metadata(
 APP_CHANGELOG = [
     *(f"{APP_VERSION}：本次更新｜{item}" for item in APP_CHANGES),
     *(f"{APP_VERSION}：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.144：本次更新｜{item}" for item in _V022144_CHANGES),
+    *(f"v0.22.144：如何验证｜{item}" for item in _V022144_VERIFICATION_STEPS),
     *(f"v0.22.143：本次更新｜{item}" for item in _V022143_CHANGES),
     *(f"v0.22.143：如何验证｜{item}" for item in _V022143_VERIFICATION_STEPS),
     *(f"v0.22.142：本次更新｜{item}" for item in _V022142_CHANGES),

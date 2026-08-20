@@ -42,10 +42,25 @@ class Requisition(Base):
         ),
         Index("ix_material_requisitions_date", "requisition_date"),
         Index("ix_material_requisitions_status", "status"),
+        CheckConstraint(
+            "((request_key IS NULL AND request_hash IS NULL "
+            "AND request_actor_id IS NULL) OR "
+            "(request_key IS NOT NULL AND length(request_hash) = 64 "
+            "AND request_actor_id IS NOT NULL))",
+            name="ck_material_requisitions_request_fact",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     requisition_number: Mapped[str] = mapped_column(String(40), nullable=False)
+    request_key: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, unique=True
+    )
+    request_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    request_actor_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
     requisition_date: Mapped[date] = mapped_column(Date, nullable=False)
     supplier_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     status: Mapped[str] = mapped_column(

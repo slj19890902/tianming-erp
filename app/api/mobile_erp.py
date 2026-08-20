@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import String, and_, case, cast, exists, func, or_, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, aliased, selectinload
 
 from app.api.deps import (
     PermissionChecker,
@@ -1204,32 +1204,35 @@ def pending_incoming_production_detail(
         task_query = select(ProductionTask.id).where(
             ProductionTask.order_item_id == int(order_item_id)
         )
-        requisition_item_id = route.get("requisition_item_id")
-        if requisition_item_id is not None:
-            source = db.scalar(
-                select(RequisitionItemBomSource)
-                .where(
-                    RequisitionItemBomSource.requisition_item_id
-                    == int(requisition_item_id),
-                    RequisitionItemBomSource.active_guard == 1,
+        if incoming_rows[0].get("purpose_status") != "legacy_unset":
+            task_query = task_query.where(ProductionTask.task_role == "order_main")
+        else:
+            requisition_item_id = route.get("requisition_item_id")
+            if requisition_item_id is not None:
+                source = db.scalar(
+                    select(RequisitionItemBomSource)
+                    .where(
+                        RequisitionItemBomSource.requisition_item_id
+                        == int(requisition_item_id),
+                        RequisitionItemBomSource.active_guard == 1,
+                    )
+                    .order_by(RequisitionItemBomSource.id.asc())
                 )
-                .order_by(RequisitionItemBomSource.id.asc())
-            )
-            component_id = (
-                source.sales_order_item_bom_component_id if source is not None else None
-            )
-            if component_id is None:
+                component_id = (
+                    source.sales_order_item_bom_component_id
+                    if source is not None
+                    else None
+                )
                 task_query = task_query.where(
-                    ProductionTask.sales_order_item_bom_component_id.is_(None)
+                    ProductionTask.sales_order_item_bom_component_id
+                    == component_id
+                    if component_id is not None
+                    else ProductionTask.sales_order_item_bom_component_id.is_(None)
                 )
             else:
                 task_query = task_query.where(
-                    ProductionTask.sales_order_item_bom_component_id == component_id
+                    ProductionTask.sales_order_item_bom_component_id.is_(None)
                 )
-        else:
-            task_query = task_query.where(
-                ProductionTask.sales_order_item_bom_component_id.is_(None)
-            )
         task_ids = list(db.scalars(task_query.order_by(ProductionTask.id.asc())).all())
         if task_ids:
             task_rows = list_production_tasks(
@@ -1592,23 +1595,30 @@ def _product_joining_summary(value: str | None) -> tuple[str, str | None]:
 
 
 def _current_product_task_ids(db: Session, product_id: int) -> list[int]:
+    main_task = aliased(ProductionTask)
+    main_task_exists = exists().where(
+        main_task.order_item_id == ProductionTask.order_item_id,
+        main_task.task_role == "order_main",
+    )
+    component_match = exists().where(
+        SalesOrderItemBomComponent.sales_order_item_id == OrderItem.id,
+        SalesOrderItemBomComponent.component_product_id == product_id,
+        or_(
+            ProductionTask.task_role == "order_main",
+            SalesOrderItemBomComponent.id
+            == ProductionTask.sales_order_item_bom_component_id,
+        ),
+    )
     return list(
         db.scalars(
             select(ProductionTask.id)
             .join(OrderItem, OrderItem.id == ProductionTask.order_item_id)
-            .outerjoin(
-                SalesOrderItemBomComponent,
-                SalesOrderItemBomComponent.id
-                == ProductionTask.sales_order_item_bom_component_id,
-            )
             .where(
                 ProductionTask.status.in_(tuple(_PRODUCT_TASK_STATUS_LABELS)),
+                or_(ProductionTask.task_role == "order_main", ~main_task_exists),
                 or_(
-                    and_(
-                        ProductionTask.sales_order_item_bom_component_id.is_(None),
-                        OrderItem.product_id == product_id,
-                    ),
-                    SalesOrderItemBomComponent.component_product_id == product_id,
+                    OrderItem.product_id == product_id,
+                    component_match,
                 ),
             )
             .order_by(ProductionTask.id.desc())

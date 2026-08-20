@@ -215,10 +215,12 @@ const $=id=>nodes[id];
 const state={{
   activeTab:"pending",pending:[{{item_id:"r-secret",customer_name:"客户A"}}],pendingTotal:9,
   pendingPage:2,pendingRetryPage:2,pendingPageSize:25,pendingLoading:false,pendingError:"",
+  pendingAppliedQuery:"",pendingAppliedDimensionMode:"any",pendingAsOf:"",productionDetailRouteId:null,
   received:[{{customer_name:"客户A"}}],receivedLoaded:true,receivedLoading:false,receivedError:"",
   locations:[{{id:1}}],locationsLoading:false,receiptLocations:[{{id:2}}],receiptLocationsLoading:false,
   user:{{id:1,role:"sales"}},permissions:["incoming.view"],revertingItemId:null,
-  busyItemIds:new Set(),receiveIdempotencyKeys:new Map(),revertSubmitting:false,expandedIds:new Set(["r-secret"]),
+  busyItemIds:new Set(),receiveIdempotencyKeys:new Map(),revertIdempotencyKeys:new Map(),revertSubmitting:false,expandedIds:new Set(["r-secret"]),
+  sessionIdentity:null,initialContentReported:false,performanceRequests:[],
   authGeneration:3,
 }};
 const hasPermission=code=>state.user?.role==="admin"||state.permissions.includes(code);

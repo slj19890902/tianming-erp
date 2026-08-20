@@ -34,7 +34,7 @@ def _run_node(source: str, tmp_path: Path, name: str) -> None:
 
 def test_composite_formal_button_has_dedicated_operation_state() -> None:
     assert (
-        "compositeRequisitionSaveState:{saving:false, committed:false, uncertain:false, result:null}"
+        "compositeRequisitionSaveState:{saving:false, committed:false, uncertain:false, result:null, requestKey:\"\", draftSignature:\"\"}"
         in INDEX
     )
     click = INDEX.index("modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()")
@@ -64,10 +64,11 @@ def _runtime(block: str) -> str:
     return f"""
 const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
 const pending=[];const toasts=[];const printCalls=[];
+global.createIdempotencyKey=()=>"p1-09c-76-stable-key";
 global.axios={{post:(url,payload)=>new Promise((resolve,reject)=>pending.push({{url,payload,resolve,reject}}))}};
 global.window={{open:(url,target)=>{{printCalls.push({{url,target}});return {{}};}}}};
 const vm={{
-  compositeRequisitionSaveState:{{saving:false,committed:false,uncertain:false,result:null}},
+  compositeRequisitionSaveState:{{saving:false,committed:false,uncertain:false,result:null,requestKey:"",draftSignature:""}},
   requisitionForm:{{supplier_name:"鸣朋",items:[{{order_item_id:1,component_type:"whole",bom_snapshot_id:3,requisition_qty:10,cardboard_len:800,cardboard_width:600,special_process:"一开二",remark:""}}]}},
   requisitionSelected:{{a:true}},selectedPendingKeys:["a"],selectedBomSnapshotIds:["3:whole"],modal:{{type:"requisition"}},
   validateRequisitionForm(){{return "";}},requisitionBatchLinePayload(line){{return {{...line}};}},
@@ -132,5 +133,5 @@ def test_composite_network_unknown_closes_original_draft() -> None:
 def test_backend_still_rejects_duplicate_composite_sources() -> None:
     source = (ROOT / "app" / "api" / "requisition.py").read_text(encoding="utf-8")
     assert "同一复合产品物理料不能重复报料" in source
-    assert "该复合产品物理料已经报料，不能重复创建" in source
+    assert "该复合产品物理料订单用途已报足，不能重复创建" in source
     assert "db.rollback()" in source

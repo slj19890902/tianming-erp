@@ -370,7 +370,7 @@ def test_requisition_batch_uses_remaining_quantity_and_keeps_order_quantity(
                 {
                     "order_item_id": data["item"].id,
                     "inventory_deducted_qty": 0,
-                    "requisition_qty": 999,
+                    "requisition_qty": 70,
                     "cardboard_len": 800,
                     "cardboard_width": 200,
                     "special_process": "一开一",
@@ -574,13 +574,11 @@ def test_exact_double_splice_demand_is_recomputed_at_preview_and_save(
     assert line["requisition_qty"] == 2
     assert line["source_items"][0]["requisition_qty"] == 2
 
-    # Simulate a stale browser carrying the pre-reservation value. Save must
-    # derive the current value again instead of persisting 20.
-    line["requisition_qty"] = 20
+    # Finalize the authoritative preview unchanged. P1-80 now rejects stale
+    # client quantities instead of silently correcting them.
     line.pop("inventory_deducted_qty", None)
     line.pop("finished_inventory_reserved_qty", None)
     for source in line["source_items"]:
-        source["requisition_qty"] = 20
         source.pop("inventory_deducted_qty", None)
         source.pop("finished_inventory_reserved_qty", None)
     result = create_supplier_orders_from_pending_selection(
@@ -706,7 +704,7 @@ def test_exact_double_splice_ordinary_batch_ignores_stale_requisition_qty(
                 {
                     "order_item_id": data["item"].id,
                     "inventory_deducted_qty": 0,
-                    "requisition_qty": 20,
+                    "requisition_qty": 2,
                     "cardboard_len": 800,
                     "cardboard_width": 200,
                     "special_process": "一开一",
@@ -858,11 +856,11 @@ def test_merge_paths_recompute_exact_active_reservation_and_stale_group_rows(
     assert exact_source["required_piece_qty"] == 2
     assert exact_source["requisition_qty"] == 2
 
-    line["requisition_qty"] = 40
+    # Keep the authoritative aggregate quantity; stale quantities are a
+    # tamper conflict under the frozen purchase-purpose contract.
     line.pop("inventory_deducted_qty", None)
     line.pop("finished_inventory_reserved_qty", None)
     for source in line["source_items"]:
-        source["requisition_qty"] = 20
         source.pop("inventory_deducted_qty", None)
         source.pop("finished_inventory_reserved_qty", None)
     lot_before = (

@@ -60,6 +60,10 @@ from app.models.supplier_requisition_order import (
     SupplierRequisitionOrder,
     SupplierRequisitionOrderItem,
 )
+from app.models.purchase_receipt import (
+    PurchaseReceiptFact,
+    PurchaseReceiptMaterialVariance,
+)
 from app.models.stock_replenishment import (
     InventoryStockPolicy,
     StockReplenishmentOrder,
@@ -177,6 +181,17 @@ from app.services.purchase_purpose_allocation import (
     assert_purchase_purpose_stale_token,
     canonical_purchase_purpose_hash,
 )
+from app.services.purchase_receipt_facts import (
+    PurchaseReceiptFactIdempotencyConflict,
+    PurchaseReceiptFactStaleError,
+    PurchaseReceiptFactValidationError,
+    create_or_replay_purchase_receipt_fact,
+    create_or_replay_material_variance,
+    confirm_or_replay_material_variance,
+    serialize_material_variance,
+    serialize_material_variance_approval,
+    serialize_purchase_receipt_fact,
+)
 from app.services.requisition_production_print import (
     build_composite_requisition_production_package,
     build_supplier_requisition_production_package,
@@ -221,6 +236,7 @@ from app.services.production_label_operations import (
 router = APIRouter()
 can_read = PermissionChecker("requisition.view")
 can_operate = PermissionChecker("requisition.execute")
+can_receive_material_variance = PermissionChecker("incoming.execute")
 can_reserve = PermissionChecker("warehouse.reserve")
 can_read_production_labels = PermissionChecker("orders.view")
 admin_rollback = RoleChecker(["admin"])
@@ -241,6 +257,321 @@ class ProductionPackagingLabelJobItemRequest(BaseModel):
         if isinstance(value, bool):
             raise ValueError("生产任务编号和本次打印张数必须为整数")
         return value
+
+
+class PurchaseReceiptFactRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    actual_material_id: int = Field(gt=0)
+    unit_price: Decimal = Field(gt=0)
+    currency: str = Field(default="CNY", min_length=3, max_length=3)
+    price_unit: Literal["per_sheet", "per_square_meter"] = "per_sheet"
+    tax_included: bool = True
+    tax_rate: Decimal = Field(default=Decimal("0"), ge=0, le=1)
+    purchase_purpose_source_snapshot_id: int = Field(gt=0)
+    purpose_snapshot_version: int = Field(gt=0)
+    receipt_plan_fingerprint: str = Field(min_length=64, max_length=64)
+    expected_source_version: int = Field(gt=0)
+    expected_latest_receipt_fact_version: int = Field(ge=0)
+    material_variance_approval_id: int | None = Field(default=None, gt=0)
+    idempotency_key: str = Field(min_length=1, max_length=120)
+
+
+class PurchaseMaterialVarianceRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    purchase_purpose_source_snapshot_id: int = Field(gt=0)
+    purpose_snapshot_version: int = Field(gt=0)
+    receipt_plan_fingerprint: str = Field(min_length=64, max_length=64)
+    expected_source_version: int = Field(gt=0)
+    actual_material_id: int = Field(gt=0)
+    reason: str = Field(min_length=1, max_length=500)
+    idempotency_key: str = Field(min_length=1, max_length=120)
+
+
+class PurchaseMaterialVarianceApprovalRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    idempotency_key: str = Field(min_length=1, max_length=120)
+
+
+def _purchase_receipt_fact_error(code: str, message: str) -> HTTPException:
+    return HTTPException(status_code=409, detail={"code": code, "message": message})
+
+
+def _current_purchase_purpose_source(
+    db: Session,
+    *,
+    source_key: str,
+    snapshot_id: int,
+    user: User,
+) -> tuple[
+    PurchasePurposeSourceSnapshot,
+    SupplierRequisitionOrderItem | RequisitionItem,
+]:
+    normalized = str(source_key or "").strip()
+    if not normalized:
+        raise HTTPException(status_code=404, detail="采购来源不存在或无权访问")
+    statement = (
+        select(PurchasePurposeSourceSnapshot).where(
+            PurchasePurposeSourceSnapshot.id == int(snapshot_id),
+            PurchasePurposeSourceSnapshot.source_key == normalized,
+        )
+    )
+    if not has_unrestricted_customer_access(user, db):
+        allowed = customer_scope_ids(user, db)
+        if not allowed:
+            raise HTTPException(status_code=404, detail="采购来源不存在或无权访问")
+        statement = statement.where(
+            PurchasePurposeSourceSnapshot.customer_id.in_(allowed)
+        )
+    snapshots = list(db.scalars(statement).all())
+    for snapshot in snapshots:
+        if snapshot.supplier_requisition_order_item_id is not None:
+            source = db.get(
+                SupplierRequisitionOrderItem,
+                snapshot.supplier_requisition_order_item_id,
+            )
+            if source is None or source.status != "active":
+                continue
+            header = db.get(SupplierRequisitionOrder, source.supplier_order_id)
+            if header is None or header.status != "confirmed":
+                continue
+        elif snapshot.material_requisition_item_id is not None:
+            source = db.get(RequisitionItem, snapshot.material_requisition_item_id)
+            if source is None or source.status != "有效":
+                continue
+        else:
+            continue
+        if source.purpose_contract_status != "frozen":
+            raise _purchase_receipt_fact_error(
+                "PURCHASE_PURPOSE_SNAPSHOT_INVALID",
+                "正式采购来源与用途快照状态不一致，请先修复采购事实。",
+            )
+        return snapshot, source
+    raise HTTPException(status_code=404, detail="采购来源不存在或无权访问")
+
+
+@router.put("/purchase-sources/{source_key}/receipt-facts")
+def confirm_purchase_receipt_fact(
+    source_key: str,
+    payload: PurchaseReceiptFactRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+):
+    """Freeze actual material and final purchase price before formal receipt."""
+
+    if not (
+        has_permission(user, "cost.view")
+        and has_permission(user, "requisition.purchase_price.confirm")
+    ):
+        raise HTTPException(status_code=403, detail="无采购价格确认权限")
+    if (
+        payload.expected_latest_receipt_fact_version > 0
+        and not has_permission(user, "requisition.purchase_price.correct")
+    ):
+        raise HTTPException(status_code=403, detail="无正式采购价格更正权限")
+    snapshot, source = _current_purchase_purpose_source(
+        db,
+        source_key=source_key,
+        snapshot_id=payload.purchase_purpose_source_snapshot_id,
+        user=user,
+    )
+    actual_material = db.get(Material, payload.actual_material_id)
+    if actual_material is None or not actual_material.is_active:
+        raise _purchase_receipt_fact_error(
+            "ACTUAL_MATERIAL_INVALID",
+            "实际材质不存在或已停用。",
+        )
+    supplier_item_id = (
+        source.id if isinstance(source, SupplierRequisitionOrderItem) else None
+    )
+    requisition_item_id = (
+        source.id if isinstance(source, RequisitionItem) else None
+    )
+    try:
+        fact = create_or_replay_purchase_receipt_fact(
+            db,
+            supplier_requisition_order_item_id=supplier_item_id,
+            material_requisition_item_id=requisition_item_id,
+            purchase_purpose_source_snapshot_id=payload.purchase_purpose_source_snapshot_id,
+            expected_source_version=payload.expected_source_version,
+            purpose_snapshot_version=payload.purpose_snapshot_version,
+            receipt_plan_fingerprint=payload.receipt_plan_fingerprint,
+            actual_material_id=payload.actual_material_id,
+            material_change_confirmed=payload.material_variance_approval_id is not None,
+            material_variance_approval_id=payload.material_variance_approval_id,
+            unit_price=payload.unit_price,
+            currency=payload.currency,
+            price_unit=payload.price_unit,
+            tax_included=payload.tax_included,
+            tax_rate=payload.tax_rate,
+            idempotency_key=payload.idempotency_key,
+            created_by=user.id,
+            expected_latest_receipt_fact_version=(
+                payload.expected_latest_receipt_fact_version
+            ),
+        )
+        _audit(
+            db,
+            user=user,
+            action="CONFIRM_PURCHASE_RECEIPT_FACT",
+            entity_id=(snapshot.source_order_item_id or source.id),
+            details={
+                "purchase_purpose_source_snapshot_id": snapshot.id,
+                "source_key": snapshot.source_key,
+                "receipt_fact_id": fact.id,
+                "receipt_fact_version": fact.receipt_fact_version,
+                "actual_material_id": fact.actual_material_id,
+                "material_changed": (
+                    fact.actual_material_code_snapshot
+                    != fact.expected_material_code_snapshot
+                ),
+                "price_unit": fact.price_unit,
+                "currency": fact.currency,
+            },
+            description="确认收料实际材质和正式采购价格",
+        )
+        db.commit()
+        db.refresh(fact)
+    except PurchaseReceiptFactIdempotencyConflict as error:
+        db.rollback()
+        raise _purchase_receipt_fact_error(
+            "PURCHASE_RECEIPT_FACT_IDEMPOTENCY_CONFLICT",
+            str(error),
+        ) from error
+    except PurchaseReceiptFactStaleError as error:
+        db.rollback()
+        message = str(error)
+        code = (
+            "PURCHASE_SOURCE_STALE"
+            if "报料来源" in message
+            else "PURCHASE_RECEIPT_FACT_STALE"
+        )
+        raise _purchase_receipt_fact_error(code, message) from error
+    except PurchaseReceiptFactValidationError as error:
+        db.rollback()
+        message = str(error)
+        code = (
+            "ACTUAL_MATERIAL_CONFIRMATION_REQUIRED"
+            if "实际材质变化" in message
+            else "PURCHASE_RECEIPT_FACT_INVALID"
+        )
+        raise _purchase_receipt_fact_error(code, message) from error
+    except Exception:
+        db.rollback()
+        raise
+    response = serialize_purchase_receipt_fact(fact)
+    response.update(
+        {
+            "receipt_fact_id": fact.id,
+            "formal_material_id": fact.expected_material_id,
+            "material_changed": (
+                fact.actual_material_code_snapshot
+                != fact.expected_material_code_snapshot
+            ),
+        }
+    )
+    return response
+
+
+@router.put("/purchase-sources/{source_key}/material-variances")
+def request_purchase_material_variance(
+    source_key: str,
+    payload: PurchaseMaterialVarianceRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_receive_material_variance),
+):
+    snapshot, source = _current_purchase_purpose_source(
+        db,
+        source_key=source_key,
+        snapshot_id=payload.purchase_purpose_source_snapshot_id,
+        user=user,
+    )
+    try:
+        variance = create_or_replay_material_variance(
+            db,
+            supplier_requisition_order_item_id=(
+                source.id if isinstance(source, SupplierRequisitionOrderItem) else None
+            ),
+            material_requisition_item_id=(
+                source.id if isinstance(source, RequisitionItem) else None
+            ),
+            purchase_purpose_source_snapshot_id=snapshot.id,
+            expected_source_version=payload.expected_source_version,
+            purpose_snapshot_version=payload.purpose_snapshot_version,
+            receipt_plan_fingerprint=payload.receipt_plan_fingerprint,
+            actual_material_id=payload.actual_material_id,
+            reason=payload.reason,
+            idempotency_key=payload.idempotency_key,
+            requested_by=user.id,
+        )
+        _audit(
+            db,
+            user=user,
+            action="REQUEST_PURCHASE_MATERIAL_VARIANCE",
+            entity_id=snapshot.source_order_item_id or source.id,
+            details={"material_variance_id": variance.id, "source_key": source_key},
+            description="发起收料实际材质差异确认",
+        )
+        db.commit()
+        return serialize_material_variance(variance)
+    except (PurchaseReceiptFactValidationError, PurchaseReceiptFactStaleError) as error:
+        db.rollback()
+        raise _purchase_receipt_fact_error("PURCHASE_MATERIAL_VARIANCE_INVALID", str(error)) from error
+    except PurchaseReceiptFactIdempotencyConflict as error:
+        db.rollback()
+        raise _purchase_receipt_fact_error("PURCHASE_MATERIAL_VARIANCE_IDEMPOTENCY_CONFLICT", str(error)) from error
+
+
+@router.put("/purchase-material-variances/{material_variance_id}/confirm")
+def confirm_purchase_material_variance(
+    material_variance_id: int,
+    payload: PurchaseMaterialVarianceApprovalRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+):
+    variance = db.get(PurchaseReceiptMaterialVariance, material_variance_id)
+    if variance is None:
+        raise HTTPException(status_code=404, detail="材质差异事实不存在或无权访问")
+    snapshot = db.get(
+        PurchasePurposeSourceSnapshot,
+        variance.purchase_purpose_source_snapshot_id,
+    )
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="材质差异事实不存在或无权访问")
+    if not has_unrestricted_customer_access(user, db):
+        allowed = customer_scope_ids(user, db)
+        if snapshot.customer_id not in allowed:
+            raise HTTPException(status_code=404, detail="材质差异事实不存在或无权访问")
+    if not has_permission(user, "incoming.material_variance.confirm"):
+        raise HTTPException(status_code=403, detail="无实际材质差异确认权限")
+    try:
+        approval = confirm_or_replay_material_variance(
+            db,
+            material_variance_id=material_variance_id,
+            idempotency_key=payload.idempotency_key,
+            confirmed_by=user.id,
+        )
+        _audit(
+            db,
+            user=user,
+            action="CONFIRM_PURCHASE_MATERIAL_VARIANCE",
+            entity_id=material_variance_id,
+            details={"material_variance_approval_id": approval.id},
+            description="独立确认收料实际材质差异",
+        )
+        db.commit()
+        return serialize_material_variance_approval(approval)
+    except PurchaseReceiptFactIdempotencyConflict as error:
+        db.rollback()
+        raise _purchase_receipt_fact_error("PURCHASE_MATERIAL_VARIANCE_IDEMPOTENCY_CONFLICT", str(error)) from error
+    except PurchaseReceiptFactValidationError as error:
+        db.rollback()
+        raise _purchase_receipt_fact_error("PURCHASE_MATERIAL_VARIANCE_CONFIRM_INVALID", str(error)) from error
 
 
 class ProductionPackagingLabelJobRequest(BaseModel):
@@ -7931,6 +8262,7 @@ def _create_supplier_order_for_pending_entries(
                 required_piece_qty=entry["required_piece_qty"],
                 customer_name=entry["customer"].name,
                 delivery_date=entry["order"].delivery_date,
+                purpose_contract_status="frozen",
         )
         db.add(supplier_item)
         db.flush()
@@ -11996,6 +12328,7 @@ def _create_batch_locked(
                             ),
                             remark=(line.remark or "").strip() or None,
                             status="有效",
+                            purpose_contract_status="frozen",
                         )
                         db.add(batch_item)
                         db.flush()
@@ -12148,6 +12481,7 @@ def _create_batch_locked(
                         specification_snapshot=snapshot.snapshot_component_spec,
                         remark=component_remark,
                         status="有效",
+                        purpose_contract_status="frozen",
                     )
                     db.add(batch_item)
                     db.flush()
@@ -12450,6 +12784,7 @@ def _create_batch_locked(
                     ),
                     remark=component_remark,
                     status="有效",
+                    purpose_contract_status="frozen",
                 )
                 db.add(batch_item)
                 db.flush()

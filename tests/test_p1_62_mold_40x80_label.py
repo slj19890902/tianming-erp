@@ -163,11 +163,11 @@ def test_page_and_warehouse_select_one_frozen_paper_template() -> None:
         assert marker in WAREHOUSE
     for marker in (
         'const TEMPLATE_40X30="mold_40x30_v1",TEMPLATE_80X40="mold_80x40_v1"',
-        "@page{size:${wideTemplate?\"80mm 40mm\":\"40mm 30mm\"};margin:0}",
+        "@page{size:${wideTemplate?\"40mm 80mm\":\"40mm 30mm\"};margin:0}",
         ".label.template-80x40{width:80mm;height:40mm",
         "width:13.9mm;height:13.9mm",
-        "body.template-80x40 #previewContent,body.template-80x40 #labels{width:80mm!important}",
-        "transform:none!important",
+        "transform:translateX(40mm) rotate(90deg)!important",
+        "专用队列固定使用驱动纸型 80×40、Portrait",
         '.template-80x40 .wide-inventory{font:900 6.3mm/.95',
         ".template-80x40 .wide-customer{font-size:4mm",
         "label_inventory_code",
@@ -178,14 +178,14 @@ def test_page_and_warehouse_select_one_frozen_paper_template() -> None:
         "window.print()",
     ):
         assert marker in LABEL
-    assert "80mm 40mm" in LABEL
-    assert "rotate(90deg)" not in LABEL
+    assert "40mm 80mm" in LABEL
+    assert "rotate(90deg)" in LABEL
     assert "--print-x-compensation:2mm" in LABEL
     assert "body,html{width:40mm;height:auto" in LABEL
 
 
 @pytest.mark.parametrize("label_count", (1, 2, 100))
-def test_40x80_feed_uses_one_landscape_page_without_web_double_rotation(
+def test_40x80_feed_uses_one_portrait_page_with_one_inner_rotation(
     label_count: int,
     headless_browser: Path,
     tmp_path: Path,
@@ -204,7 +204,7 @@ def test_40x80_feed_uses_one_landscape_page_without_web_double_rotation(
     fixture.write_text(
         '<!doctype html><html class="template-80x40"><head><meta charset="utf-8">'
         + _current_print_styles()
-        + '<style>@page{size:80mm 40mm;margin:0}</style></head>'
+        + '<style>@page{size:40mm 80mm;margin:0}</style></head>'
         + f'<body class="template-80x40"><section id="previewContent"><main id="labels" class="labels">{labels}</main></section></body></html>',
         encoding="utf-8",
     )
@@ -214,9 +214,9 @@ def test_40x80_feed_uses_one_landscape_page_without_web_double_rotation(
     for page_number, page in enumerate(reader.pages, start=1):
         width_mm = float(page.mediabox.width) * POINTS_TO_MM
         height_mm = float(page.mediabox.height) * POINTS_TO_MM
-        assert width_mm == pytest.approx(80.0, abs=0.25)
-        assert height_mm == pytest.approx(40.0, abs=0.25)
-        assert width_mm > height_mm
+        assert width_mm == pytest.approx(40.0, abs=0.25)
+        assert height_mm == pytest.approx(80.0, abs=0.25)
+        assert height_mm > width_mm
         text = page.extract_text() or ""
         for expected in (
             "1100 × 760",
@@ -229,7 +229,7 @@ def test_40x80_feed_uses_one_landscape_page_without_web_double_rotation(
             assert expected in text
 
 
-def test_40x80_landscape_pixels_keep_content_inside_printable_width(
+def test_40x80_portrait_pixels_keep_rotated_content_inside_physical_page(
     headless_browser: Path,
     tmp_path: Path,
 ) -> None:
@@ -240,7 +240,7 @@ def test_40x80_landscape_pixels_keep_content_inside_printable_width(
     fixture.write_text(
         '<!doctype html><html class="template-80x40"><head><meta charset="utf-8">'
         + _current_print_styles()
-        + '<style>@page{size:80mm 40mm;margin:0}</style></head>'
+        + '<style>@page{size:40mm 80mm;margin:0}</style></head>'
         + f'''<body class="template-80x40"><section id="previewContent"><main id="labels" class="labels">
         <article class="label template-80x40">
           <div class="wide-board">705 × 700</div>
@@ -266,8 +266,8 @@ def test_40x80_landscape_pixels_keep_content_inside_printable_width(
     top = min(point[1] for point in dark_pixels)
     bottom = max(point[1] for point in dark_pixels)
     pixels_per_mm = 300 / 25.4
-    assert left >= 0.7 * pixels_per_mm
-    assert right <= pixmap.width - 0.7 * pixels_per_mm
-    assert top >= 0.5 * pixels_per_mm
-    assert bottom <= pixmap.height - 0.5 * pixels_per_mm
-    assert (right - left) / pixels_per_mm >= 60
+    assert left >= 0.5 * pixels_per_mm
+    assert right <= pixmap.width - 0.5 * pixels_per_mm
+    assert top >= 0.7 * pixels_per_mm
+    assert bottom <= pixmap.height - 0.7 * pixels_per_mm
+    assert (bottom - top) / pixels_per_mm >= 60

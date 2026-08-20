@@ -64,6 +64,10 @@ class Product(Base):
             name="ck_products_combination_mode",
         ),
         CheckConstraint(
+            "composite_fulfillment_mode IN ('parent_delivery', 'component_delivery')",
+            name="ck_products_composite_fulfillment_mode",
+        ),
+        CheckConstraint(
             "printing_plate_mode IN ('no_plate', 'plate')",
             name="ck_products_printing_plate_mode",
         ),
@@ -273,6 +277,12 @@ class Product(Base):
         String(30),
         default="parent_priced_set",
         server_default="parent_priced_set",
+        nullable=False,
+    )
+    composite_fulfillment_mode: Mapped[str] = mapped_column(
+        String(30),
+        default="component_delivery",
+        server_default="component_delivery",
         nullable=False,
     )
     is_internal_component: Mapped[bool] = mapped_column(

@@ -158,6 +158,29 @@ interface InventoryItem {
   version?: number;
   specification?: string | null;
   material?: string | null;
+  composite_parent_group_key?: string | null;
+  composite_parent_summary?: {
+    group_key: string;
+    order_item_id: number;
+    order_number: string;
+    product_id: number;
+    inventory_code?: string | null;
+    product_name: string;
+    available_set_quantity: number;
+    remaining_order_set_quantity: number;
+    unit: "sets";
+    component_lot_count: number;
+    component_lot_ids: number[];
+    components: Array<{
+      snapshot_id: number;
+      product_code?: string | null;
+      product_name?: string | null;
+      quantity_per_set: number;
+      available_piece_quantity: number;
+      complete_set_quantity: number;
+      is_required: boolean;
+    }>;
+  } | null;
 }
 
 interface RackInventoryItem extends InventoryItem {
@@ -1925,6 +1948,16 @@ export function WarehouseTwinApp() {
     () => selectedLocation ? inventoryLocationItems(selectedLocation) as InventoryItem[] : [],
     [selectedLocation]
   );
+  const selectedLocationCompositeParentSummaries = useMemo(
+    () => selectedLocationItems
+      .map((item) => ({ item, summary: item.composite_parent_summary }))
+      .filter((row): row is { item: InventoryItem; summary: NonNullable<InventoryItem["composite_parent_summary"]> } => Boolean(row.summary)),
+    [selectedLocationItems]
+  );
+  const selectedLocationLookupItems = useMemo(
+    () => selectedLocationItems.filter((item) => !item.composite_parent_group_key),
+    [selectedLocationItems]
+  );
   const selectedLocationCustomers = Array.from(new Set(
     selectedLocationItems.map((item) => item.customer_name?.trim()).filter((name): name is string => Boolean(name))
   ));
@@ -1935,9 +1968,11 @@ export function WarehouseTwinApp() {
       : selectedLocation?.occupancy_status === "empty"
         ? "当前空库位"
         : "客户待确认";
-  const visibleSelectedLocationItems = locationItemsExpanded || mapMode !== "lookup"
+  const visibleSelectedLocationItems = mapMode !== "lookup"
     ? selectedLocationItems
-    : selectedLocationItems.slice(0, 4);
+    : locationItemsExpanded
+      ? selectedLocationLookupItems
+      : selectedLocationLookupItems.slice(0, 4);
   const selectedLocationHasColumnConflict = Boolean(
     selectedLocation && palletColumnConflictIds.has(`erp-location-${selectedLocation.location_id}`)
   );
@@ -4415,12 +4450,19 @@ export function WarehouseTwinApp() {
           <div className="twin-location-card-title"><div><small>当前位置 · {selectedLocation.location_code}</small><b>{selectedLocation.location_name}</b></div><em className={selectedLocation.occupancy_status}>{selectedLocation.occupancy_status === "occupied" ? "有货" : "空位"}</em></div>
           <div className="twin-selection-summary"><span><small>货物</small><b>{selectedLocationItems.length} 条</b></span><span><small>客户</small><b>{selectedLocationCustomerLabel}</b></span><span><small>栈板</small><b>{selectedLocationPallets.length || 0} 块</b></span></div>
           {selectedLocationItems.length === 0 && <p className="twin-location-empty-primary">该位置当前没有货物</p>}
+          {mapMode === "lookup" && selectedLocationCompositeParentSummaries.map(({ item, summary }) => <article className="twin-location-item twin-composite-parent-item" key={summary.group_key}>
+            <div className="twin-location-item-code"><b>{summary.inventory_code || `组合父件 ${summary.order_item_id}`}</b><strong>{summary.available_set_quantity > 0 ? `${formatNumber(summary.available_set_quantity)} 套` : "待齐套"}</strong></div>
+            <h4>{summary.product_name}</h4>
+            <div className="twin-location-item-summary"><span>{item.customer_name || "客户待确认"} · {summary.order_number}</span></div>
+            <small>按最短组件自动计算；底层 {summary.component_lot_count} 个正式批次仍独立追溯</small>
+            <div className="twin-composite-component-lines">{summary.components.map((component) => <span key={component.snapshot_id}>{component.product_code || component.product_name || `组件 ${component.snapshot_id}`}：{formatNumber(component.available_piece_quantity)} 件 / 每套 {formatNumber(component.quantity_per_set)} 件{component.is_required ? "" : "（可选）"}</span>)}</div>
+          </article>)}
           {visibleSelectedLocationItems.map((item, itemIndex) => <button type="button" className={`twin-location-item ${correctionLotId === item.lot_id ? "correction-selected" : ""} ${focusedSearchProductKey && searchProductKey(item) === focusedSearchProductKey ? "warehouse-search-hit" : ""}`} key={item.lot_id || `${item.inventory_code}-${itemIndex}`} onClick={() => { setCorrectionLotId(item.lot_id || null); setCorrectionQuantity(""); setCorrectionReason(""); setWarehouseOperationMessage(""); }}>
             <div className="twin-location-item-code"><b>{item.inventory_code || item.lot_number || `批次 ${item.lot_id}`}</b><strong>{formatNumber(inventoryLabelQuantity(item))} {inventoryUnitLabel(item.unit)}</strong></div>
             <h4>{item.product_name || "产品名称待补充"}</h4>
             <div className="twin-location-item-summary"><span>{item.customer_name || "客户待确认"}</span></div>
           </button>)}
-          {mapMode === "lookup" && selectedLocationItems.length > 4 && <button type="button" className="twin-detail-toggle" aria-expanded={locationItemsExpanded} onClick={() => setLocationItemsExpanded((current) => !current)}>{locationItemsExpanded ? "收起货物" : `查看全部 ${selectedLocationItems.length} 条货物`}</button>}
+          {mapMode === "lookup" && selectedLocationLookupItems.length > 4 && <button type="button" className="twin-detail-toggle" aria-expanded={locationItemsExpanded} onClick={() => setLocationItemsExpanded((current) => !current)}>{locationItemsExpanded ? "收起货物" : `查看全部 ${selectedLocationLookupItems.length} 条非组合货物`}</button>}
           {palletColumnConflictIds.has(`erp-location-${selectedLocation.location_id}`) && <p className="twin-location-column-warning">该货位与固定柱子重叠，请在二维“库位布局”中拖离柱子后再保存。</p>}
           <button type="button" className="twin-detail-toggle secondary" aria-expanded={locationDetailOpen} onClick={() => setLocationDetailOpen((current) => !current)}>{locationDetailOpen ? "收起位置与栈板详情" : "位置与栈板详情"}</button>
           {locationDetailOpen && <div className="twin-location-secondary">

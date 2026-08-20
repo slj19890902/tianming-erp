@@ -214,7 +214,9 @@ def _seed_virtual_kit(session: Session) -> tuple[User, Product, Product, Product
     assert relation_b.mold_tool_id == mold.id
     assert relation_b.mold_max_yield_per_sheet == 4
     assert relation_b.spare_sheet_quantity == 0
-    assert relation_b.show_on_delivery is False
+    # 子件交付是订单级权威模式，所有必需子件都必须进入送货展示；
+    # 旧的逐组件 show_on_delivery 不能再制造父/子混合口径。
+    assert relation_b.show_on_delivery is True
 
     order = Order(
         order_number="P1-43A-ORDER",
@@ -299,14 +301,14 @@ def test_virtual_parent_freezes_component_demands_and_never_creates_parent_task(
             ("KIT-A", 600),
             ("KIT-B", 400),
         ]
-        assert [row.show_on_delivery for row in demands] == [True, False]
+        assert [row.show_on_delivery for row in demands] == [True, True]
         snapshots = session.scalars(
             select(SalesOrderItemBomComponent)
             .where(SalesOrderItemBomComponent.sales_order_item_id == item.id)
             .order_by(SalesOrderItemBomComponent.display_order)
         ).all()
         assert all(row.snapshot_schema_version == 4 for row in snapshots)
-        assert [row.show_on_delivery for row in snapshots] == [True, False]
+        assert [row.show_on_delivery for row in snapshots] == [True, True]
 
         create_or_refresh_production_task(session, item.id)
         tasks = session.scalars(
@@ -355,8 +357,10 @@ def test_delivery_visibility_filters_only_customer_goods_lines() -> None:
         specification=None,
         parent_quantity=100,
         component_lines=component_lines,
+        fulfillment_mode="component_delivery",
     )
-    assert [line["product_code"] for line in lines] == ["KIT-PARENT", "KIT-A"]
+    assert [line["product_code"] for line in lines] == ["KIT-A", "KIT-B"]
+    assert all(line["line_type"] == "component" for line in lines)
     assert lines[1]["pricing_included"] is False
     assert lines[1]["independent_statement"] is False
 

@@ -21,11 +21,14 @@ from app.models.warehouse_inventory import (
     InventoryLot,
     InventoryMovement,
     InventoryPallet,
+    InventoryReservation,
     WarehouseArea,
     WarehouseAreaStoragePolicy,
     WarehouseFloor,
     WarehouseLocation,
 )
+from app.models.order import Order, OrderItem
+from app.models.product_bom import SalesOrderItemBomComponent
 from app.services.warehouse_pallet_standard import standard_pallet_contract
 from app.services.product_specification import dimension_specification
 
@@ -126,10 +129,161 @@ def _lot_business_fields(row: InventoryLot) -> dict:
     }
 
 
-def _lot_payload(row: InventoryLot, as_of: date) -> dict:
+def _parent_delivery_inventory_projections(
+    db: Session,
+    lots: Iterable[InventoryLot],
+) -> dict[int, dict]:
+    """Project component ledgers as one physical parent-delivery product.
+
+    This is display metadata only.  The component lots remain authoritative so
+    delivery consumption, shortages and traceability keep their exact piece
+    quantities.  A projection is calculated independently for every physical
+    location/pallet and uses the shortest required component as the set count.
+    """
+
+    lot_map = {int(row.id): row for row in lots if int(row.id or 0) > 0}
+    if not lot_map:
+        return {}
+    rows = db.execute(
+        select(
+            InventoryReservation,
+            SalesOrderItemBomComponent,
+            OrderItem,
+            Order,
+        )
+        .join(
+            SalesOrderItemBomComponent,
+            SalesOrderItemBomComponent.id
+            == InventoryReservation.sales_order_item_bom_component_id,
+        )
+        .join(OrderItem, OrderItem.id == InventoryReservation.order_item_id)
+        .join(Order, Order.id == OrderItem.order_id)
+        .where(
+            InventoryReservation.inventory_lot_id.in_(list(lot_map)),
+            InventoryReservation.status.in_(("active", "partial")),
+            InventoryReservation.reserved_stock_quantity
+            > InventoryReservation.consumed_stock_quantity
+            + InventoryReservation.released_stock_quantity,
+            OrderItem.composite_fulfillment_mode_snapshot == "parent_delivery",
+        )
+        .order_by(InventoryReservation.id)
+    ).all()
+    if not rows:
+        return {}
+    item_ids = sorted({int(item.id) for _reservation, _snapshot, item, _order in rows})
+    demands_by_item: dict[int, list[SalesOrderItemBomComponent]] = defaultdict(list)
+    for snapshot in db.scalars(
+        select(SalesOrderItemBomComponent)
+        .where(SalesOrderItemBomComponent.sales_order_item_id.in_(item_ids))
+        .order_by(
+            SalesOrderItemBomComponent.sales_order_item_id,
+            SalesOrderItemBomComponent.display_order,
+            SalesOrderItemBomComponent.id,
+        )
+    ).all():
+        demands_by_item[int(snapshot.sales_order_item_id)].append(snapshot)
+
+    groups: dict[tuple[int, int, int | None], dict] = {}
+    for reservation, snapshot, item, order in rows:
+        lot = lot_map.get(int(reservation.inventory_lot_id))
+        if lot is None:
+            continue
+        pallet_id = (
+            int(lot.pallet_item.pallet_id) if lot.pallet_item is not None else None
+        )
+        key = (int(item.id), int(lot.warehouse_location_id), pallet_id)
+        group = groups.setdefault(
+            key,
+            {
+                "item": item,
+                "order": order,
+                "lot_ids": set(),
+                "pieces_by_snapshot": defaultdict(int),
+            },
+        )
+        remaining = max(
+            int(reservation.reserved_stock_quantity or 0)
+            - int(reservation.consumed_stock_quantity or 0)
+            - int(reservation.released_stock_quantity or 0),
+            0,
+        )
+        # A component completion has one reservation per lot.  Capping by the
+        # current reserved balance prevents damaged/reclassified pieces from
+        # being presented as ready parent sets.
+        remaining = min(remaining, max(int(lot.quantity_reserved or 0), 0))
+        group["lot_ids"].add(int(lot.id))
+        group["pieces_by_snapshot"][int(snapshot.id)] += remaining
+
+    result: dict[int, dict] = {}
+    for (item_id, location_id, pallet_id), group in groups.items():
+        item: OrderItem = group["item"]
+        order: Order = group["order"]
+        component_rows = []
+        required_set_counts: list[int] = []
+        for snapshot in demands_by_item.get(item_id, []):
+            quantity_per_set = max(int(snapshot.quantity_per_set or 0), 1)
+            available_pieces = int(
+                group["pieces_by_snapshot"].get(int(snapshot.id), 0)
+            )
+            complete_sets = available_pieces // quantity_per_set
+            if snapshot.is_required:
+                required_set_counts.append(complete_sets)
+            component_rows.append(
+                {
+                    "snapshot_id": int(snapshot.id),
+                    "product_code": snapshot.snapshot_component_product_code,
+                    "product_name": snapshot.snapshot_component_product_name,
+                    "quantity_per_set": quantity_per_set,
+                    "available_piece_quantity": available_pieces,
+                    "complete_set_quantity": complete_sets,
+                    "is_required": bool(snapshot.is_required),
+                }
+            )
+        remaining_order_sets = max(
+            int(item.quantity or 0) - int(item.delivered_quantity or 0),
+            0,
+        )
+        available_sets = min(required_set_counts, default=0)
+        available_sets = min(available_sets, remaining_order_sets)
+        lot_ids = sorted(int(value) for value in group["lot_ids"])
+        group_key = (
+            f"parent-delivery:{item_id}:location:{location_id}:"
+            f"pallet:{pallet_id or 'loose'}"
+        )
+        summary = {
+            "group_key": group_key,
+            "order_item_id": item_id,
+            "order_number": order.order_number,
+            "product_id": int(item.product_id),
+            "inventory_code": item.snapshot_product_code,
+            "product_name": item.snapshot_product_name,
+            "available_set_quantity": available_sets,
+            "remaining_order_set_quantity": remaining_order_sets,
+            "unit": "sets",
+            "component_lot_count": len(lot_ids),
+            "component_lot_ids": lot_ids,
+            "components": component_rows,
+        }
+        representative_lot_id = lot_ids[0]
+        for lot_id in lot_ids:
+            result[lot_id] = {
+                "composite_parent_group_key": group_key,
+                "composite_parent_summary": (
+                    summary if lot_id == representative_lot_id else None
+                ),
+            }
+    return result
+
+
+def _lot_payload(
+    row: InventoryLot,
+    as_of: date,
+    *,
+    composite_projection: dict | None = None,
+) -> dict:
     business = _lot_business_fields(row)
     age_days = _age_days(row, as_of)
-    return {
+    payload = {
         "lot_id": row.id,
         "lot_number": row.lot_number,
         "inventory_type": row.inventory_type,
@@ -145,6 +299,9 @@ def _lot_payload(row: InventoryLot, as_of: date) -> dict:
         "status": row.status,
         "version": row.version,
     }
+    if composite_projection:
+        payload.update(composite_projection)
+    return payload
 
 
 def _pallet_visible(
@@ -343,12 +500,17 @@ def _location_payload(
     pallets: list[InventoryPallet],
     as_of: date,
     allowed_inventory_types: list[str] | None = None,
+    composite_projections: dict[int, dict] | None = None,
 ) -> dict:
     position_status, map_position = _location_position(row)
     pallet_payloads = []
     for pallet in sorted(pallets, key=lambda item: item.id):
         items = [
-            _lot_payload(lot, as_of)
+            _lot_payload(
+                lot,
+                as_of,
+                composite_projection=(composite_projections or {}).get(int(lot.id)),
+            )
             for lot in lots
             if lot.pallet_item is not None
             and lot.pallet_item.pallet_id == pallet.id
@@ -385,7 +547,11 @@ def _location_payload(
             }
         )
     loose_items = [
-        _lot_payload(lot, as_of)
+        _lot_payload(
+            lot,
+            as_of,
+            composite_projection=(composite_projections or {}).get(int(lot.id)),
+        )
         for lot in lots
         if lot.pallet_item is None
     ]
@@ -588,6 +754,7 @@ def build_warehouse_twin_dashboard(
         for row in projection_lots
         if row.status in {"active", "frozen"} and _physical_quantity(row) > 0
     ]
+    composite_projections = _parent_delivery_inventory_projections(db, current_lots)
     lots_by_location: dict[int, list[InventoryLot]] = defaultdict(list)
     for row in current_lots:
         lots_by_location[row.warehouse_location_id].append(row)
@@ -637,6 +804,7 @@ def build_warehouse_twin_dashboard(
                     ),
                     [],
                 ),
+                composite_projections=composite_projections,
             )
         )
 

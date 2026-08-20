@@ -20,6 +20,7 @@ from app.models.production_label_print import (
     ProductionPackagingLabelPrintJob,
     ProductionPackagingLabelPrintJobTask,
 )
+from app.models.requisition import Requisition
 from app.models.supplier_requisition_order import SupplierRequisitionOrder
 from app.services.composite_bom_workflow import (
     component_available_quantity,
@@ -31,6 +32,7 @@ from app.services.production_label_strategy import (
     build_new_task_production_label_snapshot,
 )
 from app.services.production_packaging_label import (
+    build_composite_requisition_packaging_label_package,
     build_supplier_requisition_packaging_label_package,
 )
 from app.services.warehouse_inventory import active_finished_reserved_qty
@@ -558,9 +560,10 @@ def _validate_job_task_links(
             )
         ).all()
     )
+    frozen_task_rows = package.get("job_tasks") or package.get("plans") or []
     frozen_plans = {
         int(plan["production_task_id"]): plan
-        for plan in (package.get("plans") or [])
+        for plan in frozen_task_rows
         if isinstance(plan, dict) and plan.get("production_task_id") is not None
     }
     link_ids = [int(link.production_task_id) for link in links]
@@ -612,7 +615,14 @@ def packaging_label_job_response(
 ) -> dict:
     return {
         "job_id": int(job.id),
-        "supplier_order_id": int(job.supplier_order_id),
+        "supplier_order_id": (
+            int(job.supplier_order_id) if job.supplier_order_id is not None else None
+        ),
+        "material_requisition_id": (
+            int(job.material_requisition_id)
+            if job.material_requisition_id is not None
+            else None
+        ),
         "status": job.status,
         "template_version": job.template_version,
         "plan_fingerprint": job.plan_fingerprint,
@@ -709,6 +719,106 @@ def prepare_packaging_label_job(
     return PackagingLabelJobResult(job, package, False)
 
 
+def prepare_composite_packaging_label_job(
+    db: Session,
+    *,
+    requisition: Requisition,
+    selected_item_ids: set[int],
+    idempotency_key: str,
+    expected_plan_fingerprint: str,
+    operator_id: int,
+) -> PackagingLabelJobResult:
+    key = idempotency_key.strip()
+    normalized_item_ids = sorted({int(value) for value in selected_item_ids})
+    request_hash = _canonical_hash(
+        {
+            "material_requisition_id": int(requisition.id),
+            "selected_item_ids": normalized_item_ids,
+            "idempotency_key": key,
+            "plan_fingerprint": expected_plan_fingerprint,
+        }
+    )
+    repeated = db.scalar(
+        select(ProductionPackagingLabelPrintJob).where(
+            ProductionPackagingLabelPrintJob.idempotency_key == key
+        )
+    )
+    if repeated is not None:
+        if repeated.request_hash != request_hash or repeated.operator_id != operator_id:
+            raise ProductionLabelOperationError("幂等键已用于不同的标签打印作业")
+        return PackagingLabelJobResult(repeated, _load_job_package(repeated, db), True)
+
+    package = build_composite_requisition_packaging_label_package(
+        db,
+        requisition,
+        selected_item_ids=set(normalized_item_ids),
+    )
+    if package.get("review_required"):
+        raise ProductionLabelOperationError(
+            "组合产品标签计划需要核对："
+            + "；".join(str(value) for value in package.get("review_messages") or [])
+        )
+    if not package.get("label_count"):
+        raise ProductionLabelOperationError("所选组合报料明细没有可打印的产品标签")
+    if package.get("plan_fingerprint") != expected_plan_fingerprint:
+        raise ProductionLabelOperationError("标签计划已变化，请刷新预览后重试")
+    task_rows = package.get("job_tasks") or package.get("plans") or []
+    plan_versions = {
+        int(row["production_task_id"]): int(row["production_task_version"])
+        for row in task_rows
+    }
+    _claim_task_versions(
+        db,
+        plan_versions,
+        conflict_message="组合标签对应的生产任务已变化，请重新加载预览",
+    )
+    package = build_composite_requisition_packaging_label_package(
+        db,
+        requisition,
+        selected_item_ids=set(normalized_item_ids),
+    )
+    if package.get("plan_fingerprint") != expected_plan_fingerprint:
+        raise ProductionLabelOperationError("标签计划已变化，请刷新预览后重试")
+    template_version = str(package.get("template_version") or "")
+    if template_version not in {
+        "legacy_65x45_v1",
+        "current_40x30_v1",
+        CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION,
+    }:
+        raise ProductionLabelOperationError("标签模板版本不受支持")
+
+    frozen_json = _canonical_json(package)
+    payload_hash = sha256(frozen_json.encode("utf-8")).hexdigest()
+    job = ProductionPackagingLabelPrintJob(
+        supplier_order_id=None,
+        material_requisition_id=requisition.id,
+        idempotency_key=key,
+        request_hash=request_hash,
+        operator_id=operator_id,
+        template_version=template_version,
+        plan_fingerprint=expected_plan_fingerprint,
+        payload_json=frozen_json,
+        payload_hash=payload_hash,
+        status="prepared",
+    )
+    db.add(job)
+    db.flush()
+    for row in package.get("job_tasks") or package.get("plans") or []:
+        db.add(
+            ProductionPackagingLabelPrintJobTask(
+                print_job_id=job.id,
+                production_task_id=int(row["production_task_id"]),
+                production_task_version=int(row["production_task_version"]),
+                product_id=row.get("product_id"),
+                product_version=row.get("product_version"),
+                template_version=template_version,
+                snapshot_json=_canonical_json(row),
+            )
+        )
+    db.flush()
+    return PackagingLabelJobResult(job, package, False)
+
+
 def get_packaging_label_job(
     db: Session,
     job_id: int,
@@ -791,9 +901,10 @@ def confirm_packaging_label_job_printed(
     task_ids = [int(link.production_task_id) for link in links]
     if not task_ids:
         raise ProductionLabelOperationError("打印作业没有关联生产任务，不能登记实际打印")
+    frozen_task_rows = package.get("job_tasks") or package.get("plans") or []
     frozen_plans = {
         int(plan["production_task_id"]): plan
-        for plan in (package.get("plans") or [])
+        for plan in frozen_task_rows
     }
     # Serialize against manual plan refreshes.  The job payload itself remains
     # immutable even if a later business read changes.
@@ -814,6 +925,32 @@ def latest_printed_job_metadata(db: Session, supplier_order_id: int) -> dict | N
         select(ProductionPackagingLabelPrintJob)
         .where(
             ProductionPackagingLabelPrintJob.supplier_order_id == supplier_order_id,
+            ProductionPackagingLabelPrintJob.status == "printed",
+        )
+        .order_by(
+            ProductionPackagingLabelPrintJob.printed_at.desc(),
+            ProductionPackagingLabelPrintJob.id.desc(),
+        )
+        .limit(1)
+    )
+    if job is None:
+        return None
+    return {
+        "job_id": int(job.id),
+        "template_version": job.template_version,
+        "printed_at": utc_naive_to_api(job.printed_at) if job.printed_at else None,
+    }
+
+
+def latest_printed_composite_job_metadata(
+    db: Session,
+    material_requisition_id: int,
+) -> dict | None:
+    job = db.scalar(
+        select(ProductionPackagingLabelPrintJob)
+        .where(
+            ProductionPackagingLabelPrintJob.material_requisition_id
+            == material_requisition_id,
             ProductionPackagingLabelPrintJob.status == "printed",
         )
         .order_by(

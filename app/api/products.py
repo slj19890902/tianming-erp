@@ -538,6 +538,9 @@ class ProductPayload(BaseModel):
     production_label_units_per_label: int | None = Field(default=None, gt=0)
     flap_mm: int | None = 30
     combination_mode: Literal["parent_priced_set", "component_priced"] = "parent_priced_set"
+    composite_fulfillment_mode: Literal[
+        "parent_delivery", "component_delivery"
+    ] = "component_delivery"
     is_virtual_composite_parent: bool = False
 
     @field_validator("production_label_units_per_label", mode="before")
@@ -557,6 +560,11 @@ class ProductPayload(BaseModel):
                 raise ValueError("虚拟组合套装父件必须采用父件按套计价")
             _clear_virtual_composite_parent_fields(self)
             return self
+        if (
+            self.combination_mode == "component_priced"
+            and self.composite_fulfillment_mode != "component_delivery"
+        ):
+            raise ValueError("组件分别计价时必须按子件交付、打印标签和存放")
         if self.supply_mode == "external_purchase":
             _clear_external_purchase_paper_fields(self)
         self.flute_type = normalize_flute_type(self.flute_type)
@@ -661,6 +669,9 @@ class ProductResponse(ProductPayload):
     is_composite: bool = False
     is_virtual_composite_parent: bool = False
     combination_mode: Literal["parent_priced_set", "component_priced"] = "parent_priced_set"
+    composite_fulfillment_mode: Literal[
+        "parent_delivery", "component_delivery"
+    ] = "component_delivery"
     is_internal_component: bool = False
     drawings: list[ProductDrawingResponse] = Field(default_factory=list)
 
@@ -839,8 +850,24 @@ def _clear_virtual_composite_parent_fields(payload: ProductPayload) -> None:
     payload.machine_set_length_mm = None
     payload.machine_set_width_mm = None
     payload.machine_set_height_mm = None
-    payload.production_label_enabled = False
-    payload.production_label_units_per_label = None
+    if payload.composite_fulfillment_mode == "component_delivery":
+        payload.production_label_enabled = False
+        payload.production_label_units_per_label = None
+    elif {
+        "production_label_enabled",
+        "production_label_units_per_label",
+    }.intersection(payload.model_fields_set):
+        try:
+            (
+                payload.production_label_enabled,
+                payload.production_label_units_per_label,
+            ) = normalize_production_label_strategy(
+                box_style=payload.box_style,
+                enabled=payload.production_label_enabled,
+                units_per_label=payload.production_label_units_per_label,
+            )
+        except ProductionLabelStrategyError as error:
+            raise ValueError(str(error)) from error
     payload.cost_unit_price = None
     payload.board_price = None
     payload.suggested_price = None
@@ -1112,6 +1139,10 @@ def _validated_product_versioned_updates(
         getattr(product, "is_virtual_composite_parent", False)
     ):
         payload.is_virtual_composite_parent = True
+        payload.composite_fulfillment_mode = str(
+            getattr(product, "composite_fulfillment_mode", "component_delivery")
+            or "component_delivery"
+        )
         _clear_virtual_composite_parent_fields(payload)
     if (
         virtual_marker_was_submitted
@@ -1150,6 +1181,8 @@ def _validated_product_versioned_updates(
     updates = _product_write_data(payload, user)
     if not virtual_marker_was_submitted:
         updates.pop("is_virtual_composite_parent", None)
+    if "composite_fulfillment_mode" not in payload.model_fields_set:
+        updates.pop("composite_fulfillment_mode", None)
     if not {
         "production_label_enabled",
         "production_label_units_per_label",
@@ -1298,6 +1331,10 @@ def _summary_response(product: Product, user: User) -> dict:
         "is_composite": bool(getattr(product, "is_composite", False)),
         "is_virtual_composite_parent": bool(
             getattr(product, "is_virtual_composite_parent", False)
+        ),
+        "composite_fulfillment_mode": str(
+            getattr(product, "composite_fulfillment_mode", "component_delivery")
+            or "component_delivery"
         ),
         "readiness": product_readiness(product),
     }

@@ -130,6 +130,7 @@ test("inventory units use employee-friendly factory labels without changing quan
   assert.equal(inventoryUnitLabel("boxes"), "只");
   assert.equal(inventoryUnitLabel("sheets"), "张");
   assert.equal(inventoryUnitLabel("pieces"), "件");
+  assert.equal(inventoryUnitLabel("sets"), "套");
   assert.equal(inventoryUnitLabel("kg"), "kg");
 });
 

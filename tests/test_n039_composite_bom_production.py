@@ -15,7 +15,11 @@ from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.product_bom import SalesOrderItemBomComponent
 from app.models.production import ProductionCompletion, ProductionTask
-from app.models.warehouse_inventory import InventoryReservation, WarehouseLocation
+from app.models.warehouse_inventory import (
+    InventoryPalletItem,
+    InventoryReservation,
+    WarehouseLocation,
+)
 from app.services.production_workflow import (
     CompletionCommand,
     ProductionWorkflowError,
@@ -25,6 +29,9 @@ from app.services.production_workflow import (
     refresh_production_task,
     transfer_direct_completion_to_stock,
     StockTransferCommand,
+)
+from app.services.warehouse_twin_dashboard import (
+    _parent_delivery_inventory_projections,
 )
 
 
@@ -315,6 +322,97 @@ def test_component_completion_is_task_scoped_and_transfer_uses_component_product
         complete_production_batch(
             db,
             idempotency_key="n039-repeat-task",
+            commands=[
+                CompletionCommand(
+                    task_id=task.id,
+                    expected_version=task.version,
+                    disposition="direct",
+                )
+            ],
+            operator_id=None,
+        )
+
+
+def test_parent_delivery_components_must_stock_together_on_one_pallet(
+    composite_db,
+) -> None:
+    db, item_id, _products, location_id = composite_db
+    item = db.get(OrderItem, item_id)
+    item.composite_fulfillment_mode_snapshot = "parent_delivery"
+    refresh_production_task(db, item_id, create_if_missing=True)
+    tasks = _component_tasks(db, item_id)
+
+    first = complete_production_batch(
+        db,
+        idempotency_key="n039-parent-stock-first",
+        commands=[
+            CompletionCommand(
+                task_id=tasks[0].id,
+                expected_version=tasks[0].version,
+                disposition="stock",
+                location_id=location_id,
+            )
+        ],
+        operator_id=None,
+    ).completions[0]
+    first_pallet_id = db.scalar(
+        select(InventoryPalletItem.pallet_id).where(
+            InventoryPalletItem.inventory_lot_id == first.inventory_lot_id
+        )
+    )
+    assert first_pallet_id is not None
+
+    second = complete_production_batch(
+        db,
+        idempotency_key="n039-parent-stock-second",
+        commands=[
+            CompletionCommand(
+                task_id=tasks[1].id,
+                expected_version=tasks[1].version,
+                disposition="stock",
+                location_id=location_id,
+            )
+        ],
+        operator_id=None,
+    ).completions[0]
+    second_pallet_id = db.scalar(
+        select(InventoryPalletItem.pallet_id).where(
+            InventoryPalletItem.inventory_lot_id == second.inventory_lot_id
+        )
+    )
+    assert second_pallet_id == first_pallet_id
+    from app.models.warehouse_inventory import InventoryLot
+
+    lots = list(
+        db.scalars(
+            select(InventoryLot).where(
+                InventoryLot.id.in_((first.inventory_lot_id, second.inventory_lot_id))
+            )
+        ).all()
+    )
+    projections = _parent_delivery_inventory_projections(db, lots)
+    summaries = [
+        row["composite_parent_summary"]
+        for row in projections.values()
+        if row.get("composite_parent_summary") is not None
+    ]
+    assert len(summaries) == 1
+    assert summaries[0]["inventory_code"] == "KIT-001"
+    assert summaries[0]["available_set_quantity"] == 5
+    assert summaries[0]["component_lot_count"] == 2
+
+
+def test_parent_delivery_rejects_direct_component_completion(composite_db) -> None:
+    db, item_id, _products, _location_id = composite_db
+    item = db.get(OrderItem, item_id)
+    item.composite_fulfillment_mode_snapshot = "parent_delivery"
+    refresh_production_task(db, item_id, create_if_missing=True)
+    task = _component_tasks(db, item_id)[0]
+
+    with pytest.raises(ProductionWorkflowError, match="同一位置齐套入库"):
+        complete_production_batch(
+            db,
+            idempotency_key="n039-parent-direct-rejected",
             commands=[
                 CompletionCommand(
                     task_id=task.id,

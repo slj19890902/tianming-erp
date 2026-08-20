@@ -1907,19 +1907,22 @@
       .reported-item-toolbar .toolbar-group { flex-wrap: wrap; }
       .reported-item-selection-summary { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
       .reported-item-table-wrap { max-height: calc(100vh - 340px); overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
-      .reported-item-table { width: 100%; min-width: 1280px; table-layout: fixed; border-collapse: separate; border-spacing: 0; }
+      .reported-item-table { width: 100%; min-width: 1110px; table-layout: fixed; border-collapse: separate; border-spacing: 0; font-size: 15px; }
       .reported-item-table th,
-      .reported-item-table td { height: 34px; min-height: 34px; padding: 4px 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
+      .reported-item-table td { height: 38px; min-height: 38px; padding: 5px 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; border-bottom: 1px solid #cbd5e1; }
+      .reported-item-table th { height: 38px; min-height: 38px; padding: 5px 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
       .reported-item-table thead th { position: sticky; top: 0; z-index: 3; background: #f4f6f8; }
       .reported-item-table .reported-item-select-column { position: sticky; left: 0; z-index: 2; width: 78px; background: #fff; text-align: center; }
       .reported-item-table thead .reported-item-select-column { z-index: 5; background: #f4f6f8; }
-      .reported-item-table .reported-item-action-column { position: sticky; right: 0; z-index: 2; width: 205px; background: #fff; }
-      .reported-item-table thead .reported-item-action-column { z-index: 5; background: #f4f6f8; }
-      .reported-item-table .reported-item-dimension { width: 88px; text-align: right; font-variant-numeric: tabular-nums; }
+      .reported-item-table .reported-item-dimension { width: 92px; text-align: right; font-variant-numeric: tabular-nums; font-size: 16px; font-weight: 800; }
+      .reported-item-table .reported-item-supplier { width: 6.5em; max-width: 6.5em; }
       .reported-item-table .reported-item-times { width: 145px; }
       .reported-item-table .reported-item-status { width: 90px; }
       .reported-item-table .reported-item-customer { cursor: pointer; color: var(--primary); text-decoration: underline; text-underline-offset: 2px; }
       .reported-item-table tr.row-voided td { color: var(--muted); background: #f8fafc; }
+      .reported-item-table .reported-composite-parent-row td { padding: 8px 10px; background: #eff6ff; border-bottom: 1px solid #93c5fd; white-space: normal; }
+      .reported-composite-parent { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+      .reported-composite-parent-main { display:flex; align-items:center; flex-wrap:wrap; gap:8px; min-width:0; }
       .reported-item-sort { border: 0; background: transparent; color: inherit; font: inherit; font-weight: 700; padding: 0; cursor: pointer; white-space: nowrap; }
       .reported-item-sort.active { color: var(--primary); }
       .reported-item-drawer-backdrop { position: fixed; inset: 0; z-index: 84; background: rgba(15,23,42,.28); }
@@ -3629,11 +3632,23 @@
                     <th style="width:135px">材质 / 楞型</th>
                     <th style="width:220px">客户简称 / 存货编码</th>
                     <th class="reported-item-times"><button :class="['reported-item-sort',{active:reportedSort.by==='reported_at'}]" @click="setReportedSort('reported_at')">报料日期 {{ reportedSortArrow('reported_at') }}</button></th>
-                    <th style="width:135px">供应商</th>
+                    <th class="reported-item-supplier">供应商</th>
                     <th class="reported-item-status">状态</th>
-                    <th class="reported-item-action-column">操作</th>
                   </tr></thead>
-                  <tbody><tr v-for="row in requisitionItems" :key="row.stable_id" :class="{'row-voided':row.status==='voided'}">
+                  <tbody><template v-for="row in requisitionItems" :key="row.stable_id">
+                  <tr v-if="row.composite_group_first" class="reported-composite-parent-row">
+                    <td colspan="11"><div class="reported-composite-parent">
+                      <div class="reported-composite-parent-main">
+                        <input v-if="row.composite_fulfillment_mode==='parent_delivery'" type="checkbox" :checked="reportedCompositeGroupSelected(row)" @change="toggleReportedCompositeGroup(row,$event.target.checked)" />
+                        <strong>组合父件：{{ row.composite_parent_product_code || '-' }}｜{{ row.composite_parent_product_name || '-' }}</strong>
+                        <span class="status blue">{{ row.composite_fulfillment_mode==='parent_delivery' ? '父件交付' : '子件交付' }}</span>
+                        <span>{{ row.composite_parent_set_quantity || 0 }} 套</span>
+                        <span class="muted">{{ row.composite_fulfillment_mode==='parent_delivery' ? '勾选父件将整组子件用于父件标签；报料仍按下方子件数量' : '父件不进入送货单与标签，下方子件分别交付、打印和入库' }}</span>
+                      </div>
+                      <button v-if="row.composite_group_can_void" class="btn small danger" type="button" @click="voidReportedCompositeRequisition(row)">撤销整组报料</button>
+                    </div></td>
+                  </tr>
+                  <tr :class="{'row-voided':row.status==='voided'}">
                     <td class="reported-item-select-column"><input type="checkbox" :checked="reportedItemSelected(row)" @change="toggleReportedItemSelection(row,$event.target.checked)" /> {{ row.sequence }}</td>
                     <td class="reported-item-dimension" :title="String(row.report_length_mm || '-')">{{ row.report_length_mm || '-' }}</td>
                     <td style="text-align:center">×</td>
@@ -3643,14 +3658,9 @@
                     <td :title="`${row.material_code || '-'} / ${row.flute_type || '-'}`">{{ row.material_code || '-' }} / {{ row.flute_type || '-' }}</td>
                     <td><button class="reported-item-customer" type="button" @click="openReportedItemDetail(row)" :title="`${row.customer_name || '-'}｜${row.product_code || '-'}`">{{ row.customer_short_name || row.customer_name || '-' }}｜{{ row.product_code || '-' }}</button></td>
                     <td :title="formatDateTime(row.reported_at)">{{ formatDateTime(row.reported_at) }}</td>
-                    <td :title="supplierDisplayName(row.supplier_name || '-')">{{ supplierDisplayName(row.supplier_name || '-') }}</td>
+                    <td class="reported-item-supplier" :title="supplierDisplayName(row.supplier_name || '-')">{{ supplierDisplayName(row.supplier_name || '-') }}</td>
                     <td><span :class="['status',reportedItemStatusClass(row)]">{{ reportedItemStatusText(row) }}</span></td>
-                    <td class="reported-item-action-column"><div class="toolbar-group" style="flex-wrap:nowrap">
-                      <button class="btn small" type="button" @click="openReportedItemDetail(row)">详情</button>
-                      <button class="btn small" type="button" @click="openReportedItemDocument(row)">{{ row.can_view_supplier_order ? '采购单' : '查看' }}</button>
-                      <button v-if="row.can_void_item" class="btn small danger" type="button" :disabled="reportedItemVoidBusy(row)" @click="voidReportedItem(row)">{{ reportedItemVoidButtonText(row) }}</button>
-                    </div></td>
-                  </tr></tbody>
+                  </tr></template></tbody>
                 </table>
               </div>
               <div v-if="requisitionTab==='submitted' && requisitionReportedLoaded && !requisitionItems.length && !reportedItemLoading" class="empty">当前条件下没有已报料明细。</div>
@@ -3672,6 +3682,7 @@
                 </dl>
                 <div class="toolbar-group" style="margin-top:18px;flex-wrap:wrap">
                   <button class="btn primary" type="button" @click="openReportedItemDocument(reportedItemDetail)">{{ reportedItemDetail.can_view_supplier_order ? '查看采购单并定位本行' : '查看原单据' }}</button>
+                  <button v-if="reportedItemDetail.composite_group_can_void" class="btn danger" type="button" @click="voidReportedCompositeRequisition(reportedItemDetail)">撤销整组 BOM 报料</button>
                   <button v-if="reportedItemDetail.can_void_item" class="btn danger" type="button" :disabled="reportedItemVoidBusy(reportedItemDetail)" @click="voidReportedItem(reportedItemDetail)">{{ reportedItemVoidButtonText(reportedItemDetail) }}</button>
                 </div>
               </aside>
@@ -3819,7 +3830,7 @@
 	                  <tbody><tr v-for="row in productionPending" :key="row.id" :class="{'requisition-selected': productionSelected[row.id]}">
 	                    <td v-if="canProductionExecute"><input v-if="productionUsesBatchConfirmation(row)" type="checkbox" :checked="!!productionSelected[row.id]" :disabled="productionBusy || !canConfirmProductionRow(row)" @change="onProductionSelectionChange(row,$event.target.checked)" /><span v-else class="muted">{{ row._direct_submitting ? '处理中' : '-' }}</span></td>
 	                    <td style="white-space:normal"><strong>{{ row.item_order_number || row.order_number || '-' }}</strong><br><span class="muted">{{ row.customer_name || '-' }}</span></td>
-	                    <td style="white-space:normal"><div class="production-product-summary" :title="productionProductTitle(row)"><div class="production-product-line"><span v-if="row.is_component_task" class="status blue">组件</span><strong>{{ row.product_code || '-' }}</strong><span>｜{{ row.product_name || '-' }}</span></div><div :class="productionPrintingSetup(row)?'production-printing-setup':'production-product-meta'">{{ productionPrintingSetup(row) || (row.specification || '-') }}<span v-if="!productionPrintingSetup(row) && productionBoardPreparationSummary(row)">｜{{ productionBoardPreparationSummary(row) }}</span></div><div :class="productionLabelPlanClass(row)" style="display:block;margin-top:5px">{{ productionLabelPlanText(row) }}</div><div v-if="row.fulfillment_reminders?.length" class="status orange" style="display:block;margin-top:6px;white-space:normal"><strong>客户回单交代</strong><div v-for="reminder in row.fulfillment_reminders" :key="reminder.id" style="overflow-wrap:anywhere">{{ reminder.content }}<span class="muted">｜{{ reminder.scope_type==='product' ? (reminder.product_code || '指定常用箱') : '该客户' }}｜{{ reminder.source_delivery_number || '-' }}</span></div></div></div></td>
+                    <td style="white-space:normal"><div class="production-product-summary" :title="productionProductTitle(row)"><div class="production-product-line"><span v-if="row.is_component_task" class="status blue">组件</span><strong>{{ row.product_code || '-' }}</strong><span>｜{{ row.product_name || '-' }}</span></div><div :class="productionPrintingSetup(row)?'production-printing-setup':'production-product-meta'">{{ productionPrintingSetup(row) || (row.specification || '-') }}<span v-if="!productionPrintingSetup(row) && productionBoardPreparationSummary(row)">｜{{ productionBoardPreparationSummary(row) }}</span></div><div v-if="row.is_component_task && row.composite_parent" class="status blue" style="display:block;margin-top:5px;white-space:normal">组合父件 {{ row.composite_parent.product_code || '-' }}｜{{ row.composite_parent.product_name || '-' }}；同组：{{ (row.composite_siblings || []).filter(item => !item.is_current).map(item => `${item.product_code || '-'} ${item.product_name || '-'}`).join('、') || '无其他子件' }}</div><div :class="productionLabelPlanClass(row)" style="display:block;margin-top:5px">{{ productionLabelPlanText(row) }}</div><div v-if="row.fulfillment_reminders?.length" class="status orange" style="display:block;margin-top:6px;white-space:normal"><strong>客户回单交代</strong><div v-for="reminder in row.fulfillment_reminders" :key="reminder.id" style="overflow-wrap:anywhere">{{ reminder.content }}<span class="muted">｜{{ reminder.scope_type==='product' ? (reminder.product_code || '指定常用箱') : '该客户' }}｜{{ reminder.source_delivery_number || '-' }}</span></div></div></div></td>
 	                    <td style="white-space:normal"><div class="production-quantity-summary"><div>订单 <strong>{{ row.order_quantity || 0 }}</strong>{{ productionOutputUnit(row) }}｜已到纸板 <strong>{{ row.material_received_quantity || 0 }}</strong>张</div><div>本次做 <strong>{{ row.planned_output_quantity || row.planned_quantity || 0 }}</strong>{{ productionOutputUnit(row) }}<span v-if="productionCuttingModeLabel(row)" class="muted">｜{{ productionCuttingModeLabel(row) }}</span></div></div></td>
 	                    <td style="white-space:normal"><div class="production-input-line"><label class="muted">用纸板</label><input class="input" type="number" min="1" v-model.number="row.actual_input_quantity" @input="syncProductionQuantities(row)" /><span class="production-input-unit">张</span></div><div class="production-input-line"><label class="muted">做成品</label><input class="input" type="number" min="1" v-model.number="row.actual_output_quantity" @input="syncProductionQuantities(row)" /><span class="production-input-unit">{{ productionOutputUnit(row) }}｜损耗 {{ productionDefectiveQuantity(row) }}</span></div></td>
 	                    <td style="white-space:normal"><div>用于订单 <strong>{{ productionOrderCoverage(row) }}</strong></div><div :class="productionSurplusQuantity(row)>0?'status orange':'muted'" style="margin-top:4px">多出 {{ productionSurplusQuantity(row) }}</div></td>
@@ -3847,7 +3858,7 @@
                   <thead><tr><th class="production-history-time">完工时间</th><th style="width:18%">订单 / 客户</th><th style="width:24%">存货编码 / 产品</th><th style="width:13%">数量 / 操作人</th><th style="width:16%">去向 / 库位</th><th class="production-history-actions">操作</th></tr></thead>
                   <tbody><tr v-for="row in productionHistory" :key="row.id">
                     <td class="production-history-time">{{ formatDateTime(row.completed_at) }}</td><td><strong>{{ row.item_order_number || row.order_number || '-' }}</strong><br><span class="muted">{{ row.customer_name || '-' }}</span></td>
-                    <td style="white-space:normal"><div class="production-product-summary" :title="productionProductTitle(row)"><div class="production-product-line"><span v-if="row.is_component_task" class="status blue">组件</span><strong>{{ row.product_code || '-' }}</strong><span>｜{{ row.product_name || '-' }}</span></div><div :class="productionPrintingSetup(row)?'production-printing-setup':'production-product-meta'">{{ productionPrintingSetup(row) || (row.specification || '-') }}</div></div></td><td><strong>{{ row.quantity || 0 }}{{ row.is_component_task ? '片' : '' }}</strong><br><span class="muted">{{ row.completed_by_name || '-' }}</span></td>
+                    <td style="white-space:normal"><div class="production-product-summary" :title="productionProductTitle(row)"><div class="production-product-line"><span v-if="row.is_component_task" class="status blue">组件</span><strong>{{ row.product_code || '-' }}</strong><span>｜{{ row.product_name || '-' }}</span></div><div :class="productionPrintingSetup(row)?'production-printing-setup':'production-product-meta'">{{ productionPrintingSetup(row) || (row.specification || '-') }}</div><div v-if="row.is_component_task && row.composite_parent" class="muted" style="white-space:normal">组合父件 {{ row.composite_parent.product_code || '-' }}｜{{ row.composite_parent.product_name || '-' }}</div></div></td><td><strong>{{ row.quantity || 0 }}{{ row.is_component_task ? '片' : '' }}</strong><br><span class="muted">{{ row.completed_by_name || '-' }}</span></td>
                     <td style="white-space:normal"><span v-if="row.status==='reversed'" class="status orange">已撤销</span><span v-else :class="['status',productionCompletionIsStock(row)?'green':'blue']">{{ productionDestinationLabel(row) }}</span><br><template v-if="row.warehouse_location_code"><strong>{{ row.warehouse_location_code }}</strong></template><template v-else-if="row.status!=='reversed'"><span class="muted">已进入待送货</span></template><div>投入 {{ row.material_input_quantity }} / 合格 {{ row.actual_output_quantity }} / 损耗 {{ row.defective_quantity }}</div><div v-if="row.surplus_finished_quantity" class="status orange">客户余货 {{ row.surplus_finished_quantity }}</div><div v-if="row.status==='reversed'" class="muted">{{ row.reversal_reason || '管理员撤销生产确认' }}</div></td>
                     <td class="production-history-actions"><div class="toolbar-group"><template v-if="row.status!=='reversed' && row.can_transfer_to_stock && canWarehouseExecute"><div class="production-location-picker"><select class="select" v-model.number="row.transfer_floor_number" :disabled="productionBusy" @change="onProductionFloorChange(row,'transfer_floor_number','transfer_area_code','transfer_location_id')"><option :value="null">先选楼层</option><option v-for="floor in productionLocationFloors" :key="floor.number" :value="floor.number">{{ floor.label }}（{{ floor.count }} 个空位）</option></select><select class="select" v-model="row.transfer_area_code" :disabled="productionBusy || !row.transfer_floor_number" @change="onProductionAreaChange(row,'transfer_floor_number','transfer_area_code','transfer_location_id')"><option value="">{{ row.transfer_floor_number ? '再选区域' : '请先选择楼层' }}</option><option v-for="area in productionAreasForFloor(row.transfer_floor_number)" :key="area.code" :value="area.code">{{ area.code }}（{{ area.count }} 个空位）</option></select><select class="select" v-model.number="row.transfer_location_id" :disabled="productionBusy || !row.transfer_area_code"><option :value="null">{{ row.transfer_area_code ? '再选库位' : '请先选择区域' }}</option><option v-for="location in productionLocationsForArea(row.transfer_floor_number,row.transfer_area_code)" :key="location.id" :value="location.id">{{ location.location_code }}｜{{ location.is_temporary ? '临时' : '固定' }}</option></select></div><button class="btn small success" :disabled="productionBusy || !row.transfer_location_id" @click="transferProductionCompletionToStock(row)">转入成品库存</button></template><button v-if="user?.role==='admin' && row.can_supplement" class="btn small success" :disabled="productionBusy" @click="supplementProductionCompletion(row)">补录余量 {{ row.available_material_input_quantity }}</button><button v-if="row.status!=='reversed'" class="btn small" :disabled="productionBusy" @click="productionCompletionIsStock(row)?openProductionInventory(row):go('deliveries')">{{ productionCompletionIsStock(row)?'定位库存':'去送货' }}</button><button v-if="user?.role==='admin' && row.can_revert" class="btn small danger" :disabled="productionBusy" @click="revertProductionCompletion(row)">撤销生产确认</button></div></td>
                   </tr></tbody>
@@ -5015,6 +5026,14 @@
                     <option v-if="productForm.box_style && !productBoxStyleOptions.includes(productForm.box_style)" :value="productForm.box_style">原记录：{{ productForm.box_style }}</option>
                   </select>
                 </div>
+                <div v-if="bomEditor.enabled" class="field" style="max-width:520px;margin:0 0 10px">
+                  <label>交付、标签和成品存放方式（必选）</label>
+                  <select class="select" v-model="productForm.composite_fulfillment_mode" :disabled="productForm.combination_mode === 'component_priced'">
+                    <option value="component_delivery">子件交付：送货、标签、成品库存按各子件分别处理</option>
+                    <option value="parent_delivery">父件交付：子件同位同栈板存放，按最短件齐套，送货、标签和地图按父件显示</option>
+                  </select>
+                  <div class="muted">订单会冻结本次选择；父件交付缺少任一必需子件时，只能生成实际可齐套的父件数量。</div>
+                </div>
                 <div v-if="productForm.box_style!=='其他'" class="field product-supply-compact"><label>结构</label><select class="select" v-model="productForm.supply_mode"><option value="corrugated_production">纸板生产</option><option value="mixed_bom">纸板＋外购组件</option></select></div>
               </div>
 
@@ -5399,7 +5418,7 @@
                 </div>
                 <div class="field" style="max-width:340px;margin:0 0 8px">
                   <label>组合计价方式</label>
-                  <select class="select" v-model="productForm.combination_mode" @change="productForm.is_virtual_composite_parent = productForm.combination_mode === 'parent_priced_set' ? productForm.is_virtual_composite_parent : false">
+                  <select class="select" v-model="productForm.combination_mode" @change="productForm.is_virtual_composite_parent = productForm.combination_mode === 'parent_priced_set' ? productForm.is_virtual_composite_parent : false; productForm.composite_fulfillment_mode = productForm.combination_mode === 'component_priced' ? 'component_delivery' : productForm.composite_fulfillment_mode">
                     <option value="parent_priced_set">整套统一计价（推荐）</option>
                     <option value="component_priced">组件分别计价</option>
                   </select>
@@ -5422,7 +5441,6 @@
                         </div>
                         <div class="field"><label>每套数量</label><input class="input" type="number" min="0.0001" step="0.0001" v-model.number="component.quantity_per_set" /></div>
                         <label class="remember-line bom-component-compact-meta"><input type="checkbox" v-model="component.is_required" /> 必需</label>
-                        <label class="remember-line bom-component-compact-meta"><input type="checkbox" v-model="component.show_on_delivery" /> 送货单显示</label>
                         <button type="button" class="btn small danger" @click="removeBomComponent(index)">移除</button>
                       </div>
                       <div class="bom-component-code">内部编码：{{ bomComponentInternalCode(component) }}<template v-if="component.product_name">｜{{ component.product_name }}｜{{ component.product_code || "-" }}</template></div>
@@ -6087,6 +6105,10 @@
 	                    </td>
 	                    <td class="order-entry-quantity">
 	                      <input :id="`order-quantity-${index}`" class="input compact-input" :disabled="!orderForm.customer_id" type="number" min="1" v-model.number="item.quantity" @input="onOrderDraftQuantityInput(item)" />
+	                      <select v-if="item.bom_component_demands?.length && item.combination_role !== 'priced_component'" class="select" style="margin-top:5px;font-size:12px" v-model="item.composite_fulfillment_mode_snapshot">
+	                        <option value="component_delivery">子件交付 / 分开存放</option>
+	                        <option value="parent_delivery">父件交付 / 子件同位存放并自动投影父件</option>
+	                      </select>
 	                      <div v-if="item._validation_error" class="order-entry-error">{{ item._validation_error }}</div>
 	                      <div v-if="inventoryPlanApplies(item) && item._inventory" :class="['inventory-auto-summary',{'attention':orderLineInventoryNeedsAttention(item)}]">{{ orderLineInventoryAutoSummary(item) }}</div>
 	                      <button v-if="inventoryPlanApplies(item) && item._inventory" :class="['btn','small','inventory-auto-detail-button',orderLineInventoryNeedsAttention(item)?'danger':'']" type="button" @click="item._show_inventory_details=!item._show_inventory_details">{{ item._show_inventory_details ? '收起库存安排' : (orderLineInventoryNeedsAttention(item) ? '处理库存例外' : '查看库存安排') }}</button>
@@ -8026,7 +8048,7 @@
         flute_type: null, layer_count: null, surface_paper_type: null,
         _material_supplier: "全部供应商",
         splice_mode: "single", pieces_per_box: 1, default_cutting_mode: "一开一", flap_mm: 30,
-        combination_mode: "parent_priced_set", is_virtual_composite_parent: false,
+        combination_mode: "parent_priced_set", composite_fulfillment_mode: "component_delivery", is_virtual_composite_parent: false,
         report_length_mm: null, report_width_mm: null,
         crease_type: null, crease_left_mm: null, crease_middle_mm: null, crease_right_mm: null,
         report_notes: null,
@@ -15768,6 +15790,19 @@
           toggleReportedCurrentPage(checked) {
             for (const row of this.requisitionItems || []) this.toggleReportedItemSelection(row,checked);
           },
+          reportedCompositeGroupRows(row) {
+            const key = String(row?.composite_group_key || "");
+            return key
+              ? (this.requisitionItems || []).filter(item => String(item.composite_group_key || "") === key && item.status === "有效")
+              : [];
+          },
+          reportedCompositeGroupSelected(row) {
+            const rows = this.reportedCompositeGroupRows(row);
+            return Boolean(rows.length) && rows.every(item => this.reportedItemSelected(item));
+          },
+          toggleReportedCompositeGroup(row, checked) {
+            for (const item of this.reportedCompositeGroupRows(row)) this.toggleReportedItemSelection(item, checked);
+          },
           clearReportedItemSelections() {
             if (this.reportedItemPrintBusy || this.productionPrintAttemptUncertain()) return false;
             this.reportedItemSelections = {};
@@ -20233,6 +20268,7 @@
             const rawComponents = response.bom_components || response.components || response.items || [];
             const components = Array.isArray(rawComponents) ? rawComponents.map(component => this.normalizeBomComponent(component)) : [];
             this.bomEditor.enabled = response.is_composite ?? response.enabled ?? Boolean(components.length);
+            if (response.composite_fulfillment_mode) this.productForm.composite_fulfillment_mode = response.composite_fulfillment_mode;
             this.bomEditor.expected_version = response.expected_version ?? response.version ?? null;
             this.bomEditor.components = components;
             this.bomEditor.error = "";
@@ -20363,8 +20399,8 @@
                 mold_tool_id: component.mold_tool_id || null,
                 mold_max_yield_per_sheet: component.mold_max_yield_per_sheet === "" ? null : component.mold_max_yield_per_sheet,
                 spare_sheet_quantity: component.spare_sheet_quantity,
-                display_mode: component.display_mode || "internal_only",
-                show_on_delivery: component.show_on_delivery !== false,
+                display_mode: this.productForm.composite_fulfillment_mode === "component_delivery" ? "show_on_delivery" : "internal_only",
+                show_on_delivery: this.productForm.composite_fulfillment_mode === "component_delivery",
                 is_required: component.is_required !== false,
                 remark: component.remark || "",
               })),
@@ -20558,6 +20594,7 @@
             try {
               const {data} = await axios.get(`/api/master/products/${productId}/bom`);
               if (data?.is_composite) {
+                item.composite_fulfillment_mode_snapshot = data.composite_fulfillment_mode || item.composite_fulfillment_mode_snapshot || "component_delivery";
                 item.bom_component_demands = (data.components || []).map(component =>
                   this.normalizeOrderBomDemand(item, component, false)
                 );
@@ -21692,6 +21729,7 @@
               splice_mode: f.splice_mode, pieces_per_box: f.pieces_per_box,
               default_cutting_mode: f.default_cutting_mode, flap_mm: f.flap_mm,
               combination_mode: f.combination_mode,
+              composite_fulfillment_mode: f.composite_fulfillment_mode || "component_delivery",
               is_virtual_composite_parent: f.is_virtual_composite_parent === true,
               report_length_mm: f.report_length_mm, report_width_mm: f.report_width_mm,
               crease_type: f.crease_type, crease_left_mm: f.crease_left_mm,
@@ -22858,45 +22896,68 @@
             this.reportedItemPrintErrors = [];
             this.reportedLabelRecoveryUrls = [];
             if (!selected.length) return false;
-            const invalidRows = selected.filter(row => row.source_type !== "supplier_order" || row.status !== "active" || row.can_print_label !== true);
+            const supportedSources = new Set(["supplier_order", "composite_bom_requisition"]);
+            const invalidRows = selected.filter(row => !supportedSources.has(row.source_type) || row.can_print_label !== true);
             if (invalidRows.length) {
               this.reportedItemPrintErrors = invalidRows.map(row => `${row.document_number || '-'}｜${row.product_code || '-'}：当前明细不能打印产品标签`);
               return false;
             }
-            const byOrder = new Map();
+            const groups = new Map();
             for (const row of selected) {
-              const orderId = Number(row.document_id);
-              if (!byOrder.has(orderId)) byOrder.set(orderId,{document_number:row.document_number,rows:[]});
-              byOrder.get(orderId).rows.push(row);
+              const documentId = Number(row.document_id);
+              const key = `${row.source_type}:${documentId}`;
+              if (!groups.has(key)) groups.set(key,{source_type:row.source_type,document_id:documentId,document_number:row.document_number,rows:[]});
+              groups.get(key).rows.push(row);
             }
             const incomplete = [];
-            for (const group of byOrder.values()) {
-              const required = Number(group.rows[0]?.active_item_count || 0);
-              if (!required || group.rows.length !== required) incomplete.push(`${group.document_number || '-'}：产品标签按采购单冻结，请勾选该采购单全部 ${required || '有效'} 条有效明细`);
+            for (const group of groups.values()) {
+              if (group.source_type === "supplier_order") {
+                const required = Number(group.rows[0]?.active_item_count || 0);
+                if (!required || group.rows.length !== required) incomplete.push(`${group.document_number || '-'}：产品标签按采购单冻结，请勾选该采购单全部 ${required || '有效'} 条有效明细`);
+                continue;
+              }
+              const parentGroups = new Map();
+              for (const row of group.rows) {
+                if (row.composite_fulfillment_mode !== "parent_delivery") continue;
+                const key = String(row.composite_group_key || row.order_item_id || "");
+                if (!parentGroups.has(key)) parentGroups.set(key,{row,selected:new Set()});
+                parentGroups.get(key).selected.add(Number(row.item_id));
+              }
+              for (const parentGroup of parentGroups.values()) {
+                const requiredIds = (parentGroup.row.composite_group_item_ids || []).map(Number);
+                const missing = requiredIds.filter(itemId => !parentGroup.selected.has(itemId));
+                if (missing.length) incomplete.push(`${group.document_number || '-'}｜${parentGroup.row.composite_parent_product_code || '组合父件'}：父件标签必须勾选整组全部 ${requiredIds.length} 个子件`);
+              }
             }
             if (incomplete.length) {
               this.reportedItemPrintErrors = incomplete;
               return false;
             }
-            if (!confirm(`确认核验并打开 ${byOrder.size} 张采购单的产品标签页？\n\n每张采购单的全部有效明细均已勾选；页面仍会按冻结任务逐项校验，不可打印时整单停止。`)) return false;
+            if (!confirm(`确认核验并打开 ${groups.size} 个产品标签页？\n\n子件交付按所选子件分别打印；父件交付必须整组核验后按父件标签策略打印。不可打印时对应单据整体停止。`)) return false;
             const authGeneration = this.authGeneration;
             const userId = this.user?.id ?? null;
-            const windows = [...byOrder.keys()].map(() => {
+            const windows = [...groups.keys()].map(() => {
               try { const opened=window.open("about:blank","_blank"); if(opened) opened.opener=null; return opened; } catch(_error) { return null; }
             });
             this.reportedItemPrintBusy = true;
             try {
-              const packages = await Promise.all([...byOrder.entries()].map(async ([orderId,group]) => {
-                const {data}=await axios.get(`/api/requisition/supplier-orders/${orderId}/production-packaging-label-package`);
-                return {orderId,group,data};
+              const packages = await Promise.all([...groups.values()].map(async group => {
+                const itemIds = group.rows.map(row => Number(row.item_id)).sort((a,b) => a-b);
+                const url = group.source_type === "supplier_order"
+                  ? `/api/requisition/supplier-orders/${group.document_id}/production-packaging-label-package`
+                  : `/api/requisition/batches/${group.document_id}/production-packaging-label-package?item_ids=${encodeURIComponent(itemIds.join(","))}`;
+                const {data}=await axios.get(url);
+                return {group,itemIds,data};
               }));
               if (this.authGeneration !== authGeneration || (this.user?.id ?? null) !== userId || this.activePage !== "requisition" || this.requisitionTab !== "submitted") {
                 windows.forEach(opened => { try { opened?.close(); } catch(_error) {} });
                 return false;
               }
               const recovery = [];
-              packages.forEach(({orderId,group},index) => {
-                const url=`/production-packaging-label.html?id=${encodeURIComponent(orderId)}`;
+              packages.forEach(({group,itemIds},index) => {
+                const url=group.source_type === "supplier_order"
+                  ? `/production-packaging-label.html?id=${encodeURIComponent(group.document_id)}`
+                  : `/production-packaging-label.html?batch_id=${encodeURIComponent(group.document_id)}&item_ids=${encodeURIComponent(itemIds.join(","))}`;
                 const opened=windows[index];
                 if (opened) { try { opened.location.href=url; } catch(_error) { recovery.push({url,document_number:group.document_number}); } }
                 else recovery.push({url,document_number:group.document_number});
@@ -23157,16 +23218,18 @@
             }
           },
           async voidReportedCompositeRequisition(row) {
-            const targetId = Number(row?.id || 0);
+            const targetId = Number(row?.document_id || row?.id || 0);
+            const orderItemId = Number(row?.order_item_id || 0);
             const documentNumber = String(row?.document_number || `#${targetId}`);
-            if (!targetId || !confirm(`确认作废组合 BOM 报料单 ${documentNumber}？父件和组件将自动回到待报料。`)) return false;
+            const targetLabel = orderItemId ? `${row.composite_parent_product_code || '组合父件'} 整组` : `组合 BOM 报料单 ${documentNumber}`;
+            if (!targetId || !confirm(`确认作废${targetLabel}？对应父件和全部子件将自动回到待报料。`)) return false;
             return await this.executeRequisitionVoidAction({
               action:"void_composite_batch",
               sourceType:"composite_bom_requisition",
               targetId,
-              targetKey:`composite-batch:${targetId}`,
+              targetKey:`composite-batch:${targetId}:${orderItemId || 'all'}`,
               documentNumber,
-              submit:() => axios.put(`/api/requisition/batches/${targetId}/void`, {
+              submit:() => axios.put(`/api/requisition/batches/${targetId}/void${orderItemId ? `?order_item_id=${encodeURIComponent(orderItemId)}` : ''}`, {
                 reason: "组合 BOM 报料单人工作废",
               }),
               refresh:async () => {
@@ -25139,8 +25202,9 @@
                  client_line_id: item.client_line_id || createIdempotencyKey(),
                  _inventory: item._inventory || this.newOrderInventoryState(),
                  _inventory_product: item._inventory_product || null,
-                 bom_component_demands: [],
-                 _bom_loading: false,
+	              bom_component_demands: [],
+	              composite_fulfillment_mode_snapshot: null,
+	              _bom_loading: false,
                  _bom_error: "",
                })),
             };
@@ -25776,6 +25840,7 @@
               _inventory_product: product,
               _original_product: { specification: this.orderSpecificationText(this.spec(product), ""), sale_unit_price: product.sale_unit_price, layer_count: product.layer_count, flute_type: product.flute_type, version: product.version },
               combination_mode_snapshot: "component_priced", combination_role: "priced_component",
+              composite_fulfillment_mode_snapshot: "component_delivery",
               combination_group_key: groupKey, combination_parent_product_id: parent.id,
               combination_parent_name_snapshot: parent.product_name || "组合父件",
               combination_set_quantity_snapshot: sets, combination_quantity_per_set_snapshot: perSet,
@@ -25856,6 +25921,9 @@
                   required_piece_quantity:Number(component.required_piece_quantity),
                   idempotency_key:component.idempotency_key || createIdempotencyKey(),
                 })),
+              composite_fulfillment_mode_snapshot: (item.bom_component_demands || []).length
+                ? (item.composite_fulfillment_mode_snapshot || "component_delivery")
+                : undefined,
             };
             if (item.combination_role === "priced_component") {
               Object.assign(payload, {
@@ -25921,6 +25989,9 @@
             item._material_weight = data.material_weight || "";
             item._product_drawings = data.drawings || [];
             item._inventory_product = data;
+            item.composite_fulfillment_mode_snapshot = data.is_composite
+              ? (data.composite_fulfillment_mode || "component_delivery")
+              : null;
             if (data.is_composite) await this.loadOrderDraftBom(item, data.id);
             else {
               item.bom_component_demands = [];

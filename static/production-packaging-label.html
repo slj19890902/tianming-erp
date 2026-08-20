@@ -228,6 +228,13 @@
       const layoutRollbackButton = document.getElementById("layoutRollbackButton");
       const params = new URLSearchParams(window.location.search);
       const supplierOrderId = Number(params.get("id"));
+      const compositeBatchId = Number(params.get("batch_id"));
+      const compositeItemIds = [...new Set(
+        String(params.get("item_ids") || "")
+          .split(",")
+          .map((value) => Number(value.trim()))
+          .filter((value) => Number.isInteger(value) && value > 0)
+      )].sort((a, b) => a - b);
       const requestedJobId = Number(params.get("job_id"));
       let loadGeneration = 0;
       let activeController = null;
@@ -517,6 +524,10 @@
         if (!latest) return;
         const linkParams = new URLSearchParams({job_id:String(latest.id)});
         if (Number.isInteger(supplierOrderId) && supplierOrderId > 0) linkParams.set("id", String(supplierOrderId));
+        if (Number.isInteger(compositeBatchId) && compositeBatchId > 0) {
+          linkParams.set("batch_id", String(compositeBatchId));
+          linkParams.set("item_ids", compositeItemIds.join(","));
+        }
         latestJobLink.href = `${window.location.pathname}?${linkParams.toString()}`;
         latestJobLink.textContent = latest.template_version === LEGACY_TEMPLATE_VERSION
           ? "补打最近 65 × 45 mm 历史作业"
@@ -767,14 +778,18 @@
         activeController = new AbortController();
         resetView();
         const loadingJob = Number.isInteger(requestedJobId) && requestedJobId > 0;
-        if (!loadingJob && (!Number.isInteger(supplierOrderId) || supplierOrderId <= 0)) {
+        const loadingSupplier = Number.isInteger(supplierOrderId) && supplierOrderId > 0;
+        const loadingComposite = Number.isInteger(compositeBatchId) && compositeBatchId > 0 && compositeItemIds.length > 0;
+        if (!loadingJob && !loadingSupplier && !loadingComposite) {
           showMessage("报料单编号无效", "message error");
           return;
         }
         try {
           const url = loadingJob
             ? `/api/requisition/production-packaging-label-jobs/${requestedJobId}`
-            : `/api/requisition/supplier-orders/${supplierOrderId}/production-packaging-label-package`;
+            : loadingComposite
+              ? `/api/requisition/batches/${compositeBatchId}/production-packaging-label-package?item_ids=${encodeURIComponent(compositeItemIds.join(","))}`
+              : `/api/requisition/supplier-orders/${supplierOrderId}/production-packaging-label-package`;
           const payload = await requestJson(url, {method:"GET", signal:activeController.signal});
           if (generation !== loadGeneration) return;
           const normalized = normalizeResponse(payload);
@@ -795,16 +810,24 @@
       async function preparePrintJob() {
         const fingerprint = planFingerprint(loadedPackage);
         if (!fingerprint) throw new Error("标签计划缺少校验指纹，已停止创建打印作业；请重新加载");
-        const signature = `${supplierOrderId}|${loadedPackage.template_version}|${fingerprint}`;
+        const sourceSignature = Number.isInteger(compositeBatchId) && compositeBatchId > 0
+          ? `composite:${compositeBatchId}:${compositeItemIds.join(",")}`
+          : `supplier:${supplierOrderId}`;
+        const signature = `${sourceSignature}|${loadedPackage.template_version}|${fingerprint}`;
         if (!prepareAttempt || prepareAttempt.signature !== signature) {
           prepareAttempt = {signature, idempotencyKey:newIdempotencyKey("p150c-label-job")};
         }
-        const payload = await requestJson(`/api/requisition/supplier-orders/${supplierOrderId}/production-packaging-label-jobs`, {
+        const isComposite = Number.isInteger(compositeBatchId) && compositeBatchId > 0;
+        const url = isComposite
+          ? `/api/requisition/batches/${compositeBatchId}/production-packaging-label-jobs`
+          : `/api/requisition/supplier-orders/${supplierOrderId}/production-packaging-label-jobs`;
+        const payload = await requestJson(url, {
           method:"POST",
           body:JSON.stringify({
             idempotency_key:prepareAttempt.idempotencyKey,
             confirmed:true,
             plan_fingerprint:fingerprint,
+            ...(isComposite ? {selected_item_ids:compositeItemIds} : {}),
           }),
         });
         const normalized = normalizeResponse(payload);

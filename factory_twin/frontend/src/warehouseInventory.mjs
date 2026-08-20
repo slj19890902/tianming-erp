@@ -558,6 +558,8 @@ export function inventoryUnitLabel(unit) {
     sheets: "张",
     piece: "件",
     pieces: "件",
+    set: "套",
+    sets: "套",
     pcs: "件",
     set: "套",
     sets: "套"

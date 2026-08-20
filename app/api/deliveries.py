@@ -876,6 +876,10 @@ def _pick_item_location_plan(
     )
     if order_item is None:
         return [], False
+    fulfillment_mode = (
+        getattr(order_item, "composite_fulfillment_mode_snapshot", None)
+        or "component_delivery"
+    )
     composite_hint = (
         order_item.id in read_context["composite_order_item_ids"]
         if read_context is not None
@@ -896,7 +900,7 @@ def _pick_item_location_plan(
         dispatched=False,
         composite_hint=composite_hint,
     )
-    if component_lines:
+    if component_lines and fulfillment_mode == "parent_delivery":
         raw_sources = [
             *_pick_parent_finished_sources(
                 db,
@@ -1002,7 +1006,11 @@ def _pick_item_location_plan(
         )
 
     if component_lines:
-        parent_direct_quantity = max(planned_quantity - finished_covered, 0)
+        parent_direct_quantity = (
+            max(planned_quantity - finished_covered, 0)
+            if fulfillment_mode == "parent_delivery"
+            else 0
+        )
         if parent_direct_quantity > 0:
             lines.append(
                 {
@@ -1988,8 +1996,27 @@ def _actual_goods_lines(
     specification: str | None,
     parent_quantity: int,
     component_lines: list[dict],
+    fulfillment_mode: str = "component_delivery",
 ) -> list[dict]:
-    lines = [
+    if fulfillment_mode == "component_delivery":
+        return [
+            {
+                "line_type": "component",
+                "order_item_id": order_item_id,
+                "component_snapshot_id": component["component_snapshot_id"],
+                "product_code": component["product_code"],
+                "product_name": component["product_name"],
+                "specification": component["specification"],
+                "unit": component["unit"],
+                "quantity": component["planned_delivery_quantity"],
+                "pricing_included": False,
+                "independent_return_receipt": False,
+                "independent_statement": False,
+            }
+            for component in component_lines
+            if int(component["planned_delivery_quantity"] or 0) > 0
+        ]
+    return [
         {
             "line_type": "parent",
             "order_item_id": order_item_id,
@@ -2004,25 +2031,6 @@ def _actual_goods_lines(
             "independent_statement": True,
         }
     ]
-    lines.extend(
-        {
-            "line_type": "component",
-            "order_item_id": order_item_id,
-            "component_snapshot_id": component["component_snapshot_id"],
-            "product_code": component["product_code"],
-            "product_name": component["product_name"],
-            "specification": component["specification"],
-            "unit": component["unit"],
-            "quantity": component["planned_delivery_quantity"],
-            "pricing_included": False,
-            "independent_return_receipt": False,
-            "independent_statement": False,
-        }
-        for component in component_lines
-        if int(component["planned_delivery_quantity"] or 0) > 0
-        and bool(component.get("show_on_delivery", True))
-    )
-    return lines
 
 
 def _delivery_kit_metadata(
@@ -2056,6 +2064,10 @@ def _delivery_kit_metadata(
     )
     return {
         "is_composite_bom": True,
+        "composite_fulfillment_mode": (
+            getattr(order_item, "composite_fulfillment_mode_snapshot", None)
+            or "component_delivery"
+        ),
         "kit_availability": availability,
         "available_sets": int(availability.get("available_sets") or 0),
         "missing_components": availability.get("missing_components") or [],
@@ -2436,6 +2448,7 @@ def _delivery_pick_task_list_summaries(
 def _empty_delivery_kit_metadata() -> dict:
     return {
         "is_composite_bom": False,
+        "composite_fulfillment_mode": None,
         "kit_availability": None,
         "available_sets": None,
         "missing_components": [],
@@ -2692,6 +2705,10 @@ def _delivery_list_kit_metadata(
     ]
     return {
         "is_composite_bom": True,
+        "composite_fulfillment_mode": (
+            getattr(order_item, "composite_fulfillment_mode_snapshot", None)
+            or "component_delivery"
+        ),
         "kit_availability": availability,
         "available_sets": available_sets,
         "missing_components": missing_components,
@@ -3659,6 +3676,9 @@ def _delivery_list_summary_context(db: Session, delivery_ids: list[int]) -> dict
             DeliveryItem.delivered_quantity,
             Delivery.status,
             OrderItem.delivered_quantity.label("order_delivered_quantity"),
+            OrderItem.composite_fulfillment_mode_snapshot.label(
+                "composite_fulfillment_mode"
+            ),
         )
         .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
         .join(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
@@ -3670,8 +3690,21 @@ def _delivery_list_summary_context(db: Session, delivery_ids: list[int]) -> dict
         )
         .order_by(DeliveryItem.delivery_id, DeliveryItem.id)
     ).all()
+    component_delivery_rows = [
+        row
+        for row in composite_rows
+        if (row.composite_fulfillment_mode or "component_delivery")
+        == "component_delivery"
+    ]
+    for row in component_delivery_rows:
+        delivery_id = int(row.delivery_id)
+        actual_goods_quantities[delivery_id] = max(
+            actual_goods_quantities.get(delivery_id, 0)
+            - int(row.delivered_quantity or 0),
+            0,
+        )
     component_quantities = _delivery_summary_component_quantities(
-        db, composite_rows
+        db, component_delivery_rows
     )
     for delivery_id, component_quantity in component_quantities.items():
         actual_goods_quantities[delivery_id] = (
@@ -4172,6 +4205,9 @@ def _delivery_response(
                 specification=mapping["specification"],
                 parent_quantity=mapping["delivered_quantity"],
                 component_lines=kit_metadata["component_lines"],
+                fulfillment_mode=kit_metadata.get(
+                    "composite_fulfillment_mode", "component_delivery"
+                ),
             )
         )
         actual_goods_quantity = sum(
@@ -8360,6 +8396,9 @@ def get_delivery_print_data(
                 specification=specification,
                 parent_quantity=row.quantity,
                 component_lines=kit_metadata["component_lines"],
+                fulfillment_mode=kit_metadata.get(
+                    "composite_fulfillment_mode", "component_delivery"
+                ),
             )
         )
         document_goods_lines = [

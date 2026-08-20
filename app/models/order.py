@@ -159,6 +159,12 @@ class OrderItem(Base):
             name="ck_sales_order_items_combination_mode_snapshot",
         ),
         CheckConstraint(
+            "composite_fulfillment_mode_snapshot IS NULL OR "
+            "composite_fulfillment_mode_snapshot IN "
+            "('parent_delivery', 'component_delivery')",
+            name="ck_sales_order_items_composite_fulfillment_mode_snapshot",
+        ),
+        CheckConstraint(
             "combination_role IN ('standalone', 'set_parent', 'priced_component')",
             name="ck_sales_order_items_combination_role",
         ),
@@ -346,6 +352,21 @@ class OrderItem(Base):
     snapshot_flap_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
     combination_mode_snapshot: Mapped[str | None] = mapped_column(
         String(30), nullable=True
+    )
+    composite_fulfillment_mode_snapshot: Mapped[str | None] = mapped_column(
+        String(30), nullable=True
+    )
+    parent_production_label_enabled_snapshot: Mapped[bool | None] = mapped_column(
+        Boolean, nullable=True
+    )
+    parent_production_label_units_per_label_snapshot: Mapped[int | None] = (
+        mapped_column(Integer, nullable=True)
+    )
+    parent_production_label_template_version_snapshot: Mapped[str | None] = (
+        mapped_column(String(40), nullable=True)
+    )
+    parent_production_label_product_version_snapshot: Mapped[int | None] = (
+        mapped_column(Integer, nullable=True)
     )
     is_virtual_composite_parent_snapshot: Mapped[bool] = mapped_column(
         Boolean,

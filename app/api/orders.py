@@ -217,6 +217,9 @@ from app.services.composite_bom_workflow import (
     ensure_component_production_tasks,
     is_composite_order_item,
 )
+from app.services.production_label_strategy import (
+    CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION,
+)
 from app.services.report_crease import crease_width_error, product_crease_width_error
 from app.services.supplier_master import SupplierLookupError, resolve_supplier
 from app.services.product_drawings import (
@@ -558,6 +561,9 @@ class OrderItemCreate(BaseModel):
     # 组合销售来源由服务端复核后冻结；前端不能借此把父件伪装成组件或反过来。
     combination_mode_snapshot: Literal[
         "parent_priced_set", "component_priced"
+    ] | None = None
+    composite_fulfillment_mode_snapshot: Literal[
+        "parent_delivery", "component_delivery"
     ] | None = None
     combination_role: Literal["standalone", "set_parent", "priced_component"] | None = None
     combination_group_key: str | None = Field(default=None, max_length=80)
@@ -1646,6 +1652,16 @@ def _product_combination_mode(product: Product) -> str:
     return str(mode) if mode else "parent_priced_set"
 
 
+def _product_composite_fulfillment_mode(product: Product) -> str:
+    if not product.is_composite:
+        return "component_delivery"
+    mode = str(
+        getattr(product, "composite_fulfillment_mode", "component_delivery")
+        or "component_delivery"
+    )
+    return mode if mode in {"parent_delivery", "component_delivery"} else "component_delivery"
+
+
 def _validated_combination_provenance(
     db: Session,
     *,
@@ -1672,8 +1688,28 @@ def _validated_combination_provenance(
                 status_code=400,
                 detail=f"第{item_index}条明细组合父件来源由系统生成，不能由客户端填写",
             )
+        fulfillment_mode = (
+            item_payload.composite_fulfillment_mode_snapshot
+            or _product_composite_fulfillment_mode(product)
+        )
+        parent_label_enabled = bool(
+            fulfillment_mode == "parent_delivery"
+            and product.production_label_enabled
+        )
         return {
             "combination_mode_snapshot": "parent_priced_set",
+            "composite_fulfillment_mode_snapshot": fulfillment_mode,
+            "parent_production_label_enabled_snapshot": parent_label_enabled,
+            "parent_production_label_units_per_label_snapshot": (
+                int(product.production_label_units_per_label)
+                if parent_label_enabled
+                and product.production_label_units_per_label is not None
+                else None
+            ),
+            "parent_production_label_template_version_snapshot": (
+                CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION
+            ),
+            "parent_production_label_product_version_snapshot": int(product.version),
             "combination_role": "set_parent",
             "combination_group_key": None,
             "combination_parent_product_id": None,
@@ -1693,13 +1729,20 @@ def _validated_combination_provenance(
 
     is_priced_component = item_payload.combination_role == "priced_component"
     if not is_priced_component:
-        if any(value is not None for value in requested_fields):
+        if any(value is not None for value in requested_fields) or (
+            item_payload.composite_fulfillment_mode_snapshot is not None
+        ):
             raise HTTPException(
                 status_code=400,
                 detail=f"第{item_index}条明细不是有效的组合组件来源",
             )
         return {
             "combination_mode_snapshot": None,
+            "composite_fulfillment_mode_snapshot": None,
+            "parent_production_label_enabled_snapshot": None,
+            "parent_production_label_units_per_label_snapshot": None,
+            "parent_production_label_template_version_snapshot": None,
+            "parent_production_label_product_version_snapshot": None,
             "combination_role": "standalone",
             "combination_group_key": None,
             "combination_parent_product_id": None,
@@ -1710,6 +1753,8 @@ def _validated_combination_provenance(
 
     if (
         item_payload.combination_mode_snapshot != "component_priced"
+        or item_payload.composite_fulfillment_mode_snapshot
+        not in {None, "component_delivery"}
         or not (item_payload.combination_group_key or "").strip()
         or item_payload.combination_parent_product_id is None
         or not (item_payload.combination_parent_name_snapshot or "").strip()
@@ -1757,6 +1802,11 @@ def _validated_combination_provenance(
         )
     return {
         "combination_mode_snapshot": "component_priced",
+        "composite_fulfillment_mode_snapshot": "component_delivery",
+        "parent_production_label_enabled_snapshot": None,
+        "parent_production_label_units_per_label_snapshot": None,
+        "parent_production_label_template_version_snapshot": None,
+        "parent_production_label_product_version_snapshot": None,
         "combination_role": "priced_component",
         "combination_group_key": item_payload.combination_group_key.strip(),
         "combination_parent_product_id": parent.id,
@@ -2186,6 +2236,15 @@ def _order_response(
                 "quantity": item.quantity,
                 "ordered_quantity": item.quantity,
                 "combination_mode_snapshot": item.combination_mode_snapshot,
+                "composite_fulfillment_mode_snapshot": getattr(
+                    item, "composite_fulfillment_mode_snapshot", None
+                ),
+                "parent_production_label_enabled_snapshot": getattr(
+                    item, "parent_production_label_enabled_snapshot", None
+                ),
+                "parent_production_label_units_per_label_snapshot": getattr(
+                    item, "parent_production_label_units_per_label_snapshot", None
+                ),
                 "is_virtual_composite_parent_snapshot": bool(
                     getattr(item, "is_virtual_composite_parent_snapshot", False)
                 ),

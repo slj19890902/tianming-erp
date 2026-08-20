@@ -337,6 +337,10 @@ def get_product_bom(db: Session, parent_product_id: int) -> dict[str, Any]:
         "is_virtual_composite_parent": bool(
             getattr(parent, "is_virtual_composite_parent", False)
         ),
+        "composite_fulfillment_mode": str(
+            getattr(parent, "composite_fulfillment_mode", "component_delivery")
+            or "component_delivery"
+        ),
         "components": components,
     }
 
@@ -449,6 +453,24 @@ def replace_product_bom(
     virtual_parent = bool(
         getattr(parent, "is_virtual_composite_parent", False)
     )
+    fulfillment_mode = str(
+        getattr(parent, "composite_fulfillment_mode", "component_delivery")
+        or "component_delivery"
+    )
+    if fulfillment_mode not in {"parent_delivery", "component_delivery"}:
+        raise CompositeBOMError("组合产品交付方式无效")
+    if (
+        getattr(parent, "combination_mode", "parent_priced_set")
+        == "component_priced"
+        and fulfillment_mode != "component_delivery"
+    ):
+        raise CompositeBOMError("组件分别计价时必须按子件交付")
+    if fulfillment_mode == "component_delivery":
+        # The parent is only a commercial/set identity in component-delivery
+        # mode.  Labels belong to the physical child products, so retaining a
+        # parent label policy would make the reported-items page ambiguous.
+        parent.production_label_enabled = False
+        parent.production_label_units_per_label = None
     if virtual_parent and not components:
         raise CompositeBOMError("虚拟组合套装至少需要一个真实组件")
     existing_rows = _active_bom_rows(db, parent.id)
@@ -491,10 +513,12 @@ def replace_product_bom(
                     if virtual_parent
                     else int(component.get("spare_sheet_quantity", 0) or 0)
                 ),
-                "display_mode": component.get("display_mode", "internal_only"),
-                "show_on_delivery": bool(
-                    component.get("show_on_delivery", True)
+                "display_mode": (
+                    "show_on_delivery"
+                    if fulfillment_mode == "component_delivery"
+                    else "internal_only"
                 ),
+                "show_on_delivery": fulfillment_mode == "component_delivery",
                 "is_required": bool(component.get("is_required", True)),
                 "remark": (str(component.get("remark") or "").strip() or None),
             }

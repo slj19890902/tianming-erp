@@ -48,6 +48,7 @@ from app.models.material import Material
 from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.production import ProductionCompletion, ProductionTask
+from app.models.production_label_print import ProductionPackagingLabelPrintJob
 from app.models.product_bom import (
     RequisitionItemBomSource,
     SalesOrderItemBomComponent,
@@ -179,6 +180,8 @@ from app.services.requisition_production_print_batch import (
     production_print_batch_request_hash,
 )
 from app.services.production_packaging_label import (
+    ProductionPackagingLabelError,
+    build_composite_requisition_packaging_label_package,
     build_supplier_requisition_packaging_label_package,
 )
 from app.services.production_packaging_label_layout import (
@@ -196,8 +199,10 @@ from app.services.production_label_operations import (
     ProductionLabelOperationError,
     confirm_packaging_label_job_printed,
     get_packaging_label_job,
+    latest_printed_composite_job_metadata,
     latest_printed_job_metadata,
     packaging_label_job_response,
+    prepare_composite_packaging_label_job,
     prepare_packaging_label_job,
     production_label_write_guard,
 )
@@ -224,6 +229,20 @@ class ProductionPackagingLabelJobRequest(BaseModel):
     @classmethod
     def trim_label_job_values(cls, value: str) -> str:
         return value.strip()
+
+
+class CompositeProductionPackagingLabelJobRequest(
+    ProductionPackagingLabelJobRequest
+):
+    selected_item_ids: list[int] = Field(min_length=1, max_length=200)
+
+    @field_validator("selected_item_ids")
+    @classmethod
+    def normalize_selected_item_ids(cls, value: list[int]) -> list[int]:
+        normalized = sorted({int(item_id) for item_id in value})
+        if not normalized or any(item_id <= 0 for item_id in normalized):
+            raise ValueError("必须选择有效的组合报料明细")
+        return normalized
 
 
 class ProductionPackagingLabelPrintConfirmationRequest(BaseModel):
@@ -10667,7 +10686,7 @@ def void_composite_requisition_item(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
-    """撤销一个组合 BOM 物理料来源，不影响同订单其他盖/底/围板。"""
+    """Fail closed: a composite BOM can only be revoked as one parent group."""
     row = db.get(RequisitionItem, requisition_item_id)
     if row is None:
         raise HTTPException(status_code=404, detail="报料明细不存在")
@@ -10683,95 +10702,17 @@ def void_composite_requisition_item(
             status_code=409,
             detail="只有组合 BOM 物理料明细可逐条撤销",
         )
-    if row.status in {"已取消", "已作废", "已撤回"}:
-        return {
-            "requisition_item_id": row.id,
-            "status": row.status,
-            "already_voided": True,
-            "order_item_id": item.id,
-            "requisition_status": item.requisition_status,
-        }
-    received_fact = db.scalar(
-        select(IncomingReceiptItem.id)
-        .where(
-            IncomingReceiptItem.requisition_item_id == row.id,
-            IncomingReceiptItem.status == "posted",
-        )
-        .limit(1)
+    raise HTTPException(
+        status_code=409,
+        detail="组合 BOM 必须从父组整组撤销，不能单独撤销某个子件",
     )
-    if row.status == "已入库" or received_fact is not None:
-        raise HTTPException(
-            status_code=409,
-            detail="该报料明细已有实际收货，必须先撤销来料实收",
-        )
-    if row.status != "有效":
-        raise HTTPException(
-            status_code=409,
-            detail="该报料明细已进入供应商排单或其他后续流程，不能直接撤销",
-        )
-
-    row.status = "已取消"
-    source.active_guard = None
-    db.flush()
-    _refresh_bom_order_item_requisition_state(db, item)
-    batch = db.get(Requisition, row.requisition_id)
-    if batch is not None:
-        active_in_batch = int(
-            db.scalar(
-                select(func.count(RequisitionItem.id)).where(
-                    RequisitionItem.requisition_id == batch.id,
-                    func.lower(RequisitionItem.status).notin_(
-                        INACTIVE_REQUISITION_ITEM_STATUSES
-                    ),
-                )
-            )
-            or 0
-        )
-        if active_in_batch == 0:
-            batch.status = "已取消"
-    db.add(
-        OperationLog(
-            user_id=user.id,
-            action="VOID_COMPOSITE_REQUISITION_ITEM",
-            resource="RequisitionItem",
-            details=json.dumps(
-                {
-                    "requisition_item_id": row.id,
-                    "requisition_id": row.requisition_id,
-                    "order_item_id": item.id,
-                    "snapshot_id": (
-                        source.sales_order_item_bom_component_id
-                    ),
-                    "component_type": source.component_type,
-                    "reason": payload.reason,
-                },
-                ensure_ascii=False,
-            ),
-            username=user.username,
-            role=user.role,
-            entity_type="requisition_item",
-            entity_id=row.id,
-            description="逐条撤销组合 BOM 物理料报料",
-        )
-    )
-    db.commit()
-    return {
-        "requisition_item_id": row.id,
-        "status": row.status,
-        "already_voided": False,
-        "order_item_id": item.id,
-        "requisition_status": item.requisition_status,
-        "source_key": (
-            f"component:{source.sales_order_item_bom_component_id}:"
-            f"{source.component_type}"
-        ),
-    }
 
 
 @router.put("/batches/{batch_id}/void")
 def void_composite_requisition_batch(
     batch_id: int,
     payload: CancelPayload,
+    order_item_id: int | None = Query(default=None, gt=0),
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
@@ -10783,32 +10724,45 @@ def void_composite_requisition_batch(
     if batch is None:
         raise HTTPException(status_code=404, detail="报料单不存在")
     _require_requisition_customer_access(batch, user, db)
-    requisition_item_ids = [row.id for row in batch.items]
-    has_bom_source = bool(
-        requisition_item_ids
-        and db.scalar(
-            select(RequisitionItemBomSource.id)
-            .where(
+    target_rows = [
+        row
+        for row in batch.items
+        if order_item_id is None or int(row.order_item_id) == order_item_id
+    ]
+    if not target_rows:
+        raise HTTPException(status_code=404, detail="该组合报料单中不存在指定父件组")
+    requisition_item_ids = [row.id for row in target_rows]
+    bom_sources = (
+        db.scalars(
+            select(RequisitionItemBomSource).where(
                 RequisitionItemBomSource.requisition_item_id.in_(
                     requisition_item_ids
                 )
             )
-            .limit(1)
-        )
+        ).all()
+        if requisition_item_ids
+        else []
     )
-    if not has_bom_source:
+    if not bom_sources:
         raise HTTPException(
             status_code=409,
             detail="只有组合 BOM 报料单可在此整单作废",
         )
-    if batch.status == "已取消":
+    target_order_item_ids = sorted({int(row.order_item_id) for row in target_rows})
+    if order_item_id is None and len(target_order_item_ids) > 1:
+        raise HTTPException(
+            status_code=409,
+            detail="该报料批次包含多个组合父单，请从父单行选择要撤销的整组",
+        )
+    if all(row.status in {"已取消", "已作废", "已撤回"} for row in target_rows):
         return {
             "id": batch.id,
             "status": batch.status,
-            "voided_item_count": len(batch.items),
+            "voided_item_count": len(target_rows),
+            "order_item_id": order_item_id,
         }
     if batch.status != "已报料" or any(
-        row.status != "有效" for row in batch.items
+        row.status != "有效" for row in target_rows
     ):
         raise HTTPException(
             status_code=409,
@@ -10829,7 +10783,7 @@ def void_composite_requisition_batch(
             status_code=409,
             detail="该组合报料单已有实际收货，必须先撤销来料实收",
         )
-    order_item_ids = sorted({row.order_item_id for row in batch.items})
+    order_item_ids = target_order_item_ids
     order_items = db.scalars(
         select(OrderItem).where(OrderItem.id.in_(order_item_ids))
     ).all()
@@ -10838,10 +10792,59 @@ def void_composite_requisition_batch(
             status_code=409,
             detail="该组合报料单已有入库事实，不能直接作废。",
         )
+    posted_completion = db.scalar(
+        select(ProductionCompletion.id)
+        .where(
+            ProductionCompletion.order_item_id.in_(order_item_ids),
+            ProductionCompletion.status == "posted",
+        )
+        .limit(1)
+    )
+    if posted_completion is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="该组合报料单已有生产完工事实，不能撤销报料",
+        )
+    snapshot_ids = sorted(
+        {
+            int(source.sales_order_item_bom_component_id)
+            for source in bom_sources
+        }
+    )
+    reservation_scope = [
+        InventoryReservation.requisition_item_id.in_(requisition_item_ids),
+        InventoryReservation.order_item_id.in_(order_item_ids),
+    ]
+    if snapshot_ids:
+        reservation_scope.append(
+            InventoryReservation.sales_order_item_bom_component_id.in_(
+                snapshot_ids
+            )
+        )
+    active_reservation = db.scalar(
+        select(InventoryReservation.id)
+        .where(
+            or_(*reservation_scope),
+            InventoryReservation.status.in_(("active", "partial", "consumed")),
+        )
+        .limit(1)
+    )
+    if active_reservation is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="该组合报料单已有库存占用或消耗事实，不能撤销报料",
+        )
 
-    batch.status = "已取消"
-    for row in batch.items:
+    for row in target_rows:
         row.status = "已取消"
+    batch.status = (
+        "已取消"
+        if all(
+            row.status in {"已取消", "已作废", "已撤回"}
+            for row in batch.items
+        )
+        else "已报料"
+    )
     db.execute(
         update(RequisitionItemBomSource)
         .where(
@@ -10891,6 +10894,7 @@ def void_composite_requisition_batch(
             details=json.dumps(
                 {
                     "batch_id": batch.id,
+                    "target_order_item_id": order_item_id,
                     "reason": payload.reason.strip(),
                     "order_item_ids": order_item_ids,
                     "requisition_item_ids": requisition_item_ids,
@@ -10901,14 +10905,15 @@ def void_composite_requisition_batch(
             role=user.role,
             entity_type="requisition",
             entity_id=batch.id,
-            description="作废组合 BOM 报料单并退回待报料池",
+            description="整组作废组合 BOM 父件报料并退回待报料池",
         )
     )
     db.commit()
     return {
         "id": batch.id,
         "status": batch.status,
-        "voided_item_count": len(batch.items),
+        "voided_item_count": len(target_rows),
+        "order_item_id": order_item_id,
     }
 
 
@@ -15039,6 +15044,19 @@ def _build_reported_document_candidates(db: Session, user: User) -> list[dict]:
                     OrderItem.snapshot_crease_right_mm.label(
                         "crease_right_mm"
                     ),
+                    OrderItem.snapshot_product_code.label(
+                        "parent_product_code"
+                    ),
+                    OrderItem.snapshot_product_name.label(
+                        "parent_product_name"
+                    ),
+                    OrderItem.quantity.label("parent_set_quantity"),
+                    OrderItem.composite_fulfillment_mode_snapshot.label(
+                        "composite_fulfillment_mode"
+                    ),
+                    OrderItem.parent_production_label_enabled_snapshot.label(
+                        "parent_label_enabled"
+                    ),
                 )
                 .join(Order, Order.id == OrderItem.order_id)
                 .join(Customer, Customer.id == Order.customer_id)
@@ -15101,6 +15119,32 @@ def _build_reported_document_candidates(db: Session, user: User) -> list[dict]:
                     "_requisition_qty": item.requisition_qty,
                     "_required_piece_qty": item.required_piece_qty,
                     "_item_status": item.status,
+                    "_order_item_id": item.order_item_id,
+                    "_parent_product_code": (
+                        order_row["parent_product_code"]
+                        if order_row is not None
+                        else None
+                    ),
+                    "_parent_product_name": (
+                        order_row["parent_product_name"]
+                        if order_row is not None
+                        else None
+                    ),
+                    "_parent_set_quantity": (
+                        order_row["parent_set_quantity"]
+                        if order_row is not None
+                        else None
+                    ),
+                    "_composite_fulfillment_mode": (
+                        order_row["composite_fulfillment_mode"]
+                        if order_row is not None
+                        else None
+                    ),
+                    "_parent_label_enabled": (
+                        order_row["parent_label_enabled"]
+                        if order_row is not None
+                        else None
+                    ),
                     "customer_id": (
                         order_row["customer_id"] if order_row is not None else None
                     ),
@@ -15408,6 +15452,31 @@ def _decorate_reported_document_candidates(candidates: list[dict]) -> list[dict]
                             "source_key": source_key,
                             "component_type": component_type if has_source else None,
                             "component_label": component_label,
+                            "order_item_id": line.get("_order_item_id"),
+                            "composite_fulfillment_mode": (
+                                line.get("_composite_fulfillment_mode")
+                                or "component_delivery"
+                            ) if has_source else None,
+                            "composite_parent_product_code": (
+                                line.get("_parent_product_code")
+                                if has_source
+                                else None
+                            ),
+                            "composite_parent_product_name": (
+                                line.get("_parent_product_name")
+                                if has_source
+                                else None
+                            ),
+                            "composite_parent_set_quantity": (
+                                int(line.get("_parent_set_quantity") or 0)
+                                if has_source
+                                else None
+                            ),
+                            "composite_parent_label_enabled": (
+                                bool(line.get("_parent_label_enabled"))
+                                if has_source
+                                else False
+                            ),
                             "customer_id": line.get("customer_id"),
                             "customer_name": line.get("customer_name"),
                             "order_number": line.get("order_number"),
@@ -16558,6 +16627,7 @@ def list_reported_items(
     }
 
     items: list[dict] = []
+    visible_composite_groups: set[tuple[int, int]] = set()
     for offset, candidate in enumerate(page_candidates, start=start + 1):
         line_key = (
             candidate["source_type"],
@@ -16581,6 +16651,30 @@ def list_reported_items(
             for document_line in document.get("line_items") or []
             if document_line.get("status") == "active"
         )
+        is_current_composite_item = (
+            candidate["source_type"] == "composite_bom_requisition"
+            and document.get("status") == "已报料"
+            and line.get("status") == "有效"
+            and line.get("order_item_id") is not None
+        )
+        composite_group_key = None
+        composite_group_first = False
+        composite_group_item_ids: list[int] = []
+        if line.get("order_item_id") is not None and candidate[
+            "source_type"
+        ] == "composite_bom_requisition":
+            composite_group_key = (
+                int(candidate["document_id"]),
+                int(line["order_item_id"]),
+            )
+            composite_group_first = composite_group_key not in visible_composite_groups
+            visible_composite_groups.add(composite_group_key)
+            composite_group_item_ids = sorted(
+                int(document_line["id"])
+                for document_line in document.get("line_items") or []
+                if document_line.get("order_item_id") == line.get("order_item_id")
+                and document_line.get("status") == "有效"
+            )
         items.append(
             {
                 "sequence": offset,
@@ -16618,8 +16712,39 @@ def list_reported_items(
                     and has_permission(user, "requisition.execute")
                 ),
                 "can_print_task": is_current_supplier_item,
-                "can_print_label": is_current_supplier_item,
+                "can_print_label": (
+                    is_current_supplier_item or is_current_composite_item
+                ),
                 "active_item_count": active_item_count,
+                "composite_group_key": (
+                    f"{composite_group_key[0]}:{composite_group_key[1]}"
+                    if composite_group_key is not None
+                    else None
+                ),
+                "composite_group_first": composite_group_first,
+                "composite_group_item_ids": composite_group_item_ids,
+                "composite_group_can_void": (
+                    bool(line.get("can_void"))
+                    and has_permission(user, "requisition.execute")
+                    if composite_group_key is not None
+                    else False
+                ),
+                "order_item_id": line.get("order_item_id"),
+                "composite_fulfillment_mode": line.get(
+                    "composite_fulfillment_mode"
+                ),
+                "composite_parent_product_code": line.get(
+                    "composite_parent_product_code"
+                ),
+                "composite_parent_product_name": line.get(
+                    "composite_parent_product_name"
+                ),
+                "composite_parent_set_quantity": line.get(
+                    "composite_parent_set_quantity"
+                ),
+                "composite_parent_label_enabled": bool(
+                    line.get("composite_parent_label_enabled")
+                ),
                 "pdf_url": document.get("pdf_url"),
                 "production_print_url": document.get("production_print_url"),
             }
@@ -17126,6 +17251,149 @@ def get_supplier_order_production_packaging_label_package(
     return package
 
 
+def _composite_label_item_ids(raw_value: str) -> set[int]:
+    values: set[int] = set()
+    for token in str(raw_value or "").split(","):
+        normalized = token.strip()
+        if not normalized:
+            continue
+        if not normalized.isdigit() or int(normalized) <= 0:
+            raise HTTPException(status_code=422, detail="组合报料明细编号无效")
+        values.add(int(normalized))
+    if not values:
+        raise HTTPException(status_code=422, detail="请选择需要打印标签的组合报料明细")
+    if len(values) > 200:
+        raise HTTPException(status_code=422, detail="单次最多选择 200 条组合报料明细")
+    return values
+
+
+def _composite_label_requisition(
+    db: Session,
+    *,
+    batch_id: int,
+    user: User,
+) -> Requisition:
+    requisition = db.scalar(
+        select(Requisition)
+        .options(selectinload(Requisition.items))
+        .where(Requisition.id == batch_id)
+    )
+    if requisition is None:
+        raise HTTPException(status_code=404, detail="组合报料单不存在")
+    _require_requisition_customer_access(requisition, user, db)
+    if requisition.status != "已报料":
+        raise HTTPException(status_code=409, detail="只有正式有效的组合报料单可以打印产品标签")
+    return requisition
+
+
+@router.get("/batches/{batch_id}/production-packaging-label-package")
+def get_composite_requisition_packaging_label_package(
+    batch_id: int,
+    item_ids: str = Query(min_length=1, max_length=1200),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read_production_labels),
+) -> dict:
+    requisition = _composite_label_requisition(
+        db,
+        batch_id=batch_id,
+        user=user,
+    )
+    try:
+        package = build_composite_requisition_packaging_label_package(
+            db,
+            requisition,
+            selected_item_ids=_composite_label_item_ids(item_ids),
+        )
+    except (ProductionPackagingLabelError, ProductionPackagingLabelLayoutError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    if package["review_required"]:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "production_label_review_required",
+                "message": "组合产品标签计划需要核对",
+                "reasons": package["review_messages"],
+            },
+        )
+    if not package["label_count"]:
+        raise HTTPException(status_code=409, detail="所选组合报料明细没有可打印的产品标签")
+    package["latest_printed_job"] = latest_printed_composite_job_metadata(
+        db,
+        requisition.id,
+    )
+    return package
+
+
+@router.post("/batches/{batch_id}/production-packaging-label-jobs")
+def post_composite_requisition_packaging_label_job(
+    batch_id: int,
+    payload: CompositeProductionPackagingLabelJobRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read_production_labels),
+    _write_guard: None = Depends(production_label_write_guard),
+) -> dict:
+    requisition = _composite_label_requisition(
+        db,
+        batch_id=batch_id,
+        user=user,
+    )
+    try:
+        result = prepare_composite_packaging_label_job(
+            db,
+            requisition=requisition,
+            selected_item_ids=set(payload.selected_item_ids),
+            idempotency_key=payload.idempotency_key,
+            expected_plan_fingerprint=payload.plan_fingerprint,
+            operator_id=user.id,
+        )
+        if not result.replayed:
+            append_audit_event(
+                db,
+                event_category="business",
+                result="success",
+                source="web",
+                module_code="production",
+                action_code="production.composite_packaging_label_job.prepared",
+                legacy_action="PREPARE_COMPOSITE_PRODUCTION_LABEL_JOB",
+                resource="ProductionPackagingLabelPrintJob",
+                actor=user,
+                entity_type="production_packaging_label_print_job",
+                entity_id=result.job.id,
+                object_ref=f"production_packaging_label_print_job:{result.job.id}",
+                batch_id=result.job.idempotency_key,
+                description="冻结组合产品包装标签打印作业",
+                details={
+                    "material_requisition_id": requisition.id,
+                    "selected_item_ids": payload.selected_item_ids,
+                    "template_version": result.job.template_version,
+                    "plan_fingerprint": result.job.plan_fingerprint,
+                    "payload_hash": result.job.payload_hash,
+                    "label_count": result.package.get("label_count"),
+                },
+            )
+        db.commit()
+        return packaging_label_job_response(
+            result.job,
+            result.package,
+            replayed=result.replayed,
+        )
+    except (ProductionPackagingLabelError, ProductionPackagingLabelLayoutError) as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except ProductionLabelOperationError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="标签打印作业已被其他请求创建，请刷新后重试",
+        ) from error
+    except Exception:
+        db.rollback()
+        raise
+
+
 @router.post("/supplier-orders/{order_id}/production-packaging-label-jobs")
 def post_supplier_order_production_packaging_label_job(
     order_id: int,
@@ -17202,6 +17470,26 @@ def post_supplier_order_production_packaging_label_job(
         raise
 
 
+def _require_packaging_label_job_access(
+    db: Session,
+    job: ProductionPackagingLabelPrintJob,
+    user: User,
+) -> None:
+    if job.supplier_order_id is not None:
+        order = db.get(SupplierRequisitionOrder, job.supplier_order_id)
+        if order is None:
+            raise ProductionLabelOperationError("打印作业关联的供应商报料单不存在", 404)
+        _require_supplier_order_customer_access(order, user, db)
+        return
+    if job.material_requisition_id is not None:
+        requisition = db.get(Requisition, job.material_requisition_id)
+        if requisition is None:
+            raise ProductionLabelOperationError("打印作业关联的组合报料单不存在", 404)
+        _require_requisition_customer_access(requisition, user, db)
+        return
+    raise ProductionLabelOperationError("标签打印作业缺少来源单据")
+
+
 @router.get("/production-packaging-label-jobs/{job_id}")
 def get_production_packaging_label_job_endpoint(
     job_id: int,
@@ -17212,10 +17500,7 @@ def get_production_packaging_label_job_endpoint(
 
     try:
         result = get_packaging_label_job(db, job_id)
-        order = db.get(SupplierRequisitionOrder, result.job.supplier_order_id)
-        if order is None:
-            raise ProductionLabelOperationError("打印作业关联的报料单不存在", 404)
-        _require_supplier_order_customer_access(order, user, db)
+        _require_packaging_label_job_access(db, result.job, user)
         return packaging_label_job_response(result.job, result.package)
     except ProductionLabelOperationError as error:
         raise HTTPException(status_code=error.status_code, detail=str(error)) from error
@@ -17233,10 +17518,7 @@ def confirm_production_packaging_label_job_endpoint(
 
     try:
         existing = get_packaging_label_job(db, job_id)
-        order = db.get(SupplierRequisitionOrder, existing.job.supplier_order_id)
-        if order is None:
-            raise ProductionLabelOperationError("打印作业关联的报料单不存在", 404)
-        _require_supplier_order_customer_access(order, user, db)
+        _require_packaging_label_job_access(db, existing.job, user)
         result = confirm_packaging_label_job_printed(
             db,
             job_id=job_id,

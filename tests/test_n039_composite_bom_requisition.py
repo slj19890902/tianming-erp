@@ -689,6 +689,182 @@ def test_legacy_shaped_component_only_batch_is_identified_and_voidable(
     ] == ["parent", "component", "component"]
 
 
+def test_composite_void_targets_one_parent_group_without_cancelling_siblings(
+    composite_requisition_app,
+) -> None:
+    from app.models.order import OrderItem
+    from app.models.product_bom import (
+        RequisitionItemBomSource,
+        SalesOrderItemBomComponent,
+    )
+    from app.models.requisition import Requisition, RequisitionItem
+
+    app, session_factory = composite_requisition_app
+    with session_factory() as session:
+        first_item = session.get(OrderItem, 1)
+        first_snapshot = session.scalar(
+            select(SalesOrderItemBomComponent)
+            .where(SalesOrderItemBomComponent.sales_order_item_id == first_item.id)
+            .order_by(SalesOrderItemBomComponent.display_order)
+        )
+        second_item = OrderItem(
+            order_id=first_item.order_id,
+            product_id=first_item.product_id,
+            quantity=5,
+            unit_price=Decimal("100"),
+            subtotal=Decimal("500"),
+            material_status="pending",
+            requisition_status="已报料",
+            requisition_qty=10,
+            snapshot_product_code="KIT-002",
+            snapshot_product_name="第二套组合成品",
+            snapshot_spec="第二套组合规格",
+            snapshot_material="K616K",
+            snapshot_supplier_name="N039 供应商",
+            special_process="一开一",
+        )
+        first_item.requisition_status = "已报料"
+        first_item.requisition_qty = 20
+        session.add(second_item)
+        session.flush()
+        second_snapshot = SalesOrderItemBomComponent(
+            sales_order_item_id=second_item.id,
+            component_product_id=first_snapshot.component_product_id,
+            snapshot_schema_version=3,
+            order_set_quantity=5,
+            quantity_per_set=Decimal(2),
+            required_piece_quantity=Decimal(10),
+            display_order=1,
+            internal_component_code="KIT-002-S01",
+            is_die_cut=False,
+            spare_sheet_quantity=0,
+            display_mode="internal_only",
+            is_required=True,
+            snapshot_component_product_code="COMP-A",
+            snapshot_component_product_name="第二套组件 A",
+            snapshot_component_spec="1000×700",
+            snapshot_component_material="K616K",
+            snapshot_component_supplier_name="N039 供应商",
+            snapshot_component_box_category="normal",
+            snapshot_component_default_cutting_mode="一开一",
+        )
+        session.add(second_snapshot)
+        session.flush()
+        batch = Requisition(
+            requisition_number="BL-N039-TWO-GROUPS",
+            requisition_date=date(2026, 8, 19),
+            supplier_name="N039 供应商",
+            status="已报料",
+            created_by=1,
+        )
+        session.add(batch)
+        session.flush()
+        rows = []
+        for order_item, snapshot, quantity, code, name in (
+            (first_item, first_snapshot, 20, "COMP-A", "组件 A"),
+            (second_item, second_snapshot, 10, "COMP-A", "第二套组件 A"),
+        ):
+            row = RequisitionItem(
+                requisition_id=batch.id,
+                order_item_id=order_item.id,
+                inventory_deducted_qty=0,
+                requisition_qty=quantity,
+                cardboard_len=1000,
+                cardboard_width=700,
+                pieces_per_box=2,
+                required_piece_qty=quantity,
+                special_process="一开一",
+                product_code_snapshot=code,
+                product_name_snapshot=name,
+                status="有效",
+            )
+            session.add(row)
+            session.flush()
+            rows.append(row)
+            session.add(
+                RequisitionItemBomSource(
+                    requisition_item_id=row.id,
+                    sales_order_item_bom_component_id=snapshot.id,
+                    order_set_quantity=quantity // 2,
+                    quantity_per_set=Decimal(2),
+                    required_piece_quantity=Decimal(quantity),
+                    demand_basis="order_sets",
+                    spare_sheet_quantity=0,
+                    calculated_purchase_quantity=Decimal(quantity),
+                    calculation_rule_version="p1-79-group-void-v1",
+                )
+            )
+        session.commit()
+        batch_id = batch.id
+        first_item_id = first_item.id
+        second_item_id = second_item.id
+        first_row_id = rows[0].id
+
+    with TestClient(app) as client:
+        _login(client)
+        ambiguous_batch = client.put(
+            f"/api/requisition/batches/{batch_id}/void",
+            json={"reason": "多父单批次不得直接整批撤销"},
+        )
+        child_rejected = client.put(
+            f"/api/requisition/batch-items/{first_row_id}/void",
+            json={"reason": "不得单独撤销子件"},
+        )
+        first_voided = client.put(
+            f"/api/requisition/batches/{batch_id}/void"
+            f"?order_item_id={first_item_id}",
+            json={"reason": "仅撤销第一套组合父单"},
+        )
+
+    assert ambiguous_batch.status_code == 409, ambiguous_batch.text
+    assert "多个组合父单" in ambiguous_batch.json()["detail"]
+    assert child_rejected.status_code == 409, child_rejected.text
+    assert "整组" in child_rejected.json()["detail"]
+    assert first_voided.status_code == 200, first_voided.text
+    assert first_voided.json() == {
+        "id": batch_id,
+        "status": "已报料",
+        "voided_item_count": 1,
+        "order_item_id": first_item_id,
+    }
+    with session_factory() as session:
+        batch = session.get(Requisition, batch_id)
+        first_item = session.get(OrderItem, first_item_id)
+        second_item = session.get(OrderItem, second_item_id)
+        rows = session.scalars(
+            select(RequisitionItem)
+            .where(RequisitionItem.requisition_id == batch_id)
+            .order_by(RequisitionItem.id)
+        ).all()
+        assert batch.status == "已报料"
+        assert [row.status for row in rows] == ["已取消", "有效"]
+        assert first_item.requisition_status == "未报料"
+        assert second_item.requisition_status == "已报料"
+
+        second_item.material_status = "received"
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client)
+        blocked = client.put(
+            f"/api/requisition/batches/{batch_id}/void"
+            f"?order_item_id={second_item_id}",
+            json={"reason": "已有入库事实时必须整体阻止"},
+        )
+
+    assert blocked.status_code == 409, blocked.text
+    with session_factory() as session:
+        batch = session.get(Requisition, batch_id)
+        remaining = session.scalar(
+            select(RequisitionItem).where(
+                RequisitionItem.requisition_id == batch_id,
+                RequisitionItem.order_item_id == second_item_id,
+            )
+        )
+        assert batch.status == "已报料"
+        assert remaining.status == "有效"
+
+
 def test_composite_uses_snapshot_linked_semi_reservation_before_purchase(
     composite_requisition_app,
 ) -> None:

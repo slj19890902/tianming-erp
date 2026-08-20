@@ -1114,6 +1114,7 @@ def _production_stock_location(
     location_id: int | None,
     *,
     pallet_id: int | None,
+    allowed_existing_pallet_id: int | None = None,
 ) -> WarehouseLocation:
     if location_id is None:
         raise ProductionWorkflowError("库存完工必须选择成品库位", 400)
@@ -1148,7 +1149,10 @@ def _production_stock_location(
             "一楼待送区只供直接待送使用，不能作为一般生产入库库位",
             409,
         )
-    if location_has_live_inventory(db, location.id):
+    if (
+        location_has_live_inventory(db, location.id)
+        and allowed_existing_pallet_id is None
+    ):
         raise ProductionWorkflowError("所选库位已有活动库存，请选择空位", 409)
     pallet = _current_pallet(db, location.id)
     if pallet is not None:
@@ -1157,7 +1161,13 @@ def _production_stock_location(
             .where(InventoryPalletItem.pallet_id == pallet.id)
             .limit(1)
         )
-        if pallet_id != pallet.id or item_exists is not None:
+        if (
+            pallet_id != pallet.id
+            or (
+                item_exists is not None
+                and allowed_existing_pallet_id != pallet.id
+            )
+        ):
             raise ProductionWorkflowError("所选三楼库位已占用，请选择空位", 409)
     elif pallet_id is not None:
         raise ProductionWorkflowError("指定栈板不在所选三楼库位", 409)
@@ -1608,6 +1618,63 @@ def _reserve_component_completion_lot(
     return reservation
 
 
+def _parent_delivery_storage_target(
+    db: Session,
+    *,
+    order_item_id: int,
+) -> tuple[int | None, int | None]:
+    """Return the one physical target already used by a parent-delivery kit.
+
+    Component lots remain the quantity ledger, but a parent-delivery order is
+    one physical finished product.  Once its first component is stored, later
+    component completions must join the same location and, when present, the
+    same system pallet.  This keeps the physical map truthful without creating
+    a duplicate parent inventory lot.
+    """
+
+    rows = db.execute(
+        select(
+            InventoryLot.warehouse_location_id,
+            InventoryPalletItem.pallet_id,
+        )
+        .join(
+            InventoryReservation,
+            InventoryReservation.inventory_lot_id == InventoryLot.id,
+        )
+        .outerjoin(
+            InventoryPalletItem,
+            InventoryPalletItem.inventory_lot_id == InventoryLot.id,
+        )
+        .where(
+            InventoryReservation.order_item_id == order_item_id,
+            InventoryReservation.sales_order_item_bom_component_id.is_not(None),
+            InventoryReservation.status.in_(("active", "partial")),
+            InventoryReservation.reserved_stock_quantity
+            > InventoryReservation.consumed_stock_quantity
+            + InventoryReservation.released_stock_quantity,
+            InventoryLot.status.in_(("active", "frozen")),
+            InventoryLot.source_type != "production_completion",
+        )
+    ).all()
+    if not rows:
+        return None, None
+    location_ids = {int(location_id) for location_id, _pallet_id in rows}
+    if len(location_ids) != 1:
+        raise ProductionWorkflowError(
+            "父件交付的历史子件已分散在多个库位，请先在移货模式合并到同一位置后再继续完工",
+            409,
+        )
+    pallet_ids = {
+        int(pallet_id) for _location_id, pallet_id in rows if pallet_id is not None
+    }
+    if len(pallet_ids) > 1:
+        raise ProductionWorkflowError(
+            "父件交付的历史子件已分散在多块栈板，请先合并为同一栈板后再继续完工",
+            409,
+        )
+    return next(iter(location_ids)), next(iter(pallet_ids), None)
+
+
 def _stock_completion_lot(
     db: Session,
     *,
@@ -1622,6 +1689,35 @@ def _stock_completion_lot(
     source_type: str = "production_surplus",
     movement_reason: str = "生产完工入库",
 ) -> InventoryLot:
+    snapshot = (
+        db.get(SalesOrderItemBomComponent, task.sales_order_item_bom_component_id)
+        if task.sales_order_item_bom_component_id is not None
+        else None
+    )
+    pallet_id = command.pallet_id
+    require_empty_pallet = True
+    existing_location_id: int | None = None
+    existing_pallet_id: int | None = None
+    is_parent_delivery_component = (
+        snapshot is not None
+        and (item.composite_fulfillment_mode_snapshot or "component_delivery")
+        == "parent_delivery"
+    )
+    if is_parent_delivery_component:
+        existing_location_id, existing_pallet_id = _parent_delivery_storage_target(
+            db,
+            order_item_id=item.id,
+        )
+        if existing_pallet_id is not None:
+            if pallet_id is not None and int(pallet_id) != existing_pallet_id:
+                raise ProductionWorkflowError(
+                    "父件交付的同一套产品必须归入同一栈板；请选择已存子件所在栈板",
+                    409,
+                )
+            pallet_id = existing_pallet_id
+            require_empty_pallet = False
+        elif existing_location_id is not None:
+            require_empty_pallet = False
     if location_id_override is not None:
         location = _production_direct_staging_location(db)
         if location.id != location_id_override:
@@ -1630,14 +1726,16 @@ def _stock_completion_lot(
         location = _production_stock_location(
             db,
             command.location_id,
-            pallet_id=command.pallet_id,
+            pallet_id=pallet_id,
+            allowed_existing_pallet_id=existing_pallet_id,
         )
-    snapshot = (
-        db.get(SalesOrderItemBomComponent, task.sales_order_item_bom_component_id)
-        if task.sales_order_item_bom_component_id is not None
-        else None
-    )
     product_id = snapshot.component_product_id if snapshot is not None else item.product_id
+    if is_parent_delivery_component:
+        if existing_location_id is not None and existing_location_id != location.id:
+            raise ProductionWorkflowError(
+                "父件交付的同一套产品必须存放在同一库位；请选择已存子件所在位置",
+                409,
+            )
     is_transfer = isinstance(command, StockTransferCommand)
     stock_quantity = (
         int(completion.quantity)
@@ -1657,13 +1755,13 @@ def _stock_completion_lot(
         remarks=_normalized_text(command.remarks),
         operator_id=operator_id,
         idempotency_key=_stable_key(idempotency_prefix, "finished-in"),
-        pallet_id=None if location_id_override is not None else command.pallet_id,
+        pallet_id=None if location_id_override is not None else pallet_id,
         pallet_code=(
             None
             if location_id_override is not None
             else _normalized_text(command.pallet_code)
         ),
-        require_empty_pallet=True,
+        require_empty_pallet=require_empty_pallet,
         movement_reason=movement_reason,
         expected_layout_version=(
             None
@@ -2016,10 +2114,51 @@ def complete_production_batch(
             direct_quantity = 0
             stock_quantity = actual_output
             stored_disposition = "stock"
+            resolved_pallet_id = command.pallet_id
+            allowed_existing_pallet_id = None
+            if (
+                is_component_task
+                and (item.composite_fulfillment_mode_snapshot or "component_delivery")
+                == "parent_delivery"
+            ):
+                existing_location_id, existing_pallet_id = (
+                    _parent_delivery_storage_target(db, order_item_id=item.id)
+                )
+                if (
+                    existing_location_id is not None
+                    and existing_location_id != command.location_id
+                ):
+                    raise ProductionWorkflowError(
+                        "父件交付的同一套产品必须存放在同一库位；请选择已存子件所在位置",
+                        409,
+                    )
+                if existing_pallet_id is not None:
+                    if (
+                        resolved_pallet_id is not None
+                        and int(resolved_pallet_id) != existing_pallet_id
+                    ):
+                        raise ProductionWorkflowError(
+                            "父件交付的同一套产品必须归入同一栈板；请选择已存子件所在栈板",
+                            409,
+                        )
+                    resolved_pallet_id = existing_pallet_id
+                    allowed_existing_pallet_id = existing_pallet_id
             location = _production_stock_location(
-                db, command.location_id, pallet_id=command.pallet_id
+                db,
+                command.location_id,
+                pallet_id=resolved_pallet_id,
+                allowed_existing_pallet_id=allowed_existing_pallet_id,
             )
         else:
+            if (
+                is_component_task
+                and (item.composite_fulfillment_mode_snapshot or "component_delivery")
+                == "parent_delivery"
+            ):
+                raise ProductionWorkflowError(
+                    "父件交付必须先让全部子件在同一位置齐套入库，不能把单个子件直接转入待送区",
+                    409,
+                )
             if command.location_id is not None:
                 raise ProductionWorkflowError(
                     "直接待送整批自动进入一楼待送区，请刷新页面后重试",
@@ -2824,6 +2963,17 @@ def _task_product_snapshot(
     component = (
         db.get(Product, snapshot.component_product_id) if snapshot is not None else None
     )
+    sibling_snapshots = db.scalars(
+        select(SalesOrderItemBomComponent)
+        .where(
+            SalesOrderItemBomComponent.sales_order_item_id == item.id,
+            SalesOrderItemBomComponent.is_required.is_(True),
+        )
+        .order_by(
+            SalesOrderItemBomComponent.display_order,
+            SalesOrderItemBomComponent.id,
+        )
+    ).all()
     return {
         "product_id": snapshot.component_product_id if snapshot is not None else None,
         "product_code": (
@@ -2875,6 +3025,28 @@ def _task_product_snapshot(
         ),
         "production_quantity_unit": "pieces",
         "component_product_found": component is not None,
+        "composite_parent": {
+            "product_code": item.snapshot_product_code,
+            "product_name": item.snapshot_product_name,
+            "set_quantity": int(item.quantity or 0),
+            "fulfillment_mode": (
+                item.composite_fulfillment_mode_snapshot
+                or "component_delivery"
+            ),
+        },
+        "composite_siblings": [
+            {
+                "bom_component_snapshot_id": sibling.id,
+                "product_code": sibling.snapshot_component_product_code,
+                "product_name": sibling.snapshot_component_product_name,
+                "required_piece_quantity": int(
+                    sibling.required_piece_quantity or 0
+                ),
+                "quantity_per_set": int(sibling.quantity_per_set or 0),
+                "is_current": sibling.id == snapshot_id,
+            }
+            for sibling in sibling_snapshots
+        ],
         "current_product_version": (
             int(component.version) if component is not None else None
         ),

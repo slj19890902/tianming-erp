@@ -295,9 +295,9 @@ def test_order_component_override_caps_multi_delivery_and_cancel(
             assert [
                 line["quantity"]
                 for line in detail_payload["items"][0]["actual_goods_lines"]
-            ] == [3000, 2700]
+            ] == [2700]
             assert detail_payload["total_quantity"] == 3000
-            assert detail_payload["total_actual_goods_quantity"] == 5700
+            assert detail_payload["total_actual_goods_quantity"] == 2700
             summary_context = _delivery_list_summary_context(db, [preview.id])
             summary_payload = _delivery_summary_response(
                 preview.id,
@@ -305,7 +305,7 @@ def test_order_component_override_caps_multi_delivery_and_cancel(
             )
             assert summary_payload["item_count"] == 1
             assert summary_payload["total_quantity"] == 3000
-            assert summary_payload["total_actual_goods_quantity"] == 5700
+            assert summary_payload["total_actual_goods_quantity"] == 2700
             assert "items" not in summary_payload
             detail_component = detail_payload["items"][0]["component_lines"][0]
             assert detail_component["pricing_included"] is False
@@ -319,20 +319,20 @@ def test_order_component_override_caps_multi_delivery_and_cancel(
             )
             assert [
                 line["quantity"] for line in print_payload["actual_goods_items"]
-            ] == [3000, 2700]
+            ] == [2700]
             assert print_payload["total_quantity"] == 3000
-            assert print_payload["total_actual_goods_quantity"] == 5700
+            assert print_payload["total_actual_goods_quantity"] == 2700
             assert (
-                print_payload["actual_goods_items"][1]["pricing_included"] is False
+                print_payload["actual_goods_items"][0]["pricing_included"] is False
             )
             assert (
-                print_payload["actual_goods_items"][1][
+                print_payload["actual_goods_items"][0][
                     "independent_return_receipt"
                 ]
                 is False
             )
             assert (
-                print_payload["actual_goods_items"][1]["independent_statement"]
+                print_payload["actual_goods_items"][0]["independent_statement"]
                 is False
             )
 
@@ -374,16 +374,9 @@ def test_order_component_override_caps_multi_delivery_and_cancel(
                 "生产区直接拿货"
             ]
             assert [
-                (
-                    line["product_code"],
-                    line["product_name"],
-                    line["pick_quantity"],
-                )
+                (line["product_code"], line["product_name"], line["pick_quantity"])
                 for line in pick_payload["location_groups"][0]["lines"]
-            ] == [
-                ("KIT-PARENT", "订单专用内衬", 2700),
-                ("KIT-PARENT", "统一计价主产品", 3000),
-            ]
+            ] == [("KIT-PARENT", "订单专用内衬", 2700)]
 
             first, first_item = _delivery(
                 db,
@@ -410,7 +403,7 @@ def test_order_component_override_caps_multi_delivery_and_cancel(
                 first.id,
                 list_context=first_list_context,
             ) == first_detail
-            _assert_summary_matches_full_total(db, first.id, 2000)
+            _assert_summary_matches_full_total(db, first.id, 1000)
 
             second, second_item = _delivery(
                 db,
@@ -431,7 +424,7 @@ def test_order_component_override_caps_multi_delivery_and_cancel(
             second.status = "dispatched"
             db.commit()
             assert _active_direct_quantity(db, snapshot.id) == 2700
-            _assert_summary_matches_full_total(db, second.id, 3700)
+            _assert_summary_matches_full_total(db, second.id, 1700)
 
             reverse_delivery_component_allocations(
                 db,
@@ -444,11 +437,11 @@ def test_order_component_override_caps_multi_delivery_and_cancel(
             db.commit()
             assert _active_direct_quantity(db, snapshot.id) == 1000
             assert kit_availability(db, order_item.id)["available_sets"] == 2000
-            _assert_summary_matches_full_total(db, second.id, 3700)
+            _assert_summary_matches_full_total(db, second.id, 1700)
 
             second.status = "voided"
             db.commit()
-            _assert_summary_matches_full_total(db, second.id, 2000)
+            _assert_summary_matches_full_total(db, second.id, 0)
             second.status = "pending"
             db.commit()
 
@@ -464,6 +457,6 @@ def test_order_component_override_caps_multi_delivery_and_cancel(
             second.status = "dispatched"
             db.commit()
             assert _active_direct_quantity(db, snapshot.id) == 2700
-            _assert_summary_matches_full_total(db, second.id, 3700)
+            _assert_summary_matches_full_total(db, second.id, 1700)
     finally:
         engine.dispose()

@@ -56,17 +56,20 @@ def test_compact_reported_item_table_drawer_and_fixed_columns_are_present() -> N
         "报料日期",
         "供应商",
         "状态",
-        "操作",
     ):
         assert heading in block
-    assert 'v-for="row in requisitionItems" :key="row.stable_id"' in block
+    assert "操作</th>" not in block
+    assert '<template v-for="row in requisitionItems" :key="row.stable_id">' in block
+    assert "组合父件：" in block
+    assert "撤销整组报料" in block
     assert '@click="openReportedItemDetail(row)"' in block
     assert "查看采购单并定位本行" in INDEX
     assert "supplier-order-line-" in INDEX
     assert ".reported-item-table thead th { position: sticky" in INDEX
     assert ".reported-item-select-column { position: sticky; left: 0" in INDEX
-    assert ".reported-item-action-column { position: sticky; right: 0" in INDEX
-    assert "height: 34px" in INDEX
+    assert ".reported-item-action-column { position: sticky; right: 0" not in INDEX
+    assert "height: 38px" in INDEX
+    assert ".reported-item-dimension { width: 92px" in INDEX
     assert ".ui-large .reported-item-table th" in INDEX and "height: 42px" in INDEX
 
 

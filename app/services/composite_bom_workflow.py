@@ -37,6 +37,7 @@ from app.models.warehouse_inventory import (
     InventoryReservation,
 )
 from app.services.production_label_strategy import (
+    CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION,
     ProductionLabelStrategyError,
     build_new_task_production_label_snapshot,
 )
@@ -391,6 +392,24 @@ def ensure_component_production_tasks(
                         0,
                     ),
                 )
+                if (
+                    getattr(item, "composite_fulfillment_mode_snapshot", None)
+                    == "parent_delivery"
+                ):
+                    label_snapshot = {
+                        "production_label_enabled_snapshot": False,
+                        "production_label_units_per_label_snapshot": None,
+                        "production_label_total_quantity_snapshot": 0,
+                        "production_label_count_snapshot": 0,
+                        "production_label_template_version_snapshot": (
+                            CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION
+                        ),
+                        "production_label_product_version_snapshot": (
+                            int(component_product.version)
+                            if component_product is not None
+                            else None
+                        ),
+                    }
             except ProductionLabelStrategyError as error:
                 raise CompositeBomWorkflowError(str(error)) from error
             task = ProductionTask(

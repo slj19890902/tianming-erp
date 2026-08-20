@@ -541,6 +541,48 @@ def test_composite_reviewed_quantity_above_minimum_is_preserved(
 ) -> None:
     from app.models.product_bom import RequisitionItemBomSource
     from app.models.requisition import RequisitionItem
+    from app.services.purchase_purpose_allocation import (
+        canonical_purchase_purpose_hash,
+    )
+
+    parent_line = _parent_payload(requisition_qty=12)
+    parent_line.update(
+        {
+            "purchase_total_sheet_qty": 12,
+            "order_purpose_sheet_qty": 10,
+            "stock_purpose_sheet_qty": 2,
+            "purpose_plan_version": 1,
+            "purpose_plan_fingerprint": canonical_purchase_purpose_hash(
+                {
+                    "version": 1,
+                    "source_key": "order_item:1:whole",
+                    "customer_id": 1,
+                    "effective_piece_qty": 10,
+                    "yield_per_sheet": 1,
+                    "authoritative_order_sheet_qty": 10,
+                }
+            ),
+        }
+    )
+    component_line = _component_payload(1, requisition_qty=25)
+    component_line.update(
+        {
+            "purchase_total_sheet_qty": 25,
+            "order_purpose_sheet_qty": 20,
+            "stock_purpose_sheet_qty": 5,
+            "purpose_plan_version": 1,
+            "purpose_plan_fingerprint": canonical_purchase_purpose_hash(
+                {
+                    "version": 1,
+                    "source_key": "bom_component:1:whole",
+                    "customer_id": 1,
+                    "effective_piece_qty": 20,
+                    "yield_per_sheet": 1,
+                    "authoritative_order_sheet_qty": 20,
+                }
+            ),
+        }
+    )
 
     app, session_factory = composite_requisition_app
     with TestClient(app) as client:
@@ -549,10 +591,7 @@ def test_composite_reviewed_quantity_above_minimum_is_preserved(
             "/api/requisition/batches",
             json={
                 "supplier_name": "N039 供应商",
-                "items": [
-                    _parent_payload(requisition_qty=12),
-                    _component_payload(1, requisition_qty=25),
-                ],
+                "items": [parent_line, component_line],
             },
         )
 

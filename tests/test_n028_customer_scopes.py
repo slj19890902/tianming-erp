@@ -1287,10 +1287,13 @@ def test_scoped_supplier_order_creation_requires_an_authorized_order_item(
             ("n028-boss", "BossPass123!"),
         ):
             _login(client, username, password)
-            created = client.post(
+            rejected = client.post(
                 "/api/requisition/supplier-orders", json=manual_payload
             )
-            assert created.status_code == 201, created.text
+            assert rejected.status_code == 409, rejected.text
+            assert rejected.json()["detail"]["code"] == (
+                "PURCHASE_PURPOSE_SOURCE_REQUIRED"
+            )
             client.post("/api/auth/logout")
 
         _login(client, "n028-sales", "SalesPass123!")
@@ -1302,7 +1305,7 @@ def test_scoped_supplier_order_creation_requires_an_authorized_order_item(
         ).text
 
     with factory() as db:
-        assert db.scalar(select(func.count()).select_from(SupplierRequisitionOrder)) == 2
+        assert db.scalar(select(func.count()).select_from(SupplierRequisitionOrder)) == 0
 
 
 def test_supplier_order_creation_rejects_duplicate_items_and_serializes_writes(
@@ -1330,6 +1333,16 @@ def test_supplier_order_creation_rejects_duplicate_items_and_serializes_writes(
             subtotal=Decimal("2.00"),
             snapshot_product_code="N028-SERIAL-P001",
             snapshot_product_name="N028 serialized item",
+            snapshot_material="K=A",
+            snapshot_supplier_name="N028 serialized supplier",
+            snapshot_report_length_mm=800,
+            snapshot_report_width_mm=600,
+            snapshot_crease_type="净料",
+            special_process="一开一",
+            material_status="pending",
+            requisition_status="未报料",
+            layer_count=3,
+            flute_type="B",
         )
         db.add_all(
             [
@@ -1365,8 +1378,8 @@ def test_supplier_order_creation_rejects_duplicate_items_and_serializes_writes(
             "/api/requisition/supplier-orders",
             json={**payload, "members": [member, dict(member)]},
         )
-        assert duplicate.status_code == 400
-        assert "不能重复报料" in duplicate.json()["detail"]
+        assert duplicate.status_code == 409
+        assert "不能重复" in duplicate.json()["detail"]
 
     with TestClient(app) as first_client, TestClient(app) as second_client:
         _login(first_client, "n028-admin", "AdminPass123!")

@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 from tests.test_phase11_requisition import (
     _add_pending_candidate,
     _login,
+    _set_supplier_draft_purchase_quantity,
     requisition_app,
 )
 
@@ -115,8 +116,11 @@ def test_both_merged_entry_points_call_the_same_helper_and_show_plan() -> None:
     assert "mergedRequisitionCuttingPlanSummary(row)" in pending
     assert "recalculateSupplierDraftLine(line)" in supplier
     assert "mergedRequisitionCuttingPlanSummary(line)" in supplier
-    assert 'v-model.number="line.requisition_qty"' in supplier
-    assert "line.quantity_override_acknowledged=false" in supplier
+    assert 'v-model.number="line.purchase_total_sheet_qty"' in supplier
+    assert 'v-model.number="line.order_purpose_sheet_qty"' in supplier
+    assert 'v-model.number="line.stock_purpose_sheet_qty"' in supplier
+    assert "onPurchasePurposeTotalChanged(line)" in supplier
+    assert "purchasePurposeValidationError(line)" in supplier
 
 
 def test_merge_and_supplier_payloads_round_trip_server_cutting_contract() -> None:
@@ -142,6 +146,15 @@ def test_merge_and_supplier_payloads_round_trip_server_cutting_contract() -> Non
     ):
         assert field in merge_payload
     assert "cutting_plan_fingerprint: line.cutting_plan_fingerprint" in save_payload
+    for purpose_field in (
+        "purchase_total_sheet_qty",
+        "order_purpose_sheet_qty",
+        "stock_purpose_sheet_qty",
+        "purpose_plan_version",
+        "purpose_plan_fingerprint",
+    ):
+        assert purpose_field in save_payload
+    assert "order_purpose_sheet_qty:sourceOrderQuantities[sourceIndex]" in save_payload
     assert "cutting_plan_fingerprint:" not in _method_source(
         "applyMergedRequisitionCuttingPlan(line, rawMode = null) {",
         "mergedRequisitionCuttingPlanSummary(line) {",
@@ -880,7 +893,7 @@ def test_ordinary_supplier_draft_keeps_manual_partial_then_remaining_quantity(
         first_line = first_draft["supplier_groups"][0]["lines"][0]
         assert first_line["source_type"] == "normal"
         assert first_line["remaining_requisition_qty"] == 100
-        first_line["requisition_qty"] = 40
+        _set_supplier_draft_purchase_quantity(first_line, 40)
         first_saved = client.post(
             "/api/requisition/supplier-orders/from-pending-selection",
             json=first_draft,

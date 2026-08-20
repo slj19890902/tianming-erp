@@ -12,7 +12,7 @@ from typing import Annotated, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
 from sqlalchemy import and_, exists, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased, load_only, selectinload
@@ -56,6 +56,7 @@ from app.models.product_bom import (
 )
 from app.models.requisition import Requisition, RequisitionHold, RequisitionItem
 from app.models.supplier_requisition_order import (
+    PurchasePurposeSourceSnapshot,
     SupplierRequisitionOrder,
     SupplierRequisitionOrderItem,
 )
@@ -167,6 +168,14 @@ from app.services.requisition_quantities import (
     normalize_cutting_mode,
     purchase_sheet_quantity,
     required_piece_quantity,
+)
+from app.services.purchase_purpose_allocation import (
+    PurchasePurposeError,
+    PurchasePurposeSourceDemand,
+    allocate_purchase_purpose,
+    assert_purchase_purpose_replay,
+    assert_purchase_purpose_stale_token,
+    canonical_purchase_purpose_hash,
 )
 from app.services.requisition_production_print import (
     build_composite_requisition_production_package,
@@ -514,6 +523,13 @@ class RequisitionLinePayload(BaseModel):
     actual_yield_per_sheet: int | None = Field(default=None, gt=0, strict=True)
     inventory_deducted_qty: int = Field(default=0, ge=0)
     requisition_qty: int | None = Field(default=None, ge=0)
+    purchase_total_sheet_qty: int | None = Field(default=None, ge=0)
+    order_purpose_sheet_qty: int | None = Field(default=None, ge=0)
+    stock_purpose_sheet_qty: int | None = Field(default=None, ge=0)
+    purpose_plan_version: int | None = Field(default=None, ge=1)
+    purpose_plan_fingerprint: str | None = Field(
+        default=None, min_length=64, max_length=64
+    )
     cardboard_len: Decimal = Field(gt=0)
     cardboard_width: Decimal = Field(gt=0)
     special_process: str = DEFAULT_CUTTING_MODE
@@ -610,7 +626,18 @@ class CustomerMaterialCandidateUpdate(BaseModel):
 
 class RequisitionBatchCreate(BaseModel):
     supplier_name: str | None = None
+    request_key: str | None = Field(default=None, min_length=16, max_length=64)
     items: list[RequisitionLinePayload]
+
+    @field_validator("request_key")
+    @classmethod
+    def normalize_request_key(cls, value: str | None) -> str | None:
+        normalized = str(value or "").strip()
+        if not normalized:
+            return None
+        if not re.fullmatch(r"[A-Za-z0-9_-]{16,64}", normalized):
+            raise ValueError("报料请求编号格式不正确，请刷新草稿后重试")
+        return normalized
 
     @field_validator("items")
     @classmethod
@@ -1048,11 +1075,14 @@ class PendingSupplierOrderDraftItem(BaseModel):
 class PendingSupplierOrderDraftSourceItem(BaseModel):
     source_type: str
     order_item_id: int
+    customer_id: int | None = Field(default=None, gt=0)
     merge_group_id: int | None = None
     component_type: str | None = None
     source_quantity: int | None = None
     inventory_deducted_qty: int | None = None
     requisition_qty: int | None = None
+    order_purpose_sheet_qty: int | None = Field(default=None, ge=0)
+    stock_purpose_sheet_qty: int | None = Field(default=None, ge=0)
 
     @field_validator("source_type")
     @classmethod
@@ -1081,6 +1111,14 @@ class PendingSupplierOrderDraftLine(BaseModel):
     cutting_mode: str = DEFAULT_CUTTING_MODE
     inventory_deducted_qty: int = 0
     requisition_qty: int
+    purchase_total_sheet_qty: int | None = Field(default=None, ge=0)
+    order_purpose_sheet_qty: int | None = Field(default=None, ge=0)
+    stock_purpose_sheet_qty: int | None = Field(default=None, ge=0)
+    purpose_plan_version: int | None = Field(default=None, ge=1)
+    purpose_plan_fingerprint: str | None = Field(
+        default=None, min_length=64, max_length=64
+    )
+    purpose_status: str | None = None
     dimension_override_acknowledged: bool = False
     quantity_override_acknowledged: bool = False
     cutting_plan_fingerprint: str | None = Field(
@@ -1103,6 +1141,7 @@ class PendingSupplierOrderDraftLine(BaseModel):
 class PendingSupplierOrderDraftGroup(BaseModel):
     supplier_name: str | None = None
     request_key: str | None = None
+    _request_hash_override: str | None = PrivateAttr(default=None)
     lines: list[PendingSupplierOrderDraftLine] = Field(default_factory=list)
     # Backward-compatible input for the previous flat source-item draft shape.
     items: list[dict] = Field(default_factory=list)
@@ -1120,6 +1159,22 @@ class PendingSupplierOrderDraftGroup(BaseModel):
 
 class PendingSupplierOrderFinalizePayload(BaseModel):
     supplier_groups: list[PendingSupplierOrderDraftGroup] = Field(min_length=1)
+
+
+def _pending_supplier_group_request_hash(
+    group: PendingSupplierOrderDraftGroup,
+) -> str:
+    if group._request_hash_override:
+        return group._request_hash_override
+    canonical = group.model_dump(mode="json", exclude_none=False)
+    return hashlib.sha256(
+        json.dumps(
+            canonical,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 def _plain(value: Decimal | None) -> str | None:
@@ -2373,6 +2428,126 @@ def _bom_snapshot_has_active_requisition(
     )
 
 
+def _bom_snapshot_active_order_purpose_sheet_qty(
+    db: Session,
+    snapshot_id: int,
+    *,
+    component_type: str = "whole",
+) -> int:
+    component = (component_type or "").strip().lower()
+    if component not in {"whole", "cover", "base"}:
+        raise ValueError("invalid BOM requisition component type")
+    accepted_types = (
+        [component, "whole"] if component in {"cover", "base"} else ["whole"]
+    )
+    purpose = (
+        select(
+            PurchasePurposeSourceSnapshot.material_requisition_item_id.label(
+                "requisition_item_id"
+            ),
+            func.sum(
+                PurchasePurposeSourceSnapshot.order_purpose_sheet_qty
+            ).label("order_purpose_sheet_qty"),
+        )
+        .where(
+            PurchasePurposeSourceSnapshot.material_requisition_item_id.is_not(
+                None
+            )
+        )
+        .group_by(PurchasePurposeSourceSnapshot.material_requisition_item_id)
+        .subquery()
+    )
+    rows = db.execute(
+        select(
+            RequisitionItem.requisition_qty,
+            purpose.c.order_purpose_sheet_qty,
+        )
+        .join(
+            RequisitionItemBomSource,
+            RequisitionItemBomSource.requisition_item_id == RequisitionItem.id,
+        )
+        .join(Requisition, Requisition.id == RequisitionItem.requisition_id)
+        .outerjoin(
+            purpose,
+            purpose.c.requisition_item_id == RequisitionItem.id,
+        )
+        .where(
+            RequisitionItemBomSource.sales_order_item_bom_component_id
+            == snapshot_id,
+            RequisitionItemBomSource.component_type.in_(accepted_types),
+            func.lower(RequisitionItem.status).notin_(
+                INACTIVE_REQUISITION_ITEM_STATUSES
+            ),
+            func.lower(Requisition.status).notin_(
+                NON_EFFECTIVE_LEGACY_REQUISITION_STATUSES
+            ),
+        )
+    ).all()
+    return sum(
+        int(frozen_order_purpose)
+        if frozen_order_purpose is not None
+        else int(purchase_qty or 0)
+        for purchase_qty, frozen_order_purpose in rows
+    )
+
+
+def _bom_parent_active_order_purpose_sheet_qty(
+    db: Session,
+    order_item_id: int,
+) -> int:
+    linked_source = (
+        select(RequisitionItemBomSource.id)
+        .where(
+            RequisitionItemBomSource.requisition_item_id == RequisitionItem.id
+        )
+        .exists()
+    )
+    purpose = (
+        select(
+            PurchasePurposeSourceSnapshot.material_requisition_item_id.label(
+                "requisition_item_id"
+            ),
+            func.sum(
+                PurchasePurposeSourceSnapshot.order_purpose_sheet_qty
+            ).label("order_purpose_sheet_qty"),
+        )
+        .where(
+            PurchasePurposeSourceSnapshot.material_requisition_item_id.is_not(
+                None
+            )
+        )
+        .group_by(PurchasePurposeSourceSnapshot.material_requisition_item_id)
+        .subquery()
+    )
+    rows = db.execute(
+        select(
+            RequisitionItem.requisition_qty,
+            purpose.c.order_purpose_sheet_qty,
+        )
+        .join(Requisition, Requisition.id == RequisitionItem.requisition_id)
+        .outerjoin(
+            purpose,
+            purpose.c.requisition_item_id == RequisitionItem.id,
+        )
+        .where(
+            RequisitionItem.order_item_id == order_item_id,
+            func.lower(RequisitionItem.status).notin_(
+                INACTIVE_REQUISITION_ITEM_STATUSES
+            ),
+            func.lower(Requisition.status).notin_(
+                NON_EFFECTIVE_LEGACY_REQUISITION_STATUSES
+            ),
+            ~linked_source,
+        )
+    ).all()
+    return sum(
+        int(frozen_order_purpose)
+        if frozen_order_purpose is not None
+        else int(purchase_qty or 0)
+        for purchase_qty, frozen_order_purpose in rows
+    )
+
+
 def _bom_snapshot_material_correction_blocker(
     db: Session,
     snapshot: SalesOrderItemBomComponent,
@@ -2437,22 +2612,22 @@ def _bom_snapshot_is_fully_requisitioned(
     db: Session,
     snapshot: SalesOrderItemBomComponent,
 ) -> bool:
-    return all(
-        _bom_snapshot_has_active_requisition(
+    for component in _bom_snapshot_component_types(snapshot):
+        requirements = _bom_snapshot_requirements(
+            db,
+            snapshot,
+            component_type=component,
+        )
+        if int(requirements["remaining_required_piece_qty"]) == 0:
+            continue
+        active_order_purpose = _bom_snapshot_active_order_purpose_sheet_qty(
             db,
             snapshot.id,
             component_type=component,
         )
-        or int(
-            _bom_snapshot_requirements(
-                db,
-                snapshot,
-                component_type=component,
-            )["remaining_required_piece_qty"]
-        )
-        == 0
-        for component in _bom_snapshot_component_types(snapshot)
-    )
+        if active_order_purpose < int(requirements["requisition_qty"]):
+            return False
+    return True
 
 
 def _bom_parent_has_active_requisition(
@@ -2487,16 +2662,12 @@ def _bom_order_item_is_fully_requisitioned(
     item: OrderItem,
     snapshots: list[SalesOrderItemBomComponent],
 ) -> bool:
+    parent_requirements = _current_requisition_requirements(db, item)
     parent_ready = (
         _composite_parent_requisition_is_suppressed(item, snapshots)
-        or _bom_parent_has_active_requisition(db, item.id)
-        or int(
-            _current_requisition_requirements(
-                db,
-                item,
-            )["remaining_required_piece_qty"]
-        )
-        == 0
+        or int(parent_requirements["remaining_required_piece_qty"]) == 0
+        or _bom_parent_active_order_purpose_sheet_qty(db, item.id)
+        >= int(parent_requirements["requisition_qty"])
     )
     return parent_ready and all(
         _bom_snapshot_is_fully_requisitioned(db, snapshot)
@@ -2528,16 +2699,23 @@ def _bom_pending_component_requirements(
                 f"component:{snapshot.id}:{component_type}"
             )
             requirements["parent_order_item_id"] = item.id
+            authoritative_order_sheet_qty = int(requirements["requisition_qty"])
             requirements["already_requisitioned"] = (
-                _bom_snapshot_has_active_requisition(
-                    db,
-                    snapshot.id,
-                    component_type=component_type,
+                _bom_snapshot_active_order_purpose_sheet_qty(
+                    db, snapshot.id, component_type=component_type
                 )
+            )
+            requirements["authoritative_order_sheet_qty"] = (
+                authoritative_order_sheet_qty
+            )
+            requirements["requisition_qty"] = max(
+                authoritative_order_sheet_qty
+                - int(requirements["already_requisitioned"]),
+                0,
             )
             requirements["can_requisition"] = (
                 requirements["remaining_required_piece_qty"] > 0
-                and not requirements["already_requisitioned"]
+                and requirements["requisition_qty"] > 0
             )
             rows.append(requirements)
     return rows
@@ -2553,7 +2731,10 @@ def _bom_pending_parent_requirement(
         cutting_mode=item.special_process,
         pieces_per_box=1,
     )
-    already_requisitioned = _bom_parent_has_active_requisition(db, item.id)
+    already_requisitioned = _bom_parent_active_order_purpose_sheet_qty(
+        db, item.id
+    )
+    authoritative_order_sheet_qty = int(requirements["requisition_qty"])
     return {
         "source_kind": "parent",
         "source_key": f"parent:{item.id}",
@@ -2575,14 +2756,18 @@ def _bom_pending_parent_requirement(
         "semi_finished_reserved_piece_qty": int(
             requirements["semi_finished_reserved_piece_qty"]
         ),
-        "requisition_qty": int(requirements["requisition_qty"]),
+        "requisition_qty": max(
+            authoritative_order_sheet_qty - already_requisitioned,
+            0,
+        ),
+        "authoritative_order_sheet_qty": authoritative_order_sheet_qty,
         "cutting_mode": str(requirements["cutting_mode"]),
         "cutting_factor": int(requirements["cutting_factor"]),
         "yield_per_sheet": int(requirements["cutting_factor"]),
         "already_requisitioned": already_requisitioned,
         "can_requisition": (
             int(requirements["remaining_required_piece_qty"]) > 0
-            and not already_requisitioned
+            and authoritative_order_sheet_qty > already_requisitioned
         ),
     }
 
@@ -4544,6 +4729,17 @@ def _merge_group_cutting_plan(
     active_covered_pieces = 0
     active_modes: set[str] = set()
     fingerprint_members: list[dict] = []
+    active_facts_by_source = _active_supplier_requisition_facts_by_sources(
+        db,
+        [
+            (
+                order_item,
+                req_item,
+                _requisition_item_component(req_item),
+            )
+            for req_item, order_item, *_ in rows
+        ],
+    )
     for req_item, order_item, order, customer, product in rows:
         member_dimensions = _merge_group_original_report_dimensions(
             order_item, req_item, cutting_mode=resolved_mode
@@ -4562,11 +4758,21 @@ def _merge_group_cutting_plan(
             pieces_per_box=req_item.pieces_per_box or _pieces_per_box(order_item),
             component_type=_requisition_item_component(req_item),
         )
-        active = _active_supplier_requisition_facts(
-            db,
-            item=order_item,
-            req_item=req_item,
-            component_type=_requisition_item_component(req_item),
+        active = active_facts_by_source.get(
+            _supplier_requisition_source_key(
+                order_item,
+                req_item,
+                component_type=_requisition_item_component(req_item),
+            ),
+            {
+                "source_key": _supplier_requisition_source_key(
+                    order_item,
+                    req_item,
+                    component_type=_requisition_item_component(req_item),
+                ),
+                "quantity": 0,
+                "orders": [],
+            },
         )
         active_quantity = int(active.get("quantity") or 0)
         active_total += active_quantity
@@ -4958,6 +5164,50 @@ def _merge_group_dict(
     }
 
 
+def _ensure_merge_group_whole_source(
+    db: Session,
+    item: OrderItem,
+) -> None:
+    component_summary = _current_requisition_summary(
+        db,
+        item,
+        cutting_mode=item.special_process or DEFAULT_CUTTING_MODE,
+    )
+    component_requirements = list(
+        component_summary.get("component_requirements") or []
+    )
+    has_physical_components = (
+        len(component_requirements) > 1
+        or any(
+            str(row.get("component_type") or "whole").strip().lower()
+            != "whole"
+            for row in component_requirements
+        )
+        or bool(_bom_snapshots_for_order_item(db, item.id))
+    )
+    if has_physical_components:
+        raise HTTPException(
+            status_code=409,
+            detail="多物理组件订单不能加入普通合并组，请按盖、底或BOM组件分别报料。",
+        )
+
+
+def _ensure_merge_group_rows_compatible(
+    db: Session,
+    rows: list[
+        tuple[RequisitionItem | None, OrderItem, Order, Customer, Product]
+    ],
+) -> None:
+    customer_ids = {int(customer.id) for _, _, _, customer, _ in rows}
+    if len(customer_ids) != 1:
+        raise HTTPException(
+            status_code=409,
+            detail="普通合并报料组不能跨客户，请按客户分别建立合并组。",
+        )
+    for _, item, *_ in rows:
+        _ensure_merge_group_whole_source(db, item)
+
+
 def _validate_merge_member_rows(
     db: Session,
     member_item_ids: list[int],
@@ -5000,6 +5250,13 @@ def _validate_merge_member_rows(
         )
     by_id = {item.id: (item, order, customer, product) for item, order, customer, product in rows}
     ordered_rows = [by_id[item_id] for item_id in member_item_ids]
+    _ensure_merge_group_rows_compatible(
+        db,
+        [
+            (None, item, order, customer, product)
+            for item, order, customer, product in ordered_rows
+        ],
+    )
     for item, order, *_ in ordered_rows:
         if is_history_order_number(order.order_number):
             raise HTTPException(status_code=409, detail="历史订单不能创建待报料合并组")
@@ -5060,14 +5317,43 @@ def _active_supplier_requisition_facts(
         req_item,
         component_type=component,
     )
+    supplier_purpose = (
+        select(
+            PurchasePurposeSourceSnapshot.supplier_requisition_order_item_id.label(
+                "supplier_item_id"
+            ),
+            func.sum(
+                PurchasePurposeSourceSnapshot.order_purpose_sheet_qty
+            ).label("order_purpose_sheet_qty"),
+        )
+        .where(
+            PurchasePurposeSourceSnapshot.supplier_requisition_order_item_id.is_not(
+                None
+            )
+        )
+        .group_by(
+            PurchasePurposeSourceSnapshot.supplier_requisition_order_item_id
+        )
+        .subquery()
+    )
     rows = db.execute(
-        select(SupplierRequisitionOrderItem, SupplierRequisitionOrder, User)
+        select(
+            SupplierRequisitionOrderItem,
+            SupplierRequisitionOrder,
+            User,
+            supplier_purpose.c.order_purpose_sheet_qty,
+        )
         .join(
             SupplierRequisitionOrder,
             SupplierRequisitionOrder.id
             == SupplierRequisitionOrderItem.supplier_order_id,
         )
         .outerjoin(User, User.id == SupplierRequisitionOrder.created_by)
+        .outerjoin(
+            supplier_purpose,
+            supplier_purpose.c.supplier_item_id
+            == SupplierRequisitionOrderItem.id,
+        )
         .where(
             SupplierRequisitionOrderItem.order_item_id == item.id,
             SupplierRequisitionOrder.status != "voided",
@@ -5079,7 +5365,7 @@ def _active_supplier_requisition_facts(
         )
     ).all()
     facts: list[dict[str, object]] = []
-    for order_line, supplier_order, operator in rows:
+    for order_line, supplier_order, operator, frozen_order_purpose in rows:
         if order_line.source_key:
             if order_line.source_key != source_key:
                 continue
@@ -5091,12 +5377,21 @@ def _active_supplier_requisition_facts(
             expected_suffix = "-盖" if component == "cover" else "-底"
             if not str(order_line.product_name or "").endswith(expected_suffix):
                 continue
+        effective_order_purpose = (
+            int(frozen_order_purpose)
+            if frozen_order_purpose is not None
+            else int(order_line.requisition_qty or 0)
+        )
         facts.append(
             {
                 "supplier_order_id": supplier_order.id,
                 "supplier_order_number": supplier_order.order_number,
                 "supplier_name": supplier_order.supplier_name,
-                "requisition_qty": int(order_line.requisition_qty or 0),
+                "requisition_qty": effective_order_purpose,
+                "purchase_total_sheet_qty": int(order_line.requisition_qty or 0),
+                "purpose_status": (
+                    "frozen" if frozen_order_purpose is not None else "legacy_unset"
+                ),
                 "cutting_mode": normalize_cutting_mode(
                     order_line.cutting_mode or supplier_order.cutting_mode
                 ),
@@ -5115,10 +5410,36 @@ def _active_supplier_requisition_facts(
             }
         )
     if req_item is None and component in {"cover", "base"}:
+        legacy_purpose = (
+            select(
+                PurchasePurposeSourceSnapshot.material_requisition_item_id.label(
+                    "requisition_item_id"
+                ),
+                func.sum(
+                    PurchasePurposeSourceSnapshot.order_purpose_sheet_qty
+                ).label("order_purpose_sheet_qty"),
+            )
+            .where(
+                PurchasePurposeSourceSnapshot.material_requisition_item_id.is_not(
+                    None
+                )
+            )
+            .group_by(PurchasePurposeSourceSnapshot.material_requisition_item_id)
+            .subquery()
+        )
         legacy_rows = db.execute(
-            select(RequisitionItem, Requisition, User)
+            select(
+                RequisitionItem,
+                Requisition,
+                User,
+                legacy_purpose.c.order_purpose_sheet_qty,
+            )
             .join(Requisition, Requisition.id == RequisitionItem.requisition_id)
             .outerjoin(User, User.id == Requisition.created_by)
+            .outerjoin(
+                legacy_purpose,
+                legacy_purpose.c.requisition_item_id == RequisitionItem.id,
+            )
             .where(
                 RequisitionItem.order_item_id == item.id,
                 func.lower(RequisitionItem.status).notin_(
@@ -5131,17 +5452,30 @@ def _active_supplier_requisition_facts(
             .order_by(Requisition.created_at.asc(), Requisition.id.asc())
         ).all()
         expected_suffix = "-盖" if component == "cover" else "-底"
-        for legacy_line, requisition, operator in legacy_rows:
+        for legacy_line, requisition, operator, frozen_order_purpose in legacy_rows:
             if not str(legacy_line.product_name_snapshot or "").endswith(
                 expected_suffix
             ):
                 continue
+            effective_order_purpose = (
+                int(frozen_order_purpose)
+                if frozen_order_purpose is not None
+                else int(legacy_line.requisition_qty or 0)
+            )
             facts.append(
                 {
                     "supplier_order_id": None,
                     "supplier_order_number": requisition.requisition_number,
                     "supplier_name": requisition.supplier_name,
-                    "requisition_qty": int(legacy_line.requisition_qty or 0),
+                    "requisition_qty": effective_order_purpose,
+                    "purchase_total_sheet_qty": int(
+                        legacy_line.requisition_qty or 0
+                    ),
+                    "purpose_status": (
+                        "frozen"
+                        if frozen_order_purpose is not None
+                        else "legacy_unset"
+                    ),
                     "cutting_mode": normalize_cutting_mode(
                         legacy_line.special_process or DEFAULT_CUTTING_MODE
                     ),
@@ -5189,14 +5523,43 @@ def _active_requisition_facts_by_item_ids(
     clean_ids = sorted({int(item_id) for item_id in item_ids if int(item_id) > 0})
     if not clean_ids:
         return {}
+    supplier_purpose = (
+        select(
+            PurchasePurposeSourceSnapshot.supplier_requisition_order_item_id.label(
+                "supplier_item_id"
+            ),
+            func.sum(
+                PurchasePurposeSourceSnapshot.order_purpose_sheet_qty
+            ).label("order_purpose_sheet_qty"),
+        )
+        .where(
+            PurchasePurposeSourceSnapshot.supplier_requisition_order_item_id.is_not(
+                None
+            )
+        )
+        .group_by(
+            PurchasePurposeSourceSnapshot.supplier_requisition_order_item_id
+        )
+        .subquery()
+    )
     rows = db.execute(
-        select(SupplierRequisitionOrderItem, SupplierRequisitionOrder, User)
+        select(
+            SupplierRequisitionOrderItem,
+            SupplierRequisitionOrder,
+            User,
+            supplier_purpose.c.order_purpose_sheet_qty,
+        )
         .join(
             SupplierRequisitionOrder,
             SupplierRequisitionOrder.id
             == SupplierRequisitionOrderItem.supplier_order_id,
         )
         .outerjoin(User, User.id == SupplierRequisitionOrder.created_by)
+        .outerjoin(
+            supplier_purpose,
+            supplier_purpose.c.supplier_item_id
+            == SupplierRequisitionOrderItem.id,
+        )
         .where(
             SupplierRequisitionOrderItem.order_item_id.in_(clean_ids),
             SupplierRequisitionOrder.status != "voided",
@@ -5215,17 +5578,26 @@ def _active_requisition_facts_by_item_ids(
         }
         for item_id in clean_ids
     }
-    for order_line, supplier_order, operator in rows:
+    for order_line, supplier_order, operator, frozen_order_purpose in rows:
         item_id = int(order_line.order_item_id or 0)
         if item_id not in result:
             continue
         if not _source_key_matches_order_item(order_line.source_key, item_id):
             continue
+        effective_order_purpose = (
+            int(frozen_order_purpose)
+            if frozen_order_purpose is not None
+            else int(order_line.requisition_qty or 0)
+        )
         fact = {
             "supplier_order_id": supplier_order.id,
             "supplier_order_number": supplier_order.order_number,
             "supplier_name": supplier_order.supplier_name,
-            "requisition_qty": int(order_line.requisition_qty or 0),
+            "requisition_qty": effective_order_purpose,
+            "purchase_total_sheet_qty": int(order_line.requisition_qty or 0),
+            "purpose_status": (
+                "frozen" if frozen_order_purpose is not None else "legacy_unset"
+            ),
             "created_at": (
                 beijing_naive_to_api(supplier_order.created_at)
                 if supplier_order.created_at is not None
@@ -5246,10 +5618,36 @@ def _active_requisition_facts_by_item_ids(
         if isinstance(item_orders, list):
             item_orders.append(fact)
 
+    legacy_purpose = (
+        select(
+            PurchasePurposeSourceSnapshot.material_requisition_item_id.label(
+                "requisition_item_id"
+            ),
+            func.sum(
+                PurchasePurposeSourceSnapshot.order_purpose_sheet_qty
+            ).label("order_purpose_sheet_qty"),
+        )
+        .where(
+            PurchasePurposeSourceSnapshot.material_requisition_item_id.is_not(
+                None
+            )
+        )
+        .group_by(PurchasePurposeSourceSnapshot.material_requisition_item_id)
+        .subquery()
+    )
     legacy_rows = db.execute(
-        select(RequisitionItem, Requisition, User)
+        select(
+            RequisitionItem,
+            Requisition,
+            User,
+            legacy_purpose.c.order_purpose_sheet_qty,
+        )
         .join(Requisition, Requisition.id == RequisitionItem.requisition_id)
         .outerjoin(User, User.id == Requisition.created_by)
+        .outerjoin(
+            legacy_purpose,
+            legacy_purpose.c.requisition_item_id == RequisitionItem.id,
+        )
         .where(
             RequisitionItem.order_item_id.in_(clean_ids),
             func.lower(RequisitionItem.status).notin_(
@@ -5261,15 +5659,24 @@ def _active_requisition_facts_by_item_ids(
         )
         .order_by(Requisition.created_at.asc(), Requisition.id.asc())
     ).all()
-    for legacy_line, requisition, operator in legacy_rows:
+    for legacy_line, requisition, operator, frozen_order_purpose in legacy_rows:
         item_id = int(legacy_line.order_item_id or 0)
         if item_id not in result:
             continue
+        effective_order_purpose = (
+            int(frozen_order_purpose)
+            if frozen_order_purpose is not None
+            else int(legacy_line.requisition_qty or 0)
+        )
         fact = {
             "supplier_order_id": None,
             "supplier_order_number": requisition.requisition_number,
             "supplier_name": requisition.supplier_name,
-            "requisition_qty": int(legacy_line.requisition_qty or 0),
+            "requisition_qty": effective_order_purpose,
+            "purchase_total_sheet_qty": int(legacy_line.requisition_qty or 0),
+            "purpose_status": (
+                "frozen" if frozen_order_purpose is not None else "legacy_unset"
+            ),
             "created_at": (
                 beijing_naive_to_api(requisition.created_at)
                 if requisition.created_at is not None
@@ -5292,6 +5699,291 @@ def _active_requisition_facts_by_item_ids(
         item_orders = result[item_id]["orders"]
         if isinstance(item_orders, list):
             item_orders.append(fact)
+    return result
+
+
+def _active_supplier_requisition_facts_by_sources(
+    db: Session,
+    sources: list[tuple[OrderItem, RequisitionItem | None, str]],
+) -> dict[str, dict[str, object]]:
+    specs: dict[str, tuple[OrderItem, RequisitionItem | None, str]] = {}
+    for item, req_item, raw_component in sources:
+        component = str(raw_component or "whole").strip().lower()
+        source_key = _supplier_requisition_source_key(
+            item,
+            req_item,
+            component_type=component,
+        )
+        specs[source_key] = (item, req_item, component)
+    if not specs:
+        return {}
+
+    result: dict[str, dict[str, object]] = {
+        source_key: {
+            "source_key": source_key,
+            "quantity": 0,
+            "orders": [],
+        }
+        for source_key in specs
+    }
+    whole_item_ids = [
+        int(item.id)
+        for item, req_item, component in specs.values()
+        if req_item is None and component == "whole"
+    ]
+    if whole_item_ids:
+        whole_facts = _active_requisition_facts_by_item_ids(
+            db, whole_item_ids
+        )
+        for item_id, facts in whole_facts.items():
+            result[f"order_item:{item_id}"] = facts
+
+    special_specs = {
+        source_key: spec
+        for source_key, spec in specs.items()
+        if not (spec[1] is None and spec[2] == "whole")
+    }
+    if not special_specs:
+        return result
+    special_item_ids = sorted(
+        {int(item.id) for item, _, _ in special_specs.values()}
+    )
+    supplier_purpose = (
+        select(
+            PurchasePurposeSourceSnapshot.supplier_requisition_order_item_id.label(
+                "supplier_item_id"
+            ),
+            func.sum(
+                PurchasePurposeSourceSnapshot.order_purpose_sheet_qty
+            ).label("order_purpose_sheet_qty"),
+        )
+        .where(
+            PurchasePurposeSourceSnapshot.supplier_requisition_order_item_id.is_not(
+                None
+            )
+        )
+        .group_by(
+            PurchasePurposeSourceSnapshot.supplier_requisition_order_item_id
+        )
+        .subquery()
+    )
+    supplier_rows = db.execute(
+        select(
+            SupplierRequisitionOrderItem,
+            SupplierRequisitionOrder,
+            User,
+            supplier_purpose.c.order_purpose_sheet_qty,
+        )
+        .join(
+            SupplierRequisitionOrder,
+            SupplierRequisitionOrder.id
+            == SupplierRequisitionOrderItem.supplier_order_id,
+        )
+        .outerjoin(User, User.id == SupplierRequisitionOrder.created_by)
+        .outerjoin(
+            supplier_purpose,
+            supplier_purpose.c.supplier_item_id
+            == SupplierRequisitionOrderItem.id,
+        )
+        .where(
+            SupplierRequisitionOrderItem.order_item_id.in_(
+                special_item_ids
+            ),
+            SupplierRequisitionOrder.status != "voided",
+            SupplierRequisitionOrderItem.status == "active",
+        )
+        .order_by(
+            SupplierRequisitionOrder.created_at.asc(),
+            SupplierRequisitionOrder.id.asc(),
+        )
+    ).all()
+    supplier_rows_by_item: dict[int, list[tuple]] = {}
+    for row in supplier_rows:
+        supplier_rows_by_item.setdefault(
+            int(row[0].order_item_id or 0), []
+        ).append(row)
+
+    for source_key, (item, req_item, component) in special_specs.items():
+        facts: list[dict[str, object]] = []
+        for order_line, supplier_order, operator, frozen_order_purpose in (
+            supplier_rows_by_item.get(int(item.id), [])
+        ):
+            if order_line.source_key:
+                if order_line.source_key != source_key:
+                    continue
+            elif req_item is not None:
+                expected_code = str(
+                    req_item.product_code_snapshot or ""
+                ).strip()
+                if expected_code and str(
+                    order_line.product_code or ""
+                ).strip() != expected_code:
+                    continue
+            elif component in {"cover", "base"}:
+                expected_suffix = "-盖" if component == "cover" else "-底"
+                if not str(order_line.product_name or "").endswith(
+                    expected_suffix
+                ):
+                    continue
+            effective_order_purpose = (
+                int(frozen_order_purpose)
+                if frozen_order_purpose is not None
+                else int(order_line.requisition_qty or 0)
+            )
+            facts.append(
+                {
+                    "supplier_order_id": supplier_order.id,
+                    "supplier_order_number": supplier_order.order_number,
+                    "supplier_name": supplier_order.supplier_name,
+                    "requisition_qty": effective_order_purpose,
+                    "purchase_total_sheet_qty": int(
+                        order_line.requisition_qty or 0
+                    ),
+                    "purpose_status": (
+                        "frozen"
+                        if frozen_order_purpose is not None
+                        else "legacy_unset"
+                    ),
+                    "cutting_mode": normalize_cutting_mode(
+                        order_line.cutting_mode
+                        or supplier_order.cutting_mode
+                    ),
+                    "created_at": (
+                        beijing_naive_to_api(supplier_order.created_at)
+                        if supplier_order.created_at is not None
+                        else None
+                    ),
+                    "operator": (
+                        operator.display_name
+                        or operator.real_name
+                        or operator.username
+                        if operator is not None
+                        else None
+                    ),
+                }
+            )
+        result[source_key] = {
+            "source_key": source_key,
+            "quantity": sum(
+                int(row["requisition_qty"]) for row in facts
+            ),
+            "orders": facts,
+        }
+
+    legacy_specs = {
+        source_key: spec
+        for source_key, spec in special_specs.items()
+        if spec[1] is None and spec[2] in {"cover", "base"}
+    }
+    if not legacy_specs:
+        return result
+    legacy_item_ids = sorted(
+        {int(item.id) for item, _, _ in legacy_specs.values()}
+    )
+    legacy_purpose = (
+        select(
+            PurchasePurposeSourceSnapshot.material_requisition_item_id.label(
+                "requisition_item_id"
+            ),
+            func.sum(
+                PurchasePurposeSourceSnapshot.order_purpose_sheet_qty
+            ).label("order_purpose_sheet_qty"),
+        )
+        .where(
+            PurchasePurposeSourceSnapshot.material_requisition_item_id.is_not(
+                None
+            )
+        )
+        .group_by(
+            PurchasePurposeSourceSnapshot.material_requisition_item_id
+        )
+        .subquery()
+    )
+    legacy_rows = db.execute(
+        select(
+            RequisitionItem,
+            Requisition,
+            User,
+            legacy_purpose.c.order_purpose_sheet_qty,
+        )
+        .join(Requisition, Requisition.id == RequisitionItem.requisition_id)
+        .outerjoin(User, User.id == Requisition.created_by)
+        .outerjoin(
+            legacy_purpose,
+            legacy_purpose.c.requisition_item_id == RequisitionItem.id,
+        )
+        .where(
+            RequisitionItem.order_item_id.in_(legacy_item_ids),
+            func.lower(RequisitionItem.status).notin_(
+                NON_EFFECTIVE_LEGACY_REQUISITION_STATUSES
+            ),
+            func.lower(Requisition.status).notin_(
+                NON_EFFECTIVE_LEGACY_REQUISITION_STATUSES
+            ),
+        )
+        .order_by(Requisition.created_at.asc(), Requisition.id.asc())
+    ).all()
+    legacy_rows_by_item: dict[int, list[tuple]] = {}
+    for row in legacy_rows:
+        legacy_rows_by_item.setdefault(
+            int(row[0].order_item_id or 0), []
+        ).append(row)
+    for source_key, (item, _, component) in legacy_specs.items():
+        expected_suffix = "-盖" if component == "cover" else "-底"
+        target = result[source_key]
+        target_orders = target["orders"]
+        if not isinstance(target_orders, list):
+            continue
+        for legacy_line, requisition, operator, frozen_order_purpose in (
+            legacy_rows_by_item.get(int(item.id), [])
+        ):
+            if not str(
+                legacy_line.product_name_snapshot or ""
+            ).endswith(expected_suffix):
+                continue
+            effective_order_purpose = (
+                int(frozen_order_purpose)
+                if frozen_order_purpose is not None
+                else int(legacy_line.requisition_qty or 0)
+            )
+            target_orders.append(
+                {
+                    "supplier_order_id": None,
+                    "supplier_order_number": requisition.requisition_number,
+                    "supplier_name": requisition.supplier_name,
+                    "requisition_qty": effective_order_purpose,
+                    "purchase_total_sheet_qty": int(
+                        legacy_line.requisition_qty or 0
+                    ),
+                    "purpose_status": (
+                        "frozen"
+                        if frozen_order_purpose is not None
+                        else "legacy_unset"
+                    ),
+                    "cutting_mode": normalize_cutting_mode(
+                        legacy_line.special_process
+                        or DEFAULT_CUTTING_MODE
+                    ),
+                    "created_at": (
+                        beijing_naive_to_api(requisition.created_at)
+                        if requisition.created_at is not None
+                        else None
+                    ),
+                    "operator": (
+                        operator.display_name
+                        or operator.real_name
+                        or operator.username
+                        if operator is not None
+                        else None
+                    ),
+                    "source_type": "legacy_material_requisition",
+                    "legacy_requisition_id": requisition.id,
+                    "legacy_requisition_item_id": legacy_line.id,
+                }
+            )
+            target["quantity"] = int(target["quantity"]) + int(
+                effective_order_purpose
+            )
     return result
 
 
@@ -5426,178 +6118,6 @@ def _entry_decimal(
     return decimal_value
 
 
-def _pending_selection_entries(
-    db: Session,
-    payload: PendingSupplierOrderCreatePayload,
-) -> tuple[dict[str, list[dict]], list[Requisition]]:
-    grouped: dict[str, list[dict]] = {}
-    touched_groups: list[Requisition] = []
-    seen_order_item_ids: set[int] = set()
-    seen_group_ids: set[int] = set()
-
-    def add_entry(supplier_name: str, entry: dict) -> None:
-        if entry["order_item"].id in seen_order_item_ids:
-            raise HTTPException(status_code=409, detail="同一订单明细不能重复生成供应商报料单")
-        seen_order_item_ids.add(entry["order_item"].id)
-        grouped.setdefault(supplier_name, []).append(entry)
-
-    for selection in payload.selections:
-        if selection.type == "order_item":
-            if not selection.order_item_id:
-                raise HTTPException(status_code=400, detail="普通待报料行缺少 order_item_id")
-            item, order, customer, product = _ensure_pending_order_item_for_supplier_order(
-                db, selection.order_item_id
-            )
-            if _order_item_in_merged_pending_group(db, item.id):
-                raise HTTPException(status_code=409, detail="订单明细已属于待报料合并组，不能按普通行重复报料")
-            supplier_name = _entry_supplier(selection, item.snapshot_supplier_name)
-            cardboard_len = _entry_decimal(
-                selection.report_length_mm,
-                item.cardboard_len or item.snapshot_report_length_mm,
-                "报料长",
-            )
-            cardboard_width = _entry_decimal(
-                selection.report_width_mm,
-                item.cardboard_width or item.snapshot_report_width_mm,
-                "报料宽",
-            )
-            cutting_mode = selection.cutting_mode or item.special_process or DEFAULT_CUTTING_MODE
-            requirements = _current_requisition_summary(
-                db,
-                item,
-                cutting_mode=cutting_mode,
-            )
-            pieces_per_box = int(requirements["pieces_per_box"])
-            finished_reserved_qty = int(
-                requirements["finished_inventory_reserved_qty"]
-            )
-            production_required_qty = int(
-                requirements["production_required_qty"]
-            )
-            if production_required_qty == 0:
-                raise HTTPException(
-                    status_code=409,
-                    detail="该订单明细已由成品库存全额抵扣，无需生成供应商报料单",
-                )
-            required_piece_qty = int(requirements["required_piece_qty"])
-            add_entry(
-                supplier_name,
-                {
-                    "source_type": "order_item",
-                    "group": None,
-                    "req_item": None,
-                    "order_item": item,
-                    "order": order,
-                    "customer": customer,
-                    "product": product,
-                    "supplier_name": supplier_name,
-                    "cardboard_len": cardboard_len,
-                    "cardboard_width": cardboard_width,
-                    "cutting_mode": cutting_mode,
-                    "remark": (selection.remark or item.requisition_remark or "").strip() or None,
-                    "inventory_deducted_qty": finished_reserved_qty,
-                    "pieces_per_box": pieces_per_box,
-                    "production_required_qty": production_required_qty,
-                    "required_piece_qty": required_piece_qty,
-                    "semi_finished_reserved_piece_qty": int(
-                        requirements["semi_finished_reserved_piece_qty"]
-                    ),
-                    "remaining_required_piece_qty": int(
-                        requirements["remaining_required_piece_qty"]
-                    ),
-                    "requisition_qty": int(requirements["requisition_qty"]),
-                },
-            )
-            continue
-
-        if not selection.merge_group_id:
-            raise HTTPException(status_code=400, detail="合并组行缺少 merge_group_id")
-        if selection.merge_group_id in seen_group_ids:
-            raise HTTPException(status_code=409, detail="同一合并组不能重复生成供应商报料单")
-        seen_group_ids.add(selection.merge_group_id)
-        group = db.get(Requisition, selection.merge_group_id)
-        if group is None:
-            raise HTTPException(status_code=404, detail="待报料合并组不存在")
-        if group.status != "merged_pending":
-            raise HTTPException(status_code=409, detail="该合并组已生成供应商报料单，不能重复生成")
-        rows = _merge_group_rows(db, group.id)
-        if not rows:
-            raise HTTPException(status_code=400, detail="合并组没有来源明细")
-        supplier_name = _entry_supplier(selection, group.supplier_name)
-        first_req_item = rows[0][0]
-        cardboard_len = _entry_decimal(
-            selection.report_length_mm,
-            first_req_item.cardboard_len,
-            "报料长",
-        )
-        cardboard_width = _entry_decimal(
-            selection.report_width_mm,
-            first_req_item.cardboard_width,
-            "报料宽",
-        )
-        cutting_mode = selection.cutting_mode or first_req_item.special_process or DEFAULT_CUTTING_MODE
-        remark = (selection.remark or first_req_item.remark or "").strip() or None
-        group.supplier_name = supplier_name
-        for req_item, order_item, order, customer, product in rows:
-            if req_item.status != "merged_pending":
-                raise HTTPException(status_code=409, detail="合并组状态异常，不能生成供应商报料单")
-            _ensure_pending_order_item_for_supplier_order(db, order_item.id)
-            req_item.cardboard_len = cardboard_len
-            req_item.cardboard_width = cardboard_width
-            req_item.special_process = cutting_mode
-            req_item.remark = remark
-            requirements = _current_requisition_requirements(
-                db,
-                order_item,
-                cutting_mode=cutting_mode,
-                pieces_per_box=req_item.pieces_per_box or _pieces_per_box(order_item),
-                component_type=_requisition_item_component(req_item),
-            )
-            if bool(requirements["fully_covered_by_finished_inventory"]):
-                raise HTTPException(
-                    status_code=409,
-                    detail="合并组中存在已由成品库存全额抵扣的明细，请刷新后重试",
-                )
-            req_item.pieces_per_box = int(requirements["pieces_per_box"])
-            req_item.required_piece_qty = int(requirements["required_piece_qty"])
-            req_item.requisition_qty = int(requirements["requisition_qty"])
-            add_entry(
-                supplier_name,
-                {
-                    "source_type": "merge_group",
-                    "group": group,
-                    "req_item": req_item,
-                    "order_item": order_item,
-                    "order": order,
-                    "customer": customer,
-                    "product": product,
-                    "supplier_name": supplier_name,
-                    "cardboard_len": cardboard_len,
-                    "cardboard_width": cardboard_width,
-                    "cutting_mode": cutting_mode,
-                    "remark": remark,
-                    "inventory_deducted_qty": int(
-                        requirements["finished_inventory_reserved_qty"]
-                    ),
-                    "pieces_per_box": int(requirements["pieces_per_box"]),
-                    "production_required_qty": int(
-                        requirements["production_required_qty"]
-                    ),
-                    "required_piece_qty": int(requirements["required_piece_qty"]),
-                    "semi_finished_reserved_piece_qty": int(
-                        requirements["semi_finished_reserved_piece_qty"]
-                    ),
-                    "remaining_required_piece_qty": int(
-                        requirements["remaining_required_piece_qty"]
-                    ),
-                    "requisition_qty": int(requirements["requisition_qty"]),
-                },
-            )
-        touched_groups.append(group)
-
-    return grouped, touched_groups
-
-
 def _pending_entry_dict(entry: dict) -> dict:
     req_item: RequisitionItem | None = entry.get("req_item")
     order_item: OrderItem = entry["order_item"]
@@ -5617,6 +6137,7 @@ def _pending_entry_dict(entry: dict) -> dict:
         "order_item_id": order_item.id,
         "merge_group_id": entry["group"].id if entry.get("group") is not None else None,
         "order_number": display_order_number(order, entry.get("display_registry") or {}),
+        "customer_id": customer.id,
         "customer_name": customer.name,
         "product_code": (
             req_item.product_code_snapshot
@@ -5708,6 +6229,9 @@ def _purchase_line_spec_from_entry(entry: dict) -> dict:
     flute_type = _clean_supplier_flute(order_item.flute_type)
     clean_material_code = _clean_supplier_material_code(material_code, layer_count)
     return {
+        # 备库用途默认只属于一个客户。内部采购草稿按 customer_id 拆行，
+        # 供应商打印仍可按物理规格汇总总张数，不能把差额静默归给首客户。
+        "customer_id": int(entry["customer"].id),
         "component_type": component_type,
         "merge_group_id": (
             int(entry["group"].id)
@@ -5738,6 +6262,7 @@ def _purchase_line_spec_from_entry(entry: dict) -> dict:
 def _purchase_line_key(supplier_name: str | None, spec: dict) -> str:
     key_payload = {
         "supplier_name": (supplier_name or "").strip(),
+        "customer_id": spec.get("customer_id"),
         # A3 盖片与底片是两条独立物理来源；即使采购规格偶然相同，
         # 也不能在报料单重建时合并成一条虚假数量。
         "component_type": spec.get("component_type") or "whole",
@@ -5763,7 +6288,172 @@ def _source_item_from_entry(entry: dict) -> dict:
     source = _pending_entry_dict(entry)
     source["source_quantity"] = int(entry.get("production_required_qty") or 0)
     source["required_piece_qty"] = int(entry.get("required_piece_qty") or 0)
+    source["order_purpose_sheet_qty"] = int(entry.get("requisition_qty") or 0)
+    source["stock_purpose_sheet_qty"] = 0
     return source
+
+
+_PURCHASE_PURPOSE_PLAN_VERSION = 1
+
+
+def _purchase_purpose_plan_fingerprint(
+    *,
+    supplier_name: str | None,
+    line_key: str,
+    authoritative_order_sheet_qty: int,
+    source_items: list[dict],
+) -> str:
+    # The purpose token protects authoritative source identities and live
+    # demand. Supplier, editable purchase dimensions and remarks are validated
+    # separately by the purchase-spec and dimension-override contracts; they
+    # must not make an otherwise current demand token stale before those
+    # explicit checks can run.
+    _ = supplier_name, line_key
+    payload = {
+        "version": _PURCHASE_PURPOSE_PLAN_VERSION,
+        "authoritative_order_sheet_qty": int(authoritative_order_sheet_qty),
+        "sources": [
+            {
+                "source_type": row.get("source_type"),
+                "order_item_id": int(row.get("order_item_id") or 0),
+                "merge_group_id": row.get("merge_group_id"),
+                "component_type": row.get("component_type") or "whole",
+                "customer_id": int(row.get("customer_id") or 0),
+                "required_piece_qty": int(row.get("required_piece_qty") or 0),
+                "remaining_required_piece_qty": int(
+                    row.get("remaining_required_piece_qty") or 0
+                ),
+                "requisition_qty": int(row.get("requisition_qty") or 0),
+            }
+            for row in source_items
+        ],
+    }
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _purchase_purpose_conflict(code: str, message: str) -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={"code": code, "message": message},
+    )
+
+
+def _assert_supplier_order_purpose_replay(
+    *,
+    existing_order: SupplierRequisitionOrder,
+    expected_hash: str | None,
+    user: User,
+) -> None:
+    try:
+        assert_purchase_purpose_replay(
+            stored_request_hash=existing_order.request_hash,
+            stored_actor_id=existing_order.request_actor_id,
+            submitted_request_hash=str(expected_hash or ""),
+            submitted_actor_id=user.id,
+        )
+    except PurchasePurposeError as error:
+        code = (
+            "PURCHASE_PURPOSE_ACTOR_MISMATCH"
+            if existing_order.request_actor_id != user.id
+            else "PURCHASE_PURPOSE_IDEMPOTENCY_CONFLICT"
+        )
+        raise _purchase_purpose_conflict(code, str(error)) from error
+
+
+def _resolve_purchase_purpose_submission(
+    *,
+    draft_line: PendingSupplierOrderDraftLine,
+    requested_total: int,
+    authoritative_order_sheet_qty: int,
+    current_fingerprint: str,
+    yield_per_sheet: int,
+    source_demands: list[PurchasePurposeSourceDemand],
+) -> tuple[object, bool]:
+    submitted_fields = (
+        draft_line.purchase_total_sheet_qty,
+        draft_line.order_purpose_sheet_qty,
+        draft_line.stock_purpose_sheet_qty,
+        draft_line.purpose_plan_version,
+        draft_line.purpose_plan_fingerprint,
+    )
+    explicit = any(value is not None for value in submitted_fields)
+    if not explicit:
+        if requested_total > authoritative_order_sheet_qty:
+            raise _purchase_purpose_conflict(
+                "PURCHASE_PURPOSE_REQUIRED_FOR_OVERBUY",
+                "本次采购超过订单当前所需张数，请先确认订单用途和客户通用片料备库用途。",
+            )
+        submitted_order_purpose = None
+        submitted_stock_purpose = None
+    else:
+        if any(value is None for value in submitted_fields):
+            raise _purchase_purpose_conflict(
+                "PURCHASE_PURPOSE_TAMPERED",
+                "采购用途字段不完整，请刷新草稿后重试。",
+            )
+        if int(draft_line.purpose_plan_version or 0) != _PURCHASE_PURPOSE_PLAN_VERSION:
+            raise _purchase_purpose_conflict(
+                "PURCHASE_PURPOSE_STALE",
+                "采购用途计算版本已变化，请刷新草稿后重试。",
+            )
+        try:
+            assert_purchase_purpose_stale_token(
+                draft_line.purpose_plan_fingerprint,
+                current_fingerprint,
+            )
+        except PurchasePurposeError as error:
+            raise _purchase_purpose_conflict(
+                "PURCHASE_PURPOSE_STALE",
+                "订单需求、库存抵扣或采购来源已变化，请刷新草稿后重试。",
+            ) from error
+        purchase_total = int(draft_line.purchase_total_sheet_qty or 0)
+        submitted_order_purpose = int(draft_line.order_purpose_sheet_qty or 0)
+        submitted_stock_purpose = int(draft_line.stock_purpose_sheet_qty or 0)
+        if purchase_total != requested_total:
+            raise _purchase_purpose_conflict(
+                "PURCHASE_PURPOSE_TAMPERED",
+                "采购总张数与报料张数不一致，请刷新草稿后重试。",
+            )
+        if submitted_order_purpose + submitted_stock_purpose != purchase_total:
+            raise _purchase_purpose_conflict(
+                "PURCHASE_PURPOSE_SUM_MISMATCH",
+                "订单用途与客户备库用途之和必须等于采购总张数。",
+            )
+        if submitted_order_purpose > authoritative_order_sheet_qty:
+            raise _purchase_purpose_conflict(
+                "PURCHASE_PURPOSE_TAMPERED",
+                "订单用途张数不能超过服务端当前权威需求。",
+            )
+    try:
+        allocation = allocate_purchase_purpose(
+            purchase_sheet_qty=requested_total,
+            yield_per_sheet=yield_per_sheet,
+            source_demands=source_demands,
+            order_purpose_sheet_qty=submitted_order_purpose,
+            reserve_purpose_sheet_qty=submitted_stock_purpose,
+            authoritative_order_sheet_qty_override=(
+                authoritative_order_sheet_qty
+            ),
+            allow_implicit_reserve=False,
+        )
+    except PurchasePurposeError as error:
+        raise _purchase_purpose_conflict(
+            "PURCHASE_PURPOSE_TAMPERED",
+            str(error),
+        ) from error
+    if allocation.authoritative_order_sheet_qty != authoritative_order_sheet_qty:
+        raise _purchase_purpose_conflict(
+            "PURCHASE_PURPOSE_STALE",
+            "采购用途权威需求已变化，请刷新草稿后重试。",
+        )
+    return allocation, explicit
 
 
 def _aggregate_entries_to_purchase_lines(
@@ -5866,6 +6556,65 @@ def _aggregate_entries_to_purchase_lines(
             line["source_type"] = "normal"
         else:
             line["source_type"] = "mixed"
+        if line.get("effective_demand_piece_qty") is None:
+            line["effective_demand_piece_qty"] = sum(
+                max(
+                    int(source.get("remaining_required_piece_qty") or 0)
+                    - int(source.get("already_requisitioned_qty") or 0)
+                    * _cutting_factor(line["cutting_mode"]),
+                    0,
+                )
+                for source in line["source_items"]
+            )
+        if line["source_type"] == "merge_group":
+            authoritative_order_sheet_qty = int(line["requisition_qty"] or 0)
+        else:
+            factor = _cutting_factor(line["cutting_mode"])
+            authoritative_order_sheet_qty = (
+                int(line["effective_demand_piece_qty"]) + factor - 1
+            ) // factor
+            line["requisition_qty"] = authoritative_order_sheet_qty
+            line["remaining_requisition_qty"] = authoritative_order_sheet_qty
+            source_order_allocations = _allocate_integer_total(
+                authoritative_order_sheet_qty,
+                [
+                    max(
+                        int(source.get("remaining_required_piece_qty") or 0)
+                        - int(source.get("already_requisitioned_qty") or 0)
+                        * factor,
+                        0,
+                    )
+                    for source in line["source_items"]
+                ],
+            )
+            for source, allocated in zip(
+                line["source_items"], source_order_allocations
+            ):
+                source["requisition_qty"] = int(allocated)
+                source["order_purpose_sheet_qty"] = int(allocated)
+        if line.get("theoretical_output_piece_qty") is None:
+            line["theoretical_output_piece_qty"] = (
+                authoritative_order_sheet_qty
+                * _cutting_factor(line["cutting_mode"])
+            )
+        if line.get("remainder_piece_qty") is None:
+            line["remainder_piece_qty"] = max(
+                int(line["theoretical_output_piece_qty"])
+                - int(line["effective_demand_piece_qty"]),
+                0,
+            )
+        line["purpose_status"] = "draft"
+        line["purpose_plan_version"] = _PURCHASE_PURPOSE_PLAN_VERSION
+        line["purchase_total_sheet_qty"] = authoritative_order_sheet_qty
+        line["order_purpose_sheet_qty"] = authoritative_order_sheet_qty
+        line["stock_purpose_sheet_qty"] = 0
+        line["authoritative_order_sheet_qty"] = authoritative_order_sheet_qty
+        line["purpose_plan_fingerprint"] = _purchase_purpose_plan_fingerprint(
+            supplier_name=supplier_name,
+            line_key=line["line_key"],
+            authoritative_order_sheet_qty=authoritative_order_sheet_qty,
+            source_items=line["source_items"],
+        )
     return lines
 
 
@@ -5932,6 +6681,33 @@ def _pending_selection_preview_groups(
     grouped: dict[str, list[dict]] = {}
     seen_source_keys: set[tuple[int, str]] = set()
     seen_group_ids: set[int] = set()
+    ordinary_selection_item_ids = [
+        int(selection.order_item_id)
+        for selection in payload.selections
+        if selection.type == "order_item"
+        and selection.order_item_id is not None
+    ]
+    ordinary_active_facts = _active_requisition_facts_by_item_ids(
+        db,
+        ordinary_selection_item_ids,
+    )
+    ordinary_selection_items = (
+        db.scalars(
+            select(OrderItem).where(
+                OrderItem.id.in_(ordinary_selection_item_ids)
+            )
+        ).all()
+        if ordinary_selection_item_ids
+        else []
+    )
+    component_active_facts = _active_supplier_requisition_facts_by_sources(
+        db,
+        [
+            (item, None, component_type)
+            for item in ordinary_selection_items
+            for component_type in ("cover", "base")
+        ],
+    )
 
     def add_preview(supplier_name: str, entry: dict) -> None:
         source_key = (
@@ -5961,6 +6737,11 @@ def _pending_selection_preview_groups(
                 db, selection.order_item_id
             )
             _require_order_item_customer_access(db, item, user)
+            if _bom_snapshots_for_order_item(db, item.id):
+                raise HTTPException(
+                    status_code=409,
+                    detail="组合/BOM订单必须按冻结物理组件报料，不能按父件整单生成供应商采购单。",
+                )
             if _order_item_in_merged_pending_group(db, item.id):
                 raise HTTPException(status_code=409, detail="订单明细已属于待报料合并组，不能按普通行重复报料")
             supplier_name = (selection.supplier_name or item.snapshot_supplier_name or "").strip()
@@ -6003,11 +6784,22 @@ def _pending_selection_preview_groups(
                 ).strip().lower()
                 if not _requires_supplier_purchase(component_requirements_row):
                     continue
-                active_requisition = _active_supplier_requisition_facts(
-                    db,
-                    item=item,
-                    component_type=component_type,
-                )
+                active_requisition = (
+                    ordinary_active_facts.get(item.id)
+                    if component_type == "whole"
+                    else component_active_facts.get(
+                        _supplier_requisition_source_key(
+                            item,
+                            component_type=component_type,
+                        )
+                    )
+                ) or {
+                    "source_key": _supplier_requisition_source_key(
+                        item, component_type=component_type
+                    ),
+                    "quantity": 0,
+                    "orders": [],
+                }
                 theoretical_requisition_qty = int(
                     component_requirements_row["requisition_qty"]
                 )
@@ -6125,6 +6917,7 @@ def _pending_selection_preview_groups(
         rows = _merge_group_rows(db, group.id)
         if not rows:
             raise HTTPException(status_code=400, detail="合并组没有来源明细")
+        _ensure_merge_group_rows_compatible(db, rows)
         supplier_name = (selection.supplier_name or group.supplier_name or "").strip()
         requested_mode = selection.cutting_mode or rows[0][0].special_process
         cutting_plan = _merge_group_cutting_plan(
@@ -6246,124 +7039,6 @@ def _pending_selection_preview_groups(
     return {"supplier_groups": supplier_groups}
 
 
-def _draft_group_entries(
-    db: Session,
-    payload: PendingSupplierOrderFinalizePayload,
-) -> tuple[dict[str, list[dict]], list[Requisition]]:
-    grouped: dict[str, list[dict]] = {}
-    touched_groups_by_id: dict[int, Requisition] = {}
-    seen_order_item_ids: set[int] = set()
-    seen_suppliers: set[str] = set()
-
-    for group_payload in payload.supplier_groups:
-        supplier_name = (group_payload.supplier_name or "").strip()
-        if not supplier_name:
-            raise HTTPException(status_code=400, detail="每个供应商组必须选择供应商")
-        if supplier_name in seen_suppliers:
-            raise HTTPException(status_code=400, detail="同一供应商只能保留一个报料组")
-        seen_suppliers.add(supplier_name)
-        for draft_item in group_payload.items:
-            if draft_item.order_item_id in seen_order_item_ids:
-                raise HTTPException(status_code=409, detail="同一订单明细不能重复生成供应商报料单")
-            seen_order_item_ids.add(draft_item.order_item_id)
-            item, order, customer, product = _ensure_pending_order_item_for_supplier_order(
-                db, draft_item.order_item_id
-            )
-            req_item: RequisitionItem | None = None
-            merge_group: Requisition | None = None
-            if draft_item.source_type == "order_item":
-                if _order_item_in_merged_pending_group(db, item.id):
-                    raise HTTPException(status_code=409, detail="订单明细已属于待报料合并组，不能按普通行重复报料")
-            else:
-                if not draft_item.merge_group_id:
-                    raise HTTPException(status_code=400, detail="合并组来源明细缺少 merge_group_id")
-                merge_group = db.get(Requisition, draft_item.merge_group_id)
-                if merge_group is None:
-                    raise HTTPException(status_code=404, detail="待报料合并组不存在")
-                if merge_group.status != "merged_pending":
-                    raise HTTPException(status_code=409, detail="该合并组已生成供应商报料单，不能重复生成")
-                req_item = db.scalar(
-                    select(RequisitionItem).where(
-                        RequisitionItem.requisition_id == merge_group.id,
-                        RequisitionItem.order_item_id == item.id,
-                    )
-                )
-                if req_item is None or req_item.status != "merged_pending":
-                    raise HTTPException(status_code=409, detail="合并组来源明细状态异常")
-                touched_groups_by_id[merge_group.id] = merge_group
-
-            requirements = _current_requisition_requirements(
-                db,
-                item,
-                cutting_mode=draft_item.cutting_mode,
-                pieces_per_box=(
-                    req_item.pieces_per_box
-                    if req_item is not None and req_item.pieces_per_box
-                    else _pieces_per_box(item)
-                ),
-                component_type=_requisition_item_component(req_item),
-            )
-            actual_finished_reserved = int(
-                requirements["finished_inventory_reserved_qty"]
-            )
-            if draft_item.inventory_deducted_qty not in {
-                0,
-                actual_finished_reserved,
-            }:
-                raise HTTPException(
-                    status_code=400,
-                    detail="成品库存抵扣只能来自当前有效的真实库存预占，请刷新后重试",
-                )
-            production_required_qty = int(requirements["production_required_qty"])
-            if production_required_qty <= 0:
-                raise HTTPException(status_code=409, detail="该订单明细已由成品库存全额抵扣，无需报料")
-            if not _requires_supplier_purchase(requirements):
-                raise HTTPException(
-                    status_code=409,
-                    detail="该订单明细已由半成品库存全额抵扣，无需报料，请刷新待报料列表。",
-                )
-            pieces_per_box = int(requirements["pieces_per_box"])
-            required_piece_qty = int(requirements["required_piece_qty"])
-            requisition_qty = int(requirements["requisition_qty"])
-            material = db.get(Material, item.material_id) if item.material_id else None
-            entry = {
-                "source_type": draft_item.source_type,
-                "group": merge_group,
-                "req_item": req_item,
-                "order_item": item,
-                "order": order,
-                "customer": customer,
-                "product": product,
-                "material": material,
-                "supplier_name": supplier_name,
-                "cardboard_len": draft_item.report_length_mm,
-                "cardboard_width": draft_item.report_width_mm,
-                "cutting_mode": draft_item.cutting_mode,
-                "remark": (draft_item.remark or "").strip() or None,
-                "inventory_deducted_qty": actual_finished_reserved,
-                "pieces_per_box": pieces_per_box,
-                "production_required_qty": production_required_qty,
-                "required_piece_qty": required_piece_qty,
-                "semi_finished_reserved_piece_qty": int(
-                    requirements["semi_finished_reserved_piece_qty"]
-                ),
-                "remaining_required_piece_qty": int(
-                    requirements["remaining_required_piece_qty"]
-                ),
-                "requisition_qty": requisition_qty,
-            }
-            if req_item is not None:
-                req_item.cardboard_len = draft_item.report_length_mm
-                req_item.cardboard_width = draft_item.report_width_mm
-                req_item.special_process = draft_item.cutting_mode
-                req_item.requisition_qty = requisition_qty
-                req_item.required_piece_qty = required_piece_qty
-                req_item.remark = entry["remark"]
-            grouped.setdefault(supplier_name, []).append(entry)
-
-    return grouped, list(touched_groups_by_id.values())
-
-
 def _draft_group_entries_by_purchase_lines(
     db: Session,
     payload: PendingSupplierOrderFinalizePayload,
@@ -6373,6 +7048,19 @@ def _draft_group_entries_by_purchase_lines(
     touched_groups_by_id: dict[int, Requisition] = {}
     seen_components_by_item: dict[int, set[str]] = {}
     seen_suppliers: set[str] = set()
+    validated_merge_group_ids: set[int] = set()
+    ordinary_active_facts = _active_requisition_facts_by_item_ids(
+        db,
+        [
+            int(source.order_item_id)
+            for group in payload.supplier_groups
+            for line in _draft_lines_from_group(group)
+            for source in line.source_items
+            if source.source_type == "order_item"
+            and str(source.component_type or "whole").strip().lower()
+            == "whole"
+        ],
+    )
 
     for group_payload in payload.supplier_groups:
         supplier_name = (group_payload.supplier_name or "").strip()
@@ -6384,6 +7072,7 @@ def _draft_group_entries_by_purchase_lines(
         draft_lines = _draft_lines_from_group(group_payload)
         if not draft_lines:
             raise HTTPException(status_code=400, detail="每个供应商组必须至少包含一条采购规格行")
+        seen_purchase_line_keys: set[str] = set()
 
         for draft_line in draft_lines:
             source_refs: list[dict] = []
@@ -6405,6 +7094,19 @@ def _draft_group_entries_by_purchase_lines(
                         raise HTTPException(status_code=404, detail="待报料合并组不存在")
                     if merge_group.status != "merged_pending":
                         raise HTTPException(status_code=409, detail="该合并组已生成供应商报料单，不能重复生成")
+                    if merge_group.id not in validated_merge_group_ids:
+                        merge_group_rows = _merge_group_rows(
+                            db, merge_group.id
+                        )
+                        if not merge_group_rows:
+                            raise HTTPException(
+                                status_code=409,
+                                detail="合并组没有有效来源明细",
+                            )
+                        _ensure_merge_group_rows_compatible(
+                            db, merge_group_rows
+                        )
+                        validated_merge_group_ids.add(merge_group.id)
                     req_item = db.scalar(
                         select(RequisitionItem).where(
                             RequisitionItem.requisition_id == merge_group.id,
@@ -6419,6 +7121,30 @@ def _draft_group_entries_by_purchase_lines(
                     if req_item is not None
                     else str(source_payload.component_type or "whole").strip().lower()
                 )
+                if req_item is None:
+                    authoritative_component_summary = (
+                        _current_requisition_summary(
+                            db,
+                            item,
+                            cutting_mode=draft_line.cutting_mode,
+                        )
+                    )
+                    allowed_component_types = {
+                        str(row.get("component_type") or "whole")
+                        .strip()
+                        .lower()
+                        for row in (
+                            authoritative_component_summary.get(
+                                "component_requirements"
+                            )
+                            or [authoritative_component_summary]
+                        )
+                    }
+                    if component_type not in allowed_component_types:
+                        raise _purchase_purpose_conflict(
+                            "PURCHASE_PURPOSE_TAMPERED",
+                            "采购物理组件身份与订单当前冻结资料不一致，请刷新草稿后重试。",
+                        )
                 if (
                     req_item is None
                     and component_type == "whole"
@@ -6474,13 +7200,49 @@ def _draft_group_entries_by_purchase_lines(
                 )
                 for ref in source_refs
             ]
-            active_requisitions = [
-                _active_supplier_requisition_facts(
+            special_active_facts = (
+                _active_supplier_requisition_facts_by_sources(
                     db,
-                    item=ref["item"],
-                    req_item=ref["req_item"],
-                    component_type=ref["component_type"],
+                    [
+                        (
+                            ref["item"],
+                            ref["req_item"],
+                            ref["component_type"],
+                        )
+                        for ref in source_refs
+                        if not (
+                            ref["req_item"] is None
+                            and ref["component_type"] == "whole"
+                        )
+                    ],
                 )
+                if not any(
+                    ref["merge_group"] is not None for ref in source_refs
+                )
+                else {}
+            )
+            active_requisitions = [
+                (
+                    ordinary_active_facts.get(int(ref["item"].id))
+                    if ref["req_item"] is None
+                    and ref["component_type"] == "whole"
+                    else special_active_facts.get(
+                        _supplier_requisition_source_key(
+                            ref["item"],
+                            ref["req_item"],
+                            component_type=ref["component_type"],
+                        )
+                    )
+                )
+                or {
+                    "source_key": _supplier_requisition_source_key(
+                        ref["item"],
+                        ref["req_item"],
+                        component_type=ref["component_type"],
+                    ),
+                    "quantity": 0,
+                    "orders": [],
+                }
                 for ref in source_refs
             ]
             merge_groups = {
@@ -6607,7 +7369,29 @@ def _draft_group_entries_by_purchase_lines(
                     for ref in source_refs
                 ]
             else:
-                remaining_line_total = sum(remaining_requisition_quantities)
+                source_effective_remaining_pieces = [
+                    max(
+                        int(requirements["remaining_required_piece_qty"])
+                        - int(active["quantity"])
+                        * _cutting_factor(draft_line.cutting_mode),
+                        0,
+                    )
+                    for requirements, active in zip(
+                        current_requirements,
+                        active_requisitions,
+                    )
+                ]
+                remaining_line_effective_pieces = sum(
+                    source_effective_remaining_pieces
+                )
+                factor = _cutting_factor(draft_line.cutting_mode)
+                remaining_line_total = (
+                    remaining_line_effective_pieces + factor - 1
+                ) // factor
+                remaining_requisition_quantities = _allocate_integer_total(
+                    remaining_line_total,
+                    source_effective_remaining_pieces,
+                )
             if remaining_line_total <= 0:
                 combined_orders = [
                     row
@@ -6623,8 +7407,144 @@ def _draft_group_entries_by_purchase_lines(
             requested_line_total = int(draft_line.requisition_qty or 0)
             if requested_line_total <= 0:
                 raise HTTPException(status_code=400, detail="本次报料张数必须大于 0")
+            customer_ids = {
+                int(ref["customer"].id) for ref in source_refs
+            }
+            if len(customer_ids) != 1:
+                raise _purchase_purpose_conflict(
+                    "PURCHASE_PURPOSE_TAMPERED",
+                    "客户通用片料备库必须按客户拆分采购行，请刷新草稿后重试。",
+                )
+            source_material_ids = {
+                int(ref["item"].material_id)
+                for ref in source_refs
+                if ref["item"].material_id
+            }
+            source_materials = {
+                int(row.id): row
+                for row in (
+                    db.scalars(
+                        select(Material).where(
+                            Material.id.in_(source_material_ids)
+                        )
+                    ).all()
+                    if source_material_ids
+                    else []
+                )
+            }
+            current_line_keys = {
+                _purchase_line_key(
+                    supplier_name,
+                    _purchase_line_spec_from_entry(
+                        {
+                            "order_item": ref["item"],
+                            "customer": ref["customer"],
+                            "group": ref["merge_group"],
+                            "component_type": ref["component_type"],
+                            "material": (
+                                source_materials.get(
+                                    int(ref["item"].material_id)
+                                )
+                                if ref["item"].material_id
+                                else None
+                            ),
+                            "cardboard_len": draft_line.report_length_mm,
+                            "cardboard_width": draft_line.report_width_mm,
+                            "cutting_mode": draft_line.cutting_mode,
+                            "remark": (draft_line.remark or "").strip(),
+                        }
+                    ),
+                )
+                for ref in source_refs
+            }
+            if len(current_line_keys) != 1:
+                raise _purchase_purpose_conflict(
+                    "PURCHASE_PURPOSE_TAMPERED",
+                    "不同采购规格或物理组件不能合并为同一采购行，请刷新草稿后重试。",
+                )
+            current_line_key = next(iter(current_line_keys))
+            if current_line_key in seen_purchase_line_keys:
+                raise _purchase_purpose_conflict(
+                    "PURCHASE_PURPOSE_TAMPERED",
+                    "同一采购规格被拆成多行，请刷新草稿后重试。",
+                )
+            seen_purchase_line_keys.add(current_line_key)
+            current_purpose_sources = [
+                {
+                    "source_type": ref["source_payload"].source_type,
+                    "order_item_id": int(ref["item"].id),
+                    "merge_group_id": (
+                        int(ref["merge_group"].id)
+                        if ref["merge_group"] is not None
+                        else None
+                    ),
+                    "component_type": ref["component_type"],
+                    "customer_id": int(ref["customer"].id),
+                    "required_piece_qty": int(
+                        requirements["required_piece_qty"]
+                    ),
+                    "remaining_required_piece_qty": int(
+                        requirements["remaining_required_piece_qty"]
+                    ),
+                    "purpose_source_effective_piece_qty": max(
+                        int(requirements["remaining_required_piece_qty"])
+                        - int(active_requisition["quantity"])
+                        * _cutting_factor(draft_line.cutting_mode),
+                        0,
+                    ),
+                    "requisition_qty": int(remaining),
+                }
+                for ref, requirements, active_requisition, remaining in zip(
+                    source_refs,
+                    current_requirements,
+                    active_requisitions,
+                    remaining_requisition_quantities,
+                )
+            ]
+            current_purpose_fingerprint = _purchase_purpose_plan_fingerprint(
+                supplier_name=supplier_name,
+                line_key=current_line_key,
+                authoritative_order_sheet_qty=remaining_line_total,
+                source_items=current_purpose_sources,
+            )
+            purpose_source_keys = [
+                _supplier_requisition_source_key(
+                    ref["item"],
+                    ref["req_item"],
+                    component_type=ref["component_type"],
+                )
+                for ref in source_refs
+            ]
+            purpose_allocation, explicit_purchase_purpose = (
+                _resolve_purchase_purpose_submission(
+                draft_line=draft_line,
+                requested_total=requested_line_total,
+                authoritative_order_sheet_qty=remaining_line_total,
+                current_fingerprint=current_purpose_fingerprint,
+                    yield_per_sheet=_cutting_factor(draft_line.cutting_mode),
+                    source_demands=[
+                        PurchasePurposeSourceDemand(
+                            source_key=source_key,
+                            customer_id=int(source["customer_id"]),
+                            effective_required_piece_qty=int(
+                                source["purpose_source_effective_piece_qty"]
+                            ),
+                        )
+                        for source_key, source in zip(
+                            purpose_source_keys,
+                            current_purpose_sources,
+                        )
+                    ],
+                )
+            )
+            order_purpose_line_total = int(
+                purpose_allocation.order_purpose_sheet_qty
+            )
+            stock_purpose_line_total = int(
+                purpose_allocation.reserve_purpose_sheet_qty
+            )
             is_over_quantity = requested_line_total > remaining_line_total
-            if is_merge_line and is_over_quantity:
+            if is_merge_line and is_over_quantity and not explicit_purchase_purpose:
                 raise HTTPException(
                     status_code=409,
                     detail="合并报料采购张数超过当前权威剩余张数，请刷新草稿后重试",
@@ -6656,6 +7576,7 @@ def _draft_group_entries_by_purchase_lines(
                 not is_merge_line
                 and
                 is_over_quantity
+                and not explicit_purchase_purpose
                 and not draft_line.quantity_override_acknowledged
                 and stale_source_quantities
                 and submitted_source_total == requested_line_total
@@ -6669,7 +7590,11 @@ def _draft_group_entries_by_purchase_lines(
                 # explicit admin acknowledgement below.
                 requested_line_total = remaining_line_total
                 is_over_quantity = False
-            if is_over_quantity and user.role not in {"admin", "boss"}:
+            if (
+                is_over_quantity
+                and not explicit_purchase_purpose
+                and user.role not in {"admin", "boss"}
+            ):
                 raise HTTPException(
                     status_code=403,
                     detail=(
@@ -6677,7 +7602,11 @@ def _draft_group_entries_by_purchase_lines(
                         f"{remaining_line_total} 张；只有管理员可确认超量报料"
                     ),
                 )
-            if is_over_quantity and not draft_line.quantity_override_acknowledged:
+            if (
+                is_over_quantity
+                and not explicit_purchase_purpose
+                and not draft_line.quantity_override_acknowledged
+            ):
                 raise HTTPException(
                     status_code=409,
                     detail=(
@@ -6731,10 +7660,22 @@ def _draft_group_entries_by_purchase_lines(
                     ),
                 )
 
-            requisition_allocations = _allocate_integer_total(
-                requested_line_total,
-                remaining_requisition_quantities,
-            )
+            purpose_by_source_key = {
+                row.source_key: row
+                for row in purpose_allocation.source_allocations
+            }
+            requisition_allocations = [
+                int(purpose_by_source_key[source_key].purchase_sheet_qty)
+                for source_key in purpose_source_keys
+            ]
+            order_purpose_allocations = [
+                int(purpose_by_source_key[source_key].order_purpose_sheet_qty)
+                for source_key in purpose_source_keys
+            ]
+            stock_purpose_allocations = [
+                int(purpose_by_source_key[source_key].reserve_purpose_sheet_qty)
+                for source_key in purpose_source_keys
+            ]
             actual_inventory_allocations = [
                 int(requirements["finished_inventory_reserved_qty"])
                 for requirements in current_requirements
@@ -6758,12 +7699,14 @@ def _draft_group_entries_by_purchase_lines(
                         detail="成品库存抵扣只能来自当前有效的真实库存预占，请刷新后重试",
                     )
 
-            for ref, requirements, active_requisition, remaining_before, allocated_qty, expected_dimensions in zip(
+            for ref, requirements, active_requisition, remaining_before, allocated_qty, allocated_order_purpose, allocated_stock_purpose, expected_dimensions in zip(
                 source_refs,
                 current_requirements,
                 active_requisitions,
                 remaining_requisition_quantities,
                 requisition_allocations,
+                order_purpose_allocations,
+                stock_purpose_allocations,
                 recommended_dimensions,
             ):
                 item: OrderItem = ref["item"]
@@ -6777,8 +7720,9 @@ def _draft_group_entries_by_purchase_lines(
                     requirements["finished_inventory_reserved_qty"]
                 )
                 requisition_qty = int(allocated_qty)
-                if requisition_qty <= 0:
-                    continue
+                # A single aggregated purchase sheet can cover several physical
+                # sources.  A source may receive zero sheets after deterministic
+                # rounding, but its immutable trace row must remain formal.
 
                 if inventory_deducted_qty < 0:
                     raise HTTPException(status_code=400, detail="成品库存抵扣不能小于 0")
@@ -6826,7 +7770,33 @@ def _draft_group_entries_by_purchase_lines(
                     "remaining_required_piece_qty": int(
                         requirements["remaining_required_piece_qty"]
                     ),
+                    "purpose_source_effective_piece_qty": max(
+                        int(requirements["remaining_required_piece_qty"])
+                        - int(active_requisition["quantity"])
+                        * _cutting_factor(draft_line.cutting_mode),
+                        0,
+                    ),
                     "requisition_qty": requisition_qty,
+                    "purchase_total_sheet_qty": requisition_qty,
+                    "order_purpose_sheet_qty": int(allocated_order_purpose),
+                    "stock_purpose_sheet_qty": int(allocated_stock_purpose),
+                    "purpose_plan_version": _PURCHASE_PURPOSE_PLAN_VERSION,
+                    "purpose_plan_fingerprint": current_purpose_fingerprint,
+                    "authoritative_order_sheet_qty": remaining_line_total,
+                    "purpose_group_effective_piece_qty": sum(
+                        max(
+                            int(requirements["remaining_required_piece_qty"])
+                            - int(active["quantity"])
+                            * _cutting_factor(draft_line.cutting_mode),
+                            0,
+                        )
+                        for requirements, active in zip(
+                            current_requirements,
+                            active_requisitions,
+                        )
+                    ) if merge_plan is None else int(
+                        merge_plan["effective_demand_piece_qty"]
+                    ),
                     "theoretical_requisition_qty": int(
                         requirements["requisition_qty"]
                     ),
@@ -6835,17 +7805,24 @@ def _draft_group_entries_by_purchase_lines(
                     ),
                     "remaining_requisition_qty": int(remaining_before),
                     "remaining_after_requisition_qty": max(
-                        int(remaining_before) - requisition_qty,
+                        int(remaining_before) - int(allocated_order_purpose),
                         0,
                     ),
                     "source_key": active_requisition["source_key"],
                     "request_key": group_payload.request_key,
+                    "request_hash": _pending_supplier_group_request_hash(
+                        group_payload
+                    ),
+                    "request_actor_id": user.id,
                     "recommended_report_length_mm": expected_dimensions[0],
                     "recommended_report_width_mm": expected_dimensions[1],
                     "dimension_override": bool(swapped_sources),
                     "quantity_override": is_over_quantity,
                     "merge_plan_remaining_after_qty": (
-                        max(remaining_line_total - requested_line_total, 0)
+                        max(
+                            remaining_line_total - order_purpose_line_total,
+                            0,
+                        )
                         if merge_plan is not None
                         else None
                     ),
@@ -6886,6 +7863,8 @@ def _create_supplier_order_for_pending_entries(
     order = SupplierRequisitionOrder(
         order_number=_supplier_order_number(db),
         request_key=first.get("request_key"),
+        request_hash=first.get("request_hash"),
+        request_actor_id=first.get("request_actor_id"),
         supplier_name=supplier_name,
         material_id=first_item.material_id,
         layer_count=layer_count,
@@ -6919,8 +7898,7 @@ def _create_supplier_order_for_pending_entries(
             if component_type == "cover"
             else "-底" if component_type == "base" else ""
         )
-        db.add(
-            SupplierRequisitionOrderItem(
+        supplier_item = SupplierRequisitionOrderItem(
                 supplier_order_id=order.id,
                 order_item_id=order_item.id,
                 **_supplier_item_snapshot_values(
@@ -6953,6 +7931,70 @@ def _create_supplier_order_for_pending_entries(
                 required_piece_qty=entry["required_piece_qty"],
                 customer_name=entry["customer"].name,
                 delivery_date=entry["order"].delivery_date,
+        )
+        db.add(supplier_item)
+        db.flush()
+        source_kind = "requisition_item" if req_item is not None else "order_item"
+        source_key = str(
+            entry.get("source_key")
+            or (
+                f"requisition_item:{req_item.id}"
+                if req_item is not None
+                else f"order_item:{order_item.id}:{component_type}"
+            )
+        )
+        db.add(
+            PurchasePurposeSourceSnapshot(
+                snapshot_key=f"supplier_item:{supplier_item.id}:{source_key}",
+                allocation_group_key=str(entry["purpose_plan_fingerprint"]),
+                supplier_requisition_order_item_id=supplier_item.id,
+                material_requisition_item_id=None,
+                source_kind=source_kind,
+                source_key=source_key,
+                source_order_item_id=order_item.id,
+                source_requisition_item_id=(
+                    req_item.id if req_item is not None else None
+                ),
+                source_bom_requisition_source_id=None,
+                customer_id=int(entry["customer"].id),
+                customer_name_snapshot=entry["customer"].name,
+                component_type=component_type,
+                source_finished_qty_snapshot=int(
+                    entry["production_required_qty"] or 0
+                ),
+                pieces_per_finished_snapshot=int(entry["pieces_per_box"] or 1),
+                source_required_piece_qty_snapshot=int(
+                    entry["required_piece_qty"] or 0
+                ),
+                source_semi_reserved_piece_qty_snapshot=int(
+                    entry.get("semi_finished_reserved_piece_qty") or 0
+                ),
+                source_effective_piece_qty_snapshot=int(
+                    entry.get("purpose_source_effective_piece_qty") or 0
+                ),
+                yield_per_sheet_snapshot=_cutting_factor(
+                    entry["cutting_mode"]
+                ),
+                group_effective_piece_qty_snapshot=int(
+                    entry["purpose_group_effective_piece_qty"]
+                ),
+                group_authoritative_order_sheet_qty_snapshot=int(
+                    entry["authoritative_order_sheet_qty"]
+                ),
+                purchase_sheet_qty=int(
+                    entry["purchase_total_sheet_qty"]
+                ),
+                order_purpose_sheet_qty=int(
+                    entry["order_purpose_sheet_qty"]
+                ),
+                reserve_purpose_sheet_qty=int(
+                    entry["stock_purpose_sheet_qty"]
+                ),
+                calculation_rule_version="p1-80-v1",
+                snapshot_version=1,
+                preview_fingerprint=str(entry["purpose_plan_fingerprint"]),
+                request_hash=str(entry["request_hash"]),
+                created_by=user.id,
             )
         )
         entries_by_order_item.setdefault(order_item.id, []).append(entry)
@@ -10389,19 +11431,302 @@ def _confirmed_composite_requisition_qty(
     return requested
 
 
+def _material_requisition_purpose_values(
+    *,
+    line: RequisitionLinePayload,
+    purchase_sheet_qty: int,
+    authoritative_order_sheet_qty: int,
+    effective_piece_qty: int,
+    yield_per_sheet: int,
+    source_key: str,
+    customer_id: int,
+) -> dict:
+    fingerprint = canonical_purchase_purpose_hash(
+        {
+            "version": _PURCHASE_PURPOSE_PLAN_VERSION,
+            "source_key": source_key,
+            "customer_id": int(customer_id),
+            "effective_piece_qty": int(effective_piece_qty),
+            "yield_per_sheet": int(yield_per_sheet),
+            "authoritative_order_sheet_qty": int(
+                authoritative_order_sheet_qty
+            ),
+        }
+    )
+    explicit = any(
+        value is not None
+        for value in (
+            line.purchase_total_sheet_qty,
+            line.order_purpose_sheet_qty,
+            line.stock_purpose_sheet_qty,
+            line.purpose_plan_version,
+            line.purpose_plan_fingerprint,
+        )
+    )
+    if line.purchase_total_sheet_qty is not None and int(
+        line.purchase_total_sheet_qty
+    ) != int(purchase_sheet_qty):
+        raise _purchase_purpose_conflict(
+            "PURCHASE_PURPOSE_TAMPERED",
+            "采购总张数与报料张数不一致，请刷新后重试。",
+        )
+    if not explicit:
+        if int(purchase_sheet_qty) > int(authoritative_order_sheet_qty):
+            raise _purchase_purpose_conflict(
+                "PURCHASE_PURPOSE_REQUIRED_FOR_OVERBUY",
+                "本次采购超过订单当前所需张数，请先确认采购用途。",
+            )
+        order_purpose = int(purchase_sheet_qty)
+        stock_purpose = 0
+    else:
+        if (
+            line.purchase_total_sheet_qty is None
+            or line.order_purpose_sheet_qty is None
+            or line.stock_purpose_sheet_qty is None
+            or line.purpose_plan_version is None
+            or line.purpose_plan_fingerprint is None
+        ):
+            raise _purchase_purpose_conflict(
+                "PURCHASE_PURPOSE_TAMPERED",
+                "采购用途字段不完整，请刷新后重试。",
+            )
+        if int(line.purpose_plan_version) != _PURCHASE_PURPOSE_PLAN_VERSION:
+            raise _purchase_purpose_conflict(
+                "PURCHASE_PURPOSE_STALE",
+                "采购用途计算版本已变化，请刷新后重试。",
+            )
+        if str(line.purpose_plan_fingerprint) != fingerprint:
+            raise _purchase_purpose_conflict(
+                "PURCHASE_PURPOSE_STALE",
+                "采购来源或订单需求已变化，请刷新后重试。",
+            )
+        order_purpose = int(line.order_purpose_sheet_qty)
+        stock_purpose = int(line.stock_purpose_sheet_qty)
+        if order_purpose + stock_purpose != int(purchase_sheet_qty):
+            raise _purchase_purpose_conflict(
+                "PURCHASE_PURPOSE_SUM_MISMATCH",
+                "订单用途与客户备库用途之和必须等于采购总张数。",
+            )
+        if order_purpose > int(authoritative_order_sheet_qty):
+            raise _purchase_purpose_conflict(
+                "PURCHASE_PURPOSE_TAMPERED",
+                "订单用途张数不能超过服务端当前权威需求。",
+            )
+    try:
+        allocation = allocate_purchase_purpose(
+            purchase_sheet_qty=purchase_sheet_qty,
+            yield_per_sheet=yield_per_sheet,
+            source_demands=[
+                PurchasePurposeSourceDemand(
+                    source_key=source_key,
+                    customer_id=customer_id,
+                    effective_required_piece_qty=effective_piece_qty,
+                )
+            ],
+            order_purpose_sheet_qty=(order_purpose if explicit else None),
+            reserve_purpose_sheet_qty=(stock_purpose if explicit else None),
+            authoritative_order_sheet_qty_override=(
+                authoritative_order_sheet_qty
+            ),
+            allow_implicit_reserve=False,
+        )
+    except PurchasePurposeError as error:
+        raise _purchase_purpose_conflict(
+            "PURCHASE_PURPOSE_TAMPERED",
+            str(error),
+        ) from error
+    if allocation.authoritative_order_sheet_qty != int(
+        authoritative_order_sheet_qty
+    ):
+        raise _purchase_purpose_conflict(
+            "PURCHASE_PURPOSE_STALE",
+            "采购用途权威需求已变化，请刷新后重试。",
+        )
+    return {
+        "purchase_sheet_qty": int(purchase_sheet_qty),
+        "order_purpose_sheet_qty": int(allocation.order_purpose_sheet_qty),
+        "reserve_purpose_sheet_qty": int(allocation.reserve_purpose_sheet_qty),
+        "purpose_plan_fingerprint": fingerprint,
+        "effective_piece_qty": int(effective_piece_qty),
+        "yield_per_sheet": int(yield_per_sheet),
+        "authoritative_order_sheet_qty": int(
+            authoritative_order_sheet_qty
+        ),
+    }
+
+
+def _add_material_requisition_purpose_snapshot(
+    db: Session,
+    *,
+    batch_item: RequisitionItem,
+    line: RequisitionLinePayload,
+    purpose: dict,
+    customer: Customer,
+    order_item: OrderItem,
+    request_hash: str,
+    user: User,
+    source_kind: str,
+    source_key: str,
+    component_type: str,
+    semi_reserved_piece_qty: int,
+    source_bom_requisition_source_id: int | None = None,
+) -> None:
+    db.add(
+        PurchasePurposeSourceSnapshot(
+            snapshot_key=f"material_item:{batch_item.id}:{source_key}",
+            allocation_group_key=purpose["purpose_plan_fingerprint"],
+            supplier_requisition_order_item_id=None,
+            material_requisition_item_id=batch_item.id,
+            source_kind=source_kind,
+            source_key=source_key,
+            source_order_item_id=(
+                order_item.id if source_kind in {"order_item", "requisition_item"} else None
+            ),
+            source_requisition_item_id=None,
+            source_bom_requisition_source_id=source_bom_requisition_source_id,
+            customer_id=customer.id,
+            customer_name_snapshot=customer.name,
+            component_type=component_type,
+            source_finished_qty_snapshot=int(order_item.quantity or 0),
+            pieces_per_finished_snapshot=max(
+                int(batch_item.pieces_per_box or 1), 1
+            ),
+            source_required_piece_qty_snapshot=int(
+                batch_item.required_piece_qty or 0
+            ),
+            source_semi_reserved_piece_qty_snapshot=max(
+                int(semi_reserved_piece_qty or 0),
+                0,
+            ),
+            source_effective_piece_qty_snapshot=int(
+                purpose["effective_piece_qty"]
+            ),
+            yield_per_sheet_snapshot=int(purpose["yield_per_sheet"]),
+            group_effective_piece_qty_snapshot=int(
+                purpose["effective_piece_qty"]
+            ),
+            group_authoritative_order_sheet_qty_snapshot=int(
+                purpose["authoritative_order_sheet_qty"]
+            ),
+            purchase_sheet_qty=int(purpose["purchase_sheet_qty"]),
+            order_purpose_sheet_qty=int(
+                purpose["order_purpose_sheet_qty"]
+            ),
+            reserve_purpose_sheet_qty=int(
+                purpose["reserve_purpose_sheet_qty"]
+            ),
+            calculation_rule_version="p1-80-v1",
+            snapshot_version=1,
+            preview_fingerprint=purpose["purpose_plan_fingerprint"],
+            request_hash=request_hash,
+            created_by=user.id,
+        )
+    )
+
+
 @router.post("/batches", status_code=status.HTTP_201_CREATED)
 def create_batch(
     payload: RequisitionBatchCreate,
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
+    with _SUPPLIER_ORDER_CREATE_WRITE_LOCK:
+        return _create_batch_locked(payload=payload, db=db, user=user)
+
+
+def _material_requisition_replay_response(
+    db: Session,
+    requisition: Requisition,
+) -> dict:
+    order_item_ids = sorted(
+        {
+            int(item_id)
+            for item_id in db.scalars(
+                select(RequisitionItem.order_item_id).where(
+                    RequisitionItem.requisition_id == requisition.id,
+                    RequisitionItem.order_item_id.is_not(None),
+                )
+            ).all()
+            if item_id is not None
+        }
+    )
+    order_items_by_id = {
+        int(row.id): row
+        for row in db.scalars(
+            select(OrderItem).where(OrderItem.id.in_(order_item_ids))
+        ).all()
+    }
+    return {
+        "id": requisition.id,
+        "requisition_number": requisition.requisition_number,
+        "requisition_date": requisition.requisition_date,
+        "supplier_name": requisition.supplier_name,
+        "status": requisition.status,
+        "items": [
+            _item_response(order_items_by_id[item_id], db)
+            for item_id in order_item_ids
+            if item_id in order_items_by_id
+        ],
+        "idempotent_replay": True,
+    }
+
+
+def _assert_material_requisition_replay(
+    *,
+    existing: Requisition,
+    request_hash: str,
+    user: User,
+) -> None:
+    try:
+        assert_purchase_purpose_replay(
+            stored_request_hash=existing.request_hash,
+            stored_actor_id=existing.request_actor_id,
+            submitted_request_hash=request_hash,
+            submitted_actor_id=user.id,
+        )
+    except PurchasePurposeError as error:
+        code = (
+            "PURCHASE_PURPOSE_ACTOR_MISMATCH"
+            if existing.request_actor_id != user.id
+            else "PURCHASE_PURPOSE_IDEMPOTENCY_CONFLICT"
+        )
+        raise _purchase_purpose_conflict(code, str(error)) from error
+
+
+def _create_batch_locked(
+    *,
+    payload: RequisitionBatchCreate,
+    db: Session,
+    user: User,
+) -> dict:
     requisition_date = beijing_today()
+    request_key = payload.request_key or uuid4().hex
+    request_hash = canonical_purchase_purpose_hash(
+        payload.model_dump(mode="json", exclude_none=False)
+    )
+    if payload.request_key:
+        existing = db.scalar(
+            select(Requisition).where(
+                Requisition.request_key == payload.request_key
+            )
+        )
+        if existing is not None:
+            _require_requisition_customer_access(existing, user, db)
+            _assert_material_requisition_replay(
+                existing=existing,
+                request_hash=request_hash,
+                user=user,
+            )
+            return _material_requisition_replay_response(db, existing)
     try:
         supplier_name = (payload.supplier_name or "").strip()
         if supplier_name:
             supplier_name = _require_active_supplier(db, supplier_name)
         batch = Requisition(
             requisition_number=_next_number(db, requisition_date),
+            request_key=request_key,
+            request_hash=request_hash,
+            request_actor_id=user.id,
             requisition_date=requisition_date,
             supplier_name=supplier_name or None,
             status="已报料",
@@ -10413,18 +11738,59 @@ def create_batch(
         lines_by_order_item: dict[int, list[RequisitionLinePayload]] = {}
         for line in payload.items:
             lines_by_order_item.setdefault(line.order_item_id, []).append(line)
+        batch_preflight_rows = db.execute(
+            select(OrderItem, Product)
+            .join(Product, Product.id == OrderItem.product_id)
+            .where(OrderItem.id.in_(list(lines_by_order_item)))
+        ).all()
+        batch_preflight_by_item_id = {
+            int(item.id): (item, product)
+            for item, product in batch_preflight_rows
+        }
+        batch_component_source_specs: list[
+            tuple[OrderItem, RequisitionItem | None, str]
+        ] = []
+        for order_item_id, lines in lines_by_order_item.items():
+            preflight = batch_preflight_by_item_id.get(int(order_item_id))
+            if preflight is None or any(
+                line.bom_snapshot_id is not None for line in lines
+            ):
+                continue
+            preflight_item, preflight_product = preflight
+            for line in lines:
+                component_types = (
+                    [line.component_type]
+                    if line.component_type
+                    else (
+                        ["cover", "base"]
+                        if _is_telescoping_lid_box(
+                            preflight_product.box_style
+                        )
+                        else ["whole"]
+                    )
+                )
+                batch_component_source_specs.extend(
+                    (preflight_item, None, component_type)
+                    for component_type in component_types
+                )
+        batch_initial_component_facts = (
+            _active_supplier_requisition_facts_by_sources(
+                db, batch_component_source_specs
+            )
+        )
 
         for order_item_id, lines in lines_by_order_item.items():
             row = db.execute(
-                select(OrderItem, Product, Order)
+                select(OrderItem, Product, Order, Customer)
                 .join(Product, Product.id == OrderItem.product_id)
                 .join(Order, Order.id == OrderItem.order_id)
+                .join(Customer, Customer.id == Order.customer_id)
                 .where(OrderItem.id == order_item_id)
                 .with_for_update()
             ).one_or_none()
             if row is None:
                 raise HTTPException(status_code=404, detail="订单明细不存在")
-            item, product, order = row
+            item, product, order, customer = row
             _require_order_item_customer_access(db, item, user)
             if _active_requisition_hold(db, item.id) is not None:
                 raise HTTPException(
@@ -10480,19 +11846,24 @@ def create_batch(
                         status_code=400,
                         detail="该组合父档只表示一套，不是第4条纸板，不能生成父件报料",
                     )
-                parent_already_requisitioned = (
-                    suppress_parent_requisition
-                    or _bom_parent_has_active_requisition(
-                        db,
-                        item.id,
-                    )
+                parent_requirement_now = _current_requisition_requirements(
+                    db, item
                 )
-                if not parent_already_requisitioned and not parent_lines:
+                parent_active_order_purpose = (
+                    _bom_parent_active_order_purpose_sheet_qty(db, item.id)
+                )
+                parent_fully_requisitioned = (
+                    suppress_parent_requisition
+                    or int(parent_requirement_now["remaining_required_piece_qty"]) == 0
+                    or parent_active_order_purpose
+                    >= int(parent_requirement_now["requisition_qty"])
+                )
+                if not parent_fully_requisitioned and not parent_lines:
                     raise HTTPException(
                         status_code=400,
                         detail="复合产品报料必须同时包含父件外包装盒",
                     )
-                if parent_already_requisitioned and parent_lines:
+                if parent_fully_requisitioned and parent_lines:
                     raise HTTPException(
                         status_code=409,
                         detail="该复合产品父件已经报料，不能重复创建",
@@ -10525,19 +11896,18 @@ def create_batch(
                     (snapshot.id, component_type)
                     for snapshot in bom_snapshots
                     for component_type in _bom_snapshot_component_types(snapshot)
-                    if not _bom_snapshot_has_active_requisition(
-                        db,
-                        snapshot.id,
-                        component_type=component_type,
-                    )
-                    and int(
+                    if int(
                         _bom_snapshot_requirements(
                             db,
                             snapshot,
                             component_type=component_type,
-                        )["remaining_required_piece_qty"]
+                        )["requisition_qty"]
                     )
-                    > 0
+                    > _bom_snapshot_active_order_purpose_sheet_qty(
+                        db,
+                        snapshot.id,
+                        component_type=component_type,
+                    )
                 }
                 selected_active_source = any(
                     _bom_snapshot_has_active_requisition(
@@ -10574,8 +11944,28 @@ def create_batch(
                                 status_code=409,
                                 detail="该复合产品父件已由库存全额抵扣，无需报料",
                             )
-                        parent_minimum_qty = int(
-                            parent_requirements["requisition_qty"]
+                        parent_yield = _cutting_factor(
+                            str(parent_requirements["cutting_mode"])
+                        )
+                        parent_active_order_purpose = (
+                            _bom_parent_active_order_purpose_sheet_qty(
+                                db, item.id
+                            )
+                        )
+                        parent_minimum_qty = max(
+                            int(parent_requirements["requisition_qty"])
+                            - parent_active_order_purpose,
+                            0,
+                        )
+                        if parent_minimum_qty <= 0:
+                            raise HTTPException(
+                                status_code=409,
+                                detail="该复合产品父件订单用途已报足，不能重复创建",
+                            )
+                        parent_effective_piece_qty = max(
+                            int(parent_requirements["remaining_required_piece_qty"])
+                            - parent_active_order_purpose * parent_yield,
+                            0,
                         )
                         parent_confirmed_qty = (
                             _confirmed_composite_requisition_qty(
@@ -10608,6 +11998,35 @@ def create_batch(
                             status="有效",
                         )
                         db.add(batch_item)
+                        db.flush()
+                        parent_source_key = f"order_item:{item.id}:whole"
+                        parent_purpose = _material_requisition_purpose_values(
+                            line=line,
+                            purchase_sheet_qty=parent_confirmed_qty,
+                            authoritative_order_sheet_qty=parent_minimum_qty,
+                            effective_piece_qty=parent_effective_piece_qty,
+                            yield_per_sheet=parent_yield,
+                            source_key=parent_source_key,
+                            customer_id=customer.id,
+                        )
+                        _add_material_requisition_purpose_snapshot(
+                            db,
+                            batch_item=batch_item,
+                            line=line,
+                            purpose=parent_purpose,
+                            customer=customer,
+                            order_item=item,
+                            request_hash=request_hash,
+                            user=user,
+                            source_kind="order_item",
+                            source_key=parent_source_key,
+                            component_type="whole",
+                            semi_reserved_piece_qty=int(
+                                parent_requirements[
+                                    "semi_finished_reserved_piece_qty"
+                                ]
+                            ),
+                        )
                         item.special_process = str(
                             parent_requirements["cutting_mode"]
                         )
@@ -10638,15 +12057,6 @@ def create_batch(
                         snapshot,
                         line.component_type,
                     )
-                    if _bom_snapshot_has_active_requisition(
-                        db,
-                        snapshot.id,
-                        component_type=component_type,
-                    ):
-                        raise HTTPException(
-                            status_code=409,
-                            detail="该复合产品物理料已经报料，不能重复创建",
-                        )
                     if line.actual_yield_per_sheet is not None and not snapshot.is_die_cut:
                         raise HTTPException(
                             status_code=400,
@@ -10664,8 +12074,37 @@ def create_batch(
                             status_code=409,
                             detail="该复合产品组件已由半成品库存全额抵扣，无需报料",
                         )
-                    component_minimum_qty = int(
-                        requirements["requisition_qty"]
+                    component_yield = int(requirements["yield_per_sheet"])
+                    component_active_order_purpose = (
+                        _bom_snapshot_active_order_purpose_sheet_qty(
+                            db,
+                            snapshot.id,
+                            component_type=component_type,
+                        )
+                    )
+                    component_minimum_qty = max(
+                        int(requirements["requisition_qty"])
+                        - component_active_order_purpose,
+                        0,
+                    )
+                    if component_minimum_qty <= 0:
+                        raise HTTPException(
+                            status_code=409,
+                            detail="该复合产品物理料订单用途已报足，不能重复创建",
+                        )
+                    net_required_sheets = (
+                        int(requirements["remaining_required_piece_qty"])
+                        + component_yield
+                        - 1
+                    ) // component_yield
+                    component_effective_piece_qty = max(
+                        int(requirements["remaining_required_piece_qty"])
+                        - min(
+                            component_active_order_purpose,
+                            net_required_sheets,
+                        )
+                        * component_yield,
+                        0,
                     )
                     component_confirmed_qty = (
                         _confirmed_composite_requisition_qty(
@@ -10712,8 +12151,7 @@ def create_batch(
                     )
                     db.add(batch_item)
                     db.flush()
-                    db.add(
-                        RequisitionItemBomSource(
+                    bom_source = RequisitionItemBomSource(
                             requisition_item_id=batch_item.id,
                             sales_order_item_bom_component_id=snapshot.id,
                             component_type=component_type,
@@ -10772,21 +12210,46 @@ def create_batch(
                                 )
                                 else "bom-demand-cutting-v2"
                             ),
-                        )
+                    )
+                    db.add(bom_source)
+                    db.flush()
+                    bom_source_key = (
+                        f"bom_component:{snapshot.id}:{component_type}"
+                    )
+                    component_purpose = _material_requisition_purpose_values(
+                        line=line,
+                        purchase_sheet_qty=component_confirmed_qty,
+                        authoritative_order_sheet_qty=component_minimum_qty,
+                        effective_piece_qty=component_effective_piece_qty,
+                        yield_per_sheet=component_yield,
+                        source_key=bom_source_key,
+                        customer_id=customer.id,
+                    )
+                    _add_material_requisition_purpose_snapshot(
+                        db,
+                        batch_item=batch_item,
+                        line=line,
+                        purpose=component_purpose,
+                        customer=customer,
+                        order_item=item,
+                        request_hash=request_hash,
+                        user=user,
+                        source_kind="bom_component",
+                        source_key=bom_source_key,
+                        component_type=component_type,
+                        semi_reserved_piece_qty=int(
+                            requirements[
+                                "semi_finished_reserved_piece_qty"
+                            ]
+                        ),
+                        source_bom_requisition_source_id=bom_source.id,
                     )
                 db.flush()
                 item.inventory_deducted_qty = 0
                 item.requisition_qty = int(
-                    db.scalar(
-                        select(func.coalesce(func.sum(RequisitionItem.requisition_qty), 0))
-                        .where(
-                            RequisitionItem.order_item_id == item.id,
-                            func.lower(RequisitionItem.status).notin_(
-                                INACTIVE_REQUISITION_ITEM_STATUSES
-                            ),
-                        )
-                    )
-                    or 0
+                    _active_requisition_facts_by_item_ids(db, [item.id])[
+                        item.id
+                    ]["quantity"]
                 )
                 item.requisition_status = (
                     "已报料"
@@ -10844,8 +12307,57 @@ def create_batch(
                         cutting_mode=line.special_process,
                         component_type=component_type,
                     )
+                    active_order_purpose = int(
+                        batch_initial_component_facts.get(
+                            _supplier_requisition_source_key(
+                                item,
+                                component_type=component_type,
+                            ),
+                            {"quantity": 0},
+                        )["quantity"]
+                    )
+                    authoritative_remaining_qty = max(
+                        int(requirements["requisition_qty"])
+                        - active_order_purpose,
+                        0,
+                    )
+                    if authoritative_remaining_qty <= 0:
+                        raise HTTPException(
+                            status_code=409,
+                            detail="该物理料订单用途已报足，不能重复创建",
+                        )
+                    submitted_purchase_qty = (
+                        authoritative_remaining_qty
+                        if line.requisition_qty is None
+                        else int(line.requisition_qty)
+                    )
+                    has_explicit_purchase_purpose = any(
+                        value is not None
+                        for value in (
+                            line.purchase_total_sheet_qty,
+                            line.order_purpose_sheet_qty,
+                            line.stock_purpose_sheet_qty,
+                            line.purpose_plan_version,
+                            line.purpose_plan_fingerprint,
+                        )
+                    )
+                    confirmed_purchase_qty = (
+                        submitted_purchase_qty
+                        if has_explicit_purchase_purpose
+                        else max(
+                            submitted_purchase_qty,
+                            authoritative_remaining_qty,
+                        )
+                    )
+                    if confirmed_purchase_qty <= 0:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="本次采购张数必须大于 0",
+                        )
+                    component_yield = _cutting_factor(line.special_process)
                     components.append(
                         {
+                            "line": line,
                             "kind": component_type,
                             "suffix": (
                                 "底"
@@ -10862,7 +12374,15 @@ def create_batch(
                                 if is_base and item.snapshot_base_report_width_mm
                                 else line.cardboard_width
                             ),
-                            "requisition_qty": int(requirements["requisition_qty"]),
+                            "requisition_qty": confirmed_purchase_qty,
+                            "authoritative_order_sheet_qty": (
+                                authoritative_remaining_qty
+                            ),
+                            "effective_piece_qty": max(
+                                int(requirements["remaining_required_piece_qty"])
+                                - active_order_purpose * component_yield,
+                                0,
+                            ),
                             "pieces_per_box": int(requirements["pieces_per_box"]),
                             "required_piece_qty": int(requirements["required_piece_qty"]),
                             "semi_finished_reserved_piece_qty": int(
@@ -10932,6 +12452,96 @@ def create_batch(
                     status="有效",
                 )
                 db.add(batch_item)
+                db.flush()
+                component_line: RequisitionLinePayload = component["line"]
+                component_source_key = _supplier_requisition_source_key(
+                    item,
+                    component_type=component["kind"],
+                )
+                component_purpose = _material_requisition_purpose_values(
+                    line=component_line,
+                    purchase_sheet_qty=int(component["requisition_qty"]),
+                    authoritative_order_sheet_qty=int(
+                        component["authoritative_order_sheet_qty"]
+                    ),
+                    effective_piece_qty=int(
+                        component["effective_piece_qty"]
+                    ),
+                    yield_per_sheet=_cutting_factor(
+                        component["special_process"]
+                    ),
+                    source_key=component_source_key,
+                    customer_id=customer.id,
+                )
+                component["new_order_purpose_sheet_qty"] = int(
+                    component_purpose["order_purpose_sheet_qty"]
+                )
+                _add_material_requisition_purpose_snapshot(
+                    db,
+                    batch_item=batch_item,
+                    line=component_line,
+                    purpose=component_purpose,
+                    customer=customer,
+                    order_item=item,
+                    request_hash=request_hash,
+                    user=user,
+                    source_kind="order_item",
+                    source_key=component_source_key,
+                    component_type=component["kind"],
+                    semi_reserved_piece_qty=int(
+                        component["semi_finished_reserved_piece_qty"]
+                    ),
+                )
+            db.flush()
+            active_component_facts = [
+                {
+                    **batch_initial_component_facts.get(
+                        _supplier_requisition_source_key(
+                            item,
+                            component_type=component["kind"],
+                        ),
+                        {"quantity": 0, "orders": []},
+                    ),
+                    "quantity": int(
+                        batch_initial_component_facts.get(
+                            _supplier_requisition_source_key(
+                                item,
+                                component_type=component["kind"],
+                            ),
+                            {"quantity": 0},
+                        )["quantity"]
+                    )
+                    + int(
+                        component.get(
+                            "new_order_purpose_sheet_qty", 0
+                        )
+                    ),
+                }
+                for component in components
+            ]
+            item.requisition_qty = sum(
+                int(facts["quantity"])
+                for facts in active_component_facts
+            )
+            item.requisition_status = (
+                "已报料"
+                if all(
+                    int(facts["quantity"])
+                    >= int(
+                        _current_requisition_requirements(
+                            db,
+                            item,
+                            cutting_mode=component["special_process"],
+                            component_type=component["kind"],
+                        )["requisition_qty"]
+                    )
+                    for component, facts in zip(
+                        components,
+                        active_component_facts,
+                    )
+                )
+                else "未报料"
+            )
             response_items.append(_item_response(item, db))
         _audit(
             db,
@@ -10959,6 +12569,27 @@ def create_batch(
     except IntegrityError as error:
         db.rollback()
         message = str(getattr(error, "orig", error)).lower()
+        if payload.request_key and (
+            "uq_material_requisitions_request_key" in message
+            or (
+                "material_requisitions.request_key" in message
+                and "unique" in message
+            )
+        ):
+            existing = db.scalar(
+                select(Requisition).where(
+                    Requisition.request_key == payload.request_key
+                )
+            )
+            if existing is None:
+                raise
+            _require_requisition_customer_access(existing, user, db)
+            _assert_material_requisition_replay(
+                existing=existing,
+                request_hash=request_hash,
+                user=user,
+            )
+            return _material_requisition_replay_response(db, existing)
         if (
             "uq_requisition_item_bom_sources_active_physical_source"
             in message
@@ -10992,6 +12623,16 @@ def edit_requisition(
         raise HTTPException(status_code=409, detail="已入库明细禁止修改报料")
     if item.requisition_status == "未报料":
         raise HTTPException(status_code=409, detail="该明细尚未报料")
+    frozen_purpose_snapshot_id = db.scalar(
+        select(PurchasePurposeSourceSnapshot.id)
+        .where(PurchasePurposeSourceSnapshot.source_order_item_id == item.id)
+        .limit(1)
+    )
+    if frozen_purpose_snapshot_id is not None:
+        raise _purchase_purpose_conflict(
+            "PURCHASE_PURPOSE_FROZEN",
+            "该报料已冻结采购用途，不能再通过旧编辑入口修改尺寸、开料或采购数量。",
+        )
     if payload.inventory_deducted_qty:
         raise HTTPException(
             status_code=400,
@@ -11222,16 +12863,9 @@ def _refresh_bom_order_item_requisition_state(
 ) -> None:
     snapshots = _bom_snapshots_for_order_item(db, item.id)
     active_total = int(
-        db.scalar(
-            select(func.coalesce(func.sum(RequisitionItem.requisition_qty), 0))
-            .where(
-                RequisitionItem.order_item_id == item.id,
-                func.lower(RequisitionItem.status).notin_(
-                    INACTIVE_REQUISITION_ITEM_STATUSES
-                ),
-            )
-        )
-        or 0
+        _active_requisition_facts_by_item_ids(db, [item.id])[item.id][
+            "quantity"
+        ]
     )
     item.requisition_qty = active_total or None
     item.requisition_status = (
@@ -11432,16 +13066,9 @@ def void_composite_requisition_batch(
         if not snapshots:
             continue
         active_total = int(
-            db.scalar(
-                select(func.coalesce(func.sum(RequisitionItem.requisition_qty), 0))
-                .where(
-                    RequisitionItem.order_item_id == item.id,
-                    func.lower(RequisitionItem.status).notin_(
-                        INACTIVE_REQUISITION_ITEM_STATUSES
-                    ),
-                )
-            )
-            or 0
+            _active_requisition_facts_by_item_ids(db, [item.id])[item.id][
+                "quantity"
+            ]
         )
         item.requisition_qty = active_total or None
         item.requisition_status = (
@@ -13780,6 +15407,13 @@ class SupplierOrderMemberPayload(BaseModel):
     item_id: int | None = None
     stock_deduction_qty: int = Field(default=0, ge=0)
     requisition_qty: int | None = Field(default=None, ge=0)
+    purchase_total_sheet_qty: int | None = Field(default=None, ge=0)
+    order_purpose_sheet_qty: int | None = Field(default=None, ge=0)
+    stock_purpose_sheet_qty: int | None = Field(default=None, ge=0)
+    purpose_plan_version: int | None = Field(default=None, ge=1)
+    purpose_plan_fingerprint: str | None = Field(
+        default=None, min_length=64, max_length=64
+    )
     order_number: str | None = None
     product_code: str | None = None
     product_name: str | None = None
@@ -13792,6 +15426,7 @@ class SupplierOrderMemberPayload(BaseModel):
 
 
 class SupplierOrderCreatePayload(BaseModel):
+    request_key: str | None = Field(default=None, min_length=16, max_length=64)
     supplier_name: str | None = None
     material_id: int | None = None
     layer_count: int | None = None
@@ -13807,6 +15442,16 @@ class SupplierOrderCreatePayload(BaseModel):
     required_piece_qty: int | None = None
     remark: str | None = None
     members: list[SupplierOrderMemberPayload] = Field(default_factory=list)
+
+    @field_validator("request_key")
+    @classmethod
+    def normalize_request_key(cls, value: str | None) -> str | None:
+        normalized = str(value or "").strip()
+        if not normalized:
+            return None
+        if not re.fullmatch(r"[A-Za-z0-9_-]{16,64}", normalized):
+            raise ValueError("报料请求编号格式不正确，请刷新草稿后重试")
+        return normalized
 
 
 def _supplier_order_number(db: Session) -> str:
@@ -13876,16 +15521,78 @@ def _supplier_order_purchase_lines(
     order: SupplierRequisitionOrder,
     db: Session,
 ) -> list[dict]:
+    active_item_ids = [
+        int(item.id) for item in order.items if item.status == "active"
+    ]
+    snapshots_by_item: dict[int, list[PurchasePurposeSourceSnapshot]] = {}
+    if active_item_ids:
+        purpose_rows = db.scalars(
+            select(PurchasePurposeSourceSnapshot)
+            .where(
+                PurchasePurposeSourceSnapshot.supplier_requisition_order_item_id.in_(
+                    active_item_ids
+                )
+            )
+            .order_by(PurchasePurposeSourceSnapshot.id)
+        ).all()
+        for snapshot in purpose_rows:
+            snapshots_by_item.setdefault(
+                int(snapshot.supplier_requisition_order_item_id), []
+            ).append(snapshot)
+    source_order_item_ids = sorted(
+        {
+            int(item.order_item_id)
+            for item in order.items
+            if item.status == "active" and item.order_item_id
+        }
+    )
+    order_items_by_id = {
+        int(row.id): row
+        for row in (
+            db.scalars(
+                select(OrderItem).where(OrderItem.id.in_(source_order_item_ids))
+            ).all()
+            if source_order_item_ids
+            else []
+        )
+    }
+    material_ids = {
+        int(value)
+        for value in [
+            order.material_id,
+            *[
+                item.material_id
+                for item in order.items
+                if item.status == "active"
+            ],
+            *[
+                item.material_id for item in order_items_by_id.values()
+            ],
+        ]
+        if value
+    }
+    materials_by_id = {
+        int(row.id): row
+        for row in (
+            db.scalars(select(Material).where(Material.id.in_(material_ids))).all()
+            if material_ids
+            else []
+        )
+    }
     line_map: dict[str, dict] = {}
     for item in order.items:
         if item.status != "active":
             continue
-        order_item = db.get(OrderItem, item.order_item_id) if item.order_item_id else None
+        order_item = (
+            order_items_by_id.get(int(item.order_item_id))
+            if item.order_item_id
+            else None
+        )
         component_type = _supplier_order_item_component_type(item)
         material_id = item.material_id or (
             order_item.material_id if order_item and order_item.material_id else order.material_id
         )
-        material = db.get(Material, material_id) if material_id else None
+        material = materials_by_id.get(int(material_id)) if material_id else None
         layer_count = (
             item.layer_count_snapshot
             or (
@@ -13981,6 +15688,13 @@ def _supplier_order_purchase_lines(
                 "stock_deduction_qty": 0,
                 "inventory_deducted_qty": 0,
                 "requisition_qty": 0,
+                "purchase_total_sheet_qty": 0,
+                "order_purpose_sheet_qty": 0,
+                "stock_purpose_sheet_qty": 0,
+                "purpose_statuses": set(),
+                "purpose_plan_versions": set(),
+                "purpose_plan_fingerprints": set(),
+                "purpose_allocations": [],
                 "source_items": [],
             }
             line_map[line_key] = line
@@ -13990,6 +15704,49 @@ def _supplier_order_purchase_lines(
         line["stock_deduction_qty"] += int(item.stock_deduction_qty or 0)
         line["inventory_deducted_qty"] = line["stock_deduction_qty"]
         line["requisition_qty"] += int(item.requisition_qty or 0)
+        item_purpose_rows = snapshots_by_item.get(int(item.id), [])
+        if item_purpose_rows:
+            item_purchase_total = sum(
+                int(row.purchase_sheet_qty) for row in item_purpose_rows
+            )
+            item_order_purpose = sum(
+                int(row.order_purpose_sheet_qty) for row in item_purpose_rows
+            )
+            item_stock_purpose = sum(
+                int(row.reserve_purpose_sheet_qty) for row in item_purpose_rows
+            )
+            item_purpose_status = "frozen"
+            line["purchase_total_sheet_qty"] += item_purchase_total
+            line["order_purpose_sheet_qty"] += item_order_purpose
+            line["stock_purpose_sheet_qty"] += item_stock_purpose
+            line["purpose_allocations"].extend(
+                {
+                    "id": row.id,
+                    "customer_id": row.customer_id,
+                    "customer_name": row.customer_name_snapshot,
+                    "source_kind": row.source_kind,
+                    "source_key": row.source_key,
+                    "component_type": row.component_type,
+                    "purchase_total_sheet_qty": row.purchase_sheet_qty,
+                    "order_purpose_sheet_qty": row.order_purpose_sheet_qty,
+                    "stock_purpose_sheet_qty": row.reserve_purpose_sheet_qty,
+                    "purpose_plan_version": row.snapshot_version,
+                    "purpose_plan_fingerprint": row.preview_fingerprint,
+                }
+                for row in item_purpose_rows
+            )
+            line["purpose_plan_versions"].update(
+                int(row.snapshot_version) for row in item_purpose_rows
+            )
+            line["purpose_plan_fingerprints"].update(
+                str(row.preview_fingerprint) for row in item_purpose_rows
+            )
+        else:
+            item_purchase_total = None
+            item_order_purpose = None
+            item_stock_purpose = None
+            item_purpose_status = "legacy_unset"
+        line["purpose_statuses"].add(item_purpose_status)
         line["source_items"].append(
             {
                 "id": item.id,
@@ -14003,6 +15760,10 @@ def _supplier_order_purchase_lines(
                 "stock_deduction_qty": item.stock_deduction_qty,
                 "inventory_deducted_qty": item.stock_deduction_qty,
                 "requisition_qty": item.requisition_qty,
+                "purchase_total_sheet_qty": item_purchase_total,
+                "order_purpose_sheet_qty": item_order_purpose,
+                "stock_purpose_sheet_qty": item_stock_purpose,
+                "purpose_status": item_purpose_status,
                 "cutting_mode": item.cutting_mode or order.cutting_mode or DEFAULT_CUTTING_MODE,
                 "pieces_per_box": item.pieces_per_box,
                 "required_piece_qty": item.required_piece_qty,
@@ -14010,7 +15771,33 @@ def _supplier_order_purchase_lines(
                 "delivery_date": item.delivery_date,
             }
         )
-    return list(line_map.values())
+    lines = list(line_map.values())
+    for line in lines:
+        statuses = set(line.pop("purpose_statuses", set()))
+        purpose_versions = set(line.pop("purpose_plan_versions", set()))
+        purpose_fingerprints = set(
+            line.pop("purpose_plan_fingerprints", set())
+        )
+        line["purpose_status"] = (
+            next(iter(statuses)) if len(statuses) == 1 else "mixed"
+        )
+        line["purpose_plan_version"] = (
+            next(iter(purpose_versions)) if len(purpose_versions) == 1 else None
+        )
+        line["purpose_plan_fingerprint"] = (
+            next(iter(purpose_fingerprints))
+            if len(purpose_fingerprints) == 1
+            else canonical_purchase_purpose_hash(
+                sorted(purpose_fingerprints)
+            )
+            if purpose_fingerprints
+            else None
+        )
+        if line["purpose_status"] == "legacy_unset":
+            line["purchase_total_sheet_qty"] = None
+            line["order_purpose_sheet_qty"] = None
+            line["stock_purpose_sheet_qty"] = None
+    return lines
 
 
 def _supplier_order_dict(order: SupplierRequisitionOrder, db: Session) -> dict:
@@ -14025,6 +15812,14 @@ def _supplier_order_dict(order: SupplierRequisitionOrder, db: Session) -> dict:
     )
     source_items = _source_items_from_supplier_order(order)
     purchase_lines = _supplier_order_purchase_lines(order, db)
+    purpose_statuses = {line.get("purpose_status") for line in purchase_lines}
+    purpose_status = (
+        "legacy_unset"
+        if not purpose_statuses
+        else next(iter(purpose_statuses))
+        if len(purpose_statuses) == 1
+        else "mixed"
+    )
     return {
         "id": order.id,
         "order_number": order.order_number,
@@ -14060,6 +15855,22 @@ def _supplier_order_dict(order: SupplierRequisitionOrder, db: Session) -> dict:
         "total_quantity": order.total_quantity,
         "stock_deduction_qty": order.stock_deduction_qty,
         "requisition_qty": order.requisition_qty,
+        "purpose_status": purpose_status,
+        "purchase_total_sheet_qty": (
+            sum(int(line.get("purchase_total_sheet_qty") or 0) for line in purchase_lines)
+            if purpose_status != "legacy_unset"
+            else None
+        ),
+        "order_purpose_sheet_qty": (
+            sum(int(line.get("order_purpose_sheet_qty") or 0) for line in purchase_lines)
+            if purpose_status != "legacy_unset"
+            else None
+        ),
+        "stock_purpose_sheet_qty": (
+            sum(int(line.get("stock_purpose_sheet_qty") or 0) for line in purchase_lines)
+            if purpose_status != "legacy_unset"
+            else None
+        ),
         "remark": order.remark,
         "status": order.status,
         "created_at": utc_naive_to_api(order.created_at) if order.created_at else None,
@@ -14675,17 +16486,22 @@ def _create_supplier_orders_from_pending_selection_locked(
     db: Session,
     user: User,
 ) -> dict:
+    groups_by_request_key = {
+        group.request_key: group
+        for group in payload.supplier_groups
+        if group.request_key
+    }
     request_keys = [
         group.request_key
         for group in payload.supplier_groups
         if group.request_key
     ]
+    if len(request_keys) != len(payload.supplier_groups):
+        raise HTTPException(
+            status_code=400,
+            detail="报料草稿请求编号不完整，请刷新草稿后重试",
+        )
     if request_keys:
-        if len(request_keys) != len(payload.supplier_groups):
-            raise HTTPException(
-                status_code=400,
-                detail="报料草稿请求编号不完整，请刷新草稿后重试",
-            )
         if len(set(request_keys)) != len(request_keys):
             raise HTTPException(status_code=400, detail="报料草稿请求编号重复")
         existing_orders = db.scalars(
@@ -14698,6 +16514,19 @@ def _create_supplier_orders_from_pending_selection_locked(
             for existing_order in existing_orders:
                 _require_supplier_order_customer_access(
                     existing_order, user, db
+                )
+                request_group = groups_by_request_key.get(
+                    existing_order.request_key
+                )
+                expected_hash = (
+                    _pending_supplier_group_request_hash(request_group)
+                    if request_group is not None
+                    else None
+                )
+                _assert_supplier_order_purpose_replay(
+                    existing_order=existing_order,
+                    expected_hash=expected_hash,
+                    user=user,
                 )
             if len(existing_orders) == len(request_keys):
                 return _created_supplier_orders_response(
@@ -14847,6 +16676,19 @@ def _create_supplier_orders_from_pending_selection_locked(
                 _require_supplier_order_customer_access(
                     existing_order, user, db
                 )
+                request_group = groups_by_request_key.get(
+                    existing_order.request_key
+                )
+                expected_hash = (
+                    _pending_supplier_group_request_hash(request_group)
+                    if request_group is not None
+                    else None
+                )
+                _assert_supplier_order_purpose_replay(
+                    existing_order=existing_order,
+                    expected_hash=expected_hash,
+                    user=user,
+                )
             if len(existing_orders) == len(request_keys):
                 return _created_supplier_orders_response(
                     list(existing_orders),
@@ -14864,238 +16706,151 @@ def create_supplier_order(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
-    # The formal SQLite deployment uses one application worker.  Serialize this
-    # legacy write endpoint so two requests cannot both observe an item as
-    # unreported before either transaction commits.
     with _SUPPLIER_ORDER_CREATE_WRITE_LOCK:
-        return _create_supplier_order_locked(payload=payload, db=db, user=user)
-
-
-def _create_supplier_order_locked(
-    *,
-    payload: SupplierOrderCreatePayload,
-    db: Session,
-    user: User,
-) -> dict:
-    if not payload.members:
-        raise HTTPException(status_code=400, detail="至少需要一条明细")
-
-    # Authorize every referenced customer before supplier/material validation.
-    # Otherwise a scoped user can distinguish supplier-master validation errors
-    # for an order item they are not allowed to access.
-    linked_item_ids: list[int] = []
-    for member in payload.members:
-        if member.item_id is None:
-            if user.role not in {"admin", "boss"}:
+        if not payload.members:
+            raise HTTPException(status_code=400, detail="至少需要一条明细")
+        if any(member.item_id is None for member in payload.members):
+            if _allowed_customer_ids(user, db) is not None:
                 raise HTTPException(
                     status_code=403,
-                    detail="受限账号不能创建无订单明细关联的手工报料单",
+                    detail="客户数据权限不足",
                 )
-            continue
-        linked_item_ids.append(member.item_id)
-    if len(linked_item_ids) != len(set(linked_item_ids)):
-        raise HTTPException(status_code=400, detail="同一订单明细不能重复报料")
-
-    authorized_order_items: dict[int, OrderItem] = {}
-    for item_id in sorted(linked_item_ids):
-        order_item = db.scalar(
-            select(OrderItem)
-            .where(OrderItem.id == item_id)
-            .with_for_update()
+            raise _purchase_purpose_conflict(
+                "PURCHASE_PURPOSE_SOURCE_REQUIRED",
+                "正式采购必须关联订单物理来源；无订单备库请使用库存补库流程。",
+            )
+        legacy_request_hash = canonical_purchase_purpose_hash(
+            payload.model_dump(mode="json", exclude_none=False)
         )
-        if order_item is None:
-            raise HTTPException(status_code=404, detail="订单明细不存在")
-        _require_order_item_customer_access(db, order_item, user)
-        authorized_order_items[item_id] = order_item
-
-    supplier_name = _require_active_supplier(db, payload.supplier_name)
-    material = db.get(Material, payload.material_id) if payload.material_id else None
-    _require_active_material_supplier(db, material)
-    effective_layer_count = (
-        material.layer_count
-        if material is not None
-        else payload.layer_count
-    )
-    normalized_flute, flute_error = _business_flute_error(
-        effective_layer_count,
-        payload.flute_type,
-    )
-    if flute_error:
-        raise HTTPException(status_code=400, detail=flute_error)
-
-    validated_members: list[dict] = []
-    for member in payload.members:
-        if member.stock_deduction_qty:
-            raise HTTPException(
-                status_code=400,
-                detail="旧库存抵扣字段已停用，真实抵扣只能来自成品库存预占",
-            )
-        order_item = (
-            authorized_order_items.get(member.item_id)
-            if member.item_id is not None
-            else None
-        )
-        if order_item is not None:
-            if _active_requisition_hold(db, order_item.id) is not None:
-                raise HTTPException(
-                    status_code=409,
-                    detail="订单明细正在等候报料，请先恢复到待报料",
+        if payload.request_key:
+            existing = db.scalar(
+                select(SupplierRequisitionOrder)
+                .options(selectinload(SupplierRequisitionOrder.items))
+                .where(
+                    SupplierRequisitionOrder.request_key
+                    == payload.request_key
                 )
-            order = db.get(Order, order_item.order_id)
-            product = db.get(Product, order_item.product_id)
-            if order is None or product is None:
-                raise HTTPException(
-                    status_code=409,
-                    detail="订单或产品快照关联已失效，不能生成供应商报料单",
+            )
+            if existing is not None:
+                _require_supplier_order_customer_access(existing, user, db)
+                _assert_supplier_order_purpose_replay(
+                    existing_order=existing,
+                    expected_hash=legacy_request_hash,
+                    user=user,
                 )
-            _require_late_finished_inventory_resolved(
-                db,
-                item=order_item,
-                order=order,
-                product=product,
-            )
-        if order_item is None:
-            pieces_per_box = max(int(member.pieces_per_box or 1), 1)
-            production_required_qty = max(int(member.quantity or 0), 0)
-            required_piece_qty = max(
-                int(
-                    member.required_piece_qty
-                    if member.required_piece_qty is not None
-                    else production_required_qty * pieces_per_box
-                ),
-                0,
-            )
-            cutting_mode = member.cutting_mode or payload.cutting_mode
-            validated_members.append(
-                {
-                    "payload": member,
-                    "order_item": None,
-                    "production_required_qty": production_required_qty,
-                    "finished_reserved_qty": 0,
-                    "pieces_per_box": pieces_per_box,
-                    "required_piece_qty": required_piece_qty,
-                    "cutting_mode": cutting_mode,
-                    "requisition_qty": _purchase_qty(
-                        required_piece_qty, 0, cutting_mode
-                    ),
-                }
-            )
-            continue
-        if order_item.requisition_status != "未报料":
-            raise HTTPException(status_code=409, detail="订单明细已经报料")
-        cutting_mode = member.cutting_mode or payload.cutting_mode
-        requirements = _current_requisition_summary(
+                return _supplier_order_dict(existing, db)
+        preview = _pending_selection_preview_groups(
             db,
-            order_item,
-            cutting_mode=cutting_mode,
+            PendingSupplierOrderCreatePayload(
+                selections=[
+                    PendingSupplierOrderSelection(
+                        type="order_item",
+                        order_item_id=int(member.item_id),
+                        supplier_name=payload.supplier_name,
+                        report_length_mm=payload.report_length_mm,
+                        report_width_mm=payload.report_width_mm,
+                        cutting_mode=(
+                            member.cutting_mode
+                            or payload.cutting_mode
+                            or DEFAULT_CUTTING_MODE
+                        ),
+                        remark=payload.remark,
+                    )
+                    for member in payload.members
+                ]
+            ),
+            user,
         )
-        finished_reserved_qty = int(
-            requirements["finished_inventory_reserved_qty"]
+        finalized = PendingSupplierOrderFinalizePayload.model_validate(preview)
+        members_by_item_id = {
+            int(member.item_id): member for member in payload.members
+        }
+        source_occurrences_by_item_id: dict[int, int] = {}
+        for supplier_group in finalized.supplier_groups:
+            for line in supplier_group.lines:
+                for source in line.source_items:
+                    source_item_id = int(source.order_item_id)
+                    source_occurrences_by_item_id[source_item_id] = (
+                        source_occurrences_by_item_id.get(source_item_id, 0)
+                        + 1
+                    )
+        for item_id, occurrence_count in source_occurrences_by_item_id.items():
+            member = members_by_item_id[item_id]
+            if occurrence_count > 1 and any(
+                value is not None
+                for value in (
+                    member.requisition_qty,
+                    member.purchase_total_sheet_qty,
+                    member.order_purpose_sheet_qty,
+                    member.stock_purpose_sheet_qty,
+                )
+            ):
+                raise _purchase_purpose_conflict(
+                    "PURCHASE_PURPOSE_TAMPERED",
+                    "多组件订单不能通过旧直连接口覆盖采购数量，请使用当前待报料草稿。",
+                )
+        for supplier_group in finalized.supplier_groups:
+            if payload.request_key:
+                supplier_group.request_key = payload.request_key
+                supplier_group._request_hash_override = legacy_request_hash
+            for line in supplier_group.lines:
+                source_members = [
+                    members_by_item_id[int(source.order_item_id)]
+                    for source in line.source_items
+                ]
+                submitted_totals = [
+                    member.purchase_total_sheet_qty
+                    if member.purchase_total_sheet_qty is not None
+                    else member.requisition_qty
+                    for member in source_members
+                ]
+                explicit_purpose = any(
+                    member.order_purpose_sheet_qty is not None
+                    or member.stock_purpose_sheet_qty is not None
+                    or member.purchase_total_sheet_qty is not None
+                    for member in source_members
+                )
+                if any(value is not None for value in submitted_totals):
+                    line.requisition_qty = sum(
+                        int(value or 0) for value in submitted_totals
+                    )
+                if explicit_purpose:
+                    if any(
+                        member.order_purpose_sheet_qty is None
+                        or member.stock_purpose_sheet_qty is None
+                        for member in source_members
+                    ):
+                        raise _purchase_purpose_conflict(
+                            "PURCHASE_PURPOSE_TAMPERED",
+                            "旧直连采购用途字段不完整，请刷新后重试。",
+                        )
+                    line.purchase_total_sheet_qty = line.requisition_qty
+                    line.order_purpose_sheet_qty = sum(
+                        int(member.order_purpose_sheet_qty or 0)
+                        for member in source_members
+                    )
+                    line.stock_purpose_sheet_qty = sum(
+                        int(member.stock_purpose_sheet_qty or 0)
+                        for member in source_members
+                    )
+        result = _create_supplier_orders_from_pending_selection_locked(
+            payload=finalized,
+            db=db,
+            user=user,
         )
-        production_required_qty = int(requirements["production_required_qty"])
-        if production_required_qty == 0:
+        created = list(result.get("created_orders") or [])
+        if len(created) != 1:
             raise HTTPException(
                 status_code=409,
-                detail="该订单明细已由成品库存全额抵扣，无需生成供应商报料单",
+                detail="旧直连供应商报料生成结果异常，请刷新后重试",
             )
-        pieces_per_box = int(requirements["pieces_per_box"])
-        required_piece_qty = int(requirements["required_piece_qty"])
-        requisition_qty = int(requirements["requisition_qty"])
-        validated_members.append(
-            {
-                "payload": member,
-                "order_item": order_item,
-                "production_required_qty": production_required_qty,
-                "finished_reserved_qty": finished_reserved_qty,
-                "pieces_per_box": pieces_per_box,
-                "required_piece_qty": required_piece_qty,
-                "semi_finished_reserved_piece_qty": int(
-                    requirements["semi_finished_reserved_piece_qty"]
-                ),
-                "remaining_required_piece_qty": int(
-                    requirements["remaining_required_piece_qty"]
-                ),
-                "cutting_mode": cutting_mode,
-                "requisition_qty": requisition_qty,
-            }
+        order = db.get(
+            SupplierRequisitionOrder,
+            int(created[0]["supplier_order_id"]),
         )
-
-    order_number = _supplier_order_number(db)
-    total_qty = sum(row["production_required_qty"] for row in validated_members)
-    total_deduct = sum(row["finished_reserved_qty"] for row in validated_members)
-    total_req = sum(row["requisition_qty"] for row in validated_members)
-    total_required_piece_qty = sum(
-        row["required_piece_qty"] for row in validated_members
-    )
-
-    order = SupplierRequisitionOrder(
-        order_number=order_number,
-        supplier_name=supplier_name,
-        material_id=payload.material_id,
-        layer_count=effective_layer_count,
-        flute_type=normalized_flute,
-        report_length_mm=payload.report_length_mm,
-        report_width_mm=payload.report_width_mm,
-        crease_type=payload.crease_type,
-        crease_left_mm=payload.crease_left_mm,
-        crease_middle_mm=payload.crease_middle_mm,
-        crease_right_mm=payload.crease_right_mm,
-        cutting_mode=payload.cutting_mode,
-        pieces_per_box=payload.pieces_per_box,
-        required_piece_qty=total_required_piece_qty,
-        total_quantity=total_qty,
-        stock_deduction_qty=total_deduct,
-        requisition_qty=total_req,
-        remark=payload.remark,
-        status="confirmed",
-        created_by=user.id,
-    )
-    db.add(order)
-    db.flush()
-
-    for validated in validated_members:
-        m = validated["payload"]
-        req_qty = validated["requisition_qty"]
-        oi = validated["order_item"]
-        db.add(SupplierRequisitionOrderItem(
-            supplier_order_id=order.id,
-            order_item_id=m.item_id,
-            **_supplier_item_snapshot_values(
-                db,
-                oi,
-                fallback_material_id=order.material_id,
-                fallback_supplier_name=order.supplier_name,
-                fallback_layer_count=order.layer_count,
-                fallback_flute_type=order.flute_type,
-            ),
-            order_number=m.order_number,
-            product_code=m.product_code,
-            product_name=m.product_name,
-            source_key=(
-                _supplier_requisition_source_key(oi)
-                if oi is not None
-                else None
-            ),
-            report_length_mm=payload.report_length_mm,
-            report_width_mm=payload.report_width_mm,
-            quantity=validated["production_required_qty"],
-            stock_deduction_qty=validated["finished_reserved_qty"],
-            requisition_qty=req_qty,
-            cutting_mode=validated["cutting_mode"],
-            pieces_per_box=validated["pieces_per_box"],
-            required_piece_qty=validated["required_piece_qty"],
-            customer_name=m.customer_name,
-            delivery_date=date.fromisoformat(m.delivery_date) if m.delivery_date else None,
-        ))
-        if oi:
-            oi.requisition_status = "已报料"
-            oi.inventory_deducted_qty = 0
-            oi.requisition_qty = req_qty
-            oi.special_process = validated["cutting_mode"]
-
-    db.commit()
-    db.refresh(order)
-    return _supplier_order_dict(order, db)
+        if order is None:
+            raise HTTPException(status_code=409, detail="供应商报料单生成结果不存在")
+        return _supplier_order_dict(order, db)
 
 
 @router.get("/supplier-orders")
@@ -18473,22 +20228,30 @@ def _recompute_order_item_after_supplier_item_void(
             SupplierRequisitionOrderItem.id.asc(),
         )
     ).all()
-    legacy_quantity = int(
-        db.scalar(
-            select(func.coalesce(func.sum(RequisitionItem.requisition_qty), 0)).where(
-                RequisitionItem.order_item_id == order_item.id,
-                RequisitionItem.status == "有效",
-            )
-        )
-        or 0
+    remaining_quantity = int(
+        _active_requisition_facts_by_item_ids(db, [order_item.id])[
+            order_item.id
+        ]["quantity"]
     )
-    supplier_quantity = sum(
-        int(line.requisition_qty or 0) for line, _supplier_order in active_supplier_rows
-    )
-    remaining_quantity = supplier_quantity + legacy_quantity
     order_item.requisition_qty = remaining_quantity or None
+    current_summary = _current_requisition_summary(
+        db,
+        order_item,
+        cutting_mode=order_item.special_process,
+    )
+    authoritative_quantity = sum(
+        int(row["requisition_qty"])
+        for row in list(
+            current_summary.get("component_requirements")
+            or [current_summary]
+        )
+    )
     if remaining_quantity > 0:
-        order_item.requisition_status = "已报料"
+        order_item.requisition_status = (
+            "已报料"
+            if remaining_quantity >= authoritative_quantity
+            else "未报料"
+        )
         if active_supplier_rows:
             order_item.supplier_order_number = active_supplier_rows[-1][1].order_number
     else:

@@ -6892,6 +6892,23 @@
                   <div v-if="modal.data.sender?.phone">电话：{{ modal.data.sender.phone }}</div>
                 </div>
               </div>
+              <div v-if="modal.type === 'supplierOrderPrint'" class="panel" style="margin-top:12px" aria-label="厂内采购用途只读详情" data-contract-field="purpose_status">
+                <div class="section-title">厂内采购用途（只读）</div>
+                <div class="muted" style="margin-bottom:8px">用途在正式采购生成时冻结，仅供厂内核对；下方内容不在供应商打印区域内。</div>
+                <table style="font-size:12px">
+                  <thead><tr><th>序号</th><th>采购规格</th><th>采购总张数</th><th>订单生产用途张</th><th>客户通用片料备库张</th><th>状态</th></tr></thead>
+                  <tbody>
+                    <tr v-for="(line,index) in supplierOrderPrintLines(modal.data)" :key="`purpose-${line.line_key || index}`">
+                      <td>{{ index + 1 }}</td>
+                      <td>{{ line.report_length_mm }}×{{ line.report_width_mm }} mm</td>
+                      <td>{{ supplierOrderPurposeValue(line, 'purchase_total_sheet_qty', line.requisition_qty) }}</td>
+                      <td>{{ supplierOrderPurposeValue(line, 'order_purpose_sheet_qty') }}</td>
+                      <td>{{ supplierOrderPurposeValue(line, 'stock_purpose_sheet_qty') }}</td>
+                      <td>{{ supplierOrderPurposeStatusText(line) }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
               <div v-if="modal.data.focus_reported_item?.status==='voided'" :id="'supplier-order-line-'+modal.data.focus_item_id" class="reported-detail-card reported-match-row" style="margin-top:12px">
                 <div><strong>已撤销明细（历史保留）</strong><br>{{ modal.data.focus_reported_item.product_code || '-' }}｜{{ modal.data.focus_reported_item.product_name || '-' }}</div>
                 <div>{{ modal.data.focus_reported_item.report_length_mm || '-' }} × {{ modal.data.focus_reported_item.report_width_mm || '-' }} mm<br><span class="muted">{{ modal.data.focus_reported_item.crease_display || '-' }}</span></div>
@@ -7019,7 +7036,7 @@
               <div class="muted" style="margin-bottom:10px">当前只是报料草稿，点击保存后才正式生成供应商采购报料单。</div>
               <div style="margin-bottom:10px;padding:10px 12px;border:1px solid #93c5fd;border-radius:8px;background:#eff6ff;white-space:normal">
                 <strong>报料防错检查</strong>
-                <div class="muted">系统会拦住重复报料和长宽填反；少报后自动保留剩余数量，超量只允许管理员确认。</div>
+                <div class="muted">系统会拦住重复报料和长宽填反；采购总张调整后，先满足本次订单用途，多订部分自动进入该客户通用片料备库。</div>
               </div>
               <div v-if="supplierDraftSemiInventoryOptions().length" style="margin-bottom:10px;padding:10px 12px;border:2px solid #f59e0b;border-radius:8px;background:#fffbeb;color:#92400e;white-space:normal">
                 <strong>发现 {{ supplierDraftSemiInventoryOptions().length }} 条可抵扣半成品库存</strong>
@@ -7032,7 +7049,7 @@
               <div v-for="(group, groupIndex) in supplierRequisitionDraft.supplier_groups" :key="groupIndex" class="order-group-detail-card" style="margin-bottom:12px">
                 <div class="field" style="width:320px"><label>供应商</label><select class="select" v-model="group.supplier_name" @focus="ensureRequisitionMaterials()"><option value="">请选择供应商</option><option v-if="group.supplier_name && !materialSupplierSelectOptions.includes(group.supplier_name)" :value="group.supplier_name">{{ supplierDisplayName(group.supplier_name) }}</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ supplierDisplayName(s) }}</option></select></div>
                 <table style="font-size:12px">
-                  <thead><tr><th>采购规格</th><th>来源概览</th><th>材质</th><th>需求换算</th><th>报料长</th><th>报料宽</th><th>开料方式</th><th>库存抵扣</th><th>本次报料</th><th>备注</th></tr></thead>
+                  <thead><tr><th>采购规格</th><th>来源概览</th><th>材质</th><th>需求换算</th><th>报料长</th><th>报料宽</th><th>开料方式</th><th>库存抵扣</th><th>采购总张数</th><th>订单生产用途张</th><th>客户通用片料备库张</th><th>备注</th></tr></thead>
                   <tbody>
                     <template v-for="line in draftGroupLines(group)" :key="line.line_key || line.source_type + '-' + line.report_length_mm + '-' + line.report_width_mm">
                       <tr>
@@ -7068,13 +7085,15 @@
                         <td><input class="input merge-size-input" type="number" min="1" v-model.number="line.report_width_mm" @input="line.dimension_override_acknowledged=false" /><div v-if="supplierDraftLineIsSwapped(line)" class="muted" style="white-space:normal">推荐 {{ supplierDraftExpectedLength(line) }}×{{ supplierDraftExpectedWidth(line) }}</div><label v-if="supplierDraftLineIsSwapped(line) && (canAdmin || user.role==='boss')" style="display:block;margin-top:4px"><input type="checkbox" v-model="line.dimension_override_acknowledged" /> 按人工尺寸继续</label></td>
                         <td><div class="inline-input"><span>一开</span><input class="input merge-cutter-select" type="number" min="1" step="1" :value="cuttingModeFactor(line.cutting_mode)" @change="line.cutting_mode=normalizeCuttingMode($event.target.value);recalculateSupplierDraftLine(line)" /></div><div v-if="isMergedRequisitionCuttingLine(line) && line._cutting_plan_error" class="status red" style="white-space:normal">{{ line._cutting_plan_error }}</div><div v-else-if="isMergedRequisitionCuttingLine(line)" class="muted" style="white-space:normal">{{ mergedRequisitionCuttingPlanSummary(line) }}</div></td>
                         <td><strong>{{ line.finished_inventory_reserved_qty ?? line.inventory_deducted_qty ?? 0 }}</strong><div class="muted">已报 {{ line.already_requisitioned_qty || 0 }} 张</div></td>
-                        <td><input class="input merge-size-input" type="number" min="1" v-model.number="line.requisition_qty" @input="line.quantity_override_acknowledged=false" /><div :class="['muted', {'status red':supplierDraftQuantityAfter(line)<0}]">报后{{ supplierDraftQuantityAfter(line) >= 0 ? `还缺 ${supplierDraftQuantityAfter(line)} 张` : `超出 ${Math.abs(supplierDraftQuantityAfter(line))} 张` }}</div><label v-if="supplierDraftQuantityAfter(line)<0 && (canAdmin || user.role==='boss')" style="display:block;margin-top:4px"><input type="checkbox" v-model="line.quantity_override_acknowledged" /> 确认超量报料</label></td>
+                        <td><input class="input merge-size-input" type="number" min="1" step="1" v-model.number="line.purchase_total_sheet_qty" @input="onPurchasePurposeTotalChanged(line)" /><input type="hidden" v-model.number="line.requisition_qty" aria-hidden="true" @input="line.quantity_override_acknowledged=false" /><div class="muted">供应商采购总量</div></td>
+                        <td><input class="input merge-size-input" type="number" min="0" step="1" v-model.number="line.order_purpose_sheet_qty" @input="onPurchasePurposePartChanged(line)" /><div class="muted">本行订单上限 {{ purchasePurposeAuthoritativeOrderQty(line) }} 张</div></td>
+                        <td><input class="input merge-size-input" type="number" min="0" step="1" v-model.number="line.stock_purpose_sheet_qty" @input="onPurchasePurposePartChanged(line)" /><div v-if="purchasePurposeValidationError(line)" class="status red" style="white-space:normal;margin-top:4px">{{ purchasePurposeValidationError(line) }}</div><div v-else-if="Number(line.stock_purpose_sheet_qty || 0)>0" class="status blue" style="white-space:normal;margin-top:4px">多订 {{ line.stock_purpose_sheet_qty }} 张，收料后进入该客户通用片料备库</div></td>
                         <td><input class="input merge-remark-input" v-model.trim="line.remark" /></td>
                       </tr>
                       <tr v-if="line._expanded" class="order-detail-row">
-                        <td colspan="10">
+                        <td colspan="12">
                           <div class="muted" style="white-space:normal">
-                            <div v-for="source in line.source_items || []" :key="source.order_item_id">{{ source.order_number }}｜{{ source.customer_name }}｜{{ source.product_code }}｜{{ source.product_name }} × {{ source.requisition_qty || source.source_quantity || source.quantity }}</div>
+                            <div v-for="(source,sourceIndex) in line.source_items || []" :key="source.order_item_id">{{ source.order_number }}｜{{ source.customer_name }}｜{{ source.product_code }}｜{{ source.product_name }} × {{ source.requisition_qty || source.source_quantity || source.quantity }}｜订单用途 {{ purchasePurposeSourceOrderQuantities(line)[sourceIndex] ?? 0 }} 张</div>
                           </div>
                         </td>
                       </tr>
@@ -7092,8 +7111,25 @@
               <fieldset :disabled="requisitionInventoryActionBlocked()" style="border:0;padding:0;margin:0;min-width:0">
               <div class="status blue" style="display:block;white-space:normal;margin-bottom:10px">当前只是报料明细草稿。请先核对库存抵扣、采购张数、尺寸和开料方式；点击“确认生成正式采购单”后才会正式入账并进入打印页。</div>
               <div class="field" style="width:360px"><label>报料供应商</label><select class="select" v-model="requisitionForm.supplier_name"><option value="">请选择供应商</option><option v-if="requisitionForm.supplier_name && !materialSupplierSelectOptions.includes(requisitionForm.supplier_name)" :value="requisitionForm.supplier_name">{{ supplierDisplayName(requisitionForm.supplier_name) }}</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ supplierDisplayName(s) }}</option></select></div>
-              <table><thead><tr><th>客户 / 存货编码 / 产品</th><th>供应商 / 材质</th><th>需求数量</th><th>库存抵扣</th><th class="purchase-qty-cell">采购张数</th><th>采购长(mm)</th><th>采购宽(mm)</th><th>开料方式</th><th>备注</th></tr></thead><tbody><tr v-for="line in requisitionForm.items" :key="`${line.order_item_id}-${line.bom_snapshot_id || 'parent'}-${line.component_type || 'whole'}`" :class="{'warning-row':(line.cutting_mode || line.special_process)!== '一开一'}"><td class="requisition-product-cell"><strong>{{ shortCustomerName(line.customer_name) }}｜{{ line.product_code }}</strong><div class="requisition-product-name" :title="line.product_name">{{ line.product_name }}</div><span class="muted">{{ line.specification || "-" }}</span><div v-if="line.is_composite_parent" class="status blue">父件</div><div v-else-if="line.is_composite_component" class="status green">组件{{ line.component_type === 'cover' ? '·盖' : line.component_type === 'base' ? '·底' : '' }}</div></td><td>{{ line.snapshot_supplier_name || '未设供应商' }}<br><span class="muted">{{ line.material_display || '-' }}</span></td><td><strong>{{ line.required_piece_qty || line.quantity || 0 }}</strong><div class="muted">剩余 {{ line.remaining_required_piece_qty ?? line.required_piece_qty ?? line.quantity ?? 0 }}</div></td><td><div>成品：{{ line.finished_inventory_reserved_qty || 0 }}</div><div>半成品：{{ line.semi_finished_reserved_piece_qty || 0 }}</div><button v-if="line.is_composite_component && Number(line.remaining_required_piece_qty || 0)>0" class="btn small success" type="button" :disabled="line._auto_cover_loading" @click="autoCoverCompositeDraftLine(line)">{{ line._auto_cover_loading ? '正在匹配…' : '自动使用匹配库存' }}</button><div v-if="line._auto_cover_error" class="status orange" style="margin-top:4px;white-space:normal">{{ line._auto_cover_error }}</div></td><td class="purchase-qty-cell"><input class="input purchase-qty-input" type="number" min="1" step="1" v-model.number="line.requisition_qty" /><div class="muted">系统最低 {{ line._minimum_requisition_qty ?? line.requisition_qty }} 张</div></td><td><input :class="['input','compact-input',{'warning-input':Number(line.cardboard_len)>0 && Number(line.cardboard_len)<500 && String(line.snapshot_supplier_name || requisitionForm.supplier_name).includes('嘉林亿')}]" type="number" min="1" step="1" v-model.number="line.cardboard_len" /></td><td><input :class="['input','compact-input',{'warning-input':Number(line.cardboard_width)>0 && Number(line.cardboard_width)<270 && String(line.snapshot_supplier_name || requisitionForm.supplier_name).includes('嘉林亿')}]" type="number" min="1" step="1" v-model.number="line.cardboard_width" /></td><td><div class="inline-input"><span>一开</span><input class="input" type="number" min="1" step="1" :value="cuttingModeFactor(line.special_process)" @change="line.special_process=normalizeCuttingMode($event.target.value);autoRequisitionQty(line)" /></div><div v-for="warning in requisitionDimensionWarnings(line)" :key="warning" class="status orange" style="white-space:normal;margin-top:4px">{{ warning }}</div></td><td><input class="input compact-input" v-model.trim="line.remark" /></td></tr></tbody></table>
-              <div class="muted" style="margin-top:8px">采购张数允许按供应商实际要求增加；如需减少，请先使用同客户匹配库存，系统会自动降低最低采购张数。</div>
+              <table>
+                <thead><tr><th>客户 / 存货编码 / 产品</th><th>供应商 / 材质</th><th>需求数量</th><th>库存抵扣</th><th class="purchase-qty-cell">采购总张数</th><th>订单生产用途张</th><th>客户通用片料备库张</th><th>采购长(mm)</th><th>采购宽(mm)</th><th>开料方式</th><th>备注</th></tr></thead>
+                <tbody>
+                  <tr v-for="line in requisitionForm.items" :key="`${line.order_item_id}-${line.bom_snapshot_id || 'parent'}-${line.component_type || 'whole'}`" :class="{'warning-row':(line.cutting_mode || line.special_process)!== '一开一'}">
+                    <td class="requisition-product-cell"><strong>{{ shortCustomerName(line.customer_name) }}｜{{ line.product_code }}</strong><div class="requisition-product-name" :title="line.product_name">{{ line.product_name }}</div><span class="muted">{{ line.specification || "-" }}</span><div v-if="line.is_composite_parent" class="status blue">父件</div><div v-else-if="line.is_composite_component" class="status green">组件{{ line.component_type === 'cover' ? '·盖' : line.component_type === 'base' ? '·底' : '' }}</div></td>
+                    <td>{{ line.snapshot_supplier_name || '未设供应商' }}<br><span class="muted">{{ line.material_display || '-' }}</span></td>
+                    <td><strong>{{ line.required_piece_qty || line.quantity || 0 }}</strong><div class="muted">剩余 {{ line.remaining_required_piece_qty ?? line.required_piece_qty ?? line.quantity ?? 0 }}</div></td>
+                    <td><div>成品：{{ line.finished_inventory_reserved_qty || 0 }}</div><div>半成品：{{ line.semi_finished_reserved_piece_qty || 0 }}</div><button v-if="line.is_composite_component && Number(line.remaining_required_piece_qty || 0)>0" class="btn small success" type="button" :disabled="line._auto_cover_loading" @click="autoCoverCompositeDraftLine(line)">{{ line._auto_cover_loading ? '正在匹配…' : '自动使用匹配库存' }}</button><div v-if="line._auto_cover_error" class="status orange" style="margin-top:4px;white-space:normal">{{ line._auto_cover_error }}</div></td>
+                    <td class="purchase-qty-cell"><input class="input purchase-qty-input" type="number" min="1" step="1" v-model.number="line.purchase_total_sheet_qty" @input="onPurchasePurposeTotalChanged(line)" /><div class="muted">系统最低 {{ line._minimum_requisition_qty ?? line.purchase_total_sheet_qty }} 张</div></td>
+                    <td><input class="input purchase-qty-input" type="number" min="0" step="1" v-model.number="line.order_purpose_sheet_qty" @input="onPurchasePurposePartChanged(line)" /><div class="muted">本行订单上限 {{ purchasePurposeAuthoritativeOrderQty(line) }} 张</div></td>
+                    <td><input class="input purchase-qty-input" type="number" min="0" step="1" v-model.number="line.stock_purpose_sheet_qty" @input="onPurchasePurposePartChanged(line)" /><div v-if="purchasePurposeValidationError(line)" class="status red" style="white-space:normal;margin-top:4px">{{ purchasePurposeValidationError(line) }}</div><div v-else-if="Number(line.stock_purpose_sheet_qty || 0)>0" class="status blue" style="white-space:normal;margin-top:4px">多订 {{ line.stock_purpose_sheet_qty }} 张，进入该客户通用片料备库</div></td>
+                    <td><input :class="['input','compact-input',{'warning-input':Number(line.cardboard_len)>0 && Number(line.cardboard_len)<500 && String(line.snapshot_supplier_name || requisitionForm.supplier_name).includes('嘉林亿')}]" type="number" min="1" step="1" v-model.number="line.cardboard_len" /></td>
+                    <td><input :class="['input','compact-input',{'warning-input':Number(line.cardboard_width)>0 && Number(line.cardboard_width)<270 && String(line.snapshot_supplier_name || requisitionForm.supplier_name).includes('嘉林亿')}]" type="number" min="1" step="1" v-model.number="line.cardboard_width" /></td>
+                    <td><div class="inline-input"><span>一开</span><input class="input" type="number" min="1" step="1" :value="cuttingModeFactor(line.special_process)" @change="line.special_process=normalizeCuttingMode($event.target.value);autoRequisitionQty(line)" /></div><div v-for="warning in requisitionDimensionWarnings(line)" :key="warning" class="status orange" style="white-space:normal;margin-top:4px">{{ warning }}</div></td>
+                    <td><input class="input compact-input" v-model.trim="line.remark" /></td>
+                  </tr>
+                </tbody>
+              </table>
+              <div class="muted" style="margin-top:8px">采购总张调整后默认先满足订单用途，多订差额进入该客户通用片料备库；如需减少采购，请先使用同客户匹配库存。</div>
               </fieldset>
             </div>
             <div v-else-if="modal.type === 'receipt'">
@@ -8416,7 +8452,7 @@
             supplierOrders: [],
             supplierRequisitionDraft: { supplier_groups: [] }, supplierRequisitionSelections: [], supplierRequisitionPreviewLoading:false,
             supplierRequisitionSaveState:{saving:false, committed:false, uncertain:false, result:null},
-            compositeRequisitionSaveState:{saving:false, committed:false, uncertain:false, result:null},
+            compositeRequisitionSaveState:{saving:false, committed:false, uncertain:false, result:null, requestKey:"", draftSignature:""},
             stockReplenishmentSaveState:{saving:false, committed:false, uncertain:false, result:null},
             stockReplenishmentVoidState:{orderId:null, documentNumber:"", uncertainIds:{}},
             stockPolicyWarnings: [], stockReplenishmentProducts: [], stockReplenishmentCompanions: [],
@@ -10913,7 +10949,7 @@
                 this.showToast("所选明细已由库存全额抵扣，无需再报料");
                 return;
               }
-              this.supplierRequisitionDraft = data;
+              this.supplierRequisitionDraft = this.initializeSupplierPurchasePurposeDraft(data);
             } catch (error) {
               const detail = error.response?.data?.detail || "";
               if (error.response?.status === 409 && /全额抵扣/.test(detail)) {
@@ -12443,15 +12479,12 @@
             if (!Array.isArray(this.requisitionForm.items) || !this.requisitionForm.items.length) return "请先选择待报料明细";
             if (!String(this.requisitionForm.supplier_name || "").trim()) return "请先选择报料供应商";
             for (const [index, line] of this.requisitionForm.items.entries()) {
-              if (line.requisition_qty === "" || line.requisition_qty === null || line.requisition_qty === undefined) {
-                return `第 ${index + 1} 条请填写实际报料数`;
-              }
-              if (Number(line.requisition_qty) <= 0) {
-                return `第 ${index + 1} 条实际报料数必须大于 0`;
-              }
+              this.initializePurchasePurposeLine(line);
+              const purposeError = this.purchasePurposeValidationError(line);
+              if (purposeError) return `第 ${index + 1} 条${purposeError}`;
               if (
                 (line.is_composite_parent || line.is_composite_component)
-                && Number(line.requisition_qty) < Number(line._minimum_requisition_qty || 0)
+                && Number(line.purchase_total_sheet_qty) < Number(line._minimum_requisition_qty || 0)
               ) {
                 return `第 ${index + 1} 条采购张数不能少于系统最低 ${line._minimum_requisition_qty} 张；如需减少，请先使用匹配库存`;
               }
@@ -12750,6 +12783,7 @@
             this.supplierRequisitionSelections = [];
             this.supplierRequisitionPreviewLoading = false;
             this.supplierRequisitionSaveState = {saving:false,committed:false,uncertain:false,result:null};
+            this.compositeRequisitionSaveState = {saving:false,committed:false,uncertain:false,result:null,requestKey:"",draftSignature:""};
             this.stockReplenishmentSaveState = {saving:false,committed:false,uncertain:false,result:null};
             this.stockReplenishmentVoidState = {orderId:null,documentNumber:"",uncertainIds:{}};
             this.stockPolicyWarnings = [];
@@ -27227,6 +27261,7 @@
             if (!preserveManualQty || line.requisition_qty === null || line.requisition_qty === undefined || line.requisition_qty === "") {
               line.requisition_qty = Math.ceil(line.required_piece_qty / line.cutting_factor);
             }
+            this.initializePurchasePurposeLine(line, true);
           },
           calculateMergedRequisitionCuttingPlan(line, rawMode = null) {
             const cuttingMode = this.normalizeCuttingMode(
@@ -27309,6 +27344,7 @@
               );
               line.requisition_qty = line.remaining_requisition_qty;
               line.quantity_override_acknowledged = false;
+              this.initializePurchasePurposeLine(line, true);
               return true;
             }
             // 合并行禁止回退到旧的 remaining_required_piece_qty 作为计算基数。
@@ -27322,6 +27358,7 @@
             line.theoretical_requisition_qty = Math.ceil(
               remainingPieceQty / this.cuttingModeFactor(line.cutting_mode)
             );
+            this.initializePurchasePurposeLine(line, true);
             return true;
           },
           supplierDraftExpectedLength(line) {
@@ -27342,6 +27379,207 @@
           supplierDraftQuantityAfter(line) {
             const remaining = Number(line?.remaining_requisition_qty ?? line?.requisition_qty ?? 0);
             return remaining - Number(line?.requisition_qty || 0);
+          },
+          purchasePurposeRawValue(line, key) {
+            const snapshots = [
+              line,
+              line?.purchase_purpose,
+              line?.purpose_snapshot,
+              line?.purpose_allocation,
+            ];
+            for (const snapshot of snapshots) {
+              if (!snapshot || !Object.prototype.hasOwnProperty.call(snapshot, key)) continue;
+              const value = snapshot[key];
+              if (value !== null && value !== undefined && value !== "") return value;
+            }
+            return null;
+          },
+          purchasePurposeInteger(value) {
+            if (value === null || value === undefined || value === "") return null;
+            const number = Number(value);
+            return Number.isSafeInteger(number) && number >= 0 ? number : null;
+          },
+          purchasePurposeAuthoritativeOrderQty(line) {
+            const candidates = [
+              line?._authoritative_order_purpose_sheet_qty,
+              line?.authoritative_order_sheet_qty,
+              line?.authoritative_order_purpose_sheet_qty,
+              line?.order_required_sheet_qty,
+              line?.required_purchase_sheet_qty,
+              line?.remaining_requisition_qty,
+              line?._minimum_requisition_qty,
+              this.purchasePurposeRawValue(line, "order_purpose_sheet_qty"),
+              this.purchasePurposeRawValue(line, "purchase_total_sheet_qty"),
+              line?.requisition_qty,
+            ];
+            for (const candidate of candidates) {
+              const quantity = this.purchasePurposeInteger(candidate);
+              if (quantity !== null) return quantity;
+            }
+            return 0;
+          },
+          initializePurchasePurposeLine(line, force = false) {
+            if (!line || (line._purchase_purpose_initialized && !force)) return line;
+            const explicitTotal = force ? null : this.purchasePurposeInteger(
+              this.purchasePurposeRawValue(line, "purchase_total_sheet_qty")
+            );
+            const explicitOrder = force ? null : this.purchasePurposeInteger(
+              this.purchasePurposeRawValue(line, "order_purpose_sheet_qty")
+            );
+            const explicitStock = force ? null : this.purchasePurposeInteger(
+              this.purchasePurposeRawValue(line, "stock_purpose_sheet_qty")
+            );
+            let total = explicitTotal;
+            if (total === null && explicitOrder !== null && explicitStock !== null) total = explicitOrder + explicitStock;
+            if (total === null) total = this.purchasePurposeInteger(line.requisition_qty) ?? 0;
+
+            let authoritative = force ? null : this.purchasePurposeInteger(line._authoritative_order_purpose_sheet_qty);
+            if (authoritative === null) {
+              const candidates = [
+                line.authoritative_order_purpose_sheet_qty,
+                line.authoritative_order_sheet_qty,
+                line.order_required_sheet_qty,
+                line.required_purchase_sheet_qty,
+                explicitOrder,
+                line.remaining_requisition_qty,
+                line._minimum_requisition_qty,
+                total,
+              ];
+              for (const candidate of candidates) {
+                authoritative = this.purchasePurposeInteger(candidate);
+                if (authoritative !== null) break;
+              }
+            }
+            if (authoritative === null) authoritative = total;
+
+            let orderQuantity = explicitOrder;
+            let stockQuantity = explicitStock;
+            if (orderQuantity === null && stockQuantity !== null) orderQuantity = total - stockQuantity;
+            if (stockQuantity === null && orderQuantity !== null) stockQuantity = total - orderQuantity;
+            if (orderQuantity === null || stockQuantity === null || force) {
+              orderQuantity = Math.min(total, authoritative);
+              stockQuantity = Math.max(total - orderQuantity, 0);
+            }
+
+            line._authoritative_order_purpose_sheet_qty = authoritative;
+            line.purchase_total_sheet_qty = total;
+            line.order_purpose_sheet_qty = orderQuantity;
+            line.stock_purpose_sheet_qty = stockQuantity;
+            line.requisition_qty = total;
+            const planVersion = this.purchasePurposeRawValue(line, "purpose_plan_version");
+            const planFingerprint = this.purchasePurposeRawValue(line, "purpose_plan_fingerprint");
+            line.purpose_plan_version = planVersion === null ? null : planVersion;
+            line.purpose_plan_fingerprint = planFingerprint === null ? null : planFingerprint;
+            line._purchase_purpose_initialized = true;
+            return line;
+          },
+          initializeSupplierPurchasePurposeDraft(draft) {
+            for (const group of draft?.supplier_groups || []) {
+              for (const line of this.draftGroupLines(group)) this.initializePurchasePurposeLine(line);
+            }
+            return draft;
+          },
+          onPurchasePurposeTotalChanged(line) {
+            const total = this.purchasePurposeInteger(line?.purchase_total_sheet_qty);
+            line.requisition_qty = line?.purchase_total_sheet_qty;
+            line.quantity_override_acknowledged = false;
+            if (total === null) return false;
+            const authoritative = this.purchasePurposeAuthoritativeOrderQty(line);
+            line.order_purpose_sheet_qty = Math.min(total, authoritative);
+            line.stock_purpose_sheet_qty = Math.max(total - line.order_purpose_sheet_qty, 0);
+            return true;
+          },
+          onPurchasePurposePartChanged(line) {
+            line.requisition_qty = line?.purchase_total_sheet_qty;
+            line.quantity_override_acknowledged = false;
+          },
+          purchasePurposeCustomerScopeCount(line) {
+            const scopes = new Set();
+            for (const source of line?.source_items || []) {
+              const id = Number(source?.customer_id || source?.source_customer_id || 0);
+              const name = String(source?.customer_name || "").trim();
+              if (id > 0) scopes.add(`id:${id}`);
+              else if (name) scopes.add(`name:${name}`);
+            }
+            return scopes.size;
+          },
+          purchasePurposeValidationError(line) {
+            const total = this.purchasePurposeInteger(line?.purchase_total_sheet_qty);
+            const orderQuantity = this.purchasePurposeInteger(line?.order_purpose_sheet_qty);
+            const stockQuantity = this.purchasePurposeInteger(line?.stock_purpose_sheet_qty);
+            if (total === null || total <= 0) return "采购总张必须为大于 0 的整数";
+            if (orderQuantity === null) return "订单用途张必须为非负整数";
+            if (stockQuantity === null) return "客户通用片料备库张必须为非负整数";
+            if (orderQuantity + stockQuantity !== total) return "订单用途张与备库张合计必须等于采购总张";
+            const authoritative = this.purchasePurposeAuthoritativeOrderQty(line);
+            if (orderQuantity > authoritative) return `订单用途张不能超过本行权威上限 ${authoritative} 张`;
+            if (stockQuantity > 0 && this.purchasePurposeCustomerScopeCount(line) > 1) {
+              return "该采购行包含多个客户，备库用途必须先按客户拆分";
+            }
+            const planVersion = this.purchasePurposeInteger(line?.purpose_plan_version);
+            const planFingerprint = String(line?.purpose_plan_fingerprint || "").trim();
+            const hasVersion = planVersion !== null && planVersion > 0;
+            const hasFingerprint = planFingerprint.length === 64;
+            if (hasVersion !== hasFingerprint) return "采购用途版本不完整，请刷新草稿后重试";
+            if ((!hasVersion || !hasFingerprint) && stockQuantity > 0) {
+              return "当前旧草稿没有采购用途版本，不能多订备库；请关闭后重新生成草稿";
+            }
+            return "";
+          },
+          purchasePurposeSourceOrderQuantities(line) {
+            const sources = line?.source_items || [];
+            if (!sources.length) return [];
+            const target = this.purchasePurposeInteger(line?.order_purpose_sheet_qty) ?? 0;
+            const existing = sources.map(source => this.purchasePurposeInteger(source?.order_purpose_sheet_qty));
+            if (existing.every(quantity => quantity !== null)
+              && existing.reduce((sum, quantity) => sum + quantity, 0) === target) {
+              return existing;
+            }
+            const weights = sources.map(source => this.purchasePurposeInteger(
+              source?.requisition_qty ?? source?.source_requisition_qty ?? source?.source_quantity ?? source?.quantity
+            ) ?? 0);
+            const weightTotal = weights.reduce((sum, weight) => sum + weight, 0);
+            if (weightTotal <= 0) return sources.map((source, index) => index === 0 ? target : 0);
+            const raw = weights.map(weight => target * weight / weightTotal);
+            const allocated = raw.map(value => Math.floor(value));
+            let remainder = target - allocated.reduce((sum, quantity) => sum + quantity, 0);
+            const priority = raw.map((value, index) => ({index, fraction:value - allocated[index]}))
+              .sort((left, right) => right.fraction - left.fraction || left.index - right.index);
+            for (let index = 0; index < remainder; index += 1) allocated[priority[index % priority.length].index] += 1;
+            return allocated;
+          },
+          purchasePurposePayload(line) {
+            const planVersion = this.purchasePurposeInteger(line?.purpose_plan_version);
+            const planFingerprint = String(line?.purpose_plan_fingerprint || "").trim();
+            if (planVersion === null && !planFingerprint) return {};
+            return {
+              purchase_total_sheet_qty:Number(line?.purchase_total_sheet_qty || 0),
+              order_purpose_sheet_qty:Number(line?.order_purpose_sheet_qty || 0),
+              stock_purpose_sheet_qty:Number(line?.stock_purpose_sheet_qty || 0),
+              purpose_plan_version:planVersion,
+              purpose_plan_fingerprint:planFingerprint || null,
+            };
+          },
+          supplierOrderPurposeValue(line, key, fallback = null) {
+            const quantity = this.purchasePurposeInteger(this.purchasePurposeRawValue(line, key));
+            if (quantity !== null) return quantity;
+            if (fallback !== null && fallback !== undefined && fallback !== "") return fallback;
+            return "—";
+          },
+          supplierOrderPurposeStatusText(line) {
+            const status = String(this.purchasePurposeRawValue(line, "purpose_status") || "").toLowerCase();
+            const hasOrderPurpose = this.purchasePurposeInteger(
+              this.purchasePurposeRawValue(line, "order_purpose_sheet_qty")
+            ) !== null;
+            const hasStockPurpose = this.purchasePurposeInteger(
+              this.purchasePurposeRawValue(line, "stock_purpose_sheet_qty")
+            ) !== null;
+            if (!hasOrderPurpose || !hasStockPurpose || status.includes("legacy") || status === "unset") {
+              return "历史采购未设置用途（不推断）";
+            }
+            if (status === "mixed") return "部分历史明细未设置用途（不推断）";
+            if (status === "draft") return "草稿";
+            return "已冻结";
           },
           mergeGroupPayload(row) {
             return {
@@ -27419,24 +27657,22 @@
                 if (undecidedInventory) return `${label} 发现可抵扣半成品库存，请先确认抵扣或选择本次不用库存`;
                 if (Number(line.report_length_mm) <= 0) return `${label} 报料长必须大于 0`;
                 if (Number(line.report_width_mm) <= 0) return `${label} 报料宽必须大于 0`;
-                if (Number(line.requisition_qty) <= 0) return `${label} 采购张数必须大于 0`;
+                this.initializePurchasePurposeLine(line);
+                const purposeError = this.purchasePurposeValidationError(line);
+                if (purposeError) return `${label} ${purposeError}`;
                 if (this.isMergedRequisitionCuttingLine(line)) {
                   const plan = this.calculateMergedRequisitionCuttingPlan(line);
                   if (!plan.valid) return `${label} ${plan.error}`;
                   if (!String(line.cutting_plan_fingerprint || "").trim()) return `${label} 缺少开料版本，请刷新后重试`;
                   if (Number(line.report_length_mm) !== plan.report_length_mm
                     || Number(line.report_width_mm) !== plan.report_width_mm
-                    || Number(line.requisition_qty) !== plan.requisition_qty) {
-                    return `${label} 开料尺寸或采购张数已被改动，请重新选择开料方式`;
+                    || this.purchasePurposeAuthoritativeOrderQty(line) !== plan.requisition_qty) {
+                    return `${label} 开料尺寸或订单用途权威张数已变化，请重新生成草稿`;
                   }
                 }
                 if (this.supplierDraftLineIsSwapped(line)) {
                   if (!(this.canAdmin || this.user?.role === "boss")) return `${label} 疑似长宽填反，请修改后再保存`;
                   if (!line.dimension_override_acknowledged) return `${label} 疑似长宽填反，请勾选“按人工尺寸继续”`;
-                }
-                if (this.supplierDraftQuantityAfter(line) < 0) {
-                  if (!(this.canAdmin || this.user?.role === "boss")) return `${label} 本次报料超过剩余待报数量，只有管理员可确认超量报料`;
-                  if (!line.quantity_override_acknowledged) return `${label} 请勾选“确认超量报料”`;
                 }
                 if (!Array.isArray(line.source_items) || !line.source_items.length) return `${label} 缺少来源明细`;
               }
@@ -27454,7 +27690,11 @@
             }
             const requisitionError = this.validateRequisitionForm();
             if (requisitionError) throw new Error(requisitionError);
+            if (!String(state.requestKey || "").trim()) {
+              state.requestKey = createIdempotencyKey();
+            }
             const payload = {
+              request_key:state.requestKey,
               supplier_name:this.requisitionForm.supplier_name,
               items:this.requisitionForm.items.map(line => this.requisitionBatchLinePayload(line)),
             };
@@ -27582,31 +27822,50 @@
               supplier_groups: (this.supplierRequisitionDraft.supplier_groups || []).map(group => ({
                 supplier_name: group.supplier_name,
                 request_key: group.request_key || null,
-                lines: this.draftGroupLines(group).map(line => ({
-                  line_key: line.line_key || null,
-                  source_type: line.source_type || null,
-                  report_length_mm: line.report_length_mm,
-                  report_width_mm: line.report_width_mm,
-                  cutting_mode: line.cutting_mode || "一开一",
-                  requisition_qty: Number(line.requisition_qty || 0),
-                  original_report_length_mm: line.original_report_length_mm ?? null,
-                  original_report_width_mm: line.original_report_width_mm ?? null,
-                  effective_demand_piece_qty: line.effective_demand_piece_qty ?? null,
-                  theoretical_output_piece_qty: line.theoretical_output_piece_qty ?? null,
-                  remainder_piece_qty: line.remainder_piece_qty ?? null,
-                  cutting_plan_fingerprint: line.cutting_plan_fingerprint ?? null,
-                  dimension_override_acknowledged: !!line.dimension_override_acknowledged,
-                  quantity_override_acknowledged: !!line.quantity_override_acknowledged,
-                  remark: line.remark || null,
-                  source_items: (line.source_items || []).map(source => ({
-                    source_type: source.source_type,
-                    order_item_id: source.order_item_id,
-                    merge_group_id: source.merge_group_id || null,
-                    component_type: source.component_type || null,
-                    source_quantity: Number(source.source_quantity || source.quantity || 0),
-                    requisition_qty: Number(source.requisition_qty || 0),
-                  })),
-                })),
+                lines: this.draftGroupLines(group).map(line => {
+                  const purchaseTotal = Number(line.purchase_total_sheet_qty ?? line.requisition_qty ?? 0);
+                  const orderPurpose = Number(line.order_purpose_sheet_qty ?? purchaseTotal);
+                  const stockPurpose = Number(line.stock_purpose_sheet_qty ?? Math.max(purchaseTotal - orderPurpose, 0));
+                  const purposePayload = typeof this.purchasePurposePayload === "function"
+                    ? this.purchasePurposePayload(line)
+                    : {
+                        purchase_total_sheet_qty:purchaseTotal,
+                        order_purpose_sheet_qty:orderPurpose,
+                        stock_purpose_sheet_qty:stockPurpose,
+                        purpose_plan_version:line.purpose_plan_version ?? null,
+                        purpose_plan_fingerprint:line.purpose_plan_fingerprint ?? null,
+                      };
+                  const sourceOrderQuantities = typeof this.purchasePurposeSourceOrderQuantities === "function"
+                    ? this.purchasePurposeSourceOrderQuantities(line)
+                    : (line.source_items || []).map(source => Number(source.order_purpose_sheet_qty ?? source.requisition_qty ?? 0));
+                  return {
+                    line_key: line.line_key || null,
+                    source_type: line.source_type || null,
+                    report_length_mm: line.report_length_mm,
+                    report_width_mm: line.report_width_mm,
+                    cutting_mode: line.cutting_mode || "一开一",
+                    requisition_qty: purchaseTotal,
+                    ...purposePayload,
+                    original_report_length_mm: line.original_report_length_mm ?? null,
+                    original_report_width_mm: line.original_report_width_mm ?? null,
+                    effective_demand_piece_qty: line.effective_demand_piece_qty ?? null,
+                    theoretical_output_piece_qty: line.theoretical_output_piece_qty ?? null,
+                    remainder_piece_qty: line.remainder_piece_qty ?? null,
+                    cutting_plan_fingerprint: line.cutting_plan_fingerprint ?? null,
+                    dimension_override_acknowledged: !!line.dimension_override_acknowledged,
+                    quantity_override_acknowledged: !!line.quantity_override_acknowledged,
+                    remark: line.remark || null,
+                    source_items: (line.source_items || []).map((source, sourceIndex) => ({
+                      source_type: source.source_type,
+                      order_item_id: source.order_item_id,
+                      merge_group_id: source.merge_group_id || null,
+                      component_type: source.component_type || null,
+                      source_quantity: Number(source.source_quantity || source.quantity || 0),
+                      requisition_qty: Number(source.requisition_qty || 0),
+                      order_purpose_sheet_qty:sourceOrderQuantities[sourceIndex] || 0,
+                    })),
+                  };
+                }),
               })),
             };
             const frozenPayload = JSON.parse(JSON.stringify(payload));
@@ -27688,9 +27947,7 @@
             const compositeRows = selectedRows.filter(row => row.is_composite_bom);
             if (compositeRows.length) {
               if (compositeRows.length !== selectedRows.length) { this.showToast("复合产品组件请与普通商品分开报料", true); return; }
-              this.cancelSupplierRequisitionPreview();
-              await this.openCompositeRequisition(compositeRows);
-              return true;
+              return this.openCompositeRequisition(compositeRows);
             }
             const selections = JSON.parse(JSON.stringify(
               selectedRows.map(row => this.pendingSupplierSelectionPayload(row)).filter(item => item.type === "merge_group" ? !!item.merge_group_id : !!item.order_item_id)
@@ -27718,7 +27975,7 @@
                 }
               }
               this.supplierRequisitionSelections = selections;
-              this.supplierRequisitionDraft = data;
+              this.supplierRequisitionDraft = this.initializeSupplierPurchasePurposeDraft(data);
               this.supplierRequisitionSaveState = {saving:false, committed:false, uncertain:false, result:null};
               this.modal = { type:"supplierRequisitionDraft", title:"生成供应商采购报料单" };
               const lateFinishedSources = this.supplierDraftLateFinishedSources();
@@ -27747,9 +28004,21 @@
               line._minimum_requisition_qty = Number(line.requisition_qty || 0);
               line._auto_cover_loading = false;
               line._auto_cover_error = "";
+              this.initializePurchasePurposeLine(line, true);
             });
+            const draftSignature = JSON.stringify(lines.map(line => ({
+              order_item_id:Number(line.order_item_id || 0),
+              bom_snapshot_id:Number(line.bom_snapshot_id || 0),
+              component_type:String(line.component_type || "whole"),
+            })).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))));
+            const previousSaveState = this.compositeRequisitionSaveState || {};
+            const requestKey = previousSaveState.uncertain
+              && previousSaveState.draftSignature === draftSignature
+              && String(previousSaveState.requestKey || "").trim()
+              ? previousSaveState.requestKey
+              : createIdempotencyKey();
             this.requisitionForm = { supplier_name:suppliers[0], items:lines };
-            this.compositeRequisitionSaveState = {saving:false, committed:false, uncertain:false, result:null};
+            this.compositeRequisitionSaveState = {saving:false, committed:false, uncertain:false, result:null, requestKey, draftSignature};
             this.modal = {type:"requisition", title:"报料明细草稿"};
           },
           recalculateCompositeDraftLine(line) {
@@ -27763,6 +28032,7 @@
               : this.cuttingModeFactor(line.special_process);
             line._minimum_requisition_qty = Math.ceil(remaining / Math.max(yieldPerSheet, 1));
             line.requisition_qty = line._minimum_requisition_qty;
+            this.initializePurchasePurposeLine(line, true);
           },
           async autoCoverCompositeDraftLine(line) {
             const snapshotId = Number(line.bom_snapshot_id || 0);
@@ -27811,7 +28081,8 @@
               bom_snapshot_id:line.bom_snapshot_id ? Number(line.bom_snapshot_id) : null,
               actual_yield_per_sheet:line.actual_yield_per_sheet ? Number(line.actual_yield_per_sheet) : null,
               inventory_deducted_qty:Number(line.inventory_deducted_qty || 0),
-              requisition_qty:Number(line.requisition_qty || 0),
+              requisition_qty:Number(line.purchase_total_sheet_qty || 0),
+              ...this.purchasePurposePayload(line),
               cardboard_len:Number(line.cardboard_len),
               cardboard_width:Number(line.cardboard_width),
               special_process:line.special_process || "一开一",

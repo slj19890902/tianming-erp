@@ -110,6 +110,10 @@ class SupplierRequisitionOrderItem(Base):
             name="ck_supplier_requisition_order_items_version",
         ),
         CheckConstraint(
+            "purpose_contract_status IN ('legacy_unset','frozen')",
+            name="ck_supplier_requisition_order_items_purpose_contract_status",
+        ),
+        CheckConstraint(
             "((status = 'active' AND voided_at IS NULL AND voided_by IS NULL "
             "AND void_idempotency_key IS NULL AND void_request_hash IS NULL) OR "
             "(status = 'voided' AND voided_at IS NOT NULL "
@@ -159,6 +163,12 @@ class SupplierRequisitionOrderItem(Base):
     )
     version: Mapped[int] = mapped_column(
         Integer, default=1, server_default="1", nullable=False
+    )
+    purpose_contract_status: Mapped[str] = mapped_column(
+        String(20),
+        default="legacy_unset",
+        server_default="legacy_unset",
+        nullable=False,
     )
     voided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     voided_by: Mapped[int | None] = mapped_column(

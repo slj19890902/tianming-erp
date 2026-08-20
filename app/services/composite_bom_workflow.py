@@ -415,6 +415,7 @@ def ensure_component_production_tasks(
             task = ProductionTask(
                 order_item_id=order_item_id,
                 sales_order_item_bom_component_id=demand.snapshot_id,
+                task_role="component_internal",
                 status="waiting_material",
                 planned_quantity=0,
                 finished_coverage_snapshot=0,

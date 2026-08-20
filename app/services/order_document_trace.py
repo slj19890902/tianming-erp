@@ -21,6 +21,7 @@ from app.models.finance import (
 from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
 from app.models.order import Order, OrderItem
 from app.models.product import Product
+from app.models.purchase_receipt import IncomingReceiptPurposeAllocation
 from app.models.production import (
     ProductionCompletion,
     ProductionStockTransfer,
@@ -387,10 +388,62 @@ def build_order_item_document_trace(
             .where(IncomingReceiptItem.order_item_id == item.id)
             .order_by(IncomingReceipt.received_at, IncomingReceiptItem.id)
         ).all()
+        receipt_item_ids = [receipt_item.id for receipt_item, _receipt in incoming_rows]
+        purpose_rows = (
+            db.scalars(
+                select(IncomingReceiptPurposeAllocation).where(
+                    IncomingReceiptPurposeAllocation.incoming_receipt_item_id.in_(
+                        receipt_item_ids
+                    )
+                )
+            ).all()
+            if receipt_item_ids
+            else []
+        )
+        purpose_by_receipt_item = {
+            row.incoming_receipt_item_id: row for row in purpose_rows
+        }
         for receipt_item, receipt in incoming_rows:
+            purpose = purpose_by_receipt_item.get(receipt_item.id)
             if receipt_item.surplus_inventory_lot_id is not None:
                 lot_ids.add(receipt_item.surplus_inventory_lot_id)
+            if purpose is not None:
+                if purpose.finished_inventory_lot_id is not None:
+                    lot_ids.add(purpose.finished_inventory_lot_id)
+                if purpose.semi_finished_inventory_lot_id is not None:
+                    lot_ids.add(purpose.semi_finished_inventory_lot_id)
             effective = receipt.status == "posted" and receipt_item.status == "posted"
+            purpose_details: dict[str, Any] = {}
+            if purpose is not None:
+                purpose_details = {
+                    "purpose_status": purpose.purpose_contract_status_snapshot,
+                    "order_purpose_sheet_qty": (
+                        purpose.receipt_order_purpose_sheet_qty
+                    ),
+                    "reserve_purpose_sheet_qty": (
+                        purpose.receipt_reserve_purpose_sheet_qty
+                    ),
+                    "cumulative_order_purpose_sheet_qty": (
+                        purpose.cumulative_order_purpose_sheet_qty_after
+                    ),
+                    "cumulative_reserve_purpose_sheet_qty": (
+                        purpose.cumulative_reserve_purpose_sheet_qty_after
+                    ),
+                    "finished_output_qty_delta": purpose.finished_output_qty_delta,
+                    "finished_output_qty_cumulative": purpose.finished_output_qty_after,
+                    "finished_inventory_lot_id": purpose.finished_inventory_lot_id,
+                    "reserve_inventory_lot_id": (
+                        purpose.semi_finished_inventory_lot_id
+                    ),
+                }
+                if "cost.view" in permissions:
+                    purpose_details.update(
+                        {
+                            "order_purpose_cost": purpose.order_purpose_cost,
+                            "reserve_purpose_cost": purpose.reserve_purpose_cost,
+                            "total_cost": purpose.total_cost,
+                        }
+                    )
             add_event(
                 stage="incoming",
                 source_type="incoming_receipt",
@@ -405,6 +458,7 @@ def build_order_item_document_trace(
                     "planned_quantity": receipt_item.planned_quantity,
                     "variance_quantity": receipt_item.variance_quantity,
                     "variance_type": receipt_item.variance_type,
+                    **purpose_details,
                 },
             )
             reversed_at = receipt_item.reversed_at or receipt.reversed_at
@@ -424,7 +478,10 @@ def build_order_item_document_trace(
 
     production_tasks = db.scalars(
         select(ProductionTask)
-        .where(ProductionTask.order_item_id == item.id)
+        .where(
+            ProductionTask.order_item_id == item.id,
+            ProductionTask.task_role == "order_main",
+        )
         .order_by(ProductionTask.created_at, ProductionTask.id)
     ).all()
     for task in production_tasks:

@@ -688,6 +688,7 @@ def test_n083_location_first_plan_and_one_click_normal_completion(pick_app) -> N
                 remarks=None,
                 operator_id=admin.id,
                 idempotency_key=f"n083-lot-{index}",
+                expected_layout_version=(1 if index == 1 else None),
             )
             lot.quantity_available -= quantity
             lot.quantity_reserved += quantity

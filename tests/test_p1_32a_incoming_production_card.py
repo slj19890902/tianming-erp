@@ -253,7 +253,11 @@ def test_card_page_is_a4_large_print_and_has_no_business_write() -> None:
     assert "window.opener" not in CARD
     assert "localStorage.clear" not in CARD
     assert "sessionStorage.clear" not in CARD
-    assert "method:\"POST\"" not in CARD
+    # Label-plan refresh is the page's one explicit audited write; receiving
+    # and production completion still cannot be posted from this print page.
+    assert CARD.count('method:"POST"') == 1
+    assert "/label-plan-refresh" in CARD
+    assert "/api/incoming/" not in CARD.split('method:"POST"', 1)[0][-200:]
     assert "method:\"PUT\"" not in CARD
     assert not (ROOT / "static" / "incoming-production-card.html").exists()
 

@@ -136,6 +136,7 @@ def _seed_label_facts(db: Session) -> tuple[Requisition, OrderItem, list[Requisi
         task = ProductionTask(
             order_item_id=order_item.id,
             sales_order_item_bom_component_id=snapshot.id,
+            task_role="component_internal",
             status="pending",
             planned_quantity=total,
             ordered_quantity_snapshot=total,

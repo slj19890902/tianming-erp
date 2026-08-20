@@ -45,6 +45,17 @@ class ProductionTask(Base):
             name="ck_production_tasks_status",
         ),
         CheckConstraint(
+            "task_role IN ('order_main','component_internal')",
+            name="ck_production_tasks_task_role",
+        ),
+        CheckConstraint(
+            "((task_role = 'order_main' "
+            "AND sales_order_item_bom_component_id IS NULL) OR "
+            "(task_role = 'component_internal' "
+            "AND sales_order_item_bom_component_id IS NOT NULL))",
+            name="ck_production_tasks_role_component",
+        ),
+        CheckConstraint(
             "planned_quantity >= 0",
             name="ck_production_tasks_planned_quantity_nonnegative",
         ),
@@ -91,8 +102,11 @@ class ProductionTask(Base):
         ForeignKey("sales_order_items.id", ondelete="CASCADE"), nullable=False
     )
     sales_order_item_bom_component_id: Mapped[int | None] = mapped_column(
-        ForeignKey("sales_order_item_bom_components.id", ondelete="SET NULL"),
+        ForeignKey("sales_order_item_bom_components.id", ondelete="RESTRICT"),
         nullable=True,
+    )
+    task_role: Mapped[str] = mapped_column(
+        String(30), default="order_main", server_default="order_main", nullable=False
     )
     status: Mapped[str] = mapped_column(
         String(30), default="waiting_material", server_default="waiting_material", nullable=False
@@ -259,6 +273,10 @@ class ProductionCompletion(Base):
             name="ck_production_completions_type",
         ),
         CheckConstraint(
+            "origin IN ('manual','receipt_auto')",
+            name="ck_production_completions_origin",
+        ),
+        CheckConstraint(
             "material_input_quantity > 0 AND planned_output_quantity > 0 "
             "AND actual_output_quantity > 0 AND defective_quantity >= 0",
             name="ck_production_completions_output_quantities",
@@ -288,6 +306,9 @@ class ProductionCompletion(Base):
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     completion_type: Mapped[str] = mapped_column(
         String(20), default="primary", server_default="primary", nullable=False
+    )
+    origin: Mapped[str] = mapped_column(
+        String(20), default="manual", server_default="manual", nullable=False
     )
     material_input_quantity: Mapped[int] = mapped_column(
         Integer,

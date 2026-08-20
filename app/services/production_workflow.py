@@ -2,14 +2,15 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import date
+from decimal import Decimal, ROUND_HALF_UP
 from hashlib import sha256
 import json
 from math import ceil
 from typing import Literal, Sequence
 
-from sqlalchemy import String, case, cast, func, or_, select, update
+from sqlalchemy import String, and_, case, cast, exists, func, or_, select, update
 from sqlalchemy.exc import IntegrityError, OperationalError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.core.time_contract import (
     beijing_date_bounds_utc_naive,
@@ -21,10 +22,15 @@ from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryItem
 from app.models.incoming_receipt import IncomingReceiptItem
 from app.models.order import Order, OrderItem
+from app.models.purchase_receipt import (
+    IncomingReceiptPurposeAllocation,
+    IncomingReceiptPurposeReversal,
+)
 from app.models.product import Product
 from app.models.printing_plate import PrintingPlate
 from app.models.product_bom import (
     BomComponentDirectDeliveryAllocation,
+    RequisitionItemBomSource,
     SalesOrderItemBomComponent,
 )
 from app.models.production import (
@@ -757,6 +763,7 @@ def _refresh_composite_production_tasks(
             task = ProductionTask(
                 order_item_id=item.id,
                 sales_order_item_bom_component_id=demand.snapshot_id,
+                task_role="component_internal",
                 status=WAITING_MATERIAL,
                 planned_quantity=0,
                 finished_coverage_snapshot=0,
@@ -893,6 +900,7 @@ def refresh_production_task(
         )
         task = ProductionTask(
             order_item_id=item.id,
+            task_role="order_main",
             status=WAITING_MATERIAL,
             planned_quantity=0,
             finished_coverage_snapshot=0,
@@ -1027,6 +1035,18 @@ def refresh_order_production_status(db: Session, order_id: int) -> Order | None:
     item_states: list[str] = []
     for item in items:
         if is_composite_order_item(db, item.id):
+            receipt_auto_main_task = db.scalar(
+                select(ProductionTask).where(
+                    ProductionTask.order_item_id == item.id,
+                    ProductionTask.sales_order_item_bom_component_id.is_(None),
+                    ProductionTask.task_role == "order_main",
+                )
+            )
+            if receipt_auto_main_task is not None and _has_receipt_managed_frozen_source(
+                db, order_item_ids=[item.id]
+            ):
+                item_states.append(receipt_auto_main_task.status)
+                continue
             component_rows = _component_task_rows(db, item.id)
             demands = effective_component_demands(db, item.id)
             required_snapshot_ids = {
@@ -1087,6 +1107,19 @@ def production_ready_quantity(db: Session, order_item: OrderItem | int) -> int:
                 ProductionTask.sales_order_item_bom_component_id.is_(None),
             )
         )
+    receipt_auto_completions = db.scalars(
+        select(ProductionCompletion).where(
+            ProductionCompletion.order_item_id == item.id,
+            ProductionCompletion.status == "posted",
+            ProductionCompletion.origin == "receipt_auto",
+        )
+    ).all()
+    if receipt_auto_completions:
+        completion_quantity = sum(
+            normalized_completion_output(item, completion)
+            for completion in receipt_auto_completions
+        )
+        return max(completion_quantity, 0)
     if is_composite_order_item(db, item.id):
         try:
             return int(kit_availability(db, item.id)["available_sets"])
@@ -1188,7 +1221,11 @@ def _production_stock_location(
     return location
 
 
-def _production_direct_staging_location(db: Session) -> WarehouseLocation:
+def _production_direct_staging_location(
+    db: Session,
+    *,
+    require_receipt_ready: bool = False,
+) -> WarehouseLocation:
     location = db.scalar(
         select(WarehouseLocation).where(
             WarehouseLocation.location_code == DIRECT_DELIVERY_STAGING_LOCATION_CODE
@@ -1203,6 +1240,15 @@ def _production_direct_staging_location(db: Session) -> WarehouseLocation:
         db,
         location,
         warehouse_types={"finished", "shared"},
+        pallet_storage_only=require_receipt_ready,
+        require_published=require_receipt_ready,
+        require_map_geometry=require_receipt_ready,
+        required_inventory_type="finished" if require_receipt_ready else None,
+        # The combined staging area intentionally accepts several system
+        # pallets at one area-level location.  Passing the same location as
+        # capacity source keeps a full-area result as a warning rather than a
+        # hard block while every publication/type/geometry gate still runs.
+        capacity_source_location_id=(location.id if require_receipt_ready else None),
     )
     if issue:
         raise ProductionWorkflowError(f"一楼待送区不可用：{issue}", 409)
@@ -1210,13 +1256,55 @@ def _production_direct_staging_location(db: Session) -> WarehouseLocation:
         location.warehouse_floor != 1
         or str(location.area_code or "").strip().upper() != "DISPATCH"
         or location.storage_type != "temporary_aisle"
-        or location.source_version != "P1-25C"
+        or (
+            not require_receipt_ready
+            and location.source_version != "P1-25C"
+        )
     ):
         raise ProductionWorkflowError(
             "一楼待送区与正式 F1-DISPATCH-01 定义不一致，请先核对仓库台账",
             409,
         )
     return location
+
+
+def receipt_auto_finished_location_projection(db: Session) -> dict[str, object]:
+    """Return the authoritative employee-safe F1 receipt destination preview."""
+
+    try:
+        location = _production_direct_staging_location(db, require_receipt_ready=True)
+    except ProductionWorkflowError as error:
+        return {
+            "ready": False,
+            "location_name": None,
+            "layout_version": None,
+            "capacity_warning": None,
+            "issue": str(error),
+        }
+    capacity_issue = operational_location_issue(
+        db,
+        location,
+        warehouse_types={"finished", "shared"},
+        pallet_storage_only=True,
+        require_published=True,
+        require_map_geometry=True,
+        required_inventory_type="finished",
+    )
+    return {
+        "ready": True,
+        "location_name": location.location_name,
+        "layout_version": (
+            int(location.floor3_layout.version)
+            if location.floor3_layout is not None
+            else None
+        ),
+        "capacity_warning": (
+            capacity_issue
+            if capacity_issue == "该区域已达到现场确认的栈板容量"
+            else None
+        ),
+        "issue": None,
+    }
 
 
 def _direct_dispatch_pallet_occupancy_key(completion_id: int) -> str:
@@ -1778,8 +1866,9 @@ def _stock_completion_lot(
         require_empty_pallet=require_empty_pallet,
         movement_reason=movement_reason,
         expected_layout_version=(
-            None
+            int(location.floor3_layout.version)
             if location_id_override is not None
+            and location.floor3_layout is not None
             else command.expected_layout_version
         ),
     )
@@ -1865,6 +1954,56 @@ def _replay_completion_batch(
     return CompletionBatchResult(batch, tuple(rows), True)
 
 
+def _has_receipt_managed_frozen_source(
+    db: Session,
+    *,
+    order_item_ids: Sequence[int],
+) -> bool:
+    """Return whether P1-81 already owns production for any sales line.
+
+    Once a frozen-purpose receipt has posted, its order-level finished output is
+    derived from the immutable cumulative receipt allocation.  Allowing the
+    legacy manual completion path for either the main task or an internal BOM
+    component task would post the same material a second time.
+    """
+
+    normalized_ids = sorted({int(item_id) for item_id in order_item_ids})
+    if not normalized_ids:
+        return False
+    allocation_id = db.scalar(
+        select(IncomingReceiptPurposeAllocation.id)
+        .outerjoin(
+            RequisitionItemBomSource,
+            RequisitionItemBomSource.id
+            == IncomingReceiptPurposeAllocation.source_bom_requisition_source_id,
+        )
+        .outerjoin(
+            SalesOrderItemBomComponent,
+            SalesOrderItemBomComponent.id
+            == RequisitionItemBomSource.sales_order_item_bom_component_id,
+        )
+        .where(
+            IncomingReceiptPurposeAllocation.status == "posted",
+            IncomingReceiptPurposeAllocation.purpose_contract_status_snapshot
+            == "frozen",
+            ~exists(
+                select(IncomingReceiptPurposeReversal.id).where(
+                    IncomingReceiptPurposeReversal.incoming_receipt_purpose_allocation_id
+                    == IncomingReceiptPurposeAllocation.id
+                )
+            ),
+            or_(
+                IncomingReceiptPurposeAllocation.source_order_item_id.in_(
+                    normalized_ids
+                ),
+                SalesOrderItemBomComponent.sales_order_item_id.in_(normalized_ids),
+            ),
+        )
+        .limit(1)
+    )
+    return allocation_id is not None
+
+
 def complete_production_batch(
     db: Session,
     *,
@@ -1939,6 +2078,14 @@ def complete_production_batch(
     ).all()
     if len(rows) != len(task_ids):
         raise ProductionWorkflowError("生产任务或关联订单已被删除，不能确认完工", 409)
+    if _has_receipt_managed_frozen_source(
+        db,
+        order_item_ids=[item.id for _task, item, _order in rows],
+    ):
+        raise ProductionWorkflowError(
+            "该订单已由冻结收料用途自动形成成品，不能再手工确认生产完工",
+            409,
+        )
     by_task = {task.id: (task, item, order) for task, item, order in rows}
     if len({order.customer_id for _, _, order in rows}) != 1:
         raise ProductionWorkflowError("一个完工批次只能包含同一客户的生产任务", 409)
@@ -2838,6 +2985,337 @@ def reverse_production_completion(
     )
 
 
+def _ensure_receipt_auto_main_task(
+    db: Session,
+    *,
+    item: OrderItem,
+    product: Product,
+) -> ProductionTask:
+    """Return the single employee-visible task used by automatic receipts.
+
+    Composite component tasks remain internal execution records.  They are not
+    reused as the order-level task because doing so would give one sales line
+    several employee QR identities.
+    """
+
+    task = db.scalar(
+        select(ProductionTask).where(
+            ProductionTask.order_item_id == item.id,
+            ProductionTask.sales_order_item_bom_component_id.is_(None),
+        )
+    )
+    if task is not None:
+        if hasattr(task, "task_role"):
+            task.task_role = "order_main"
+        return task
+    order_quantity = int(item.quantity or 0)
+    if order_quantity <= 0:
+        raise ProductionWorkflowError("订单明细数量必须大于0，不能自动形成成品", 409)
+    task = ProductionTask(
+        order_item_id=item.id,
+        sales_order_item_bom_component_id=None,
+        task_role="order_main",
+        status=WAITING_MATERIAL,
+        planned_quantity=0,
+        finished_coverage_snapshot=0,
+        ordered_quantity_snapshot=order_quantity,
+        material_received_quantity=0,
+        material_input_quantity=0,
+        output_factor=cutting_output_factor(item.special_process),
+        readiness_basis=None,
+        ready_at=None,
+        version=1,
+        **_new_task_printing_snapshot(db, product),
+        **_new_task_label_snapshot(product, total_quantity=order_quantity),
+    )
+    db.add(task)
+    db.flush()
+    return task
+
+
+def ensure_receipt_auto_main_task(
+    db: Session,
+    *,
+    order_item_id: int,
+) -> ProductionTask:
+    """Ensure the one employee-visible task exists even before finished output.
+
+    A3/BOM receipts can have a zero finished increment until all required
+    components arrive.  The persistent order-level task must nevertheless exist
+    from the first frozen-purpose receipt; component tasks remain internal.
+    """
+
+    item = db.get(OrderItem, int(order_item_id))
+    if item is None:
+        raise ProductionWorkflowError("自动收料关联订单明细不存在", 409)
+    product = db.get(Product, item.product_id)
+    if product is None or not product.is_active:
+        raise ProductionWorkflowError("订单常用箱不存在或已停用，不能建立生产任务", 409)
+    return _ensure_receipt_auto_main_task(db, item=item, product=product)
+
+
+def post_automatic_receipt_completion(
+    db: Session,
+    *,
+    order_item_id: int,
+    previous_theoretical_quantity: int,
+    new_theoretical_quantity: int,
+    material_input_delta: int,
+    material_input_cumulative: int,
+    operator_id: int | None,
+    idempotency_key: str,
+    capitalized_material_cost: Decimal,
+    cost_detail: dict[str, object],
+) -> ProductionCompletion | None:
+    """Post one receipt-derived finished increment through the existing ledger.
+
+    The caller owns the surrounding receipt transaction and has already
+    validated the immutable purpose, material and price facts.  This function
+    never commits.
+    """
+
+    before = max(int(previous_theoretical_quantity or 0), 0)
+    after = max(int(new_theoretical_quantity or 0), 0)
+    if after < before:
+        raise ProductionWorkflowError("自动完工累计数量不能倒退", 409)
+    delta = after - before
+    if delta == 0:
+        return None
+    if material_input_delta <= 0 or material_input_cumulative <= 0:
+        raise ProductionWorkflowError("自动完工缺少有效的订单用途来料张数", 409)
+    key = str(idempotency_key or "").strip()
+    if not key or len(key) > 120:
+        raise ProductionWorkflowError("自动完工幂等键无效", 409)
+
+    item = db.get(OrderItem, order_item_id)
+    if item is None:
+        raise ProductionWorkflowError("自动完工关联订单明细不存在", 409)
+    order = lock_order_rows_for_production_transition(db, [item.order_id])[item.order_id]
+    if order.status not in MUTABLE_ORDER_STATUSES or item.is_force_closed:
+        raise ProductionWorkflowError("订单已结档、作废或强制关闭，不能自动形成成品", 409)
+    product = db.get(Product, item.product_id)
+    if product is None or not product.is_active:
+        raise ProductionWorkflowError("订单常用箱不存在或已停用，不能自动形成成品", 409)
+    task = _ensure_receipt_auto_main_task(db, item=item, product=product)
+    payload = {
+        "order_item_id": item.id,
+        "task_id": task.id,
+        "before": before,
+        "after": after,
+        "material_input_delta": int(material_input_delta),
+        "material_input_cumulative": int(material_input_cumulative),
+        "capitalized_material_cost": str(capitalized_material_cost),
+        "cost_detail": cost_detail,
+    }
+    request_hash = _canonical_hash(payload)
+    existing_batch = db.scalar(
+        select(ProductionCompletionBatch).where(
+            ProductionCompletionBatch.idempotency_key == key
+        )
+    )
+    if existing_batch is not None:
+        replay = _replay_completion_batch(
+            db,
+            batch=existing_batch,
+            request_hash=request_hash,
+        )
+        if len(replay.completions) != 1:
+            raise ProductionWorkflowError("自动完工幂等事实不完整", 409)
+        return replay.completions[0]
+
+    location = _production_direct_staging_location(db, require_receipt_ready=True)
+    existing_posted = db.scalar(
+        select(ProductionCompletion.id)
+        .where(
+            ProductionCompletion.task_id == task.id,
+            ProductionCompletion.status == "posted",
+        )
+        .limit(1)
+    )
+    completion_type: CompletionType = (
+        "primary" if existing_posted is None else "supplemental"
+    )
+    now = utc_now_naive()
+    batch = ProductionCompletionBatch(
+        idempotency_key=key,
+        request_hash=request_hash,
+        item_count=1,
+        completed_by=operator_id,
+        completed_at=now,
+    )
+    db.add(batch)
+    db.flush()
+    order_reserved = min(delta, max(int(item.quantity or 0) - before, 0))
+    completion = ProductionCompletion(
+        batch_id=batch.id,
+        task_id=task.id,
+        order_item_id=item.id,
+        expected_version=max(int(task.version or 1), 1),
+        quantity=delta,
+        completion_type=completion_type,
+        origin="receipt_auto",
+        material_input_quantity=int(material_input_delta),
+        planned_output_quantity=delta,
+        actual_output_quantity=delta,
+        defective_quantity=0,
+        order_reserved_quantity=order_reserved,
+        direct_delivery_quantity=delta,
+        stock_quantity=0,
+        surplus_finished_quantity=delta - order_reserved,
+        initial_disposition="direct",
+        warehouse_location_id=location.id,
+        inventory_lot_id=None,
+        remarks="收料后按冻结订单用途自动形成理论成品",
+        completed_by=operator_id,
+        completed_at=now,
+    )
+    db.add(completion)
+    db.flush()
+    command = CompletionCommand(
+        task_id=task.id,
+        expected_version=max(int(task.version or 1), 1),
+        disposition="direct",
+        completion_type=completion_type,
+        material_input_quantity=int(material_input_delta),
+        actual_output_quantity=delta,
+        direct_delivery_quantity=delta,
+        remarks="收料自动成品进入合并一楼成品暂存区",
+    )
+    lot = _stock_completion_lot(
+        db,
+        completion=completion,
+        task=task,
+        order=order,
+        item=item,
+        command=command,
+        operator_id=operator_id,
+        idempotency_prefix=_stable_key("incoming-auto", key),
+        location_id_override=location.id,
+        source_type="production_completion",
+        movement_reason="订单用途来料自动形成成品并进入合并一楼成品暂存区",
+    )
+    completion.inventory_lot_id = lot.id
+    _bind_direct_completion_lots_to_system_pallet(
+        db,
+        completion=completion,
+        order=order,
+        lots=[lot],
+        location=location,
+        operator_id=operator_id,
+    )
+    capitalized = Decimal(str(capitalized_material_cost or 0)).quantize(
+        Decimal("0.0001"), rounding=ROUND_HALF_UP
+    )
+    if capitalized < 0:
+        raise ProductionWorkflowError("自动成品成本不能小于0", 409)
+    lot.estimated_unit_cost_snapshot = (
+        capitalized / Decimal(delta)
+    ).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+    lot.estimated_square_price_snapshot = None
+    lot.estimated_cost_area_m2_snapshot = None
+    lot.cost_snapshot_source = "purchase_receipt_actual"
+    lot.cost_snapshot_detail_json = json.dumps(
+        {
+            **cost_detail,
+            "capitalized_material_cost": str(capitalized),
+            "finished_quantity": delta,
+            "formula": "cumulative uncapitalized order-purpose cost / finished increment",
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    lot.cost_snapshot_at = now
+
+    task.status = COMPLETED if after >= int(item.quantity or 0) else PENDING
+    task.planned_quantity = max(int(item.quantity or 0), after, 1)
+    task.finished_coverage_snapshot = min(after, int(item.quantity or 0))
+    task.ordered_quantity_snapshot = int(item.quantity or 0)
+    task.material_received_quantity = int(material_input_cumulative)
+    task.material_input_quantity = int(material_input_cumulative)
+    task.readiness_basis = "automatic_receipt"
+    task.ready_at = task.ready_at or now
+    task.version = max(int(task.version or 1), 1) + 1
+    db.flush()
+    refresh_order_production_status(db, order.id)
+    return completion
+
+
+def reverse_automatic_receipt_completion(
+    db: Session,
+    *,
+    completion_id: int,
+    remaining_theoretical_quantity: int,
+    remaining_material_input_quantity: int,
+    operator_id: int | None,
+    reason: str | None,
+) -> CompletionReversalResult:
+    """Reverse the latest receipt-derived completion inside receipt rollback."""
+
+    completion = db.get(ProductionCompletion, completion_id)
+    if completion is None or completion.status != "posted":
+        raise ProductionWorkflowError("关联的自动完工事实不存在或已撤销", 409)
+    if getattr(completion, "origin", "manual") != "receipt_auto":
+        raise ProductionWorkflowError("关联完工不是收料自动事实，不能由收料撤销", 409)
+    task = db.get(ProductionTask, completion.task_id)
+    item = db.get(OrderItem, completion.order_item_id)
+    if task is None or item is None:
+        raise ProductionWorkflowError("自动完工关联任务或订单明细不存在", 409)
+    order = lock_order_rows_for_production_transition(db, [item.order_id])[item.order_id]
+    if order.status not in MUTABLE_ORDER_STATUSES or item.is_force_closed:
+        raise ProductionWorkflowError("订单已结档、作废或强制关闭，不能撤销收料自动完工", 409)
+    if int(item.delivered_quantity or 0) > 0 or has_dispatched_delivery_facts(db, [item.id]):
+        raise ProductionWorkflowError("订单已经发货，请先撤销发货后再撤销来料", 409)
+    later = db.scalar(
+        select(ProductionCompletion.id)
+        .where(
+            ProductionCompletion.task_id == task.id,
+            ProductionCompletion.status == "posted",
+            ProductionCompletion.origin == "receipt_auto",
+            ProductionCompletion.id > completion.id,
+        )
+        .limit(1)
+    )
+    if later is not None:
+        raise ProductionWorkflowError("存在更晚的自动完工，请先撤销最新一笔来料", 409)
+    lot_id = completion.inventory_lot_id
+    if lot_id is not None:
+        _reverse_completion_finished_lot(
+            db,
+            completion=completion,
+            lot_id=lot_id,
+            operator_id=operator_id,
+            reason=(reason or "").strip() or "撤销来料自动完工",
+        )
+    now = utc_now_naive()
+    completion.status = "reversed"
+    completion.reversed_by = operator_id
+    completion.reversed_at = now
+    completion.reversal_reason = (reason or "").strip() or "撤销来料自动完工"
+    remaining = max(int(remaining_theoretical_quantity or 0), 0)
+    if remaining <= 0:
+        task.status = WAITING_MATERIAL
+        task.planned_quantity = 0
+        task.ready_at = None
+        task.readiness_basis = None
+    else:
+        task.status = COMPLETED if remaining >= int(item.quantity or 0) else PENDING
+        task.planned_quantity = max(int(item.quantity or 0), remaining, 1)
+        task.ready_at = task.ready_at or now
+        task.readiness_basis = "automatic_receipt"
+    task.finished_coverage_snapshot = min(remaining, int(item.quantity or 0))
+    task.material_received_quantity = max(int(remaining_material_input_quantity or 0), 0)
+    task.material_input_quantity = max(int(remaining_material_input_quantity or 0), 0)
+    task.version = max(int(task.version or 1), 1) + 1
+    db.flush()
+    refresh_order_production_status(db, order.id)
+    return CompletionReversalResult(
+        completion=completion,
+        transfer=None,
+        inventory_lot_id=lot_id,
+        reversed_semi_movement_ids=(),
+    )
+
+
 def _task_query(db: Session, allowed_customer_ids: set[int] | None):
     query = (
         select(ProductionTask, OrderItem, Order, Customer, Product)
@@ -2857,9 +3335,18 @@ def _filtered_task_query(
     allowed_customer_ids: set[int] | None,
     status: str | None,
 ):
+    main_task = aliased(ProductionTask)
+    main_task_exists = exists().where(
+        main_task.order_item_id == ProductionTask.order_item_id,
+        main_task.task_role == "order_main",
+    )
     query = _task_query(db, allowed_customer_ids).where(
         Order.status.in_(MUTABLE_ORDER_STATUSES),
         OrderItem.is_force_closed.is_(False),
+        or_(
+            ProductionTask.task_role == "order_main",
+            ~main_task_exists,
+        ),
     )
     if status:
         query = query.where(ProductionTask.status == status)
@@ -3340,6 +3827,77 @@ def _ordinary_pending_task_fast_payload(
     }
 
 
+def _receipt_purpose_summaries_by_order_item_ids(
+    db: Session,
+    order_item_ids: Sequence[int],
+) -> dict[int, dict[str, int]]:
+    normalized_ids = sorted({int(item_id) for item_id in order_item_ids})
+    if not normalized_ids:
+        return {}
+    rows = db.execute(
+        select(
+            IncomingReceiptPurposeAllocation,
+            SalesOrderItemBomComponent.sales_order_item_id,
+        )
+        .outerjoin(
+            RequisitionItemBomSource,
+            RequisitionItemBomSource.id
+            == IncomingReceiptPurposeAllocation.source_bom_requisition_source_id,
+        )
+        .outerjoin(
+            SalesOrderItemBomComponent,
+            SalesOrderItemBomComponent.id
+            == RequisitionItemBomSource.sales_order_item_bom_component_id,
+        )
+        .where(
+            IncomingReceiptPurposeAllocation.status == "posted",
+            IncomingReceiptPurposeAllocation.purpose_contract_status_snapshot
+            == "frozen",
+            ~exists(
+                select(IncomingReceiptPurposeReversal.id).where(
+                    IncomingReceiptPurposeReversal.incoming_receipt_purpose_allocation_id
+                    == IncomingReceiptPurposeAllocation.id
+                )
+            ),
+            or_(
+                IncomingReceiptPurposeAllocation.source_order_item_id.in_(
+                    normalized_ids
+                ),
+                SalesOrderItemBomComponent.sales_order_item_id.in_(normalized_ids),
+            ),
+        )
+    ).all()
+    result: dict[int, dict[str, int]] = {}
+    for allocation, component_order_item_id in rows:
+        order_item_id = (
+            int(allocation.source_order_item_id)
+            if allocation.source_order_item_id is not None
+            else int(component_order_item_id)
+            if component_order_item_id is not None
+            else None
+        )
+        if order_item_id is None:
+            continue
+        summary = result.setdefault(
+            order_item_id,
+            {
+                "order_purpose_received_sheet_qty": 0,
+                "reserve_purpose_received_sheet_qty": 0,
+                "automatic_finished_output_qty": 0,
+            },
+        )
+        summary["order_purpose_received_sheet_qty"] += int(
+            allocation.receipt_order_purpose_sheet_qty or 0
+        )
+        summary["reserve_purpose_received_sheet_qty"] += int(
+            allocation.receipt_reserve_purpose_sheet_qty or 0
+        )
+        summary["automatic_finished_output_qty"] += int(
+            allocation.finished_output_qty_delta or 0
+        )
+    return result
+
+
 def list_production_tasks(
     db: Session,
     *,
@@ -3362,6 +3920,10 @@ def list_production_tasks(
     if page is not None and page_size is not None:
         query = query.offset((page - 1) * page_size).limit(page_size)
     rows = db.execute(query).all()
+    receipt_purpose_summaries = _receipt_purpose_summaries_by_order_item_ids(
+        db,
+        [item.id for _task, item, _order, _customer, _product in rows],
+    )
     pending_context = (
         _pending_production_read_context(db, rows)
         if status == PENDING
@@ -3518,6 +4080,15 @@ def list_production_tasks(
                 )
             ),
         })
+    for row in result:
+        row["receipt_purpose_summary"] = receipt_purpose_summaries.get(
+            int(row["order_item_id"]),
+            {
+                "order_purpose_received_sheet_qty": 0,
+                "reserve_purpose_received_sheet_qty": 0,
+                "automatic_finished_output_qty": 0,
+            },
+        )
     _annotate_printing_plate_current_locations(db, result)
     return result
 
@@ -3541,6 +4112,8 @@ def list_production_station_task_ids(
 
     if station not in PRODUCTION_STATIONS:
         raise ValueError("unsupported production station")
+    component_snapshot = aliased(SalesOrderItemBomComponent)
+    component_task = aliased(ProductionTask)
     query = (
         _filtered_task_query(
             db,
@@ -3548,45 +4121,73 @@ def list_production_station_task_ids(
             status=PENDING,
         )
         .outerjoin(
-            SalesOrderItemBomComponent,
-            SalesOrderItemBomComponent.id
-            == ProductionTask.sales_order_item_bom_component_id,
+            component_snapshot,
+            and_(
+                component_snapshot.sales_order_item_id == OrderItem.id,
+                component_snapshot.is_required.is_(True),
+                or_(
+                    ProductionTask.task_role == "order_main",
+                    component_snapshot.id
+                    == ProductionTask.sales_order_item_bom_component_id,
+                ),
+            ),
+        )
+        .outerjoin(
+            component_task,
+            and_(
+                component_task.sales_order_item_bom_component_id
+                == component_snapshot.id,
+                component_task.task_role == "component_internal",
+            ),
         )
         .with_only_columns(
             ProductionTask.id.label("task_id"),
-            ProductionTask.print_content_snapshot.label("print_content_snapshot"),
-            ProductionTask.sales_order_item_bom_component_id.label(
+            ProductionTask.print_content_snapshot.label("main_print_content_snapshot"),
+            component_task.print_content_snapshot.label(
+                "component_print_content_snapshot"
+            ),
+            component_snapshot.id.label(
                 "bom_component_snapshot_id"
             ),
             Product.box_category.label("product_box_category"),
             Product.box_style.label("product_box_style"),
-            SalesOrderItemBomComponent.is_die_cut.label("component_is_die_cut"),
-            SalesOrderItemBomComponent.snapshot_component_box_style.label(
+            component_snapshot.is_die_cut.label("component_is_die_cut"),
+            component_snapshot.snapshot_component_box_style.label(
                 "component_box_style"
             ),
         )
         .order_by(Order.delivery_date, Order.id, OrderItem.id, ProductionTask.id)
     )
     matching_ids: list[int] = []
+    seen_ids: set[int] = set()
     for row in db.execute(query).mappings().all():
         is_component = row.bom_component_snapshot_id is not None
         if station == "die_cut":
-            matches = (
-                bool(row.component_is_die_cut)
-                if is_component
-                else row.product_box_category == "die_cut"
+            matches = row.product_box_category == "die_cut" or (
+                is_component and bool(row.component_is_die_cut)
             )
         else:
-            content = str(row.print_content_snapshot or "").strip()
-            box_style = (
-                row.component_box_style if is_component else row.product_box_style
-            )
+            main_content = str(row.main_print_content_snapshot or "").strip()
+            component_content = str(
+                row.component_print_content_snapshot or ""
+            ).strip()
             matches = (
-                content not in _NO_PRINT_CONTENT
-                or box_type_code(box_style) in _PRINTING_STATION_BOX_TYPE_CODES
+                main_content not in _NO_PRINT_CONTENT
+                or box_type_code(row.product_box_style)
+                in _PRINTING_STATION_BOX_TYPE_CODES
+                or (
+                    is_component
+                    and (
+                        component_content not in _NO_PRINT_CONTENT
+                        or box_type_code(row.component_box_style)
+                        in _PRINTING_STATION_BOX_TYPE_CODES
+                    )
+                )
             )
-        if matches:
-            matching_ids.append(int(row.task_id))
+        task_id = int(row.task_id)
+        if matches and task_id not in seen_ids:
+            matching_ids.append(task_id)
+            seen_ids.add(task_id)
 
     total = len(matching_ids)
     last_page = max(1, (total + page_size - 1) // page_size)
@@ -3617,8 +4218,6 @@ def find_pending_production_task_lookup_rows(
     )
     pattern = f"%{escaped}%"
     lowered = normalized.casefold()
-    component_code = SalesOrderItemBomComponent.snapshot_component_product_code
-    component_name = SalesOrderItemBomComponent.snapshot_component_product_name
     parent_code = func.coalesce(
         func.nullif(OrderItem.snapshot_product_code, ""),
         Product.product_code,
@@ -3627,52 +4226,56 @@ def find_pending_production_task_lookup_rows(
         func.nullif(OrderItem.snapshot_product_name, ""),
         Product.product_name,
     )
-    task_code = case(
-        (
-            ProductionTask.sales_order_item_bom_component_id.is_not(None),
-            component_code,
+    lookup_component = aliased(SalesOrderItemBomComponent)
+    component_match = exists().where(
+        lookup_component.sales_order_item_id == OrderItem.id,
+        or_(
+            ProductionTask.task_role == "order_main",
+            lookup_component.id == ProductionTask.sales_order_item_bom_component_id,
         ),
-        else_=parent_code,
+        or_(
+            lookup_component.snapshot_component_product_code.ilike(
+                pattern, escape="\\"
+            ),
+            lookup_component.snapshot_component_product_name.ilike(
+                pattern, escape="\\"
+            ),
+        ),
     )
-    task_name = case(
-        (
-            ProductionTask.sales_order_item_bom_component_id.is_not(None),
-            component_name,
+    component_exact = exists().where(
+        lookup_component.sales_order_item_id == OrderItem.id,
+        or_(
+            ProductionTask.task_role == "order_main",
+            lookup_component.id == ProductionTask.sales_order_item_bom_component_id,
         ),
-        else_=parent_name,
+        func.lower(lookup_component.snapshot_component_product_code) == lowered,
     )
     match_condition = or_(
         cast(ProductionTask.id, String) == normalized,
         Order.order_number.ilike(pattern, escape="\\"),
         Order.customer_po.ilike(pattern, escape="\\"),
         OrderItem.item_order_number.ilike(pattern, escape="\\"),
-        task_code.ilike(pattern, escape="\\"),
-        task_name.ilike(pattern, escape="\\"),
+        parent_code.ilike(pattern, escape="\\"),
+        parent_name.ilike(pattern, escape="\\"),
         Product.product_code.ilike(pattern, escape="\\"),
         Product.customer_material_code.ilike(pattern, escape="\\"),
         Customer.name.ilike(pattern, escape="\\"),
+        component_match,
     )
     exact_rank = case(
         (func.lower(cast(ProductionTask.id, String)) == lowered, 0),
-        (func.lower(task_code) == lowered, 0),
+        (func.lower(parent_code) == lowered, 0),
+        (component_exact, 0),
         (func.lower(Order.order_number) == lowered, 0),
         (func.lower(OrderItem.item_order_number) == lowered, 0),
         (func.lower(Order.customer_po) == lowered, 0),
         else_=1,
     )
-    base = (
-        _filtered_task_query(
-            db,
-            allowed_customer_ids=allowed_customer_ids,
-            status=PENDING,
-        )
-        .outerjoin(
-            SalesOrderItemBomComponent,
-            SalesOrderItemBomComponent.id
-            == ProductionTask.sales_order_item_bom_component_id,
-        )
-        .where(match_condition)
-    )
+    base = _filtered_task_query(
+        db,
+        allowed_customer_ids=allowed_customer_ids,
+        status=PENDING,
+    ).where(match_condition)
     count_query = base.with_only_columns(ProductionTask.id).order_by(None).subquery()
     total = int(db.scalar(select(func.count()).select_from(count_query)) or 0)
     rows = db.execute(

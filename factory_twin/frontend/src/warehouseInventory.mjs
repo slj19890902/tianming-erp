@@ -204,6 +204,16 @@ export function singleLocationPallet(location) {
   return pallets.length === 1 ? pallets[0] : null;
 }
 
+export function employeeLocationName(location) {
+  const name = String(location?.location_name || "").trim();
+  return name || "位置名称待完善";
+}
+
+export function employeeAreaName(area) {
+  const name = String(area?.area_name || area?.name || "").trim();
+  return name || "区域名称待完善";
+}
+
 function dispatchPalletItemQuantity(item) {
   if (item?.quantity !== undefined && item?.quantity !== null) return Math.max(0, Number(item.quantity) || 0);
   return Math.max(
@@ -289,8 +299,8 @@ export function buildMeasuredDispatchPallets(
         layout_id: layoutId,
         pallet_code: pallet.pallet_code,
         name: `${productLabel} · ${totalQuantity.toLocaleString("zh-CN")} ${inventoryUnitLabel(unit)}`,
-        zone_id: zone.id,
-        zone_code: zone.feature_code,
+        zone_id: `combined-dispatch-${dispatchLocation.location_id}`,
+        zone_code: "一楼成品合并暂存区",
         x_mm: points[palletIndex][0],
         y_mm: points[palletIndex][1],
         z_mm: 0,
@@ -301,6 +311,9 @@ export function buildMeasuredDispatchPallets(
         color: "#ea580c",
         visual_status: "waiting",
         status_note: `真实待送栈板 · ${customerLabel} · ${pallet.pallet_code}`,
+        visual_kind: "physical_pallet",
+        display_label: `${productLabel} · ${totalQuantity.toLocaleString("zh-CN")} ${inventoryUnitLabel(unit)}`,
+        operational_group_id: `dispatch-location:${dispatchLocation.location_id}`,
         is_simulated: false,
         version: Number(pallet.version || 1),
         snapped: false
@@ -340,6 +353,7 @@ export function buildMappedLocationPallets(
     const xs = zone.points.map((point) => Number(point[0]));
     const ys = zone.points.map((point) => Number(point[1]));
     ordered.forEach((location, index) => {
+      const readableLocationName = employeeLocationName(location);
       const occupied = location.occupancy_status === "occupied";
       const locationPallets = inventoryLocationPallets(location);
       const actualPalletCode = locationPallets.length === 1 ? locationPallets[0].pallet_code : null;
@@ -350,31 +364,21 @@ export function buildMappedLocationPallets(
       const rotation = mappedWidthMm > 0 && mappedDepthMm > 0 && Math.abs(mappedWidthMm - mappedDepthMm) > 50
         ? (mappedWidthMm < mappedDepthMm ? 90 : 0)
         : Math.max(...ys) - Math.min(...ys) > Math.max(...xs) - Math.min(...xs) ? 90 : 0;
-      const hasMappedFootprint = mappedWidthMm > 0 && mappedDepthMm > 0;
-      const representsPhysicalPallet = hasMappedFootprint && (
-        (mappedWidthMm >= 1080 && mappedWidthMm <= 1320 && mappedDepthMm >= 900 && mappedDepthMm <= 1100)
-        || (mappedWidthMm >= 900 && mappedWidthMm <= 1100 && mappedDepthMm >= 1080 && mappedDepthMm <= 1320)
-      );
-      const isLogicalAnchor = position?.layout_kind === "logical_anchor"
-        || (position?.layout_kind !== "physical_pallet" && hasMappedFootprint && !representsPhysicalPallet);
+      const isLogicalAnchor = locationPallets.length !== 1;
       // The measured rectangle remains authoritative for the location centre and
       // orientation.  A physical pallet never inherits or scales to that legacy
       // rectangle: rotation may swap axes, while the one backend contract owns size.
-      const renderedWidthMm = isLogicalAnchor
-        ? (hasMappedFootprint ? Math.min(mappedWidthMm, 400) : 400)
-        : standard.width_mm;
-      const renderedDepthMm = isLogicalAnchor
-        ? (hasMappedFootprint ? Math.min(mappedDepthMm, 400) : 400)
-        : standard.depth_mm;
+      const renderedWidthMm = isLogicalAnchor ? 0 : standard.width_mm;
+      const renderedDepthMm = isLogicalAnchor ? 0 : standard.depth_mm;
       pallets.push({
         id: `erp-location-${location.location_id}`,
         layout_id: layoutId,
         pallet_code: location.location_code,
         name: actualPalletCode
-          ? `${location.location_name} · ${actualPalletCode}`
+          ? `${readableLocationName} · ${actualPalletCode}`
           : palletSummary
-            ? `${location.location_name} · ${palletSummary}`
-            : location.location_name,
+            ? `${readableLocationName} · ${palletSummary}`
+            : readableLocationName,
         zone_id: zone.id,
         zone_code: zone.feature_code,
         x_mm: positions[index][0],
@@ -382,7 +386,7 @@ export function buildMappedLocationPallets(
         z_mm: 0,
         width_mm: renderedWidthMm,
         depth_mm: renderedDepthMm,
-        height_mm: isLogicalAnchor ? 90 : standard.height_mm,
+        height_mm: isLogicalAnchor ? 0 : standard.height_mm,
         rotation_deg: rotation,
         color: occupied ? "#0f766e" : "#a16207",
         visual_status: occupied ? "waiting" : "empty",
@@ -390,7 +394,10 @@ export function buildMappedLocationPallets(
           ? `ERP正式库位 · ${actualPalletCode}`
           : palletSummary
             ? `ERP正式共享位置 · ${palletSummary} · 请在右侧逐块选择`
-            : "ERP正式空库位"}${isLogicalAnchor ? " · 逻辑点位（非实尺度栈板占地）" : ""}`,
+            : "ERP正式空库位"}${isLogicalAnchor ? " · 逻辑位置标记（非实物占地）" : ""}`,
+        visual_kind: isLogicalAnchor ? "location_anchor" : "physical_pallet",
+        display_label: readableLocationName,
+        operational_group_id: `location:${location.location_id}`,
         is_logical_anchor: isLogicalAnchor,
         is_simulated: true,
         version: 1,
@@ -473,6 +480,7 @@ export function findPalletColumnConflicts(pallets, structures = [], features = [
   const conflicts = [];
   const seen = new Set();
   for (const pallet of pallets) {
+    if (pallet?.visual_kind === "location_anchor" || pallet?.is_logical_anchor) continue;
     const candidate = palletBounds(pallet, clearanceMm);
     for (const column of columnBounds) {
       if (!boundsOverlap(candidate, column)) continue;

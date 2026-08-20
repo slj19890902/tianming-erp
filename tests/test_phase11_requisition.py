@@ -3390,7 +3390,7 @@ def test_formal_supplier_a3_incoming_keeps_cover_base_physical_lines_until_sets(
     from app.models.order import OrderItem
     from app.models.product import Product
     from app.models.production import ProductionTask
-    from app.models.requisition import RequisitionItem
+    from app.models.requisition import Requisition, RequisitionItem
     from app.models.supplier_requisition_order import (
         SupplierRequisitionOrder,
         SupplierRequisitionOrderItem,
@@ -3420,6 +3420,42 @@ def test_formal_supplier_a3_incoming_keeps_cover_base_physical_lines_until_sets(
         item.snapshot_splice_mode = "single"
         item.snapshot_pieces_per_box = 1
         item.special_process = "一开一"
+        historical_requisition = Requisition(
+            requisition_number="BL-TD010-CANCELLED",
+            requisition_date=date(2026, 7, 8),
+            supplier_name="苏州纸板供应商",
+            status="已取消",
+        )
+        session.add(historical_requisition)
+        session.flush()
+        session.add_all(
+            [
+                RequisitionItem(
+                    requisition_id=historical_requisition.id,
+                    order_item_id=item.id,
+                    requisition_qty=200,
+                    cardboard_len=2145,
+                    cardboard_width=1055,
+                    special_process="一开一",
+                    material_snapshot="J616D",
+                    product_code_snapshot="CPN087079",
+                    product_name_snapshot="TD010纸箱150*41.5*31-盖",
+                    status="已取消",
+                ),
+                RequisitionItem(
+                    requisition_id=historical_requisition.id,
+                    order_item_id=item.id,
+                    requisition_qty=200,
+                    cardboard_len=2120,
+                    cardboard_width=1035,
+                    special_process="一开一",
+                    material_snapshot="J616D",
+                    product_code_snapshot="CPN087079",
+                    product_name_snapshot="TD010纸箱150*41.5*31-底",
+                    status="已取消",
+                ),
+            ]
+        )
         supplier_order = SupplierRequisitionOrder(
             order_number="SRO-TD010-100SETS",
             supplier_name="苏州纸板供应商",
@@ -3481,12 +3517,14 @@ def test_formal_supplier_a3_incoming_keeps_cover_base_physical_lines_until_sets(
         cover_key = f"so{cover.id}"
         base_key = f"so{base.id}"
 
-        assert (
+        historical_rows = (
             session.query(RequisitionItem)
             .filter_by(order_item_id=item.id)
-            .count()
-            == 0
+            .order_by(RequisitionItem.id)
+            .all()
         )
+        assert len(historical_rows) == 2
+        assert {row.status for row in historical_rows} == {"已取消"}
 
     with TestClient(app) as client:
         _login(client, "workshop")
@@ -3532,7 +3570,7 @@ def test_formal_supplier_a3_incoming_keeps_cover_base_physical_lines_until_sets(
         for row in rows
     ] == [(2145, 1055), (2120, 1035)]
     assert parent_receive.status_code == 409, parent_receive.text
-    assert "按每条报料明细分别收料" in parent_receive.json()["detail"]
+    assert "盖片和底片" in parent_receive.json()["detail"]
     assert cover_receive.status_code == 200, cover_receive.text
     assert cover_receive.json()["supplier_order_item_id"] == int(cover_key[2:])
     assert pending_after_cover.status_code == 200

@@ -1111,7 +1111,11 @@ def _pending_incoming_route_rows(db: Session, user: User) -> list[dict]:
             current_supplier_items,
         ):
             if supplier_item.order_item_id is not None:
-                if int(supplier_item.order_item_id) in order_items_with_requisitions:
+                # Historical cancelled/closed requisition rows must not hide a
+                # newer confirmed supplier requisition.  Only a currently
+                # receivable requisition route may take precedence over the
+                # supplier-order physical line.
+                if int(supplier_item.order_item_id) in active_by_order_item:
                     continue
                 supplier_by_order_item.setdefault(
                     int(supplier_item.order_item_id), []
@@ -1559,7 +1563,10 @@ def _rows(
             ):
                 if supplier_item.order_item_id is None:
                     continue
-                if int(supplier_item.order_item_id) in order_items_with_requisitions:
+                # Keep old requisition history as a fallback-suppression fact,
+                # but do not let it suppress the current confirmed supplier
+                # lines unless an active requisition route actually exists.
+                if int(supplier_item.order_item_id) in component_requisition_items:
                     continue
                 if (
                     selected_supplier_order_item_ids is not None

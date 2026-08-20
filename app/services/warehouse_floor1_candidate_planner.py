@@ -47,7 +47,9 @@ _USAGE_BY_SUBTYPE = {
 }
 _INVENTORY_LOCATION_USAGES = frozenset({"finished", "semi_finished"})
 _ASSET_USAGES = frozenset({"mold", "print_plate"})
-_PRESERVED_BUSINESS_ANCHOR_AREA_CODES = frozenset({"DISPATCH"})
+_PRESERVED_BUSINESS_ANCHOR_AREA_CODES = frozenset(
+    {"DISPATCH", "FIN-001", "FIN-002", "FIN-003"}
+)
 
 
 class Floor1CandidatePlanningError(ValueError):
@@ -853,6 +855,7 @@ def build_floor1_formal_candidate_plan(floor_layout: dict) -> dict:
         raise Floor1CandidatePlanningError("一楼已发布地图缺少版本或毫米边界", status_code=409)
 
     candidates: list[dict] = []
+    combined_dispatch_features: list[dict] = []
     excluded_out_of_bounds: list[dict] = list(
         floor_layout.get("excluded_out_of_bounds_zones") or []
     )
@@ -892,6 +895,15 @@ def build_floor1_formal_candidate_plan(floor_layout: dict) -> dict:
                     }
                 )
                 excluded_ids.add(feature_id)
+            continue
+        if subtype == "finished_wait_delivery":
+            combined_dispatch_features.append(
+                {
+                    "map_feature_id": str(feature.get("id") or ""),
+                    "feature_code": str(feature.get("feature_code") or ""),
+                    "area_name": str(feature.get("name") or "一楼成品合并暂存区"),
+                }
+            )
             continue
         slots, orientation = _pallet_slots(points, obstacles)
         is_outdoor = area_code.startswith("OUT-") or str(
@@ -956,6 +968,7 @@ def build_floor1_formal_candidate_plan(floor_layout: dict) -> dict:
             "floor_code": "1F",
             "map_revision": revision,
             "candidates": candidates,
+            "combined_dispatch_features": combined_dispatch_features,
             "excluded_out_of_bounds": excluded_out_of_bounds,
         },
         ensure_ascii=False,
@@ -974,6 +987,14 @@ def build_floor1_formal_candidate_plan(floor_layout: dict) -> dict:
         "candidate_count": len(candidates),
         "excluded_out_of_bounds_count": len(excluded_out_of_bounds),
         "excluded_out_of_bounds": excluded_out_of_bounds,
+        "combined_dispatch_projection": {
+            "location_code": "F1-DISPATCH-01",
+            "location_name": "一楼成品合并暂存区",
+            "map_feature_ids": [
+                row["map_feature_id"] for row in combined_dispatch_features
+            ],
+            "creates_formal_locations": False,
+        },
         "obstacle_count": len(obstacles),
         "formal_location_count": sum(
             row["formal_location_count"] for row in candidates

@@ -49,10 +49,10 @@ from app.models.product_bom import (
 )
 from app.models.user import User
 from app.services.production_workflow import (
-    count_production_tasks,
     find_pending_production_task_lookup_rows,
     list_production_tasks,
     list_production_task_dashboard_rows,
+    list_production_station_task_ids,
 )
 from app.services.printing_colors import parse_printing_colors
 from app.services.product_specification import (
@@ -1273,20 +1273,21 @@ def mobile_production_station_tasks(
     _no_store(response)
     _require_exact_mobile_production_station(user, station)
     visible_customer_ids = _visible_customer_ids(user, db)
-    total = count_production_tasks(
+    task_ids, total, resolved_page = list_production_station_task_ids(
         db,
         allowed_customer_ids=visible_customer_ids,
-        status="pending",
+        station=station,
+        page=page,
+        page_size=page_size,
     )
-    last_page = max(1, (total + page_size - 1) // page_size)
-    resolved_page = min(page, last_page)
     task_rows = list_production_tasks(
         db,
         allowed_customer_ids=visible_customer_ids,
         status="pending",
-        page=resolved_page,
-        page_size=page_size,
+        task_ids=task_ids,
     )
+    if {int(row["id"]) for row in task_rows} != set(task_ids):
+        raise HTTPException(status_code=409, detail="生产任务状态已变化，请重新读取")
     return {
         "station": station,
         "items": _production_station_task_payloads(

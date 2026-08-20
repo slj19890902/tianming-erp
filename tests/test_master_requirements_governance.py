@@ -26,7 +26,8 @@ def test_master_requirements_is_unique_and_indexed() -> None:
 def test_confirmed_factory_rules_are_frozen_in_master() -> None:
     master = _read(MASTER)
     required = (
-        "`FIN-001～003` 是同一个合并的一楼暂存区",
+        "`FIN-001～003` 共同组成一个“一楼成品待送暂存组”",
+        "三个独立真实物理区域",
         "片料优先复用工厂现有半成品/原料暂存区",
         "客户简称，按顺序用 `/` 分隔",
         "P1-11D 继续暂停",
@@ -36,6 +37,19 @@ def test_confirmed_factory_rules_are_frozen_in_master() -> None:
     )
     for rule in required:
         assert rule in master
+
+
+def test_factory_audit_followup_rules_separate_business_groups_and_facts() -> None:
+    master = _read(MASTER)
+    warehouse = _read(DOCS / "context" / "WAREHOUSE.md")
+    finance = _read(DOCS / "context" / "FINANCE.md")
+
+    assert "一个业务暂存组的三个独立真实物理区域" in warehouse
+    assert "不能只保存“FIN 合并区”" in master
+    assert "只作当前参考价，不能反推历史成交价" in master
+    assert "每条正式收料行确认时冻结" in master
+    assert "发生收料后禁止直接覆盖旧值" in master
+    assert "显式冻结单位、币种、税口径、税率、确认人与版本" in finance
 
 
 def test_module_routes_exist_without_duplicating_master() -> None:

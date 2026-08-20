@@ -1,4 +1,6 @@
-# ERP Project State
+# ERP Project State（历史快照）
+
+> 状态：已停止作为当前版本和能力来源。本文记录早期 v0.20.x 阶段；当前 SHA、版本、migration 和能力必须实时核对。当前业务规则入口为 `docs/TIANMING_ERP_MASTER_REQUIREMENTS.md`，启动入口为 `docs/CODEX_START.md`。
 
 ## Current Baseline
 

@@ -1,4 +1,6 @@
-# Business Rules
+# Business Rules（历史规则汇编）
+
+> 状态：历史证据，不再是当前业务规则总入口。自 2026-08-20 起，唯一有效业务总需求为 `docs/TIANMING_ERP_MASTER_REQUIREMENTS.md`。本文只用于追查旧实现和回归；发生冲突时以老板最新明确规则及统一总需求为准。
 
 ## Warehouse Inventory Foundation
 

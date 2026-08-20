@@ -239,7 +239,7 @@ const result = {{
 const expected = {{shared:[50,30,20],yielded:[1,3],yieldedStock:2,multiPlan:[3,4],multiWarnings:[[true,["SEMI_SIGNATURE_OVERRIDE"]],[false,[]]],manualWarning:[true,["SEMI_SIGNATURE_OVERRIDE"]],finished:[4,1],gates:[true,true,""]}};
 if (JSON.stringify(result) !== JSON.stringify(expected)) throw new Error(JSON.stringify(result));
 let removeReallocations = 0;
-const removeContext = {{orderForm:{{items:[{{}},{{}}]}},modal:null,reallocateAllDraftInventory() {{ removeReallocations += 1; }}}};
+const removeContext = {{orderForm:{{items:[{{}},{{}}]}},modal:null,syncOrderReminderVisibility() {{}},reallocateAllDraftInventory() {{ removeReallocations += 1; }}}};
 methods.removeOrderItem.call(removeContext,0);
 if (removeContext.orderForm.items.length !== 1 || removeReallocations !== 1) throw new Error("removing a line did not reallocate inventory");
 (async () => {{
@@ -266,7 +266,7 @@ if (removeContext.orderForm.items.length !== 1 || removeReallocations !== 1) thr
     isImportDraftLocked:() => false,
     inventoryStateMatchesLine:methods.inventoryStateMatchesLine, searchOrderProducts:async () => {{}},
     loadOrderDraftBom:async () => {{}},
-    loadOrderLineInventory:async () => {{ reloads += 1; }}, reallocateAllDraftInventory() {{}}, refreshOrderNumberPreview:async () => {{}},
+    loadOrderLineInventory:async () => {{ reloads += 1; }}, reallocateAllDraftInventory() {{}}, syncOrderReminderVisibility() {{}}, refreshOrderNumberPreview:async () => {{}},
   }};
   await methods.applyPdfDraftToOrderForm.call(pdfContext, draft);
   const preservedPlan = methods.buildReservationPlan.call(context, pdfContext.orderForm.items[0]);

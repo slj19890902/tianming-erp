@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, sessionmaker
 
 
@@ -278,6 +278,35 @@ def _source_payload(snapshot_id: int, component_type: str) -> dict:
         "cardboard_width": 1,
         "special_process": "一开一",
     }
+
+
+def _mark_material_requisition_items_as_legacy(
+    factory,
+    requisition_item_ids: list[int] | None = None,
+) -> None:
+    """Turn API-created rows into explicit pre-P1-80 compatibility fixtures.
+
+    Modern formal rows must use the P1-81 frozen receipt flow. These older
+    regression cases intentionally exercise the legacy incoming endpoints.
+    """
+    from app.models.requisition import RequisitionItem
+    from app.models.supplier_requisition_order import PurchasePurposeSourceSnapshot
+
+    with factory() as db:
+        query = select(RequisitionItem)
+        if requisition_item_ids is not None:
+            query = query.where(RequisitionItem.id.in_(requisition_item_ids))
+        rows = db.scalars(query).all()
+        ids = [row.id for row in rows]
+        if ids:
+            db.execute(
+                delete(PurchasePurposeSourceSnapshot).where(
+                    PurchasePurposeSourceSnapshot.material_requisition_item_id.in_(ids)
+                )
+            )
+        for row in rows:
+            row.purpose_contract_status = "legacy_unset"
+        db.commit()
 
 
 def test_pending_expands_exactly_cover_base_and_double_surround(
@@ -563,6 +592,8 @@ def test_report_receive_and_replay_keep_three_physical_sources_independent(
         db.get(RequisitionItem, 2).product_name_snapshot = "A3 物理料乙"
         db.commit()
 
+    _mark_material_requisition_items_as_legacy(factory)
+
     by_component = {
         source.component_type: source.requisition_item_id for source in sources
     }
@@ -599,72 +630,27 @@ def test_report_receive_and_replay_keep_three_physical_sources_independent(
         f"r{by_component['base']}": "base",
         f"r{by_component['whole']}": "whole",
     }
-    assert cancelled_base.status_code == 200, cancelled_base.text
-    assert cancelled_base.json()["requisition_status"] == "未报料"
-    assert cancel_replay.status_code == 200, cancel_replay.text
-    assert cancel_replay.json()["already_voided"] is True
+    assert cancelled_base.status_code == 409, cancelled_base.text
+    assert cancel_replay.status_code == 409, cancel_replay.text
     assert {
         row["item_id"] for row in pending_after_cancel.json()["items"]
     } == {
         f"r{by_component['cover']}",
+        f"r{by_component['base']}",
         f"r{by_component['whole']}",
     }
     assert received_cover.status_code == 200, received_cover.text
     assert {
         row["item_id"]
         for row in pending_after_receive_cover.json()["items"]
-    } == {f"r{by_component['whole']}"}
+    } == {f"r{by_component['base']}", f"r{by_component['whole']}"}
     assert received_surround.status_code == 200, received_surround.text
     assert void_received_cover.status_code == 409, void_received_cover.text
     with factory() as db:
         item = db.get(OrderItem, 1)
         assert item is not None
         assert item.material_status == "pending"
-        assert item.requisition_status == "未报料"
-
-    with TestClient(app) as client:
-        _login(client)
-        rereported_base = client.post(
-            "/api/requisition/batches",
-            json={
-                "supplier_name": "匿名供应商",
-                "items": [_source_payload(1, "base")],
-            },
-        )
-    assert rereported_base.status_code == 201, rereported_base.text
-    with factory() as db:
-        new_base_source = db.scalar(
-            select(RequisitionItemBomSource)
-            .where(
-                RequisitionItemBomSource.component_type == "base",
-            )
-            .order_by(RequisitionItemBomSource.id.desc())
-        )
-        assert new_base_source is not None
-        new_base_id = new_base_source.requisition_item_id
-
-    with TestClient(app) as client:
-        _login(client)
-        received_base = client.put(f"/api/incoming/receive/r{new_base_id}")
-    assert received_base.status_code == 200, received_base.text
-
-    with TestClient(app) as client:
-        _login(client)
-        reverted_base = client.put(
-            f"/api/incoming/receipt-items/"
-            f"{received_base.json()['receipt_item_id']}/revert",
-            json={"reason": "P1-13C 撤销后重收"},
-        )
-        received_base_again = client.put(
-            f"/api/incoming/receive/r{new_base_id}"
-        )
-
-    assert reverted_base.status_code == 200, reverted_base.text
-    assert received_base_again.status_code == 200, received_base_again.text
-    with factory() as db:
-        item = db.get(OrderItem, 1)
-        assert item is not None
-        assert item.material_status == "received"
+        assert item.requisition_status == "已报料"
 
 
 @pytest.mark.parametrize(
@@ -706,6 +692,8 @@ def test_each_physical_source_can_short_receive_revert_and_receive_again(
         )
         assert source is not None
         requisition_item_id = source.requisition_item_id
+
+    _mark_material_requisition_items_as_legacy(factory)
 
     with TestClient(app) as client:
         _login(client)
@@ -1091,6 +1079,8 @@ def test_inventory_covered_cover_needs_only_base_and_surround_receipts(
             for source in sources
         }
 
+    _mark_material_requisition_items_as_legacy(factory)
+
     with TestClient(app) as client:
         _login(client)
         base = client.put(f"/api/incoming/receive/r{source_ids['base']}")
@@ -1188,7 +1178,7 @@ def test_database_guard_blocks_duplicate_active_source_and_allows_rereport(
     with TestClient(app) as client:
         _login(client)
         voided = client.put(
-            f"/api/requisition/batch-items/{original_id}/void",
+            f"/api/requisition/batches/{created.json()['id']}/void",
             json={"reason": "释放活动来源门禁"},
         )
         rereported = client.post(
@@ -1236,6 +1226,8 @@ def test_partial_receipt_blocks_batch_and_order_level_void(
             )
         )
         assert cover_source is not None
+
+    _mark_material_requisition_items_as_legacy(factory)
 
     with TestClient(app) as client:
         _login(client)

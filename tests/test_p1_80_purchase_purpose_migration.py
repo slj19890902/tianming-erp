@@ -198,7 +198,6 @@ def test_downgrade_fails_closed_when_any_new_purpose_fact_exists(
     from app.models.supplier_requisition_order import (
         PurchasePurposeSourceSnapshot,
         SupplierRequisitionOrder,
-        SupplierRequisitionOrderItem,
     )
     from app.models.user import User
 
@@ -228,28 +227,33 @@ def test_downgrade_fails_closed_when_any_new_purpose_fact_exists(
         )
         session.add(supplier_order)
         session.flush()
-        supplier_item = SupplierRequisitionOrderItem(
-            supplier_order_id=supplier_order.id,
-            order_item_id=None,
-            source_key="direct_supplier_item:anonymous",
-            product_id=None,
-            product_code="P180-ANON-P",
-            product_name="匿名纸箱",
-            quantity=1,
-            stock_deduction_qty=0,
-            requisition_qty=1,
-            cutting_mode="一开一",
-            pieces_per_box=1,
-            required_piece_qty=1,
-            customer_name=customer.name,
-        )
-        session.add(supplier_item)
-        session.flush()
+        # The database is intentionally held at ww31 here. Insert only the
+        # columns that existed in that revision; the latest ORM also contains
+        # P1-81's purpose_contract_status column.
+        supplier_item_id = session.execute(
+            text(
+                """
+                INSERT INTO supplier_requisition_order_items (
+                    supplier_order_id, source_key, product_code, product_name,
+                    quantity, stock_deduction_qty, requisition_qty, cutting_mode,
+                    pieces_per_box, required_piece_qty, customer_name, status, version
+                ) VALUES (
+                    :supplier_order_id, 'direct_supplier_item:anonymous',
+                    'P180-ANON-P', '匿名纸箱', 1, 0, 1, '一开一',
+                    1, 1, :customer_name, 'active', 1
+                ) RETURNING id
+                """
+            ),
+            {
+                "supplier_order_id": supplier_order.id,
+                "customer_name": customer.name,
+            },
+        ).scalar_one()
         session.add(
             PurchasePurposeSourceSnapshot(
                 snapshot_key="p180-anonymous-fact",
                 allocation_group_key="p180-anonymous-group",
-                supplier_requisition_order_item_id=supplier_item.id,
+                supplier_requisition_order_item_id=supplier_item_id,
                 material_requisition_item_id=None,
                 source_kind="direct_supplier_item",
                 source_key="direct_supplier_item:anonymous",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
 import socket
 from datetime import date, datetime, timedelta
@@ -12,6 +13,7 @@ from uuid import uuid4
 
 import qrcode
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session, aliased, selectinload
@@ -21,6 +23,7 @@ from app.api.deps import (
     RoleChecker,
     customer_scope_ids,
     get_db,
+    has_permission,
     has_unrestricted_customer_access,
     require_customer_access,
 )
@@ -32,6 +35,16 @@ from app.core.time_contract import (
 from app.models.audit import OperationLog
 from app.models.customer import Customer
 from app.models.incoming_receipt import IncomingReceiptItem
+from app.models.material import Material
+from app.models.purchase_receipt import (
+    IncomingReceiptBatchFact,
+    IncomingReceiptReversalFact,
+    IncomingReceiptPurposeAllocation,
+    IncomingReceiptPurposeReversal,
+    PurchaseReceiptFact,
+    PurchaseReceiptMaterialVariance,
+    PurchaseReceiptMaterialVarianceApproval,
+)
 from app.models.order import Order, OrderItem
 from app.models.product_drawing import ProductDrawing
 from app.models.product import Product
@@ -46,6 +59,7 @@ from app.models.stock_replenishment import (
     StockReplenishmentOrderItem,
 )
 from app.models.supplier_requisition_order import (
+    PurchasePurposeSourceSnapshot,
     SupplierRequisitionOrder,
     SupplierRequisitionOrderItem,
 )
@@ -78,6 +92,7 @@ from app.services.production_workflow import (
     lock_order_rows_for_production_transition,
     refresh_order_production_status,
     refresh_production_task,
+    receipt_auto_finished_location_projection,
 )
 from app.services.composite_bom_workflow import is_composite_order_item
 from app.services.audit_log import append_audit_event
@@ -86,6 +101,20 @@ from app.services.requisition_production_print import (
 )
 from app.services.supplier_material_display import clean_supplier_material_code
 from app.services.product_specification import resolved_product_specification
+from app.services.receipt_purpose_distribution import (
+    receipt_purpose_finished_capacity,
+    serialize_receipt_purpose_allocation,
+    serialize_receipt_purpose_allocations,
+    serialize_receipt_purpose_reversal,
+)
+from app.services.purchase_receipt_facts import (
+    canonical_purchase_receipt_hash,
+    material_calculation_fingerprint,
+)
+from app.services.warehouse_inventory import (
+    WarehouseInventoryError,
+    automatic_raw_material_staging_location,
+)
 
 
 router = APIRouter()
@@ -330,6 +359,389 @@ class _PendingIncomingReadContext:
         return True, self._summaries.get(key)
 
 
+def _decorate_rows_with_receipt_purpose(db: Session, rows: list[dict]) -> None:
+    """Attach a server-authoritative P1-81 preview to pending formal sources."""
+
+    finished_projection = receipt_auto_finished_location_projection(db)
+    try:
+        reserve_location = automatic_raw_material_staging_location(db)
+        reserve_projection = {
+            "ready": True,
+            "location_name": reserve_location.location_name,
+            "issue": None,
+        }
+    except WarehouseInventoryError as error:
+        reserve_projection = {
+            "ready": False,
+            "location_name": None,
+            "issue": str(error),
+        }
+
+    supplier_ids = {
+        int(row["supplier_order_item_id"])
+        for row in rows
+        if row.get("supplier_order_item_id") is not None
+    }
+    requisition_ids = {
+        int(row["requisition_item_id"])
+        for row in rows
+        if row.get("requisition_item_id") is not None
+    }
+    supplier_sources = {
+        source.id: source
+        for source in db.scalars(
+            select(SupplierRequisitionOrderItem).where(
+                SupplierRequisitionOrderItem.id.in_(supplier_ids)
+            )
+        ).all()
+    } if supplier_ids else {}
+    requisition_sources = {
+        source.id: source
+        for source in db.scalars(
+            select(RequisitionItem).where(RequisitionItem.id.in_(requisition_ids))
+        ).all()
+    } if requisition_ids else {}
+    order_item_ids = {
+        int(source.order_item_id)
+        for source in [*supplier_sources.values(), *requisition_sources.values()]
+        if source.order_item_id is not None
+    }
+
+    snapshots: list[PurchasePurposeSourceSnapshot] = []
+    if order_item_ids:
+        snapshots = list(
+            db.scalars(
+                select(PurchasePurposeSourceSnapshot)
+                .outerjoin(
+                    SupplierRequisitionOrderItem,
+                    SupplierRequisitionOrderItem.id
+                    == PurchasePurposeSourceSnapshot.supplier_requisition_order_item_id,
+                )
+                .outerjoin(
+                    RequisitionItem,
+                    RequisitionItem.id
+                    == PurchasePurposeSourceSnapshot.material_requisition_item_id,
+                )
+                .where(
+                    or_(
+                        SupplierRequisitionOrderItem.order_item_id.in_(order_item_ids),
+                        RequisitionItem.order_item_id.in_(order_item_ids),
+                    )
+                )
+                .order_by(PurchasePurposeSourceSnapshot.id)
+            ).unique().all()
+        )
+    snapshots_by_source: dict[tuple[str, int], list[PurchasePurposeSourceSnapshot]] = {}
+    snapshots_by_order_item: dict[int, list[PurchasePurposeSourceSnapshot]] = {}
+    snapshot_order_item_ids: dict[int, int] = {}
+    for snapshot in snapshots:
+        if snapshot.supplier_requisition_order_item_id is not None:
+            source_key = ("supplier", int(snapshot.supplier_requisition_order_item_id))
+            source = supplier_sources.get(source_key[1])
+        elif snapshot.material_requisition_item_id is not None:
+            source_key = ("requisition", int(snapshot.material_requisition_item_id))
+            source = requisition_sources.get(source_key[1])
+        else:
+            continue
+        snapshots_by_source.setdefault(source_key, []).append(snapshot)
+        if source is not None and source.order_item_id is not None:
+            order_item_id = int(source.order_item_id)
+            snapshots_by_order_item.setdefault(order_item_id, []).append(snapshot)
+            snapshot_order_item_ids[snapshot.id] = order_item_id
+
+    snapshot_ids = {snapshot.id for snapshot in snapshots}
+    facts: list[PurchaseReceiptFact] = []
+    fact_filters = []
+    if supplier_ids:
+        fact_filters.append(
+            PurchaseReceiptFact.supplier_requisition_order_item_id.in_(supplier_ids)
+        )
+    if requisition_ids:
+        fact_filters.append(
+            PurchaseReceiptFact.material_requisition_item_id.in_(requisition_ids)
+        )
+    if fact_filters:
+        facts = list(
+            db.scalars(
+                select(PurchaseReceiptFact)
+                .where(or_(*fact_filters))
+                .order_by(
+                    PurchaseReceiptFact.receipt_fact_version.desc(),
+                    PurchaseReceiptFact.id.desc(),
+                )
+            ).all()
+        )
+    latest_fact_by_snapshot: dict[int, PurchaseReceiptFact] = {}
+    for fact in facts:
+        latest_fact_by_snapshot.setdefault(
+            int(fact.purchase_purpose_source_snapshot_id), fact
+        )
+    allocations = list(
+        db.scalars(
+            select(IncomingReceiptPurposeAllocation).where(
+                IncomingReceiptPurposeAllocation.purchase_purpose_source_snapshot_id.in_(
+                    snapshot_ids
+                )
+            )
+        ).all()
+    ) if snapshot_ids else []
+    reversed_allocation_ids = {
+        int(allocation_id)
+        for allocation_id in db.scalars(
+            select(
+                IncomingReceiptPurposeReversal.incoming_receipt_purpose_allocation_id
+            ).where(
+                IncomingReceiptPurposeReversal.incoming_receipt_purpose_allocation_id.in_(
+                    [allocation.id for allocation in allocations]
+                )
+            )
+        ).all()
+    } if allocations else set()
+    active_allocations = [
+        allocation
+        for allocation in allocations
+        if allocation.id not in reversed_allocation_ids
+    ]
+    variances = list(
+        db.scalars(
+            select(PurchaseReceiptMaterialVariance)
+            .where(
+                PurchaseReceiptMaterialVariance.purchase_purpose_source_snapshot_id.in_(
+                    snapshot_ids
+                )
+            )
+            .order_by(PurchaseReceiptMaterialVariance.id.desc())
+        ).all()
+    ) if snapshot_ids else []
+    latest_variance_by_snapshot: dict[int, PurchaseReceiptMaterialVariance] = {}
+    for variance in variances:
+        latest_variance_by_snapshot.setdefault(
+            int(variance.purchase_purpose_source_snapshot_id), variance
+        )
+    actual_material_ids = {
+        int(fact.actual_material_id) for fact in facts
+    } | {
+        int(variance.actual_material_id) for variance in variances
+    }
+    actual_materials = {
+        row.id: row
+        for row in db.scalars(
+            select(Material).where(Material.id.in_(actual_material_ids))
+        ).all()
+    } if actual_material_ids else {}
+    approvals = list(
+        db.scalars(
+            select(PurchaseReceiptMaterialVarianceApproval).where(
+                PurchaseReceiptMaterialVarianceApproval.material_variance_id.in_(
+                    [row.id for row in variances]
+                )
+            )
+        ).all()
+    ) if variances else []
+    approval_by_variance = {int(row.material_variance_id): row for row in approvals}
+    allocations_by_snapshot: dict[int, list[IncomingReceiptPurposeAllocation]] = {}
+    allocations_by_order_item: dict[int, list[IncomingReceiptPurposeAllocation]] = {}
+    for allocation in active_allocations:
+        snapshot_id = int(allocation.purchase_purpose_source_snapshot_id or 0)
+        allocations_by_snapshot.setdefault(snapshot_id, []).append(allocation)
+        order_item_id = snapshot_order_item_ids.get(snapshot_id)
+        if order_item_id is not None:
+            allocations_by_order_item.setdefault(order_item_id, []).append(allocation)
+
+    for row in rows:
+        supplier_id = row.get("supplier_order_item_id")
+        requisition_id = row.get("requisition_item_id")
+        if supplier_id is not None:
+            source_key = ("supplier", int(supplier_id))
+            source = supplier_sources.get(int(supplier_id))
+        elif requisition_id is not None:
+            source_key = ("requisition", int(requisition_id))
+            source = requisition_sources.get(int(requisition_id))
+        else:
+            row.update({"purpose_status": "legacy_unset", "receipt_fact_ready": True})
+            continue
+        marker = str(getattr(source, "purpose_contract_status", "legacy_unset"))
+        source_snapshots = snapshots_by_source.get(source_key, [])
+        if marker == "legacy_unset" and not source_snapshots:
+            row.update({"purpose_status": "legacy_unset", "receipt_fact_ready": True})
+            continue
+        row["purpose_status"] = "frozen"
+        row["receipt_fact_ready"] = False
+        if marker != "frozen" or len(source_snapshots) != 1 or source is None:
+            row["purpose_issue"] = "正式采购用途快照缺失、重复或损坏"
+            continue
+        snapshot = source_snapshots[0]
+        order_item_id = int(source.order_item_id)
+        prior_source = allocations_by_snapshot.get(snapshot.id, [])
+        before_total = sum(int(item.receipt_total_sheet_qty) for item in prior_source)
+        before_order = sum(
+            int(item.receipt_order_purpose_sheet_qty) for item in prior_source
+        )
+        before_reserve = sum(
+            int(item.receipt_reserve_purpose_sheet_qty) for item in prior_source
+        )
+        quantity = max(int(row.get("incoming_quantity") or 0), 0)
+        after_total = before_total + quantity
+        order_plan = int(snapshot.order_purpose_sheet_qty or 0)
+        reserve_plan = int(snapshot.reserve_purpose_sheet_qty or 0)
+        after_order = after_total if reserve_plan == 0 else min(after_total, order_plan)
+        after_reserve = after_total - after_order
+        order_delta = max(after_order - before_order, 0)
+        reserve_delta = max(after_reserve - before_reserve, 0)
+        before_sheets: dict[int, int] = {}
+        for allocation in allocations_by_order_item.get(order_item_id, []):
+            sid = int(allocation.purchase_purpose_source_snapshot_id or 0)
+            before_sheets[sid] = before_sheets.get(sid, 0) + int(
+                allocation.receipt_order_purpose_sheet_qty
+            )
+        after_sheets = dict(before_sheets)
+        after_sheets[snapshot.id] = after_sheets.get(snapshot.id, 0) + order_delta
+        item_snapshots = snapshots_by_order_item.get(order_item_id, [])
+        finished_before = receipt_purpose_finished_capacity(
+            db, item_snapshots, before_sheets
+        )
+        finished_after = receipt_purpose_finished_capacity(
+            db, item_snapshots, after_sheets
+        )
+        fact = latest_fact_by_snapshot.get(int(snapshot.id))
+        variance = latest_variance_by_snapshot.get(int(snapshot.id))
+        variance_material = (
+            actual_materials.get(int(variance.actual_material_id))
+            if variance is not None
+            else None
+        )
+        if variance is not None and (
+            int(variance.expected_source_version) != int(source.version)
+            or int(variance.purpose_snapshot_version) != int(snapshot.snapshot_version)
+            or variance.receipt_plan_fingerprint != snapshot.preview_fingerprint
+            or variance_material is None
+            or not bool(variance_material.is_active)
+            or int(variance_material.version) != int(variance.actual_material_version)
+            or material_calculation_fingerprint(variance_material)
+            != variance.actual_material_fingerprint
+        ):
+            variance = None
+        variance_approval = (
+            approval_by_variance.get(int(variance.id)) if variance is not None else None
+        )
+        actual_material = (
+            actual_materials.get(int(fact.actual_material_id))
+            if fact is not None
+            else None
+        )
+        fact_ready = bool(
+            fact is not None
+            and int(fact.expected_source_version) == int(source.version)
+            and fact.purchase_purpose_source_snapshot_id == snapshot.id
+            and int(fact.purpose_snapshot_version) == int(snapshot.snapshot_version)
+            and actual_material is not None
+            and bool(actual_material.is_active)
+            and int(actual_material.version) == int(fact.actual_material_version)
+            and material_calculation_fingerprint(actual_material)
+            == fact.actual_material_fingerprint
+        )
+        row.update(
+            {
+                "source_key": snapshot.source_key,
+                "purchase_purpose_source_snapshot_id": snapshot.id,
+                "expected_source_version": int(source.version),
+                "expected_receipt_fact_version": (
+                    int(fact.receipt_fact_version) if fact_ready else None
+                ),
+                "latest_receipt_fact_version": (
+                    int(fact.receipt_fact_version) if fact is not None else 0
+                ),
+                "expected_actual_material_version": (
+                    int(fact.actual_material_version) if fact_ready else None
+                ),
+                "actual_material_fingerprint": (
+                    fact.actual_material_fingerprint if fact_ready else None
+                ),
+                "expected_purpose_snapshot_version": int(snapshot.snapshot_version),
+                "receipt_plan_fingerprint": (
+                    snapshot.preview_fingerprint
+                ),
+                "receipt_fact_ready": fact_ready,
+                "actual_material_id": fact.actual_material_id if fact_ready else None,
+                "formal_material_id": (
+                    fact.expected_material_id
+                    if fact_ready
+                    else getattr(source, "material_id", None)
+                ),
+                "formal_material_code": (
+                    fact.expected_material_code_snapshot
+                    if fact_ready
+                    else str(
+                        getattr(source, "material_code_snapshot", None)
+                        or getattr(source, "material_snapshot", None)
+                        or ""
+                    ).strip()
+                    or None
+                ),
+                "material_variance_id": variance.id if variance is not None else None,
+                "material_variance_actual_material_id": (
+                    variance.actual_material_id if variance is not None else None
+                ),
+                "material_variance_actual_material_code": (
+                    variance.actual_material_code_snapshot
+                    if variance is not None
+                    else None
+                ),
+                "material_variance_reason": (
+                    variance.reason if variance is not None else None
+                ),
+                "material_variance_approval_id": (
+                    variance_approval.id if variance_approval is not None else None
+                ),
+                "material_variance_requested_by": (
+                    variance.requested_by if variance is not None else None
+                ),
+                "expected_order_purpose_sheet_qty": order_delta,
+                "expected_reserve_purpose_sheet_qty": reserve_delta,
+                "expected_finished_output_qty": max(
+                    finished_after - finished_before, 0
+                ),
+                "finished_location_name": (
+                    finished_projection.get("location_name")
+                    if finished_after > finished_before
+                    else None
+                ),
+                "reserve_location_name": (
+                    reserve_projection.get("location_name") if reserve_delta > 0 else None
+                ),
+                "finished_location_ready": (
+                    bool(finished_projection.get("ready"))
+                    if finished_after > finished_before
+                    else True
+                ),
+                "finished_location_issue": (
+                    finished_projection.get("issue")
+                    if finished_after > finished_before
+                    else None
+                ),
+                "finished_capacity_warning": (
+                    finished_projection.get("capacity_warning")
+                    if finished_after > finished_before
+                    else None
+                ),
+                "reserve_location_ready": (
+                    bool(reserve_projection.get("ready")) if reserve_delta > 0 else True
+                ),
+                "reserve_location_issue": (
+                    reserve_projection.get("issue") if reserve_delta > 0 else None
+                ),
+            }
+        )
+        if finished_after > finished_before and not finished_projection.get("ready"):
+            row["receipt_fact_ready"] = False
+            row["purpose_issue"] = str(finished_projection.get("issue") or "成品暂存位置未就绪")
+        elif reserve_delta > 0 and not reserve_projection.get("ready"):
+            row["receipt_fact_ready"] = False
+            row["purpose_issue"] = str(reserve_projection.get("issue") or "片料暂存位置未就绪")
+        if not fact_ready:
+            row["purpose_issue"] = "请先确认实际材质和正式采购价格"
+
+
 def _utc_now() -> datetime:
     return utc_now_naive()
 
@@ -365,18 +777,109 @@ def _lock_order_for_material_revert(db: Session, order_id: int) -> Order:
 
 class RevertRequest(BaseModel):
     reason: str | None = Field(default=None, max_length=500)
+    idempotency_key: str | None = Field(default=None, max_length=120)
 
 
 def _material_revert_reason(value: str | None) -> str:
     return (value or "").strip() or "撤回来料实收（系统记录）"
 
 
+def _reversal_idempotency_contract(
+    db: Session,
+    *,
+    user: User,
+    target_kind: str,
+    target_id: int,
+    payload: RevertRequest,
+) -> tuple[str, str, dict | None]:
+    key = (payload.idempotency_key or "").strip() or (
+        f"incoming-revert:{target_kind}:{target_id}"
+    )
+    request_hash = canonical_purchase_receipt_hash(
+        {
+            "target_kind": target_kind,
+            "target_id": int(target_id),
+            "reason": _material_revert_reason(payload.reason),
+        }
+    )
+    existing = db.scalar(
+        select(IncomingReceiptReversalFact).where(
+            or_(
+                IncomingReceiptReversalFact.idempotency_key == key,
+                (
+                    IncomingReceiptReversalFact.target_kind == target_kind
+                )
+                & (IncomingReceiptReversalFact.target_id == int(target_id)),
+            )
+        )
+    )
+    if existing is None:
+        return key, request_hash, None
+    if (
+        existing.idempotency_key != key
+        or int(existing.reversed_by) != int(user.id)
+        or not hmac.compare_digest(existing.request_hash, request_hash)
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "INCOMING_REVERSAL_IDEMPOTENCY_CONFLICT",
+                "message": "该撤销幂等键或业务对象已由不同操作者或载荷使用。",
+            },
+        )
+    return key, request_hash, json.loads(existing.response_json)
+
+
+def _record_reversal_fact(
+    db: Session,
+    *,
+    user: User,
+    target_kind: str,
+    target_id: int,
+    idempotency_key: str,
+    request_hash: str,
+    response: dict,
+    incoming_receipt_item_id: int | None = None,
+    incoming_receipt_purpose_reversal_id: int | None = None,
+) -> dict:
+    stable_response = jsonable_encoder(response)
+    db.add(
+        IncomingReceiptReversalFact(
+            target_kind=target_kind,
+            target_id=int(target_id),
+            incoming_receipt_item_id=incoming_receipt_item_id,
+            incoming_receipt_purpose_reversal_id=(
+                incoming_receipt_purpose_reversal_id
+            ),
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+            response_json=json.dumps(
+                stable_response, ensure_ascii=False, sort_keys=True
+            ),
+            reversed_by=user.id,
+        )
+    )
+    db.flush()
+    return stable_response
+
+
 class ReceiveRequest(BaseModel):
+    model_config = {"extra": "forbid"}
     received_quantity: int | None = None
     resolution_action: str | None = None
     resolution_reason: str | None = None
     surplus_location_id: int | None = Field(default=None, gt=0)
     expected_surplus_layout_version: int | None = Field(default=None, gt=0)
+    expected_receipt_fact_version: int | None = Field(default=None, gt=0)
+    purchase_purpose_source_snapshot_id: int | None = Field(default=None, gt=0)
+    expected_purpose_snapshot_version: int | None = Field(default=None, gt=0)
+    receipt_plan_fingerprint: str | None = Field(
+        default=None, min_length=64, max_length=64
+    )
+    expected_actual_material_version: int | None = Field(default=None, gt=0)
+    actual_material_fingerprint: str | None = Field(
+        default=None, min_length=64, max_length=64
+    )
     idempotency_key: str | None = Field(default=None, max_length=100)
 
     @field_validator("received_quantity")
@@ -388,12 +891,23 @@ class ReceiveRequest(BaseModel):
 
 
 class BatchReceiveLine(BaseModel):
+    model_config = {"extra": "forbid"}
     item_id: int | str
     received_quantity: int
     resolution_action: str | None = None
     resolution_reason: str | None = None
     surplus_location_id: int | None = Field(default=None, gt=0)
     expected_surplus_layout_version: int | None = Field(default=None, gt=0)
+    expected_receipt_fact_version: int | None = Field(default=None, gt=0)
+    purchase_purpose_source_snapshot_id: int | None = Field(default=None, gt=0)
+    expected_purpose_snapshot_version: int | None = Field(default=None, gt=0)
+    receipt_plan_fingerprint: str | None = Field(
+        default=None, min_length=64, max_length=64
+    )
+    expected_actual_material_version: int | None = Field(default=None, gt=0)
+    actual_material_fingerprint: str | None = Field(
+        default=None, min_length=64, max_length=64
+    )
     idempotency_key: str | None = Field(default=None, max_length=100)
 
     @field_validator("received_quantity")
@@ -1778,6 +2292,7 @@ def _rows(
             for item_id in selected_route_ids
             if item_id in rows_by_id
         ]
+    _decorate_rows_with_receipt_purpose(db, rows)
     return rows
 
 
@@ -2276,6 +2791,70 @@ def _stock_replenishment_receipt_row(
     }
 
 
+def _decorate_received_rows_with_purpose(
+    db: Session,
+    *,
+    rows: list[dict],
+    user: User,
+) -> None:
+    receipt_item_ids = {
+        int(row["receipt_item_id"])
+        for row in rows
+        if row.get("receipt_item_id") is not None
+    }
+    if not receipt_item_ids:
+        return
+    allocations = list(
+        db.scalars(
+            select(IncomingReceiptPurposeAllocation).where(
+                IncomingReceiptPurposeAllocation.incoming_receipt_item_id.in_(
+                    receipt_item_ids
+                )
+            )
+        ).all()
+    )
+    allocation_by_receipt = {
+        int(row.incoming_receipt_item_id): row for row in allocations
+    }
+    allocation_payloads = serialize_receipt_purpose_allocations(db, allocations)
+    reversals = list(
+        db.scalars(
+            select(IncomingReceiptPurposeReversal).where(
+                IncomingReceiptPurposeReversal.incoming_receipt_item_id.in_(
+                    receipt_item_ids
+                )
+            )
+        ).all()
+    )
+    reversal_by_receipt = {
+        int(row.incoming_receipt_item_id): row for row in reversals
+    }
+    can_view_cost = has_permission(user, "cost.view")
+    for row in rows:
+        receipt_item_id = row.get("receipt_item_id")
+        allocation = allocation_by_receipt.get(int(receipt_item_id or 0))
+        if allocation is None:
+            row["purpose_status"] = "legacy_unset"
+            row["purpose_allocation"] = None
+            continue
+        row["purpose_status"] = allocation.purpose_contract_status_snapshot
+        row["purpose_allocation"] = _visible_purpose_allocation(
+            allocation_payloads.get(allocation.id), can_view_cost=can_view_cost
+        )
+        reversal = reversal_by_receipt.get(int(receipt_item_id))
+        if reversal is not None:
+            row["purpose_reversal"] = {
+                "purpose_reversal_id": reversal.id,
+                "valid_received_cumulative": reversal.cumulative_total_sheet_qty_after,
+                "order_sheet_cumulative": reversal.cumulative_order_purpose_sheet_qty_after,
+                "reserve_sheet_cumulative": reversal.cumulative_reserve_purpose_sheet_qty_after,
+                "cumulative_total_sheet_qty_after": reversal.cumulative_total_sheet_qty_after,
+                "cumulative_order_purpose_sheet_qty_after": reversal.cumulative_order_purpose_sheet_qty_after,
+                "cumulative_reserve_purpose_sheet_qty_after": reversal.cumulative_reserve_purpose_sheet_qty_after,
+                "reversed_at": reversal.reversed_at,
+            }
+
+
 def _receipt_fact_rows(
     db: Session,
     *,
@@ -2502,6 +3081,7 @@ def _receipt_fact_rows(
         }
         _apply_component_crease(row, component)
         rows.append(row)
+    _decorate_received_rows_with_purpose(db, rows=rows, user=user)
     return rows
 
 
@@ -3205,7 +3785,30 @@ def mobile_entry(
     return {"url": url, "qr_data_url": f"data:image/png;base64,{encoded}"}
 
 
-def _new_receipt_response(db: Session, fact: IncomingReceiptItem) -> dict:
+_COST_RESPONSE_KEYS = {
+    "sheet_cost",
+    "order_cost",
+    "reserve_cost",
+    "receipt_total_cost",
+    "currency",
+}
+
+
+def _visible_purpose_allocation(payload: dict | None, *, can_view_cost: bool) -> dict | None:
+    if payload is None or can_view_cost:
+        return payload
+    return {key: value for key, value in payload.items() if key not in _COST_RESPONSE_KEYS}
+
+
+def _new_receipt_response(
+    db: Session,
+    fact: IncomingReceiptItem,
+    *,
+    can_view_cost: bool,
+    allocation_by_receipt: dict[int, IncomingReceiptPurposeAllocation] | None = None,
+    allocation_payloads: dict[int, dict] | None = None,
+    reversal_by_receipt: dict[int, IncomingReceiptPurposeReversal] | None = None,
+) -> dict:
     if fact.stock_replenishment_item_id is not None:
         response = _stock_replenishment_receipt_row(db, fact)
         if response is None:
@@ -3237,11 +3840,51 @@ def _new_receipt_response(db: Session, fact: IncomingReceiptItem) -> dict:
             and summary["remaining_quantity"] > 0
             else fact.received_quantity
         )
+    response["idempotency_key"] = fact.receipt.idempotency_key
+    allocation = (
+        allocation_by_receipt.get(fact.id)
+        if allocation_by_receipt is not None
+        else db.scalar(
+            select(IncomingReceiptPurposeAllocation).where(
+                IncomingReceiptPurposeAllocation.incoming_receipt_item_id == fact.id
+            )
+        )
+    )
+    if allocation is None:
+        response["purpose_status"] = "legacy_unset"
+        response["purpose_allocation"] = None
+    else:
+        response["purpose_status"] = allocation.purpose_contract_status_snapshot
+        allocation_payload = (
+            allocation_payloads.get(allocation.id)
+            if allocation_payloads is not None
+            else serialize_receipt_purpose_allocation(db, allocation)
+        )
+        response["purpose_allocation"] = _visible_purpose_allocation(
+            allocation_payload,
+            can_view_cost=can_view_cost,
+        )
+        reversal = (
+            reversal_by_receipt.get(fact.id)
+            if reversal_by_receipt is not None
+            else db.scalar(
+                select(IncomingReceiptPurposeReversal).where(
+                    IncomingReceiptPurposeReversal.incoming_receipt_item_id == fact.id
+                )
+            )
+        )
+        if reversal is not None:
+            response["purpose_reversal"] = serialize_receipt_purpose_reversal(
+                db, reversal
+            )
     return response
 
 
 def _raise_receipt_error(error: IncomingReceiptError) -> None:
-    raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    detail: str | dict[str, str] = str(error)
+    if error.code:
+        detail = {"code": error.code, "message": str(error)}
+    raise HTTPException(status_code=error.status_code, detail=detail) from error
 
 
 def _preflight_receipt_item_customer_access(
@@ -3290,10 +3933,30 @@ def receive_item(
             expected_surplus_layout_version=(
                 payload.expected_surplus_layout_version if payload else None
             ),
+            expected_receipt_fact_version=(
+                payload.expected_receipt_fact_version if payload else None
+            ),
+            purchase_purpose_source_snapshot_id=(
+                payload.purchase_purpose_source_snapshot_id if payload else None
+            ),
+            expected_purpose_snapshot_version=(
+                payload.expected_purpose_snapshot_version if payload else None
+            ),
+            receipt_plan_fingerprint=(
+                payload.receipt_plan_fingerprint if payload else None
+            ),
+            expected_actual_material_version=(
+                payload.expected_actual_material_version if payload else None
+            ),
+            actual_material_fingerprint=(
+                payload.actual_material_fingerprint if payload else None
+            ),
             idempotency_key=(payload.idempotency_key if payload else None),
             audit_context={"request": request},
         )
-        response = _new_receipt_response(db, fact)
+        response = _new_receipt_response(
+            db, fact, can_view_cost=has_permission(user, "cost.view")
+        )
         db.commit()
         return response
     except IncomingReceiptError as error:
@@ -3314,12 +3977,63 @@ def batch_receive_items(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
+    batch_key = (payload.idempotency_key or "").strip()
+    formal_lines = [
+        line
+        for line in payload.items
+        if line.purchase_purpose_source_snapshot_id is not None
+    ]
+    if formal_lines and not batch_key:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "INCOMING_BATCH_IDEMPOTENCY_KEY_REQUIRED",
+                "message": "正式采购用途批量收料必须提交非空批次幂等键。",
+            },
+        )
+    if any(not str(line.idempotency_key or "").strip() for line in formal_lines):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "INCOMING_IDEMPOTENCY_KEY_REQUIRED",
+                "message": "正式采购用途批量收料的每一行都必须提交独立幂等键。",
+            },
+        )
+    request_hash = canonical_purchase_receipt_hash(
+        {"items": [line.model_dump(mode="json") for line in payload.items]}
+    )
+    scope_value: str | list[int] = (
+        "unrestricted"
+        if has_unrestricted_customer_access(user, db)
+        else sorted(customer_scope_ids(user, db))
+    )
+    scope_hash = canonical_purchase_receipt_hash({"customer_scope": scope_value})
+    if batch_key:
+        replay = db.scalar(
+            select(IncomingReceiptBatchFact).where(
+                IncomingReceiptBatchFact.idempotency_key == batch_key
+            )
+        )
+        if replay is not None:
+            if (
+                int(replay.received_by) != int(user.id)
+                or not hmac.compare_digest(replay.request_hash, request_hash)
+                or not hmac.compare_digest(replay.scope_hash, scope_hash)
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "INCOMING_BATCH_IDEMPOTENCY_CONFLICT",
+                        "message": "同一批次幂等键不能由不同操作者、权限范围或载荷重放。",
+                    },
+                )
+            return json.loads(replay.response_json)
     # Check all targets before the first write.  A cross-customer item must not
     # turn a batch into a partial write that happens before the 403 response.
     for line in payload.items:
         _preflight_item_customer_access(db, item_id=line.item_id, user=user)
     seen: set[int | str] = set()
-    batch_id = (payload.idempotency_key or "").strip() or uuid4().hex
+    batch_id = batch_key or uuid4().hex
     results: list[dict] = []
     succeeded = 0
     for line in payload.items:
@@ -3346,21 +4060,29 @@ def batch_receive_items(
                     expected_surplus_layout_version=(
                         line.expected_surplus_layout_version
                     ),
-                    idempotency_key=(
-                        line.idempotency_key
-                        or (
-                            f"{batch_id}:{line.item_id}"
-                        )
+                    expected_receipt_fact_version=(
+                        line.expected_receipt_fact_version
                     ),
+                    purchase_purpose_source_snapshot_id=(
+                        line.purchase_purpose_source_snapshot_id
+                    ),
+                    expected_purpose_snapshot_version=(
+                        line.expected_purpose_snapshot_version
+                    ),
+                    receipt_plan_fingerprint=line.receipt_plan_fingerprint,
+                    expected_actual_material_version=(
+                        line.expected_actual_material_version
+                    ),
+                    actual_material_fingerprint=line.actual_material_fingerprint,
+                    idempotency_key=line.idempotency_key,
                     audit_context={"request": request, "batch_id": batch_id},
                 )
-                response = _new_receipt_response(db, fact)
             results.append(
                 {
                     "item_id": line.item_id,
                     "success": True,
                     "message": "入库成功",
-                    "item": response,
+                    "_fact": fact,
                 }
             )
             succeeded += 1
@@ -3382,6 +4104,63 @@ def batch_receive_items(
                     "message": "系统处理失败，请刷新后重试",
                 }
             )
+    successful_facts = [row["_fact"] for row in results if row.get("success")]
+    receipt_item_ids = [int(row.id) for row in successful_facts]
+    allocations = (
+        list(
+            db.scalars(
+                select(IncomingReceiptPurposeAllocation).where(
+                    IncomingReceiptPurposeAllocation.incoming_receipt_item_id.in_(
+                        receipt_item_ids
+                    )
+                )
+            ).all()
+        )
+        if receipt_item_ids
+        else []
+    )
+    allocation_by_receipt = {
+        int(row.incoming_receipt_item_id): row for row in allocations
+    }
+    allocation_payloads = serialize_receipt_purpose_allocations(db, allocations)
+    reversals = (
+        list(
+            db.scalars(
+                select(IncomingReceiptPurposeReversal).where(
+                    IncomingReceiptPurposeReversal.incoming_receipt_item_id.in_(
+                        receipt_item_ids
+                    )
+                )
+            ).all()
+        )
+        if receipt_item_ids
+        else []
+    )
+    reversal_by_receipt = {
+        int(row.incoming_receipt_item_id): row for row in reversals
+    }
+    can_view_cost = has_permission(user, "cost.view")
+    for row in results:
+        fact = row.pop("_fact", None)
+        if fact is not None:
+            row["item"] = _new_receipt_response(
+                db,
+                fact,
+                can_view_cost=can_view_cost,
+                allocation_by_receipt=allocation_by_receipt,
+                allocation_payloads=allocation_payloads,
+                reversal_by_receipt=reversal_by_receipt,
+            )
+    response = jsonable_encoder(
+        {
+            "batch_id": batch_id,
+            "idempotency_key": batch_key or None,
+            "total": len(payload.items),
+            "succeeded": succeeded,
+            "failed": len(payload.items) - succeeded,
+            "results": results,
+        }
+    )
     try:
         append_audit_event(
             db,
@@ -3411,17 +4190,22 @@ def batch_receive_items(
                 "item_ids": [str(line.item_id) for line in payload.items],
             },
         )
+        if batch_key:
+            db.add(
+                IncomingReceiptBatchFact(
+                    idempotency_key=batch_key,
+                    request_hash=request_hash,
+                    scope_hash=scope_hash,
+                    response_json=json.dumps(response, ensure_ascii=False, sort_keys=True),
+                    received_by=user.id,
+                )
+            )
+            db.flush()
         db.commit()
     except Exception:
         db.rollback()
         raise
-    return {
-        "batch_id": batch_id,
-        "total": len(payload.items),
-        "succeeded": succeeded,
-        "failed": len(payload.items) - succeeded,
-        "results": results,
-    }
+    return response
 
 
 @router.put("/receipt-items/{receipt_item_id}/accept-short")
@@ -3445,7 +4229,9 @@ def accept_short_receipt_item(
             reason=payload.reason,
             audit_context={"request": request},
         )
-        response = _new_receipt_response(db, fact)
+        response = _new_receipt_response(
+            db, fact, can_view_cost=has_permission(user, "cost.view")
+        )
         db.commit()
         return response
     except IncomingReceiptError as error:
@@ -3466,16 +4252,47 @@ def revert_new_receipt_item(
         receipt_item_id=receipt_item_id,
         user=user,
     )
+    idempotency_key, request_hash, replay = _reversal_idempotency_contract(
+        db,
+        user=user,
+        target_kind="receipt_item",
+        target_id=receipt_item_id,
+        payload=payload,
+    )
+    if replay is not None:
+        return replay
     try:
         fact = revert_receipt_item(
             db,
             user=user,
             receipt_item_id=receipt_item_id,
             reason=payload.reason,
+            idempotency_key=idempotency_key,
             audit_context={"request": request},
         )
+        response = _new_receipt_response(
+            db, fact, can_view_cost=has_permission(user, "cost.view")
+        )
+        purpose_reversal = db.scalar(
+            select(IncomingReceiptPurposeReversal).where(
+                IncomingReceiptPurposeReversal.incoming_receipt_item_id == fact.id
+            )
+        )
+        response = _record_reversal_fact(
+            db,
+            user=user,
+            target_kind="receipt_item",
+            target_id=receipt_item_id,
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+            response=response,
+            incoming_receipt_item_id=fact.id,
+            incoming_receipt_purpose_reversal_id=(
+                purpose_reversal.id if purpose_reversal is not None else None
+            ),
+        )
         db.commit()
-        return receipt_item_dict(fact)
+        return response
     except IncomingReceiptError as error:
         db.rollback()
         _raise_receipt_error(error)
@@ -3504,6 +4321,15 @@ def _revert_requisition_component(
         order_item_id=order_item.id,
         user=user,
     )
+    idempotency_key, request_hash, replay = _reversal_idempotency_contract(
+        db,
+        user=user,
+        target_kind="requisition_item",
+        target_id=requisition_item_id,
+        payload=payload,
+    )
+    if replay is not None:
+        return replay
     _lock_order_for_material_revert(db, order.id)
     row = db.execute(
         select(RequisitionItem, OrderItem, Order)
@@ -3515,6 +4341,14 @@ def _revert_requisition_component(
     if row is None:
         raise HTTPException(status_code=409, detail="报料明细或关联订单已被删除，请刷新后重试")
     requisition_item, order_item, order = row
+    if requisition_item.purpose_contract_status == "frozen":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "FROZEN_RECEIPT_LEGACY_REVERT_FORBIDDEN",
+                "message": "冻结采购用途必须按具体收料事实撤销，不能走旧撤销入口。",
+            },
+        )
     if order.status in {"partially_delivered", "delivered"}:
         raise HTTPException(status_code=409, detail="订单已发货，禁止撤回来料")
     if requisition_item.status != "已入库":
@@ -3582,8 +4416,17 @@ def _revert_requisition_component(
             },
             audit_context={"request": request},
         )
+        response = _record_reversal_fact(
+            db,
+            user=user,
+            target_kind="requisition_item",
+            target_id=requisition_item_id,
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+            response=_component_response(db, requisition_item_id),
+        )
         db.commit()
-        return _component_response(db, requisition_item_id)
+        return response
     except HTTPException:
         db.rollback()
         raise
@@ -3626,6 +4469,15 @@ def revert_item(
         order_item_id=item.id,
         user=user,
     )
+    idempotency_key, request_hash, replay = _reversal_idempotency_contract(
+        db,
+        user=user,
+        target_kind="order_item",
+        target_id=item_id_int,
+        payload=payload,
+    )
+    if replay is not None:
+        return replay
     _lock_order_for_material_revert(db, order.id)
     row = db.execute(
         select(OrderItem, Order)
@@ -3636,6 +4488,38 @@ def revert_item(
     if row is None:
         raise HTTPException(status_code=409, detail="订单明细或关联订单已被删除，请刷新后重试")
     item, order = row
+    frozen_source_exists = db.scalar(
+        select(RequisitionItem.id)
+        .where(
+            RequisitionItem.order_item_id == item.id,
+            RequisitionItem.purpose_contract_status == "frozen",
+        )
+        .limit(1)
+    ) is not None or db.scalar(
+        select(SupplierRequisitionOrderItem.id)
+        .where(
+            SupplierRequisitionOrderItem.order_item_id == item.id,
+            SupplierRequisitionOrderItem.purpose_contract_status == "frozen",
+        )
+        .limit(1)
+    ) is not None or db.scalar(
+        select(IncomingReceiptPurposeAllocation.id)
+        .join(
+            IncomingReceiptItem,
+            IncomingReceiptItem.id
+            == IncomingReceiptPurposeAllocation.incoming_receipt_item_id,
+        )
+        .where(IncomingReceiptItem.order_item_id == item.id)
+        .limit(1)
+    ) is not None
+    if frozen_source_exists:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "FROZEN_RECEIPT_LEGACY_REVERT_FORBIDDEN",
+                "message": "冻结采购用途必须按具体收料事实撤销，不能走旧撤销入口。",
+            },
+        )
     if order.status in {"partially_delivered", "delivered"}:
         raise HTTPException(status_code=409, detail="订单已发货，禁止撤回来料")
     if item.material_status != "received":
@@ -3686,8 +4570,17 @@ def revert_item(
             )
             .values(status="有效")
         )
+        response = _record_reversal_fact(
+            db,
+            user=user,
+            target_kind="order_item",
+            target_id=item_id_int,
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+            response=_item_response(db, item_id_int),
+        )
         db.commit()
-        return _item_response(db, item_id_int)
+        return response
     except HTTPException:
         db.rollback()
         raise

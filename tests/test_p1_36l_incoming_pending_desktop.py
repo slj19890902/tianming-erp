@@ -262,7 +262,7 @@ const expect=(value,message)=>{{if(!value)throw new Error(message);}};
     _run_node(script, tmp_path, "p1-56-desktop-receive-attempt.js")
 
 
-def test_desktop_single_receive_blocks_changed_uncertain_attempt_clears_4xx_and_single_flights(
+def test_desktop_single_receive_keeps_uncertain_attempt_until_reconciled_and_single_flights(
     tmp_path: Path,
 ) -> None:
     receive = _method_body(
@@ -306,14 +306,17 @@ const expect=(value,message)=>{{if(!value)throw new Error(message);}};
   await vm.receiveIncoming(row);
   expect(requests.length===2,"same uncertain payload was not retried for the 4xx case");
   expect(requests[1].payload.idempotency_key===uncertainKey,"same uncertain payload did not retain its key before 4xx");
-  expect(!vm.incomingReceiveAttempts["99"],"explicit 4xx did not clear the attempt");
+  expect(vm.incomingReceiveAttempts["99"]?.idempotencyKey===uncertainKey,"explicit 4xx discarded the stable attempt key");
 
+  // An authoritative refresh/reconciliation is the only point that may clear
+  // an uncertain attempt and accept a new quantity with a new key.
+  vm.incomingReceiveAttempts["99"]=null;
   row.incoming_quantity=21;
   const first=vm.receiveIncoming(row);
   const doubleClick=vm.receiveIncoming(row);
   expect(requests.length===3,"double click submitted more than one in-flight write");
   expect(vm.incomingReceiveAttempts["99"]?.saving===true,"single-flight attempt was not marked saving");
-  expect(requests[2].payload.idempotency_key!==uncertainKey,"new payload after explicit 4xx reused the rejected key");
+  expect(requests[2].payload.idempotency_key!==uncertainKey,"new payload after reconciliation reused the old key");
   resolveThird({{data:{{material_status:"received",remaining_quantity:0}}}});
   await Promise.all([first,doubleClick]);
   expect(requests.length===3,"double click produced a late duplicate write");
@@ -424,6 +427,7 @@ global.pageSearchGenerations=new Map();
 global.pinyinSearchTextCache=new Map();
 global.today=()=>"2026-08-13";
 global.plusDays=()=>"2026-08-20";
+global.blankReceiptReminderEditor=()=>({{}});
 const vm={{
   loginAttemptSequence:1,pageLoadSequence:1,loading:true,pageCacheUpdatedAt:{{incoming:1,"incoming:external-packaging":2}},
   orderGroupDetails:{{}},orderGroupDetailLoading:{{}},orderGroupDetailErrors:{{}},

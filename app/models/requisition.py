@@ -97,6 +97,14 @@ class RequisitionItem(Base):
             "ix_material_requisition_items_order_item_id",
             "order_item_id",
         ),
+        CheckConstraint(
+            "purpose_contract_status IN ('legacy_unset','frozen')",
+            name="ck_material_requisition_items_purpose_contract_status",
+        ),
+        CheckConstraint(
+            "version >= 1",
+            name="ck_material_requisition_items_version",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -149,6 +157,18 @@ class RequisitionItem(Base):
     status: Mapped[str] = mapped_column(
         String(30),
         default="有效",
+        nullable=False,
+    )
+    purpose_contract_status: Mapped[str] = mapped_column(
+        String(20),
+        default="legacy_unset",
+        server_default="legacy_unset",
+        nullable=False,
+    )
+    version: Mapped[int] = mapped_column(
+        Integer,
+        default=1,
+        server_default="1",
         nullable=False,
     )
     created_at: Mapped[datetime] = mapped_column(

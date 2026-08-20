@@ -132,6 +132,7 @@ def _add_task(
     task = ProductionTask(
         order_item_id=item.id,
         sales_order_item_bom_component_id=component_snapshot_id,
+        task_role=("component_internal" if component_snapshot_id is not None else "order_main"),
         status=task_status,
         planned_quantity=100,
         ordered_quantity_snapshot=100,

@@ -263,6 +263,11 @@ def test_card_page_is_a4_half_page_print_and_keeps_writes_in_explicit_label_refr
     assert "confirmed_not_started:true" in refresh_body
     assert "confirmed_no_prior_print:true" in refresh_body
     assert "window.confirm" in refresh_body
+    # Label-plan refresh is the page's one explicit audited write; receiving
+    # and production completion still cannot be posted from this print page.
+    assert CARD.count('method:"POST"') == 1
+    assert "/label-plan-refresh" in CARD
+    assert "/api/incoming/" not in CARD.split('method:"POST"', 1)[0][-200:]
     assert "method:\"PUT\"" not in CARD
     assert not (ROOT / "static" / "incoming-production-card.html").exists()
 

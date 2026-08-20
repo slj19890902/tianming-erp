@@ -22,9 +22,11 @@ def test_desktop_and_mobile_use_one_confirmation_without_reason() -> None:
     method = INDEX[start:end]
     assert method.count("confirm(") == 1
     assert "prompt(" not in method
-    assert "await axios.put(url,{})" in method
+    assert "row._revert_idempotency_key=row._revert_idempotency_key || createIdempotencyKey()" in method
+    assert "await axios.put(url,{idempotency_key:row._revert_idempotency_key})" in method
     assert "操作人、时间和前后状态" in method
-    assert "body: JSON.stringify({})" in MOBILE
+    assert "state.revertIdempotencyKeys.set(key, revertKey)" in MOBILE
+    assert "body: JSON.stringify({idempotency_key: revertKey})" in MOBILE
     assert "来料实收历史回退（管理员一次确认）" not in MOBILE
 
 

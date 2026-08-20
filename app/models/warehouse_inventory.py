@@ -565,7 +565,8 @@ class InventoryLot(Base):
         ),
         CheckConstraint(
             "source_type IN ('manual','production_completion','production_surplus',"
-            "'purchase_surplus','stocktake','transfer','replenishment','delivery_return')",
+            "'purchase_surplus','purchase_reserve','stocktake','transfer',"
+            "'replenishment','delivery_return')",
             name="ck_inventory_lots_source_type",
         ),
         CheckConstraint(

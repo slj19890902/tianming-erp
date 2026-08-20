@@ -534,6 +534,59 @@ def _save_supplier_order_draft(client: TestClient, draft: dict):
     )
 
 
+def _set_supplier_draft_purchase_quantity(
+    line: dict,
+    purchase_total: int,
+    *,
+    order_purpose: int | None = None,
+    stock_purpose: int | None = None,
+) -> None:
+    """Keep a P1-80 versioned draft internally consistent after quantity edits."""
+
+    plan_version = line["purpose_plan_version"]
+    plan_fingerprint = line["purpose_plan_fingerprint"]
+    assert int(plan_version) >= 1
+    assert len(str(plan_fingerprint)) == 64
+    authoritative = int(
+        line.get("authoritative_order_sheet_qty")
+        or line.get("remaining_requisition_qty")
+        or 0
+    )
+    order_quantity = (
+        min(int(purchase_total), authoritative)
+        if order_purpose is None
+        else int(order_purpose)
+    )
+    stock_quantity = (
+        int(purchase_total) - order_quantity
+        if stock_purpose is None
+        else int(stock_purpose)
+    )
+    line["requisition_qty"] = int(purchase_total)
+    line["purchase_total_sheet_qty"] = int(purchase_total)
+    line["order_purpose_sheet_qty"] = order_quantity
+    line["stock_purpose_sheet_qty"] = stock_quantity
+    assert line["purpose_plan_version"] == plan_version
+    assert line["purpose_plan_fingerprint"] == plan_fingerprint
+
+
+def _drop_supplier_draft_purchase_purpose(line: dict) -> None:
+    """Model a pre-P1-80 client without inventing any purpose fact."""
+
+    for field in (
+        "purchase_total_sheet_qty",
+        "order_purpose_sheet_qty",
+        "stock_purpose_sheet_qty",
+        "purpose_plan_version",
+        "purpose_plan_fingerprint",
+        "purpose_status",
+    ):
+        line.pop(field, None)
+    for source in line.get("source_items") or []:
+        source.pop("order_purpose_sheet_qty", None)
+        source.pop("stock_purpose_sheet_qty", None)
+
+
 def test_frontend_merge_suggestion_confirm_does_not_create_supplier_order() -> None:
     index = (Path(__file__).resolve().parents[1] / "static" / "index.html").read_text(
         encoding="utf-8"
@@ -582,12 +635,18 @@ def test_frontend_supplier_draft_shows_duplicate_dimension_and_quantity_checks()
         "报料防错检查",
         "疑似长宽填反",
         "按人工尺寸继续",
-        "确认超量报料",
+        "采购总张数",
+        "订单生产用途张",
+        "客户通用片料备库张",
         "supplierDraftLineIsSwapped(line)",
-        "supplierDraftQuantityAfter(line)",
+        "purchasePurposeValidationError(line)",
+        "purchase_total_sheet_qty",
+        "order_purpose_sheet_qty",
+        "stock_purpose_sheet_qty",
+        "purpose_plan_version",
+        "purpose_plan_fingerprint",
         "request_key: group.request_key || null",
         "dimension_override_acknowledged",
-        "quantity_override_acknowledged",
     ):
         assert expected in index
     assert "/api/requisition/reported-items" in index
@@ -597,6 +656,28 @@ def test_frontend_supplier_draft_shows_duplicate_dimension_and_quantity_checks()
     assert "reported-item-table" in index
     assert "reported-item-select-column" in index
     assert "reported-item-dimension" in index
+
+
+def test_frontend_composite_draft_reuses_stable_key_only_for_same_uncertain_draft() -> None:
+    index = (Path(__file__).resolve().parents[1] / "static" / "index.html").read_text(
+        encoding="utf-8"
+    )
+    open_start = index.index("async openCompositeRequisition(rows)")
+    open_end = index.index("recalculateCompositeDraftLine(line)", open_start)
+    open_block = index[open_start:open_end]
+    save_start = index.index("async saveCompositeRequisitionDraft()")
+    save_end = index.index("async saveStockReplenishmentDraft()", save_start)
+    save_block = index[save_start:save_end]
+
+    assert "draftSignature = JSON.stringify" in open_block
+    assert "previousSaveState.uncertain" in open_block
+    assert "previousSaveState.draftSignature === draftSignature" in open_block
+    assert "? previousSaveState.requestKey" in open_block
+    assert ": createIdempotencyKey()" in open_block
+    assert "request_key:state.requestKey" in save_block
+    assert "if (!String(state.requestKey || \"\").trim())" in save_block
+    assert "state.uncertain = true" in save_block
+    assert "state.requestKey = createIdempotencyKey()" in save_block
 
 
 def test_preview_supplier_order_draft_supports_single_regular_pending_item(
@@ -765,7 +846,7 @@ def test_a3_supplier_draft_allows_cover_and_base_partial_100_of_200(
         _login(client, "sales")
         draft = _preview_supplier_order_draft(client, [selection])
         for line in draft["supplier_groups"][0]["lines"]:
-            line["requisition_qty"] = 100
+            _set_supplier_draft_purchase_quantity(line, 100)
         saved = _save_supplier_order_draft(client, draft)
         supplier_order_id = saved.json()["created_orders"][0]["supplier_order_id"]
         detail = client.get(f"/api/requisition/supplier-orders/{supplier_order_id}")
@@ -1629,7 +1710,9 @@ def test_pending_selection_rejects_fabricated_deduction_and_invalid_requisition_
             "inventory_deducted_qty"
         ] = 1
         zero_requisition_qty = deepcopy(draft)
-        zero_requisition_qty["supplier_groups"][0]["lines"][0]["requisition_qty"] = 0
+        _set_supplier_draft_purchase_quantity(
+            zero_requisition_qty["supplier_groups"][0]["lines"][0], 0
+        )
 
         negative = _save_supplier_order_draft(client, negative_deduction)
         fabricated = _save_supplier_order_draft(client, fabricated_deduction)
@@ -1671,7 +1754,7 @@ def test_supplier_draft_partial_quantity_stays_pending_and_retry_is_idempotent(
         assert line["theoretical_requisition_qty"] == 100
         assert line["already_requisitioned_qty"] == 0
         assert line["remaining_requisition_qty"] == 100
-        line["requisition_qty"] = 40
+        _set_supplier_draft_purchase_quantity(line, 40)
 
         first = _save_supplier_order_draft(client, draft)
         retry = _save_supplier_order_draft(client, draft)
@@ -1756,7 +1839,7 @@ def test_receiving_partial_supplier_order_keeps_unreported_remainder_pending(
         draft = _preview_supplier_order_draft(client, [selection])
         line = draft["supplier_groups"][0]["lines"][0]
         assert line["theoretical_requisition_qty"] == 300
-        line["requisition_qty"] = 200
+        _set_supplier_draft_purchase_quantity(line, 200)
         saved = _save_supplier_order_draft(client, draft)
         assert saved.status_code == 201, saved.text
 
@@ -2119,7 +2202,7 @@ def test_pending_hides_fully_reported_legacy_telescoping_lid_components(
     assert not [row for row in pending.json()["items"] if row.get("item_id") == 1]
 
 
-def test_supplier_draft_blocks_swapped_dimensions_and_controls_overage(
+def test_supplier_draft_blocks_swapped_dimensions_and_rejects_tampered_order_purpose(
     requisition_app,
 ) -> None:
     from app.models.audit import OperationLog
@@ -2145,6 +2228,7 @@ def test_supplier_draft_blocks_swapped_dimensions_and_controls_overage(
         _login(sales_client, "sales")
         swapped_draft = _preview_supplier_order_draft(sales_client, [selection])
         swapped_line = swapped_draft["supplier_groups"][0]["lines"][0]
+        _drop_supplier_draft_purchase_purpose(swapped_line)
         swapped_line["report_length_mm"] = 800
         swapped_line["report_width_mm"] = 1000
         swapped_line["dimension_override_acknowledged"] = True
@@ -2152,36 +2236,38 @@ def test_supplier_draft_blocks_swapped_dimensions_and_controls_overage(
 
         over_draft = _preview_supplier_order_draft(sales_client, [selection])
         over_line = over_draft["supplier_groups"][0]["lines"][0]
-        over_line["requisition_qty"] = over_line["remaining_requisition_qty"] + 1
-        over_line["quantity_override_acknowledged"] = True
+        authoritative = int(over_line["authoritative_order_sheet_qty"])
+        _set_supplier_draft_purchase_quantity(
+            over_line,
+            authoritative + 1,
+            order_purpose=authoritative + 1,
+            stock_purpose=0,
+        )
         sales_over = _save_supplier_order_draft(sales_client, over_draft)
 
     assert sales_swapped.status_code == 403
     assert "长宽颠倒" in sales_swapped.json()["detail"]
-    assert sales_over.status_code == 403
-    assert "只有管理员" in sales_over.json()["detail"]
+    assert sales_over.status_code == 409
+    assert sales_over.json()["detail"]["code"] == "PURCHASE_PURPOSE_TAMPERED"
+    assert "订单用途" in sales_over.json()["detail"]["message"]
 
     with TestClient(app) as admin_client:
         _login(admin_client, "admin")
         admin_draft = _preview_supplier_order_draft(admin_client, [selection])
         admin_line = admin_draft["supplier_groups"][0]["lines"][0]
+        _drop_supplier_draft_purchase_purpose(admin_line)
         admin_line["report_length_mm"] = 800
         admin_line["report_width_mm"] = 1000
-        admin_line["requisition_qty"] = admin_line["remaining_requisition_qty"] + 5
-        missing_ack = _save_supplier_order_draft(admin_client, admin_draft)
-        admin_line["quantity_override_acknowledged"] = True
         missing_dimension_ack = _save_supplier_order_draft(admin_client, admin_draft)
         admin_line["dimension_override_acknowledged"] = True
         accepted = _save_supplier_order_draft(admin_client, admin_draft)
 
-    assert missing_ack.status_code == 409
-    assert "确认超量报料" in missing_ack.json()["detail"]
     assert missing_dimension_ack.status_code == 409
     assert "按人工尺寸继续" in missing_dimension_ack.json()["detail"]
     assert accepted.status_code == 201, accepted.text
     with session_factory() as session:
         order = session.query(SupplierRequisitionOrder).one()
-        assert order.requisition_qty == 105
+        assert order.requisition_qty == 100
         assert order.request_key
         event = session.scalar(
             select(OperationLog).where(
@@ -2190,7 +2276,43 @@ def test_supplier_draft_blocks_swapped_dimensions_and_controls_overage(
         )
         assert event is not None
         assert '"dimension_override": true' in event.details
-        assert '"quantity_override": true' in event.details
+
+
+def test_supplier_draft_overbuy_freezes_stock_purpose_without_extra_ack(
+    requisition_app,
+) -> None:
+    app, _session_factory = requisition_app
+    selection = {
+        "type": "order_item",
+        "order_item_id": 1,
+        "supplier_name": "苏州纸板供应商",
+        "report_length_mm": 1000,
+        "report_width_mm": 800,
+        "cutting_mode": "一开一",
+    }
+    with TestClient(app) as client:
+        _login(client, "sales")
+        draft = _preview_supplier_order_draft(client, [selection])
+        line = draft["supplier_groups"][0]["lines"][0]
+        authoritative = int(line["authoritative_order_sheet_qty"])
+        _set_supplier_draft_purchase_quantity(
+            line,
+            authoritative + 5,
+            order_purpose=authoritative,
+            stock_purpose=5,
+        )
+        assert line.get("quantity_override_acknowledged") is not True
+        saved = _save_supplier_order_draft(client, draft)
+        assert saved.status_code == 201, saved.text
+        order_id = saved.json()["created_orders"][0]["supplier_order_id"]
+        detail = client.get(f"/api/requisition/supplier-orders/{order_id}")
+
+    assert detail.status_code == 200, detail.text
+    line = detail.json()["lines"][0]
+    assert line["purpose_status"] == "frozen"
+    assert line["purchase_total_sheet_qty"] == 105
+    assert line["order_purpose_sheet_qty"] == 100
+    assert line["stock_purpose_sheet_qty"] == 5
 
 
 def test_reported_documents_unifies_supplier_orders_and_legacy_requisitions(

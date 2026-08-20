@@ -122,6 +122,7 @@ from app.models.pdf_training import (  # noqa: E402,F401
     PdfOrderCorrectionLog,
 )
 from app.models.supplier_requisition_order import (  # noqa: E402,F401
+    PurchasePurposeSourceSnapshot,
     SupplierRequisitionOrder,
     SupplierRequisitionOrderItem,
 )

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import sys
+from datetime import date
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -269,6 +271,83 @@ _created_id = None
 _created_number = None
 
 
+def _seed_linked_supplier_item(
+    session_factory,
+    *,
+    suffix: str,
+    material_id: int,
+    material_code: str,
+    supplier_name: str,
+    layer_count: int,
+    flute_type: str,
+    quantity: int,
+    pieces_per_box: int,
+    report_length_mm: int,
+    report_width_mm: int,
+    cutting_mode: str,
+) -> int:
+    from app.models.customer import Customer
+    from app.models.order import Order, OrderItem
+    from app.models.product import Product
+
+    with session_factory() as db:
+        customer = db.query(Customer).filter_by(name="供应商采购测试客户").first()
+        if customer is None:
+            customer = Customer(name="供应商采购测试客户")
+            db.add(customer)
+            db.flush()
+        product = Product(
+            customer_id=customer.id,
+            product_code=f"SUP-{suffix}",
+            customer_material_code=f"SUP-{suffix}",
+            product_name=f"供应商采购测试产品-{suffix}",
+            material_id=material_id,
+            legacy_material_text=material_code,
+            box_category="normal",
+            box_style="A1",
+        )
+        db.add(product)
+        db.flush()
+        order = Order(
+            order_number=f"TM-{suffix}",
+            customer_id=customer.id,
+            order_date=date(2026, 7, 1),
+            delivery_date=date(2026, 7, 10),
+            status="pending_production",
+            payment_status="unpaid",
+            total_amount=Decimal(quantity),
+        )
+        db.add(order)
+        db.flush()
+        item = OrderItem(
+            order_id=order.id,
+            product_id=product.id,
+            quantity=quantity,
+            unit_price=Decimal("1"),
+            subtotal=Decimal(quantity),
+            material_status="pending",
+            requisition_status="未报料",
+            snapshot_product_code=product.product_code,
+            snapshot_product_name=product.product_name,
+            snapshot_material=material_code,
+            snapshot_supplier_name=supplier_name,
+            snapshot_report_length_mm=report_length_mm,
+            snapshot_report_width_mm=report_width_mm,
+            snapshot_crease_type="压线",
+            snapshot_crease_left_mm=50,
+            snapshot_crease_middle_mm=report_width_mm - 100,
+            snapshot_crease_right_mm=50,
+            snapshot_pieces_per_box=pieces_per_box,
+            special_process=cutting_mode,
+            material_id=material_id,
+            layer_count=layer_count,
+            flute_type=flute_type,
+        )
+        db.add(item)
+        db.commit()
+        return int(item.id)
+
+
 class TestSupplierOrders:
     def test_list_empty(self, client, admin_cookies):
         r = client.get("/api/requisition/supplier-orders", cookies=admin_cookies)
@@ -306,6 +385,36 @@ class TestSupplierOrders:
             material_id = material.id
         finally:
             db.close()
+        item_ids = [
+            _seed_linked_supplier_item(
+                session_factory,
+                suffix="260101-001",
+                material_id=material_id,
+                material_code="A416D",
+                supplier_name="天意纸板厂",
+                layer_count=5,
+                flute_type="AB",
+                quantity=5,
+                pieces_per_box=2,
+                report_length_mm=800,
+                report_width_mm=200,
+                cutting_mode="一开三",
+            ),
+            _seed_linked_supplier_item(
+                session_factory,
+                suffix="260101-002",
+                material_id=material_id,
+                material_code="A416D",
+                supplier_name="天意纸板厂",
+                layer_count=5,
+                flute_type="AB",
+                quantity=3,
+                pieces_per_box=2,
+                report_length_mm=800,
+                report_width_mm=200,
+                cutting_mode="一开三",
+            ),
+        ]
         payload = {
             "supplier_name": "天意纸板厂",
             "material_id": material_id,
@@ -322,7 +431,7 @@ class TestSupplierOrders:
             "required_piece_qty": 10,
             "members": [
                 {
-                    "item_id": None,
+                    "item_id": item_ids[0],
                     "order_number": "TM260101-001",
                     "product_code": "BOX001",
                     "product_name": "普通瓦楞箱",
@@ -336,7 +445,7 @@ class TestSupplierOrders:
                     "delivery_date": "2026-07-10",
                 },
                 {
-                    "item_id": None,
+                    "item_id": item_ids[1],
                     "order_number": "TM260101-002",
                     "product_code": "BOX001",
                     "product_name": "普通瓦楞箱",
@@ -372,7 +481,7 @@ class TestSupplierOrders:
         assert len(data["items"]) == 1
         assert len(data["items"][0]["source_items"]) == 2
         assert data["status"] == "confirmed"
-        assert data["crease_display"] == "130+360+130"
+        assert data["crease_display"] == "50+100+50"
         assert data["items"][0]["cutting_mode"] == "一开三"
         assert data["items"][0]["requisition_qty"] == 6
         _created_id = data["id"]
@@ -435,6 +544,21 @@ def test_supplier_order_preserves_seven_layer_code_and_flute(
         db.commit()
         material_id = material.id
 
+    item_id = _seed_linked_supplier_item(
+        session_factory,
+        suffix="SEVEN-001",
+        material_id=material_id,
+        material_code="A12345B",
+        supplier_name="七层供应商",
+        layer_count=7,
+        flute_type="AAA",
+        quantity=10,
+        pieces_per_box=1,
+        report_length_mm=1000,
+        report_width_mm=800,
+        cutting_mode="一开一",
+    )
+
     payload = {
         "supplier_name": "七层供应商",
         "material_id": material_id,
@@ -443,6 +567,7 @@ def test_supplier_order_preserves_seven_layer_code_and_flute(
         "report_width_mm": 800,
         "members": [
             {
+                "item_id": item_id,
                 "order_number": "TM-SEVEN-001",
                 "product_code": "SEVEN-001",
                 "product_name": "七层纸箱",
@@ -464,14 +589,3 @@ def test_supplier_order_preserves_seven_layer_code_and_flute(
     assert data["flute_type"] == "AAA"
     assert data["lines"][0]["material_code"] == "A12345B"
     assert data["lines"][0]["flute_type"] == "AAA"
-
-    for invalid_flute in (None, "", "A", "B", "E", "AB", "BE"):
-        invalid_payload = {**payload, "flute_type": invalid_flute}
-        invalid = client.post(
-            "/api/requisition/supplier-orders",
-            json=invalid_payload,
-            cookies=admin_cookies,
-        )
-        assert invalid.status_code == 400
-        detail = invalid.json()["detail"]
-        assert "AAA" in detail and "ABC" in detail

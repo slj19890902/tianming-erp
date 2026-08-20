@@ -2130,6 +2130,7 @@ def _order_response(
         "group_key": _order_group_key(order),
         "customer_id": order.customer_id,
         "customer_name": customer_name,
+        "source_contract_id": order.source_contract_id,
         "customer_po": order.customer_po,
         "order_date": order.order_date,
         "delivery_date": order.delivery_date,
@@ -5884,6 +5885,9 @@ def update_order(
         "delivery_date": order.delivery_date,
         "remark": order.remark,
     }
+    # A source contract is immutable provenance.  Contract-backed orders remain
+    # normal operational orders, but order edits never propagate back into the
+    # confirmed contract snapshot.
     order.customer_po = (payload.customer_po or "").strip() or None
     order.delivery_date = payload.delivery_date
     order.remark = (payload.remark or "").strip() or None
@@ -7088,6 +7092,10 @@ def _create_order_impl(
             pending_drawing_consumptions,
             observability=observability,
         )
+        if not commit:
+            # The contract workflow owns the outer transaction and must be able
+            # to recover a concurrently committed source_contract_id winner.
+            raise
         raise HTTPException(status_code=409, detail="订单号或订单数据冲突") from error
     except Exception:
         db.rollback()

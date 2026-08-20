@@ -10,7 +10,7 @@
     .actions{position:sticky;top:0;z-index:10;padding:10px;text-align:center;background:#fffffff2;border-bottom:1px solid #d1d5db}.actions a{display:inline-block;margin-left:9px;color:#1769aa;text-decoration:none}
     button{padding:9px 22px;border:0;border-radius:6px;background:#1769aa;color:#fff;font-weight:700;cursor:pointer}button.secondary{background:#475569}button:disabled{cursor:not-allowed;opacity:.45}
     .pages{padding:12px 0 28px}
-    .contract-page{position:relative;width:210mm;min-height:297mm;margin:0 auto 12px;padding:11mm 14mm 13mm;background:#fff;box-shadow:0 4px 18px #0002;page-break-after:always;break-after:page}
+    .contract-page{position:relative;display:flex;flex-direction:column;width:210mm;height:297mm;margin:0 auto 12px;padding:11mm 14mm 13mm;background:#fff;box-shadow:0 4px 18px #0002;overflow:hidden;page-break-after:always;break-after:page}
     .contract-page:last-child{page-break-after:auto;break-after:auto}
     .title{text-align:center}.title h1{margin:0;font-size:18pt;line-height:1.25}.title h2{margin:4px 0 0;font-size:17pt;letter-spacing:8px}
     .contract-no{text-align:right;margin-top:-3px;font:10.5pt/1.4 "Microsoft YaHei",sans-serif}
@@ -24,10 +24,14 @@
     .col-index{width:8mm}.col-name{width:42mm}.col-spec{width:32mm}.col-material{width:27mm}.col-qty{width:17mm}.col-price{width:21mm}.col-amount{width:23mm}.col-remark{width:auto}
     .total{margin-top:2mm;text-align:right;font-weight:700;font-size:11pt}
     .terms{margin-top:3mm;font-size:8.9pt;line-height:1.42;text-align:justify}
-    .term{margin:0 0 1.5mm}.term-title{font-weight:700}.term-body{display:inline}
+    .term{margin:0 0 1.5mm;font-size:8.9pt;line-height:1.42;text-align:justify;break-inside:avoid;page-break-inside:avoid}.term-title{font-weight:700}.term-body{display:inline}
     .contract-remarks{margin:2mm 0;font-size:9pt;line-height:1.4;white-space:pre-wrap}
-    .signatures{display:grid;grid-template-columns:1fr 1fr;gap:14mm;margin-top:5mm;font-size:9.5pt;line-height:1.8}
-    .signature{border-top:1px solid #333;padding-top:2mm;min-height:24mm}
+    .page-content{flex:1;min-height:0;overflow:hidden}
+    .page-terms .page-content{font-size:8.9pt;line-height:1.42;text-align:justify}
+    .continuation td:first-child{font-size:8.5pt;color:#4b5563}
+    .signatures{flex:0 0 auto;display:grid;grid-template-columns:1fr 1fr;gap:14mm;margin-top:3mm;font-size:9.5pt;line-height:1.8}
+    .signature{border-top:1px solid #333;padding-top:2mm;min-height:24mm;break-inside:avoid;page-break-inside:avoid}
+    tr{break-inside:avoid;page-break-inside:avoid}
     .page-number{position:absolute;left:0;right:0;bottom:5mm;text-align:center;font:9pt/1 "Microsoft YaHei",sans-serif;color:#374151}
     .load-state,.error-box{width:210mm;margin:20px auto;padding:30px;background:#fff;text-align:center;box-shadow:0 4px 18px #0002}.load-state{color:#475569}.error-box{color:#b91c1c}.hidden,[hidden]{display:none!important}
     @media print{
@@ -40,101 +44,253 @@
   </style>
 </head>
 <body>
-  <div class="actions"><button id="printButton" disabled type="button">打印 / 保存为 PDF</button><button id="retryButton" class="secondary hidden" type="button" hidden>重新读取</button><a href="/contracts">返回 ERP</a></div>
+  <div class="actions" id="printToolbar"><button id="printButton" disabled type="button" data-print-action="print">打印 / 保存为 PDF</button><button id="retryButton" class="secondary hidden" type="button" hidden>重新读取</button><a href="/contracts">返回 ERP</a></div>
   <div id="loadState" class="load-state">正在读取合同，请稍候…</div>
   <div id="errorBox" class="error-box" role="alert" hidden></div>
   <main id="app" class="pages" hidden></main>
   <script src="/static/assets/print-recovery.js"></script>
+  <script src="/static/assets/print-template-editor.js"></script>
   <script>
+    let templateEditor = null;
+    let loadedPrintData = null;
     const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;", "'":"&#39;"}[char]));
     const text = value => escapeHtml(value === null || value === undefined || value === "" ? "-" : value);
+    const templateText = (key, fallback) => {
+      const value = templateEditor?.value?.().fields?.[key];
+      return typeof value === "string" ? value : fallback;
+    };
+    const editableText = (key, fallback) => `<span data-print-edit-key="${key}">${escapeHtml(templateText(key,fallback))}</span>`;
     const money = value => value === null || value === undefined || value === "" ? "-" : Number(value).toFixed(2);
-    const compactNumber = value => Number.isFinite(Number(value)) ? String(Math.round(Number(value))) : String(value || "");
+    const compactNumber = value => {
+      const raw = String(value ?? "").trim();
+      if (!raw) return "";
+      const number = Number(raw);
+      return Number.isFinite(number) ? String(number) : raw;
+    };
     const specification = item => {
       const dimensions = [item.length_mm,item.width_mm]
         .filter(value => value !== null && value !== undefined && value !== "");
       if (item.height_mm !== null && item.height_mm !== undefined && item.height_mm !== "") dimensions.push(item.height_mm);
-      if (dimensions.length >= 2) return `${dimensions.map(compactNumber).join("×")}mm`;
+      if (dimensions.length >= 2) return dimensions.map(compactNumber).join("×");
       return String(item.specification || "-")
+        .replace(/mm/gi, "")
         .replace(/-?\d+(?:\.\d+)?/g, value => compactNumber(value));
     };
     const formatDate = value => {
       const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
       return match ? `${match[1]}年${Number(match[2])}月${Number(match[3])}日` : String(value || "-");
     };
-    const chunkItems = (items, size=8) => {
-      const pages = [];
-      for (let index=0; index<items.length; index+=size) pages.push(items.slice(index,index+size));
-      return pages.length ? pages : [[]];
+    const splitText = (value, maxChars=56) => {
+      const chars = Array.from(String(value ?? ""));
+      if (!chars.length) return [""];
+      const chunks = [];
+      for (let index=0; index<chars.length; index+=maxChars) chunks.push(chars.slice(index,index+maxChars).join(""));
+      return chunks;
     };
-    const buildContractPages = items => {
-      if (items.length <= 4) return [{kind:"combined",items,offset:0}];
-      const itemPages = chunkItems(items,8);
-      let offset = 0;
-      const pages = itemPages.map(pageItems => {
-        const page = {kind:"items",items:pageItems,offset};
-        offset += pageItems.length;
-        return page;
-      });
-      pages.push({kind:"terms",items:[],offset:items.length});
-      return pages;
+    const itemFragments = item => {
+      const fields = {
+        product_name: splitText(item.product_name, 48),
+        specification: splitText(specification(item), 48),
+        material: splitText([item.material,item.flute_type].filter(Boolean).join(" / "), 48),
+        remarks: splitText(item.remarks, 48),
+      };
+      const count = Math.max(...Object.values(fields).map(parts => parts.length));
+      return Array.from({length:count}, (_,index) => ({
+        first:index === 0,
+        product_name:fields.product_name[index] || "",
+        specification:fields.specification[index] || "",
+        material:fields.material[index] || "",
+        remarks:fields.remarks[index] || "",
+      }));
     };
     const paymentTermsText = value => {
       const raw = String(value || "").trim();
       if (!raw) return "双方书面确认的账期";
       return /^\d+$/.test(raw) ? `${raw}天账期` : raw;
     };
-    const termsHtml = contract => {
-      const paymentTerms = text(paymentTermsText(contract.payment_terms));
-      const clauses = [
-        ["第二条　交货", "甲方在乙方确认规格、数量、图稿及交货信息后，原则上于7个工作日内送达约定地点。乙方变更资料、地点或拒绝按约收货的，交期相应顺延，增加的仓储、运输等合理费用由乙方承担。乙方授权人员签收后视为交付完成，货物毁损、灭失风险转由乙方承担；因甲方原因造成的除外。"],
-        ["第三条　结算与发票", `双方按${paymentTerms}结算。乙方收到对账单后5个工作日内未书面提出具体异议的，视为对账无异议。乙方应按约支付货款；逾期的，每日按逾期未付款项万分之三支付违约金，甲方有权暂停后续供货。甲方依法按实际交易及届时适用税率开具发票。`],
-        ["第四条　验收与质量责任", "乙方应在收货时核验数量、规格和外观，并在收货后5个工作日内书面提出异议和证据；隐蔽质量问题应在发现或应当发现后5个工作日内提出并保留待检货物。经确认属于甲方责任的，甲方可根据实际情况采取补货、更换、返工、减价或退还不合格部分价款。因乙方提供或确认的资料、储存、装卸或使用不当造成的问题，由乙方承担。"],
-        ["第五条　变更、解除与终止", "合同或订单变更、取消须经双方书面确认。乙方在甲方已备料、排产或生产后取消、变更或无正当理由拒收的，应承担甲方已经发生且可证明的材料、生产、仓储、运输及处置损失。一方发生法定解除事由，或经催告仍不履行主要义务的，守约方可依法解除；结算、质量、违约及争议解决条款不因解除或到期而失效。"],
-        ["第六条　违约责任", "一方违约应继续履行、采取补救措施并赔偿合理损失。因甲方原因迟延交货的，按迟延部分货款每日万分之三承担违约金，累计不超过该部分货款的10%。除法律另有规定外，甲方赔偿范围以乙方能够证明的直接实际损失为限，累计不超过涉争货物价款；因甲方故意或重大过失造成对方人身损害或财产损失的，不适用该限制。"],
-        ["第七条　生效、附件与争议解决", "本合同自双方盖章或有权代表签字之日起生效，一式两份，双方各执一份。双方确认的订单、报价单、样品、图稿、技术文件、送货单、对账单及补充协议均为合同组成部分；同一事项不一致的，以后形成且经双方确认的书面文件为准。争议先协商解决；协商不成的，向甲方住所地有管辖权的人民法院提起诉讼。"],
+    const termClauses = contract => {
+      const paymentTerms = paymentTermsText(contract.payment_terms);
+      return [
+        {titleKey:"clause_2_title",bodyKey:"clause_2_body",title:"第二条　交货",body:"甲方在乙方确认规格、数量、图稿及交货信息后，原则上于7个工作日内送达约定地点。乙方变更资料、地点或拒绝按约收货的，交期相应顺延，增加的仓储、运输等合理费用由乙方承担。乙方授权人员签收后视为交付完成，货物毁损、灭失风险转由乙方承担；因甲方原因造成的除外。"},
+        {titleKey:"clause_3_title",bodyKey:"clause_3_body",prefixKey:"clause_3_payment_prefix",title:"第三条　结算与发票",prefix:"双方按",dynamicText:paymentTerms,body:"结算。乙方收到对账单后5个工作日内未书面提出具体异议的，视为对账无异议。乙方应按约支付货款；逾期的，每日按逾期未付款项万分之三支付违约金，甲方有权暂停后续供货。甲方依法按实际交易及届时适用税率开具发票。"},
+        {titleKey:"clause_4_title",bodyKey:"clause_4_body",title:"第四条　验收与质量责任",body:"乙方应在收货时核验数量、规格和外观，并在收货后5个工作日内书面提出异议和证据；隐蔽质量问题应在发现或应当发现后5个工作日内提出并保留待检货物。经确认属于甲方责任的，甲方可根据实际情况采取补货、更换、返工、减价或退还不合格部分价款。因乙方提供或确认的资料、储存、装卸或使用不当造成的问题，由乙方承担。"},
+        {titleKey:"clause_5_title",bodyKey:"clause_5_body",title:"第五条　变更、解除与终止",body:"合同或订单变更、取消须经双方书面确认。乙方在甲方已备料、排产或生产后取消、变更或无正当理由拒收的，应承担甲方已经发生且可证明的材料、生产、仓储、运输及处置损失。一方发生法定解除事由，或经催告仍不履行主要义务的，守约方可依法解除；结算、质量、违约及争议解决条款不因解除或到期而失效。"},
+        {titleKey:"clause_6_title",bodyKey:"clause_6_body",title:"第六条　违约责任",body:"一方违约应继续履行、采取补救措施并赔偿合理损失。因甲方原因迟延交货的，按迟延部分货款每日万分之三承担违约金，累计不超过该部分货款的10%。除法律另有规定外，甲方赔偿范围以乙方能够证明的直接实际损失为限，累计不超过涉争货物价款；因甲方故意或重大过失造成对方人身损害或财产损失的，不适用该限制。"},
+        {titleKey:"clause_7_title",bodyKey:"clause_7_body",title:"第七条　生效、附件与争议解决",body:"本合同自双方盖章或有权代表签字之日起生效，一式两份，双方各执一份。双方确认的订单、报价单、样品、图稿、技术文件、送货单、对账单及补充协议均为合同组成部分；同一事项不一致的，以后形成且经双方确认的书面文件为准。争议先协商解决；协商不成的，向甲方住所地有管辖权的人民法院提起诉讼。"},
       ];
-      return clauses.map(([titleValue,body]) => `<p class="term"><span class="term-title">${titleValue}：</span><span class="term-body">${body}</span></p>`).join("");
     };
     const headerHtml = (data, contract) => {
       const customerName = contract.customer_name || contract.customer?.name || "-";
       const seller = data.sender || {};
-      return `<div class="title"><h1>${text(seller.company_name || "苏州天明包装有限公司")}</h1><h2>购货合同</h2></div>
-        <div class="contract-no">合同编号：${text(contract.contract_no)}</div>
+      return `<div class="title"><h1>${text(seller.company_name || "苏州天明包装有限公司")}</h1><h2>${editableText("document_title","购货合同")}</h2></div>
+        <div class="contract-no">${editableText("contract_number_label","合同编号：")}${text(contract.contract_no)}</div>
         <div class="parties">
-          <div class="party"><div><strong>甲方（供方）：${text(seller.company_name || "苏州天明包装有限公司")}</strong></div><div>地址：${text(seller.address)}</div><div>联系人/电话：${text(seller.contact_person)}　${text(seller.phone)}</div></div>
-          <div class="party"><div><strong>乙方（需方）：${text(customerName)}</strong></div><div>地址：${text(contract.customer_address)}</div><div>联系人/电话：${text(contract.customer_contact)}　${text(contract.customer_phone)}</div></div>
+          <div class="party"><div><strong>${editableText("supplier_party_label","甲方（供方）：")}${text(seller.company_name || "苏州天明包装有限公司")}</strong></div><div>${editableText("address_label","地址：")}${text(seller.address)}</div><div>${editableText("contact_phone_label","联系人/电话：")}${text(seller.contact_person)}　${text(seller.phone)}</div></div>
+          <div class="party"><div><strong>${editableText("customer_party_label","乙方（需方）：")}${text(customerName)}</strong></div><div>${editableText("address_label","地址：")}${text(contract.customer_address)}</div><div>${editableText("contact_phone_label","联系人/电话：")}${text(contract.customer_contact)}　${text(contract.customer_phone)}</div></div>
         </div>
-        <div class="meta"><div>合同日期：${text(formatDate(contract.contract_date))}</div><div>交货日期：${text(formatDate(contract.delivery_date))}</div><div>客户单号 / PO：${text(contract.customer_po)}</div></div>`;
+        <div class="meta"><div>${editableText("contract_date_label","合同日期：")}${text(formatDate(contract.contract_date))}</div><div>${editableText("delivery_date_label","交货日期：")}${text(formatDate(contract.delivery_date))}</div><div>${editableText("customer_po_label","客户单号 / PO：")}${text(contract.customer_po)}</div></div>`;
     };
-    const tableHtml = (items, offset) => {
-      const rows = items.map((item,index) => `<tr><td>${offset + index + 1}</td><td class="left">${text(item.product_name)}</td><td>${text(specification(item))}</td><td>${text([item.material,item.flute_type].filter(Boolean).join(" / "))}</td><td>${text(item.quantity)}</td><td>${money(item.unit_price)}</td><td>${money(Number(item.quantity || 0) * Number(item.unit_price || 0))}</td><td class="left">${text(item.remarks)}</td></tr>`).join("");
-      return `<div class="article-title">第一条　货物名称、规格、数量及价款</div><table><thead><tr><th class="col-index">序号</th><th class="col-name">商品名称</th><th class="col-spec">规格</th><th class="col-material">材质 / 楞型</th><th class="col-qty">数量</th><th class="col-price">单价</th><th class="col-amount">金额</th><th class="col-remark">备注</th></tr></thead><tbody>${rows}</tbody></table>`;
+    const tableShellHtml = () => `<div class="article-title">${editableText("article_one_title","第一条　货物名称、规格、数量及价款")}</div><table><thead><tr><th class="col-index">${editableText("column_sequence","序号")}</th><th class="col-name">${editableText("column_product_name","商品名称")}</th><th class="col-spec">${editableText("column_specification","规格")}</th><th class="col-material">${editableText("column_material","材质 / 楞型")}</th><th class="col-qty">${editableText("column_quantity","数量")}</th><th class="col-price">${editableText("column_unit_price","单价")}</th><th class="col-amount">${editableText("column_amount","金额")}</th><th class="col-remark">${editableText("column_remarks","备注")}</th></tr></thead><tbody></tbody></table>`;
+    const itemRowHtml = (item, fragment, itemIndex) => `<tr class="${fragment.first ? "" : "continuation"}"><td>${fragment.first ? itemIndex + 1 : editableText("continuation_label","续")}</td><td class="left">${fragment.product_name ? text(fragment.product_name) : ""}</td><td>${fragment.specification ? text(fragment.specification) : ""}</td><td>${fragment.material ? text(fragment.material) : ""}</td><td>${fragment.first ? text(item.quantity) : ""}</td><td>${fragment.first ? money(item.unit_price) : ""}</td><td>${fragment.first ? money(Number(item.quantity || 0) * Number(item.unit_price || 0)) : ""}</td><td class="left">${fragment.remarks ? text(fragment.remarks) : ""}</td></tr>`;
+    const signaturesHtml = (data, contract) => `<div class="signatures"><div class="signature"><strong>${editableText("supplier_party_label","甲方（供方）：")}${text(data.sender?.company_name || "苏州天明包装有限公司")}</strong><br>${editableText("authorized_representative_label","授权代表：")}　　　　　　　${editableText("seal_label","盖章：")}<br>${editableText("signing_date_label","签署日期：")}</div><div class="signature"><strong>${editableText("customer_party_label","乙方（需方）：")}${text(contract.customer_name)}</strong><br>${editableText("authorized_representative_label","授权代表：")}　　　　　　　${editableText("seal_label","盖章：")}<br>${editableText("signing_date_label","签署日期：")}</div></div>`;
+    const createPage = (app, data, contract, kind) => {
+      const page = document.createElement("section");
+      page.className = `contract-page page-${kind}`;
+      page.innerHTML = `${headerHtml(data,contract)}<div class="page-content"></div>${signaturesHtml(data,contract)}<div class="page-number"></div>`;
+      app.appendChild(page);
+      templateEditor?.applyTo(page);
+      return page;
     };
-    const signaturesHtml = (data, contract) => `<div class="signatures"><div class="signature"><strong>甲方（供方）：${text(data.sender?.company_name || "苏州天明包装有限公司")}</strong><br>授权代表：　　　　　　　盖章：<br>签署日期：</div><div class="signature"><strong>乙方（需方）：${text(contract.customer_name)}</strong><br>授权代表：　　　　　　　盖章：<br>签署日期：</div></div>`;
+    const pageFits = page => {
+      const content = page.querySelector(".page-content");
+      return content.scrollHeight <= content.clientHeight + 1 && page.scrollHeight <= page.clientHeight + 1;
+    };
+    const appendTermBlock = (state, block) => {
+      templateEditor?.applyTo(block);
+      let content = state.page.querySelector(".page-content");
+      content.appendChild(block);
+      if (pageFits(state.page)) return;
+      content.removeChild(block);
+      state.page = createPage(state.app,state.data,state.contract,"terms");
+      content = state.page.querySelector(".page-content");
+      content.appendChild(block);
+      if (!pageFits(state.page)) throw new Error("合同内容过长，无法安全分页，请缩短单段备注后重试");
+    };
+    const createTermBlock = ({titleKey,bodyKey,prefixKey,title,prefix,dynamicText}, bodyText, continuation) => {
+      const term = document.createElement("p");
+      term.className = continuation ? "term term-continuation" : "term";
+      const titleHtml = `<span class="term-title" data-print-edit-key="${titleKey}">${escapeHtml(templateText(titleKey,title))}</span>${continuation ? "（续）" : ""}：`;
+      const bodyHtml = `<span class="term-body" data-print-edit-key="${bodyKey}" data-print-edit-segment="true">${escapeHtml(bodyText)}</span>`;
+      term.innerHTML = continuation || !prefixKey
+        ? `${titleHtml}${bodyHtml}`
+        : `${titleHtml}<span class="term-body" data-print-edit-key="${prefixKey}">${escapeHtml(templateText(prefixKey,prefix))}</span>${escapeHtml(dynamicText)}${bodyHtml}`;
+      return term;
+    };
+    const appendTermClause = (state, clause) => {
+      const bodyCharacters = Array.from(templateText(clause.bodyKey,clause.body));
+      let offset = 0;
+      let continuation = false;
+      let renderedEmptyBody = false;
+      while (offset < bodyCharacters.length || (!bodyCharacters.length && !renderedEmptyBody)) {
+        const remainingText = bodyCharacters.slice(offset).join("");
+        let content = state.page.querySelector(".page-content");
+        let block = createTermBlock(clause,remainingText,continuation);
+        content.appendChild(block);
+        if (pageFits(state.page)) return;
+        content.removeChild(block);
+
+        if (content.childElementCount > 0) {
+          state.page = createPage(state.app,state.data,state.contract,"terms");
+          continue;
+        }
+        if (!bodyCharacters.length) {
+          renderedEmptyBody = true;
+          throw new Error(`合同条款“${clause.title}”标题过长，无法安全分页`);
+        }
+
+        let low = 1;
+        let high = bodyCharacters.length - offset;
+        let best = 0;
+        while (low <= high) {
+          const middle = Math.floor((low + high) / 2);
+          const candidate = createTermBlock(clause,bodyCharacters.slice(offset,offset + middle).join(""),continuation);
+          content.appendChild(candidate);
+          const fits = pageFits(state.page);
+          content.removeChild(candidate);
+          if (fits) {
+            best = middle;
+            low = middle + 1;
+          } else {
+            high = middle - 1;
+          }
+        }
+        if (!best) throw new Error(`合同条款“${clause.title}”内容过长，无法安全分页`);
+        block = createTermBlock(clause,bodyCharacters.slice(offset,offset + best).join(""),continuation);
+        content.appendChild(block);
+        if (!pageFits(state.page)) throw new Error(`合同条款“${clause.title}”分页校验失败`);
+        offset += best;
+        if (offset >= bodyCharacters.length) return;
+        continuation = true;
+        state.page = createPage(state.app,state.data,state.contract,"terms");
+      }
+    };
+    const paginateItems = (app, data, contract, items) => {
+      let page = createPage(app,data,contract,"items");
+      let content = page.querySelector(".page-content");
+      content.innerHTML = tableShellHtml();
+      let tbody = content.querySelector("tbody");
+      items.forEach((item,itemIndex) => {
+        itemFragments(item).forEach(fragment => {
+          const template = document.createElement("template");
+          template.innerHTML = itemRowHtml(item,fragment,itemIndex).trim();
+          const row = template.content.firstElementChild;
+          tbody.appendChild(row);
+          if (pageFits(page)) return;
+          tbody.removeChild(row);
+          page = createPage(app,data,contract,"items");
+          content = page.querySelector(".page-content");
+          content.innerHTML = tableShellHtml();
+          tbody = content.querySelector("tbody");
+          tbody.appendChild(row);
+          if (!pageFits(page)) throw new Error(`合同第 ${itemIndex + 1} 行内容过长，无法安全分页`);
+        });
+      });
+      return page;
+    };
+    const paginateTerms = (app, data, contract, itemPage) => {
+      const state = {app,data,contract,page:itemPage || createPage(app,data,contract,"terms")};
+      const total = document.createElement("div");
+      total.className = "total";
+      total.innerHTML = `${editableText("total_amount_label","合同总金额：")}￥${money(contract.total_amount)}`;
+      appendTermBlock(state,total);
+      splitText(contract.remarks,180).filter(Boolean).forEach((part,index) => {
+        const remarks = document.createElement("div");
+        remarks.className = "contract-remarks";
+        const key = index === 0 ? "contract_remarks_label" : "contract_remarks_continued_label";
+        const fallback = index === 0 ? "合同备注：" : "合同备注（续）：";
+        remarks.innerHTML = `<strong>${editableText(key,fallback)}</strong>${escapeHtml(part)}`;
+        appendTermBlock(state,remarks);
+      });
+      termClauses(contract).forEach(clause => appendTermClause(state,clause));
+      return state.page;
+    };
+    const finalizePages = app => {
+      const pages = Array.from(app.querySelectorAll(".contract-page"));
+      pages.forEach((page,index) => { page.querySelector(".page-number").textContent = `第 ${index + 1} / ${pages.length} 页`; });
+      if (pages.some(page => !pageFits(page))) throw new Error("合同分页校验失败，请调整内容后重试");
+    };
+    const renderContract = () => {
+      if (!loadedPrintData) return;
+      const data = loadedPrintData;
+      const contract = data.contract || data;
+      const items = Array.isArray(contract.items) ? contract.items : [];
+      const app = document.getElementById("app");
+      app.innerHTML = "";
+      const lastItemPage = paginateItems(app,data,contract,items);
+      paginateTerms(app,data,contract,lastItemPage);
+      templateEditor?.applyTo(app);
+      finalizePages(app);
+    };
     const appNode=document.getElementById("app");
     const printButtonNode=document.getElementById("printButton");
     const retryButtonNode=document.getElementById("retryButton");
     const loadStateNode=document.getElementById("loadState");
     const errorBoxNode=document.getElementById("errorBox");
-    function renderContract(data){
-      const contract=data.contract||data;
-      const items=Array.isArray(contract.items)?contract.items:[];
-      const pages=buildContractPages(items);
-      appNode.innerHTML=pages.map((page,pageIndex)=>{
-        const showItems = page.kind !== "terms";
-        const showTerms = page.kind !== "items";
-        return `<section class="contract-page page-${page.kind}">${headerHtml(data,contract)}${showItems?tableHtml(page.items,page.offset):""}
-          ${showTerms?`<div class="total">合同总金额：￥${money(contract.total_amount)}</div>${contract.remarks?`<div class="contract-remarks"><strong>合同备注：</strong>${text(contract.remarks)}</div>`:""}<div class="terms">${termsHtml(contract)}</div>`:""}
-          ${signaturesHtml(data,contract)}<div class="page-number">第 ${pageIndex + 1} / ${pages.length} 页</div></section>`;
-      }).join("");
-    }
+    templateEditor = PrintTemplateEditor.create({
+      templateKey:"customer_contract",
+      root:document,
+      toolbar:document.getElementById("printToolbar"),
+      printButton:printButtonNode,
+      onBeforePrint:() => { if (loadedPrintData) renderContract(); },
+      onPrint:() => window.print(),
+      onApplied:() => { if (loadedPrintData) renderContract(); },
+    });
     const contractPrintPage=TmPrintRecovery.createPrintPage({
       id:new URLSearchParams(location.search).get("id"),
       url:id=>`/api/contracts/${encodeURIComponent(id)}/print`,
       printButton:printButtonNode,retryButton:retryButtonNode,loadState:loadStateNode,errorBox:errorBoxNode,content:appNode,
       loadingMessage:"正在读取合同，请稍候…",invalidMessage:"合同链接无效，请返回 ERP 重新打开。",authMessage:"登录已失效，请返回 ERP 登录后重新打印。",failureMessage:"合同读取失败",
-      render:renderContract,print:()=>window.print(),
+      render:async data=>{loadedPrintData=data;await templateEditor.ready;if(document.fonts?.ready)await document.fonts.ready;renderContract()},print:()=>window.print(),
     });
     async function loadContract(){return contractPrintPage.load()}
     loadContract();

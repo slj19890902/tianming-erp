@@ -606,7 +606,7 @@ def test_quotation_print_page_calls_api():
     assert "estimated_unit_cost" not in html
     assert "margin_rate" not in html
     assert "suggested_unit_price" not in html
-    assert "<th>临时编码</th>" in html
+    assert 'data-print-edit-key="column_temporary_code">临时编码</th>' in html
     assert "row.temporary_code" in html
     assert "<th>箱型</th>" not in html
     assert "<th>金额</th>" not in html

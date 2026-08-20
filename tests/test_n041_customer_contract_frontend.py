@@ -84,6 +84,36 @@ def test_contract_form_defaults_and_compact_layout() -> None:
     assert '.contract-product-select .search-select-list' in INDEX
     assert 'width: min(560px,70vw)' in INDEX
     assert '金额</th>' in INDEX
+    assert '默认按周一至周五顺延 7 个工作日' in INDEX
+    assert '不自动识别法定节假日' in INDEX
+
+
+def test_contract_work_page_hides_product_codes_and_history_is_responsive() -> None:
+    work_page = INDEX.split("<template v-else-if=\"activePage === 'contracts'\">", 1)[1].split(
+        "<template v-else-if=\"activePage === 'products'\">", 1
+    )[0]
+    product_options = INDEX.split("contractProductOptions()", 1)[1].split(
+        "quotationEditable()", 1
+    )[0]
+    assert "常用箱（编码 / 名称 / 规格）" not in work_page
+    assert "line.product_code" not in work_page
+    assert "item.product_code" not in work_page
+    assert "product.product_code" not in product_options
+    assert "product.customer_material_code" not in product_options
+    assert 'class="contract-history-grid"' in work_page
+    assert 'class="contract-history-card"' in work_page
+    assert '<div v-else class="table-wrap"><table>' not in work_page
+    assert ".contract-history-card { display: grid" in INDEX
+    assert ".contract-history-field { min-width: 0; overflow-wrap: anywhere" in INDEX
+
+
+def test_contract_specification_only_removes_trailing_zeroes() -> None:
+    formatter = INDEX.split("contractSpecification(row)", 1)[1].split(
+        "contractMaterialText(row)", 1
+    )[0]
+    assert "Math.round" not in formatter
+    assert "Number.isFinite(number) ? String(number) : raw" in formatter
+    assert ".map(compactNumber).join(\"×\")" in formatter
 
 
 def test_contract_status_actions_are_locked_and_idempotent() -> None:
@@ -124,19 +154,56 @@ def test_contract_print_is_safe_customer_facing_document() -> None:
     assert 'item.product_code' not in PRINT
     assert '规格(mm)' not in PRINT
     assert '.replace(/mm/gi, "")' in PRINT
-    assert '金额</th>' in PRINT
-    assert 'buildContractPages(items)' in PRINT
-    assert 'items.length <= 4' in PRINT
-    assert 'pages.push({kind:"terms",items:[],offset:items.length})' in PRINT
-    assert 'page.kind !== "terms"' in PRINT
-    assert 'page.kind !== "items"' in PRINT
-    assert 'class="contract-page page-${page.kind}"' in PRINT
-    assert '第 ${pageIndex + 1} / ${pages.length} 页' in PRINT
+    assert 'editableText("column_amount","金额")' in PRINT
+    assert "Math.round" not in PRINT
+    assert "chunkItems" not in PRINT
+    assert "size=8" not in PRINT
+    assert ".contract-page{position:relative;display:flex;flex-direction:column;width:210mm;height:297mm" in PRINT
+    assert 'const pageFits = page =>' in PRINT
+    assert 'content.scrollHeight <= content.clientHeight + 1' in PRINT
+    assert 'const lastItemPage = paginateItems(app,data,contract,items)' in PRINT
+    assert 'paginateTerms(app,data,contract,lastItemPage)' in PRINT
+    assert 'finalizePages(app)' in PRINT
+    assert 'page.querySelector(".page-number").textContent = `第 ${index + 1} / ${pages.length} 页`' in PRINT
+    assert 'createPage(app,data,contract,"items")' in PRINT
+    assert 'createPage(app,data,contract,"terms")' in PRINT
+    assert 'page:itemPage || createPage(app,data,contract,"terms")' in PRINT
+    assert 'itemFragments(item)' in PRINT
+    assert 'splitText(contract.remarks,180)' in PRINT
+    assert 'const appendTermClause = (state, clause) =>' in PRINT
+    assert 'data-print-edit-segment="true"' in PRINT
+    assert 'while (low <= high)' in PRINT
+    assert 'bodyCharacters.slice(offset,offset + best)' in PRINT
+    assert 'templateEditor?.applyTo(app)' in PRINT
+    assert 'onBeforePrint:() => { if (loadedPrintData) renderContract(); }' in PRINT
     assert '第二条　交货' in PRINT
     assert '第七条　生效、附件与争议解决' in PRINT
     assert '甲方（供方）' in PRINT
     assert '乙方（需方）' in PRINT
     assert '本合同打印件仅显示业务条款' not in PRINT
+    assert '/static/assets/print-template-editor.js' in PRINT
+    assert 'templateKey:"customer_contract"' in PRINT
+    assert 'data-print-edit-key' in PRINT
+    assert 'expected_revision' not in PRINT  # shared editor owns the save contract
+
+
+def test_contract_print_number_formatter_preserves_meaningful_decimals(tmp_path: Path) -> None:
+    script = _inline_scripts(PRINT)[0]
+    formatter = "const compactNumber" + script.split("const compactNumber", 1)[1].split(
+        "const formatDate", 1
+    )[0]
+    target = tmp_path / "contract-number-format.js"
+    target.write_text(
+        formatter
+        + '\nconst values=["420.500","420.5","420.000","0.50"];'
+        + '\nconsole.log(JSON.stringify(values.map(compactNumber)));',
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [_node(), str(target)], capture_output=True, text=True, encoding="utf-8"
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == '["420.5","420.5","420","0.5"]'
 
 
 def test_contract_print_page_route_is_registered() -> None:

@@ -18,20 +18,31 @@
   </style>
 </head>
 <body>
-  <div class="actions"><button id="printButton" disabled type="button">打印 / 保存为 PDF</button><button id="retryButton" class="secondary hidden" type="button" hidden>重新读取</button><a href="/?page=quotations">返回 ERP</a></div>
+  <div class="actions" id="printToolbar"><button id="printButton" disabled type="button" data-print-action="print">打印 / 保存为 PDF</button><button id="retryButton" class="secondary hidden" type="button" hidden>重新读取</button><a href="/?page=quotations">返回 ERP</a></div>
   <div id="loadState" class="load-state">正在读取报价单，请稍候…</div>
   <div id="errorBox" class="error-box" role="alert" hidden></div>
   <main id="sheet" class="sheet" hidden>
-    <div class="title"><h1 id="company"></h1><h2>报价单</h2></div>
-    <div class="meta"><div><strong id="customer"></strong></div><div class="meta-right"><div id="number"></div><div id="date"></div></div></div>
+    <div class="title"><h1 id="company"></h1><h2 data-print-edit-key="document_title" data-print-edit-label="单据标题">报价单</h2></div>
+    <div class="meta">
+      <div><strong><span data-print-edit-key="customer_label" data-print-edit-label="客户标签">客户：</span><span id="customer"></span></strong></div>
+      <div class="meta-right">
+        <div><span data-print-edit-key="quotation_number_label" data-print-edit-label="报价单号标签">报价单号：</span><span id="number"></span></div>
+        <div><span data-print-edit-key="quotation_date_label" data-print-edit-label="报价日期标签">报价日期：</span><span id="date"></span></div>
+      </div>
+    </div>
     <table>
-      <thead><tr><th>序号</th><th>临时编码</th><th>产品名称</th><th>规格(mm)</th><th>材质</th><th>数量</th><th>单价</th><th>备注</th></tr></thead>
+      <thead><tr><th data-print-edit-key="column_sequence">序号</th><th data-print-edit-key="column_temporary_code">临时编码</th><th data-print-edit-key="column_product_name">产品名称</th><th data-print-edit-key="column_specification">规格(mm)</th><th data-print-edit-key="column_material">材质</th><th data-print-edit-key="column_quantity">数量</th><th data-print-edit-key="column_unit_price">单价</th><th data-print-edit-key="column_remarks">备注</th></tr></thead>
       <tbody id="rows"></tbody>
     </table>
-    <div id="remarks" class="remarks"></div>
-    <div id="footer" class="footer"></div>
+    <div id="remarks" class="remarks" hidden><span data-print-edit-key="remarks_label" data-print-edit-label="备注标签">备注：</span><span id="remarksValue"></span></div>
+    <div id="footer" class="footer">
+      <div id="addressRow" hidden><span data-print-edit-key="address_label" data-print-edit-label="地址标签">地址：</span><span id="addressValue"></span></div>
+      <div id="phoneRow" hidden><span data-print-edit-key="phone_label" data-print-edit-label="电话标签">电话：</span><span id="phoneValue"></span></div>
+      <div id="contactRow" hidden><span data-print-edit-key="contact_label" data-print-edit-label="联系人标签">联系人：</span><span id="contactValue"></span></div>
+    </div>
   </main>
   <script src="/static/assets/print-recovery.js"></script>
+  <script src="/static/assets/print-template-editor.js"></script>
   <script>
     const escapeHtml=value=>String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
     const money=value=>value===null||value===undefined||value===""?"-":Number(value).toFixed(2);
@@ -47,25 +58,23 @@
     const loadStateNode=document.getElementById("loadState");
     const errorBoxNode=document.getElementById("errorBox");
     const sheetNode=document.getElementById("sheet");
+    const templateEditor=PrintTemplateEditor.create({templateKey:"customer_quotation",root:document,toolbar:document.getElementById("printToolbar"),printButton:printButtonNode,onPrint:()=>window.print()});
     function renderQuotation(data){
       companyNode.textContent=data.sender?.company_name||"苏州工业园区天明纸品包装厂";
-      customerNode.textContent=`客户：${data.customer_name||"-"}`;
-      numberNode.textContent=`报价单号：${data.quotation_no||"-"}`;
-      dateNode.textContent=`报价日期：${data.quotation_date||"-"}`;
+      customerNode.textContent=data.customer_name||"-";
+      numberNode.textContent=data.quotation_no||"-";
+      dateNode.textContent=data.quotation_date||"-";
       rowsNode.innerHTML=(Array.isArray(data.items)?data.items:[]).map(row=>`<tr><td>${escapeHtml(row.sequence)}</td><td>${escapeHtml(row.temporary_code||"")}</td><td class="left">${escapeHtml(row.product_name)}</td><td>${escapeHtml(row.specification)}</td><td>${escapeHtml(row.material)}</td><td>${escapeHtml(row.quantity??"-")}</td><td>${money(row.unit_price)}</td><td class="left">${escapeHtml(row.remarks||"")}</td></tr>`).join("");
-      remarksNode.textContent=data.remarks?`备注：${data.remarks}`:"";
-      const parts=[];
-      if(data.sender?.address)parts.push(`地址：${escapeHtml(data.sender.address)}`);
-      if(data.sender?.phone)parts.push(`电话：${escapeHtml(data.sender.phone)}`);
-      if(data.sender?.contact_person)parts.push(`联系人：${escapeHtml(data.sender.contact_person)}`);
-      footerNode.innerHTML=parts.join("<br>");
+      remarksNode.hidden=!data.remarks;document.getElementById("remarksValue").textContent=data.remarks||"";
+      [["addressRow","addressValue",data.sender?.address],["phoneRow","phoneValue",data.sender?.phone],["contactRow","contactValue",data.sender?.contact_person]].forEach(([rowId,valueId,value])=>{document.getElementById(rowId).hidden=!value;document.getElementById(valueId).textContent=value||""});
+      templateEditor.applyTo(sheetNode);
     }
     const quotationPrintPage=TmPrintRecovery.createPrintPage({
       id:new URLSearchParams(location.search).get("id"),
       url:id=>`/api/quotations/${encodeURIComponent(id)}/print`,
       printButton:printButtonNode,retryButton:retryButtonNode,loadState:loadStateNode,errorBox:errorBoxNode,content:sheetNode,
       loadingMessage:"正在读取报价单，请稍候…",invalidMessage:"报价单链接无效，请返回 ERP 重新打开。",authMessage:"登录已失效，请返回 ERP 登录后重新打印。",failureMessage:"报价单读取失败",
-      render:renderQuotation,print:()=>window.print(),
+      render:async data=>{renderQuotation(data);await templateEditor.ready;templateEditor.applyTo(sheetNode)},print:()=>window.print(),
     });
     async function loadQuotation(){return quotationPrintPage.load()}
     loadQuotation();

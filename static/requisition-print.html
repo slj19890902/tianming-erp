@@ -16,15 +16,25 @@
   </style>
 </head>
 <body>
-  <div class="actions"><button id="printButton" disabled>打印 / 保存为 PDF</button><button id="retryButton" class="secondary hidden" type="button">重新读取</button><a class="return-link" href="/?page=requisition">返回 ERP</a></div>
+  <div class="actions" id="printToolbar"><button id="printButton" disabled type="button" data-print-action="print">打印 / 保存为 PDF</button><button id="retryButton" class="secondary hidden" type="button">重新读取</button><a class="return-link" href="/?page=requisition">返回 ERP</a></div>
   <div id="loadState" class="load-state" role="status">正在读取报料单，请稍候…</div>
   <main id="sheet" class="sheet">
-    <div class="title"><h1 id="company-name">苏州工业园区天明纸品包装厂</h1><div>采购单</div></div>
-    <div class="head"><div id="supplier"></div><div class="meta"><div id="number"></div><div id="date"></div></div></div>
-    <table><thead><tr><th>序号</th><th>纸板长宽（mm）</th><th>压线(mm）</th><th>材质/楞型</th><th>数量</th><th>报料备注</th></tr></thead><tbody id="rows"></tbody></table>
-    <div id="company-footer" class="footer"></div>
+    <div class="title"><h1 id="company-name">苏州工业园区天明纸品包装厂</h1><div data-print-edit-key="document_title" data-print-edit-label="单据标题">采购单</div></div>
+    <div class="head">
+      <div><span data-print-edit-key="supplier_label" data-print-edit-label="供应商标签">TO：</span><span id="supplier"></span></div>
+      <div class="meta">
+        <div><span data-print-edit-key="number_label" data-print-edit-label="单号标签">NO：</span><span id="number"></span></div>
+        <div><span data-print-edit-key="date_label" data-print-edit-label="日期标签">日期：</span><span id="date"></span></div>
+      </div>
+    </div>
+    <table><thead><tr><th data-print-edit-key="column_sequence">序号</th><th data-print-edit-key="column_board_size">纸板长宽（mm）</th><th data-print-edit-key="column_crease">压线(mm）</th><th data-print-edit-key="column_material">材质/楞型</th><th data-print-edit-key="column_quantity">数量</th><th data-print-edit-key="column_remarks">报料备注</th></tr></thead><tbody id="rows"></tbody></table>
+    <div id="company-footer" class="footer">
+      <div id="addressRow" hidden><span data-print-edit-key="address_label" data-print-edit-label="地址标签">地址：</span><span id="addressValue"></span></div>
+      <div id="phoneRow" hidden><span data-print-edit-key="phone_label" data-print-edit-label="电话标签">电话：</span><span id="phoneValue"></span></div>
+    </div>
   </main>
   <script src="/static/assets/time-utils.js?v=95c91f9ded41"></script>
+  <script src="/static/assets/print-template-editor.js"></script>
   <script>
     const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, char => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[char]));
     const shortDate = value => {
@@ -35,6 +45,13 @@
         return String(value || "");
       }
     };
+    const templateEditor = PrintTemplateEditor.create({
+      templateKey:"legacy_requisition",
+      root:document,
+      toolbar:document.getElementById("printToolbar"),
+      printButton:document.getElementById("printButton"),
+      onPrint:()=>window.print(),
+    });
 
     const printButton = document.getElementById("printButton");
     const retryButton = document.getElementById("retryButton");
@@ -108,9 +125,9 @@
 
     function renderRequisition(data) {
       document.getElementById("company-name").textContent = data.sender?.company_name || "苏州工业园区天明纸品包装厂";
-      numberNode.textContent = `NO：${data.requisition_number || "-"}`;
-      dateNode.textContent = `日期：${shortDate(data.requisition_date)}`;
-      supplierNode.textContent = `TO：${data.supplier_name || "未指定供应商"}`;
+      numberNode.textContent = data.requisition_number || "-";
+      dateNode.textContent = shortDate(data.requisition_date);
+      supplierNode.textContent = data.supplier_name || "未指定供应商";
       const items = Array.isArray(data.items) ? data.items : [];
       rowsNode.innerHTML = items.length ? items.map((row, index) => `
         <tr>
@@ -122,10 +139,8 @@
           <td class="left">${escapeHtml(row.report_remark || "")}</td>
         </tr>
       `).join("") : '<tr><td colspan="6">该报料单暂无明细</td></tr>';
-      const footerLines = [];
-      if (data.sender?.address) footerLines.push(`地址：${escapeHtml(data.sender.address)}`);
-      if (data.sender?.phone) footerLines.push(`电话：${escapeHtml(data.sender.phone)}`);
-      document.getElementById("company-footer").innerHTML = footerLines.join("<br>");
+      [["addressRow","addressValue",data.sender?.address],["phoneRow","phoneValue",data.sender?.phone]].forEach(([rowId,valueId,value])=>{document.getElementById(rowId).hidden=!value;document.getElementById(valueId).textContent=value||""});
+      templateEditor.applyTo(document.getElementById("sheet"));
       loadState.classList.add("hidden");
       loadState.classList.remove("error");
       retryButton.classList.add("hidden");

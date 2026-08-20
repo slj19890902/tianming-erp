@@ -11,7 +11,8 @@ from uuid import uuid4
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from fastapi.responses import Response
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
-from sqlalchemy import select, text
+from sqlalchemy import delete as sa_delete
+from sqlalchemy import select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -99,6 +100,7 @@ class ContractConvertPayload(BaseModel):
 
 class ContractDeletePayload(BaseModel):
     confirm_text: str = Field(min_length=1, max_length=50)
+    expected_version: int = Field(ge=1)
 
 
 def _next_number(db: Session, contract_date: date) -> str:
@@ -263,6 +265,56 @@ def _apply_content(contract: CustomerContract, payload: ContractContentPayload) 
     contract.remarks = _clean(payload.remarks)
 
 
+def _claim_draft_version(
+    db: Session,
+    *,
+    contract: CustomerContract,
+    expected_version: int,
+) -> None:
+    """Atomically claim one draft version before mutating contract state.
+
+    The initial ORM read is only for authorization and friendly validation.  This
+    conditional UPDATE is the actual concurrency boundary, so two requests that
+    both read the same version cannot both continue and overwrite each other.
+    """
+    result = db.execute(
+        update(CustomerContract)
+        .where(
+            CustomerContract.id == contract.id,
+            CustomerContract.status == "draft",
+            CustomerContract.version == expected_version,
+        )
+        .values(
+            version=expected_version + 1,
+            updated_at=utc_now_naive(),
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount != 1:
+        raise HTTPException(status_code=409, detail="合同已被其他操作更新，请刷新后重试")
+    db.refresh(contract)
+
+
+def _delete_draft_version(
+    db: Session,
+    *,
+    contract_id: int,
+    expected_version: int,
+) -> None:
+    """Delete exactly one unchanged draft using the database as the CAS boundary."""
+    result = db.execute(
+        sa_delete(CustomerContract)
+        .where(
+            CustomerContract.id == contract_id,
+            CustomerContract.status == "draft",
+            CustomerContract.version == expected_version,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount != 1:
+        raise HTTPException(status_code=409, detail="合同已被其他操作更新，请刷新后重试")
+
+
 def _item_dict(item: CustomerContractItem) -> dict:
     return {
         "id": item.id,
@@ -330,11 +382,31 @@ def _converted_response(contract: CustomerContract, db: Session) -> dict:
     order = db.get(Order, contract.converted_order_id) if contract.converted_order_id else None
     return {
         **_contract_dict(contract),
+        "source_contract_id": contract.id,
         "order_id": contract.converted_order_id,
         "order_number": order.order_number if order is not None else None,
         "converted_order_number": order.order_number if order is not None else None,
         "already_converted": True,
     }
+
+
+def _converted_response_after_rollback(db: Session, contract_id: int) -> dict | None:
+    """Return a concurrently committed conversion after the losing transaction rolls back."""
+    existing = db.scalar(
+        select(CustomerContract)
+        .options(
+            selectinload(CustomerContract.items),
+            selectinload(CustomerContract.converted_order),
+        )
+        .where(CustomerContract.id == contract_id)
+    )
+    if (
+        existing is None
+        or existing.status != "converted"
+        or existing.converted_order_id is None
+    ):
+        return None
+    return _converted_response(existing, db)
 
 
 @router.get("")
@@ -430,9 +502,13 @@ def update_contract(
         raise HTTPException(status_code=409, detail="合同已被其他操作更新，请刷新后重试")
     try:
         old_version = contract.version
+        _claim_draft_version(
+            db,
+            contract=contract,
+            expected_version=payload.expected_version,
+        )
         _apply_content(contract, payload)
         _replace_items(db, contract, payload.items)
-        contract.version += 1
         _audit(
             db,
             user=user,
@@ -462,19 +538,36 @@ def delete_contract(
     require_customer_access(contract.customer_id, current_user=user, db=db)
     if contract.status != "draft":
         raise HTTPException(status_code=409, detail="仅合同草稿可以删除")
+    if contract.version != payload.expected_version:
+        raise HTTPException(status_code=409, detail="合同已被其他操作更新，请刷新后重试")
     if payload.confirm_text != DELETE_CONFIRM_TEXT:
         raise HTTPException(status_code=400, detail="删除确认文字不正确")
-    _audit(
-        db,
-        user=user,
-        action="DELETE",
-        contract=contract,
-        details={"contract_no": contract.contract_no, "customer_id": contract.customer_id},
-        description="删除客户合同草稿",
-    )
-    db.delete(contract)
-    db.commit()
-    return {"ok": True, "contract_id": contract_id}
+    try:
+        _delete_draft_version(
+            db,
+            contract_id=contract_id,
+            expected_version=payload.expected_version,
+        )
+        _audit(
+            db,
+            user=user,
+            action="DELETE",
+            contract=contract,
+            details={
+                "contract_no": contract.contract_no,
+                "customer_id": contract.customer_id,
+                "deleted_version": payload.expected_version,
+            },
+            description="删除客户合同草稿",
+        )
+        db.commit()
+        return {"ok": True, "contract_id": contract_id}
+    except HTTPException:
+        db.rollback()
+        raise
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="合同已被其他操作更新，请刷新后重试") from error
 
 
 @router.post("/{contract_id}/confirm")
@@ -502,20 +595,31 @@ def confirm_contract(
             product_id=item.product_id,
             require_active=True,
         )
-    contract.status = "confirmed"
-    contract.confirmed_by = user.id
-    contract.confirmed_at = utc_now_naive()
-    contract.version += 1
-    _audit(
-        db,
-        user=user,
-        action="CONFIRM",
-        contract=contract,
-        details={"contract_no": contract.contract_no, "version": contract.version},
-        description="确认客户合同并锁定内容",
-    )
-    db.commit()
-    return _contract_dict(_contract_or_404(db, contract.id))
+    try:
+        _claim_draft_version(
+            db,
+            contract=contract,
+            expected_version=payload.expected_version,
+        )
+        contract.status = "confirmed"
+        contract.confirmed_by = user.id
+        contract.confirmed_at = utc_now_naive()
+        _audit(
+            db,
+            user=user,
+            action="CONFIRM",
+            contract=contract,
+            details={"contract_no": contract.contract_no, "version": contract.version},
+            description="确认客户合同并锁定内容",
+        )
+        db.commit()
+        return _contract_dict(_contract_or_404(db, contract.id))
+    except HTTPException:
+        db.rollback()
+        raise
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="合同确认数据冲突") from error
 
 
 @router.post("/{contract_id}/convert-order")
@@ -589,23 +693,23 @@ def convert_contract_to_order(
         converted = _contract_or_404(db, contract.id)
         return {
             **_contract_dict(converted),
+            "source_contract_id": contract.id,
             "order_id": order_id,
             "order_number": order_data.get("order_number"),
             "converted_order_number": order_data.get("order_number"),
             "already_converted": False,
         }
-    except HTTPException:
+    except HTTPException as error:
         db.rollback()
-        raise
+        concurrently_converted = _converted_response_after_rollback(db, contract_id)
+        if concurrently_converted is not None:
+            return concurrently_converted
+        raise error
     except IntegrityError as error:
         db.rollback()
-        existing = db.scalar(
-            select(CustomerContract)
-            .options(selectinload(CustomerContract.items))
-            .where(CustomerContract.id == contract_id)
-        )
-        if existing is not None and existing.converted_order_id is not None:
-            return _converted_response(existing, db)
+        concurrently_converted = _converted_response_after_rollback(db, contract_id)
+        if concurrently_converted is not None:
+            return concurrently_converted
         raise HTTPException(status_code=409, detail="合同转订单数据冲突") from error
 
 

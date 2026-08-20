@@ -9,6 +9,7 @@
     <script src="/static/vendor/axios-1.18.1.min.js"></script>
     <script src="/static/assets/time-utils.js?v=95c91f9ded41"></script>
     <script src="/static/assets/phone-display.js?v=b9c44d142168"></script>
+    <script src="/static/assets/print-template-editor.js"></script>
     <style>
       :root {
         /* Apple-style design tokens */
@@ -59,6 +60,40 @@
       body.business-modal-open,
       body.business-modal-open .main,
       body.business-modal-open .sidebar { overflow: hidden; }
+
+      /* Browser-menu/Ctrl+P fallback for the inline supplier/replenishment print modal. */
+      @media print {
+        @page { size: A4 portrait; margin: 12mm; }
+        body.supplier-print-native-active {
+          min-width: 0 !important;
+          background: #fff !important;
+        }
+        body.supplier-print-native-active * {
+          visibility: hidden !important;
+        }
+        body.supplier-print-native-active .modal-mask {
+          visibility: visible !important;
+          position: fixed !important;
+          inset: 0 !important;
+          overflow: visible !important;
+          padding: 0 !important;
+          background: #fff !important;
+          backdrop-filter: none !important;
+        }
+        body.supplier-print-native-active #supplier-order-print-area,
+        body.supplier-print-native-active #supplier-order-print-area * {
+          visibility: visible !important;
+        }
+        body.supplier-print-native-active #supplier-order-print-area {
+          position: absolute !important;
+          inset: 0 auto auto 0 !important;
+          width: 100% !important;
+          margin: 0 !important;
+          padding: 0 !important;
+          background: #fff !important;
+          font-size: 14px !important;
+        }
+      }
 
       /* Login */
       .login-shell {
@@ -1110,11 +1145,22 @@
       .contract-amount-cell { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap !important; }
       .contract-line-remark { width: 6em !important; min-width: 0 !important; }
       .contract-status { white-space: nowrap; }
+      .contract-working-day-note { margin-top: 4px; font-size: 11px; line-height: 1.35; color: #6b7280; }
+      .contract-history-grid { display: grid; gap: 10px; min-width: 0; }
+      .contract-history-card { display: grid; grid-template-columns: minmax(130px,.8fr) minmax(110px,.65fr) minmax(140px,.9fr) minmax(110px,.65fr) minmax(110px,.65fr) minmax(220px,1.5fr) minmax(100px,.6fr) minmax(210px,1.2fr); gap: 8px 12px; align-items: start; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; min-width: 0; }
+      .contract-history-field { min-width: 0; overflow-wrap: anywhere; }
+      .contract-history-label { display: block; margin-bottom: 3px; color: #6b7280; font-size: 11px; }
+      .contract-history-items { display: grid; gap: 3px; }
+      .contract-history-actions { display: flex; flex-wrap: wrap; gap: 6px; }
       @media (max-width: 1050px) {
         .contract-header-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
         .contract-edit-table { font-size: 11px; }
         .contract-edit-table th, .contract-edit-table td { padding-left: 4px; padding-right: 4px; }
         .contract-product-select .search-select-list { width: min(500px,82vw); }
+        .contract-history-card { grid-template-columns: repeat(2,minmax(0,1fr)); }
+      }
+      @media (max-width: 640px) {
+        .contract-history-card { grid-template-columns: minmax(0,1fr); }
       }
       .warning-input { background:#fef3c7 !important; border-color:#f59e0b !important; }
       .pieces-per-box-cell { width: 64px; min-width: 64px; max-width: 64px; text-align: center; white-space: nowrap; }
@@ -2604,7 +2650,7 @@
                   <div class="field"><label>客户</label><div><strong>{{ contractCustomer.name }}</strong></div></div>
                   <div class="field"><label>客户单号 / PO</label><input class="input" v-model.trim="contractDraft.customer_po" :placeholder="contractDraft.contract_no || '保存后自动使用天明合同号'" :disabled="!contractEditable" /></div>
                   <div class="field"><label>合同日期</label><input class="input" type="date" v-model="contractDraft.contract_date" :disabled="!contractEditable" @change="onContractDateChanged" /></div>
-                  <div class="field"><label>交期</label><input class="input" type="date" v-model="contractDraft.delivery_date" :disabled="!contractEditable" @input="markContractDeliveryDateManual" /></div>
+                  <div class="field"><label>交期</label><input class="input" type="date" v-model="contractDraft.delivery_date" :disabled="!contractEditable" @input="markContractDeliveryDateManual" /><div class="contract-working-day-note">默认按周一至周五顺延 7 个工作日，不自动识别法定节假日；可按客户要求手工修改。</div></div>
                 </div>
                 <div class="contract-secondary-row">
                   <div class="field"><label>合同备注</label><input class="input contract-remark-input" v-model.trim="contractDraft.remarks" :title="contractDraft.remarks || ''" placeholder="最多显示6字" :disabled="!contractEditable" /></div>
@@ -2614,12 +2660,12 @@
                 <div v-if="contractDraft.status !== 'draft'" class="notice readonly-hint" style="margin-bottom:10px">合同已{{ contractStatusText(contractDraft.status) }}，合同抬头和明细已锁定。</div>
                 <div class="table-wrap contract-table-wrap">
                   <table class="contract-edit-table">
-                    <thead><tr><th>序号</th><th>常用箱（编码 / 名称 / 规格）</th><th>产品详情</th><th>材质 / 楞型</th><th>数量</th><th>单价</th><th>金额</th><th>备注</th><th>操作</th></tr></thead>
+                    <thead><tr><th>序号</th><th>常用箱（名称 / 规格）</th><th>产品详情</th><th>材质 / 楞型</th><th>数量</th><th>单价</th><th>金额</th><th>备注</th><th>操作</th></tr></thead>
                     <tbody>
                       <tr v-for="(line,index) in contractDraft.items" :key="line._key || line.id || index">
                         <td>{{ index + 1 }}</td>
                         <td class="contract-product-select"><search-select v-model="line.product_id" :options="contractProductOptions" label-key="_label" value-key="id" placeholder="搜索当前客户常用箱" :disabled="!contractEditable" @search="searchContractProducts" @change="selectContractProduct(line,$event)"></search-select></td>
-                        <td class="contract-product-summary"><strong>{{ line.product_name || '-' }}</strong><span class="muted">{{ line.product_code || '-' }}｜{{ line.specification || contractSpecification(line) || '-' }}｜{{ line.box_type || '-' }}</span></td>
+                        <td class="contract-product-summary"><strong>{{ line.product_name || '-' }}</strong><span class="muted">{{ line.specification || contractSpecification(line) || '-' }}｜{{ line.box_type || '-' }}</span></td>
                         <td class="contract-material-cell">{{ line.material || '-' }}<br><span class="muted">{{ line.flute_type || '-' }}</span></td>
                         <td><input class="input contract-number-input" type="number" min="1" step="1" v-model.number="line.quantity" :disabled="!contractEditable" /></td>
                         <td><input class="input contract-price-input" type="number" min="0" step="0.0001" v-model.number="line.unit_price" :disabled="!contractEditable" /></td>
@@ -2635,14 +2681,18 @@
               <div class="panel">
                 <div class="toolbar"><strong>合同历史</strong><button class="btn" :disabled="contractActionBusy()" @click="loadContractHistory">刷新</button></div>
                 <div v-if="!contractHistory.length" class="empty">该客户还没有合同记录</div>
-                <div v-else class="table-wrap"><table><thead><tr><th>合同号</th><th>日期</th><th>客户单号/PO</th><th>交期</th><th>状态</th><th>明细</th><th>金额</th><th>操作</th></tr></thead><tbody>
-                  <tr v-for="row in contractHistory" :key="row.id">
-                    <td><strong>{{ row.contract_no }}</strong></td><td>{{ row.contract_date || '-' }}</td><td>{{ row.customer_po || '-' }}</td><td>{{ row.delivery_date || '-' }}</td>
-                    <td><span :class="['status','contract-status',contractStatusTone(row.status)]">{{ contractStatusText(row.status) }}</span></td>
-                    <td><div v-for="item in row.items || []" :key="item.id || item.product_id">{{ item.product_code || '-' }}｜{{ item.product_name || '-' }} × {{ item.quantity || 0 }}</div></td><td>￥ {{ money(row.total_amount) }}</td>
-                    <td class="toolbar-group"><button class="btn small" :disabled="loading || contractActionBusy()" @click="editContract(row)">{{ row.status === 'draft' ? '查看/编辑' : '查看' }}</button><button class="btn small primary" :disabled="contractPdfExportBusy()" @click="exportContractPdf(row)">{{ contractPdfExportBusy(row.id) ? '正在导出…' : '导出 PDF（未盖章）' }}</button><button class="btn small" @click="printContract(row)">网页预览/自助打印</button><button v-if="row.status === 'draft' && canEditContracts" class="btn small success" :disabled="loading || contractActionBusy()" @click="confirmContract(row)">{{ contractActionPending('confirm',row.id) ? '确认中…' : '客户确认' }}</button><button v-if="row.status === 'confirmed' && canConvertContracts" class="btn small success" :disabled="loading || contractActionBusy()" @click="convertContract(row)">{{ contractActionPending('convert',row.id) ? '转单中…' : '转订单' }}</button><button v-if="row.status === 'draft' && canEditContracts" class="btn small danger" :disabled="loading || contractActionBusy()" @click="deleteContract(row)">{{ contractActionPending('delete',row.id) ? '删除中…' : '删除' }}</button></td>
-                  </tr>
-                </tbody></table></div>
+                <div v-else class="contract-history-grid">
+                  <article v-for="row in contractHistory" :key="row.id" class="contract-history-card">
+                    <div class="contract-history-field"><span class="contract-history-label">合同号</span><strong>{{ row.contract_no }}</strong></div>
+                    <div class="contract-history-field"><span class="contract-history-label">日期</span>{{ row.contract_date || '-' }}</div>
+                    <div class="contract-history-field"><span class="contract-history-label">客户单号 / PO</span>{{ row.customer_po || '-' }}</div>
+                    <div class="contract-history-field"><span class="contract-history-label">交期</span>{{ row.delivery_date || '-' }}</div>
+                    <div class="contract-history-field"><span class="contract-history-label">状态</span><span :class="['status','contract-status',contractStatusTone(row.status)]">{{ contractStatusText(row.status) }}</span></div>
+                    <div class="contract-history-field"><span class="contract-history-label">明细</span><div class="contract-history-items"><div v-for="item in row.items || []" :key="item.id || item.product_id">{{ item.product_name || '-' }}｜{{ contractSpecification(item) }} × {{ item.quantity || 0 }}</div></div></div>
+                    <div class="contract-history-field"><span class="contract-history-label">金额</span><strong>￥ {{ money(row.total_amount) }}</strong></div>
+                    <div class="contract-history-field"><span class="contract-history-label">操作</span><div class="contract-history-actions"><button class="btn small" :disabled="loading || contractActionBusy()" @click="editContract(row)">{{ row.status === 'draft' ? '查看/编辑' : '查看' }}</button><button class="btn small primary" :disabled="contractPdfExportBusy()" @click="exportContractPdf(row)">{{ contractPdfExportBusy(row.id) ? '正在导出…' : '导出 PDF（未盖章）' }}</button><button class="btn small" :disabled="loading || contractActionBusy()" @click="printContract(row)">网页预览/自助打印</button><button v-if="row.status === 'draft' && canEditContracts" class="btn small success" :disabled="loading || contractActionBusy()" @click="confirmContract(row)">{{ contractActionPending('confirm',row.id) ? '确认中…' : '客户确认' }}</button><button v-if="row.status === 'confirmed' && canConvertContracts" class="btn small success" :disabled="loading || contractActionBusy()" @click="convertContract(row)">{{ contractActionPending('convert',row.id) ? '转单中…' : '转订单' }}</button><button v-if="row.status === 'draft' && canEditContracts" class="btn small danger" :disabled="loading || contractActionBusy()" @click="deleteContract(row)">{{ contractActionPending('delete',row.id) ? '删除中…' : '删除' }}</button></div></div>
+                  </article>
+                </div>
               </div>
             </template>
 
@@ -6805,13 +6855,13 @@
             <!-- 供应商报料单打印预览 -->
             <div v-else-if="(modal.type === 'supplierOrderPrint' || modal.type === 'stockReplenishmentPrint') && modal.data" style="max-width:900px;margin:0 auto">
               <div id="supplier-order-print-area" class="supplier-print-sheet" style="font-size:14px;padding:20px">
-                <div class="supplier-print-title"><h2>{{ modal.data.sender?.company_name || "苏州工业园区天明纸品包装厂" }}</h2><div>采购单</div></div>
+                <div class="supplier-print-title"><h2>{{ modal.data.sender?.company_name || "苏州工业园区天明纸品包装厂" }}</h2><div data-print-edit-key="document_title">采购单</div></div>
                 <div class="supplier-print-head">
-                  <div><strong>TO：{{ modal.data.supplier_name || "未指定供应商" }}</strong></div>
-                  <div class="supplier-print-meta"><div>NO：{{ modal.data.order_number }}</div><div>日期：{{ supplierPrintDate(modal.data.created_at) }}</div></div>
+                  <div><strong><span data-print-edit-key="supplier_label">TO：</span>{{ modal.data.supplier_name || "未指定供应商" }}</strong></div>
+                  <div class="supplier-print-meta"><div><span data-print-edit-key="number_label">NO：</span>{{ modal.data.order_number }}</div><div><span data-print-edit-key="date_label">日期：</span>{{ supplierPrintDate(modal.data.created_at) }}</div></div>
                 </div>
                 <table style="width:100%;border-collapse:collapse;font-size:14px">
-                  <thead><tr style="background:#f0f0f0"><th>序号</th><th>纸板长宽（mm）</th><th>压线(mm）</th><th>材质/楞型</th><th>数量</th><th>报料备注</th></tr></thead>
+                  <thead><tr style="background:#f0f0f0"><th data-print-edit-key="column_sequence">序号</th><th data-print-edit-key="column_board_size">纸板长宽（mm）</th><th data-print-edit-key="column_crease">压线(mm）</th><th data-print-edit-key="column_material">材质/楞型</th><th data-print-edit-key="column_quantity">数量</th><th data-print-edit-key="column_remarks">报料备注</th></tr></thead>
                   <tbody>
                     <tr v-for="(line,index) in supplierOrderPrintLines(modal.data)" :key="line.line_key || index" :id="(line.source_items || []).some(item => Number(item.id)===Number(modal.data.focus_item_id)) ? 'supplier-order-line-'+modal.data.focus_item_id : null" :class="{'reported-match-row':(line.source_items || []).some(item => Number(item.id)===Number(modal.data.focus_item_id))}">
                       <td>{{ index + 1 }}</td>
@@ -6824,8 +6874,8 @@
                   </tbody>
                 </table>
                 <div v-if="modal.data.sender?.address || modal.data.sender?.phone" class="supplier-print-footer">
-                  <div v-if="modal.data.sender?.address">地址：{{ modal.data.sender.address }}</div>
-                  <div v-if="modal.data.sender?.phone">电话：{{ modal.data.sender.phone }}</div>
+                  <div v-if="modal.data.sender?.address"><span data-print-edit-key="address_label">地址：</span>{{ modal.data.sender.address }}</div>
+                  <div v-if="modal.data.sender?.phone"><span data-print-edit-key="phone_label">电话：</span>{{ modal.data.sender.phone }}</div>
                 </div>
               </div>
               <div v-if="modal.data.focus_reported_item?.status==='voided'" :id="'supplier-order-line-'+modal.data.focus_item_id" class="reported-detail-card reported-match-row" style="margin-top:12px">
@@ -6834,8 +6884,8 @@
                 <div>{{ modal.data.focus_reported_item.material_code || '-' }} / {{ modal.data.focus_reported_item.flute_type || '-' }}<br><span class="muted">{{ modal.data.focus_reported_item.customer_name || '-' }}</span></div>
                 <div>{{ modal.data.focus_reported_item.requisition_qty || 0 }} {{ modal.data.focus_reported_item.unit || '张' }}<br><span class="muted">{{ formatDateTime(modal.data.focus_reported_item.voided_at) }}</span></div>
               </div>
-              <div style="text-align:center;margin-top:12px">
-                <button class="btn primary" @click="printSupplierOrderArea()">打印</button>
+              <div id="supplier-order-print-template-toolbar" style="display:flex;justify-content:center;gap:8px;flex-wrap:wrap;margin-top:12px">
+                <button id="supplier-order-print-button" type="button" class="btn primary">打印</button>
               </div>
             </div>
             <div v-else-if="modal.type === 'requisitionMaterial'">
@@ -9038,7 +9088,7 @@
           contractProductOptions() {
             return (this.contractProducts || []).map(product => ({
               ...product,
-              _label: `${product.product_code || product.customer_material_code || "-"}｜${product.product_name || "未命名产品"}｜${this.contractSpecification(product)}`,
+              _label: `${product.product_name || "未命名产品"}｜${this.contractSpecification(product)}`,
             }));
           },
           manualSizePreferenceOptions() {
@@ -9627,6 +9677,8 @@
             this.uiLayoutEffective = null;
             this.uiLayoutAdminPreview = false;
             this.activePage = "dashboard";
+            this.destroySupplierPrintTemplateEditor();
+            this.modal = null;
             this.user = null;
             this.loginError = "登录已失效，请重新登录";
           };
@@ -9635,7 +9687,7 @@
           await this.checkSession();
           window.erpCheckingSession = false;
           // ESC 关闭弹层（含防呆检查）
-          document.addEventListener("keydown", (e) => {
+          this._modalEscapeHandler = (e) => {
             if (e.key !== "Escape") return;
             if (this.pdfWarehouseLocator.visible) {
               this.closePdfWarehouseLocator();
@@ -9644,8 +9696,14 @@
             if (!this.modal || this.isForcedPassword) return;
             if (this.modal.type === "order" || this.modal.type === "orderEdit") return;
             this.closeModal();
-          });
+          };
+          document.addEventListener("keydown", this._modalEscapeHandler);
           window.addEventListener("popstate", this.handlePdfWarehousePopState);
+        },
+        beforeUnmount() {
+          if (this._modalEscapeHandler) document.removeEventListener("keydown", this._modalEscapeHandler);
+          window.removeEventListener("popstate", this.handlePdfWarehousePopState);
+          this.destroySupplierPrintTemplateEditor();
         },
         methods: {
           customerPhoneAnalysis(value) {
@@ -10780,11 +10838,13 @@
             return {...data, lines};
           },
           openStockReplenishmentPrint(data) {
+            this.destroySupplierPrintTemplateEditor();
             this.modal = {
               type: "stockReplenishmentPrint",
               title: `供应商报料单 ${data.order_number}`,
               data: this.stockReplenishmentPrintData(data),
             };
+            this.$nextTick(() => this.initializeSupplierPrintTemplateEditor());
           },
           draftGroupLines(group) {
             if (Array.isArray(group?.lines) && group.lines.length) return group.lines;
@@ -12567,6 +12627,8 @@
             this.activePage = "dashboard";
             this.warehouseFrameUrl = "";
             this.warehouseFrameRevision += 1;
+            this.destroySupplierPrintTemplateEditor();
+            this.modal = null;
             this.user = null;
             try {
               await axios.post("/api/auth/logout");
@@ -19447,15 +19509,21 @@
             return status === "draft" ? "orange" : "green";
           },
           contractSpecification(row) {
-            const compact = value => String(value || "")
+            const compactNumber = value => {
+              const raw = String(value ?? "").trim();
+              if (!raw) return "";
+              const number = Number(raw);
+              return Number.isFinite(number) ? String(number) : raw;
+            };
+            const compact = value => String(value ?? "")
               .replace(/mm/gi, "")
-              .replace(/-?\d+(?:\.\d+)?/g, number => String(Math.round(Number(number))));
+              .replace(/-?\d+(?:\.\d+)?/g, number => compactNumber(number));
             const stored = String(row?.specification || "").trim();
             if (stored && !["-", "—", "－", "未登记", "规格未登记"].includes(stored)) return compact(stored);
             const values = [row?.length_mm, row?.width_mm, row?.height_mm];
             if (values.slice(0, 2).some(value => value === null || value === undefined || value === "")) return "-";
             return values.filter(value => value !== null && value !== undefined && value !== "")
-              .map(value => Math.round(Number(value))).join("×");
+              .map(compactNumber).join("×");
           },
           contractMaterialText(row) {
             if (!row) return "";
@@ -19632,13 +19700,14 @@
           async deleteContract(row) {
             const target = {
               id:Number(row.id),
+              version:Number(row.version || 1),
               contractNo:String(row.contract_no || "草稿"),
             };
             return this.runContractAction({
               action:"delete", contractId:target.id,
               confirmMessage:`确认删除合同 ${target.contractNo} 吗？`,
               task:async() => {
-                await axios.delete(`/api/contracts/${target.id}`, { data:{ confirm_text:"我确认删除合同" } });
+                await axios.delete(`/api/contracts/${target.id}`, { data:{ confirm_text:"我确认删除合同", expected_version:target.version } });
                 this.newContractDraft();
                 await this.refreshContractHistoryAfterMutation("合同草稿已删除");
                 return true;
@@ -23267,12 +23336,89 @@
             if (warnings.length && !confirm(
               `当前报料单存在低于供应商最小切宽/切长的明细，请确认后再打印。\n\n${warnings.join("\n")}\n\n继续打开打印预览吗？`
             )) return;
+            this.destroySupplierPrintTemplateEditor();
             this.modal = { type: 'supplierOrderPrint', title: `供应商报料单 ${so.order_number}`, data: so };
+            this.$nextTick(() => this.initializeSupplierPrintTemplateEditor());
+          },
+          supplierPrintTemplateKey() {
+            if (this.modal?.type === "supplierOrderPrint") return "supplier_purchase_order";
+            if (this.modal?.type === "stockReplenishmentPrint") return "stock_replenishment_order";
+            return "";
+          },
+          destroySupplierPrintTemplateEditor() {
+            this._supplierPrintEditorGeneration = Number(this._supplierPrintEditorGeneration || 0) + 1;
+            const editor = this._supplierPrintTemplateEditor;
+            this._supplierPrintTemplateEditor = null;
+            if (editor && typeof editor.destroy === "function") editor.destroy();
+            document.body.classList.remove("supplier-print-native-active");
+          },
+          supplierPrintTemplateEditorDirty() {
+            try {
+              return this._supplierPrintTemplateEditor?.value?.().dirty === true;
+            } catch (_) {
+              return false;
+            }
+          },
+          confirmDiscardSupplierPrintTemplateChanges() {
+            if (!this.supplierPrintTemplateEditorDirty()) return true;
+            return confirm("打印内容有未保存的修改，确定关闭并放弃这些修改吗？");
+          },
+          async initializeSupplierPrintTemplateEditor() {
+            const templateKey = this.supplierPrintTemplateKey();
+            if (!templateKey) return;
+            const generation = Number(this._supplierPrintEditorGeneration || 0) + 1;
+            this._supplierPrintEditorGeneration = generation;
+            await this.$nextTick();
+            const root = document.getElementById("supplier-order-print-area");
+            const toolbar = document.getElementById("supplier-order-print-template-toolbar");
+            const printButton = document.getElementById("supplier-order-print-button");
+            if (!root || !toolbar || !printButton) return;
+            document.body.classList.add("supplier-print-native-active");
+            toolbar.querySelectorAll(".print-template-editor-only").forEach(node => node.remove());
+            if (!window.PrintTemplateEditor) {
+              printButton.addEventListener("click", () => this.printSupplierOrderArea());
+              return;
+            }
+            let editor = null;
+            try {
+              editor = PrintTemplateEditor.create({
+                templateKey,
+                root,
+                toolbar,
+                printButton,
+                onApplied: () => {
+                  if (this._supplierPrintTemplateEditor !== editor || !root.isConnected) return;
+                  editor.applyTo(root);
+                },
+                onPrint: () => this.printSupplierOrderArea(),
+                handleEscape: false,
+              });
+              this._supplierPrintTemplateEditor = editor;
+              await editor.ready;
+              if (
+                this._supplierPrintEditorGeneration !== generation
+                || this.supplierPrintTemplateKey() !== templateKey
+                || !root.isConnected
+              ) {
+                if (typeof editor.destroy === "function") editor.destroy();
+                return;
+              }
+              editor.applyTo(root);
+            } catch (error) {
+              if (this._supplierPrintTemplateEditor === editor) this._supplierPrintTemplateEditor = null;
+              if (editor && typeof editor.destroy === "function") editor.destroy();
+              console.error("供应商打印模板编辑器加载失败", error);
+              if (root.isConnected) {
+                printButton.addEventListener("click", () => this.printSupplierOrderArea());
+                this.showToast("打印模板编辑器加载失败，仍可使用系统原版打印", true);
+              }
+            }
           },
           printSupplierOrderArea() {
             const area = document.getElementById('supplier-order-print-area');
             if (!area) return;
             const w = window.open('', '_blank');
+            if (!w) { this.showToast("浏览器阻止了打印预览窗口，请允许弹出窗口后重试", true); return; }
             w.document.write(`<html><head><title>供应商报料单</title><style>
               body{font-family:'SimSun',serif;font-size:14px;margin:20px}
               table{border-collapse:collapse;width:100%}
@@ -23282,7 +23428,7 @@
             </style></head><body>${area.innerHTML}</body></html>`);
             w.document.close();
             w.focus();
-            setTimeout(() => { w.print(); w.close(); }, 300);
+            w.print();
           },
           async voidSupplierOrder(so) {
             if (!this.canAdmin) return false;
@@ -29173,6 +29319,8 @@
           },
 	          closeModal() {
 	            if (this.isForcedPassword) return;
+              if (!this.confirmDiscardSupplierPrintTemplateChanges()) return false;
+              this.destroySupplierPrintTemplateEditor();
               const productionLabelMaintenanceScrollY = this.modal?.type === "productionLabelMaintenance"
                 ? Number(this.productionLabelMaintenanceScrollY || 0)
                 : null;
@@ -29309,6 +29457,7 @@
             this.masterVersionConflict = null;
             this.masterChangeConfirm = blankMasterChangeConfirm();
             this.masterPendingSaveOptions = null;
+            return true;
           },
           handleMasterSaveRefreshFailure(entity, error) {
             const label = entity === "customer" ? "客户" : (entity === "product" ? "常用箱" : (entity === "supplier" ? "供应商" : "材质"));

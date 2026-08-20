@@ -31,7 +31,6 @@ def _checks(path: Path) -> tuple[str, int]:
         foreign_keys = len(connection.execute("PRAGMA foreign_key_check").fetchall())
     return integrity, foreign_keys
 
-
 def test_n041_migration_is_linear_and_defines_contract_schema() -> None:
     path = (
         ROOT

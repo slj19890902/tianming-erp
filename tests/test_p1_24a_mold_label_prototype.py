@@ -65,7 +65,9 @@ def test_mold_label_keeps_only_complete_on_label_identification_fields() -> None
     assert 'align-self:end' in LABEL
     assert '<span class="field-key">位置</span>' not in LABEL
     assert 'class="product-flute-row"' in LABEL
-    assert 'factRow("片料",board,"","board-row")' in LABEL
+    assert 'data-print-edit-key="board_size_label"' in LABEL
+    assert 'data-print-edit-key="product_size_label"' in LABEL
+    assert 'data-print-edit-key="flute_label"' in LABEL
     assert '.customer-name{font-size:3.05mm' in LABEL
     assert 'function numberClass(value)' in LABEL
     assert 'length>19?"xxlong":length>15?"xlong":length>11?"long":length>8?"compact"' in LABEL

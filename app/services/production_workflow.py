@@ -44,6 +44,7 @@ from app.models.warehouse_inventory import (
     OrderItemSemiRequirement,
     WarehouseLocation,
 )
+from app.services.box_type_rules import box_type_code
 from app.services.composite_bom_workflow import (
     CompositeBomWorkflowError,
     component_available_quantity,
@@ -84,6 +85,19 @@ PENDING = "pending"
 COMPLETED = "completed"
 NOT_REQUIRED = "not_required"
 READY_TASK_STATUSES = frozenset({COMPLETED, NOT_REQUIRED})
+PRODUCTION_STATIONS = frozenset({"printing", "die_cut"})
+_NO_PRINT_CONTENT = frozenset({"", "无印刷", "无", "否", "不印刷"})
+_PRINTING_STATION_BOX_TYPE_CODES = frozenset(
+    {
+        "a1_0201",
+        "a3_set",
+        "top_cover",
+        "bottom_base",
+        "surround_panel",
+        "full_flap_carton",
+        "half_slotted_carton",
+    }
+)
 PRODUCIBLE_ORDER_STATUSES = frozenset(
     {"pending_confirmation", "pending_production", "production"}
 )
@@ -3506,6 +3520,79 @@ def list_production_tasks(
         })
     _annotate_printing_plate_current_locations(db, result)
     return result
+
+
+def list_production_station_task_ids(
+    db: Session,
+    *,
+    allowed_customer_ids: set[int] | None,
+    station: Literal["printing", "die_cut"],
+    page: int,
+    page_size: int,
+) -> tuple[list[int], int, int]:
+    """Return one station's pending task identities before payload pagination.
+
+    The projection deliberately reads only task-frozen printing content, the
+    immutable component snapshot, and the ordinary product's explicit box
+    facts.  It never infers die cutting from names, drawings, notes or print
+    content, and it keeps customer/status/order eligibility in the shared task
+    query.
+    """
+
+    if station not in PRODUCTION_STATIONS:
+        raise ValueError("unsupported production station")
+    query = (
+        _filtered_task_query(
+            db,
+            allowed_customer_ids=allowed_customer_ids,
+            status=PENDING,
+        )
+        .outerjoin(
+            SalesOrderItemBomComponent,
+            SalesOrderItemBomComponent.id
+            == ProductionTask.sales_order_item_bom_component_id,
+        )
+        .with_only_columns(
+            ProductionTask.id.label("task_id"),
+            ProductionTask.print_content_snapshot.label("print_content_snapshot"),
+            ProductionTask.sales_order_item_bom_component_id.label(
+                "bom_component_snapshot_id"
+            ),
+            Product.box_category.label("product_box_category"),
+            Product.box_style.label("product_box_style"),
+            SalesOrderItemBomComponent.is_die_cut.label("component_is_die_cut"),
+            SalesOrderItemBomComponent.snapshot_component_box_style.label(
+                "component_box_style"
+            ),
+        )
+        .order_by(Order.delivery_date, Order.id, OrderItem.id, ProductionTask.id)
+    )
+    matching_ids: list[int] = []
+    for row in db.execute(query).mappings().all():
+        is_component = row.bom_component_snapshot_id is not None
+        if station == "die_cut":
+            matches = (
+                bool(row.component_is_die_cut)
+                if is_component
+                else row.product_box_category == "die_cut"
+            )
+        else:
+            content = str(row.print_content_snapshot or "").strip()
+            box_style = (
+                row.component_box_style if is_component else row.product_box_style
+            )
+            matches = (
+                content not in _NO_PRINT_CONTENT
+                or box_type_code(box_style) in _PRINTING_STATION_BOX_TYPE_CODES
+            )
+        if matches:
+            matching_ids.append(int(row.task_id))
+
+    total = len(matching_ids)
+    last_page = max(1, (total + page_size - 1) // page_size)
+    resolved_page = min(max(int(page), 1), last_page)
+    start = (resolved_page - 1) * page_size
+    return matching_ids[start : start + page_size], total, resolved_page
 
 
 def find_pending_production_task_lookup_rows(

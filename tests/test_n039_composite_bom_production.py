@@ -267,6 +267,73 @@ def test_composite_tasks_are_component_piece_tasks_and_optional_does_not_block(
     assert tasks[2].status == "pending"  # optional component remains informational.
 
 
+def test_virtual_composite_component_receipts_do_not_require_parent_board(
+    composite_db,
+) -> None:
+    from app.models.product_bom import RequisitionItemBomSource
+    from app.models.requisition import Requisition, RequisitionItem
+    from app.services.incoming_receipts import _all_expected_bom_sources_received
+
+    db, item_id, _products, _location_id = composite_db
+    item = db.get(OrderItem, item_id)
+    item.material_status = "pending"
+    item.is_virtual_composite_parent_snapshot = True
+    create_or_refresh_production_task(db, item_id)
+    assert all(task.status == "waiting_material" for task in _component_tasks(db, item_id))
+
+    batch = Requisition(
+        requisition_number="BL-N039-VIRTUAL-COMPONENTS",
+        requisition_date=date.today(),
+        supplier_name="N039 供应商",
+        status="已报料",
+    )
+    db.add(batch)
+    db.flush()
+    snapshots = db.scalars(
+        select(SalesOrderItemBomComponent)
+        .where(SalesOrderItemBomComponent.sales_order_item_id == item_id)
+        .order_by(SalesOrderItemBomComponent.id)
+    ).all()
+    for snapshot in snapshots:
+        required = int(snapshot.required_piece_quantity)
+        factor = 1
+        line = RequisitionItem(
+            requisition_id=batch.id,
+            order_item_id=item_id,
+            inventory_deducted_qty=0,
+            requisition_qty=required,
+            cardboard_len=1000,
+            cardboard_width=700,
+            pieces_per_box=1,
+            required_piece_qty=required,
+            special_process="一开一",
+            product_code_snapshot=snapshot.snapshot_component_product_code,
+            product_name_snapshot=snapshot.snapshot_component_product_name,
+            status="已入库",
+        )
+        db.add(line)
+        db.flush()
+        db.add(
+            RequisitionItemBomSource(
+                requisition_item_id=line.id,
+                sales_order_item_bom_component_id=snapshot.id,
+                order_set_quantity=int(item.quantity),
+                quantity_per_set=snapshot.quantity_per_set,
+                required_piece_quantity=snapshot.required_piece_quantity,
+                demand_basis="order_sets",
+                spare_sheet_quantity=0,
+                calculated_purchase_quantity=required // factor,
+                calculation_rule_version="bom-demand-cutting-v2",
+            )
+        )
+    db.flush()
+
+    assert _all_expected_bom_sources_received(db, item) is True
+    item.material_status = "received"
+    refresh_production_task(db, item_id)
+    assert all(task.status == "pending" for task in _component_tasks(db, item_id))
+
+
 def test_component_completion_is_task_scoped_and_transfer_uses_component_product(
     composite_db,
 ) -> None:

@@ -431,7 +431,8 @@ def _all_expected_bom_sources_received(
         return False
 
     parent_required = (
-        not _is_set_only_a3_surround_bom(snapshots)
+        not bool(item.is_virtual_composite_parent_snapshot)
+        and not _is_set_only_a3_surround_bom(snapshots)
         and not _parent_inventory_fully_covers(db, item)
     )
     if parent_required:

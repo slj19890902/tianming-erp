@@ -1,0 +1,1322 @@
+{
+  "candidates": [
+    {
+      "action_class": "trace_reconstruction_after_delivery_confirmation",
+      "allocation_facts": {
+        "component_direct_allocation_count": 0,
+        "component_direct_consumed_quantity": 0,
+        "consume_movement_count": 0,
+        "inventory_allocation_count": 0,
+        "net_inventory_consumed_quantity": 0
+      },
+      "automatic_apply_allowed": false,
+      "candidate_key": "phase0-d1:r3-completion-trace:9935393225b17a4e22fbf371",
+      "completion_facts": {
+        "actual_output_quantity": 100,
+        "direct_delivery_quantity": 100,
+        "initial_disposition": "direct",
+        "order_reserved_quantity": 100,
+        "stock_quantity": 0
+      },
+      "completion_token": "COMP-6b86b273ff34fce1",
+      "delivery_facts": {
+        "dispatched_line_count": 1,
+        "effective_dispatched_quantity": 100,
+        "item_delivered_quantity": 100,
+        "order_quantity": 100,
+        "pending_delivery_quantity": 0,
+        "voided_delivery_quantity": 0
+      },
+      "item_token": "ITEM-02710fc94f019128",
+      "order_token": "ORD-1b31fc8436d20816",
+      "reason": "ordinary direct completion equals the effective dispatched quantity",
+      "scope": {
+        "in_current_unfinished_scope": false,
+        "order_status": "delivered"
+      },
+      "task_token": "TASK-6b86b273ff34fce1"
+    },
+    {
+      "action_class": "physical_stocktake_required_before_trace",
+      "allocation_facts": {
+        "component_direct_allocation_count": 0,
+        "component_direct_consumed_quantity": 0,
+        "consume_movement_count": 0,
+        "inventory_allocation_count": 0,
+        "net_inventory_consumed_quantity": 0
+      },
+      "automatic_apply_allowed": false,
+      "candidate_key": "phase0-d1:r3-completion-trace:695edcb23718f766686839d0",
+      "completion_facts": {
+        "actual_output_quantity": 730,
+        "direct_delivery_quantity": 730,
+        "initial_disposition": "direct",
+        "order_reserved_quantity": 730,
+        "stock_quantity": 0
+      },
+      "completion_token": "COMP-4e07408562bedb8b",
+      "delivery_facts": {
+        "dispatched_line_count": 0,
+        "effective_dispatched_quantity": 0,
+        "item_delivered_quantity": 0,
+        "order_quantity": 730,
+        "pending_delivery_quantity": 0,
+        "voided_delivery_quantity": 0
+      },
+      "item_token": "ITEM-9862c778f98d28d7",
+      "order_token": "ORD-2a7fb2e61fe57309",
+      "reason": "direct output has no effective dispatch and physical location is unproven",
+      "scope": {
+        "in_current_unfinished_scope": true,
+        "order_status": "partially_delivered"
+      },
+      "task_token": "TASK-4ec9599fc203d176"
+    },
+    {
+      "action_class": "trace_reconstruction_after_delivery_confirmation",
+      "allocation_facts": {
+        "component_direct_allocation_count": 0,
+        "component_direct_consumed_quantity": 0,
+        "consume_movement_count": 0,
+        "inventory_allocation_count": 0,
+        "net_inventory_consumed_quantity": 0
+      },
+      "automatic_apply_allowed": false,
+      "candidate_key": "phase0-d1:r3-completion-trace:1552b5099e0b605a8a8080b5",
+      "completion_facts": {
+        "actual_output_quantity": 150,
+        "direct_delivery_quantity": 150,
+        "initial_disposition": "direct",
+        "order_reserved_quantity": 150,
+        "stock_quantity": 0
+      },
+      "completion_token": "COMP-4b227777d4dd1fc6",
+      "delivery_facts": {
+        "dispatched_line_count": 1,
+        "effective_dispatched_quantity": 150,
+        "item_delivered_quantity": 150,
+        "order_quantity": 150,
+        "pending_delivery_quantity": 0,
+        "voided_delivery_quantity": 0
+      },
+      "item_token": "ITEM-b84e4d71547e781c",
+      "order_token": "ORD-2a7fb2e61fe57309",
+      "reason": "ordinary direct completion equals the effective dispatched quantity",
+      "scope": {
+        "in_current_unfinished_scope": false,
+        "order_status": "partially_delivered"
+      },
+      "task_token": "TASK-9400f1b21cb527d7"
+    },
+    {
+      "action_class": "trace_reconstruction_after_delivery_confirmation",
+      "allocation_facts": {
+        "component_direct_allocation_count": 0,
+        "component_direct_consumed_quantity": 0,
+        "consume_movement_count": 1,
+        "inventory_allocation_count": 1,
+        "net_inventory_consumed_quantity": 32
+      },
+      "automatic_apply_allowed": false,
+      "candidate_key": "phase0-d1:r3-completion-trace:971d031a12f2b60d47585291",
+      "completion_facts": {
+        "actual_output_quantity": 118,
+        "direct_delivery_quantity": 118,
+        "initial_disposition": "direct",
+        "order_reserved_quantity": 118,
+        "stock_quantity": 0
+      },
+      "completion_token": "COMP-ef2d127de37b942b",
+      "delivery_facts": {
+        "dispatched_line_count": 1,
+        "effective_dispatched_quantity": 150,
+        "item_delivered_quantity": 150,
+        "order_quantity": 150,
+        "pending_delivery_quantity": 0,
+        "voided_delivery_quantity": 0
+      },
+      "item_token": "ITEM-f9e3ebbfd1b8975f",
+      "order_token": "ORD-2a7fb2e61fe57309",
+      "reason": "direct completion plus recorded inventory allocation equals the effective dispatch",
+      "scope": {
+        "in_current_unfinished_scope": false,
+        "order_status": "partially_delivered"
+      },
+      "task_token": "TASK-785f3ec7eb32f30b"
+    },
+    {
+      "action_class": "physical_stocktake_required_before_trace",
+      "allocation_facts": {
+        "component_direct_allocation_count": 0,
+        "component_direct_consumed_quantity": 0,
+        "consume_movement_count": 0,
+        "inventory_allocation_count": 0,
+        "net_inventory_consumed_quantity": 0
+      },
+      "automatic_apply_allowed": false,
+      "candidate_key": "phase0-d1:r3-completion-trace:c5491b0c8eaece1792c63f2c",
+      "completion_facts": {
+        "actual_output_quantity": 20,
+        "direct_delivery_quantity": 20,
+        "initial_disposition": "direct",
+        "order_reserved_quantity": 20,
+        "stock_quantity": 0
+      },
+      "completion_token": "COMP-e7f6c011776e8db7",
+      "delivery_facts": {
+        "dispatched_line_count": 0,
+        "effective_dispatched_quantity": 0,
+        "item_delivered_quantity": 0,
+        "order_quantity": 20,
+        "pending_delivery_quantity": 0,
+        "voided_delivery_quantity": 0
+      },
+      "item_token": "ITEM-c2fee3f0d5577fe1",
+      "order_token": "ORD-2a7fb2e61fe57309",
+      "reason": "direct output has no effective dispatch and physical location is unproven",
+      "scope": {
+        "in_current_unfinished_scope": true,
+        "order_status": "partially_delivered"
+      },
+      "task_token": "TASK-535fa30d7e25dd8a"
+    },
+    {
+      "action_class": "trace_reconstruction_after_delivery_confirmation",
+      "allocation_facts": {
+        "component_direct_allocation_count": 0,
+        "component_direct_consumed_quantity": 0,
+        "consume_movement_count": 0,
+        "inventory_allocation_count": 0,
+        "net_inventory_consumed_quantity": 0
+      },
+      "automatic_apply_allowed": false,
+      "candidate_key": "phase0-d1:r3-completion-trace:1945ceb3c9b3ab8cbb03c7e7",
+      "completion_facts": {
+        "actual_output_quantity": 4,
+        "direct_delivery_quantity": 4,
+        "initial_disposition": "direct",
+        "order_reserved_quantity": 4,
+        "stock_quantity": 0
+      },
+      "completion_token": "COMP-7902699be42c8a8e",
+      "delivery_facts": {
+        "dispatched_line_count": 1,
+        "effective_dispatched_quantity": 4,
+        "item_delivered_quantity": 4,
+        "order_quantity": 4,
+        "pending_delivery_quantity": 0,
+        "voided_delivery_quantity": 0
+      },
+      "item_token": "ITEM-036104e933aa5160",
+      "order_token": "ORD-2a7fb2e61fe57309",
+      "reason": "ordinary direct completion equals the effective dispatched quantity",
+      "scope": {
+        "in_current_unfinished_scope": false,
+        "order_status": "partially_delivered"
+      },
+      "task_token": "TASK-c2356069e9d1e79c"
+    },
+    {
+      "action_class": "physical_stocktake_required_before_trace",
+      "allocation_facts": {
+        "component_direct_allocation_count": 0,
+        "component_direct_consumed_quantity": 0,
+        "consume_movement_count": 0,
+        "inventory_allocation_count": 0,
+        "net_inventory_consumed_quantity": 0
+      },
+      "automatic_apply_allowed": false,
+      "candidate_key": "phase0-d1:r3-completion-trace:44a8621de3bc7fdc4bec572f",
+      "completion_facts": {
+        "actual_output_quantity": 336,
+        "direct_delivery_quantity": 336,
+        "initial_disposition": "direct",
+        "order_reserved_quantity": 336,
+        "stock_quantity": 0
+      },
+      "completion_token": "COMP-19581e27de7ced00",
+      "delivery_facts": {
+        "dispatched_line_count": 0,
+        "effective_dispatched_quantity": 0,
+        "item_delivered_quantity": 0,
+        "order_quantity": 336,
+        "pending_delivery_quantity": 0,
+        "voided_delivery_quantity": 0
+      },
+      "item_token": "ITEM-231fa9ab4593d824",
+      "order_token": "ORD-b0ab205aa02d7278",
+      "reason": "direct output has no effective dispatch and physical location is unproven",
+      "scope": {
+        "in_current_unfinished_scope": true,
+        "order_status": "pending_delivery"
+      },
+      "task_token": "TASK-5f9c4ab08cac7457"
+    },
+    {
+      "action_class": "physical_stocktake_required_before_trace",
+      "allocation_facts": {
+        "component_direct_allocation_count": 0,
+        "component_direct_consumed_quantity": 0,
+        "consume_movement_count": 0,
+        "inventory_allocation_count": 0,
+        "net_inventory_consumed_quantity": 0
+      },
+      "automatic_apply_allowed": false,
+      "candidate_key": "phase0-d1:r3-completion-trace:eb5b30692fc7d56e9bc390a9",
+      "completion_facts": {
+        "actual_output_quantity": 5,
+        "direct_delivery_quantity": 5,
+        "initial_disposition": "direct",
+        "order_reserved_quantity": 5,
+        "stock_quantity": 0
+      },
+      "completion_token": "COMP-4a44dc15364204a8",
+      "delivery_facts": {
+        "dispatched_line_count": 0,
+        "effective_dispatched_quantity": 0,
+        "item_delivered_quantity": 0,
+        "order_quantity": 5,
+        "pending_delivery_quantity": 0,
+        "voided_delivery_quantity": 0
+      },
+      "item_token": "ITEM-5edd6fe9fd8d4373",
+      "order_token": "ORD-b0ab205aa02d7278",
+      "reason": "direct output has no effective dispatch and physical location is unproven",
+      "scope": {
+        "in_current_unfinished_scope": true,
+        "order_status": "pending_delivery"
+      },
+      "task_token": "TASK-59e19706d51d39f6"
+    },
+    {
+      "action_class": "physical_stocktake_required_before_trace",
+      "allocation_facts": {
+        "component_direct_allocation_count": 0,
+        "component_direct_consumed_quantity": 0,
+        "consume_movement_count": 0,
+        "inventory_allocation_count": 0,
+        "net_inventory_consumed_quantity": 0
+      },
+      "automatic_apply_allowed": false,
+      "candidate_key": "phase0-d1:r3-completion-trace:9e632291c2b2687bf907c14f",
+      "completion_facts": {
+        "actual_output_quantity": 336,
+        "direct_delivery_quantity": 336,
+        "initial_disposition": "direct",
+        "order_reserved_quantity": 336,
+        "stock_quantity": 0
+      },
+      "completion_token": "COMP-4fc82b26aecb47d2",
+      "delivery_facts": {
+        "dispatched_line_count": 0,
+        "effective_dispatched_quantity": 0,
+        "item_delivered_quantity": 0,
+        "order_quantity": 336,
+        "pending_delivery_quantity": 0,
+        "voided_delivery_quantity": 0
+      },
+      "item_token": "ITEM-6d240bc6808be374",
+      "order_token": "ORD-88ca91effb10f455",
+      "reason": "direct output has no effective dispatch and physical location is unproven",
+      "scope": {
+        "in_current_unfinished_scope": true,
+        "order_status": "pending_delivery"
+      },
+      "task_token": "TASK-624b60c58c9d8bfb"
+    },
+    {
+      "action_class": "physical_stocktake_required_before_trace",
+      "allocation_facts": {
+        "component_direct_allocation_count": 0,
+        "component_direct_consumed_quantity": 0,
+        "consume_movement_count": 0,
+        "inventory_allocation_count": 0,
+        "net_inventory_consumed_quantity": 0
+      },
+      "automatic_apply_allowed": false,
+      "candidate_key": "phase0-d1:r3-completion-trace:570b424a0afe3600eb956d3b",
+      "completion_facts": {
+        "actual_output_quantity": 30,
+        "direct_delivery_quantity": 30,
+        "initial_disposition": "direct",
+        "order_reserved_quantity": 30,
+        "stock_quantity": 0
+      },
+      "completion_token": "COMP-6b51d431df5d7f14",
+      "delivery_facts": {
+        "dispatched_line_count": 0,
+        "effective_dispatched_quantity": 0,
+        "item_delivered_quantity": 0,
+        "order_quantity": 30,
+        "pending_delivery_quantity": 0,
+        "voided_delivery_quantity": 0
+      },
+      "item_token": "ITEM-dd74ff4c3cf85f63",
+      "order_token": "ORD-4c930e78b5aea221",
+      "reason": "direct output has no effective dispatch and physical location is unproven",
+      "scope": {
+        "in_current_unfinished_scope": true,
+        "order_status": "pending_delivery"
+      },
+      "task_token": "TASK-c6f3ac57944a5314"
+    },
+    {
+      "action_class": "physical_stocktake_required_before_trace",
+      "allocation_facts": {
+        "component_direct_allocation_count": 0,
+        "component_direct_consumed_quantity": 0,
+        "consume_movement_count": 0,
+        "inventory_allocation_count": 0,
+        "net_inventory_consumed_quantity": 0
+      },
+      "automatic_apply_allowed": false,
+      "candidate_key": "phase0-d1:r3-completion-trace:7138888a8c418dec5be297d6",
+      "completion_facts": {
+        "actual_output_quantity": 10,
+        "direct_delivery_quantity": 10,
+        "initial_disposition": "direct",
+        "order_reserved_quantity": 10,
+        "stock_quantity": 0
+      },
+      "completion_token": "COMP-e629fa6598d73276",
+      "delivery_facts": {
+        "dispatched_line_count": 0,
+        "effective_dispatched_quantity": 0,
+        "item_delivered_quantity": 0,
+        "order_quantity": 10,
+        "pending_delivery_quantity": 0,
+        "voided_delivery_quantity": 0
+      },
+      "item_token": "ITEM-3444765fb503d4c8",
+      "order_token": "ORD-20dadd51a49839f1",
+      "reason": "direct output has no effective dispatch and physical location is unproven",
+      "scope": {
+        "in_current_unfinished_scope": true,
+        "order_status": "pending_delivery"
+      },
+      "task_token": "TASK-2858dcd1057d3eae"
+    },
+    {
+      "action_class": "physical_stocktake_required_before_trace",
+      "allocation_facts": {
+        "component_direct_allocation_count": 0,
+        "component_direct_consumed_quantity": 0,
+        "consume_movement_count": 0,
+        "inventory_allocation_count": 0,
+        "net_inventory_consumed_quantity": 0
+      },
+      "automatic_apply_allowed": false,
+      "candidate_key": "phase0-d1:r3-completion-trace:0632e99e413d070357b72f89",
+      "completion_facts": {
+        "actual_output_quantity": 30,
+        "direct_delivery_quantity": 30,
+        "initial_disposition": "direct",
+        "order_reserved_quantity": 30,
+        "stock_quantity": 0
+      },
+      "completion_token": "COMP-4523540f1504cd17",
+      "delivery_facts": {
+        "dispatched_line_count": 0,
+        "effective_dispatched_quantity": 0,
+        "item_delivered_quantity": 0,
+        "order_quantity": 30,
+        "pending_delivery_quantity": 0,
+        "voided_delivery_quantity": 0
+      },
+      "item_token": "ITEM-1903f120adc6a5a8",
+      "order_token": "ORD-191347b21ec7de5d",
+      "reason": "direct output has no effective dispatch and physical location is unproven",
+      "scope": {
+        "in_current_unfinished_scope": true,
+        "order_status": "pending_delivery"
+      },
+      "task_token": "TASK-7a61b53701befdae"
+    },
+    {
+      "action_class": "physical_stocktake_required_before_trace",
+      "allocation_facts": {
+        "component_direct_allocation_count": 0,
+        "component_direct_consumed_quantity": 0,
+        "consume_movement_count": 0,
+        "inventory_allocation_count": 0,
+        "net_inventory_consumed_quantity": 0
+      },
+      "automatic_apply_allowed": false,
+      "candidate_key": "phase0-d1:r3-completion-trace:c08879dcf1cee658e3a5dc0d",
+      "completion_facts": {
+        "actual_output_quantity": 500,
+        "direct_delivery_quantity": 500,
+        "initial_disposition": "direct",
+        "order_reserved_quantity": 500,
+        "stock_quantity": 0
+      },
+      "completion_token": "COMP-4ec9599fc203d176",
+      "delivery_facts": {
+        "dispatched_line_count": 0,
+        "effective_dispatched_quantity": 0,
+        "item_delivered_quantity": 0,
+        "order_quantity": 500,
+        "pending_delivery_quantity": 0,
+        "voided_delivery_quantity": 0
+      },
+      "item_token": "ITEM-5542f9c152f58f47",
+      "order_token": "ORD-191347b21ec7de5d",
+      "reason": "direct output has no effective dispatch and physical location is unproven",
+      "scope": {
+        "in_current_unfinished_scope": true,
+        "order_status": "pending_delivery"
+      },
+      "task_token": "TASK-76a50887d8f1c2e9"
+    },
+    {
+      "action_class": "physical_stocktake_required_before_trace",
+      "allocation_facts": {
+        "component_direct_allocation_count": 0,
+        "component_direct_consumed_quantity": 0,
+        "consume_movement_count": 0,
+        "inventory_allocation_count": 0,
+        "net_inventory_consumed_quantity": 0
+      },
+      "automatic_apply_allowed": false,
+      "candidate_key": "phase0-d1:r3-completion-trace:9d9de0cb2b2c58699e6ebbe3",
+      "completion_facts": {
+        "actual_output_quantity": 50,
+        "direct_delivery_quantity": 50,
+        "initial_disposition": "direct",
+        "order_reserved_quantity": 50,
+        "stock_quantity": 0
+      },
+      "completion_token": "COMP-9400f1b21cb527d7",
+      "delivery_facts": {
+        "dispatched_line_count": 0,
+        "effective_dispatched_quantity": 0,
+        "item_delivered_quantity": 0,
+        "order_quantity": 50,
+        "pending_delivery_quantity": 0,
+        "voided_delivery_quantity": 0
+      },
+      "item_token": "ITEM-8e0f513c882b1c07",
+      "order_token": "ORD-191347b21ec7de5d",
+      "reason": "direct output has no effective dispatch and physical location is unproven",
+      "scope": {
+        "in_current_unfinished_scope": true,
+        "order_status": "pending_delivery"
+      },
+      "task_token": "TASK-9f14025af0065b30"
+    },
+    {
+      "action_class": "physical_stocktake_required_before_trace",
+      "allocation_facts": {
+        "component_direct_allocation_count": 0,
+        "component_direct_consumed_quantity": 0,
+        "consume_movement_count": 0,
+        "inventory_allocation_count": 0,
+        "net_inventory_consumed_quantity": 0
+      },
+      "automatic_apply_allowed": false,
+      "candidate_key": "phase0-d1:r3-completion-trace:4c5552723b12fe25b93617cf",
+      "completion_facts": {
+        "actual_output_quantity": 150,
+        "direct_delivery_quantity": 150,
+        "initial_disposition": "direct",
+        "order_reserved_quantity": 150,
+        "stock_quantity": 0
+      },
+      "completion_token": "COMP-f5ca38f748a1d6ea",
+      "delivery_facts": {
+        "dispatched_line_count": 0,
+        "effective_dispatched_quantity": 0,
+        "item_delivered_quantity": 0,
+        "order_quantity": 150,
+        "pending_delivery_quantity": 0,
+        "voided_delivery_quantity": 0
+      },
+      "item_token": "ITEM-16107d13273e7aea",
+      "order_token": "ORD-f6d4c20c35885cf5",
+      "reason": "direct output has no effective dispatch and physical location is unproven",
+      "scope": {
+        "in_current_unfinished_scope": true,
+        "order_status": "pending_delivery"
+      },
+      "task_token": "TASK-3d914f9348c9cc0f"
+    },
+    {
+      "action_class": "physical_stocktake_required_before_trace",
+      "allocation_facts": {
+        "component_direct_allocation_count": 0,
+        "component_direct_consumed_quantity": 0,
+        "consume_movement_count": 0,
+        "inventory_allocation_count": 0,
+        "net_inventory_consumed_quantity": 0
+      },
+      "automatic_apply_allowed": false,
+      "candidate_key": "phase0-d1:r3-completion-trace:0779dc4c715f594c2f25c61c",
+      "completion_facts": {
+        "actual_output_quantity": 160,
+        "direct_delivery_quantity": 160,
+        "initial_disposition": "direct",
+        "order_reserved_quantity": 160,
+        "stock_quantity": 0
+      },
+      "completion_token": "COMP-6f4b6612125fb3a0",
+      "delivery_facts": {
+        "dispatched_line_count": 0,
+        "effective_dispatched_quantity": 0,
+        "item_delivered_quantity": 0,
+        "order_quantity": 160,
+        "pending_delivery_quantity": 0,
+        "voided_delivery_quantity": 0
+      },
+      "item_token": "ITEM-5506655794c9a46a",
+      "order_token": "ORD-f6d4c20c35885cf5",
+      "reason": "direct output has no effective dispatch and physical location is unproven",
+      "scope": {
+        "in_current_unfinished_scope": true,
+        "order_status": "pending_delivery"
+      },
+      "task_token": "TASK-73475cb40a568e8d"
+    },
+    {
+      "action_class": "physical_stocktake_required_before_trace",
+      "allocation_facts": {
+        "component_direct_allocation_count": 0,
+        "component_direct_consumed_quantity": 0,
+        "consume_movement_count": 0,
+        "inventory_allocation_count": 0,
+        "net_inventory_consumed_quantity": 0
+      },
+      "automatic_apply_allowed": false,
+      "candidate_key": "phase0-d1:r3-completion-trace:34be1847c8b5e81a3b8f9616",
+      "completion_facts": {
+        "actual_output_quantity": 12,
+        "direct_delivery_quantity": 12,
+        "initial_disposition": "direct",
+        "order_reserved_quantity": 12,
+        "stock_quantity": 0
+      },
+      "completion_token": "COMP-785f3ec7eb32f30b",
+      "delivery_facts": {
+        "dispatched_line_count": 0,
+        "effective_dispatched_quantity": 0,
+        "item_delivered_quantity": 0,
+        "order_quantity": 12,
+        "pending_delivery_quantity": 0,
+        "voided_delivery_quantity": 0
+      },
+      "item_token": "ITEM-6dc6da2a4d2f7640",
+      "order_token": "ORD-cb4802988b933e8f",
+      "reason": "direct output has no effective dispatch and physical location is unproven",
+      "scope": {
+        "in_current_unfinished_scope": true,
+        "order_status": "pending_delivery"
+      },
+      "task_token": "TASK-6208ef0f7750c111"
+    },
+    {
+      "action_class": "physical_stocktake_required_before_trace",
+      "allocation_facts": {
+        "component_direct_allocation_count": 0,
+        "component_direct_consumed_quantity": 0,
+        "consume_movement_count": 0,
+        "inventory_allocation_count": 0,
+        "net_inventory_consumed_quantity": 0
+      },
+      "automatic_apply_allowed": false,
+      "candidate_key": "phase0-d1:r3-completion-trace:bc713835625c0aeb49c5465b",
+      "completion_facts": {
+        "actual_output_quantity": 20,
+        "direct_delivery_quantity": 20,
+        "initial_disposition": "direct",
+        "order_reserved_quantity": 20,
+        "stock_quantity": 0
+      },
+      "completion_token": "COMP-535fa30d7e25dd8a",
+      "delivery_facts": {
+        "dispatched_line_count": 0,
+        "effective_dispatched_quantity": 0,
+        "item_delivered_quantity": 0,
+        "order_quantity": 20,
+        "pending_delivery_quantity": 0,
+        "voided_delivery_quantity": 0
+      },
+      "item_token": "ITEM-294cd5558aede0e5",
+      "order_token": "ORD-cb4802988b933e8f",
+      "reason": "direct output has no effective dispatch and physical location is unproven",
+      "scope": {
+        "in_current_unfinished_scope": true,
+        "order_status": "pending_delivery"
+      },
+      "task_token": "TASK-39fa9ec190eee7b6"
+    },
+    {
+      "action_class": "physical_stocktake_required_before_trace",
+      "allocation_facts": {
+        "component_direct_allocation_count": 0,
+        "component_direct_consumed_quantity": 0,
+        "consume_movement_count": 0,
+        "inventory_allocation_count": 0,
+        "net_inventory_consumed_quantity": 0
+      },
+      "automatic_apply_allowed": false,
+      "candidate_key": "phase0-d1:r3-completion-trace:079cf0196160734fc5d0b4f8",
+      "completion_facts": {
+        "actual_output_quantity": 50,
+        "direct_delivery_quantity": 50,
+        "initial_disposition": "direct",
+        "order_reserved_quantity": 50,
+        "stock_quantity": 0
+      },
+      "completion_token": "COMP-c2356069e9d1e79c",
+      "delivery_facts": {
+        "dispatched_line_count": 0,
+        "effective_dispatched_quantity": 0,
+        "item_delivered_quantity": 0,
+        "order_quantity": 50,
+        "pending_delivery_quantity": 0,
+        "voided_delivery_quantity": 0
+      },
+      "item_token": "ITEM-ba258b5a7eb00f1b",
+      "order_token": "ORD-cb4802988b933e8f",
+      "reason": "direct output has no effective dispatch and physical location is unproven",
+      "scope": {
+        "in_current_unfinished_scope": true,
+        "order_status": "pending_delivery"
+      },
+      "task_token": "TASK-d029fa3a95e174a1"
+    },
+    {
+      "action_class": "physical_stocktake_required_before_trace",
+      "allocation_facts": {
+        "component_direct_allocation_count": 0,
+        "component_direct_consumed_quantity": 0,
+        "consume_movement_count": 0,
+        "inventory_allocation_count": 0,
+        "net_inventory_consumed_quantity": 0
+      },
+      "automatic_apply_allowed": false,
+      "candidate_key": "phase0-d1:r3-completion-trace:8108776832d307876aa1aa2b",
+      "completion_facts": {
+        "actual_output_quantity": 30,
+        "direct_delivery_quantity": 30,
+        "initial_disposition": "direct",
+        "order_reserved_quantity": 30,
+        "stock_quantity": 0
+      },
+      "completion_token": "COMP-b7a56873cd771f2c",
+      "delivery_facts": {
+        "dispatched_line_count": 0,
+        "effective_dispatched_quantity": 0,
+        "item_delivered_quantity": 0,
+        "order_quantity": 30,
+        "pending_delivery_quantity": 0,
+        "voided_delivery_quantity": 0
+      },
+      "item_token": "ITEM-caf8135c0f01e2a3",
+      "order_token": "ORD-cb4802988b933e8f",
+      "reason": "direct output has no effective dispatch and physical location is unproven",
+      "scope": {
+        "in_current_unfinished_scope": true,
+        "order_status": "pending_delivery"
+      },
+      "task_token": "TASK-81b8a03f97e8787c"
+    },
+    {
+      "action_class": "physical_stocktake_required_before_trace",
+      "allocation_facts": {
+        "component_direct_allocation_count": 0,
+        "component_direct_consumed_quantity": 0,
+        "consume_movement_count": 0,
+        "inventory_allocation_count": 0,
+        "net_inventory_consumed_quantity": 0
+      },
+      "automatic_apply_allowed": false,
+      "candidate_key": "phase0-d1:r3-completion-trace:2c7d14843cd52afb52ac70d7",
+      "completion_facts": {
+        "actual_output_quantity": 20,
+        "direct_delivery_quantity": 20,
+        "initial_disposition": "direct",
+        "order_reserved_quantity": 20,
+        "stock_quantity": 0
+      },
+      "completion_token": "COMP-5f9c4ab08cac7457",
+      "delivery_facts": {
+        "dispatched_line_count": 0,
+        "effective_dispatched_quantity": 0,
+        "item_delivered_quantity": 0,
+        "order_quantity": 20,
+        "pending_delivery_quantity": 0,
+        "voided_delivery_quantity": 0
+      },
+      "item_token": "ITEM-a33686b000cb614d",
+      "order_token": "ORD-cb4802988b933e8f",
+      "reason": "direct output has no effective dispatch and physical location is unproven",
+      "scope": {
+        "in_current_unfinished_scope": true,
+        "order_status": "pending_delivery"
+      },
+      "task_token": "TASK-da4ea2a5506f2693"
+    },
+    {
+      "action_class": "physical_stocktake_required_before_trace",
+      "allocation_facts": {
+        "component_direct_allocation_count": 0,
+        "component_direct_consumed_quantity": 0,
+        "consume_movement_count": 0,
+        "inventory_allocation_count": 0,
+        "net_inventory_consumed_quantity": 0
+      },
+      "automatic_apply_allowed": false,
+      "candidate_key": "phase0-d1:r3-completion-trace:7eb39cde485d761a739b5261",
+      "completion_facts": {
+        "actual_output_quantity": 150,
+        "direct_delivery_quantity": 150,
+        "initial_disposition": "direct",
+        "order_reserved_quantity": 150,
+        "stock_quantity": 0
+      },
+      "completion_token": "COMP-670671cd97404156",
+      "delivery_facts": {
+        "dispatched_line_count": 0,
+        "effective_dispatched_quantity": 0,
+        "item_delivered_quantity": 0,
+        "order_quantity": 150,
+        "pending_delivery_quantity": 0,
+        "voided_delivery_quantity": 0
+      },
+      "item_token": "ITEM-928b44e6b3d42a16",
+      "order_token": "ORD-cb4802988b933e8f",
+      "reason": "direct output has no effective dispatch and physical location is unproven",
+      "scope": {
+        "in_current_unfinished_scope": true,
+        "order_status": "pending_delivery"
+      },
+      "task_token": "TASK-a68b412c4282555f"
+    },
+    {
+      "action_class": "trace_reconstruction_after_delivery_confirmation",
+      "allocation_facts": {
+        "component_direct_allocation_count": 0,
+        "component_direct_consumed_quantity": 0,
+        "consume_movement_count": 0,
+        "inventory_allocation_count": 0,
+        "net_inventory_consumed_quantity": 0
+      },
+      "automatic_apply_allowed": false,
+      "candidate_key": "phase0-d1:r3-completion-trace:781ae04934565c8f208a397f",
+      "completion_facts": {
+        "actual_output_quantity": 400,
+        "direct_delivery_quantity": 400,
+        "initial_disposition": "direct",
+        "order_reserved_quantity": 400,
+        "stock_quantity": 0
+      },
+      "completion_token": "COMP-59e19706d51d39f6",
+      "delivery_facts": {
+        "dispatched_line_count": 1,
+        "effective_dispatched_quantity": 400,
+        "item_delivered_quantity": 400,
+        "order_quantity": 400,
+        "pending_delivery_quantity": 0,
+        "voided_delivery_quantity": 0
+      },
+      "item_token": "ITEM-7684f0452c460353",
+      "order_token": "ORD-f6a906db719ac527",
+      "reason": "ordinary direct completion equals the effective dispatched quantity",
+      "scope": {
+        "in_current_unfinished_scope": false,
+        "order_status": "delivered"
+      },
+      "task_token": "TASK-0b918943df0962bc"
+    },
+    {
+      "action_class": "trace_reconstruction_after_delivery_confirmation",
+      "allocation_facts": {
+        "component_direct_allocation_count": 0,
+        "component_direct_consumed_quantity": 0,
+        "consume_movement_count": 0,
+        "inventory_allocation_count": 0,
+        "net_inventory_consumed_quantity": 0
+      },
+      "automatic_apply_allowed": false,
+      "candidate_key": "phase0-d1:r3-completion-trace:9202f38b7a44470799d0232b",
+      "completion_facts": {
+        "actual_output_quantity": 50,
+        "direct_delivery_quantity": 50,
+        "initial_disposition": "direct",
+        "order_reserved_quantity": 50,
+        "stock_quantity": 0
+      },
+      "completion_token": "COMP-35135aaa6cc23891",
+      "delivery_facts": {
+        "dispatched_line_count": 1,
+        "effective_dispatched_quantity": 50,
+        "item_delivered_quantity": 50,
+        "order_quantity": 50,
+        "pending_delivery_quantity": 0,
+        "voided_delivery_quantity": 0
+      },
+      "item_token": "ITEM-56fe4b09b0b1481a",
+      "order_token": "ORD-f6a906db719ac527",
+      "reason": "ordinary direct completion equals the effective dispatched quantity",
+      "scope": {
+        "in_current_unfinished_scope": false,
+        "order_status": "delivered"
+      },
+      "task_token": "TASK-d59eced1ded07f84"
+    },
+    {
+      "action_class": "trace_reconstruction_after_delivery_confirmation",
+      "allocation_facts": {
+        "component_direct_allocation_count": 0,
+        "component_direct_consumed_quantity": 0,
+        "consume_movement_count": 0,
+        "inventory_allocation_count": 0,
+        "net_inventory_consumed_quantity": 0
+      },
+      "automatic_apply_allowed": false,
+      "candidate_key": "phase0-d1:r3-completion-trace:a14538cd8394dbdc8284f690",
+      "completion_facts": {
+        "actual_output_quantity": 50,
+        "direct_delivery_quantity": 50,
+        "initial_disposition": "direct",
+        "order_reserved_quantity": 50,
+        "stock_quantity": 0
+      },
+      "completion_token": "COMP-624b60c58c9d8bfb",
+      "delivery_facts": {
+        "dispatched_line_count": 1,
+        "effective_dispatched_quantity": 50,
+        "item_delivered_quantity": 50,
+        "order_quantity": 50,
+        "pending_delivery_quantity": 0,
+        "voided_delivery_quantity": 0
+      },
+      "item_token": "ITEM-29df5d7b8880bf4c",
+      "order_token": "ORD-f856bf26b857c531",
+      "reason": "ordinary direct completion equals the effective dispatched quantity",
+      "scope": {
+        "in_current_unfinished_scope": false,
+        "order_status": "delivered"
+      },
+      "task_token": "TASK-aea92132c4cbeb26"
+    },
+    {
+      "action_class": "trace_reconstruction_after_delivery_confirmation",
+      "allocation_facts": {
+        "component_direct_allocation_count": 0,
+        "component_direct_consumed_quantity": 0,
+        "consume_movement_count": 0,
+        "inventory_allocation_count": 0,
+        "net_inventory_consumed_quantity": 0
+      },
+      "automatic_apply_allowed": false,
+      "candidate_key": "phase0-d1:r3-completion-trace:1bc8ddcecd453445be650462",
+      "completion_facts": {
+        "actual_output_quantity": 300,
+        "direct_delivery_quantity": 300,
+        "initial_disposition": "direct",
+        "order_reserved_quantity": 300,
+        "stock_quantity": 0
+      },
+      "completion_token": "COMP-eb1e33e8a81b697b",
+      "delivery_facts": {
+        "dispatched_line_count": 1,
+        "effective_dispatched_quantity": 300,
+        "item_delivered_quantity": 300,
+        "order_quantity": 300,
+        "pending_delivery_quantity": 0,
+        "voided_delivery_quantity": 0
+      },
+      "item_token": "ITEM-b789f4e82d98e206",
+      "order_token": "ORD-b9443c4e519c6e9a",
+      "reason": "ordinary direct completion equals the effective dispatched quantity",
+      "scope": {
+        "in_current_unfinished_scope": false,
+        "order_status": "delivered"
+      },
+      "task_token": "TASK-98010bd9270f9b10"
+    },
+    {
+      "action_class": "trace_reconstruction_after_delivery_confirmation",
+      "allocation_facts": {
+        "component_direct_allocation_count": 0,
+        "component_direct_consumed_quantity": 0,
+        "consume_movement_count": 0,
+        "inventory_allocation_count": 0,
+        "net_inventory_consumed_quantity": 0
+      },
+      "automatic_apply_allowed": false,
+      "candidate_key": "phase0-d1:r3-completion-trace:7e0f0febb55b0cf0e1e216d9",
+      "completion_facts": {
+        "actual_output_quantity": 100,
+        "direct_delivery_quantity": 100,
+        "initial_disposition": "direct",
+        "order_reserved_quantity": 100,
+        "stock_quantity": 0
+      },
+      "completion_token": "COMP-e29c9c180c6279b0",
+      "delivery_facts": {
+        "dispatched_line_count": 1,
+        "effective_dispatched_quantity": 100,
+        "item_delivered_quantity": 100,
+        "order_quantity": 100,
+        "pending_delivery_quantity": 0,
+        "voided_delivery_quantity": 0
+      },
+      "item_token": "ITEM-950ee8b03a9a5122",
+      "order_token": "ORD-7ac41629d179aed0",
+      "reason": "ordinary direct completion equals the effective dispatched quantity",
+      "scope": {
+        "in_current_unfinished_scope": false,
+        "order_status": "delivered"
+      },
+      "task_token": "TASK-1a6562590ef19d10"
+    },
+    {
+      "action_class": "trace_reconstruction_after_delivery_confirmation",
+      "allocation_facts": {
+        "component_direct_allocation_count": 0,
+        "component_direct_consumed_quantity": 0,
+        "consume_movement_count": 0,
+        "inventory_allocation_count": 0,
+        "net_inventory_consumed_quantity": 0
+      },
+      "automatic_apply_allowed": false,
+      "candidate_key": "phase0-d1:r3-completion-trace:bd3d6b4911d0a020ea8de23b",
+      "completion_facts": {
+        "actual_output_quantity": 200,
+        "direct_delivery_quantity": 200,
+        "initial_disposition": "direct",
+        "order_reserved_quantity": 200,
+        "stock_quantity": 0
+      },
+      "completion_token": "COMP-c6f3ac57944a5314",
+      "delivery_facts": {
+        "dispatched_line_count": 1,
+        "effective_dispatched_quantity": 200,
+        "item_delivered_quantity": 200,
+        "order_quantity": 200,
+        "pending_delivery_quantity": 0,
+        "voided_delivery_quantity": 0
+      },
+      "item_token": "ITEM-0b3baf54fa37185a",
+      "order_token": "ORD-98b9b1a938f4981d",
+      "reason": "ordinary direct completion equals the effective dispatched quantity",
+      "scope": {
+        "in_current_unfinished_scope": false,
+        "order_status": "delivered"
+      },
+      "task_token": "TASK-0e17daca5f3e175f"
+    },
+    {
+      "action_class": "trace_reconstruction_after_delivery_confirmation",
+      "allocation_facts": {
+        "component_direct_allocation_count": 0,
+        "component_direct_consumed_quantity": 0,
+        "consume_movement_count": 0,
+        "inventory_allocation_count": 0,
+        "net_inventory_consumed_quantity": 0
+      },
+      "automatic_apply_allowed": false,
+      "candidate_key": "phase0-d1:r3-completion-trace:25455555b4daf47d8aa6dfb2",
+      "completion_facts": {
+        "actual_output_quantity": 4,
+        "direct_delivery_quantity": 4,
+        "initial_disposition": "direct",
+        "order_reserved_quantity": 4,
+        "stock_quantity": 0
+      },
+      "completion_token": "COMP-76a50887d8f1c2e9",
+      "delivery_facts": {
+        "dispatched_line_count": 1,
+        "effective_dispatched_quantity": 4,
+        "item_delivered_quantity": 4,
+        "order_quantity": 4,
+        "pending_delivery_quantity": 0,
+        "voided_delivery_quantity": 0
+      },
+      "item_token": "ITEM-924eab70797953e4",
+      "order_token": "ORD-18c5aebe805482cf",
+      "reason": "ordinary direct completion equals the effective dispatched quantity",
+      "scope": {
+        "in_current_unfinished_scope": false,
+        "order_status": "delivered"
+      },
+      "task_token": "TASK-c75cb66ae28d8ebc"
+    },
+    {
+      "action_class": "trace_reconstruction_after_delivery_confirmation",
+      "allocation_facts": {
+        "component_direct_allocation_count": 1,
+        "component_direct_consumed_quantity": 2700,
+        "consume_movement_count": 0,
+        "inventory_allocation_count": 0,
+        "net_inventory_consumed_quantity": 0
+      },
+      "automatic_apply_allowed": false,
+      "candidate_key": "phase0-d1:r3-completion-trace:0bdff39685b7e69bd3a73b4b",
+      "completion_facts": {
+        "actual_output_quantity": 2700,
+        "direct_delivery_quantity": 2700,
+        "initial_disposition": "direct",
+        "order_reserved_quantity": 2700,
+        "stock_quantity": 0
+      },
+      "completion_token": "COMP-7a61b53701befdae",
+      "delivery_facts": {
+        "dispatched_line_count": 1,
+        "effective_dispatched_quantity": 3000,
+        "item_delivered_quantity": 3000,
+        "order_quantity": 3000,
+        "pending_delivery_quantity": 0,
+        "voided_delivery_quantity": 0
+      },
+      "item_token": "ITEM-395e21aaf42e2d2e",
+      "order_token": "ORD-2b1aa576bd0c7ae2",
+      "reason": "explicit component direct-delivery allocation consumes the full completion output",
+      "scope": {
+        "in_current_unfinished_scope": false,
+        "order_status": "delivered"
+      },
+      "task_token": "TASK-c837649cce43f272"
+    },
+    {
+      "action_class": "physical_stocktake_required_before_trace",
+      "allocation_facts": {
+        "component_direct_allocation_count": 0,
+        "component_direct_consumed_quantity": 0,
+        "consume_movement_count": 0,
+        "inventory_allocation_count": 0,
+        "net_inventory_consumed_quantity": 0
+      },
+      "automatic_apply_allowed": false,
+      "candidate_key": "phase0-d1:r3-completion-trace:5eedeb86dca61716526cd5ae",
+      "completion_facts": {
+        "actual_output_quantity": 50,
+        "direct_delivery_quantity": 50,
+        "initial_disposition": "direct",
+        "order_reserved_quantity": 50,
+        "stock_quantity": 0
+      },
+      "completion_token": "COMP-aea92132c4cbeb26",
+      "delivery_facts": {
+        "dispatched_line_count": 0,
+        "effective_dispatched_quantity": 0,
+        "item_delivered_quantity": 0,
+        "order_quantity": 50,
+        "pending_delivery_quantity": 0,
+        "voided_delivery_quantity": 0
+      },
+      "item_token": "ITEM-a779b5bdea7260a5",
+      "order_token": "ORD-08239f8781c9538f",
+      "reason": "direct output has no effective dispatch and physical location is unproven",
+      "scope": {
+        "in_current_unfinished_scope": true,
+        "order_status": "pending_delivery"
+      },
+      "task_token": "TASK-a88a7902cb4ef697"
+    },
+    {
+      "action_class": "physical_stocktake_required_before_trace",
+      "allocation_facts": {
+        "component_direct_allocation_count": 0,
+        "component_direct_consumed_quantity": 0,
+        "consume_movement_count": 0,
+        "inventory_allocation_count": 0,
+        "net_inventory_consumed_quantity": 0
+      },
+      "automatic_apply_allowed": false,
+      "candidate_key": "phase0-d1:r3-completion-trace:046f7ee624ba8ba943277a7a",
+      "completion_facts": {
+        "actual_output_quantity": 50,
+        "direct_delivery_quantity": 50,
+        "initial_disposition": "direct",
+        "order_reserved_quantity": 50,
+        "stock_quantity": 0
+      },
+      "completion_token": "COMP-0b918943df0962bc",
+      "delivery_facts": {
+        "dispatched_line_count": 0,
+        "effective_dispatched_quantity": 0,
+        "item_delivered_quantity": 0,
+        "order_quantity": 50,
+        "pending_delivery_quantity": 0,
+        "voided_delivery_quantity": 0
+      },
+      "item_token": "ITEM-7f4f593ee3ac429f",
+      "order_token": "ORD-08239f8781c9538f",
+      "reason": "direct output has no effective dispatch and physical location is unproven",
+      "scope": {
+        "in_current_unfinished_scope": true,
+        "order_status": "pending_delivery"
+      },
+      "task_token": "TASK-349c41201b62db85"
+    },
+    {
+      "action_class": "trace_reconstruction_after_delivery_confirmation",
+      "allocation_facts": {
+        "component_direct_allocation_count": 0,
+        "component_direct_consumed_quantity": 0,
+        "consume_movement_count": 0,
+        "inventory_allocation_count": 0,
+        "net_inventory_consumed_quantity": 0
+      },
+      "automatic_apply_allowed": false,
+      "candidate_key": "phase0-d1:r3-completion-trace:af61ac07f1b33eb23e189605",
+      "completion_facts": {
+        "actual_output_quantity": 30,
+        "direct_delivery_quantity": 30,
+        "initial_disposition": "direct",
+        "order_reserved_quantity": 30,
+        "stock_quantity": 0
+      },
+      "completion_token": "COMP-d59eced1ded07f84",
+      "delivery_facts": {
+        "dispatched_line_count": 1,
+        "effective_dispatched_quantity": 30,
+        "item_delivered_quantity": 30,
+        "order_quantity": 30,
+        "pending_delivery_quantity": 0,
+        "voided_delivery_quantity": 0
+      },
+      "item_token": "ITEM-b2f1ef6f11dfc560",
+      "order_token": "ORD-f7cc0e8b019506df",
+      "reason": "ordinary direct completion equals the effective dispatched quantity",
+      "scope": {
+        "in_current_unfinished_scope": false,
+        "order_status": "partially_delivered"
+      },
+      "task_token": "TASK-48449a14a4ff7d79"
+    },
+    {
+      "action_class": "physical_stocktake_required_before_trace",
+      "allocation_facts": {
+        "component_direct_allocation_count": 0,
+        "component_direct_consumed_quantity": 0,
+        "consume_movement_count": 0,
+        "inventory_allocation_count": 0,
+        "net_inventory_consumed_quantity": 0
+      },
+      "automatic_apply_allowed": false,
+      "candidate_key": "phase0-d1:r3-completion-trace:ea015310c38bef77dfe7960b",
+      "completion_facts": {
+        "actual_output_quantity": 30,
+        "direct_delivery_quantity": 30,
+        "initial_disposition": "direct",
+        "order_reserved_quantity": 30,
+        "stock_quantity": 0
+      },
+      "completion_token": "COMP-73475cb40a568e8d",
+      "delivery_facts": {
+        "dispatched_line_count": 0,
+        "effective_dispatched_quantity": 0,
+        "item_delivered_quantity": 0,
+        "order_quantity": 30,
+        "pending_delivery_quantity": 0,
+        "voided_delivery_quantity": 0
+      },
+      "item_token": "ITEM-109e04d1a95845cc",
+      "order_token": "ORD-f7cc0e8b019506df",
+      "reason": "direct output has no effective dispatch and physical location is unproven",
+      "scope": {
+        "in_current_unfinished_scope": true,
+        "order_status": "partially_delivered"
+      },
+      "task_token": "TASK-98a3ab7c340e8a03"
+    },
+    {
+      "action_class": "trace_reconstruction_after_delivery_confirmation",
+      "allocation_facts": {
+        "component_direct_allocation_count": 0,
+        "component_direct_consumed_quantity": 0,
+        "consume_movement_count": 0,
+        "inventory_allocation_count": 0,
+        "net_inventory_consumed_quantity": 0
+      },
+      "automatic_apply_allowed": false,
+      "candidate_key": "phase0-d1:r3-completion-trace:43ce484f37a09283c7f873e6",
+      "completion_facts": {
+        "actual_output_quantity": 38,
+        "direct_delivery_quantity": 38,
+        "initial_disposition": "direct",
+        "order_reserved_quantity": 38,
+        "stock_quantity": 0
+      },
+      "completion_token": "COMP-44cb730c420480a0",
+      "delivery_facts": {
+        "dispatched_line_count": 1,
+        "effective_dispatched_quantity": 38,
+        "item_delivered_quantity": 38,
+        "order_quantity": 38,
+        "pending_delivery_quantity": 0,
+        "voided_delivery_quantity": 0
+      },
+      "item_token": "ITEM-786cc3ab7da0c7d1",
+      "order_token": "ORD-ccddcd7ec696cfcc",
+      "reason": "ordinary direct completion equals the effective dispatched quantity",
+      "scope": {
+        "in_current_unfinished_scope": false,
+        "order_status": "partially_delivered"
+      },
+      "task_token": "TASK-44c8031cb036a735"
+    },
+    {
+      "action_class": "trace_reconstruction_after_delivery_confirmation",
+      "allocation_facts": {
+        "component_direct_allocation_count": 0,
+        "component_direct_consumed_quantity": 0,
+        "consume_movement_count": 0,
+        "inventory_allocation_count": 0,
+        "net_inventory_consumed_quantity": 0
+      },
+      "automatic_apply_allowed": false,
+      "candidate_key": "phase0-d1:r3-completion-trace:157cbe9bbf6d2854e5daa763",
+      "completion_facts": {
+        "actual_output_quantity": 8,
+        "direct_delivery_quantity": 8,
+        "initial_disposition": "direct",
+        "order_reserved_quantity": 8,
+        "stock_quantity": 0
+      },
+      "completion_token": "COMP-71ee45a3c0db9a98",
+      "delivery_facts": {
+        "dispatched_line_count": 1,
+        "effective_dispatched_quantity": 8,
+        "item_delivered_quantity": 8,
+        "order_quantity": 8,
+        "pending_delivery_quantity": 0,
+        "voided_delivery_quantity": 0
+      },
+      "item_token": "ITEM-44f74127d6ea7ada",
+      "order_token": "ORD-ccddcd7ec696cfcc",
+      "reason": "ordinary direct completion equals the effective dispatched quantity",
+      "scope": {
+        "in_current_unfinished_scope": false,
+        "order_status": "partially_delivered"
+      },
+      "task_token": "TASK-b4944c6ff08dc6f4"
+    }
+  ],
+  "counts": {
+    "automatic_apply_allowed": 0,
+    "completion_trace_gaps": 36,
+    "physical_stocktake_required_before_trace": 21,
+    "quantity_contradiction_stop": 0,
+    "trace_reconstruction_after_delivery_confirmation": 15
+  },
+  "database": {
+    "query_only": 1,
+    "sha256_after": "3e1ba7fbce2d8be2ab76b926af2c2282d046c61130404680f9b4d3024f07dd91",
+    "sha256_before": "3e1ba7fbce2d8be2ab76b926af2c2282d046c61130404680f9b4d3024f07dd91",
+    "total_changes": 0,
+    "write_probe_denied": true
+  },
+  "decision": {
+    "apply_executed": false,
+    "create_inventory_now": false,
+    "create_trace_now": false,
+    "factory_confirmation_required": true
+  },
+  "generated_at": "2026-08-20T07:35:29.084667+00:00",
+  "report_kind": "phase0_d1_r3_completion_trace_action_matrix"
+}

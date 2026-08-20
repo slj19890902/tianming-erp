@@ -1,0 +1,65 @@
+{
+  "candidates": [
+    {
+      "automatic_apply_allowed": false,
+      "candidate_key": "phase0-d1:r2-composite-projection:215ad8eaa362e805c2826937",
+      "classification": "virtual_parent_false_parent_receipt_gate",
+      "component_facts": [
+        {
+          "active_source_count": 1,
+          "component_token": "COMPONENT-d4735e3a265e16ee",
+          "frozen_output_factor": 4,
+          "is_required": true,
+          "posted_receipt_line_count": 1,
+          "posted_receipt_sheet_quantity": 1351,
+          "projected_component_piece_quantity": 5404,
+          "required_piece_quantity": 5400,
+          "required_source_fully_received": true
+        },
+        {
+          "active_source_count": 1,
+          "component_token": "COMPONENT-4e07408562bedb8b",
+          "frozen_output_factor": 4,
+          "is_required": true,
+          "posted_receipt_line_count": 1,
+          "posted_receipt_sheet_quantity": 1801,
+          "projected_component_piece_quantity": 7204,
+          "required_piece_quantity": 7200,
+          "required_source_fully_received": true
+        }
+      ],
+      "item_token": "ITEM-bb0c5a9fd6a46579",
+      "receipt_facts": {
+        "all_required_component_sources_received": true,
+        "parent_linked_receipt_sheet_quantity": 3152
+      },
+      "shape": {
+        "combination_role": "set_parent",
+        "virtual_composite_parent": true
+      },
+      "task_facts": {
+        "task_count": 2,
+        "waiting_material_count": 2
+      }
+    }
+  ],
+  "counts": {
+    "all_waiting_with_posted_receipt": 1,
+    "automatic_apply_allowed": 0,
+    "virtual_parent_false_parent_receipt_gate": 1
+  },
+  "database": {
+    "query_only": 1,
+    "sha256_after": "3e1ba7fbce2d8be2ab76b926af2c2282d046c61130404680f9b4d3024f07dd91",
+    "sha256_before": "3e1ba7fbce2d8be2ab76b926af2c2282d046c61130404680f9b4d3024f07dd91",
+    "total_changes": 0,
+    "write_probe_denied": true
+  },
+  "decision": {
+    "apply_executed": false,
+    "create_duplicate_task": false,
+    "minimal_code_fix": "virtual composite parents do not require a physical parent-board receipt after every required component source is received"
+  },
+  "generated_at": "2026-08-20T07:27:29.481486+00:00",
+  "report_kind": "phase0_d1_r2_composite_receipt_projection"
+}

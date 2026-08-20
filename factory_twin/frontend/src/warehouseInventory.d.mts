@@ -117,6 +117,14 @@ export function singleLocationPallet(
   location?: InventoryProjectionLocation | null
 ): InventoryProjectionPallet | null;
 
+export function employeeLocationName(
+  location?: { location_name?: string | null } | null
+): string;
+
+export function employeeAreaName(
+  area?: { area_name?: string | null; name?: string | null } | null
+): string;
+
 export interface StandardPalletContract {
   contract_version: "standard-pallet-v1";
   width_mm: number;

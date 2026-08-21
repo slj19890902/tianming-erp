@@ -219,6 +219,37 @@ const expect=(value,message)=>{{if(!value)throw new Error(message);}};
     _run_node(script, tmp_path, "p1-73d-task-print-selection.js")
 
 
+def test_composite_reported_component_opens_task_package_and_batch(
+    tmp_path: Path,
+) -> None:
+    candidates = _method_body("reportedProductionCandidates")
+    prepare = _method_body("prepareReportedItemTaskPrint")
+    payload_items = _method_body("productionPrintPayloadItems")
+    script = f"""
+const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
+const calls=[];
+global.axios={{get:async(url)=>{{calls.push(url);return {{data:{{source_type:'composite_bom_requisition',supplier_order_number:'BL-C1',cards:[{{source_identity:'bom:77:whole',selection_fingerprint:'a'.repeat(64),production_task_versions:[{{task_id:501,version:3}}],selection_eligible:true,material_requisition_item_ids:[41],components:[{{material_requisition_item_id:41}}],product_code:'C-41'}}]}}}};}}}};
+const row={{stable_id:'composite_bom_requisition:9:41',source_type:'composite_bom_requisition',status:'已入库',can_print_task:true,document_id:9,document_number:'BL-C1',item_id:41}};
+const vm={{activePage:'requisition',requisitionTab:'submitted',authGeneration:2,user:{{id:8}},reportedItemPrintBusy:false,reportedItemPrintErrors:[],reportedLabelRecoveryUrls:[],productionPrintBatchAttempt:null,productionPrintRecoveryUrl:'',productionPrintSelections:{{}},productionPrintSelectionSequence:0,
+  reportedSelectedItems(){{return [row];}},productionPrintAttemptUncertain(){{return false;}},resetProductionPrintBatchOutcome(){{}},
+  async prepareProductionPrintBatch(){{this.preparedPayload=this.productionPrintPayloadItems(Object.values(this.productionPrintSelections));return true;}},
+  errorMessage(error){{return error.message;}},resetPagePerformanceState(){{throw new Error('unexpected reset');}},
+}};
+vm.reportedProductionCandidates=new Function('orderId','row','data',{json.dumps(candidates, ensure_ascii=False)}).bind(vm);
+vm.productionPrintPayloadItems=new Function('items',{json.dumps(payload_items, ensure_ascii=False)}).bind(vm);
+vm.prepareReportedItemTaskPrint=new AsyncFunction({json.dumps(prepare, ensure_ascii=False)}).bind(vm);
+const expect=(value,message)=>{{if(!value)throw new Error(message);}};
+(async()=>{{
+  expect(await vm.prepareReportedItemTaskPrint()===true,'composite component task was blocked');
+  expect(calls[0]==='/api/requisition/batches/9/production-print-package?item_ids=41','wrong composite task preflight URL');
+  expect(vm.preparedPayload.length===1,'composite task was not prepared once');
+  expect(vm.preparedPayload[0].source_type==='composite_bom_requisition'&&vm.preparedPayload[0].document_id===9,'composite batch identity was lost');
+  expect(!('supplier_order_id' in vm.preparedPayload[0]),'composite task impersonated supplier order');
+}})().catch(error=>{{console.error(error);process.exit(1);}});
+"""
+    _run_node(script, tmp_path, "p1-73d-composite-task-print.js")
+
+
 def test_label_print_requires_every_active_line_of_each_supplier_order(
     tmp_path: Path,
 ) -> None:

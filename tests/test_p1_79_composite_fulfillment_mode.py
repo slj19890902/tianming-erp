@@ -31,6 +31,12 @@ from app.services.production_label_operations import (
 from app.services.production_packaging_label import (
     build_composite_requisition_packaging_label_package,
 )
+from app.services.requisition_production_print import (
+    build_composite_requisition_production_package,
+)
+from app.services.requisition_production_print_batch import (
+    build_selected_production_print_package,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -295,6 +301,128 @@ def test_component_and_parent_delivery_label_plans_are_mutually_exclusive(
         engine.dispose()
 
 
+def test_reported_composite_components_keep_task_and_current_label_printing(
+    tmp_path: Path,
+) -> None:
+    engine = create_sqlite_engine(tmp_path / "p1-79-reported-print.sqlite3")
+    Base.metadata.create_all(engine)
+    try:
+        with Session(engine) as db:
+            requisition, order_item, items = _seed_label_facts(db)
+            for item in items:
+                item.status = "已入库"
+            tasks = db.query(ProductionTask).order_by(ProductionTask.id).all()
+            for task in tasks:
+                task.production_label_enabled_snapshot = False
+                task.production_label_units_per_label_snapshot = None
+                task.production_label_total_quantity_snapshot = 0
+                task.production_label_count_snapshot = 0
+            children = [
+                db.get(
+                    Product,
+                    db.get(
+                        SalesOrderItemBomComponent,
+                        task.sales_order_item_bom_component_id,
+                    ).component_product_id,
+                )
+                for task in tasks
+            ]
+            for product in children:
+                assert product is not None
+                product.production_label_enabled = True
+                product.production_label_units_per_label = 75
+                product.version = int(product.version) + 1
+            db.flush()
+
+            production_package = build_composite_requisition_production_package(
+                db,
+                requisition,
+                selected_item_ids={item.id for item in items},
+            )
+            assert production_package["card_count"] == 2
+            assert [
+                card["material_requisition_item_ids"]
+                for card in production_package["cards"]
+            ] == [[items[0].id], [items[1].id]]
+            assert all(
+                card["selection_eligible"] is True
+                for card in production_package["cards"]
+            )
+            assert [
+                card["production_label_units_per_bundle"]
+                for card in production_package["cards"]
+            ] == [75, 75]
+
+            first_card = production_package["cards"][0]
+            selected_package = build_selected_production_print_package(
+                db,
+                selections=[
+                    {
+                        "source_type": "composite_bom_requisition",
+                        "document_id": requisition.id,
+                        "source_identity": first_card["source_identity"],
+                        "selection_fingerprint": first_card[
+                            "selection_fingerprint"
+                        ],
+                        "task_versions": first_card["production_task_versions"],
+                    }
+                ],
+                orders={},
+                composite_requisitions={requisition.id: requisition},
+                batch_id="a" * 64,
+            )
+            assert selected_package["card_count"] == 1
+            assert selected_package["cards"][0][
+                "material_requisition_item_ids"
+            ] == [items[0].id]
+
+            component_labels = build_composite_requisition_packaging_label_package(
+                db,
+                requisition,
+                selected_item_ids={item.id for item in items},
+            )
+            assert component_labels["review_required"] is False
+            assert [plan["total_quantity"] for plan in component_labels["plans"]] == [
+                5400,
+                7200,
+            ]
+            assert [plan["units_per_label"] for plan in component_labels["plans"]] == [
+                75,
+                75,
+            ]
+            assert [plan["label_count"] for plan in component_labels["plans"]] == [
+                72,
+                96,
+            ]
+
+            order_item.composite_fulfillment_mode_snapshot = "parent_delivery"
+            order_item.parent_production_label_enabled_snapshot = False
+            parent = db.get(Product, order_item.product_id)
+            assert parent is not None
+            parent.production_label_enabled = True
+            parent.production_label_units_per_label = 50
+            parent.version = int(parent.version) + 1
+            parent_labels = build_composite_requisition_packaging_label_package(
+                db,
+                requisition,
+                selected_item_ids={item.id for item in items},
+            )
+            assert parent_labels["review_required"] is False
+            assert len(parent_labels["plans"]) == 1
+            assert parent_labels["plans"][0]["fulfillment_mode"] == "parent_delivery"
+            assert parent_labels["plans"][0]["label_count"] == 36
+
+            items[1].status = "已取消"
+            with pytest.raises(ValueError, match="已取消或失效"):
+                build_composite_requisition_production_package(
+                    db,
+                    requisition,
+                    selected_item_ids={items[1].id},
+                )
+    finally:
+        engine.dispose()
+
+
 def test_order_freezes_product_default_but_allows_one_order_override(
     tmp_path: Path,
 ) -> None:
@@ -397,6 +525,7 @@ def test_reported_ui_and_label_page_expose_composite_group_contract() -> None:
         "组合父件：",
         "撤销整组报料",
         "reportedCompositeGroupSelected",
+        "选择父件标签",
         "composite_group_item_ids",
         "batch_id=",
         "item_ids=",
@@ -406,6 +535,7 @@ def test_reported_ui_and_label_page_expose_composite_group_contract() -> None:
     assert "compositeBatchId" in label_page
     assert "selected_item_ids:compositeItemIds" in label_page
     assert "组合 BOM 必须从父组整组撤销" in api
+    assert 'Product.production_label_enabled.label(' in api
     assert "order_item_id: int | None = Query(default=None, gt=0)" in api
 
 

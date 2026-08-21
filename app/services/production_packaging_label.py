@@ -36,6 +36,7 @@ ALLOWED_TEMPLATE_VERSIONS = frozenset(
         CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION,
     }
 )
+COMPOSITE_PRINTABLE_ITEM_STATUSES = frozenset({"有效", "已入库"})
 
 def _customer_label_fields(
     template_version: str,
@@ -449,11 +450,12 @@ def build_composite_requisition_packaging_label_package(
     inactive_item_ids = sorted(
         item_id
         for item_id in selected_ids
-        if str(item_by_id[item_id].status or "").strip() != "有效"
+        if str(item_by_id[item_id].status or "").strip()
+        not in COMPOSITE_PRINTABLE_ITEM_STATUSES
     )
     if inactive_item_ids:
         raise ProductionPackagingLabelError(
-            f"所选组合报料明细已失效：{inactive_item_ids}"
+            f"所选组合报料明细已取消或失效：{inactive_item_ids}"
         )
     sources = {
         int(source.requisition_item_id): source
@@ -559,7 +561,13 @@ def build_composite_requisition_packaging_label_package(
         if customer is None:
             review_messages.append(f"订单明细 #{order_item_id} 的客户资料不存在")
             continue
-        group_tasks: list[tuple[ProductionTask, SalesOrderItemBomComponent]] = []
+        group_tasks: list[
+            tuple[
+                ProductionTask,
+                SalesOrderItemBomComponent,
+                RequisitionItemBomSource,
+            ]
+        ] = []
         for requisition_item_id in group_item_ids:
             source = sources[requisition_item_id]
             snapshot_id = int(source.sales_order_item_bom_component_id)
@@ -570,7 +578,7 @@ def build_composite_requisition_packaging_label_package(
                     f"报料明细 #{requisition_item_id} 缺少对应生产任务"
                 )
                 continue
-            group_tasks.append((task, snapshot))
+            group_tasks.append((task, snapshot, source))
 
         if mode == "parent_delivery":
             all_group_ids = {
@@ -578,6 +586,8 @@ def build_composite_requisition_packaging_label_package(
                 for row in requisition.items
                 if int(row.order_item_id) == order_item_id
                 and int(row.id) in sources
+                and str(row.status or "").strip()
+                in COMPOSITE_PRINTABLE_ITEM_STATUSES
             }
             if set(group_item_ids) != all_group_ids:
                 review_messages.append(
@@ -595,11 +605,6 @@ def build_composite_requisition_packaging_label_package(
                     f"{order_item.snapshot_product_code or order_item_id} 未启用父件产品标签"
                 )
                 continue
-            if not bool(order_item.parent_production_label_enabled_snapshot):
-                review_messages.append(
-                    f"{order_item.snapshot_product_code or order_item_id} 的父件标签任务快照未启用"
-                )
-                continue
             units_per_label = _positive_int(
                 parent_product.production_label_units_per_label
             )
@@ -612,7 +617,7 @@ def build_composite_requisition_packaging_label_package(
             task_pairs = sorted(group_tasks, key=lambda pair: int(pair[0].id))
             if not task_pairs:
                 continue
-            for task, snapshot in task_pairs:
+            for task, snapshot, _source in task_pairs:
                 append_job_task(task, int(snapshot.component_product_id))
             template_version = str(
                 order_item.parent_production_label_template_version_snapshot
@@ -646,14 +651,18 @@ def build_composite_requisition_packaging_label_package(
                         min(units_per_label, total_quantity - index * units_per_label)
                         for index in range(label_count)
                     ],
-                    "job_task_ids": [int(task.id) for task, _snapshot in task_pairs],
+                    "job_task_ids": [
+                        int(task.id) for task, _snapshot, _source in task_pairs
+                    ],
                     "fulfillment_mode": "parent_delivery",
                     **_customer_label_fields(template_version, customer.chinese_short_name),
                 }
             )
             continue
 
-        for task, snapshot in sorted(group_tasks, key=lambda pair: int(pair[0].id)):
+        for task, snapshot, source in sorted(
+            group_tasks, key=lambda pair: int(pair[0].id)
+        ):
             append_job_task(task, int(snapshot.component_product_id))
             product = products.get(int(snapshot.component_product_id))
             if product is None:
@@ -666,14 +675,12 @@ def build_composite_requisition_packaging_label_package(
                     f"{snapshot.snapshot_component_product_code or snapshot.component_product_id} 未启用子件产品标签"
                 )
                 continue
-            if not bool(task.production_label_enabled_snapshot):
-                review_messages.append(
-                    f"生产任务 #{task.id} 的子件标签任务快照未启用"
-                )
-                continue
-            template_version = str(task.production_label_template_version_snapshot or "")
+            template_version = str(
+                task.production_label_template_version_snapshot
+                or CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION
+            )
             units_per_label = _positive_int(product.production_label_units_per_label)
-            total_quantity = _positive_int(task.production_label_total_quantity_snapshot)
+            total_quantity = _positive_int(source.required_piece_quantity)
             label_count = ceil(total_quantity / units_per_label) if units_per_label else 0
             if (
                 template_version not in ALLOWED_TEMPLATE_VERSIONS

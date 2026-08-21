@@ -169,6 +169,7 @@ from app.services.requisition_quantities import (
     required_piece_quantity,
 )
 from app.services.requisition_production_print import (
+    build_composite_requisition_production_package,
     build_supplier_requisition_production_package,
 )
 from app.services.requisition_production_print_batch import (
@@ -332,7 +333,11 @@ class ProductionPrintTaskVersion(BaseModel):
 
 
 class ProductionPrintBatchItem(BaseModel):
-    supplier_order_id: int = Field(gt=0)
+    source_type: Literal[
+        "supplier_order", "composite_bom_requisition"
+    ] = "supplier_order"
+    document_id: int | None = Field(default=None, gt=0)
+    supplier_order_id: int | None = Field(default=None, gt=0)
     source_identity: str = Field(min_length=1, max_length=160)
     selection_fingerprint: str = Field(min_length=64, max_length=64)
     task_versions: list[ProductionPrintTaskVersion] = Field(min_length=1, max_length=6)
@@ -341,6 +346,27 @@ class ProductionPrintBatchItem(BaseModel):
     @classmethod
     def trim_production_print_item_values(cls, value: str) -> str:
         return value.strip()
+
+    @model_validator(mode="after")
+    def validate_production_print_document_identity(self):
+        if self.source_type == "supplier_order":
+            resolved = self.supplier_order_id or self.document_id
+            if resolved is None:
+                raise ValueError("供应商报料单编号不能为空")
+            if (
+                self.supplier_order_id is not None
+                and self.document_id is not None
+                and self.supplier_order_id != self.document_id
+            ):
+                raise ValueError("供应商报料单编号不一致")
+            self.supplier_order_id = resolved
+            self.document_id = resolved
+            return self
+        if self.document_id is None:
+            raise ValueError("组合报料单编号不能为空")
+        if self.supplier_order_id is not None:
+            raise ValueError("组合报料任务不能冒充供应商报料单")
+        return self
 
 
 class ProductionPrintBatchRequest(BaseModel):
@@ -15659,12 +15685,13 @@ def _build_reported_document_candidates(db: Session, user: User) -> list[dict]:
                     OrderItem.composite_fulfillment_mode_snapshot.label(
                         "composite_fulfillment_mode"
                     ),
-                    OrderItem.parent_production_label_enabled_snapshot.label(
+                    Product.production_label_enabled.label(
                         "parent_label_enabled"
                     ),
                 )
                 .join(Order, Order.id == OrderItem.order_id)
                 .join(Customer, Customer.id == Order.customer_id)
+                .join(Product, Product.id == OrderItem.product_id)
                 .where(OrderItem.id.in_(legacy_order_item_ids))
             ).mappings().all()
         }
@@ -17259,7 +17286,7 @@ def list_reported_items(
         is_current_composite_item = (
             candidate["source_type"] == "composite_bom_requisition"
             and document.get("status") == "已报料"
-            and line.get("status") == "有效"
+            and line.get("status") in {"有效", "已入库"}
             and line.get("order_item_id") is not None
         )
         composite_group_key = None
@@ -17278,7 +17305,7 @@ def list_reported_items(
                 int(document_line["id"])
                 for document_line in document.get("line_items") or []
                 if document_line.get("order_item_id") == line.get("order_item_id")
-                and document_line.get("status") == "有效"
+                and document_line.get("status") in {"有效", "已入库"}
             )
         items.append(
             {
@@ -17316,7 +17343,9 @@ def list_reported_items(
                     is_current_supplier_item
                     and has_permission(user, "requisition.execute")
                 ),
-                "can_print_task": is_current_supplier_item,
+                "can_print_task": (
+                    is_current_supplier_item or is_current_composite_item
+                ),
                 "can_print_label": (
                     is_current_supplier_item or is_current_composite_item
                 ),
@@ -17549,21 +17578,30 @@ def _production_print_batch_details(log: OperationLog) -> dict:
     return details
 
 
-def _production_print_batch_orders(
+def _production_print_batch_sources(
     db: Session,
     user: User,
     selections: list[dict],
-) -> dict[int, SupplierRequisitionOrder]:
+) -> tuple[dict[int, SupplierRequisitionOrder], dict[int, Requisition]]:
     order_ids = sorted(
-        {int(item.get("supplier_order_id") or 0) for item in selections}
+        {
+            int(item.get("supplier_order_id") or 0)
+            for item in selections
+            if str(item.get("source_type") or "supplier_order")
+            == "supplier_order"
+        }
     )
     orders = {
         int(order.id): order
-        for order in db.scalars(
-            select(SupplierRequisitionOrder).where(
-                SupplierRequisitionOrder.id.in_(order_ids)
-            )
-        ).all()
+        for order in (
+            db.scalars(
+                select(SupplierRequisitionOrder).where(
+                    SupplierRequisitionOrder.id.in_(order_ids)
+                )
+            ).all()
+            if order_ids
+            else []
+        )
     }
     if len(orders) != len(order_ids):
         raise HTTPException(
@@ -17572,7 +17610,35 @@ def _production_print_batch_orders(
         )
     for order_id in order_ids:
         _require_supplier_order_customer_access(orders[order_id], user, db)
-    return orders
+    requisition_ids = sorted(
+        {
+            int(item.get("document_id") or 0)
+            for item in selections
+            if item.get("source_type") == "composite_bom_requisition"
+        }
+    )
+    composite_requisitions = {
+        int(row.id): row
+        for row in (
+            db.scalars(
+                select(Requisition)
+                .options(selectinload(Requisition.items))
+                .where(Requisition.id.in_(requisition_ids))
+            ).all()
+            if requisition_ids
+            else []
+        )
+    }
+    if len(composite_requisitions) != len(requisition_ids):
+        raise HTTPException(
+            status_code=409,
+            detail="所选组合生产任务已撤销、作废或不存在，请刷新后重新勾选",
+        )
+    for requisition_id in requisition_ids:
+        _require_requisition_customer_access(
+            composite_requisitions[requisition_id], user, db
+        )
+    return orders, composite_requisitions
 
 
 def _production_print_batch_response(
@@ -17631,11 +17697,14 @@ def prepare_production_print_batch(
                     detail="该批量打印幂等键已用于不同的任务选择",
                 )
             stored_items = canonical_batch_items(details.get("items") or [])
-            orders = _production_print_batch_orders(db, user, stored_items)
+            orders, composite_requisitions = _production_print_batch_sources(
+                db, user, stored_items
+            )
             package = build_selected_production_print_package(
                 db,
                 selections=stored_items,
                 orders=orders,
+                composite_requisitions=composite_requisitions,
                 batch_id=batch_id,
             )
             if package["package_fingerprint"] != details.get(
@@ -17647,11 +17716,14 @@ def prepare_production_print_batch(
                 )
             return _production_print_batch_response(package, replayed=True)
 
-        orders = _production_print_batch_orders(db, user, items)
+        orders, composite_requisitions = _production_print_batch_sources(
+            db, user, items
+        )
         package = build_selected_production_print_package(
             db,
             selections=items,
             orders=orders,
+            composite_requisitions=composite_requisitions,
             batch_id=batch_id,
         )
         append_audit_event(
@@ -17796,11 +17868,14 @@ def get_production_print_batch(
     details = _production_print_batch_details(log)
     try:
         items = canonical_batch_items(details.get("items") or [])
-        orders = _production_print_batch_orders(db, user, items)
+        orders, composite_requisitions = _production_print_batch_sources(
+            db, user, items
+        )
         package = build_selected_production_print_package(
             db,
             selections=items,
             orders=orders,
+            composite_requisitions=composite_requisitions,
             batch_id=normalized_batch_id,
         )
     except ProductionPrintBatchError as error:
@@ -17889,6 +17964,39 @@ def _composite_label_requisition(
     if requisition.status != "已报料":
         raise HTTPException(status_code=409, detail="只有正式有效的组合报料单可以打印产品标签")
     return requisition
+
+
+@router.get("/batches/{batch_id}/production-print-package")
+def get_composite_requisition_production_print_package(
+    batch_id: int,
+    item_ids: str = Query(min_length=1, max_length=1200),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    requisition = _composite_label_requisition(
+        db,
+        batch_id=batch_id,
+        user=user,
+    )
+    try:
+        package = build_composite_requisition_production_package(
+            db,
+            requisition,
+            selected_item_ids=_composite_label_item_ids(item_ids),
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    if not package["card_count"]:
+        raise HTTPException(
+            status_code=409,
+            detail="所选组合报料明细没有可打印的生产任务",
+        )
+    if package["layout_overflow"]:
+        raise HTTPException(
+            status_code=409,
+            detail="组合子件的物理组件超过半页容量，请先核对后再打印",
+        )
+    return package
 
 
 @router.get("/batches/{batch_id}/production-packaging-label-package")

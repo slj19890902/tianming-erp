@@ -855,7 +855,9 @@ def test_print_page_and_erp_entry_use_one_layout_for_plan_and_receipt_phases():
 
     assert "待来料任务单" in index_html
     assert "reportedItemDetail.can_view_supplier_order ? '查看采购单并定位本行' : '查看原单据'" in index_html
-    assert 'row.source_type !== "supplier_order" || row.status !== "active" || row.can_print_task !== true' in index_html
+    assert 'new Set(["supplier_order", "composite_bom_requisition"])' in index_html
+    assert "row.can_print_task !== true" in index_html
+    assert "/production-print-package?item_ids=" in index_html
     assert "/api/requisition/supplier-orders/${orderId}/production-print-package" in index_html
     assert 'window.open(url, "_blank", "noopener")' in index_html
     assert "/requisition-production-print.html" in main_source

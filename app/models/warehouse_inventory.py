@@ -676,6 +676,304 @@ class InventoryPalletItem(Base):
     product: Mapped["Product | None"] = relationship()
 
 
+class WarehouseGroundLayoutPlan(Base):
+    """One versioned ground-slot numbering plan for a published measured area."""
+
+    __tablename__ = "warehouse_ground_layout_plans"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('draft','published')",
+            name="ck_warehouse_ground_layout_plans_status",
+        ),
+        CheckConstraint(
+            "numbering_origin IN ('south','north','west','east')",
+            name="ck_warehouse_ground_layout_plans_origin",
+        ),
+        CheckConstraint(
+            "row_direction IN ('from_aisle_inward','from_inside_outward')",
+            name="ck_warehouse_ground_layout_plans_row_direction",
+        ),
+        CheckConstraint(
+            "slot_direction IN ('left_to_right','right_to_left')",
+            name="ck_warehouse_ground_layout_plans_slot_direction",
+        ),
+        CheckConstraint(
+            "target_slot_count > 0 AND target_slot_count <= 500",
+            name="ck_warehouse_ground_layout_plans_target_count",
+        ),
+        CheckConstraint(
+            "row_start_no BETWEEN 1 AND 99 AND slot_start_no BETWEEN 1 AND 99",
+            name="ck_warehouse_ground_layout_plans_number_starts",
+        ),
+        CheckConstraint(
+            "version > 0",
+            name="ck_warehouse_ground_layout_plans_version",
+        ),
+        CheckConstraint(
+            "length(preview_fingerprint) = 64",
+            name="ck_warehouse_ground_layout_plans_preview_fingerprint",
+        ),
+        CheckConstraint(
+            "(status = 'draft' AND published_map_revision IS NULL "
+            "AND publish_idempotency_key IS NULL AND publish_request_hash IS NULL "
+            "AND published_by IS NULL AND published_at IS NULL) OR "
+            "(status = 'published' AND published_map_revision IS NOT NULL "
+            "AND length(trim(publish_idempotency_key)) > 0 "
+            "AND length(publish_request_hash) = 64 "
+            "AND published_by IS NOT NULL AND published_at IS NOT NULL)",
+            name="ck_warehouse_ground_layout_plans_publish_facts",
+        ),
+        UniqueConstraint("area_id", name="uq_warehouse_ground_layout_plans_area"),
+        UniqueConstraint(
+            "publish_idempotency_key",
+            name="uq_warehouse_ground_layout_plans_publish_idem",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    area_id: Mapped[int] = mapped_column(
+        ForeignKey("warehouse_areas.id", ondelete="RESTRICT"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), default="draft", server_default="draft", nullable=False
+    )
+    target_slot_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    numbering_origin: Mapped[str] = mapped_column(String(20), nullable=False)
+    row_direction: Mapped[str] = mapped_column(String(30), nullable=False)
+    slot_direction: Mapped[str] = mapped_column(String(20), nullable=False)
+    row_start_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    slot_start_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    draft_map_revision: Mapped[str] = mapped_column(String(64), nullable=False)
+    published_map_revision: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    preview_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    version: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1", nullable=False
+    )
+    publish_idempotency_key: Mapped[str | None] = mapped_column(
+        String(120), nullable=True
+    )
+    publish_request_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    updated_by: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    published_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    area: Mapped["WarehouseArea"] = relationship()
+    slots: Mapped[list["WarehouseGroundLayoutSlot"]] = relationship(
+        back_populates="plan", cascade="all, delete-orphan", order_by="WarehouseGroundLayoutSlot.route_sequence"
+    )
+
+
+class WarehouseGroundLayoutSlot(Base):
+    """Measured 1200x1000 footprint associated with one stable location."""
+
+    __tablename__ = "warehouse_ground_layout_slots"
+    __table_args__ = (
+        CheckConstraint("route_sequence > 0", name="ck_warehouse_ground_layout_slots_route"),
+        CheckConstraint(
+            "row_no BETWEEN 1 AND 99 AND slot_no BETWEEN 1 AND 99",
+            name="ck_warehouse_ground_layout_slots_address",
+        ),
+        CheckConstraint(
+            "((width_mm = 1200 AND depth_mm = 1000) OR "
+            "(width_mm = 1000 AND depth_mm = 1200))",
+            name="ck_warehouse_ground_layout_slots_standard_size",
+        ),
+        UniqueConstraint("location_id", name="uq_warehouse_ground_layout_slots_location"),
+        UniqueConstraint(
+            "plan_id", "route_sequence", name="uq_warehouse_ground_layout_slots_route"
+        ),
+        UniqueConstraint(
+            "plan_id", "row_no", "slot_no", name="uq_warehouse_ground_layout_slots_address"
+        ),
+        Index("ix_warehouse_ground_layout_slots_plan", "plan_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    plan_id: Mapped[int] = mapped_column(
+        ForeignKey("warehouse_ground_layout_plans.id", ondelete="RESTRICT"), nullable=False
+    )
+    location_id: Mapped[int] = mapped_column(
+        ForeignKey("warehouse_locations.id", ondelete="RESTRICT"), nullable=False
+    )
+    route_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    row_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    slot_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    x_mm: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
+    y_mm: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
+    width_mm: Mapped[int] = mapped_column(Integer, nullable=False)
+    depth_mm: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    plan: Mapped["WarehouseGroundLayoutPlan"] = relationship(back_populates="slots")
+    location: Mapped["WarehouseLocation"] = relationship()
+
+
+class WarehouseGroundOccupancy(Base):
+    """Spatial footprint for one pallet; InventoryLot remains the quantity ledger."""
+
+    __tablename__ = "warehouse_ground_occupancies"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active','released')",
+            name="ck_warehouse_ground_occupancies_status",
+        ),
+        CheckConstraint(
+            "footprint_kind IN ('single','double')",
+            name="ck_warehouse_ground_occupancies_footprint",
+        ),
+        CheckConstraint(
+            "capacity_quantity > 0",
+            name="ck_warehouse_ground_occupancies_capacity",
+        ),
+        CheckConstraint("version > 0", name="ck_warehouse_ground_occupancies_version"),
+        Index(
+            "uq_warehouse_ground_occupancies_active_pallet",
+            "pallet_id",
+            unique=True,
+            sqlite_where=text("status = 'active'"),
+            postgresql_where=text("status = 'active'"),
+        ),
+        Index("ix_warehouse_ground_occupancies_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    pallet_id: Mapped[int] = mapped_column(
+        ForeignKey("inventory_pallets.id", ondelete="RESTRICT"), nullable=False
+    )
+    primary_location_id: Mapped[int] = mapped_column(
+        ForeignKey("warehouse_locations.id", ondelete="RESTRICT"), nullable=False
+    )
+    customer_id: Mapped[int] = mapped_column(
+        ForeignKey("customers.id", ondelete="RESTRICT"), nullable=False
+    )
+    product_id: Mapped[int] = mapped_column(
+        ForeignKey("products.id", ondelete="RESTRICT"), nullable=False
+    )
+    footprint_kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    capacity_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), default="active", server_default="active", nullable=False
+    )
+    version: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1", nullable=False
+    )
+    created_by: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    released_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+    released_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    pallet: Mapped["InventoryPallet"] = relationship()
+    primary_location: Mapped["WarehouseLocation"] = relationship()
+    slots: Mapped[list["WarehouseGroundOccupancySlot"]] = relationship(
+        back_populates="occupancy", cascade="all, delete-orphan", order_by="WarehouseGroundOccupancySlot.slot_sequence"
+    )
+
+
+class WarehouseGroundOccupancySlot(Base):
+    """One active/released ground slot belonging to a single spatial occupancy."""
+
+    __tablename__ = "warehouse_ground_occupancy_slots"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active','released')",
+            name="ck_warehouse_ground_occupancy_slots_status",
+        ),
+        CheckConstraint(
+            "slot_sequence IN (1,2)",
+            name="ck_warehouse_ground_occupancy_slots_sequence",
+        ),
+        UniqueConstraint(
+            "occupancy_id", "slot_sequence", name="uq_warehouse_ground_occupancy_slots_sequence"
+        ),
+        UniqueConstraint(
+            "occupancy_id", "location_id", name="uq_warehouse_ground_occupancy_slots_location"
+        ),
+        Index(
+            "uq_warehouse_ground_occupancy_slots_active_location",
+            "location_id",
+            unique=True,
+            sqlite_where=text("status = 'active'"),
+            postgresql_where=text("status = 'active'"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    occupancy_id: Mapped[int] = mapped_column(
+        ForeignKey("warehouse_ground_occupancies.id", ondelete="RESTRICT"), nullable=False
+    )
+    location_id: Mapped[int] = mapped_column(
+        ForeignKey("warehouse_locations.id", ondelete="RESTRICT"), nullable=False
+    )
+    slot_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), default="active", server_default="active", nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+    released_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    occupancy: Mapped["WarehouseGroundOccupancy"] = relationship(back_populates="slots")
+    location: Mapped["WarehouseLocation"] = relationship()
+
+
+class WarehouseGroundPlacementMutation(Base):
+    """Immutable idempotency fact for one map-selected placement transaction."""
+
+    __tablename__ = "warehouse_ground_placement_mutations"
+    __table_args__ = (
+        CheckConstraint(
+            "operation IN ('finished_inbound','lot_transfer','pallet_move')",
+            name="ck_warehouse_ground_placement_mutations_operation",
+        ),
+        CheckConstraint(
+            "length(trim(idempotency_key)) > 0 AND length(request_hash) = 64",
+            name="ck_warehouse_ground_placement_mutations_request",
+        ),
+        UniqueConstraint(
+            "idempotency_key", name="uq_warehouse_ground_placement_mutations_idem"
+        ),
+        Index(
+            "ix_warehouse_ground_placement_mutations_occupancy",
+            "occupancy_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    actor_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    operation: Mapped[str] = mapped_column(String(24), nullable=False)
+    source_lot_id: Mapped[int | None] = mapped_column(
+        ForeignKey("inventory_lots.id", ondelete="RESTRICT"), nullable=True
+    )
+    result_lot_id: Mapped[int] = mapped_column(
+        ForeignKey("inventory_lots.id", ondelete="RESTRICT"), nullable=False
+    )
+    occupancy_id: Mapped[int] = mapped_column(
+        ForeignKey("warehouse_ground_occupancies.id", ondelete="RESTRICT"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+
+
 class InventoryLocationMovement(Base):
     __tablename__ = "inventory_location_movements"
     __table_args__ = (

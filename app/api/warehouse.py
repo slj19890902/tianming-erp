@@ -88,6 +88,11 @@ from app.models.warehouse_inventory import (
     WarehouseArea,
     WarehouseAreaStoragePolicy,
     WarehouseFloor,
+    WarehouseGroundLayoutPlan,
+    WarehouseGroundLayoutSlot,
+    WarehouseGroundOccupancy,
+    WarehouseGroundOccupancySlot,
+    WarehouseGroundPlacementMutation,
     WarehouseLocation,
     WarehouseLocationAlias,
 )
@@ -95,6 +100,7 @@ from app.services.floor3_locations import (
     Floor3LocationError,
     add_pallet_item,
     adjust_area_location_count,
+    bind_finished_lot_to_floor3_pallet,
     clear_pallet,
     convert_snapshot_to_finished_lot,
     create_pallet,
@@ -213,7 +219,20 @@ from app.services.warehouse_inventory import (
     replace_semi_finished_lot_allowed_products,
     semi_finished_lot_allowed_product_ids,
     transfer_staging_finished_lot,
+    transfer_finished_lot_between_locations,
     void_semi_finished_lot,
+)
+from app.services.warehouse_ground_slots import (
+    WarehouseGroundSlotError,
+    active_ground_occupancy_for_location,
+    build_ground_slot_preview,
+    canonical_hash as ground_canonical_hash,
+    ground_candidate_rows,
+    ground_occupancy_payload,
+    ground_preview_fingerprint,
+    ground_slots_adjacent,
+    occupancy_physical_quantity,
+    published_ground_plan,
 )
 from app.services.warehouse_movement_batch import (
     BATCH_AUDIT_ACTION_CODE,
@@ -271,6 +290,7 @@ from app.services.mold_label_template import (
     mold_label_template_label,
 )
 from app.services.location_candidates import (
+    claim_active_placed_location,
     list_operational_locations,
     operational_location_issue,
     operational_location_payload,
@@ -342,6 +362,7 @@ from app.services.printing_plate_resin_reuse import (
 
 
 router = APIRouter()
+GROUND_STORAGE_TRANSACTION_LOCK = Lock()
 _MOLD_CODE_WRITE_LOCK = Lock()
 # Configuration/master-data operations have no N028 permission equivalent and
 # intentionally retain their legacy admin-only boundary.
@@ -1181,6 +1202,101 @@ class AreaLocationAutoArrangePayload(BaseModel):
         ):
             raise ValueError("货位编号和布局版本必须为正整数")
         return value
+
+
+class GroundLayoutDraftPayload(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    target_slot_count: int = Field(ge=1, le=500)
+    numbering_origin: Literal["south", "north", "west", "east"]
+    row_direction: Literal["from_aisle_inward", "from_inside_outward"]
+    slot_direction: Literal["left_to_right", "right_to_left"]
+    row_start_no: int = Field(default=1, ge=1, le=99)
+    slot_start_no: int = Field(default=1, ge=1, le=99)
+    expected_policy_version: int = Field(gt=0)
+    expected_map_revision: str = Field(min_length=1, max_length=64)
+    expected_plan_version: int | None = Field(default=None, gt=0)
+
+
+class GroundLayoutPublishPayload(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    expected_plan_version: int = Field(gt=0)
+    preview_fingerprint: str = Field(min_length=64, max_length=64)
+    idempotency_key: str = Field(min_length=1, max_length=120)
+
+    @field_validator("preview_fingerprint", "idempotency_key")
+    @classmethod
+    def strip_ground_publish_text(cls, value: str) -> str:
+        return value.strip()
+
+
+class GroundFinishedInboundPayload(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    location_id: int = Field(gt=0)
+    expected_layout_version: int = Field(gt=0)
+    secondary_location_id: int | None = Field(default=None, gt=0)
+    expected_secondary_layout_version: int | None = Field(default=None, gt=0)
+    customer_id: int = Field(gt=0)
+    product_id: int = Field(gt=0)
+    quantity: int = Field(gt=0)
+    capacity_quantity: int = Field(gt=0)
+    stock_date: date
+    idempotency_key: str = Field(min_length=1, max_length=120)
+    remarks: str | None = Field(default=None, max_length=500)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def strip_ground_inbound_key(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("remarks")
+    @classmethod
+    def strip_ground_inbound_remarks(cls, value: str | None) -> str | None:
+        return (value or "").strip() or None
+
+    @model_validator(mode="after")
+    def validate_ground_inbound_footprint(self) -> "GroundFinishedInboundPayload":
+        if (self.secondary_location_id is None) != (
+            self.expected_secondary_layout_version is None
+        ):
+            raise ValueError("大型货物的第二位置与布局版本必须同时提供")
+        if self.secondary_location_id == self.location_id:
+            raise ValueError("大型货物必须选择两个不同的相邻位置")
+        if self.capacity_quantity < self.quantity:
+            raise ValueError("位置容量不能小于本次入库数量")
+        return self
+
+
+class GroundFinishedTransferPayload(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    location_id: int = Field(gt=0)
+    expected_layout_version: int = Field(gt=0)
+    secondary_location_id: int | None = Field(default=None, gt=0)
+    expected_secondary_layout_version: int | None = Field(default=None, gt=0)
+    expected_lot_version: int = Field(gt=0)
+    quantity: int = Field(gt=0)
+    capacity_quantity: int = Field(gt=0)
+    idempotency_key: str = Field(min_length=1, max_length=120)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def strip_ground_transfer_key(cls, value: str) -> str:
+        return value.strip()
+
+    @model_validator(mode="after")
+    def validate_ground_transfer_footprint(self) -> "GroundFinishedTransferPayload":
+        if (self.secondary_location_id is None) != (
+            self.expected_secondary_layout_version is None
+        ):
+            raise ValueError("大型货物的第二位置与布局版本必须同时提供")
+        if self.secondary_location_id == self.location_id:
+            raise ValueError("大型货物必须选择两个不同的相邻位置")
+        if self.capacity_quantity < self.quantity:
+            raise ValueError("位置容量不能小于本次转位数量")
+        return self
 
 
 class Floor3LayoutSlotStatePayload(BaseModel):
@@ -4304,6 +4420,970 @@ def _reflow_area_locations(
     }
 
 
+def _ground_layout_context(
+    db: Session, *, floor_code: str, area_code: str
+) -> tuple[WarehouseFloor, WarehouseArea, WarehouseAreaStoragePolicy]:
+    floor, area, policy = formal_area(
+        db,
+        floor_code=floor_code.strip().upper(),
+        area_code=area_code.strip().upper(),
+    )
+    if (
+        floor.construction_status != "enabled"
+        or area.construction_status != "enabled"
+        or policy.status != "published"
+        or policy.storage_layout not in {"pallet_ground", "mixed"}
+        or "finished" not in set(policy_inventory_types(policy))
+    ):
+        raise WarehouseGroundSlotError(
+            "GROUND_AREA_NOT_OPERATIONAL",
+            "只有已启用、已发布且允许成品地堆的区域可以维护排位。",
+        )
+    if not area.address_zone_code or not area.address_subzone_no:
+        raise WarehouseGroundSlotError(
+            "GROUND_AREA_ADDRESS_REQUIRED",
+            "请先按 P1-86 为区域确认 A～G 大区和两位数子区。",
+        )
+    return floor, area, policy
+
+
+def _ground_plan_configuration(plan: WarehouseGroundLayoutPlan) -> dict:
+    return {
+        "target_slot_count": plan.target_slot_count,
+        "numbering_origin": plan.numbering_origin,
+        "row_direction": plan.row_direction,
+        "slot_direction": plan.slot_direction,
+        "row_start_no": plan.row_start_no,
+        "slot_start_no": plan.slot_start_no,
+    }
+
+
+def _ground_preview_for_plan(
+    plan: WarehouseGroundLayoutPlan,
+    *,
+    floor: WarehouseFloor,
+    area: WarehouseArea,
+    policy: WarehouseAreaStoragePolicy,
+    floor_layout: dict,
+) -> tuple[list[dict], str]:
+    slots = build_ground_slot_preview(
+        floor_layout,
+        feature_id=policy.map_feature_id,
+        floor_number=floor.floor_number,
+        zone_code=str(area.address_zone_code),
+        subzone_no=int(area.address_subzone_no),
+        **_ground_plan_configuration(plan),
+    )
+    fingerprint = ground_preview_fingerprint(
+        area_id=area.id,
+        policy_version=policy.version,
+        map_revision=str(policy.published_map_revision or ""),
+        configuration=_ground_plan_configuration(plan),
+        slots=slots,
+    )
+    return slots, fingerprint
+
+
+def _ground_published_plan_payload(
+    db: Session,
+    plan: WarehouseGroundLayoutPlan,
+    *,
+    replayed: bool,
+) -> dict:
+    current = db.scalar(
+        select(WarehouseGroundLayoutPlan)
+        .where(WarehouseGroundLayoutPlan.id == plan.id)
+        .options(
+            selectinload(WarehouseGroundLayoutPlan.slots)
+            .selectinload(WarehouseGroundLayoutSlot.location)
+            .selectinload(WarehouseLocation.floor3_layout)
+        )
+        .execution_options(populate_existing=True)
+    )
+    assert current is not None
+    return {
+        "plan_id": current.id,
+        "plan_version": current.version,
+        "status": current.status,
+        "preview_fingerprint": current.preview_fingerprint,
+        "published_map_revision": current.published_map_revision,
+        "idempotent_replay": replayed,
+        "writes_inventory": False,
+        "slots": [
+            {
+                "location_id": row.location_id,
+                "location_name": row.location.location_name,
+                "row_no": row.row_no,
+                "slot_no": row.slot_no,
+                "route_sequence": row.route_sequence,
+                "layout_version": int(row.location.floor3_layout.version),
+                "width_mm": row.width_mm,
+                "depth_mm": row.depth_mm,
+            }
+            for row in current.slots
+        ],
+    }
+
+
+@router.post("/ground-layout/floors/{floor_code}/areas/{area_code}/draft")
+def save_ground_layout_draft(
+    floor_code: str,
+    area_code: str,
+    payload: GroundLayoutDraftPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    with GROUND_STORAGE_TRANSACTION_LOCK:
+        try:
+            floor, area, policy = _ground_layout_context(
+                db, floor_code=floor_code, area_code=area_code
+            )
+            if policy.version != payload.expected_policy_version:
+                raise WarehouseGroundSlotError(
+                    "GROUND_POLICY_STALE", "区域设置已变化，请刷新后重试。"
+                )
+            if policy.published_map_revision != payload.expected_map_revision:
+                raise WarehouseGroundSlotError(
+                    "GROUND_MAP_STALE", "正式地图版本已变化，请刷新后重试。"
+                )
+            floor_layout = load_warehouse_twin_floor(floor.floor_code)
+            if str(floor_layout.get("revision") or "") != payload.expected_map_revision:
+                raise WarehouseGroundSlotError(
+                    "GROUND_MAP_STALE", "地图文件与区域发布版本不一致，请先重新发布地图。"
+                )
+            configuration = {
+                key: value
+                for key, value in payload.model_dump().items()
+                if key
+                in {
+                    "target_slot_count",
+                    "numbering_origin",
+                    "row_direction",
+                    "slot_direction",
+                    "row_start_no",
+                    "slot_start_no",
+                }
+            }
+            slots = build_ground_slot_preview(
+                floor_layout,
+                feature_id=policy.map_feature_id,
+                floor_number=floor.floor_number,
+                zone_code=str(area.address_zone_code),
+                subzone_no=int(area.address_subzone_no),
+                **configuration,
+            )
+            fingerprint = ground_preview_fingerprint(
+                area_id=area.id,
+                policy_version=policy.version,
+                map_revision=payload.expected_map_revision,
+                configuration=configuration,
+                slots=slots,
+            )
+            plan = db.scalar(
+                select(WarehouseGroundLayoutPlan)
+                .where(WarehouseGroundLayoutPlan.area_id == area.id)
+                .with_for_update()
+            )
+            if plan is not None and plan.status == "published":
+                raise WarehouseGroundSlotError(
+                    "GROUND_LAYOUT_ALREADY_PUBLISHED",
+                    "该区域已发布地堆排位；为保护占用与历史，请通过后续变更流程调整。",
+                )
+            now = beijing_now_naive()
+            if plan is None:
+                if payload.expected_plan_version is not None:
+                    raise WarehouseGroundSlotError(
+                        "GROUND_PLAN_STALE", "地堆排位草稿不存在，请刷新后重试。"
+                    )
+                plan = WarehouseGroundLayoutPlan(
+                    area_id=area.id,
+                    status="draft",
+                    draft_map_revision=payload.expected_map_revision,
+                    preview_fingerprint=fingerprint,
+                    version=1,
+                    updated_by=user.id,
+                    **configuration,
+                )
+                db.add(plan)
+            else:
+                if payload.expected_plan_version != plan.version:
+                    raise WarehouseGroundSlotError(
+                        "GROUND_PLAN_STALE", "地堆排位草稿已变化，请刷新后重试。"
+                    )
+                for key, value in configuration.items():
+                    setattr(plan, key, value)
+                plan.draft_map_revision = payload.expected_map_revision
+                plan.preview_fingerprint = fingerprint
+                plan.version += 1
+                plan.updated_by = user.id
+                plan.updated_at = now
+            db.flush()
+            db.commit()
+            return {
+                "plan_id": plan.id,
+                "plan_version": plan.version,
+                "status": "draft",
+                "preview_fingerprint": fingerprint,
+                "writes_inventory": False,
+                "writes_pallets": False,
+                "slots": slots,
+                "message": "地堆排位预览已保存；尚未发布，不可用于入库或转位。",
+            }
+        except (WarehouseGroundSlotError, WarehouseAreaActivationError) as error:
+            db.rollback()
+            raise HTTPException(
+                status_code=getattr(error, "status_code", 409),
+                detail={"code": getattr(error, "code", "GROUND_LAYOUT_INVALID"), "message": str(error)},
+            ) from error
+        except IntegrityError as error:
+            db.rollback()
+            raise HTTPException(status_code=409, detail="地堆排位草稿发生并发冲突，请刷新后重试") from error
+
+
+@router.post("/ground-layout/floors/{floor_code}/areas/{area_code}/publish")
+def publish_ground_layout(
+    floor_code: str,
+    area_code: str,
+    payload: GroundLayoutPublishPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    with GROUND_STORAGE_TRANSACTION_LOCK:
+        try:
+            floor, area, policy = _ground_layout_context(
+                db, floor_code=floor_code, area_code=area_code
+            )
+            plan = db.scalar(
+                select(WarehouseGroundLayoutPlan)
+                .where(WarehouseGroundLayoutPlan.area_id == area.id)
+                .with_for_update()
+            )
+            if plan is None:
+                raise WarehouseGroundSlotError(
+                    "GROUND_LAYOUT_DRAFT_REQUIRED", "请先保存地堆排位预览。", status_code=404
+                )
+            request_hash = ground_canonical_hash(
+                {
+                    "plan_id": plan.id,
+                    "expected_plan_version": payload.expected_plan_version,
+                    "preview_fingerprint": payload.preview_fingerprint,
+                }
+            )
+            if plan.status == "published":
+                if (
+                    plan.publish_idempotency_key == payload.idempotency_key
+                    and plan.publish_request_hash == request_hash
+                    and plan.published_by == user.id
+                ):
+                    return _ground_published_plan_payload(db, plan, replayed=True)
+                raise WarehouseGroundSlotError(
+                    "GROUND_LAYOUT_ALREADY_PUBLISHED", "该区域地堆排位已经发布。"
+                )
+            if plan.version != payload.expected_plan_version:
+                raise WarehouseGroundSlotError(
+                    "GROUND_PLAN_STALE", "地堆排位草稿已变化，请刷新后重试。"
+                )
+            if plan.preview_fingerprint != payload.preview_fingerprint:
+                raise WarehouseGroundSlotError(
+                    "GROUND_PREVIEW_TAMPERED", "地堆排位预览校验值不一致，请重新生成预览。"
+                )
+            floor_layout = load_warehouse_twin_floor(floor.floor_code)
+            slots, fingerprint = _ground_preview_for_plan(
+                plan,
+                floor=floor,
+                area=area,
+                policy=policy,
+                floor_layout=floor_layout,
+            )
+            if (
+                str(floor_layout.get("revision") or "") != plan.draft_map_revision
+                or policy.published_map_revision != plan.draft_map_revision
+                or fingerprint != plan.preview_fingerprint
+            ):
+                raise WarehouseGroundSlotError(
+                    "GROUND_PREVIEW_STALE", "区域、地图或排位预览已变化，请重新生成。"
+                )
+            existing_managed = int(
+                db.scalar(
+                    select(func.count(WarehouseGroundLayoutSlot.id))
+                    .join(WarehouseGroundLayoutPlan)
+                    .where(WarehouseGroundLayoutPlan.area_id == area.id)
+                )
+                or 0
+            )
+            if existing_managed:
+                raise WarehouseGroundSlotError(
+                    "GROUND_LAYOUT_ALREADY_MATERIALIZED", "该区域已有地堆排位位置，禁止重复生成。"
+                )
+            created_locations: list[WarehouseLocation] = []
+            for slot in slots:
+                location = WarehouseLocation(
+                    location_code=slot["location_code"],
+                    location_name=slot["location_name"],
+                    warehouse_type="finished",
+                    is_active=True,
+                    warehouse_floor=floor.floor_number,
+                    area_code=area.area_code,
+                    storage_type="ground",
+                    sort_order=int(slot["route_sequence"]),
+                    is_temporary=False,
+                    source_version="TWIN_V1",
+                    address_kind="ground_slot",
+                    address_area_id=area.id,
+                    ground_row_no=int(slot["row_no"]),
+                    slot_no=int(slot["slot_no"]),
+                    address_version=1,
+                    placement_status="placed",
+                )
+                location.floor3_layout = Floor3LocationLayout(
+                    left_pct=Decimal(str(slot["left_pct"])),
+                    top_pct=Decimal(str(slot["top_pct"])),
+                    width_pct=Decimal(str(slot["width_pct"])),
+                    height_pct=Decimal(str(slot["height_pct"])),
+                    z_index=int(slot["route_sequence"]),
+                    version=1,
+                    source_type="seeded",
+                    layout_kind="physical_pallet",
+                    created_by=user.id,
+                    updated_by=user.id,
+                )
+                db.add(location)
+                db.flush()
+                db.add(
+                    WarehouseGroundLayoutSlot(
+                        plan_id=plan.id,
+                        location_id=location.id,
+                        route_sequence=int(slot["route_sequence"]),
+                        row_no=int(slot["row_no"]),
+                        slot_no=int(slot["slot_no"]),
+                        x_mm=Decimal(str(slot["x_mm"])),
+                        y_mm=Decimal(str(slot["y_mm"])),
+                        width_mm=int(slot["width_mm"]),
+                        depth_mm=int(slot["depth_mm"]),
+                    )
+                )
+                created_locations.append(location)
+            now = beijing_now_naive()
+            plan.status = "published"
+            plan.published_map_revision = plan.draft_map_revision
+            plan.publish_idempotency_key = payload.idempotency_key
+            plan.publish_request_hash = request_hash
+            plan.published_by = user.id
+            plan.published_at = now
+            plan.updated_at = now
+            plan.version += 1
+            area.planned_location_count = len(created_locations)
+            area.planned_pallet_capacity = max(
+                int(area.planned_pallet_capacity or 0), len(created_locations)
+            )
+            policy.version += 1
+            policy.updated_by = user.id
+            policy.updated_at = now
+            append_audit_event(
+                db,
+                request=request,
+                actor=user,
+                event_category="business",
+                result="success",
+                source="web",
+                module_code="warehouse",
+                action_code="warehouse.ground_layout.publish",
+                legacy_action="PUBLISH_GROUND_LAYOUT",
+                resource="WarehouseGroundLayoutPlan",
+                entity_type="warehouse_ground_layout_plan",
+                entity_id=plan.id,
+                object_ref=f"ground-layout:{floor.floor_code}:{area.area_code}",
+                description="发布实测地堆排位",
+                details={
+                    "slot_count": len(created_locations),
+                    "location_ids": [row.id for row in created_locations],
+                    "preview_fingerprint": plan.preview_fingerprint,
+                    "inventory_changed": False,
+                    "pallet_changed": False,
+                },
+            )
+            db.flush()
+            db.commit()
+            return _ground_published_plan_payload(db, plan, replayed=False)
+        except (WarehouseGroundSlotError, WarehouseAreaActivationError) as error:
+            db.rollback()
+            raise HTTPException(
+                status_code=getattr(error, "status_code", 409),
+                detail={"code": getattr(error, "code", "GROUND_LAYOUT_INVALID"), "message": str(error)},
+            ) from error
+        except IntegrityError as error:
+            db.rollback()
+            raise HTTPException(status_code=409, detail="地堆排位发布发生重码或并发冲突，请刷新后重试") from error
+
+
+@router.get("/ground-storage/candidates")
+def list_ground_storage_candidates(
+    floor_code: str,
+    area_code: str,
+    customer_id: int = Query(gt=0),
+    product_id: int = Query(gt=0),
+    incoming_quantity: int = Query(gt=0),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    require_customer_access(customer_id, user, db)
+    product = db.get(Product, product_id)
+    if product is None or product.deleted_at is not None or product.customer_id != customer_id:
+        raise HTTPException(status_code=409, detail="所选产品不属于当前客户或已停用")
+    try:
+        plan = published_ground_plan(
+            db, floor_code=floor_code, area_code=area_code
+        )
+        items = ground_candidate_rows(
+            db,
+            plan=plan,
+            customer_id=customer_id,
+            product_id=product_id,
+            incoming_quantity=incoming_quantity,
+            can_view_occupied_details=has_unrestricted_customer_access(user, db),
+        )
+        return {
+            "floor_name": plan.area.floor.floor_name,
+            "area_name": plan.area.area_name,
+            "plan_version": plan.version,
+            "published_map_revision": plan.published_map_revision,
+            "incoming_quantity": incoming_quantity,
+            "legend": {
+                "empty": {"color": "green", "label": "空位，可存放"},
+                "same_product": {"color": "blue", "label": "同款可共位（人工选择）"},
+                "unavailable": {"color": "gray", "label": "未发布、用途不符或容量不足"},
+                "conflict": {"color": "red", "label": "冲突，不可选择"},
+            },
+            "items": items,
+        }
+    except WarehouseGroundSlotError as error:
+        raise HTTPException(
+            status_code=error.status_code,
+            detail={"code": error.code, "message": error.message},
+        ) from error
+
+
+def _ground_slot_for_location(
+    db: Session, location_id: int
+) -> tuple[WarehouseGroundLayoutPlan, WarehouseGroundLayoutSlot]:
+    slot = db.scalar(
+        select(WarehouseGroundLayoutSlot)
+        .where(WarehouseGroundLayoutSlot.location_id == location_id)
+        .options(
+            selectinload(WarehouseGroundLayoutSlot.plan)
+            .selectinload(WarehouseGroundLayoutPlan.area)
+            .selectinload(WarehouseArea.floor),
+            selectinload(WarehouseGroundLayoutSlot.plan)
+            .selectinload(WarehouseGroundLayoutPlan.area)
+            .selectinload(WarehouseArea.storage_policy),
+            selectinload(WarehouseGroundLayoutSlot.location)
+            .selectinload(WarehouseLocation.floor3_layout),
+        )
+    )
+    if slot is None or slot.plan.status != "published":
+        raise WarehouseGroundSlotError(
+            "GROUND_TARGET_NOT_PUBLISHED", "所选位置不是已发布地堆排位。", status_code=404
+        )
+    plan = published_ground_plan(
+        db,
+        floor_code=slot.plan.area.floor.floor_code,
+        area_code=slot.plan.area.area_code,
+    )
+    slot = next(row for row in plan.slots if row.location_id == location_id)
+    return plan, slot
+
+
+def _ground_mutation_replay(
+    db: Session,
+    *,
+    idempotency_key: str,
+    request_hash: str,
+    actor_user_id: int,
+) -> tuple[WarehouseGroundPlacementMutation | None, dict | None]:
+    mutation = db.scalar(
+        select(WarehouseGroundPlacementMutation).where(
+            WarehouseGroundPlacementMutation.idempotency_key == idempotency_key
+        )
+    )
+    if mutation is None:
+        return None, None
+    if mutation.request_hash != request_hash or mutation.actor_user_id != actor_user_id:
+        raise WarehouseGroundSlotError(
+            "GROUND_IDEMPOTENCY_CONFLICT", "同一请求标识已用于其他地图存放业务。"
+        )
+    occupancy = db.scalar(
+        select(WarehouseGroundOccupancy)
+        .where(WarehouseGroundOccupancy.id == mutation.occupancy_id)
+        .options(
+            selectinload(WarehouseGroundOccupancy.slots),
+            selectinload(WarehouseGroundOccupancy.pallet)
+            .selectinload(InventoryPallet.items)
+            .selectinload(InventoryPalletItem.inventory_lot),
+        )
+    )
+    lot = db.get(InventoryLot, mutation.result_lot_id)
+    if occupancy is None or lot is None:
+        raise WarehouseGroundSlotError(
+            "GROUND_REPLAY_FACT_MISSING", "地图存放重放事实不完整，请管理员核对。"
+        )
+    return mutation, {
+        "message": "相同请求已成功处理，本次返回原结果。",
+        "idempotent_replay": True,
+        "lot_id": lot.id,
+        "lot_number": lot.lot_number,
+        "quantity": int(lot.quantity_available or 0) + int(lot.quantity_reserved or 0),
+        "location_name": occupancy.primary_location.location_name if occupancy.primary_location else None,
+        "occupancy": ground_occupancy_payload(occupancy),
+    }
+
+
+def _validate_ground_target(
+    db: Session,
+    *,
+    plan: WarehouseGroundLayoutPlan,
+    primary_slot: WarehouseGroundLayoutSlot,
+    secondary_location_id: int | None,
+    expected_primary_version: int,
+    expected_secondary_version: int | None,
+    customer_id: int,
+    product_id: int,
+    quantity: int,
+) -> tuple[WarehouseGroundOccupancy | None, WarehouseGroundLayoutSlot | None]:
+    if (
+        primary_slot.location.floor3_layout is None
+        or primary_slot.location.floor3_layout.version != expected_primary_version
+    ):
+        raise WarehouseGroundSlotError(
+            "GROUND_TARGET_STALE", "所选位置布局已变化，请重新点选。"
+        )
+    secondary_slot = None
+    if secondary_location_id is not None:
+        secondary_slot = next(
+            (row for row in plan.slots if row.location_id == secondary_location_id), None
+        )
+        if (
+            secondary_slot is None
+            or secondary_slot.location.floor3_layout is None
+            or secondary_slot.location.floor3_layout.version != expected_secondary_version
+        ):
+            raise WarehouseGroundSlotError(
+                "GROUND_SECONDARY_STALE", "大型货物第二位置已变化，请重新点选。"
+            )
+        if not ground_slots_adjacent(primary_slot, secondary_slot):
+            raise WarehouseGroundSlotError(
+                "GROUND_SLOTS_NOT_ADJACENT", "大型货物只能选择两个相邻地堆位置。"
+            )
+    occupancy = active_ground_occupancy_for_location(db, primary_slot.location_id)
+    if occupancy is not None:
+        if secondary_slot is not None:
+            raise WarehouseGroundSlotError(
+                "GROUND_LARGE_TARGET_OCCUPIED", "大型货物的两个位置都必须为空。"
+            )
+        if (
+            occupancy.primary_location_id != primary_slot.location_id
+            or occupancy.customer_id != customer_id
+            or occupancy.product_id != product_id
+        ):
+            raise WarehouseGroundSlotError(
+                "GROUND_TARGET_CONFLICT", "该位置不是同客户同存货编码的可共位位置。"
+            )
+        if occupancy_physical_quantity(occupancy) + quantity > occupancy.capacity_quantity:
+            raise WarehouseGroundSlotError(
+                "GROUND_TARGET_CAPACITY_FULL", "同款位置剩余容量不足。"
+            )
+    if secondary_slot is not None and active_ground_occupancy_for_location(
+        db, secondary_slot.location_id
+    ) is not None:
+        raise WarehouseGroundSlotError(
+            "GROUND_SECONDARY_OCCUPIED", "大型货物第二位置已被占用。"
+        )
+    for slot in [primary_slot, secondary_slot]:
+        if slot is None:
+            continue
+        issue = operational_location_issue(
+            db,
+            slot.location,
+            warehouse_types={"finished", "shared"},
+            pallet_storage_only=True,
+            require_published=True,
+            require_map_geometry=True,
+            required_inventory_type="finished",
+        )
+        if issue:
+            raise WarehouseGroundSlotError("GROUND_TARGET_UNAVAILABLE", issue)
+    return occupancy, secondary_slot
+
+
+@router.post("/ground-storage/finished-inbound", status_code=201)
+def ground_finished_inbound(
+    payload: GroundFinishedInboundPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    require_customer_access(payload.customer_id, user, db)
+    product = db.get(Product, payload.product_id)
+    if product is None or product.deleted_at is not None or product.customer_id != payload.customer_id:
+        raise HTTPException(status_code=409, detail="所选产品不属于当前客户或已停用")
+    request_hash = ground_canonical_hash(payload.model_dump(mode="json"))
+    with GROUND_STORAGE_TRANSACTION_LOCK:
+        try:
+            _mutation, replay = _ground_mutation_replay(
+                db,
+                idempotency_key=payload.idempotency_key,
+                request_hash=request_hash,
+                actor_user_id=user.id,
+            )
+            if replay is not None:
+                return replay
+            plan, primary_slot = _ground_slot_for_location(db, payload.location_id)
+            occupancy, secondary_slot = _validate_ground_target(
+                db,
+                plan=plan,
+                primary_slot=primary_slot,
+                secondary_location_id=payload.secondary_location_id,
+                expected_primary_version=payload.expected_layout_version,
+                expected_secondary_version=payload.expected_secondary_layout_version,
+                customer_id=payload.customer_id,
+                product_id=payload.product_id,
+                quantity=payload.quantity,
+            )
+            if occupancy is not None and payload.capacity_quantity != occupancy.capacity_quantity:
+                raise WarehouseGroundSlotError(
+                    "GROUND_CAPACITY_STALE", "该位置容量已变化，请刷新后重试。"
+                )
+            lock_pairs = [(primary_slot.location_id, payload.expected_layout_version)]
+            if secondary_slot is not None:
+                lock_pairs.append(
+                    (secondary_slot.location_id, int(payload.expected_secondary_layout_version))
+                )
+            for location_id, expected_version in sorted(lock_pairs):
+                if not claim_active_placed_location(
+                    db, location_id, expected_layout_version=expected_version
+                ):
+                    raise WarehouseGroundSlotError(
+                        "GROUND_TARGET_STALE", "所选位置已变化，请重新点选。"
+                    )
+            occupancy, secondary_slot = _validate_ground_target(
+                db,
+                plan=plan,
+                primary_slot=primary_slot,
+                secondary_location_id=payload.secondary_location_id,
+                expected_primary_version=payload.expected_layout_version,
+                expected_secondary_version=payload.expected_secondary_layout_version,
+                customer_id=payload.customer_id,
+                product_id=payload.product_id,
+                quantity=payload.quantity,
+            )
+            lot = manual_finished_in(
+                db,
+                customer_id=payload.customer_id,
+                product_id=payload.product_id,
+                location_id=primary_slot.location_id,
+                quantity=payload.quantity,
+                stock_date=payload.stock_date,
+                source_type="manual",
+                remarks=payload.remarks,
+                operator_id=user.id,
+                idempotency_key=payload.idempotency_key,
+                pallet_id=occupancy.pallet_id if occupancy is not None else None,
+                expected_layout_version=payload.expected_layout_version,
+                movement_reason="地图点选成品入库",
+            )
+            if lot.pallet_item is None:
+                bind_finished_lot_to_floor3_pallet(
+                    db,
+                    lot=lot,
+                    operator_id=user.id,
+                    pallet_id=occupancy.pallet_id if occupancy is not None else None,
+                    allow_operational_location=True,
+                )
+            pallet_item = lot.pallet_item
+            if pallet_item is None:
+                raise WarehouseGroundSlotError(
+                    "GROUND_PALLET_BINDING_FAILED", "成品批次未能绑定内部空间身份。"
+                )
+            if occupancy is None:
+                occupancy = WarehouseGroundOccupancy(
+                    pallet_id=pallet_item.pallet_id,
+                    primary_location_id=primary_slot.location_id,
+                    customer_id=payload.customer_id,
+                    product_id=payload.product_id,
+                    footprint_kind="double" if secondary_slot is not None else "single",
+                    capacity_quantity=payload.capacity_quantity,
+                    status="active",
+                    version=1,
+                    created_by=user.id,
+                )
+                db.add(occupancy)
+                db.flush()
+                db.add(
+                    WarehouseGroundOccupancySlot(
+                        occupancy_id=occupancy.id,
+                        location_id=primary_slot.location_id,
+                        slot_sequence=1,
+                        status="active",
+                    )
+                )
+                if secondary_slot is not None:
+                    db.add(
+                        WarehouseGroundOccupancySlot(
+                            occupancy_id=occupancy.id,
+                            location_id=secondary_slot.location_id,
+                            slot_sequence=2,
+                            status="active",
+                        )
+                    )
+                db.flush()
+            db.add(
+                WarehouseGroundPlacementMutation(
+                    idempotency_key=payload.idempotency_key,
+                    request_hash=request_hash,
+                    actor_user_id=user.id,
+                    operation="finished_inbound",
+                    result_lot_id=lot.id,
+                    occupancy_id=occupancy.id,
+                )
+            )
+            append_audit_event(
+                db,
+                request=request,
+                actor=user,
+                event_category="business",
+                result="success",
+                source="web",
+                module_code="warehouse",
+                action_code="warehouse.ground.finished_inbound",
+                legacy_action="GROUND_FINISHED_INBOUND",
+                resource="InventoryLot",
+                entity_type="inventory_lot",
+                entity_id=lot.id,
+                object_ref=lot.lot_number,
+                customer_id=payload.customer_id,
+                description="地图点选成品入库",
+                details={
+                    "location_ids": [
+                        primary_slot.location_id,
+                        *([secondary_slot.location_id] if secondary_slot else []),
+                    ],
+                    "quantity": payload.quantity,
+                    "capacity_quantity": payload.capacity_quantity,
+                    "idempotency_key": payload.idempotency_key,
+                },
+            )
+            db.flush()
+            db.commit()
+            db.refresh(occupancy)
+            return {
+                "message": "已按地图所选中文位置保存成品；库存批次和来源保持独立。",
+                "idempotent_replay": False,
+                "lot_id": lot.id,
+                "lot_number": lot.lot_number,
+                "quantity": payload.quantity,
+                "location_name": primary_slot.location.location_name,
+                "occupancy": ground_occupancy_payload(occupancy),
+            }
+        except (WarehouseGroundSlotError, WarehouseInventoryError) as error:
+            db.rollback()
+            raise HTTPException(
+                status_code=getattr(error, "status_code", 409),
+                detail={"code": getattr(error, "code", "GROUND_STORAGE_INVALID"), "message": str(error)},
+            ) from error
+        except IntegrityError as error:
+            db.rollback()
+            raise HTTPException(status_code=409, detail="地图存放发生并发冲突，请刷新后重试") from error
+
+
+@router.post("/ground-storage/lots/{lot_id}/transfer")
+def ground_finished_lot_transfer(
+    lot_id: int,
+    payload: GroundFinishedTransferPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    source_lot = _require_lot_customer_access(db, lot_id, user)
+    detail = source_lot.finished_detail
+    if detail is None or detail.owner_customer_id is None:
+        raise HTTPException(status_code=409, detail="只有客户归属明确的正式成品可以地图转位")
+    request_hash = ground_canonical_hash(
+        {"source_lot_id": lot_id, **payload.model_dump(mode="json")}
+    )
+    with GROUND_STORAGE_TRANSACTION_LOCK:
+        try:
+            _mutation, replay = _ground_mutation_replay(
+                db,
+                idempotency_key=payload.idempotency_key,
+                request_hash=request_hash,
+                actor_user_id=user.id,
+            )
+            if replay is not None:
+                return replay
+            plan, primary_slot = _ground_slot_for_location(db, payload.location_id)
+            occupancy, secondary_slot = _validate_ground_target(
+                db,
+                plan=plan,
+                primary_slot=primary_slot,
+                secondary_location_id=payload.secondary_location_id,
+                expected_primary_version=payload.expected_layout_version,
+                expected_secondary_version=payload.expected_secondary_layout_version,
+                customer_id=int(detail.owner_customer_id),
+                product_id=int(detail.product_id),
+                quantity=payload.quantity,
+            )
+            if occupancy is not None and payload.capacity_quantity != occupancy.capacity_quantity:
+                raise WarehouseGroundSlotError(
+                    "GROUND_CAPACITY_STALE", "该位置容量已变化，请刷新后重试。"
+                )
+            lock_pairs = [(primary_slot.location_id, payload.expected_layout_version)]
+            if secondary_slot is not None:
+                lock_pairs.append(
+                    (secondary_slot.location_id, int(payload.expected_secondary_layout_version))
+                )
+            for location_id, expected_version in sorted(lock_pairs):
+                if not claim_active_placed_location(
+                    db, location_id, expected_layout_version=expected_version
+                ):
+                    raise WarehouseGroundSlotError(
+                        "GROUND_TARGET_STALE", "所选位置已变化，请重新点选。"
+                    )
+            occupancy, secondary_slot = _validate_ground_target(
+                db,
+                plan=plan,
+                primary_slot=primary_slot,
+                secondary_location_id=payload.secondary_location_id,
+                expected_primary_version=payload.expected_layout_version,
+                expected_secondary_version=payload.expected_secondary_layout_version,
+                customer_id=int(detail.owner_customer_id),
+                product_id=int(detail.product_id),
+                quantity=payload.quantity,
+            )
+            source_pallet_id = source_lot.pallet_item.pallet_id if source_lot.pallet_item else None
+            source_occupancy = (
+                db.scalar(
+                    select(WarehouseGroundOccupancy)
+                    .where(
+                        WarehouseGroundOccupancy.pallet_id == source_pallet_id,
+                        WarehouseGroundOccupancy.status == "active",
+                    )
+                    .options(selectinload(WarehouseGroundOccupancy.slots))
+                )
+                if source_pallet_id is not None
+                else None
+            )
+            result = transfer_finished_lot_between_locations(
+                db,
+                lot_id=lot_id,
+                expected_version=payload.expected_lot_version,
+                quantity=payload.quantity,
+                location_id=primary_slot.location_id,
+                operator_id=user.id,
+                idempotency_key=payload.idempotency_key,
+                require_empty_target=False,
+                expected_target_layout_version=payload.expected_layout_version,
+            )
+            target_item = result.target_lot.pallet_item
+            if target_item is None:
+                raise WarehouseGroundSlotError(
+                    "GROUND_PALLET_BINDING_FAILED", "转位批次未能绑定内部空间身份。"
+                )
+            if source_occupancy is not None and source_occupancy.primary_location_id != primary_slot.location_id:
+                now = beijing_now_naive()
+                source_occupancy.status = "released"
+                source_occupancy.version += 1
+                source_occupancy.released_by = user.id
+                source_occupancy.released_at = now
+                for row in source_occupancy.slots:
+                    row.status = "released"
+                    row.released_at = now
+                db.flush()
+            if occupancy is None:
+                occupancy = WarehouseGroundOccupancy(
+                    pallet_id=target_item.pallet_id,
+                    primary_location_id=primary_slot.location_id,
+                    customer_id=int(detail.owner_customer_id),
+                    product_id=int(detail.product_id),
+                    footprint_kind="double" if secondary_slot is not None else "single",
+                    capacity_quantity=payload.capacity_quantity,
+                    status="active",
+                    version=1,
+                    created_by=user.id,
+                )
+                db.add(occupancy)
+                db.flush()
+                for sequence, slot in enumerate([primary_slot, secondary_slot], start=1):
+                    if slot is not None:
+                        db.add(
+                            WarehouseGroundOccupancySlot(
+                                occupancy_id=occupancy.id,
+                                location_id=slot.location_id,
+                                slot_sequence=sequence,
+                                status="active",
+                            )
+                        )
+                db.flush()
+            db.add(
+                WarehouseGroundPlacementMutation(
+                    idempotency_key=payload.idempotency_key,
+                    request_hash=request_hash,
+                    actor_user_id=user.id,
+                    operation="lot_transfer",
+                    source_lot_id=lot_id,
+                    result_lot_id=result.target_lot.id,
+                    occupancy_id=occupancy.id,
+                )
+            )
+            append_audit_event(
+                db,
+                request=request,
+                actor=user,
+                event_category="business",
+                result="success",
+                source="web",
+                module_code="warehouse",
+                action_code="warehouse.ground.lot_transfer",
+                legacy_action="GROUND_LOT_TRANSFER",
+                resource="InventoryLotTransfer",
+                entity_type="inventory_lot_transfer",
+                entity_id=result.transfer.id,
+                object_ref=f"inventory_lot_transfer:{result.transfer.id}",
+                customer_id=int(detail.owner_customer_id),
+                description="地图点选成品转位",
+                details={
+                    "source_lot_id": lot_id,
+                    "target_lot_id": result.target_lot.id,
+                    "location_ids": [
+                        primary_slot.location_id,
+                        *([secondary_slot.location_id] if secondary_slot else []),
+                    ],
+                    "quantity": payload.quantity,
+                    "idempotency_key": payload.idempotency_key,
+                },
+            )
+            db.flush()
+            db.commit()
+            db.refresh(occupancy)
+            return {
+                "message": "已按地图所选位置完成转位；库存总量、批次来源和预占保持守恒。",
+                "idempotent_replay": result.replayed,
+                "lot_id": result.target_lot.id,
+                "lot_number": result.target_lot.lot_number,
+                "quantity": payload.quantity,
+                "location_name": primary_slot.location.location_name,
+                "occupancy": ground_occupancy_payload(occupancy),
+            }
+        except (WarehouseGroundSlotError, WarehouseInventoryError) as error:
+            db.rollback()
+            raise HTTPException(
+                status_code=getattr(error, "status_code", 409),
+                detail={"code": getattr(error, "code", "GROUND_STORAGE_INVALID"), "message": str(error)},
+            ) from error
+        except IntegrityError as error:
+            db.rollback()
+            raise HTTPException(status_code=409, detail="地图转位发生并发冲突，请刷新后重试") from error
+
+
 @router.post("/spatial-layout/floors/{floor_code}/areas/{area_code}/location-count")
 def set_activated_area_location_count(
     floor_code: str,
@@ -5519,6 +6599,21 @@ def _twin_assert_finished_merge_compatible(
     current_pallet: InventoryPallet | None,
 ) -> None:
     """An occupied map location may only receive the exact same finished product."""
+
+    managed_ground_slot = db.scalar(
+        select(WarehouseGroundLayoutSlot.id)
+        .join(WarehouseGroundLayoutPlan)
+        .where(
+            WarehouseGroundLayoutSlot.location_id == location_id,
+            WarehouseGroundLayoutPlan.status == "published",
+        )
+        .limit(1)
+    )
+    if managed_ground_slot is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="该位置已纳入地堆排位，请使用地图点选存放入口校验容量和占用关系",
+        )
 
     if current_pallet is not None:
         for item in current_pallet.items:

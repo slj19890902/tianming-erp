@@ -74,7 +74,7 @@ def test_operational_twin_uses_erp_session_for_real_production_and_manual_mappin
     assert "确认投影到地图" in SOURCE
     assert "productionProjections={productionProjection?.items || EMPTY_PRODUCTION_PROJECTIONS}" in SOURCE
     assert "raw.pallets || []" in SOURCE
-    assert "pallets: movePreviewPallets" in SOURCE
+    assert "pallets: groundCandidatePallets" in SOURCE
     assert "pallets: [...layout.pallets, ...movePreviewPallets]" not in SOURCE
 
 
@@ -269,7 +269,7 @@ def test_operational_twin_uses_cross_floor_search_highlights_and_mapped_location
     assert "const mappedLocationPallets = useMemo(" in SOURCE
     assert "const movePreviewPallets = useMemo(() =>" in SOURCE
     assert "if (mapMode !== \"move\" || !moveDrafts.length) return mappedLocationPallets" in SOURCE
-    assert "pallets: movePreviewPallets" in SOURCE
+    assert "pallets: groundCandidatePallets" in SOURCE
 
 
 def test_area_planning_defaults_to_one_result_oriented_confirmation() -> None:

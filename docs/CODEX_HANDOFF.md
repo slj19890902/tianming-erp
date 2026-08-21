@@ -4597,3 +4597,9 @@ legacy_ruida_* 原始层
 - 定向发布回归 `51 passed`，Python 编译、`git diff --check` 与唯一 Alembic head `vv30v8x9z19` 均通过。两阶段报告 `docs/migration_reports/release_runtime_20260821_145855.json` 状态 `completed`，SHA-256 `DC685D949CF33EEB239E7AC79302124D59FC8BC9139A99FFC7D7D5E435068AE3`。
 - 正式备份 `data/backups/carton_erp_before_release_20260821_145856.sqlite3` SHA-256 `46326A26A14B7683BB99C9D0164013D6640B0235C1A2AB785CE34ABF2866AF05`；正式、备份与隔离演练完整性正常、外键异常 0、核心表计数一致。本版无 migration，正式数据库 SHA-256 发布前后均为 `9FC141C18CC8690D4893BCBF339DDBB68064B8D3684188EB7EB3682560C58560`，只读回读 `total_changes=0`。
 - ERP 已以正式目录单 worker 重启，本机及局域网 health、首页均 HTTP 200。发布前 D1/交接/outputs 在途内容已从保护点恢复，clean-filter Git 对象与保护点一致，保护 stash `6f86b6507cccda1ff18d3d223a19f52c041b6aae` 继续保留。技术发布完成，实体 A4/标签打印仍需老板人工验收。
+
+## 2026-08-21 v0.22.150 外购蜂窝板订单比例、采购单与历史撤销索引
+
+- 家庭候选 `862ba059` 已在 v0.22.149 正式基线之上线性整合；外购包材改为逐订单明细维护客户订单数量基数与供应商采购数量基数，客户销售口径和供应商采购口径保持分离。
+- 供应商包材主档新增蜂窝板结构化材质、孔径和长宽厚；采购确认冻结规格，打印单显示 NO.、材质、孔径、规格和采购数量。零收料采购可受控撤销并保留历史，已有实收继续阻断。
+- 新唯一 Alembic head 为 `zz34v8x9z23`；迁移只将旧系统历史比例按既有事实回填为 1:1，不自动把任何旧订单改成 1:2，也不改写采购、价格或收料事实。正式发布运行证据以本轮 `release_runtime_*.json` 和 NAS 独立回执为准。

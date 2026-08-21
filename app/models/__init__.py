@@ -34,9 +34,11 @@ from app.models.mold_tool import (  # noqa: E402,F401
     MoldLabelPrintJob,
     MoldLabelPrintJobItem,
     MoldLocationMovement,
+    MoldMasterMutation,
     MoldRepairEvent,
     MoldScanEvent,
     MoldTool,
+    MoldToolCustomer,
 )
 from app.models.printing_plate import (  # noqa: E402,F401
     PrintingPlate,

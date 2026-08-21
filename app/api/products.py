@@ -42,7 +42,7 @@ from app.models.customer import Customer
 from app.models.external_packaging_price import ExternalPackagingPriceVersion
 from app.models.material import Material
 from app.models.master_data_object_version import MasterDataObjectVersion
-from app.models.mold_tool import MoldTool
+from app.models.mold_tool import MoldTool, MoldToolCustomer
 from app.models.printing_plate import PrintingPlate
 from app.models.product import Product
 from app.models.product_drawing import ProductDrawing
@@ -1262,6 +1262,7 @@ def _response(product: Product, user: User) -> dict:
         data["mold_tool"] = {
             "id": product.mold_tool.id,
             "mold_code": product.mold_tool.mold_code,
+            "display_name": product.mold_tool.mold_name,
             "mold_name": product.mold_tool.mold_name,
             "rack_location": product.mold_tool.rack_location,
             "is_active": product.mold_tool.is_active,
@@ -1535,6 +1536,37 @@ def _validate_references(
             raise HTTPException(status_code=400, detail="模具不存在")
         if not mold_tool.is_active:
             raise HTTPException(status_code=400, detail="所选模具已停用")
+        _validate_mold_customer_association(
+            db,
+            mold_tool=mold_tool,
+            customer_id=customer_id,
+        )
+
+
+def _validate_mold_customer_association(
+    db: Session,
+    *,
+    mold_tool: MoldTool,
+    customer_id: int,
+) -> None:
+    """Prevent product writers from bypassing a frozen mold's customer scope."""
+
+    if str(getattr(mold_tool, "identity_status", "legacy_unset")) != "frozen":
+        return
+    association_id = db.scalar(
+        select(MoldToolCustomer.id).where(
+            MoldToolCustomer.mold_tool_id == mold_tool.id,
+            MoldToolCustomer.customer_id == customer_id,
+        )
+    )
+    if association_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "MOLD_CUSTOMER_NOT_ASSOCIATED",
+                "message": "所选模具尚未关联该产品客户，请先到模具档案保存适用客户",
+            },
+        )
 
 
 def _validate_product_material_flute(db: Session, payload: ProductPayload) -> None:
@@ -2579,6 +2611,11 @@ def sync_product_fields(
                 raise HTTPException(status_code=400, detail="模具不存在")
             if not mold_tool.is_active:
                 raise HTTPException(status_code=400, detail="所选模具已停用")
+            _validate_mold_customer_association(
+                db,
+                mold_tool=mold_tool,
+                customer_id=product.customer_id,
+            )
         else:
             fields["mold_tool_id"] = None
     main_crease_fields = {

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
+from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -16,6 +17,9 @@ _INITIALS_PATTERN = re.compile(r"^[A-Z0-9]{1,20}$")
 _LEADING_CHINESE_LABEL_PATTERN = re.compile(
     r"^(?P<label>[\u3400-\u9fff]{2,8})[\s:：_#＃-]*(?=[A-Za-z0-9])"
 )
+_MOLD_LABEL_ALLOWED_PATTERN = re.compile(
+    r"^[\u3400-\u9fffA-Za-z0-9\s*×/._\-()（）]+$"
+)
 
 
 class MoldIdentityError(ValueError):
@@ -28,6 +32,57 @@ class MoldIdentityParts:
     customer_initials: str
     inventory_code: str
     base_code: str
+
+
+def normalize_mold_label_name(value: str | None) -> str:
+    label = " ".join(str(value or "").strip().split())
+    if not label:
+        raise MoldIdentityError("请填写模具标签名称")
+    if len(label) > 200:
+        raise MoldIdentityError("模具标签名称不能超过 200 个字符")
+    if _MOLD_LABEL_ALLOWED_PATTERN.fullmatch(label) is None:
+        raise MoldIdentityError("模具标签名称包含不支持的字符")
+    return label
+
+
+def normalize_mold_chinese_short_name(value: str | None) -> str | None:
+    short_name = " ".join(str(value or "").strip().split())
+    if not short_name:
+        return None
+    if len(short_name) > 100:
+        raise MoldIdentityError("模具中文简写不能超过 100 个字符")
+    if _MOLD_LABEL_ALLOWED_PATTERN.fullmatch(short_name) is None:
+        raise MoldIdentityError("模具中文简写包含不支持的字符")
+    return short_name
+
+
+def compose_mold_display_name(
+    customer_short_names: list[str] | tuple[str, ...],
+    label_name: str,
+    chinese_short_name: str | None = None,
+) -> str:
+    customers = [str(value or "").strip() for value in customer_short_names]
+    customers = [value for value in customers if value]
+    if not customers:
+        raise MoldIdentityError("请至少选择一个主显示客户")
+    if len(customers) > 2:
+        raise MoldIdentityError("主标签最多显示两个客户简称")
+    normalized_label = normalize_mold_label_name(label_name)
+    normalized_short = normalize_mold_chinese_short_name(chinese_short_name)
+    parts = ["/".join(customers), normalized_label]
+    if normalized_short:
+        parts.append(normalized_short)
+    return " ".join(parts)
+
+
+def next_available_internal_mold_code(db: Session) -> str:
+    """Allocate an opaque stable code without deriving identity from Chinese text."""
+
+    for _attempt in range(100):
+        candidate = f"M-{uuid4().hex[:12].upper()}"
+        if db.scalar(select(MoldTool.id).where(MoldTool.mold_code == candidate)) is None:
+            return candidate
+    raise MoldIdentityError("模具内部编号生成失败，请重试")
 
 
 def mold_customer_short_name(

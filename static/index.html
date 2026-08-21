@@ -5334,7 +5334,7 @@
                     <label class="process-option"><input type="checkbox" value="模切" v-model="productForm._production_processes" @change="onProductProcessesChanged" />模切</label>
                   </div>
                 </div>
-                <div v-if="productForm.supply_mode!=='external_purchase' && productUsesMold(productForm)" class="field product-mold-adjacent"><label>生产模具 / 货架位置（必选）</label><search-select v-model="productForm.mold_tool_id" :options="moldToolSelectOptions()" label-key="_label" value-key="id" placeholder="输入模具编号、名称或位置" :allow-empty="false" @search="searchMoldTools"></search-select><div v-if="productMoldError" class="status orange" style="display:block;margin-top:4px">{{ productMoldError }}</div></div>
+                <div v-if="productForm.supply_mode!=='external_purchase' && productUsesMold(productForm)" class="field product-mold-adjacent"><label>生产模具 / 货架位置（必选）</label><search-select v-model="productForm.mold_tool_id" :options="moldToolSelectOptions()" label-key="_label" value-key="id" placeholder="输入模具标签名称、客户或位置" :allow-empty="false" @search="searchMoldTools"></search-select><div v-if="productMoldError" class="status orange" style="display:block;margin-top:4px">{{ productMoldError }}</div></div>
                 <div v-if="productForm.supply_mode!=='external_purchase'" class="product-printing-direct-workbench" :class="{'has-direct-colors':productUsesDirectPrinting(productForm)}">
                   <div class="field product-print-status-field"><label>印刷情况</label>
                     <select class="select" v-model="productForm._printing_situation" @change="onProductPrintingSituationChanged">
@@ -13545,7 +13545,7 @@
           moldToolSelectOptions() {
             return (this.moldTools || []).filter(row=>row.is_active).map(row=>({
               ...row,
-              _label:`${row.mold_code}｜${row.mold_name}｜${row.rack_location}`,
+              _label:[row.display_name||row.mold_name,row.rack_location].filter(Boolean).join("｜"),
             }));
           },
           printingPlateSelectOptions() {
@@ -23353,7 +23353,7 @@
             return ct === '净料' ? '净' : ct === '毛片' ? '毛' : ct;
           },
           moldLocationText(item) {
-            const parts = [item.mold_code, item.mold_name, item.mold_location].filter(Boolean);
+            const parts = [item.mold_display_name || item.mold_name, item.mold_location].filter(Boolean);
             return parts.length ? parts.join("｜") : "未绑定模具";
           },
           // ===== 常用箱采购报料/压线推荐（只推荐，不强制覆盖人工值） =====
@@ -29484,7 +29484,7 @@
               const products = (row.products || []).map(item =>
                 [item.customer_name, item.product_code, item.product_name].filter(Boolean).join(" / ")
               ).filter(Boolean).join("；");
-              return `模具 ${row.mold_code || row.mold_name || row.mold_id}：待维修${products ? `\n关联 ${products}` : ""}`;
+              return `模具 ${row.display_name || row.mold_name || "名称待完善"}：待维修${products ? `\n关联 ${products}` : ""}`;
             });
             return `以下订单关联模具处于待维修状态：\n\n${details.join("\n\n")}\n\n是否仍要保存订单？此提醒不会自动改变模具、订单或生产状态。`;
           },

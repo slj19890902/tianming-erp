@@ -491,22 +491,31 @@ def test_p1_43a_migration_downgrade_fails_closed_after_virtual_fact(
     path = tmp_path / "p1-43a-fail-closed.sqlite3"
     config = _config(monkeypatch, path)
     command.upgrade(config, TARGET_REVISION)
-    engine = create_sqlite_engine(path)
-    with Session(engine) as session:
-        customer = Customer(name="P1-43A migration customer", customer_code="P143AM")
-        session.add(customer)
-        session.flush()
-        session.add(
-            Product(
-                customer_id=customer.id,
-                product_code="P143A-MIG",
-                customer_material_code="P143A-MIG",
-                product_name="migration virtual parent",
-                box_category="normal",
-                unit="套",
-                is_virtual_composite_parent=True,
-            )
+    # This test intentionally stops at the historical P1-43A revision.  Use
+    # that revision's physical columns instead of the current ORM, whose later
+    # customer-short-name field does not exist yet at this point in the chain.
+    with sqlite3.connect(path) as connection:
+        customer_id = connection.execute(
+            "INSERT INTO customers (name, customer_code) VALUES (?, ?) RETURNING id",
+            ("P1-43A migration customer", "P143AM"),
+        ).fetchone()[0]
+        connection.execute(
+            """
+            INSERT INTO products (
+                customer_id, product_code, customer_material_code, product_name,
+                box_category, unit, is_virtual_composite_parent
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                customer_id,
+                "P143A-MIG",
+                "P143A-MIG",
+                "migration virtual parent",
+                "normal",
+                "套",
+                1,
+            ),
         )
-        session.commit()
+        connection.commit()
     with pytest.raises(RuntimeError, match="拒绝破坏性降级"):
         command.downgrade(config, PARENT_REVISION)

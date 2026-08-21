@@ -38,7 +38,7 @@ from app.core.time_contract import (
     utc_naive_to_api,
 )
 from app.models.customer import Customer
-from app.models.mold_tool import MoldTool
+from app.models.mold_tool import MoldTool, MoldToolCustomer
 from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.product_drawing import ProductDrawing
@@ -477,10 +477,10 @@ def _production_station_task_payloads(
             else None
         )
         mold_name = (
-            component.snapshot_mold_tool_name
-            if component is not None
-            else mold.mold_name
+            mold.mold_name
             if mold is not None
+            else component.snapshot_mold_tool_name
+            if component is not None
             else task.get("mold_name")
         )
         drawing_url = None
@@ -588,7 +588,7 @@ def _production_station_task_payloads(
                 {
                     "material": task.get("material"),
                     "flute_type": task.get("flute"),
-                    "mold_code": mold_code,
+                    "mold_display_name": mold_name,
                     "mold_name": mold_name,
                     "mold_location": mold.rack_location if mold is not None else None,
                     "mold_is_active": mold_active,
@@ -603,8 +603,8 @@ def _production_station_task_payloads(
                         else None
                     ),
                     "mold_map_url": (
-                        f"/mobile/mold-lookup?q={mold_code}&readonly=1"
-                        if mold_map_allowed and mold_code
+                        f"/mobile/mold-lookup?mold_id={int(mold_id)}&readonly=1"
+                        if mold_map_allowed and mold_id
                         else None
                     ),
                     "cutting_mode": task.get("special_process"),
@@ -1753,7 +1753,7 @@ def product_production_overview(
             ),
             "mold": (
                 {
-                    "mold_code": mold.mold_code,
+                    "display_name": mold.mold_name,
                     "mold_name": mold.mold_name,
                     "current_location": mold.rack_location,
                     "is_active": bool(mold.is_active),
@@ -2044,6 +2044,14 @@ def _mobile_mold_search_group(
     visible_product_exists = exists(
         select(1).select_from(Product).where(*visible_product)
     )
+    visible_relation = [MoldToolCustomer.mold_tool_id == MoldTool.id]
+    if visible_customer_ids is not None:
+        visible_relation.append(
+            MoldToolCustomer.customer_id.in_(visible_customer_ids)
+        )
+    visible_relation_exists = exists(
+        select(1).select_from(MoldToolCustomer).where(*visible_relation)
+    )
     linked_match = exists(
         select(1)
         .select_from(Product)
@@ -2066,20 +2074,47 @@ def _mobile_mold_search_group(
             ),
         )
     )
+    associated_customer_match = exists(
+        select(1)
+        .select_from(MoldToolCustomer)
+        .join(Customer, Customer.id == MoldToolCustomer.customer_id)
+        .where(
+            MoldToolCustomer.mold_tool_id == MoldTool.id,
+            or_(
+                Customer.name.ilike(pattern, escape="\\"),
+                Customer.chinese_short_name.ilike(pattern, escape="\\"),
+            ),
+            *(
+                [MoldToolCustomer.customer_id.in_(visible_customer_ids)]
+                if visible_customer_ids is not None
+                else []
+            ),
+        )
+    )
     statement = (
         select(MoldTool)
-        .options(selectinload(MoldTool.products).selectinload(Product.customer))
+        .options(
+            selectinload(MoldTool.products).selectinload(Product.customer),
+            selectinload(MoldTool.customer_links).selectinload(
+                MoldToolCustomer.customer
+            ),
+        )
         .where(
             or_(
                 MoldTool.mold_code.ilike(pattern, escape="\\"),
                 MoldTool.mold_name.ilike(pattern, escape="\\"),
+                MoldTool.label_name.ilike(pattern, escape="\\"),
+                MoldTool.chinese_short_name.ilike(pattern, escape="\\"),
                 MoldTool.rack_location.ilike(pattern, escape="\\"),
                 linked_match,
+                associated_customer_match,
             )
         )
     )
     if visible_customer_ids is not None:
-        statement = statement.where(visible_product_exists)
+        statement = statement.where(
+            or_(visible_product_exists, visible_relation_exists)
+        )
     total = int(
         db.scalar(
             select(func.count()).select_from(statement.order_by(None).subquery())
@@ -2109,8 +2144,9 @@ def _mobile_mold_search_group(
         items.append(
             {
                 "mold_id": mold.id,
-                "mold_code": mold.mold_code,
+                "display_name": mold.mold_name,
                 "mold_name": mold.mold_name,
+                "identity_status": mold.identity_status,
                 "rack_location": mold.rack_location,
                 "is_active": bool(mold.is_active),
                 "archive_status": mold.archive_status,
@@ -2125,7 +2161,30 @@ def _mobile_mold_search_group(
                     }
                     for product in products[:5]
                 ],
-                "lookup_url": f"/mobile/mold-lookup?q={mold.mold_code}&readonly=1",
+                "associated_customers": [
+                    {
+                        "customer_id": int(link.customer_id),
+                        "customer_name": (
+                            link.customer.chinese_short_name
+                            or link.customer.name
+                        ),
+                        "display_order": link.display_order,
+                    }
+                    for link in sorted(
+                        (
+                            link
+                            for link in mold.customer_links
+                            if visible_customer_ids is None
+                            or link.customer_id in visible_customer_ids
+                        ),
+                        key=lambda link: (
+                            link.display_order is None,
+                            link.display_order or 99,
+                            link.customer_id,
+                        ),
+                    )
+                ],
+                "lookup_url": f"/mobile/mold-lookup?mold_id={mold.id}&readonly=1",
             }
         )
     return _mobile_group_payload(

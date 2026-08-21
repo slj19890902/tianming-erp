@@ -114,11 +114,12 @@ def test_station_pages_are_exactly_authorized_scoped_and_read_only(
         die_task = die_payload["items"][0]
         assert die_task["material"] == "SECRET-SUPPLIER-MATERIAL"
         assert die_task["flute_type"] == "B"
-        assert die_task["mold_code"] == "MOBILE-MOLD-01"
+        assert die_task["mold_display_name"] == "匿名内盒模具"
+        assert "mold_code" not in die_task
         assert die_task["mold_location"] == "M1-R02"
         assert die_task["mold_is_active"] is False
         assert "禁止直接生产" in die_task["mold_warning"]
-        assert die_task["mold_map_url"].startswith("/mobile/mold-lookup?q=")
+        assert die_task["mold_map_url"].startswith("/mobile/mold-lookup?mold_id=")
         assert die_task["mold_map_url"].endswith("&readonly=1")
         assert "print_content" not in die_task
         assert "snapshot_supplier_name" not in die_cut.text

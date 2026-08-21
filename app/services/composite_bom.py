@@ -23,7 +23,7 @@ from sqlalchemy import exists, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app.models.audit import OperationLog
-from app.models.mold_tool import MoldTool
+from app.models.mold_tool import MoldTool, MoldToolCustomer
 from app.models.order import OrderItem
 from app.models.product import Product
 from app.models.user import User
@@ -370,6 +370,23 @@ def _validate_die_cut_mold(
         raise CompositeBOMError(
             f"第{position}个模切组件必须选择启用中的模具"
         )
+    if str(getattr(mold, "identity_status", "legacy_unset")) == "frozen":
+        customer_link_id = db.scalar(
+            select(MoldToolCustomer.id).where(
+                MoldToolCustomer.mold_tool_id == mold.id,
+                MoldToolCustomer.customer_id == product.customer_id,
+            )
+        )
+        if customer_link_id is None:
+            raise CompositeBOMError(
+                f"第{position}个模切组件所选模具尚未关联该产品客户，"
+                "请先到模具档案保存适用客户",
+                409,
+                detail={
+                    "code": "MOLD_CUSTOMER_NOT_ASSOCIATED",
+                    "position": position,
+                },
+            )
     return mold
 
 

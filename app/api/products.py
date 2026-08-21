@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import mimetypes
 from datetime import datetime, timedelta
@@ -901,6 +902,63 @@ def _external_supply_requested(payload: ProductPayload) -> bool:
     return bool(_PRODUCT_EXTERNAL_SUPPLY_FIELDS.intersection(payload.model_fields_set))
 
 
+def _positive_customer_specification_number(
+    specification: dict[str, Any], field: str, label: str
+) -> float:
+    try:
+        value = float(specification.get(field))
+    except (TypeError, ValueError) as error:
+        raise HTTPException(status_code=422, detail=f"{label}必须填写有效数字") from error
+    if not math.isfinite(value) or value <= 0:
+        raise HTTPException(status_code=422, detail=f"{label}必须大于 0")
+    return value
+
+
+def _normalize_direct_external_customer_specification(
+    category_code: str, raw_specification: dict[str, Any]
+) -> tuple[dict[str, Any], str]:
+    specification = dict(raw_specification or {})
+    if category_code == "honeycomb_board":
+        material = str(specification.get("material") or "").strip()
+        if not material:
+            raise HTTPException(status_code=422, detail="请填写客户要求的蜂窝板材质")
+        if len(material) > 200:
+            raise HTTPException(status_code=422, detail="客户要求的蜂窝板材质不能超过 200 个字符")
+        aperture = _positive_customer_specification_number(
+            specification, "aperture_mm", "蜂窝板孔径"
+        )
+        length = _positive_customer_specification_number(
+            specification, "length_mm", "蜂窝板长度"
+        )
+        width = _positive_customer_specification_number(
+            specification, "width_mm", "蜂窝板宽度"
+        )
+        thickness = _positive_customer_specification_number(
+            specification, "thickness_mm", "蜂窝板厚度"
+        )
+        normalized = {
+            "material": material,
+            "aperture_mm": aperture,
+            "length_mm": length,
+            "width_mm": width,
+            "thickness_mm": thickness,
+        }
+        return (
+            normalized,
+            f"材质{material}，孔径{aperture:g}mm，{length:g}×{width:g}×{thickness:g}mm",
+        )
+    if category_code == "other_packaging":
+        summary = str(specification.get("summary") or "").strip()
+        if not summary:
+            raise HTTPException(
+                status_code=422, detail="请填写客户要求及报给供应商的包材规格"
+            )
+        if len(summary) > 500:
+            raise HTTPException(status_code=422, detail="客户外购包材规格不能超过 500 个字符")
+        return {"summary": summary}, summary
+    raise HTTPException(status_code=422, detail="当前包材类别不支持独立客户规格")
+
+
 def _clear_external_purchase_paper_fields(payload: ProductPayload) -> None:
     for field in _EXTERNAL_PURCHASE_PAPER_FIELDS:
         setattr(payload, field, None)
@@ -1019,11 +1077,44 @@ def _normalize_product_external_supply(
                     detail="纸护角客户订单必须按根/支保存，供应商产品采购单位请先完善",
                 )
         purchase_unit = "根"
+    elif first.category_code in {"honeycomb_board", "other_packaging"}:
+        raw_customer_specification = (
+            payload.external_supply.customer_specification
+            if payload.external_supply is not None
+            else None
+        )
+        if raw_customer_specification is None and existing is not None:
+            try:
+                raw_customer_specification = json.loads(
+                    existing.external_packaging_specification_json or "{}"
+                )
+            except (TypeError, json.JSONDecodeError):
+                raw_customer_specification = None
+        if raw_customer_specification is None:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "蜂窝板必须填写客户材质、孔径和长宽厚"
+                    if first.category_code == "honeycomb_board"
+                    else "其他外购包装必须填写客户要求及报给供应商的规格"
+                ),
+            )
+        customer_specification, specification_summary = (
+            _normalize_direct_external_customer_specification(
+                first.category_code, raw_customer_specification
+            )
+        )
+        if any(
+            row.category_code != first.category_code
+            or row.purchase_unit != first.purchase_unit
+            for row in rows[1:]
+        ):
+            raise HTTPException(status_code=422, detail="候选供应商必须属于同一包材类别和采购单位")
     else:
         if payload.external_supply and payload.external_supply.customer_specification:
             raise HTTPException(
                 status_code=422,
-                detail="本阶段只有纸护角支持独立客户规格",
+                detail="当前包材类别暂不支持独立客户规格",
             )
         if any(
             row.category_code != first.category_code

@@ -9,7 +9,11 @@ from fastapi.testclient import TestClient
 import pytest
 from sqlalchemy import func, select
 
-from test_p1_40a_packaging_masterdata import p1_40a_app, _external_payload
+from test_p1_40a_packaging_masterdata import (
+    p1_40a_app,
+    _external_payload,
+    _honeycomb_payload,
+)
 from test_p1_33c2_order_external_component_snapshots import snapshot_app, _order_payload
 
 
@@ -74,7 +78,13 @@ def _order_payload_for(product_id: int, customer_id: int) -> dict:
     }
 
 
-def _seed_price(app: FastAPI, external_product_id: int) -> None:
+def _seed_price(
+    app: FastAPI,
+    external_product_id: int,
+    *,
+    quote_unit: str = "米",
+    unit_price: str = "1.10",
+) -> None:
     from app.models.external_packaging_price import ExternalPackagingPriceVersion
     from app.models.supplier import ExternalPackagingProduct
     from app.models.user import User
@@ -89,15 +99,17 @@ def _seed_price(app: FastAPI, external_product_id: int) -> None:
                 version_number=1,
                 product_version=product.version,
                 specification_snapshot_json=product.specification_json,
-                quote_unit="米",
-                unit_conversion_basis="客户单根长度mm÷1000换算",
+                quote_unit=quote_unit,
+                unit_conversion_basis=(
+                    "客户单根长度mm÷1000换算" if quote_unit == "米" else "采购单位直接计价"
+                ),
                 currency="CNY",
                 tax_mode="tax_inclusive",
                 tax_rate=Decimal("0.13"),
-                unit_price=Decimal("1.10"),
+                unit_price=Decimal(unit_price),
                 effective_from=date(2026, 1, 1),
                 moq_quantity=Decimal("1"),
-                moq_unit="米",
+                moq_unit=quote_unit,
                 packaging_multiple=Decimal("1"),
                 tier_prices_json="[]",
                 shipping_fee_mode="not_provided",
@@ -270,6 +282,70 @@ def test_direct_external_order_freezes_routes_skips_production_and_confirms(
         assert denied_client.get(
             "/api/external-packaging-purchases/pending-confirmations"
         ).status_code == 403
+
+
+def test_direct_honeycomb_customer_spec_and_order_ratio_reach_supplier_print(
+    routing_app: FastAPI,
+) -> None:
+    ids = routing_app.state.fixture
+    with TestClient(routing_app) as client:
+        _login(client, "p1-40a-admin")
+        created_product = client.post(
+            "/api/master/products", json=_honeycomb_payload(ids)
+        )
+        assert created_product.status_code == 201, created_product.text
+        _seed_price(
+            routing_app,
+            ids["HC-GENERAL"],
+            quote_unit="片",
+            unit_price="1.97",
+        )
+
+        order_payload = _order_payload_for(
+            created_product.json()["id"], ids["customer_a"]
+        )
+        order_payload["customer_po"] = "P1-40B-HONEYCOMB"
+        created_order = client.post("/api/orders", json=order_payload)
+        assert created_order.status_code == 201, created_order.text
+        order_id = created_order.json()["id"]
+
+        preview_response = client.get(
+            f"/api/orders/{order_id}/external-packaging-purchase"
+        )
+        assert preview_response.status_code == 200, preview_response.text
+        preview = preview_response.json()
+        assert len(preview["items"]) == 1
+        row = preview["items"][0]
+        assert row["specification_summary"] == (
+            "材质170*110*170，孔径15mm，800×180×60mm"
+        )
+        assert row["suggested_purchase_quantity"] == "200"
+
+        confirmed_response = client.post(
+            f"/api/orders/{order_id}/external-packaging-purchase/confirm",
+            json={
+                "idempotency_key": "p1-40b-honeycomb-confirm",
+                "lines": [
+                    {
+                        "order_component_id": row["order_component_id"],
+                        "candidate_id": row["default_candidate_id"],
+                        "purchase_quantity": row["suggested_purchase_quantity"],
+                    }
+                ],
+            },
+        )
+        assert confirmed_response.status_code == 200, confirmed_response.text
+        purchase_id = confirmed_response.json()["confirmation"]["purchase_orders"][0]["id"]
+        printed_response = client.get(
+            f"/api/external-packaging-purchases/{purchase_id}/print"
+        )
+        assert printed_response.status_code == 200, printed_response.text
+        printed = printed_response.json()["items"][0]
+        assert printed["material"] == "170*110*170"
+        assert printed["aperture_mm"] == "15"
+        assert printed["dimensions_mm"] == "800×180×60"
+        assert printed["purchase_quantity"] == "200"
+        assert printed["purchase_unit"] == "片"
 
 
 def test_mixed_bom_keeps_paper_production_and_external_components(

@@ -583,8 +583,10 @@ def test_mold_rack_move_mode_reuses_guarded_location_move_and_exposes_publish_st
     assert "当前正式层格" in SOURCE
     assert "当前草稿层格" in SOURCE
     assert "① 保存层格到草稿" in SOURCE
-    assert "② 校验当前地图草稿" in SOURCE
-    assert "③ 发布已校验地图" in SOURCE
+    assert "② 校验当前楼层草稿" in SOURCE
+    assert "③ 发布当前楼层地图" in SOURCE
+    assert "其他楼层草稿会独立保留" in SOURCE
     assert "只有第③步发布完成" in SOURCE
     assert "货架总层数（含设备占用层）" in SOURCE
+    assert ".twin-mold-rack-planner-actions button:disabled" in TWIN_CSS
     assert ".twin-mold-move-panel" in TWIN_CSS

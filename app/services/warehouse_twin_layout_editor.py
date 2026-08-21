@@ -537,19 +537,80 @@ def _active_draft_document_unlocked(
     return _new_draft_document(published_path)
 
 
-def _mark_draft_changed(document: dict[str, Any]) -> None:
+def _dirty_floor_codes(document: dict[str, Any]) -> list[str]:
+    meta = document.get("draft_meta") or {}
+    base_floor_revisions = meta.get("base_floor_revisions") or {}
+    return [
+        str(code)
+        for code, floor in (document.get("floors") or {}).items()
+        if isinstance(floor, dict)
+        and str(floor.get("revision") or "")
+        != str(base_floor_revisions.get(code) or "")
+    ]
+
+
+def _floor_validation(
+    document: dict[str, Any], floor_code: str, floor_revision: str
+) -> dict[str, Any] | None:
+    meta = document.get("draft_meta") or {}
+    validations = meta.get("floor_validations") or {}
+    validation = validations.get(floor_code)
+    if (
+        isinstance(validation, dict)
+        and str(validation.get("revision") or "") == floor_revision
+    ):
+        return validation
+
+    # Older single-floor drafts stored validation details globally.  Accept
+    # those records until the draft is changed or validated again.
+    validated_revisions = meta.get("validated_floor_revisions") or {}
+    if (
+        meta.get("status") == "validated"
+        and str(validated_revisions.get(floor_code) or "") == floor_revision
+    ):
+        return {
+            "revision": floor_revision,
+            "validated_at": meta.get("validated_at"),
+            "blockers": list(meta.get("validation_blockers") or []),
+            "warnings": list(meta.get("validation_warnings") or []),
+        }
+    return None
+
+
+def _refresh_draft_status(document: dict[str, Any]) -> None:
     meta = document.get("draft_meta")
     if not isinstance(meta, dict):
         return
-    meta["status"] = "draft"
+    dirty_floors = _dirty_floor_codes(document)
+    validated_revisions = meta.get("validated_floor_revisions") or {}
+    all_dirty_floors_validated = bool(dirty_floors) and all(
+        str(validated_revisions.get(code) or "")
+        == str((document.get("floors") or {}).get(code, {}).get("revision") or "")
+        for code in dirty_floors
+    )
+    meta["status"] = "validated" if all_dirty_floors_validated else "draft"
+
+
+def _mark_draft_changed(document: dict[str, Any], floor_code: str) -> None:
+    meta = document.get("draft_meta")
+    if not isinstance(meta, dict):
+        return
     meta["updated_at"] = _utc_iso()
-    for key in (
-        "validated_at",
-        "validated_floor_revisions",
-        "validation_blockers",
-        "validation_warnings",
-    ):
+    validated_revisions = dict(meta.get("validated_floor_revisions") or {})
+    validated_revisions.pop(floor_code, None)
+    if validated_revisions:
+        meta["validated_floor_revisions"] = validated_revisions
+    else:
+        meta.pop("validated_floor_revisions", None)
+    floor_validations = dict(meta.get("floor_validations") or {})
+    floor_validations.pop(floor_code, None)
+    if floor_validations:
+        meta["floor_validations"] = floor_validations
+    else:
+        meta.pop("floor_validations", None)
+    for key in ("validated_at", "validation_blockers", "validation_warnings"):
         meta.pop(key, None)
+    _refresh_draft_status(document)
 
 
 def _normalize_floor_code(floor_code: str) -> str:
@@ -625,21 +686,6 @@ def _apply_mutation(
         current_revision = str(floor.get("revision") or "")
         if not expected_revision or expected_revision != current_revision:
             raise WarehouseTwinLayoutEditConflictError("布局已被其他操作更新，请刷新后重试")
-        if path is None:
-            meta = document.get("draft_meta") or {}
-            base_floor_revisions = meta.get("base_floor_revisions") or {}
-            changed_other_floors = [
-                code
-                for code, other_floor in (document.get("floors") or {}).items()
-                if code != normalized
-                and isinstance(other_floor, dict)
-                and str(other_floor.get("revision") or "")
-                != str(base_floor_revisions.get(code) or "")
-            ]
-            if changed_other_floors:
-                raise WarehouseTwinLayoutEditConflictError(
-                    "同一地图草稿只能规划一个楼层；请先发布或放弃其他楼层草稿"
-                )
         result = mutate(floor)
         _remember_receipt(
             floor,
@@ -651,7 +697,7 @@ def _apply_mutation(
         floor["revision"] = _floor_revision(floor)
         document["generated_at"] = floor["layout_edited_at"]
         if path is None:
-            _mark_draft_changed(document)
+            _mark_draft_changed(document, normalized)
         _write_document(target, document)
         return LayoutMutation(
             value=result,
@@ -1189,29 +1235,53 @@ def load_warehouse_twin_layout_draft(
         )
         floor = published_floor
         meta: dict[str, Any] = {}
-        has_draft = draft is not None
+        dirty_floor_codes: list[str] = []
+        has_draft = False
         if draft is not None:
             candidate = draft["floors"].get(normalized)
             if not isinstance(candidate, dict):
                 raise WarehouseTwinLayoutEditError(f"布局草稿缺少 {normalized}")
             floor = candidate
             meta = dict(draft.get("draft_meta") or {})
+            dirty_floor_codes = _dirty_floor_codes(draft)
+            has_draft = normalized in dirty_floor_codes
+        floor_revision = str(floor.get("revision") or "")
+        validation = (
+            _floor_validation(draft, normalized, floor_revision)
+            if draft is not None and has_draft
+            else None
+        )
+        floor_status = "none"
+        if has_draft:
+            floor_status = (
+                "validated"
+                if validation is not None and not list(validation.get("blockers") or [])
+                else "draft"
+            )
         visible_floor = keep_measured_floor_features(deepcopy(floor))
         return {
             **visible_floor,
             "generated_at": (draft if draft is not None else published).get("generated_at"),
-            "projection_notice": "当前为管理员布局草稿；正式库存数量仍以 ERP 库存账为准。",
+            "projection_notice": (
+                "当前为本楼层管理员布局草稿；正式库存数量仍以 ERP 库存账为准。"
+                if has_draft
+                else "当前楼层没有待发布草稿；正式库存数量仍以 ERP 库存账为准。"
+            ),
             "draft_control": {
                 "has_draft": has_draft,
-                "status": str(meta.get("status") or "none") if has_draft else "none",
+                "has_other_floor_drafts": any(
+                    code != normalized for code in dirty_floor_codes
+                ),
+                "dirty_floor_codes": dirty_floor_codes,
+                "status": floor_status,
                 "published_revision": str(published_floor.get("revision") or ""),
-                "draft_revision": str(floor.get("revision") or "") if has_draft else None,
+                "draft_revision": floor_revision if has_draft else None,
                 "base_published_sha256": meta.get("base_published_sha256"),
                 "created_at": meta.get("created_at"),
                 "updated_at": meta.get("updated_at"),
-                "validated_at": meta.get("validated_at"),
-                "blockers": list(meta.get("validation_blockers") or []),
-                "warnings": list(meta.get("validation_warnings") or []),
+                "validated_at": validation.get("validated_at") if validation else None,
+                "blockers": list(validation.get("blockers") or []) if validation else [],
+                "warnings": list(validation.get("warnings") or []) if validation else [],
             },
         }
 
@@ -1240,6 +1310,7 @@ def validate_warehouse_twin_layout_draft(
     published_target = _published_layout_paths(published_path).source
     draft_target = draft_path or TWIN_LAYOUT_DRAFT_PATH
     with _LAYOUT_EDIT_LOCK:
+        published = _read_document(published_target)
         draft = _active_draft_document_unlocked(
             published_path=published_target,
             draft_path=draft_target,
@@ -1252,28 +1323,45 @@ def validate_warehouse_twin_layout_draft(
             raise WarehouseTwinLayoutEditNotFoundError(f"布局草稿缺少 {normalized}")
         if str(floor.get("revision") or "") != str(expected_revision or ""):
             raise WarehouseTwinLayoutEditConflictError("布局草稿已更新，请刷新后重新校验")
-        blockers, warnings = _validate_document_for_publish(draft)
+        if normalized not in _dirty_floor_codes(draft):
+            raise WarehouseTwinLayoutEditNotFoundError("当前楼层没有可校验的布局草稿")
+
+        # Validate only the requested floor on top of the current published
+        # document.  Other floors may have independent drafts, but they must
+        # neither be published nor block this floor's workflow.
+        candidate = deepcopy(published)
+        candidate["floors"][normalized] = deepcopy(floor)
+        blockers, warnings = _validate_document_for_publish(candidate)
         meta = draft["draft_meta"]
         now = _utc_iso()
         meta["updated_at"] = now
         meta["validation_blockers"] = blockers
         meta["validation_warnings"] = warnings
+        validations = dict(meta.get("floor_validations") or {})
+        validations[normalized] = {
+            "revision": str(floor.get("revision") or ""),
+            "validated_at": now if not blockers else None,
+            "blockers": blockers,
+            "warnings": warnings,
+        }
+        meta["floor_validations"] = validations
+        validated_revisions = dict(meta.get("validated_floor_revisions") or {})
         if blockers:
-            meta["status"] = "draft"
+            validated_revisions.pop(normalized, None)
             meta.pop("validated_at", None)
-            meta.pop("validated_floor_revisions", None)
         else:
-            meta["status"] = "validated"
             meta["validated_at"] = now
-            meta["validated_floor_revisions"] = {
-                code: str(item.get("revision") or "")
-                for code, item in draft["floors"].items()
-                if isinstance(item, dict)
-            }
+            validated_revisions[normalized] = str(floor.get("revision") or "")
+        if validated_revisions:
+            meta["validated_floor_revisions"] = validated_revisions
+        else:
+            meta.pop("validated_floor_revisions", None)
+        _refresh_draft_status(draft)
+        floor_status = "draft" if blockers else "validated"
         _write_document(draft_target, draft)
         return LayoutDraftAction(
             value={
-                "status": meta["status"],
+                "status": floor_status,
                 "floor_code": normalized,
                 "draft_revision": str(floor.get("revision") or ""),
                 "blockers": blockers,
@@ -1309,9 +1397,34 @@ def publish_warehouse_twin_layout_draft(
         if draft_target.is_file():
             replay_document = _read_document(draft_target)
             replay_meta = replay_document.get("draft_meta") or {}
-            receipt = replay_meta.get("last_publish") or {}
-            if replay_meta.get("status") == "published" and receipt.get("operation_key") == normalized_key:
-                return LayoutDraftAction(value=dict(receipt.get("result") or {}), applied=False)
+            receipts = list(replay_meta.get("publish_receipts") or [])
+            last_publish = replay_meta.get("last_publish") or {}
+            if last_publish and not receipts:
+                receipts.append(last_publish)
+            for receipt in receipts:
+                if receipt.get("operation_key") != normalized_key:
+                    continue
+                receipt_floor = str(
+                    receipt.get("floor_code")
+                    or (receipt.get("result") or {}).get("floor_code")
+                    or ""
+                ).upper()
+                if receipt_floor and receipt_floor != normalized:
+                    raise WarehouseTwinLayoutEditConflictError(
+                        "该发布操作键已用于其他楼层"
+                    )
+                if (
+                    receipt.get("expected_published_revision")
+                    not in (None, expected_published_revision)
+                    or receipt.get("expected_draft_revision")
+                    not in (None, expected_draft_revision)
+                ):
+                    raise WarehouseTwinLayoutEditConflictError(
+                        "该发布操作键已用于不同版本的地图草稿"
+                    )
+                return LayoutDraftAction(
+                    value=dict(receipt.get("result") or {}), applied=False
+                )
 
         draft = _active_draft_document_unlocked(
             published_path=published_source,
@@ -1329,31 +1442,20 @@ def publish_warehouse_twin_layout_draft(
         if str(draft_floor.get("revision") or "") != str(expected_draft_revision or ""):
             raise WarehouseTwinLayoutEditConflictError("布局草稿已更新，请重新校验后发布")
         meta = draft["draft_meta"]
-        base_floor_revisions = meta.get("base_floor_revisions") or {}
-        dirty_floors = [
-            code
-            for code, item in draft["floors"].items()
-            if isinstance(item, dict)
-            and str(item.get("revision") or "")
-            != str(base_floor_revisions.get(code) or "")
-        ]
-        if dirty_floors != [normalized]:
-            raise WarehouseTwinLayoutEditConflictError(
-                "每次只能发布一个楼层的地图草稿；请刷新并重新核对草稿范围"
-            )
+        dirty_floors = _dirty_floor_codes(draft)
+        if normalized not in dirty_floors:
+            raise WarehouseTwinLayoutEditNotFoundError("当前楼层没有可发布的布局草稿")
         validated_revisions = meta.get("validated_floor_revisions") or {}
-        current_revisions = {
-            code: str(item.get("revision") or "")
-            for code, item in draft["floors"].items()
-            if isinstance(item, dict)
-        }
         if (
-            meta.get("status") != "validated"
-            or validated_revisions.get(normalized) != expected_draft_revision
-            or validated_revisions != current_revisions
+            str(validated_revisions.get(normalized) or "")
+            != expected_draft_revision
         ):
-            raise WarehouseTwinLayoutEditConflictError("请先校验当前布局草稿，再执行发布")
-        blockers, warnings = _validate_document_for_publish(draft)
+            raise WarehouseTwinLayoutEditConflictError("请先校验当前楼层布局草稿，再执行发布")
+
+        candidate = deepcopy(published)
+        candidate["floors"][normalized] = deepcopy(draft_floor)
+        candidate["generated_at"] = draft.get("generated_at") or _utc_iso()
+        blockers, warnings = _validate_document_for_publish(candidate)
         if blockers:
             raise WarehouseTwinLayoutEditError("布局草稿校验未通过：" + "；".join(blockers[:5]))
 
@@ -1366,7 +1468,6 @@ def publish_warehouse_twin_layout_draft(
             backup_path.unlink(missing_ok=True)
             raise WarehouseTwinLayoutEditError("正式地图备份校验失败，已停止发布")
 
-        candidate = deepcopy(draft)
         candidate.pop("draft_meta", None)
         draft_before_publish = draft_target.read_bytes()
         try:
@@ -1378,6 +1479,9 @@ def publish_warehouse_twin_layout_draft(
             if published_source != published_target and _path_sha256(published_source) != old_sha256:
                 raise WarehouseTwinLayoutEditError("静态地图基线发生变化，已停止发布")
             published_sha256 = _path_sha256(published_target)
+            remaining_dirty_floors = [
+                code for code in dirty_floors if code != normalized
+            ]
             result = {
                 "status": "published",
                 "floor_code": normalized,
@@ -1389,11 +1493,50 @@ def publish_warehouse_twin_layout_draft(
                 "warnings": warnings,
                 "inventory_changed": False,
                 "published_at": _utc_iso(),
+                "remaining_draft_floor_codes": remaining_dirty_floors,
             }
-            meta["status"] = "published"
-            meta["published_at"] = result["published_at"]
-            meta["last_publish"] = {"operation_key": normalized_key, "result": result}
-            _write_document(draft_target, draft)
+            receipt = {
+                "operation_key": normalized_key,
+                "floor_code": normalized,
+                "expected_published_revision": expected_published_revision,
+                "expected_draft_revision": expected_draft_revision,
+                "result": result,
+            }
+            persisted_draft = deepcopy(draft)
+            persisted_meta = persisted_draft["draft_meta"]
+            publish_receipts = list(persisted_meta.get("publish_receipts") or [])
+            publish_receipts.append(receipt)
+            persisted_meta["publish_receipts"] = publish_receipts[-50:]
+            persisted_meta["last_publish"] = receipt
+            persisted_meta["published_at"] = result["published_at"]
+            if remaining_dirty_floors:
+                # Consume only this floor.  Other floors stay as independent
+                # drafts and are rebased onto the newly published document.
+                persisted_draft["floors"][normalized] = deepcopy(
+                    written["floors"][normalized]
+                )
+                persisted_draft["generated_at"] = result["published_at"]
+                persisted_meta["status"] = "draft"
+                persisted_meta["updated_at"] = result["published_at"]
+                persisted_meta["base_published_sha256"] = published_sha256
+                persisted_meta["base_floor_revisions"] = {
+                    code: str(item.get("revision") or "")
+                    for code, item in written["floors"].items()
+                    if isinstance(item, dict)
+                }
+                # A publish changes the base document.  Require every
+                # remaining floor to be validated again against that base.
+                for key in (
+                    "validated_at",
+                    "validated_floor_revisions",
+                    "floor_validations",
+                    "validation_blockers",
+                    "validation_warnings",
+                ):
+                    persisted_meta.pop(key, None)
+            else:
+                persisted_meta["status"] = "published"
+            _write_document(draft_target, persisted_draft)
         except Exception as error:
             try:
                 if published_source == published_target:
@@ -1422,9 +1565,11 @@ def discard_warehouse_twin_layout_draft(
     floor_code: str,
     *,
     expected_revision: str,
+    published_path: Path | None = None,
     draft_path: Path | None = None,
 ) -> LayoutDraftAction:
     normalized = _normalize_floor_code(floor_code)
+    published_target = _published_layout_paths(published_path).source
     target = draft_path or TWIN_LAYOUT_DRAFT_PATH
     with _LAYOUT_EDIT_LOCK:
         if not target.is_file():
@@ -1432,9 +1577,12 @@ def discard_warehouse_twin_layout_draft(
                 value={"status": "none", "floor_code": normalized, "inventory_changed": False},
                 applied=False,
             )
-        draft = _read_document(target)
-        meta = draft.get("draft_meta") or {}
-        if meta.get("status") not in {"draft", "validated"}:
+        draft = _active_draft_document_unlocked(
+            published_path=published_target,
+            draft_path=target,
+            create=False,
+        )
+        if draft is None:
             return LayoutDraftAction(
                 value={"status": "none", "floor_code": normalized, "inventory_changed": False},
                 applied=False,
@@ -1444,8 +1592,48 @@ def discard_warehouse_twin_layout_draft(
             raise WarehouseTwinLayoutEditNotFoundError(f"布局草稿缺少 {normalized}")
         if str(floor.get("revision") or "") != str(expected_revision or ""):
             raise WarehouseTwinLayoutEditConflictError("布局草稿已更新，请刷新后再放弃")
-        target.unlink()
+        dirty_floors = _dirty_floor_codes(draft)
+        if normalized not in dirty_floors:
+            return LayoutDraftAction(
+                value={"status": "none", "floor_code": normalized, "inventory_changed": False},
+                applied=False,
+            )
+        remaining_dirty_floors = [code for code in dirty_floors if code != normalized]
+        if remaining_dirty_floors:
+            published = _read_document(published_target)
+            published_floor = published["floors"].get(normalized)
+            if not isinstance(published_floor, dict):
+                raise WarehouseTwinLayoutEditNotFoundError(
+                    f"数字孪生平面缺少 {normalized}"
+                )
+            draft["floors"][normalized] = deepcopy(published_floor)
+            draft["generated_at"] = _utc_iso()
+            meta = draft["draft_meta"]
+            validated_revisions = dict(meta.get("validated_floor_revisions") or {})
+            validated_revisions.pop(normalized, None)
+            if validated_revisions:
+                meta["validated_floor_revisions"] = validated_revisions
+            else:
+                meta.pop("validated_floor_revisions", None)
+            floor_validations = dict(meta.get("floor_validations") or {})
+            floor_validations.pop(normalized, None)
+            if floor_validations:
+                meta["floor_validations"] = floor_validations
+            else:
+                meta.pop("floor_validations", None)
+            meta["updated_at"] = draft["generated_at"]
+            for key in ("validated_at", "validation_blockers", "validation_warnings"):
+                meta.pop(key, None)
+            _refresh_draft_status(draft)
+            _write_document(target, draft)
+        else:
+            target.unlink()
         return LayoutDraftAction(
-            value={"status": "discarded", "floor_code": normalized, "inventory_changed": False},
+            value={
+                "status": "discarded",
+                "floor_code": normalized,
+                "remaining_draft_floor_codes": remaining_dirty_floors,
+                "inventory_changed": False,
+            },
             applied=True,
         )

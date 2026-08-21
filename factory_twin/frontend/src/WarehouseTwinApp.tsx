@@ -555,6 +555,8 @@ interface TwinFloorResponse {
 
 interface LayoutDraftControl {
   has_draft: boolean;
+  has_other_floor_drafts?: boolean;
+  dirty_floor_codes?: string[];
   status: "none" | "draft" | "validated" | "published";
   published_revision: string;
   draft_revision: string | null;
@@ -586,6 +588,7 @@ interface LayoutDraftPublishResponse {
   floor_code: string;
   published_revision: string;
   backup_name: string;
+  remaining_draft_floor_codes?: string[];
   inventory_changed: false;
   applied: boolean;
 }
@@ -3560,8 +3563,10 @@ export function WarehouseTwinApp() {
       setZonePolicyDrafts({});
       setZoneGeometryDrafts({});
       setLocationEditMessage(raw.draft_control.has_draft
-        ? "检测到以前保留的高级维护草稿，员工仍只看到已发布地图；系统会保留该草稿。只要当前区域本身没有高级改动，仍可直接一次确认启用。"
-        : "区域规划已开启；选中区域后填写用途、形式和最大栈板数，一次确认即可启用。"
+        ? "检测到当前楼层以前保留的高级维护草稿，员工仍只看到已发布地图；系统会保留该草稿。只要当前区域本身没有高级改动，仍可直接一次确认启用。"
+        : raw.draft_control.has_other_floor_drafts
+          ? `区域规划已开启；${(raw.draft_control.dirty_floor_codes || []).filter((code) => code !== floorCode).join("、") || "其他楼层"} 的草稿会独立保留，不影响当前楼层保存、校验和发布。`
+          : "区域规划已开启；选中区域后填写用途、形式和最大栈板数，一次确认即可启用。"
       );
     } catch (reason) {
       setLocationEditMessage(`打开布局草稿失败：${(reason as Error).message}`);
@@ -3664,6 +3669,8 @@ export function WarehouseTwinApp() {
   const rememberServerDraft = (revision: string) => {
     setLayoutDraftControl((current) => ({
       has_draft: true,
+      has_other_floor_drafts: current?.has_other_floor_drafts,
+      dirty_floor_codes: Array.from(new Set([...(current?.dirty_floor_codes || []), floorCode])),
       status: "draft",
       published_revision: current?.published_revision || layout?.source_sha256 || revision,
       draft_revision: revision,
@@ -3707,7 +3714,7 @@ export function WarehouseTwinApp() {
 
   const publishLayoutDraft = async () => {
     if (!layout || layoutDraftControl?.status !== "validated") return;
-    if (!window.confirm("确认发布已校验的仓库地图吗？发布前会自动备份旧地图；库存数量不会改变。")) return;
+    if (!window.confirm(`确认发布 ${floorCode} 已校验的仓库地图吗？只发布当前楼层，其他楼层草稿会保留；发布前会自动备份旧地图，库存数量不会改变。`)) return;
     setSpatialEditBusy(true);
     try {
       const result = await mutateJson<LayoutDraftPublishResponse>(
@@ -3726,7 +3733,7 @@ export function WarehouseTwinApp() {
       setRackDrafts({});
       setZonePolicyDrafts({});
       setZoneGeometryDrafts({});
-      setLocationEditMessage(`仓库地图已发布；旧地图备份为 ${result.backup_name}，库存数量未改变。`);
+      setLocationEditMessage(`${floorCode} 仓库地图已发布；旧地图备份为 ${result.backup_name}，库存数量未改变。${result.remaining_draft_floor_codes?.length ? ` ${result.remaining_draft_floor_codes.join("、")} 草稿仍独立保留。` : ""}`);
     } catch (reason) {
       setLocationEditMessage(`发布布局失败：${(reason as Error).message}`);
     } finally {
@@ -3740,7 +3747,7 @@ export function WarehouseTwinApp() {
       await toggleLayoutEditor();
       return;
     }
-    if (!window.confirm("确认放弃整个布局草稿吗？已发布地图和库存不会改变。")) return;
+    if (!window.confirm(`确认只放弃 ${floorCode} 的布局草稿吗？其他楼层草稿、已发布地图和库存不会改变。`)) return;
     setSpatialEditBusy(true);
     try {
       await mutateJson(
@@ -3754,7 +3761,7 @@ export function WarehouseTwinApp() {
       setRackDrafts({});
       setZonePolicyDrafts({});
       setZoneGeometryDrafts({});
-      setLocationEditMessage("布局草稿已放弃；已发布地图和库存均未改变。");
+      setLocationEditMessage(`${floorCode} 布局草稿已放弃；其他楼层草稿、已发布地图和库存均未改变。`);
     } catch (reason) {
       setLocationEditMessage(`放弃草稿失败：${(reason as Error).message}`);
     } finally {
@@ -4648,12 +4655,12 @@ export function WarehouseTwinApp() {
                   return <label className={machineBlocked ? "blocked" : ""} key={`${selectedRackEditDraft.id}-simple-grid-${level}`}><span>第 {level} 层格数{machineBlocked ? "（设备占用层）" : usedCount ? `（已有 ${usedCount} 件模具）` : ""}</span><input type="number" min="0" max="50" disabled={machineBlocked} value={machineBlocked ? 0 : count} onChange={(event) => changeRackLevelCellCount(selectedRackEditDraft, index, Number(event.target.value))} /></label>;
                 })}</div>
                 <div className="twin-mold-rack-planner-actions">
-                  <button type="button" className="primary" disabled={spatialEditBusy} onClick={saveSelectedRack}>① 保存层格到草稿</button>
-                  <button type="button" disabled={spatialEditBusy || !layoutDraftControl?.has_draft || Boolean(rackDrafts[selectedRackEditDraft.id])} onClick={validateLayoutDraft}>② 校验当前地图草稿</button>
-                  <button type="button" className="publish" disabled={spatialEditBusy || layoutDraftControl?.status !== "validated" || Boolean(rackDrafts[selectedRackEditDraft.id])} onClick={publishLayoutDraft}>③ 发布已校验地图</button>
+                  <button type="button" className="primary" disabled={spatialEditBusy} title="保存当前货架层格到当前楼层草稿" onClick={saveSelectedRack}>① 保存层格到草稿</button>
+                  <button type="button" disabled={spatialEditBusy || !layoutDraftControl?.has_draft || Boolean(rackDrafts[selectedRackEditDraft.id])} title={Boolean(rackDrafts[selectedRackEditDraft.id]) ? "请先完成第①步保存当前输入" : !layoutDraftControl?.has_draft ? "请先完成第①步生成当前楼层草稿" : "只校验当前楼层草稿"} onClick={validateLayoutDraft}>② 校验当前楼层草稿</button>
+                  <button type="button" className="publish" disabled={spatialEditBusy || layoutDraftControl?.status !== "validated" || Boolean(rackDrafts[selectedRackEditDraft.id])} title={layoutDraftControl?.status !== "validated" ? "请先完成第②步校验当前楼层草稿" : "只发布当前楼层，其他楼层草稿会保留"} onClick={publishLayoutDraft}>③ 发布当前楼层地图</button>
                   <button type="button" disabled={spatialEditBusy} onClick={() => setRackDrafts((current) => { const next = { ...current }; delete next[selectedRackEditDraft.id]; return next; })}>取消本次输入</button>
                 </div>
-                <p>第②、③步会校验并发布当前整份地图草稿；只有第③步发布完成，“模具与位置”和移货目标才会读取新格数。减少已被正式模具位置使用的层或格会被系统拦截；增加格位不会自动搬动或平均分配现有模具。</p>
+                <p>第②、③步只处理当前楼层；其他楼层草稿会独立保留。只有第③步发布完成，“模具与位置”和移货目标才会读取新格数。减少已被正式模具位置使用的层或格会被系统拦截；增加格位不会自动搬动或平均分配现有模具。</p>
               </div>}
             </section>}
             {locationEditMode && advancedAreaMaintenanceOpen && areaPolicyEditMode && canEditLocations && selectedAreaFeature && selectedZonePolicy && <div className="twin-zone-policy-editor">

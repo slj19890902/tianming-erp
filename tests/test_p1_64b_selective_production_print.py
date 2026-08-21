@@ -347,6 +347,24 @@ def test_frontend_selection_snapshot_singleflight_and_exact_retry(tmp_path: Path
         ("prepareProductionPrintBatch", "stockReplenishmentVoidBusy"),
     ]
     methods = {name: _method_body(name, next_name) for name, next_name in names}
+    constructor_line_parts: list[str] = []
+    for name, (params, body) in methods.items():
+        if name == "prepareProductionPrintBatch":
+            async_function = "return async function(){" + body + "}"
+            constructor_line_parts.append(
+                "vm.{}=new FunctionCtor({})().bind(vm);\n".format(
+                    name, json.dumps(async_function, ensure_ascii=False)
+                )
+            )
+            continue
+        arguments = json.dumps(params, ensure_ascii=False)[1:-1]
+        if arguments:
+            arguments += ","
+        arguments += json.dumps(body, ensure_ascii=False)
+        constructor_line_parts.append(
+            "vm.{}=new FunctionCtor({});\n".format(name, arguments)
+        )
+    constructor_lines = "".join(constructor_line_parts)
     script = f"""
 const assert=(condition,message)=>{{if(!condition)throw new Error(message);}};
 global.confirm=()=>true;
@@ -364,7 +382,7 @@ const vm={{
   errorMessage(error){{return error?.response?.data?.detail?.message||error?.response?.data?.detail||error?.message||"error";}},
 }};
 const FunctionCtor=Function;
-{''.join(f'vm.{name}=new FunctionCtor({json.dumps(params, ensure_ascii=False)[1:-1]}{"," if params else ""}{json.dumps(("return async function(){{" + body + "}}") if name == "prepareProductionPrintBatch" else body, ensure_ascii=False)});\n' if name != 'prepareProductionPrintBatch' else f'vm.{name}=new FunctionCtor({json.dumps("return async function(){" + body + "}", ensure_ascii=False)})().bind(vm);\n' for name,(params,body) in methods.items())}
+{constructor_lines}
 for(const name of ["productionPrintSelectedItems","productionPrintCandidateSelected","productionPrintAttemptUncertain","resetProductionPrintBatchOutcome","toggleProductionPrintCandidate","clearProductionPrintSelections","productionPrintPayloadItems"]) vm[name]=vm[name].bind(vm);
 const card=(key,task)=>({{selection_key:key,selection_eligible:true,supplier_order_id:1,source_identity:key,selection_fingerprint:"a".repeat(64),task_versions:[{{task_id:task,version:1}}],product_code:key,product_name:`产品${{key}}`}});
 assert(vm.toggleProductionPrintCandidate(card("page-1",11),true)===true,"first explicit selection failed");

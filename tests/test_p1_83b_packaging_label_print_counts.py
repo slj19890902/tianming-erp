@@ -308,6 +308,8 @@ def test_composite_parent_label_job_uses_same_count_freeze_and_keeps_evidence(
             db.flush()
             requisition, order_item, items = _seed_label_facts(db)
             order_item.composite_fulfillment_mode_snapshot = "parent_delivery"
+            order_item.product.production_label_enabled = True
+            order_item.product.production_label_units_per_label = 50
             order_item.parent_production_label_enabled_snapshot = True
             order_item.parent_production_label_units_per_label_snapshot = 50
             order_item.parent_production_label_template_version_snapshot = (

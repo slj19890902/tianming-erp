@@ -30,6 +30,10 @@ from app.models.warehouse_inventory import (
 from app.models.order import Order, OrderItem
 from app.models.product_bom import SalesOrderItemBomComponent
 from app.services.warehouse_pallet_standard import standard_pallet_contract
+from app.services.warehouse_location_address import (
+    employee_location_name,
+    location_address_payload,
+)
 from app.services.product_specification import dimension_specification
 
 
@@ -581,6 +585,7 @@ def _location_payload(
         "location_id": row.id,
         "location_code": row.location_code,
         "location_name": row.location_name,
+        **location_address_payload(row),
         "floor_code": _floor_key(row.warehouse_floor),
         "floor_number": row.warehouse_floor,
         "area_code": row.area_code,
@@ -1129,7 +1134,13 @@ def build_inventory_code_search_results(
             "area_code": location.area_code if location else None,
             "location_id": location.id if location else None,
             "location_code": location.location_code if location else None,
-            "location_name": location.location_name if location else "待定位",
+            "location_name": employee_location_name(location),
+            "employee_location_name": employee_location_name(location),
+            "current_address_code": (
+                location_address_payload(location)["current_address_code"]
+                if location is not None
+                else None
+            ),
             "position_status": position_status,
             "map_position": map_position,
             "pallet_id": row.pallet_item.pallet_id if row.pallet_item else None,
@@ -1217,6 +1228,11 @@ def inventory_search_matches(row: InventoryLot, keyword: str, as_of: date) -> bo
             payload.get("lot_number"),
             location.location_code if location else None,
             location.location_name if location else None,
+            employee_location_name(location) if location else None,
+            *(
+                alias.alias_text
+                for alias in (location.address_aliases if location else [])
+            ),
             location.area_code if location else None,
             pallet.pallet_code if pallet else None,
         )

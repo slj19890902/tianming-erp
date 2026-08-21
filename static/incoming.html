@@ -525,7 +525,7 @@
       const projected = cumulative + Number(item.incoming_quantity || 0) - planned;
       const locations = state.locations
         .filter(row => ["semi_finished", "shared"].includes(row.warehouse_type))
-        .map(row => `<option value="${row.id}" ${Number(item.surplus_location_id) === Number(row.id) ? "selected" : ""}>${escapeHtml(row.location_code)}｜${escapeHtml(row.location_name)}</option>`)
+        .map(row => `<option value="${row.id}" ${Number(item.surplus_location_id) === Number(row.id) ? "selected" : ""}>${escapeHtml(row.employee_location_name || row.current_address_name || row.location_name || "位置名称待完善")}</option>`)
         .join("");
       const decisionBlock = !isPending ? "" : projected < 0
         ? `<div class="mt-2 rounded-lg bg-amber-50 p-2"><p class="text-sm font-bold text-amber-900">还差 ${Math.abs(projected)} 张</p><select data-resolution="${key}" class="mt-1 w-full rounded-lg border p-2" ${canOperate() && !disabled ? "" : "disabled"}><option value="">少收怎么处理</option><option value="await_supplier" ${item.resolution_action === "await_supplier" ? "selected" : ""}>继续等补货</option>${isStockReplenishment ? "" : `<option value="accept_short" ${item.resolution_action === "accept_short" ? "selected" : ""}>按已收数结单</option>`}</select></div>`

@@ -15,11 +15,14 @@ from app.models.warehouse_inventory import (
     InventoryLot,
     SemiFinishedInventoryDetail,
     SemiFinishedLotAllowedProduct,
+    WarehouseArea,
+    WarehouseLocation,
 )
 from app.services.inventory_cost_snapshot import (
     estimate_from_snapshot,
     estimate_inventory_lot_cost,
 )
+from app.services.warehouse_location_address import employee_location_name
 INACTIVE_ORDER_STATUSES = {"completed", "archived", "closed", "dead", "cancelled"}
 NON_DEMAND_ORDER_STATUSES = {"dead", "cancelled"}
 AGE_BUCKETS = (
@@ -151,7 +154,9 @@ def build_inventory_insights(
 
     as_of = as_of or beijing_today()
     lot_query = select(InventoryLot).options(
-        selectinload(InventoryLot.location),
+        selectinload(InventoryLot.location)
+        .selectinload(WarehouseLocation.address_area)
+        .selectinload(WarehouseArea.floor),
         selectinload(InventoryLot.finished_detail),
         selectinload(InventoryLot.semi_finished_detail),
     )
@@ -442,6 +447,7 @@ def build_inventory_insights(
                     "inventory_type": lot.inventory_type,
                     "status": lot.status,
                     "location_code": lot.location.location_code if lot.location else None,
+                    "location_name": employee_location_name(lot.location),
                     "quantity_available": lot.quantity_available,
                     "unit": lot.unit,
                     "age_days": days,

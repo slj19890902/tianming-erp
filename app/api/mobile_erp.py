@@ -70,8 +70,14 @@ from app.models.warehouse_inventory import (
     SemiFinishedLotAllowedProduct,
     Floor3LocationLayout,
     InventoryLotTransfer,
+    WarehouseArea,
     WarehouseLocation,
     WarehouseLocationDiscrepancy,
+)
+from app.services.warehouse_location_address import (
+    employee_location_name,
+    format_location_address,
+    location_address_payload,
 )
 from app.services.audit_log import append_audit_event
 from app.services.location_candidates import (
@@ -987,6 +993,9 @@ def _lot_load_options():
         selectinload(InventoryLot.location).selectinload(
             WarehouseLocation.floor3_layout
         ),
+        selectinload(InventoryLot.location)
+        .selectinload(WarehouseLocation.address_area)
+        .selectinload(WarehouseArea.floor),
         selectinload(InventoryLot.pallet_item).selectinload(
             InventoryPalletItem.pallet
         ),
@@ -1020,6 +1029,7 @@ def _position_payload(lot: InventoryLot) -> dict:
             f"&lot_id={lot.id}&source=mobile-product"
         )
     unit_label = "只" if lot.inventory_type == "finished" else "张"
+    address = location_address_payload(location)
     return {
         "lot_id": lot.id,
         "lot_version": lot.version,
@@ -1027,6 +1037,8 @@ def _position_payload(lot: InventoryLot) -> dict:
         "location_id": location.id,
         "location_code": location.location_code,
         "location_name": location.location_name,
+        "current_address_name": address["current_address_name"],
+        "employee_location_name": address["employee_location_name"],
         "floor": location.warehouse_floor,
         "area_code": location.area_code,
         "pallet_code": (
@@ -2722,6 +2734,30 @@ def _mobile_floor_code(row) -> str:
     return f"{int(row.location.warehouse_floor or 0)}F"
 
 
+def _mobile_area_name(row) -> str:
+    area = row.area
+    if area is not None and area.address_zone_code and area.address_subzone_no:
+        return f"{area.address_zone_code}{int(area.address_subzone_no)}区"
+    if area is not None:
+        name = str(area.area_name or "").strip()
+        code = str(area.area_code or "").strip()
+        if name and name.casefold() != code.casefold():
+            return name
+    return "区域名称待完善"
+
+
+def _mobile_location_name(row) -> str:
+    area = row.area if row.area is not None and row.location.address_area_id == row.area.id else None
+    _code, name = format_location_address(
+        row.location,
+        area=area,
+        floor=row.floor if area is not None else None,
+    )
+    if str(name or "").strip().casefold() == str(_code or "").strip().casefold():
+        return "位置名称待完善"
+    return name or "位置名称待完善"
+
+
 @router.get("/warehouse/map/floors")
 def mobile_warehouse_map_floors(
     response: Response,
@@ -2755,7 +2791,7 @@ def mobile_warehouse_map_floors(
             area_code,
             {
                 "area_code": area_code,
-                "area_name": row.area.area_name if row.area else area_code,
+                "area_name": _mobile_area_name(row),
                 "published_location_count": 0,
             },
         )
@@ -2868,11 +2904,14 @@ def mobile_warehouse_map_area(
         location = row.location
         layout = layouts.get(int(location.id))
         goods = goods_by_location.get(int(location.id), [])
+        readable_location = _mobile_location_name(row)
         location_payloads.append(
             {
                 "location_id": int(location.id),
                 "location_code": location.location_code,
                 "location_name": location.location_name,
+                "current_address_name": readable_location,
+                "employee_location_name": readable_location,
                 "area_code": normalized_area,
                 "geometry": _mobile_layout_payload(layout) if layout else None,
                 "map_status": "ready" if layout else "unmeasured",
@@ -2887,15 +2926,17 @@ def mobile_warehouse_map_area(
             }
         )
     has_geometry = any(item["geometry"] is not None for item in location_payloads)
+    floor_name = rows[0].floor.floor_name if rows[0].floor else "楼层名称待完善"
+    area_name = _mobile_area_name(rows[0])
     return {
         "floor_code": normalized_floor,
-        "floor_name": rows[0].floor.floor_name if rows[0].floor else normalized_floor,
+        "floor_name": floor_name,
         "area_code": normalized_area,
-        "area_name": rows[0].area.area_name if rows[0].area else normalized_area,
+        "area_name": area_name,
         "map_status": "ready" if has_geometry else "unmeasured",
         "map_status_text": "实测地图已建立" if has_geometry else "未建立实测地图",
         "guidance": (
-            f"{normalized_floor} {normalized_area}区，以地图高亮位置为准；到现场后核对相邻位置。"
+            f"{floor_name} {area_name}，以地图高亮位置为准；到现场后核对相邻位置。"
             if has_geometry
             else "未建立实测地图，只能查看文字区域和库位；系统不会生成假坐标或编号格子。"
         ),
@@ -3003,11 +3044,13 @@ def _mobile_discrepancy_payload(
             "location_id": registered.id,
             "location_code": registered.location_code,
             "location_name": registered.location_name,
+            "employee_location_name": employee_location_name(registered),
         },
         "observed_location": {
             "location_id": observed.id,
             "location_code": observed.location_code,
             "location_name": observed.location_name,
+            "employee_location_name": employee_location_name(observed),
         },
         "observed_location_layout_version": row.observed_location_layout_version,
         "reported_quantity": row.reported_quantity,

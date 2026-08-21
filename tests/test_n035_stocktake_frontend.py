@@ -350,7 +350,7 @@ def test_f12_f34_are_explicitly_aisle_temporary_locations() -> None:
 
 def test_mobile_location_list_requires_area_or_search_before_rendering() -> None:
     assert "if(!area&&!query)" in MOBILE
-    assert "请先选择区域或输入库位编码" in MOBILE
+    assert "请先选择区域或输入中文位置名称" in MOBILE
     assert '<option value="">请选择区域</option>' in MOBILE
 
 
@@ -373,7 +373,7 @@ def test_mobile_location_loading_empty_error_and_retry_are_explicit() -> None:
 def test_mobile_location_filter_and_temporary_detection_behavior(tmp_path: Path) -> None:
     functions = "\n".join(
         _function_line(MOBILE, name)
-        for name in ("isTemporary", "locationCode", "locationArea", "renderLocations")
+        for name in ("isTemporary", "locationName", "locationArea", "renderLocations")
     )
     harness = f"""
 const nodes={{
@@ -386,8 +386,8 @@ const h=value=>String(value??"");
 const pick=(row,keys,fallback=null)=>{{for(const key of keys){{if(row&&row[key]!==undefined&&row[key]!==null)return row[key]}}return fallback}};
 const numberValue=(row,keys)=>{{const value=Number(pick(row,keys,0));return Number.isFinite(value)?value:0}};
 const state={{locations:[
-  {{id:1,area_code:"F12",location_code:"F12-P01",location_name:"临放一号"}},
-  {{id:2,area_code:"A1",location_code:"A1-P01",location_name:"正常库位"}},
+  {{id:1,area_code:"F12",area_name:"过道临放区",location_code:"F12-P01",location_name:"临放一号",employee_location_name:"三楼过道临放一号"}},
+  {{id:2,area_code:"A1",area_name:"A1区",location_code:"A1-P01",location_name:"正常库位",employee_location_name:"三楼 A1区·第1排·1号位"}},
 ]}};
 const document={{querySelectorAll:()=>[]}};
 function openLocation(){{}}
@@ -399,15 +399,15 @@ expect(isTemporary({{area_code:"F12",location_code:"OTHER"}}),"F12 area must be 
 expect(isTemporary({{is_temporary:true,location_code:"OTHER"}}),"API temporary flag must win");
 expect(!isTemporary({{area_code:"A1",location_code:"A1-P01"}}),"normal location must stay normal");
 renderLocations();
-expect(nodes.locationList.innerHTML.includes("请先选择区域或输入库位编码"),"empty filters need guidance");
+expect(nodes.locationList.innerHTML.includes("请先选择区域或输入中文位置名称"),"empty filters need guidance");
 expect(!nodes.locationList.innerHTML.includes("location-button"),"empty filters must not render all locations");
-nodes.areaFilter.value="F12";
+nodes.areaFilter.value="过道临放区";
 renderLocations();
-expect(nodes.locationList.innerHTML.includes("F12-P01（过道临放）"),"area filter must render and label F12 location");
+expect(nodes.locationList.innerHTML.includes("三楼过道临放一号（过道临放）"),"area filter must render a readable F12 location");
 nodes.areaFilter.value="";
 nodes.locationSearch.value="A1-P01";
 renderLocations();
-expect(nodes.locationList.innerHTML.includes("A1-P01"),"location search must render matching location");
+expect(nodes.locationList.innerHTML.includes("三楼 A1区·第1排·1号位"),"location search must render the readable matching location");
 """
     _assert_node_run(harness, tmp_path, "n035-mobile-location-behavior.js")
 

@@ -92,6 +92,14 @@ def test_supplier_groups_and_external_product_editor_are_explicit() -> None:
     assert "externalPurchaseCandidateNeedsPrice(row)" in INDEX
     assert "openExternalPurchasePriceMaintenance" in INDEX
     assert "supplierPriceProduct?.category_code==='paper_corner_guard'" in INDEX
+    assert "外购包材组件（一个常用箱可添加多条）" in product_modal
+    assert "添加一条外购包材" in product_modal
+    assert "材质、孔径和长×宽×厚会从供应商产品带入采购快照" in product_modal
+    assert "单独保存外购包材" in product_modal
+    assert product_modal.index("</details>") < product_modal.index(
+        "外购包材组件（一个常用箱可添加多条）"
+    )
+    assert "以下“材质、孔径、规格”会自动进入常用箱外购组件快照和供应商采购单" in INDEX
 
     assert "v-if=\"productForm.supply_mode!=='external_purchase'\"" in product_modal
     assert product_modal.count("productForm.supply_mode!=='external_purchase'") >= 7
@@ -111,6 +119,54 @@ def test_external_purchase_ratio_is_selected_on_customer_order_not_product_maste
     assert "本行客户数量和客户单价不变" in INDEX
     assert "采购单价读取供应商有效报价" in INDEX
     assert "每个客户销售单位需采购数量" not in INDEX
+
+
+def test_common_box_external_components_track_two_rows_and_exclude_reused_supplier_product(
+    tmp_path: Path,
+) -> None:
+    method_names = (
+        "_externalComponentSaveFields",
+        "_externalComponentsDirty",
+        "externalCandidateOptions",
+    )
+    methods = {name: _method(name) for name in method_names}
+    source = f"""
+const first={{purpose:"上板",quantity_per_finished_unit:"1",waste_rate:"0",consumption_unit:"片",units_per_purchase_unit:"",conversion_basis:"",is_required:true,remarks:"上层",category_code:"honeycomb_board",specification:{{material:"A",aperture_mm:8,length_mm:1000,width_mm:800,thickness_mm:20}},candidates:[{{external_product_id:11,is_default:true,purchase_unit:"片"}}]}};
+const second={{purpose:"下板",quantity_per_finished_unit:"1",waste_rate:"0",consumption_unit:"片",units_per_purchase_unit:"",conversion_basis:"",is_required:true,remarks:"下层",category_code:"",specification:{{}},candidates:[]}};
+const vm={{
+  modal:{{type:"product"}}, productForm:{{id:7}}, externalComponentSnapshot:null,
+  externalComponentEditor:{{components:[first,second],catalog:[
+    {{id:11,category_code:"honeycomb_board",purchase_unit:"片",specification:first.specification}},
+    {{id:12,category_code:"honeycomb_board",purchase_unit:"片",specification:{{material:"B",aperture_mm:10,length_mm:900,width_mm:700,thickness_mm:15}}}},
+  ]}},
+}};
+for (const name of {json.dumps(method_names)}) {{
+  const [params,body] = {json.dumps({name: methods[name] for name in method_names}, ensure_ascii=False)}[name];
+  vm[name] = new Function(params,body).bind(vm);
+}}
+vm.externalComponentSnapshot=JSON.stringify(vm._externalComponentSaveFields());
+if(vm._externalComponentsDirty()) throw new Error("fresh two-row snapshot was marked dirty");
+const options=vm.externalCandidateOptions(second).map(row=>row.id);
+if(options.includes(11)||!options.includes(12)) throw new Error("supplier product could be reused across two components");
+second.quantity_per_finished_unit="2";
+if(!vm._externalComponentsDirty()) throw new Error("second component quantity change was not tracked");
+if(vm._externalComponentSaveFields().length!==2) throw new Error("two external components were collapsed");
+"""
+    _run_node(tmp_path, source)
+
+
+def test_common_box_primary_save_includes_external_component_changes() -> None:
+    save_modal = INDEX.split("async saveModal()", 1)[1].split(
+        "async dispatchDelivery(row, options = {})", 1
+    )[0]
+    preview = INDEX.split("async prepareProductOneClickSave()", 1)[1].split(
+        "attachMasterUpdateMetadata(entity, payload, options = null)", 1
+    )[0]
+    assert "this._productBomDirty() || this._externalComponentsDirty()" in save_modal
+    assert "const externalComponentsDirty = this._externalComponentsDirty()" in save_modal
+    assert "await this.saveExternalComponents({notify:false,rethrow:true})" in save_modal
+    assert "this._externalComponentsDirty()" in preview
+    assert "_productEditorDirty()" in INDEX
 
 
 def test_external_candidate_selection_and_payload_clear_paper_fields(

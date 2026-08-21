@@ -322,7 +322,7 @@ def test_frontend_exposes_customer_scope_and_external_component_editor() -> None
     for needle in (
         "适用客户",
         "customer_scope_id",
-        "外购包装组件",
+        "外购包材组件（一个常用箱可添加多条）",
         "loadExternalComponents(productId)",
         "saveExternalComponents()",
         "不会自动生成采购单",

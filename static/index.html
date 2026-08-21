@@ -4994,7 +4994,7 @@
                 <div v-else-if="supplierPackagingForm.category_code==='printed_folding_carton'" class="form-grid" style="margin-top:8px"><div class="field"><label>结构</label><input class="input" v-model.trim="supplierPackagingForm.specification.structure" /></div><div class="field"><label>基材</label><input class="input" v-model.trim="supplierPackagingForm.specification.substrate" /></div><div class="field"><label>成品长(mm)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.finished_length_mm" /></div><div class="field"><label>成品宽(mm)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.finished_width_mm" /></div><div class="field"><label>成品高(mm)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.finished_height_mm" /></div><div class="field"><label>展开长(mm)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.unfolded_length_mm" /></div><div class="field"><label>展开宽(mm)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.unfolded_width_mm" /></div><div class="field"><label>印刷色数</label><input class="input" type="number" min="1" max="12" v-model.number="supplierPackagingForm.specification.print_color_count" /></div><div class="field wide"><label>后道工艺（按顺序）</label><input class="input" v-model="supplierPackagingForm.specification.ordered_processes" placeholder="覆膜→烫金→模切" /></div></div>
                 <div v-else-if="supplierPackagingForm.category_code==='epe_cushion'" class="form-grid" style="margin-top:8px"><div class="field"><label>形态</label><input class="input" v-model.trim="supplierPackagingForm.specification.shape" placeholder="内衬/护角/片材等" /></div><div class="field"><label>长(mm)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.length_mm" /></div><div class="field"><label>宽(mm)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.width_mm" /></div><div class="field"><label>厚度(mm)</label><input class="input" type="number" min="0.1" step="0.1" v-model.number="supplierPackagingForm.specification.thickness_mm" /></div><div class="field"><label>复合层数</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.layers" /></div><div class="field"><label>密度(kg/m³，可选)</label><input class="input" type="number" min="0.1" step="0.1" v-model.number="supplierPackagingForm.specification.density_kg_m3" /></div><div class="field wide"><label>性能依据（有资料才填）</label><input class="input" v-model.trim="supplierPackagingForm.specification.performance" placeholder="供应商检测资料/合同要求" /></div></div>
                 <div v-else-if="supplierPackagingForm.category_code==='hollow_board'" class="form-grid" style="margin-top:8px"><div class="field"><label>长(mm)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.length_mm" /></div><div class="field"><label>宽(mm)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.width_mm" /></div><div class="field"><label>厚度(mm)</label><input class="input" type="number" min="0.1" step="0.1" v-model.number="supplierPackagingForm.specification.thickness_mm" /></div><div class="field"><label>颜色</label><input class="input" v-model.trim="supplierPackagingForm.specification.color" /></div><div class="field"><label>克重(g/㎡，可选)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.basis_weight_gsm" /></div><div class="field"><label>密度(kg/m³，可选)</label><input class="input" type="number" min="0.1" step="0.1" v-model.number="supplierPackagingForm.specification.density_kg_m3" /></div></div>
-                <div v-else-if="supplierPackagingForm.category_code==='honeycomb_board'" class="form-grid" style="margin-top:8px"><div class="field"><label>材质</label><input class="input" v-model.trim="supplierPackagingForm.specification.material" placeholder="例如 170*110*170" /></div><div class="field"><label>孔径(mm)</label><input class="input" type="number" min="0.1" step="0.1" v-model.number="supplierPackagingForm.specification.aperture_mm" /></div><div class="field"><label>规格长(mm)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.length_mm" /></div><div class="field"><label>规格宽(mm)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.width_mm" /></div><div class="field"><label>规格厚(mm)</label><input class="input" type="number" min="0.1" step="0.1" v-model.number="supplierPackagingForm.specification.thickness_mm" /></div></div>
+                <div v-else-if="supplierPackagingForm.category_code==='honeycomb_board'" class="form-grid" style="margin-top:8px"><div class="field wide muted">以下“材质、孔径、规格”会自动进入常用箱外购组件快照和供应商采购单；数量由常用箱每只/每套用量及客户订单数量计算。</div><div class="field"><label>材质</label><input class="input" v-model.trim="supplierPackagingForm.specification.material" placeholder="例如 170*110*170" /></div><div class="field"><label>孔径(mm)</label><input class="input" type="number" min="0.1" step="0.1" v-model.number="supplierPackagingForm.specification.aperture_mm" /></div><div class="field"><label>规格长(mm)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.length_mm" /></div><div class="field"><label>规格宽(mm)</label><input class="input" type="number" min="1" v-model.number="supplierPackagingForm.specification.width_mm" /></div><div class="field"><label>规格厚(mm)</label><input class="input" type="number" min="0.1" step="0.1" v-model.number="supplierPackagingForm.specification.thickness_mm" /></div></div>
                 <div v-else-if="supplierPackagingForm.category_code==='other_packaging'" class="field" style="margin-top:8px"><label>规格摘要</label><input class="input" v-model.trim="supplierPackagingForm.specification.summary" /></div>
                 <div v-else class="muted" style="margin-top:8px">请先选择产品类别。</div>
               </div>
@@ -5498,21 +5498,23 @@
                   </div>
                 </template>
               </fieldset>
+              </details>
               <fieldset v-if="canAdmin" class="bom-editor-panel" :disabled="externalComponentEditor.loading || externalComponentEditor.saving">
                 <div class="bom-editor-heading">
                   <div>
-                    <h4>外购包装组件</h4>
-                    <p class="bom-editor-note">维护外购组件与默认供应商候选。</p>
+                    <h4>外购包材组件（一个常用箱可添加多条）</h4>
+                    <p class="bom-editor-note">先在“供应商 → 包材产品与报价”登记每一种真实包材；这里逐条选择并填写每只/每套用量。蜂窝板的材质、孔径和长×宽×厚会从供应商产品带入采购快照，不重复手填。</p>
                   </div>
-                  <span class="status blue">版本 {{ externalComponentEditor.version || 0 }}</span>
+                  <div class="toolbar-group"><span class="status green">已添加 {{ externalComponentEditor.components.length }} 项</span><span class="status blue">版本 {{ externalComponentEditor.version || 0 }}</span></div>
                 </div>
                 <div v-if="!productForm.id" class="status blue" style="display:block;white-space:normal">请先保存常用箱，再维护外购组件。</div>
                 <div v-else-if="externalComponentEditor.loading" class="muted">正在读取外购组件…</div>
                 <template v-else>
                   <div v-if="externalComponentEditor.error" class="notice danger">{{ externalComponentEditor.error }}</div>
+                  <div v-if="!externalComponentEditor.catalog.length" class="notice warning" style="margin:8px 0">当前没有可选择的供应商包材产品。请先到“供应商 → 包材产品与报价”新增蜂窝板等真实产品，并填写材质、孔径、规格、采购单位和正式报价。</div>
                   <div class="toolbar-group" style="margin:8px 0">
-                    <button type="button" class="btn small" @click="addExternalComponent">添加外购组件</button>
-                    <button type="button" class="btn small primary" :disabled="externalComponentEditor.saving" @click="saveExternalComponents">{{ externalComponentEditor.saving ? '保存中…' : '保存外购组件' }}</button>
+                    <button type="button" class="btn small" :disabled="!productForm.id" @click="addExternalComponent">添加一条外购包材</button>
+                    <button type="button" class="btn small primary" :disabled="!productForm.id || externalComponentEditor.saving" @click="saveExternalComponents()">{{ externalComponentEditor.saving ? '保存中…' : '单独保存外购包材' }}</button>
                   </div>
                   <div v-if="!externalComponentEditor.components.length" class="muted">当前常用箱没有外购组件。</div>
                   <div v-for="(component,index) in externalComponentEditor.components" :key="component._key || component.id || index" class="bom-component-card" style="margin-bottom:10px">
@@ -5531,6 +5533,7 @@
                       </template>
                       <div class="field"><label>每采购单位可用数量</label><input class="input" type="number" min="0.000001" step="0.000001" v-model="component.units_per_purchase_unit" placeholder="单位不同时填写" /></div>
                       <div class="field wide"><label>换算依据</label><input class="input" v-model.trim="component.conversion_basis" placeholder="如：1箱=100件（供应商装箱单）" /></div>
+                      <div class="field wide"><label>采购备注</label><input class="input" v-model.trim="component.remarks" placeholder="如：上板/下板、打孔或供应商采购要求" /></div>
                     </div>
                     <div class="panel" style="margin-top:8px;padding:8px">
                       <div class="toolbar-group">
@@ -5547,7 +5550,6 @@
                   </div>
                 </template>
               </fieldset>
-              </details>
             </div>
             <div v-else-if="modal.type === 'finishedStockPolicy'" class="form-grid">
               <div class="field wide"><label>常用箱</label><div class="notice">{{ quickStockPolicyForm.customer_name }}｜{{ quickStockPolicyForm.product_code }}｜{{ quickStockPolicyForm.product_name }}</div></div>
@@ -8437,7 +8439,7 @@
             productionTab: "pending", productionPending: [], productionPendingTotal: 0, productionPendingLoading: false, productionPendingError: "", productionWaitingLabels: [], productionWaitingLabelTotal: 0, productionWaitingLabelLoading: false, productionWaitingLabelError: "", productionLabelMaintenanceScrollY: 0, productionHistory: [], productionHistoryTotal: 0, productionLocations: [], productionLocationsLoading: false, productionLocationsError: "", productionSelected: {}, productionBusy: false,
             productionHistoryFilters: { customer_id:"", order_keyword:"", product_code:"", product_name:"", completed_date_from:"", completed_date_to:"", status:"" },
             productionCompletionAttempts: {}, productionDirectAttempts: {}, productionTransferAttempts: {}, productionLabelRefreshAttempts: {},
-            productFormSnapshot: null, productBomSnapshot: null,
+            productFormSnapshot: null, productBomSnapshot: null, externalComponentSnapshot: null,
             productEditReturnContext: null,
             productMaterialContext: { product_id:null, candidates:[], requisition_history:[], material_history:[], manual_selection_history:[], loading:false, error:"" },
             productMaterialActiveTab: "candidates",
@@ -10262,7 +10264,7 @@
                 `/api/master/products/${encodeURIComponent(productId)}/update-preview`,
                 payload
               );
-              const hasRelatedWrite = !!this.drawingFile || this._productBomDirty();
+              const hasRelatedWrite = !!this.drawingFile || this._productBomDirty() || this._externalComponentsDirty();
               if (!data.can_update && !hasRelatedWrite) {
                 this.closeModal();
                 this.showToast("未检测到可保存的变化");
@@ -20980,6 +20982,7 @@
           resetProductEditorState() {
             this.productFormSnapshot = null;
             this.productBomSnapshot = null;
+            this.externalComponentSnapshot = null;
             this.bomEditor = blankBomEditor();
             this.masterEditBaseline.product = null;
             this.masterVersionConflict = null;
@@ -21042,6 +21045,7 @@
           },
           resetExternalComponentEditor(productId=null) {
             this.externalComponentEditor = {product_id:Number(productId)||null,version:0,components:[],catalog:[],loading:false,saving:false,error:""};
+            this.externalComponentSnapshot = null;
           },
           externalSpecificationKey(specification) {
             const normalize = value => {
@@ -21075,6 +21079,7 @@
                 _candidate_to_add:null,
               }));
               this.externalComponentEditor = {product_id:requestedId,version:Number(data.version || 0),components,catalog:catalogResponse.data?.items || [],loading:false,saving:false,error:""};
+              this.externalComponentSnapshot = JSON.stringify(this._externalComponentSaveFields());
               return true;
             } catch (error) {
               if (Number(this.productForm.id || 0) !== requestedId) return false;
@@ -21090,8 +21095,13 @@
           },
           externalCandidateOptions(component) {
             const selected = new Set((component.candidates || []).map(item=>Number(item.external_product_id)));
+            const selectedByOtherComponents = new Set(
+              (this.externalComponentEditor.components || [])
+                .filter(row=>row !== component)
+                .flatMap(row=>(row.candidates || []).map(item=>Number(item.external_product_id)))
+            );
             const catalog = this.externalComponentEditor.catalog || [];
-            if (!(component.candidates || []).length) return catalog.filter(item=>!selected.has(Number(item.id)));
+            if (!(component.candidates || []).length) return catalog.filter(item=>!selected.has(Number(item.id)) && !selectedByOtherComponents.has(Number(item.id)));
             const category = component.category_code;
             const specKey = category === "paper_corner_guard"
               ? this.externalCornerSectionKey(component.specification)
@@ -21099,6 +21109,7 @@
             const purchaseUnit = component.candidates[0]?.purchase_unit;
             return catalog.filter(item=>
               !selected.has(Number(item.id))
+              && !selectedByOtherComponents.has(Number(item.id))
               && item.category_code === category
               && (category === "paper_corner_guard"
                 ? this.externalCornerSectionKey(item.specification) === specKey
@@ -21132,6 +21143,28 @@
               component.specification = {};
               component.specification_summary = "";
             }
+          },
+          _externalComponentSaveFields() {
+            return (this.externalComponentEditor.components || []).map(component=>({
+              purpose:String(component.purpose || "").trim(),
+              quantity_per_finished_unit:String(component.quantity_per_finished_unit ?? ""),
+              waste_rate:String(component.waste_rate ?? 0),
+              consumption_unit:String(component.consumption_unit || ""),
+              units_per_purchase_unit:Number(component.units_per_purchase_unit)>0 ? String(component.units_per_purchase_unit) : null,
+              conversion_basis:String(component.conversion_basis || "").trim() || null,
+              is_required:component.is_required !== false,
+              remarks:String(component.remarks || "").trim() || null,
+              category_code:String(component.category_code || ""),
+              customer_specification:component.category_code === "paper_corner_guard" ? JSON.parse(JSON.stringify(component.specification || {})) : null,
+              candidates:(component.candidates || []).map(candidate=>({
+                external_product_id:Number(candidate.external_product_id),
+                is_default:!!candidate.is_default,
+              })),
+            }));
+          },
+          _externalComponentsDirty() {
+            if (this.modal?.type !== "product" || !this.productForm?.id || this.externalComponentSnapshot === null) return false;
+            return JSON.stringify(this._externalComponentSaveFields()) !== this.externalComponentSnapshot;
           },
           externalComponentPayload() {
             return {
@@ -21167,18 +21200,23 @@
               }),
             };
           },
-          async saveExternalComponents() {
+          async saveExternalComponents({notify=true,rethrow=false}={}) {
             const productId = Number(this.productForm.id || 0);
             if (!productId || this.externalComponentEditor.saving) return false;
+            if (!this._externalComponentsDirty()) {
+              if (notify) this.showToast("外购包材没有变化");
+              return true;
+            }
             this.externalComponentEditor.saving = true;
             try {
               const payload = this.externalComponentPayload();
               const {data} = await axios.put(`/api/master/products/${productId}/external-components`,payload);
               this.externalComponentEditor.version = Number(data.version || 0);
               await this.loadExternalComponents(productId);
-              this.showToast("外购组件已保存；不会自动生成采购单");
+              if (notify) this.showToast(`外购包材已保存 ${data.components?.length || 0} 项；不会自动生成采购单`);
               return true;
             } catch (error) {
+              if (rethrow) throw error;
               this.showToast(this.errorMessage(error),true);
               return false;
             } finally {
@@ -21962,6 +22000,9 @@
             if (this.productFormSnapshot === null) return false;
             if (this.drawingFile !== null) return true;
             return JSON.stringify(this._productFormSaveFields()) !== this.productFormSnapshot;
+          },
+          _productEditorDirty() {
+            return this._productFormDirty() || this._productBomDirty() || this._externalComponentsDirty();
           },
           productReportCreaseTouched() {
             if (!this.productForm?.id || this.productFormSnapshot === null) return true;
@@ -27981,7 +28022,7 @@
           },
           onModalMaskClick() {
             if (this.modal?.type === "order" || this.modal?.type === "orderEdit") return;
-            if (this._productFormDirty()) return; // 有未保存更改，禁止点遮罩关闭
+            if (this._productEditorDirty()) return; // 常用箱、内部BOM或外购包材有未保存更改时禁止点遮罩关闭
             this.closeModal();
           },
           async cancelRequisition(row) {
@@ -29649,7 +29690,7 @@
               && ((this.receiptForm.reminder_drafts || []).length || String(this.receiptReminderEditor?.content || "").trim())
               && !confirm("回单或内部备忘还有未保存内容，确定要关闭吗？")
             ) return;
-            if (this._productFormDirty()) {
+            if (this._productEditorDirty()) {
               if (!confirm("表单有未保存的修改，确定要关闭吗？")) return;
             }
             if (this.modal?.type === "product") this.invalidateProductBoardCost();
@@ -29693,6 +29734,7 @@
             this.statementEditForm = { id: null, statement_month: "" };
             this.productFormSnapshot = null;
             this.productBomSnapshot = null;
+            this.externalComponentSnapshot = null;
             this.bomEditor = blankBomEditor();
             this.masterEditBaseline = { customer:null, product:null, material:null };
             this.masterVersionConflict = null;
@@ -30040,7 +30082,7 @@
                 if (masterEntity !== "product") return false;
               }
               if (!changes.length) {
-                if (!(masterEntity === "product" && this._productBomDirty())) {
+                if (!(masterEntity === "product" && (this._productBomDirty() || this._externalComponentsDirty()))) {
                   this.closeModal();
                   this.showToast("未检测到可保存的变化");
                   return true;
@@ -30135,6 +30177,7 @@
               if (this.modal.type === "product") {
                 const productDirty = this._productFormDirty();
                 const bomDirty = this._productBomDirty();
+                const externalComponentsDirty = this._externalComponentsDirty();
                 const payload = this.buildProductWritePayload(masterOptions);
                 let saved;
                 if (this.productForm.id) {
@@ -30152,6 +30195,13 @@
                   await axios.post(`/api/master/products/${saved.id}/drawings`,form);
                 }
                 if (saved?.id && bomDirty) await this.saveProductBom(saved.id, saved.version ?? null);
+                if (saved?.id && externalComponentsDirty) {
+                  try {
+                    await this.saveExternalComponents({notify:false,rethrow:true});
+                  } catch (externalError) {
+                    throw new Error(`常用箱主体已保存，但外购包材未保存：${this.errorMessage(externalError)}。请保留当前页面并重试“单独保存外购包材”，不要重复新建常用箱。`);
+                  }
+                }
                 try {
                   const refreshed = await this.loadProducts();
                   if (!refreshed) throw new Error(this.productsError || "常用箱列表刷新未完成");

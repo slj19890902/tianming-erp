@@ -3639,7 +3639,10 @@
                   <tr v-if="row.composite_group_first" class="reported-composite-parent-row">
                     <td colspan="11"><div class="reported-composite-parent">
                       <div class="reported-composite-parent-main">
-                        <input v-if="row.composite_fulfillment_mode==='parent_delivery'" type="checkbox" :checked="reportedCompositeGroupSelected(row)" @change="toggleReportedCompositeGroup(row,$event.target.checked)" />
+                        <label v-if="row.composite_fulfillment_mode==='parent_delivery'" class="reported-composite-parent-label-choice" :title="row.composite_parent_label_enabled ? '父件标签按父件常用箱当前设置打印；下方子件仍分别生产' : '父件常用箱尚未启用产品标签'">
+                          <input type="checkbox" :disabled="!row.composite_parent_label_enabled" :checked="reportedCompositeGroupSelected(row)" @change="toggleReportedCompositeGroup(row,$event.target.checked)" />
+                          {{ reportedCompositeGroupSelected(row) ? '已选择父件标签' : (row.composite_parent_label_enabled ? '选择父件标签' : '父件未启用标签') }}
+                        </label>
                         <strong>组合父件：{{ row.composite_parent_product_code || '-' }}｜{{ row.composite_parent_product_name || '-' }}</strong>
                         <span class="status blue">{{ row.composite_fulfillment_mode==='parent_delivery' ? '父件交付' : '子件交付' }}</span>
                         <span>{{ row.composite_parent_set_quantity || 0 }} 套</span>
@@ -22803,14 +22806,22 @@
             return true;
           },
           reportedProductionCandidates(orderId,row,data) {
+            const documentId = Number(orderId);
+            const sourceType = row?.source_type || data?.source_type || "supplier_order";
             return (data?.cards || []).map((card,index) => ({
-              supplier_order_id:Number(orderId),
+              source_type:sourceType,
+              document_id:Number(documentId),
+              supplier_order_id:sourceType === "supplier_order" ? Number(documentId) : null,
               supplier_order_number:data?.supplier_order_number || row?.document_number || "",
               source_identity:String(card.source_identity || ""),
-              selection_key:`${orderId}:${String(card.source_identity || index)}`,
+              selection_key:`${sourceType}:${documentId}:${String(card.source_identity || index)}`,
               selection_fingerprint:String(card.selection_fingerprint || ""),
               task_versions:Array.isArray(card.production_task_versions) ? card.production_task_versions.map(item => ({task_id:Number(item.task_id),version:Number(item.version)})) : [],
               supplier_order_item_ids:[...new Set((card.components || []).map(component => Number(component.supplier_order_item_id || 0)).filter(Boolean))],
+              material_requisition_item_ids:[...new Set((card.material_requisition_item_ids || []).map(Number).filter(Boolean))],
+              reported_item_ids:sourceType === "composite_bom_requisition"
+                ? [...new Set((card.material_requisition_item_ids || []).map(Number).filter(Boolean))]
+                : [...new Set((card.components || []).map(component => Number(component.supplier_order_item_id || 0)).filter(Boolean))],
               selection_eligible:card.selection_eligible === true,
               selection_block_reasons:Array.isArray(card.selection_block_reasons) ? card.selection_block_reasons : [],
               customer_name:card.customer_name || "",
@@ -22826,48 +22837,54 @@
             this.reportedItemPrintErrors = [];
             this.reportedLabelRecoveryUrls = [];
             if (!selected.length) return false;
-            const invalidRows = selected.filter(row => row.source_type !== "supplier_order" || row.status !== "active" || row.can_print_task !== true);
+            const supportedSources = new Set(["supplier_order", "composite_bom_requisition"]);
+            const invalidRows = selected.filter(row => !supportedSources.has(row.source_type) || row.can_print_task !== true);
             if (invalidRows.length) {
               this.reportedItemPrintErrors = invalidRows.map(row => `${row.document_number || '-'}｜${row.product_code || '-'}：当前明细不能打印待来料任务单`);
               return false;
             }
-            const byOrder = new Map();
+            const byDocument = new Map();
             for (const row of selected) {
-              const orderId = Number(row.document_id);
-              if (!byOrder.has(orderId)) byOrder.set(orderId,{row,itemIds:new Set()});
-              byOrder.get(orderId).itemIds.add(Number(row.item_id));
+              const documentId = Number(row.document_id);
+              const key = `${row.source_type}:${documentId}`;
+              if (!byDocument.has(key)) byDocument.set(key,{sourceType:row.source_type,documentId,row,itemIds:new Set()});
+              byDocument.get(key).itemIds.add(Number(row.item_id));
             }
             const authGeneration = this.authGeneration;
             const userId = this.user?.id ?? null;
             this.reportedItemPrintBusy = true;
             try {
-              const packages = await Promise.all([...byOrder.entries()].map(async ([orderId,group]) => {
-                const {data}=await axios.get(`/api/requisition/supplier-orders/${orderId}/production-print-package`);
-                return {orderId,group,data};
+              const packages = await Promise.all([...byDocument.values()].map(async group => {
+                const itemIds=[...group.itemIds].sort((a,b)=>a-b);
+                const url=group.sourceType === "supplier_order"
+                  ? `/api/requisition/supplier-orders/${group.documentId}/production-print-package`
+                  : `/api/requisition/batches/${group.documentId}/production-print-package?item_ids=${encodeURIComponent(itemIds.join(","))}`;
+                const {data}=await axios.get(url);
+                return {group,data};
               }));
               if (this.authGeneration !== authGeneration || (this.user?.id ?? null) !== userId || this.activePage !== "requisition" || this.requisitionTab !== "submitted") return false;
               const candidates = {};
               const covered = new Set();
               const errors = [];
-              for (const {orderId,group,data} of packages) {
-                for (const candidate of this.reportedProductionCandidates(orderId,group.row,data)) {
-                  const related = candidate.supplier_order_item_ids.filter(itemId => group.itemIds.has(itemId));
+              for (const {group,data} of packages) {
+                for (const candidate of this.reportedProductionCandidates(group.documentId,group.row,data)) {
+                  const related = candidate.reported_item_ids.filter(itemId => group.itemIds.has(itemId));
                   if (!related.length) continue;
-                  const missingCompanions = candidate.supplier_order_item_ids.filter(itemId => !group.itemIds.has(itemId));
+                  const missingCompanions = candidate.reported_item_ids.filter(itemId => !group.itemIds.has(itemId));
                   if (missingCompanions.length) {
-                    errors.push(`${candidate.supplier_order_number || orderId}｜${candidate.product_code || '-'}：同一生产任务由多条报料明细共同组成，请把关联明细一并勾选`);
+                    errors.push(`${candidate.supplier_order_number || group.documentId}｜${candidate.product_code || '-'}：同一生产任务由多条报料明细共同组成，请把关联明细一并勾选`);
                     continue;
                   }
-                  related.forEach(itemId => covered.add(`${orderId}:${itemId}`));
+                  related.forEach(itemId => covered.add(`${group.sourceType}:${group.documentId}:${itemId}`));
                   if (!candidate.selection_eligible) {
-                    errors.push(`${candidate.supplier_order_number || orderId}｜${candidate.product_code || '-'}：${candidate.selection_block_reasons.join('；') || '当前任务不可打印'}`);
+                    errors.push(`${candidate.supplier_order_number || group.documentId}｜${candidate.product_code || '-'}：${candidate.selection_block_reasons.join('；') || '当前任务不可打印'}`);
                     continue;
                   }
                   candidates[candidate.selection_key] = candidate;
                 }
               }
-              for (const [orderId,group] of byOrder.entries()) {
-                for (const itemId of group.itemIds) if (!covered.has(`${orderId}:${itemId}`)) errors.push(`${group.row.document_number || orderId}｜明细 #${itemId}：没有对应的待来料生产任务`);
+              for (const group of byDocument.values()) {
+                for (const itemId of group.itemIds) if (!covered.has(`${group.sourceType}:${group.documentId}:${itemId}`)) errors.push(`${group.row.document_number || group.documentId}｜明细 #${itemId}：没有对应的待来料生产任务`);
               }
               if (errors.length) {
                 this.reportedItemPrintErrors = [...new Set(errors)];
@@ -23075,12 +23092,18 @@
             return true;
           },
           productionPrintPayloadItems(items) {
-            return (items || []).map(item => ({
-              supplier_order_id:Number(item.supplier_order_id),
-              source_identity:String(item.source_identity || ""),
-              selection_fingerprint:String(item.selection_fingerprint || ""),
-              task_versions:(item.task_versions || []).map(version => ({task_id:Number(version.task_id),version:Number(version.version)})),
-            }));
+            return (items || []).map(item => {
+              const payload={
+                source_identity:String(item.source_identity || ""),
+                selection_fingerprint:String(item.selection_fingerprint || ""),
+                task_versions:(item.task_versions || []).map(version => ({task_id:Number(version.task_id),version:Number(version.version)})),
+              };
+              if (item.source_type === "composite_bom_requisition") {
+                payload.source_type="composite_bom_requisition";
+                payload.document_id=Number(item.document_id);
+              } else payload.supplier_order_id=Number(item.supplier_order_id);
+              return payload;
+            });
           },
           async prepareProductionPrintBatch() {
             if (this.productionPrintBatchBusy) return false;

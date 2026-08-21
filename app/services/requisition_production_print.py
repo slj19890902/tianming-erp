@@ -7,6 +7,7 @@ import re
 from collections import OrderedDict
 from copy import deepcopy
 from pathlib import PurePath
+from types import SimpleNamespace
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
@@ -24,6 +25,7 @@ from app.models.product_bom import (
 from app.models.product_drawing import ProductDrawing
 from app.models.printing_plate import PrintingPlate
 from app.models.production import ProductionTask
+from app.models.requisition import Requisition
 from app.models.supplier_requisition_order import (
     SupplierRequisitionOrder,
     SupplierRequisitionOrderItem,
@@ -47,6 +49,8 @@ _REQUISITION_ITEM_SOURCE = re.compile(r"^requisition_item:(\d+)$")
 _ORDER_ITEM_COMPONENT_SOURCE = re.compile(
     r"^order_item:(\d+)(?::(cover|base))?$"
 )
+_COMPOSITE_PRINTABLE_ITEM_STATUSES = frozenset({"有效", "已入库"})
+_COMPOSITE_TRANSIENT_ID_OFFSET = 1_500_000_000
 
 
 def _unique_text(values: list[object]) -> list[str]:
@@ -1251,6 +1255,170 @@ def build_supplier_requisition_production_package(
         "cards": cards,
         "pages": pages,
     }
+
+
+def build_composite_requisition_production_package(
+    db: Session,
+    requisition: Requisition,
+    *,
+    selected_item_ids: set[int] | None = None,
+) -> dict:
+    """Build one ordinary production card per reported composite component.
+
+    A composite parent is a fulfillment identity, not a material-production
+    shortcut.  Before assembly every reported BOM component remains its own
+    production task in both parent- and component-delivery modes.  The adapter
+    deliberately reuses the established half-A4 projection so mold, printing,
+    joining, current common-box bundle policy and task-version gates stay
+    identical to supplier requisition cards.
+    """
+
+    item_by_id = {int(row.id): row for row in requisition.items}
+    selected_ids = (
+        {int(value) for value in selected_item_ids}
+        if selected_item_ids is not None
+        else {
+            item_id
+            for item_id, row in item_by_id.items()
+            if str(row.status or "").strip() in _COMPOSITE_PRINTABLE_ITEM_STATUSES
+        }
+    )
+    if not selected_ids or not selected_ids.issubset(item_by_id):
+        raise ValueError("所选组合报料明细不存在或已发生变化")
+    unavailable = sorted(
+        item_id
+        for item_id in selected_ids
+        if str(item_by_id[item_id].status or "").strip()
+        not in _COMPOSITE_PRINTABLE_ITEM_STATUSES
+    )
+    if unavailable:
+        raise ValueError(f"所选组合报料明细已取消或失效：{unavailable}")
+
+    sources = {
+        int(row.requisition_item_id): row
+        for row in db.scalars(
+            select(RequisitionItemBomSource).where(
+                RequisitionItemBomSource.requisition_item_id.in_(selected_ids)
+            )
+        ).all()
+    }
+    if any(item_id not in sources for item_id in selected_ids):
+        raise ValueError("所选报料明细不是可追溯的组合 BOM 子件")
+    snapshots = {
+        int(row.id): row
+        for row in db.scalars(
+            select(SalesOrderItemBomComponent).where(
+                SalesOrderItemBomComponent.id.in_(
+                    {
+                        int(source.sales_order_item_bom_component_id)
+                        for source in sources.values()
+                    }
+                )
+            )
+        ).all()
+    }
+
+    transient_to_requisition_item: dict[int, int] = {}
+    transient_items: list[SimpleNamespace] = []
+    for item_id in sorted(selected_ids):
+        row = item_by_id[item_id]
+        source = sources[item_id]
+        snapshot = snapshots.get(int(source.sales_order_item_bom_component_id))
+        if snapshot is None:
+            raise ValueError(f"组合报料明细 #{item_id} 缺少订单组件快照")
+        order_item = row.order_item or db.get(OrderItem, int(row.order_item_id))
+        sales_order = order_item.order if order_item is not None else None
+        transient_id = _COMPOSITE_TRANSIENT_ID_OFFSET + item_id
+        transient_to_requisition_item[transient_id] = item_id
+        transient_items.append(
+            SimpleNamespace(
+                id=transient_id,
+                order_item_id=int(row.order_item_id),
+                source_key=f"requisition_item:{item_id}",
+                product_id=int(snapshot.component_product_id),
+                material_id=snapshot.snapshot_component_material_id,
+                material_code_snapshot=(
+                    row.material_snapshot or snapshot.snapshot_component_material
+                ),
+                supplier_name_snapshot=(
+                    snapshot.snapshot_component_supplier_name
+                    or requisition.supplier_name
+                ),
+                layer_count_snapshot=snapshot.snapshot_component_layer_count,
+                flute_type_snapshot=snapshot.snapshot_component_flute_type,
+                order_number=(sales_order.order_number if sales_order is not None else None),
+                product_code=snapshot.snapshot_component_product_code,
+                product_name=snapshot.snapshot_component_product_name,
+                report_length_mm=(
+                    int(row.cardboard_len)
+                    if row.cardboard_len is not None
+                    else snapshot.snapshot_component_report_length_mm
+                ),
+                report_width_mm=(
+                    int(row.cardboard_width)
+                    if row.cardboard_width is not None
+                    else snapshot.snapshot_component_report_width_mm
+                ),
+                quantity=int(source.required_piece_quantity),
+                stock_deduction_qty=0,
+                requisition_qty=int(row.requisition_qty or 0),
+                cutting_mode=snapshot.snapshot_component_default_cutting_mode,
+                pieces_per_box=(
+                    row.pieces_per_box
+                    or snapshot.snapshot_component_pieces_per_box
+                    or 1
+                ),
+                required_piece_qty=int(source.required_piece_quantity),
+                customer_name=None,
+                delivery_date=(sales_order.delivery_date if sales_order is not None else None),
+                status="active",
+            )
+        )
+
+    transient_order = SimpleNamespace(
+        id=_COMPOSITE_TRANSIENT_ID_OFFSET + int(requisition.id),
+        order_number=requisition.requisition_number,
+        supplier_name=requisition.supplier_name,
+        items=transient_items,
+        status="confirmed",
+        created_at=requisition.created_at,
+        layer_count=None,
+        flute_type=None,
+        report_length_mm=None,
+        report_width_mm=None,
+        cutting_mode=None,
+        crease_type=None,
+        crease_left_mm=None,
+        crease_middle_mm=None,
+        crease_right_mm=None,
+    )
+    package = build_supplier_requisition_production_package(db, transient_order)
+    for card in package.get("cards") or []:
+        material_item_ids: list[int] = []
+        for component in card.get("components") or []:
+            material_item_id = transient_to_requisition_item.get(
+                int(component.get("supplier_order_item_id") or 0)
+            )
+            if material_item_id is None:
+                continue
+            component["material_requisition_item_id"] = material_item_id
+            material_item_ids.append(material_item_id)
+        card["source_type"] = "composite_bom_requisition"
+        card["material_requisition_id"] = int(requisition.id)
+        card["material_requisition_item_ids"] = sorted(set(material_item_ids))
+        card["selection_fingerprint"] = production_print_card_fingerprint(card)
+    package.update(
+        {
+            "source_type": "composite_bom_requisition",
+            "document_id": int(requisition.id),
+            "material_requisition_id": int(requisition.id),
+            "material_requisition_number": requisition.requisition_number,
+            "supplier_order_id": None,
+            "supplier_order_number": requisition.requisition_number,
+            "status": requisition.status,
+        }
+    )
+    return package
 
 
 def _actual_receipt_label(version: dict) -> str:

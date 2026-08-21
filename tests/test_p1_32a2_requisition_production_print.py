@@ -342,6 +342,10 @@ def test_package_keeps_one_formal_requisition_detail_per_task_card(
         f"order_item:{production_print_app['order_item_id']}:base",
     ]
     assert [cover["component_label"], base["component_label"]] == ["盖", "底"]
+    assert cover["customer_name"] == base["customer_name"] == "半页客户"
+    assert cover["customer_pos"] == base["customer_pos"] == ["CPO-P132A2"]
+    assert cover["customer_order_quantity"] == base["customer_order_quantity"] == 200
+    assert cover["stock_deduction_quantity"] == base["stock_deduction_quantity"] == 0
     assert cover["layout_kind"] == base["layout_kind"] == "carton"
     assert [cover["product_name"], base["product_name"]] == [
         "天地盖测试箱-盖",
@@ -850,7 +854,7 @@ def test_print_page_and_erp_entry_use_one_layout_for_plan_and_receipt_phases():
     main_source = Path("app/main.py").read_text(encoding="utf-8")
 
     assert "待来料任务单" in index_html
-    assert "row.can_view_supplier_order ? '采购单' : '查看'" in index_html
+    assert "reportedItemDetail.can_view_supplier_order ? '查看采购单并定位本行' : '查看原单据'" in index_html
     assert 'row.source_type !== "supplier_order" || row.status !== "active" || row.can_print_task !== true' in index_html
     assert "/api/requisition/supplier-orders/${orderId}/production-print-package" in index_html
     assert 'window.open(url, "_blank", "noopener")' in index_html
@@ -861,15 +865,14 @@ def test_print_page_and_erp_entry_use_one_layout_for_plan_and_receipt_phases():
     assert "receiptMode" in print_html
     assert "/api/incoming/receipt-items/${encodeURIComponent(receiptItemId)}/production-card" in print_html
     assert "待来料计划版" in print_html
-    assert "一笔实收事实一张卡" in print_html
+    assert "每个生产任务固定半张 A4" in print_html
     assert "@page { size:A4 portrait;" in print_html
     assert "grid-template-rows:140.5mm 140.5mm" in print_html
     assert 'class="task-card half-card blank"' in print_html
-    assert "packageData.card_count === 1" in print_html
-    assert 'class="page single-page"' in print_html
     assert 'class="page batch-page"' in print_html
-    assert "单张任务单独占一张 A4" in print_html
-    assert "批量每张 A4 上下两款" in print_html
+    assert "single-page" not in print_html
+    assert "cardNeedsFullPage" not in print_html
+    assert "每页上下两款" in print_html
     assert "A1 型纸箱生产任务单" in print_html
     assert "模切内盒生产任务单" in print_html
     assert "衬板生产任务单" in print_html
@@ -878,7 +881,7 @@ def test_print_page_and_erp_entry_use_one_layout_for_plan_and_receipt_phases():
         in print_html
     )
     assert (
-        ".single-page .production-key-value,.single-page .detail-row.production-key-fact .value { font-size:20pt;"
+        ".task-card.printing-heavy .production-key-value,\n    .task-card.printing-heavy .detail-row.production-key-fact .value { font-size:9.5pt;"
         in print_html
     )
     assert 'detailRow("压线尺寸", crease, "production-key-fact")' in print_html
@@ -892,8 +895,10 @@ def test_print_page_and_erp_entry_use_one_layout_for_plan_and_receipt_phases():
         'if (card.layout_kind === "die_cut") {', 1
     )[0]
     assert 'detailRow("开料方式", cutting)' in liner_layout
-    assert "filter:grayscale(1)" in print_html
-    assert "structure_reference" in print_html
+    assert "drawingReferenceText(card)" in print_html
+    assert "图号 / 图纸版本" in print_html
+    assert 'class="structure-body"' not in print_html
+    assert '<object data="${escapeHtml(drawing.url)}"' not in print_html
     assert "请核对后再打印" in print_html
     assert "card.scrollHeight > card.clientHeight + 1" in print_html
     assert "任务内容超过页面容量，已停止打印" in print_html
@@ -995,8 +1000,13 @@ def test_p1_67_task_sheet_prioritizes_identity_fields_and_process_order() -> Non
     card = source[source.index("function cardHtml"):source.index("function applyMode")]
     assert card.index("<span>存货编码</span>") < card.index("<span>产品名称</span>")
     strip = card[card.index('<div class="product-strip">'):]
-    assert strip.index("成品内尺寸") < strip.index("quantityLabel")
-    assert strip.index("quantityLabel") < strip.index("<span class=\"field-label\">交期")
+    assert strip.index("成品内尺寸") < strip.index("图号 / 图纸版本")
+    assert strip.index("图号 / 图纸版本") < strip.index("<span class=\"field-label\">交期")
+    facts = source[source.index("function orderFactsHtml"):source.index("function productionNotesHtml")]
+    assert facts.index("客户订单号") < facts.index("订单数量")
+    assert facts.index("订单数量") < facts.index("库存抵扣")
+    assert facts.index("库存抵扣") < facts.index("计划生产")
+    assert facts.index("计划生产") < facts.index("采购张数")
     assert "生产数量" not in card
     assert "产品 / 存货编码" not in card
 

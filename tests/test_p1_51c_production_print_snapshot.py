@@ -787,11 +787,11 @@ def test_screen_and_black_white_print_render_frozen_long_text_without_leaking_in
     complexity_body = _method_body(
         TASK_PRINT,
         "function printingComplexity(card) {",
-        "function cardNeedsFullPage(card) {",
+        "function cardNeedsCompactLayout(card) {",
     )
-    full_page_body = _method_body(
+    compact_layout_body = _method_body(
         TASK_PRINT,
-        "function cardNeedsFullPage(card) {",
+        "function cardNeedsCompactLayout(card) {",
         "function printPageLayouts(cards) {",
     )
     layouts_body = _method_body(
@@ -815,10 +815,9 @@ const rawPrintingComponentHtml=new Function('component','componentIndex','compon
 const printingComponentHtml=(component,index,count)=>rawPrintingComponentHtml(component,index,count,escapeHtml,detailRow,numberText);
 const printingHtml=new Function('card','printingComponentHtml',{json.dumps(print_body, ensure_ascii=False)});
 const printingComplexity=new Function('card',{json.dumps(complexity_body, ensure_ascii=False)});
-const rawCardNeedsFullPage=new Function('card','printingComplexity',{json.dumps(full_page_body, ensure_ascii=False)});
-const cardNeedsFullPage=card=>rawCardNeedsFullPage(card,printingComplexity);
-const rawPrintPageLayouts=new Function('cards','cardNeedsFullPage',{json.dumps(layouts_body, ensure_ascii=False)});
-const printPageLayouts=cards=>rawPrintPageLayouts(cards,cardNeedsFullPage);
+const rawCardNeedsCompactLayout=new Function('card','printingComplexity',{json.dumps(compact_layout_body, ensure_ascii=False)});
+const cardNeedsCompactLayout=card=>rawCardNeedsCompactLayout(card,printingComplexity);
+const printPageLayouts=new Function('cards',{json.dumps(layouts_body, ensure_ascii=False)});
 const expect=(value,message)=>{{if(!value)throw new Error(message)}};
 const longName='PANTONE 186 C 超长专色名称必须在黑白打印中完整保留且可以自然换行';
 const longPlate='正唛与侧唛以及运输警示图案超长挂板内容必须完整保留不能截断';
@@ -839,16 +838,17 @@ expect(mobileLines({{printing_situation:'无印刷',printing_plate_mode:'no_plat
 const html=printingHtml({{components:[plate]}},printingComponentHtml);
 expect(['printing-block','printing-plate-line','第1色','第2色','第3色','颜色：专红','挂板编号：PL-001','挂板内容：'+longPlate,'当前位置','机器设定'].every(value=>html.includes(value)),'black-white text contract incomplete');
 expect(html.includes('internal-only'),'internal facts were not marked sensitive');
-expect(cardNeedsFullPage({{components:[plate]}})===true,'three-plate card was not promoted to a full A4 page');
-expect(cardNeedsFullPage({{components:[{{printing_situation:'单色印刷',printing_plate_mode:'no_plate',printing_colors_frozen:true,printing_colors:['黑色']}}]}})===false,'simple direct-print card lost two-up layout');
+expect(cardNeedsCompactLayout({{components:[plate]}})===true,'three-plate card did not receive compact half-page styling');
+expect(cardNeedsCompactLayout({{components:[{{printing_situation:'单色印刷',printing_plate_mode:'no_plate',printing_colors_frozen:true,printing_colors:['黑色']}}]}})===false,'simple direct-print card was over-compacted');
 const mixed={{components:[{{printing_situation:'单色印刷',printing_plate_mode:'no_plate',printing_colors_frozen:true,printing_colors:['黑色']}},plate]}};
-expect(cardNeedsFullPage(mixed)===true,'multi-component printing card was not promoted to a full A4 page');
+expect(cardNeedsCompactLayout(mixed)===true,'multi-component printing card did not receive compact half-page styling');
 const layouts=printPageLayouts([
   {{id:'simple-1',components:[{{printing_situation:'单色印刷',printing_plate_mode:'no_plate',printing_colors_frozen:true,printing_colors:['黑色']}}]}},
   {{id:'plate',components:[plate]}},
   {{id:'simple-2',components:[{{printing_situation:'无印刷',printing_plate_mode:'no_plate',printing_colors_frozen:true,printing_colors:[]}}]}}
 ]);
-expect(layouts.length===3 && layouts[1].fullPage===true && layouts[1].top.id==='plate','mixed print page pagination is not deterministic');
+expect(layouts.length===2 && layouts[0].top.id==='simple-1' && layouts[0].bottom.id==='plate' && layouts[1].top.id==='simple-2' && layouts[1].bottom===null,'fixed half-page pagination is not deterministic');
+expect(layouts.every(layout=>layout.fullPage===false),'printing complexity promoted a task beyond half A4');
 const legacyHtml=printingHtml({{components:[{{printing_situation:'双色印刷',printing_plate_mode:'no_plate',printing_colors_frozen:false,printing_colors:[]}}]}},printingComponentHtml);
 expect(legacyHtml.includes('历史颜色未冻结'),'historical NULL print wording missing');
 expect(printingHtml({{components:[{{printing_situation:'无印刷',printing_plate_mode:'no_plate',printing_colors_frozen:true,printing_colors:[]}}]}},printingComponentHtml)==='','no-print paper gained an empty block');
@@ -858,13 +858,13 @@ expect(printingHtml({{components:[{{printing_situation:'无印刷',printing_plat
     assert ".customer-safe.internal-only{display:none!important;}" in compact_css
     assert "white-space:normal" in TASK_PRINT
     assert "overflow-wrap:anywhere" in TASK_PRINT
-    assert ".single-page .task-card.printing-heavy" in TASK_PRINT
+    assert ".task-card.printing-heavy" in TASK_PRINT
     assert "element.scrollHeight > element.clientHeight + 1" in TASK_PRINT
     assert "element.scrollWidth > element.clientWidth + 1" in TASK_PRINT
     assert "toolbarNote.textContent = batchMode" in TASK_PRINT
     assert ": receiptMode" in TASK_PRINT
-    assert "fullPageCount" in TASK_PRINT
-    assert "黑白打印 · ${fullPageCount} 款复杂印刷任务单独占 A4" in TASK_PRINT
+    assert "fullPageCount" not in TASK_PRINT
+    assert "每个生产任务固定半张 A4" in TASK_PRINT
 
     assert "task.printing_colors_frozen === false" in mobile
     assert 'colors.join("＋")' in mobile

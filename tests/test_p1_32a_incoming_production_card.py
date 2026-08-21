@@ -241,19 +241,28 @@ def test_logout_reset_clears_all_production_card_open_state() -> None:
         assert f"this.{field}" in reset_body
 
 
-def test_card_page_is_a4_large_print_and_has_no_business_write() -> None:
+def test_card_page_is_a4_half_page_print_and_keeps_writes_in_explicit_label_refresh() -> None:
     assert "生产任务单" in CARD
     assert "@page { size:A4 portrait" in CARD
     assert "待来料计划版" in CARD
     assert "本次实收" in CARD
     assert "本批最多生产" in CARD
-    assert "一笔实收事实一张卡" in CARD
+    assert "每个生产任务固定半张 A4" in CARD
     assert "/api/incoming/receipt-items/${encodeURIComponent(receiptItemId)}/production-card" in CARD
     assert 'credentials:"include"' in CARD
     assert "window.opener" not in CARD
     assert "localStorage.clear" not in CARD
     assert "sessionStorage.clear" not in CARD
-    assert "method:\"POST\"" not in CARD
+    load_body = CARD[CARD.index("async function loadPackage()") : CARD.index(
+        'retryButton.addEventListener("click", loadPackage)'
+    )]
+    refresh_body = CARD[CARD.index('labelRefreshButton.addEventListener("click"') :]
+    assert 'method:"GET"' in load_body
+    assert 'method:"POST"' not in load_body
+    assert 'method:"POST"' in refresh_body
+    assert "confirmed_not_started:true" in refresh_body
+    assert "confirmed_no_prior_print:true" in refresh_body
+    assert "window.confirm" in refresh_body
     assert "method:\"PUT\"" not in CARD
     assert not (ROOT / "static" / "incoming-production-card.html").exists()
 

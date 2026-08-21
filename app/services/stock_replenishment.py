@@ -232,13 +232,43 @@ def finished_product_quantity_summary(
     product_id: int,
     customer_id: int,
 ) -> dict[str, int]:
-    """Return the net allocatable finished-goods quantity for one product.
+    """Return warehouse stock for one customer inventory code.
 
-    ``quantity_available`` is already reduced when stock is reserved.  The
-    warning calculation must therefore sum it directly instead of subtracting
-    reservations a second time.  Valid third-floor V11 locations are formal
-    inventory even while their placement status still needs attention.
+    Stock warnings describe how many sound finished goods are still physically
+    in the warehouse, so ``available_quantity`` includes both allocatable and
+    already-reserved quantities.  ``allocatable_available_quantity`` keeps the
+    narrower allocation fact explicit and prevents reserved stock from being
+    allocated again.  Inventory is grouped by the frozen inventory-code
+    snapshot instead of one product master id because historical and composite
+    products may legitimately have multiple master rows for the same code.
+
+    Valid third-floor V11 locations are formal inventory even while their
+    placement status still needs attention.
     """
+    product_fact = db.execute(
+        select(Product.product_code, Product.customer_id).where(
+            Product.id == product_id
+        )
+    ).one_or_none()
+    if product_fact is None or int(product_fact.customer_id) != int(customer_id):
+        return {
+            "available_quantity": 0,
+            "allocatable_available_quantity": 0,
+            "dedicated_available_quantity": 0,
+            "general_available_quantity": 0,
+            "reserved_quantity": 0,
+            "physical_unconsumed_quantity": 0,
+        }
+    inventory_code = str(product_fact.product_code or "").strip().lower()
+    if not inventory_code:
+        return {
+            "available_quantity": 0,
+            "allocatable_available_quantity": 0,
+            "dedicated_available_quantity": 0,
+            "general_available_quantity": 0,
+            "reserved_quantity": 0,
+            "physical_unconsumed_quantity": 0,
+        }
     row = db.execute(
         select(
             func.coalesce(func.sum(InventoryLot.quantity_available), 0),
@@ -255,6 +285,18 @@ def finished_product_quantity_summary(
                 0,
             ),
             func.coalesce(func.sum(InventoryLot.quantity_reserved), 0),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (
+                            FinishedGoodsInventoryDetail.is_general.is_(True),
+                            InventoryLot.quantity_reserved,
+                        ),
+                        else_=0,
+                    )
+                ),
+                0,
+            ),
         )
         .select_from(InventoryLot)
         .join(
@@ -265,10 +307,15 @@ def finished_product_quantity_summary(
             WarehouseLocation,
             WarehouseLocation.id == InventoryLot.warehouse_location_id,
         )
+        .join(Product, Product.id == FinishedGoodsInventoryDetail.product_id)
         .where(
             InventoryLot.inventory_type == "finished",
             InventoryLot.status == "active",
-            FinishedGoodsInventoryDetail.product_id == product_id,
+            Product.customer_id == customer_id,
+            func.lower(
+                func.trim(FinishedGoodsInventoryDetail.inventory_code_snapshot)
+            )
+            == inventory_code,
             or_(
                 and_(
                     FinishedGoodsInventoryDetail.is_general.is_(False),
@@ -286,15 +333,22 @@ def finished_product_quantity_summary(
             ),
         )
     ).one()
-    available = int(row[0] or 0)
-    general_available = int(row[1] or 0)
+    allocatable = int(row[0] or 0)
+    general_allocatable = int(row[1] or 0)
     reserved = int(row[2] or 0)
+    general_reserved = int(row[3] or 0)
+    physical_unconsumed = allocatable + reserved
+    general_physical = general_allocatable + general_reserved
     return {
-        "available_quantity": available,
-        "dedicated_available_quantity": max(available - general_available, 0),
-        "general_available_quantity": general_available,
+        "available_quantity": physical_unconsumed,
+        "allocatable_available_quantity": allocatable,
+        "dedicated_available_quantity": max(
+            physical_unconsumed - general_physical,
+            0,
+        ),
+        "general_available_quantity": general_physical,
         "reserved_quantity": reserved,
-        "physical_unconsumed_quantity": available + reserved,
+        "physical_unconsumed_quantity": physical_unconsumed,
     }
 
 
@@ -603,6 +657,9 @@ def stock_policy_dict(db: Session, policy: InventoryStockPolicy) -> dict:
         ),
         "general_available_quantity": finished_summary.get(
             "general_available_quantity"
+        ),
+        "allocatable_available_quantity": finished_summary.get(
+            "allocatable_available_quantity"
         ),
         "reserved_quantity": finished_summary.get("reserved_quantity"),
         "physical_unconsumed_quantity": finished_summary.get(

@@ -393,6 +393,10 @@ def _common_box_low_stock_warnings(
                 "product_code": item["product_code"],
                 "product_name": item["product_name"],
                 "available_quantity": item["available_quantity"],
+                "allocatable_available_quantity": item[
+                    "allocatable_available_quantity"
+                ],
+                "reserved_quantity": item["reserved_quantity"],
                 "warning_quantity": item["warning_quantity"],
                 "target_quantity": item["target_quantity"],
                 "suggested_replenishment_quantity": item[

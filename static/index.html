@@ -2447,7 +2447,7 @@
                             <span v-if="!item.draft_ready" class="status orange">常用箱缺：{{ (item.missing_fields || []).join("、") }}</span>
                           </div>
                           <div class="low-stock-detail-metrics">
-                            <span>当前可用 <strong>{{ item.available_quantity }}</strong></span>
+                            <span>仓库总数 <strong>{{ item.available_quantity }}</strong></span>
                             <span>预警线 <strong>{{ item.warning_quantity }}</strong></span>
                             <span>距离目标还差 <strong>{{ item.suggested_replenishment_quantity }}</strong> 个成品</span>
                             <span v-if="item.customer_board_preparation_available_sheet_quantity && item.customer_board_preparation_auto_cover_capacity">已有客户备料 <strong>{{ item.customer_board_preparation_available_sheet_quantity }}</strong> 张</span>
@@ -5501,10 +5501,10 @@
             </div>
             <div v-else-if="modal.type === 'finishedStockPolicy'" class="form-grid">
               <div class="field wide"><label>常用箱</label><div class="notice">{{ quickStockPolicyForm.customer_name }}｜{{ quickStockPolicyForm.product_code }}｜{{ quickStockPolicyForm.product_name }}</div></div>
-              <div class="field"><label>当前可用数量</label><input class="input" :value="quickStockPolicyForm.available_quantity" readonly /></div>
+              <div class="field"><label>仓库当前总数</label><input class="input" :value="quickStockPolicyForm.available_quantity" readonly /></div>
               <div class="field"><label>低于多少预警</label><input class="input" type="number" min="0" step="1" v-model.number="quickStockPolicyForm.warning_quantity" @input="syncQuickStockTargetToWarning" /></div>
               <div class="field"><label>建议补到多少</label><input class="input" type="number" min="1" step="1" v-model.number="quickStockPolicyForm.target_quantity" /></div>
-              <div class="field wide muted">两个数量都可以高于当前库存；建议补到会自动保持不低于预警数量。这里只设置提醒，不会自动报料或入库。</div>
+              <div class="field wide muted">仓库当前总数按同一客户、同一存货编码汇总可用与已预占的实物，不含冻结、损坏、报废和已消耗；其中净可分配 {{ quickStockPolicyForm.allocatable_available_quantity }}，已预占 {{ quickStockPolicyForm.reserved_quantity }}。两个预警设置都可以高于当前库存；这里只设置提醒，不会自动报料或入库。</div>
             </div>
             <div v-else-if="modal.type === 'material'" class="form-grid">
               <div class="field"><label>材质代码</label><input class="input" v-model.trim="materialForm.code" @change="weightFromMaterialCode" /></div>
@@ -6889,13 +6889,13 @@
                 <strong>同客户、同材质和同报料尺寸的其他款</strong>
                 <div class="muted">印刷内容不同，不会自动增加各款成品。多报纸板统一作为客户专用纸板备料，可供下列同规格款号共用；只有点击“同时加入”才增加该款的计划补货。</div>
                 <div v-for="row in stockReplenishmentCompanions" :key="row.product_id" class="stock-warning-companion">
-                  <div><strong>{{ row.product_code }}｜{{ row.product_name }}</strong><div class="muted">可用 {{ row.available_quantity }} / 预警 {{ row.warning_quantity }} / 目标 {{ row.target_quantity }}　本次新报 {{ row.suggested_new_requisition_sheet_quantity || 0 }} 张</div></div>
+                  <div><strong>{{ row.product_code }}｜{{ row.product_name }}</strong><div class="muted">仓库总数 {{ row.available_quantity }} / 预警 {{ row.warning_quantity }} / 目标 {{ row.target_quantity }}　本次新报 {{ row.suggested_new_requisition_sheet_quantity || 0 }} 张</div></div>
                   <button class="btn small success" type="button" :disabled="!Number(row.suggested_new_requisition_sheet_quantity || 0) || !row.draft_item?.draft_ready" @click="addCompatibleStockDraft(row)">{{ row.warning_triggered ? "同时加入预警款" : "顺带补到目标" }}</button>
                 </div>
               </div>
               <div v-if="stockReplenishmentForm.source_type!=='stock_warning' && stockPolicyWarnings.length" class="panel" style="margin-bottom:12px">
                 <div class="section-title">库存预警</div>
-                <table style="font-size:12px"><thead><tr><th>策略</th><th>类型</th><th>可用 / 预警 / 目标</th><th>建议补库</th><th>默认库位</th><th>操作</th></tr></thead><tbody>
+                <table style="font-size:12px"><thead><tr><th>策略</th><th>类型</th><th>仓库总数 / 预警 / 目标</th><th>建议补库</th><th>默认库位</th><th>操作</th></tr></thead><tbody>
                   <tr v-for="policy in stockPolicyWarnings" :key="policy.id">
                     <td><strong>{{ policy.policy_name }}</strong><div class="muted">{{ policy.product_code || policy.material_code || '-' }}</div></td>
                     <td>{{ policy.target_inventory_type === 'finished' ? '成品' : '半成品' }}</td>
@@ -8494,7 +8494,7 @@
             customerForm: blankCustomer(), customerQuotePreferences: [], customerQuotePreferenceLoading: false,
             customerQuotePreferenceOptionsLoading: false, customerQuotePreferenceOptionsError: "",
             customerQuotePreferenceDraft: { box_type:"", layer_count:null, flute_type:"", supplier_name:"", material_id:null, tax_included_square_price:"", is_active:true }, productForm: blankProduct(),
-            quickStockPolicyForm: { id:null, product_id:null, customer_name:"", product_code:"", product_name:"", available_quantity:0, warning_quantity:0, target_quantity:1 },
+            quickStockPolicyForm: { id:null, product_id:null, customer_name:"", product_code:"", product_name:"", available_quantity:0, allocatable_available_quantity:0, reserved_quantity:0, warning_quantity:0, target_quantity:1 },
             materialForm: blankMaterial(),
             orderForm: { customer_id: null, customer_po: "", order_date: today(), delivery_date: plusDays(7), requisition_strategy:"normal", remark: "", items: [] },
             orderCreateSaveState:{saving:false,committed:false,outcomeUncertain:false,result:null},
@@ -20808,6 +20808,8 @@
                 product_code:data.product_code || row.product_code || "",
                 product_name:data.product_name || row.product_name || "",
                 available_quantity:Number(data.available_quantity || 0),
+                allocatable_available_quantity:Number(data.allocatable_available_quantity || 0),
+                reserved_quantity:Number(data.reserved_quantity || 0),
                 warning_quantity:Number(data.warning_quantity || 0),
                 target_quantity:Number(data.target_quantity || Math.max(Number(data.available_quantity || 0),1)),
               };

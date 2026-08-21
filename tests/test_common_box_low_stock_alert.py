@@ -317,7 +317,7 @@ def _factory(tmp_path: Path):
     return engine, factory, _seed(factory)
 
 
-def test_finished_stock_warning_uses_net_available_and_valid_floor3(
+def test_finished_stock_warning_uses_current_warehouse_total_and_valid_floor3(
     tmp_path: Path,
 ) -> None:
     from app.models.stock_replenishment import InventoryStockPolicy
@@ -330,13 +330,14 @@ def test_finished_stock_warning_uses_net_available_and_valid_floor3(
         policy = db.get(InventoryStockPolicy, ids["policy_a"])
         assert policy is not None
         summary = stock_policy_dict(db, policy)
-        assert summary["available_quantity"] == 70
-        assert summary["dedicated_available_quantity"] == 50
+        assert summary["available_quantity"] == 80
+        assert summary["allocatable_available_quantity"] == 70
+        assert summary["dedicated_available_quantity"] == 60
         assert summary["general_available_quantity"] == 20
         assert summary["reserved_quantity"] == 10
         assert summary["physical_unconsumed_quantity"] == 80
         assert summary["warning_triggered"] is True
-        assert summary["suggested_replenishment_quantity"] == 80
+        assert summary["suggested_replenishment_quantity"] == 70
 
         product = db.get(Product, ids["product_a"])
         location = db.get(WarehouseLocation, ids["standard_location"])
@@ -360,12 +361,68 @@ def test_finished_stock_warning_uses_net_available_and_valid_floor3(
         reserved_lot.quantity_available -= 1
         reserved_lot.quantity_reserved += 1
         db.flush()
-        assert stock_policy_dict(db, policy)["warning_triggered"] is True
+        assert stock_policy_dict(db, policy)["warning_triggered"] is False
+        assert stock_policy_dict(db, policy)["available_quantity"] == 110
+        assert stock_policy_dict(db, policy)["allocatable_available_quantity"] == 99
 
         reserved_lot.quantity_available += 1
         reserved_lot.quantity_reserved -= 1
         db.flush()
         assert stock_policy_dict(db, policy)["warning_triggered"] is False
+
+
+def test_finished_stock_warning_aggregates_same_customer_inventory_code(
+    tmp_path: Path,
+) -> None:
+    from app.models.product import Product
+    from app.models.warehouse_inventory import WarehouseLocation
+    from app.services.stock_replenishment import finished_product_quantity_summary
+
+    _engine, factory, ids = _factory(tmp_path)
+    with factory() as db:
+        primary = db.get(Product, ids["product_a"])
+        other_customer_product = db.get(Product, ids["product_b"])
+        location = db.get(WarehouseLocation, ids["standard_location"])
+        assert primary is not None and other_customer_product is not None
+        assert location is not None
+        duplicate = Product(
+            customer_id=primary.customer_id,
+            product_code=primary.product_code,
+            customer_material_code=primary.customer_material_code,
+            product_name="same-code historical master",
+            box_category="normal",
+            is_active=False,
+        )
+        other_customer_product.product_code = primary.product_code
+        other_customer_product.customer_material_code = primary.product_code
+        db.add(duplicate)
+        db.flush()
+        _add_finished_lot(
+            db,
+            lot_number="LOT-A-SAME-CODE-RESERVED",
+            product=duplicate,
+            location=location,
+            quantity_available=0,
+            quantity_reserved=1300,
+        )
+        _add_finished_lot(
+            db,
+            lot_number="LOT-B-SAME-CODE-OTHER-CUSTOMER",
+            product=other_customer_product,
+            location=location,
+            quantity_available=900,
+        )
+        db.flush()
+
+        summary = finished_product_quantity_summary(
+            db,
+            product_id=primary.id,
+            customer_id=primary.customer_id,
+        )
+        assert summary["available_quantity"] == 1380
+        assert summary["allocatable_available_quantity"] == 70
+        assert summary["reserved_quantity"] == 1310
+        assert summary["physical_unconsumed_quantity"] == 1380
 
 
 def test_dashboard_warning_is_read_only_permissioned_and_customer_scoped(
@@ -387,14 +444,17 @@ def test_dashboard_warning_is_read_only_permissioned_and_customer_scoped(
             overview = dashboard_overview(db, scoped)
         assert len(overview["low_stock_warnings"]) == 1
         assert overview["low_stock_warnings"][0]["product_code"] == "A-BOX"
-        assert overview["low_stock_warnings"][0]["available_quantity"] == 70
+        assert overview["low_stock_warnings"][0]["available_quantity"] == 80
+        assert overview["low_stock_warnings"][0][
+            "allocatable_available_quantity"
+        ] == 70
         assert overview["low_stock_warnings"][0]["draft_ready"] is True
         assert overview["low_stock_warnings"][0][
             "theoretical_requisition_quantity"
-        ] == 40
+        ] == 35
         assert overview["low_stock_warnings"][0][
             "suggested_new_requisition_sheet_quantity"
-        ] == 40
+        ] == 35
         assert overview["low_stock_warnings"][0][
             "customer_board_preparation_available_sheet_quantity"
         ] == 0
@@ -476,7 +536,8 @@ def test_quick_policy_update_only_changes_two_thresholds(tmp_path: Path) -> None
         body = response.json()
         assert body["warning_quantity"] == 60
         assert body["target_quantity"] == 120
-        assert body["available_quantity"] == 70
+        assert body["available_quantity"] == 80
+        assert body["allocatable_available_quantity"] == 70
         assert body["warning_triggered"] is False
 
         zero_stock = client.put(
@@ -719,9 +780,9 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
         assert line["report_width_mm"] == 470
         assert line["cutting_mode"] == "一开二"
         assert line["target_inventory_type"] == "semi_finished"
-        assert line["suggested_finished_quantity"] == 80
-        assert line["quantity"] == 40
-        assert line["theoretical_requisition_quantity"] == 40
+        assert line["suggested_finished_quantity"] == 70
+        assert line["quantity"] == 35
+        assert line["theoretical_requisition_quantity"] == 35
         assert line["compatible_product_codes"] == [
             "A-BOX",
             "A-BOX-PRINT-B",
@@ -1002,7 +1063,7 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
             ] == 0
             assert unsafe_policy_summary[
                 "suggested_new_requisition_sheet_quantity"
-            ] == 40
+            ] == 35
             db.commit()
         unsafe_supplier = client.get("/api/requisition/pending").json()["items"]
         assert next(
@@ -1507,7 +1568,11 @@ def test_frontend_exposes_read_only_alert_and_two_number_setup() -> None:
     assert "常用箱低库存" in source
     assert "lowStockCustomerGroups" in source
     assert "库存不足 {{ group.items.length }} 款" in source
-    assert "当前可用 <strong>{{ item.available_quantity }}</strong>" in source
+    assert "仓库总数 <strong>{{ item.available_quantity }}</strong>" in source
+    assert "<label>仓库当前总数</label>" in source
+    assert "同一客户、同一存货编码汇总可用与已预占的实物" in source
+    assert "quickStockPolicyForm.allocatable_available_quantity" in source
+    assert "quickStockPolicyForm.reserved_quantity" in source
     assert "距离目标还差 <strong>{{ item.suggested_replenishment_quantity }}</strong> 个成品" in source
     assert "已有客户备料" in source
     assert "已报料待到" in source
@@ -1551,7 +1616,7 @@ def test_frontend_exposes_read_only_alert_and_two_number_setup() -> None:
     assert "openProductStockPolicy(item)" in source
     assert "低于多少预警" in source
     assert "建议补到多少" in source
-    assert "两个数量都可以高于当前库存" in source
+    assert "两个预警设置都可以高于当前库存" in source
     assert '@input="syncQuickStockTargetToWarning"' in source
     assert "this.syncQuickStockTargetToWarning();" in source
     assert "建议补到数量不能小于库存下限" not in source

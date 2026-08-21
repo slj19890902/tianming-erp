@@ -85,6 +85,16 @@ def test_supplier_groups_and_external_product_editor_are_explicit() -> None:
         assert marker in INDEX
     assert "hollow_board" in INDEX
     assert "中空板" in INDEX
+    assert "客户要求的蜂窝板资料（将打印到供应商采购单）" in product_modal
+    assert "客户要求材质" in product_modal
+    assert "客户要求孔径(mm)" in product_modal
+    assert "客户要求规格长(mm)" in product_modal
+    assert "客户要求规格宽(mm)" in product_modal
+    assert "客户要求规格厚(mm)" in product_modal
+    assert "客户要求及报给供应商的规格" in product_modal
+    assert "按客户样本填写材质、孔径、长×宽×厚及其他采购要求" in product_modal
+    assert "本客户订单的数量换算在下单时填写" in product_modal
+    assert '<details v-if="productForm.supply_mode!==\'external_purchase\'"' in product_modal
     assert 'supplierPackagingForm.category_code===\'hollow_board\'' in INDEX
     assert "维护正式报价" in INDEX
     assert "不进入材质字典、组合材质或材质规则" in INDEX
@@ -181,6 +191,43 @@ if (payload.production_label_enabled !== false) throw new Error("production labe
 if (payload.external_supply.candidates.length !== 1 || payload.external_supply.candidates[0].is_default !== true) throw new Error("external supply snapshot is invalid");
 if (payload.external_supply.customer_specification.length_mm !== 780) throw new Error("customer length was not saved separately");
 if (payload.unit !== "根") throw new Error("corner guard customer unit must be roots");
+"""
+    _run_node(tmp_path, source)
+
+
+def test_honeycomb_customer_specification_is_built_without_copying_supplier_spec(
+    tmp_path: Path,
+) -> None:
+    method_names = ("syncProductExternalProfile", "buildProductWritePayload")
+    methods = {name: _method(name) for name in method_names}
+    source = f"""
+const vm={{
+  productForm:{{
+    supply_mode:"external_purchase", box_style:"其他",
+    external_packaging_category_code:"honeycomb_board",
+    external_packaging_specification_summary:"", external_packaging_purchase_unit:"片",
+    _external_specification:{{material:"170*110*170",aperture_mm:15,length_mm:800,width_mm:180,thickness_mm:60}},
+    _external_selected_ids:[31], _external_default_product_id:31,
+    customer_material_code:"HC-1", product_code:"HC-1",
+  }},
+  productExternalSupplyOptions:[{{external_product_id:31,purchase_unit:"片",specification_summary:"供应商标准规格1000×500×40mm"}}],
+  productMoldError:"", productPrintingPlateError:"", productProductionLabelError:"",
+  productPrintingWriteFields(){{return {{printing_plate_mode:"no_plate",printing_plate_product_id:null,printing_content_description:""}};}},
+  validateProductCreaseAndReport(){{return null;}},
+  serializeProductionProcesses(rows){{return (rows||[]).join(",");}},
+  normalizeMmInteger(value){{return Number(value);}}, productHasPrinting(){{return false;}},
+  attachMasterUpdateMetadata(_entity,payload){{return payload;}},
+}};
+for (const name of {json.dumps(method_names)}) {{
+  const [params,body]={json.dumps(methods, ensure_ascii=False)}[name];
+  vm[name]=new Function(params,body).bind(vm);
+}}
+vm.syncProductExternalProfile();
+if(vm.productForm.external_packaging_specification_summary!=="材质170*110*170，孔径15mm，800×180×60mm") throw new Error("customer honeycomb summary was replaced by supplier specification");
+const payload=vm.buildProductWritePayload();
+const spec=payload.external_supply.customer_specification;
+if(spec.material!=="170*110*170"||spec.aperture_mm!==15||spec.length_mm!==800||spec.width_mm!==180||spec.thickness_mm!==60) throw new Error("customer honeycomb specification was not saved");
+if(payload.external_supply.candidates.length!==1||payload.external_supply.candidates[0].external_product_id!==31) throw new Error("supplier candidate was not retained");
 """
     _run_node(tmp_path, source)
 

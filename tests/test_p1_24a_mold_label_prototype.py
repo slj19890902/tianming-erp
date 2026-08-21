@@ -44,7 +44,7 @@ def test_mold_label_keeps_only_complete_on_label_identification_fields() -> None
     assert "shortLocation" not in LABEL
     assert "第一排单独显示片料尺寸" in LABEL
     assert "第二排并列显示产品尺寸与楞型" in LABEL
-    assert "模具编号按长度自动紧排缩小" in LABEL
+    assert "模具标签名称按长度自动紧排缩小" in LABEL
     assert "不打印位置和外围边框" in LABEL
     assert "共 ${total} 款见扫码" not in LABEL
     assert "label_product_specification" in LABEL

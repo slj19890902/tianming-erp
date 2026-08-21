@@ -68,6 +68,7 @@ let rendered=[];
 function render(items){{rendered=items}}
 function setSearchLoading(loading){{nodes.searchButton.disabled=loading;nodes.searchButton.textContent=loading?"查询中…":"查询"}}
 function loginNext(){{throw new Error("unexpected login redirect")}}
+async function pinyinCustomerIds(){{return []}}
 const pending=[];
 function api(url){{return new Promise((resolve,reject)=>pending.push({{url,resolve,reject}}))}}
 {search_source}
@@ -75,6 +76,7 @@ function api(url){{return new Promise((resolve,reject)=>pending.push({{url,resol
   const first=search();
   nodes.keyword.value="B";
   const second=search();
+  await Promise.resolve();
   pending[1].resolve({{items:[{{mold_code:"B"}}]}});
   await second;
   if(rendered[0]?.mold_code!=="B")throw new Error("latest search must render first");

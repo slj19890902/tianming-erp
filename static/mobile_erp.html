@@ -228,7 +228,7 @@
 
       <section id="lookupPage" hidden>
         <h1 class="page-title">现场查询</h1>
-        <p class="page-help">一次输入订单号、客户、存货编码、模具编号或尺寸；只返回当前账号有权限且在客户范围内的资料，不显示价格、成本或毛利。</p>
+        <p class="page-help">一次输入订单号、客户、存货编码、模具标签名称或尺寸；只返回当前账号有权限且在客户范围内的资料，不显示价格、成本或毛利。</p>
         <div class="searchbar">
           <input id="lookupInput" maxlength="100" autocomplete="off" inputmode="search" placeholder="输入订单、客户、产品、模具或尺寸">
           <button id="lookupButton" class="search-btn" type="button">查询</button>
@@ -833,7 +833,7 @@
             ? item.products.map(product => `${product.customer_name || ""} ${product.product_code || product.product_name || ""}`.trim()).join("；")
             : "未显示关联产品";
           return {
-            title: `${item.mold_code || "模具"}｜${item.mold_name || "名称未填写"}`,
+            title: item.display_name || item.mold_name || "模具名称待完善",
             lines: [
               `位置 ${item.rack_location || "未填写"}｜${item.repair_status === "needs_repair" ? "需要维修" : "状态正常"}`,
               linked,
@@ -846,7 +846,7 @@
             lines: [
               `${item.customer_name || "客户未填写"}｜${item.order_number || "订单号未填写"}`,
               `${item.product_name || "产品未填写"}｜${item.carton_specification || "规格未填写"}｜${Number(item.order_quantity || 0)}只`,
-              `${item.process_tags?.length ? item.process_tags.join("、") : "工艺待核对"}${item.mold_code ? `｜模具 ${item.mold_code} ${item.mold_location || ""}` : ""}`,
+              `${item.process_tags?.length ? item.process_tags.join("、") : "工艺待核对"}${item.mold_display_name || item.mold_name ? `｜模具 ${item.mold_display_name || item.mold_name} ${item.mold_location || ""}` : ""}`,
             ],
           };
         }
@@ -1512,7 +1512,7 @@
 
       function openMoldMap(task) {
         if (!task.mold_map_url) return;
-        byId("mapTitle").textContent = `${task.mold_code || task.mold_name || "当前模具"}｜模具位置`;
+        byId("mapTitle").textContent = `${task.mold_display_name || task.mold_name || "当前模具"}｜模具位置`;
         byId("mapFrame").src = task.mold_map_url;
         byId("mapLayer").hidden = false;
       }
@@ -1556,7 +1556,7 @@
           facts.append(
             stationFact("订单数量", `${task.order_quantity || 0}只`),
             stationFact("材质 / 楞型", [task.material, task.flute_type ? `${task.flute_type}楞` : ""].filter(Boolean).join(" / ")),
-            stationFact("模具编号", task.mold_code || "未绑定"),
+            stationFact("模具名称", task.mold_display_name || task.mold_name || "未绑定"),
             stationFact("正式模具位置", task.mold_location || "未登记")
           );
         } else {

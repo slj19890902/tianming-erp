@@ -501,6 +501,7 @@ def test_mold_list_supports_server_pagination_and_preserves_search(mold_app) -> 
         assert searched.status_code == 200, searched.text
         assert searched.json()["total"] == 1
         assert searched.json()["items"][0]["mold_code"] == "PAGE-017"
+        target_mold_id = searched.json()["items"][0]["id"]
 
         mapped_area = client.get(
             "/api/warehouse/molds/by-map-area",
@@ -525,8 +526,9 @@ def test_mold_list_supports_server_pagination_and_preserves_search(mold_app) -> 
         resource = next(
             row
             for row in located.json()["resources"]
-            if row["primary_code"] == "PAGE-017"
+            if row["resource_id"] == f"mold:{target_mold_id}"
         )
+        assert resource["primary_code"] is None
         assert resource["feature_codes"] == ["ZONE-1F-MOLD-002"]
         assert resource["map_status"] == "mapped"
 
@@ -1083,7 +1085,8 @@ def test_mold_label_dimensions_are_complete_and_printing_fails_closed(
             f"/api/warehouse/molds/{long_identity_id}/label"
         )
         assert long_title.status_code == 409, long_title.text
-        assert "客户名称+模具编号过长" in long_title.json()["detail"]
+        assert "标签内容过长" in long_title.json()["detail"]
+        assert "客户简称、标签名称和中文简写" in long_title.json()["detail"]
 
         manual_location = client.get(
             f"/api/warehouse/molds/{long_location_id}/label"
@@ -1428,7 +1431,7 @@ def test_mold_live_status_reads_current_order_receipt_and_material_location(
         assert task["order_number"] == "SO-MOLD-LIVE-001"
         assert task["order_quantity"] == 1000
         assert task["product_code"] == "61452621R1F"
-        assert task["specification"] == "430 × 68"
+        assert task["specification"] == "430×68mm"
         assert task["material"]["state"] == "partially_received"
         assert task["material"]["received_quantity"] == 400
         assert task["material"]["locations"][0]["location_code"] == "1F-RAW-01"
@@ -2770,10 +2773,12 @@ def test_mold_frontend_connects_location_common_box_and_order_display() -> None:
     index = Path("static/index.html").read_text(encoding="utf-8")
     for marker in (
         "新增 / 编辑生产模具",
-        "模具编号（系统自动生成）",
+        "搜索正式客户",
+        "第一主标签客户",
+        "模具标签名称",
+        "中文简写（可不填）",
         "/api/warehouse/molds",
         "已绑定常用箱",
-        "/api/warehouse/molds/code-preview",
         "/api/warehouse/molds/binding-products",
         "moldBindingPanel",
         "pinyin-pro-3.26.0.js",

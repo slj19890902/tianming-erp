@@ -17,14 +17,14 @@
 <body>
   <header>
     <div class="header-row"><h1>模具位置查询</h1><nav class="quick-links"><a id="warehouseLink" href="/warehouse.html">返回仓库</a><a id="productionLink" href="/production">生产确认</a></nav></div>
-    <div class="search"><input id="keyword" inputmode="search" placeholder="输入模具编号、存货编码、客户或产品名称"><button id="searchButton" type="button">查询</button></div>
+    <div class="search"><input id="keyword" inputmode="search" placeholder="输入客户、标签名称、存货编码或产品名称"><button id="searchButton" type="button">查询</button></div>
   </header>
   <main>
     <section id="movePanel" class="move-panel">
       <h2>模具双码移动确认</h2>
       <div class="muted">扫描结果可直接粘贴，也可手动输入。先预览当前与目标位置，再确认移动。</div>
       <div class="move-grid">
-        <div class="field"><label for="moveMoldCode">模具码</label><input id="moveMoldCode" autocomplete="off" placeholder="例如 MJ-A1-001"></div>
+        <div class="field"><label>已选模具</label><div id="moveMoldDisplay" class="preview-code">请先从查询结果选择模具</div><input id="moveMoldCode" type="hidden"></div>
         <div class="field"><label for="moveLocationCode">模具位置码（1F / 3F）</label><input id="moveLocationCode" autocomplete="off" autocapitalize="characters" placeholder="例如 1F-M-R01-L2-G01"></div>
       </div>
       <div class="one-floor-builder">
@@ -40,7 +40,7 @@
       <div class="move-actions"><button id="previewButton" type="button">预览移动</button><button id="confirmButton" class="confirm" type="button" disabled>确认移动</button></div>
       <div id="moveMessage"></div><div id="movePreview"></div>
     </section>
-    <div class="hint">先看醒目的位置提示，再核对模具编号、存货编码和产品尺寸。大模具请按现场要求两人搬运。</div>
+    <div class="hint">先看醒目的位置提示，再核对模具标签名称、存货编码和产品尺寸。大模具请按现场要求两人搬运。</div>
     <div id="message"></div>
     <div id="results"></div>
   </main>
@@ -48,7 +48,7 @@
     const $=id=>document.getElementById(id);
     const h=value=>String(value??"").replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[char]);
     const readOnly=new URLSearchParams(location.search).get("readonly")==="1";
-    let canMove=false,movePreview=null,moveIdempotencyKey=null,moveSource="manual_input",oneFloorLocationOptions=[];
+    let canMove=false,movePreview=null,moveIdempotencyKey=null,moveSource="manual_input",oneFloorLocationOptions=[],visibleMolds=[],customerReferences=null,moldPinyinRuntimePromise=null;
     let searchRequestId=0,movePreviewRequestId=0;
     function errorMessage(body,status){const detail=body?.detail;if(typeof detail==="string"&&detail.trim())return detail;if(detail&&typeof detail==="object"&&!Array.isArray(detail)){const message=detail.message||detail.detail||detail.msg,code=detail.code;if(typeof message==="string"&&message.trim())return code?`${message}（${code}）`:message}if(Array.isArray(detail)&&detail[0]?.msg)return detail[0].msg;if(typeof body?.message==="string"&&body.message.trim())return body.message;return `请求失败（HTTP ${status}）`}
     async function api(url,options={}){let response;try{response=await fetch(url,{credentials:"same-origin",headers:{"Content-Type":"application/json",...(options.headers||{})},...options})}catch{const error=new Error("连接 ERP 失败，请检查网络后重试");error.code="NETWORK_ERROR";throw error}let body={};try{body=await response.json()}catch{}if(!response.ok){const error=new Error(errorMessage(body,response.status));error.status=response.status;error.code=body?.detail?.code||body?.code||null;throw error}return body}
@@ -72,46 +72,54 @@
       try{const data=await api("/api/warehouse/molds/location-options");oneFloorLocationOptions=data.racks||[];$("oneFloorRack").innerHTML=oneFloorLocationOptions.map(row=>`<option value="${h(row.rack_code)}">${h(row.rack_code)} · ${h(row.name)}</option>`).join("");renderOneFloorLevels()}catch(error){$("oneFloorBuilderHint").textContent=`一楼快捷位置读取失败：${error.message}`}
     }
     function loginNext(){const next=location.pathname+location.search;location.href=`/?next=${encodeURIComponent(next)}`}
+    async function ensureCustomerReferences(){if(customerReferences)return customerReferences;const data=await api("/api/warehouse/references/customers");customerReferences=data.items||[];return customerReferences}
+    async function ensureMoldPinyinRuntime(){if(typeof window.pinyinPro?.pinyin==="function")return window.pinyinPro;if(moldPinyinRuntimePromise)return moldPinyinRuntimePromise;moldPinyinRuntimePromise=new Promise(resolve=>{const script=document.createElement("script");script.src="/static/vendor/pinyin-pro-3.26.0.js";script.async=true;script.onload=()=>resolve(typeof window.pinyinPro?.pinyin==="function"?window.pinyinPro:null);script.onerror=()=>resolve(null);document.head.appendChild(script)});return moldPinyinRuntimePromise}
+    async function pinyinCustomerIds(keyword){if(!/^[A-Za-z\s]+$/.test(keyword))return[];const rows=await ensureCustomerReferences(),runtime=await ensureMoldPinyinRuntime(),compact=keyword.toLocaleLowerCase().replace(/\s+/g,"");if(!runtime)return[];return rows.filter(row=>{try{return[runtime.pinyin(row.name,{toneType:"none"}),runtime.pinyin(row.name,{pattern:"first",toneType:"none",type:"array"}).join("")].some(value=>String(value||"").toLocaleLowerCase().replace(/\s+/g,"").includes(compact))}catch{return false}}).slice(0,50).map(row=>Number(row.id))}
     function productHtml(row){
       const report=row.report_specification?`报料尺寸 ${h(row.report_specification)} mm`:"";
       const direction=row.direction_note?`<div class="direction">方向/报料提醒：${h(row.direction_note)}</div>`:"";
       return `<div class="product"><div class="product-name">${h(row.product_name)}</div><div class="product-code">${h(row.customer_name||"-")}｜存货编码 ${h(row.product_code||"-")}</div><div class="meta">产品规格 ${h(row.specification||"未登记")} ${report?`｜${report}`:""}</div>${direction}</div>`
     }
+    function selectMoldForMove(id){const row=visibleMolds.find(item=>Number(item.id)===Number(id));if(!row)return;$("moveMoldCode").value=row.internal_code||row.mold_code||"";$("moveMoldDisplay").textContent=row.display_name||row.mold_name||"当前模具";invalidateMovePreview();$("movePanel").scrollIntoView({behavior:"smooth",block:"start"})}
     function render(items){
-      $("results").innerHTML=items.map(row=>`<article class="card"><div class="card-head"><div class="name">${h(row.mold_name)}</div><div class="toolbar"><span class="code">模具编号 ${h(row.mold_code)}</span><span class="tag">关联 ${row.product_count} 款</span></div></div><div class="location"><div class="location-code">${h(row.rack_location)}</div><div class="prompt">${h(row.location_guide?.prompt||"")}</div></div><div class="products">${(row.products||[]).map(productHtml).join("")||'<div class="empty">该模具尚未绑定常用箱，请先联系管理员维护。</div>'}<a class="label-link" href="/mold-label.html?mold_id=${row.id}" target="_blank">查看/打印模具标签</a></div></article>`).join("")||'<div class="empty">没有找到模具。请检查编号，或让管理员先维护模具与常用箱绑定。</div>';
+      visibleMolds=items;$("results").innerHTML=items.map(row=>`<article class="card"><div class="card-head"><div class="name">${h(row.display_name||row.mold_name||"名称待完善")}</div><div class="toolbar"><span class="code">${h(row.identity_ready?"正式标签资料":"历史资料待完善")}</span><span class="tag">关联 ${row.product_count} 款</span></div></div><div class="location"><div class="location-code">${h(row.rack_location)}</div><div class="prompt">${h(row.location_guide?.prompt||"")}</div></div><div class="products">${(row.products||[]).map(productHtml).join("")||'<div class="empty">该模具尚未绑定常用箱，请先联系管理员维护。</div>'}<div class="toolbar">${canMove?`<button class="label-link" type="button" onclick="selectMoldForMove(${Number(row.id)})">选择此模具移动</button>`:""}<a class="label-link" href="/mold-label.html?mold_id=${row.id}" target="_blank">查看/打印模具标签</a></div></div></article>`).join("")||'<div class="empty">没有找到模具。请换客户、标签名称、存货编码或产品名称。</div>';
     }
     function setSearchLoading(loading){$("searchButton").disabled=loading;$("searchButton").textContent=loading?"查询中…":"查询"}
     function invalidateSearch(){searchRequestId+=1;setSearchLoading(false);$("message").innerHTML="";$("results").innerHTML=""}
     async function search(){
-      const requestId=++searchRequestId,keyword=$("keyword").value.trim();if(!keyword){$("results").innerHTML="";$("message").innerHTML='<div class="error">请输入模具编号、存货编码、客户或产品名称。</div>';setSearchLoading(false);return}
+      const requestId=++searchRequestId,keyword=$("keyword").value.trim();if(!keyword){$("results").innerHTML="";$("message").innerHTML='<div class="error">请输入客户、标签名称、存货编码或产品名称。</div>';setSearchLoading(false);return}
       setSearchLoading(true);$("message").innerHTML='<div class="hint">正在查询模具，请稍候…</div>';$("results").innerHTML="";
-      try{const data=await api(`/api/warehouse/molds?q=${encodeURIComponent(keyword)}&limit=50`);if(requestId!==searchRequestId)return;const items=data.items||[];render(items);$("message").innerHTML=items.length?`<div class="success">找到 ${items.length} 个模具</div>`:""}catch(error){if(requestId!==searchRequestId)return;if(error.status===401){loginNext();return}$("message").innerHTML=`<div class="error">${h(error.message)}</div>`}finally{if(requestId===searchRequestId)setSearchLoading(false)}
+      try{const customerIds=await pinyinCustomerIds(keyword),customerQuery=customerIds.length?`&customer_ids=${encodeURIComponent(customerIds.join(","))}`:"",data=await api(`/api/warehouse/molds?q=${encodeURIComponent(keyword)}&limit=50${customerQuery}`);if(requestId!==searchRequestId)return;const items=data.items||[];render(items);$("message").innerHTML=items.length?`<div class="success">找到 ${items.length} 个模具</div>`:""}catch(error){if(requestId!==searchRequestId)return;if(error.status===401){loginNext();return}$("message").innerHTML=`<div class="error">${h(error.message)}</div>`}finally{if(requestId===searchRequestId)setSearchLoading(false)}
+    }
+    async function loadMoldById(moldId){
+      setSearchLoading(true);$("message").innerHTML='<div class="hint">正在读取模具，请稍候…</div>';$("results").innerHTML="";
+      try{const row=await api(`/api/warehouse/molds/${encodeURIComponent(moldId)}/detail`);render([row]);$("message").innerHTML='<div class="success">已打开扫码对应模具</div>'}catch(error){if(error.status===401){loginNext();return}$("message").innerHTML=`<div class="error">${h(error.message)}</div>`}finally{setSearchLoading(false)}
     }
     function renderMovePreview(){
       const row=movePreview;if(!row){$("movePreview").innerHTML="";$("confirmButton").disabled=true;return}
       const colocated=row.co_located_count?`<div class="hint">该货架分类已有 ${h(row.co_located_count)} 块模具；系统不记录格内左右顺序，仍可确认归位。</div>`:"";
       const same=row.same_location?'<div class="muted">当前位置与目标位置相同；确认后不会新增移动流水。</div>':"";
-      $("movePreview").innerHTML=`<div class="preview"><div class="preview-line"><span>模具</span><span class="preview-code">${h(row.mold.mold_code)}｜${h(row.mold.mold_name)}</span></div><div class="preview-line"><span>当前位置</span><span class="preview-code">${h(row.mold.rack_location)}</span></div><div class="preview-line"><span>目标位置</span><span class="preview-code">${h(row.target_location)}</span></div><div class="preview-line"><span>位置版本</span><span>${h(row.expected_version)}</span></div>${colocated}${same}</div>`;
+      $("movePreview").innerHTML=`<div class="preview"><div class="preview-line"><span>模具</span><span class="preview-code">${h(row.mold.display_name||row.mold.mold_name||"当前模具")}</span></div><div class="preview-line"><span>当前位置</span><span class="preview-code">${h(row.mold.rack_location)}</span></div><div class="preview-line"><span>目标位置</span><span class="preview-code">${h(row.target_location)}</span></div><div class="preview-line"><span>位置版本</span><span>${h(row.expected_version)}</span></div>${colocated}${same}</div>`;
       $("confirmButton").disabled=!canMove||!row.can_confirm;
       if(!canMove)$("moveMessage").innerHTML='<div class="hint">当前账号可预览，但没有仓库操作权限，不能确认移动。</div>';
     }
     function invalidateMovePreview(){movePreviewRequestId+=1;movePreview=null;moveIdempotencyKey=null;$("previewButton").disabled=false;$("moveMessage").innerHTML="";renderMovePreview()}
     async function previewMove(){
       const requestId=++movePreviewRequestId,moldCode=$("moveMoldCode").value.trim(),targetLocation=$("moveLocationCode").value.trim();
-      if(!moldCode||!targetLocation){movePreview=null;moveIdempotencyKey=null;renderMovePreview();$("moveMessage").innerHTML='<div class="error">请同时输入模具码和位置码。</div>';return}
+      if(!moldCode||!targetLocation){movePreview=null;moveIdempotencyKey=null;renderMovePreview();$("moveMessage").innerHTML='<div class="error">请先选择模具并选择目标位置。</div>';return}
       $("moveMessage").innerHTML="";$("previewButton").disabled=true;$("confirmButton").disabled=true;
       try{const preview=await api("/api/warehouse/molds/location-movement/preview",{method:"POST",body:JSON.stringify({mold_code:moldCode,target_location:targetLocation})});if(requestId!==movePreviewRequestId)return;movePreview=preview;moveIdempotencyKey=createIdempotencyKey();renderMovePreview()}catch(error){if(requestId!==movePreviewRequestId)return;movePreview=null;moveIdempotencyKey=null;renderMovePreview();if(error.status===401){loginNext();return}$("moveMessage").innerHTML=`<div class="error">${h(error.message)}</div>`}finally{if(requestId===movePreviewRequestId)$("previewButton").disabled=false}
     }
     async function confirmMove(){
       if(!canMove||!movePreview||!moveIdempotencyKey)return;
       $("confirmButton").disabled=true;$("previewButton").disabled=true;$("moveMessage").innerHTML="";
-      try{const data=await api("/api/warehouse/molds/location-movement/confirm",{method:"POST",body:JSON.stringify({mold_code:movePreview.mold.mold_code,target_location:movePreview.target_location,expected_version:movePreview.expected_version,idempotency_key:moveIdempotencyKey,source:moveSource,note:$("moveNote").value.trim()||null})});$("moveMessage").innerHTML=`<div class="success">${h(data.message)}：${h(data.mold.rack_location)}${data.idempotent_replay?"（幂等重放）":""}</div>`;$("keyword").value=data.mold.mold_code;await search();movePreview=null;moveIdempotencyKey=null;renderMovePreview()}catch(error){if(error.status===401){loginNext();return}if(error.status===409){movePreview=null;moveIdempotencyKey=null;renderMovePreview()}$("moveMessage").innerHTML=`<div class="error">${h(error.message)}${error.status===409?" 请重新预览。":""}</div>`}finally{$("previewButton").disabled=false;if(movePreview)renderMovePreview()}
+      try{const data=await api("/api/warehouse/molds/location-movement/confirm",{method:"POST",body:JSON.stringify({mold_code:movePreview.mold.mold_code,target_location:movePreview.target_location,expected_version:movePreview.expected_version,idempotency_key:moveIdempotencyKey,source:moveSource,note:$("moveNote").value.trim()||null})});$("moveMessage").innerHTML=`<div class="success">${h(data.message)}：${h(data.mold.rack_location)}${data.idempotent_replay?"（幂等重放）":""}</div>`;$("keyword").value=data.mold.display_name||data.mold.mold_name||"";await search();movePreview=null;moveIdempotencyKey=null;renderMovePreview()}catch(error){if(error.status===401){loginNext();return}if(error.status===409){movePreview=null;moveIdempotencyKey=null;renderMovePreview()}$("moveMessage").innerHTML=`<div class="error">${h(error.message)}${error.status===409?" 请重新预览。":""}</div>`}finally{$("previewButton").disabled=false;if(movePreview)renderMovePreview()}
     }
     async function init(){
       let auth;try{auth=await api("/api/auth/me")}catch(error){if(error.status===401){loginNext();return}$("message").innerHTML=`<div class="error">${h(error.message)}</div>`;return}
       const permissions=auth.permissions||[];canMove=!readOnly&&permissions.includes("warehouse.execute");$("warehouseLink").style.display=permissions.includes("warehouse.view")?"inline-block":"none";$("productionLink").style.display=permissions.includes("orders.view")?"inline-block":"none";$("movePanel").hidden=readOnly;
       if(!readOnly)await loadOneFloorLocationOptions();
-      const params=new URLSearchParams(location.search),preset=params.get("mold")||params.get("q")||"",target=params.get("location")||params.get("target")||params.get("to")||"";$("keyword").value=preset;$("moveMoldCode").value=params.get("move_mold")||preset;$("moveLocationCode").value=target;if(target)moveSource="url_parameter";if(preset)await search();if($("moveMoldCode").value&&target)await previewMove()
+      const params=new URLSearchParams(location.search),moldId=params.get("mold_id")||"",preset=params.get("mold")||params.get("q")||"",target=params.get("location")||params.get("target")||params.get("to")||"";$("keyword").value=preset;$("moveMoldCode").value=params.get("move_mold")||preset;$("moveLocationCode").value=target;if(target)moveSource="url_parameter";if(moldId)await loadMoldById(moldId);else if(preset)await search();if($("moveMoldCode").value&&target)await previewMove()
     }
     $("searchButton").onclick=search;$("keyword").oninput=invalidateSearch;$("keyword").onkeydown=event=>{if(event.key==="Enter")search()};$("previewButton").onclick=previewMove;$("confirmButton").onclick=confirmMove;$("moveMoldCode").onpaste=$("moveLocationCode").onpaste=()=>{moveSource="scanner_paste"};$("moveMoldCode").oninput=$("moveLocationCode").oninput=invalidateMovePreview;$("moveLocationCode").onkeydown=event=>{if(event.key==="Enter")previewMove()};$("oneFloorRack").onchange=renderOneFloorLevels;$("oneFloorLevel").onchange=renderOneFloorGrids;$("oneFloorGrid").onchange=buildOneFloorLocation;init();
   </script>

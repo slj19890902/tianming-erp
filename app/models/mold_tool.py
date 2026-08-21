@@ -20,6 +20,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models import Base
 
 if TYPE_CHECKING:
+    from app.models.customer import Customer
     from app.models.product import Product
     from app.models.user import User
 
@@ -45,6 +46,20 @@ class MoldTool(Base):
             name="ck_mold_tools_repair_version",
         ),
         CheckConstraint(
+            "version >= 1",
+            name="ck_mold_tools_version",
+        ),
+        CheckConstraint(
+            "identity_status IN ('legacy_unset', 'frozen')",
+            name="ck_mold_tools_identity_status",
+        ),
+        CheckConstraint(
+            "((identity_status = 'legacy_unset' AND label_name IS NULL) OR "
+            "(identity_status = 'frozen' AND label_name IS NOT NULL "
+            "AND length(trim(label_name)) > 0))",
+            name="ck_mold_tools_identity_fields",
+        ),
+        CheckConstraint(
             "((archive_status = 'active' AND archived_at IS NULL "
             "AND archived_by IS NULL AND archive_reason IS NULL "
             "AND pre_archive_location IS NULL) OR "
@@ -58,6 +73,14 @@ class MoldTool(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     mold_code: Mapped[str] = mapped_column(String(100), nullable=False)
     mold_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    label_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    chinese_short_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    identity_status: Mapped[str] = mapped_column(
+        String(20), default="legacy_unset", server_default="legacy_unset", nullable=False
+    )
+    version: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1", nullable=False
+    )
     rack_location: Mapped[str] = mapped_column(String(250), nullable=False)
     location_version: Mapped[int] = mapped_column(
         Integer,
@@ -111,6 +134,16 @@ class MoldTool(Base):
         back_populates="mold_tool",
         passive_deletes=True,
     )
+    customer_links: Mapped[list["MoldToolCustomer"]] = relationship(
+        back_populates="mold_tool",
+        passive_deletes=True,
+        order_by="MoldToolCustomer.id",
+    )
+    master_mutations: Mapped[list["MoldMasterMutation"]] = relationship(
+        back_populates="mold_tool",
+        passive_deletes=True,
+        order_by="MoldMasterMutation.id",
+    )
     location_movements: Mapped[list["MoldLocationMovement"]] = relationship(
         back_populates="mold_tool",
         passive_deletes=True,
@@ -136,6 +169,89 @@ class MoldTool(Base):
     )
     archiver: Mapped["User | None"] = relationship(foreign_keys=[archived_by])
     restorer: Mapped["User | None"] = relationship(foreign_keys=[restored_by])
+
+
+class MoldToolCustomer(Base):
+    """A formal customer association for one physical mold body."""
+
+    __tablename__ = "mold_tool_customers"
+    __table_args__ = (
+        UniqueConstraint(
+            "mold_tool_id",
+            "customer_id",
+            name="uq_mold_tool_customers_mold_customer",
+        ),
+        UniqueConstraint(
+            "mold_tool_id",
+            "display_order",
+            name="uq_mold_tool_customers_mold_display_order",
+        ),
+        CheckConstraint(
+            "display_order IS NULL OR display_order IN (1, 2)",
+            name="ck_mold_tool_customers_display_order",
+        ),
+        Index("ix_mold_tool_customers_customer_mold", "customer_id", "mold_tool_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    mold_tool_id: Mapped[int] = mapped_column(
+        ForeignKey("mold_tools.id", ondelete="RESTRICT"), nullable=False
+    )
+    customer_id: Mapped[int] = mapped_column(
+        ForeignKey("customers.id", ondelete="RESTRICT"), nullable=False
+    )
+    display_order: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+
+    mold_tool: Mapped["MoldTool"] = relationship(back_populates="customer_links")
+    customer: Mapped["Customer"] = relationship()
+    creator: Mapped["User | None"] = relationship(foreign_keys=[created_by])
+
+
+class MoldMasterMutation(Base):
+    """Immutable idempotency and audit fact for mold identity edits."""
+
+    __tablename__ = "mold_master_mutations"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_mold_master_mutations_key"),
+        CheckConstraint(
+            "action IN ('create', 'update')",
+            name="ck_mold_master_mutations_action",
+        ),
+        CheckConstraint(
+            "length(request_hash) = 64",
+            name="ck_mold_master_mutations_request_hash",
+        ),
+        CheckConstraint(
+            "result_version >= 1",
+            name="ck_mold_master_mutations_result_version",
+        ),
+        Index("ix_mold_master_mutations_mold_time", "mold_tool_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    mold_tool_id: Mapped[int] = mapped_column(
+        ForeignKey("mold_tools.id", ondelete="RESTRICT"), nullable=False
+    )
+    action: Mapped[str] = mapped_column(String(20), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    actor_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    result_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    result_snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+
+    mold_tool: Mapped["MoldTool"] = relationship(back_populates="master_mutations")
+    actor: Mapped["User"] = relationship(foreign_keys=[actor_id])
 
 
 class MoldLocationMovement(Base):

@@ -252,12 +252,12 @@
         const text = textList(card.production_steps || []);
         const steps = [];
         const add = (value) => { if (!steps.includes(value)) steps.push(value); };
-        if ((card.components || []).some((line) => line.mold_code)) add("模具");
+        if ((card.components || []).some((line) => line.mold_display_name || line.mold_name || line.mold_code)) add("模具");
         if (text.includes("印刷") || firstValues(card, "print_content").some((value) => !["无印刷", "无", "否", "不印刷"].includes(value))) add("印刷");
         if (card.joining_method && card.joining_method.includes("粘贴")) add("粘贴");
         if (text.includes("开槽")) add("开槽");
         if (text.includes("压线")) add("压线");
-        if (!(card.components || []).some((line) => line.mold_code) && (card.layout_kind === "die_cut" || text.includes("模切"))) add("模切");
+        if (!(card.components || []).some((line) => line.mold_display_name || line.mold_name || line.mold_code) && (card.layout_kind === "die_cut" || text.includes("模切"))) add("模切");
         if (text.includes("清废")) add("清废");
         if (card.joining_method) card.joining_method.split(" / ").filter((value) => !["粘贴", "无需结合"].includes(value)).forEach(add);
         return steps.length ? steps.slice(0, 6) : ["无需后加工"];
@@ -274,7 +274,7 @@
       function printingComponentHtml(component, componentIndex, componentCount) {
         const content = String(component && (component.printing_situation || component.print_content) || "").trim();
         if (!content || ["无印刷", "无", "否", "不印刷"].includes(content)) return "";
-        const titlePrefix = component && component.mold_code ? "第 2 工序 · " : "";
+        const titlePrefix = component && (component.mold_display_name || component.mold_name || component.mold_code) ? "第 2 工序 · " : "";
         const title = componentCount > 1
           ? `${titlePrefix}${component.component_label || component.product_code || `组件${componentIndex + 1}`} · 印刷`
           : `${titlePrefix}印刷`;
@@ -437,22 +437,22 @@
         const rows = [];
         const seen = new Set();
         (card.components || []).forEach((line) => {
-          const code = String(line.mold_code || "").trim();
-          if (!code) return;
-          const key = `${line.mold_tool_id || ""}|${code}|${line.mold_location || ""}`;
+          const name = String(line.mold_display_name || line.mold_name || "").trim();
+          if (!name) return;
+          const key = `${line.mold_tool_id || ""}|${name}|${line.mold_location || ""}`;
           if (seen.has(key)) return;
           seen.add(key);
           const state = line.mold_is_active === false ? " · 已停用，请勿直接领用" : "";
-          rows.push(`<div class="mold-focus-row"><strong class="mold-focus-code">${escapeHtml(code)}</strong><span class="mold-focus-location">${escapeHtml(line.mold_location || "位置待完善")}${escapeHtml(state)}</span></div>`);
+          rows.push(`<div class="mold-focus-row"><strong class="mold-focus-code">${escapeHtml(name)}</strong><span class="mold-focus-location">${escapeHtml(line.mold_location || "位置待完善")}${escapeHtml(state)}</span></div>`);
         });
         if (!rows.length) return "";
-        return `<section class="mold-focus internal-only"><div class="mold-focus-title"><span>第 1 工序 · 模具编号与现场位置</span><span>先核对再领用</span></div>${rows.join("")}<div class="mold-focus-note">扫描模具上的固定二维码，可查看本任务其余信息并登记本次扫码时间；扫码不会自动开工。</div></section>`;
+        return `<section class="mold-focus internal-only"><div class="mold-focus-title"><span>第 1 工序 · 模具名称与现场位置</span><span>先核对再领用</span></div>${rows.join("")}<div class="mold-focus-note">扫描模具上的固定二维码，可查看本任务其余信息并登记本次扫码时间；扫码不会自动开工。</div></section>`;
       }
 
       function joiningHtml(card) {
         if (!card.joining_method || !card.joining_method.includes("粘贴")) return "";
         const components = Array.isArray(card.components) ? card.components : [];
-        const hasMold = components.some((component) => component && component.mold_code);
+        const hasMold = components.some((component) => component && (component.mold_display_name || component.mold_name || component.mold_code));
         const hasPrinting = components.some((component) => {
           const content = String(component && (component.printing_situation || component.print_content) || "").trim();
           return content && !["无印刷", "无", "否", "不印刷"].includes(content);

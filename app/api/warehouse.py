@@ -46,9 +46,11 @@ from app.models.mold_tool import (
     MoldLabelPrintJob,
     MoldLabelPrintJobItem,
     MoldLocationMovement,
+    MoldMasterMutation,
     MoldRepairEvent,
     MoldScanEvent,
     MoldTool,
+    MoldToolCustomer,
 )
 from app.models.printing_plate import (
     PrintingPlate,
@@ -268,9 +270,13 @@ from app.services.master_data_versioning import (
 )
 from app.services.mold_identity import (
     MoldIdentityError,
+    compose_mold_display_name,
     mold_customer_short_name,
     mold_label_display_number,
     next_available_mold_code,
+    next_available_internal_mold_code,
+    normalize_mold_chinese_short_name,
+    normalize_mold_label_name,
 )
 from app.core.config import load_settings
 from app.services.mold_location import (
@@ -1050,12 +1056,25 @@ class Floor3PalletRelocationPayload(BaseModel):
     remarks: str | None = Field(default=None, max_length=500)
 
 
+class MoldCustomerAssociationPayload(BaseModel):
+    customer_id: int = Field(gt=0)
+    display_order: Literal[1, 2] | None = None
+
+
 class MoldToolPayload(BaseModel):
     # mold_code remains optional for compatibility with older API clients.
     # The warehouse UI sends customer_initials and lets the server allocate it.
     mold_code: str | None = Field(default=None, max_length=100)
     customer_initials: str | None = Field(default=None, max_length=20)
-    mold_name: str = Field(min_length=1, max_length=200)
+    mold_name: str | None = Field(default=None, max_length=200)
+    label_name: str | None = Field(default=None, max_length=200)
+    chinese_short_name: str | None = Field(default=None, max_length=100)
+    customers: list[MoldCustomerAssociationPayload] | None = Field(
+        default=None,
+        max_length=50,
+    )
+    expected_version: int | None = Field(default=None, gt=0)
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=120)
     rack_location: str = Field(min_length=1, max_length=250)
     remarks: str | None = None
     expected_location_version: int | None = Field(default=None, gt=0)
@@ -1067,7 +1086,7 @@ class MoldToolPayload(BaseModel):
     physical_move_confirmed: bool = False
     location_note: str | None = Field(default=None, max_length=500)
 
-    @field_validator("mold_name", "rack_location")
+    @field_validator("rack_location")
     @classmethod
     def strip_mold_fields(cls, value: str) -> str:
         return value.strip()
@@ -1075,6 +1094,10 @@ class MoldToolPayload(BaseModel):
     @field_validator(
         "mold_code",
         "customer_initials",
+        "mold_name",
+        "label_name",
+        "chinese_short_name",
+        "idempotency_key",
         "location_idempotency_key",
         "location_note",
     )
@@ -1082,6 +1105,40 @@ class MoldToolPayload(BaseModel):
     def strip_optional_mold_fields(cls, value: str | None) -> str | None:
         text = (value or "").strip()
         return text or None
+
+    @model_validator(mode="after")
+    def validate_identity_contract(self) -> "MoldToolPayload":
+        uses_formal_identity = any(
+            value is not None
+            for value in (
+                self.label_name,
+                self.chinese_short_name,
+                self.customers,
+                self.expected_version,
+                self.idempotency_key,
+            )
+        )
+        if not uses_formal_identity:
+            if not self.mold_name:
+                raise ValueError("请填写模具名称")
+            return self
+        if not self.label_name:
+            raise ValueError("请填写模具标签名称")
+        if not self.customers:
+            raise ValueError("请至少选择一个正式客户")
+        customer_ids = [item.customer_id for item in self.customers]
+        if len(customer_ids) != len(set(customer_ids)):
+            raise ValueError("同一客户不能重复关联")
+        primary_orders = sorted(
+            item.display_order
+            for item in self.customers
+            if item.display_order is not None
+        )
+        if primary_orders not in ([1], [1, 2]):
+            raise ValueError("主标签客户必须从第一位开始，且最多选择两个")
+        if not self.idempotency_key:
+            raise ValueError("模具资料保存凭证缺失，请刷新后重试")
+        return self
 
 
 class MoldProductBindingItem(BaseModel):
@@ -9560,6 +9617,7 @@ def _twin_mold_resources(
         floor1_layout = None
     response = list_mold_tools(
         q=keyword,
+        customer_ids=None,
         include_inactive=False,
         limit=100,
         page=None,
@@ -9606,8 +9664,8 @@ def _twin_mold_resources(
             {
                 "resource_id": f"mold:{mold.get('id')}",
                 "kind": "mold",
-                "primary_code": mold.get("mold_code"),
-                "title": mold.get("mold_name") or "模具",
+                "primary_code": None,
+                "title": mold.get("display_name") or mold.get("mold_name") or "模具",
                 "subtitle": (
                     f"封存待复用 · {product_summary or '无历史绑定'}"
                     if mold.get("archive_status") == "archived"
@@ -10278,6 +10336,7 @@ def reference_customers(
             {
                 "id": row.id,
                 "name": row.name,
+                "chinese_short_name": row.chinese_short_name,
                 "customer_code": row.customer_code,
                 "customer_number": row.customer_number,
             }
@@ -11067,6 +11126,203 @@ def confirm_printing_plate_location_movement(
         raise HTTPException(status_code=409, detail="挂板位置或幂等键冲突，请重新预览") from error
 
 
+def _visible_mold_customer_links(
+    row: MoldTool,
+    allowed_customer_ids: set[int] | None,
+) -> list[MoldToolCustomer]:
+    return sorted(
+        (
+            link
+            for link in row.customer_links
+            if allowed_customer_ids is None or link.customer_id in allowed_customer_ids
+        ),
+        key=lambda link: (
+            link.display_order is None,
+            link.display_order or 99,
+            link.customer.name,
+            link.id,
+        ),
+    )
+
+
+def _mold_display_name(
+    row: MoldTool,
+    allowed_customer_ids: set[int] | None = None,
+) -> str:
+    if row.identity_status != "frozen" or not row.label_name:
+        return row.mold_name
+    primary_links = [
+        link
+        for link in _visible_mold_customer_links(row, allowed_customer_ids)
+        if link.display_order is not None
+    ]
+    if not primary_links:
+        parts = [row.label_name, row.chinese_short_name]
+        return " ".join(str(value).strip() for value in parts if value)
+    short_names = [
+        str(link.customer.chinese_short_name or "").strip() or "简称待完善"
+        for link in primary_links
+    ]
+    try:
+        return compose_mold_display_name(
+            short_names,
+            row.label_name,
+            row.chinese_short_name,
+        )
+    except MoldIdentityError:
+        return row.mold_name
+
+
+def _mold_customer_dict(link: MoldToolCustomer) -> dict:
+    return {
+        "customer_id": link.customer_id,
+        "customer_name": link.customer.name,
+        "customer_code": link.customer.customer_code,
+        "chinese_short_name": link.customer.chinese_short_name,
+        "display_order": link.display_order,
+    }
+
+
+def _formal_mold_identity(payload: MoldToolPayload, db: Session) -> tuple[str, str | None, list[Customer]]:
+    try:
+        label_name = normalize_mold_label_name(payload.label_name)
+        chinese_short_name = normalize_mold_chinese_short_name(
+            payload.chinese_short_name
+        )
+    except MoldIdentityError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    associations = payload.customers or []
+    customers = db.scalars(
+        select(Customer).where(
+            Customer.id.in_([item.customer_id for item in associations]),
+            Customer.is_active.is_(True),
+        )
+    ).all()
+    customer_by_id = {row.id: row for row in customers}
+    if len(customer_by_id) != len(associations):
+        raise HTTPException(status_code=409, detail="所选客户不存在或已停用，请刷新后重试")
+    primary = sorted(
+        (item for item in associations if item.display_order is not None),
+        key=lambda item: item.display_order or 99,
+    )
+    primary_short_names: list[str] = []
+    for item in primary:
+        customer = customer_by_id[item.customer_id]
+        short_name = str(customer.chinese_short_name or "").strip()
+        if not short_name:
+            raise HTTPException(
+                status_code=409,
+                detail=f"客户“{customer.name}”尚未维护中文简称，请先到客户资料补充",
+            )
+        primary_short_names.append(short_name)
+    try:
+        display_name = compose_mold_display_name(
+            primary_short_names,
+            label_name,
+            chinese_short_name,
+        )
+    except MoldIdentityError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    ordered_customers = [customer_by_id[item.customer_id] for item in associations]
+    return display_name, chinese_short_name, ordered_customers
+
+
+def _mold_master_request_hash(
+    *,
+    action: str,
+    mold_id: int | None,
+    payload: MoldToolPayload,
+) -> str:
+    canonical = {
+        "action": action,
+        "mold_id": mold_id,
+        "expected_version": payload.expected_version,
+        "label_name": payload.label_name,
+        "chinese_short_name": payload.chinese_short_name,
+        "customers": sorted(
+            (
+                {
+                    "customer_id": item.customer_id,
+                    "display_order": item.display_order,
+                }
+                for item in (payload.customers or [])
+            ),
+            key=lambda item: item["customer_id"],
+        ),
+        "rack_location": payload.rack_location,
+        "remarks": payload.remarks,
+    }
+    return hashlib.sha256(
+        json.dumps(
+            canonical,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _mold_master_replay(
+    db: Session,
+    *,
+    action: str,
+    idempotency_key: str,
+    request_hash: str,
+    actor_id: int,
+) -> dict | None:
+    mutation = db.scalar(
+        select(MoldMasterMutation).where(
+            MoldMasterMutation.idempotency_key == idempotency_key
+        )
+    )
+    if mutation is None:
+        return None
+    if (
+        mutation.action != action
+        or mutation.request_hash != request_hash
+        or mutation.actor_id != actor_id
+    ):
+        raise HTTPException(status_code=409, detail="模具资料保存凭证已被其他请求使用")
+    try:
+        snapshot = json.loads(mutation.result_snapshot_json)
+    except (TypeError, ValueError, json.JSONDecodeError) as error:
+        raise HTTPException(
+            status_code=409,
+            detail="模具保存回放记录损坏，请联系管理员核对",
+        ) from error
+    if not isinstance(snapshot, dict) or int(snapshot.get("id") or 0) != int(
+        mutation.mold_tool_id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="模具保存回放记录与模具身份不一致，请联系管理员核对",
+        )
+    return snapshot
+
+
+def _replace_mold_customer_links(
+    db: Session,
+    *,
+    row: MoldTool,
+    payload: MoldToolPayload,
+    customers: list[Customer],
+    actor_id: int,
+) -> None:
+    associations = payload.customers or []
+    customer_by_id = {customer.id: customer for customer in customers}
+    for link in list(row.customer_links):
+        db.delete(link)
+    db.flush()
+    for item in associations:
+        row.customer_links.append(
+            MoldToolCustomer(
+                customer=customer_by_id[item.customer_id],
+                display_order=item.display_order,
+                created_by=actor_id,
+            )
+        )
+
+
 def _visible_mold_products(
     row: MoldTool,
     allowed_customer_ids: set[int] | None,
@@ -11120,7 +11376,15 @@ def _require_mold_customer_scope(
         if include_historical
         else _visible_mold_products(row, allowed_customer_ids)
     )
-    if allowed_customer_ids is not None and not visible_products:
+    visible_customer_links = _visible_mold_customer_links(
+        row,
+        allowed_customer_ids,
+    )
+    if (
+        allowed_customer_ids is not None
+        and not visible_products
+        and not visible_customer_links
+    ):
         raise HTTPException(status_code=403, detail="无客户访问权限")
 
 
@@ -11133,15 +11397,27 @@ def _mold_binding_dict(row: MoldTool, product: Product) -> dict:
         if material is not None and str(material.code or "").strip()
         else product.default_material_code or product.legacy_material_text
     )
+    formal_customer_link = next(
+        (
+            link
+            for link in row.customer_links
+            if link.customer_id == product.customer_id
+        ),
+        None,
+    )
     return {
         "id": product.id,
         "customer_id": product.customer_id,
         "customer_code": customer_code,
         "customer_name": customer_name,
-        "customer_short_name": mold_customer_short_name(
-            row.mold_name,
-            customer_name,
-            customer_code,
+        "customer_short_name": (
+            formal_customer_link.customer.chinese_short_name
+            if row.identity_status == "frozen" and formal_customer_link is not None
+            else mold_customer_short_name(
+                row.mold_name,
+                customer_name,
+                customer_code,
+            )
         ),
         "product_code": product.product_code,
         "product_name": product.product_name,
@@ -11216,10 +11492,30 @@ def _mold_tool_dict(
     archive_candidate = (
         mold_archive_candidate(row) if allowed_customer_ids is None else None
     )
+    customer_links = _visible_mold_customer_links(row, allowed_customer_ids)
+    associated_customers = [_mold_customer_dict(link) for link in customer_links]
+    primary_customers = [
+        item for item in associated_customers if item["display_order"] is not None
+    ]
+    display_name = _mold_display_name(row, allowed_customer_ids)
     return {
         "id": row.id,
         "mold_code": row.mold_code,
-        "mold_name": row.mold_name,
+        "internal_code": row.mold_code,
+        "mold_name": display_name,
+        "display_name": display_name,
+        "label_name": row.label_name,
+        "chinese_short_name": row.chinese_short_name,
+        "identity_status": row.identity_status,
+        "identity_ready": row.identity_status == "frozen",
+        "identity_issue": (
+            None
+            if row.identity_status == "frozen"
+            else "客户与标签三字段待完善"
+        ),
+        "version": row.version,
+        "associated_customers": associated_customers,
+        "primary_customers": primary_customers,
         "rack_location": row.rack_location,
         "location_guide": describe_mold_location(row.rack_location),
         "location_version": row.location_version,
@@ -11318,21 +11614,33 @@ def _mold_tools_query(
     user: User,
     q: str | None,
     include_inactive: bool,
+    customer_ids: set[int] | None = None,
 ):
     allowed_customer_ids = _mold_customer_scope(user, db)
+    requested_customer_ids = set(customer_ids or set())
+    if allowed_customer_ids is not None:
+        requested_customer_ids &= allowed_customer_ids
     query = select(MoldTool).options(
+        selectinload(MoldTool.customer_links).selectinload(MoldToolCustomer.customer),
         selectinload(MoldTool.products).selectinload(Product.customer),
         selectinload(MoldTool.products).selectinload(Product.material),
     )
     if allowed_customer_ids is not None:
         query = query.where(
-            MoldTool.id.in_(
+            or_(
+                MoldTool.id.in_(
+                    select(MoldToolCustomer.mold_tool_id).where(
+                        MoldToolCustomer.customer_id.in_(allowed_customer_ids)
+                    )
+                ),
+                MoldTool.id.in_(
                 select(Product.mold_tool_id).where(
                     Product.mold_tool_id.is_not(None),
                     Product.deleted_at.is_(None),
                     Product.is_active.is_(True),
                     Product.customer_id.in_(allowed_customer_ids),
-                )
+                ),
+                ),
             )
         )
     if not include_inactive:
@@ -11370,13 +11678,53 @@ def _mold_tools_query(
                 ),
             )
         )
+        associated_molds = (
+            select(MoldToolCustomer.mold_tool_id)
+            .join(Customer, Customer.id == MoldToolCustomer.customer_id)
+            .where(
+                *(
+                    [MoldToolCustomer.customer_id.in_(allowed_customer_ids)]
+                    if allowed_customer_ids is not None
+                    else []
+                ),
+                or_(
+                    Customer.name.like(pattern),
+                    Customer.chinese_short_name.like(pattern),
+                    Customer.customer_code.like(pattern),
+                ),
+            )
+        )
         query = query.where(
             or_(
                 MoldTool.mold_code.like(pattern),
                 MoldTool.mold_name.like(pattern),
+                MoldTool.label_name.like(pattern),
+                MoldTool.chinese_short_name.like(pattern),
                 MoldTool.rack_location.like(pattern),
                 MoldTool.remarks.like(pattern),
                 MoldTool.id.in_(linked_molds),
+                MoldTool.id.in_(associated_molds),
+                *(
+                    [
+                        MoldTool.id.in_(
+                            select(MoldToolCustomer.mold_tool_id).where(
+                                MoldToolCustomer.customer_id.in_(
+                                    requested_customer_ids
+                                )
+                            )
+                        ),
+                        MoldTool.id.in_(
+                            select(Product.mold_tool_id).where(
+                                Product.mold_tool_id.is_not(None),
+                                Product.deleted_at.is_(None),
+                                Product.is_active.is_(True),
+                                Product.customer_id.in_(requested_customer_ids),
+                            )
+                        ),
+                    ]
+                    if requested_customer_ids
+                    else []
+                ),
             )
         )
     return query, allowed_customer_ids
@@ -11385,6 +11733,7 @@ def _mold_tools_query(
 @router.get("/molds")
 def list_mold_tools(
     q: str | None = None,
+    customer_ids: str | None = Query(default=None, max_length=400),
     include_inactive: bool = False,
     limit: int = Query(default=200, ge=1, le=500),
     page: int | None = Query(default=None, ge=1),
@@ -11392,11 +11741,22 @@ def list_mold_tools(
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
+    resolved_customer_ids: set[int] = set()
+    for value in str(customer_ids or "").split(","):
+        normalized = value.strip()
+        if not normalized:
+            continue
+        if not normalized.isdigit() or int(normalized) <= 0:
+            raise HTTPException(status_code=422, detail="客户搜索条件无效")
+        resolved_customer_ids.add(int(normalized))
+    if len(resolved_customer_ids) > 50:
+        raise HTTPException(status_code=422, detail="客户搜索条件过多")
     query, allowed_customer_ids = _mold_tools_query(
         db=db,
         user=user,
         q=q,
         include_inactive=include_inactive,
+        customer_ids=resolved_customer_ids,
     )
     if allowed_customer_ids == set():
         return {
@@ -11451,7 +11811,12 @@ def get_mold_tool_detail(
     allowed_customer_ids = _mold_customer_scope(user, db)
     row = db.scalar(
         select(MoldTool)
-        .options(selectinload(MoldTool.products).selectinload(Product.customer))
+        .options(
+            selectinload(MoldTool.customer_links).selectinload(
+                MoldToolCustomer.customer
+            ),
+            selectinload(MoldTool.products).selectinload(Product.customer),
+        )
         .where(MoldTool.id == mold_id)
     )
     if row is None:
@@ -12058,6 +12423,19 @@ def _lan_ip() -> str:
 
 
 def _label_customer(row: MoldTool, products: list[Product]) -> tuple[str, str | None]:
+    if row.identity_status == "frozen":
+        primary_links = [
+            link
+            for link in _visible_mold_customer_links(row, None)
+            if link.display_order is not None
+        ]
+        short_names = [
+            str(link.customer.chinese_short_name or "").strip()
+            for link in primary_links
+        ]
+        if primary_links and all(short_names):
+            return "/".join(short_names), None
+        return "待完善", None
     customers = {
         (product.customer.name, product.customer.customer_code)
         for product in products
@@ -12074,6 +12452,12 @@ def _label_customer(row: MoldTool, products: list[Product]) -> tuple[str, str | 
 
 
 def _label_mold_number(row: MoldTool, products: list[Product]) -> str:
+    if row.identity_status == "frozen" and row.label_name:
+        return " ".join(
+            value
+            for value in (row.label_name, row.chinese_short_name)
+            if value
+        )
     customers = {
         (product.customer.name, product.customer.customer_code)
         for product in products
@@ -12091,6 +12475,8 @@ def _label_mold_number(row: MoldTool, products: list[Product]) -> str:
 
 
 def _label_identity(row: MoldTool, products: list[Product]) -> str:
+    if row.identity_status == "frozen":
+        return _mold_display_name(row, None)
     customer_name, _customer_code = _label_customer(row, products)
     return f"{customer_name}{_label_mold_number(row, products)}"
 
@@ -12158,7 +12544,7 @@ def _label_cutting_mode(products: list[Product]) -> str:
     return values[0]
 
 
-_LABEL_PRINTABLE_IDENTITY_LIMIT = 24
+_LABEL_PRINTABLE_IDENTITY_LIMIT = 40
 
 
 def _mold_label_printability_error(
@@ -12168,20 +12554,26 @@ def _mold_label_printability_error(
 ) -> str | None:
     """Return a human-fixable reason instead of printing clipped facts."""
 
+    display_name = _mold_display_name(row, None)
     if not row.is_active or row.archive_status != "active":
-        return f"模具 {row.mold_code} 已停用或归档，不能打印使用标签"
+        return f"模具 {display_name} 已停用或归档，不能打印使用标签"
     if not products:
-        return f"模具 {row.mold_code} 尚未绑定有效常用箱，不能打印使用标签"
+        return f"模具 {display_name} 尚未绑定有效常用箱，不能打印使用标签"
     identity = _label_identity(row, products)
-    if len(identity) > _LABEL_PRINTABLE_IDENTITY_LIMIT:
+    identity_limit = (
+        _LABEL_PRINTABLE_IDENTITY_LIMIT
+        if row.identity_status == "frozen"
+        else 24
+    )
+    if len(identity) > identity_limit:
         return (
-            f"模具 {row.mold_code} 的客户名称+模具编号过长，"
-            "请先按“客户中文简写+编号”维护模具名称"
+            f"模具 {display_name} 的标签内容过长，"
+            "请核对客户简称、标签名称和中文简写"
         )
     if template_version == MOLD_LABEL_TEMPLATE_80X40:
         if len(products) != 1:
             return (
-                f"模具 {row.mold_code} 当前绑定 {len(products)} 款常用箱；"
+                f"模具 {display_name} 当前绑定 {len(products)} 款常用箱；"
                 "40×80 标签尚未确认一模多款版式，拒绝猜测打印"
             )
         product = products[0]
@@ -12206,10 +12598,10 @@ def _mold_label_printability_error(
             if not value
         ]
         if missing:
-            return f"模具 {row.mold_code} 的{'、'.join(missing)}待完善，不能打印 40×80 标签"
+            return f"模具 {display_name} 的{'、'.join(missing)}待完善，不能打印 40×80 标签"
         if len(customer) > 12 or len(inventory_code) > 34 or len(product_name) > 40:
             return (
-                f"模具 {row.mold_code} 的客户简称、存货编码或产品名称超出已验证版式，"
+                f"模具 {display_name} 的客户简称、存货编码或产品名称超出已验证版式，"
                 "请先人工核对，系统不会静默裁切"
             )
     return None
@@ -12265,7 +12657,6 @@ def _mold_label_dict(
             products, "report_specification"
         ),
         "label_flute_type": _label_flute_type(products),
-        "label_cutting_mode": _label_cutting_mode(products),
         "lookup_url": lookup_url,
         "qr_data_url": (
             "data:image/png;base64,"
@@ -12277,6 +12668,7 @@ def _mold_label_dict(
             {
                 "template_version": template_version,
                 "template_label": mold_label_template_label(template_version),
+                "label_cutting_mode": _label_cutting_mode(products),
                 "label_inventory_code": str(
                     products[0].product_code or ""
                 ).strip(),
@@ -13125,6 +13517,9 @@ def get_mold_live_status(
     row = db.scalar(
         select(MoldTool)
         .options(
+            selectinload(MoldTool.customer_links).selectinload(
+                MoldToolCustomer.customer
+            ),
             selectinload(MoldTool.products).selectinload(Product.customer),
             selectinload(MoldTool.products).selectinload(Product.material),
         )
@@ -13194,7 +13589,7 @@ def get_mold_live_status(
         else {"total": None, "items": []}
     )
     return {
-        "schema_version": "mold-live-v2",
+        "schema_version": "mold-live-v3",
         "as_of": beijing_naive_to_api(beijing_now_naive()),
         "read_only": True,
         "mode": (
@@ -13208,8 +13603,9 @@ def get_mold_live_status(
             "visible" if dynamic_allowed else "hidden_by_permission"
         ),
         "mold": {
-            "mold_code": row.mold_code,
+            "display_name": _mold_display_name(row, allowed_customer_ids),
             "label_identity": _label_identity(row, products),
+            "identity_status": row.identity_status,
             "rack_location": row.rack_location,
             "location_guide": basics["location_guide"],
             "location_version": row.location_version,
@@ -13439,6 +13835,9 @@ def get_mold_labels(
     rows = db.scalars(
         select(MoldTool)
         .options(
+            selectinload(MoldTool.customer_links).selectinload(
+                MoldToolCustomer.customer
+            ),
             selectinload(MoldTool.products).selectinload(Product.customer),
             selectinload(MoldTool.products).selectinload(Product.material),
         )
@@ -13519,6 +13918,9 @@ def register_mold_label_print(
     rows = db.scalars(
         select(MoldTool)
         .options(
+            selectinload(MoldTool.customer_links).selectinload(
+                MoldToolCustomer.customer
+            ),
             selectinload(MoldTool.products).selectinload(Product.customer),
             selectinload(MoldTool.products).selectinload(Product.material),
         )
@@ -13634,6 +14036,9 @@ def get_mold_label(
     row = db.scalar(
         select(MoldTool)
         .options(
+            selectinload(MoldTool.customer_links).selectinload(
+                MoldToolCustomer.customer
+            ),
             selectinload(MoldTool.products).selectinload(Product.customer),
             selectinload(MoldTool.products).selectinload(Product.material),
         )
@@ -13739,13 +14144,144 @@ def search_mold_binding_products(
 @router.post("/molds", status_code=201)
 def create_mold_tool(
     payload: MoldToolPayload,
+    request: Request,
     db: Session = Depends(get_db),
     user: User = Depends(admin_only),
 ) -> dict:
+    formal_identity = payload.customers is not None
     with _MOLD_CODE_WRITE_LOCK:
+        if formal_identity:
+            request_hash = _mold_master_request_hash(
+                action="create",
+                mold_id=None,
+                payload=payload,
+            )
+            replay = _mold_master_replay(
+                db,
+                action="create",
+                idempotency_key=payload.idempotency_key or "",
+                request_hash=request_hash,
+                actor_id=user.id,
+            )
+            if replay is not None:
+                result = dict(replay)
+                result["idempotent_replay"] = True
+                return result
+            display_name, chinese_short_name, customers = _formal_mold_identity(
+                payload,
+                db,
+            )
+            try:
+                internal_code = next_available_internal_mold_code(db)
+                row = MoldTool(
+                    mold_code=internal_code,
+                    mold_name=display_name,
+                    label_name=normalize_mold_label_name(payload.label_name),
+                    chinese_short_name=chinese_short_name,
+                    identity_status="frozen",
+                    version=1,
+                    rack_location=payload.rack_location,
+                    remarks=payload.remarks,
+                    created_by=user.id,
+                    updated_by=user.id,
+                )
+                db.add(row)
+                db.flush()
+                _replace_mold_customer_links(
+                    db,
+                    row=row,
+                    payload=payload,
+                    customers=customers,
+                    actor_id=user.id,
+                )
+                db.flush()
+                result_snapshot = _mold_tool_dict(row)
+                mutation = MoldMasterMutation(
+                    mold_tool=row,
+                    action="create",
+                    idempotency_key=payload.idempotency_key or "",
+                    request_hash=request_hash,
+                    actor_id=user.id,
+                    result_version=1,
+                    result_snapshot_json=json.dumps(
+                        result_snapshot,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                )
+                db.add(mutation)
+                append_audit_event(
+                    db,
+                    request=request,
+                    actor=user,
+                    event_category="business",
+                    result="success",
+                    source="web",
+                    module_code="warehouse",
+                    action_code="mold.master.create",
+                    legacy_action="CREATE",
+                    resource="warehouse/molds",
+                    entity_type="mold_tool",
+                    entity_id=row.id,
+                    object_ref=row.mold_code,
+                    description="新增模具正式客户与标签资料",
+                    details={
+                        "identity_status": "frozen",
+                        "version": 1,
+                        "customer_ids": [customer.id for customer in customers],
+                        "primary_customer_ids": [
+                            item.customer_id
+                            for item in (payload.customers or [])
+                            if item.display_order is not None
+                        ],
+                        "idempotency_key": payload.idempotency_key,
+                    },
+                )
+                db.commit()
+            except (IntegrityError, MoldIdentityError) as error:
+                db.rollback()
+                replay = _mold_master_replay(
+                    db,
+                    action="create",
+                    idempotency_key=payload.idempotency_key or "",
+                    request_hash=request_hash,
+                    actor_id=user.id,
+                )
+                if replay is not None:
+                    result = dict(replay)
+                    result["idempotent_replay"] = True
+                    return result
+                detail = (
+                    str(error)
+                    if isinstance(error, MoldIdentityError)
+                    else "模具资料保存冲突，请刷新后重试"
+                )
+                raise HTTPException(status_code=409, detail=detail) from error
+            db.refresh(row)
+            row = db.scalar(
+                select(MoldTool)
+                .options(
+                    selectinload(MoldTool.customer_links).selectinload(
+                        MoldToolCustomer.customer
+                    ),
+                    selectinload(MoldTool.products).selectinload(Product.customer),
+                    selectinload(MoldTool.products).selectinload(Product.material),
+                )
+                .where(MoldTool.id == row.id)
+            )
+            result = _mold_tool_dict(row)
+            result["idempotent_replay"] = False
+            return result
+
         values = payload.model_dump(
             exclude={
                 "customer_initials",
+                "label_name",
+                "chinese_short_name",
+                "customers",
+                "expected_version",
+                "idempotency_key",
                 "expected_location_version",
                 "location_idempotency_key",
                 "physical_move_confirmed",
@@ -13768,6 +14304,7 @@ def create_mold_tool(
             )
         row = MoldTool(
             **values,
+            identity_status="legacy_unset",
             created_by=user.id,
             updated_by=user.id,
         )
@@ -13789,13 +14326,94 @@ def update_mold_tool(
     db: Session = Depends(get_db),
     user: User = Depends(admin_only),
 ) -> dict:
-    row = db.get(MoldTool, mold_id)
+    row = db.scalar(
+        select(MoldTool)
+        .options(
+            selectinload(MoldTool.customer_links).selectinload(
+                MoldToolCustomer.customer
+            ),
+            selectinload(MoldTool.products).selectinload(Product.customer),
+            selectinload(MoldTool.products).selectinload(Product.material),
+        )
+        .where(MoldTool.id == mold_id)
+    )
     if row is None:
         raise HTTPException(status_code=404, detail="模具不存在")
     if row.archive_status == "archived":
         raise HTTPException(status_code=409, detail="封存模具不能直接编辑，请先按现场搬回后恢复启用")
     if payload.mold_code and payload.mold_code != row.mold_code:
         raise HTTPException(status_code=409, detail="模具编号生成后不可在档案编辑中修改")
+    formal_identity = payload.customers is not None
+    if row.identity_status == "frozen" and not formal_identity:
+        raise HTTPException(
+            status_code=409,
+            detail="该模具已使用正式客户与标签资料，请刷新后按新表单保存",
+        )
+    before_identity = {
+        "display_name": _mold_display_name(row, None),
+        "label_name": row.label_name,
+        "chinese_short_name": row.chinese_short_name,
+        "customers": [
+            {
+                "customer_id": link.customer_id,
+                "display_order": link.display_order,
+            }
+            for link in _visible_mold_customer_links(row, None)
+        ],
+        "version": row.version,
+    }
+    request_hash: str | None = None
+    formal_customers: list[Customer] = []
+    formal_display_name: str | None = None
+    formal_chinese_short_name: str | None = None
+    if formal_identity:
+        if payload.expected_version is None:
+            raise HTTPException(status_code=409, detail="模具资料版本缺失，请刷新后重试")
+        request_hash = _mold_master_request_hash(
+            action="update",
+            mold_id=row.id,
+            payload=payload,
+        )
+        replay = _mold_master_replay(
+            db,
+            action="update",
+            idempotency_key=payload.idempotency_key or "",
+            request_hash=request_hash,
+            actor_id=user.id,
+        )
+        if replay is not None:
+            result_payload = dict(replay)
+            result_payload["idempotent_replay"] = True
+            return result_payload
+        (
+            formal_display_name,
+            formal_chinese_short_name,
+            formal_customers,
+        ) = _formal_mold_identity(payload, db)
+        associated_customer_ids = {customer.id for customer in formal_customers}
+        bound_customer_ids = {
+            product.customer_id
+            for product in row.products
+        }
+        missing_bound_customers = bound_customer_ids - associated_customer_ids
+        if missing_bound_customers:
+            raise HTTPException(
+                status_code=409,
+                detail="当前仍有常用箱绑定到被移除的客户，请先解除产品绑定后再调整客户关联",
+            )
+        claimed = db.execute(
+            update(MoldTool)
+            .where(
+                MoldTool.id == row.id,
+                MoldTool.version == payload.expected_version,
+            )
+            .values(version=MoldTool.version + 1)
+            .execution_options(synchronize_session=False)
+        )
+        if claimed.rowcount != 1:
+            db.rollback()
+            raise HTTPException(status_code=409, detail="模具资料已变化，请刷新后重试")
+        db.refresh(row)
     location_changed = payload.rack_location.strip() != row.rack_location.strip()
     result: MoldLocationMoveResult | None = None
     if location_changed:
@@ -13847,6 +14465,11 @@ def update_mold_tool(
             "customer_initials",
             "mold_code",
             "rack_location",
+            "label_name",
+            "chinese_short_name",
+            "customers",
+            "expected_version",
+            "idempotency_key",
             "expected_location_version",
             "location_idempotency_key",
             "physical_move_confirmed",
@@ -13855,6 +14478,54 @@ def update_mold_tool(
     )
     for key, value in values.items():
         setattr(row, key, value)
+    if formal_identity:
+        row.label_name = normalize_mold_label_name(payload.label_name)
+        row.chinese_short_name = formal_chinese_short_name
+        row.mold_name = formal_display_name or row.mold_name
+        row.identity_status = "frozen"
+        _replace_mold_customer_links(
+            db,
+            row=row,
+            payload=payload,
+            customers=formal_customers,
+            actor_id=user.id,
+        )
+        append_audit_event(
+            db,
+            request=request,
+            actor=user,
+            event_category="business",
+            result="success",
+            source="web",
+            module_code="warehouse",
+            action_code="mold.master.update",
+            legacy_action="UPDATE",
+            resource=f"warehouse/molds/{row.id}",
+            entity_type="mold_tool",
+            entity_id=row.id,
+            object_ref=row.mold_code,
+            description="更新模具正式客户与标签资料",
+            details={
+                "identity_status": "frozen",
+                "expected_version": payload.expected_version,
+                "resulting_version": row.version,
+                "before": before_identity,
+                "after": {
+                    "display_name": row.mold_name,
+                    "label_name": row.label_name,
+                    "chinese_short_name": row.chinese_short_name,
+                    "customers": [
+                        {
+                            "customer_id": item.customer_id,
+                            "display_order": item.display_order,
+                        }
+                        for item in (payload.customers or [])
+                    ],
+                    "version": row.version,
+                },
+                "idempotency_key": payload.idempotency_key,
+            },
+        )
     row.updated_by = user.id
     if result is not None:
         _append_mold_location_move_log(
@@ -13864,13 +14535,56 @@ def update_mold_tool(
             result=result,
             description="模具编辑确认位置移动",
         )
+    if formal_identity:
+        db.flush()
+        db.add(
+            MoldMasterMutation(
+                mold_tool=row,
+                action="update",
+                idempotency_key=payload.idempotency_key or "",
+                request_hash=request_hash or "",
+                actor_id=user.id,
+                result_version=row.version,
+                result_snapshot_json=json.dumps(
+                    _mold_tool_dict(row),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+            )
+        )
     try:
         db.commit()
     except IntegrityError as error:
         db.rollback()
+        if formal_identity and request_hash is not None:
+            replay = _mold_master_replay(
+                db,
+                action="update",
+                idempotency_key=payload.idempotency_key or "",
+                request_hash=request_hash,
+                actor_id=user.id,
+            )
+            if replay is not None:
+                result_payload = dict(replay)
+                result_payload["idempotent_replay"] = True
+                return result_payload
         raise HTTPException(status_code=409, detail="模具位置已变化或保存冲突，请重新预览") from error
-    db.refresh(row)
-    return _mold_tool_dict(row)
+    row = db.scalar(
+        select(MoldTool)
+        .options(
+            selectinload(MoldTool.customer_links).selectinload(
+                MoldToolCustomer.customer
+            ),
+            selectinload(MoldTool.products).selectinload(Product.customer),
+            selectinload(MoldTool.products).selectinload(Product.material),
+        )
+        .where(MoldTool.id == row.id)
+    )
+    result_payload = _mold_tool_dict(row)
+    if formal_identity:
+        result_payload["idempotent_replay"] = False
+    return result_payload
 
 
 def _production_process_with_die_cut(value: str | None) -> str:
@@ -13900,7 +14614,15 @@ def bind_mold_products(
     db: Session = Depends(get_db),
     user: User = Depends(admin_only),
 ) -> dict:
-    mold = db.get(MoldTool, mold_id)
+    mold = db.scalar(
+        select(MoldTool)
+        .options(
+            selectinload(MoldTool.customer_links).selectinload(
+                MoldToolCustomer.customer
+            )
+        )
+        .where(MoldTool.id == mold_id)
+    )
     if mold is None:
         raise HTTPException(status_code=404, detail="模具不存在")
     if not mold.is_active:
@@ -13922,6 +14644,18 @@ def bind_mold_products(
     missing_ids = sorted(set(expected_versions) - set(products_by_id))
     if missing_ids:
         raise HTTPException(status_code=404, detail="所选常用箱不存在或已停用")
+    if mold.identity_status == "frozen":
+        associated_customer_ids = {
+            link.customer_id for link in mold.customer_links
+        }
+        unexpected_customers = {
+            product.customer_id for product in products
+        } - associated_customer_ids
+        if unexpected_customers:
+            raise HTTPException(
+                status_code=409,
+                detail="所选常用箱客户尚未关联到该模具，请先保存模具适用客户",
+            )
 
     conflicts = [
         product
@@ -13981,7 +14715,12 @@ def bind_mold_products(
 
     mold = db.scalar(
         select(MoldTool)
-        .options(selectinload(MoldTool.products).selectinload(Product.customer))
+        .options(
+            selectinload(MoldTool.customer_links).selectinload(
+                MoldToolCustomer.customer
+            ),
+            selectinload(MoldTool.products).selectinload(Product.customer),
+        )
         .where(MoldTool.id == mold_id)
     )
     return {

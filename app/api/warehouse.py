@@ -286,10 +286,11 @@ from app.services.mold_location import (
     MoldLocationPreview,
     confirm_mold_location_move,
     describe_mold_location,
-    mold_rack_layout_usage_blockers,
+    mold_rack_layout_relocation_warnings,
     mold_rack_structure,
     mold_location_feature_codes,
     one_floor_mold_location_options,
+    plan_mold_rack_layout_relocations,
     preview_mold_location_move,
 )
 from app.services.mold_archive import (
@@ -7469,22 +7470,22 @@ def validate_twin_layout_draft(
                 status_code=409,
                 detail="正式区域身份核验未通过：" + "；".join(identity_blockers[:5]),
             )
+        mold_relocation_warnings: list[str] = []
         if floor_code.strip().upper() == "1F":
-            mold_blockers = mold_rack_layout_usage_blockers(
+            mold_relocations = plan_mold_rack_layout_relocations(
                 db,
                 load_effective_warehouse_twin_floor_for_edit("1F"),
             )
-            if mold_blockers:
-                raise HTTPException(
-                    status_code=409,
-                    detail="模具货架结构会使现有位置失效：" + "；".join(mold_blockers[:5]),
-                )
+            mold_relocation_warnings = mold_rack_layout_relocation_warnings(
+                mold_relocations
+            )
         draft_snapshot = snapshot_warehouse_twin_layout_draft()
         result = None
         try:
             result = validate_warehouse_twin_layout_draft(
                 floor_code,
                 expected_revision=payload.expected_revision,
+                additional_warnings=mold_relocation_warnings,
             )
             _twin_layout_asset_log(
                 db,
@@ -7809,16 +7810,16 @@ def _publish_twin_layout_draft_locked(
     commit: bool = True,
     defer_location_readiness_for_feature_id: str | None = None,
 ) -> dict:
+    mold_relocations = []
+    mold_relocation_warnings: list[str] = []
     if floor_code.strip().upper() == "1F":
-        mold_blockers = mold_rack_layout_usage_blockers(
+        mold_relocations = plan_mold_rack_layout_relocations(
             db,
             load_effective_warehouse_twin_floor_for_edit("1F"),
         )
-        if mold_blockers:
-            raise HTTPException(
-                status_code=409,
-                detail="模具货架结构会使现有位置失效：" + "；".join(mold_blockers[:5]),
-            )
+        mold_relocation_warnings = mold_rack_layout_relocation_warnings(
+            mold_relocations
+        )
     blockers = _formal_area_publish_blockers(
         db,
         floor_code,
@@ -7839,7 +7840,27 @@ def _publish_twin_layout_draft_locked(
             expected_published_revision=payload.expected_published_revision,
             expected_draft_revision=payload.expected_draft_revision,
             operation_key=payload.operation_key,
+            additional_warnings=mold_relocation_warnings,
+            mold_location_reassignment_count=len(mold_relocations),
         )
+        if result.applied:
+            for relocation in mold_relocations:
+                movement_key = "layout-publish:" + hashlib.sha256(
+                    (
+                        f"{payload.operation_key}|{relocation.mold_tool_id}|"
+                        f"{relocation.to_location}"
+                    ).encode("utf-8")
+                ).hexdigest()[:48]
+                confirm_mold_location_move(
+                    db,
+                    mold_code=relocation.mold_code,
+                    target_location=relocation.to_location,
+                    expected_version=relocation.expected_version,
+                    idempotency_key=movement_key,
+                    actor_id=user.id,
+                    source="layout_publish",
+                    note=f"地图发布自动归位：{relocation.reason}",
+                )
         published_policies = publish_floor_area_policies(
             db,
             floor_code=floor_code,
@@ -7891,6 +7912,13 @@ def _publish_twin_layout_draft_locked(
         )
         _handle_twin_layout_edit_error(error)
     except WarehouseAreaActivationError as error:
+        db.rollback()
+        restore_warehouse_twin_publish_state(
+            publish_snapshot,
+            backup_name=(result.value.get("backup_name") if result is not None else None),
+        )
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except MoldLocationError as error:
         db.rollback()
         restore_warehouse_twin_publish_state(
             publish_snapshot,

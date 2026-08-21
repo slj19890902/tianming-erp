@@ -42,7 +42,7 @@ _SHORT_VERTICAL_PATTERN = re.compile(
 )
 
 MOLD_LOCATION_SOURCES = frozenset(
-    {"manual_input", "scanner_paste", "url_parameter", "api"}
+    {"manual_input", "scanner_paste", "url_parameter", "api", "layout_publish"}
 )
 MOLD_ARCHIVE_AREA_CODE = "3F-M-ARCHIVE-AB2-N"
 MOLD_ARCHIVE_AREA_PROMPT = "三楼 AB2 北侧模具封存区（区域内待定位）"
@@ -118,6 +118,19 @@ class MoldLocationMoveResult:
     movement: MoldLocationMovement | None
     replayed: bool
     no_change: bool
+
+
+@dataclass(frozen=True)
+class MoldRackLayoutRelocation:
+    """One mold position that must be collapsed when a rack draft is published."""
+
+    mold_tool_id: int
+    mold_code: str
+    from_location: str
+    to_location: str
+    expected_version: int
+    rack_code: str
+    reason: str
 
 
 def _number(value: str) -> int:
@@ -267,17 +280,43 @@ def mold_rack_structure(rack: dict) -> dict:
     }
 
 
-def mold_rack_layout_usage_blockers(
+def _first_rack_location(rack: dict) -> str | None:
+    structure = mold_rack_structure(rack)
+    rack_code = str(structure["mold_rack_code"] or "").strip().upper()
+    if not rack_code:
+        return None
+    blocked_levels = set(structure["blocked_levels"])
+    for level, grid_count in enumerate(structure["level_cell_counts"], start=1):
+        if level in blocked_levels:
+            continue
+        if int(grid_count) > 0:
+            return f"1F-M-{rack_code}-L{level}-G01"
+    for level in range(1, int(structure["levels"]) + 1):
+        if level not in blocked_levels:
+            return f"1F-M-{rack_code}-L{level}"
+    return f"1F-M-{rack_code}"
+
+
+def _first_floor_rack_location(rack_by_code: dict[str, dict]) -> str | None:
+    for rack_code in sorted(rack_by_code):
+        target = _first_rack_location(rack_by_code[rack_code])
+        if target:
+            return target
+    return None
+
+
+def plan_mold_rack_layout_relocations(
     db: Session,
     floor_layout: dict,
-) -> list[str]:
-    """Reject a rack draft that would invalidate a current mold location.
+) -> list[MoldRackLayoutRelocation]:
+    """Plan deterministic moves for positions invalidated by a rack draft.
 
-    Existing molds are never redistributed when a rack gains more cells.  A
-    coarser rack-only or level-only historical location therefore remains
-    valid and is displayed as not yet assigned to a precise cell.  Only a
-    missing rack/level or a recorded grid/row outside the proposed structure
-    is a blocker.
+    A rack/level-only historical location remains valid.  A position whose
+    level or grid disappears is collapsed to the first available position in
+    the same rack.  If the whole rack disappears, the first available mold
+    position on the floor is used.  R04 is a confirmed wall-side rack-only
+    area represented by measured features rather than ``floor.racks`` and is
+    therefore valid when absent from that list.
     """
 
     rack_by_code = {
@@ -285,7 +324,8 @@ def mold_rack_layout_usage_blockers(
         for row in (floor_layout.get("racks") or [])
         if str(row.get("mold_rack_code") or "").strip()
     }
-    issue_molds: dict[tuple[str, str], list[str]] = {}
+    first_floor_location = _first_floor_rack_location(rack_by_code)
+    relocations: list[MoldRackLayoutRelocation] = []
     rows = db.scalars(
         select(MoldTool)
         .where(MoldTool.is_active.is_(True))
@@ -298,45 +338,91 @@ def mold_rack_layout_usage_blockers(
         rack_code = f"R{int(guide['rack']):02d}"
         rack = rack_by_code.get(rack_code)
         if rack is None:
-            issue_molds.setdefault(
-                (rack_code, "草稿中缺少该模具货架"), []
-            ).append(mold.mold_code)
+            if rack_code == "R04":
+                continue
+            if first_floor_location:
+                relocations.append(
+                    MoldRackLayoutRelocation(
+                        mold_tool_id=mold.id,
+                        mold_code=mold.mold_code,
+                        from_location=mold.rack_location,
+                        to_location=first_floor_location,
+                        expected_version=mold.location_version,
+                        rack_code=rack_code,
+                        reason="草稿中缺少原模具货架",
+                    )
+                )
             continue
         structure = mold_rack_structure(rack)
+        reason: str | None = None
         level = guide.get("level")
         if level is None:
             continue
         level = int(level)
         if level < 1 or level > int(structure["levels"]):
-            issue_molds.setdefault(
-                (rack_code, f"第{level}层已被删除"), []
-            ).append(mold.mold_code)
+            reason = f"第{level}层已被删除"
+        elif level in set(structure["blocked_levels"]):
+            reason = f"第{level}层是设备占用层"
+        else:
+            grid = guide.get("grid")
+            if grid is None and guide.get("kind") in {"flat", "flat_legacy"}:
+                grid = guide.get("row")
+            if grid is not None:
+                grid = int(grid)
+                grid_count = int(structure["level_cell_counts"][level - 1])
+                if grid_count < grid:
+                    reason = f"第{level}层只剩{grid_count}格，原第{grid}格已失效"
+        if reason is None:
             continue
-        if level in set(structure["blocked_levels"]):
-            issue_molds.setdefault(
-                (rack_code, f"第{level}层是设备占用层，不能存放模具"), []
-            ).append(mold.mold_code)
-            continue
-        grid = guide.get("grid")
-        if grid is None and guide.get("kind") in {"flat", "flat_legacy"}:
-            grid = guide.get("row")
-        if grid is None:
-            continue
-        grid = int(grid)
-        grid_count = int(structure["level_cell_counts"][level - 1])
-        if grid_count < grid:
-            issue_molds.setdefault(
-                (rack_code, f"第{level}层只剩{grid_count}格，不能保留第{grid}格"), []
-            ).append(mold.mold_code)
+        target = _first_rack_location(rack) or first_floor_location
+        if target and target != mold.rack_location.strip().upper():
+            relocations.append(
+                MoldRackLayoutRelocation(
+                    mold_tool_id=mold.id,
+                    mold_code=mold.mold_code,
+                    from_location=mold.rack_location,
+                    to_location=target,
+                    expected_version=mold.location_version,
+                    rack_code=rack_code,
+                    reason=reason,
+                )
+            )
+    return relocations
 
-    blockers = []
-    for (rack_code, reason), mold_codes in sorted(issue_molds.items()):
-        examples = "、".join(mold_codes[:3])
-        suffix = f"等{len(mold_codes)}件" if len(mold_codes) > 3 else ""
-        blockers.append(
-            f"{rack_code} {reason}；仍有模具 {examples}{suffix} 使用该位置"
+
+def mold_rack_layout_relocation_warnings(
+    relocations: list[MoldRackLayoutRelocation],
+) -> list[str]:
+    grouped: dict[tuple[str, str], int] = {}
+    for relocation in relocations:
+        key = (relocation.rack_code, relocation.to_location)
+        grouped[key] = grouped.get(key, 0) + 1
+    warnings = []
+    for (rack_code, target), count in sorted(grouped.items()):
+        guide = describe_mold_location(target)
+        if guide.get("kind") == "storage_grid":
+            destination = (
+                f"R{int(guide['rack']):02d} 第{int(guide['level'])}层第{int(guide['grid'])}格"
+            )
+        elif guide.get("kind") == "storage_level":
+            destination = f"R{int(guide['rack']):02d} 第{int(guide['level'])}层"
+        else:
+            destination = target
+        warnings.append(
+            f"{rack_code} 有{count}件模具的现位置将在发布后失效；"
+            f"发布时自动归入{destination}，之后可逐件手动调整"
         )
-    return blockers
+    return warnings
+
+
+def mold_rack_layout_usage_blockers(
+    db: Session,
+    floor_layout: dict,
+) -> list[str]:
+    """Compatibility shim: occupied mold positions no longer block publishing."""
+
+    del db, floor_layout
+    return []
 
 
 def _rack_prompt(floor: str, rack: int) -> str:

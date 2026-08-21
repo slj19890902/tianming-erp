@@ -2642,12 +2642,16 @@ def test_mold_location_options_use_each_published_level_cell_count(monkeypatch) 
         mold_location.normalize_mold_location_code("1f-m-r01-l3-g01")
 
 
-def test_mold_rack_structure_change_blocks_only_positions_it_would_invalidate(
+def test_mold_rack_structure_change_plans_invalid_positions_to_first_grid(
     mold_app,
 ) -> None:
     _app, factory = mold_app
     from app.models.mold_tool import MoldTool
-    from app.services.mold_location import mold_rack_layout_usage_blockers
+    from app.services.mold_location import (
+        mold_rack_layout_relocation_warnings,
+        mold_rack_layout_usage_blockers,
+        plan_mold_rack_layout_relocations,
+    )
 
     with factory() as db:
         db.add_all(
@@ -2664,29 +2668,42 @@ def test_mold_rack_structure_change_blocks_only_positions_it_would_invalidate(
                     rack_location="1F-M-R01-L3",
                     created_by=1,
                 ),
+                MoldTool(
+                    mold_code="R04-RACK-ONLY-001",
+                    mold_name="靠墙特大模具区模具",
+                    rack_location="1F-M-R04",
+                    created_by=1,
+                ),
             ]
         )
         db.commit()
 
-        reduced = mold_rack_layout_usage_blockers(
+        reduced_layout = {
+            "racks": [
+                {
+                    "id": "rack-r01",
+                    "mold_rack_code": "R01",
+                    "levels": 3,
+                    "level_cell_counts": [0, 2, 1],
+                }
+            ]
+        }
+        relocations = plan_mold_rack_layout_relocations(
             db,
-            {
-                "racks": [
-                    {
-                        "id": "rack-r01",
-                        "mold_rack_code": "R01",
-                        "levels": 3,
-                        "level_cell_counts": [0, 2, 1],
-                    }
-                ]
-            },
+            reduced_layout,
         )
-        assert len(reduced) == 1
-        assert "第2层只剩2格" in reduced[0]
-        assert "GRID-USED-003" in reduced[0]
-        assert "LEVEL-ONLY-001" not in reduced[0]
+        assert len(relocations) == 1
+        assert relocations[0].mold_code == "GRID-USED-003"
+        assert relocations[0].from_location == "1F-M-R01-L2-G03"
+        assert relocations[0].to_location == "1F-M-R01-L2-G01"
+        assert "第2层只剩2格" in relocations[0].reason
+        assert mold_rack_layout_usage_blockers(db, reduced_layout) == []
+        assert mold_rack_layout_relocation_warnings(relocations) == [
+            "R01 有1件模具的现位置将在发布后失效；"
+            "发布时自动归入R01 第2层第1格，之后可逐件手动调整"
+        ]
 
-        expanded = mold_rack_layout_usage_blockers(
+        expanded = plan_mold_rack_layout_relocations(
             db,
             {
                 "racks": [

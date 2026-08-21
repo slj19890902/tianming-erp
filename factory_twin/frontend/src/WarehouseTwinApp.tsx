@@ -591,6 +591,8 @@ interface LayoutDraftPublishResponse {
   backup_name: string;
   remaining_draft_floor_codes?: string[];
   inventory_changed: false;
+  mold_location_reassignment_count?: number;
+  mold_location_changed?: boolean;
   applied: boolean;
 }
 
@@ -3712,7 +3714,7 @@ export function WarehouseTwinApp() {
       } : current);
       setLocationEditMessage(result.blockers.length
         ? `草稿未通过：${result.blockers.slice(0, 3).join("；")}`
-        : `草稿校验通过${result.warnings.length ? `，有 ${result.warnings.length} 条现场提示` : ""}；现在可以发布。`
+        : `草稿校验通过${result.warnings.length ? `：${result.warnings.slice(0, 3).join("；")}` : ""}；现在可以发布。`
       );
     } catch (reason) {
       setLocationEditMessage(`校验草稿失败：${(reason as Error).message}`);
@@ -3723,7 +3725,8 @@ export function WarehouseTwinApp() {
 
   const publishLayoutDraft = async () => {
     if (!layout || layoutDraftControl?.status !== "validated") return;
-    if (!window.confirm(`确认发布 ${floorCode} 已校验的仓库地图吗？只发布当前楼层，其他楼层草稿会保留；发布前会自动备份旧地图，库存数量不会改变。`)) return;
+    const moldMoveWarnings = (layoutDraftControl.warnings || []).filter((warning) => warning.includes("件模具"));
+    if (!window.confirm(`确认发布 ${floorCode} 已校验的仓库地图吗？只发布当前楼层，其他楼层草稿会保留；发布前会自动备份旧地图，库存数量不会改变。${moldMoveWarnings.length ? `\n\n${moldMoveWarnings.slice(0, 3).join("；")}。自动归位会写入模具位置移动流水。` : ""}`)) return;
     setSpatialEditBusy(true);
     try {
       const result = await mutateJson<LayoutDraftPublishResponse>(
@@ -3742,7 +3745,7 @@ export function WarehouseTwinApp() {
       setRackDrafts({});
       setZonePolicyDrafts({});
       setZoneGeometryDrafts({});
-      setLocationEditMessage(`${floorCode} 仓库地图已发布；旧地图备份为 ${result.backup_name}，库存数量未改变。${result.remaining_draft_floor_codes?.length ? ` ${result.remaining_draft_floor_codes.join("、")} 草稿仍独立保留。` : ""}`);
+      setLocationEditMessage(`${floorCode} 仓库地图已发布；旧地图备份为 ${result.backup_name}，库存数量未改变。${result.mold_location_reassignment_count ? ` ${result.mold_location_reassignment_count} 件失效模具位置已自动归入首个可用格，并记录移动流水。` : ""}${result.remaining_draft_floor_codes?.length ? ` ${result.remaining_draft_floor_codes.join("、")} 草稿仍独立保留。` : ""}`);
     } catch (reason) {
       setLocationEditMessage(`发布布局失败：${(reason as Error).message}`);
     } finally {
@@ -4655,8 +4658,8 @@ export function WarehouseTwinApp() {
                   <div><span>当前草稿层格</span><b>{selectedRackEditDraft.levels} 层 · {selectedRackEditDraft.level_cell_counts.map((count, index) => moldRackBlockedLevels(selectedRackEditDraft).includes(index + 1) ? `第${index + 1}层 设备占用` : `第${index + 1}层 ${count} 格`).join(" / ")}</b></div>
                   <em className={layoutDraftControl?.status || "none"}>{layoutDraftControl?.status === "validated" ? "草稿已校验，尚未发布" : layoutDraftControl?.has_draft ? "草稿已保存，正式仍未改变" : "本次修改尚未保存"}</em>
                 </div>
-                {selectedMoldRackHighestUsedLevel > selectedRackEditDraft.levels && <p className="twin-mold-rack-structure-blocker">正式台账仍有模具放在第 {selectedMoldRackHighestUsedLevel} 层；总层数必须恢复到至少 {selectedMoldRackHighestUsedLevel} 层，否则校验和发布会被阻止。</p>}
-                <label><span>货架总层数（含设备占用层）</span><input type="number" min={Math.max(1, selectedMoldRackHighestUsedLevel)} max="20" value={selectedRackEditDraft.levels} onChange={(event) => changeRackLevels(selectedRackEditDraft, Number(event.target.value))} /><small>已有模具使用到第 {selectedMoldRackHighestUsedLevel || 0} 层；不得缩掉仍在使用的层。</small></label>
+                {selectedMoldRackHighestUsedLevel > selectedRackEditDraft.levels && <p className="twin-mold-rack-structure-blocker">正式台账仍有模具放在第 {selectedMoldRackHighestUsedLevel} 层；草稿可以继续保存，校验会预告数量，发布时这些模具将自动归入本货架首个可用格。</p>}
+                <label><span>货架总层数（含设备占用层）</span><input type="number" min="1" max="20" value={selectedRackEditDraft.levels} onChange={(event) => changeRackLevels(selectedRackEditDraft, Number(event.target.value))} /><small>已有模具使用到第 {selectedMoldRackHighestUsedLevel || 0} 层；缩减不会阻止保存，只有发布成功才自动归位。</small></label>
                 <div className="twin-mold-rack-level-counts">{selectedRackEditDraft.level_cell_counts.map((count, index) => {
                   const level = index + 1;
                   const machineBlocked = moldRackBlockedLevels(selectedRackEditDraft).includes(level);
@@ -4669,7 +4672,7 @@ export function WarehouseTwinApp() {
                   <button type="button" className="publish" disabled={selectedMoldRackDraftWorkflow.publish.disabled} title={selectedMoldRackDraftWorkflow.publish.title} onClick={publishLayoutDraft}>③ 发布当前楼层地图</button>
                   <button type="button" disabled={spatialEditBusy} onClick={() => setRackDrafts((current) => { const next = { ...current }; delete next[selectedRackEditDraft.id]; return next; })}>取消本次输入</button>
                 </div>
-                <p>第②、③步只处理当前楼层；其他楼层草稿会独立保留。只有第③步发布完成，“模具与位置”和移货目标才会读取新格数。减少已被正式模具位置使用的层或格会被系统拦截；增加格位不会自动搬动或平均分配现有模具。</p>
+                <p>第②、③步只处理当前楼层；其他楼层草稿会独立保留。只有第③步发布完成，“模具与位置”和移货目标才会读取新格数。减少已被正式模具使用的层或格时，校验只做预告；发布成功后失效位置统一归入首个可用格并写移动流水，之后可逐件手动调整。增加格位不会自动平均分配现有模具。</p>
               </div>}
             </section>}
             {locationEditMode && advancedAreaMaintenanceOpen && areaPolicyEditMode && canEditLocations && selectedAreaFeature && selectedZonePolicy && <div className="twin-zone-policy-editor">

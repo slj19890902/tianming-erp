@@ -52,7 +52,9 @@ def test_mold_rack_planning_and_lookup_use_the_live_mold_ledger() -> None:
     assert "关联产品</dt>" in SOURCE
     assert "直接选择货架，设置层数和每层格数" in SOURCE
     assert "保存层格到草稿" in SOURCE
-    assert "减少已被正式模具位置使用的层或格会被系统拦截" in SOURCE
+    assert "发布成功后失效位置统一归入首个可用格并写移动流水" in SOURCE
+    assert 'min="1" max="20" value={selectedRackEditDraft.levels}' in SOURCE
+    assert "mold_location_reassignment_count" in SOURCE
     assert "!advancedAreaMaintenanceOpen && !rack?.mold_rack_code" in SOURCE
     assert "moldRacksForArea(selectedAreaFeature" in SOURCE
     assert "打开模具货架正视图" in SOURCE

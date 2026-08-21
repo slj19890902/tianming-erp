@@ -1303,6 +1303,7 @@ def validate_warehouse_twin_layout_draft(
     floor_code: str,
     *,
     expected_revision: str,
+    additional_warnings: list[str] | None = None,
     published_path: Path | None = None,
     draft_path: Path | None = None,
 ) -> LayoutDraftAction:
@@ -1332,6 +1333,7 @@ def validate_warehouse_twin_layout_draft(
         candidate = deepcopy(published)
         candidate["floors"][normalized] = deepcopy(floor)
         blockers, warnings = _validate_document_for_publish(candidate)
+        warnings = list(dict.fromkeys([*warnings, *(additional_warnings or [])]))
         meta = draft["draft_meta"]
         now = _utc_iso()
         meta["updated_at"] = now
@@ -1379,6 +1381,8 @@ def publish_warehouse_twin_layout_draft(
     expected_published_revision: str,
     expected_draft_revision: str,
     operation_key: str,
+    additional_warnings: list[str] | None = None,
+    mold_location_reassignment_count: int = 0,
     published_path: Path | None = None,
     draft_path: Path | None = None,
     backup_dir: Path | None = None,
@@ -1456,6 +1460,7 @@ def publish_warehouse_twin_layout_draft(
         candidate["floors"][normalized] = deepcopy(draft_floor)
         candidate["generated_at"] = draft.get("generated_at") or _utc_iso()
         blockers, warnings = _validate_document_for_publish(candidate)
+        warnings = list(dict.fromkeys([*warnings, *(additional_warnings or [])]))
         if blockers:
             raise WarehouseTwinLayoutEditError("布局草稿校验未通过：" + "；".join(blockers[:5]))
 
@@ -1492,6 +1497,10 @@ def publish_warehouse_twin_layout_draft(
                 "published_storage": "runtime",
                 "warnings": warnings,
                 "inventory_changed": False,
+                "mold_location_reassignment_count": max(
+                    0, int(mold_location_reassignment_count)
+                ),
+                "mold_location_changed": bool(mold_location_reassignment_count),
                 "published_at": _utc_iso(),
                 "remaining_draft_floor_codes": remaining_dirty_floors,
             }

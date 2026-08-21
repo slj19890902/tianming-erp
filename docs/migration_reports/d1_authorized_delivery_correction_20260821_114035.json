@@ -1,0 +1,90 @@
+{
+  "executed_at": "2026-08-21T11:40:37+08:00",
+  "scope": "D1 historical delivery recording and T250 quantity correction",
+  "formal_database": "data/carton_erp.sqlite3",
+  "revision": "vv30v8x9z19",
+  "operator": {
+    "user_id": 1,
+    "username": "admin"
+  },
+  "authorization": {
+    "historical_delivery_date": "2026-08-21",
+    "original_delivery_date": "unknown",
+    "t250_actual_incoming": 2700,
+    "t250_actual_delivery": 2700,
+    "t250_inventory": 0
+  },
+  "pre_write_backup": {
+    "path": "data/backups/carton_erp_20260821_114008_057421_pre_d1_delivery_correction.sqlite3",
+    "sha256": "25d926b19f90aaacdde77e377dfed00515b0066608ba29544a9d18652d874b10",
+    "integrity_check": "ok",
+    "foreign_key_violation_count": 0,
+    "revision": "vv30v8x9z19",
+    "retention_cleanup_performed": false
+  },
+  "rehearsal": {
+    "database": "data/work/d1_confirmation_worklist_20260820/d1_authorized_full_rehearsal_20260821.sqlite3",
+    "report": "data/work/d1_confirmation_worklist_20260820/d1_authorized_full_rehearsal_20260821.json",
+    "all_gates_passed": true,
+    "inventory_lot_count_delta": 0,
+    "inventory_movement_count_delta": 0
+  },
+  "formal_write": {
+    "batch_id": "d1-20260821-114035",
+    "report": "data/work/d1_confirmation_worklist_20260820/d1_authorized_formal_20260821.json",
+    "historical_deliveries": [
+      {
+        "delivery_id": 59,
+        "delivery_number": "TH-20260821-002",
+        "customer_id": 5,
+        "delivery_date": "2026-08-21",
+        "status": "dispatched",
+        "item_count": 19,
+        "total_quantity": 2669
+      },
+      {
+        "delivery_id": 60,
+        "delivery_number": "SME-20260821-003",
+        "customer_id": 37,
+        "delivery_date": "2026-08-21",
+        "status": "dispatched",
+        "item_count": 2,
+        "total_quantity": 100
+      }
+    ],
+    "historical_line_remark": "D1历史补录：老板确认实际已送完；原送货日期未知；统一以2026-08-21登记",
+    "t250": {
+      "order_number": "TM20260727001",
+      "order_item_id": 9846,
+      "quantity": 2700,
+      "delivered_quantity": 2700,
+      "total_amount": 9450,
+      "outer_requisition_quantity": 2700,
+      "outer_incoming_quantity": 2700,
+      "production_task_quantity": 2700,
+      "posted_completion_id": 37,
+      "posted_completion_quantity": 2700,
+      "delivery_id": 42,
+      "delivery_number": "RBJD-20260818-003",
+      "delivery_quantity": 2700,
+      "return_receipt_quantity": 2700,
+      "direct_delivery_allocation_quantity": 2700,
+      "completion_stock_quantity": 0,
+      "inventory_lot_count": 0
+    }
+  },
+  "post_write_verification": {
+    "all_gates_passed": true,
+    "d1_trace_reconstruction_candidates": 36,
+    "d1_physical_stocktake_candidates": 0,
+    "created_delivery_count": 2,
+    "created_delivery_item_count": 21,
+    "inventory_lot_count_delta": 0,
+    "inventory_movement_count_delta": 0,
+    "integrity_check": "ok",
+    "foreign_key_violation_count": 0,
+    "revision": "vv30v8x9z19",
+    "read_only_total_changes": 0,
+    "erp_health_http_status": 200
+  }
+}

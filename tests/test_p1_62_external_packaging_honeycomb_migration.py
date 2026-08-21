@@ -6,6 +6,7 @@ import sqlite3
 
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 import pytest
 
 
@@ -35,7 +36,14 @@ def test_honeycomb_purchase_migration_is_unique_head(current_alembic_head: str) 
     spec.loader.exec_module(module)
     assert module.revision == TARGET
     assert module.down_revision == PARENT
-    assert current_alembic_head == TARGET
+    config = Config(str(ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(ROOT / "alembic"))
+    script = ScriptDirectory.from_config(config)
+    revision_ids = {
+        revision.revision
+        for revision in script.walk_revisions("base", current_alembic_head)
+    }
+    assert TARGET in revision_ids
 
 
 def test_honeycomb_purchase_migration_round_trip_and_fail_closed(

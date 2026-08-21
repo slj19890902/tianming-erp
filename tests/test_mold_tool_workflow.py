@@ -1600,6 +1600,7 @@ def test_mold_live_material_facts_keep_physical_sources_separate_and_accept_shor
         task = ProductionTask(
             order_item_id=item.id,
             sales_order_item_bom_component_id=snapshot.id,
+            task_role="component_internal",
             status="pending",
             planned_quantity=10,
             ordered_quantity_snapshot=10,
@@ -1941,6 +1942,7 @@ def test_mold_live_material_facts_mark_unattributed_parent_legacy_bom(
         db.add(snapshot)
         db.flush()
         task.sales_order_item_bom_component_id = snapshot.id
+        task.task_role = "component_internal"
         db.flush()
 
         material = _material_facts_for_task(db, task=task, item=item)
@@ -1989,6 +1991,7 @@ def test_mold_live_bom_ignores_superseded_whole_when_current_sources_are_split(
         db.add(snapshot)
         db.flush()
         task.sales_order_item_bom_component_id = snapshot.id
+        task.task_role = "component_internal"
         old_req, old_item = _material_live_requisition(
             db,
             item=item,
@@ -2286,6 +2289,7 @@ def test_scoped_customer_can_read_current_bom_snapshot_after_product_unbind(
             ProductionTask(
                 order_item_id=item.id,
                 sales_order_item_bom_component_id=snapshot.id,
+                task_role="component_internal",
                 status="pending",
                 planned_quantity=5,
                 ordered_quantity_snapshot=5,

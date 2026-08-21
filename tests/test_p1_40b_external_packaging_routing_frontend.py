@@ -65,3 +65,22 @@ def test_product_modal_keeps_external_other_and_mixed_non_other_boundaries() -> 
     assert "混合 BOM 必须保留纸板主件" in (ROOT / "app" / "api" / "products.py").read_text(encoding="utf-8")
     assert 'class="field product-supply-compact"' in INDEX
     assert "混合模式请在下方“外购包装组件”维护" not in INDEX
+
+
+def test_regular_and_pdf_orders_auto_fill_common_box_purchase_ratio() -> None:
+    regular = _method_source("selectOrderProduct")
+    pdf_select = _method_source("selectImportProduct")
+    pdf_apply = _method_source("applyPdfDraftToOrderForm")
+    for source in (regular, pdf_select):
+        assert "external_packaging_default_order_quantity_basis" in source
+        assert "external_packaging_default_purchase_quantity_basis" in source
+    assert (
+        "external_packaging_order_quantity_basis: item.external_packaging_order_quantity_basis ?? null"
+        in pdf_apply
+    )
+    assert (
+        "external_packaging_purchase_quantity_basis: item.external_packaging_purchase_quantity_basis ?? null"
+        in pdf_apply
+    )
+    assert "selectedProduct.external_packaging_default_order_quantity_basis" in pdf_apply
+    assert "selectedProduct.external_packaging_default_purchase_quantity_basis" in pdf_apply

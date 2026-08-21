@@ -99,6 +99,17 @@ class Product(Base):
             "AND external_packaging_purchase_unit IS NULL AND external_packaging_candidate_snapshot_json IS NULL))",
             name="ck_products_external_supply_profile",
         ),
+        CheckConstraint(
+            "((supply_mode = 'external_purchase' AND "
+            "((external_packaging_default_order_quantity_basis IS NULL AND "
+            "external_packaging_default_purchase_quantity_basis IS NULL) OR "
+            "(external_packaging_default_order_quantity_basis > 0 AND "
+            "external_packaging_default_purchase_quantity_basis > 0))) OR "
+            "(supply_mode <> 'external_purchase' AND "
+            "external_packaging_default_order_quantity_basis IS NULL AND "
+            "external_packaging_default_purchase_quantity_basis IS NULL))",
+            name="ck_products_external_purchase_default_ratio",
+        ),
         CheckConstraint("version >= 1", name="ck_products_version"),
         Index("ix_products_customer_id", "customer_id"),
         Index("ix_products_material_id", "material_id"),
@@ -151,6 +162,12 @@ class Product(Base):
     )
     external_packaging_candidate_snapshot_json: Mapped[str | None] = mapped_column(
         Text, nullable=True
+    )
+    external_packaging_default_order_quantity_basis: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 6), nullable=True
+    )
+    external_packaging_default_purchase_quantity_basis: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 6), nullable=True
     )
     print_content: Mapped[str | None] = mapped_column(Text, nullable=True)
     printing_colors: Mapped[str | None] = mapped_column(String(150), nullable=True)

@@ -754,12 +754,23 @@ def _validated_external_purchase_ratio(
                 detail=f"第{index}条不是外购包材，不能填写采购数量换算",
             )
         return None, None, None
+    if (order_basis is None) != (purchase_basis is None):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"第{index}条外购包材数量换算必须同时包含"
+                "订单数量基数和供应商采购数量基数"
+            ),
+        )
+    if order_basis is None and purchase_basis is None:
+        order_basis = product.external_packaging_default_order_quantity_basis
+        purchase_basis = product.external_packaging_default_purchase_quantity_basis
     if order_basis is None or purchase_basis is None:
         raise HTTPException(
             status_code=422,
             detail=(
-                f"第{index}条外购包材必须填写本客户订单的数量换算："
-                "订单数量基数和供应商采购数量基数都不能为空"
+                f"第{index}条外购包材的常用箱尚未设置默认采购比例，"
+                "请先在常用箱选择1→1、1→2或自定义比例"
             ),
         )
     ratio = (Decimal(purchase_basis) / Decimal(order_basis)).quantize(

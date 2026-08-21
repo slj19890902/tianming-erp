@@ -175,6 +175,8 @@ def _external_payload(ids: dict[str, int], candidates: list[dict] | None = None)
         "box_category": "normal",
         "box_style": "其他",
         "supply_mode": "external_purchase",
+        "external_packaging_default_order_quantity_basis": "1",
+        "external_packaging_default_purchase_quantity_basis": "2",
         "material_id": None,
         "length_mm": 500,
         "width_mm": 400,
@@ -211,6 +213,8 @@ def _honeycomb_payload(ids: dict[str, int]) -> dict:
         "box_category": "normal",
         "box_style": "其他",
         "supply_mode": "external_purchase",
+        "external_packaging_default_order_quantity_basis": "1",
+        "external_packaging_default_purchase_quantity_basis": "2",
         "unit": "片",
         "external_supply": {
             "customer_specification": {
@@ -236,6 +240,8 @@ def _other_packaging_payload(ids: dict[str, int]) -> dict:
         "box_category": "normal",
         "box_style": "其他",
         "supply_mode": "external_purchase",
+        "external_packaging_default_order_quantity_basis": "1",
+        "external_packaging_default_purchase_quantity_basis": "2",
         "unit": "片",
         "external_supply": {
             "customer_specification": {
@@ -278,6 +284,8 @@ def test_external_product_candidates_scope_and_single_default(p1_40a_app: FastAP
         assert body["readiness"]["ready"] is True
         assert body["external_supply"]["specification"]["length_mm"] == 870.0
         assert body["external_supply"]["candidates"][0]["is_default"] is True
+        assert body["external_packaging_default_order_quantity_basis"] == "1.000000"
+        assert body["external_packaging_default_purchase_quantity_basis"] == "2.000000"
 
         summary = client.get(
             "/api/master/products",
@@ -288,6 +296,8 @@ def test_external_product_candidates_scope_and_single_default(p1_40a_app: FastAP
         assert summary_item["supply_mode"] == "external_purchase"
         assert summary_item["external_packaging_specification_summary"] == "870×50×50×5mm"
         assert summary_item["external_packaging_purchase_unit"] == "根"
+        assert summary_item["external_packaging_default_order_quantity_basis"] == "1.000000"
+        assert summary_item["external_packaging_default_purchase_quantity_basis"] == "2.000000"
 
         blocked_sync = client.post(
             f"/api/master/products/{body['id']}/sync-fields",
@@ -364,6 +374,28 @@ def test_multiple_candidates_require_one_default_and_old_client_preserves(p1_40a
         assert [row["external_product_id"] for row in after["external_supply"]["candidates"]] == [
             ids["CG-870-A"], ids["CG-870-G"]
         ]
+        assert after["external_packaging_default_order_quantity_basis"] == "1.000000"
+        assert after["external_packaging_default_purchase_quantity_basis"] == "2.000000"
+
+
+def test_external_product_requires_complete_default_purchase_ratio(
+    p1_40a_app: FastAPI,
+) -> None:
+    ids = p1_40a_app.state.fixture
+    with TestClient(p1_40a_app) as client:
+        _login(client)
+        missing = _external_payload(ids)
+        missing.pop("external_packaging_default_order_quantity_basis")
+        missing.pop("external_packaging_default_purchase_quantity_basis")
+        response = client.post("/api/master/products", json=missing)
+        assert response.status_code == 422
+        assert "常用箱默认采购比例" in response.text
+
+        one_sided = _external_payload(ids)
+        one_sided.pop("external_packaging_default_purchase_quantity_basis")
+        response = client.post("/api/master/products", json=one_sided)
+        assert response.status_code == 422
+        assert "必须同时填写" in response.text
 
 
 def test_corrugated_product_rejects_external_candidates(p1_40a_app: FastAPI) -> None:

@@ -93,7 +93,10 @@ def test_supplier_groups_and_external_product_editor_are_explicit() -> None:
     assert "客户要求规格厚(mm)" in product_modal
     assert "客户要求及报给供应商的规格" in product_modal
     assert "按客户样本填写材质、孔径、长×宽×厚及其他采购要求" in product_modal
-    assert "本客户订单的数量换算在下单时填写" in product_modal
+    assert "默认采购数量比例" in product_modal
+    assert "订单1 → 采购1" in product_modal
+    assert "订单1 → 采购2" in product_modal
+    assert "新订单会自动带入并冻结本常用箱比例" in product_modal
     assert '<details v-if="productForm.supply_mode!==\'external_purchase\'"' in product_modal
     assert 'supplierPackagingForm.category_code===\'hollow_board\'' in INDEX
     assert "维护正式报价" in INDEX
@@ -114,13 +117,32 @@ def test_supplier_groups_and_external_product_editor_are_explicit() -> None:
     assert "最低价" not in candidate_table
 
 
-def test_external_purchase_ratio_is_selected_on_customer_order_not_product_master() -> None:
-    assert "本客户订单的外购数量换算" in INDEX
+def test_external_purchase_ratio_defaults_in_common_box_and_allows_order_exception() -> None:
+    assert "本单外购数量换算" in INDEX
+    assert "onProductExternalRatioModeChange" in INDEX
+    assert "external_packaging_default_order_quantity_basis" in INDEX
+    assert "external_packaging_default_purchase_quantity_basis" in INDEX
     assert "external_packaging_order_quantity_basis" in INDEX
     assert "external_packaging_purchase_quantity_basis" in INDEX
-    assert "本行客户数量和客户单价不变" in INDEX
+    assert "仅本单比例有例外时才调整" in INDEX
     assert "采购单价读取供应商有效报价" in INDEX
     assert "每个客户销售单位需采购数量" not in INDEX
+
+
+def test_common_box_ratio_selector_sets_standard_and_custom_values(tmp_path: Path) -> None:
+    args, body = _method("onProductExternalRatioModeChange")
+    source = f"""
+const vm={{productForm:{{_external_ratio_mode:"one_to_two",external_packaging_default_order_quantity_basis:null,external_packaging_default_purchase_quantity_basis:null}}}};
+vm.change=new Function({json.dumps(args)},{json.dumps(body, ensure_ascii=False)}).bind(vm);
+vm.change();
+if(vm.productForm.external_packaging_default_order_quantity_basis!==1||vm.productForm.external_packaging_default_purchase_quantity_basis!==2) throw new Error("1 to 2 preset failed");
+vm.productForm._external_ratio_mode="custom";
+vm.productForm.external_packaging_default_order_quantity_basis=3;
+vm.productForm.external_packaging_default_purchase_quantity_basis=5;
+vm.change();
+if(vm.productForm.external_packaging_default_order_quantity_basis!==3||vm.productForm.external_packaging_default_purchase_quantity_basis!==5) throw new Error("custom ratio was overwritten");
+"""
+    _run_node(tmp_path, source)
 
 
 def test_external_candidate_selection_and_payload_clear_paper_fields(
@@ -139,6 +161,8 @@ const vm = {{
     external_packaging_category_code:"paper_corner_guard",
     external_packaging_specification_summary:"",
     external_packaging_purchase_unit:"",
+    external_packaging_default_order_quantity_basis:1,
+    external_packaging_default_purchase_quantity_basis:2,
     _external_specification:{{shape:"L",length_mm:780,side_a_mm:50,side_b_mm:50,thickness_mm:5}},
     _external_selected_ids:[],
     _external_default_product_id:null,
@@ -206,6 +230,8 @@ const vm={{
     supply_mode:"external_purchase", box_style:"其他",
     external_packaging_category_code:"honeycomb_board",
     external_packaging_specification_summary:"", external_packaging_purchase_unit:"片",
+    external_packaging_default_order_quantity_basis:1,
+    external_packaging_default_purchase_quantity_basis:2,
     _external_specification:{{material:"170*110*170",aperture_mm:15,length_mm:800,width_mm:180,thickness_mm:60}},
     _external_selected_ids:[31], _external_default_product_id:31,
     customer_material_code:"HC-1", product_code:"HC-1",
@@ -315,6 +341,8 @@ globalThis.axios={{
 const vm={{
   productForm:{{
     customer_id:5,supply_mode:"external_purchase",
+    external_packaging_default_order_quantity_basis:1,
+    external_packaging_default_purchase_quantity_basis:2,
     external_packaging_category_code:"paper_corner_guard",
     external_packaging_specification_summary:"",
     external_packaging_purchase_unit:"",

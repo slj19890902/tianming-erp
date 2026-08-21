@@ -5110,7 +5110,20 @@
                   </template>
                   <div class="field"><label>客户规格</label><input class="input" :value="productForm.external_packaging_specification_summary || '请填写客户规格'" readonly /></div>
                   <div class="field"><label>采购单位</label><input class="input" :value="productForm.external_packaging_purchase_unit || '自动带出'" readonly /></div>
-                  <div class="field wide muted">本客户订单的数量换算在下单时填写，例如订单 1 套 → 供应商采购 2 片；常用箱不写死比例。</div>
+                  <div class="field">
+                    <label>默认采购数量比例</label>
+                    <select class="select" v-model="productForm._external_ratio_mode" @change="onProductExternalRatioModeChange">
+                      <option value="">请选择</option>
+                      <option value="one_to_one">订单1 → 采购1</option>
+                      <option value="one_to_two">订单1 → 采购2</option>
+                      <option value="custom">自定义比例</option>
+                    </select>
+                  </div>
+                  <template v-if="productForm._external_ratio_mode==='custom'">
+                    <div class="field"><label>订单数量基数</label><input class="input" type="number" min="0.000001" step="0.000001" v-model.number="productForm.external_packaging_default_order_quantity_basis" /></div>
+                    <div class="field"><label>供应商采购数量基数</label><input class="input" type="number" min="0.000001" step="0.000001" v-model.number="productForm.external_packaging_default_purchase_quantity_basis" /></div>
+                  </template>
+                  <div class="field wide muted">新订单会自动带入并冻结本常用箱比例；只有本单比例例外时才在订单明细调整。以后修改常用箱，不会改写历史订单和历史采购。</div>
                 </div>
                 <div v-if="productExternalSupplyLoading" class="muted" style="margin-top:8px">正在读取候选供应商产品…</div>
                 <div v-else-if="productExternalSupplyError" class="notice danger" style="margin-top:8px">{{ productExternalSupplyError }} <button type="button" class="btn small" @click="loadProductExternalSupplyCandidates({force:true})">重试</button></div>
@@ -6194,11 +6207,11 @@
                   <tr v-if="orderItemIsExternalPurchase(item)" class="external-purchase-ratio-row">
                     <td colspan="8" style="padding:6px 8px;background:#fff7ed;border-top:1px solid #fdba74;border-bottom:1px solid #fdba74">
                       <div class="toolbar-group" style="justify-content:flex-start;flex-wrap:wrap;align-items:flex-end">
-                        <strong>本客户订单的外购数量换算</strong>
+                        <strong>本单外购数量换算</strong>
                         <label>订单数量基数<input class="input compact-input" style="width:9ch" type="number" min="0.000001" step="0.000001" v-model.number="item.external_packaging_order_quantity_basis" /></label>
                         <span>→</span>
                         <label>供应商采购数量基数<input class="input compact-input" style="width:9ch" type="number" min="0.000001" step="0.000001" v-model.number="item.external_packaging_purchase_quantity_basis" /></label>
-                        <span class="muted">例如客户订单 1 套需采购 2 片，填写 1 → 2。本行客户数量和客户单价不变；采购数量按本比例计算，采购单价读取供应商有效报价。</span>
+                        <span class="muted">已从常用箱自动带入；仅本单比例有例外时才调整。客户数量和客户单价不变，采购数量按本比例计算，采购单价读取供应商有效报价。</span>
                         <span v-if="externalPurchaseQuantityPreview(item)" class="status orange">本行 {{ item.quantity || 0 }} 个客户单位，预计采购 {{ externalPurchaseQuantityPreview(item) }} {{ externalPurchaseUnit(item) }}</span>
                       </div>
                     </td>
@@ -8110,9 +8123,11 @@
         _printing_original: null,
         supply_mode: "corrugated_production", external_packaging_category_code: "",
         external_packaging_specification_summary: "", external_packaging_purchase_unit: "",
+        external_packaging_default_order_quantity_basis: null,
+        external_packaging_default_purchase_quantity_basis: null,
         external_supply: { candidates: [], customer_specification:null },
         _external_specification: {shape:"L",length_mm:null,side_a_mm:50,side_b_mm:50,thickness_mm:5},
-        _external_selected_ids: [], _external_default_product_id: null, _corner_reference_quantity: 1000,
+        _external_selected_ids: [], _external_default_product_id: null, _external_ratio_mode: "", _corner_reference_quantity: 1000,
         printing_plate_mode: "no_plate", printing_plate_1_id: null, printing_plate_2_id: null, printing_plate_3_id: null,
         printing_plates: [], plate_alignment_value_mm: null, plate_mount_value_mm: null,
         machine_set_length_mm: null, machine_set_width_mm: null, machine_set_height_mm: null,
@@ -10165,6 +10180,13 @@
             const printing = this.productPrintingWriteFields(this.productForm);
             Object.assign(payload,printing);
             if (isExternal) {
+              const defaultOrderBasis = Number(payload.external_packaging_default_order_quantity_basis || 0);
+              const defaultPurchaseBasis = Number(payload.external_packaging_default_purchase_quantity_basis || 0);
+              if (!(defaultOrderBasis > 0 && defaultPurchaseBasis > 0)) {
+                throw new Error("请选择常用箱默认采购比例；特殊比例可选择自定义");
+              }
+              payload.external_packaging_default_order_quantity_basis = defaultOrderBasis;
+              payload.external_packaging_default_purchase_quantity_basis = defaultPurchaseBasis;
               const selectedIds = [...new Set((payload._external_selected_ids || []).map(Number).filter(value=>value>0))];
               if (!payload.external_packaging_category_code) throw new Error("请选择外购包材类别");
               if (!selectedIds.length) throw new Error("请至少选择一个候选供应商产品");
@@ -10202,12 +10224,15 @@
               payload.external_packaging_category_code=null;
               payload.external_packaging_specification_summary=null;
               payload.external_packaging_purchase_unit=null;
+              payload.external_packaging_default_order_quantity_basis=null;
+              payload.external_packaging_default_purchase_quantity_basis=null;
               payload.external_supply=null;
             }
             delete payload._external_selected_ids;
             delete payload._external_default_product_id;
             delete payload._corner_reference_quantity;
             delete payload._external_specification;
+            delete payload._external_ratio_mode;
             delete payload.id;
             payload.production_process = this.serializeProductionProcesses(
               payload._production_processes,
@@ -11619,8 +11644,8 @@
                 const orderBasis = Number(item.external_packaging_order_quantity_basis || 0);
                 const purchaseBasis = Number(item.external_packaging_purchase_quantity_basis || 0);
                 if (!(orderBasis > 0 && purchaseBasis > 0)) {
-                  item._validation_error = "请填写本订单外购换算";
-                  return `第${index + 1}条外购包材必须填写本客户订单的“订单数量基数 → 供应商采购数量基数”。`;
+                  item._validation_error = "常用箱尚未设置默认采购比例";
+                  return `第${index + 1}条外购包材没有采购数量比例，请先在常用箱选择1→1、1→2或自定义比例。`;
                 }
               }
               if (item.unit_price === "" || item.unit_price === null || item.unit_price === undefined) {
@@ -13818,6 +13843,30 @@
             }
             this.productForm.external_packaging_specification_summary = row.specification_summary || "";
             this.productForm.external_packaging_purchase_unit = row.purchase_unit || "";
+          },
+          onProductExternalRatioModeChange() {
+            const mode = String(this.productForm?._external_ratio_mode || "");
+            if (mode === "one_to_one") {
+              this.productForm.external_packaging_default_order_quantity_basis = 1;
+              this.productForm.external_packaging_default_purchase_quantity_basis = 1;
+              return;
+            }
+            if (mode === "one_to_two") {
+              this.productForm.external_packaging_default_order_quantity_basis = 1;
+              this.productForm.external_packaging_default_purchase_quantity_basis = 2;
+              return;
+            }
+            if (mode === "custom") {
+              if (!(Number(this.productForm.external_packaging_default_order_quantity_basis) > 0)) {
+                this.productForm.external_packaging_default_order_quantity_basis = null;
+              }
+              if (!(Number(this.productForm.external_packaging_default_purchase_quantity_basis) > 0)) {
+                this.productForm.external_packaging_default_purchase_quantity_basis = null;
+              }
+              return;
+            }
+            this.productForm.external_packaging_default_order_quantity_basis = null;
+            this.productForm.external_packaging_default_purchase_quantity_basis = null;
           },
           setProductExternalCandidate(row, checked) {
             const id = Number(row?.external_product_id || 0);
@@ -21871,6 +21920,12 @@
             form.external_packaging_category_code = externalSupply.category_code || form.external_packaging_category_code || "";
             form.external_packaging_specification_summary = externalSupply.specification_summary || form.external_packaging_specification_summary || "";
             form.external_packaging_purchase_unit = externalSupply.purchase_unit || form.external_packaging_purchase_unit || "";
+            const externalOrderBasis = Number(form.external_packaging_default_order_quantity_basis || 0);
+            const externalPurchaseBasis = Number(form.external_packaging_default_purchase_quantity_basis || 0);
+            if (externalOrderBasis === 1 && externalPurchaseBasis === 1) form._external_ratio_mode = "one_to_one";
+            else if (externalOrderBasis === 1 && externalPurchaseBasis === 2) form._external_ratio_mode = "one_to_two";
+            else if (externalOrderBasis > 0 && externalPurchaseBasis > 0) form._external_ratio_mode = "custom";
+            else form._external_ratio_mode = "";
             form._external_specification = JSON.parse(JSON.stringify(
               externalSupply.specification
               || form._external_specification
@@ -21969,6 +22024,8 @@
               external_packaging_category_code: f.external_packaging_category_code,
               external_packaging_specification_summary: f.external_packaging_specification_summary,
               external_packaging_purchase_unit: f.external_packaging_purchase_unit,
+              external_packaging_default_order_quantity_basis: f.external_packaging_default_order_quantity_basis,
+              external_packaging_default_purchase_quantity_basis: f.external_packaging_default_purchase_quantity_basis,
               external_packaging_customer_specification: f._external_specification,
               external_supply_candidates: (f._external_selected_ids || []).map(Number).sort((a,b)=>a-b),
               external_supply_default: Number(f._external_default_product_id || 0) || null,
@@ -23997,6 +24054,9 @@
               this.productForm.external_packaging_category_code = "";
               this.productForm.external_packaging_specification_summary = "";
               this.productForm.external_packaging_purchase_unit = "";
+              this.productForm.external_packaging_default_order_quantity_basis = null;
+              this.productForm.external_packaging_default_purchase_quantity_basis = null;
+              this.productForm._external_ratio_mode = "";
               this.productForm._external_selected_ids = [];
               this.productForm._external_default_product_id = null;
               this.productExternalSupplyOptions = [];
@@ -25356,6 +25416,9 @@
                 item.product_manual_modified = !!data.manual_modified;
                 item.product_manual_modified_at = data.manual_modified_at || null;
                 item.product_drawing_file = data.drawings?.[0]?.image_path || null;
+                item.supply_mode = data.supply_mode || "corrugated_production";
+                item.external_packaging_order_quantity_basis = data.external_packaging_default_order_quantity_basis ?? null;
+                item.external_packaging_purchase_quantity_basis = data.external_packaging_default_purchase_quantity_basis ?? null;
                 if (!item.production_notes && data.production_process) item.production_notes = data.production_process;
                 item.product_default_price = data.sale_unit_price != null ? String(data.sale_unit_price) : null;
                  this.refreshPdfPriceConflict(item);
@@ -25464,8 +25527,8 @@
                 product_id: item.is_new_product ? null : (item.matched_product_id || null),
                 is_new_product: !!item.is_new_product,
                 supply_mode: item.supply_mode || "",
-                external_packaging_order_quantity_basis: null,
-                external_packaging_purchase_quantity_basis: null,
+                external_packaging_order_quantity_basis: item.external_packaging_order_quantity_basis ?? null,
+                external_packaging_purchase_quantity_basis: item.external_packaging_purchase_quantity_basis ?? null,
                 product_code: item.normalized_product_code || item.product_code || item.raw_product_code || "",
                 // 名称以常用箱为准
                 product_name: (!item.is_new_product && item.product_name) ? item.product_name : (item.raw_product_name || ""),
@@ -25522,6 +25585,8 @@
                const selectedProduct = (this.orderProductOptions[index] || []).find(row => Number(row.id) === Number(this.orderForm.items[index].product_id));
                if (selectedProduct) {
                  this.orderForm.items[index].supply_mode = selectedProduct.supply_mode || "corrugated_production";
+                 this.orderForm.items[index].external_packaging_order_quantity_basis = selectedProduct.external_packaging_default_order_quantity_basis ?? this.orderForm.items[index].external_packaging_order_quantity_basis ?? null;
+                 this.orderForm.items[index].external_packaging_purchase_quantity_basis = selectedProduct.external_packaging_default_purchase_quantity_basis ?? this.orderForm.items[index].external_packaging_purchase_quantity_basis ?? null;
                  this.orderForm.items[index]._inventory_product = selectedProduct;
                }
                if (this.orderForm.items[index].product_id) await this.loadOrderDraftBom(this.orderForm.items[index], this.orderForm.items[index].product_id);
@@ -26281,8 +26346,8 @@
             item.product_code = data.product_code || "";
             item.product_name = data.product_name || "";
             item.supply_mode = data.supply_mode || "corrugated_production";
-            item.external_packaging_order_quantity_basis = null;
-            item.external_packaging_purchase_quantity_basis = null;
+            item.external_packaging_order_quantity_basis = data.external_packaging_default_order_quantity_basis ?? null;
+            item.external_packaging_purchase_quantity_basis = data.external_packaging_default_purchase_quantity_basis ?? null;
             item.material_id = data.material_id || null;
             item.material = data.material_code || this.materialName(data.material_id, data.legacy_material_text);
             item.specification = this.orderSpecificationText(this.spec(data), "");

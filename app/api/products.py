@@ -491,6 +491,12 @@ class ProductPayload(BaseModel):
     external_packaging_category_code: str | None = None
     external_packaging_specification_summary: str | None = None
     external_packaging_purchase_unit: str | None = None
+    external_packaging_default_order_quantity_basis: Decimal | None = Field(
+        default=None, gt=0, max_digits=18, decimal_places=6
+    )
+    external_packaging_default_purchase_quantity_basis: Decimal | None = Field(
+        default=None, gt=0, max_digits=18, decimal_places=6
+    )
     external_supply: ProductExternalSupplyPayload | None = None
     print_content: str | None = None
     printing_colors: str | None = Field(default=None, max_length=150)
@@ -792,12 +798,16 @@ _COST_SENSITIVE_PRODUCT_FIELDS = frozenset(
 _PRODUCT_EXTERNAL_SUPPLY_FIELDS = frozenset({
     "supply_mode", "external_packaging_category_code",
     "external_packaging_specification_summary", "external_packaging_purchase_unit",
+    "external_packaging_default_order_quantity_basis",
+    "external_packaging_default_purchase_quantity_basis",
     "external_supply",
 })
 _PRODUCT_EXTERNAL_PROFILE_COLUMNS = (
     "supply_mode", "external_packaging_category_code",
     "external_packaging_specification_json", "external_packaging_specification_summary",
     "external_packaging_purchase_unit", "external_packaging_candidate_snapshot_json",
+    "external_packaging_default_order_quantity_basis",
+    "external_packaging_default_purchase_quantity_basis",
 )
 _EXTERNAL_PURCHASE_PAPER_FIELDS = (
     "material_id", "legacy_material_text", "length_mm", "width_mm", "height_mm",
@@ -838,6 +848,8 @@ def _clear_virtual_composite_parent_fields(payload: ProductPayload) -> None:
     payload.external_packaging_category_code = None
     payload.external_packaging_specification_summary = None
     payload.external_packaging_purchase_unit = None
+    payload.external_packaging_default_order_quantity_basis = None
+    payload.external_packaging_default_purchase_quantity_basis = None
     payload.external_supply = None
     payload.splice_mode = "single"
     payload.pieces_per_box = 1
@@ -997,6 +1009,8 @@ def _normalize_product_external_supply(
             "external_packaging_specification_summary": None,
             "external_packaging_purchase_unit": None,
             "external_packaging_candidate_snapshot_json": None,
+            "external_packaging_default_order_quantity_basis": None,
+            "external_packaging_default_purchase_quantity_basis": None,
         }
     if payload.supply_mode != "external_purchase":
         if payload.external_supply and payload.external_supply.candidates:
@@ -1008,9 +1022,31 @@ def _normalize_product_external_supply(
             "external_packaging_specification_summary": None,
             "external_packaging_purchase_unit": None,
             "external_packaging_candidate_snapshot_json": None,
+            "external_packaging_default_order_quantity_basis": None,
+            "external_packaging_default_purchase_quantity_basis": None,
         }
     if (payload.box_style or "").strip() != "其他":
         raise HTTPException(status_code=422, detail="只有箱型选择“其他”才能使用外购包材供货")
+    ratio_fields = {
+        "external_packaging_default_order_quantity_basis",
+        "external_packaging_default_purchase_quantity_basis",
+    }
+    ratio_was_submitted = bool(ratio_fields.intersection(payload.model_fields_set))
+    default_order_basis = payload.external_packaging_default_order_quantity_basis
+    default_purchase_basis = payload.external_packaging_default_purchase_quantity_basis
+    if existing is not None and not ratio_was_submitted:
+        default_order_basis = existing.external_packaging_default_order_quantity_basis
+        default_purchase_basis = existing.external_packaging_default_purchase_quantity_basis
+    if existing is None and default_order_basis is None and default_purchase_basis is None:
+        raise HTTPException(
+            status_code=422,
+            detail="请选择常用箱默认采购比例：1→1、1→2或自定义比例",
+        )
+    if (default_order_basis is None) != (default_purchase_basis is None):
+        raise HTTPException(
+            status_code=422,
+            detail="常用箱默认采购比例必须同时填写订单数量基数和供应商采购数量基数",
+        )
     candidates = list(payload.external_supply.candidates if payload.external_supply else [])
     if not candidates:
         raise HTTPException(status_code=422, detail="当前外购包材没有候选供应商产品，不能保存")
@@ -1163,6 +1199,8 @@ def _normalize_product_external_supply(
         "external_packaging_specification_summary": specification_summary,
         "external_packaging_purchase_unit": purchase_unit,
         "external_packaging_candidate_snapshot_json": json.dumps(snapshots, ensure_ascii=False, sort_keys=True),
+        "external_packaging_default_order_quantity_basis": default_order_basis,
+        "external_packaging_default_purchase_quantity_basis": default_purchase_basis,
     }
 
 
@@ -1210,6 +1248,12 @@ def _product_write_data(payload: ProductPayload, user: User) -> dict:
     """
     data = payload.model_dump(include=set(ProductPayload.model_fields))
     data.pop("external_supply", None)
+    for field in (
+        "external_packaging_default_order_quantity_basis",
+        "external_packaging_default_purchase_quantity_basis",
+    ):
+        if field not in payload.model_fields_set:
+            data.pop(field, None)
     if not has_permission(user, "cost.view"):
         for field in _COST_SENSITIVE_PRODUCT_FIELDS:
             data.pop(field, None)
@@ -1405,6 +1449,8 @@ def _summary_response(product: Product, user: User) -> dict:
         "external_packaging_category_code": product.external_packaging_category_code,
         "external_packaging_specification_summary": product.external_packaging_specification_summary,
         "external_packaging_purchase_unit": product.external_packaging_purchase_unit,
+        "external_packaging_default_order_quantity_basis": product.external_packaging_default_order_quantity_basis,
+        "external_packaging_default_purchase_quantity_basis": product.external_packaging_default_purchase_quantity_basis,
         "length_mm": product.length_mm,
         "width_mm": product.width_mm,
         "height_mm": product.height_mm,

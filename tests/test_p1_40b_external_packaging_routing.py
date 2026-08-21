@@ -156,13 +156,7 @@ def test_direct_external_order_freezes_routes_skips_production_and_confirms(
         missing_ratio_payload["items"][0].pop(
             "external_packaging_purchase_quantity_basis"
         )
-        missing_ratio = client.post("/api/orders", json=missing_ratio_payload)
-        assert missing_ratio.status_code == 422, missing_ratio.text
-        assert "订单数量基数" in missing_ratio.json()["detail"]
-
-        created_order = client.post(
-            "/api/orders", json=_order_payload_for(product_id, ids["customer_a"])
-        )
+        created_order = client.post("/api/orders", json=missing_ratio_payload)
         assert created_order.status_code == 201, created_order.text
         order = created_order.json()
         order_id = order["id"]
@@ -219,7 +213,14 @@ def test_direct_external_order_freezes_routes_skips_production_and_confirms(
             product.external_packaging_candidate_snapshot_json = json.dumps(
                 [{"external_product_id": ids["CG-1000"], "is_default": True}]
             )
+            product.external_packaging_default_order_quantity_basis = Decimal("1")
+            product.external_packaging_default_purchase_quantity_basis = Decimal("3")
             db.commit()
+
+            frozen = db.scalar(select(OrderItem).where(OrderItem.order_id == order_id))
+            assert frozen is not None
+            assert Decimal(frozen.external_packaging_order_quantity_basis_snapshot) == Decimal("1")
+            assert Decimal(frozen.external_packaging_purchase_quantity_basis_snapshot) == Decimal("2")
 
         pending = client.get("/api/external-packaging-purchases/pending-confirmations")
         assert pending.status_code == 200
@@ -282,6 +283,54 @@ def test_direct_external_order_freezes_routes_skips_production_and_confirms(
         assert denied_client.get(
             "/api/external-packaging-purchases/pending-confirmations"
         ).status_code == 403
+
+
+def test_order_override_is_frozen_and_legacy_product_without_default_is_explicit(
+    routing_app: FastAPI,
+) -> None:
+    from app.models.order import OrderItem
+    from app.models.product import Product
+
+    ids = routing_app.state.fixture
+    with TestClient(routing_app) as client:
+        _login(client, "p1-40a-admin")
+        created_product = client.post(
+            "/api/master/products", json=_external_payload(ids)
+        )
+        assert created_product.status_code == 201, created_product.text
+        product_id = created_product.json()["id"]
+
+        override = _order_payload_for(product_id, ids["customer_a"])
+        override["customer_po"] = "P1-40B-OVERRIDE-001"
+        override["items"][0]["external_packaging_purchase_quantity_basis"] = "3"
+        created_order = client.post("/api/orders", json=override)
+        assert created_order.status_code == 201, created_order.text
+        with routing_app.state.factory() as db:
+            item = db.scalar(
+                select(OrderItem).where(OrderItem.order_id == created_order.json()["id"])
+            )
+            assert item is not None
+            assert Decimal(item.external_packaging_order_quantity_basis_snapshot) == Decimal("1")
+            assert Decimal(item.external_packaging_purchase_quantity_basis_snapshot) == Decimal("3")
+
+            product = db.get(Product, product_id)
+            assert product is not None
+            product.external_packaging_default_order_quantity_basis = None
+            product.external_packaging_default_purchase_quantity_basis = None
+            db.commit()
+
+        missing = _order_payload_for(product_id, ids["customer_a"])
+        missing["customer_po"] = "P1-40B-LEGACY-MISSING"
+        missing["items"][0].pop("external_packaging_order_quantity_basis")
+        missing["items"][0].pop("external_packaging_purchase_quantity_basis")
+        rejected = client.post("/api/orders", json=missing)
+        assert rejected.status_code == 422
+        assert "常用箱尚未设置默认采购比例" in rejected.text
+
+        explicit = _order_payload_for(product_id, ids["customer_a"])
+        explicit["customer_po"] = "P1-40B-LEGACY-EXPLICIT"
+        accepted = client.post("/api/orders", json=explicit)
+        assert accepted.status_code == 201, accepted.text
 
 
 def test_direct_honeycomb_customer_spec_and_order_ratio_reach_supplier_print(

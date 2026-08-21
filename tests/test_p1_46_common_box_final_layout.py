@@ -112,7 +112,7 @@ def test_layout_matches_selected_compact_information_architecture() -> None:
     assert "productMaterialActiveTab==='candidates'" in PRODUCT_MODAL
     assert "productMaterialActiveTab==='history'" in PRODUCT_MODAL
     assert "组合产品 / 内部 BOM（不常用）" in PRODUCT_MODAL
-    assert '<details class="product-secondary-disclosure">' in PRODUCT_MODAL
+    assert 'class="product-secondary-disclosure"' in PRODUCT_MODAL
 
 
 def test_digit_capacity_is_content_width_plus_control_chrome() -> None:
@@ -216,6 +216,8 @@ if (directPayload.printing_plate_mode!=="no_plate" || directPayload.printing_pla
 const external=JSON.parse(JSON.stringify(base));
 external.supply_mode="external_purchase"; external.external_packaging_category_code="carton";
 external._external_selected_ids=[88]; external._external_default_product_id=88;
+external.external_packaging_default_order_quantity_basis=1;
+external.external_packaging_default_purchase_quantity_basis=2;
 vm.productForm=external;
 const externalPayload=vm.buildProductWritePayload();
 if (externalPayload.print_content!=="无印刷" || externalPayload.printing_colors!==null || externalPayload.printing_plate_mode!=="no_plate" || externalPayload.printing_plate_1_id!==null) throw new Error("external switch kept plate data");

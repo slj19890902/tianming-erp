@@ -85,6 +85,8 @@ _PRODUCT_FIELDS = (
     "external_packaging_specification_summary",
     "external_packaging_purchase_unit",
     "external_packaging_candidate_snapshot_json",
+    "external_packaging_default_order_quantity_basis",
+    "external_packaging_default_purchase_quantity_basis",
     "print_content",
     "printing_colors",
     "printing_plate_mode",
@@ -203,6 +205,8 @@ _OBJECT_SPECS: dict[MasterDataObjectType, _ObjectSpec] = {
                 "machine_set_length_mm",
                 "machine_set_width_mm",
                 "machine_set_height_mm",
+                "external_packaging_default_order_quantity_basis",
+                "external_packaging_default_purchase_quantity_basis",
             }
         ),
     ),

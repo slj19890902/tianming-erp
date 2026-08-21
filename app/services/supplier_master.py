@@ -15,6 +15,7 @@ SUPPLIER_CATEGORY_LABELS = {
     "printed_folding_carton": "印刷折叠彩盒",
     "epe_cushion": "EPE缓冲包装",
     "hollow_board": "中空板",
+    "honeycomb_board": "蜂窝板",
     "other_packaging": "其他外购包装",
 }
 

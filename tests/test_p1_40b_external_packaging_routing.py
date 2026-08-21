@@ -64,7 +64,13 @@ def _order_payload_for(product_id: int, customer_id: int) -> dict:
         "customer_po": "P1-40B-DIRECT-001",
         "order_date": "2026-08-11",
         "delivery_date": "2026-08-20",
-        "items": [{"product_id": product_id, "quantity": 100, "unit_price": "2.50"}],
+        "items": [{
+            "product_id": product_id,
+            "quantity": 100,
+            "unit_price": "2.50",
+            "external_packaging_order_quantity_basis": "1",
+            "external_packaging_purchase_quantity_basis": "2",
+        }],
     }
 
 
@@ -111,6 +117,7 @@ def test_direct_external_order_freezes_routes_skips_production_and_confirms(
         SalesOrderItemExternalComponentCandidate,
         SalesOrderItemExternalComponent,
     )
+    from app.models.external_packaging_purchase import ExternalPackagingPurchaseItem
     from app.models.production import ProductionTask
     from app.models.product import Product
     from app.models.requisition import RequisitionItem
@@ -130,6 +137,17 @@ def test_direct_external_order_freezes_routes_skips_production_and_confirms(
         product_id = created_product.json()["id"]
         _seed_price(routing_app, ids["CG-870-A"])
 
+        missing_ratio_payload = _order_payload_for(product_id, ids["customer_a"])
+        missing_ratio_payload["items"][0].pop(
+            "external_packaging_order_quantity_basis"
+        )
+        missing_ratio_payload["items"][0].pop(
+            "external_packaging_purchase_quantity_basis"
+        )
+        missing_ratio = client.post("/api/orders", json=missing_ratio_payload)
+        assert missing_ratio.status_code == 422, missing_ratio.text
+        assert "订单数量基数" in missing_ratio.json()["detail"]
+
         created_order = client.post(
             "/api/orders", json=_order_payload_for(product_id, ids["customer_a"])
         )
@@ -144,6 +162,15 @@ def test_direct_external_order_freezes_routes_skips_production_and_confirms(
             assert item.external_packaging_category_code_snapshot == "paper_corner_guard"
             assert item.external_packaging_purchase_unit_snapshot == "根"
             assert item.external_packaging_product_version_snapshot == 1
+            assert Decimal(
+                item.external_packaging_order_quantity_basis_snapshot
+            ) == Decimal("1")
+            assert Decimal(
+                item.external_packaging_purchase_quantity_basis_snapshot
+            ) == Decimal("2")
+            assert Decimal(
+                item.external_packaging_quantity_per_finished_unit_snapshot
+            ) == Decimal("2")
             assert item.requisition_status == "外购包材待确认"
             assert db.scalar(
                 select(func.count()).select_from(ProductionTask).where(
@@ -164,7 +191,7 @@ def test_direct_external_order_freezes_routes_skips_production_and_confirms(
             assert component.source_kind == "direct_product"
             assert component.source_component_set_id is None
             assert component.source_component_id is None
-            assert Decimal(component.quantity_per_finished_unit) == Decimal("1")
+            assert Decimal(component.quantity_per_finished_unit) == Decimal("2")
             assert Decimal(component.waste_rate) == Decimal("0")
             candidates = db.scalars(
                 select(SalesOrderItemExternalComponentCandidate).where(
@@ -193,6 +220,7 @@ def test_direct_external_order_freezes_routes_skips_production_and_confirms(
         preview_data = preview.json()
         assert len(preview_data["items"]) == 1
         assert "870" in preview_data["items"][0]["specification_summary"]
+        assert preview_data["items"][0]["suggested_purchase_quantity"] == "200"
         confirmation = {
             "idempotency_key": "p1-40b-direct-confirm-001",
             "lines": [
@@ -221,6 +249,11 @@ def test_direct_external_order_freezes_routes_skips_production_and_confirms(
             item = db.scalar(select(OrderItem).where(OrderItem.order_id == order_id))
             assert item is not None
             assert item.requisition_status == "外购包材已采购"
+            assert Decimal(item.unit_price) == Decimal("2.50")
+            purchase_item = db.scalar(select(ExternalPackagingPurchaseItem))
+            assert purchase_item is not None
+            assert Decimal(purchase_item.purchase_quantity) == Decimal("200")
+            assert Decimal(purchase_item.unit_price) != Decimal(item.unit_price)
         assert client.get(
             "/api/external-packaging-purchases/pending-confirmations"
         ).json()["total"] == 0

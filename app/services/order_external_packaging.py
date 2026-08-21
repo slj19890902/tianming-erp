@@ -163,6 +163,9 @@ def _freeze_direct_product_component(
     purchase_unit = str(
         order_item.external_packaging_purchase_unit_snapshot or ""
     ).strip()
+    order_basis = order_item.external_packaging_order_quantity_basis_snapshot
+    purchase_basis = order_item.external_packaging_purchase_quantity_basis_snapshot
+    quantity_ratio = order_item.external_packaging_quantity_per_finished_unit_snapshot
     source_version = int(order_item.external_packaging_product_version_snapshot or 0)
     try:
         candidate_rows = json.loads(
@@ -177,12 +180,15 @@ def _freeze_direct_product_component(
         or not specification_json
         or not specification_summary
         or not purchase_unit
+        or order_basis is None
+        or purchase_basis is None
+        or quantity_ratio is None
         or source_version < 1
         or not isinstance(candidate_rows, list)
         or not candidate_rows
     ):
         raise OrderExternalPackagingSnapshotError(
-            "纯外购产品资料不完整，请先补齐类别、规格、单位和供应商候选"
+            "纯外购产品资料不完整，请先补齐类别、规格、单位、订单采购比例和供应商候选"
         )
     defaults = [row for row in candidate_rows if bool(row.get("is_default"))]
     if len(defaults) != 1:
@@ -197,11 +203,14 @@ def _freeze_direct_product_component(
         source_component_set_version=source_version,
         display_order=1,
         purpose=order_item.snapshot_product_name,
-        quantity_per_finished_unit=Decimal("1"),
+        quantity_per_finished_unit=Decimal(quantity_ratio),
         waste_rate=Decimal("0"),
         consumption_unit=purchase_unit,
         units_per_purchase_unit=None,
-        conversion_basis=None,
+        conversion_basis=(
+            f"客户订单 {Decimal(order_basis):f} → "
+            f"供应商采购 {Decimal(purchase_basis):f}"
+        ),
         is_required=True,
         remarks="P1-40B 纯外购产品下单快照",
         category_code=category,

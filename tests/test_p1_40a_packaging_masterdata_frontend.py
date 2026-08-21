@@ -104,6 +104,15 @@ def test_supplier_groups_and_external_product_editor_are_explicit() -> None:
     assert "最低价" not in candidate_table
 
 
+def test_external_purchase_ratio_is_selected_on_customer_order_not_product_master() -> None:
+    assert "本客户订单的外购数量换算" in INDEX
+    assert "external_packaging_order_quantity_basis" in INDEX
+    assert "external_packaging_purchase_quantity_basis" in INDEX
+    assert "本行客户数量和客户单价不变" in INDEX
+    assert "采购单价读取供应商有效报价" in INDEX
+    assert "每个客户销售单位需采购数量" not in INDEX
+
+
 def test_external_candidate_selection_and_payload_clear_paper_fields(
     tmp_path: Path,
 ) -> None:

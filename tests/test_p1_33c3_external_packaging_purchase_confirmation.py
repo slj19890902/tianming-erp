@@ -356,6 +356,161 @@ def test_one_confirmation_groups_three_components_into_two_supplier_orders(
         }
 
 
+def test_manual_cancel_preserves_history_and_allows_reconfirmation(
+    purchase_app: FastAPI,
+) -> None:
+    order_id = purchase_app.state.fixture["order_id"]
+    with TestClient(purchase_app) as client:
+        _login(client, "purchase-admin")
+        preview = client.get(
+            f"/api/orders/{order_id}/external-packaging-purchase"
+        ).json()
+        first = client.post(
+            f"/api/orders/{order_id}/external-packaging-purchase/confirm",
+            json=_confirmation_payload(preview, "manual-cancel-first"),
+        )
+        assert first.status_code == 200, first.text
+        first_confirmation = first.json()["confirmation"]
+
+        cancelled = client.post(
+            f"/api/orders/{order_id}/external-packaging-purchase/cancel",
+            json={
+                "expected_batch_id": first_confirmation["batch_id"],
+                "confirmed": True,
+                "reason": "客户套数与供应商片数换算需要改为 1:2",
+            },
+        )
+        assert cancelled.status_code == 200, cancelled.text
+        after_cancel = cancelled.json()["preview"]
+        assert after_cancel["status"] == "pending"
+        assert len(after_cancel["history"]) == 1
+        assert all(
+            row["lifecycle_status"] == "cancelled"
+            for row in after_cancel["history"][0]["purchase_orders"]
+        )
+        assert client.get(
+            "/api/external-packaging-purchases/pending-confirmations"
+        ).json()["total"] == 1
+
+        second = client.post(
+            f"/api/orders/{order_id}/external-packaging-purchase/confirm",
+            json=_confirmation_payload(after_cancel, "manual-cancel-second"),
+        )
+        assert second.status_code == 200, second.text
+        assert second.json()["confirmation"]["batch_id"] != first_confirmation["batch_id"]
+        reread = client.get(
+            f"/api/orders/{order_id}/external-packaging-purchase"
+        ).json()
+        assert reread["status"] == "confirmed"
+        assert len(reread["history"]) == 2
+
+    with purchase_app.state.session_factory() as db:
+        assert db.execute(
+            text("SELECT COUNT(*) FROM external_packaging_purchase_batches")
+        ).scalar_one() == 2
+        assert db.execute(
+            text("SELECT COUNT(*) FROM external_packaging_purchase_cancellations")
+        ).scalar_one() == 2
+
+
+def test_honeycomb_print_uses_frozen_structured_specification(
+    purchase_app: FastAPI,
+) -> None:
+    from app.models.order_external_packaging import SalesOrderItemExternalComponent
+
+    order_id = purchase_app.state.fixture["order_id"]
+    with purchase_app.state.session_factory() as db:
+        component = db.scalar(
+            select(SalesOrderItemExternalComponent).where(
+                SalesOrderItemExternalComponent.purpose == "缓冲内衬"
+            )
+        )
+        assert component is not None
+        component.category_code = "honeycomb_board"
+        component.specification_json = json.dumps(
+            {
+                "material": "170*110*170",
+                "aperture_mm": 15,
+                "length_mm": 800,
+                "width_mm": 180,
+                "thickness_mm": 60,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        component.specification_summary = "材质170*110*170，孔径15mm，800×180×60mm"
+        db.commit()
+
+    with TestClient(purchase_app) as client:
+        _login(client, "purchase-admin")
+        preview = client.get(
+            f"/api/orders/{order_id}/external-packaging-purchase"
+        ).json()
+        confirmation = client.post(
+            f"/api/orders/{order_id}/external-packaging-purchase/confirm",
+            json=_confirmation_payload(preview, "honeycomb-print"),
+        )
+        assert confirmation.status_code == 200, confirmation.text
+        purchase_ids = [
+            row["id"] for row in confirmation.json()["confirmation"]["purchase_orders"]
+        ]
+        printed_items = []
+        for purchase_id in purchase_ids:
+            response = client.get(
+                f"/api/external-packaging-purchases/{purchase_id}/print"
+            )
+            assert response.status_code == 200, response.text
+            printed_items.extend(response.json()["items"])
+        honeycomb = next(row for row in printed_items if row["material"])
+        assert honeycomb["material"] == "170*110*170"
+        assert honeycomb["aperture_mm"] == "15"
+        assert honeycomb["dimensions_mm"] == "800×180×60"
+
+
+def test_manual_cancel_is_blocked_after_any_receipt(
+    purchase_app: FastAPI,
+) -> None:
+    order_id = purchase_app.state.fixture["order_id"]
+    with TestClient(purchase_app) as client:
+        _login(client, "purchase-admin")
+        preview = client.get(
+            f"/api/orders/{order_id}/external-packaging-purchase"
+        ).json()
+        confirmed = client.post(
+            f"/api/orders/{order_id}/external-packaging-purchase/confirm",
+            json=_confirmation_payload(preview, "manual-cancel-received"),
+        ).json()["confirmation"]
+        purchase = confirmed["purchase_orders"][0]
+        received = client.post(
+            f"/api/external-packaging-purchases/{purchase['id']}/receipts",
+            json={
+                "idempotency_key": "manual-cancel-received-fact",
+                "lines": [
+                    {
+                        "purchase_item_id": purchase["items"][0]["id"],
+                        "received_quantity": "1",
+                    }
+                ],
+            },
+        )
+        assert received.status_code == 200, received.text
+        cancelled = client.post(
+            f"/api/orders/{order_id}/external-packaging-purchase/cancel",
+            json={
+                "expected_batch_id": confirmed["batch_id"],
+                "confirmed": True,
+                "reason": "不得撤销已有实收的采购",
+            },
+        )
+        assert cancelled.status_code == 409
+        assert "实收" in cancelled.text
+
+    with purchase_app.state.session_factory() as db:
+        assert db.execute(
+            text("SELECT COUNT(*) FROM external_packaging_purchase_cancellations")
+        ).scalar_one() == 0
+
+
 def test_retry_is_idempotent_and_conflicting_retry_is_rejected(
     purchase_app: FastAPI,
 ) -> None:
@@ -554,6 +709,9 @@ def test_external_purchase_print_is_cost_protected_read_only_and_redacted(
         assert all(
             set(row) == {
                 "specification_summary",
+                "material",
+                "aperture_mm",
+                "dimensions_mm",
                 "purchase_quantity",
                 "purchase_unit",
             }

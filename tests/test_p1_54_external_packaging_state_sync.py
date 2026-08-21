@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -55,6 +57,9 @@ def _make_pure_external_snapshot(item: OrderItem) -> None:
     item.external_packaging_purchase_unit_snapshot = "根"
     item.external_packaging_candidate_snapshot_json = "[]"
     item.external_packaging_product_version_snapshot = 1
+    item.external_packaging_order_quantity_basis_snapshot = Decimal("1")
+    item.external_packaging_purchase_quantity_basis_snapshot = Decimal("1")
+    item.external_packaging_quantity_per_finished_unit_snapshot = Decimal("1")
 
 
 def test_external_purchase_moves_order_to_pending_incoming(

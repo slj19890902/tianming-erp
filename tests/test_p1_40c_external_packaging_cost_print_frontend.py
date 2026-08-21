@@ -53,8 +53,19 @@ def test_product_and_order_ui_separate_purchase_cost_from_customer_sale_price() 
     assert "<label>图纸</label>" in INDEX
 
 
-def test_external_purchase_print_only_shows_specification_and_quantity() -> None:
-    for label in ("规格", "数量", "specification_summary", "purchase_quantity", "purchase_unit"):
+def test_external_purchase_print_shows_supplier_specification_and_quantity() -> None:
+    for label in (
+        "材质",
+        "孔径(mm)",
+        "规格(mm)",
+        "数量",
+        "material",
+        "aperture_mm",
+        "dimensions_mm",
+        "specification_summary",
+        "purchase_quantity",
+        "purchase_unit",
+    ):
         assert label in PRINT_PAGE
     for forbidden in (
         "客户",

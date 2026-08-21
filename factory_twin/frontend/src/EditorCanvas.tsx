@@ -943,7 +943,7 @@ export function EditorCanvas({
             showInternalCodes
               ? `${pallet.pallet_code} · ${palletState.label} · ${pallet.zone_code}`
               : `${pallet.name || "位置名称待完善"} · ${palletState.label}`,
-            violated ? "#dc2626" : palletState.color,
+            violated ? "#dc2626" : pallet.candidate_status_color || palletState.color,
             2400,
             340,
             warehouseTheme

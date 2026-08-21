@@ -250,7 +250,7 @@ export function buildPalletVisual(pallet: Pallet, viewMode: ViewMode, violated: 
   const wood = violated ? "#dc2626" : pallet.color || "#b7793f";
   const darkWood = violated ? "#991b1b" : "#75431f";
   const state = palletStatusInfo(pallet.visual_status);
-  const statusColor = violated ? "#dc2626" : state.color;
+  const statusColor = violated ? "#dc2626" : pallet.candidate_status_color || state.color;
   const deckHeight = viewMode === "2d" ? 32 : Math.max(height * 0.22, 28);
   const topY = viewMode === "2d" ? 46 : height - deckHeight / 2;
   const slatCount = 7;
@@ -305,7 +305,7 @@ export function palletMarkerSpec(pallet: Pallet, viewMode: ViewMode, violated: b
   const width = Math.max(pallet.width_mm, minimumFootprint);
   const depth = Math.max(pallet.depth_mm, minimumFootprint);
   const state = palletStatusInfo(pallet.visual_status);
-  const statusColor = violated ? "#dc2626" : state.color;
+  const statusColor = violated ? "#dc2626" : pallet.candidate_status_color || state.color;
   const baseColor = violated ? "#991b1b" : pallet.color || "#9a6a3a";
   const baseHeight = viewMode === "2d" ? 32 : 80;
   const loadHeight = viewMode === "2d" ? 26 : pallet.visual_status === "empty" ? 70 : 420;

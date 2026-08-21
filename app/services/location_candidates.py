@@ -13,6 +13,8 @@ from app.models.warehouse_inventory import (
     WarehouseArea,
     WarehouseAreaStoragePolicy,
     WarehouseFloor,
+    WarehouseGroundOccupancy,
+    WarehouseGroundOccupancySlot,
     WarehouseLocation,
 )
 from app.services.warehouse_location_address import (
@@ -100,6 +102,22 @@ def _current_pallet_exists(location_id_expression):
     )
 
 
+def _active_ground_occupancy_exists(location_id_expression):
+    return exists(
+        select(WarehouseGroundOccupancySlot.id)
+        .join(
+            WarehouseGroundOccupancy,
+            WarehouseGroundOccupancy.id
+            == WarehouseGroundOccupancySlot.occupancy_id,
+        )
+        .where(
+            WarehouseGroundOccupancySlot.location_id == location_id_expression,
+            WarehouseGroundOccupancySlot.status == "active",
+            WarehouseGroundOccupancy.status == "active",
+        )
+    )
+
+
 def claim_active_placed_location(
     db: Session,
     location_id: int,
@@ -130,6 +148,17 @@ def claim_active_placed_location(
                     Floor3LocationLayout.location_id == WarehouseLocation.id,
                     Floor3LocationLayout.version == expected_layout_version,
                 )
+            )
+        )
+        # A two-slot large occupancy has no pallet or InventoryLot on its
+        # secondary location. It must still block every ordinary writer. The
+        # primary location may accept an explicitly validated same-product
+        # co-location because its current pallet proves the authoritative
+        # container identity.
+        conditions.append(
+            or_(
+                ~_active_ground_occupancy_exists(WarehouseLocation.id),
+                _current_pallet_exists(WarehouseLocation.id),
             )
         )
     else:
@@ -290,7 +319,21 @@ def operational_location_issue(
             )
             .limit(1)
         )
-        if occupied_pallet is not None or location_has_live_inventory(db, location.id):
+        occupied_ground_slot = db.scalar(
+            select(WarehouseGroundOccupancySlot.id)
+            .join(WarehouseGroundOccupancy)
+            .where(
+                WarehouseGroundOccupancySlot.location_id == location.id,
+                WarehouseGroundOccupancySlot.status == "active",
+                WarehouseGroundOccupancy.status == "active",
+            )
+            .limit(1)
+        )
+        if (
+            occupied_pallet is not None
+            or occupied_ground_slot is not None
+            or location_has_live_inventory(db, location.id)
+        ):
             return "该库位已有活动库存或当前栈板"
     if (
         require_published
@@ -416,7 +459,11 @@ def list_operational_locations(
         )
     )
     live_inventory_exists = _live_inventory_exists(WarehouseLocation.id)
-    occupied_condition = or_(current_pallet_exists, live_inventory_exists)
+    occupied_condition = or_(
+        current_pallet_exists,
+        live_inventory_exists,
+        _active_ground_occupancy_exists(WarehouseLocation.id),
+    )
     query = (
         select(
             WarehouseLocation,

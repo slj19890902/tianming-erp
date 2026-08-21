@@ -247,6 +247,7 @@ def _render_markdown(report: dict) -> str:
         f"- 未完成明细：`{report['scope']['unfinished_order_item_count']}`",
         f"- 异常/待复核/信息合计：`{summary['finding_count']}`",
         f"- 聚焦对象命中：`{summary['focus_finding_count']}`",
+        f"- 聚焦对象工位命中：`{summary.get('focus_route_count', 0)}`",
         f"- 扫描覆盖完整：`{summary['scan_complete']}`",
         f"- 扫描耗时：`{source['elapsed_ms']}` ms",
         "",
@@ -255,7 +256,7 @@ def _render_markdown(report: dict) -> str:
         "- 本次状态为部分覆盖；`scan_complete=false` 时禁止宣称全链异常已清零。",
         "- 当前正式版尚无 P1-80 采购用途分配事实，因此本报告不会把缺少用途字段误报成数量不平。",
         "- 当前正式版尚无 P1-81 自动成品事实，因此本报告不评估收料后自动成品闭环。",
-        "- 当前正式版尚无 P1-84 独立工位成员事实，因此本报告不评估工位路由正确性。",
+        "- P1-84 工位路由按明确任务、产品和组件事实实时评估；不会从名称、编码、备注、图纸或模具推断模切。",
         "- `RECEIVED_AWAITING_PRODUCTION_CONFIRMATION` 表示现行人工生产确认流程中的待办，不是库存缺失。",
         "- `ORDER_STATUS_SNAPSHOT_DIVERGENCE` 只提示保存状态与事实投影不同，禁止自动改正式状态。",
         "",
@@ -269,6 +270,41 @@ def _render_markdown(report: dict) -> str:
             f"| `{capability}` | `{detail['status']}` | "
             f"{detail.get('reason') or '-'} |"
         )
+    station_coverage = report["coverage"].get("workstation_membership") or {}
+    lines.extend(
+        [
+            "",
+            "## 工位路由统计",
+            "",
+            f"- 规则版本：`{station_coverage.get('rule_version') or '-'}`",
+            f"- 待生产任务：`{station_coverage.get('eligible_task_count', 0)}`",
+            f"- 印刷/开槽：`{(station_coverage.get('station_task_counts') or {}).get('printing', 0)}`",
+            f"- 模切：`{(station_coverage.get('station_task_counts') or {}).get('die_cut', 0)}`",
+            f"- 同时进入两个工位：`{station_coverage.get('dual_route_task_count', 0)}`",
+            f"- 无工位任务：`{station_coverage.get('unrouted_task_count', 0)}`",
+        ]
+    )
+    focused_routes = [
+        row for row in report.get("workstation_routes") or [] if row.get("focus_match")
+    ]
+    if focused_routes:
+        lines.extend(
+            [
+                "",
+                "### 聚焦对象工位证据",
+                "",
+                "| 任务匿名标识 | 明细匿名标识 | 来源 | 明确模切 | 工位 | 命中字段 |",
+                "|---|---|---|---|---|---|",
+            ]
+        )
+        for route in focused_routes:
+            focus = route.get("focus_match") or {}
+            lines.append(
+                f"| `{route['task_ref']}` | `{route['order_item_ref']}` | "
+                f"`{route['source_kind']}` | `{route['die_cut_required']}` | "
+                f"{' / '.join(route['stations']) or '-'} | "
+                f"{' / '.join(focus.get('matched_fields') or []) or '-'} |"
+            )
     lines.extend(
         [
         "",
@@ -494,6 +530,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "items": report["scope"]["unfinished_order_item_count"],
                 "findings": report["summary"]["finding_count"],
                 "focus_findings": report["summary"]["focus_finding_count"],
+                "focus_routes": report["summary"].get("focus_route_count", 0),
                 "database_unchanged": True,
                 "json_output": str(json_path),
                 "csv_output": str(csv_path),

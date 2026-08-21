@@ -347,6 +347,7 @@ def _append_order_audit(
     )
 _PRODUCT_DRAWING_SAVE_OPTIONS = frozenset({"save_to_product", "overwrite_product"})
 MONEY_QUANTUM = Decimal("0.00")
+EXTERNAL_QUANTITY_QUANTUM = Decimal("0.000001")
 ORDER_STATUSES = {
     "pending_confirmation",
     "pending_production",
@@ -520,6 +521,12 @@ class OrderItemCreate(BaseModel):
     product_id: int | None = None
     quantity: int | float
     unit_price: Decimal
+    external_packaging_order_quantity_basis: Decimal | None = Field(
+        default=None, gt=0, max_digits=18, decimal_places=6
+    )
+    external_packaging_purchase_quantity_basis: Decimal | None = Field(
+        default=None, gt=0, max_digits=18, decimal_places=6
+    )
     product_code: str | None = None
     product_name: str | None = None
     material: str | None = None
@@ -730,6 +737,41 @@ def _validated_order_quantity(value: int | float, index: int) -> int:
             detail="当前 PDF 识别存在非整数数量，请人工确认并修改后再保存。",
         )
     return int(decimal_value)
+
+
+def _validated_external_purchase_ratio(
+    item: OrderItemCreate,
+    *,
+    product: Product,
+    index: int,
+) -> tuple[Decimal | None, Decimal | None, Decimal | None]:
+    order_basis = item.external_packaging_order_quantity_basis
+    purchase_basis = item.external_packaging_purchase_quantity_basis
+    if product.supply_mode != "external_purchase":
+        if order_basis is not None or purchase_basis is not None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"第{index}条不是外购包材，不能填写采购数量换算",
+            )
+        return None, None, None
+    if order_basis is None or purchase_basis is None:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"第{index}条外购包材必须填写本客户订单的数量换算："
+                "订单数量基数和供应商采购数量基数都不能为空"
+            ),
+        )
+    ratio = (Decimal(purchase_basis) / Decimal(order_basis)).quantize(
+        EXTERNAL_QUANTITY_QUANTUM,
+        rounding=ROUND_HALF_UP,
+    )
+    if ratio <= 0:
+        raise HTTPException(
+            status_code=422,
+            detail=f"第{index}条外购包材数量换算精度过小，无法形成有效采购数量",
+        )
+    return Decimal(order_basis), Decimal(purchase_basis), ratio
 
 
 PDF_PREVIEW_SAFETY_TOKEN_TTL_MINUTES = 5
@@ -2313,6 +2355,9 @@ def _order_response(
                 "external_packaging_category_code_snapshot": item.external_packaging_category_code_snapshot,
                 "external_packaging_specification_summary_snapshot": item.external_packaging_specification_summary_snapshot,
                 "external_packaging_purchase_unit_snapshot": item.external_packaging_purchase_unit_snapshot,
+                "external_packaging_order_quantity_basis_snapshot": item.external_packaging_order_quantity_basis_snapshot,
+                "external_packaging_purchase_quantity_basis_snapshot": item.external_packaging_purchase_quantity_basis_snapshot,
+                "external_packaging_quantity_per_finished_unit_snapshot": item.external_packaging_quantity_per_finished_unit_snapshot,
                 "display_material": _display_material(item.snapshot_material),
                 # v0.19.2-B: 常用箱层数/楞型/供应商/克重/图纸
                 "layer_count": item.layer_count,
@@ -6360,6 +6405,10 @@ def _create_order_impl(
             int,
             tuple[int | None, str | None, int | None, Material | None],
         ] = {}
+        validated_external_purchase_ratios: dict[
+            int,
+            tuple[Decimal | None, Decimal | None, Decimal | None],
+        ] = {}
         combination_provenances: dict[int, dict[str, object]] = {}
         _set_order_save_stage(observability, "validate_items")
         for index, item_payload in enumerate(payload.items, start=1):
@@ -6482,6 +6531,13 @@ def _create_order_impl(
                     raise HTTPException(
                         status_code=400, detail=f"第{index}条明细{error}"
                     ) from error
+            validated_external_purchase_ratios[index] = (
+                _validated_external_purchase_ratio(
+                    item_payload,
+                    product=product,
+                    index=index,
+                )
+            )
             if bool(getattr(product, "is_virtual_composite_parent", False)):
                 validated_layer_flutes[index] = (None, None, None, None)
                 resolved_products[index] = product
@@ -6635,6 +6691,8 @@ def _create_order_impl(
                         )
                         or ""
                     ),
+                    str(validated_external_purchase_ratios[index][0] or ""),
+                    str(validated_external_purchase_ratios[index][1] or ""),
                 )
                 for index, item in enumerate(payload.items, start=1)
             )
@@ -6645,6 +6703,8 @@ def _create_order_impl(
                         item.quantity,
                         str(Decimal(str(item.unit_price)).quantize(Decimal("0.0001"))),
                         (item.snapshot_spec or "").strip(),
+                        str(item.external_packaging_order_quantity_basis_snapshot or ""),
+                        str(item.external_packaging_purchase_quantity_basis_snapshot or ""),
                     )
                     for item in existing_order.items
                 )
@@ -6698,6 +6758,11 @@ def _create_order_impl(
                 selected_material_id,
                 selected_material,
             ) = validated_layer_flutes[index]
+            (
+                external_order_basis,
+                external_purchase_basis,
+                external_purchase_ratio,
+            ) = validated_external_purchase_ratios[index]
 
             subtotal = (
                 Decimal(quantity) * unit_price
@@ -6823,6 +6888,21 @@ def _create_order_impl(
                 ),
                 external_packaging_product_version_snapshot=(
                     int(product.version)
+                    if product.supply_mode == "external_purchase"
+                    else None
+                ),
+                external_packaging_order_quantity_basis_snapshot=(
+                    external_order_basis
+                    if product.supply_mode == "external_purchase"
+                    else None
+                ),
+                external_packaging_purchase_quantity_basis_snapshot=(
+                    external_purchase_basis
+                    if product.supply_mode == "external_purchase"
+                    else None
+                ),
+                external_packaging_quantity_per_finished_unit_snapshot=(
+                    external_purchase_ratio
                     if product.supply_mode == "external_purchase"
                     else None
                 ),

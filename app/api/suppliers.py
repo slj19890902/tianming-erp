@@ -37,6 +37,7 @@ EXTERNAL_PACKAGING_CATEGORIES = {
     "printed_folding_carton",
     "epe_cushion",
     "hollow_board",
+    "honeycomb_board",
     "other_packaging",
 }
 PURCHASE_UNITS = {"根", "米", "件", "张", "令", "kg", "吨", "只", "个", "套", "片", "卷", "箱"}
@@ -669,6 +670,25 @@ def _clean_external_product_payload(
         optional = f"，{basis_weight:g}g/㎡" if basis_weight is not None else ""
         optional += f"，{density:g}kg/m³" if density is not None else ""
         summary = f"{color} {length:g}×{width:g}×{thickness:g}mm{optional}"
+    elif category == "honeycomb_board":
+        material = str(specification.get("material") or "").strip()
+        if not material:
+            raise HTTPException(status_code=422, detail="请填写蜂窝板材质")
+        aperture = _positive_number(specification, "aperture_mm", "蜂窝板孔径")
+        length = _positive_number(specification, "length_mm", "蜂窝板长度")
+        width = _positive_number(specification, "width_mm", "蜂窝板宽度")
+        thickness = _positive_number(specification, "thickness_mm", "蜂窝板厚度")
+        specification = {
+            "material": material,
+            "aperture_mm": aperture,
+            "length_mm": length,
+            "width_mm": width,
+            "thickness_mm": thickness,
+        }
+        summary = (
+            f"材质{material}，孔径{aperture:g}mm，"
+            f"{length:g}×{width:g}×{thickness:g}mm"
+        )
     else:
         summary = str(specification.get("summary") or "").strip()
         if not summary:

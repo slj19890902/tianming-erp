@@ -154,6 +154,32 @@ class OrderItem(Base):
             name="ck_sales_order_items_external_profile_snapshot",
         ),
         CheckConstraint(
+            "external_packaging_quantity_per_finished_unit_snapshot IS NULL OR "
+            "external_packaging_quantity_per_finished_unit_snapshot > 0",
+            name="ck_sales_order_items_external_packaging_quantity_snapshot",
+        ),
+        CheckConstraint(
+            "((supply_mode_snapshot = 'external_purchase' "
+            "AND external_packaging_order_quantity_basis_snapshot IS NOT NULL "
+            "AND external_packaging_purchase_quantity_basis_snapshot IS NOT NULL "
+            "AND external_packaging_quantity_per_finished_unit_snapshot IS NOT NULL) OR "
+            "(supply_mode_snapshot <> 'external_purchase' "
+            "AND external_packaging_order_quantity_basis_snapshot IS NULL "
+            "AND external_packaging_purchase_quantity_basis_snapshot IS NULL "
+            "AND external_packaging_quantity_per_finished_unit_snapshot IS NULL))",
+            name="ck_sales_order_items_external_purchase_ratio_snapshot",
+        ),
+        CheckConstraint(
+            "external_packaging_order_quantity_basis_snapshot IS NULL OR "
+            "external_packaging_order_quantity_basis_snapshot > 0",
+            name="ck_sales_order_items_external_order_basis_snapshot",
+        ),
+        CheckConstraint(
+            "external_packaging_purchase_quantity_basis_snapshot IS NULL OR "
+            "external_packaging_purchase_quantity_basis_snapshot > 0",
+            name="ck_sales_order_items_external_purchase_basis_snapshot",
+        ),
+        CheckConstraint(
             "combination_mode_snapshot IS NULL OR "
             "combination_mode_snapshot IN ('parent_priced_set', 'component_priced')",
             name="ck_sales_order_items_combination_mode_snapshot",
@@ -283,6 +309,15 @@ class OrderItem(Base):
     )
     external_packaging_product_version_snapshot: Mapped[int | None] = mapped_column(
         Integer, nullable=True
+    )
+    external_packaging_order_quantity_basis_snapshot: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 6), nullable=True
+    )
+    external_packaging_purchase_quantity_basis_snapshot: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 6), nullable=True
+    )
+    external_packaging_quantity_per_finished_unit_snapshot: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 6), nullable=True
     )
     inventory_deducted_qty: Mapped[int] = mapped_column(
         Integer,

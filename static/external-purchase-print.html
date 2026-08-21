@@ -12,7 +12,7 @@
     .head{display:grid;grid-template-columns:1fr 1fr;gap:6px 24px;margin:10px 0}.head-card{border:1px solid #111;padding:7px 9px;line-height:1.65}.head-card strong{display:inline-block;min-width:68px}
     table{width:100%;border-collapse:collapse;table-layout:fixed}thead{display:table-header-group}th,td{border:1px solid #111;padding:8px;text-align:center;vertical-align:middle;overflow-wrap:anywhere}th{background:#f3f4f6}.left{text-align:left}.footer{display:flex;justify-content:flex-end;margin-top:12px;font-size:12px}
     tr{break-inside:avoid;page-break-inside:avoid}
-    @media print{body{background:#fff}.actions,.load-state{display:none}.sheet{width:auto;max-width:none;margin:0;padding:0;box-shadow:none}@page{size:A4 portrait;margin:12mm}}
+    @media print{body{background:#fff}.actions,.load-state{display:none}.sheet{width:auto;max-width:none;margin:0;padding:0;box-shadow:none}@page{size:A4 portrait;margin:10mm}}
   </style>
 </head>
 <body>
@@ -25,8 +25,8 @@
       <div class="head-card"><div><strong>采购单号</strong><span id="purchaseNumber">-</span></div><div><strong>确认日期</strong><span id="confirmedDate">-</span></div></div>
     </div>
     <table>
-      <colgroup><col style="width:10%"><col style="width:65%"><col style="width:25%"></colgroup>
-      <thead><tr><th>序号</th><th>规格</th><th>数量</th></tr></thead>
+      <colgroup><col style="width:8%"><col style="width:24%"><col style="width:14%"><col style="width:32%"><col style="width:22%"></colgroup>
+      <thead><tr><th>NO.</th><th>材质</th><th>孔径(mm)</th><th>规格(mm)</th><th>数量</th></tr></thead>
       <tbody id="rows"></tbody>
     </table>
     <div class="footer"><span>制单：ERP 人工确认采购记录</span></div>
@@ -72,7 +72,7 @@
       document.getElementById("purchaseNumber").textContent=data.purchase_number||"-";
       document.getElementById("confirmedDate").textContent=confirmedDate;
       const items=Array.isArray(data.items)?data.items:[];
-      rowsNode.innerHTML=items.length?items.map((item,index)=>`<tr><td>${index+1}</td><td class="left">${escapeHtml(item.specification_summary||"-")}</td><td>${escapeHtml(item.purchase_quantity)} ${escapeHtml(item.purchase_unit)}</td></tr>`).join(""):'<tr><td colspan="3">该采购单暂无明细</td></tr>';
+      rowsNode.innerHTML=items.length?items.map((item,index)=>`<tr><td>${index+1}</td><td>${escapeHtml(item.material||"-")}</td><td>${escapeHtml(item.aperture_mm||"-")}</td><td class="left">${escapeHtml(item.dimensions_mm||item.specification_summary||"-")}</td><td>${escapeHtml(item.purchase_quantity)} ${escapeHtml(item.purchase_unit)}</td></tr>`).join(""):'<tr><td colspan="5">该采购单暂无明细</td></tr>';
       loadState.classList.add("hidden");loadState.classList.remove("error");retryButton.classList.add("hidden");printButton.disabled=false;
     }
     async function loadPurchase(){

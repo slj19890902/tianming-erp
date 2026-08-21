@@ -33,9 +33,6 @@ class ExternalPackagingPurchaseBatch(Base):
     __tablename__ = "external_packaging_purchase_batches"
     __table_args__ = (
         UniqueConstraint(
-            "sales_order_id", name="uq_external_packaging_purchase_batch_order"
-        ),
-        UniqueConstraint(
             "idempotency_key", name="uq_external_packaging_purchase_batch_key"
         ),
     )
@@ -129,8 +126,9 @@ class ExternalPackagingPurchaseItem(Base):
     __tablename__ = "external_packaging_purchase_items"
     __table_args__ = (
         UniqueConstraint(
+            "purchase_order_id",
             "order_component_id",
-            name="uq_external_packaging_purchase_component",
+            name="uq_external_packaging_purchase_order_component",
         ),
         CheckConstraint(
             "purchase_quantity > 0", name="ck_external_packaging_purchase_item_qty"
@@ -186,6 +184,9 @@ class ExternalPackagingPurchaseItem(Base):
     category_code_snapshot: Mapped[str] = mapped_column(String(50), nullable=False)
     specification_summary_snapshot: Mapped[str] = mapped_column(
         String(500), nullable=False
+    )
+    specification_json_snapshot: Mapped[str] = mapped_column(
+        Text, nullable=False, default="{}"
     )
     external_product_id_snapshot: Mapped[int] = mapped_column(Integer, nullable=False)
     external_product_version_snapshot: Mapped[int] = mapped_column(
@@ -254,7 +255,7 @@ class ExternalPackagingPurchaseCancellation(Base):
             name="uq_external_packaging_purchase_cancellation_order",
         ),
         CheckConstraint(
-            "source IN ('order_workflow_rollback','order_status_cancelled','order_status_dead','authorized_data_repair')",
+            "source IN ('order_workflow_rollback','order_status_cancelled','order_status_dead','authorized_data_repair','manual_purchase_cancel')",
             name="ck_external_packaging_purchase_cancellation_source",
         ),
     )

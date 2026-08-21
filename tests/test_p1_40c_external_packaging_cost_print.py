@@ -171,6 +171,9 @@ def test_supplier_purchase_print_does_not_expose_internal_source_or_price(
         assert all(
             set(row) == {
                 "specification_summary",
+                "material",
+                "aperture_mm",
+                "dimensions_mm",
                 "purchase_quantity",
                 "purchase_unit",
             }

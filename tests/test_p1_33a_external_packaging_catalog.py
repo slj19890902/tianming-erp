@@ -171,6 +171,66 @@ def test_category_specific_validation_and_version_gate(packaging_app: FastAPI) -
         assert stale.status_code == 409
 
 
+def test_honeycomb_board_keeps_material_aperture_and_dimensions(
+    packaging_app: FastAPI,
+) -> None:
+    from app.models.supplier import Supplier, SupplierSupplyCategory
+
+    with packaging_app.state.session_factory() as db:
+        supplier = db.scalar(select(Supplier).order_by(Supplier.id))
+        assert supplier is not None
+        db.add(
+            SupplierSupplyCategory(
+                supplier_id=supplier.id,
+                category_code="honeycomb_board",
+                is_active=True,
+            )
+        )
+        db.commit()
+        supplier_id = supplier.id
+
+    payload = {
+        "category_code": "honeycomb_board",
+        "supplier_product_code": "FWB-800-180-60",
+        "product_name": "蜂窝板",
+        "purchase_unit": "片",
+        "specification": {
+            "material": "170*110*170",
+            "aperture_mm": 15,
+            "length_mm": 800,
+            "width_mm": 180,
+            "thickness_mm": 60,
+        },
+    }
+    with TestClient(packaging_app) as client:
+        _login(client)
+        created = client.post(
+            f"/api/master/suppliers/{supplier_id}/packaging-products",
+            json=payload,
+        )
+        assert created.status_code == 201, created.text
+        data = created.json()
+        assert data["category_code"] == "honeycomb_board"
+        assert data["specification"] == payload["specification"]
+        assert data["specification_summary"] == (
+            "材质170*110*170，孔径15mm，800×180×60mm"
+        )
+
+        invalid = client.post(
+            f"/api/master/suppliers/{supplier_id}/packaging-products",
+            json={
+                **payload,
+                "supplier_product_code": "FWB-NO-APERTURE",
+                "specification": {
+                    **payload["specification"],
+                    "aperture_mm": None,
+                },
+            },
+        )
+        assert invalid.status_code == 422
+        assert "孔径" in invalid.text
+
+
 def test_four_categories_keep_only_meaningful_structured_specs(
     packaging_app: FastAPI,
 ) -> None:

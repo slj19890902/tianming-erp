@@ -457,6 +457,7 @@ def test_historical_composite_mixed_bom_draft_cannot_dispatch_before_external_re
         task = ProductionTask(
             order_item_id=item.id,
             sales_order_item_bom_component_id=snapshot.id,
+            task_role="component_internal",
             status="completed",
             planned_quantity=item.quantity,
             ordered_quantity_snapshot=item.quantity,

@@ -72,6 +72,10 @@ from app.services.history_orders import (
     is_history_order_number,
 )
 from app.services.location_candidates import list_operational_locations
+from app.services.warehouse_location_address import (
+    employee_location_name,
+    location_address_payload,
+)
 from app.services.incoming_receipts import (
     IncomingReceiptError,
     accept_short,
@@ -3616,7 +3620,8 @@ def surplus_inventory_locations(
             {
                 "id": row.id,
                 "location_code": row.location_code,
-                "location_name": row.location_name,
+                "location_name": employee_location_name(row),
+                **location_address_payload(row),
                 "warehouse_type": row.warehouse_type,
                 "layout_version": (
                     int(row.floor3_layout.version)

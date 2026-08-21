@@ -81,6 +81,7 @@ from app.services.warehouse_inventory import (
     reserve_completed_finished_inventory,
 )
 from app.services.warehouse_inventory import _balances, _movement
+from app.services.warehouse_location_address import employee_location_name
 
 
 Disposition = Literal["direct", "stock"]
@@ -1458,7 +1459,9 @@ def list_temporary_locations(db: Session) -> list[dict]:
                 "area_code": location.area_code,
                 "area_name": candidate.area.area_name if candidate.area else None,
                 "location_code": location.location_code,
-                "location_name": location.location_name,
+                "location_name": employee_location_name(location),
+                "current_address_name": employee_location_name(location),
+                "employee_location_name": employee_location_name(location),
                 "layout_version": (
                     int(location.floor3_layout.version)
                     if location.floor3_layout is not None
@@ -3617,7 +3620,9 @@ def _active_customer_board_preparation_sources(
                 "source_ref_type": lot.source_ref_type,
                 "source_ref_id": lot.source_ref_id,
                 "location_code": location.location_code,
-                "location_name": location.location_name,
+                "location_name": employee_location_name(location),
+                "current_address_name": employee_location_name(location),
+                "employee_location_name": employee_location_name(location),
                 "remaining_sheet_quantity": remaining_sheets,
                 "remaining_product_quantity": remaining_pieces,
                 "stock_yield_per_sheet": int(
@@ -4553,6 +4558,7 @@ def _production_completion_dicts(db: Session, rows: Sequence[tuple]) -> list[dic
                 "initial_disposition": completion.initial_disposition,
                 "warehouse_location_id": effective_location_id,
                 "warehouse_location_code": location.location_code if location else None,
+                "warehouse_location_name": employee_location_name(location),
                 "inventory_lot_id": effective_lot_id,
                 "system_pallet_id": (
                     effective_pallet.id if effective_pallet is not None else None

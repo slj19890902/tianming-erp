@@ -1104,10 +1104,14 @@
         return cell;
       }
 
+      function readableLocation(row) {
+        return row?.employee_location_name || row?.current_address_name || row?.location_name || "位置名称待完善";
+      }
+
       function locationCard(position) {
         const card = node("div", "location");
         const top = node("div", "location-top");
-        top.append(node("strong", "", `${position.location_code}｜${position.quantity_available}${position.unit}可用`));
+        top.append(node("strong", "", `${readableLocation(position)}｜${position.quantity_available}${position.unit}可用`));
         if (position.map_url) {
           const button = node("button", "map-btn", "地图定位");
           button.type = "button";
@@ -1116,8 +1120,6 @@
         }
         card.append(top);
         const facts = [
-          position.location_name && position.location_name !== position.location_code ? position.location_name : "",
-          position.area_code ? `${position.area_code} 区` : "",
           position.quantity_reserved ? `已预留 ${position.quantity_reserved}${position.unit}` : "",
         ].filter(Boolean).join("｜");
         if (facts) card.append(node("p", "muted", facts));
@@ -1208,7 +1210,7 @@
         areaSelect.replaceChildren();
         warehouseAreaOptions().forEach(area => {
           const suffix = area.map_status === "ready" ? "" : "（未建立实测地图）";
-          const option = node("option", "", `${area.area_name || area.area_code}${suffix}`);
+          const option = node("option", "", `${area.area_name || "区域名称待完善"}${suffix}`);
           option.value = area.area_code;
           option.selected = area.area_code === state.warehouseMapArea;
           areaSelect.append(option);
@@ -1283,7 +1285,7 @@
         const data = state.warehouseMapData || {};
         const stage = byId("warehouseMapStage");
         stage.replaceChildren();
-        byId("warehouseMapTitle").textContent = `${data.floor_name || data.floor_code || "仓库"}｜${data.area_name || data.area_code || "区域"}`;
+        byId("warehouseMapTitle").textContent = `${data.floor_name || "楼层名称待完善"}｜${data.area_name || "区域名称待完善"}`;
         byId("warehouseMapGuidance").textContent = data.guidance || "以地图高亮位置为准，到现场后核对相邻位置。";
         byId("warehouseMapGuidance").hidden = false;
         const bounds = data.bounds_mm || {};
@@ -1311,7 +1313,7 @@
           const button = node("button", `warehouse-map-location${(location.goods || []).length ? " has-goods" : ""}`);
           button.type = "button";
           button.dataset.locationId = String(location.location_id);
-          button.textContent = location.location_code;
+          button.textContent = readableLocation(location);
           button.style.left = `${location.geometry.left_pct}%`;
           button.style.top = `${location.geometry.top_pct}%`;
           button.style.width = `${location.geometry.width_pct}%`;
@@ -1334,7 +1336,7 @@
 
       function renderWarehouseLocationGoods(location, preferredLotId = null) {
         const container = byId("warehouseMapGoods");
-        container.replaceChildren(node("h2", "", `${location.location_code}｜现场货物`));
+        container.replaceChildren(node("h2", "", `${readableLocation(location)}｜现场货物`));
         const goods = Array.isArray(location.goods) ? location.goods : [];
         if (!goods.length) {
           container.append(node("p", "muted", "当前账号在这个位置没有可见货物。若货物实际在这里，请先从系统登记位置选中货物后再上报。"));
@@ -1345,7 +1347,7 @@
           button.append(
             node("strong", "", `${good.product_code || "无存货编码"}｜${good.product_name || "未填写名称"}`),
             node("span", "", `${good.customer_name || "未填写客户"}｜${good.specification || "未填写规格"}`),
-            node("span", "", `${good.quantity_total || 0}${good.unit}｜在 ${location.location_code}`),
+            node("span", "", `${good.quantity_total || 0}${good.unit}｜在 ${readableLocation(location)}`),
             node("span", "candidate-action", good.can_move ? "选择这批货物" : "半成品仅查看")
           );
           button.disabled = good.can_move !== true;
@@ -1366,7 +1368,7 @@
         byId("warehouseMapMoveForm").hidden = false;
         byId("warehouseMapMoveQuantity").value = String(good.quantity_total || 1);
         byId("warehouseMapMoveQuantity").max = String(good.quantity_total || 1);
-        byId("warehouseMapMoveSummary").textContent = `${good.product_code || "当前货物"}：来源 ${location.location_code}，请在地图点选现场目标位置。`;
+        byId("warehouseMapMoveSummary").textContent = `${good.product_code || "当前货物"}：来源 ${readableLocation(location)}，请在地图点选现场目标位置。`;
         byId("warehouseMapConfirmMove").disabled = true;
         byId("warehouseMapReportMismatch").disabled = true;
       }
@@ -1378,7 +1380,7 @@
           button.classList.toggle("target", Number(button.dataset.locationId) === Number(location.location_id));
         });
         const good = state.warehouseMapSource.good;
-        byId("warehouseMapMoveSummary").textContent = `${good.product_code || "当前货物"}：${state.warehouseMapSource.location.location_code} → ${location.location_code}`;
+        byId("warehouseMapMoveSummary").textContent = `${good.product_code || "当前货物"}：${readableLocation(state.warehouseMapSource.location)} → ${readableLocation(location)}`;
         byId("warehouseMapConfirmMove").disabled = !state.warehouseMapCanExecute;
         byId("warehouseMapReportMismatch").disabled = false;
       }
@@ -1388,7 +1390,6 @@
         const target = state.warehouseMapTarget;
         const quantity = Number(byId("warehouseMapMoveQuantity").value || 0);
         if (!source || !target || quantity < 1 || quantity > Number(source.good.quantity_total || 0)) return;
-        if (!window.confirm(`确认员工已经把 ${quantity}${source.good.unit} 从 ${source.location.location_code} 实际搬到 ${target.location_code}？\n确认后才会更新系统位置。`)) return;
         byId("warehouseMapConfirmMove").disabled = true;
         try {
           const data = await apiPost(`/api/mobile/erp/warehouse/lots/${source.good.lot_id}/moves`, {
@@ -1444,7 +1445,7 @@
             const card = node("section", "card");
             card.append(
               node("strong", "", `${item.lot.product_code || "当前货物"}｜${item.reported_quantity}${item.lot.unit}`),
-              node("p", "muted", `${item.registered_location.location_code} → ${item.observed_location.location_code}`),
+              node("p", "muted", `${readableLocation(item.registered_location)} → ${readableLocation(item.observed_location)}`),
               node("p", "muted", item.reason)
             );
             const button = node("button", "small-btn", "核对后确认纠正");

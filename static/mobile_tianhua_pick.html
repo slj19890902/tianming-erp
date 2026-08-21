@@ -96,9 +96,7 @@
           const qty=item.mobile_picked_qty ?? item.final_delivery_qty ?? item.suggested_qty ?? 0;
           const disabled=busyItems.has(item.item_id) ? " disabled" : "";
           const locations=(item.finished_inventory_sources || []).map(source => {
-            const location=source.location_code && source.location_name && source.location_code !== source.location_name
-              ? `${source.location_code}（${source.location_name}）`
-              : (source.location_code || source.location_name || "库位未标定");
+            const location=source.employee_location_name || source.current_address_name || source.location_name || "库位未标定";
             const amount=source.quantity_to_pick_stock ?? 0;
             return `<div>成品库位：<strong>${escapeHtml(location)}</strong> · 拿取 ${escapeHtml(amount)}</div>`;
           }).join("");

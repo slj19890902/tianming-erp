@@ -218,6 +218,8 @@ from app.models.warehouse_inventory import (  # noqa: E402,F401
     WarehouseAreaStoragePolicy,
     WarehouseFloor,
     WarehouseLocation,
+    WarehouseLocationAddressMutation,
+    WarehouseLocationAlias,
 )
 from app.models.incoming_receipt import (  # noqa: E402,F401
     IncomingReceipt,

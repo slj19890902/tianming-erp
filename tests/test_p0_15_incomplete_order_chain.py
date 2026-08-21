@@ -508,6 +508,7 @@ def test_component_finished_reservation_uses_frozen_component_product(
             ProductionTask(
                 order_item_id=item.id,
                 sales_order_item_bom_component_id=component.id,
+                task_role="component_internal",
                 status="pending",
                 planned_quantity=item.quantity,
                 ordered_quantity_snapshot=item.quantity,

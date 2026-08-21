@@ -1288,6 +1288,7 @@ body.warehouse-twin-page {
 .twin-mold-rack-planner-actions button { min-height: 36px; padding: 6px 9px; border: 1px solid #9eb5bc; border-radius: 3px; color: #405862; background: #fff; font-size: 9px; font-weight: 800; }
 .twin-mold-rack-planner-actions button.primary { border-color: #0f766e; color: #fff; background: #0f766e; }
 .twin-mold-rack-planner-actions button.publish { border-color: #166534; color: #fff; background: #15803d; }
+.twin-mold-rack-planner-actions button:disabled { border-color: #cbd5d9; color: #7b8b91; background: #e8edef; cursor: not-allowed; opacity: .62; }
 .twin-mold-rack-structure-editor > p { margin: 0; color: #647981; font-size: 8px; line-height: 1.5; }
 .twin-zone-simple-planner > button.advanced-toggle:disabled { cursor: not-allowed; opacity: .45; }
 .twin-location-point-planner { padding: 10px; display: grid; gap: 8px; border: 1px solid #9fc8c2; border-radius: 5px; background: #fff; }

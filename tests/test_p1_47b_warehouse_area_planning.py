@@ -1736,7 +1736,7 @@ def test_draft_policy_is_visible_only_in_admin_draft_overlay_until_published(
         engine.dispose()
 
 
-def test_cross_floor_edit_and_dirty_multi_floor_publish_are_rejected_atomically(
+def test_cross_floor_drafts_publish_one_floor_and_preserve_the_other(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1754,6 +1754,7 @@ def test_cross_floor_edit_and_dirty_multi_floor_publish_are_rejected_atomically(
     runtime = Path(editor.TWIN_LAYOUT_PATH)
     backups = Path(editor.TWIN_LAYOUT_BACKUP_DIR)
     published_before = published.read_bytes()
+    original_1f_revision = _revision(published, '1F')
     changed_3f = editor.update_warehouse_twin_zone_geometry(
         '3F',
         'zone-f1',
@@ -1762,77 +1763,188 @@ def test_cross_floor_edit_and_dirty_multi_floor_publish_are_rejected_atomically(
         operation_key='p1-47b-cross-floor-3f',
         points=[[500, 500], [9_500, 500], [9_500, 8_000], [500, 8_000]],
     )
-    draft_after_3f = draft.read_bytes()
-
-    with pytest.raises(WarehouseTwinLayoutEditConflictError) as edit_conflict:
-        editor.update_warehouse_twin_zone_geometry(
-            '1F',
-            'zone-1f',
-            expected_revision=_revision(published, '1F'),
-            expected_version=1,
-            operation_key='p1-47b-cross-floor-1f',
-            points=[[250, 250], [7_750, 250], [7_750, 7_500], [250, 7_500]],
-        )
-    assert '只能规划一个楼层' in str(edit_conflict.value)
-    assert draft.read_bytes() == draft_after_3f
-
-    dirty_document = json.loads(draft.read_text(encoding='utf-8'))
-    floor_1f = dirty_document['floors']['1F']
-    floor_1f['features'][0]['points'] = [
-        [250, 250], [7_750, 250], [7_750, 7_500], [250, 7_500]
-    ]
-    floor_1f['features'][0]['area_mm2'] = 54_375_000
-    floor_1f['features'][0]['version'] = 2
-    floor_1f['revision'] = _floor_revision(floor_1f)
-    dirty_document['draft_meta']['status'] = 'validated'
-    dirty_document['draft_meta']['validated_at'] = '2026-08-12T00:00:00Z'
-    dirty_document['draft_meta']['validated_floor_revisions'] = {
-        code: floor['revision'] for code, floor in dirty_document['floors'].items()
-    }
-    draft.write_text(
-        json.dumps(dirty_document, ensure_ascii=False, separators=(',', ':')),
-        encoding='utf-8',
+    changed_1f = editor.update_warehouse_twin_zone_geometry(
+        '1F',
+        'zone-1f',
+        expected_revision=original_1f_revision,
+        expected_version=1,
+        operation_key='p1-47b-cross-floor-1f',
+        points=[[250, 250], [7_750, 250], [7_750, 7_500], [250, 7_500]],
     )
-    dirty_draft_before = draft.read_bytes()
-    runtime_before = runtime.read_bytes() if runtime.exists() else None
+    assert changed_1f.applied is True
+    initial_3f_control = editor.load_warehouse_twin_layout_draft('3F')[
+        'draft_control'
+    ]
+    assert initial_3f_control['has_draft'] is True
+    assert initial_3f_control['has_other_floor_drafts'] is True
+
+    editor.validate_warehouse_twin_layout_draft(
+        '3F', expected_revision=changed_3f.floor_revision
+    )
+    first = editor.publish_warehouse_twin_layout_draft(
+        '3F',
+        expected_published_revision=_revision(published, '3F'),
+        expected_draft_revision=changed_3f.floor_revision,
+        operation_key='p1-47b-publish-only-3f',
+    )
+    assert first.applied is True
+    assert first.value['remaining_draft_floor_codes'] == ['1F']
+    live_after_3f = json.loads(runtime.read_text(encoding='utf-8'))
+    assert live_after_3f['floors']['3F']['revision'] == changed_3f.floor_revision
+    assert live_after_3f['floors']['1F']['revision'] == original_1f_revision
+    assert published.read_bytes() == published_before
+
+    control_3f = editor.load_warehouse_twin_layout_draft('3F')['draft_control']
+    control_1f = editor.load_warehouse_twin_layout_draft('1F')['draft_control']
+    assert control_3f['has_draft'] is False
+    assert control_3f['has_other_floor_drafts'] is True
+    assert control_1f['has_draft'] is True
+    assert control_1f['status'] == 'draft'
+    assert control_1f['dirty_floor_codes'] == ['1F']
+
+    repeated = editor.publish_warehouse_twin_layout_draft(
+        '3F',
+        expected_published_revision=_revision(published, '3F'),
+        expected_draft_revision=changed_3f.floor_revision,
+        operation_key='p1-47b-publish-only-3f',
+    )
+    assert repeated.applied is False
+    assert repeated.value == first.value
+    with pytest.raises(WarehouseTwinLayoutEditConflictError, match='不同版本'):
+        editor.publish_warehouse_twin_layout_draft(
+            '3F',
+            expected_published_revision='different-published-revision',
+            expected_draft_revision=changed_3f.floor_revision,
+            operation_key='p1-47b-publish-only-3f',
+        )
+
+    runtime_before_unvalidated = runtime.read_bytes()
+    draft_before_unvalidated = draft.read_bytes()
+    backups_before_unvalidated = _backup_manifest(backups)
+    with pytest.raises(WarehouseTwinLayoutEditConflictError, match='先校验当前楼层'):
+        editor.publish_warehouse_twin_layout_draft(
+            '1F',
+            expected_published_revision=original_1f_revision,
+            expected_draft_revision=changed_1f.floor_revision,
+            operation_key='p1-47b-unvalidated-1f',
+        )
+    assert runtime.read_bytes() == runtime_before_unvalidated
+    assert draft.read_bytes() == draft_before_unvalidated
+    assert _backup_manifest(backups) == backups_before_unvalidated
+
+    editor.validate_warehouse_twin_layout_draft(
+        '1F', expected_revision=changed_1f.floor_revision
+    )
+    second = editor.publish_warehouse_twin_layout_draft(
+        '1F',
+        expected_published_revision=original_1f_revision,
+        expected_draft_revision=changed_1f.floor_revision,
+        operation_key='p1-47b-publish-only-1f',
+    )
+    assert second.value['remaining_draft_floor_codes'] == []
+    final_live = json.loads(runtime.read_text(encoding='utf-8'))
+    assert final_live['floors']['3F']['revision'] == changed_3f.floor_revision
+    assert final_live['floors']['1F']['revision'] == changed_1f.floor_revision
+    assert json.loads(draft.read_text(encoding='utf-8'))['draft_meta']['status'] == 'published'
+    assert len(_backup_manifest(backups)) == 2
+
+
+def test_discard_removes_only_the_selected_floor_draft(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    published, draft = _isolate_layout_paths(tmp_path, monkeypatch)
+    _add_floor_one_to_published_layout(published)
+    original_3f_revision = _revision(published, '3F')
+    original_1f_revision = _revision(published, '1F')
+    changed_3f = editor.update_warehouse_twin_zone_geometry(
+        '3F',
+        'zone-f1',
+        expected_revision=original_3f_revision,
+        expected_version=1,
+        operation_key='p1-47b-discard-floor-3f',
+        points=[[500, 500], [9_500, 500], [9_500, 8_000], [500, 8_000]],
+    )
+    changed_1f = editor.update_warehouse_twin_zone_geometry(
+        '1F',
+        'zone-1f',
+        expected_revision=original_1f_revision,
+        expected_version=1,
+        operation_key='p1-47b-discard-floor-1f',
+        points=[[250, 250], [7_750, 250], [7_750, 7_500], [250, 7_500]],
+    )
+
+    discarded = editor.discard_warehouse_twin_layout_draft(
+        '1F', expected_revision=changed_1f.floor_revision
+    )
+    assert discarded.applied is True
+    assert discarded.value['remaining_draft_floor_codes'] == ['3F']
+    assert draft.is_file()
+    assert editor.load_warehouse_twin_layout_draft('1F')['draft_control']['has_draft'] is False
+    assert editor.load_warehouse_twin_layout_draft('3F')['draft_control']['has_draft'] is True
+
+    editor.discard_warehouse_twin_layout_draft(
+        '3F', expected_revision=changed_3f.floor_revision
+    )
+    assert not draft.exists()
+
+
+def test_cross_floor_publish_rebase_write_failure_rolls_back_every_file(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    published, draft = _isolate_layout_paths(tmp_path, monkeypatch)
+    _add_floor_one_to_published_layout(published)
+    runtime = Path(editor.TWIN_LAYOUT_PATH)
+    backups = Path(editor.TWIN_LAYOUT_BACKUP_DIR)
+    changed_3f = editor.update_warehouse_twin_zone_geometry(
+        '3F',
+        'zone-f1',
+        expected_revision=_revision(published, '3F'),
+        expected_version=1,
+        operation_key='p1-47b-rebase-failure-3f',
+        points=[[500, 500], [9_500, 500], [9_500, 8_000], [500, 8_000]],
+    )
+    editor.update_warehouse_twin_zone_geometry(
+        '1F',
+        'zone-1f',
+        expected_revision=_revision(published, '1F'),
+        expected_version=1,
+        operation_key='p1-47b-rebase-failure-1f',
+        points=[[250, 250], [7_750, 250], [7_750, 7_500], [250, 7_500]],
+    )
+    editor.validate_warehouse_twin_layout_draft(
+        '3F', expected_revision=changed_3f.floor_revision
+    )
+    baseline_before = published.read_bytes()
+    draft_before = draft.read_bytes()
     backups_before = _backup_manifest(backups)
-    engine, factory = _database(tmp_path)
-    try:
-        with factory() as db:
-            admin = db.scalar(select(User).where(User.username == 'p1-47b-admin'))
-            assert admin is not None
-            database_before = (
-                db.scalar(select(func.count(WarehouseArea.id))),
-                db.scalar(select(func.count(WarehouseAreaStoragePolicy.id))),
-                db.scalar(select(func.count(OperationLog.id))),
-            )
+    real_write = editor._write_document
 
-            with pytest.raises(warehouse_api.HTTPException) as publish_conflict:
-                warehouse_api.publish_twin_layout_draft(
-                    '3F',
-                    warehouse_api.TwinLayoutDraftPublishPayload(
-                        expected_published_revision=_revision(published, '3F'),
-                        expected_draft_revision=changed_3f.floor_revision,
-                        operation_key='p1-47b-double-dirty-publish',
-                    ),
-                    _request(),
-                    db,
-                    admin,
-                )
+    def fail_rebased_draft(path: Path, payload: dict) -> None:
+        meta = payload.get('draft_meta') or {}
+        if (
+            Path(path) == draft
+            and meta.get('status') == 'draft'
+            and (meta.get('last_publish') or {}).get('operation_key')
+            == 'p1-47b-rebase-failure-publish'
+        ):
+            raise OSError('rebased draft write failed')
+        real_write(path, payload)
 
-            assert publish_conflict.value.status_code == 409
-            assert '只能发布一个楼层' in str(publish_conflict.value.detail)
-            assert published.read_bytes() == published_before
-            assert draft.read_bytes() == dirty_draft_before
-            assert (runtime.read_bytes() if runtime.exists() else None) == runtime_before
-            assert _backup_manifest(backups) == backups_before
-            assert (
-                db.scalar(select(func.count(WarehouseArea.id))),
-                db.scalar(select(func.count(WarehouseAreaStoragePolicy.id))),
-                db.scalar(select(func.count(OperationLog.id))),
-            ) == database_before
-    finally:
-        engine.dispose()
+    monkeypatch.setattr(editor, '_write_document', fail_rebased_draft)
+    with pytest.raises(WarehouseTwinLayoutEditError) as caught:
+        editor.publish_warehouse_twin_layout_draft(
+            '3F',
+            expected_published_revision=_revision(published, '3F'),
+            expected_draft_revision=changed_3f.floor_revision,
+            operation_key='p1-47b-rebase-failure-publish',
+        )
+    assert isinstance(caught.value.__cause__, OSError)
+    assert published.read_bytes() == baseline_before
+    assert not runtime.exists()
+    assert draft.read_bytes() == draft_before
+    assert _backup_manifest(backups) == backups_before
 
 
 def test_published_area_policy_draft_and_discard_preserve_formal_employee_state(

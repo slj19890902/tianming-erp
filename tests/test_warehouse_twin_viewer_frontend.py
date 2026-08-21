@@ -130,11 +130,15 @@ def test_operational_twin_uses_tianming_erp_compact_shell() -> None:
 
 
 def test_embedded_warehouse_shell_has_a_definite_visible_height() -> None:
-    assert ".warehouse-shell { grid-row:2; height:100%; min-height:0; overflow:hidden; }" in ERP_INDEX
-    assert "height:auto; min-height:0" not in ERP_INDEX
+    assert (
+        ".warehouse-shell {\n"
+        "        grid-row:2; height:100%; min-height:0; overflow:hidden;\n"
+        "        display:flex; flex-direction:column; gap:8px;\n"
+        "      }"
+    ) in ERP_INDEX
     assert (
         ".warehouse-shell-frame {\n"
-        "        display:block; width:100%; height:100%; min-height:100%;"
+        "        display:block; width:100%; height:auto; min-height:0; flex:1 1 auto;"
     ) in ERP_INDEX
 
 

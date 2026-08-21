@@ -83,6 +83,14 @@ def test_warehouse_page_reads_nested_auth_user_and_uses_n028_permissions() -> No
     assert "当前账号没有仓库库存管理权限，请联系管理员。" in WAREHOUSE_HTML
 
 
+def test_admin_warehouse_shell_exposes_the_mold_archive_entry() -> None:
+    assert 'v-if="user.role === \'admin\'" class="warehouse-shell-head"' in INDEX_HTML
+    assert 'href="/warehouse-ledger.html?tab=molds"' in INDEX_HTML
+    assert 'target="_blank" rel="noopener">模具档案</a>' in INDEX_HTML
+    assert "新增或编辑生产模具，请进入模具档案" in INDEX_HTML
+    assert 'requestedTab&&["finished","semi_finished","molds"].includes(requestedTab)' in WAREHOUSE_HTML
+
+
 def test_warehouse_page_unauthenticated_and_initialization_failures_are_explicit() -> None:
     assert 'const loginTarget=warehouseEmbeddedMode?"/?page=warehouse":"/?redirect=%2Fwarehouse.html";' in WAREHOUSE_HTML
     assert "window.top.location.replace(loginTarget)" in WAREHOUSE_HTML

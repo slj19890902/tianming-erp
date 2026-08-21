@@ -983,7 +983,7 @@
         return
       }
       if(requestedTab==="locations"&&requestedLocationView==="floor3"&&state.locationView!=="floor3")await switchLocationView("floor3");
-      if(requestedTab&&["finished","semi_finished"].includes(requestedTab))await switchTab(requestedTab);
+      if(requestedTab&&["finished","semi_finished","molds"].includes(requestedTab))await switchTab(requestedTab);
       if(locationId||lotId||keyword)await locateWarehouseLedger({lot,locationId,keyword});
     }
     function bind(){

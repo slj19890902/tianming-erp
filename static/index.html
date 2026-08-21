@@ -2160,9 +2160,12 @@
       }
       .main.warehouse-main { display:grid; grid-template-rows:auto minmax(0,1fr); gap:12px; overflow:hidden; }
       .warehouse-main .workbench-nav { margin:0; }
-      .warehouse-shell { grid-row:2; height:100%; min-height:0; overflow:hidden; }
+      .warehouse-shell {
+        grid-row:2; height:100%; min-height:0; overflow:hidden;
+        display:flex; flex-direction:column; gap:8px;
+      }
       .warehouse-shell-frame {
-        display:block; width:100%; height:100%; min-height:100%;
+        display:block; width:100%; height:auto; min-height:0; flex:1 1 auto;
         border:1px solid var(--line); border-radius:10px; background:var(--panel);
       }
       .production-table th,
@@ -2399,6 +2402,13 @@
             </section>
 
             <section v-if="warehouseFrameUrl" v-show="activePage === 'warehouse'" class="warehouse-shell">
+              <div v-if="user.role === 'admin'" class="warehouse-shell-head">
+                <div>
+                  <strong>仓库地图</strong>
+                  <div class="muted">新增或编辑生产模具，请进入模具档案，依次选择客户、填写标签名称和中文简写。</div>
+                </div>
+                <a class="btn primary" href="/warehouse-ledger.html?tab=molds" target="_blank" rel="noopener">模具档案</a>
+              </div>
               <iframe
                 :key="warehouseFrameRevision"
                 class="warehouse-shell-frame"

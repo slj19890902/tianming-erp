@@ -55,6 +55,7 @@ import {
   moldRacksForArea
 } from "./moldRackView.mjs";
 import type { MoldLocationOption } from "./moldRackView.mjs";
+import { moldRackDraftWorkflowState } from "./moldRackDraftWorkflow.mjs";
 import type {
   AssetTemplate,
   CameraPreset,
@@ -2167,6 +2168,14 @@ export function WarehouseTwinApp() {
   const selectedRackEditDraft = selectedRack
     ? (rackDrafts[selectedRack.id] || rackDraft(selectedRack))
     : null;
+  const selectedMoldRackDraftWorkflow = moldRackDraftWorkflowState({
+    busy: spatialEditBusy,
+    hasDraft: Boolean(layoutDraftControl?.has_draft),
+    status: layoutDraftControl?.status || "none",
+    hasUnsavedInput: Boolean(
+      selectedRackEditDraft && rackDrafts[selectedRackEditDraft.id]
+    )
+  });
   const selectedPublishedMoldRack = selectedRackEditDraft
     && moldRackResponse?.rack.rack_id === selectedRackEditDraft.id
       ? moldRackResponse.rack
@@ -4655,9 +4664,9 @@ export function WarehouseTwinApp() {
                   return <label className={machineBlocked ? "blocked" : ""} key={`${selectedRackEditDraft.id}-simple-grid-${level}`}><span>第 {level} 层格数{machineBlocked ? "（设备占用层）" : usedCount ? `（已有 ${usedCount} 件模具）` : ""}</span><input type="number" min="0" max="50" disabled={machineBlocked} value={machineBlocked ? 0 : count} onChange={(event) => changeRackLevelCellCount(selectedRackEditDraft, index, Number(event.target.value))} /></label>;
                 })}</div>
                 <div className="twin-mold-rack-planner-actions">
-                  <button type="button" className="primary" disabled={spatialEditBusy} title="保存当前货架层格到当前楼层草稿" onClick={saveSelectedRack}>① 保存层格到草稿</button>
-                  <button type="button" disabled={spatialEditBusy || !layoutDraftControl?.has_draft || Boolean(rackDrafts[selectedRackEditDraft.id])} title={Boolean(rackDrafts[selectedRackEditDraft.id]) ? "请先完成第①步保存当前输入" : !layoutDraftControl?.has_draft ? "请先完成第①步生成当前楼层草稿" : "只校验当前楼层草稿"} onClick={validateLayoutDraft}>② 校验当前楼层草稿</button>
-                  <button type="button" className="publish" disabled={spatialEditBusy || layoutDraftControl?.status !== "validated" || Boolean(rackDrafts[selectedRackEditDraft.id])} title={layoutDraftControl?.status !== "validated" ? "请先完成第②步校验当前楼层草稿" : "只发布当前楼层，其他楼层草稿会保留"} onClick={publishLayoutDraft}>③ 发布当前楼层地图</button>
+                  <button type="button" className="primary" disabled={selectedMoldRackDraftWorkflow.save.disabled} title={selectedMoldRackDraftWorkflow.save.title} onClick={saveSelectedRack}>① 保存层格到草稿</button>
+                  <button type="button" disabled={selectedMoldRackDraftWorkflow.validate.disabled} title={selectedMoldRackDraftWorkflow.validate.title} onClick={validateLayoutDraft}>② 校验当前楼层草稿</button>
+                  <button type="button" className="publish" disabled={selectedMoldRackDraftWorkflow.publish.disabled} title={selectedMoldRackDraftWorkflow.publish.title} onClick={publishLayoutDraft}>③ 发布当前楼层地图</button>
                   <button type="button" disabled={spatialEditBusy} onClick={() => setRackDrafts((current) => { const next = { ...current }; delete next[selectedRackEditDraft.id]; return next; })}>取消本次输入</button>
                 </div>
                 <p>第②、③步只处理当前楼层；其他楼层草稿会独立保留。只有第③步发布完成，“模具与位置”和移货目标才会读取新格数。减少已被正式模具位置使用的层或格会被系统拦截；增加格位不会自动搬动或平均分配现有模具。</p>

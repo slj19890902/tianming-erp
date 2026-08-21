@@ -83,6 +83,64 @@ def p1_40a_app(tmp_path):
             db.add(supplier)
             db.flush()
             ids[code] = supplier.packaging_products[0].id
+
+        honeycomb_specification = json.dumps(
+            {
+                "material": "供应商标准蜂窝材质",
+                "aperture_mm": 12.0,
+                "length_mm": 1000.0,
+                "width_mm": 500.0,
+                "thickness_mm": 40.0,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        honeycomb_supplier = Supplier(
+            standard_name="匿名蜂窝板供应商",
+            normalized_name=normalize_supplier_identity("匿名蜂窝板供应商"),
+            display_name="蜂窝板供应商",
+            is_active=True,
+            sort_order=10,
+            version=1,
+            supply_categories=[SupplierSupplyCategory(category_code="honeycomb_board")],
+        )
+        honeycomb_supplier.packaging_products.append(
+            ExternalPackagingProduct(
+                category_code="honeycomb_board",
+                supplier_product_code="HC-GENERAL",
+                normalized_supplier_product_code="HC-GENERAL",
+                product_name="蜂窝纸板",
+                purchase_unit="片",
+                specification_summary="供应商标准蜂窝材质，孔径12mm，1000×500×40mm",
+                specification_json=honeycomb_specification,
+                customer_scope_id=None,
+                is_active=True,
+                version=1,
+            )
+        )
+        honeycomb_supplier.supply_categories.append(
+            SupplierSupplyCategory(category_code="other_packaging")
+        )
+        honeycomb_supplier.packaging_products.append(
+            ExternalPackagingProduct(
+                category_code="other_packaging",
+                supplier_product_code="OTHER-GENERAL",
+                normalized_supplier_product_code="OTHER-GENERAL",
+                product_name="其他外购包材",
+                purchase_unit="片",
+                specification_summary="供应商通用包材",
+                specification_json=json.dumps(
+                    {"summary": "供应商通用包材"}, ensure_ascii=False, sort_keys=True
+                ),
+                customer_scope_id=None,
+                is_active=True,
+                version=1,
+            )
+        )
+        db.add(honeycomb_supplier)
+        db.flush()
+        ids["HC-GENERAL"] = honeycomb_supplier.packaging_products[0].id
+        ids["OTHER-GENERAL"] = honeycomb_supplier.packaging_products[1].id
         db.commit()
 
     app = FastAPI()
@@ -140,6 +198,52 @@ def _external_payload(ids: dict[str, int], candidates: list[dict] | None = None)
             },
             "candidates": candidates
             or [{"external_product_id": ids["CG-870-A"], "is_default": False}]
+        },
+    }
+
+
+def _honeycomb_payload(ids: dict[str, int]) -> dict:
+    return {
+        "customer_id": ids["customer_a"],
+        "product_code": "EXT-HC-CUSTOMER",
+        "customer_material_code": "EXT-HC-CUSTOMER",
+        "product_name": "客户定制蜂窝纸板",
+        "box_category": "normal",
+        "box_style": "其他",
+        "supply_mode": "external_purchase",
+        "unit": "片",
+        "external_supply": {
+            "customer_specification": {
+                "material": "170*110*170",
+                "aperture_mm": 15,
+                "length_mm": 800,
+                "width_mm": 180,
+                "thickness_mm": 60,
+            },
+            "candidates": [
+                {"external_product_id": ids["HC-GENERAL"], "is_default": True}
+            ],
+        },
+    }
+
+
+def _other_packaging_payload(ids: dict[str, int]) -> dict:
+    return {
+        "customer_id": ids["customer_a"],
+        "product_code": "EXT-OTHER-CUSTOMER",
+        "customer_material_code": "EXT-OTHER-CUSTOMER",
+        "product_name": "客户其他外购包材",
+        "box_category": "normal",
+        "box_style": "其他",
+        "supply_mode": "external_purchase",
+        "unit": "片",
+        "external_supply": {
+            "customer_specification": {
+                "summary": "材质170*110*170，孔径15mm，800×180×60mm，按样品验收"
+            },
+            "candidates": [
+                {"external_product_id": ids["OTHER-GENERAL"], "is_default": True}
+            ],
         },
     }
 
@@ -271,6 +375,59 @@ def test_corrugated_product_rejects_external_candidates(p1_40a_app: FastAPI) -> 
         response = client.post("/api/master/products", json=payload)
         assert response.status_code == 422
         assert "不能绑定" in response.text
+
+
+def test_honeycomb_customer_specification_is_saved_independently_from_supplier_product(
+    p1_40a_app: FastAPI,
+) -> None:
+    ids = p1_40a_app.state.fixture
+    with TestClient(p1_40a_app) as client:
+        _login(client)
+        created = client.post("/api/master/products", json=_honeycomb_payload(ids))
+        assert created.status_code == 201, created.text
+        body = created.json()
+        assert body["supply_mode"] == "external_purchase"
+        assert body["external_supply"]["category_code"] == "honeycomb_board"
+        assert body["external_supply"]["specification"] == {
+            "aperture_mm": 15.0,
+            "length_mm": 800.0,
+            "material": "170*110*170",
+            "thickness_mm": 60.0,
+            "width_mm": 180.0,
+        }
+        assert body["external_supply"]["specification_summary"] == (
+            "材质170*110*170，孔径15mm，800×180×60mm"
+        )
+        supplier_snapshot = body["external_supply"]["candidates"][0]
+        assert supplier_snapshot["supplier_specification"]["aperture_mm"] == 12.0
+        assert supplier_snapshot["supplier_specification"]["length_mm"] == 1000.0
+
+        invalid = _honeycomb_payload(ids)
+        invalid["product_code"] = "EXT-HC-MISSING"
+        invalid["customer_material_code"] = "EXT-HC-MISSING"
+        invalid["external_supply"]["customer_specification"].pop("aperture_mm")
+        rejected = client.post("/api/master/products", json=invalid)
+        assert rejected.status_code == 422
+        assert "蜂窝板孔径" in rejected.text
+
+
+def test_other_packaging_customer_supplier_instruction_is_saved_directly(
+    p1_40a_app: FastAPI,
+) -> None:
+    ids = p1_40a_app.state.fixture
+    with TestClient(p1_40a_app) as client:
+        _login(client)
+        created = client.post(
+            "/api/master/products", json=_other_packaging_payload(ids)
+        )
+        assert created.status_code == 201, created.text
+        specification = created.json()["external_supply"]["specification"]
+        assert specification == {
+            "summary": "材质170*110*170，孔径15mm，800×180×60mm，按样品验收"
+        }
+        assert created.json()["external_supply"]["specification_summary"] == (
+            "材质170*110*170，孔径15mm，800×180×60mm，按样品验收"
+        )
 
 
 

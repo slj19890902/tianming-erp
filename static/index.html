@@ -5097,8 +5097,20 @@
                     <div class="field"><label>边宽B(mm)</label><input class="input" type="number" min="0.000001" step="1" v-model.number="productForm._external_specification.side_b_mm" @input="syncProductExternalProfile" /></div>
                     <div class="field"><label>厚度(mm)</label><input class="input" type="number" min="0.000001" step="0.1" v-model.number="productForm._external_specification.thickness_mm" @input="syncProductExternalProfile" /></div>
                   </template>
+                  <template v-else-if="productForm.external_packaging_category_code==='honeycomb_board'">
+                    <div class="field wide"><strong>客户要求的蜂窝板资料（将打印到供应商采购单）</strong></div>
+                    <div class="field"><label>客户要求材质</label><input class="input" maxlength="200" v-model.trim="productForm._external_specification.material" @input="syncProductExternalProfile" placeholder="例如 170*110*170" /></div>
+                    <div class="field"><label>客户要求孔径(mm)</label><input class="input" type="number" min="0.000001" step="0.1" v-model.number="productForm._external_specification.aperture_mm" @input="syncProductExternalProfile" /></div>
+                    <div class="field"><label>客户要求规格长(mm)</label><input class="input" type="number" min="0.000001" step="1" v-model.number="productForm._external_specification.length_mm" @input="syncProductExternalProfile" /></div>
+                    <div class="field"><label>客户要求规格宽(mm)</label><input class="input" type="number" min="0.000001" step="1" v-model.number="productForm._external_specification.width_mm" @input="syncProductExternalProfile" /></div>
+                    <div class="field"><label>客户要求规格厚(mm)</label><input class="input" type="number" min="0.000001" step="0.1" v-model.number="productForm._external_specification.thickness_mm" @input="syncProductExternalProfile" /></div>
+                  </template>
+                  <template v-else-if="productForm.external_packaging_category_code==='other_packaging'">
+                    <div class="field wide"><label>客户要求及报给供应商的规格</label><textarea class="textarea" maxlength="500" v-model.trim="productForm._external_specification.summary" @input="syncProductExternalProfile" placeholder="按客户样本填写材质、孔径、长×宽×厚及其他采购要求"></textarea></div>
+                  </template>
                   <div class="field"><label>客户规格</label><input class="input" :value="productForm.external_packaging_specification_summary || '请填写客户规格'" readonly /></div>
                   <div class="field"><label>采购单位</label><input class="input" :value="productForm.external_packaging_purchase_unit || '自动带出'" readonly /></div>
+                  <div class="field wide muted">本客户订单的数量换算在下单时填写，例如订单 1 套 → 供应商采购 2 片；常用箱不写死比例。</div>
                 </div>
                 <div v-if="productExternalSupplyLoading" class="muted" style="margin-top:8px">正在读取候选供应商产品…</div>
                 <div v-else-if="productExternalSupplyError" class="notice danger" style="margin-top:8px">{{ productExternalSupplyError }} <button type="button" class="btn small" @click="loadProductExternalSupplyCandidates({force:true})">重试</button></div>
@@ -5456,7 +5468,7 @@
                 <button type="button" class="btn primary product-inline-save" :disabled="loading || masterSavePending || !!productCreaseMismatch || !!productMoldError || !!productPrintingPlateError || !!productPrintingColorError || !!productProductionLabelError" @click="saveModal()">{{ masterSavePending ? '保存中…' : '保存' }}</button>
               </div>
               </fieldset>
-              <details class="product-secondary-disclosure">
+              <details v-if="productForm.supply_mode!=='external_purchase'" class="product-secondary-disclosure">
               <summary>组合产品 / 内部 BOM（不常用）</summary>
               <fieldset class="bom-editor-panel" :disabled="!!productForm.id && !canEditProducts">
                 <div class="bom-editor-heading">
@@ -10166,6 +10178,16 @@
                 if (!values.every(value=>Number.isFinite(value)&&value>0)) throw new Error("请完整填写护角单根长度、边宽A、边宽B和厚度");
                 customerSpecification = {shape:String(source.shape||"L"),length_mm:values[0],side_a_mm:values[1],side_b_mm:values[2],thickness_mm:values[3]};
                 payload.unit = "根";
+              } else if (payload.external_packaging_category_code === "honeycomb_board") {
+                const source = payload._external_specification || {};
+                const material = String(source.material || "").trim();
+                const values = [source.aperture_mm,source.length_mm,source.width_mm,source.thickness_mm].map(Number);
+                if (!material || !values.every(value=>Number.isFinite(value)&&value>0)) throw new Error("请完整填写客户要求的蜂窝板材质、孔径和长宽厚");
+                customerSpecification = {material,aperture_mm:values[0],length_mm:values[1],width_mm:values[2],thickness_mm:values[3]};
+              } else if (payload.external_packaging_category_code === "other_packaging") {
+                const summary = String(payload._external_specification?.summary || "").trim();
+                if (!summary) throw new Error("请填写客户要求及报给供应商的包材规格");
+                customerSpecification = {summary};
               }
               payload.external_supply = {candidates:selectedIds.map(external_product_id=>({external_product_id,is_default:external_product_id===defaultId})),customer_specification:customerSpecification};
               payload.material_id=null; payload.layer_count=null; payload.flute_type=null; payload.surface_paper_type=null;
@@ -13766,6 +13788,27 @@
               this.productForm.external_packaging_purchase_unit = "根";
               return;
             }
+            if (this.productForm?.external_packaging_category_code === "honeycomb_board") {
+              const spec = this.productForm._external_specification || {};
+              const material = String(spec.material || "").trim();
+              const numbers = [spec.aperture_mm,spec.length_mm,spec.width_mm,spec.thickness_mm].map(Number);
+              this.productForm.external_packaging_specification_summary = material && numbers.every(value=>value>0)
+                ? `材质${material}，孔径${numbers[0]}mm，${numbers[1]}×${numbers[2]}×${numbers[3]}mm`
+                : "";
+              const selected = (this.productForm?._external_selected_ids || []).map(Number);
+              const row = (this.productExternalSupplyOptions || []).find(item=>selected.includes(Number(item.external_product_id)));
+              this.productForm.external_packaging_purchase_unit = row?.purchase_unit || "";
+              return;
+            }
+            if (this.productForm?.external_packaging_category_code === "other_packaging") {
+              this.productForm.external_packaging_specification_summary = String(
+                this.productForm?._external_specification?.summary || ""
+              ).trim();
+              const selected = (this.productForm?._external_selected_ids || []).map(Number);
+              const row = (this.productExternalSupplyOptions || []).find(item=>selected.includes(Number(item.external_product_id)));
+              this.productForm.external_packaging_purchase_unit = row?.purchase_unit || "";
+              return;
+            }
             const selected = (this.productForm?._external_selected_ids || []).map(Number);
             const row = (this.productExternalSupplyOptions || []).find(item=>selected.includes(Number(item.external_product_id)));
             if (!row) {
@@ -13825,7 +13868,11 @@
             this.productForm.external_packaging_purchase_unit = "";
             this.productForm._external_specification = this.productForm.external_packaging_category_code === "paper_corner_guard"
               ? {shape:"L",length_mm:null,side_a_mm:50,side_b_mm:50,thickness_mm:5}
-              : {};
+              : this.productForm.external_packaging_category_code === "honeycomb_board"
+                ? {material:"",aperture_mm:null,length_mm:null,width_mm:null,thickness_mm:null}
+                : this.productForm.external_packaging_category_code === "other_packaging"
+                  ? {summary:""}
+                  : {};
             this.syncProductExternalProfile();
             await this.loadProductExternalSupplyCandidates();
           },

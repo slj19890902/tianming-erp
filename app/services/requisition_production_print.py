@@ -636,7 +636,12 @@ def build_supplier_requisition_production_package(
                 "source_identity": source_identity,
                 "component_label": component_label,
                 "customer_id": customer.id if customer is not None else None,
-                "customer_name": item.customer_name or (customer.name if customer else None),
+                "customer_name": (
+                    customer.chinese_short_name
+                    if customer is not None and customer.chinese_short_name
+                    else item.customer_name
+                    or (customer.name if customer else None)
+                ),
                 "product_code": product_code or None,
                 "product_name": header_product_name,
                 "specifications": [],
@@ -645,6 +650,12 @@ def build_supplier_requisition_production_package(
                 "customer_pos": [],
                 "delivery_dates": [],
                 "planned_finished_quantity": 0,
+                "customer_order_quantity": (
+                    int(order_item.quantity or 0)
+                    if order_item is not None
+                    else int(item.quantity or 0) + int(item.stock_deduction_qty or 0)
+                ),
+                "stock_deduction_quantity": int(item.stock_deduction_qty or 0),
                 "requisition_quantity": 0,
                 "paper_phase": "planned",
                 "paper_phase_label": "待来料计划版",

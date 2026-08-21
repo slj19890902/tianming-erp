@@ -90,8 +90,7 @@
             productCode: line.product_code || "-",
             productName: line.product_name || "未命名产品",
             specification: line.specification || "-",
-            location: group.label || line.location_code || "位置待核对",
-            pallet: line.pallet_code || group.pallet_code || "",
+            location: group.label || line.employee_location_name || line.current_address_name || line.location_name || "位置待核对",
             quantity: Number(line.pick_quantity || 0),
             unit: line.unit || "个",
           });
@@ -110,7 +109,7 @@
         <td>${row.sequence}</td>
         <td>${escapeHtml(row.productCode)}</td>
         <td class="product"><div class="product-name">${escapeHtml(row.productName)}</div><div class="spec">${escapeHtml(row.specification)}</div>${row.productTotal === null ? "" : `<div class="subtotal">本品合计 ${row.productTotal} ${escapeHtml(row.unit)}</div>`}</td>
-        <td class="location"><div class="route">第 ${row.routeSequence || "-"} 站</div><div>${escapeHtml(row.location)}</div>${row.pallet ? `<div class="muted">栈板 ${escapeHtml(row.pallet)}</div>` : ""}</td>
+        <td class="location"><div class="route">第 ${row.routeSequence || "-"} 站</div><div>${escapeHtml(row.location)}</div></td>
         <td>${row.quantity} ${escapeHtml(row.unit)}</td>
         <td><span class="write-line"></span></td>
         <td><span class="write-line"></span></td>

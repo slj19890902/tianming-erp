@@ -58,7 +58,7 @@
     function materialBlock(material){
       if(material.visibility!=="visible")return '<div class="material muted">当前账号无收料详情查看权限</div>';
       const progress=material.received_quantity!=null&&material.planned_quantity!=null?`已收 ${material.received_quantity} 张 / 计划 ${material.planned_quantity} 张`:material.legacy_received_quantity!=null?`历史实收 ${material.legacy_received_quantity} 张，原计划未记录`:material.state==="source_conflict"?"数量待人工核对":"数量未记录";
-      const locations=(material.locations||[]).map(row=>`<div class="location-item"><strong>${h(row.location_code)} ${h(row.location_name)}</strong>${row.availability_state==="frozen"?' <span class="tag orange">冻结</span>':""}</div>`).join("");
+      const locations=(material.locations||[]).map(row=>`<div class="location-item"><strong>${h(row.employee_location_name||row.current_address_name||row.location_name||"位置名称待完善")}</strong>${row.availability_state==="frozen"?' <span class="tag orange">冻结</span>':""}</div>`).join("");
       return `<div class="material"><div class="row"><strong>材料：${h(material.state_label)}</strong><span class="tag ${["received","received_accept_short","legacy_received"].includes(material.state)?"green":"orange"}">${h(progress)}</span></div>${locations||`<div class="muted" style="margin-top:5px">${h(material.location_display||"当前没有可显示的材料库位")}</div>`}${material.warning?`<div class="warning">${h(material.warning)}</div>`:""}</div>`;
     }
     function printingText(row){

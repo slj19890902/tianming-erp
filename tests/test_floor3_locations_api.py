@@ -898,6 +898,7 @@ def test_floor3_customer_abbreviation_search_is_scoped_and_does_not_auto_select(
                 {
                     "id": ids["tianhua"],
                     "name": "苏州天华超净科技股份有限公司",
+                    "chinese_short_name": None,
                     "customer_code": "TH",
                     "customer_number": None,
                 }
@@ -4136,7 +4137,7 @@ def test_p1_34b1_location_labels_are_mapped_read_only_and_fail_closed(
         single = client.get(f"/api/warehouse/locations/{mapped_id}/label")
         assert single.status_code == 200, single.text
         assert single.json()["location_code"] == "A1-L01"
-        assert single.json()["display_path"] == "三楼 · A1区 · A1-L01"
+        assert single.json()["display_path"] == "位置名称待完善"
         assert single.json()["layout_version"] == 3
         assert single.json()["lookup_url"].endswith(
             f"/warehouse.html?tab=locations&location_id={mapped_id}"

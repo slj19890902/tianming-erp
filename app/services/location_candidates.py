@@ -15,6 +15,10 @@ from app.models.warehouse_inventory import (
     WarehouseFloor,
     WarehouseLocation,
 )
+from app.services.warehouse_location_address import (
+    employee_location_name,
+    format_location_address,
+)
 
 
 @dataclass(frozen=True)
@@ -463,6 +467,16 @@ def operational_location_payload(row: OperationalLocationRow) -> dict:
     location = row.location
     floor = row.floor
     area = row.area
+    address_area = (
+        area
+        if area is not None and location.address_area_id == area.id
+        else getattr(location, "address_area", None)
+    )
+    current_address_code, current_address_name = format_location_address(
+        location,
+        area=address_area,
+        floor=floor if address_area is not None else None,
+    )
     return {
         "id": location.id,
         "location_code": location.location_code,
@@ -486,4 +500,20 @@ def operational_location_payload(row: OperationalLocationRow) -> dict:
         "sort_order": int(location.sort_order or 0),
         "occupied": row.occupied,
         "is_empty": not row.occupied,
+        "address_kind": location.address_kind,
+        "address_area_id": location.address_area_id,
+        "address_zone_code": (
+            address_area.address_zone_code if address_area is not None else None
+        ),
+        "address_subzone_no": (
+            address_area.address_subzone_no if address_area is not None else None
+        ),
+        "rack_code": location.rack_code,
+        "ground_row_no": location.ground_row_no,
+        "level_no": location.level_no,
+        "slot_no": location.slot_no,
+        "address_version": int(location.address_version or 1),
+        "current_address_code": current_address_code,
+        "current_address_name": current_address_name,
+        "employee_location_name": employee_location_name(location),
     }

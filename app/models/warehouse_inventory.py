@@ -135,7 +135,27 @@ class WarehouseArea(Base):
         UniqueConstraint(
             "floor_id", "area_code", name="uq_warehouse_areas_floor_code"
         ),
+        CheckConstraint(
+            "(address_zone_code IS NULL AND address_subzone_no IS NULL) OR "
+            "(address_zone_code >= 'A' AND address_zone_code <= 'G' "
+            "AND length(address_zone_code) = 1 "
+            "AND address_subzone_no >= 1 AND address_subzone_no <= 99)",
+            name="ck_warehouse_areas_structured_address",
+        ),
+        CheckConstraint(
+            "address_version > 0",
+            name="ck_warehouse_areas_address_version",
+        ),
         Index("ix_warehouse_areas_floor_id", "floor_id"),
+        Index(
+            "uq_warehouse_areas_structured_path",
+            "floor_id",
+            "address_zone_code",
+            "address_subzone_no",
+            unique=True,
+            sqlite_where=text("address_zone_code IS NOT NULL"),
+            postgresql_where=text("address_zone_code IS NOT NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -144,6 +164,11 @@ class WarehouseArea(Base):
     )
     area_code: Mapped[str] = mapped_column(String(30), nullable=False)
     area_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    address_zone_code: Mapped[str | None] = mapped_column(String(1), nullable=True)
+    address_subzone_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    address_version: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1", nullable=False
+    )
     planned_location_count: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0", nullable=False
     )
@@ -177,6 +202,10 @@ class WarehouseArea(Base):
         back_populates="area",
         cascade="all, delete-orphan",
         uselist=False,
+    )
+    address_locations: Mapped[list["WarehouseLocation"]] = relationship(
+        back_populates="address_area",
+        foreign_keys="WarehouseLocation.address_area_id",
     )
 
 
@@ -254,8 +283,49 @@ class WarehouseLocation(Base):
             "placement_status IS NULL OR placement_status IN ('unplaced','placed')",
             name="ck_warehouse_locations_placement_status",
         ),
+        CheckConstraint(
+            "address_kind IN ('legacy','rack_slot','ground_slot','functional')",
+            name="ck_warehouse_locations_address_kind",
+        ),
+        CheckConstraint(
+            "address_version > 0",
+            name="ck_warehouse_locations_address_version",
+        ),
+        CheckConstraint(
+            "address_kind != 'rack_slot' OR "
+            "(address_area_id IS NOT NULL AND rack_code >= 'A' AND rack_code <= 'Z' "
+            "AND length(rack_code) = 1 AND level_no >= 1 AND level_no <= 99 "
+            "AND slot_no >= 1 AND slot_no <= 99)",
+            name="ck_warehouse_locations_rack_address",
+        ),
+        CheckConstraint(
+            "address_kind != 'ground_slot' OR "
+            "(address_area_id IS NOT NULL AND ground_row_no >= 1 AND ground_row_no <= 99 "
+            "AND slot_no >= 1 AND slot_no <= 99)",
+            name="ck_warehouse_locations_ground_address",
+        ),
         UniqueConstraint("location_code", name="uq_warehouse_locations_code"),
         Index("ix_warehouse_locations_type_active", "warehouse_type", "is_active"),
+        Index("ix_warehouse_locations_address_area", "address_area_id"),
+        Index(
+            "uq_warehouse_locations_rack_path",
+            "address_area_id",
+            "rack_code",
+            "level_no",
+            "slot_no",
+            unique=True,
+            sqlite_where=text("address_kind = 'rack_slot'"),
+            postgresql_where=text("address_kind = 'rack_slot'"),
+        ),
+        Index(
+            "uq_warehouse_locations_ground_path",
+            "address_area_id",
+            "ground_row_no",
+            "slot_no",
+            unique=True,
+            sqlite_where=text("address_kind = 'ground_slot'"),
+            postgresql_where=text("address_kind = 'ground_slot'"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -276,6 +346,18 @@ class WarehouseLocation(Base):
         Boolean, default=False, server_default=false(), nullable=False
     )
     source_version: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    address_kind: Mapped[str] = mapped_column(
+        String(24), default="legacy", server_default="legacy", nullable=False
+    )
+    address_area_id: Mapped[int | None] = mapped_column(
+        ForeignKey("warehouse_areas.id", ondelete="RESTRICT"), nullable=True
+    )
+    rack_code: Mapped[str | None] = mapped_column(String(1), nullable=True)
+    ground_row_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    slot_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    address_version: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1", nullable=False
+    )
     # Alembic owns the formal non-null/default gate. Keeping ORM-only test
     # schemas nullable preserves legacy fixtures that predate spatial placement.
     placement_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
@@ -298,6 +380,92 @@ class WarehouseLocation(Base):
         back_populates="location",
         cascade="all, delete-orphan",
         uselist=False,
+    )
+    address_area: Mapped["WarehouseArea | None"] = relationship(
+        back_populates="address_locations",
+        foreign_keys=[address_area_id],
+    )
+    address_aliases: Mapped[list["WarehouseLocationAlias"]] = relationship(
+        back_populates="location",
+        cascade="all, delete-orphan",
+    )
+
+
+class WarehouseLocationAlias(Base):
+    """Permanent old labels for one stable warehouse location identity."""
+
+    __tablename__ = "warehouse_location_aliases"
+    __table_args__ = (
+        CheckConstraint(
+            "alias_kind IN ('legacy_code','legacy_name','printed_label')",
+            name="ck_warehouse_location_aliases_kind",
+        ),
+        CheckConstraint(
+            "length(trim(alias_text)) > 0 AND length(trim(normalized_alias)) > 0",
+            name="ck_warehouse_location_aliases_text",
+        ),
+        UniqueConstraint(
+            "normalized_alias", name="uq_warehouse_location_aliases_normalized"
+        ),
+        Index("ix_warehouse_location_aliases_location", "location_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    location_id: Mapped[int] = mapped_column(
+        ForeignKey("warehouse_locations.id", ondelete="RESTRICT"), nullable=False
+    )
+    alias_text: Mapped[str] = mapped_column(String(120), nullable=False)
+    normalized_alias: Mapped[str] = mapped_column(String(120), nullable=False)
+    alias_kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    created_by: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+
+    location: Mapped["WarehouseLocation"] = relationship(
+        back_populates="address_aliases"
+    )
+
+
+class WarehouseLocationAddressMutation(Base):
+    """Immutable idempotency and audit fact for one address change transaction."""
+
+    __tablename__ = "warehouse_location_address_mutations"
+    __table_args__ = (
+        CheckConstraint(
+            "action_kind IN ('area','rack','location')",
+            name="ck_warehouse_location_address_mutations_action",
+        ),
+        CheckConstraint(
+            "length(trim(idempotency_key)) > 0 AND length(request_hash) = 64 "
+            "AND length(preview_fingerprint) = 64",
+            name="ck_warehouse_location_address_mutations_frozen",
+        ),
+        UniqueConstraint(
+            "idempotency_key",
+            name="uq_warehouse_location_address_mutations_idem",
+        ),
+        Index(
+            "ix_warehouse_location_address_mutations_target",
+            "action_kind",
+            "target_ref",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    preview_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    action_kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    target_ref: Mapped[str] = mapped_column(String(120), nullable=False)
+    actor_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    affected_location_ids_json: Mapped[str] = mapped_column(Text, nullable=False)
+    before_json: Mapped[str] = mapped_column(Text, nullable=False)
+    after_json: Mapped[str] = mapped_column(Text, nullable=False)
+    response_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
     )
 
 

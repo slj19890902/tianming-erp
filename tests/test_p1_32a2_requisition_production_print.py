@@ -1018,7 +1018,7 @@ def test_p1_67_task_sheet_prioritizes_identity_fields_and_process_order() -> Non
     process_details = source[source.index("function processDetailsHtml"):source.index("function cardHtml")]
     assert process_details.index("moldHtml(card)") < process_details.index("printingHtml(card)")
     assert process_details.index("printingHtml(card)") < process_details.index("joiningHtml(card)")
-    assert "模具编号与现场位置" in source
+    assert "模具名称与现场位置" in source
     assert "扫描模具上的固定二维码" in source
     assert "扫码不会自动开工" in source
 

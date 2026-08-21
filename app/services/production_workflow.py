@@ -44,7 +44,7 @@ from app.models.warehouse_inventory import (
     OrderItemSemiRequirement,
     WarehouseLocation,
 )
-from app.services.box_type_rules import box_type_code
+from app.services.production_station_routing import production_station_memberships
 from app.services.composite_bom_workflow import (
     CompositeBomWorkflowError,
     component_available_quantity,
@@ -86,18 +86,6 @@ COMPLETED = "completed"
 NOT_REQUIRED = "not_required"
 READY_TASK_STATUSES = frozenset({COMPLETED, NOT_REQUIRED})
 PRODUCTION_STATIONS = frozenset({"printing", "die_cut"})
-_NO_PRINT_CONTENT = frozenset({"", "无印刷", "无", "否", "不印刷"})
-_PRINTING_STATION_BOX_TYPE_CODES = frozenset(
-    {
-        "a1_0201",
-        "a3_set",
-        "top_cover",
-        "bottom_base",
-        "surround_panel",
-        "full_flap_carton",
-        "half_slotted_carton",
-    }
-)
 PRODUCIBLE_ORDER_STATUSES = frozenset(
     {"pending_confirmation", "pending_production", "production"}
 )
@@ -3570,22 +3558,18 @@ def list_production_station_task_ids(
     matching_ids: list[int] = []
     for row in db.execute(query).mappings().all():
         is_component = row.bom_component_snapshot_id is not None
-        if station == "die_cut":
-            matches = (
+        memberships = production_station_memberships(
+            print_content_snapshot=row.print_content_snapshot,
+            box_style=(
+                row.component_box_style if is_component else row.product_box_style
+            ),
+            die_cut_required=(
                 bool(row.component_is_die_cut)
                 if is_component
                 else row.product_box_category == "die_cut"
-            )
-        else:
-            content = str(row.print_content_snapshot or "").strip()
-            box_style = (
-                row.component_box_style if is_component else row.product_box_style
-            )
-            matches = (
-                content not in _NO_PRINT_CONTENT
-                or box_type_code(box_style) in _PRINTING_STATION_BOX_TYPE_CODES
-            )
-        if matches:
+            ),
+        )
+        if station in memberships:
             matching_ids.append(int(row.task_id))
 
     total = len(matching_ids)

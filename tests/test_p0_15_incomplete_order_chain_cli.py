@@ -102,6 +102,7 @@ def test_cli_writes_three_consistent_anonymous_reports_without_touching_source(
     assert stdout["coverage"]["receipt_auto_finished"]["status"] == (
         "not_evaluated"
     )
+    assert stdout["coverage"]["workstation_membership"]["status"] == "evaluated"
     assert cli._sha256(database) == sha_before
     assert cli._source_state(database) == source_before
     json_report = json.loads(outputs[0].read_text(encoding="utf-8"))
@@ -124,6 +125,7 @@ def test_cli_writes_three_consistent_anonymous_reports_without_touching_source(
     assert "扫描覆盖完整：`False`" in markdown
     assert "P1-81" in markdown
     assert "P1-84" in markdown
+    assert "## 工位路由统计" in markdown
     for code in json_report["summary"]["code_counts"]:
         assert code in markdown
     combined = outputs[0].read_text(encoding="utf-8") + outputs[1].read_text(

@@ -30,6 +30,10 @@ from app.services.order_business_status import (
     build_order_business_statuses,
 )
 from app.services.printing_colors import PrintingColorError, normalize_printing_colors
+from app.services.production_station_routing import (
+    PRODUCTION_STATION_ROUTING_RULE_VERSION,
+    production_station_memberships,
+)
 
 
 REPORT_SCHEMA_VERSION = "p0-15-v1"
@@ -210,7 +214,18 @@ def _task_rows(db: Session, item_ids: Sequence[int]) -> dict[int, dict[int | Non
                 ProductionTask.status,
                 ProductionTask.production_label_enabled_snapshot,
                 ProductionTask.production_label_units_per_label_snapshot,
-            ).where(ProductionTask.order_item_id.in_(chunk))
+                ProductionTask.print_content_snapshot,
+                SalesOrderItemBomComponent.is_die_cut.label("component_is_die_cut"),
+                SalesOrderItemBomComponent.snapshot_component_box_style.label(
+                    "component_box_style"
+                ),
+            )
+            .outerjoin(
+                SalesOrderItemBomComponent,
+                SalesOrderItemBomComponent.id
+                == ProductionTask.sales_order_item_bom_component_id,
+            )
+            .where(ProductionTask.order_item_id.in_(chunk))
         ).mappings():
             component_id = row["sales_order_item_bom_component_id"]
             result[int(row["order_item_id"])][
@@ -495,6 +510,8 @@ def _product_rows(db: Session, product_ids: Sequence[int]) -> dict[int, dict]:
                 Product.production_label_units_per_label,
                 Product.print_content,
                 Product.printing_colors,
+                Product.box_category,
+                Product.box_style,
                 Product.is_virtual_composite_parent,
             ).where(Product.id.in_(chunk))
         ).mappings():
@@ -585,6 +602,11 @@ def audit_incomplete_order_chains(
 
     findings: list[ChainFinding] = []
     scanned_items = 0
+    workstation_eligible_tasks = 0
+    workstation_station_counts: Counter[str] = Counter()
+    workstation_dual_route_tasks = 0
+    workstation_unrouted_tasks = 0
+    workstation_routes: list[dict] = []
     for order in orders:
         projection = projections[int(order.id)]
         if (
@@ -618,6 +640,61 @@ def audit_incomplete_order_chains(
             components = set(component_products)
             external_components = required_external_components.get(item_id, set())
             product = products.get(int(item.product_id))
+            for component_id, task_row in item_tasks.items():
+                if str(task_row["status"]) != "pending":
+                    continue
+                is_component = component_id is not None
+                memberships = production_station_memberships(
+                    print_content_snapshot=task_row["print_content_snapshot"],
+                    box_style=(
+                        task_row["component_box_style"]
+                        if is_component
+                        else product["box_style"] if product else None
+                    ),
+                    die_cut_required=(
+                        bool(task_row["component_is_die_cut"])
+                        if is_component
+                        else bool(product and product["box_category"] == "die_cut")
+                    ),
+                )
+                workstation_eligible_tasks += 1
+                workstation_station_counts.update(memberships)
+                if len(memberships) > 1:
+                    workstation_dual_route_tasks += 1
+                if not memberships:
+                    workstation_unrouted_tasks += 1
+                workstation_routes.append(
+                    {
+                        "task_ref": _anonymous_ref(
+                            "production_task", int(task_row["id"]), anonymization_key
+                        ),
+                        "order_item_ref": _anonymous_ref(
+                            "item", item_id, anonymization_key
+                        ),
+                        "component_ref": (
+                            _anonymous_ref(
+                                "bom_component", int(component_id), anonymization_key
+                            )
+                            if component_id is not None
+                            else None
+                        ),
+                        "source_kind": "bom_component" if is_component else "regular",
+                        "die_cut_required": (
+                            bool(task_row["component_is_die_cut"])
+                            if is_component
+                            else bool(
+                                product and product["box_category"] == "die_cut"
+                            )
+                        ),
+                        "stations": sorted(memberships),
+                        "focus_match": _focus_match(
+                            order,
+                            item,
+                            normalized_focus,
+                            key=anonymization_key,
+                        ),
+                    }
+                )
             missing_task_keys: list[str] = []
             if item.supply_mode_snapshot != "external_purchase":
                 if components:
@@ -1222,6 +1299,14 @@ def audit_incomplete_order_chains(
         .upper()
         for term in normalized_focus
     )
+    workstation_routes.sort(
+        key=lambda row: (
+            row["order_item_ref"],
+            row["task_ref"],
+            row["component_ref"] or "",
+        )
+    )
+    focus_routes = sum(row["focus_match"] is not None for row in workstation_routes)
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
         "generated_at": (
@@ -1243,11 +1328,15 @@ def audit_incomplete_order_chains(
                 "reason": "not_available_before_p1_81",
             },
             "workstation_membership": {
-                "status": "not_evaluated",
-                "reason": (
-                    "no_persisted_membership_before_p1_84; current mobile endpoints "
-                    "share all pending tasks and require a separate code fix"
-                ),
+                "status": "evaluated",
+                "rule_version": PRODUCTION_STATION_ROUTING_RULE_VERSION,
+                "eligible_task_count": workstation_eligible_tasks,
+                "station_task_counts": {
+                    station: int(workstation_station_counts.get(station, 0))
+                    for station in ("printing", "die_cut")
+                },
+                "dual_route_task_count": workstation_dual_route_tasks,
+                "unrouted_task_count": workstation_unrouted_tasks,
             },
             "common_box_api_round_trip": {
                 "status": "not_evaluated_by_database_scan",
@@ -1256,10 +1345,12 @@ def audit_incomplete_order_chains(
             "current_chain_facts": {"status": "evaluated"},
         },
         "finding_code_registry": sorted(FINDING_CODES),
+        "workstation_routes": workstation_routes,
         "summary": {
             "scan_complete": False,
             "finding_count": len(findings),
             "focus_finding_count": focus_findings,
+            "focus_route_count": focus_routes,
             "severity_counts": dict(sorted(severity_counts.items())),
             "code_counts": dict(sorted(code_counts.items())),
         },

@@ -796,8 +796,14 @@ def test_common_box_contract_and_future_capabilities_are_explicit(tmp_path: Path
         "status": "not_evaluated",
         "reason": "not_available_before_p1_81",
     }
-    assert report["coverage"]["workstation_membership"]["status"] == "not_evaluated"
-    assert "p1_84" in report["coverage"]["workstation_membership"]["reason"]
+    assert report["coverage"]["workstation_membership"] == {
+        "status": "evaluated",
+        "rule_version": "p1-84-v1",
+        "eligible_task_count": 0,
+        "station_task_counts": {"printing": 0, "die_cut": 0},
+        "dual_route_task_count": 0,
+        "unrouted_task_count": 0,
+    }
     assert report["coverage"]["current_chain_facts"] == {"status": "evaluated"}
     assert report["summary"]["scan_complete"] is False
 

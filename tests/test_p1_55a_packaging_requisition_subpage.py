@@ -67,6 +67,28 @@ def test_board_and_external_packaging_are_distinct_requisition_views() -> None:
     assert "库存补库" in board
 
 
+def test_package_subpage_exposes_purchase_history_print_and_cancel_operations() -> None:
+    requisition = INDEX.split(
+        '<template v-else-if="activePage === \'requisition\'">', 1
+    )[1].split('<template v-else-if="activePage === \'incoming\'">', 1)[0]
+    external = requisition.split("<template v-else>", 1)[0]
+    history_loader = _method_body("loadExternalPurchaseHistory")
+    switcher = _method_body("selectExternalPurchaseView")
+
+    assert "待确认采购" in external
+    assert "采购历史" in external
+    assert "已确认的采购不会留在待确认列表" in external
+    assert "查看 / 撤销采购" in external
+    assert "查看采购" in external
+    assert "打印采购单" in external
+    assert "purchase.received_quantity" in external
+    assert "purchase.cancellation.reason" in external
+    assert "/api/external-packaging-purchases/history" in history_loader
+    assert 'this.externalPurchaseView = target;' in switcher
+    assert "this.loadExternalPurchaseHistory()" in switcher
+    assert "!this.canAdmin || !this.canViewCosts" in switcher
+
+
 def test_refreshable_subpage_url_restores_external_packaging_and_return_clears_it(
     tmp_path: Path,
 ) -> None:
@@ -294,6 +316,7 @@ const FunctionCtor=Function;
 global.latestRequestControllers=new Map();
 global.searchDebounceTimers=new Map();global.pageSearchGenerations=new Map();global.pinyinSearchTextCache=new Map();
 global.today=()=>"2026-08-14";global.plusDays=()=>"2026-08-21";
+global.blankReceiptReminderEditor=()=>({{}});
 global.axios={{get:async()=>{{throw Object.assign(new Error("forbidden"),{{response:{{status:403}}}});}}}};
 const vm={{
   authGeneration:5,user:{{id:22}},activePage:"requisition",requisitionWorkspace:"external-packaging",

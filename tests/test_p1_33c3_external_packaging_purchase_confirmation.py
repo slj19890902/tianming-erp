@@ -413,6 +413,71 @@ def test_manual_cancel_preserves_history_and_allows_reconfirmation(
         ).scalar_one() == 2
 
 
+def test_global_purchase_history_lists_confirmed_orders_and_exposes_safe_actions(
+    purchase_app: FastAPI,
+) -> None:
+    order_id = purchase_app.state.fixture["order_id"]
+    with TestClient(purchase_app) as client:
+        _login(client, "purchase-admin")
+        preview = client.get(
+            f"/api/orders/{order_id}/external-packaging-purchase"
+        ).json()
+        confirmed_response = client.post(
+            f"/api/orders/{order_id}/external-packaging-purchase/confirm",
+            json=_confirmation_payload(preview, "visible-purchase-history"),
+        )
+        assert confirmed_response.status_code == 200, confirmed_response.text
+        confirmed = confirmed_response.json()["confirmation"]
+
+        history_response = client.get(
+            "/api/external-packaging-purchases/history",
+            params={"page": 1, "page_size": 25, "q": "匿名采购客户"},
+        )
+        assert history_response.status_code == 200, history_response.text
+        history = history_response.json()
+        assert history["total"] == 1
+        assert history["page"] == 1
+        row = history["items"][0]
+        assert row["order_id"] == order_id
+        assert row["customer_name"] == "匿名采购客户"
+        assert row["can_cancel"] is True
+        assert row["lifecycle_status"] == "active"
+        assert len(row["purchase_orders"]) == 2
+        assert all(
+            purchase["receipt_status"] == "pending_receipt"
+            and purchase["received_quantity"] == "0"
+            and purchase["items"]
+            for purchase in row["purchase_orders"]
+        )
+        assert client.get(
+            "/api/external-packaging-purchases/history", params={"q": "查无此单"}
+        ).json()["total"] == 0
+
+        cancelled = client.post(
+            f"/api/orders/{order_id}/external-packaging-purchase/cancel",
+            json={
+                "expected_batch_id": confirmed["batch_id"],
+                "confirmed": True,
+                "reason": "从采购历史入口撤销并重新核对",
+            },
+        )
+        assert cancelled.status_code == 200, cancelled.text
+        after = client.get("/api/external-packaging-purchases/history").json()
+        assert after["total"] == 1
+        assert after["items"][0]["can_cancel"] is False
+        assert after["items"][0]["lifecycle_status"] == "cancelled"
+        assert all(
+            purchase["lifecycle_status"] == "cancelled"
+            and purchase["cancellation"]["reason"] == "从采购历史入口撤销并重新核对"
+            for purchase in after["items"][0]["purchase_orders"]
+        )
+
+        _login(client, "purchase-sales")
+        assert client.get("/api/external-packaging-purchases/history").status_code == 403
+        _login(client, "purchase-boss")
+        assert client.get("/api/external-packaging-purchases/history").status_code == 403
+
+
 def test_honeycomb_print_uses_frozen_structured_specification(
     purchase_app: FastAPI,
 ) -> None:
@@ -494,6 +559,13 @@ def test_manual_cancel_is_blocked_after_any_receipt(
             },
         )
         assert received.status_code == 200, received.text
+        history = client.get("/api/external-packaging-purchases/history").json()
+        assert history["total"] == 1
+        assert history["items"][0]["can_cancel"] is False
+        assert history["items"][0]["purchase_orders"][0]["receipt_status"] in {
+            "partially_received",
+            "received",
+        }
         cancelled = client.post(
             f"/api/orders/{order_id}/external-packaging-purchase/cancel",
             json={

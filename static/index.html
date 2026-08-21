@@ -3478,23 +3478,59 @@
                 </div>
                 <div class="toolbar requisition-page-actionbar">
                   <div class="toolbar-group">
+                    <button :class="['btn',{primary:externalPurchaseView==='pending'}]" type="button" @click="selectExternalPurchaseView('pending')">待确认采购</button>
+                    <button v-if="canAdmin && canViewCosts" :class="['btn',{primary:externalPurchaseView==='history'}]" type="button" @click="selectExternalPurchaseView('history')">采购历史<span v-if="externalPurchaseHistoryLoaded"> {{ externalPurchaseHistoryTotal }}</span></button>
+                  </div>
+                  <div class="muted">已确认的采购不会留在待确认列表，请到“采购历史”查看、打印或撤销。</div>
+                </div>
+                <div v-if="externalPurchaseView==='pending'" class="toolbar requisition-page-actionbar">
+                  <div class="toolbar-group">
                     <input class="input" v-model.trim="externalPurchaseRoutingFilter" @input="pages.externalPurchaseRouting=1" placeholder="搜索客户、订单、品号或包材" />
                   </div>
                   <button class="btn" type="button" :disabled="externalPurchaseRoutingLoading" @click="loadExternalPurchaseRouting">{{ externalPurchaseRoutingLoading ? '读取中…' : '刷新包材待确认' }}</button>
                 </div>
-                <div v-if="externalPurchaseRoutingLoading" class="status blue" style="display:block;margin:8px 0">正在读取外购包材待确认；已显示的上次结果不会被清空。</div>
-                <div v-if="externalPurchaseRoutingError" class="status orange" style="display:flex;align-items:center;gap:8px;white-space:normal;margin:8px 0">
+                <div v-if="externalPurchaseView==='pending' && externalPurchaseRoutingLoading" class="status blue" style="display:block;margin:8px 0">正在读取外购包材待确认；已显示的上次结果不会被清空。</div>
+                <div v-if="externalPurchaseView==='pending' && externalPurchaseRoutingError" class="status orange" style="display:flex;align-items:center;gap:8px;white-space:normal;margin:8px 0">
                   <span>{{ externalPurchaseRoutingError }}</span>
                   <button class="btn small" type="button" :disabled="externalPurchaseRoutingLoading" @click="loadExternalPurchaseRouting">重试</button>
                 </div>
-                <div v-if="externalPurchaseRoutingLoaded && !externalPurchaseRoutingLoading && !filteredExternalPurchaseRouting.length" class="empty">当前条件下没有待确认的外购包材需求。</div>
-                <div v-if="pagedExternalPurchaseRouting.length" class="table-wrap">
+                <div v-if="externalPurchaseView==='pending' && externalPurchaseRoutingLoaded && !externalPurchaseRoutingLoading && !filteredExternalPurchaseRouting.length" class="empty">当前条件下没有待确认的外购包材需求。已确认的单据请点击上方“采购历史”。</div>
+                <div v-if="externalPurchaseView==='pending' && pagedExternalPurchaseRouting.length" class="table-wrap">
                   <table class="compact-table">
                     <thead><tr><th>客户 / 订单</th><th>品号 / 名称</th><th>供货方式</th><th>规格</th><th>数量</th><th>下一步</th></tr></thead>
                     <tbody><tr v-for="row in pagedExternalPurchaseRouting" :key="'external-route-'+row.order_item_id"><td>{{ row.customer_name }}<div class="muted">{{ row.order_number }}｜交期 {{ row.delivery_date || '-' }}</div></td><td>{{ row.product_code || '-' }}｜{{ row.product_name || '-' }}</td><td>{{ row.supply_mode==='external_purchase' ? '纯外购包材' : '纸板主件＋外购组件' }}</td><td>{{ row.specification_summary || (row.component_count + '项外购组件') }}<div class="muted">{{ row.purchase_unit || '' }}</div></td><td>{{ row.quantity }}</td><td><button v-if="canAdmin && canViewCosts" class="btn small primary" @click="openExternalPurchase(row)">核对并确认采购</button><span v-else class="muted">请管理员在成本权限下确认采购</span></td></tr></tbody>
                   </table>
                 </div>
-                <pager :page="pages.externalPurchaseRouting" :total="filteredExternalPurchaseRouting.length" :page-size="pageSize" :always="true" :compact="true" :filter-count="externalPurchaseRoutingFilter ? 1 : 0" @change="pages.externalPurchaseRouting=$event"></pager>
+                <pager v-if="externalPurchaseView==='pending'" :page="pages.externalPurchaseRouting" :total="filteredExternalPurchaseRouting.length" :page-size="pageSize" :always="true" :compact="true" :filter-count="externalPurchaseRoutingFilter ? 1 : 0" @change="pages.externalPurchaseRouting=$event"></pager>
+
+                <div v-if="externalPurchaseView==='history'" class="toolbar requisition-page-actionbar">
+                  <div class="toolbar-group">
+                    <input class="input" v-model.trim="externalPurchaseHistoryFilter" @keyup.enter="pages.externalPurchaseHistory=1;loadExternalPurchaseHistory()" placeholder="搜索客户、ERP订单号、客户订单号、采购单号或供应商" />
+                    <button class="btn" type="button" :disabled="externalPurchaseHistoryLoading" @click="pages.externalPurchaseHistory=1;loadExternalPurchaseHistory()">查询</button>
+                  </div>
+                  <button class="btn" type="button" :disabled="externalPurchaseHistoryLoading" @click="loadExternalPurchaseHistory">{{ externalPurchaseHistoryLoading ? '读取中…' : '刷新采购历史' }}</button>
+                </div>
+                <div v-if="externalPurchaseView==='history' && externalPurchaseHistoryLoading" class="status blue" style="display:block;margin:8px 0">正在读取外购包材采购历史；已显示的上次结果不会被清空。</div>
+                <div v-if="externalPurchaseView==='history' && externalPurchaseHistoryError" class="status orange" style="display:flex;align-items:center;gap:8px;white-space:normal;margin:8px 0"><span>{{ externalPurchaseHistoryError }}</span><button class="btn small" type="button" :disabled="externalPurchaseHistoryLoading" @click="loadExternalPurchaseHistory">重试</button></div>
+                <div v-if="externalPurchaseView==='history' && externalPurchaseHistoryLoaded && !externalPurchaseHistoryLoading && !externalPurchaseHistory.length" class="empty">当前条件下没有外购包材采购历史。</div>
+                <div v-if="externalPurchaseView==='history' && externalPurchaseHistory.length" class="table-wrap">
+                  <table class="compact-table external-purchase-history-table">
+                    <thead><tr><th>客户 / 订单</th><th>采购单 / 供应商</th><th>采购内容</th><th>采购 / 已收</th><th>状态</th><th>操作</th></tr></thead>
+                    <tbody>
+                      <template v-for="batch in externalPurchaseHistory" :key="`purchase-history-${batch.batch_id}`">
+                        <tr v-for="(purchase,purchaseIndex) in batch.purchase_orders" :key="`purchase-history-order-${purchase.id}`">
+                          <td v-if="purchaseIndex===0" :rowspan="batch.purchase_orders.length"><strong>{{ batch.customer_short_name || batch.customer_name }}</strong><div class="muted">ERP {{ batch.order_number }}<template v-if="batch.customer_order_number">｜客户单号 {{ batch.customer_order_number }}</template></div><div class="muted">确认 {{ formatDateTime(batch.confirmed_at) }}</div></td>
+                          <td><strong>{{ purchase.purchase_number }}</strong><div class="muted">{{ purchase.supplier_name }}</div></td>
+                          <td><div v-for="item in purchase.items" :key="`purchase-history-item-${item.id}`"><strong>{{ item.supplier_product_code || '-' }}｜{{ item.product_name }}</strong><div class="muted">{{ item.specification_summary || '-' }}｜{{ item.purchase_quantity }} {{ item.purchase_unit }}</div></div></td>
+                          <td>采购 {{ purchase.ordered_quantity }}<br>已收 {{ purchase.received_quantity }}</td>
+                          <td><span :class="['status',purchase.lifecycle_status==='cancelled'?'red':(purchase.receipt_status==='received'?'green':'orange')]">{{ purchase.lifecycle_status==='cancelled' ? '已撤销' : (purchase.receipt_status==='received' ? '已收齐' : (purchase.receipt_status==='partially_received' ? '部分实收' : '未实收')) }}</span><div v-if="purchase.cancellation" class="muted">{{ formatDateTime(purchase.cancellation.cancelled_at) }}<br>{{ purchase.cancellation.reason }}</div></td>
+                          <td><div class="toolbar-group"><button class="btn small primary" type="button" @click="openExternalPurchase({id:batch.order_id,order_number:batch.order_number,customer_po:batch.customer_order_number})">{{ batch.can_cancel ? '查看 / 撤销采购' : '查看采购' }}</button><a class="btn small" :href="`/external-purchase-print.html?id=${purchase.id}`" target="_blank" rel="noopener">打印采购单</a></div></td>
+                        </tr>
+                      </template>
+                    </tbody>
+                  </table>
+                </div>
+                <pager v-if="externalPurchaseView==='history'" :page="pages.externalPurchaseHistory" :total="externalPurchaseHistoryTotal" :page-size="pageSize" :always="true" :compact="true" :filter-count="externalPurchaseHistoryFilter ? 1 : 0" @change="pages.externalPurchaseHistory=$event;loadExternalPurchaseHistory()"></pager>
               </template>
               <template v-else>
               <div class="page-head requisition-page-head">
@@ -8422,7 +8458,8 @@
             costReviewState:{loading:false,loaded:false,error:"",scope_label:"",evaluated_items:0,total_items:0,returned_items:0,truncated:false,summary:[],items:[]},
             orderDetail:null, orderGroupDetail:null, orderTrace:null, orderTraceEventDetail:null, orderTraceEventDetailLoadingKey:"", orderTraceReturnContext:null, traceRollbackBusy:false, drawingFile:null,
             externalPurchase:{loading:false,saving:false,cancelSaving:false,error:"",submitError:"",status:"",orderId:null,orderLabel:"",items:[],confirmation:null,history:[],cancelReason:"采购内容或数量需要重新核对",idempotencyKey:""},
-            externalPurchaseRouting:[], externalPurchaseRoutingLoading:false, externalPurchaseRoutingError:"", externalPurchaseRoutingFilter:"", externalPurchaseRoutingLoaded:false,
+            externalPurchaseView:"pending", externalPurchaseRouting:[], externalPurchaseRoutingLoading:false, externalPurchaseRoutingError:"", externalPurchaseRoutingFilter:"", externalPurchaseRoutingLoaded:false,
+            externalPurchaseHistory:[], externalPurchaseHistoryTotal:0, externalPurchaseHistoryLoading:false, externalPurchaseHistoryError:"", externalPurchaseHistoryFilter:"", externalPurchaseHistoryLoaded:false,
             orderItemSaveState:{saving:false,committed:false,outcomeUncertain:false,result:null},
             finishedInventoryCandidates: [], finishedInventoryCandidatesLoaded: false,
             finishedInventoryReservations: [],
@@ -8441,7 +8478,7 @@
             financeReportData: { monthly:[], yearly_summary:{}, selected_month_summary:{}, selected_month_customers:[], customer_balances:[], aging:[], as_of:"", included_through_statement_month:"" },
             financeReportState: { loading:false, error:"", loaded:false },
             statementsTotal: 0, financeCustomersTotal: 0, invoicesTotal: 0, pageSize: 25,
-            pages: { customers: 1, products: 1, orders: 1, customerHeat: 1, requisitionPending: 1, requisitionHolds: 1, requisitionReported: 1, externalPurchaseRouting: 1, incomingPending: 1, externalIncoming: 1, incomingHistory: 1, productionPending: 1, productionWaitingLabels: 1, productionHistory: 1, deliveries: 1, statements: 1, invoices: 1, financeCurrent: 1, financeSettled: 1 },
+            pages: { customers: 1, products: 1, orders: 1, customerHeat: 1, requisitionPending: 1, requisitionHolds: 1, requisitionReported: 1, externalPurchaseRouting: 1, externalPurchaseHistory: 1, incomingPending: 1, externalIncoming: 1, incomingHistory: 1, productionPending: 1, productionWaitingLabels: 1, productionHistory: 1, deliveries: 1, statements: 1, invoices: 1, financeCurrent: 1, financeSettled: 1 },
             productTab: "products", modal: null,
             materialCandidateItems: [], materialCandidateLoading: false,
             materialCandidateFilter: { customer_id:null, q:"", include_inactive:false },
@@ -12780,6 +12817,14 @@
             this.externalPurchaseRoutingFilter = "";
             this.externalPurchaseRoutingLoaded = false;
             this.pages.externalPurchaseRouting = 1;
+            this.externalPurchaseView = "pending";
+            this.externalPurchaseHistory = [];
+            this.externalPurchaseHistoryTotal = 0;
+            this.externalPurchaseHistoryLoading = false;
+            this.externalPurchaseHistoryError = "";
+            this.externalPurchaseHistoryFilter = "";
+            this.externalPurchaseHistoryLoaded = false;
+            this.pages.externalPurchaseHistory = 1;
             this.productionWaitingLabels = [];
             this.productionWaitingLabelTotal = 0;
             this.productionWaitingLabelLoading = false;
@@ -13211,7 +13256,10 @@
                 requirePageLoad(this.loadOrders()),
               ]);
               if (page === "requisition") {
-                if (this.requisitionWorkspace === "external-packaging") await requirePageLoad(this.loadExternalPurchaseRouting());
+                if (this.requisitionWorkspace === "external-packaging") {
+                  if (this.externalPurchaseView === "history") await requirePageLoad(this.loadExternalPurchaseHistory());
+                  else await requirePageLoad(this.loadExternalPurchaseRouting());
+                }
                 else await requirePageLoad(this.loadRequisition());
               }
               if (page === "incoming") {
@@ -15411,6 +15459,40 @@
               && this.requisitionWorkspace === "external-packaging"
             );
           },
+          externalPurchaseHistoryRequestIsCurrent(controller, authGeneration, userId) {
+            return (
+              latestRequestControllers.get("requisition:external-packaging-history") === controller
+              && !controller.signal.aborted
+              && authGeneration === this.authGeneration
+              && userId === (this.user?.id ?? null)
+              && this.activePage === "requisition"
+              && this.requisitionWorkspace === "external-packaging"
+              && this.externalPurchaseView === "history"
+            );
+          },
+          async selectExternalPurchaseView(view) {
+            const target = view === "history" ? "history" : "pending";
+            if (target === "history" && (!this.canAdmin || !this.canViewCosts)) {
+              this.showToast("采购历史需要管理员和成本查看权限", true);
+              return false;
+            }
+            if (target === this.externalPurchaseView) {
+              return target === "history"
+                ? this.loadExternalPurchaseHistory()
+                : this.loadExternalPurchaseRouting();
+            }
+            if (target === "history") {
+              this.cancelLatestRequest("requisition:external-packaging");
+              this.externalPurchaseRoutingLoading = false;
+            } else {
+              this.cancelLatestRequest("requisition:external-packaging-history");
+              this.externalPurchaseHistoryLoading = false;
+            }
+            this.externalPurchaseView = target;
+            return target === "history"
+              ? this.loadExternalPurchaseHistory()
+              : this.loadExternalPurchaseRouting();
+          },
           async openExternalPackagingRequisition() {
             if (!this.pageAllowed("requisition")) {
               this.showToast("当前账号没有包材报料查看权限", true);
@@ -15419,12 +15501,15 @@
             this.cancelLatestRequest("requisition:pending");
             this.requisitionPendingLoading = false;
             this.requisitionWorkspace = "external-packaging";
+            this.externalPurchaseView = "pending";
             this.syncDesktopWorkspaceUrl("requisition", "external-packaging");
             return this.loadExternalPurchaseRouting();
           },
           async returnToBoardRequisition() {
             this.cancelLatestRequest("requisition:external-packaging");
+            this.cancelLatestRequest("requisition:external-packaging-history");
             this.externalPurchaseRoutingLoading = false;
+            this.externalPurchaseHistoryLoading = false;
             this.requisitionWorkspace = "board";
             this.syncDesktopWorkspaceUrl("requisition");
             if (this.pageCacheFresh("requisition")) return true;
@@ -15462,6 +15547,52 @@
                 this.externalPurchaseRoutingLoading = false;
               }
               this.finishLatestRequest("requisition:external-packaging", controller);
+            }
+          },
+          async loadExternalPurchaseHistory() {
+            if (!this.canAdmin || !this.canViewCosts) {
+              this.externalPurchaseHistory = [];
+              this.externalPurchaseHistoryTotal = 0;
+              this.externalPurchaseHistoryLoaded = false;
+              this.externalPurchaseHistoryError = "采购历史需要管理员和成本查看权限";
+              return false;
+            }
+            const controller = this.beginLatestRequest("requisition:external-packaging-history");
+            const authGeneration = this.authGeneration;
+            const userId = this.user?.id ?? null;
+            this.externalPurchaseHistoryLoading = true;
+            this.externalPurchaseHistoryError = "";
+            try {
+              const params = {
+                page:Math.max(1, Number(this.pages.externalPurchaseHistory || 1)),
+                page_size:Math.max(1, Number(this.pageSize || 25)),
+              };
+              const keyword = String(this.externalPurchaseHistoryFilter || "").trim();
+              if (keyword) params.q = keyword;
+              const {data} = await axios.get("/api/external-packaging-purchases/history", {
+                params,
+                signal:controller.signal,
+              });
+              if (!this.externalPurchaseHistoryRequestIsCurrent(controller, authGeneration, userId)) return false;
+              this.externalPurchaseHistory = Array.isArray(data?.items) ? data.items : [];
+              this.externalPurchaseHistoryTotal = Number(data?.total || 0);
+              this.externalPurchaseHistoryLoaded = true;
+              const maxPage = Math.max(1, Math.ceil(this.externalPurchaseHistoryTotal / Math.max(1, Number(this.pageSize || 25))));
+              this.pages.externalPurchaseHistory = Math.min(Math.max(1, Number(data?.page || this.pages.externalPurchaseHistory || 1)), maxPage);
+              return true;
+            } catch (error) {
+              if (this.isCancelledRequest(error) || !this.externalPurchaseHistoryRequestIsCurrent(controller, authGeneration, userId)) return false;
+              if (error?.response?.status === 403) {
+                this.externalPurchaseHistory = [];
+                this.externalPurchaseHistoryTotal = 0;
+              }
+              this.externalPurchaseHistoryError = "外购包材采购历史读取失败：" + this.errorMessage(error);
+              return false;
+            } finally {
+              if (this.externalPurchaseHistoryRequestIsCurrent(controller, authGeneration, userId)) {
+                this.externalPurchaseHistoryLoading = false;
+              }
+              this.finishLatestRequest("requisition:external-packaging-history", controller);
             }
           },
           async loadRequisitionHolds({skipAutoRelease=false}={}) {
@@ -20581,7 +20712,10 @@
               this.orderDetail = detail.data;
               await this.loadOrders();
               if (this.activePage === "requisition") {
-                if (this.requisitionWorkspace === "external-packaging") await this.loadExternalPurchaseRouting();
+                if (this.requisitionWorkspace === "external-packaging") {
+                  await this.loadExternalPurchaseRouting();
+                  if (this.externalPurchaseHistoryLoaded || this.externalPurchaseView === "history") await this.loadExternalPurchaseHistory();
+                }
                 else await this.loadRequisition({skipAutoRelease:true});
               }
               this.showToast(data.created ? "外购包装已按供应商确认采购" : "该采购已确认，本次未重复创建");
@@ -20617,7 +20751,10 @@
               const detail = await axios.get(`/api/orders/${this.externalPurchase.orderId}`);
               this.orderDetail = detail.data;
               await this.loadOrders();
-              if (this.activePage === "requisition" && this.requisitionWorkspace === "external-packaging") await this.loadExternalPurchaseRouting();
+              if (this.activePage === "requisition" && this.requisitionWorkspace === "external-packaging") {
+                await this.loadExternalPurchaseRouting();
+                if (this.externalPurchaseHistoryLoaded || this.externalPurchaseView === "history") await this.loadExternalPurchaseHistory();
+              }
               this.showToast("外购包材采购已撤销，历史已保留；请按正确数量重新确认");
               return true;
             } catch (error) {

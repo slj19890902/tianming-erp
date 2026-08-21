@@ -441,6 +441,181 @@ def test_print_job_requires_explicit_confirmation_and_replays_frozen_template(
         assert {row["production_task_id"] for row in frozen_payload["plans"]} == {task_id}
 
 
+def test_new_print_uses_current_common_box_units_but_printed_history_stays_frozen(
+    production_print_app,
+) -> None:
+    from app.models.order import OrderItem
+    from app.models.product import Product
+    from app.models.production import ProductionTask
+    from app.models.production_label_print import ProductionPackagingLabelPrintJob
+
+    fixture = production_print_app
+    with fixture["session_factory"]() as db:
+        task = db.scalar(
+            select(ProductionTask).where(
+                ProductionTask.order_item_id == fixture["order_item_id"]
+            )
+        )
+        assert task is not None
+        item = db.get(OrderItem, task.order_item_id)
+        assert item is not None
+        product = db.get(Product, item.product_id)
+        assert product is not None
+        product.production_label_enabled = True
+        product.production_label_units_per_label = 50
+        product.version = 7
+        task.status = "completed"
+        task.planned_quantity = 1800
+        task.production_label_enabled_snapshot = True
+        task.production_label_units_per_label_snapshot = 50
+        task.production_label_total_quantity_snapshot = 1800
+        task.production_label_count_snapshot = 36
+        task.production_label_template_version_snapshot = CURRENT_TEMPLATE
+        task.production_label_product_version_snapshot = 7
+        db.commit()
+        task_id = int(task.id)
+        task_version = int(task.version)
+        product_id = int(product.id)
+
+    order_id = fixture["supplier_order_id"]
+    with TestClient(fixture["app"]) as client:
+        _login(client, "p132a2-admin")
+        old_preview = client.get(
+            f"/api/requisition/supplier-orders/{order_id}/production-packaging-label-package"
+        )
+        assert old_preview.status_code == 200, old_preview.text
+        old_plan = next(
+            plan
+            for plan in old_preview.json()["plans"]
+            if int(plan["production_task_id"]) == task_id
+        )
+        assert old_plan["units_per_label"] == 50
+        assert old_plan["label_count"] == 36
+        old_job = client.post(
+            f"/api/requisition/supplier-orders/{order_id}/production-packaging-label-jobs",
+            json={
+                "idempotency_key": "yl-000206-old-prepared-job",
+                "plan_fingerprint": old_preview.json()["plan_fingerprint"],
+                "confirmed": True,
+            },
+        )
+        assert old_job.status_code == 200, old_job.text
+        old_job_id = int(old_job.json()["job_id"])
+
+        with fixture["session_factory"]() as db:
+            product = db.get(Product, product_id)
+            assert product is not None
+            product.production_label_units_per_label = 20
+            product.version = 8
+            db.commit()
+
+        stale_prepare = client.post(
+            f"/api/requisition/supplier-orders/{order_id}/production-packaging-label-jobs",
+            json={
+                "idempotency_key": "yl-000206-stale-preview",
+                "plan_fingerprint": old_preview.json()["plan_fingerprint"],
+                "confirmed": True,
+            },
+        )
+        assert stale_prepare.status_code == 409
+        stale_replay = client.post(
+            f"/api/requisition/supplier-orders/{order_id}/production-packaging-label-jobs",
+            json={
+                "idempotency_key": "yl-000206-old-prepared-job",
+                "plan_fingerprint": old_preview.json()["plan_fingerprint"],
+                "confirmed": True,
+            },
+        )
+        assert stale_replay.status_code == 409
+        stale_job = client.get(
+            f"/api/requisition/production-packaging-label-jobs/{old_job_id}"
+        )
+        assert stale_job.status_code == 409
+
+        production_sheet = client.get(
+            f"/api/requisition/supplier-orders/{order_id}/production-print-package"
+        )
+        assert production_sheet.status_code == 200, production_sheet.text
+        assert production_sheet.json()["production_label_task_count"] == 1
+        assert production_sheet.json()["production_label_count"] == 90
+        sheet_component = next(
+            component
+            for card in production_sheet.json()["cards"]
+            for component in card.get("components", [])
+            if int(component.get("production_task_id") or 0) == task_id
+        )
+        assert sheet_component["production_label_units_per_bundle"] == 20
+
+        current_preview = client.get(
+            f"/api/requisition/supplier-orders/{order_id}/production-packaging-label-package"
+        )
+        assert current_preview.status_code == 200, current_preview.text
+        current_plan = next(
+            plan
+            for plan in current_preview.json()["plans"]
+            if int(plan["production_task_id"]) == task_id
+        )
+        assert current_plan["units_per_label"] == 20
+        assert current_plan["label_count"] == 90
+        assert current_plan["label_quantities"] == [20] * 90
+        assert current_plan["product_version"] == 8
+        assert current_plan["label_policy_source"] == "product_master_current"
+        assert current_plan["task_label_product_version_snapshot"] == 7
+
+        current_job = client.post(
+            f"/api/requisition/supplier-orders/{order_id}/production-packaging-label-jobs",
+            json={
+                "idempotency_key": "yl-000206-current-job",
+                "plan_fingerprint": current_preview.json()["plan_fingerprint"],
+                "confirmed": True,
+            },
+        )
+        assert current_job.status_code == 200, current_job.text
+        current_job_id = int(current_job.json()["job_id"])
+        confirmed = client.post(
+            f"/api/requisition/production-packaging-label-jobs/{current_job_id}/confirm",
+            json={
+                "idempotency_key": "yl-000206-current-confirm",
+                "confirmed": True,
+            },
+        )
+        assert confirmed.status_code == 200, confirmed.text
+
+        with fixture["session_factory"]() as db:
+            product = db.get(Product, product_id)
+            assert product is not None
+            product.production_label_units_per_label = 10
+            product.version = 9
+            db.commit()
+
+        frozen_printed = client.get(
+            f"/api/requisition/production-packaging-label-jobs/{current_job_id}"
+        )
+        assert frozen_printed.status_code == 200, frozen_printed.text
+        frozen_plan = next(
+            plan
+            for plan in frozen_printed.json()["package"]["plans"]
+            if int(plan["production_task_id"]) == task_id
+        )
+        assert frozen_plan["units_per_label"] == 20
+        assert frozen_plan["label_count"] == 90
+
+    with fixture["session_factory"]() as db:
+        task = db.get(ProductionTask, task_id)
+        old_frozen_job = db.get(ProductionPackagingLabelPrintJob, old_job_id)
+        current_frozen_job = db.get(ProductionPackagingLabelPrintJob, current_job_id)
+        assert task is not None
+        assert old_frozen_job is not None and current_frozen_job is not None
+        assert int(task.version) == task_version
+        assert task.production_label_units_per_label_snapshot == 50
+        assert task.production_label_count_snapshot == 36
+        assert task.production_label_product_version_snapshot == 7
+        assert old_frozen_job.status == "prepared"
+        assert old_frozen_job.printed_at is None
+        assert current_frozen_job.status == "printed"
+        assert current_frozen_job.printed_at is not None
+
+
 def test_current_task_disabled_snapshot_is_a_fail_closed_error_not_a_legacy_refresh(
     production_print_app,
 ) -> None:

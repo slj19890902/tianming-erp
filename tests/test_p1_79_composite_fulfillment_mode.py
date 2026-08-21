@@ -240,6 +240,11 @@ def test_component_and_parent_delivery_label_plans_are_mutually_exclusive(
             order_item.parent_production_label_template_version_snapshot = (
                 "current_40x30_v2"
             )
+            parent_product = db.get(Product, order_item.product_id)
+            assert parent_product is not None
+            parent_product.production_label_enabled = True
+            parent_product.production_label_units_per_label = 50
+            parent_product.version = int(parent_product.version) + 1
             partial = build_composite_requisition_packaging_label_package(
                 db,
                 requisition,
@@ -255,6 +260,14 @@ def test_component_and_parent_delivery_label_plans_are_mutually_exclusive(
             assert parent_package["review_required"] is False
             assert len(parent_package["plans"]) == 1
             assert parent_package["plans"][0]["fulfillment_mode"] == "parent_delivery"
+            assert parent_package["plans"][0]["units_per_label"] == 50
+            assert parent_package["plans"][0]["product_version"] == int(
+                parent_product.version
+            )
+            assert (
+                parent_package["plans"][0]["label_policy_source"]
+                == "product_master_current"
+            )
             assert parent_package["plans"][0]["product_name"] == "组合父件"
             assert parent_package["plans"][0]["total_quantity"] == 1800
             assert parent_package["plans"][0]["label_count"] == 36

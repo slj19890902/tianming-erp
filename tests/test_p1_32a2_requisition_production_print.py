@@ -969,6 +969,8 @@ def test_package_projects_explicit_box_layout_current_mold_and_secure_drawing(
 
         product.box_style = "衬板"
         product.box_category = "normal"
+        product.production_label_enabled = True
+        product.production_label_units_per_label = 50
         task.production_label_enabled_snapshot = True
         task.production_label_units_per_label_snapshot = 50
         task.production_label_total_quantity_snapshot = 200
@@ -1012,6 +1014,8 @@ def test_p1_67_task_sheet_prioritizes_identity_fields_and_process_order() -> Non
 def test_production_packaging_labels_deduplicate_split_rows_and_keep_remainder(
     production_print_app,
 ):
+    from app.models.order import OrderItem
+    from app.models.product import Product
     from app.models.production import ProductionTask
     from app.models.supplier_requisition_order import SupplierRequisitionOrder
     from app.services.production_packaging_label import (
@@ -1028,6 +1032,12 @@ def test_production_packaging_labels_deduplicate_split_rows_and_keep_remainder(
                 ProductionTask.order_item_id == production_print_app["order_item_id"]
             )
         )
+        item = db.get(OrderItem, task.order_item_id)
+        assert item is not None
+        product = db.get(Product, item.product_id)
+        assert product is not None
+        product.production_label_enabled = True
+        product.production_label_units_per_label = 5
         task.production_label_enabled_snapshot = True
         task.production_label_units_per_label_snapshot = 5
         task.production_label_total_quantity_snapshot = 23
@@ -1077,6 +1087,8 @@ def test_production_packaging_labels_deduplicate_split_rows_and_keep_remainder(
 def test_production_packaging_label_api_is_read_only_and_customer_scoped(
     production_print_app,
 ):
+    from app.models.order import OrderItem
+    from app.models.product import Product
     from app.models.production import ProductionTask
 
     order_id = production_print_app["supplier_order_id"]
@@ -1086,6 +1098,12 @@ def test_production_packaging_label_api_is_read_only_and_customer_scoped(
                 ProductionTask.order_item_id == production_print_app["order_item_id"]
             )
         )
+        item = db.get(OrderItem, task.order_item_id)
+        assert item is not None
+        product = db.get(Product, item.product_id)
+        assert product is not None
+        product.production_label_enabled = True
+        product.production_label_units_per_label = 5
         task.production_label_enabled_snapshot = True
         task.production_label_units_per_label_snapshot = 5
         task.production_label_total_quantity_snapshot = 23

@@ -17947,6 +17947,9 @@ def post_composite_requisition_packaging_label_job(
                     "material_requisition_id": requisition.id,
                     "selected_item_ids": payload.selected_item_ids,
                     "template_version": result.job.template_version,
+                    "label_policy_source": result.package.get(
+                        "label_policy_source"
+                    ),
                     "plan_fingerprint": result.job.plan_fingerprint,
                     "payload_hash": result.job.payload_hash,
                     "label_count": result.package.get("label_count"),
@@ -18020,6 +18023,9 @@ def post_supplier_order_production_packaging_label_job(
                 details={
                     "supplier_order_id": order.id,
                     "template_version": result.job.template_version,
+                    "label_policy_source": result.package.get(
+                        "label_policy_source"
+                    ),
                     "plan_fingerprint": result.job.plan_fingerprint,
                     "payload_hash": result.job.payload_hash,
                     "label_count": result.package.get("label_count"),

@@ -300,9 +300,10 @@ def build_supplier_requisition_production_package(
 ) -> dict:
     """Build a deterministic, read-only pre-receipt production print package.
 
-    The projection uses the immutable supplier-order rows, order-item snapshots,
-    BOM snapshots and production-task printing snapshots. It never reads current
-    product master fields and never advances receiving, production or inventory.
+    The production facts use immutable supplier-order rows, order-item snapshots,
+    BOM snapshots and production-task printing snapshots.  The label action and
+    per-bundle display deliberately read the current common-box label policy; the
+    projection never advances receiving, production or inventory.
     """
 
     items = sorted(
@@ -535,6 +536,7 @@ def build_supplier_requisition_production_package(
     # BOM sources, or repeated rows may share the same product code and even
     # the same dimensions while still being distinct material tasks.
     grouped: OrderedDict[int, dict] = OrderedDict()
+    task_label_products: dict[int, Product] = {}
     for item in items:
         context = order_context.get(int(item.order_item_id or 0))
         order_item, sales_order, customer = (
@@ -568,6 +570,8 @@ def build_supplier_requisition_production_package(
             else ordinary_tasks.get(int(item.order_item_id or 0))
         )
         product = products.get(int(item.product_id or 0))
+        if task is not None and product is not None:
+            task_label_products[int(task.id)] = product
         product_drawing = latest_drawings.get(int(item.product_id or 0))
         box_style = (
             component_snapshot.snapshot_component_box_style
@@ -792,9 +796,10 @@ def build_supplier_requisition_production_package(
                 1,
             ),
             "production_label_units_per_bundle": (
-                int(task.production_label_units_per_label_snapshot)
-                if task is not None
-                and task.production_label_units_per_label_snapshot is not None
+                int(product.production_label_units_per_label)
+                if product is not None
+                and bool(product.production_label_enabled)
+                and product.production_label_units_per_label is not None
                 else None
             ),
             **printing_snapshot,
@@ -1129,7 +1134,7 @@ def build_supplier_requisition_production_package(
         for task in tasks
         if int(task.id) in used_task_ids
         and bool(task.production_label_enabled_snapshot)
-        and int(task.production_label_count_snapshot or 0) > 0
+        and int(task.production_label_total_quantity_snapshot or 0) > 0
     }
     # This maintenance projection is deliberately kept outside the immutable
     # paper fingerprint above.  It does not change historical task cards; it
@@ -1137,6 +1142,7 @@ def build_supplier_requisition_production_package(
     # existing, audited per-task refresh command when an older task froze the
     # label plan before the common-box policy was enabled.
     label_plan_refresh_options: list[dict] = []
+    current_label_counts: dict[int, int] = {}
     if used_task_ids:
         # Local import avoids the intentional production-label module cycle:
         # job creation imports this read projection, while task maintenance
@@ -1154,9 +1160,37 @@ def build_supplier_requisition_production_package(
             task_id = int(row["id"])
             task = task_by_id[task_id]
             current = row.get("current_production_label_product") or {}
-            product_id = current.get("product_id")
-            product = db.get(Product, int(product_id)) if product_id else None
-            current_enabled = bool(current.get("enabled"))
+            product = task_label_products.get(task_id)
+            product_id = (
+                int(product.id)
+                if product is not None
+                else current.get("product_id")
+            )
+            if product is None and product_id:
+                product = db.get(Product, int(product_id))
+            current_enabled = bool(
+                product.production_label_enabled
+                if product is not None
+                else current.get("enabled")
+            )
+            current_units_per_label = int(
+                product.production_label_units_per_label
+                if product is not None
+                and product.production_label_units_per_label is not None
+                else current.get("units_per_label") or 0
+            )
+            frozen_total_quantity = int(
+                task.production_label_total_quantity_snapshot or 0
+            )
+            if (
+                task_id in label_tasks
+                and current_enabled
+                and current_units_per_label > 0
+                and frozen_total_quantity > 0
+            ):
+                current_label_counts[task_id] = math.ceil(
+                    frozen_total_quantity / current_units_per_label
+                )
             refresh_allowed = bool(
                 row.get("can_refresh_production_label_plan") and current_enabled
             )
@@ -1168,14 +1202,20 @@ def build_supplier_requisition_production_package(
                     "task_id": task_id,
                     "expected_task_version": int(task.version),
                     "product_id": int(product_id) if product_id else None,
-                    "expected_product_version": current.get("version"),
+                    "expected_product_version": (
+                        int(product.version)
+                        if product is not None
+                        else current.get("version")
+                    ),
                     "product_code": product.product_code if product is not None else None,
                     "product_name": product.product_name if product is not None else None,
                     "frozen_template_version": (
                         task.production_label_template_version_snapshot
                     ),
                     "current_enabled": current_enabled,
-                    "current_units_per_label": current.get("units_per_label"),
+                    "current_units_per_label": (
+                        current_units_per_label or None
+                    ),
                     "can_refresh": refresh_allowed,
                     "block_reason": block_reason,
                 }
@@ -1194,11 +1234,8 @@ def build_supplier_requisition_production_package(
         "review_messages": review_messages,
         "layout_overflow": layout_overflow,
         "printable": not layout_overflow,
-        "production_label_task_count": len(label_tasks),
-        "production_label_count": sum(
-            int(task.production_label_count_snapshot or 0)
-            for task in label_tasks.values()
-        ),
+        "production_label_task_count": len(current_label_counts),
+        "production_label_count": sum(current_label_counts.values()),
         "production_label_refresh_options": label_plan_refresh_options,
         "cards": cards,
         "pages": pages,

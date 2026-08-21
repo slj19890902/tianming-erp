@@ -89,6 +89,7 @@ from app.models.warehouse_inventory import (
     WarehouseAreaStoragePolicy,
     WarehouseFloor,
     WarehouseLocation,
+    WarehouseLocationAlias,
 )
 from app.services.floor3_locations import (
     Floor3LocationError,
@@ -273,6 +274,16 @@ from app.services.location_candidates import (
     list_operational_locations,
     operational_location_issue,
     operational_location_payload,
+)
+from app.services.warehouse_location_address import (
+    AddressChangeCommand,
+    WarehouseLocationAddressError,
+    build_address_change_preview,
+    confirm_address_change,
+    employee_location_name,
+    location_address_payload,
+    location_alias_conflict,
+    resolve_location_address,
 )
 from app.services.requisition_quantities import cutting_factor, normalize_cutting_mode
 from app.services.product_specification import product_dimension_specification
@@ -491,6 +502,47 @@ class LocationPayload(BaseModel):
         ):
             raise ValueError("普通库位要启用入库，必须同时填写楼层、区域和存储方式")
         return self
+
+
+class WarehouseAddressChangePayload(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    action_kind: Literal["area", "rack", "location"]
+    area_id: int | None = Field(default=None, gt=0)
+    location_id: int | None = Field(default=None, gt=0)
+    current_rack_code: str | None = Field(default=None, max_length=1)
+    new_zone_code: str | None = Field(default=None, max_length=1)
+    new_subzone_no: int | None = Field(default=None, ge=1, le=99)
+    new_address_kind: Literal["rack_slot", "ground_slot"] | None = None
+    new_rack_code: str | None = Field(default=None, max_length=1)
+    new_level_no: int | None = Field(default=None, ge=1, le=99)
+    new_ground_row_no: int | None = Field(default=None, ge=1, le=99)
+    new_slot_no: int | None = Field(default=None, ge=1, le=99)
+
+    @field_validator("current_rack_code", "new_zone_code", "new_rack_code")
+    @classmethod
+    def normalize_address_letter(cls, value: str | None) -> str | None:
+        normalized = (value or "").strip().upper()
+        return normalized or None
+
+    def command(self) -> AddressChangeCommand:
+        return AddressChangeCommand(**self.model_dump())
+
+
+class WarehouseAddressConfirmPayload(WarehouseAddressChangePayload):
+    preview_fingerprint: str = Field(min_length=64, max_length=64)
+    idempotency_key: str = Field(min_length=8, max_length=120)
+
+    @field_validator("preview_fingerprint", "idempotency_key")
+    @classmethod
+    def strip_address_confirm_text(cls, value: str) -> str:
+        return value.strip()
+
+    def command(self) -> AddressChangeCommand:
+        values = self.model_dump(
+            exclude={"preview_fingerprint", "idempotency_key"}
+        )
+        return AddressChangeCommand(**values)
 
 
 class WarehouseFloorPayload(BaseModel):
@@ -1817,6 +1869,7 @@ def _location_dict(row: WarehouseLocation) -> dict:
             else None
         ),
         "remarks": row.remarks,
+        **location_address_payload(row),
     }
 
 
@@ -2178,7 +2231,12 @@ def _lot_query():
             )
         )
         .options(
-            selectinload(InventoryLot.location),
+            selectinload(InventoryLot.location).selectinload(
+                WarehouseLocation.address_aliases
+            ),
+            selectinload(InventoryLot.location)
+            .selectinload(WarehouseLocation.address_area)
+            .selectinload(WarehouseArea.floor),
             selectinload(InventoryLot.finished_detail),
             selectinload(InventoryLot.semi_finished_detail),
             selectinload(InventoryLot.allowed_products).selectinload(
@@ -5047,7 +5105,8 @@ def list_floor3_locations(
     visible_customer_ids = _visible_customer_ids(user, db)
 
     query = select(WarehouseLocation).options(
-        selectinload(WarehouseLocation.floor3_layout)
+        selectinload(WarehouseLocation.floor3_layout),
+        selectinload(WarehouseLocation.address_area).selectinload(WarehouseArea.floor),
     ).where(
         WarehouseLocation.warehouse_floor == 3,
         WarehouseLocation.source_version == "V11",
@@ -5164,7 +5223,8 @@ def get_floor3_location(
 ) -> dict:
     location = db.scalar(
         select(WarehouseLocation).options(
-            selectinload(WarehouseLocation.floor3_layout)
+            selectinload(WarehouseLocation.floor3_layout),
+            selectinload(WarehouseLocation.address_area).selectinload(WarehouseArea.floor),
         ).where(
             WarehouseLocation.id == location_id,
             WarehouseLocation.warehouse_floor == 3,
@@ -5210,14 +5270,19 @@ def get_floor3_location(
         for value in (movement.from_location_id, movement.to_location_id)
         if value is not None
     }
-    location_codes = (
-        dict(
-            db.execute(
-                select(WarehouseLocation.id, WarehouseLocation.location_code).where(
-                    WarehouseLocation.id.in_(location_ids)
+    history_locations = (
+        {
+            row.id: row
+            for row in db.scalars(
+                select(WarehouseLocation)
+                .options(
+                    selectinload(WarehouseLocation.address_area).selectinload(
+                        WarehouseArea.floor
+                    )
                 )
+                .where(WarehouseLocation.id.in_(location_ids))
             ).all()
-        )
+        }
         if location_ids
         else {}
     )
@@ -5238,9 +5303,23 @@ def get_floor3_location(
                 "pallet_code": history_pallet.pallet_code,
                 "movement_type": movement.movement_type,
                 "from_location_id": movement.from_location_id,
-                "from_location_code": location_codes.get(movement.from_location_id),
+                "from_location_code": (
+                    history_locations[movement.from_location_id].location_code
+                    if movement.from_location_id in history_locations
+                    else None
+                ),
+                "from_location_name": employee_location_name(
+                    history_locations.get(movement.from_location_id)
+                ),
                 "to_location_id": movement.to_location_id,
-                "to_location_code": location_codes.get(movement.to_location_id),
+                "to_location_code": (
+                    history_locations[movement.to_location_id].location_code
+                    if movement.to_location_id in history_locations
+                    else None
+                ),
+                "to_location_name": employee_location_name(
+                    history_locations.get(movement.to_location_id)
+                ),
                 "operator_id": movement.operator_id,
                 "moved_at": beijing_naive_to_api(movement.moved_at),
                 "remarks": movement.remarks,
@@ -7135,6 +7214,19 @@ def _warehouse_area_dict(db: Session, row: WarehouseArea) -> dict:
         "floor_number": row.floor.floor_number,
         "area_code": row.area_code,
         "area_name": row.area_name,
+        "address_zone_code": row.address_zone_code,
+        "address_subzone_no": row.address_subzone_no,
+        "address_version": int(row.address_version or 1),
+        "current_address_code": (
+            f"{row.floor.floor_number}F-{row.address_zone_code}{int(row.address_subzone_no):02d}"
+            if row.address_zone_code and row.address_subzone_no
+            else None
+        ),
+        "current_address_name": (
+            f"{row.floor.floor_name} {row.address_zone_code}{int(row.address_subzone_no)}区"
+            if row.address_zone_code and row.address_subzone_no
+            else row.area_name
+        ),
         "planned_location_count": row.planned_location_count,
         "planned_pallet_capacity": row.planned_pallet_capacity,
         "capacity_review_status": row.capacity_review_status,
@@ -9317,7 +9409,12 @@ def _twin_dashboard_source_rows(
         db.scalars(
             select(WarehouseLocation)
             .where(_formal_inventory_location_condition())
-            .options(selectinload(WarehouseLocation.floor3_layout))
+            .options(
+                selectinload(WarehouseLocation.floor3_layout),
+                selectinload(WarehouseLocation.address_area).selectinload(
+                    WarehouseArea.floor
+                ),
+            )
             .order_by(WarehouseLocation.sort_order, WarehouseLocation.location_code)
         ).all()
     )
@@ -9777,11 +9874,21 @@ def search_warehouse_twin_inventory(
         row for row in candidates
         if inventory_search_matches(row, effective_keyword, today)
     ][:500]
-    return build_inventory_code_search_results(
+    result = build_inventory_code_search_results(
         lots=lots,
         keyword=effective_keyword,
         as_of=today,
     )
+    try:
+        result["location_match"] = resolve_location_address(db, effective_keyword)
+    except WarehouseLocationAddressError as error:
+        result["location_match"] = None
+        result["location_lookup_issue"] = (
+            {"code": error.code, "message": error.message}
+            if error.code != "WAREHOUSE_ADDRESS_NOT_FOUND"
+            else None
+        )
+    return result
 
 
 def _twin_reference_feature_codes(kind: str, location_text: str | None) -> list[str]:
@@ -9916,7 +10023,7 @@ def _twin_mold_resources(
             {
                 "resource_id": f"mold:{mold.get('id')}",
                 "kind": "mold",
-                "primary_code": None,
+                "primary_code": mold.get("mold_code"),
                 "title": mold.get("display_name") or mold.get("mold_name") or "模具",
                 "subtitle": (
                     f"封存待复用 · {product_summary or '无历史绑定'}"
@@ -10244,6 +10351,22 @@ def update_warehouse_floor(
     row = db.get(WarehouseFloor, floor_id)
     if row is None:
         raise HTTPException(status_code=404, detail="楼层不存在")
+    if (
+        (row.floor_code != payload.floor_code or row.floor_number != payload.floor_number)
+        and db.scalar(
+            select(WarehouseArea.id)
+            .where(
+                WarehouseArea.floor_id == row.id,
+                WarehouseArea.address_zone_code.is_not(None),
+            )
+            .limit(1)
+        )
+        is not None
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="该楼层已有结构化位置地址，楼层身份不能通过普通台账编辑修改。",
+        )
     before_capacity = row.planning_reference_pallet_capacity
     for key, value in payload.model_dump().items():
         setattr(row, key, value)
@@ -10326,6 +10449,13 @@ def update_warehouse_area(
     row = db.get(WarehouseArea, area_id)
     if row is None:
         raise HTTPException(status_code=404, detail="区域不存在")
+    if row.address_zone_code and (
+        row.floor_id != payload.floor_id or row.area_code != payload.area_code
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="该区域已启用结构化地址，请通过地址治理预览和一次确认修改。",
+        )
     floor = db.get(WarehouseFloor, payload.floor_id)
     if floor is None:
         raise HTTPException(status_code=404, detail="楼层不存在")
@@ -10381,6 +10511,121 @@ def update_warehouse_area(
     return _warehouse_area_dict(db, row)
 
 
+def _raise_location_address_error(error: WarehouseLocationAddressError) -> None:
+    raise HTTPException(
+        status_code=error.status_code,
+        detail={"code": error.code, "message": error.message},
+    ) from error
+
+
+@router.post("/location-addresses/preview")
+def preview_warehouse_location_address_change(
+    payload: WarehouseAddressChangePayload,
+    db: Session = Depends(get_db),
+    _user: User = Depends(admin_only),
+) -> dict:
+    try:
+        return build_address_change_preview(db, payload.command())
+    except WarehouseLocationAddressError as error:
+        _raise_location_address_error(error)
+
+
+@router.post("/location-addresses/confirm")
+def confirm_warehouse_location_address_change(
+    payload: WarehouseAddressConfirmPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    try:
+        response, replayed = confirm_address_change(
+            db,
+            payload.command(),
+            preview_fingerprint=payload.preview_fingerprint,
+            idempotency_key=payload.idempotency_key,
+            actor_user_id=int(user.id),
+        )
+        if replayed:
+            return response
+        append_audit_event(
+            db,
+            request=request,
+            actor=user,
+            event_category="system",
+            result="success",
+            source="web",
+            module_code="warehouse",
+            action_code="warehouse_location_address_change",
+            legacy_action="LOCATION_RENAME",
+            resource="warehouse/location-addresses",
+            entity_type="warehouse_location_address_mutation",
+            object_ref=response["target_ref"],
+            batch_id=payload.idempotency_key[:64],
+            description="仓库位置当前地址已更新；稳定位置、库存数量和流水未改变",
+            details={
+                "before": response["before"],
+                "after": response["after"],
+                "impacts": response["impacts"],
+                "writes_inventory": False,
+                "writes_movements": False,
+            },
+        )
+        db.commit()
+        return response
+    except WarehouseLocationAddressError as error:
+        db.rollback()
+        _raise_location_address_error(error)
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "WAREHOUSE_ADDRESS_CONFLICT",
+                "message": "地址、旧码或操作键已被占用，请刷新后重试。",
+            },
+        ) from error
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.get("/location-addresses/resolve")
+def resolve_warehouse_location_address(
+    value: str = Query(min_length=1, max_length=120),
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_read),
+) -> dict:
+    try:
+        return resolve_location_address(db, value)
+    except WarehouseLocationAddressError as error:
+        _raise_location_address_error(error)
+
+
+@router.get("/location-addresses/{location_id}/aliases")
+def list_warehouse_location_aliases(
+    location_id: int,
+    db: Session = Depends(get_db),
+    _user: User = Depends(admin_only),
+) -> dict:
+    if db.get(WarehouseLocation, location_id) is None:
+        raise HTTPException(status_code=404, detail="位置不存在")
+    rows = db.scalars(
+        select(WarehouseLocationAlias)
+        .where(WarehouseLocationAlias.location_id == location_id)
+        .order_by(WarehouseLocationAlias.id)
+    ).all()
+    return {
+        "items": [
+            {
+                "alias_text": row.alias_text,
+                "alias_kind": row.alias_kind,
+                "created_at": utc_naive_to_api(row.created_at),
+            }
+            for row in rows
+        ]
+    }
+
+
 @router.get("/locations")
 def list_locations(
     include_inactive: bool = False,
@@ -10394,7 +10639,13 @@ def list_locations(
     )
     if not include_inactive:
         query = query.where(WarehouseLocation.is_active.is_(True))
-    rows = db.scalars(query.order_by(WarehouseLocation.location_code)).all()
+    rows = db.scalars(
+        query.options(
+            selectinload(WarehouseLocation.address_area).selectinload(
+                WarehouseArea.floor
+            )
+        ).order_by(WarehouseLocation.location_code)
+    ).all()
     return {"items": [_location_dict(row) for row in rows]}
 
 
@@ -10423,7 +10674,15 @@ def _location_label_dict(
         floor_number,
         f"{floor_number}楼" if floor_number else "楼层待确认",
     )
-    area_text = f"{row.area_code}区" if row.area_code else "区域待确认"
+    structured_area = row.address_area
+    area_text = (
+        f"{structured_area.address_zone_code}{int(structured_area.address_subzone_no)}区"
+        if structured_area is not None
+        and structured_area.address_zone_code
+        and structured_area.address_subzone_no
+        else (f"{row.area_code}区" if row.area_code else "区域待确认")
+    )
+    readable_location = employee_location_name(row)
     port = request.url.port or 8000
     lookup_url = (
         f"http://{lan_ip or _lan_ip()}:{port}/warehouse.html"
@@ -10436,7 +10695,7 @@ def _location_label_dict(
         **_location_dict(row),
         "floor_text": floor_text,
         "area_text": area_text,
-        "display_path": f"{floor_text} · {area_text} · {row.location_name}",
+        "display_path": readable_location,
         "layout_version": row.floor3_layout.version if row.floor3_layout else None,
         "lookup_url": lookup_url,
         "qr_data_url": (
@@ -10461,7 +10720,12 @@ def get_location_labels(
         raise HTTPException(status_code=422, detail="一次最多打印 100 个位置")
     rows = db.scalars(
         select(WarehouseLocation)
-        .options(selectinload(WarehouseLocation.floor3_layout))
+        .options(
+            selectinload(WarehouseLocation.floor3_layout),
+            selectinload(WarehouseLocation.address_area).selectinload(
+                WarehouseArea.floor
+            ),
+        )
         .where(WarehouseLocation.id.in_(ordered_ids))
     ).all()
     rows_by_id = {row.id: row for row in rows}
@@ -10486,7 +10750,12 @@ def get_location_label(
 ) -> dict:
     row = db.scalar(
         select(WarehouseLocation)
-        .options(selectinload(WarehouseLocation.floor3_layout))
+        .options(
+            selectinload(WarehouseLocation.floor3_layout),
+            selectinload(WarehouseLocation.address_area).selectinload(
+                WarehouseArea.floor
+            ),
+        )
         .where(WarehouseLocation.id == location_id)
     )
     if row is None:
@@ -15181,6 +15450,11 @@ def create_location(
     db: Session = Depends(get_db),
     user: User = Depends(admin_only),
 ) -> dict:
+    if location_alias_conflict(db, payload.location_code):
+        raise HTTPException(
+            status_code=409,
+            detail="该库位编码是其他稳定位置的永久旧码，禁止复用。",
+        )
     _require_registered_area(
         db,
         floor_number=payload.warehouse_floor,
@@ -15210,6 +15484,25 @@ def update_location(
     row = db.get(WarehouseLocation, location_id)
     if row is None:
         raise HTTPException(status_code=404, detail="库位不存在")
+    if row.address_kind != "legacy" and any(
+        (
+            row.location_code != payload.location_code,
+            row.warehouse_floor != payload.warehouse_floor,
+            (row.area_code or None) != payload.area_code,
+            (row.storage_type or None) != payload.storage_type,
+        )
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="该位置已启用结构化地址，请通过地址治理预览和一次确认修改。",
+        )
+    if location_alias_conflict(
+        db, payload.location_code, location_id=location_id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="该库位编码是其他稳定位置的永久旧码，禁止复用。",
+        )
     _reject_v11_location_configuration(row)
     _require_registered_area(
         db,
@@ -15632,6 +15925,7 @@ _INSIGHT_OPERATIONAL_ACTION_FIELDS = frozenset(
         "inventory_type",
         "status",
         "location_code",
+        "location_name",
         "quantity_available",
         "unit",
         "age_days",

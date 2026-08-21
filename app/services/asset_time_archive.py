@@ -7,7 +7,7 @@ import json
 from typing import Iterable, Literal
 
 from sqlalchemy import func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.time_contract import beijing_naive_to_api, beijing_today, utc_naive_to_api
 from app.models.customer import Customer
@@ -26,8 +26,10 @@ from app.models.warehouse_inventory import (
     InventoryLot,
     InventoryLotTransfer,
     InventoryMovement,
+    WarehouseArea,
     WarehouseLocation,
 )
+from app.services.warehouse_location_address import employee_location_name
 
 
 _PLATE_FIELDS = (
@@ -196,9 +198,15 @@ def _location_labels(db: Session, location_ids: set[int]) -> dict[int, str]:
     if not location_ids:
         return {}
     return {
-        row.id: row.location_code
+        row.id: employee_location_name(row)
         for row in db.scalars(
-            select(WarehouseLocation).where(WarehouseLocation.id.in_(location_ids))
+            select(WarehouseLocation)
+            .options(
+                selectinload(WarehouseLocation.address_area).selectinload(
+                    WarehouseArea.floor
+                )
+            )
+            .where(WarehouseLocation.id.in_(location_ids))
         ).all()
     }
 

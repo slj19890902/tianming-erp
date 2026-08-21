@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.time_contract import utc_naive_to_api
 from app.models.delivery import Delivery, DeliveryItem
@@ -38,8 +38,10 @@ from app.models.warehouse_inventory import (
     InventoryPallet,
     InventoryPalletItem,
     InventoryReservation,
+    WarehouseArea,
     WarehouseLocation,
 )
+from app.services.warehouse_location_address import employee_location_name
 from app.services.order_business_status import BUSINESS_STATUS_LABELS
 from app.services.product_specification import resolved_product_specification
 
@@ -510,9 +512,13 @@ def build_order_item_document_trace(
     }
     location_rows = (
         db.scalars(
-            select(WarehouseLocation).where(
-                WarehouseLocation.id.in_(completion_location_ids)
+            select(WarehouseLocation)
+            .options(
+                selectinload(WarehouseLocation.address_area).selectinload(
+                    WarehouseArea.floor
+                )
             )
+            .where(WarehouseLocation.id.in_(completion_location_ids))
         ).all()
         if completion_location_ids
         else []
@@ -538,7 +544,7 @@ def build_order_item_document_trace(
                 else None
             ),
             location_name=(
-                location.location_name
+                employee_location_name(location)
                 if location is not None and "warehouse.view" in permissions
                 else None
             ),
@@ -582,9 +588,13 @@ def build_order_item_document_trace(
     }
     if transfer_location_ids:
         for location in db.scalars(
-            select(WarehouseLocation).where(
-                WarehouseLocation.id.in_(transfer_location_ids)
+            select(WarehouseLocation)
+            .options(
+                selectinload(WarehouseLocation.address_area).selectinload(
+                    WarehouseArea.floor
+                )
             )
+            .where(WarehouseLocation.id.in_(transfer_location_ids))
         ).all():
             locations[location.id] = location
     for transfer in transfer_rows:
@@ -600,7 +610,7 @@ def build_order_item_document_trace(
             status=transfer.status,
             occurred_at=transfer.transferred_at,
             location_code=location.location_code if location else None,
-            location_name=location.location_name if location else None,
+            location_name=employee_location_name(location) if location else None,
             is_effective=effective,
         )
         if transfer.reversed_at is not None:
@@ -830,9 +840,13 @@ def build_order_item_document_trace(
         lot_locations = {
             row.id: row
             for row in db.scalars(
-                select(WarehouseLocation).where(
-                    WarehouseLocation.id.in_(lot_location_ids)
+                select(WarehouseLocation)
+                .options(
+                    selectinload(WarehouseLocation.address_area).selectinload(
+                        WarehouseArea.floor
+                    )
                 )
+                .where(WarehouseLocation.id.in_(lot_location_ids))
             ).all()
         }
         pallet_rows = db.execute(
@@ -867,7 +881,7 @@ def build_order_item_document_trace(
                     "quantity_consumed": lot.quantity_consumed,
                     "unit": lot.unit,
                     "location_code": location.location_code if location else None,
-                    "location_name": location.location_name if location else None,
+                    "location_name": employee_location_name(location) if location else None,
                     "pallet_code": pallet.pallet_code if pallet else None,
                     "last_movement_at": _api_datetime(lot.last_movement_at),
                 }

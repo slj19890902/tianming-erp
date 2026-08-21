@@ -16,6 +16,7 @@ from app.models.warehouse_inventory import (
     Floor3LocationLayout,
     InventoryLot,
     InventoryMovement,
+    WarehouseArea,
     WarehouseLocation,
 )
 from app.services.location_candidates import (
@@ -24,6 +25,11 @@ from app.services.location_candidates import (
     operational_location_issue,
 )
 from app.services.product_specification import dimension_specification
+from app.services.warehouse_location_address import (
+    employee_location_name,
+    format_location_address,
+    location_address_payload,
+)
 
 
 COUNTABLE_LOT_STATUSES = frozenset({"active", "frozen"})
@@ -56,14 +62,18 @@ def _movement_idempotency_key(review_key: str, lot_id: int) -> str:
 
 def _lot_options():
     return (
-        selectinload(InventoryLot.location),
+        selectinload(InventoryLot.location)
+        .selectinload(WarehouseLocation.address_area)
+        .selectinload(WarehouseArea.floor),
         selectinload(InventoryLot.finished_detail),
     )
 
 
 def _order_options():
     return (
-        selectinload(StocktakeOrder.location),
+        selectinload(StocktakeOrder.location)
+        .selectinload(WarehouseLocation.address_area)
+        .selectinload(WarehouseArea.floor),
         selectinload(StocktakeOrder.submitter),
         selectinload(StocktakeOrder.reviewer),
         selectinload(StocktakeOrder.items),
@@ -85,7 +95,15 @@ def _countable_lots_statement(location_id: int):
 
 
 def _get_countable_location(db: Session, location_id: int) -> WarehouseLocation:
-    location = db.get(WarehouseLocation, location_id)
+    location = db.scalar(
+        select(WarehouseLocation)
+        .options(
+            selectinload(WarehouseLocation.address_area).selectinload(
+                WarehouseArea.floor
+            )
+        )
+        .where(WarehouseLocation.id == location_id)
+    )
     if location is None:
         raise StocktakeError(
             "可盘点库位不存在或已停用",
@@ -109,6 +127,32 @@ def _get_countable_location(db: Session, location_id: int) -> WarehouseLocation:
             error_code,
         )
     return location
+
+
+def _stocktake_address_payload(location: WarehouseLocation, candidate) -> dict:
+    area = (
+        candidate.area
+        if candidate.area is not None and location.address_area_id == candidate.area.id
+        else None
+    )
+    current_code, current_name = format_location_address(
+        location,
+        area=area,
+        floor=candidate.floor if area is not None else None,
+    )
+    employee_name = (
+        current_name
+        if str(current_name or "").strip().casefold()
+        != str(current_code or "").strip().casefold()
+        else "位置名称待完善"
+    )
+    return {
+        "address_zone_code": area.address_zone_code if area is not None else None,
+        "address_subzone_no": area.address_subzone_no if area is not None else None,
+        "current_address_code": current_code,
+        "current_address_name": current_name,
+        "employee_location_name": employee_name,
+    }
 
 
 def list_locations(db: Session) -> list[dict[str, object]]:
@@ -196,6 +240,7 @@ def list_locations(db: Session) -> list[dict[str, object]]:
                 if candidate_by_id[location.id].area
                 else None
             ),
+            **_stocktake_address_payload(location, candidate_by_id[location.id]),
             "placement_status": location.placement_status or "placed",
             "layout_version": layout_versions.get(int(location.id)),
             "is_temporary": location.is_temporary,
@@ -266,6 +311,7 @@ def lot_payload(lot: InventoryLot) -> dict[str, object]:
 
 def get_location_detail(db: Session, location_id: int) -> dict[str, object]:
     location = _get_countable_location(db, location_id)
+    current_address = location_address_payload(location)
     layout_version = db.scalar(
         select(Floor3LocationLayout.version).where(
             Floor3LocationLayout.location_id == location_id
@@ -285,7 +331,8 @@ def get_location_detail(db: Session, location_id: int) -> dict[str, object]:
     return {
         "id": location.id,
         "location_code": location.location_code,
-        "location_name": location.location_name,
+        "location_name": employee_location_name(location),
+        **current_address,
         "warehouse_type": location.warehouse_type,
         "area_code": location.area_code,
         "layout_version": (
@@ -927,6 +974,7 @@ def reject_stocktake(
 
 
 def order_payload(order: StocktakeOrder) -> dict[str, object]:
+    current_address = location_address_payload(order.location)
     items = [
         {
             "id": item.id,
@@ -956,7 +1004,10 @@ def order_payload(order: StocktakeOrder) -> dict[str, object]:
         "location_id": order.location_id,
         "location_layout_version": order.location_layout_version,
         "location_code": order.location.location_code,
-        "location_name": order.location.location_name,
+        "location_name": employee_location_name(order.location),
+        "employee_location_name": employee_location_name(order.location),
+        "current_address_code": current_address["current_address_code"],
+        "current_address_name": current_address["current_address_name"],
         "status": order.status,
         "version": order.version,
         "submitted_by": order.submitted_by,

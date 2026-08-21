@@ -131,6 +131,7 @@ from app.services.warehouse_inventory import (
     release_empty_pallets_after_delivery,
     restore_auto_released_pallets_after_delivery_cancel,
 )
+from app.services.warehouse_location_address import employee_location_name
 from app.services.unordered_finished_delivery import (
     cancel_unordered_finished_dispatch,
     dispatch_unordered_finished_inventory,
@@ -144,6 +145,18 @@ can_read = PermissionChecker("deliveries.view")
 can_operate = PermissionChecker("deliveries.execute")
 can_pick = PermissionChecker("deliveries.pick")
 PICK_TASK_STATUSES = {"pushed", "driver_confirmed", "exception", "applied", "dispatched"}
+
+
+def _employee_warehouse_area_name(area: WarehouseArea | None) -> str:
+    if area is None:
+        return "区域名称待完善"
+    if area.address_zone_code and area.address_subzone_no:
+        return f"{area.address_zone_code}{int(area.address_subzone_no)}区"
+    name = str(area.area_name or "").strip()
+    code = str(area.area_code or "").strip()
+    if name and name.casefold() != code.casefold():
+        return name
+    return "区域名称待完善"
 
 
 def _utc_now() -> datetime:
@@ -802,7 +815,7 @@ def _pick_source_location(
     return {
         "location_id": location.id if location else None,
         "location_code": location.location_code if location else None,
-        "location_name": location.location_name if location else None,
+        "location_name": employee_location_name(location) if location else None,
         "warehouse_floor": location.warehouse_floor if location else None,
         "area_code": location.area_code if location else None,
         "location_sort_order": int(location.sort_order or 0) if location else None,
@@ -1158,11 +1171,7 @@ def _pick_location_groups(db: Session, item_responses: list[dict]) -> list[dict]
                     line.get("pallet_id"),
                     bool(line.get("needs_relocation")),
                 )
-                floor = line.get("warehouse_floor")
-                prefix = f"{floor}楼" if floor is not None else "仓库"
-                area = line.get("area_code") or "未分区"
-                location = line.get("location_code") or "未标库位"
-                label = f"{prefix} · {area} · {location}"
+                label = line.get("location_name") or "位置名称待完善"
                 if line.get("needs_relocation"):
                     label += "（待归位）"
             group = groups.setdefault(
@@ -1819,7 +1828,7 @@ def _composite_inventory_sources_for_order_item(
             "lot_number": lot.lot_number if lot else None,
             "location_id": location.id if location else None,
             "location_code": location.location_code if location else None,
-            "location_name": location.location_name if location else None,
+            "location_name": employee_location_name(location) if location else None,
             **_delivery_location_metadata(
                 db,
                 location,
@@ -2270,7 +2279,7 @@ def _inventory_sources_for_order_item(
                 "lot_number": lot.lot_number,
                 "location_id": location.id if location else None,
                 "location_code": location.location_code if location else None,
-                "location_name": location.location_name if location else None,
+                "location_name": employee_location_name(location) if location else None,
                 **_delivery_location_metadata(
                     db,
                     location,
@@ -2781,7 +2790,7 @@ def _delivery_list_composite_inventory_sources(
             "lot_number": lot.lot_number if lot else None,
             "location_id": location.id if location else None,
             "location_code": location.location_code if location else None,
-            "location_name": location.location_name if location else None,
+            "location_name": employee_location_name(location) if location else None,
             **location_metadata,
             "component_type": "bom_component",
             "component_snapshot_id": demand.snapshot_id,
@@ -3048,7 +3057,7 @@ def _delivery_list_standard_inventory_sources(
                 "lot_number": lot.lot_number,
                 "location_id": location.id if location else None,
                 "location_code": location.location_code if location else None,
-                "location_name": location.location_name if location else None,
+                "location_name": employee_location_name(location) if location else None,
                 **location_metadata,
                 "component_type": requirement.component_type if requirement else "whole",
                 "yield_factor": max(int(reservation.yield_factor or 1), 1),
@@ -4972,11 +4981,12 @@ def get_delivery_pick_measured_map_floors(
                 "areas": {},
             },
         )
+        employee_area_name = _employee_warehouse_area_name(area_row)
         area = floor["areas"].setdefault(
             area_code,
             {
                 "area_code": area_code,
-                "area_name": area_row.area_name if area_row is not None else area_code,
+                "area_name": employee_area_name,
                 "task_location_count": 0,
                 "mapped_location_count": 0,
             },
@@ -5110,7 +5120,7 @@ def get_delivery_pick_measured_map_area(
             floor_row.floor_name if floor_row is not None else f"{floor_number}楼"
         ),
         "area_code": normalized_area,
-        "area_name": area_row.area_name if area_row is not None else normalized_area,
+        "area_name": _employee_warehouse_area_name(area_row),
         "map_status": "ready" if measured else "unmeasured",
         "map_status_text": "实测地图已建立" if measured else "未建立实测地图",
         "guidance": (
@@ -6089,7 +6099,7 @@ def unordered_finished_candidates(
                 ),
                 "location_id": location.id,
                 "location_code": location.location_code,
-                "location_name": location.location_name,
+                "location_name": employee_location_name(location),
                 "pallet_code": pallet.pallet_code if pallet else None,
                 "order_pending_quantity": int(
                     pending_by_code.get(str(product.product_code or "").strip().casefold(), 0)

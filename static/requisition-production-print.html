@@ -360,7 +360,7 @@
         const actualSize = card.actual_board_length_mm && card.actual_board_width_mm
           ? `${numberText(card.actual_board_length_mm)} × ${numberText(card.actual_board_width_mm)} mm`
           : "与计划冻结规格一致";
-        const trace = [card.inventory_lot_number, card.pallet_code, card.warehouse_location].filter(Boolean).join(" / ") || "实收明细已留痕";
+        const trace = [card.inventory_lot_number, card.employee_location_name || card.current_address_name || card.warehouse_location].filter(Boolean).join(" / ") || "实收明细已留痕";
         return `<section class="receipt-facts internal-only">
           <div class="receipt-fact"><span>实收单 / 版本</span><strong>${escapeHtml(card.receipt_number || "-")} / ${escapeHtml(card.paper_phase_label || "实收版")}</strong></div>
           <div class="receipt-fact"><span>本次实收</span><strong>${escapeHtml(numberText(card.received_sheet_quantity))} 张</strong></div>

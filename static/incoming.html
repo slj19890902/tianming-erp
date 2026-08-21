@@ -527,7 +527,7 @@
       const projected = cumulative + Number(item.incoming_quantity || 0) - planned;
       const locations = state.locations
         .filter(row => ["semi_finished", "shared"].includes(row.warehouse_type))
-        .map(row => `<option value="${row.id}" ${Number(item.surplus_location_id) === Number(row.id) ? "selected" : ""}>${escapeHtml(row.location_name || "位置名称待完善")}</option>`)
+        .map(row => `<option value="${row.id}" ${Number(item.surplus_location_id) === Number(row.id) ? "selected" : ""}>${escapeHtml(row.employee_location_name || row.current_address_name || row.location_name || "位置名称待完善")}</option>`)
         .join("");
       const frozenPurpose = item.purpose_status !== "legacy_unset";
       const decisionBlock = !isPending ? "" : frozenPurpose

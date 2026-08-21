@@ -1153,6 +1153,7 @@ def bind_finished_lot_to_floor3_pallet(
                 "match_status": "matched",
             },
             operator_id=operator_id,
+            allow_operational_location=allow_operational_location,
         )
     item = {
         "inventory_lot_id": lot.id,
@@ -1186,6 +1187,7 @@ def bind_finished_lot_to_floor3_pallet(
         expected_version=pallet.version,
         item=item,
         operator_id=operator_id,
+        allow_operational_location=allow_operational_location,
     )
 
 
@@ -1418,11 +1420,16 @@ def add_pallet_item(
     expected_version: int,
     item: dict,
     operator_id: int | None,
+    allow_operational_location: bool = False,
 ) -> InventoryPallet:
     row = _pallet(db, pallet_id)
     if not row.is_current or row.location_id is None:
         raise Floor3LocationError("栈板已清空或移出，不能继续增加内容", status_code=409)
-    location = _location(db, row.location_id)
+    location = (
+        _operational_pallet_location(db, row.location_id)
+        if allow_operational_location
+        else _location(db, row.location_id)
+    )
     _claim_pallet_version(db, row, expected_version=expected_version)
     row.items.append(
         _build_item(db, pallet_id=row.id, item=item, operator_id=operator_id)

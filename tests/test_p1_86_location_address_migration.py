@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 ROOT = Path(__file__).resolve().parents[1]
 BASE_REVISION = "xx32v8x9z21"
 P1_86_REVISION = "bb36v8x9z25"
+P1_87_REVISION = "cc37v8x9z26"
 P1_86_TABLES = {
     "warehouse_location_aliases",
     "warehouse_location_address_mutations",
@@ -96,10 +97,13 @@ def test_revision_is_linear_from_latest_formal_head() -> None:
     config = Config(str(ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == [P1_86_REVISION]
+    assert script.get_heads() == [P1_87_REVISION]
     revision = script.get_revision(P1_86_REVISION)
     assert revision is not None
     assert revision.down_revision == BASE_REVISION
+    next_revision = script.get_revision(P1_87_REVISION)
+    assert next_revision is not None
+    assert next_revision.down_revision == P1_86_REVISION
 
 
 def test_legacy_sqlite_upgrade_downgrade_upgrade_preserves_old_rows_and_triggers(

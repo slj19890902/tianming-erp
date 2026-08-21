@@ -96,7 +96,7 @@ def test_floor3_restricted_pallet_never_renders_write_controls() -> None:
         "function closeFloor3Detail(){", 1
     )[0]
     assert "function floor3PalletRestricted(pallet)" in WAREHOUSE_HTML
-    assert "当前货位已占用（客户范围受限）" in WAREHOUSE_HTML
+    assert "当前位置已占用（客户范围受限）" in WAREHOUSE_HTML
     assert "位置内容受客户范围权限保护" in WAREHOUSE_HTML
     assert "pallet&&!restricted&&canOperate()?" in detail_block
     assert "pallet&&!restricted&&canOperate()?" in detail_block
@@ -542,7 +542,7 @@ def test_floor3_map_overlays_physical_slots_and_keeps_slot_clicks_out_of_area_fo
     assert "area.left+(layout.left_pct/100)*area.width" in WAREHOUSE_HTML
     assert "floor3-overview-selection" in WAREHOUSE_HTML
     assert "async function floor3OpenMapSlot(event,locationId)" in WAREHOUSE_HTML
-    assert "当前货位已占用（客户范围受限）" in WAREHOUSE_HTML
+    assert "当前位置已占用（客户范围受限）" in WAREHOUSE_HTML
     assert "<b>占用</b>" in WAREHOUSE_HTML
     summary = WAREHOUSE_HTML.split("function floor3PalletSummary(row)", 1)[1].split(
         "function floor3SlotMarker", 1
@@ -1041,7 +1041,7 @@ def test_floor3_finished_binding_and_legacy_promotion_use_explicit_contract() ->
     assert "idempotency_key:idempotencyKey" in promotion
     assert "promotionPending" in promotion
     assert promotion.count("confirm(") == 2
-    for label in ("客户：", "存货编码：", "产品：", "数量：", "当前库位：", "入库日期："):
+    for label in ("客户：", "存货编码：", "产品：", "数量：", "当前位置：", "入库日期："):
         assert label in promotion
     assert "不会直接用盘点快照抵扣" in promotion
 

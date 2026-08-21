@@ -570,6 +570,229 @@ def _purchase_history_rows(
     return history
 
 
+def list_external_purchase_history_rows(
+    db: Session,
+    *,
+    visible_customer_ids: set[int] | None = None,
+    page: int = 1,
+    page_size: int = 25,
+    keyword: str | None = None,
+) -> dict[str, Any]:
+    """List confirmed and cancelled external purchases for the visible workbench."""
+
+    safe_page = max(1, int(page))
+    safe_page_size = min(100, max(1, int(page_size)))
+    query = (
+        select(ExternalPackagingPurchaseBatch)
+        .join(Order, Order.id == ExternalPackagingPurchaseBatch.sales_order_id)
+        .join(Customer, Customer.id == Order.customer_id)
+    )
+    count_query = (
+        select(func.count(ExternalPackagingPurchaseBatch.id))
+        .join(Order, Order.id == ExternalPackagingPurchaseBatch.sales_order_id)
+        .join(Customer, Customer.id == Order.customer_id)
+    )
+    predicates = []
+    if visible_customer_ids is not None:
+        if not visible_customer_ids:
+            return {
+                "items": [],
+                "total": 0,
+                "page": safe_page,
+                "page_size": safe_page_size,
+            }
+        predicates.append(Order.customer_id.in_(visible_customer_ids))
+    normalized_keyword = str(keyword or "").strip()
+    if normalized_keyword:
+        pattern = f"%{normalized_keyword}%"
+        matching_purchase_exists = (
+            select(ExternalPackagingPurchaseOrder.id)
+            .where(
+                ExternalPackagingPurchaseOrder.batch_id
+                == ExternalPackagingPurchaseBatch.id,
+                or_(
+                    ExternalPackagingPurchaseOrder.purchase_number.ilike(pattern),
+                    ExternalPackagingPurchaseOrder.supplier_name_snapshot.ilike(pattern),
+                ),
+            )
+            .exists()
+        )
+        predicates.append(
+            or_(
+                Order.order_number.ilike(pattern),
+                Order.customer_po.ilike(pattern),
+                Customer.name.ilike(pattern),
+                Customer.chinese_short_name.ilike(pattern),
+                matching_purchase_exists,
+            )
+        )
+    if predicates:
+        query = query.where(*predicates)
+        count_query = count_query.where(*predicates)
+
+    total = int(db.scalar(count_query) or 0)
+    batches = list(
+        db.scalars(
+            query.options(
+                selectinload(
+                    ExternalPackagingPurchaseBatch.purchase_orders
+                ).selectinload(ExternalPackagingPurchaseOrder.items)
+            )
+            .order_by(ExternalPackagingPurchaseBatch.id.desc())
+            .offset((safe_page - 1) * safe_page_size)
+            .limit(safe_page_size)
+        ).all()
+    )
+    if not batches:
+        return {
+            "items": [],
+            "total": total,
+            "page": safe_page,
+            "page_size": safe_page_size,
+        }
+
+    order_ids = {int(batch.sales_order_id) for batch in batches}
+    orders = {
+        int(order.id): order
+        for order in db.scalars(select(Order).where(Order.id.in_(order_ids))).all()
+    }
+    customer_ids = {int(order.customer_id) for order in orders.values()}
+    customers = {
+        int(customer.id): customer
+        for customer in db.scalars(
+            select(Customer).where(Customer.id.in_(customer_ids))
+        ).all()
+    }
+    latest_batch_ids = {
+        int(order_id): int(batch_id)
+        for order_id, batch_id in db.execute(
+            select(
+                ExternalPackagingPurchaseBatch.sales_order_id,
+                func.max(ExternalPackagingPurchaseBatch.id),
+            )
+            .where(ExternalPackagingPurchaseBatch.sales_order_id.in_(order_ids))
+            .group_by(ExternalPackagingPurchaseBatch.sales_order_id)
+        ).all()
+    }
+    purchase_ids = {
+        int(purchase.id)
+        for batch in batches
+        for purchase in batch.purchase_orders
+    }
+    cancellations = (
+        {
+            int(row.purchase_order_id): row
+            for row in db.scalars(
+                select(ExternalPackagingPurchaseCancellation).where(
+                    ExternalPackagingPurchaseCancellation.purchase_order_id.in_(
+                        purchase_ids
+                    )
+                )
+            ).all()
+        }
+        if purchase_ids
+        else {}
+    )
+    purchase_item_ids = {
+        int(item.id)
+        for batch in batches
+        for purchase in batch.purchase_orders
+        for item in purchase.items
+    }
+    received_totals = _received_totals_by_purchase_item_ids(db, purchase_item_ids)
+
+    rows: list[dict[str, Any]] = []
+    for batch in batches:
+        order = orders[int(batch.sales_order_id)]
+        customer = customers[int(order.customer_id)]
+        serialized = _serialize_batch(batch)
+        active_purchase_seen = False
+        active_purchase_received = False
+        active_count = 0
+        cancelled_count = 0
+        for purchase_payload, purchase in zip(
+            serialized["purchase_orders"], batch.purchase_orders
+        ):
+            cancellation = cancellations.get(int(purchase.id))
+            lifecycle_status = "cancelled" if cancellation is not None else "active"
+            received_quantity = sum(
+                (
+                    received_totals.get(int(item.id), Decimal("0"))
+                    for item in purchase.items
+                ),
+                Decimal("0"),
+            )
+            ordered_quantity = sum(
+                (Decimal(item.purchase_quantity) for item in purchase.items),
+                Decimal("0"),
+            )
+            if cancellation is None:
+                active_count += 1
+                active_purchase_seen = True
+                active_purchase_received = (
+                    active_purchase_received or received_quantity > 0
+                )
+            else:
+                cancelled_count += 1
+            purchase_payload.update(
+                {
+                    "lifecycle_status": lifecycle_status,
+                    "ordered_quantity": _decimal_text(ordered_quantity),
+                    "received_quantity": _decimal_text(received_quantity),
+                    "receipt_status": (
+                        "cancelled"
+                        if cancellation is not None
+                        else (
+                            "received"
+                            if ordered_quantity > 0 and received_quantity >= ordered_quantity
+                            else (
+                                "partially_received"
+                                if received_quantity > 0
+                                else "pending_receipt"
+                            )
+                        )
+                    ),
+                    "cancellation": (
+                        {
+                            "source": cancellation.source,
+                            "reason": cancellation.reason,
+                            "cancelled_at": utc_naive_to_api(
+                                cancellation.cancelled_at
+                            ),
+                        }
+                        if cancellation is not None
+                        else None
+                    ),
+                }
+            )
+        serialized.update(
+            {
+                "order_number": order.order_number,
+                "customer_order_number": order.customer_po,
+                "customer_id": customer.id,
+                "customer_name": customer.name,
+                "customer_short_name": customer.chinese_short_name,
+                "lifecycle_status": (
+                    "cancelled"
+                    if active_count == 0 and cancelled_count > 0
+                    else ("partially_cancelled" if cancelled_count > 0 else "active")
+                ),
+                "can_cancel": (
+                    latest_batch_ids.get(int(order.id)) == int(batch.id)
+                    and active_purchase_seen
+                    and not active_purchase_received
+                ),
+            }
+        )
+        rows.append(serialized)
+    return {
+        "items": rows,
+        "total": total,
+        "page": safe_page,
+        "page_size": safe_page_size,
+    }
+
+
 def get_external_purchase_summary(db: Session, order_id: int) -> dict[str, Any]:
     order_status = db.scalar(select(Order.status).where(Order.id == order_id))
     batch = db.scalar(

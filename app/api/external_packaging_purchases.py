@@ -3,7 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
@@ -24,6 +24,7 @@ from app.services.external_packaging_purchase import (
     build_external_purchase_print,
     build_external_purchase_preview,
     confirm_external_purchase,
+    list_external_purchase_history_rows,
     list_external_purchase_routing_rows,
     serialize_external_purchase_batch,
     get_external_purchase_summary,
@@ -119,6 +120,24 @@ def get_external_packaging_pending_receipts(
     return build_external_receiving_overview(
         db,
         visible_customer_ids=_visible_customer_ids(user, db),
+    )
+
+
+@router.get("/external-packaging-purchases/history")
+def get_external_packaging_purchase_history(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    q: str | None = Query(None, max_length=100),
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+    _cost_user: User = Depends(can_cost),
+) -> dict[str, Any]:
+    return list_external_purchase_history_rows(
+        db,
+        visible_customer_ids=_visible_customer_ids(user, db),
+        page=page,
+        page_size=page_size,
+        keyword=q,
     )
 
 

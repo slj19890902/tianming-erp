@@ -250,6 +250,14 @@ def test_v2_package_freezes_manual_short_name_without_changing_v1_payload_shape(
         )
         assert prepared.status_code == 200, prepared.text
         job_id = int(prepared.json()["job_id"])
+        confirmed = client.post(
+            f"/api/requisition/production-packaging-label-jobs/{job_id}/confirm",
+            json={
+                "idempotency_key": "p1-66a-original-v1-confirmed-print",
+                "confirmed": True,
+            },
+        )
+        assert confirmed.status_code == 200, confirmed.text
 
         with fixture["session_factory"]() as db:
             task = db.get(ProductionTask, task_id)

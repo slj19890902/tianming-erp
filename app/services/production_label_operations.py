@@ -607,6 +607,87 @@ def _load_job_package(
     return package
 
 
+def _package_plan_product_versions(package: dict) -> dict[int, int]:
+    """Return the exact current common-box versions frozen into a new package."""
+
+    versions: dict[int, int] = {}
+    for plan in package.get("plans") or []:
+        try:
+            product_id = int(plan.get("product_id") or 0)
+            product_version = int(plan.get("product_version") or 0)
+        except (TypeError, ValueError):
+            product_id = 0
+            product_version = 0
+        if product_id <= 0 or product_version <= 0:
+            raise ProductionLabelOperationError(
+                "标签计划缺少常用箱产品版本，请刷新后重试"
+            )
+        existing = versions.get(product_id)
+        if existing is not None and existing != product_version:
+            raise ProductionLabelOperationError(
+                "同一常用箱产品出现多个标签版本，请刷新后重试"
+            )
+        versions[product_id] = product_version
+    if not versions:
+        raise ProductionLabelOperationError(
+            "标签计划没有可回读的常用箱产品，请核对"
+        )
+    return versions
+
+
+def _claim_package_product_versions(db: Session, package: dict) -> None:
+    for product_id, product_version in sorted(
+        _package_plan_product_versions(package).items()
+    ):
+        _claim_product_version(
+            db,
+            product_id=product_id,
+            expected_version=product_version,
+        )
+
+
+def _assert_prepared_job_is_current(
+    db: Session,
+    job: ProductionPackagingLabelPrintJob,
+    package: dict,
+) -> None:
+    """Do not let an unprinted draft masquerade as the current label plan."""
+
+    if job.status != "prepared":
+        return
+    links = _validate_job_task_links(db, job, package)
+    current_task_versions = {
+        int(task.id): int(task.version or 0)
+        for task in db.scalars(
+            select(ProductionTask).where(
+                ProductionTask.id.in_(
+                    [int(link.production_task_id) for link in links]
+                )
+            )
+        ).all()
+    }
+    if len(current_task_versions) != len(links) or any(
+        current_task_versions.get(int(link.production_task_id))
+        != int(link.production_task_version)
+        for link in links
+    ):
+        raise ProductionLabelOperationError(
+            "未实际打印的标签草稿已过期，请从原报料单重新打开标签"
+        )
+
+    expected_product_versions = _package_plan_product_versions(package)
+    current_product_versions = {
+        int(product.id): int(product.version or 0)
+        for product in db.scalars(
+            select(Product).where(Product.id.in_(expected_product_versions))
+        ).all()
+    }
+    if current_product_versions != expected_product_versions:
+        raise ProductionLabelOperationError(
+            "未实际打印的标签草稿已过期，常用箱数据已更新，请从原报料单重新打开标签"
+        )
+
+
 def packaging_label_job_response(
     job: ProductionPackagingLabelPrintJob,
     package: dict,
@@ -657,7 +738,9 @@ def prepare_packaging_label_job(
     if repeated is not None:
         if repeated.request_hash != request_hash or repeated.operator_id != operator_id:
             raise ProductionLabelOperationError("幂等键已用于不同的标签打印作业")
-        return PackagingLabelJobResult(repeated, _load_job_package(repeated, db), True)
+        repeated_package = _load_job_package(repeated, db)
+        _assert_prepared_job_is_current(db, repeated, repeated_package)
+        return PackagingLabelJobResult(repeated, repeated_package, True)
 
     package = build_supplier_requisition_packaging_label_package(db, order)
     if package.get("review_required"):
@@ -675,6 +758,7 @@ def prepare_packaging_label_job(
         plan_versions,
         conflict_message="标签计划已被刷新或正在被其他操作更新，请重新加载预览",
     )
+    _claim_package_product_versions(db, package)
     # Rebuild while the exact task rows are locked so a job can never combine
     # snapshots observed on opposite sides of a concurrent refresh.
     package = build_supplier_requisition_packaging_label_package(db, order)
@@ -746,7 +830,9 @@ def prepare_composite_packaging_label_job(
     if repeated is not None:
         if repeated.request_hash != request_hash or repeated.operator_id != operator_id:
             raise ProductionLabelOperationError("幂等键已用于不同的标签打印作业")
-        return PackagingLabelJobResult(repeated, _load_job_package(repeated, db), True)
+        repeated_package = _load_job_package(repeated, db)
+        _assert_prepared_job_is_current(db, repeated, repeated_package)
+        return PackagingLabelJobResult(repeated, repeated_package, True)
 
     package = build_composite_requisition_packaging_label_package(
         db,
@@ -772,6 +858,7 @@ def prepare_composite_packaging_label_job(
         plan_versions,
         conflict_message="组合标签对应的生产任务已变化，请重新加载预览",
     )
+    _claim_package_product_versions(db, package)
     package = build_composite_requisition_packaging_label_package(
         db,
         requisition,
@@ -826,7 +913,9 @@ def get_packaging_label_job(
     job = db.get(ProductionPackagingLabelPrintJob, job_id)
     if job is None:
         raise ProductionLabelOperationError("标签打印作业不存在", 404)
-    return PackagingLabelJobResult(job, _load_job_package(job, db), False)
+    package = _load_job_package(job, db)
+    _assert_prepared_job_is_current(db, job, package)
+    return PackagingLabelJobResult(job, package, False)
 
 
 def confirm_packaging_label_job_printed(
@@ -850,6 +939,30 @@ def confirm_packaging_label_job_printed(
         return PackagingLabelJobResult(job, package, True)
     if job.status != "prepared":
         raise ProductionLabelOperationError("只有待确认的标签打印作业可以登记实际打印")
+
+    links = _validate_job_task_links(db, job, package)
+    task_ids = [int(link.production_task_id) for link in links]
+    if not task_ids:
+        raise ProductionLabelOperationError(
+            "打印作业没有关联生产任务，不能登记实际打印"
+        )
+    frozen_task_rows = package.get("job_tasks") or package.get("plans") or []
+    frozen_plans = {
+        int(plan["production_task_id"]): plan
+        for plan in frozen_task_rows
+    }
+    _claim_task_versions(
+        db,
+        {
+            task_id: int(frozen_plans[task_id]["production_task_version"])
+            for task_id in task_ids
+        },
+        conflict_message=(
+            "打印作业准备后标签计划已变化，"
+            "不能登记旧预览为实际打印"
+        ),
+    )
+    _claim_package_product_versions(db, package)
 
     printed_at = utc_now_naive()
     try:
@@ -897,25 +1010,6 @@ def confirm_packaging_label_job_printed(
     if job is None:
         raise ProductionLabelOperationError("标签打印作业不存在", 404)
 
-    links = _validate_job_task_links(db, job, package)
-    task_ids = [int(link.production_task_id) for link in links]
-    if not task_ids:
-        raise ProductionLabelOperationError("打印作业没有关联生产任务，不能登记实际打印")
-    frozen_task_rows = package.get("job_tasks") or package.get("plans") or []
-    frozen_plans = {
-        int(plan["production_task_id"]): plan
-        for plan in frozen_task_rows
-    }
-    # Serialize against manual plan refreshes.  The job payload itself remains
-    # immutable even if a later business read changes.
-    _claim_task_versions(
-        db,
-        {
-            task_id: int(frozen_plans[task_id]["production_task_version"])
-            for task_id in task_ids
-        },
-        conflict_message="打印作业准备后标签计划已变化，不能登记旧预览为实际打印",
-    )
     db.flush()
     return PackagingLabelJobResult(job, package, False)
 

@@ -80,11 +80,14 @@ def build_supplier_requisition_packaging_label_package(
     db: Session,
     order: SupplierRequisitionOrder,
 ) -> dict:
-    """Project immutable ProductionTask label snapshots into a read-only package.
+    """Project a read-only package using the current common-box label policy.
 
     A supplier order can contain cover/base rows or repeated requisition sources
     that point to the same production task.  The task id is therefore the only
     deduplication key; procurement sheet quantities are deliberately ignored.
+    Production quantity and template stay frozen on the task, while the enabled
+    flag and units-per-label come from the current Product master.  A prepared
+    print job freezes that projection; an actually printed job remains immutable.
     """
 
     production_package = build_supplier_requisition_production_package(db, order)
@@ -142,28 +145,33 @@ def build_supplier_requisition_packaging_label_package(
         if task is None:
             package_review_messages.append(f"生产任务 #{task_id} 不存在，请核对")
             continue
+        item = db.get(OrderItem, task.order_item_id)
+        component_snapshot = (
+            db.get(
+                SalesOrderItemBomComponent,
+                task.sales_order_item_bom_component_id,
+            )
+            if task.sales_order_item_bom_component_id is not None
+            else None
+        )
+        product_id = (
+            int(component_snapshot.component_product_id)
+            if component_snapshot is not None
+            else int(item.product_id)
+            if item is not None
+            else None
+        )
+        product = db.get(Product, product_id) if product_id is not None else None
+        if product is None:
+            package_review_messages.append(
+                f"生产任务 #{task_id} 没有可回读的常用箱产品，请核对"
+            )
+            continue
+        if not bool(product.production_label_enabled):
+            continue
         if not bool(task.production_label_enabled_snapshot):
-            item = db.get(OrderItem, task.order_item_id)
-            component_snapshot = (
-                db.get(
-                    SalesOrderItemBomComponent,
-                    task.sales_order_item_bom_component_id,
-                )
-                if task.sales_order_item_bom_component_id is not None
-                else None
-            )
-            product_id = (
-                int(component_snapshot.component_product_id)
-                if component_snapshot is not None
-                else int(item.product_id)
-                if item is not None
-                else None
-            )
-            product = db.get(Product, product_id) if product_id is not None else None
             if (
-                product is not None
-                and bool(product.production_label_enabled)
-                and task.status in {"waiting_material", "pending"}
+                task.status in {"waiting_material", "pending"}
                 and task.production_label_template_version_snapshot
                 == CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION
                 and task.production_label_product_version_snapshot
@@ -185,36 +193,19 @@ def build_supplier_requisition_packaging_label_package(
             continue
         template_versions.add(template_version)
 
-        units_per_label = _positive_int(task.production_label_units_per_label_snapshot)
+        units_per_label = _positive_int(product.production_label_units_per_label)
         total_quantity = _positive_int(task.production_label_total_quantity_snapshot)
-        frozen_count = _positive_int(task.production_label_count_snapshot)
-        expected_count = ceil(total_quantity / units_per_label) if units_per_label else 0
-        if not units_per_label or not total_quantity or frozen_count != expected_count:
+        label_count = ceil(total_quantity / units_per_label) if units_per_label else 0
+        if not units_per_label or not total_quantity or not label_count:
             package_review_messages.append(
-                f"生产任务 #{task_id} 的包装标签快照不完整，请核对"
+                f"生产任务 #{task_id} 的常用箱标签数量或任务总量不完整，请核对"
             )
             continue
 
         card, component = task_sources[task_id]
-        item = db.get(OrderItem, task.order_item_id)
-        component_snapshot = (
-            db.get(
-                SalesOrderItemBomComponent,
-                task.sales_order_item_bom_component_id,
-            )
-            if task.sales_order_item_bom_component_id is not None
-            else None
-        )
-        product_id = (
-            int(component_snapshot.component_product_id)
-            if component_snapshot is not None
-            else int(item.product_id)
-            if item is not None
-            else None
-        )
         quantities = [
             min(units_per_label, total_quantity - index * units_per_label)
-            for index in range(frozen_count)
+            for index in range(label_count)
         ]
         if not quantities or any(quantity <= 0 for quantity in quantities):
             package_review_messages.append(
@@ -242,7 +233,11 @@ def build_supplier_requisition_packaging_label_package(
                 "production_task_id": task_id,
                 "production_task_version": int(task.version or 1),
                 "product_id": product_id,
-                "product_version": task.production_label_product_version_snapshot,
+                "product_version": int(product.version),
+                "label_policy_source": "product_master_current",
+                "task_label_product_version_snapshot": (
+                    task.production_label_product_version_snapshot
+                ),
                 "template_version": template_version,
                 "customer_id": card.get("customer_id"),
                 "customer_name": customer_name,
@@ -255,7 +250,7 @@ def build_supplier_requisition_packaging_label_package(
                 "customer_pos": list(card.get("customer_pos") or []),
                 "total_quantity": total_quantity,
                 "units_per_label": units_per_label,
-                "label_count": frozen_count,
+                "label_count": label_count,
                 "label_quantities": quantities,
                 **customer_label_fields,
             }
@@ -321,6 +316,7 @@ def build_supplier_requisition_packaging_label_package(
         "supplier_order_number": order.order_number,
         "status": order.status,
         "status_label": "生产包装标签｜非库存标签",
+        "label_policy_source": "product_master_current",
         "template_version": template_version,
         "template_dimensions": (
             template_dimensions(template_version) if template_version else None
@@ -417,6 +413,19 @@ def build_composite_requisition_packaging_label_package(
             select(Customer).where(Customer.id.in_(customer_ids))
         ).all()
     } if customer_ids else {}
+    product_ids = {
+        int(order_item.product_id) for order_item in order_items.values()
+    } | {
+        int(snapshot.component_product_id) for snapshot in snapshots.values()
+    }
+    products = {
+        int(product.id): product
+        for product in (
+            db.scalars(select(Product).where(Product.id.in_(product_ids))).all()
+            if product_ids
+            else []
+        )
+    }
 
     plans: list[dict] = []
     job_tasks: list[dict] = []
@@ -485,13 +494,24 @@ def build_composite_requisition_packaging_label_package(
                     f"{order_item.snapshot_product_code or order_item_id} 为父件交付，必须整组选择所有子件"
                 )
                 continue
-            if not bool(order_item.parent_production_label_enabled_snapshot):
+            parent_product = products.get(int(order_item.product_id))
+            if parent_product is None:
+                review_messages.append(
+                    f"{order_item.snapshot_product_code or order_item_id} 没有可回读的常用箱产品"
+                )
+                continue
+            if not bool(parent_product.production_label_enabled):
                 review_messages.append(
                     f"{order_item.snapshot_product_code or order_item_id} 未启用父件产品标签"
                 )
                 continue
+            if not bool(order_item.parent_production_label_enabled_snapshot):
+                review_messages.append(
+                    f"{order_item.snapshot_product_code or order_item_id} 的父件标签任务快照未启用"
+                )
+                continue
             units_per_label = _positive_int(
-                order_item.parent_production_label_units_per_label_snapshot
+                parent_product.production_label_units_per_label
             )
             total_quantity = _positive_int(order_item.quantity)
             if not units_per_label or not total_quantity:
@@ -515,7 +535,11 @@ def build_composite_requisition_packaging_label_package(
                     "production_task_id": int(task_pairs[0][0].id),
                     "production_task_version": int(task_pairs[0][0].version or 1),
                     "product_id": int(order_item.product_id),
-                    "product_version": order_item.parent_production_label_product_version_snapshot,
+                    "product_version": int(parent_product.version),
+                    "label_policy_source": "product_master_current",
+                    "task_label_product_version_snapshot": (
+                        order_item.parent_production_label_product_version_snapshot
+                    ),
                     "template_version": template_version,
                     "customer_id": int(customer.id),
                     "customer_name": customer.name,
@@ -540,22 +564,35 @@ def build_composite_requisition_packaging_label_package(
 
         for task, snapshot in sorted(group_tasks, key=lambda pair: int(pair[0].id)):
             append_job_task(task, int(snapshot.component_product_id))
-            if not bool(task.production_label_enabled_snapshot):
+            product = products.get(int(snapshot.component_product_id))
+            if product is None:
+                review_messages.append(
+                    f"{snapshot.snapshot_component_product_code or snapshot.component_product_id} 没有可回读的常用箱产品"
+                )
+                continue
+            if not bool(product.production_label_enabled):
                 review_messages.append(
                     f"{snapshot.snapshot_component_product_code or snapshot.component_product_id} 未启用子件产品标签"
                 )
                 continue
+            if not bool(task.production_label_enabled_snapshot):
+                review_messages.append(
+                    f"生产任务 #{task.id} 的子件标签任务快照未启用"
+                )
+                continue
             template_version = str(task.production_label_template_version_snapshot or "")
-            units_per_label = _positive_int(task.production_label_units_per_label_snapshot)
+            units_per_label = _positive_int(product.production_label_units_per_label)
             total_quantity = _positive_int(task.production_label_total_quantity_snapshot)
-            label_count = _positive_int(task.production_label_count_snapshot)
+            label_count = ceil(total_quantity / units_per_label) if units_per_label else 0
             if (
                 template_version not in ALLOWED_TEMPLATE_VERSIONS
                 or not units_per_label
                 or not total_quantity
-                or label_count != ceil(total_quantity / units_per_label)
+                or not label_count
             ):
-                review_messages.append(f"生产任务 #{task.id} 的子件标签快照不完整")
+                review_messages.append(
+                    f"生产任务 #{task.id} 的常用箱子件标签数量或任务总量不完整"
+                )
                 continue
             template_versions.add(template_version)
             plans.append(
@@ -563,7 +600,11 @@ def build_composite_requisition_packaging_label_package(
                     "production_task_id": int(task.id),
                     "production_task_version": int(task.version or 1),
                     "product_id": int(snapshot.component_product_id),
-                    "product_version": task.production_label_product_version_snapshot,
+                    "product_version": int(product.version),
+                    "label_policy_source": "product_master_current",
+                    "task_label_product_version_snapshot": (
+                        task.production_label_product_version_snapshot
+                    ),
                     "template_version": template_version,
                     "customer_id": int(customer.id),
                     "customer_name": customer.name,
@@ -636,6 +677,7 @@ def build_composite_requisition_packaging_label_package(
         "selected_item_ids": sorted(selected_ids),
         "status": requisition.status,
         "status_label": "生产包装标签｜非库存标签",
+        "label_policy_source": "product_master_current",
         "template_version": template_version,
         "template_dimensions": template_dimensions(template_version) if template_version else None,
         "plan_fingerprint": fingerprint,

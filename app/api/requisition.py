@@ -221,15 +221,39 @@ _SUPPLIER_ORDER_ITEM_VOID_WRITE_LOCK = Lock()
 _MERGE_GROUP_WRITE_LOCK = Lock()
 
 
+class ProductionPackagingLabelJobItemRequest(BaseModel):
+    production_task_id: int = Field(gt=0)
+    print_label_count: int = Field(ge=0)
+
+    @field_validator("production_task_id", "print_label_count", mode="before")
+    @classmethod
+    def reject_boolean_label_counts(cls, value: object) -> object:
+        if isinstance(value, bool):
+            raise ValueError("生产任务编号和本次打印张数必须为整数")
+        return value
+
+
 class ProductionPackagingLabelJobRequest(BaseModel):
     idempotency_key: str = Field(min_length=1, max_length=120)
     plan_fingerprint: str = Field(min_length=64, max_length=64)
     confirmed: Literal[True]
+    items: list[ProductionPackagingLabelJobItemRequest] | None = Field(
+        default=None,
+        min_length=1,
+        max_length=500,
+    )
 
     @field_validator("idempotency_key", "plan_fingerprint")
     @classmethod
     def trim_label_job_values(cls, value: str) -> str:
         return value.strip()
+
+    @model_validator(mode="after")
+    def validate_unique_label_tasks(self):
+        task_ids = [item.production_task_id for item in (self.items or [])]
+        if len(task_ids) != len(set(task_ids)):
+            raise ValueError("本次打印任务不能重复")
+        return self
 
 
 class CompositeProductionPackagingLabelJobRequest(
@@ -17925,6 +17949,14 @@ def post_composite_requisition_packaging_label_job(
             selected_item_ids=set(payload.selected_item_ids),
             idempotency_key=payload.idempotency_key,
             expected_plan_fingerprint=payload.plan_fingerprint,
+            requested_print_counts=(
+                {
+                    item.production_task_id: item.print_label_count
+                    for item in payload.items
+                }
+                if payload.items is not None
+                else None
+            ),
             operator_id=user.id,
         )
         if not result.replayed:
@@ -17950,6 +17982,8 @@ def post_composite_requisition_packaging_label_job(
                     "plan_fingerprint": result.job.plan_fingerprint,
                     "payload_hash": result.job.payload_hash,
                     "label_count": result.package.get("label_count"),
+                    "system_label_count": result.package.get("system_label_count"),
+                    "print_selection": result.package.get("print_selection"),
                 },
             )
         db.commit()
@@ -17997,6 +18031,14 @@ def post_supplier_order_production_packaging_label_job(
             order=order,
             idempotency_key=payload.idempotency_key,
             expected_plan_fingerprint=payload.plan_fingerprint,
+            requested_print_counts=(
+                {
+                    item.production_task_id: item.print_label_count
+                    for item in payload.items
+                }
+                if payload.items is not None
+                else None
+            ),
             operator_id=user.id,
         )
         # Persist the job and its exact task links atomically.  A prepared job
@@ -18023,6 +18065,8 @@ def post_supplier_order_production_packaging_label_job(
                     "plan_fingerprint": result.job.plan_fingerprint,
                     "payload_hash": result.job.payload_hash,
                     "label_count": result.package.get("label_count"),
+                    "system_label_count": result.package.get("system_label_count"),
+                    "print_selection": result.package.get("print_selection"),
                 },
             )
         db.commit()
@@ -18127,6 +18171,8 @@ def confirm_production_packaging_label_job_endpoint(
                     "template_version": result.job.template_version,
                     "plan_fingerprint": result.job.plan_fingerprint,
                     "payload_hash": result.job.payload_hash,
+                    "label_count": result.package.get("label_count"),
+                    "system_label_count": result.package.get("system_label_count"),
                 },
             )
         db.commit()

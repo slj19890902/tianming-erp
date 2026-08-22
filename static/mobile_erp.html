@@ -1678,8 +1678,11 @@
           metrics.append(fact);
         });
         card.append(metrics);
-        if (task.production_process || task.production_notes) {
-          card.append(node("p", "fact-line", `生产要求：${task.production_process || task.production_notes}`));
+        if (task.production_process) {
+          card.append(node("p", "fact-line", `生产工艺：${task.production_process}`));
+        }
+        if (task.production_notes) {
+          card.append(node("p", "fact-line", `生产备注说明：${task.production_notes}`));
         }
         if (task.mold_name || task.mold_location) {
           card.append(node("p", "fact-line", `模具：${task.mold_name || "未命名"}｜位置 ${task.mold_location || "未登记"}`));

@@ -2723,10 +2723,10 @@ def _apply_standard_product(item: dict, product: Product) -> None:
             str(int(w)) if w == int(w) else str(w)
             for w in _parse_layer_weights(material.basis_weight_description)
         )
-    # 生产说明：常用箱 production_process 写入 production_notes（若 PDF 未提供）
-    std_production = (product.production_process or "").strip()
-    if std_production and not item.get("production_notes"):
-        item["production_notes"] = std_production
+    # 生产备注独立于粘贴/打钉/模切工艺；PDF 未提供时冻结常用箱备注。
+    std_production_notes = (product.production_notes or "").strip()
+    if std_production_notes and not item.get("production_notes"):
+        item["production_notes"] = std_production_notes
     if product.print_content:
         item["print_content"] = product.print_content
     # 默认单价（供前端比较，不覆盖 PDF 单价）

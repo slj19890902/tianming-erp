@@ -4648,3 +4648,4 @@ legacy_ruida_* 原始层
 - 发布回归为外购保存链 `13 passed`、相邻主数据/常用箱回归 `37 passed`；另有 2 条正式基线既有 BOM 测试失败，原因为测试文本编码与旧夹具缺少 `productForm`，未命中本次字段且未改 BOM 规则。
 - 本版无 migration，唯一 head 和正式库 revision 均保持 `bbb36v8x9z25`。两阶段报告 `docs/migration_reports/release_runtime_20260822_114542.json` 状态 `completed`，备份 `data/backups/carton_erp_before_release_20260822_114543.sqlite3` SHA-256 `6ab6db78a3102d9831489af3aedb075c6ee3bc801c8d7ea5ca9d926d642a96f9`；源库、备份和隔离演练核心计数一致，完整性正常、外键异常 0。
 - 正式服务已恢复且 `/api/health` HTTP 200。发布未自动修改 Z.004.000006；老板需强刷后重新保存真实蜂窝板资料，成功后产品 version 应递增并能重新打开原样回读。
+- 老板于 2026-08-22 11:56（北京时间）确认“验收通过”；v0.22.159 人工业务验收状态已记为 `accepted`。

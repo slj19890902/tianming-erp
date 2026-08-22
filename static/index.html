@@ -184,10 +184,64 @@
       .ui-large .delivery-list-table { min-width: 1480px; }
       .ui-large .delivery-list-actions { min-width: 300px; white-space: normal; }
       .ui-large .delivery-list-actions.toolbar-group { flex-wrap: wrap; }
-      /* The fixed history table needs room for a full datetime and its actions. */
-      .ui-large .production-history-time { width: 176px; white-space: nowrap; }
-      .ui-large .production-history-actions { width: 280px; white-space: normal; }
-      .ui-large .production-history-actions .toolbar-group { min-width: 0; flex-wrap: wrap; }
+      .production-compact-command-bar {
+        display: flex; align-items: center; gap: 6px; min-width: 0; margin: 0 0 10px;
+        white-space: nowrap;
+      }
+      .production-compact-command-bar h2 {
+        flex: 0 0 auto; margin: 0 8px 0 0; font-size: 24px; line-height: 36px;
+      }
+      .production-compact-command-bar .input,
+      .production-compact-command-bar .select { min-width: 0; padding-left: 8px; padding-right: 8px; }
+      .production-history-customer { flex: 0 1 132px; min-width: 112px; }
+      .production-history-order-filter { flex: 0 1 128px; width: 128px; }
+      .production-history-code-filter { flex: 0 1 108px; width: 108px; }
+      .production-history-name-filter { flex: 0 1 104px; width: 104px; }
+      .production-history-date { flex: 0 1 122px; width: 122px; }
+      .production-history-status { flex: 0 1 92px; width: 92px; }
+      .production-compact-command-bar .pager { flex: 0 0 auto; margin-left: auto; }
+      .production-history-table th,
+      .production-history-table td { padding: 7px 8px; vertical-align: middle; }
+      .production-history-table tbody tr { height: 48px; }
+      .production-history-sequence { width: 50px; text-align: center; }
+      .production-history-customer-order { width: 124px; overflow-wrap: anywhere; }
+      .production-history-customer-name { width: 150px; overflow-wrap: anywhere; }
+      .production-history-product { width: 190px; overflow: hidden; }
+      .production-history-product strong,
+      .production-history-product span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .production-history-product span { margin-top: 2px; color: var(--muted); }
+      .production-history-quantity { width: 68px; text-align: right; }
+      .production-history-time { width: 150px; white-space: nowrap; }
+      .production-history-destination { width: 175px; white-space: normal; }
+      .production-location-link {
+        display: block; max-width: 100%; margin-top: 4px; padding: 0; border: 0;
+        background: transparent; color: var(--primary); font-weight: 700; text-align: left;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer;
+      }
+      .production-history-actions { width: 330px; white-space: normal; }
+      .production-history-action-row { display: flex; align-items: center; gap: 4px; min-width: 0; flex-wrap: nowrap; }
+      .production-selected-location {
+        display: inline-block; max-width: 112px; padding: 3px 7px; border-radius: 5px;
+        background: #e8f8f1; color: #087a55; font-weight: 700;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      }
+      .ui-large .production-compact-command-bar { gap: 5px; }
+      .ui-large .production-compact-command-bar h2 { margin-right: 4px; font-size: 25px; }
+      .ui-large .production-compact-command-bar .btn,
+      .ui-large .production-compact-command-bar .input,
+      .ui-large .production-compact-command-bar .select { min-height: 40px; padding: 6px 9px; font-size: 15px; }
+      .ui-large .production-history-customer { min-width: 104px; max-width: 118px; }
+      .ui-large .production-history-order-filter { width: 116px; }
+      .ui-large .production-history-code-filter { width: 96px; }
+      .ui-large .production-history-name-filter { width: 92px; }
+      .ui-large .production-history-date { width: 116px; }
+      .ui-large .production-history-status { width: 88px; }
+      .ui-large .production-history-table th,
+      .ui-large .production-history-table td { min-height: 48px; padding: 8px; font-size: 16px; line-height: 1.35; }
+      .ui-large .production-history-table tbody tr { height: 54px; }
+      .ui-large .production-history-time { width: 158px; white-space: nowrap; }
+      .ui-large .production-history-actions { width: 338px; white-space: normal; }
+      .ui-large .production-history-action-row .btn.small { min-height: 36px; padding: 5px 9px; font-size: 15px; }
 
       @media (max-width: 1400px) {
         .ui-large .topbar { height: auto; min-height: 76px; padding: 10px 18px; flex-wrap: wrap; gap: 10px 16px; }
@@ -3879,19 +3933,28 @@
             </template>
 
             <template v-else-if="activePage === 'production'">
-              <page-head title="生产确认" desc="按实际投入和实际合格产量确认；超过订单需求的合格品必须进入客户专用成品库存。"></page-head>
-              <div class="toolbar">
-                <div class="toolbar-group">
-                  <button :class="['btn',{primary:productionTab==='pending'}]" :disabled="productionBusy" @click="productionTab='pending'">待生产 {{ productionPendingTotal }}</button>
-                  <button :class="['btn',{primary:productionTab==='history'}]" :disabled="productionBusy" @click="productionTab='history'; loadProductionHistory()">完工历史 {{ productionHistoryTotal }}</button>
-                  <button v-if="canProductionExecute && productionTab==='pending'" class="btn success" :disabled="productionBusy || !productionSelectedCount()" @click="batchConfirmProduction">{{ productionBusy ? '处理中…' : `批量确认入库（${productionSelectedCount()}）` }}</button>
-                  <span v-else-if="!canProductionExecute && productionTab==='pending'" class="muted">当前为只读查看；确认完工需“订单状态操作”权限。</span>
-                </div>
-                <div class="toolbar-group">
-                  <pager v-if="productionTab==='pending'" :page="pages.productionPending" :total="productionPendingTotal" :page-size="pageSize" :always="true" :compact="true" @change="loadProductionPage($event)"></pager>
-                  <button v-if="productionTab==='pending' && productionLabelMaintenanceEntryVisible()" class="btn small" :disabled="productionBusy" @click="openProductionLabelMaintenance">标签异常 / 维护<span v-if="productionLabelMaintenanceAnomalyCount()">（{{ productionLabelMaintenanceAnomalyCount() }}）</span></button>
+              <div class="production-compact-command-bar">
+                <h2>生产确认</h2>
+                <button :class="['btn',{primary:productionTab==='pending'}]" :disabled="productionBusy" @click="productionTab='pending'">待生产 {{ productionPendingTotal }}</button>
+                <button :class="['btn',{primary:productionTab==='history'}]" :disabled="productionBusy" @click="productionTab='history'; loadProductionHistory()">完工历史 {{ productionHistoryTotal }}</button>
+                <template v-if="productionTab==='pending'">
+                  <button v-if="canProductionExecute" class="btn success" :disabled="productionBusy || !productionSelectedCount()" @click="batchConfirmProduction">{{ productionBusy ? '处理中…' : `批量确认入库（${productionSelectedCount()}）` }}</button>
+                  <pager :page="pages.productionPending" :total="productionPendingTotal" :page-size="pageSize" :always="true" :compact="true" @change="loadProductionPage($event)"></pager>
+                  <button v-if="productionLabelMaintenanceEntryVisible()" class="btn small" :disabled="productionBusy" @click="openProductionLabelMaintenance">标签异常 / 维护<span v-if="productionLabelMaintenanceAnomalyCount()">（{{ productionLabelMaintenanceAnomalyCount() }}）</span></button>
                   <button class="btn" :disabled="productionBusy || productionPendingLoading" @click="loadProduction">{{ productionPendingLoading ? '读取中…' : '刷新' }}</button>
-                </div>
+                </template>
+                <template v-else>
+                  <search-select class="production-history-customer" v-model="productionHistoryFilters.customer_id" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="客户" :allow-empty="true" @change="pages.productionHistory=1; loadProductionHistory()"></search-select>
+                  <input class="input production-history-order-filter" v-model.trim="productionHistoryFilters.order_keyword" placeholder="订单/客户单号" @keyup.enter="pages.productionHistory=1; loadProductionHistory()" />
+                  <input class="input production-history-code-filter" v-model.trim="productionHistoryFilters.product_code" placeholder="存货编码" @keyup.enter="pages.productionHistory=1; loadProductionHistory()" />
+                  <input class="input production-history-name-filter" v-model.trim="productionHistoryFilters.product_name" placeholder="产品名称" @keyup.enter="pages.productionHistory=1; loadProductionHistory()" />
+                  <input class="input production-history-date" type="date" v-model="productionHistoryFilters.completed_date_from" aria-label="完工开始日期" @change="pages.productionHistory=1; loadProductionHistory()" />
+                  <input class="input production-history-date" type="date" v-model="productionHistoryFilters.completed_date_to" aria-label="完工结束日期" @change="pages.productionHistory=1; loadProductionHistory()" />
+                  <select class="select production-history-status" v-model="productionHistoryFilters.status" @change="pages.productionHistory=1; loadProductionHistory()"><option value="">全部状态</option><option value="posted">有效完工</option><option value="reversed">已撤销</option></select>
+                  <button class="btn small" @click="pages.productionHistory=1; loadProductionHistory()">查询</button>
+                  <button class="btn small" @click="resetProductionHistoryFilters()">清空</button>
+                  <pager :page="pages.productionHistory" :total="productionHistoryTotal" :page-size="productionHistoryPageSize()" :always="true" :compact="true" @change="pages.productionHistory=$event; loadProductionHistory()"></pager>
+                </template>
               </div>
               <div v-if="productionTab==='pending'" class="status blue" style="display:block;margin:8px 0">直接待送：选择后整批进入一楼待送区。全部入库：选好库位，再点顶部“批量确认入库”。</div>
               <div v-if="productionTab==='pending' && productionPendingError" class="status orange" style="display:block;margin:8px 0">{{ productionPendingError }} <button class="btn small" @click="loadProduction">重试</button></div>
@@ -3910,28 +3973,18 @@
                 </table>
               </data-panel>
               <div v-else>
-                <div v-if="productionLocationsLoading" class="muted" style="margin:8px 0">正在读取转库存可用库位…</div>
-                <div v-else-if="productionLocationsError" class="status orange" style="display:block;margin:8px 0">{{ productionLocationsError }} <button class="btn small" @click="ensureProductionLocations({force:true})">重试</button></div>
-                <div class="list-filterbar">
-                  <search-select v-model="productionHistoryFilters.customer_id" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="客户" :allow-empty="true" @change="pages.productionHistory=1; loadProductionHistory()"></search-select>
-                  <input class="input" v-model.trim="productionHistoryFilters.order_keyword" placeholder="订单/客户单号" @keyup.enter="pages.productionHistory=1; loadProductionHistory()" />
-                  <input class="input" v-model.trim="productionHistoryFilters.product_code" placeholder="存货编码" @keyup.enter="pages.productionHistory=1; loadProductionHistory()" />
-                  <input class="input" v-model.trim="productionHistoryFilters.product_name" placeholder="产品名称" @keyup.enter="pages.productionHistory=1; loadProductionHistory()" />
-                  <input class="input" type="date" v-model="productionHistoryFilters.completed_date_from" @change="pages.productionHistory=1; loadProductionHistory()" />
-                  <input class="input" type="date" v-model="productionHistoryFilters.completed_date_to" @change="pages.productionHistory=1; loadProductionHistory()" />
-                  <select class="select" v-model="productionHistoryFilters.status" @change="pages.productionHistory=1; loadProductionHistory()"><option value="">全部状态</option><option value="posted">有效完工</option><option value="reversed">已撤销</option></select>
-                  <button class="btn" @click="pages.productionHistory=1; loadProductionHistory()">查询</button>
-                  <button class="btn" @click="resetProductionHistoryFilters()">清空</button>
-                  <pager :page="pages.productionHistory" :total="productionHistoryTotal" :page-size="pageSize" :always="true" :compact="true" @change="pages.productionHistory=$event; loadProductionHistory()"></pager>
-                </div>
                 <data-panel :empty="!productionHistory.length">
                   <table class="production-history-table" style="table-layout:fixed;width:100%">
-                  <thead><tr><th class="production-history-time">完工时间</th><th style="width:18%">订单 / 客户</th><th style="width:24%">存货编码 / 产品</th><th style="width:13%">数量 / 操作人</th><th style="width:16%">去向 / 库位</th><th class="production-history-actions">操作</th></tr></thead>
-                  <tbody><tr v-for="row in productionHistory" :key="row.id">
-                    <td class="production-history-time">{{ formatDateTime(row.completed_at) }}</td><td><strong>{{ row.item_order_number || row.order_number || '-' }}</strong><br><span class="muted">{{ row.customer_name || '-' }}</span></td>
-                    <td style="white-space:normal"><div class="production-product-summary" :title="productionProductTitle(row)"><div class="production-product-line"><span v-if="row.is_component_task" class="status blue">组件</span><strong>{{ row.product_code || '-' }}</strong><span>｜{{ row.product_name || '-' }}</span></div><div :class="productionPrintingSetup(row)?'production-printing-setup':'production-product-meta'">{{ productionPrintingSetup(row) || (row.specification || '-') }}</div><div v-if="row.is_component_task && row.composite_parent" class="muted" style="white-space:normal">组合父件 {{ row.composite_parent.product_code || '-' }}｜{{ row.composite_parent.product_name || '-' }}</div></div></td><td><strong>{{ row.quantity || 0 }}{{ row.is_component_task ? '片' : '' }}</strong><br><span class="muted">{{ row.completed_by_name || '-' }}</span></td>
-                    <td style="white-space:normal"><span v-if="row.status==='reversed'" class="status orange">已撤销</span><span v-else :class="['status',productionCompletionIsStock(row)?'green':'blue']">{{ productionDestinationLabel(row) }}</span><br><template v-if="row.warehouse_location_name || row.warehouse_location_code"><strong>{{ row.warehouse_location_name || '位置名称待完善' }}</strong></template><template v-else-if="row.status!=='reversed'"><span class="muted">已进入待送货</span></template><div>投入 {{ row.material_input_quantity }} / 合格 {{ row.actual_output_quantity }} / 损耗 {{ row.defective_quantity }}</div><div v-if="row.surplus_finished_quantity" class="status orange">客户余货 {{ row.surplus_finished_quantity }}</div><div v-if="row.status==='reversed'" class="muted">{{ row.reversal_reason || '管理员撤销生产确认' }}</div></td>
-                    <td class="production-history-actions"><div class="toolbar-group"><template v-if="row.status!=='reversed' && row.can_transfer_to_stock && canWarehouseExecute"><div class="production-location-picker"><select class="select" v-model.number="row.transfer_floor_number" :disabled="productionBusy" @change="onProductionFloorChange(row,'transfer_floor_number','transfer_area_code','transfer_location_id')"><option :value="null">先选楼层</option><option v-for="floor in productionLocationFloors" :key="floor.number" :value="floor.number">{{ floor.label }}（{{ floor.count }} 个空位）</option></select><select class="select" v-model="row.transfer_area_code" :disabled="productionBusy || !row.transfer_floor_number" @change="onProductionAreaChange(row,'transfer_floor_number','transfer_area_code','transfer_location_id')"><option value="">{{ row.transfer_floor_number ? '再选区域' : '请先选择楼层' }}</option><option v-for="area in productionAreasForFloor(row.transfer_floor_number)" :key="area.code" :value="area.code">{{ area.label }}（{{ area.count }} 个空位）</option></select><select class="select" v-model.number="row.transfer_location_id" :disabled="productionBusy || !row.transfer_area_code"><option :value="null">{{ row.transfer_area_code ? '再选库位' : '请先选择区域' }}</option><option v-for="location in productionLocationsForArea(row.transfer_floor_number,row.transfer_area_code)" :key="location.id" :value="location.id">{{ inventoryLocation(location) }}｜{{ location.is_temporary ? '临时' : '固定' }}</option></select></div><button class="btn small success" :disabled="productionBusy || !row.transfer_location_id" @click="transferProductionCompletionToStock(row)">转入成品库存</button></template><button v-if="user?.role==='admin' && row.can_supplement" class="btn small success" :disabled="productionBusy" @click="supplementProductionCompletion(row)">补录余量 {{ row.available_material_input_quantity }}</button><button v-if="row.status!=='reversed'" class="btn small" :disabled="productionBusy" @click="productionCompletionIsStock(row)?openProductionInventory(row):go('deliveries')">{{ productionCompletionIsStock(row)?'定位库存':'去送货' }}</button><button v-if="user?.role==='admin' && row.can_revert" class="btn small danger" :disabled="productionBusy" @click="revertProductionCompletion(row)">撤销生产确认</button></div></td>
+                  <thead><tr><th class="production-history-sequence">序号</th><th class="production-history-customer-order">客户单号</th><th class="production-history-customer-name">客户</th><th class="production-history-product">存货编码 / 产品尺寸</th><th class="production-history-quantity">数量</th><th class="production-history-time">完工时间</th><th class="production-history-destination">去向 / 库位</th><th class="production-history-actions">操作</th></tr></thead>
+                  <tbody><tr v-for="(row,index) in productionHistory" :key="row.id">
+                    <td class="production-history-sequence">{{ (pages.productionHistory-1)*productionHistoryPageSize()+index+1 }}</td>
+                    <td class="production-history-customer-order"><strong>{{ row.item_order_number || row.customer_po || '-' }}</strong></td>
+                    <td class="production-history-customer-name">{{ row.customer_name || '-' }}</td>
+                    <td class="production-history-product" :title="`${row.product_code || '-'}｜${row.product_name || '-'}｜${row.specification || '-'}`"><strong>{{ row.product_code || '-' }}</strong><span>{{ row.specification || '-' }}</span></td>
+                    <td class="production-history-quantity"><strong>{{ row.quantity || 0 }}{{ row.is_component_task ? '片' : '' }}</strong></td>
+                    <td class="production-history-time">{{ formatDateTime(row.completed_at) }}</td>
+                    <td class="production-history-destination"><span v-if="row.status==='reversed'" class="status orange">已撤销</span><span v-else :class="['status',productionCompletionIsStock(row)?'green':'blue']">{{ productionDestinationLabel(row) }}</span><button v-if="row.warehouse_location_id && row.status!=='reversed'" type="button" class="production-location-link" @click="openProductionInventoryMap(row)">{{ row.warehouse_location_name || '位置名称待完善' }}</button><span v-else-if="row.status!=='reversed'" class="muted">一楼待送区</span></td>
+                    <td class="production-history-actions"><div class="production-history-action-row"><template v-if="row.status!=='reversed' && row.can_transfer_to_stock && canWarehouseExecute"><template v-if="row.transfer_selection_status==='selected'"><span class="production-selected-location" :title="row.transfer_selected_location_name">已选：{{ row.transfer_selected_location_name }}</span><button class="btn small success" :disabled="productionBusy" @click="transferProductionCompletionToStock(row)">确认转库存</button><button class="btn small" :disabled="productionBusy" @click="openProductionLocationSelection(row,true)">重选</button></template><button v-else class="btn small success" :disabled="productionBusy || row.transfer_selection_opening" @click="openProductionLocationSelection(row)">{{ row.transfer_selection_opening ? '正在打开…' : '地图选位' }}</button></template><button v-if="user?.role==='admin' && row.can_supplement" class="btn small success" :disabled="productionBusy" @click="supplementProductionCompletion(row)">补录 {{ row.available_material_input_quantity }}</button><button v-if="row.status!=='reversed' && !productionCompletionIsStock(row)" class="btn small" :disabled="productionBusy" @click="go('deliveries')">去送货</button><button v-if="user?.role==='admin' && row.can_revert" class="btn small danger" :disabled="productionBusy" @click="revertProductionCompletion(row)">撤销</button></div></td>
                   </tr></tbody>
                   </table>
                 </data-panel>
@@ -9870,6 +9923,9 @@
             this.closeModal();
           });
           window.addEventListener("popstate", this.handlePdfWarehousePopState);
+          window.addEventListener("message", this.handleProductionLocationSelectionMessage);
+          window.addEventListener("storage", this.handleProductionLocationSelectionStorage);
+          window.addEventListener("focus", this.refreshOpenProductionLocationSelections);
         },
         methods: {
           customerPhoneAnalysis(value) {
@@ -17208,29 +17264,26 @@
           async loadProductionHistory() {
             const params = {
               page: this.pages.productionHistory,
-              page_size: this.pageSize,
+              page_size: this.productionHistoryPageSize(),
             };
             Object.entries(this.productionHistoryFilters || {}).forEach(([key,value]) => {
               if (value !== "" && value !== null && value !== undefined) params[key] = value;
             });
             const { data } = await axios.get("/api/production/completions", { params });
-            const floorNumbers = [...new Set(this.productionLocations.filter(location => location.is_empty).map(location => Number(location.warehouse_floor)).filter(Boolean))];
-            const defaultFloorNumber = floorNumbers.length === 1 ? floorNumbers[0] : null;
-            this.productionHistory = (data.items || []).map(row => ({
-              ...row,
-              transfer_floor_number: defaultFloorNumber,
-              transfer_area_code: "",
-              transfer_location_id: null,
-            }));
+            this.productionHistory = (data.items || []).map(row => {
+              const attempt = this.productionTransferAttempts[row.id] || {};
+              return {
+                ...row,
+                transfer_selection_token: attempt.selection_token || null,
+                transfer_selection_status: attempt.selection_status || "",
+                transfer_selected_location_name: attempt.selected_location_name || "",
+                transfer_selection_opening: false,
+              };
+            });
             this.productionHistoryTotal = Number(data.total || 0);
-            if (this.productionHistory.some(row => row.status !== "reversed" && row.can_transfer_to_stock && this.canWarehouseExecute) && !this.productionLocations.length) {
-              const locationsReady = await this.ensureProductionLocations();
-              if (locationsReady) {
-                const loadedFloors = this.productionLocationFloors;
-                const singleFloor = loadedFloors.length === 1 ? loadedFloors[0].number : null;
-                this.productionHistory.forEach(row => { row.transfer_floor_number = singleFloor; });
-              }
-            }
+          },
+          productionHistoryPageSize() {
+            return this.uiMode === "large" ? 6 : 8;
           },
           resetProductionHistoryFilters() {
             this.productionHistoryFilters = { customer_id:"", order_keyword:"", product_code:"", product_name:"", completed_date_from:"", completed_date_to:"", status:"" };
@@ -17616,33 +17669,126 @@
               this.showToast(`入库结果刷新失败：${this.errorMessage(error)}；请刷新页面核对`, true);
             } finally { this.productionBusy = false; }
           },
+          applyProductionLocationSelection(row, data) {
+            if (!row || !data?.token) return;
+            const previous = this.productionTransferAttempts[row.id] || {};
+            const selectedLocation = data.selected_location || null;
+            const attempt = {
+              ...previous,
+              selection_token: data.token,
+              selection_status: data.status || "open",
+              selected_location_name: selectedLocation?.location_name || "",
+              map_url: data.map_url || previous.map_url || "",
+            };
+            this.productionTransferAttempts[row.id] = attempt;
+            row.transfer_selection_token = attempt.selection_token;
+            row.transfer_selection_status = attempt.selection_status;
+            row.transfer_selected_location_name = attempt.selected_location_name;
+          },
+          async refreshProductionLocationSelection(row, {silent=false}={}) {
+            const token = row?.transfer_selection_token || this.productionTransferAttempts[row?.id]?.selection_token;
+            if (!token) return;
+            try {
+              const { data } = await axios.get(`/api/production/location-selection-sessions/${encodeURIComponent(token)}`);
+              this.applyProductionLocationSelection(row, data);
+              if (!silent && data.status === "selected") this.showToast(`地图已回传位置：${data.selected_location?.location_name || "位置名称待完善"}；请在本页确认转库存`);
+            } catch (error) {
+              const status = Number(error?.response?.status || 0);
+              if (status === 404 || status === 410) {
+                delete this.productionTransferAttempts[row.id];
+                row.transfer_selection_token = null;
+                row.transfer_selection_status = "";
+                row.transfer_selected_location_name = "";
+              }
+              if (!silent) this.showToast(`地图选位结果读取失败：${this.errorMessage(error)}`, true);
+            }
+          },
+          handleProductionLocationSelectionMessage(event) {
+            if (event.origin !== window.location.origin || event.data?.type !== "tianming:production-location-selected") return;
+            const token = String(event.data?.token || "");
+            const row = this.productionHistory.find(item => item.transfer_selection_token === token);
+            if (row) this.refreshProductionLocationSelection(row);
+          },
+          handleProductionLocationSelectionStorage(event) {
+            if (!event.key?.startsWith("tianming:production-location-selected:") || !event.newValue) return;
+            const token = event.key.slice("tianming:production-location-selected:".length);
+            const row = this.productionHistory.find(item => item.transfer_selection_token === token);
+            if (row) this.refreshProductionLocationSelection(row);
+          },
+          refreshOpenProductionLocationSelections() {
+            if (this.activePage !== "production" || this.productionTab !== "history") return;
+            this.productionHistory.forEach(row => {
+              if (row.transfer_selection_token && row.transfer_selection_status !== "consumed") {
+                this.refreshProductionLocationSelection(row, {silent:true});
+              }
+            });
+          },
+          async openProductionLocationSelection(row, forceNew=false) {
+            if (this.productionBusy || row?.transfer_selection_opening) return;
+            let mapWindow = null;
+            try {
+              mapWindow = window.open("about:blank", "_blank");
+              if (!mapWindow) {
+                this.showToast("浏览器阻止了地图新标签，请允许本站打开新标签后重试", true);
+                return;
+              }
+              if (forceNew) delete this.productionTransferAttempts[row.id];
+              const existing = this.productionTransferAttempts[row.id];
+              if (existing?.selection_token && existing?.map_url && !forceNew) {
+                row.transfer_selection_token = existing.selection_token;
+                mapWindow.location.replace(new URL(existing.map_url, window.location.origin).href);
+                return;
+              }
+              row.transfer_selection_opening = true;
+              const createIdempotency = createIdempotencyKey();
+              const { data } = await axios.post(`/api/production/completions/${row.id}/location-selection-sessions`, {
+                idempotency_key: createIdempotency,
+              });
+              this.productionTransferAttempts[row.id] = {
+                create_idempotency_key: createIdempotency,
+                selection_token: data.token,
+                selection_status: data.status,
+                selected_location_name: data.selected_location?.location_name || "",
+                map_url: data.map_url,
+              };
+              this.applyProductionLocationSelection(row, data);
+              mapWindow.location.replace(new URL(data.map_url, window.location.origin).href);
+            } catch (error) {
+              if (mapWindow && !mapWindow.closed) mapWindow.close();
+              this.showToast(`地图选位打开失败：${this.errorMessage(error)}`, true);
+            } finally {
+              row.transfer_selection_opening = false;
+            }
+          },
           async transferProductionCompletionToStock(row) {
             if (this.productionBusy) return;
-            const location = this.productionLocation(row?.transfer_location_id);
-            if (!location) { this.showToast("请先选择区域和可用的三楼成品库位", true); return; }
-            if (!confirm(`确认将 ${row.item_order_number || row.order_number || "该完工记录"} 转入 ${this.inventoryLocation(location)}？`)) return;
-            const signature = JSON.stringify({completion_id:row.id,location_id:location.id,pallet_id:location.pallet_id || null,pallet_code:location.pallet_code || null});
-            const old = this.productionTransferAttempts[row.id];
-            if (!old || old.signature !== signature) {
-              this.productionTransferAttempts[row.id] = { signature, idempotency_key:createIdempotencyKey() };
+            const attempt = this.productionTransferAttempts[row?.id] || {};
+            const token = row?.transfer_selection_token || attempt.selection_token;
+            const locationName = row?.transfer_selected_location_name || attempt.selected_location_name;
+            if (!token || row?.transfer_selection_status !== "selected" || !locationName) {
+              this.showToast("请先在实测地图选择具体位置并回到本页确认", true);
+              return;
             }
-            const idempotencyKey = this.productionTransferAttempts[row.id].idempotency_key;
+            if (!confirm(`确认将 ${row.item_order_number || row.order_number || "该完工记录"} 转入 ${locationName}？\n\n此确认才会真正移动库存；地图选位本身不会改库存。`)) return;
+            const signature = JSON.stringify({completion_id:row.id,selection_token:token});
+            if (attempt.confirm_signature !== signature || !attempt.confirm_idempotency_key) {
+              attempt.confirm_signature = signature;
+              attempt.confirm_idempotency_key = createIdempotencyKey();
+              this.productionTransferAttempts[row.id] = attempt;
+            }
             this.productionBusy = true;
             try {
-              await axios.post(`/api/production/completions/${row.id}/stock-transfers`, {
-                idempotency_key: idempotencyKey,
-                location_id: Number(location.id),
-                expected_layout_version: location.layout_version || null,
-                pallet_id: location.pallet_id ? Number(location.pallet_id) : null,
-                pallet_code: location.pallet_code || null,
+              await axios.post(`/api/production/completions/${row.id}/stock-transfers/from-selection`, {
+                selection_token: token,
+                idempotency_key: attempt.confirm_idempotency_key,
               });
               delete this.productionTransferAttempts[row.id];
               await Promise.all([this.loadProduction(), this.loadKpi(), this.loadDeliveries()]);
               if (this.hasPermission("dashboard.view")) await this.loadOverview();
               this.productionTab = "history";
-              this.showToast(`已转入成品库存 ${this.inventoryLocation(location)}`);
+              this.showToast(`已转入成品库存 ${locationName}`);
             } catch (error) {
-              this.showToast(`转库存失败：${this.errorMessage(error)}；重试将复用同一幂等键`, true);
+              this.showToast(`转库存失败：${this.errorMessage(error)}；库存结果不明时请勿重新选位，直接重试本按钮`, true);
             } finally { this.productionBusy = false; }
           },
           async supplementProductionCompletion(row) {
@@ -17693,16 +17839,13 @@
               this.showToast(`补充生产确认失败：${this.errorMessage(error)}`, true);
             } finally { this.productionBusy=false; }
           },
-          openProductionInventory(row) {
-            if (!this.pageAllowed("warehouse")) {
-              this.showToast("当前账号没有访问仓库库存管理的权限", true);
-              return;
-            }
-            const params = new URLSearchParams({ embedded:"1", tab:"finished" });
+          openProductionInventoryMap(row) {
+            const params = new URLSearchParams({ view:"2d", mode:"lookup" });
+            if (Number(row?.warehouse_floor) === 1 || Number(row?.warehouse_floor) === 3) params.set("floor", `${Number(row.warehouse_floor)}F`);
             if (row?.warehouse_location_id) params.set("location_id", String(row.warehouse_location_id));
             if (row?.inventory_lot_id) params.set("lot_id", String(row.inventory_lot_id));
-            this.ensureWarehouseFrame(`/warehouse.html?${params.toString()}`);
-            this.activePage = "warehouse";
+            const mapWindow = window.open(`/warehouse.html?${params.toString()}`, "_blank", "noopener");
+            if (!mapWindow) this.showToast("浏览器阻止了地图新标签，请允许本站打开新标签后重试", true);
           },
           async revertProductionCompletion(row) {
             if (this.productionBusy || !row?.can_revert || this.user?.role !== "admin") return;

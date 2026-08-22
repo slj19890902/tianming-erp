@@ -186,6 +186,7 @@ from app.models.customer_contract import (  # noqa: E402,F401
 from app.models.production import (  # noqa: E402,F401
     ProductionCompletion,
     ProductionCompletionBatch,
+    ProductionLocationSelectionSession,
     ProductionStockTransfer,
     ProductionTask,
 )

@@ -432,6 +432,45 @@ interface LocationCandidatesResponse {
   items: MoveCandidate[];
 }
 
+interface ProductionLocationSelectionCandidate {
+  id: number;
+  warehouse_floor: number;
+  floor_code?: string | null;
+  floor_name?: string | null;
+  area_code?: string | null;
+  area_name?: string | null;
+  location_code: string;
+  location_name: string;
+  employee_location_name: string;
+  layout_version: number;
+  is_empty: boolean;
+}
+
+interface ProductionLocationSelectionResponse {
+  token: string;
+  status: "open" | "selected" | "consumed";
+  completion_id: number;
+  expires_at: string;
+  map_url: string;
+  completion: {
+    id: number;
+    order_number: string;
+    customer_po?: string | null;
+    customer_name: string;
+    product_code?: string | null;
+    product_name: string;
+    specification?: string | null;
+    quantity: number;
+  };
+  selected_location?: {
+    id: number;
+    layout_version: number;
+    location_name: string;
+  } | null;
+  candidate_locations: ProductionLocationSelectionCandidate[];
+  writes_inventory?: boolean;
+}
+
 interface WarehouseMoveSource {
   source_key: string;
   operation: "pallet_move" | "lot_transfer";
@@ -688,6 +727,7 @@ const DEFAULT_LAYERS: LayerVisibility = {
 
 const noop = () => undefined;
 const EMPTY_CANVAS_POINTS: number[][] = [];
+const EMPTY_PALLET_IDS: string[] = [];
 const EMPTY_PRODUCTION_PROJECTIONS: ProductionTaskProjection[] = [];
 
 function apiErrorMessage(body: unknown, status: number) {
@@ -1351,6 +1391,8 @@ function WarehouseRackElevation({
 export function WarehouseTwinApp() {
   const query = useMemo(() => new URLSearchParams(window.location.search), []);
   const embedded = query.get("embedded") === "1";
+  const productionSelectionToken = query.get("selection_token")?.trim() || "";
+  const productionSelectionMode = Boolean(productionSelectionToken) && query.get("mode") === "production-location-selection";
   const [floorCode, setFloorCode] = useState(query.get("floor")?.toUpperCase() === "1F" ? "1F" : "3F");
   const [viewMode, setViewMode] = useState<ViewMode>(query.get("view") === "25d" ? "25d" : "2d");
   const [cameraPreset, setCameraPreset] = useState<CameraPreset>("fit");
@@ -1499,6 +1541,10 @@ export function WarehouseTwinApp() {
   const [groundStorageBusy, setGroundStorageBusy] = useState(false);
   const [groundStorageMessage, setGroundStorageMessage] = useState("");
   const [groundStorageIdempotencyKey, setGroundStorageIdempotencyKey] = useState(() => operationKey("ground-storage"));
+  const [productionLocationSelection, setProductionLocationSelection] = useState<ProductionLocationSelectionResponse | null>(null);
+  const [productionLocationSelectionTarget, setProductionLocationSelectionTarget] = useState<ProductionLocationSelectionCandidate | null>(null);
+  const [productionLocationSelectionBusy, setProductionLocationSelectionBusy] = useState(false);
+  const [productionLocationSelectionMessage, setProductionLocationSelectionMessage] = useState("");
 
   const refreshDashboard = useCallback(async () => {
     const value = await requestJson<TwinDashboard>("/api/warehouse/twin-dashboard/overview?days=30");
@@ -1523,6 +1569,40 @@ export function WarehouseTwinApp() {
         setCanViewProductionProjection(false);
       });
   }, [refreshDashboard]);
+
+  useEffect(() => {
+    if (!productionSelectionMode) return;
+    let active = true;
+    setViewMode("2d");
+    setMapMode("lookup");
+    setSearchPanelOpen(false);
+    setProductionLocationSelectionBusy(true);
+    setProductionLocationSelectionMessage("正在读取生产完工与可选位置…");
+    requestJson<ProductionLocationSelectionResponse>(
+      `/api/production/location-selection-sessions/${encodeURIComponent(productionSelectionToken)}`
+    ).then((value) => {
+      if (!active) return;
+      setProductionLocationSelection(value);
+      const selectedCandidate = value.selected_location
+        ? (value.candidate_locations || []).find((item) => item.id === value.selected_location?.id) || null
+        : null;
+      setProductionLocationSelectionTarget(selectedCandidate);
+      const preferredFloor = selectedCandidate?.warehouse_floor
+        || (value.candidate_locations || []).find((item) => item.warehouse_floor === 3)?.warehouse_floor
+        || (value.candidate_locations || [])[0]?.warehouse_floor;
+      if (preferredFloor === 1 || preferredFloor === 3) setFloorCode(`${preferredFloor}F`);
+      setProductionLocationSelectionMessage(
+        value.status === "selected"
+          ? `已选 ${value.selected_location?.location_name || "位置名称待完善"}；返回原生产页面确认后才会移动库存。`
+          : "先选楼层和区域，再点击地图中的具体空位；地图选位不会移动库存。"
+      );
+    }).catch((reason: Error) => {
+      if (active) setProductionLocationSelectionMessage(`选位任务读取失败：${reason.message}`);
+    }).finally(() => {
+      if (active) setProductionLocationSelectionBusy(false);
+    });
+    return () => { active = false; };
+  }, [productionSelectionMode, productionSelectionToken]);
 
   useEffect(() => {
     if (viewMode === "25d") {
@@ -1959,6 +2039,18 @@ export function WarehouseTwinApp() {
         .map((item) => `erp-location-${item.location_id}`)
     ]
   )], [searchHighlightItems, searchResponse?.resources, floorCode]);
+  const productionSelectionHighlightPalletIds = useMemo(
+    () => productionSelectionMode
+      ? (productionLocationSelection?.candidate_locations || [])
+        .filter((item) => `${item.warehouse_floor}F` === floorCode)
+        .map((item) => `erp-location-${item.id}`)
+      : [],
+    [productionSelectionMode, productionLocationSelection, floorCode]
+  );
+  const operationalHighlightPalletIds = useMemo(
+    () => [...new Set([...searchHighlightPalletIds, ...productionSelectionHighlightPalletIds])],
+    [searchHighlightPalletIds, productionSelectionHighlightPalletIds]
+  );
   const areaStats = useMemo(() => new Map(
     (dashboard?.distribution.areas || []).filter((item) => item.floor_code === floorCode).map((item) => [item.area_code, item])
   ), [dashboard, floorCode]);
@@ -2021,6 +2113,19 @@ export function WarehouseTwinApp() {
     if (entity.kind === "pallet" && entity.id.startsWith("erp-location-")) {
       const locationId = Number(entity.id.replace("erp-location-", ""));
       const location = visualLocations.find((item) => item.location_id === locationId);
+      if (productionSelectionMode) {
+        setSelected(entity);
+        const candidate = (productionLocationSelection?.candidate_locations || []).find(
+          (item) => item.id === locationId
+        );
+        setProductionLocationSelectionTarget(candidate || null);
+        setProductionLocationSelectionMessage(
+          candidate
+            ? `已点选 ${candidate.employee_location_name || candidate.location_name}；请核对中文位置后点击“确认选择此位置”。`
+            : `${location?.location_name || "该位置"} 当前不可用于本次转库存，请选择高亮空位。`
+        );
+        return;
+      }
       if (locationPointEditAreaCode && location?.area_code !== locationPointEditAreaCode) {
         setLocationEditMessage(`当前只可拖动 ${locationPointEditAreaCode} 区货位；请先保存并固定或取消。`);
         return;
@@ -2089,7 +2194,7 @@ export function WarehouseTwinApp() {
       return;
     }
     setSelected(null);
-  }, [layout, locationEditMode, advancedAreaMaintenanceOpen, locationPointEditAreaCode, rackDrafts, mapMode, moveAction, moveSource, mappedMoveTargets, dispatchStagingLocation, dispatchStagingPallets, floorCode, features, visualLocations, groundCandidates, groundLargeFootprint, groundPrimaryLocationId]);
+  }, [layout, locationEditMode, advancedAreaMaintenanceOpen, locationPointEditAreaCode, rackDrafts, mapMode, moveAction, moveSource, mappedMoveTargets, dispatchStagingLocation, dispatchStagingPallets, floorCode, features, visualLocations, groundCandidates, groundLargeFootprint, groundPrimaryLocationId, productionSelectionMode, productionLocationSelection]);
   const selectedFeature = selected?.kind === "feature"
     ? features.find((item) => item.id === selected.id && item.feature_kind === "zone")
     : undefined;
@@ -4279,7 +4384,51 @@ export function WarehouseTwinApp() {
     setWarehouseOperationMessage(`来源 ${moveSource.inventory_code} 仍保留；请在 ${nextFloorCode} 地图点选区域，再点具体空货位。`);
   };
 
-  return <main className={`warehouse-twin-shell ${uiMode === "large" ? "large-text" : ""} ${mapMode === "move" ? "move-mode" : ""}`}>
+  const confirmProductionLocationSelection = async () => {
+    const target = productionLocationSelectionTarget;
+    if (!productionSelectionMode || !target || productionLocationSelectionBusy) return;
+    setProductionLocationSelectionBusy(true);
+    setProductionLocationSelectionMessage(`正在确认 ${target.employee_location_name || target.location_name}；库存仍未移动…`);
+    try {
+      const result = await mutateJson<ProductionLocationSelectionResponse>(
+        `/api/production/location-selection-sessions/${encodeURIComponent(productionSelectionToken)}/select`,
+        "POST",
+        {
+          location_id: target.id,
+          expected_layout_version: target.layout_version
+        }
+      );
+      if (!result || result.writes_inventory !== false) {
+        throw new Error("地图选位返回状态不明确，请返回生产页面刷新核对");
+      }
+      setProductionLocationSelection((current) => ({
+        ...result,
+        candidate_locations: current?.candidate_locations || []
+      }));
+      const selectedName = result.selected_location?.location_name || target.employee_location_name || target.location_name;
+      setProductionLocationSelectionMessage(`已回传 ${selectedName}；地图选位不会移动库存，请回到原生产页面再次确认。`);
+      const notification = {
+        type: "tianming:production-location-selected",
+        token: productionSelectionToken,
+        completion_id: result.completion_id,
+        selected_location: result.selected_location,
+        writes_inventory: result.writes_inventory
+      };
+      localStorage.setItem(
+        `tianming:production-location-selected:${productionSelectionToken}`,
+        JSON.stringify({ ...notification, notified_at: new Date().toISOString() })
+      );
+      if (window.opener && !window.opener.closed) {
+        window.opener.postMessage(notification, window.location.origin);
+      }
+    } catch (reason) {
+      setProductionLocationSelectionMessage(`选位失败：${reason instanceof Error ? reason.message : "未知错误"}；库存零写入，请刷新地图后重选。`);
+    } finally {
+      setProductionLocationSelectionBusy(false);
+    }
+  };
+
+  return <main className={`warehouse-twin-shell ${uiMode === "large" ? "large-text" : ""} ${mapMode === "move" ? "move-mode" : ""} ${productionSelectionMode ? "production-location-selection" : ""}`}>
     {focusedRack?.mold_rack_code ? <MoldRackElevation
       rack={focusedRack}
       response={moldRackResponse}
@@ -4311,20 +4460,20 @@ export function WarehouseTwinApp() {
         <button type="button" className={floorCode === "1F" ? "active" : ""} onClick={() => switchWarehouseFloor("1F")}><b>1F</b><span>生产车间</span></button>
         <button type="button" className={floorCode === "3F" ? "active" : ""} onClick={() => switchWarehouseFloor("3F")}><b>3F</b><span>成品仓库</span></button>
       </nav>{selectedAreaCode && <div className="twin-header-area-summary"><small>{mapMode === "planning" && canEditLocations ? `当前规划区域 · ${selectedAreaCode}` : "当前区域"}</small><b>{selectedAreaFeature?.name || "区域名称待完善"}</b><span>{selectedAreaFeature?.area_mm2 ? `${(selectedAreaFeature.area_mm2 / 1_000_000).toFixed(1)} m²` : "面积待确认"} · {selectedAreaLocationCount} 库位 · {selectedArea?.lot_count || 0} 批次</span></div>}<p>{floorTitle} · 正式仓库作业层</p></div>
-      <div className="twin-command-status"><span className="live">{mapMode === "planning" ? locationPointEditAreaCode ? `区域规划 · ${locationPointEditAreaCode} 点位调整` : advancedAreaMaintenanceOpen ? "区域规划 · 高级维护" : "区域规划 · 一次确认" : mapMode === "move" ? moveAction === "ground" ? "地图点选成品存放" : moveAction === "stocktake" ? `盘点调整 · ${stocktakeDrafts.length} 条草稿` : moveAction === "merge" ? `移货 · 合并栈板 · ${mergeSources.length} 块已选` : `移货 · ${moveDrafts.length} 条页面草稿` : "查货模式 · 只读"}</span><b>{currentFloor?.active_lots || 0}</b><small>当前层有效批次</small></div>
-      <a className="twin-ledger-link" href="/warehouse-ledger.html?tab=finished" target="_top">库存台账</a>
+      <div className="twin-command-status"><span className="live">{productionSelectionMode ? "生产转库存 · 地图只选位置" : mapMode === "planning" ? locationPointEditAreaCode ? `区域规划 · ${locationPointEditAreaCode} 点位调整` : advancedAreaMaintenanceOpen ? "区域规划 · 高级维护" : "区域规划 · 一次确认" : mapMode === "move" ? moveAction === "ground" ? "地图点选成品存放" : moveAction === "stocktake" ? `盘点调整 · ${stocktakeDrafts.length} 条草稿` : moveAction === "merge" ? `移货 · 合并栈板 · ${mergeSources.length} 块已选` : `移货 · ${moveDrafts.length} 条页面草稿` : "查货模式 · 只读"}</span><b>{currentFloor?.active_lots || 0}</b><small>当前层有效批次</small></div>
+      {!productionSelectionMode && <a className="twin-ledger-link" href="/warehouse-ledger.html?tab=finished" target="_top">库存台账</a>}
     </header>
 
     <section className="twin-toolbar">
       <div className="twin-operation-modes" role="tablist" aria-label="仓库地图操作模式">
-        <button type="button" className={mapMode === "lookup" ? "active" : ""} onClick={returnToLookupMode}>查货</button>
+        {productionSelectionMode ? <button type="button" className="active" disabled>只选库存位置</button> : <><button type="button" className={mapMode === "lookup" ? "active" : ""} onClick={returnToLookupMode}>查货</button>
         {(canExecuteWarehouse || canStocktake) && <button type="button" className={mapMode === "move" ? "active" : ""} disabled={spatialEditBusy} onClick={enterWarehouseMoveMode}>移货 / 盘点</button>}
-        {canEditLocations && <button type="button" className={mapMode === 'planning' ? 'active' : ''} disabled={spatialEditBusy} onClick={toggleLayoutEditor}>区域规划</button>}
+        {canEditLocations && <button type="button" className={mapMode === 'planning' ? 'active' : ''} disabled={spatialEditBusy} onClick={toggleLayoutEditor}>区域规划</button>}</>}
       </div>
       <button type="button" className={`twin-layer-toggle ${layerPanelOpen ? "active" : ""}`} aria-expanded={layerPanelOpen} onClick={() => setLayerPanelOpen((value) => !value)}>图层</button>
       <div className="twin-segmented" aria-label="视图模式">
         <button type="button" className={viewMode === "2d" ? "active" : ""} onClick={() => setViewMode("2d")}>二维平面</button>
-        <button type="button" className={viewMode === "25d" ? "active" : ""} disabled={locationEditMode || mapMode === "move"} title={mapMode === "move" ? "移货 / 盘点使用二维地图；页面草稿不会丢失" : locationEditMode ? "请先退出、发布或放弃布局草稿" : ""} onClick={() => setViewMode("25d")}>2.5D 等距</button>
+        <button type="button" className={viewMode === "25d" ? "active" : ""} disabled={productionSelectionMode || locationEditMode || mapMode === "move"} title={productionSelectionMode ? "生产转库存请在二维实测图上点选实际位置" : mapMode === "move" ? "移货 / 盘点使用二维地图；页面草稿不会丢失" : locationEditMode ? "请先退出、发布或放弃布局草稿" : ""} onClick={() => setViewMode("25d")}>2.5D 等距</button>
       </div>
       {viewMode === "25d" && <div className="twin-camera-presets">
         <button type="button" onClick={() => setCameraPreset("north_east")}>东北</button>
@@ -4333,7 +4482,7 @@ export function WarehouseTwinApp() {
         <button type="button" onClick={() => setCameraPreset("south_west")}>西南</button>
       </div>}
       <button type="button" className="twin-reset" onClick={() => { setCameraPreset("fit"); setViewResetToken((value) => value + 1); }}>全图复位</button>
-      <button type="button" className={`twin-warehouse-search-toggle ${searchPanelOpen || searchResponse ? "active" : ""}`} aria-expanded={searchPanelOpen} onClick={() => setSearchPanelOpen((value) => !value)}>全仓查找{searchResponse ? ` ${searchType === "finished" ? searchProductGroups.length : searchResponse.resource_result_count}` : ""}</button>
+      {!productionSelectionMode && <button type="button" className={`twin-warehouse-search-toggle ${searchPanelOpen || searchResponse ? "active" : ""}`} aria-expanded={searchPanelOpen} onClick={() => setSearchPanelOpen((value) => !value)}>全仓查找{searchResponse ? ` ${searchType === "finished" ? searchProductGroups.length : searchResponse.resource_result_count}` : ""}</button>}
       {mapMode === "planning" && (viewMode === "2d" ? <button type="button" className={`twin-location-edit-toggle ${locationEditMode ? "active" : ""}`} disabled={!canEditLocations || spatialEditBusy} title={!canEditLocations ? "仅管理员可以规划区域" : "二维编辑先选择地图区域，再一次确认用途、形式和容量"} onClick={toggleLayoutEditor}>{locationEditMode ? "退出规划" : "开始规划"}</button> : <span className="twin-view-note">2.5D 流畅查看 · 详情见右侧</span>)}
       {mapMode === "planning" && floorCode === "1F" && viewMode === "2d" && canEditLocations && !locationEditMode && <button type="button" className={`twin-floor1-candidate-toggle ${floor1CandidatePlan ? "active" : ""}`} disabled={floor1CandidateBusy} onClick={previewFloor1FormalCandidates}>{floor1CandidateBusy ? "正在测算…" : "一楼区域自动生成"}</button>}
       {mapMode === "planning" && locationEditMode && (advancedAreaMaintenanceOpen || locationPointEditAreaCode) && <><button type="button" className="twin-save-location-layout" disabled={locationEditBusy || !activeLocationDraftCount} onClick={saveLocationDrafts}>{locationPointEditAreaCode ? "保存并固定" : "保存库位位置"} {activeLocationDraftCount || ""}</button><button type="button" className="twin-cancel-location-layout" disabled={locationEditBusy || (advancedAreaMaintenanceOpen && !activeLocationDraftCount)} onClick={locationPointEditAreaCode ? cancelLocationPointEditing : () => { setLocationDrafts({}); setSwapSourceLocationId(null); setLocationEditMessage("已取消未保存的库位位置草稿。"); }}>{locationPointEditAreaCode ? "取消点位调整" : "取消位置草稿"}</button></>}
@@ -4416,12 +4565,13 @@ export function WarehouseTwinApp() {
           onMeasurePoint={noop}
           productionProjections={productionProjection?.items || EMPTY_PRODUCTION_PROJECTIONS}
           highlightFeatureIds={searchHighlightFeatureIds}
-          highlightedPalletIds={searchHighlightPalletIds}
+          highlightedPalletIds={operationalHighlightPalletIds}
+          selectionPriorityPalletIds={productionSelectionMode ? productionSelectionHighlightPalletIds : EMPTY_PALLET_IDS}
           focusTarget={cameraFocusTarget}
           palletEditingOnly={(locationEditMode && (advancedAreaMaintenanceOpen || Boolean(locationPointEditAreaCode))) || warehouseMoveModeActive}
           rackEditingEnabled={locationEditMode && advancedAreaMaintenanceOpen}
           featureEditingEnabled={locationEditMode && advancedAreaMaintenanceOpen && areaPolicyEditMode}
-          allowPalletSelection={viewMode === "25d" || locationEditMode || canEditLocations || canExecuteWarehouse || canStocktake}
+          allowPalletSelection={productionSelectionMode || viewMode === "25d" || locationEditMode || canEditLocations || canExecuteWarehouse || canStocktake}
           draggablePalletIds={warehouseMoveModeActive ? movablePalletIds : locationPointEditPalletIds}
           readOnly={(!locationEditMode || (!advancedAreaMaintenanceOpen && !locationPointEditAreaCode)) && !warehouseMoveModeActive}
           visualTheme="warehouse"
@@ -4431,6 +4581,15 @@ export function WarehouseTwinApp() {
 
       <aside className="twin-inspector">
         <header><small>ERP INVENTORY</small><h2>库存与库位</h2></header>
+        {productionSelectionMode && <section className="twin-production-location-selection-panel">
+          <div className="twin-production-location-selection-title"><div><small>生产完工 · 只选位置</small><b>{productionLocationSelection?.completion.customer_name || "正在读取客户"}</b></div><em>{productionLocationSelection?.status === "selected" ? "已回传" : "零库存写入"}</em></div>
+          {productionLocationSelection && <div className="twin-production-location-selection-product"><b>{productionLocationSelection.completion.product_code || "存货编码待完善"}</b><span>{productionLocationSelection.completion.product_name} · {productionLocationSelection.completion.specification || "规格待完善"}</span><strong>{productionLocationSelection.completion.quantity} 只</strong></div>}
+          <ol><li>选择 1F 或 3F</li><li>点击目标区域</li><li>点击高亮的具体空位</li><li>核对中文位置并回传</li></ol>
+          <p>地图选位不会移动库存；只有回到原生产页面再次确认，权威库存事务才会执行。</p>
+          <div className="twin-production-location-selection-summary"><small>本页选择</small><b>{productionLocationSelectionTarget?.employee_location_name || productionLocationSelectionTarget?.location_name || productionLocationSelection?.selected_location?.location_name || "尚未点击具体空位"}</b><span>{productionLocationSelectionMessage}</span></div>
+          {productionLocationSelection?.status === "selected" ? <button type="button" className="twin-primary-action" onClick={() => window.close()}>已回传，返回生产页确认</button> : <button type="button" className="twin-primary-action" disabled={productionLocationSelectionBusy || !productionLocationSelectionTarget} onClick={confirmProductionLocationSelection}>{productionLocationSelectionBusy ? "正在核对…" : "确认选择此位置"}</button>}
+          <button type="button" className="twin-production-location-selection-cancel" onClick={() => window.close()}>关闭地图（库存不变）</button>
+        </section>}
         {floor1CandidatePlan && <section className="twin-floor1-candidate-panel">
           <div className="twin-floor1-candidate-title"><div><small>1F · 实测地图候选</small><b>一次确认区域与库位</b></div><button type="button" disabled={floor1CandidateBusy} onClick={() => setFloor1CandidatePlan(null)}>关闭</button></div>
           <div className="twin-floor1-candidate-summary"><span><b>{floor1CandidatePlan.candidate_count}</b> 个区域</span><span><b>{floor1CandidatePlan.long_term_pallet_capacity}</b> 个长期栈板位</span><span><b>{floor1CandidatePlan.formal_location_count}</b> 个正式库存库位</span></div>

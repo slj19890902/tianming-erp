@@ -215,6 +215,26 @@ button { cursor: pointer; }
 .twin-ground-legend .green { color: #15803d; }.twin-ground-legend .blue { color: #1d4ed8; }.twin-ground-legend .gray { color: #64748b; }.twin-ground-legend .red { color: #b91c1c; }
 .twin-ground-selection-summary { display: grid; gap: 3px; padding: 8px; border-radius: 4px; background: #e0f2fe; color: #0c4a6e; }
 .twin-ground-selection-summary span { font-size: 12px; }
+.production-location-selection .twin-toolbar { border-bottom-color: #86efac; background: #f0fdf4; }
+.production-location-selection .twin-operation-modes button.active { background: #087a55; color: #fff; opacity: 1; }
+.production-location-selection .twin-inspector { border-left-color: #86efac; }
+.twin-production-location-selection-panel { display: grid; gap: 12px; padding: 14px; border: 2px solid #34d399; border-radius: 8px; background: #f0fdf4; color: #12372a; }
+.twin-production-location-selection-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.twin-production-location-selection-title div { display: grid; gap: 3px; }
+.twin-production-location-selection-title small { color: #087a55; font-weight: 800; }
+.twin-production-location-selection-title b { font-size: 18px; }
+.twin-production-location-selection-title em { padding: 4px 8px; border-radius: 999px; background: #d1fae5; color: #047857; font-style: normal; font-weight: 800; }
+.twin-production-location-selection-product { display: grid; gap: 3px; padding: 10px; border-radius: 6px; background: #fff; }
+.twin-production-location-selection-product b { font-size: 18px; overflow-wrap: anywhere; }
+.twin-production-location-selection-product span { color: #49675b; }
+.twin-production-location-selection-product strong { color: #087a55; }
+.twin-production-location-selection-panel ol { display: grid; gap: 5px; margin: 0; padding-left: 24px; font-weight: 700; }
+.twin-production-location-selection-panel p { margin: 0; color: #365c4d; line-height: 1.55; }
+.twin-production-location-selection-summary { display: grid; gap: 4px; padding: 10px; border-radius: 6px; background: #dcfce7; }
+.twin-production-location-selection-summary small { color: #087a55; font-weight: 800; }
+.twin-production-location-selection-summary b { font-size: 17px; overflow-wrap: anywhere; }
+.twin-production-location-selection-summary span { color: #365c4d; line-height: 1.45; }
+.twin-production-location-selection-cancel { border-color: #9ca3af !important; background: #fff !important; color: #374151 !important; }
 .calibration-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
 .calibration-title h2 { margin-bottom: 3px; color: #155e75; }
 .calibration-title p { margin: 0; color: #64748b; font-size: 10px; line-height: 1.4; }

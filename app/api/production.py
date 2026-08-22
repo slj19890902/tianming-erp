@@ -61,6 +61,13 @@ from app.services.production_task_profile import (
     production_profile_write_guard,
     refresh_task_profile,
 )
+from app.services.production_location_selection import (
+    confirm_location_selection_transfer,
+    create_location_selection_session,
+    load_location_selection_session,
+    select_location_for_session,
+    serialize_location_selection_session,
+)
 from app.services.fulfillment_reminders import annotate_production_reminders
 from app.services.warehouse_inventory import WarehouseInventoryError
 
@@ -144,6 +151,36 @@ class StockTransferRequest(BaseModel):
     def trim_optional_text(cls, value: str | None) -> str | None:
         normalized = (value or "").strip()
         return normalized or None
+
+
+class LocationSelectionCreateRequest(BaseModel):
+    idempotency_key: str = Field(min_length=1, max_length=120)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def trim_key(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("幂等键不能为空")
+        return normalized
+
+
+class LocationSelectionTargetRequest(BaseModel):
+    location_id: int = Field(gt=0)
+    expected_layout_version: int = Field(gt=0)
+
+
+class LocationSelectionTransferRequest(BaseModel):
+    selection_token: str = Field(min_length=20, max_length=96)
+    idempotency_key: str = Field(min_length=1, max_length=120)
+
+    @field_validator("selection_token", "idempotency_key")
+    @classmethod
+    def trim_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("选位凭据和幂等键不能为空")
+        return normalized
 
 
 class CompletionReversalRequest(BaseModel):
@@ -821,6 +858,216 @@ def post_completion_stock_transfer(
                 details={
                     "completion_id": completion_id,
                     "batch_id": completion.batch_id if completion is not None else None,
+                    "transfer_id": result.transfer.id,
+                    "inventory_lot_id": result.transfer.inventory_lot_id,
+                    "warehouse_location_id": result.transfer.warehouse_location_id,
+                },
+            )
+        db.commit()
+        rows = list_production_completions(
+            db,
+            allowed_customer_ids=_allowed_customer_ids(user, db),
+            completion_ids=[completion_id],
+        )
+        if not rows:
+            raise HTTPException(status_code=404, detail="生产完工记录不存在")
+        return {
+            "transfer_id": result.transfer.id,
+            "replayed": result.replayed,
+            "completion": rows[0],
+        }
+    except HTTPException:
+        db.rollback()
+        raise
+    except (ProductionWorkflowError, WarehouseInventoryError) as error:
+        db.rollback()
+        _raise_workflow_error(error)
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="转库存记录已被其他请求修改，请刷新后重试",
+        ) from error
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.post("/completions/{completion_id}/location-selection-sessions")
+def post_completion_location_selection_session(
+    completion_id: int,
+    payload: LocationSelectionCreateRequest,
+    user: User = Depends(can_complete),
+    db: Session = Depends(get_db),
+) -> dict:
+    try:
+        customer_id = completion_customer_id(db, completion_id)
+        if customer_id is not None:
+            require_customer_access(customer_id, current_user=user, db=db)
+        if not has_permission(user, "warehouse.execute"):
+            raise HTTPException(status_code=403, detail="地图选位需要仓库执行权限")
+        session, replayed = create_location_selection_session(
+            db,
+            completion_id=completion_id,
+            user_id=user.id,
+            idempotency_key=payload.idempotency_key,
+        )
+        db.commit()
+        response = serialize_location_selection_session(
+            db,
+            session,
+            include_candidates=False,
+        )
+        response["replayed"] = replayed
+        return response
+    except HTTPException:
+        db.rollback()
+        raise
+    except ProductionWorkflowError as error:
+        db.rollback()
+        _raise_workflow_error(error)
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="地图选位任务已被其他请求修改，请刷新后重试",
+        ) from error
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.get("/location-selection-sessions/{selection_token}")
+def get_completion_location_selection_session(
+    selection_token: str,
+    user: User = Depends(can_complete),
+    db: Session = Depends(get_db),
+) -> dict:
+    try:
+        if not has_permission(user, "warehouse.execute"):
+            raise HTTPException(status_code=403, detail="地图选位需要仓库执行权限")
+        session = load_location_selection_session(
+            db,
+            token=selection_token,
+            user_id=user.id,
+        )
+        require_customer_access(session.customer_id, current_user=user, db=db)
+        return serialize_location_selection_session(
+            db,
+            session,
+            include_candidates=session.status != "consumed",
+        )
+    except HTTPException:
+        raise
+    except ProductionWorkflowError as error:
+        _raise_workflow_error(error)
+
+
+@router.post("/location-selection-sessions/{selection_token}/select")
+def post_completion_location_selection_target(
+    selection_token: str,
+    payload: LocationSelectionTargetRequest,
+    user: User = Depends(can_complete),
+    db: Session = Depends(get_db),
+) -> dict:
+    try:
+        if not has_permission(user, "warehouse.execute"):
+            raise HTTPException(status_code=403, detail="地图选位需要仓库执行权限")
+        session = load_location_selection_session(
+            db,
+            token=selection_token,
+            user_id=user.id,
+            allow_consumed=False,
+        )
+        require_customer_access(session.customer_id, current_user=user, db=db)
+        select_location_for_session(
+            db,
+            session=session,
+            location_id=payload.location_id,
+            expected_layout_version=payload.expected_layout_version,
+        )
+        db.commit()
+        response = serialize_location_selection_session(
+            db,
+            session,
+            include_candidates=False,
+        )
+        response["writes_inventory"] = False
+        return response
+    except HTTPException:
+        db.rollback()
+        raise
+    except (ProductionWorkflowError, WarehouseInventoryError) as error:
+        db.rollback()
+        _raise_workflow_error(error)
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="地图选位已被其他请求修改，请返回生产页面重试",
+        ) from error
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.post("/completions/{completion_id}/stock-transfers/from-selection")
+def post_completion_stock_transfer_from_selection(
+    completion_id: int,
+    payload: LocationSelectionTransferRequest,
+    user: User = Depends(can_complete),
+    db: Session = Depends(get_db),
+) -> dict:
+    try:
+        if not has_permission(user, "warehouse.execute"):
+            raise HTTPException(status_code=403, detail="转库存需要仓库执行权限")
+        session = load_location_selection_session(
+            db,
+            token=payload.selection_token,
+            user_id=user.id,
+        )
+        if session.completion_id != completion_id:
+            raise HTTPException(status_code=409, detail="地图选位任务与完工记录不一致")
+        require_customer_access(session.customer_id, current_user=user, db=db)
+        result = confirm_location_selection_transfer(
+            db,
+            session=session,
+            completion_id=completion_id,
+            idempotency_key=payload.idempotency_key,
+            operator_id=user.id,
+        )
+        if not result.replayed:
+            completion = db.get(ProductionCompletion, completion_id)
+            customer_snapshot = _completion_customer_snapshots(
+                db,
+                (completion,) if completion is not None else (),
+            ).get(completion_id)
+            snapshot_customer_id, snapshot_customer_name = (
+                customer_snapshot or (None, None)
+            )
+            append_audit_event(
+                db,
+                event_category="business",
+                result="success",
+                source="web",
+                module_code="production",
+                action_code="production.stock_transfer.posted",
+                legacy_action="TRANSFER_PRODUCTION_STOCK",
+                resource="ProductionStockTransfer",
+                actor=user,
+                entity_type="production_stock_transfer",
+                entity_id=result.transfer.id,
+                object_ref=f"production_stock_transfer:{result.transfer.id}",
+                customer_id=snapshot_customer_id,
+                customer_name=snapshot_customer_name,
+                batch_id=(str(completion.batch_id) if completion is not None else None),
+                description="生产完工通过实测地图转入库存",
+                details={
+                    "completion_id": completion_id,
+                    "batch_id": completion.batch_id if completion is not None else None,
+                    "selection_session_id": session.id,
+                    "selected_layout_version": session.selected_layout_version,
+                    "selected_location_name": session.selected_location_name_snapshot,
                     "transfer_id": result.transfer.id,
                     "inventory_lot_id": result.transfer.inventory_lot_id,
                     "warehouse_location_id": result.transfer.warehouse_location_id,

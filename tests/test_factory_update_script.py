@@ -36,9 +36,9 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.163"
-    assert APP_VERSION_NAME == "真实FIN自动入库与既有地堆发布"
-    assert APP_BUILD_DATE == "2026-08-22"
+    assert APP_VERSION == "v0.22.164"
+    assert APP_VERSION_NAME == "生产完工地图选位与历史紧凑布局"
+    assert APP_BUILD_DATE == "2026-08-23"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
     assert metadata["external_acceptance_required"] is True
@@ -49,14 +49,14 @@ def test_factory_update_reports_current_release_version() -> None:
     current_release = [
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
-    assert any("本次更新｜" in item and "FIN-001～003" in item and "真实空位置" in item for item in current_release)
-    assert any("本次更新｜" in item and "原位认领" in item and "不重复创建" in item for item in current_release)
-    assert any("本次更新｜" in item and "送货清空" in item and "空间占用" in item for item in current_release)
-    assert any("本次更新｜" in item and "F1-DISPATCH-01" in item and "兼容" in item for item in current_release)
-    assert any("如何验证｜" in item and "FIN-001" in item and "原 10 个真实位置" in item for item in current_release)
-    assert any("如何验证｜" in item and "待来料" in item and "同一位置" in item for item in current_release)
-    assert any("如何验证｜" in item and "旧 F1-DISPATCH-01" in item for item in current_release)
-    assert any("如何验证｜" in item and "v0.22.163" in item and "de39v8x9z28" in item for item in current_release)
+    assert any("本次更新｜" in item and "完工历史" in item and "紧凑展示" in item for item in current_release)
+    assert any("本次更新｜" in item and "新标签页" in item and "货物标签" in item for item in current_release)
+    assert any("本次更新｜" in item and "地图只保存选位" in item and "不直接移动库存" in item for item in current_release)
+    assert any("本次更新｜" in item and "一次性选位会话表" in item and "不回填" in item for item in current_release)
+    assert any("如何验证｜" in item and "1920×1080" in item and "一行显示一条记录" in item for item in current_release)
+    assert any("如何验证｜" in item and "新标签页" in item and "筛选和页码" in item for item in current_release)
+    assert any("如何验证｜" in item and "未回原页确认前" in item and "一次性完成转移" in item for item in current_release)
+    assert any("如何验证｜" in item and "v0.22.164" in item and "dh42v8x9z31" in item for item in current_release)
     assert any(item.startswith("v0.22.162：本次更新｜") and "正常实收" in item and "报料材质" in item for item in APP_CHANGELOG)
     assert any(item.startswith("v0.22.162：如何验证｜") and "de39v8x9z28" in item for item in APP_CHANGELOG)
     assert any(item.startswith("v0.22.160：本次更新｜") and "订单生产用途" in item and "片料备库" in item for item in APP_CHANGELOG)
@@ -274,7 +274,7 @@ def test_factory_update_reports_current_release_version() -> None:
         for item in APP_CHANGELOG
     )
     assert any(
-        "如何验证｜" in item and "v0.22.163" in item and "de39" in item
+        "如何验证｜" in item and "v0.22.164" in item and "dh42" in item
         for item in current_release
     )
     assert any(

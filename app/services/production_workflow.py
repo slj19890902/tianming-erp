@@ -21,6 +21,7 @@ from app.core.time_contract import (
 from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryItem
 from app.models.incoming_receipt import IncomingReceiptItem
+from app.models.mold_tool import MoldTool
 from app.models.order import Order, OrderItem
 from app.models.purchase_receipt import (
     IncomingReceiptPurposeAllocation,
@@ -59,6 +60,10 @@ from app.models.warehouse_inventory import (
     WarehouseLocation,
 )
 from app.services.production_station_routing import production_station_memberships
+from app.services.production_task_profile import (
+    new_task_profile_snapshot,
+    resolved_task_profile,
+)
 from app.services.composite_bom_workflow import (
     CompositeBomWorkflowError,
     component_available_quantity,
@@ -773,6 +778,12 @@ def _refresh_composite_production_tasks(
                 ready_at=None,
                 version=1,
                 **_new_task_printing_snapshot(db, component_product),
+                **new_task_profile_snapshot(
+                    db,
+                    component_product,
+                    item=item,
+                    component_snapshot=snapshot,
+                ),
                 **_new_task_label_snapshot(
                     component_product,
                     total_quantity=max(
@@ -910,6 +921,7 @@ def refresh_production_task(
             ready_at=None,
             version=1,
             **_new_task_printing_snapshot(db, product),
+            **new_task_profile_snapshot(db, product, item=item),
             **_new_task_label_snapshot(
                 product,
                 total_quantity=max(order_quantity - initial_finished_coverage, 0),
@@ -3292,6 +3304,7 @@ def _ensure_receipt_auto_main_task(
         ready_at=None,
         version=1,
         **_new_task_printing_snapshot(db, product),
+        **new_task_profile_snapshot(db, product, item=item),
         **_new_task_label_snapshot(product, total_quantity=order_quantity),
     )
     db.add(task)
@@ -3715,9 +3728,37 @@ def _task_product_snapshot(
     """Expose the actual component being produced without changing parent sets."""
     snapshot_id = task.sales_order_item_bom_component_id
     if snapshot_id is None:
+        profile = resolved_task_profile(
+            db,
+            task=task,
+            item=item,
+            product=parent_product,
+            component=None,
+        )
+        frozen_mold = (
+            db.get(MoldTool, int(profile["mold_tool_id"]))
+            if profile.get("mold_tool_id") is not None
+            else None
+        )
         return {
             **_item_product_snapshot(item, parent_product),
             **_task_printing_snapshot(task),
+            "box_style": profile.get("box_style"),
+            "needs_die_cut": bool(profile.get("needs_die_cut")),
+            "special_process": profile.get("cutting_mode"),
+            "production_process": profile.get("production_process"),
+            "production_notes": profile.get("production_notes"),
+            "drawing_reference": profile.get("drawing_reference"),
+            "mold_tool_id": profile.get("mold_tool_id"),
+            "mold_code": profile.get("mold_tool_code"),
+            "mold_name": profile.get("mold_tool_name"),
+            "mold_location": (
+                frozen_mold.rack_location if frozen_mold is not None else None
+            ),
+            "production_profile_schema_version": profile.get("schema_version"),
+            "production_profile_source_version": profile.get(
+                "source_product_version"
+            ),
             "current_product_version": int(parent_product.version),
             "current_product_production_label_enabled": bool(
                 parent_product.production_label_enabled
@@ -3744,6 +3785,18 @@ def _task_product_snapshot(
             SalesOrderItemBomComponent.id,
         )
     ).all()
+    profile = resolved_task_profile(
+        db,
+        task=task,
+        item=item,
+        product=component or parent_product,
+        component=snapshot,
+    )
+    frozen_mold = (
+        db.get(MoldTool, int(profile["mold_tool_id"]))
+        if profile.get("mold_tool_id") is not None
+        else None
+    )
     return {
         "product_id": snapshot.component_product_id if snapshot is not None else None,
         "product_code": (
@@ -3770,24 +3823,21 @@ def _task_product_snapshot(
             if snapshot is not None
             else item.flute_type
         ),
-        "special_process": (
-            snapshot.snapshot_component_default_cutting_mode
-            if snapshot is not None
-            else item.special_process
+        "box_style": profile.get("box_style"),
+        "needs_die_cut": bool(profile.get("needs_die_cut")),
+        "special_process": profile.get("cutting_mode"),
+        "production_process": profile.get("production_process"),
+        "production_notes": profile.get("production_notes"),
+        "drawing_reference": profile.get("drawing_reference"),
+        "mold_tool_id": profile.get("mold_tool_id"),
+        "mold_code": profile.get("mold_tool_code"),
+        "mold_name": profile.get("mold_tool_name"),
+        "mold_location": (
+            frozen_mold.rack_location if frozen_mold is not None else None
         ),
-        "production_process": (
-            snapshot.snapshot_component_production_process
-            if snapshot is not None
-            else None
-        ),
-        "production_notes": (
-            snapshot.snapshot_component_production_notes
-            if snapshot is not None
-            else item.snapshot_production_notes
-        ),
-        "mold_name": snapshot.snapshot_mold_tool_name if snapshot is not None else None,
-        "mold_location": snapshot.snapshot_mold_tool_code if snapshot is not None else None,
         **_task_printing_snapshot(task),
+        "production_profile_schema_version": profile.get("schema_version"),
+        "production_profile_source_version": profile.get("source_product_version"),
         "is_component_task": True,
         "bom_component_snapshot_id": snapshot_id,
         "component_quantity_per_set": (
@@ -4414,6 +4464,15 @@ def list_production_station_task_ids(
         .with_only_columns(
             ProductionTask.id.label("task_id"),
             ProductionTask.print_content_snapshot.label("main_print_content_snapshot"),
+            ProductionTask.production_profile_schema_version.label(
+                "task_profile_schema_version"
+            ),
+            ProductionTask.production_box_style_snapshot.label(
+                "task_box_style_snapshot"
+            ),
+            ProductionTask.production_needs_die_cut_snapshot.label(
+                "task_needs_die_cut_snapshot"
+            ),
             component_task.print_content_snapshot.label(
                 "component_print_content_snapshot"
             ),
@@ -4433,6 +4492,7 @@ def list_production_station_task_ids(
     seen_ids: set[int] = set()
     for row in db.execute(query).mappings().all():
         is_component = row.bom_component_snapshot_id is not None
+        has_frozen_profile = row.task_profile_schema_version is not None
         memberships = production_station_memberships(
             print_content_snapshot=(
                 row.component_print_content_snapshot
@@ -4440,10 +4500,16 @@ def list_production_station_task_ids(
                 else row.main_print_content_snapshot
             ),
             box_style=(
-                row.component_box_style if is_component else row.product_box_style
+                row.task_box_style_snapshot
+                if has_frozen_profile
+                else row.component_box_style
+                if is_component
+                else row.product_box_style
             ),
             die_cut_required=(
-                bool(row.component_is_die_cut)
+                bool(row.task_needs_die_cut_snapshot)
+                if has_frozen_profile
+                else bool(row.component_is_die_cut)
                 if is_component
                 else row.product_box_category == "die_cut"
             ),

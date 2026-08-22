@@ -194,6 +194,9 @@ from app.models.production_label_print import (  # noqa: E402,F401
     ProductionPackagingLabelPrintJob,
     ProductionPackagingLabelPrintJobTask,
 )
+from app.models.production_profile_refresh import (  # noqa: E402,F401
+    ProductionTaskProfileRefresh,
+)
 from app.models.warehouse_inventory import (  # noqa: E402,F401
     DeliveryInventoryAllocation,
     Floor3LocationLayout,

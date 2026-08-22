@@ -54,6 +54,13 @@ from app.services.production_label_operations import (
     production_label_write_guard,
     refresh_task_label_plan,
 )
+from app.services.production_task_profile import (
+    PROFILE_REFRESH_ACTION,
+    ProductionTaskProfileError,
+    preview_task_profile_refresh,
+    production_profile_write_guard,
+    refresh_task_profile,
+)
 from app.services.fulfillment_reminders import annotate_production_reminders
 from app.services.warehouse_inventory import WarehouseInventoryError
 
@@ -156,6 +163,22 @@ class LabelPlanRefreshRequest(BaseModel):
         normalized = value.strip()
         if not normalized:
             raise ValueError("幂等键不能为空")
+        return normalized
+
+
+class TaskProfileRefreshRequest(BaseModel):
+    idempotency_key: str = Field(min_length=1, max_length=120)
+    expected_task_version: int = Field(gt=0)
+    expected_source_version: int = Field(gt=0)
+    preview_fingerprint: str = Field(min_length=64, max_length=64)
+    confirmed: Literal[True]
+
+    @field_validator("idempotency_key", "preview_fingerprint")
+    @classmethod
+    def trim_profile_refresh_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("资料刷新凭证不能为空")
         return normalized
 
 
@@ -427,6 +450,120 @@ def post_production_task_label_plan_refresh(
         raise
 
 
+def _profile_preview_response(preview) -> dict:
+    return {
+        "task_id": int(preview.context.task.id),
+        "order_item_id": int(preview.context.item.id),
+        "product_id": int(preview.context.product.id),
+        "expected_task_version": int(preview.context.task.version),
+        "expected_source_version": int(preview.context.product.version),
+        "eligible": bool(preview.eligible),
+        "block_reasons": list(preview.block_reasons),
+        "before": preview.before,
+        "after": preview.after,
+        "changes": preview.changes,
+        "preview_fingerprint": preview.preview_fingerprint,
+    }
+
+
+@router.get("/tasks/{task_id}/profile-refresh-preview")
+def get_production_task_profile_refresh_preview(
+    task_id: int,
+    user: User = Depends(admin_only),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Preview one task's exact frozen-profile delta without writing."""
+
+    try:
+        _require_task_customer_access(db, task_ids=[task_id], user=user)
+        return _profile_preview_response(
+            preview_task_profile_refresh(db, task_id=task_id)
+        )
+    except ProductionTaskProfileError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+
+
+@router.post("/tasks/{task_id}/profile-refresh")
+def post_production_task_profile_refresh(
+    task_id: int,
+    payload: TaskProfileRefreshRequest,
+    user: User = Depends(admin_only),
+    _write_guard: None = Depends(production_profile_write_guard),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Refresh one eligible pending task after an ADMIN confirms the preview."""
+
+    try:
+        _require_task_customer_access(db, task_ids=[task_id], user=user)
+        result = refresh_task_profile(
+            db,
+            task_id=task_id,
+            expected_task_version=payload.expected_task_version,
+            expected_source_version=payload.expected_source_version,
+            preview_fingerprint=payload.preview_fingerprint,
+            idempotency_key=payload.idempotency_key,
+            operator_id=user.id,
+        )
+        before = json.loads(result.receipt.before_snapshot_json)
+        after = json.loads(result.receipt.after_snapshot_json)
+        changes = json.loads(result.receipt.changes_json)
+        if not result.replayed:
+            order_row = db.execute(
+                select(Order.customer_id, Customer.name)
+                .join(OrderItem, OrderItem.order_id == Order.id)
+                .join(Customer, Customer.id == Order.customer_id)
+                .where(OrderItem.id == result.task.order_item_id)
+            ).first()
+            append_audit_event(
+                db,
+                event_category="business",
+                result="success",
+                source="web",
+                module_code="production",
+                action_code=PROFILE_REFRESH_ACTION,
+                legacy_action="REFRESH_PRODUCTION_PROFILE",
+                resource="ProductionTaskProfileRefresh",
+                actor=user,
+                entity_type="production_task_profile_refresh",
+                entity_id=result.receipt.id,
+                object_ref=f"production_task_profile_refresh:{result.receipt.id}",
+                customer_id=order_row.customer_id if order_row else None,
+                customer_name=order_row.name if order_row else None,
+                batch_id=payload.idempotency_key,
+                description="按差异预览刷新单个待生产任务资料",
+                details={
+                    "task_id": int(result.task.id),
+                    "product_id": int(result.product.id),
+                    "operator_id": int(user.id),
+                    "before": before,
+                    "after": after,
+                    "changes": changes,
+                },
+            )
+        db.commit()
+        return {
+            "refresh_id": int(result.receipt.id),
+            "task_id": int(result.task.id),
+            "task_version": int(result.receipt.after_task_version),
+            "product_id": int(result.product.id),
+            "source_version": int(result.receipt.source_version_snapshot),
+            "before": before,
+            "after": after,
+            "changes": changes,
+            "replayed": bool(result.replayed),
+        }
+    except ProductionTaskProfileError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="任务资料已被其他请求刷新，请重新预览",
+        ) from error
+    except Exception:
+        db.rollback()
+        raise
 @router.get("/completions")
 def get_production_completions(
     customer_id: int | None = Query(default=None, gt=0),

@@ -156,6 +156,41 @@ class ProductionTask(Base):
     machine_set_height_mm_snapshot: Mapped[Decimal | None] = mapped_column(
         Numeric(12, 2), nullable=True
     )
+    # P1-92: the employee-visible production profile is frozen with the task.
+    # Legacy rows stay NULL until an ADMIN explicitly previews and refreshes
+    # one eligible pending task; readers use the historical source as a
+    # compatibility fallback without silently rewriting it.
+    production_box_style_snapshot: Mapped[str | None] = mapped_column(
+        String(150), nullable=True
+    )
+    production_needs_die_cut_snapshot: Mapped[bool | None] = mapped_column(
+        Boolean, nullable=True
+    )
+    production_process_snapshot: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )
+    production_notes_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True)
+    production_cutting_mode_snapshot: Mapped[str | None] = mapped_column(
+        String(30), nullable=True
+    )
+    production_mold_tool_id_snapshot: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    production_mold_tool_code_snapshot: Mapped[str | None] = mapped_column(
+        String(120), nullable=True
+    )
+    production_mold_tool_name_snapshot: Mapped[str | None] = mapped_column(
+        String(250), nullable=True
+    )
+    production_drawing_reference_snapshot: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )
+    production_profile_source_version_snapshot: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    production_profile_schema_version: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
     production_label_enabled_snapshot: Mapped[bool] = mapped_column(
         Boolean,
         default=False,

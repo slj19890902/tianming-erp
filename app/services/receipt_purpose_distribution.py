@@ -521,9 +521,10 @@ def post_receipt_purpose_allocation(
             )
         except (ProductionWorkflowError, WarehouseInventoryError) as error:
             message = str(error)
+            location_issue_markers = ("待送区", "暂存", "FIN-", "地堆位置")
             code = (
                 "AUTO_FINISHED_LOCATION_UNAVAILABLE"
-                if "待送区" in message or "暂存" in message
+                if any(marker in message for marker in location_issue_markers)
                 else "AUTOMATIC_FINISHED_POSTING_FAILED"
             )
             raise ReceiptPurposeFlowError(code, message, error.status_code) from error

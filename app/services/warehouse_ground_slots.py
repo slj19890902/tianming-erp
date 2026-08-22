@@ -24,6 +24,7 @@ from app.models.warehouse_inventory import (
     WarehouseGroundOccupancySlot,
     WarehouseLocation,
 )
+from app.core.time_contract import utc_now_naive
 from app.services.warehouse_floor1_candidate_planner import (
     Floor1CandidatePlanningError,
     measured_pallet_slots_for_zone,
@@ -207,21 +208,33 @@ def ground_preview_fingerprint(
             "configuration": configuration,
             "slots": [
                 {
-                    key: row[key]
-                    for key in (
-                        "route_sequence",
-                        "row_no",
-                        "slot_no",
-                        "location_code",
-                        "x_mm",
-                        "y_mm",
-                        "width_mm",
-                        "depth_mm",
-                        "left_pct",
-                        "top_pct",
-                        "width_pct",
-                        "height_pct",
-                    )
+                    **{
+                        key: row[key]
+                        for key in (
+                            "route_sequence",
+                            "row_no",
+                            "slot_no",
+                            "location_code",
+                            "x_mm",
+                            "y_mm",
+                            "width_mm",
+                            "depth_mm",
+                            "left_pct",
+                            "top_pct",
+                            "width_pct",
+                            "height_pct",
+                        )
+                    },
+                    **(
+                        {"existing_location_id": row["existing_location_id"]}
+                        if "existing_location_id" in row
+                        else {}
+                    ),
+                    **(
+                        {"existing_layout_version": row["existing_layout_version"]}
+                        if "existing_layout_version" in row
+                        else {}
+                    ),
                 }
                 for row in slots
             ],
@@ -247,6 +260,88 @@ def active_ground_occupancy_for_location(
             .selectinload(InventoryPalletItem.inventory_lot),
         )
     )
+
+
+def active_ground_occupancy_for_pallet(
+    db: Session,
+    pallet_id: int,
+) -> WarehouseGroundOccupancy | None:
+    return db.scalar(
+        select(WarehouseGroundOccupancy)
+        .where(
+            WarehouseGroundOccupancy.pallet_id == pallet_id,
+            WarehouseGroundOccupancy.status == "active",
+        )
+        .options(selectinload(WarehouseGroundOccupancy.slots))
+    )
+
+
+def release_ground_occupancy_for_pallet(
+    db: Session,
+    *,
+    pallet_id: int,
+    operator_id: int | None,
+) -> WarehouseGroundOccupancy | None:
+    occupancy = active_ground_occupancy_for_pallet(db, pallet_id)
+    if occupancy is None:
+        return None
+    now = utc_now_naive()
+    occupancy.status = "released"
+    occupancy.version = int(occupancy.version or 1) + 1
+    occupancy.released_by = operator_id
+    occupancy.released_at = now
+    for slot in occupancy.slots:
+        if slot.status == "active":
+            slot.status = "released"
+            slot.released_at = now
+    db.flush()
+    return occupancy
+
+
+def restore_ground_occupancy_for_pallet(
+    db: Session,
+    *,
+    pallet_id: int,
+    location_id: int,
+) -> WarehouseGroundOccupancy | None:
+    occupancy = db.scalar(
+        select(WarehouseGroundOccupancy)
+        .where(
+            WarehouseGroundOccupancy.pallet_id == pallet_id,
+            WarehouseGroundOccupancy.primary_location_id == location_id,
+            WarehouseGroundOccupancy.status == "released",
+        )
+        .order_by(WarehouseGroundOccupancy.id.desc())
+        .options(selectinload(WarehouseGroundOccupancy.slots))
+    )
+    if occupancy is None:
+        return None
+    slot_ids = [slot.location_id for slot in occupancy.slots]
+    conflict = db.scalar(
+        select(WarehouseGroundOccupancySlot.id)
+        .join(WarehouseGroundOccupancy)
+        .where(
+            WarehouseGroundOccupancySlot.location_id.in_(slot_ids),
+            WarehouseGroundOccupancySlot.status == "active",
+            WarehouseGroundOccupancy.status == "active",
+            WarehouseGroundOccupancy.id != occupancy.id,
+        )
+        .limit(1)
+    )
+    if conflict is not None:
+        raise WarehouseGroundSlotError(
+            "GROUND_RESTORE_TARGET_OCCUPIED",
+            "原地堆位置已被其他货物占用，无法恢复送货前空间占用。",
+        )
+    occupancy.status = "active"
+    occupancy.version = int(occupancy.version or 1) + 1
+    occupancy.released_by = None
+    occupancy.released_at = None
+    for slot in occupancy.slots:
+        slot.status = "active"
+        slot.released_at = None
+    db.flush()
+    return occupancy
 
 
 def occupancy_physical_quantity(occupancy: WarehouseGroundOccupancy) -> int:

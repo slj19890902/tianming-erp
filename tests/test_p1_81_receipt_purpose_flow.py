@@ -54,6 +54,8 @@ def _seed_material_and_staging(session_factory) -> int:
         WarehouseArea,
         WarehouseAreaStoragePolicy,
         WarehouseFloor,
+        WarehouseGroundLayoutPlan,
+        WarehouseGroundLayoutSlot,
         WarehouseLocation,
     )
 
@@ -109,6 +111,20 @@ def _seed_material_and_staging(session_factory) -> int:
             published_map_revision="p181-anonymous-map-v1",
             version=1,
         )
+        fin_area = WarehouseArea(
+            floor_id=floor.id,
+            area_code="FIN-001",
+            area_name="匿名真实成品待送区",
+            construction_status="enabled",
+        )
+        fin_area.storage_policy = WarehouseAreaStoragePolicy(
+            map_feature_id="zone-p181-1f-fin-001",
+            allowed_inventory_types_json='["finished"]',
+            storage_layout="pallet_ground",
+            status="published",
+            published_map_revision="p181-anonymous-map-v1",
+            version=1,
+        )
         raw_area = WarehouseArea(
             floor_id=floor.id,
             area_code="A1",
@@ -145,6 +161,30 @@ def _seed_material_and_staging(session_factory) -> int:
             source_type="manual",
             layout_kind="logical_anchor",
         )
+        fin_locations: list[WarehouseLocation] = []
+        for index in range(1, 9):
+            fin_location = WarehouseLocation(
+                location_code=f"F1-FIN-001-L{index:03d}",
+                location_name=f"成品待送堆放区 {index:03d} 号位",
+                warehouse_type="finished",
+                is_active=True,
+                warehouse_floor=1,
+                area_code="FIN-001",
+                storage_type="ground",
+                placement_status="placed",
+                source_version="TWIN_V1",
+            )
+            fin_location.floor3_layout = Floor3LocationLayout(
+                left_pct=Decimal(str(24 + index * 7)),
+                top_pct=Decimal("4"),
+                width_pct=Decimal("6"),
+                height_pct=Decimal("12"),
+                z_index=index,
+                version=2,
+                source_type="manual",
+                layout_kind="physical_pallet",
+            )
+            fin_locations.append(fin_location)
         raw_location = WarehouseLocation(
             location_code="P181-RAW-STAGE",
             location_name="一楼半成品原料暂存区",
@@ -170,11 +210,49 @@ def _seed_material_and_staging(session_factory) -> int:
         session.add_all(
             [
                 dispatch_area,
+                fin_area,
                 raw_area,
                 dispatch_location,
+                *fin_locations,
                 raw_location,
             ]
         )
+        session.flush()
+        fin_plan = WarehouseGroundLayoutPlan(
+            area_id=fin_area.id,
+            status="published",
+            target_slot_count=len(fin_locations),
+            numbering_origin="south",
+            row_direction="from_aisle_inward",
+            slot_direction="left_to_right",
+            row_start_no=1,
+            slot_start_no=1,
+            draft_map_revision="p181-anonymous-map-v1",
+            published_map_revision="p181-anonymous-map-v1",
+            preview_fingerprint="a" * 64,
+            version=1,
+            publish_idempotency_key="p181-fin-ground-publish",
+            publish_request_hash="b" * 64,
+            updated_by=1,
+            published_by=1,
+            published_at=datetime.now(),
+        )
+        session.add(fin_plan)
+        session.flush()
+        for index, fin_location in enumerate(fin_locations, start=1):
+            session.add(
+                WarehouseGroundLayoutSlot(
+                    plan_id=fin_plan.id,
+                    location_id=fin_location.id,
+                    route_sequence=index,
+                    row_no=1,
+                    slot_no=index,
+                    x_mm=Decimal(str(1000 + (index - 1) * 1200)),
+                    y_mm=Decimal("1000"),
+                    width_mm=1200,
+                    depth_mm=1000,
+                )
+            )
         session.commit()
         return material.id
 
@@ -642,7 +720,7 @@ def test_pending_projection_refreshes_frozen_receipt_tokens_and_keeps_legacy_ope
         assert frozen_before["expected_order_purpose_sheet_qty"] == 500
         assert frozen_before["expected_reserve_purpose_sheet_qty"] == 100
         assert frozen_before["expected_finished_output_qty"] == 500
-        assert frozen_before["finished_location_name"] == "合并一楼成品暂存区"
+        assert frozen_before["finished_location_name"] == "成品待送堆放区 001 号位"
         assert frozen_before["reserve_location_name"] == "一楼半成品原料暂存区"
         assert frozen_before["purpose_issue"]
 
@@ -681,7 +759,7 @@ def test_pending_projection_refreshes_frozen_receipt_tokens_and_keeps_legacy_ope
         assert frozen_after["expected_order_purpose_sheet_qty"] == 500
         assert frozen_after["expected_reserve_purpose_sheet_qty"] == 100
         assert frozen_after["expected_finished_output_qty"] == 500
-        assert frozen_after["finished_location_name"] == "合并一楼成品暂存区"
+        assert frozen_after["finished_location_name"] == "成品待送堆放区 001 号位"
         assert frozen_after["reserve_location_name"] == "一楼半成品原料暂存区"
         assert "purpose_issue" not in frozen_after
 
@@ -724,12 +802,6 @@ def test_pending_frozen_preview_uses_live_published_location_facts(
         assert frozen.status_code == 200, frozen.text
 
         with session_factory() as session:
-            location = session.scalar(
-                select(WarehouseLocation).where(
-                    WarehouseLocation.location_code == "F1-DISPATCH-01"
-                )
-            )
-            assert location is not None
             if invalid_fact == "unpublished":
                 floor = session.scalar(
                     select(WarehouseFloor).where(WarehouseFloor.floor_number == 1)
@@ -738,7 +810,7 @@ def test_pending_frozen_preview_uses_live_published_location_facts(
                 area = session.scalar(
                     select(WarehouseArea).where(
                         WarehouseArea.floor_id == floor.id,
-                        WarehouseArea.area_code == "DISPATCH",
+                        WarehouseArea.area_code == "FIN-001",
                     )
                 )
                 assert area is not None
@@ -751,13 +823,23 @@ def test_pending_frozen_preview_uses_live_published_location_facts(
                 policy.status = "draft"
                 policy.published_map_revision = None
             else:
-                geometry = session.scalar(
-                    select(Floor3LocationLayout).where(
-                        Floor3LocationLayout.location_id == location.id
+                fin_location_ids = list(
+                    session.scalars(
+                        select(WarehouseLocation.id).where(
+                            WarehouseLocation.area_code == "FIN-001"
+                        )
                     )
                 )
-                assert geometry is not None
-                session.delete(geometry)
+                geometries = list(
+                    session.scalars(
+                        select(Floor3LocationLayout).where(
+                            Floor3LocationLayout.location_id.in_(fin_location_ids)
+                        )
+                    )
+                )
+                assert geometries
+                for geometry in geometries:
+                    session.delete(geometry)
             session.commit()
 
         pending = client.get("/api/incoming/pending")
@@ -810,12 +892,12 @@ def test_pending_frozen_preview_reports_capacity_warning_without_blocking(
             area = session.scalar(
                 select(WarehouseArea).where(
                     WarehouseArea.floor_id == floor.id,
-                    WarehouseArea.area_code == "DISPATCH",
+                    WarehouseArea.area_code == "FIN-001",
                 )
             )
             location = session.scalar(
                 select(WarehouseLocation).where(
-                    WarehouseLocation.location_code == "F1-DISPATCH-01"
+                    WarehouseLocation.location_code == "F1-FIN-001-L001"
                 )
             )
             assert area is not None and location is not None
@@ -845,7 +927,7 @@ def test_pending_frozen_preview_reports_capacity_warning_without_blocking(
             if str(item["item_id"]) == source.route_key
         )
         assert row["receipt_fact_ready"] is True
-        assert row["finished_location_name"] == "合并一楼成品暂存区"
+        assert row["finished_location_name"] == "成品待送堆放区 002 号位"
         assert row["finished_location_ready"] is True
         assert row["finished_capacity_warning"]
 
@@ -947,7 +1029,7 @@ def test_frozen_500_600_receipts_split_450_580_600_620_and_cost_exactly(
     assert fourth["reserve_planned_sheet_qty"] == 100
     assert fourth["reserve_actual_sheet_qty"] == 120
     assert fourth["reserve_variance_sheet_qty"] == 20
-    assert fourth["finished_location_name"] == "合并一楼成品暂存区"
+    assert fourth["finished_location_name"].startswith("成品待送堆放区 ")
     assert fourth["reserve_location_name"] == "一楼半成品原料暂存区"
     assert "F1-DISPATCH-01" not in fourth["finished_location_name"]
 
@@ -962,12 +1044,13 @@ def test_frozen_500_600_receipts_split_450_580_600_620_and_cost_exactly(
         )
         assert len(tasks) == 1
         assert tasks[0].planned_quantity == 500
-        dispatch = session.scalar(
-            select(WarehouseLocation).where(
-                WarehouseLocation.location_code == "F1-DISPATCH-01"
+        fin_location_ids = set(
+            session.scalars(
+                select(WarehouseLocation.id).where(
+                    WarehouseLocation.area_code == "FIN-001"
+                )
             )
         )
-        assert dispatch is not None
         finished_lots = list(
             session.scalars(
                 select(InventoryLot).where(
@@ -977,7 +1060,9 @@ def test_frozen_500_600_receipts_split_450_580_600_620_and_cost_exactly(
             )
         )
         assert finished_lots
-        assert {lot.warehouse_location_id for lot in finished_lots} == {dispatch.id}
+        assert {lot.warehouse_location_id for lot in finished_lots}.issubset(
+            fin_location_ids
+        )
     assert _posted_finished_quantity(session_factory) == 500
     assert _active_semi_quantity(session_factory) == 120
 
@@ -2020,7 +2105,7 @@ def test_actual_material_change_cannot_use_legacy_boolean_or_bypass_permission(
 @pytest.mark.parametrize(
     ("location_code", "expected_code"),
     [
-        ("F1-DISPATCH-01", "AUTO_FINISHED_LOCATION_UNAVAILABLE"),
+        ("F1-FIN-001-L001", "AUTO_FINISHED_LOCATION_UNAVAILABLE"),
         ("P181-RAW-STAGE", "RESERVE_STAGING_LOCATION_UNAVAILABLE"),
     ],
 )
@@ -2057,7 +2142,19 @@ def test_unavailable_required_location_fails_entire_receipt_without_fallback(
                 )
             )
             assert location is not None
-            location.is_active = False
+            if location_code.startswith("F1-FIN-"):
+                fin_locations = list(
+                    session.scalars(
+                        select(WarehouseLocation).where(
+                            WarehouseLocation.area_code == "FIN-001"
+                        )
+                    )
+                )
+                assert fin_locations
+                for fin_location in fin_locations:
+                    fin_location.is_active = False
+            else:
+                location.is_active = False
             session.commit()
 
         failed = _receive(

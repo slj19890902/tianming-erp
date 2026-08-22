@@ -148,6 +148,9 @@ def release_empty_pallets_after_delivery(
         return []
 
     from app.services.floor3_locations import Floor3LocationError, clear_pallet
+    from app.services.warehouse_ground_slots import (
+        release_ground_occupancy_for_pallet,
+    )
 
     released: list[int] = []
     for pallet_id in pallet_ids:
@@ -167,6 +170,11 @@ def release_empty_pallets_after_delivery(
             )
         except Floor3LocationError as error:
             raise WarehouseInventoryError(str(error), error.status_code) from error
+        release_ground_occupancy_for_pallet(
+            db,
+            pallet_id=int(pallet_id),
+            operator_id=operator_id,
+        )
         released.append(int(pallet_id))
     db.flush()
     return released
@@ -191,6 +199,11 @@ def restore_auto_released_pallets_after_delivery_cancel(
             .order_by(InventoryLocationMovement.pallet_id)
         )
     )
+    from app.services.warehouse_ground_slots import (
+        WarehouseGroundSlotError,
+        restore_ground_occupancy_for_pallet,
+    )
+
     restored: list[int] = []
     for clear_movement in clear_movements:
         pallet = db.get(InventoryPallet, clear_movement.pallet_id)
@@ -293,6 +306,14 @@ def restore_auto_released_pallets_after_delivery_cancel(
                 remarks=f"取消送货单 {delivery_id}，恢复原库存与栈板位置",
             )
         )
+        try:
+            restore_ground_occupancy_for_pallet(
+                db,
+                pallet_id=int(pallet.id),
+                location_id=int(target_location_id),
+            )
+        except WarehouseGroundSlotError as error:
+            raise WarehouseInventoryError(error.message, error.status_code) from error
         restored.append(int(pallet.id))
     db.flush()
     return restored

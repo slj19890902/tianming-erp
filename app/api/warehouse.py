@@ -4439,12 +4439,137 @@ def _ground_layout_context(
             "GROUND_AREA_NOT_OPERATIONAL",
             "只有已启用、已发布且允许成品地堆的区域可以维护排位。",
         )
-    if not area.address_zone_code or not area.address_subzone_no:
+    legacy_fin_area = (
+        re.fullmatch(r"FIN-00([1-3])", area.area_code.upper())
+        if floor.floor_number == 1
+        else None
+    )
+    if (
+        not area.address_zone_code or not area.address_subzone_no
+    ) and legacy_fin_area is None:
         raise WarehouseGroundSlotError(
             "GROUND_AREA_ADDRESS_REQUIRED",
             "请先按 P1-86 为区域确认 A～G 大区和两位数子区。",
         )
     return floor, area, policy
+
+
+def _legacy_fin_ground_locations(
+    db: Session,
+    *,
+    floor: WarehouseFloor,
+    area: WarehouseArea,
+) -> list[WarehouseLocation]:
+    return list(
+        db.scalars(
+            select(WarehouseLocation)
+            .join(
+                Floor3LocationLayout,
+                Floor3LocationLayout.location_id == WarehouseLocation.id,
+            )
+            .where(
+                WarehouseLocation.warehouse_floor == floor.floor_number,
+                func.upper(WarehouseLocation.area_code) == area.area_code.upper(),
+                WarehouseLocation.is_active.is_(True),
+                WarehouseLocation.placement_status == "placed",
+                WarehouseLocation.storage_type == "ground",
+                WarehouseLocation.source_version == "TWIN_V1",
+                Floor3LocationLayout.layout_kind.in_(("physical_pallet", "unknown")),
+            )
+            .order_by(WarehouseLocation.sort_order, WarehouseLocation.id)
+            .options(selectinload(WarehouseLocation.floor3_layout))
+        )
+    )
+
+
+def _ground_slot_preview_for_area(
+    db: Session,
+    *,
+    floor: WarehouseFloor,
+    area: WarehouseArea,
+    policy: WarehouseAreaStoragePolicy,
+    floor_layout: dict,
+    configuration: dict,
+) -> list[dict]:
+    if area.address_zone_code and area.address_subzone_no:
+        return build_ground_slot_preview(
+            floor_layout,
+            feature_id=policy.map_feature_id,
+            floor_number=floor.floor_number,
+            zone_code=str(area.address_zone_code),
+            subzone_no=int(area.address_subzone_no),
+            **configuration,
+        )
+
+    legacy_fin_match = (
+        re.fullmatch(r"FIN-00([1-3])", area.area_code.upper())
+        if floor.floor_number == 1
+        else None
+    )
+    if legacy_fin_match is None:
+        raise WarehouseGroundSlotError(
+            "GROUND_AREA_ADDRESS_REQUIRED",
+            "请先按 P1-86 为区域确认 A～G 大区和两位数子区。",
+        )
+    existing_locations = _legacy_fin_ground_locations(
+        db,
+        floor=floor,
+        area=area,
+    )
+    target_slot_count = int(configuration["target_slot_count"])
+    if len(existing_locations) != target_slot_count:
+        raise WarehouseGroundSlotError(
+            "GROUND_FIN_EXISTING_SLOT_COUNT_MISMATCH",
+            (
+                f"{area.area_code} 已有 {len(existing_locations)} 个真实实测地堆位置；"
+                f"为保护现有库存，本次位置数量必须保持为 {len(existing_locations)}。"
+            ),
+        )
+    preview = build_ground_slot_preview(
+        floor_layout,
+        feature_id=policy.map_feature_id,
+        floor_number=floor.floor_number,
+        zone_code="F",
+        subzone_no=int(legacy_fin_match.group(1)),
+        **configuration,
+    )
+    remaining = list(existing_locations)
+    adopted: list[dict] = []
+    geometry_keys = ("left_pct", "top_pct", "width_pct", "height_pct")
+    for slot in preview:
+        closest = min(
+            remaining,
+            key=lambda location: sum(
+                abs(
+                    float(getattr(location.floor3_layout, key))
+                    - float(slot[key])
+                )
+                for key in geometry_keys
+            ),
+        )
+        maximum_delta = max(
+            abs(float(getattr(closest.floor3_layout, key)) - float(slot[key]))
+            for key in geometry_keys
+        )
+        if maximum_delta > 0.05:
+            raise WarehouseGroundSlotError(
+                "GROUND_FIN_EXISTING_GEOMETRY_MISMATCH",
+                (
+                    f"{area.area_code} 的既有真实位置与当前实测地图不一致；"
+                    "请先核对地图位置，禁止重复生成重叠位置。"
+                ),
+            )
+        remaining.remove(closest)
+        adopted.append(
+            {
+                **slot,
+                "location_code": closest.location_code,
+                "location_name": closest.location_name,
+                "existing_location_id": int(closest.id),
+                "existing_layout_version": int(closest.floor3_layout.version),
+            }
+        )
+    return adopted
 
 
 def _ground_plan_configuration(plan: WarehouseGroundLayoutPlan) -> dict:
@@ -4459,6 +4584,7 @@ def _ground_plan_configuration(plan: WarehouseGroundLayoutPlan) -> dict:
 
 
 def _ground_preview_for_plan(
+    db: Session,
     plan: WarehouseGroundLayoutPlan,
     *,
     floor: WarehouseFloor,
@@ -4466,13 +4592,13 @@ def _ground_preview_for_plan(
     policy: WarehouseAreaStoragePolicy,
     floor_layout: dict,
 ) -> tuple[list[dict], str]:
-    slots = build_ground_slot_preview(
-        floor_layout,
-        feature_id=policy.map_feature_id,
-        floor_number=floor.floor_number,
-        zone_code=str(area.address_zone_code),
-        subzone_no=int(area.address_subzone_no),
-        **_ground_plan_configuration(plan),
+    slots = _ground_slot_preview_for_area(
+        db,
+        floor=floor,
+        area=area,
+        policy=policy,
+        floor_layout=floor_layout,
+        configuration=_ground_plan_configuration(plan),
     )
     fingerprint = ground_preview_fingerprint(
         area_id=area.id,
@@ -4546,7 +4672,7 @@ def save_ground_layout_draft(
                 raise WarehouseGroundSlotError(
                     "GROUND_MAP_STALE", "正式地图版本已变化，请刷新后重试。"
                 )
-            floor_layout = load_warehouse_twin_floor(floor.floor_code)
+            floor_layout = load_warehouse_twin_floor(f"{floor.floor_number}F")
             if str(floor_layout.get("revision") or "") != payload.expected_map_revision:
                 raise WarehouseGroundSlotError(
                     "GROUND_MAP_STALE", "地图文件与区域发布版本不一致，请先重新发布地图。"
@@ -4564,13 +4690,13 @@ def save_ground_layout_draft(
                     "slot_start_no",
                 }
             }
-            slots = build_ground_slot_preview(
-                floor_layout,
-                feature_id=policy.map_feature_id,
-                floor_number=floor.floor_number,
-                zone_code=str(area.address_zone_code),
-                subzone_no=int(area.address_subzone_no),
-                **configuration,
+            slots = _ground_slot_preview_for_area(
+                db,
+                floor=floor,
+                area=area,
+                policy=policy,
+                floor_layout=floor_layout,
+                configuration=configuration,
             )
             fingerprint = ground_preview_fingerprint(
                 area_id=area.id,
@@ -4688,8 +4814,9 @@ def publish_ground_layout(
                 raise WarehouseGroundSlotError(
                     "GROUND_PREVIEW_TAMPERED", "地堆排位预览校验值不一致，请重新生成预览。"
                 )
-            floor_layout = load_warehouse_twin_floor(floor.floor_code)
+            floor_layout = load_warehouse_twin_floor(f"{floor.floor_number}F")
             slots, fingerprint = _ground_preview_for_plan(
+                db,
                 plan,
                 floor=floor,
                 area=area,
@@ -4716,40 +4843,66 @@ def publish_ground_layout(
                 raise WarehouseGroundSlotError(
                     "GROUND_LAYOUT_ALREADY_MATERIALIZED", "该区域已有地堆排位位置，禁止重复生成。"
                 )
-            created_locations: list[WarehouseLocation] = []
+            materialized_locations: list[WarehouseLocation] = []
+            adopted_existing_location_ids: list[int] = []
             for slot in slots:
-                location = WarehouseLocation(
-                    location_code=slot["location_code"],
-                    location_name=slot["location_name"],
-                    warehouse_type="finished",
-                    is_active=True,
-                    warehouse_floor=floor.floor_number,
-                    area_code=area.area_code,
-                    storage_type="ground",
-                    sort_order=int(slot["route_sequence"]),
-                    is_temporary=False,
-                    source_version="TWIN_V1",
-                    address_kind="ground_slot",
-                    address_area_id=area.id,
-                    ground_row_no=int(slot["row_no"]),
-                    slot_no=int(slot["slot_no"]),
-                    address_version=1,
-                    placement_status="placed",
-                )
-                location.floor3_layout = Floor3LocationLayout(
-                    left_pct=Decimal(str(slot["left_pct"])),
-                    top_pct=Decimal(str(slot["top_pct"])),
-                    width_pct=Decimal(str(slot["width_pct"])),
-                    height_pct=Decimal(str(slot["height_pct"])),
-                    z_index=int(slot["route_sequence"]),
-                    version=1,
-                    source_type="seeded",
-                    layout_kind="physical_pallet",
-                    created_by=user.id,
-                    updated_by=user.id,
-                )
-                db.add(location)
-                db.flush()
+                existing_location_id = slot.get("existing_location_id")
+                if existing_location_id is not None:
+                    location = db.scalar(
+                        select(WarehouseLocation)
+                        .where(WarehouseLocation.id == int(existing_location_id))
+                        .options(selectinload(WarehouseLocation.floor3_layout))
+                        .with_for_update()
+                    )
+                    if (
+                        location is None
+                        or location.floor3_layout is None
+                        or not location.is_active
+                        or location.warehouse_floor != floor.floor_number
+                        or str(location.area_code or "").upper()
+                        != area.area_code.upper()
+                        or location.location_code != slot["location_code"]
+                        or int(location.floor3_layout.version)
+                        != int(slot["existing_layout_version"])
+                    ):
+                        raise WarehouseGroundSlotError(
+                            "GROUND_FIN_EXISTING_LOCATION_STALE",
+                            "FIN 既有真实位置已变化，请刷新并重新生成地堆排位预览。",
+                        )
+                    adopted_existing_location_ids.append(int(location.id))
+                else:
+                    location = WarehouseLocation(
+                        location_code=slot["location_code"],
+                        location_name=slot["location_name"],
+                        warehouse_type="finished",
+                        is_active=True,
+                        warehouse_floor=floor.floor_number,
+                        area_code=area.area_code,
+                        storage_type="ground",
+                        sort_order=int(slot["route_sequence"]),
+                        is_temporary=False,
+                        source_version="TWIN_V1",
+                        address_kind="ground_slot",
+                        address_area_id=area.id,
+                        ground_row_no=int(slot["row_no"]),
+                        slot_no=int(slot["slot_no"]),
+                        address_version=1,
+                        placement_status="placed",
+                    )
+                    location.floor3_layout = Floor3LocationLayout(
+                        left_pct=Decimal(str(slot["left_pct"])),
+                        top_pct=Decimal(str(slot["top_pct"])),
+                        width_pct=Decimal(str(slot["width_pct"])),
+                        height_pct=Decimal(str(slot["height_pct"])),
+                        z_index=int(slot["route_sequence"]),
+                        version=1,
+                        source_type="seeded",
+                        layout_kind="physical_pallet",
+                        created_by=user.id,
+                        updated_by=user.id,
+                    )
+                    db.add(location)
+                    db.flush()
                 db.add(
                     WarehouseGroundLayoutSlot(
                         plan_id=plan.id,
@@ -4763,7 +4916,7 @@ def publish_ground_layout(
                         depth_mm=int(slot["depth_mm"]),
                     )
                 )
-                created_locations.append(location)
+                materialized_locations.append(location)
             now = beijing_now_naive()
             plan.status = "published"
             plan.published_map_revision = plan.draft_map_revision
@@ -4773,9 +4926,9 @@ def publish_ground_layout(
             plan.published_at = now
             plan.updated_at = now
             plan.version += 1
-            area.planned_location_count = len(created_locations)
+            area.planned_location_count = len(materialized_locations)
             area.planned_pallet_capacity = max(
-                int(area.planned_pallet_capacity or 0), len(created_locations)
+                int(area.planned_pallet_capacity or 0), len(materialized_locations)
             )
             policy.version += 1
             policy.updated_by = user.id
@@ -4796,8 +4949,9 @@ def publish_ground_layout(
                 object_ref=f"ground-layout:{floor.floor_code}:{area.area_code}",
                 description="发布实测地堆排位",
                 details={
-                    "slot_count": len(created_locations),
-                    "location_ids": [row.id for row in created_locations],
+                    "slot_count": len(materialized_locations),
+                    "location_ids": [row.id for row in materialized_locations],
+                    "adopted_existing_location_ids": adopted_existing_location_ids,
                     "preview_fingerprint": plan.preview_fingerprint,
                     "inventory_changed": False,
                     "pallet_changed": False,

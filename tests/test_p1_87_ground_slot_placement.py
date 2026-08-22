@@ -21,6 +21,7 @@ from app.models.customer import Customer
 from app.models.product import Product
 from app.models.user import User
 from app.models.warehouse_inventory import (
+    Floor3LocationLayout,
     InventoryLot,
     InventoryPallet,
     InventoryPalletItem,
@@ -32,6 +33,7 @@ from app.models.warehouse_inventory import (
     WarehouseGroundLayoutSlot,
     WarehouseGroundOccupancy,
     WarehouseGroundOccupancySlot,
+    WarehouseLocation,
 )
 from app.services.warehouse_ground_slots import build_ground_slot_preview
 
@@ -255,6 +257,117 @@ def test_draft_publish_is_inventory_neutral_and_keeps_stable_locations(p187_app)
         assert db.scalar(select(func.count(WarehouseGroundLayoutSlot.id))) == 6
         assert db.scalar(select(func.count(InventoryLot.id))) == 0
         assert db.scalar(select(func.count(InventoryPallet.id))) == 0
+
+
+def test_unstructured_fin_publish_adopts_existing_real_locations_without_duplication(
+    p187_app,
+) -> None:
+    app, factory, ids = p187_app
+    with factory() as db:
+        floor = db.scalar(select(WarehouseFloor))
+        area = db.scalar(select(WarehouseArea))
+        assert floor is not None and area is not None
+        floor.floor_code = "1F"
+        floor.floor_name = "一楼"
+        floor.floor_number = 1
+        area.area_code = "FIN-001"
+        area.area_name = "一楼成品待送区一"
+        area.address_zone_code = None
+        area.address_subzone_no = None
+        preview = build_ground_slot_preview(
+            _measured_layout(),
+            feature_id="ZONE-3F-A01",
+            floor_number=1,
+            zone_code="F",
+            subzone_no=1,
+            target_slot_count=6,
+            numbering_origin="south",
+            row_direction="from_aisle_inward",
+            slot_direction="left_to_right",
+            row_start_no=1,
+            slot_start_no=1,
+        )
+        locations: list[WarehouseLocation] = []
+        for index, slot in enumerate(preview, start=1):
+            location = WarehouseLocation(
+                location_code=f"F1-FIN-001-L{index:03d}",
+                location_name=f"成品待送堆放区 {index:03d} 号位",
+                warehouse_type="finished",
+                is_active=True,
+                warehouse_floor=1,
+                area_code="FIN-001",
+                storage_type="ground",
+                sort_order=index,
+                source_version="TWIN_V1",
+                address_kind="legacy",
+                placement_status="placed",
+            )
+            location.floor3_layout = Floor3LocationLayout(
+                left_pct=Decimal(str(slot["left_pct"])),
+                top_pct=Decimal(str(slot["top_pct"])),
+                width_pct=Decimal(str(slot["width_pct"])),
+                height_pct=Decimal(str(slot["height_pct"])),
+                z_index=index,
+                version=1,
+                source_type="seeded",
+                layout_kind="physical_pallet",
+                created_by=ids["admin"],
+                updated_by=ids["admin"],
+            )
+            locations.append(location)
+        db.add_all(locations)
+        db.flush()
+        db.add(
+            InventoryPallet(
+                pallet_code="PLT-P187-LEGACY-FIN",
+                location_id=locations[0].id,
+                status="active",
+                is_current=True,
+                version=1,
+            )
+        )
+        db.commit()
+        existing_ids = [int(location.id) for location in locations]
+
+    with TestClient(app) as client:
+        _login(client)
+        draft = client.post(
+            "/api/warehouse/ground-layout/floors/1F/areas/FIN-001/draft",
+            json={
+                "target_slot_count": 6,
+                "numbering_origin": "south",
+                "row_direction": "from_aisle_inward",
+                "slot_direction": "left_to_right",
+                "row_start_no": 1,
+                "slot_start_no": 1,
+                "expected_policy_version": 1,
+                "expected_map_revision": "p1-87-map-r1",
+            },
+        )
+        assert draft.status_code == 200, draft.text
+        assert [row["existing_location_id"] for row in draft.json()["slots"]] == existing_ids
+        published = client.post(
+            "/api/warehouse/ground-layout/floors/1F/areas/FIN-001/publish",
+            json={
+                "expected_plan_version": draft.json()["plan_version"],
+                "preview_fingerprint": draft.json()["preview_fingerprint"],
+                "idempotency_key": "p187-adopt-fin-001",
+            },
+        )
+        assert published.status_code == 200, published.text
+        assert [row["location_id"] for row in published.json()["slots"]] == existing_ids
+
+    with factory() as db:
+        assert db.scalar(select(func.count(WarehouseLocation.id))) == 6
+        assert db.scalar(select(func.count(WarehouseGroundLayoutSlot.id))) == 6
+        area = db.scalar(select(WarehouseArea))
+        assert area is not None
+        assert area.area_code == "FIN-001"
+        assert area.address_zone_code is None
+        pallet = db.scalar(select(InventoryPallet))
+        assert pallet is not None
+        assert pallet.location_id == existing_ids[0]
+        assert pallet.is_current is True
 
 
 def test_workshop_can_use_scoped_candidates_but_cannot_publish_layout(p187_app) -> None:

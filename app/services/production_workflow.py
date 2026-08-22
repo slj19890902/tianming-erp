@@ -10,7 +10,7 @@ from typing import Literal, Sequence
 
 from sqlalchemy import String, and_, case, cast, exists, func, or_, select, update
 from sqlalchemy.exc import IntegrityError, OperationalError
-from sqlalchemy.orm import Session, aliased
+from sqlalchemy.orm import Session, aliased, selectinload
 
 from app.core.time_contract import (
     beijing_date_bounds_utc_naive,
@@ -48,6 +48,14 @@ from app.models.warehouse_inventory import (
     InventoryPalletItem,
     InventoryReservation,
     OrderItemSemiRequirement,
+    WarehouseArea,
+    WarehouseAreaStoragePolicy,
+    WarehouseFloor,
+    WarehouseGroundLayoutPlan,
+    WarehouseGroundLayoutSlot,
+    WarehouseGroundOccupancy,
+    WarehouseGroundOccupancySlot,
+    WarehouseGroundPlacementMutation,
     WarehouseLocation,
 )
 from app.services.production_station_routing import production_station_memberships
@@ -105,6 +113,7 @@ TEMPORARY_LOCATION_CODES = frozenset(
 )
 DIRECT_DELIVERY_STAGING_LOCATION_CODE = "F1-DISPATCH-01"
 DIRECT_DISPATCH_PALLET_KEY_PREFIX = "PRODUCTION_COMPLETION"
+RECEIPT_FIN_STAGING_AREA_CODES = ("FIN-001", "FIN-002", "FIN-003")
 _PRINTING_PLATE_COUNTS = {
     "单色印刷": 1,
     "双色印刷": 2,
@@ -1210,6 +1219,179 @@ def _production_stock_location(
     return location
 
 
+@dataclass(frozen=True)
+class ReceiptAutoFinishedGroundTarget:
+    plan: WarehouseGroundLayoutPlan
+    slot: WarehouseGroundLayoutSlot
+    location: WarehouseLocation
+    layout_version: int
+    capacity_warning: str | None
+
+
+def _receipt_auto_finished_ground_targets(
+    db: Session,
+) -> list[ReceiptAutoFinishedGroundTarget]:
+    plans = list(
+        db.scalars(
+            select(WarehouseGroundLayoutPlan)
+            .join(WarehouseArea, WarehouseArea.id == WarehouseGroundLayoutPlan.area_id)
+            .join(WarehouseFloor, WarehouseFloor.id == WarehouseArea.floor_id)
+            .where(
+                WarehouseFloor.floor_number == 1,
+                WarehouseFloor.construction_status == "enabled",
+                WarehouseArea.area_code.in_(RECEIPT_FIN_STAGING_AREA_CODES),
+                WarehouseArea.construction_status == "enabled",
+                WarehouseGroundLayoutPlan.status == "published",
+            )
+            .order_by(
+                case(
+                    *[
+                        (WarehouseArea.area_code == code, index)
+                        for index, code in enumerate(RECEIPT_FIN_STAGING_AREA_CODES)
+                    ],
+                    else_=len(RECEIPT_FIN_STAGING_AREA_CODES),
+                ),
+                WarehouseGroundLayoutPlan.id,
+            )
+            .options(
+                selectinload(WarehouseGroundLayoutPlan.area).selectinload(
+                    WarehouseArea.storage_policy
+                ),
+                selectinload(WarehouseGroundLayoutPlan.area).selectinload(
+                    WarehouseArea.floor
+                ),
+                selectinload(WarehouseGroundLayoutPlan.slots)
+                .selectinload(WarehouseGroundLayoutSlot.location)
+                .selectinload(WarehouseLocation.floor3_layout),
+            )
+        ).unique()
+    )
+    if not plans:
+        raise ProductionWorkflowError(
+            "一楼成品待送区尚未发布地堆排位；请在区域规划中为 FIN-001～003 至少发布一个地堆排位",
+            409,
+        )
+
+    valid_plan_found = False
+    targets: list[ReceiptAutoFinishedGroundTarget] = []
+    for plan in plans:
+        policy = plan.area.storage_policy
+        try:
+            allowed_types = (
+                json.loads(policy.allowed_inventory_types_json)
+                if policy is not None
+                else None
+            )
+        except (TypeError, ValueError, json.JSONDecodeError):
+            allowed_types = None
+        if (
+            policy is None
+            or policy.status != "published"
+            or policy.storage_layout not in {"pallet_ground", "mixed"}
+            or policy.published_map_revision != plan.published_map_revision
+            or not plan.published_map_revision
+            or not isinstance(allowed_types, list)
+            or "finished" not in {str(value).strip() for value in allowed_types}
+        ):
+            continue
+        valid_plan_found = True
+        for slot in sorted(plan.slots, key=lambda row: (row.route_sequence, row.id)):
+            location = slot.location
+            layout = location.floor3_layout
+            if layout is None:
+                continue
+            issue = operational_location_issue(
+                db,
+                location,
+                warehouse_types={"finished", "shared"},
+                pallet_storage_only=True,
+                require_published=True,
+                require_map_geometry=True,
+                required_inventory_type="finished",
+                require_empty=True,
+                # Capacity is advisory for automatic receipt completion.  The
+                # physical slot itself must still be empty and formally mapped.
+                capacity_source_location_id=location.id,
+            )
+            if issue:
+                continue
+            capacity_issue = operational_location_issue(
+                db,
+                location,
+                warehouse_types={"finished", "shared"},
+                pallet_storage_only=True,
+                require_published=True,
+                require_map_geometry=True,
+                required_inventory_type="finished",
+                require_empty=True,
+            )
+            targets.append(
+                ReceiptAutoFinishedGroundTarget(
+                    plan=plan,
+                    slot=slot,
+                    location=location,
+                    layout_version=int(layout.version),
+                    capacity_warning=(
+                        capacity_issue
+                        if capacity_issue == "该区域已达到现场确认的栈板容量"
+                        else None
+                    ),
+                )
+            )
+    if targets:
+        return targets
+    if not valid_plan_found:
+        raise ProductionWorkflowError(
+            "FIN-001～003 的地堆排位与区域发布版本不一致；请重新核对并发布地堆排位",
+            409,
+        )
+    raise ProductionWorkflowError(
+        "FIN-001～003 当前没有可用的已发布空地堆位置；请先腾空或发布新的真实位置",
+        409,
+    )
+
+
+def _receipt_auto_finished_ground_target(
+    db: Session,
+    *,
+    claim: bool,
+) -> ReceiptAutoFinishedGroundTarget:
+    targets = _receipt_auto_finished_ground_targets(db)
+    if not claim:
+        return targets[0]
+    for target in targets:
+        try:
+            claimed = claim_active_placed_location(
+                db,
+                target.location.id,
+                expected_layout_version=target.layout_version,
+            )
+        except OperationalError as error:
+            raise ProductionWorkflowError(
+                "一楼待送位置正在被其他入库或地图操作使用，请稍后重试",
+                409,
+            ) from error
+        if not claimed:
+            continue
+        issue = operational_location_issue(
+            db,
+            target.location,
+            warehouse_types={"finished", "shared"},
+            pallet_storage_only=True,
+            require_published=True,
+            require_map_geometry=True,
+            required_inventory_type="finished",
+            require_empty=True,
+            capacity_source_location_id=target.location.id,
+        )
+        if issue is None:
+            return target
+    raise ProductionWorkflowError(
+        "FIN-001～003 的可用位置刚刚发生变化，请刷新后重新确认收料",
+        409,
+    )
+
+
 def _production_direct_staging_location(
     db: Session,
     *,
@@ -1258,10 +1440,10 @@ def _production_direct_staging_location(
 
 
 def receipt_auto_finished_location_projection(db: Session) -> dict[str, object]:
-    """Return the authoritative employee-safe F1 receipt destination preview."""
+    """Return the authoritative employee-safe real FIN destination preview."""
 
     try:
-        location = _production_direct_staging_location(db, require_receipt_ready=True)
+        target = _receipt_auto_finished_ground_target(db, claim=False)
     except ProductionWorkflowError as error:
         return {
             "ready": False,
@@ -1270,28 +1452,11 @@ def receipt_auto_finished_location_projection(db: Session) -> dict[str, object]:
             "capacity_warning": None,
             "issue": str(error),
         }
-    capacity_issue = operational_location_issue(
-        db,
-        location,
-        warehouse_types={"finished", "shared"},
-        pallet_storage_only=True,
-        require_published=True,
-        require_map_geometry=True,
-        required_inventory_type="finished",
-    )
     return {
         "ready": True,
-        "location_name": location.location_name,
-        "layout_version": (
-            int(location.floor3_layout.version)
-            if location.floor3_layout is not None
-            else None
-        ),
-        "capacity_warning": (
-            capacity_issue
-            if capacity_issue == "该区域已达到现场确认的栈板容量"
-            else None
-        ),
+        "location_name": target.location.location_name,
+        "layout_version": target.layout_version,
+        "capacity_warning": target.capacity_warning,
         "issue": None,
     }
 
@@ -1312,6 +1477,7 @@ def _bind_direct_completion_lots_to_system_pallet(
     lots: Sequence[InventoryLot],
     location: WarehouseLocation,
     operator_id: int | None,
+    ground_target: ReceiptAutoFinishedGroundTarget | None = None,
 ) -> InventoryPallet:
     """Bind one direct-production detail to one formal ERP system pallet.
 
@@ -1321,8 +1487,16 @@ def _bind_direct_completion_lots_to_system_pallet(
     independently traceable pallet for each direct completion in this area.
     """
 
-    if location.location_code != DIRECT_DELIVERY_STAGING_LOCATION_CODE:
-        raise ProductionWorkflowError("直接待送系统栈板只能建立在一楼待送区", 409)
+    is_legacy_dispatch = location.location_code == DIRECT_DELIVERY_STAGING_LOCATION_CODE
+    if ground_target is not None:
+        if (
+            ground_target.location.id != location.id
+            or str(location.area_code or "").strip().upper()
+            not in RECEIPT_FIN_STAGING_AREA_CODES
+        ):
+            raise ProductionWorkflowError("收料自动成品的真实 FIN 地堆位置不一致", 409)
+    elif not is_legacy_dispatch:
+        raise ProductionWorkflowError("直接待送系统栈板缺少真实 FIN 地堆目标", 409)
     occupancy_key = _direct_dispatch_pallet_occupancy_key(completion.id)
     existing = db.scalar(
         select(InventoryPallet).where(
@@ -1354,6 +1528,16 @@ def _bind_direct_completion_lots_to_system_pallet(
         expected_ids = {int(lot.id) for lot in normalized_lots}
         if linked_ids != expected_ids:
             raise ProductionWorkflowError("直接待送系统栈板幂等事实不一致", 409)
+        if ground_target is not None:
+            occupancy = db.scalar(
+                select(WarehouseGroundOccupancy).where(
+                    WarehouseGroundOccupancy.pallet_id == existing.id,
+                    WarehouseGroundOccupancy.primary_location_id == location.id,
+                    WarehouseGroundOccupancy.status == "active",
+                )
+            )
+            if occupancy is None:
+                raise ProductionWorkflowError("真实 FIN 地堆占用幂等事实不完整", 409)
         return existing
     if any(lot.pallet_item is not None for lot in normalized_lots):
         raise ProductionWorkflowError("直接待送库存批次已绑定其他栈板", 409)
@@ -1371,6 +1555,7 @@ def _bind_direct_completion_lots_to_system_pallet(
     )
     db.add(pallet)
     db.flush()
+    total_physical_quantity = 0
     for lot in normalized_lots:
         detail = lot.finished_detail
         assert detail is not None
@@ -1381,6 +1566,7 @@ def _bind_direct_completion_lots_to_system_pallet(
         )
         if physical_quantity <= 0:
             raise ProductionWorkflowError("直接待送系统栈板数量必须大于0", 409)
+        total_physical_quantity += physical_quantity
         db.add(
             InventoryPalletItem(
                 pallet_id=pallet.id,
@@ -1417,6 +1603,65 @@ def _bind_direct_completion_lots_to_system_pallet(
             remarks=f"生产完工明细 {completion.id} 直接待送自动建立系统栈板",
         )
     )
+    if ground_target is not None:
+        if operator_id is None:
+            raise ProductionWorkflowError("真实 FIN 地堆占用缺少操作人", 409)
+        occupied = db.scalar(
+            select(WarehouseGroundOccupancySlot.id)
+            .join(WarehouseGroundOccupancy)
+            .where(
+                WarehouseGroundOccupancySlot.location_id == location.id,
+                WarehouseGroundOccupancySlot.status == "active",
+                WarehouseGroundOccupancy.status == "active",
+            )
+            .limit(1)
+        )
+        if occupied is not None:
+            raise ProductionWorkflowError("真实 FIN 地堆位置已被占用，请刷新后重试", 409)
+        occupancy = WarehouseGroundOccupancy(
+            pallet_id=pallet.id,
+            primary_location_id=location.id,
+            customer_id=order.customer_id,
+            product_id=normalized_lots[0].finished_detail.product_id,
+            footprint_kind="single",
+            capacity_quantity=total_physical_quantity,
+            status="active",
+            version=1,
+            created_by=operator_id,
+        )
+        db.add(occupancy)
+        db.flush()
+        db.add(
+            WarehouseGroundOccupancySlot(
+                occupancy_id=occupancy.id,
+                location_id=location.id,
+                slot_sequence=1,
+                status="active",
+            )
+        )
+        db.add(
+            WarehouseGroundPlacementMutation(
+                idempotency_key=_stable_key(
+                    "incoming-auto", completion.id, "fin-ground-placement"
+                ),
+                request_hash=_canonical_hash(
+                    {
+                        "completion_id": completion.id,
+                        "lot_ids": [lot.id for lot in normalized_lots],
+                        "plan_id": ground_target.plan.id,
+                        "slot_id": ground_target.slot.id,
+                        "location_id": location.id,
+                        "layout_version": ground_target.layout_version,
+                        "quantity": total_physical_quantity,
+                    }
+                ),
+                actor_user_id=operator_id,
+                operation="finished_inbound",
+                source_lot_id=None,
+                result_lot_id=normalized_lots[0].id,
+                occupancy_id=occupancy.id,
+            )
+        )
     db.flush()
     return pallet
 
@@ -1779,6 +2024,7 @@ def _stock_completion_lot(
     operator_id: int | None,
     idempotency_prefix: str,
     location_id_override: int | None = None,
+    receipt_ground_target: ReceiptAutoFinishedGroundTarget | None = None,
     source_type: str = "production_surplus",
     movement_reason: str = "生产完工入库",
 ) -> InventoryLot:
@@ -1812,9 +2058,20 @@ def _stock_completion_lot(
         elif existing_location_id is not None:
             require_empty_pallet = False
     if location_id_override is not None:
-        location = _production_direct_staging_location(db)
-        if location.id != location_id_override:
-            raise ProductionWorkflowError("一楼待送区库位已变化，请刷新后重试", 409)
+        if receipt_ground_target is not None:
+            if (
+                getattr(completion, "origin", "manual") != "receipt_auto"
+                or receipt_ground_target.location.id != location_id_override
+            ):
+                raise ProductionWorkflowError(
+                    "收料自动成品的真实 FIN 位置校验失败，请刷新后重试",
+                    409,
+                )
+            location = receipt_ground_target.location
+        else:
+            location = _production_direct_staging_location(db)
+            if location.id != location_id_override:
+                raise ProductionWorkflowError("一楼待送区库位已变化，请刷新后重试", 409)
     else:
         location = _production_stock_location(
             db,
@@ -2635,6 +2892,15 @@ def transfer_direct_completion_to_stock(
                     "production-transfer", completion.id, key, "clear-direct-pallet"
                 ),
             )
+            from app.services.warehouse_ground_slots import (
+                release_ground_occupancy_for_pallet,
+            )
+
+            release_ground_occupancy_for_pallet(
+                db,
+                pallet_id=int(direct_pallet.id),
+                operator_id=operator_id,
+            )
         if target_location.source_version == "V11":
             from app.services.floor3_locations import bind_finished_lot_to_floor3_pallet
 
@@ -2879,6 +3145,15 @@ def _reverse_completion_finished_lot(
                 remarks=f"撤销生产完工入库：{reason}",
                 operator_id=operator_id,
             )
+            from app.services.warehouse_ground_slots import (
+                release_ground_occupancy_for_pallet,
+            )
+
+            release_ground_occupancy_for_pallet(
+                db,
+                pallet_id=int(pallet.id),
+                operator_id=operator_id,
+            )
 
 
 def reverse_production_completion(
@@ -3114,7 +3389,8 @@ def post_automatic_receipt_completion(
             raise ProductionWorkflowError("自动完工幂等事实不完整", 409)
         return replay.completions[0]
 
-    location = _production_direct_staging_location(db, require_receipt_ready=True)
+    ground_target = _receipt_auto_finished_ground_target(db, claim=True)
+    location = ground_target.location
     existing_posted = db.scalar(
         select(ProductionCompletion.id)
         .where(
@@ -3182,8 +3458,9 @@ def post_automatic_receipt_completion(
         operator_id=operator_id,
         idempotency_prefix=_stable_key("incoming-auto", key),
         location_id_override=location.id,
+        receipt_ground_target=ground_target,
         source_type="production_completion",
-        movement_reason="订单用途来料自动形成成品并进入合并一楼成品暂存区",
+        movement_reason="订单用途来料自动形成成品并进入真实一楼成品待送位置",
     )
     completion.inventory_lot_id = lot.id
     _bind_direct_completion_lots_to_system_pallet(
@@ -3193,6 +3470,7 @@ def post_automatic_receipt_completion(
         lots=[lot],
         location=location,
         operator_id=operator_id,
+        ground_target=ground_target,
     )
     capitalized = Decimal(str(capitalized_material_cost or 0)).quantize(
         Decimal("0.0001"), rounding=ROUND_HALF_UP

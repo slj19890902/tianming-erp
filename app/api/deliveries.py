@@ -5949,6 +5949,7 @@ def _delivery_customer_candidates_from_summaries(
     *,
     user: User,
     pending_summaries: list[dict],
+    include_unordered_finished: bool = True,
 ) -> list[dict]:
     """Build the delivery customer selector without expanding every order item."""
 
@@ -5966,26 +5967,27 @@ def _delivery_customer_candidates_from_summaries(
             "unordered_available_quantity": 0,
         }
 
-    for summary in _unordered_finished_customer_summaries(db, user=user):
-        customer_id = int(summary["customer_id"])
-        candidate = grouped.setdefault(
-            customer_id,
-            {
-                "customer_id": customer_id,
-                "customer_name": summary["customer_name"],
-                "has_pending_orders": False,
-                "pending_item_count": 0,
-                "pending_quantity": 0,
-                "has_unordered_finished": False,
-                "unordered_lot_count": 0,
-                "unordered_available_quantity": 0,
-            },
-        )
-        candidate["has_unordered_finished"] = True
-        candidate["unordered_lot_count"] = int(summary["lot_count"])
-        candidate["unordered_available_quantity"] = int(
-            summary["available_quantity"]
-        )
+    if include_unordered_finished:
+        for summary in _unordered_finished_customer_summaries(db, user=user):
+            customer_id = int(summary["customer_id"])
+            candidate = grouped.setdefault(
+                customer_id,
+                {
+                    "customer_id": customer_id,
+                    "customer_name": summary["customer_name"],
+                    "has_pending_orders": False,
+                    "pending_item_count": 0,
+                    "pending_quantity": 0,
+                    "has_unordered_finished": False,
+                    "unordered_lot_count": 0,
+                    "unordered_available_quantity": 0,
+                },
+            )
+            candidate["has_unordered_finished"] = True
+            candidate["unordered_lot_count"] = int(summary["lot_count"])
+            candidate["unordered_available_quantity"] = int(
+                summary["available_quantity"]
+            )
 
     return sorted(
         grouped.values(),
@@ -6720,10 +6722,11 @@ def pending_delivery_customer_summaries(
 
 @router.get("/pending-customer-options")
 def pending_delivery_customer_options(
+    include_unordered_finished: bool = Query(default=False),
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
-    """Return only customers that currently have a real selectable source."""
+    """Return the order-first customer selector with opt-in free inventory."""
 
     summaries = pending_delivery_customer_summaries(db, user=user)
     return {
@@ -6731,7 +6734,9 @@ def pending_delivery_customer_options(
             db,
             user=user,
             pending_summaries=summaries,
-        )
+            include_unordered_finished=include_unordered_finished,
+        ),
+        "include_unordered_finished": include_unordered_finished,
     }
 
 

@@ -7239,7 +7239,7 @@
                 <div class="delivery-flow-message">{{ deliveryGuideMessage }}</div>
               </div>
               <div class="form-grid">
-                <div :class="['field',{'delivery-guide-target':deliveryGuideStage === 'customer'}]"><label>客户</label><search-select v-model="deliveryForm.customer_id" :options="deliveryCustomerOptions" label-key="_delivery_label" value-key="id" placeholder="输入客户名称、缩写或拼音首字母" :disabled="!!deliveryForm.editingId || deliveryCandidateLoading" @change="onDeliveryCustomerChange"></search-select><div v-if="!deliveryForm.editingId && deliveryCandidateLoading" class="muted">正在加载可送货客户…</div><div v-else-if="!deliveryForm.editingId && deliveryCandidateError" class="status orange" style="white-space:normal">客户候选加载失败：{{ deliveryCandidateError }} <button class="btn small" type="button" @click="loadDeliveryCustomerOptions">重试</button></div><div v-else-if="!deliveryForm.editingId && !deliveryCustomerOptions.length" class="muted">当前没有待送订单或可送成品库存</div></div>
+                <div :class="['field',{'delivery-guide-target':deliveryGuideStage === 'customer'}]"><label>客户</label><search-select v-model="deliveryForm.customer_id" :options="deliveryCustomerOptions" label-key="_delivery_label" value-key="id" placeholder="输入客户名称、缩写或拼音首字母" :disabled="!!deliveryForm.editingId || deliveryCandidateLoading" @change="onDeliveryCustomerChange"></search-select><label v-if="!deliveryForm.editingId" class="muted" style="display:flex;align-items:center;gap:6px;margin-top:6px"><input type="checkbox" v-model="deliveryIncludeUnorderedCustomers" :disabled="deliveryCandidateLoading" @change="reloadDeliveryCustomerOptionsForScope($event)" />包含无订单库存客户</label><div v-else class="muted" style="margin-top:6px">编辑已有草稿时保留原客户，不受当前候选范围影响。</div><div v-if="!deliveryForm.editingId && deliveryCandidateLoading" class="muted">正在加载可送货客户…</div><div v-else-if="!deliveryForm.editingId && deliveryCandidateError" class="status orange" style="white-space:normal">客户候选加载失败：{{ deliveryCandidateError }} <button class="btn small" type="button" @click="loadDeliveryCustomerOptions">重试</button></div><div v-else-if="!deliveryForm.editingId && !deliveryCustomerOptions.length" class="muted">{{ deliveryIncludeUnorderedCustomers ? '当前没有待送订单或可送成品库存' : '当前没有待送订单客户' }}</div></div>
                 <div class="field"><label>送货日期</label><input class="input" type="date" v-model="deliveryForm.delivery_date" /></div>
                 <div class="field"><label>车号</label><input class="input" v-model.trim="deliveryForm.vehicle_number" /></div>
               </div>
@@ -8677,6 +8677,7 @@
             incomingSelected: {}, incomingReceiveAttempts: {}, incomingBatchReceiveAttempt: null,
             mobileEntry: { url:"", qr_data_url:"" },
             orderPdfImport: { file: null, draft: null, matchedCustomerLabel: "" },
+            deliveryIncludeUnorderedCustomers: false,
             deliveryForm: { editingId: null, delivery_number: "", source_mode: "order", source_tab: "order", customer_id: null, delivery_date: today(), vehicle_number: "", lines: [], saved_signature: "", pick_task: null },
             deliveryRoutePlan: { origin_address:null, customer_count:0, groups:[], disclaimer:"" },
             deliveryBatchPicker: { visible: false, loading: false, keyword: "", items: [], selected: {}, page:1, page_size:10, total:0, total_pages:1, request_token:0, message: "", error: false },
@@ -9468,14 +9469,17 @@
           deliveryCustomerOptions() {
             const candidates = new Map((this.deliveryCustomerCandidates || []).map(row => [Number(row.customer_id), row]));
             const editingCustomerId = this.deliveryForm.editingId ? Number(this.deliveryForm.customer_id) : null;
+            const selectedCustomerId = Number(this.deliveryForm.customer_id || 0) || null;
             return this.customerOptions.filter(row => (
               (row.is_active && candidates.has(Number(row.id)))
               || (editingCustomerId && Number(row.id) === editingCustomerId)
+              || (selectedCustomerId && Number(row.id) === selectedCustomerId)
             )).map(row => {
               const candidate = candidates.get(Number(row.id)) || {};
               const sourceLabels = [];
               if (candidate.has_pending_orders) sourceLabels.push(`待送订单 ${Number(candidate.pending_item_count || 0)} 款`);
               if (candidate.has_unordered_finished) sourceLabels.push(`可送库存 ${Number(candidate.unordered_lot_count || 0)} 批`);
+              if (!candidates.has(Number(row.id)) && Number(row.id) === selectedCustomerId) sourceLabels.push("当前已选客户");
               const customerLabel = row.customer_code ? `${row.customer_code} · ${row.name}` : row.name;
               return {...row, _delivery_label:[customerLabel, ...sourceLabels].filter(Boolean).join("｜")};
             });
@@ -18612,7 +18616,9 @@
             this.deliveryCandidateLoading = true;
             this.deliveryCandidateError = "";
             try {
-              const { data } = await axios.get("/api/deliveries/pending-customer-options");
+              const { data } = await axios.get("/api/deliveries/pending-customer-options", { params: {
+                include_unordered_finished: this.deliveryIncludeUnorderedCustomers,
+              }});
               if (requestToken !== this.deliveryCandidateRequestSequence) return false;
               this.deliveryCustomerCandidates = data.items || [];
               return true;
@@ -18624,6 +18630,14 @@
             } finally {
               if (requestToken === this.deliveryCandidateRequestSequence) this.deliveryCandidateLoading = false;
             }
+          },
+          async reloadDeliveryCustomerOptionsForScope(event) {
+            this.deliveryIncludeUnorderedCustomers = !!event?.target?.checked;
+            const selectedCustomerId = Number(this.deliveryForm.customer_id || 0) || null;
+            const loaded = await this.loadDeliveryCustomerOptions();
+            if (!loaded || !selectedCustomerId) return loaded;
+            this.deliveryForm.customer_id = selectedCustomerId;
+            return true;
           },
           resetDeliveryListFilters() {
             this.deliveryListFilters = { customer_id:"", keyword:"", date_from:"", date_to:"", status:"", return_status:"" };
@@ -30100,6 +30114,7 @@
             if (!Number.isInteger(Number(preferredCustomerId))) preferredCustomerId = null;
             this.resetDeliveryReminderState();
             this.deliverySaveState = {saving:false,committed:false,outcomeUncertain:false,result:null};
+            this.deliveryIncludeUnorderedCustomers = false;
             this.deliveryForm = { editingId:null, delivery_number:"", source_mode:"order", source_tab:"order", customer_id:null, delivery_date:today(), vehicle_number:"", lines:[], saved_signature:"", pick_task:null };
             this.deliveryBatchPicker = { visible:false, loading:false, keyword:"", items:[], selected:{}, page:1, page_size:10, total:0, total_pages:1, request_token:0, message:"", error:false };
             this.unorderedFinishedPicker = { visible:false, loading:false, keyword:"", items:[], selected:{}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message:"", error:false };

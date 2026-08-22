@@ -296,7 +296,7 @@
           <th>客户单号</th>
           <th>款号</th>
           <th>产品名称</th>
-          <th>规格</th>
+          <th>规格mm</th>
           <th>单位</th>
           <th>数量</th>
           <th>备注</th>
@@ -426,6 +426,12 @@
       return normalized;
     }
 
+    function compactSpecificationForPrint(value) {
+      const specification = String(value || "").trim();
+      if (!specification) return "规格未登记";
+      return specification.replace(/\s*mm\s*$/i, "");
+    }
+
     function populateSheet(sheet, data, entries, pageNumber, totalPages) {
       const sender = data.sender || {};
       const senderParts = [];
@@ -452,7 +458,7 @@
       getField(sheet, "itemRows").innerHTML = entries.map((entry) => {
         const item = entry.item;
         const productName = String(item.product_name || "").trim() || "产品名称未登记";
-        const specification = String(item.specification || "").trim() || "规格未登记";
+        const specification = compactSpecificationForPrint(item.specification);
         const customerRemark = String(item.remarks || "").trim();
         const tableRemark = customerRemark.length > 12 ? "详见备注说明" : customerRemark;
         const longNameClass = productName.length > 28 ? " long-name" : "";

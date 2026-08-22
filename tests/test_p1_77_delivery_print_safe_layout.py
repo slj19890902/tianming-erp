@@ -53,7 +53,8 @@ def test_every_customer_visible_block_is_inside_the_safe_area() -> None:
 def test_name_and_spec_are_real_columns_with_larger_detail_text() -> None:
     header = _between("<thead>", "</thead>")
     assert "<th>产品名称</th>" in header
-    assert "<th>规格</th>" in header
+    assert "<th>规格mm</th>" in header
+    assert "<th>规格</th>" not in header
     assert "产品名称 / 规格" not in header
     assert "font-size: 13px" in _css("table")
     assert "font-size: 12px" in _css(".product-code")
@@ -65,6 +66,13 @@ def test_name_and_spec_are_real_columns_with_larger_detail_text() -> None:
     assert '<col style="width:5%">' in PAGE
     assert "<col" in PAGE
     assert header.count("<th>") == 8
+
+
+def test_specification_unit_is_header_only_without_mutating_snapshot() -> None:
+    populate = _between("function populateSheet", "function renderDelivery")
+    assert "compactSpecificationForPrint" in populate
+    assert "replace(/\\s*mm\\s*$/i, \"\")" in PAGE
+    assert "item.specification =" not in populate
 
 
 def test_footer_matches_confirmed_two_signature_and_summary_contract() -> None:

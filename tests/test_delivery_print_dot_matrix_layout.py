@@ -143,8 +143,8 @@ def test_printed_product_name_and_specification_use_separate_columns() -> None:
 
     assert "产品名称 / 规格" not in source
     assert "<th>产品名称</th>" in source
-    assert "<th>规格</th>" in source
+    assert "<th>规格mm</th>" in source
     assert 'class="product-specification"' in source
     assert 'class="product-spec"' not in source
-    assert 'item.specification || ""' in source
+    assert "compactSpecificationForPrint(item.specification)" in source
     assert "规格未登记" in source

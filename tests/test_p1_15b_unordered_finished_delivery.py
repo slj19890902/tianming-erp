@@ -581,6 +581,10 @@ def test_delivery_customer_candidates_are_exact_union_of_real_sources(
         _login(client)
         response = client.get("/api/deliveries/pending_items")
         lightweight = client.get("/api/deliveries/pending-customer-options")
+        lightweight_with_inventory = client.get(
+            "/api/deliveries/pending-customer-options",
+            params={"include_unordered_finished": True},
+        )
 
     assert response.status_code == 200, response.text
     body = response.json()
@@ -600,7 +604,14 @@ def test_delivery_customer_candidates_are_exact_union_of_real_sources(
     assert {
         int(row["customer_id"]): row
         for row in lightweight.json()["items"]
+    } == {order_customer_id: rows[order_customer_id]}
+    assert lightweight.json()["include_unordered_finished"] is False
+    assert lightweight_with_inventory.status_code == 200, lightweight_with_inventory.text
+    assert {
+        int(row["customer_id"]): row
+        for row in lightweight_with_inventory.json()["items"]
     } == rows
+    assert lightweight_with_inventory.json()["include_unordered_finished"] is True
 
 
 @pytest.mark.parametrize("submitted_price", [None, 0, "0.0000"])

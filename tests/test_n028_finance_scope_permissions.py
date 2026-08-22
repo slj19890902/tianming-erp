@@ -447,6 +447,17 @@ def test_selected_scope_rejects_customer_b_writes_and_allows_customer_a(
             == 403
         )
         assert (
+            client.put(
+                f"/api/finance/return_receipts/{ids['receipt_b']}/reconciliation-month",
+                json={
+                    "reconciliation_month": "2026-08",
+                    "expected_version": 1,
+                    "idempotency_key": "p1-89-out-of-scope-month",
+                },
+            ).status_code
+            == 403
+        )
+        assert (
             client.post(
                 f"/api/finance/return_receipts/{ids['receipt_b']}/cancel"
             ).status_code

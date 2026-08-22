@@ -62,6 +62,7 @@ PERMISSION_CATALOG = frozenset(
         "deliveries.pick",
         "finance.view",
         "finance.execute",
+        "finance.return_receipt.period.adjust",
         "finance.statement.confirm",
         "finance.invoice_task.generate",
         "finance.invoice_result.register",
@@ -113,6 +114,7 @@ BOSS_DEFAULT_PERMISSIONS = frozenset(
     and permission
     not in {
         "finance.statement.confirm",
+        "finance.return_receipt.period.adjust",
         "finance.invoice_task.generate",
         "finance.invoice_result.register",
         "finance.invoice_profile.manage",
@@ -134,6 +136,7 @@ ROLE_DEFAULT_PERMISSIONS: dict[str, frozenset[str]] = {
             "deliveries.view",
             "finance.view",
             "finance.execute",
+            "finance.return_receipt.period.adjust",
             "finance.statement.confirm",
             "finance.invoice_task.generate",
             "finance.invoice_result.register",

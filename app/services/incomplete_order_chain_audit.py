@@ -43,9 +43,14 @@ from app.services.production_station_routing import (
     PRODUCTION_STATION_ROUTING_RULE_VERSION,
     production_station_memberships,
 )
+from app.services.production_workflow import (
+    cutting_output_factor,
+    production_output_quantity,
+    production_pieces_per_box,
+)
 
 
-REPORT_SCHEMA_VERSION = "p0-15-v2"
+REPORT_SCHEMA_VERSION = "p0-17-v1"
 TERMINAL_ORDER_STATUSES = frozenset(
     {"completed", "archived", "closed", "dead", "cancelled"}
 )
@@ -87,6 +92,164 @@ class ChainFinding:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+def _missing_task_repair_preview(
+    *,
+    order: Order,
+    item,
+    product: dict | None,
+    missing_task_keys: Sequence[str],
+    receipt_rows: Sequence[dict],
+    active_purpose_allocations: Sequence[dict],
+    completion_rows: Sequence[dict],
+    component_facts: dict[int, dict],
+    key: bytes,
+) -> dict:
+    """Build a deterministic P0-17 dry-run plan without mutating business facts.
+
+    A missing task cannot safely inherit today's mutable printing or label master
+    data.  Even when frozen purpose and quantity facts are complete, the plan
+    therefore stops at a human-confirmed rebuild candidate.  Formal apply is a
+    separate, factory-authorized operation and is deliberately absent here.
+    """
+
+    item_id = int(item.id)
+    allocation_ids = sorted(int(row["id"]) for row in active_purpose_allocations)
+    proposal_seed = (
+        f"p0-17:{item_id}:"
+        + ",".join(sorted(str(value) for value in missing_task_keys))
+        + ":"
+        + ",".join(str(value) for value in allocation_ids)
+    )
+    proposal_id = "P017-" + hmac.new(
+        key,
+        proposal_seed.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()[:16].upper()
+
+    effective_order_sheets = sum(
+        max(int(row["receipt_order_purpose_sheet_qty"] or 0), 0)
+        for row in active_purpose_allocations
+    )
+    output_factor = cutting_output_factor(item.special_process)
+    pieces_per_box = production_pieces_per_box(item)
+    component_target_ids = sorted(
+        int(str(value).split(":", 1)[1])
+        for value in missing_task_keys
+        if str(value).startswith("component:")
+    )
+    theoretical_finished = production_output_quantity(
+        effective_order_sheets,
+        output_factor,
+        pieces_per_box,
+    )
+    if component_target_ids:
+        component_targets = []
+        for component_id in component_target_ids:
+            component = component_facts.get(component_id)
+            if component is None:
+                continue
+            component_targets.append(
+                {
+                    "component_ref": _anonymous_ref("bom_component", component_id, key),
+                    "required_piece_quantity": int(
+                        component["required_piece_quantity"] or 0
+                    ),
+                    "output_factor": cutting_output_factor(
+                        component["snapshot_component_default_cutting_mode"]
+                    ),
+                    "pieces_per_box": max(
+                        int(component["snapshot_component_pieces_per_box"] or 1),
+                        1,
+                    ),
+                }
+            )
+        quantity_facts = {
+            "effective_order_purpose_sheet_qty": effective_order_sheets,
+            "component_targets": component_targets,
+        }
+    else:
+        quantity_facts = {
+            "effective_order_purpose_sheet_qty": effective_order_sheets,
+            "output_factor": output_factor,
+            "pieces_per_box": pieces_per_box,
+            "theoretical_finished_quantity": theoretical_finished,
+        }
+
+    blocking_reasons: list[str] = []
+    if not active_purpose_allocations:
+        blocking_reasons.append("MISSING_FROZEN_PURPOSE_ALLOCATION")
+    else:
+        if any(
+            str(row["purpose_contract_status_snapshot"] or "") != "frozen"
+            for row in active_purpose_allocations
+        ):
+            blocking_reasons.append("PURPOSE_ALLOCATION_NOT_FROZEN")
+        if any(
+            row["purchase_purpose_source_snapshot_id"] is None
+            or row["purchase_receipt_fact_id"] is None
+            for row in active_purpose_allocations
+        ):
+            blocking_reasons.append("PURPOSE_TRACE_INCOMPLETE")
+        if effective_order_sheets <= 0:
+            blocking_reasons.append("NO_EFFECTIVE_ORDER_PURPOSE")
+        if not component_target_ids and theoretical_finished <= 0:
+            blocking_reasons.append("FROZEN_QUANTITY_CONVERTS_TO_ZERO")
+    if completion_rows:
+        blocking_reasons.append("HISTORICAL_COMPLETION_REQUIRES_MANUAL_RELINK")
+    if component_target_ids:
+        if len(component_target_ids) != len(quantity_facts["component_targets"]):
+            blocking_reasons.append("COMPONENT_SNAPSHOT_UNAVAILABLE")
+        if any(
+            not bool(component_facts[component_id].get("component_product_is_active"))
+            for component_id in component_target_ids
+            if component_id in component_facts
+        ):
+            blocking_reasons.append("COMPONENT_PRODUCT_MASTER_UNAVAILABLE")
+    elif product is None or not bool(product.get("is_active")):
+        blocking_reasons.append("PRODUCT_MASTER_UNAVAILABLE")
+
+    if blocking_reasons:
+        status = "manual_review"
+        action = "none"
+        reason_codes = sorted(set(blocking_reasons))
+    else:
+        status = "human_confirmation_required"
+        has_component_target = any(
+            str(value).startswith("component:") for value in missing_task_keys
+        )
+        has_order_main_target = "order_main" in missing_task_keys
+        if has_component_target and has_order_main_target:
+            action = "rebuild_order_main_and_component_tasks"
+        elif has_component_target:
+            action = "rebuild_component_tasks"
+        else:
+            action = "rebuild_order_main_task"
+        reason_codes = [
+            "PRODUCTION_PRINT_AND_LABEL_SNAPSHOT_REQUIRES_HUMAN_CONFIRMATION"
+        ]
+
+    return {
+        "proposal_id": proposal_id,
+        "finding_code": "P015_INCOMING_WITHOUT_PRODUCTION_TASK",
+        "order_ref": _anonymous_ref("order", int(order.id), key),
+        "order_item_ref": _anonymous_ref("item", item_id, key),
+        "status": status,
+        "action": action,
+        "automatic_apply_allowed": False,
+        "missing_task_keys": sorted(str(value) for value in missing_task_keys),
+        "source_receipt_refs": sorted(
+            _anonymous_ref("receipt_item", int(row["id"]), key)
+            for row in receipt_rows
+        ),
+        "purpose_allocation_refs": sorted(
+            _anonymous_ref("purpose_allocation", value, key)
+            for value in allocation_ids
+        ),
+        "frozen_quantity_facts": quantity_facts,
+        "reason_codes": reason_codes,
+    }
 
 
 def _chunks(values: Sequence[int], size: int = 800) -> Iterable[list[int]]:
@@ -248,20 +411,26 @@ def _task_rows(db: Session, item_ids: Sequence[int]) -> dict[int, dict[int | Non
 
 def _required_components(
     db: Session, item_ids: Sequence[int]
-) -> dict[int, dict[int, int]]:
-    result: dict[int, dict[int, int]] = defaultdict(dict)
+) -> dict[int, dict[int, dict]]:
+    result: dict[int, dict[int, dict]] = defaultdict(dict)
     for chunk in _chunks(item_ids):
-        for item_id, component_id, component_product_id in db.execute(
+        for row in db.execute(
             select(
                 SalesOrderItemBomComponent.sales_order_item_id,
                 SalesOrderItemBomComponent.id,
                 SalesOrderItemBomComponent.component_product_id,
-            ).where(
+                SalesOrderItemBomComponent.required_piece_quantity,
+                SalesOrderItemBomComponent.snapshot_component_default_cutting_mode,
+                SalesOrderItemBomComponent.snapshot_component_pieces_per_box,
+                Product.is_active.label("component_product_is_active"),
+            )
+            .join(Product, Product.id == SalesOrderItemBomComponent.component_product_id)
+            .where(
                 SalesOrderItemBomComponent.sales_order_item_id.in_(chunk),
                 SalesOrderItemBomComponent.is_required.is_(True),
             )
-        ):
-            result[int(item_id)][int(component_id)] = int(component_product_id)
+        ).mappings():
+            result[int(row["sales_order_item_id"])][int(row["id"])] = dict(row)
     return result
 
 
@@ -515,6 +684,7 @@ def _product_rows(db: Session, product_ids: Sequence[int]) -> dict[int, dict]:
         for row in db.execute(
             select(
                 Product.id,
+                Product.is_active,
                 Product.pieces_per_box,
                 Product.printing_plate_mode,
                 Product.printing_plate_1_id,
@@ -813,6 +983,7 @@ def audit_incomplete_order_chains(
             row
             for row in rows
             if int(row["id"]) not in reversed_receipt_purpose_ids
+            and str(row["status"] or "") == "posted"
         ]
     receipt_lots = _lots_by_id(
         db,
@@ -868,6 +1039,7 @@ def audit_incomplete_order_chains(
                 )
 
     findings: list[ChainFinding] = []
+    repair_previews: list[dict] = []
     scanned_items = 0
     workstation_eligible_tasks = 0
     workstation_station_counts: Counter[str] = Counter()
@@ -917,12 +1089,32 @@ def audit_incomplete_order_chains(
             item_receipts = receipts.get(item_id, [])
             has_receipt = bool(item_receipts)
             item_tasks = tasks.get(item_id, {})
-            component_products = required_components.get(item_id, {})
-            components = set(component_products)
+            component_facts = required_components.get(item_id, {})
+            component_products = {
+                component_id: int(row["component_product_id"])
+                for component_id, row in component_facts.items()
+            }
+            components = set(component_facts)
             external_components = required_external_components.get(item_id, set())
             product = products.get(int(item.product_id))
             item_formal_sources = formal_purpose_sources.get(item_id, [])
             item_purpose_snapshots = purchase_purpose_snapshots.get(item_id, [])
+            item_all_purpose_allocations = [
+                allocation
+                for receipt in item_receipts
+                for allocation in receipt_purpose_rows.get(int(receipt["id"]), [])
+            ]
+            item_active_purpose_allocations = [
+                allocation
+                for receipt in item_receipts
+                for allocation in active_receipt_purpose_rows.get(
+                    int(receipt["id"]), []
+                )
+            ]
+            effective_order_purpose_sheets = sum(
+                max(int(row["receipt_order_purpose_sheet_qty"] or 0), 0)
+                for row in item_active_purpose_allocations
+            )
             snapshots_by_formal: dict[tuple[str, int], list[dict]] = defaultdict(list)
             for snapshot in item_purpose_snapshots:
                 snapshots_by_formal[
@@ -1065,6 +1257,11 @@ def audit_incomplete_order_chains(
                         f"component:{component_id}"
                         for component_id in sorted(components - set(item_tasks))
                     ]
+                    if (
+                        effective_order_purpose_sheets > 0
+                        and None not in item_tasks
+                    ):
+                        missing_task_keys.append("order_main")
                 elif (
                     not external_components
                     and not bool(
@@ -1073,7 +1270,11 @@ def audit_incomplete_order_chains(
                     and None not in item_tasks
                 ):
                     missing_task_keys = ["regular"]
-            if has_receipt and missing_task_keys:
+            expects_production_task = has_receipt and (
+                not item_all_purpose_allocations
+                or effective_order_purpose_sheets > 0
+            )
+            if expects_production_task and missing_task_keys:
                 findings.append(
                     _finding(
                         code="P015_INCOMING_WITHOUT_PRODUCTION_TASK",
@@ -1088,6 +1289,19 @@ def audit_incomplete_order_chains(
                             "supply_mode": item.supply_mode_snapshot,
                         },
                         focus_terms=normalized_focus,
+                    )
+                )
+                repair_previews.append(
+                    _missing_task_repair_preview(
+                        order=order,
+                        item=item,
+                        product=product,
+                        missing_task_keys=missing_task_keys,
+                        receipt_rows=item_receipts,
+                        active_purpose_allocations=item_active_purpose_allocations,
+                        completion_rows=completions.get(item_id, []),
+                        component_facts=component_facts,
+                        key=anonymization_key,
                     )
                 )
             if has_receipt and any(
@@ -1126,13 +1340,6 @@ def audit_incomplete_order_chains(
                         focus_terms=normalized_focus,
                     )
                 )
-            item_active_purpose_allocations = [
-                allocation
-                for receipt in item_receipts
-                for allocation in active_receipt_purpose_rows.get(
-                    int(receipt["id"]), []
-                )
-            ]
             has_frozen_formal_receipt = False
             for receipt in item_receipts:
                 receipt_formals = []
@@ -2028,6 +2235,16 @@ def audit_incomplete_order_chains(
             row["component_ref"] or "",
         )
     )
+    repair_previews.sort(
+        key=lambda row: (
+            row["status"],
+            row["order_item_ref"],
+            row["proposal_id"],
+        )
+    )
+    repair_preview_status_counts = Counter(
+        str(row["status"]) for row in repair_previews
+    )
     focus_routes = sum(row["focus_match"] is not None for row in workstation_routes)
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
@@ -2077,9 +2294,15 @@ def audit_incomplete_order_chains(
                 "reason": "p0_14_p1_85_p1_86_p1_87_isolated_contracts",
             },
             "current_chain_facts": {"status": "evaluated"},
+            "repair_preview": {
+                "status": "evaluated",
+                "proposal_count": len(repair_previews),
+                "automatic_apply_allowed": False,
+            },
         },
         "finding_code_registry": sorted(FINDING_CODES),
         "workstation_routes": workstation_routes,
+        "repair_previews": repair_previews,
         "summary": {
             "scan_complete": True,
             "finding_count": len(findings),
@@ -2087,6 +2310,9 @@ def audit_incomplete_order_chains(
             "focus_route_count": focus_routes,
             "severity_counts": dict(sorted(severity_counts.items())),
             "code_counts": dict(sorted(code_counts.items())),
+            "repair_preview_status_counts": dict(
+                sorted(repair_preview_status_counts.items())
+            ),
         },
         "findings": [row.to_dict() for row in findings],
     }

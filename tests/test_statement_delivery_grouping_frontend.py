@@ -16,7 +16,7 @@ def test_customer_statement_cycle_field_matches_the_monthly_boundary_contract() 
     assert "statementCycleStartDay < 1 || statementCycleStartDay > 28" in INDEX
 
 
-def test_statement_modal_groups_deliveries_and_submits_delivery_ids() -> None:
+def test_statement_modal_groups_deliveries_and_submits_selected_receipt_items() -> None:
     assert "Array.isArray(data?.deliveries) ? data.deliveries" in INDEX
     assert "statement_month:this.statementForm.statement_month" in INDEX
     assert "送货日期" in INDEX
@@ -26,19 +26,18 @@ def test_statement_modal_groups_deliveries_and_submits_delivery_ids() -> None:
     assert "应收总额" in INDEX
     assert "toggleStatementDeliveryExpanded(row)" in INDEX
     assert "row.items" in INDEX
-    assert "this.statementForm.selected[row.delivery_id] = true" in INDEX
-    assert "delivery_ids:ids" in INDEX
-    assert "statementForm.selected[row.return_receipt_item_id]" not in INDEX
-    assert "return_receipt_item_ids:ids" not in INDEX
+    assert "this.statementForm.selected[item.return_receipt_item_id] = true" in INDEX
+    assert "return_receipt_item_ids:ids" in INDEX
+    assert "statementSelectedSummary" in INDEX
 
 
-def test_statement_delivery_selection_blocks_exception_groups_and_select_all_skips_them() -> None:
+def test_statement_selection_supports_delivery_and_individual_line_toggles() -> None:
     assert ":disabled=" in INDEX
     assert "row.selection_blocked" in INDEX
     assert "row.exception_reason" in INDEX
-    assert "异常历史" in INDEX
     assert "this.pendingStatements.filter(row => !row.selection_blocked)" in INDEX
-    assert "this.statementForm.selected[row.delivery_id]" in INDEX
+    assert "this.statementForm.selected[item.return_receipt_item_id]" in INDEX
+    assert "statementDeliverySelected(row)" in INDEX
 
 
 def test_inline_frontend_script_is_syntactically_valid(tmp_path: Path) -> None:

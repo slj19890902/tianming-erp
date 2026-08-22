@@ -153,6 +153,7 @@ def _receipt_payload(reason: str | None = "压坏拒收 2 个") -> dict:
     return {
         "delivery_id": 1,
         "actual_received_date": "2026-06-14",
+        "reconciliation_month": "2026-06",
         "signed_by": "王经理",
         "items": [
             {
@@ -163,6 +164,227 @@ def _receipt_payload(reason: str | None = "压坏拒收 2 个") -> dict:
             }
         ],
     }
+
+
+def test_p1_89_default_month_is_server_month_and_create_replays_exactly(
+    finance_api_app,
+    monkeypatch,
+) -> None:
+    from app.api import finance as finance_api
+    from app.models.finance import FinanceIdempotencyRecord, ReturnReceipt
+
+    app, session_factory = finance_api_app
+    monkeypatch.setattr(finance_api, "beijing_today", lambda: date(2026, 8, 22))
+    payload = _receipt_payload()
+    payload.pop("reconciliation_month")
+    payload["idempotency_key"] = "p1-89-receipt-default-month"
+    with TestClient(app) as client:
+        _login(client, "finance")
+        month_options = client.get("/api/finance/reconciliation-month-options")
+        created = client.post("/api/finance/return_receipts", json=payload)
+        replay = client.post("/api/finance/return_receipts", json=payload)
+        changed = client.post(
+            "/api/finance/return_receipts",
+            json={**payload, "reconciliation_month": "2026-09"},
+        )
+        _login(client, "admin")
+        other_actor = client.post("/api/finance/return_receipts", json=payload)
+
+    assert month_options.status_code == 200, month_options.text
+    assert month_options.json() == {
+        "previous": "2026-07",
+        "current": "2026-08",
+        "next": "2026-09",
+    }
+    assert created.status_code == 201, created.text
+    assert replay.status_code == 201, replay.text
+    assert replay.json() == created.json()
+    assert created.json()["reconciliation_month"] == "2026-08"
+    assert created.json()["effective_reconciliation_month"] == "2026-08"
+    assert created.json()["reconciliation_month_source"] == "explicit"
+    assert changed.status_code == 409
+    assert changed.json()["detail"]["code"] == "finance_idempotency_conflict"
+    assert other_actor.status_code == 409
+    assert other_actor.json()["detail"]["code"] == "finance_idempotency_conflict"
+    with session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(ReturnReceipt)) == 1
+        assert (
+            session.scalar(
+                select(func.count()).select_from(FinanceIdempotencyRecord)
+            )
+            == 1
+        )
+
+
+def test_p1_89_historical_null_month_keeps_old_delivery_cycle_membership(
+    finance_api_app,
+) -> None:
+    from app.models.finance import ReturnReceipt
+
+    app, session_factory = finance_api_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        created = client.post(
+            "/api/finance/return_receipts",
+            json={
+                **_receipt_payload(),
+                "idempotency_key": "p1-89-historical-null-month",
+            },
+        )
+        assert created.status_code == 201, created.text
+        receipt_id = created.json()["id"]
+        with session_factory() as session:
+            receipt = session.get(ReturnReceipt, receipt_id)
+            receipt.reconciliation_month = None
+            session.commit()
+        loaded = client.get(f"/api/finance/return_receipts/{receipt_id}")
+        june = client.get(
+            "/api/finance/pending_statements",
+            params={"customer_id": 1, "statement_month": "2026-06"},
+        )
+        july = client.get(
+            "/api/finance/pending_statements",
+            params={"customer_id": 1, "statement_month": "2026-07"},
+        )
+
+    assert loaded.status_code == 200, loaded.text
+    assert loaded.json()["reconciliation_month"] is None
+    assert loaded.json()["effective_reconciliation_month"] == "2026-06"
+    assert loaded.json()["reconciliation_month_source"] == "historical_rule"
+    assert june.json()["deliveries"][0]["delivery_id"] == 1
+    assert july.json()["deliveries"] == []
+
+
+def test_p1_89_month_adjustment_moves_only_candidate_membership_and_audits(
+    finance_api_app,
+) -> None:
+    from app.models.audit import OperationLog
+    from app.models.finance import ReturnReceipt, ReturnReceiptItem
+    from app.models.order import OrderItem
+
+    app, session_factory = finance_api_app
+    payload = _receipt_payload()
+    payload["reconciliation_month"] = "2026-08"
+    payload["idempotency_key"] = "p1-89-receipt-before-adjust"
+    with TestClient(app) as client:
+        _login(client, "finance")
+        created = client.post("/api/finance/return_receipts", json=payload)
+        assert created.status_code == 201, created.text
+        before_august = client.get(
+            "/api/finance/pending_statements",
+            params={"customer_id": 1, "statement_month": "2026-08"},
+        )
+        adjusted = client.put(
+            f"/api/finance/return_receipts/{created.json()['id']}/reconciliation-month",
+            json={
+                "reconciliation_month": "2026-09",
+                "expected_version": created.json()["version"],
+                "idempotency_key": "p1-89-adjust-to-september",
+            },
+        )
+        replay = client.put(
+            f"/api/finance/return_receipts/{created.json()['id']}/reconciliation-month",
+            json={
+                "reconciliation_month": "2026-09",
+                "expected_version": created.json()["version"],
+                "idempotency_key": "p1-89-adjust-to-september",
+            },
+        )
+        after_august = client.get(
+            "/api/finance/pending_statements",
+            params={"customer_id": 1, "statement_month": "2026-08"},
+        )
+        after_september = client.get(
+            "/api/finance/pending_statements",
+            params={"customer_id": 1, "statement_month": "2026-09"},
+        )
+
+    assert before_august.json()["deliveries"][0]["delivery_id"] == 1
+    assert adjusted.status_code == 200, adjusted.text
+    assert replay.json() == adjusted.json()
+    assert adjusted.json()["reconciliation_month"] == "2026-09"
+    assert adjusted.json()["actual_received_date"] == "2026-06-14"
+    assert adjusted.json()["version"] == 2
+    assert after_august.json()["deliveries"] == []
+    assert after_september.json()["deliveries"][0]["delivery_id"] == 1
+    with session_factory() as session:
+        receipt = session.get(ReturnReceipt, created.json()["id"])
+        item = session.scalar(
+            select(ReturnReceiptItem).where(
+                ReturnReceiptItem.return_receipt_id == receipt.id
+            )
+        )
+        assert receipt.actual_received_date == date(2026, 6, 14)
+        assert item.actual_received_quantity == 78
+        assert session.get(OrderItem, 1).delivered_quantity == 78
+        audit = session.scalar(
+            select(OperationLog)
+            .where(OperationLog.action == "UPDATE_RETURN_RECONCILIATION_MONTH")
+            .order_by(OperationLog.id.desc())
+        )
+        assert audit is not None
+        assert '"reconciliation_month": "2026-08"' in audit.details
+        assert '"reconciliation_month": "2026-09"' in audit.details
+
+
+def test_p1_89_draft_statement_locks_direct_month_adjustment(
+    finance_api_app,
+) -> None:
+    app, _ = finance_api_app
+    payload = _receipt_payload()
+    payload["idempotency_key"] = "p1-89-receipt-before-statement"
+    with TestClient(app) as client:
+        _login(client, "finance")
+        created = client.post("/api/finance/return_receipts", json=payload)
+        receipt_item_id = created.json()["items"][0]["id"]
+        statement = client.post(
+            "/api/finance/statements",
+            json={
+                "customer_id": 1,
+                "statement_month": "2026-06",
+                "return_receipt_item_ids": [receipt_item_id],
+                "idempotency_key": "p1-89-statement-create",
+            },
+        )
+        replay = client.post(
+            "/api/finance/statements",
+            json={
+                "customer_id": 1,
+                "statement_month": "2026-06",
+                "return_receipt_item_ids": [receipt_item_id],
+                "idempotency_key": "p1-89-statement-create",
+            },
+        )
+        blocked = client.put(
+            f"/api/finance/return_receipts/{created.json()['id']}/reconciliation-month",
+            json={
+                "reconciliation_month": "2026-07",
+                "expected_version": created.json()["version"],
+                "idempotency_key": "p1-89-adjust-after-draft",
+            },
+        )
+
+    assert statement.status_code == 201, statement.text
+    assert replay.json() == statement.json()
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"]["code"] == "reconciliation_month_locked"
+    assert "对账草稿" in blocked.json()["detail"]["message"]
+
+
+def test_p1_89_period_adjustment_requires_dedicated_permission(
+    finance_api_app,
+) -> None:
+    app, _ = finance_api_app
+    with TestClient(app) as client:
+        _login(client, "sales")
+        response = client.post(
+            "/api/finance/return_receipts",
+            json={
+                **_receipt_payload(),
+                "idempotency_key": "p1-89-sales-denied",
+            },
+        )
+    assert response.status_code == 403
 
 
 def test_short_receipt_allows_empty_optional_reason(finance_api_app) -> None:
@@ -331,6 +553,7 @@ def test_old_receipt_cannot_change_after_released_balance_is_dispatched(
             json={
                 "delivery_id": 1,
                 "actual_received_date": "2026-06-14",
+                "reconciliation_month": "2026-06",
                 "signed_by": "王经理",
                 "items": [
                     {
@@ -451,6 +674,7 @@ def test_precreated_delivery_dispatched_after_receipt_blocks_old_receipt_change(
             json={
                 "delivery_id": source_delivery_id,
                 "actual_received_date": "2026-06-14",
+                "reconciliation_month": "2026-06",
                 "items": [
                     {
                         "delivery_item_id": source_item_id,
@@ -494,6 +718,7 @@ def test_accept_over_receipt_can_be_cancelled_after_unrelated_later_dispatch(
             json={
                 "delivery_id": 1,
                 "actual_received_date": "2026-06-14",
+                "reconciliation_month": "2026-06",
                 "items": [
                     {
                         "delivery_item_id": 1,
@@ -550,6 +775,7 @@ def test_short_receipt_can_close_or_continue_and_over_receipt_is_allowed(
             json={
                 "delivery_id": 1,
                 "actual_received_date": "2026-06-14",
+                "reconciliation_month": "2026-06",
                 "signed_by": "王经理",
                 "items": [
                     {
@@ -636,6 +862,7 @@ def test_receipt_20_of_100_reopens_remaining_80_for_delivery(
             json={
                 "delivery_id": 1,
                 "actual_received_date": "2026-06-14",
+                "reconciliation_month": "2026-06",
                 "signed_by": "王经理",
                 "items": [
                     {
@@ -824,6 +1051,7 @@ def test_cross_customer_resource_ids_are_forbidden(finance_api_app) -> None:
             json={
                 "delivery_id": delivery_id,
                 "actual_received_date": "2026-06-14",
+                "reconciliation_month": "2026-06",
                 "items": [
                     {
                         "delivery_item_id": delivery_item_id,
@@ -989,6 +1217,7 @@ def test_statement_customer_options_cover_eligible_customers(finance_api_app) ->
             json={
                 "delivery_id": 2,
                 "actual_received_date": "2026-06-15",
+                "reconciliation_month": "2026-06",
                 "signed_by": "王经理",
                 "items": [
                     {
@@ -1092,10 +1321,13 @@ def test_pending_statement_and_statement_snapshot_amounts(
     assert Decimal(str(statement.json()["total_receivable"])) == Decimal("280.80")
     assert Decimal(str(statement.json()["total_gross_profit"])) == Decimal("70.20")
     assert pending_after.json()["items"] == []
-    assert duplicate.status_code in {400, 409}
+    assert duplicate.status_code == 201, duplicate.text
+    assert duplicate.json()["id"] == statement.json()["id"]
     with session_factory() as session:
         master = session.scalar(select(Statement))
         line = session.scalar(select(StatementItem))
+        assert len(session.scalars(select(Statement)).all()) == 1
+        assert len(session.scalars(select(StatementItem)).all()) == 1
     assert master.total_receivable == Decimal("280.80")
     assert line.unit_price_snapshot == Decimal("3.6000")
     assert line.unit_cost_snapshot == Decimal("2.7000")
@@ -1771,6 +2003,7 @@ def _two_line_receipt_payload(second_delivery_item_id: int) -> dict:
     return {
         "delivery_id": 1,
         "actual_received_date": "2026-06-14",
+        "reconciliation_month": "2026-06",
         "signed_by": "王经理",
         "items": [
             {
@@ -1787,7 +2020,7 @@ def _two_line_receipt_payload(second_delivery_item_id: int) -> dict:
     }
 
 
-def test_statement_selects_whole_delivery_and_expands_all_lines(
+def test_statement_can_select_individual_receipt_lines(
     finance_api_app,
 ) -> None:
     from app.models.finance import StatementItem
@@ -1818,14 +2051,6 @@ def test_statement_selects_whole_delivery_and_expands_all_lines(
                 "return_receipt_item_ids": [receipt_item_ids[0]],
             },
         )
-        statement = client.post(
-            "/api/finance/statements",
-            json={
-                "customer_id": 1,
-                "statement_month": "2026-06",
-                "delivery_ids": [1],
-            },
-        )
 
     assert pending.status_code == 200, pending.text
     delivery = pending.json()["deliveries"][0]
@@ -1834,11 +2059,9 @@ def test_statement_selects_whole_delivery_and_expands_all_lines(
     assert delivery["selection_blocked"] is False
     assert len(delivery["items"]) == 2
     assert customers.json()["items"][0]["pending_count"] == 1
-    assert partial.status_code == 400
-    assert "整单对账" in partial.json()["detail"]
-    assert statement.status_code == 201, statement.text
+    assert partial.status_code == 201, partial.text
     with session_factory() as session:
-        assert session.scalar(select(func.count()).select_from(StatementItem)) == 2
+        assert session.scalar(select(func.count()).select_from(StatementItem)) == 1
 
 
 @pytest.mark.parametrize(
@@ -1862,6 +2085,7 @@ def test_statement_period_uses_delivery_date_and_customer_cutoff(
         session.commit()
     payload = _receipt_payload(None)
     payload["actual_received_date"] = "2026-07-25"
+    payload["reconciliation_month"] = included_month
     with TestClient(app) as client:
         _login(client, "finance")
         receipt = client.post("/api/finance/return_receipts", json=payload)
@@ -1879,7 +2103,7 @@ def test_statement_period_uses_delivery_date_and_customer_cutoff(
     assert excluded.json()["deliveries"] == []
 
 
-def test_partially_reconciled_delivery_is_returned_as_blocked_exception(
+def test_partially_reconciled_delivery_keeps_remaining_line_selectable(
     finance_api_app,
 ) -> None:
     from app.models.finance import Statement, StatementItem
@@ -1922,21 +2146,22 @@ def test_partially_reconciled_delivery_is_returned_as_blocked_exception(
             "/api/finance/pending_statements",
             params={"customer_id": 1, "statement_month": "2026-06"},
         )
+        remaining_item_id = receipt.json()["items"][1]["id"]
         create = client.post(
             "/api/finance/statements",
             json={
                 "customer_id": 1,
                 "statement_month": "2026-06",
-                "delivery_ids": [1],
+                "return_receipt_item_ids": [remaining_item_id],
             },
         )
 
-    blocked = pending.json()["deliveries"][0]
-    assert blocked["selection_blocked"] is True
-    assert blocked["pending_item_count"] == 1
-    assert "先处理原对账单" in blocked["exception_reason"]
-    assert pending.json()["items"] == []
-    assert create.status_code == 409
+    remaining = pending.json()["deliveries"][0]
+    assert remaining["selection_blocked"] is False
+    assert remaining["pending_item_count"] == 1
+    assert remaining["exception_reason"] is None
+    assert [row["return_receipt_item_id"] for row in pending.json()["items"]] == [remaining_item_id]
+    assert create.status_code == 201, create.text
 
 
 def test_monthly_yearly_report_uses_same_customer_month_totals_and_aging(

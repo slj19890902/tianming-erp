@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Iterable, Sequence
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.delivery import Delivery, DeliveryItem
@@ -18,6 +18,15 @@ from app.models.order_external_packaging import SalesOrderItemExternalComponent
 from app.models.product import Product
 from app.models.product_bom import SalesOrderItemBomComponent
 from app.models.production import ProductionCompletion, ProductionTask
+from app.models.purchase_receipt import (
+    IncomingReceiptPurposeAllocation,
+    IncomingReceiptPurposeReversal,
+)
+from app.models.requisition import RequisitionItem
+from app.models.supplier_requisition_order import (
+    PurchasePurposeSourceSnapshot,
+    SupplierRequisitionOrderItem,
+)
 from app.models.warehouse_inventory import (
     DeliveryInventoryAllocation,
     FinishedGoodsInventoryDetail,
@@ -36,11 +45,10 @@ from app.services.production_station_routing import (
 )
 
 
-REPORT_SCHEMA_VERSION = "p0-15-v1"
+REPORT_SCHEMA_VERSION = "p0-15-v2"
 TERMINAL_ORDER_STATUSES = frozenset(
     {"completed", "archived", "closed", "dead", "cancelled"}
 )
-PURPOSE_ALLOCATION_CAPABILITY = "not_available_before_p1_80"
 FINDING_CODES = frozenset(
     {
         "P015_INCOMING_WITHOUT_PRODUCTION_TASK",
@@ -59,6 +67,10 @@ FINDING_CODES = frozenset(
         "P015_COMPLETION_INPUT_EXCEEDS_EFFECTIVE_RECEIPT",
         "P015_RECEIVED_AWAITING_MANUAL_PRODUCTION",
         "P015_ORDER_STATUS_SNAPSHOT_DIVERGENCE",
+        "P015_PURCHASE_PURPOSE_ALLOCATION_UNBALANCED",
+        "P015_RECEIPT_PURPOSE_ALLOCATION_UNBALANCED",
+        "P015_RECEIPT_AUTO_FINISHED_MISMATCH",
+        "P015_RESERVE_PURPOSE_GENERATED_ORDER_FINISHED",
     }
 )
 
@@ -283,6 +295,7 @@ def _completion_rows(db: Session, item_ids: Sequence[int]) -> dict[int, list[dic
                 ProductionCompletion.actual_output_quantity,
                 ProductionCompletion.material_input_quantity,
                 ProductionCompletion.completion_type,
+                ProductionCompletion.origin,
                 ProductionCompletion.stock_quantity,
                 ProductionCompletion.direct_delivery_quantity,
             ).where(
@@ -426,6 +439,7 @@ def _movement_by_id(db: Session, movement_ids: Sequence[int]) -> dict[int, dict]
         for row in db.execute(
             select(
                 InventoryMovement.id,
+                InventoryMovement.inventory_lot_id,
                 InventoryMovement.movement_type,
                 InventoryMovement.quantity,
                 InventoryMovement.related_delivery_id,
@@ -519,6 +533,216 @@ def _product_rows(db: Session, product_ids: Sequence[int]) -> dict[int, dict]:
     return result
 
 
+def _formal_purpose_rows(
+    db: Session,
+    item_ids: Sequence[int],
+) -> tuple[dict[int, list[dict]], dict[tuple[str, int], dict]]:
+    """Load every formal paperboard source for the unfinished item set."""
+
+    by_item: dict[int, list[dict]] = defaultdict(list)
+    by_key: dict[tuple[str, int], dict] = {}
+    for chunk in _chunks(item_ids):
+        supplier_rows = db.execute(
+            select(
+                SupplierRequisitionOrderItem.id,
+                SupplierRequisitionOrderItem.order_item_id,
+                SupplierRequisitionOrderItem.requisition_qty,
+                SupplierRequisitionOrderItem.purpose_contract_status,
+                SupplierRequisitionOrderItem.status,
+            ).where(SupplierRequisitionOrderItem.order_item_id.in_(chunk))
+        ).mappings()
+        for row in supplier_rows:
+            record = {
+                **dict(row),
+                "formal_kind": "supplier_item",
+                "formal_item_id": int(row["id"]),
+            }
+            item_id = int(row["order_item_id"])
+            by_item[item_id].append(record)
+            by_key[("supplier_item", int(row["id"]))] = record
+
+        requisition_rows = db.execute(
+            select(
+                RequisitionItem.id,
+                RequisitionItem.order_item_id,
+                RequisitionItem.requisition_qty,
+                RequisitionItem.purpose_contract_status,
+                RequisitionItem.status,
+            ).where(RequisitionItem.order_item_id.in_(chunk))
+        ).mappings()
+        for row in requisition_rows:
+            record = {
+                **dict(row),
+                "formal_kind": "requisition_item",
+                "formal_item_id": int(row["id"]),
+            }
+            item_id = int(row["order_item_id"])
+            by_item[item_id].append(record)
+            by_key[("requisition_item", int(row["id"]))] = record
+    return by_item, by_key
+
+
+def _formal_source_is_active(row: dict) -> bool:
+    status = str(row.get("status") or "").strip().casefold()
+    if row.get("formal_kind") == "supplier_item":
+        return status == "active"
+    return status not in {"作废", "void", "voided", "cancelled", "canceled"}
+
+
+def _purchase_purpose_rows(
+    db: Session,
+    formal_by_key: dict[tuple[str, int], dict],
+) -> tuple[dict[int, list[dict]], dict[int, dict]]:
+    """Load immutable P1-80 snapshots without per-item queries."""
+
+    supplier_ids = sorted(
+        formal_id
+        for (kind, formal_id) in formal_by_key
+        if kind == "supplier_item"
+    )
+    requisition_ids = sorted(
+        formal_id
+        for (kind, formal_id) in formal_by_key
+        if kind == "requisition_item"
+    )
+    snapshots_by_item: dict[int, list[dict]] = defaultdict(list)
+    snapshots_by_id: dict[int, dict] = {}
+    all_ids = [("supplier_item", value) for value in supplier_ids] + [
+        ("requisition_item", value) for value in requisition_ids
+    ]
+    for offset in range(0, len(all_ids), 800):
+        batch = all_ids[offset : offset + 800]
+        batch_supplier = [value for kind, value in batch if kind == "supplier_item"]
+        batch_requisition = [
+            value for kind, value in batch if kind == "requisition_item"
+        ]
+        filters = []
+        if batch_supplier:
+            filters.append(
+                PurchasePurposeSourceSnapshot.supplier_requisition_order_item_id.in_(
+                    batch_supplier
+                )
+            )
+        if batch_requisition:
+            filters.append(
+                PurchasePurposeSourceSnapshot.material_requisition_item_id.in_(
+                    batch_requisition
+                )
+            )
+        if not filters:
+            continue
+        rows = db.execute(
+            select(
+                PurchasePurposeSourceSnapshot.id,
+                PurchasePurposeSourceSnapshot.supplier_requisition_order_item_id,
+                PurchasePurposeSourceSnapshot.material_requisition_item_id,
+                PurchasePurposeSourceSnapshot.source_kind,
+                PurchasePurposeSourceSnapshot.source_key,
+                PurchasePurposeSourceSnapshot.customer_id,
+                PurchasePurposeSourceSnapshot.component_type,
+                PurchasePurposeSourceSnapshot.purchase_sheet_qty,
+                PurchasePurposeSourceSnapshot.order_purpose_sheet_qty,
+                PurchasePurposeSourceSnapshot.reserve_purpose_sheet_qty,
+                PurchasePurposeSourceSnapshot.group_authoritative_order_sheet_qty_snapshot,
+                PurchasePurposeSourceSnapshot.snapshot_version,
+            ).where(or_(*filters))
+        ).mappings()
+        for row in rows:
+            supplier_id = row["supplier_requisition_order_item_id"]
+            requisition_id = row["material_requisition_item_id"]
+            formal_key = (
+                ("supplier_item", int(supplier_id))
+                if supplier_id is not None
+                else ("requisition_item", int(requisition_id))
+            )
+            formal = formal_by_key.get(formal_key)
+            if formal is None:
+                continue
+            record = {
+                **dict(row),
+                "formal_kind": formal_key[0],
+                "formal_item_id": formal_key[1],
+                "order_item_id": int(formal["order_item_id"]),
+                "formal_requisition_qty": int(formal["requisition_qty"] or 0),
+                "formal_purpose_contract_status": str(
+                    formal["purpose_contract_status"] or "legacy_unset"
+                ),
+                "formal_status": str(formal["status"] or ""),
+            }
+            snapshots_by_item[int(formal["order_item_id"])].append(record)
+            snapshots_by_id[int(row["id"])] = record
+    return snapshots_by_item, snapshots_by_id
+
+
+def _receipt_purpose_rows(
+    db: Session,
+    order_item_ids: Sequence[int],
+) -> tuple[dict[int, list[dict]], set[int]]:
+    by_receipt_item: dict[int, list[dict]] = defaultdict(list)
+    allocation_ids: list[int] = []
+    for chunk in _chunks(sorted(set(order_item_ids))):
+        rows = db.execute(
+            select(
+                IncomingReceiptPurposeAllocation.id,
+                IncomingReceiptPurposeAllocation.incoming_receipt_item_id,
+                IncomingReceiptPurposeAllocation.purpose_contract_status_snapshot,
+                IncomingReceiptPurposeAllocation.purchase_purpose_source_snapshot_id,
+                IncomingReceiptPurposeAllocation.purchase_receipt_fact_id,
+                IncomingReceiptPurposeAllocation.supplier_requisition_order_item_id,
+                IncomingReceiptPurposeAllocation.material_requisition_item_id,
+                IncomingReceiptPurposeAllocation.source_kind,
+                IncomingReceiptPurposeAllocation.source_key,
+                IncomingReceiptPurposeAllocation.customer_id,
+                IncomingReceiptPurposeAllocation.component_type,
+                IncomingReceiptPurposeAllocation.order_purpose_plan_sheet_qty_snapshot,
+                IncomingReceiptPurposeAllocation.reserve_purpose_plan_sheet_qty_snapshot,
+                IncomingReceiptPurposeAllocation.receipt_total_sheet_qty,
+                IncomingReceiptPurposeAllocation.receipt_order_purpose_sheet_qty,
+                IncomingReceiptPurposeAllocation.receipt_reserve_purpose_sheet_qty,
+                IncomingReceiptPurposeAllocation.cumulative_total_sheet_qty_before,
+                IncomingReceiptPurposeAllocation.cumulative_total_sheet_qty_after,
+                IncomingReceiptPurposeAllocation.cumulative_order_purpose_sheet_qty_before,
+                IncomingReceiptPurposeAllocation.cumulative_order_purpose_sheet_qty_after,
+                IncomingReceiptPurposeAllocation.cumulative_reserve_purpose_sheet_qty_before,
+                IncomingReceiptPurposeAllocation.cumulative_reserve_purpose_sheet_qty_after,
+                IncomingReceiptPurposeAllocation.finished_output_qty_before,
+                IncomingReceiptPurposeAllocation.finished_output_qty_after,
+                IncomingReceiptPurposeAllocation.finished_output_qty_delta,
+                IncomingReceiptPurposeAllocation.production_completion_id,
+                IncomingReceiptPurposeAllocation.finished_inventory_lot_id,
+                IncomingReceiptPurposeAllocation.semi_finished_inventory_lot_id,
+                IncomingReceiptPurposeAllocation.initial_semi_inventory_movement_id,
+                IncomingReceiptPurposeAllocation.status,
+            )
+            .join(
+                IncomingReceiptItem,
+                IncomingReceiptItem.id
+                == IncomingReceiptPurposeAllocation.incoming_receipt_item_id,
+            )
+            .where(IncomingReceiptItem.order_item_id.in_(chunk))
+        ).mappings()
+        for row in rows:
+            record = dict(row)
+            allocation_id = int(row["id"])
+            allocation_ids.append(allocation_id)
+            by_receipt_item[int(row["incoming_receipt_item_id"])].append(record)
+    reversed_ids: set[int] = set()
+    for chunk in _chunks(sorted(set(allocation_ids))):
+        reversed_ids.update(
+            int(value)
+            for value in db.scalars(
+                select(
+                    IncomingReceiptPurposeReversal.incoming_receipt_purpose_allocation_id
+                ).where(
+                    IncomingReceiptPurposeReversal.incoming_receipt_purpose_allocation_id.in_(
+                        chunk
+                    )
+                )
+            ).all()
+        )
+    return by_receipt_item, reversed_ids
+
+
 def audit_incomplete_order_chains(
     db: Session,
     *,
@@ -574,6 +798,22 @@ def audit_incomplete_order_chains(
         db,
         [int(item.product_id) for order in orders for item in order.items],
     )
+    formal_purpose_sources, formal_purpose_by_key = _formal_purpose_rows(
+        db, item_ids
+    )
+    purchase_purpose_snapshots, purchase_purpose_by_id = _purchase_purpose_rows(
+        db, formal_purpose_by_key
+    )
+    receipt_purpose_rows, reversed_receipt_purpose_ids = _receipt_purpose_rows(
+        db, item_ids
+    )
+    active_receipt_purpose_rows: dict[int, list[dict]] = defaultdict(list)
+    for receipt_item_id, rows in receipt_purpose_rows.items():
+        active_receipt_purpose_rows[receipt_item_id] = [
+            row
+            for row in rows
+            if int(row["id"]) not in reversed_receipt_purpose_ids
+        ]
     receipt_lots = _lots_by_id(
         db,
         [
@@ -583,6 +823,33 @@ def audit_incomplete_order_chains(
             if row["received_inventory_lot_id"] is not None
         ],
     )
+    purpose_inventory_lots = _lots_by_id(
+        db,
+        [
+            int(lot_id)
+            for rows in active_receipt_purpose_rows.values()
+            for row in rows
+            for lot_id in (
+                row["finished_inventory_lot_id"],
+                row["semi_finished_inventory_lot_id"],
+            )
+            if lot_id is not None
+        ],
+    )
+    purpose_initial_movements = _movement_by_id(
+        db,
+        [
+            int(row["initial_semi_inventory_movement_id"])
+            for rows in active_receipt_purpose_rows.values()
+            for row in rows
+            if row["initial_semi_inventory_movement_id"] is not None
+        ],
+    )
+    completions_by_id = {
+        int(row["id"]): row
+        for rows in completions.values()
+        for row in rows
+    }
     allocation_movement_ids = [
         int(row["consume_movement_id"])
         for rows in allocations.values()
@@ -607,6 +874,20 @@ def audit_incomplete_order_chains(
     workstation_dual_route_tasks = 0
     workstation_unrouted_tasks = 0
     workstation_routes: list[dict] = []
+    active_formal_purpose_source_count = sum(
+        _formal_source_is_active(row)
+        for rows in formal_purpose_sources.values()
+        for row in rows
+    )
+    purchase_purpose_snapshot_count = sum(
+        len(rows) for rows in purchase_purpose_snapshots.values()
+    )
+    active_receipt_purpose_allocation_count = sum(
+        len(rows) for rows in active_receipt_purpose_rows.values()
+    )
+    reversed_receipt_purpose_allocation_count = len(
+        reversed_receipt_purpose_ids
+    )
     for order in orders:
         projection = projections[int(order.id)]
         if (
@@ -640,6 +921,88 @@ def audit_incomplete_order_chains(
             components = set(component_products)
             external_components = required_external_components.get(item_id, set())
             product = products.get(int(item.product_id))
+            item_formal_sources = formal_purpose_sources.get(item_id, [])
+            item_purpose_snapshots = purchase_purpose_snapshots.get(item_id, [])
+            snapshots_by_formal: dict[tuple[str, int], list[dict]] = defaultdict(list)
+            for snapshot in item_purpose_snapshots:
+                snapshots_by_formal[
+                    (snapshot["formal_kind"], int(snapshot["formal_item_id"]))
+                ].append(snapshot)
+            for formal in item_formal_sources:
+                if not _formal_source_is_active(formal):
+                    continue
+                formal_key = (
+                    str(formal["formal_kind"]),
+                    int(formal["formal_item_id"]),
+                )
+                linked_snapshots = snapshots_by_formal.get(formal_key, [])
+                marker = str(
+                    formal.get("purpose_contract_status") or "legacy_unset"
+                )
+                marker_reasons: list[str] = []
+                if marker == "frozen" and len(linked_snapshots) != 1:
+                    marker_reasons.append("frozen_source_snapshot_count_mismatch")
+                if marker == "legacy_unset" and linked_snapshots:
+                    marker_reasons.append("legacy_source_has_frozen_snapshot")
+                if marker_reasons:
+                    findings.append(
+                        _finding(
+                            code="P015_PURCHASE_PURPOSE_ALLOCATION_UNBALANCED",
+                            severity="error",
+                            order=order,
+                            item=item,
+                            key=anonymization_key,
+                            summary="正式纸板来源的采购用途标记与不可变快照不一致。",
+                            evidence={
+                                "formal_kind": formal_key[0],
+                                "formal_item_id": formal_key[1],
+                                "purpose_contract_status": marker,
+                                "snapshot_count": len(linked_snapshots),
+                                "invalid_reasons": marker_reasons,
+                            },
+                            focus_terms=normalized_focus,
+                        )
+                    )
+            for snapshot in item_purpose_snapshots:
+                purchase_qty = int(snapshot["purchase_sheet_qty"] or 0)
+                order_qty = int(snapshot["order_purpose_sheet_qty"] or 0)
+                reserve_qty = int(snapshot["reserve_purpose_sheet_qty"] or 0)
+                authoritative_qty = int(
+                    snapshot["group_authoritative_order_sheet_qty_snapshot"] or 0
+                )
+                invalid_reasons: list[str] = []
+                if order_qty + reserve_qty != purchase_qty:
+                    invalid_reasons.append("purpose_sum_mismatch")
+                if order_qty > authoritative_qty:
+                    invalid_reasons.append("order_purpose_exceeds_authority")
+                if purchase_qty != int(snapshot["formal_requisition_qty"] or 0):
+                    invalid_reasons.append("formal_purchase_quantity_mismatch")
+                if str(snapshot["formal_purpose_contract_status"]) != "frozen":
+                    invalid_reasons.append("formal_source_not_frozen")
+                if int(snapshot["customer_id"] or 0) != int(order.customer_id):
+                    invalid_reasons.append("customer_scope_mismatch")
+                if invalid_reasons:
+                    findings.append(
+                        _finding(
+                            code="P015_PURCHASE_PURPOSE_ALLOCATION_UNBALANCED",
+                            severity="error",
+                            order=order,
+                            item=item,
+                            key=anonymization_key,
+                            summary="采购总张、订单用途与客户片料备库用途不守恒。",
+                            evidence={
+                                "purpose_snapshot_id": int(snapshot["id"]),
+                                "formal_kind": snapshot["formal_kind"],
+                                "formal_item_id": int(snapshot["formal_item_id"]),
+                                "purchase_sheet_qty": purchase_qty,
+                                "order_purpose_sheet_qty": order_qty,
+                                "reserve_purpose_sheet_qty": reserve_qty,
+                                "authoritative_order_sheet_qty": authoritative_qty,
+                                "invalid_reasons": invalid_reasons,
+                            },
+                            focus_terms=normalized_focus,
+                        )
+                    )
             for component_id, task_row in item_tasks.items():
                 if str(task_row["status"]) != "pending":
                     continue
@@ -763,7 +1126,366 @@ def audit_incomplete_order_chains(
                         focus_terms=normalized_focus,
                     )
                 )
-            if has_receipt and not completions.get(item_id) and not missing_task_keys:
+            item_active_purpose_allocations = [
+                allocation
+                for receipt in item_receipts
+                for allocation in active_receipt_purpose_rows.get(
+                    int(receipt["id"]), []
+                )
+            ]
+            has_frozen_formal_receipt = False
+            for receipt in item_receipts:
+                receipt_formals = []
+                if receipt["supplier_order_item_id"] is not None:
+                    formal = formal_purpose_by_key.get(
+                        ("supplier_item", int(receipt["supplier_order_item_id"]))
+                    )
+                    if formal is not None:
+                        receipt_formals.append(formal)
+                if receipt["requisition_item_id"] is not None:
+                    formal = formal_purpose_by_key.get(
+                        ("requisition_item", int(receipt["requisition_item_id"]))
+                    )
+                    if formal is not None:
+                        receipt_formals.append(formal)
+                frozen_receipt_source = any(
+                    str(row.get("purpose_contract_status") or "legacy_unset")
+                    == "frozen"
+                    for row in receipt_formals
+                )
+                has_frozen_formal_receipt = (
+                    has_frozen_formal_receipt or frozen_receipt_source
+                )
+                active_rows = active_receipt_purpose_rows.get(int(receipt["id"]), [])
+                allocation_contract_invalid = (
+                    frozen_receipt_source and len(active_rows) != 1
+                ) or (
+                    not frozen_receipt_source
+                    and any(
+                        str(row["purpose_contract_status_snapshot"]) == "frozen"
+                        for row in active_rows
+                    )
+                )
+                if allocation_contract_invalid:
+                    findings.append(
+                        _finding(
+                            code="P015_RECEIPT_PURPOSE_ALLOCATION_UNBALANCED",
+                            severity="error",
+                            order=order,
+                            item=item,
+                            key=anonymization_key,
+                            summary="正式收料来源与本次用途分流事实不一致。",
+                            evidence={
+                                "receipt_item_id": int(receipt["id"]),
+                                "frozen_formal_source": frozen_receipt_source,
+                                "active_purpose_allocation_count": len(active_rows),
+                                "trace_kind": "receipt_purpose_contract_mismatch",
+                            },
+                            focus_terms=normalized_focus,
+                        )
+                    )
+                for allocation in active_rows:
+                    invalid_reasons: list[str] = []
+                    total_qty = int(allocation["receipt_total_sheet_qty"] or 0)
+                    order_qty = int(
+                        allocation["receipt_order_purpose_sheet_qty"] or 0
+                    )
+                    reserve_qty = int(
+                        allocation["receipt_reserve_purpose_sheet_qty"] or 0
+                    )
+                    if total_qty != int(receipt["received_quantity"] or 0):
+                        invalid_reasons.append("receipt_quantity_mismatch")
+                    if order_qty + reserve_qty != total_qty:
+                        invalid_reasons.append("receipt_purpose_sum_mismatch")
+                    if (
+                        int(allocation["cumulative_total_sheet_qty_after"] or 0)
+                        != int(allocation["cumulative_total_sheet_qty_before"] or 0)
+                        + total_qty
+                    ):
+                        invalid_reasons.append("cumulative_total_mismatch")
+                    if (
+                        int(
+                            allocation[
+                                "cumulative_order_purpose_sheet_qty_after"
+                            ]
+                            or 0
+                        )
+                        != int(
+                            allocation[
+                                "cumulative_order_purpose_sheet_qty_before"
+                            ]
+                            or 0
+                        )
+                        + order_qty
+                    ):
+                        invalid_reasons.append("cumulative_order_mismatch")
+                    if (
+                        int(
+                            allocation[
+                                "cumulative_reserve_purpose_sheet_qty_after"
+                            ]
+                            or 0
+                        )
+                        != int(
+                            allocation[
+                                "cumulative_reserve_purpose_sheet_qty_before"
+                            ]
+                            or 0
+                        )
+                        + reserve_qty
+                    ):
+                        invalid_reasons.append("cumulative_reserve_mismatch")
+                    snapshot_id = allocation[
+                        "purchase_purpose_source_snapshot_id"
+                    ]
+                    snapshot = (
+                        purchase_purpose_by_id.get(int(snapshot_id))
+                        if snapshot_id is not None
+                        else None
+                    )
+                    if (
+                        str(allocation["purpose_contract_status_snapshot"])
+                        != "frozen"
+                        or snapshot is None
+                        or allocation["purchase_receipt_fact_id"] is None
+                    ):
+                        invalid_reasons.append("frozen_contract_link_missing")
+                    if snapshot is not None:
+                        if int(snapshot["order_item_id"]) != item_id:
+                            invalid_reasons.append("purpose_snapshot_order_mismatch")
+                        if int(snapshot["customer_id"] or 0) != int(
+                            allocation["customer_id"] or 0
+                        ):
+                            invalid_reasons.append("purpose_customer_mismatch")
+                        if int(snapshot["order_purpose_sheet_qty"] or 0) != int(
+                            allocation["order_purpose_plan_sheet_qty_snapshot"]
+                            or 0
+                        ):
+                            invalid_reasons.append("order_plan_snapshot_mismatch")
+                        if int(snapshot["reserve_purpose_sheet_qty"] or 0) != int(
+                            allocation["reserve_purpose_plan_sheet_qty_snapshot"]
+                            or 0
+                        ):
+                            invalid_reasons.append("reserve_plan_snapshot_mismatch")
+                    if invalid_reasons:
+                        findings.append(
+                            _finding(
+                                code="P015_RECEIPT_PURPOSE_ALLOCATION_UNBALANCED",
+                                severity="error",
+                                order=order,
+                                item=item,
+                                key=anonymization_key,
+                                summary="本次收料的订单用途、片料备库用途或累计数量不守恒。",
+                                evidence={
+                                    "receipt_item_id": int(receipt["id"]),
+                                    "purpose_allocation_id": int(allocation["id"]),
+                                    "receipt_total_sheet_qty": total_qty,
+                                    "receipt_order_purpose_sheet_qty": order_qty,
+                                    "receipt_reserve_purpose_sheet_qty": reserve_qty,
+                                    "invalid_reasons": invalid_reasons,
+                                },
+                                focus_terms=normalized_focus,
+                            )
+                        )
+
+                    finished_delta = int(
+                        allocation["finished_output_qty_delta"] or 0
+                    )
+                    if reserve_qty > 0 and order_qty == 0 and finished_delta > 0:
+                        findings.append(
+                            _finding(
+                                code="P015_RESERVE_PURPOSE_GENERATED_ORDER_FINISHED",
+                                severity="error",
+                                order=order,
+                                item=item,
+                                key=anonymization_key,
+                                summary="仅片料备库用途的收料错误增加了当前订单成品。",
+                                evidence={
+                                    "receipt_item_id": int(receipt["id"]),
+                                    "purpose_allocation_id": int(allocation["id"]),
+                                    "reserve_sheet_qty": reserve_qty,
+                                    "finished_output_qty_delta": finished_delta,
+                                },
+                                focus_terms=normalized_focus,
+                            )
+                        )
+                    completion_id = allocation["production_completion_id"]
+                    completion = (
+                        completions_by_id.get(int(completion_id))
+                        if completion_id is not None
+                        else None
+                    )
+                    completion_invalid = (
+                        (finished_delta == 0 and completion_id is not None)
+                        or (finished_delta > 0 and completion is None)
+                        or (
+                            completion is not None
+                            and (
+                                str(completion["origin"]) != "receipt_auto"
+                                or int(completion["order_item_id"]) != item_id
+                                or int(completion["actual_output_quantity"] or 0)
+                                != finished_delta
+                                or int(completion["inventory_lot_id"] or 0)
+                                != int(allocation["finished_inventory_lot_id"] or 0)
+                            )
+                        )
+                    )
+                    if completion_invalid:
+                        findings.append(
+                            _finding(
+                                code="P015_RECEIPT_AUTO_FINISHED_MISMATCH",
+                                severity="error",
+                                order=order,
+                                item=item,
+                                key=anonymization_key,
+                                summary="收料用途分流与自动成品完工事实不一致。",
+                                evidence={
+                                    "receipt_item_id": int(receipt["id"]),
+                                    "purpose_allocation_id": int(allocation["id"]),
+                                    "production_completion_id": completion_id,
+                                    "finished_output_qty_delta": finished_delta,
+                                },
+                                focus_terms=normalized_focus,
+                            )
+                        )
+                    reserve_lot_id = allocation[
+                        "semi_finished_inventory_lot_id"
+                    ]
+                    reserve_movement_id = allocation[
+                        "initial_semi_inventory_movement_id"
+                    ]
+                    reserve_lot = (
+                        purpose_inventory_lots.get(int(reserve_lot_id))
+                        if reserve_lot_id is not None
+                        else None
+                    )
+                    reserve_movement = (
+                        purpose_initial_movements.get(int(reserve_movement_id))
+                        if reserve_movement_id is not None
+                        else None
+                    )
+                    reserve_links_invalid = (
+                        reserve_qty == 0
+                        and (reserve_lot_id is not None or reserve_movement_id is not None)
+                    ) or (
+                        reserve_qty > 0
+                        and (
+                            reserve_lot is None
+                            or reserve_lot["inventory_type"] != "semi_finished"
+                            or reserve_movement is None
+                            or reserve_movement["movement_type"] != "manual_in"
+                            or int(reserve_movement["inventory_lot_id"] or 0)
+                            != int(reserve_lot_id or 0)
+                            or int(reserve_movement["quantity"] or 0) != reserve_qty
+                        )
+                    )
+                    if reserve_links_invalid:
+                        findings.append(
+                            _finding(
+                                code="P015_RECEIPT_PURPOSE_ALLOCATION_UNBALANCED",
+                                severity="error",
+                                order=order,
+                                item=item,
+                                key=anonymization_key,
+                                summary="片料备库用途缺少数量一致的半成品批次或入库流水。",
+                                evidence={
+                                    "receipt_item_id": int(receipt["id"]),
+                                    "purpose_allocation_id": int(allocation["id"]),
+                                    "reserve_sheet_qty": reserve_qty,
+                                    "semi_finished_inventory_lot_id": reserve_lot_id,
+                                    "initial_semi_inventory_movement_id": reserve_movement_id,
+                                    "trace_kind": "reserve_inventory_link_mismatch",
+                                },
+                                focus_terms=normalized_focus,
+                            )
+                        )
+
+            allocations_by_snapshot: dict[int, list[dict]] = defaultdict(list)
+            for allocation in item_active_purpose_allocations:
+                snapshot_id = allocation["purchase_purpose_source_snapshot_id"]
+                if snapshot_id is not None:
+                    allocations_by_snapshot[int(snapshot_id)].append(allocation)
+            for snapshot_id, rows in allocations_by_snapshot.items():
+                expected_total = expected_order = expected_reserve = 0
+                for allocation in sorted(rows, key=lambda row: int(row["id"])):
+                    chain_mismatch = (
+                        int(allocation["cumulative_total_sheet_qty_before"] or 0)
+                        != expected_total
+                        or int(
+                            allocation[
+                                "cumulative_order_purpose_sheet_qty_before"
+                            ]
+                            or 0
+                        )
+                        != expected_order
+                        or int(
+                            allocation[
+                                "cumulative_reserve_purpose_sheet_qty_before"
+                            ]
+                            or 0
+                        )
+                        != expected_reserve
+                    )
+                    expected_total = int(
+                        allocation["cumulative_total_sheet_qty_after"] or 0
+                    )
+                    expected_order = int(
+                        allocation["cumulative_order_purpose_sheet_qty_after"] or 0
+                    )
+                    expected_reserve = int(
+                        allocation["cumulative_reserve_purpose_sheet_qty_after"] or 0
+                    )
+                    if chain_mismatch:
+                        findings.append(
+                            _finding(
+                                code="P015_RECEIPT_PURPOSE_ALLOCATION_UNBALANCED",
+                                severity="error",
+                                order=order,
+                                item=item,
+                                key=anonymization_key,
+                                summary="同一采购用途快照的多次收料累计链不连续。",
+                                evidence={
+                                    "purpose_snapshot_id": snapshot_id,
+                                    "purpose_allocation_id": int(allocation["id"]),
+                                    "trace_kind": "receipt_purpose_cumulative_gap",
+                                },
+                                focus_terms=normalized_focus,
+                            )
+                        )
+
+            receipt_auto_output = sum(
+                int(row["actual_output_quantity"] or 0)
+                for row in completions.get(item_id, [])
+                if str(row["origin"]) == "receipt_auto"
+            )
+            allocated_auto_output = sum(
+                int(row["finished_output_qty_delta"] or 0)
+                for row in item_active_purpose_allocations
+            )
+            if receipt_auto_output != allocated_auto_output:
+                findings.append(
+                    _finding(
+                        code="P015_RECEIPT_AUTO_FINISHED_MISMATCH",
+                        severity="error",
+                        order=order,
+                        item=item,
+                        key=anonymization_key,
+                        summary="当前有效自动完工数量与收料用途分流累计不一致。",
+                        evidence={
+                            "receipt_auto_finished_quantity": receipt_auto_output,
+                            "allocated_finished_quantity": allocated_auto_output,
+                            "trace_kind": "receipt_auto_total_mismatch",
+                        },
+                        focus_terms=normalized_focus,
+                    )
+                )
+
+            if (
+                has_receipt
+                and not completions.get(item_id)
+                and not missing_task_keys
+                and not has_frozen_formal_receipt
+            ):
                 findings.append(
                     _finding(
                         code="P015_RECEIVED_AWAITING_MANUAL_PRODUCTION",
@@ -1320,12 +2042,20 @@ def audit_incomplete_order_chains(
         },
         "coverage": {
             "purchase_purpose_allocation": {
-                "status": "not_evaluated",
-                "reason": PURPOSE_ALLOCATION_CAPABILITY,
+                "status": "evaluated",
+                "active_formal_source_count": int(
+                    active_formal_purpose_source_count
+                ),
+                "purpose_snapshot_count": int(purchase_purpose_snapshot_count),
             },
             "receipt_auto_finished": {
-                "status": "not_evaluated",
-                "reason": "not_available_before_p1_81",
+                "status": "evaluated",
+                "active_purpose_allocation_count": int(
+                    active_receipt_purpose_allocation_count
+                ),
+                "reversed_purpose_allocation_count": int(
+                    reversed_receipt_purpose_allocation_count
+                ),
             },
             "workstation_membership": {
                 "status": "evaluated",
@@ -1339,15 +2069,19 @@ def audit_incomplete_order_chains(
                 "unrouted_task_count": workstation_unrouted_tasks,
             },
             "common_box_api_round_trip": {
-                "status": "not_evaluated_by_database_scan",
-                "reason": "protected_by_anonymous_api_regression_tests",
+                "status": "evaluated_by_regression_contract",
+                "reason": "anonymous_api_round_trip_tests_plus_persisted_fact_scan",
+            },
+            "warehouse_map_stocktake_chain": {
+                "status": "evaluated_by_regression_contract",
+                "reason": "p0_14_p1_85_p1_86_p1_87_isolated_contracts",
             },
             "current_chain_facts": {"status": "evaluated"},
         },
         "finding_code_registry": sorted(FINDING_CODES),
         "workstation_routes": workstation_routes,
         "summary": {
-            "scan_complete": False,
+            "scan_complete": True,
             "finding_count": len(findings),
             "focus_finding_count": focus_findings,
             "focus_route_count": focus_routes,

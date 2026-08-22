@@ -15,6 +15,7 @@ from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryItem
 from app.models.finance import ReturnReceipt, ReturnReceiptItem
 from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
+from app.models.material import Material
 from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.product_bom import SalesOrderItemBomComponent
@@ -23,11 +24,18 @@ from app.models.production import (
     ProductionCompletionBatch,
     ProductionTask,
 )
+from app.models.purchase_receipt import (
+    IncomingReceiptPurposeAllocation,
+    IncomingReceiptPurposeReversal,
+    PurchaseReceiptFact,
+)
 from app.models.requisition import Requisition, RequisitionItem
 from app.models.supplier_requisition_order import (
+    PurchasePurposeSourceSnapshot,
     SupplierRequisitionOrder,
     SupplierRequisitionOrderItem,
 )
+from app.models.user import User
 from app.models.warehouse_inventory import (
     DeliveryInventoryAllocation,
     FinishedGoodsInventoryDetail,
@@ -318,6 +326,260 @@ def add_completion(
     task.status = "completed"
     db.flush()
     return completion
+
+
+def add_frozen_purpose_chain(
+    db: Session,
+    token: str,
+    customer: Customer,
+    product: Product,
+    order: Order,
+    item: OrderItem,
+    *,
+    order_sheet_qty: int,
+    reserve_sheet_qty: int,
+    finished_output_qty: int,
+    with_allocation: bool = True,
+) -> dict:
+    purchase_qty = order_sheet_qty + reserve_sheet_qty
+    task = add_task(db, item)
+    receipt_item = add_traced_receipt(
+        db,
+        token,
+        order,
+        item,
+        quantity=purchase_qty,
+    )
+    supplier_item = db.get(
+        SupplierRequisitionOrderItem,
+        receipt_item.supplier_order_item_id,
+    )
+    assert supplier_item is not None
+    supplier_item.purpose_contract_status = "frozen"
+    supplier_item.requisition_qty = purchase_qty
+
+    user = User(
+        username=f"anon-purpose-{token}",
+        password_hash="not-used-by-audit",
+        role="admin",
+        real_name=f"匿名审计员-{token}",
+        must_change_password=False,
+    )
+    material = Material(
+        code=f"ANON-BOARD-{token}",
+        supplier_name=f"匿名供应商-{token}",
+        layer_count=3,
+        flute_type="B",
+        quote_price=Decimal("1.0000"),
+        price_unit="元/张",
+    )
+    db.add_all([user, material])
+    db.flush()
+    supplier_item.material_id = material.id
+    supplier_item.material_code_snapshot = material.code
+    supplier_item.report_length_mm = 800
+    supplier_item.report_width_mm = 600
+
+    digest = (token.encode("utf-8").hex() + "0" * 64)[:64]
+    snapshot = PurchasePurposeSourceSnapshot(
+        snapshot_key=f"anon-purpose-snapshot-{token}",
+        allocation_group_key=f"anon-purpose-group-{token}",
+        supplier_requisition_order_item_id=supplier_item.id,
+        source_kind="order_item",
+        source_key=f"order_item:{item.id}:whole",
+        source_order_item_id=item.id,
+        customer_id=customer.id,
+        customer_name_snapshot=customer.name,
+        component_type="whole",
+        source_finished_qty_snapshot=item.quantity,
+        pieces_per_finished_snapshot=1,
+        source_required_piece_qty_snapshot=purchase_qty,
+        source_semi_reserved_piece_qty_snapshot=0,
+        source_effective_piece_qty_snapshot=purchase_qty,
+        yield_per_sheet_snapshot=1,
+        group_effective_piece_qty_snapshot=purchase_qty,
+        group_authoritative_order_sheet_qty_snapshot=max(purchase_qty, 1),
+        purchase_sheet_qty=purchase_qty,
+        order_purpose_sheet_qty=order_sheet_qty,
+        reserve_purpose_sheet_qty=reserve_sheet_qty,
+        calculation_rule_version="p1-80-v1",
+        snapshot_version=1,
+        preview_fingerprint=digest,
+        request_hash=digest,
+        created_by=user.id,
+    )
+    db.add(snapshot)
+    db.flush()
+    if not with_allocation:
+        db.flush()
+        return {
+            "task": task,
+            "receipt_item": receipt_item,
+            "supplier_item": supplier_item,
+            "snapshot": snapshot,
+        }
+
+    receipt_fact = PurchaseReceiptFact(
+        supplier_requisition_order_item_id=supplier_item.id,
+        purchase_purpose_source_snapshot_id=snapshot.id,
+        source_key=snapshot.source_key,
+        receipt_fact_version=1,
+        expected_source_version=supplier_item.version,
+        purpose_snapshot_version=snapshot.snapshot_version,
+        receipt_plan_fingerprint=digest,
+        actual_material_id=material.id,
+        actual_material_code_snapshot=material.code,
+        actual_material_version=material.version,
+        actual_material_layer_count_snapshot=material.layer_count,
+        actual_material_flute_type_snapshot=material.flute_type,
+        actual_material_is_active_snapshot=True,
+        actual_material_fingerprint=digest,
+        expected_material_id=material.id,
+        expected_material_code_snapshot=material.code,
+        material_change_confirmed=False,
+        unit_price=Decimal("1.000000"),
+        currency="CNY",
+        price_unit="per_sheet",
+        tax_included=True,
+        tax_rate=Decimal("0.000000"),
+        idempotency_key=f"anon-receipt-fact-{token}",
+        request_hash=digest,
+        created_by=user.id,
+    )
+    db.add(receipt_fact)
+    db.flush()
+
+    completion = None
+    finished_lot = None
+    if finished_output_qty > 0:
+        finished_location = add_location(db, f"PURPOSE-FINISHED-{token}")
+        completion = add_completion(
+            db,
+            f"PURPOSE-{token}",
+            task,
+            item,
+            location=finished_location,
+        )
+        completion.origin = "receipt_auto"
+        completion.quantity = finished_output_qty
+        completion.material_input_quantity = max(order_sheet_qty, 1)
+        completion.planned_output_quantity = finished_output_qty
+        completion.actual_output_quantity = finished_output_qty
+        completion.order_reserved_quantity = min(finished_output_qty, item.quantity)
+        completion.direct_delivery_quantity = 0
+        completion.stock_quantity = finished_output_qty
+        completion.surplus_finished_quantity = max(
+            finished_output_qty - item.quantity,
+            0,
+        )
+        finished_lot = add_lot(
+            db,
+            f"PURPOSE-FINISHED-{token}",
+            customer,
+            product,
+            source_ref_id=completion.id,
+            quantity_available=finished_output_qty,
+            location=finished_location,
+        )
+        completion.inventory_lot_id = finished_lot.id
+        add_movement(
+            db,
+            f"PURPOSE-FINISHED-{token}",
+            finished_lot,
+            "manual_in",
+            finished_output_qty,
+            order=order,
+            item=item,
+        )
+
+    reserve_lot = None
+    reserve_movement = None
+    if reserve_sheet_qty > 0:
+        reserve_location = add_location(db, f"PURPOSE-RESERVE-{token}")
+        reserve_location.warehouse_type = "semi_finished"
+        reserve_lot = InventoryLot(
+            lot_number=f"ANON-RESERVE-LOT-{token}",
+            inventory_type="semi_finished",
+            warehouse_location_id=reserve_location.id,
+            quantity_available=reserve_sheet_qty,
+            unit="sheets",
+            status="active",
+            source_type="purchase_reserve",
+            source_ref_type="purchase_purpose_source_snapshot",
+            source_ref_id=snapshot.id,
+            stock_date=TODAY,
+            last_movement_at=NOW,
+        )
+        db.add(reserve_lot)
+        db.flush()
+        reserve_movement = add_movement(
+            db,
+            f"PURPOSE-RESERVE-{token}",
+            reserve_lot,
+            "manual_in",
+            reserve_sheet_qty,
+            order=order,
+            item=item,
+        )
+
+    allocation = IncomingReceiptPurposeAllocation(
+        incoming_receipt_item_id=receipt_item.id,
+        purpose_contract_status_snapshot="frozen",
+        purchase_purpose_source_snapshot_id=snapshot.id,
+        purchase_receipt_fact_id=receipt_fact.id,
+        supplier_requisition_order_item_id=supplier_item.id,
+        source_kind=snapshot.source_kind,
+        source_key=snapshot.source_key,
+        source_order_item_id=item.id,
+        customer_id=customer.id,
+        customer_name_snapshot=customer.name,
+        component_type="whole",
+        order_purpose_plan_sheet_qty_snapshot=order_sheet_qty,
+        reserve_purpose_plan_sheet_qty_snapshot=reserve_sheet_qty,
+        receipt_total_sheet_qty=purchase_qty,
+        receipt_order_purpose_sheet_qty=order_sheet_qty,
+        receipt_reserve_purpose_sheet_qty=reserve_sheet_qty,
+        cumulative_total_sheet_qty_before=0,
+        cumulative_total_sheet_qty_after=purchase_qty,
+        cumulative_order_purpose_sheet_qty_before=0,
+        cumulative_order_purpose_sheet_qty_after=order_sheet_qty,
+        cumulative_reserve_purpose_sheet_qty_before=0,
+        cumulative_reserve_purpose_sheet_qty_after=reserve_sheet_qty,
+        finished_output_qty_before=0,
+        finished_output_qty_after=finished_output_qty,
+        finished_output_qty_delta=finished_output_qty,
+        sheet_cost=Decimal("1.000000"),
+        order_purpose_cost=Decimal(order_sheet_qty),
+        reserve_purpose_cost=Decimal(reserve_sheet_qty),
+        total_cost=Decimal(purchase_qty),
+        capitalized_cost=(
+            Decimal(order_sheet_qty) if finished_output_qty > 0 else Decimal(0)
+        ),
+        production_completion_id=completion.id if completion is not None else None,
+        finished_inventory_lot_id=finished_lot.id if finished_lot is not None else None,
+        semi_finished_inventory_lot_id=reserve_lot.id if reserve_lot is not None else None,
+        initial_semi_inventory_movement_id=(
+            reserve_movement.id if reserve_movement is not None else None
+        ),
+        status="posted",
+        version=1,
+        request_hash=digest,
+        created_by=user.id,
+    )
+    db.add(allocation)
+    db.flush()
+    return {
+        "task": task,
+        "receipt_item": receipt_item,
+        "supplier_item": supplier_item,
+        "snapshot": snapshot,
+        "receipt_fact": receipt_fact,
+        "user": user,
+        "allocation": allocation,
+        "completion": completion,
+        "finished_lot": finished_lot,
+        "reserve_lot": reserve_lot,
+    }
 
 
 def run_audit(db: Session, *, focus_terms: tuple[str, ...] = ()) -> dict:
@@ -761,6 +1023,199 @@ def test_two_finished_boxes_per_received_sheet_keeps_input_and_output_units_sepa
     )
 
 
+def test_frozen_purchase_and_receipt_purpose_chain_is_fully_evaluated(
+    tmp_path: Path,
+):
+    engine = build_p0_15_database(tmp_path / "purpose-valid.sqlite3")
+    with Session(engine) as db:
+        customer, product, order, item = add_order(
+            db,
+            "PURPOSE-VALID",
+            quantity=10,
+            material_status="received",
+        )
+        add_frozen_purpose_chain(
+            db,
+            "PURPOSE-VALID",
+            customer,
+            product,
+            order,
+            item,
+            order_sheet_qty=8,
+            reserve_sheet_qty=2,
+            finished_output_qty=8,
+        )
+        db.commit()
+
+        report = run_audit(db)
+
+    codes = finding_codes(report)
+    assert "P015_PURCHASE_PURPOSE_ALLOCATION_UNBALANCED" not in codes
+    assert "P015_RECEIPT_PURPOSE_ALLOCATION_UNBALANCED" not in codes
+    assert "P015_RECEIPT_AUTO_FINISHED_MISMATCH" not in codes
+    assert "P015_RESERVE_PURPOSE_GENERATED_ORDER_FINISHED" not in codes
+    assert "P015_RECEIVED_AWAITING_MANUAL_PRODUCTION" not in codes
+    assert report["coverage"]["purchase_purpose_allocation"]["status"] == "evaluated"
+    assert report["coverage"]["purchase_purpose_allocation"][
+        "purpose_snapshot_count"
+    ] == 1
+    assert report["coverage"]["receipt_auto_finished"] == {
+        "status": "evaluated",
+        "active_purpose_allocation_count": 1,
+        "reversed_purpose_allocation_count": 0,
+    }
+
+
+def test_frozen_receipt_without_allocation_and_unbalanced_purchase_are_reported(
+    tmp_path: Path,
+):
+    engine = build_p0_15_database(tmp_path / "purpose-invalid.sqlite3")
+    with Session(engine) as db:
+        customer, product, order, item = add_order(
+            db,
+            "PURPOSE-MISSING",
+            quantity=10,
+            material_status="received",
+        )
+        facts = add_frozen_purpose_chain(
+            db,
+            "PURPOSE-MISSING",
+            customer,
+            product,
+            order,
+            item,
+            order_sheet_qty=10,
+            reserve_sheet_qty=0,
+            finished_output_qty=0,
+            with_allocation=False,
+        )
+        db.commit()
+        snapshot_id = int(facts["snapshot"].id)
+
+    with engine.begin() as connection:
+        connection.execute(text("PRAGMA ignore_check_constraints=ON"))
+        connection.execute(
+            text(
+                "UPDATE purchase_purpose_source_snapshots "
+                "SET reserve_purpose_sheet_qty=1 WHERE id=:snapshot_id"
+            ),
+            {"snapshot_id": snapshot_id},
+        )
+    with Session(engine) as db:
+        report = run_audit(db)
+
+    codes = finding_codes(report)
+    assert "P015_PURCHASE_PURPOSE_ALLOCATION_UNBALANCED" in codes
+    assert "P015_RECEIPT_PURPOSE_ALLOCATION_UNBALANCED" in codes
+    assert any(
+        row["evidence"].get("trace_kind")
+        == "receipt_purpose_contract_mismatch"
+        for row in report["findings"]
+        if row["code"] == "P015_RECEIPT_PURPOSE_ALLOCATION_UNBALANCED"
+    )
+
+
+def test_reserve_only_receipt_that_creates_order_finished_is_a_hard_error(
+    tmp_path: Path,
+):
+    engine = build_p0_15_database(tmp_path / "reserve-finished.sqlite3")
+    with Session(engine) as db:
+        customer, product, order, item = add_order(
+            db,
+            "RESERVE-FINISHED",
+            quantity=10,
+            material_status="received",
+        )
+        add_frozen_purpose_chain(
+            db,
+            "RESERVE-FINISHED",
+            customer,
+            product,
+            order,
+            item,
+            order_sheet_qty=0,
+            reserve_sheet_qty=10,
+            finished_output_qty=10,
+        )
+        db.commit()
+
+        report = run_audit(db)
+
+    reserve_findings = [
+        row
+        for row in report["findings"]
+        if row["code"] == "P015_RESERVE_PURPOSE_GENERATED_ORDER_FINISHED"
+    ]
+    assert len(reserve_findings) == 1
+    assert reserve_findings[0]["severity"] == "error"
+    assert reserve_findings[0]["evidence"]["reserve_sheet_qty"] == 10
+    assert reserve_findings[0]["evidence"]["finished_output_qty_delta"] == 10
+
+
+def test_reversed_receipt_purpose_facts_do_not_count_as_current_output(
+    tmp_path: Path,
+):
+    engine = build_p0_15_database(tmp_path / "purpose-reversed.sqlite3")
+    with Session(engine) as db:
+        customer, product, order, item = add_order(
+            db,
+            "PURPOSE-REVERSED",
+            quantity=10,
+            material_status="received",
+        )
+        facts = add_frozen_purpose_chain(
+            db,
+            "PURPOSE-REVERSED",
+            customer,
+            product,
+            order,
+            item,
+            order_sheet_qty=10,
+            reserve_sheet_qty=0,
+            finished_output_qty=10,
+        )
+        allocation = facts["allocation"]
+        receipt_item = facts["receipt_item"]
+        receipt = db.get(IncomingReceipt, receipt_item.receipt_id)
+        assert receipt is not None
+        completion = facts["completion"]
+        assert completion is not None
+        db.add(
+            IncomingReceiptPurposeReversal(
+                incoming_receipt_purpose_allocation_id=allocation.id,
+                incoming_receipt_item_id=receipt_item.id,
+                reversed_production_completion_id=completion.id,
+                reversed_finished_inventory_lot_id=facts["finished_lot"].id,
+                cumulative_total_sheet_qty_before=10,
+                cumulative_total_sheet_qty_after=0,
+                cumulative_order_purpose_sheet_qty_before=10,
+                cumulative_order_purpose_sheet_qty_after=0,
+                cumulative_reserve_purpose_sheet_qty_before=0,
+                cumulative_reserve_purpose_sheet_qty_after=0,
+                request_hash=("ab" * 32),
+                reversed_by=facts["user"].id,
+            )
+        )
+        receipt.status = "reversed"
+        receipt_item.status = "reversed"
+        completion.status = "reversed"
+        facts["task"].status = "waiting_material"
+        facts["task"].planned_quantity = 0
+        item.material_status = "pending"
+        db.commit()
+
+        report = run_audit(db)
+
+    codes = finding_codes(report)
+    assert "P015_RECEIPT_AUTO_FINISHED_MISMATCH" not in codes
+    assert "P015_RESERVE_PURPOSE_GENERATED_ORDER_FINISHED" not in codes
+    assert report["coverage"]["receipt_auto_finished"] == {
+        "status": "evaluated",
+        "active_purpose_allocation_count": 0,
+        "reversed_purpose_allocation_count": 1,
+    }
+
+
 def test_common_box_contract_and_future_capabilities_are_explicit(tmp_path: Path):
     database = tmp_path / "common-box.sqlite3"
     engine = build_p0_15_database(database)
@@ -790,12 +1245,14 @@ def test_common_box_contract_and_future_capabilities_are_explicit(tmp_path: Path
         "non_positive_pieces_per_box",
     }
     assert report["coverage"]["purchase_purpose_allocation"] == {
-        "status": "not_evaluated",
-        "reason": "not_available_before_p1_80",
+        "status": "evaluated",
+        "active_formal_source_count": 0,
+        "purpose_snapshot_count": 0,
     }
     assert report["coverage"]["receipt_auto_finished"] == {
-        "status": "not_evaluated",
-        "reason": "not_available_before_p1_81",
+        "status": "evaluated",
+        "active_purpose_allocation_count": 0,
+        "reversed_purpose_allocation_count": 0,
     }
     assert report["coverage"]["workstation_membership"] == {
         "status": "evaluated",
@@ -806,7 +1263,10 @@ def test_common_box_contract_and_future_capabilities_are_explicit(tmp_path: Path
         "unrouted_task_count": 0,
     }
     assert report["coverage"]["current_chain_facts"] == {"status": "evaluated"}
-    assert report["summary"]["scan_complete"] is False
+    assert report["coverage"]["warehouse_map_stocktake_chain"]["status"] == (
+        "evaluated_by_regression_contract"
+    )
+    assert report["summary"]["scan_complete"] is True
 
 
 def test_report_and_focus_metadata_never_emit_raw_business_identifiers(tmp_path: Path):

@@ -12,7 +12,7 @@ from sqlalchemy import create_engine, inspect, text
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSIONS = ROOT / "alembic" / "versions"
-BASE_REVISION = "aaa35v8x9z24"
+BASE_REVISION = "bbb36v8x9z25"
 
 
 def _purpose_migration_path() -> Path:

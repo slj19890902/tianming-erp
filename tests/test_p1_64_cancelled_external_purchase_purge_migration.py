@@ -12,6 +12,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 PARENT = "aaa35v8x9z24"
 TARGET = "bbb36v8x9z25"
+INTEGRATION_HEAD = "cc37v8x9z26"
 MIGRATION = (
     ROOT
     / "alembic"
@@ -28,14 +29,14 @@ def _config(monkeypatch: pytest.MonkeyPatch, path: Path) -> Config:
     return config
 
 
-def test_p1_64_migration_is_unique_linear_head(current_alembic_head: str) -> None:
+def test_p1_64_migration_is_unique_linear_ancestor(current_alembic_head: str) -> None:
     spec = importlib.util.spec_from_file_location("p1_64_migration", MIGRATION)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     assert module.revision == TARGET
     assert module.down_revision == PARENT
-    assert current_alembic_head == TARGET
+    assert current_alembic_head == INTEGRATION_HEAD
 
 
 def test_p1_64_round_trip_replaces_only_delete_guards(

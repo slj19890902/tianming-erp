@@ -1,7 +1,7 @@
 """freeze purchase-purpose allocation by physical source
 
 Revision ID: ww31v8x9z20
-Revises: aaa35v8x9z24
+Revises: bbb36v8x9z25
 Create Date: 2026-08-20
 """
 
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 revision = "ww31v8x9z20"
-down_revision = "aaa35v8x9z24"
+down_revision = "bbb36v8x9z25"
 branch_labels = None
 depends_on = None
 

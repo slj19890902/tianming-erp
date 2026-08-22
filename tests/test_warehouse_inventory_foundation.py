@@ -647,8 +647,8 @@ def test_edit_finished_lot_moves_bound_floor3_pallet_and_projection(
     matching_location_events = [
         event
         for event in timeline
-        if event.get("from_location") == source.location_code
-        and event.get("to_location") == target.location_code
+        if event.get("from_location") == source.location_name
+        and event.get("to_location") == target.location_name
     ]
     assert [event["event_type"] for event in matching_location_events] == [
         "pallet_location_move"

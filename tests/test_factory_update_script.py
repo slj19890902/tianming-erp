@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.159"
-    assert APP_VERSION_NAME == "外购常用箱修改保存链修复"
+    assert APP_VERSION == "v0.22.160"
+    assert APP_VERSION_NAME == "采购用途、自动成品与仓库盘点闭环"
     assert APP_BUILD_DATE == "2026-08-22"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -49,17 +49,34 @@ def test_factory_update_reports_current_release_version() -> None:
     current_release = [
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
-    assert any("本次更新｜" in item and "误判为没有变化" in item for item in current_release)
-    assert any("本次更新｜" in item and "结构化规格" in item and "版本预检" in item for item in current_release)
-    assert any("本次更新｜" in item and "不自动修改Z.004.000006" in item for item in current_release)
-    assert any("如何验证｜" in item and "Z.004.000006" in item and "常用箱已更新" in item for item in current_release)
-    assert any("如何验证｜" in item and "原样回读" in item and "蜂窝板厚度" in item for item in current_release)
-    assert any("如何验证｜" in item and "v0.22.159" in item and "bbb36v8x9z25" in item for item in current_release)
+    assert any("本次更新｜" in item and "订单生产用途" in item and "片料备库" in item for item in current_release)
+    assert any("本次更新｜" in item and "正式收料" in item and "自动折算成品" in item for item in current_release)
+    assert any("本次更新｜" in item and "物理栈板" in item and "地面库位" in item for item in current_release)
+    assert any("本次更新｜" in item and "P0-15" in item and "bbb36" in item and "cc37" in item for item in current_release)
+    assert any("如何验证｜" in item and "500" in item and "600" in item for item in current_release)
+    assert any("如何验证｜" in item and "450" in item and "620" in item for item in current_release)
+    assert any("如何验证｜" in item and "1200×1000" in item and "盘点" in item for item in current_release)
+    assert any("如何验证｜" in item and "v0.22.160" in item and "cc37v8x9z26" in item for item in current_release)
+    assert any(item.startswith("v0.22.159：本次更新｜") and "误判为没有变化" in item for item in APP_CHANGELOG)
+    assert any(item.startswith("v0.22.159：本次更新｜") and "结构化规格" in item and "版本预检" in item for item in APP_CHANGELOG)
+    assert any(item.startswith("v0.22.159：本次更新｜") and "不自动修改Z.004.000006" in item for item in APP_CHANGELOG)
+    assert any(item.startswith("v0.22.159：如何验证｜") and "Z.004.000006" in item and "常用箱已更新" in item for item in APP_CHANGELOG)
+    assert any(item.startswith("v0.22.159：如何验证｜") and "原样回读" in item and "蜂窝板厚度" in item for item in APP_CHANGELOG)
+    assert any(item.startswith("v0.22.159：如何验证｜") and "bbb36v8x9z25" in item for item in APP_CHANGELOG)
     assert any(item.startswith("v0.22.158：本次更新｜") and "静默还原" in item for item in APP_CHANGELOG)
     assert any(item.startswith("v0.22.158：本次更新｜") and "不能覆盖常用箱" in item for item in APP_CHANGELOG)
     assert any(item.startswith("v0.22.158：本次更新｜") and "真正删除" in item and "永久审计" in item for item in APP_CHANGELOG)
-    assert any(item.startswith("v0.22.156：本次更新｜") and "长×宽×厚" in item for item in APP_CHANGELOG)
-    assert any(item.startswith("v0.22.155：本次更新｜") and "订单1→采购2" in item for item in APP_CHANGELOG)
+    assert any(item.startswith("v0.22.158：本次更新｜") and "bbb36v8x9z25" in item for item in APP_CHANGELOG)
+    assert any(item.startswith("v0.22.158：如何验证｜") and "Z.004.000006" in item and "原样回读" in item for item in APP_CHANGELOG)
+    assert any(item.startswith("v0.22.158：如何验证｜") and "只读显示" in item and "没有可编辑比例输入" in item for item in APP_CHANGELOG)
+    assert any(item.startswith("v0.22.158：如何验证｜") and "撤回到未报料" in item and "审计" in item for item in APP_CHANGELOG)
+    assert any(item.startswith("v0.22.158：如何验证｜") and "bbb36v8x9z25" in item for item in APP_CHANGELOG)
+    assert any(item.startswith("v0.22.156：本次更新｜") and "材质" in item and "孔径" in item and "长×宽×厚" in item for item in APP_CHANGELOG)
+    assert any(item.startswith("v0.22.156：本次更新｜") and "删除订单组" in item and "409" in item and "500" in item for item in APP_CHANGELOG)
+    assert any(item.startswith("v0.22.156：如何验证｜") and "Z.004.000006" in item and "默认采购比例" in item for item in APP_CHANGELOG)
+    assert any(item.startswith("v0.22.156：如何验证｜") and "aaa35v8x9z24" in item for item in APP_CHANGELOG)
+    assert any(item.startswith("v0.22.155：本次更新｜") and "订单1→采购1" in item and "订单1→采购2" in item for item in APP_CHANGELOG)
+    assert any(item.startswith("v0.22.155：如何验证｜") and "aaa35v8x9z24" in item for item in APP_CHANGELOG)
     assert any(item.startswith("v0.22.154：本次更新｜") and "纯外购" in item and "蜂窝板" in item for item in APP_CHANGELOG)
     assert any(item.startswith("v0.22.149：本次更新｜") and "不同楼层" in item and "当前楼层" in item for item in APP_CHANGELOG)
     assert any(item.startswith("v0.22.149：如何验证｜") and "v0.22.149" in item and "yy33v8x9z22" in item for item in APP_CHANGELOG)
@@ -253,7 +270,7 @@ def test_factory_update_reports_current_release_version() -> None:
         for item in APP_CHANGELOG
     )
     assert any(
-        "如何验证｜" in item and "v0.22.159" in item and "bbb36" in item
+        "如何验证｜" in item and "v0.22.160" in item and "cc37" in item
         for item in current_release
     )
     assert any(

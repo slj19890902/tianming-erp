@@ -4,7 +4,7 @@ import hashlib
 import json
 from math import ceil
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Set
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -170,6 +170,8 @@ def apply_packaging_label_print_counts(
 def build_supplier_requisition_packaging_label_package(
     db: Session,
     order: SupplierRequisitionOrder,
+    *,
+    selected_task_ids: Set[int] | None = None,
 ) -> dict:
     """Project a read-only package using the current common-box label policy.
 
@@ -182,12 +184,20 @@ def build_supplier_requisition_packaging_label_package(
     """
 
     production_package = build_supplier_requisition_production_package(db, order)
-    task_ids = {
+    explicit_task_ids = (
+        {int(task_id) for task_id in selected_task_ids}
+        if selected_task_ids is not None
+        else None
+    )
+    all_task_ids = {
         int(component["production_task_id"])
         for card in production_package["cards"]
         for component in card.get("components", [])
         if component.get("production_task_id") is not None
     }
+    task_ids = (
+        all_task_ids if explicit_task_ids is None else all_task_ids & explicit_task_ids
+    )
     tasks = {
         int(task.id): task
         for task in (
@@ -199,13 +209,18 @@ def build_supplier_requisition_packaging_label_package(
         )
     }
 
-    task_sources: dict[int, tuple[dict, dict]] = {}
+    all_task_sources: dict[int, tuple[dict, dict]] = {}
     for card in production_package["cards"]:
         for component in card.get("components", []):
             task_id = component.get("production_task_id")
             if task_id is None:
                 continue
-            task_sources.setdefault(int(task_id), (card, component))
+            all_task_sources.setdefault(int(task_id), (card, component))
+    task_sources = {
+        task_id: source
+        for task_id, source in all_task_sources.items()
+        if explicit_task_ids is None or task_id in explicit_task_ids
+    }
 
     customer_ids = {
         int(card["customer_id"])
@@ -226,11 +241,29 @@ def build_supplier_requisition_packaging_label_package(
     # An explicitly refreshed label snapshot is allowed to be newer than the
     # requisition card.  That production-card warning must not make the frozen
     # label plan unprintable; every other review reason remains fail-closed.
-    package_review_messages = [
-        message
-        for message in (production_package.get("review_messages") or [])
-        if str(message) != "生产任务版本已变化，请核对并重打"
-    ]
+    if explicit_task_ids is None:
+        package_review_messages = [
+            message
+            for message in (production_package.get("review_messages") or [])
+            if str(message) != "生产任务版本已变化，请核对并重打"
+        ]
+    else:
+        selected_cards = {
+            id(card)
+            for task_id, (card, _component) in all_task_sources.items()
+            if task_id in explicit_task_ids
+        }
+        package_review_messages = [
+            message
+            for card in production_package.get("cards") or []
+            if id(card) in selected_cards
+            for message in (card.get("review_messages") or [])
+            if str(message) != "生产任务版本已变化，请核对并重打"
+        ]
+        for task_id in sorted(explicit_task_ids - all_task_ids):
+            package_review_messages.append(
+                f"生产任务 #{task_id} 不属于当前报料单的有效任务，请重新选择"
+            )
     for task_id in sorted(task_sources):
         task = tasks.get(task_id)
         if task is None:
@@ -253,15 +286,29 @@ def build_supplier_requisition_packaging_label_package(
             else None
         )
         product = db.get(Product, product_id) if product_id is not None else None
+        card, component = task_sources[task_id]
+        task_identity = (
+            f"{component.get('product_code') or card.get('product_code') or '-'}｜"
+            f"{component.get('product_name') or card.get('product_name') or '-'}｜"
+            f"生产任务 #{task_id}"
+        )
         if product is None:
             package_review_messages.append(
-                f"生产任务 #{task_id} 没有可回读的常用箱产品，请核对"
+                f"{task_identity} 没有可回读的常用箱产品，请核对"
             )
             continue
         if not bool(product.production_label_enabled):
+            if explicit_task_ids is not None:
+                package_review_messages.append(
+                    f"{task_identity} 的当前产品未启用生产包装标签"
+                )
             continue
         if not bool(task.production_label_enabled_snapshot):
-            if (
+            if explicit_task_ids is not None:
+                package_review_messages.append(
+                    f"{task_identity} 的冻结任务未启用生产包装标签"
+                )
+            elif (
                 task.status in {"waiting_material", "pending"}
                 and task.production_label_template_version_snapshot
                 == CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION
@@ -293,7 +340,6 @@ def build_supplier_requisition_packaging_label_package(
             )
             continue
 
-        card, component = task_sources[task_id]
         quantities = [
             min(units_per_label, total_quantity - index * units_per_label)
             for index in range(label_count)
@@ -408,6 +454,9 @@ def build_supplier_requisition_packaging_label_package(
         "status": order.status,
         "status_label": "生产包装标签｜非库存标签",
         "label_policy_source": "product_master_current",
+        "selected_task_ids": (
+            sorted(explicit_task_ids) if explicit_task_ids is not None else None
+        ),
         "template_version": template_version,
         "template_dimensions": (
             template_dimensions(template_version) if template_version else None

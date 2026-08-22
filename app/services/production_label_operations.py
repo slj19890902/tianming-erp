@@ -753,9 +753,20 @@ def prepare_packaging_label_job(
         _assert_prepared_job_is_current(db, repeated, repeated_package)
         return PackagingLabelJobResult(repeated, repeated_package, True)
 
-    package = build_supplier_requisition_packaging_label_package(db, order)
+    selected_task_ids = (
+        set(requested_print_counts) if requested_print_counts is not None else None
+    )
+    package = build_supplier_requisition_packaging_label_package(
+        db,
+        order,
+        selected_task_ids=selected_task_ids,
+    )
     if package.get("review_required"):
-        raise ProductionLabelOperationError("标签计划需要人工核对，不能创建打印作业")
+        reasons = "；".join(str(value) for value in package.get("review_messages") or [])
+        raise ProductionLabelOperationError(
+            "标签计划需要人工核对，不能创建打印作业"
+            + (f"：{reasons}" if reasons else "")
+        )
     if not package.get("label_count"):
         raise ProductionLabelOperationError("该报料单没有启用生产包装标签的任务")
     if package.get("plan_fingerprint") != expected_plan_fingerprint:
@@ -777,7 +788,11 @@ def prepare_packaging_label_job(
     _claim_package_product_versions(db, package)
     # Rebuild while the exact task rows are locked so a job can never combine
     # snapshots observed on opposite sides of a concurrent refresh.
-    package = build_supplier_requisition_packaging_label_package(db, order)
+    package = build_supplier_requisition_packaging_label_package(
+        db,
+        order,
+        selected_task_ids=selected_task_ids,
+    )
     if package.get("plan_fingerprint") != expected_plan_fingerprint:
         raise ProductionLabelOperationError("标签计划已变化，请刷新预览后重试")
     try:

@@ -4640,3 +4640,11 @@ legacy_ruida_* 原始层
 - 新唯一 Alembic head 与正式库 revision 均为 `bbb36v8x9z25`。最终两阶段报告 `docs/migration_reports/release_runtime_20260822_100846.json` 状态 `completed`；最终备份 `data/backups/carton_erp_before_release_20260822_100847.sqlite3` 和隔离演练完整性正常、外键异常 0，迁移前后 13 张核心业务表计数一致。
 - 定向发布回归 `16 passed`，另有当前版本门禁测试 `1 passed`，Python 编译、唯一 Alembic head 和 `git diff --check` 均通过。正式回读 `integrity_check=ok`、外键异常 0、短期删除授权残留 0，本机 `/api/health` HTTP 200。
 - YL `Z.004.000006` 仍保留发布前的旧“其他包材/比例空值”事实，系统没有猜测回填；需老板强刷后按真实蜂窝板资料重新保存并人工验收。
+
+## 2026-08-22 v0.22.159 外购常用箱修改保存链修复正式完成
+
+- 正式发布 SHA `fd066536ac1dfe8651cedf460eaad07ab367ea2a`，版本为 `v0.22.159｜外购常用箱修改保存链修复`；正式分支与远端 `factory-current-baseline` 已同步。
+- 正式访问日志证明 Z.004.000006 切换蜂窝板并填写后没有发出 update-preview/PUT；根因是产品主数据变更字段清单遗漏外购类别、结构化规格、候选供应商和默认采购比例，页面误判无变化并关闭。现已将这些字段及对象型规格纳入稳定比较。
+- 发布回归为外购保存链 `13 passed`、相邻主数据/常用箱回归 `37 passed`；另有 2 条正式基线既有 BOM 测试失败，原因为测试文本编码与旧夹具缺少 `productForm`，未命中本次字段且未改 BOM 规则。
+- 本版无 migration，唯一 head 和正式库 revision 均保持 `bbb36v8x9z25`。两阶段报告 `docs/migration_reports/release_runtime_20260822_114542.json` 状态 `completed`，备份 `data/backups/carton_erp_before_release_20260822_114543.sqlite3` SHA-256 `6ab6db78a3102d9831489af3aedb075c6ee3bc801c8d7ea5ca9d926d642a96f9`；源库、备份和隔离演练核心计数一致，完整性正常、外键异常 0。
+- 正式服务已恢复且 `/api/health` HTTP 200。发布未自动修改 Z.004.000006；老板需强刷后重新保存真实蜂窝板资料，成功后产品 version 应递增并能重新打开原样回读。

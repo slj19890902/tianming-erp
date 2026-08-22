@@ -46,6 +46,18 @@ def test_desktop_frozen_rows_render_server_preview_and_hide_legacy_decisions() -
     assert "多收怎么处理" not in frozen_prefix
 
 
+def test_desktop_receipt_result_hides_material_and_purchase_price_status_hint() -> None:
+    table = _source(
+        DESKTOP,
+        '<table class="incoming-table">',
+        "<pager v-if=\"incomingTab==='pending'\"",
+    )
+    assert "请先确认实际材质和正式采购价格" not in table
+    assert "待确认实际材质和正式采购价" not in table
+    assert "预计订单用途" in table
+    assert "容量提醒" in table
+
+
 def test_desktop_receive_payload_carries_versions_not_client_allocations_or_price() -> None:
     payload = _source(
         DESKTOP,

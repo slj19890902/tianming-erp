@@ -154,8 +154,16 @@
       const params = new URLSearchParams(window.location.search);
       const batchId = (params.get("batch_id") || "").trim().toLowerCase();
       const batchMode = /^[0-9a-f]{64}$/.test(batchId);
+      const receiptItemIdsText = (params.get("receipt_item_ids") || "").trim();
+      const receiptItemIds = receiptItemIdsText
+        ? receiptItemIdsText.split(",").map((value) => Number(value.trim())).filter((value) => Number.isInteger(value) && value > 0)
+        : [];
+      const receiptBatchMode = receiptItemIds.length > 0
+        && new Set(receiptItemIds).size === receiptItemIds.length
+        && receiptItemIds.length <= 20;
       const receiptMode = window.location.pathname.endsWith("/incoming-production-card.html")
-        || params.has("receipt_item_id");
+        || params.has("receipt_item_id")
+        || receiptBatchMode;
       const sourceId = Number(params.get("receipt_item_id") || params.get("id"));
       const orderId = receiptMode ? null : sourceId;
       const receiptItemId = receiptMode ? sourceId : null;
@@ -508,8 +516,8 @@
         labelButton.textContent = labelCount > 0 ? `生产包装标签（${labelCount}张）` : "未启用包装标签";
         // Packaging labels use their own frozen plan and do not depend on the
         // A4 production paper's QR-image or page-overflow checks.
-        labelButton.disabled = batchMode || labelCount <= 0;
-        labelRefreshButton.hidden = batchMode || !refreshAction.options.length;
+        labelButton.disabled = batchMode || receiptBatchMode || labelCount <= 0;
+        labelRefreshButton.hidden = batchMode || receiptBatchMode || !refreshAction.options.length;
         labelRefreshButton.disabled = labelRefreshButton.hidden;
         labelRefreshButton.textContent = refreshAction.kind === "upgrade_compact"
           ? `升级到无抬头中文简称版${refreshAction.options.length > 1 ? `（${refreshAction.options.length}款）` : ""}`
@@ -538,7 +546,9 @@
         ).join("");
         applyProductionLabelActions(packageData);
         await waitForProductQrImages();
-        toolbarNote.textContent = batchMode
+        toolbarNote.textContent = receiptBatchMode
+          ? `已核验 ${packageData.card_count || 0} 项实收生产卡 · 每款固定半张 A4 · 共 ${layouts.length} 页`
+          : batchMode
           ? `已冻结 ${packageData.card_count || 0} 项人工选择 · 每个生产任务固定半张 A4 · 共 ${layouts.length} 页`
           : receiptMode
           ? (packageData.reuses_planned_card
@@ -574,14 +584,16 @@
         pagesHost.innerHTML = "";
         message.hidden = false;
         message.className = "message";
-        message.textContent = batchMode ? "正在核验已冻结的批量打印任务…" : receiptMode ? "正在读取同一生产任务的实收纸面版本…" : "正在读取正式报料快照…";
-        if (!batchMode && (!Number.isInteger(sourceId) || sourceId <= 0)) {
+        message.textContent = receiptBatchMode ? "正在核验勾选的实收生产卡…" : batchMode ? "正在核验已冻结的批量打印任务…" : receiptMode ? "正在读取同一生产任务的实收纸面版本…" : "正在读取正式报料快照…";
+        if (!batchMode && !receiptBatchMode && (!Number.isInteger(sourceId) || sourceId <= 0)) {
           message.className = "message error";
           message.textContent = receiptMode ? "来料实收明细编号无效" : "报料单编号无效";
           return;
         }
         try {
-          const endpoint = batchMode
+          const endpoint = receiptBatchMode
+            ? `/api/incoming/production-card-batch?${receiptItemIds.map((value) => `receipt_item_id=${encodeURIComponent(value)}`).join("&")}`
+            : batchMode
             ? `/api/requisition/production-print-batches/${encodeURIComponent(batchId)}`
             : receiptMode
             ? `/api/incoming/receipt-items/${encodeURIComponent(receiptItemId)}/production-card`
@@ -609,7 +621,7 @@
       modeButton.addEventListener("click", () => { customerSafe = !customerSafe; applyMode(); });
       labelButton.addEventListener("click", () => {
         const supplierOrderId = Number(loadedPackage && loadedPackage.supplier_order_id);
-        if (loadedPackage && !batchMode && Number.isInteger(supplierOrderId) && supplierOrderId > 0) {
+        if (loadedPackage && !batchMode && !receiptBatchMode && Number.isInteger(supplierOrderId) && supplierOrderId > 0) {
           window.open(`/production-packaging-label.html?id=${encodeURIComponent(supplierOrderId)}`, "_blank", "noopener");
         }
       });
@@ -665,7 +677,7 @@
       });
       closeButton.addEventListener("click", () => window.close());
       applyMode();
-      document.title = batchMode ? "生产任务单 · 批量勾选" : receiptMode ? "生产任务单 · 实收版" : "生产任务单 · 计划版";
+      document.title = receiptBatchMode ? "生产任务单 · 实收批量" : batchMode ? "生产任务单 · 批量勾选" : receiptMode ? "生产任务单 · 实收版" : "生产任务单 · 计划版";
       loadPackage();
     })();
   </script>

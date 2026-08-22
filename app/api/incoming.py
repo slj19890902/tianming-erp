@@ -103,6 +103,7 @@ from app.services.audit_log import append_audit_event
 from app.services.requisition_production_print import (
     build_receipt_production_print_package,
 )
+from app.services.requisition_production_print_batch import production_print_batch_pages
 from app.services.supplier_material_display import clean_supplier_material_code
 from app.services.product_specification import resolved_product_specification
 from app.services.receipt_purpose_distribution import (
@@ -644,6 +645,26 @@ def _decorate_rows_with_receipt_purpose(db: Session, rows: list[dict]) -> None:
             and material_calculation_fingerprint(actual_material)
             == fact.actual_material_fingerprint
         )
+        reported_material_code = (
+            str(fact.expected_material_code_snapshot or "").strip()
+            if fact_ready
+            else str(
+                getattr(source, "material_code_snapshot", None)
+                or getattr(source, "material_snapshot", None)
+                or row.get("material")
+                or ""
+            ).strip()
+        )
+        actual_material_code = (
+            str(fact.actual_material_code_snapshot or "").strip()
+            if fact_ready
+            else reported_material_code
+        )
+        actual_flute_type = (
+            str(fact.actual_material_flute_type_snapshot or "").strip()
+            if fact_ready
+            else str(row.get("flute_type") or "").strip()
+        )
         row.update(
             {
                 "source_key": snapshot.source_key,
@@ -673,14 +694,29 @@ def _decorate_rows_with_receipt_purpose(db: Session, rows: list[dict]) -> None:
                     else getattr(source, "material_id", None)
                 ),
                 "formal_material_code": (
-                    fact.expected_material_code_snapshot
-                    if fact_ready
-                    else str(
-                        getattr(source, "material_code_snapshot", None)
-                        or getattr(source, "material_snapshot", None)
-                        or ""
-                    ).strip()
-                    or None
+                    reported_material_code or None
+                ),
+                "reported_material_code": reported_material_code or None,
+                "reported_material_display": " / ".join(
+                    value
+                    for value in (
+                        reported_material_code,
+                        str(row.get("flute_type") or "").strip(),
+                    )
+                    if value
+                ),
+                "actual_material_code": actual_material_code or None,
+                "actual_material_flute_type": actual_flute_type or None,
+                "actual_material_display": " / ".join(
+                    value
+                    for value in (actual_material_code, actual_flute_type)
+                    if value
+                ),
+                "material_changed": bool(
+                    fact_ready
+                    and actual_material_code
+                    and reported_material_code
+                    and actual_material_code != reported_material_code
                 ),
                 "material_variance_id": variance.id if variance is not None else None,
                 "material_variance_actual_material_id": (
@@ -1553,6 +1589,7 @@ def _pending_incoming_route_rows(db: Session, user: User) -> list[dict]:
             Order.id.label("order_id"),
             Customer.id.label("customer_id"),
             Customer.name.label("customer_name"),
+            Customer.chinese_short_name.label("customer_short_name"),
             Customer.customer_code.label("customer_code"),
             Order.order_number,
             Order.customer_po,
@@ -1832,6 +1869,7 @@ def _rows(
             Order.customer_po,
             Order.created_at,
             Customer.name.label("customer_name"),
+            Customer.chinese_short_name.label("customer_short_name"),
             OrderItem.snapshot_product_name.label("product_name"),
             func.coalesce(
                 OrderItem.snapshot_product_code,
@@ -2732,6 +2770,7 @@ def _stock_replenishment_receipt_row(
         "display_order_number": order.order_number,
         "customer_po": None,
         "customer_name": customer.name if customer else "",
+        "customer_short_name": customer.chinese_short_name if customer else None,
         "product_name": item.product_name_snapshot,
         "product_code": item.product_code_snapshot,
         "specification": (
@@ -2820,6 +2859,23 @@ def _decorate_received_rows_with_purpose(
     allocation_by_receipt = {
         int(row.incoming_receipt_item_id): row for row in allocations
     }
+    receipt_fact_ids = {
+        int(row.purchase_receipt_fact_id)
+        for row in allocations
+        if row.purchase_receipt_fact_id is not None
+    }
+    receipt_facts = {
+        int(row.id): row
+        for row in (
+            db.scalars(
+                select(PurchaseReceiptFact).where(
+                    PurchaseReceiptFact.id.in_(receipt_fact_ids)
+                )
+            ).all()
+            if receipt_fact_ids
+            else []
+        )
+    }
     allocation_payloads = serialize_receipt_purpose_allocations(db, allocations)
     reversals = list(
         db.scalars(
@@ -2840,10 +2896,74 @@ def _decorate_received_rows_with_purpose(
         if allocation is None:
             row["purpose_status"] = "legacy_unset"
             row["purpose_allocation"] = None
+            reported_material_code = str(
+                row.get("material_code") or row.get("material") or ""
+            ).strip()
+            flute_type = str(row.get("flute_type") or "").strip()
+            row.update(
+                {
+                    "reported_material_code": reported_material_code or None,
+                    "reported_material_display": " / ".join(
+                        value
+                        for value in (reported_material_code, flute_type)
+                        if value
+                    ),
+                    "actual_material_code": reported_material_code or None,
+                    "actual_material_flute_type": flute_type or None,
+                    "actual_material_display": " / ".join(
+                        value
+                        for value in (reported_material_code, flute_type)
+                        if value
+                    ),
+                    "material_changed": False,
+                }
+            )
             continue
         row["purpose_status"] = allocation.purpose_contract_status_snapshot
         row["purpose_allocation"] = _visible_purpose_allocation(
             allocation_payloads.get(allocation.id), can_view_cost=can_view_cost
+        )
+        receipt_fact = receipt_facts.get(
+            int(allocation.purchase_receipt_fact_id or 0)
+        )
+        reported_material_code = str(
+            receipt_fact.expected_material_code_snapshot
+            if receipt_fact is not None
+            else row.get("material_code") or row.get("material") or ""
+        ).strip()
+        reported_flute_type = str(row.get("flute_type") or "").strip()
+        actual_material_code = str(
+            receipt_fact.actual_material_code_snapshot
+            if receipt_fact is not None
+            else reported_material_code
+        ).strip()
+        actual_flute_type = str(
+            receipt_fact.actual_material_flute_type_snapshot
+            if receipt_fact is not None
+            else reported_flute_type
+        ).strip()
+        row.update(
+            {
+                "reported_material_code": reported_material_code or None,
+                "reported_material_display": " / ".join(
+                    value
+                    for value in (reported_material_code, reported_flute_type)
+                    if value
+                ),
+                "actual_material_code": actual_material_code or None,
+                "actual_material_flute_type": actual_flute_type or None,
+                "actual_material_display": " / ".join(
+                    value
+                    for value in (actual_material_code, actual_flute_type)
+                    if value
+                ),
+                "material_changed": bool(
+                    receipt_fact is not None
+                    and actual_material_code
+                    and reported_material_code
+                    and actual_material_code != reported_material_code
+                ),
+            }
         )
         reversal = reversal_by_receipt.get(int(receipt_item_id))
         if reversal is not None:
@@ -2984,6 +3104,7 @@ def _receipt_fact_rows(
             "display_order_number": display_number,
             "customer_po": order.customer_po,
             "customer_name": customer.name if customer else "",
+            "customer_short_name": customer.chinese_short_name if customer else None,
             "product_name": product_name,
             "product_code": product_code,
             "specification": (
@@ -3498,7 +3619,13 @@ def incoming_production_card(
             ]
         )
     frozen_notes = "；".join(dict.fromkeys(part for part in frozen_notes_parts if part))
-    process_steps = _production_card_steps(frozen_process)
+    process_steps = _production_card_steps(
+        "；".join(
+            value
+            for value in (str(frozen_process or "").strip(), frozen_notes)
+            if value
+        )
+    )
     output_factor = max(
         int(task.output_factor if task is not None else 0)
         or cutting_output_factor(row.get("special_process")),
@@ -3610,6 +3737,111 @@ def incoming_production_card(
     return {**legacy_card, **package}
 
 
+@router.get("/production-card-batch")
+def incoming_production_card_batch(
+    receipt_item_id: Annotated[list[int], Query(min_length=1, max_length=20)],
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    """Build one fail-closed, read-only half-A4 batch from selected receipts."""
+
+    selected_ids = [int(value) for value in receipt_item_id]
+    if len(set(selected_ids)) != len(selected_ids):
+        raise HTTPException(status_code=422, detail="同一来料明细不能重复勾选打印")
+
+    invalid_items: list[dict] = []
+    cards: list[dict] = []
+    card_keys: dict[int, tuple[int, str] | None] = {}
+    for selected_id in selected_ids:
+        try:
+            package = incoming_production_card(selected_id, db=db, user=user)
+        except HTTPException as error:
+            detail = error.detail
+            invalid_items.append(
+                {
+                    "receipt_item_id": selected_id,
+                    "reason": (
+                        str(detail.get("message") or detail)
+                        if isinstance(detail, dict)
+                        else str(detail)
+                    ),
+                }
+            )
+            continue
+        if not bool(package.get("printable")) or len(package.get("cards") or []) != 1:
+            invalid_items.append(
+                {
+                    "receipt_item_id": selected_id,
+                    "reason": "生产卡内容不完整或超出半张 A4，请先核对生产资料",
+                }
+            )
+            continue
+        card = dict(package["cards"][0])
+        card["receipt_item_id"] = selected_id
+        card["paper_fingerprint"] = package.get("paper_fingerprint")
+        cards.append(card)
+        supplier_order_id = int(package.get("supplier_order_id") or 0)
+        source_identity = str(card.get("source_identity") or "").strip()
+        card_keys[selected_id] = (
+            (supplier_order_id, source_identity)
+            if supplier_order_id > 0 and source_identity
+            else None
+        )
+
+    if invalid_items:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "incoming_production_card_batch_invalid",
+                "message": "所选来料中存在不可打印项，整批未生成",
+                "invalid_items": invalid_items,
+            },
+        )
+
+    planned_print_keys: set[tuple[int, str]] = set()
+    logs = db.scalars(
+        select(OperationLog).where(
+            OperationLog.action_code
+            == "requisition.production_print_batch.prepared",
+            OperationLog.result == "success",
+        )
+    ).all()
+    for log in logs:
+        try:
+            details = json.loads(log.details or "{}")
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(details, dict) or details.get("_truncated"):
+            continue
+        for item in details.get("items") or []:
+            if not isinstance(item, dict):
+                continue
+            supplier_order_id = int(item.get("supplier_order_id") or 0)
+            source_identity = str(item.get("source_identity") or "").strip()
+            if supplier_order_id > 0 and source_identity:
+                planned_print_keys.add((supplier_order_id, source_identity))
+
+    warnings = [
+        {
+            "receipt_item_id": selected_id,
+            "message": "该产品的待来料生产任务单已生成过，确认后仍可补打实收生产卡",
+        }
+        for selected_id in selected_ids
+        if card_keys.get(selected_id) in planned_print_keys
+    ]
+    pages = production_print_batch_pages(cards)
+    return {
+        "receipt_item_ids": selected_ids,
+        "card_count": len(cards),
+        "page_count": len(pages),
+        "layout_kind": "half_a4_fixed",
+        "printable": True,
+        "planned_print_warnings": warnings,
+        "cards": cards,
+        "pages": pages,
+    }
+
+
 @router.get("/surplus-locations")
 def surplus_inventory_locations(
     db: Session = Depends(get_db),
@@ -3690,16 +3922,30 @@ def pending_items(
 def recently_received_items(
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
+    page: Annotated[int | None, Query(ge=1)] = None,
+    page_size: Annotated[int | None, Query(ge=1, le=100)] = None,
 ) -> dict:
+    rows = _received_rows(
+        db,
+        user=user,
+        received_since=_utc_now() - timedelta(hours=24),
+    )
+    if page is None and page_size is None:
+        return {"items": [_incoming_row_response(row) for row in rows]}
+    resolved_page_size = min(max(int(page_size or 25), 1), 100)
+    requested_page = max(int(page or 1), 1)
+    total = len(rows)
+    last_page = max(1, (total + resolved_page_size - 1) // resolved_page_size)
+    resolved_page = min(requested_page, last_page)
+    start = (resolved_page - 1) * resolved_page_size
     return {
         "items": [
             _incoming_row_response(row)
-            for row in _received_rows(
-                db,
-                user=user,
-                received_since=_utc_now() - timedelta(hours=24),
-            )
-        ]
+            for row in rows[start : start + resolved_page_size]
+        ],
+        "total": total,
+        "page": resolved_page,
+        "page_size": resolved_page_size,
     }
 
 

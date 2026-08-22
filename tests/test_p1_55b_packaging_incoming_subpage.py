@@ -37,7 +37,7 @@ def test_desktop_dom_is_split_and_standalone_incoming_stays_paper_only() -> None
     page = INDEX.split(
         '<template v-else-if="activePage === \'incoming\'">', 1
     )[1].split('<template v-else-if="activePage === \'production\'">', 1)[0]
-    board_title = '<page-head title="纸板收料"'
+    board_title = '<strong class="incoming-page-title">纸板收料</strong>'
     packaging_title = '<page-head title="包材收料"'
     assert "<template v-if=\"incomingWorkspace==='external-packaging'\">" in page
     assert packaging_title in page
@@ -51,7 +51,8 @@ def test_desktop_dom_is_split_and_standalone_incoming_stays_paper_only() -> None
     assert 'class="external-incoming-panel"' not in board
     assert "externalIncomingPending.length" not in board
     assert "待入库 {{ incomingPendingTotal }}" in board
-    assert "全选本页" in board
+    assert "toggleAllIncoming" in board
+    assert "incoming-compact-table" in board
 
     assert "/api/external-packaging-purchases/pending-receipts" not in STANDALONE_INCOMING
     assert "incomingWorkspace" not in STANDALONE_INCOMING

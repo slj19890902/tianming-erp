@@ -18,7 +18,7 @@ def test_revert_payload_accepts_missing_blank_and_legacy_reason() -> None:
 
 def test_desktop_and_mobile_use_one_confirmation_without_reason() -> None:
     start = INDEX.index("async revertIncoming(row)")
-    end = INDEX.index("async loadIncomingHistory()", start)
+    end = INDEX.index("async openSelectedIncomingProductionCards()", start)
     method = INDEX[start:end]
     assert method.count("confirm(") == 1
     assert "prompt(" not in method

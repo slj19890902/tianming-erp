@@ -22,8 +22,8 @@ def _source(document: str, start: str, end: str) -> str:
 def test_desktop_frozen_rows_render_server_preview_and_hide_legacy_decisions() -> None:
     table = _source(
         DESKTOP,
-        '<table class="incoming-table">',
-        "<pager v-if=\"incomingTab==='pending'\"",
+        '<table class="incoming-table incoming-compact-table">',
+        "</data-panel>",
     )
     for field in (
         "purpose_status",
@@ -154,8 +154,8 @@ def test_desktop_material_variance_is_requested_and_confirmed_independently() ->
 def test_desktop_normal_receipt_uses_material_cell_and_auto_freezes_master_price() -> None:
     table = _source(
         DESKTOP,
-        '<table class="incoming-table">',
-        "<pager v-if=\"incomingTab==='pending'\"",
+        '<table class="incoming-table incoming-compact-table">',
+        "</data-panel>",
     )
     assert "openPurchaseReceiptMaterialChange(row)" in table
     assert "处理材质与采购价" not in table

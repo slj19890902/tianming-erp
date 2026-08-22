@@ -45,7 +45,7 @@ from app.services.production_workflow import (
     _task_printing_snapshot,
     cutting_output_factor,
 )
-from app.services.product_qr import product_qr_payload
+from app.services.production_task_qr import production_task_qr_payload
 from app.services.product_specification import resolved_product_specification
 
 
@@ -1067,17 +1067,19 @@ def build_supplier_requisition_production_package(
         ]
         if len(product_ids) == 1 and len(qr_candidates) == 1:
             card["product_id"] = int(qr_candidates[0].id)
-            card["product_qr"] = product_qr_payload(qr_candidates[0].id)
-            card["product_qr_unavailable_reason"] = None
         else:
             card["product_id"] = None
-            card["product_qr"] = None
-            card["product_qr_unavailable_reason"] = (
-                "临时任务没有正式产品二维码"
-                if not product_ids
-                else "当前产品已停用，不生成二维码"
-                if len(product_ids) == 1
-                else "多产品任务不生成单一产品二维码"
+        task_versions = production_print_card_task_versions(card)
+        if len(task_versions) == 1:
+            task_id = int(task_versions[0]["task_id"])
+            card["production_task_qr"] = production_task_qr_payload(task_id)
+            card["production_task_qr_unavailable_reason"] = None
+        else:
+            card["production_task_qr"] = None
+            card["production_task_qr_unavailable_reason"] = (
+                "生产任务尚未建立，不能生成任务二维码"
+                if not task_versions
+                else "这张纸面包含多项生产任务，请分别查看组件任务"
             )
         for component in card["components"]:
             component.pop("_product_id", None)

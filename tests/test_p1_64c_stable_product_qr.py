@@ -33,7 +33,7 @@ def _decode_qr(data_url: str) -> str:
     return decoded
 
 
-def test_formal_product_qr_is_stable_and_contains_no_dynamic_business_fact(
+def test_formal_production_task_qr_is_stable_and_contains_no_dynamic_business_fact(
     production_print_app,
 ) -> None:
     from app.models.product import Product
@@ -50,12 +50,11 @@ def test_formal_product_qr_is_stable_and_contains_no_dynamic_business_fact(
         assert card["joining_method"] in {"粘贴", "打钉", "无需结合"}
         assert "待确认" not in card["joining_method"]
         assert card["product_id"] == production_print_app["product_id"]
-        qr = card["product_qr"]
-        assert qr["product_id"] == production_print_app["product_id"]
+        qr = card["production_task_qr"]
+        assert qr["production_task_id"] == card["production_task_versions"][0]["task_id"]
         assert qr["lookup_url"].endswith(
-            f"/P/{production_print_app['product_id']}"
+            f"/mobile/?task={qr['production_task_id']}#production"
         )
-        assert "?" not in qr["lookup_url"]
         assert _decode_qr(qr["qr_data_url"]) == qr["lookup_url"]
         serialized = json.dumps(qr, ensure_ascii=False)
         for forbidden in (
@@ -64,8 +63,8 @@ def test_formal_product_qr_is_stable_and_contains_no_dynamic_business_fact(
             "token",
             "order_id",
             "order_item_id",
-            "task_id",
             "quantity",
+            "version",
         ):
             assert forbidden not in serialized
 
@@ -85,7 +84,7 @@ def test_formal_product_qr_is_stable_and_contains_no_dynamic_business_fact(
             f"/api/requisition/supplier-orders/{order_id}/production-print-package"
         )
         assert refreshed.status_code == 200, refreshed.text
-        assert refreshed.json()["cards"][0]["product_qr"] == qr
+        assert refreshed.json()["cards"][0]["production_task_qr"] == qr
 
 
 def test_current_product_overview_is_scoped_permissioned_and_price_free(
@@ -218,10 +217,11 @@ def test_product_scan_page_and_task_paper_are_read_only_and_fail_closed() -> Non
     ):
         assert forbidden not in PRODUCT_PAGE
 
-    assert "productQrHtml(card)" in PRINT_PAGE
-    assert 'alt="扫码查看当前产品资料"' in PRINT_PAGE
+    assert "productionTaskQrHtml(card)" in PRINT_PAGE
+    assert 'alt="扫码查看这一项生产任务"' in PRINT_PAGE
     assert "扫码看当前资料</span>" not in PRINT_PAGE
-    assert "waitForProductQrImages" in PRINT_PAGE
+    assert "waitForTaskQrImages" in PRINT_PAGE
+    assert "img[alt='扫码查看这一项生产任务']" in PRINT_PAGE
     assert "card.status_label" not in PRINT_PAGE[
         PRINT_PAGE.index("function cardHtml") : PRINT_PAGE.index(
             "function applyMode", PRINT_PAGE.index("function cardHtml")
@@ -231,7 +231,7 @@ def test_product_scan_page_and_task_paper_are_read_only_and_fail_closed() -> Non
     assert "结合方式待确认" not in PRINT_PAGE
 
 
-def test_temporary_or_inactive_product_does_not_receive_a_fabricated_qr(
+def test_inactive_current_product_keeps_the_frozen_task_qr(
     production_print_app,
 ) -> None:
     from app.models.product import Product
@@ -251,5 +251,5 @@ def test_temporary_or_inactive_product_does_not_receive_a_fabricated_qr(
         package = build_supplier_requisition_production_package(db, order)
     card = package["cards"][0]
     assert card["product_id"] is None
-    assert card["product_qr"] is None
-    assert card["product_qr_unavailable_reason"] == "当前产品已停用，不生成二维码"
+    assert card["production_task_qr"]["production_task_id"] == card["production_task_versions"][0]["task_id"]
+    assert card["production_task_qr_unavailable_reason"] is None

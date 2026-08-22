@@ -80,10 +80,11 @@ def test_standalone_incoming_matches_deferred_loading_contract() -> None:
     assert 'endpoint = "/api/mobile/erp/incoming/search"' in pending
     assert "/api/incoming/received" not in pending
     assert "/api/incoming/surplus-locations" not in pending
-    assert 'api("/api/incoming/received", {signal: controller.signal})' in received
+    assert '`/api/incoming/history?${params.toString()}`' in received
+    assert "page_size: String(state.receivedPageSize)" in received
     assert 'api("/api/incoming/surplus-locations", {signal: controller.signal})' in locations
     assert "beginLatestRequest" in INCOMING
-    assert "await loadReceived();" in INCOMING
+    assert "await loadReceived({page: state.receivedPage});" in INCOMING
     assert "await ensureSurplusLocations();" in INCOMING
 
 
@@ -94,6 +95,6 @@ def test_standalone_incoming_writes_refresh_loaded_received_without_cold_request
 
     assert "const tasks = [loadPending({page: state.pendingPage})];" in refresh
     assert "if (state.receivedLoaded)" in refresh
-    assert "loadReceived({force: true})" in refresh
+    assert "loadReceived({page: state.receivedPage, force: true})" in refresh
     assert "await refreshAfterIncomingWrite();" in receive
     assert "await refreshAfterIncomingWrite();" in accept_short

@@ -72,7 +72,7 @@
       document.getElementById("purchaseNumber").textContent=data.purchase_number||"-";
       document.getElementById("confirmedDate").textContent=confirmedDate;
       const items=Array.isArray(data.items)?data.items:[];
-      rowsNode.innerHTML=items.length?items.map((item,index)=>`<tr><td>${index+1}</td><td>${escapeHtml(item.material||"-")}</td><td>${escapeHtml(item.aperture_mm||"-")}</td><td class="left">${escapeHtml(item.dimensions_mm||item.specification_summary||"-")}</td><td>${escapeHtml(item.purchase_quantity)} ${escapeHtml(item.purchase_unit)}</td></tr>`).join(""):'<tr><td colspan="5">该采购单暂无明细</td></tr>';
+      rowsNode.innerHTML=items.length?items.map((item,index)=>`<tr><td>${index+1}</td><td>${escapeHtml(item.material||"-")}</td><td>${escapeHtml(item.aperture_mm||"-")}</td><td class="left">${escapeHtml(item.dimensions_mm||((item.material||item.aperture_mm)?"规格未冻结":item.specification_summary)||"-")}</td><td>${escapeHtml(item.purchase_quantity)} ${escapeHtml(item.purchase_unit)}</td></tr>`).join(""):'<tr><td colspan="5">该采购单暂无明细</td></tr>';
       loadState.classList.add("hidden");loadState.classList.remove("error");retryButton.classList.add("hidden");printButton.disabled=false;
     }
     async function loadPurchase(){

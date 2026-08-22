@@ -222,3 +222,88 @@ def test_supplier_purchase_print_does_not_expose_internal_source_or_price(
         )
         assert after.status_code == 200, after.text
         assert after.json() == before_data
+
+
+def test_supplier_purchase_print_rejects_legacy_honeycomb_without_frozen_dimensions(
+    purchase_app: FastAPI,
+) -> None:
+    from app.models.external_packaging_purchase import ExternalPackagingPurchaseItem
+
+    order_id = purchase_app.state.fixture["order_id"]
+    with TestClient(purchase_app) as client:
+        _login(client, "purchase-admin")
+        preview = client.get(
+            f"/api/orders/{order_id}/external-packaging-purchase"
+        ).json()
+        confirmation = client.post(
+            f"/api/orders/{order_id}/external-packaging-purchase/confirm",
+            json=_confirmation_payload(preview, "p1-40c-incomplete-honeycomb"),
+        )
+        assert confirmation.status_code == 200, confirmation.text
+        purchase_id = confirmation.json()["confirmation"]["purchase_orders"][0]["id"]
+
+        with purchase_app.state.session_factory() as db:
+            frozen_item = db.scalar(
+                select(ExternalPackagingPurchaseItem).where(
+                    ExternalPackagingPurchaseItem.purchase_order_id == purchase_id
+                )
+            )
+            frozen_item.category_code_snapshot = "other_packaging"
+            frozen_item.specification_json_snapshot = (
+                '{"summary":"材质170*110*170 孔径15"}'
+            )
+            frozen_item.specification_summary_snapshot = "材质170*110*170 孔径15"
+            db.commit()
+
+        response = client.get(
+            f"/api/external-packaging-purchases/{purchase_id}/print"
+        )
+
+    assert response.status_code == 409, response.text
+    assert "蜂窝板长宽厚" in response.text
+    assert "不会使用当前主档覆盖历史采购" in response.text
+
+
+def test_supplier_purchase_print_splits_structured_honeycomb_fields(
+    purchase_app: FastAPI,
+) -> None:
+    from app.models.external_packaging_purchase import ExternalPackagingPurchaseItem
+
+    order_id = purchase_app.state.fixture["order_id"]
+    with TestClient(purchase_app) as client:
+        _login(client, "purchase-admin")
+        preview = client.get(
+            f"/api/orders/{order_id}/external-packaging-purchase"
+        ).json()
+        confirmation = client.post(
+            f"/api/orders/{order_id}/external-packaging-purchase/confirm",
+            json=_confirmation_payload(preview, "p1-40c-structured-honeycomb"),
+        )
+        assert confirmation.status_code == 200, confirmation.text
+        purchase_id = confirmation.json()["confirmation"]["purchase_orders"][0]["id"]
+
+        with purchase_app.state.session_factory() as db:
+            frozen_item = db.scalar(
+                select(ExternalPackagingPurchaseItem).where(
+                    ExternalPackagingPurchaseItem.purchase_order_id == purchase_id
+                )
+            )
+            frozen_item.category_code_snapshot = "honeycomb_board"
+            frozen_item.specification_json_snapshot = (
+                '{"material":"170*110*170","aperture_mm":15,'
+                '"length_mm":800,"width_mm":180,"thickness_mm":60}'
+            )
+            frozen_item.specification_summary_snapshot = (
+                "材质170*110*170，孔径15mm，800×180×60mm"
+            )
+            db.commit()
+
+        response = client.get(
+            f"/api/external-packaging-purchases/{purchase_id}/print"
+        )
+
+    assert response.status_code == 200, response.text
+    row = response.json()["items"][0]
+    assert row["material"] == "170*110*170"
+    assert row["aperture_mm"] == "15"
+    assert row["dimensions_mm"] == "800×180×60"

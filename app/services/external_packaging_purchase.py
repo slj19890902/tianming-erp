@@ -30,6 +30,7 @@ from app.models.order_external_packaging import (
 from app.models.supplier import ExternalPackagingProduct, Supplier
 from app.models.user import User
 from app.services.order_external_packaging import DISCRETE_PURCHASE_UNITS
+from app.services.supplier_master import SUPPLIER_CATEGORY_LABELS
 from app.services.corner_guard_pricing import (
     CATEGORY_CODE as CORNER_GUARD_CATEGORY_CODE,
     CornerGuardPricingError,
@@ -159,6 +160,8 @@ def _current_price(
 def _product_availability(
     db: Session,
     candidate: SalesOrderItemExternalComponentCandidate,
+    *,
+    component: SalesOrderItemExternalComponent,
 ) -> tuple[ExternalPackagingProduct | None, str | None]:
     product = db.scalar(
         select(ExternalPackagingProduct)
@@ -174,6 +177,18 @@ def _product_availability(
         return product, "冻结候选与当前供应商归属不一致"
     if product.purchase_unit != candidate.purchase_unit_snapshot:
         return product, "冻结候选与当前采购单位不一致"
+    if product.category_code != component.category_code:
+        frozen_label = SUPPLIER_CATEGORY_LABELS.get(
+            component.category_code, component.category_code
+        )
+        current_label = SUPPLIER_CATEGORY_LABELS.get(
+            product.category_code, product.category_code
+        )
+        return product, (
+            "冻结候选的包材类别已变化"
+            f"（订单：{frozen_label}；供应商产品当前：{current_label}），"
+            "请先更新常用箱并重新下单"
+        )
     if not product.is_active or not product.supplier.is_active:
         return product, "供应商或外购产品已停用"
     return product, None
@@ -359,7 +374,9 @@ def _candidate_preview(
     quantity: Decimal,
     as_of: date,
 ) -> dict[str, Any]:
-    _, blocked_reason = _product_availability(db, candidate)
+    _, blocked_reason = _product_availability(
+        db, candidate, component=component
+    )
     price = None if blocked_reason else _current_price(
         db, candidate, component=component, as_of=as_of
     )
@@ -1367,7 +1384,9 @@ def confirm_external_purchase(
             raise ExternalPurchaseContractError(
                 f"组件“{component.purpose}”采购数量格式不正确", status_code=422
             ) from error
-        product, blocked_reason = _product_availability(db, candidate)
+        product, blocked_reason = _product_availability(
+            db, candidate, component=component
+        )
         if blocked_reason or product is None:
             raise ExternalPurchaseContractError(
                 f"组件“{component.purpose}”：{blocked_reason}"
@@ -1665,14 +1684,25 @@ def _purchase_print_specification(row: ExternalPackagingPurchaseItem) -> dict[st
         dimensions = "×".join(
             _decimal_text(Decimal(str(value))) for value in (length, width, thickness)
         )
-    if row.category_code_snapshot == "honeycomb_board":
-        summary = str(row.specification_summary_snapshot or "")
-        if not material:
-            match = re.search(r"材质\s*([^，,\s]+)", summary)
-            material = match.group(1) if match else ""
-        if aperture in (None, ""):
-            match = re.search(r"孔径\s*([0-9]+(?:\.[0-9]+)?)", summary)
-            aperture = match.group(1) if match else None
+    summary = str(row.specification_summary_snapshot or "")
+    if not material:
+        match = re.search(r"材质\s*([^，,\s]+)", summary)
+        material = match.group(1) if match else ""
+    if aperture in (None, ""):
+        match = re.search(r"孔径\s*([0-9]+(?:\.[0-9]+)?)", summary)
+        aperture = match.group(1) if match else None
+    if not dimensions:
+        match = re.search(
+            r"(?:^|[，,；;\s])"
+            r"([0-9]+(?:\.[0-9]+)?)\s*[×xX*]\s*"
+            r"([0-9]+(?:\.[0-9]+)?)\s*[×xX*]\s*"
+            r"([0-9]+(?:\.[0-9]+)?)(?:\s*mm)?(?:$|[，,；;\s])",
+            summary,
+        )
+        if match:
+            dimensions = "×".join(
+                _decimal_text(Decimal(value)) for value in match.groups()
+            )
     return {
         "material": material or None,
         "aperture_mm": (
@@ -1719,6 +1749,30 @@ def build_external_purchase_print(
     items: list[dict[str, Any]] = []
     for row in purchase.items:
         specification = _purchase_print_specification(row)
+        looks_like_legacy_honeycomb = bool(
+            specification["material"] and specification["aperture_mm"]
+        )
+        is_honeycomb = (
+            row.category_code_snapshot == "honeycomb_board"
+            or looks_like_legacy_honeycomb
+        )
+        if is_honeycomb:
+            missing_fields = [
+                label
+                for key, label in (
+                    ("material", "材质"),
+                    ("aperture_mm", "孔径"),
+                    ("dimensions_mm", "蜂窝板长宽厚"),
+                )
+                if not specification[key]
+            ]
+            if missing_fields:
+                raise ExternalPurchaseContractError(
+                    "采购单冻结的蜂窝板信息不完整，缺少"
+                    f"{'、'.join(missing_fields)}；请更新常用箱并重新下单。"
+                    "系统不会使用当前主档覆盖历史采购。",
+                    status_code=409,
+                )
         items.append(
             {
                 "specification_summary": row.specification_summary_snapshot,

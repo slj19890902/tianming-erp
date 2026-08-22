@@ -67,6 +67,8 @@ def test_external_purchase_print_shows_supplier_specification_and_quantity() -> 
         "purchase_unit",
     ):
         assert label in PRINT_PAGE
+    assert "规格未冻结" in PRINT_PAGE
+    assert "dimensions_mm||item.specification_summary" not in PRINT_PAGE
     for forbidden in (
         "客户",
         "订单来源",

@@ -356,6 +356,55 @@ def test_one_confirmation_groups_three_components_into_two_supplier_orders(
         }
 
 
+def test_supplier_product_category_change_blocks_stale_order_confirmation(
+    purchase_app: FastAPI,
+) -> None:
+    from app.models.order_external_packaging import (
+        SalesOrderItemExternalComponent,
+    )
+    from app.models.order import OrderItem
+    from app.models.supplier import ExternalPackagingProduct
+
+    order_id = purchase_app.state.fixture["order_id"]
+    with purchase_app.state.session_factory() as db:
+        component = db.scalar(
+            select(SalesOrderItemExternalComponent)
+            .where(SalesOrderItemExternalComponent.sales_order_item_id.in_(
+                select(OrderItem.id).where(OrderItem.order_id == order_id)
+            ))
+            .order_by(SalesOrderItemExternalComponent.id)
+        )
+        candidate = component.candidates[0]
+        product = db.get(
+            ExternalPackagingProduct, candidate.external_product_id_snapshot
+        )
+        product.category_code = "honeycomb_board"
+        product.version += 1
+        db.commit()
+
+    with TestClient(purchase_app) as client:
+        _login(client, "purchase-admin")
+        preview = client.get(
+            f"/api/orders/{order_id}/external-packaging-purchase"
+        )
+        assert preview.status_code == 200, preview.text
+        first = preview.json()["items"][0]
+        selected = next(
+            row for row in first["candidates"] if row["id"] == first["default_candidate_id"]
+        )
+        assert "包材类别已变化" in selected["blocked_reason"]
+
+        confirmation = client.post(
+            f"/api/orders/{order_id}/external-packaging-purchase/confirm",
+            json=_confirmation_payload(
+                preview.json(), "p1-64-stale-supplier-category"
+            ),
+        )
+
+    assert confirmation.status_code == 409, confirmation.text
+    assert "先更新常用箱并重新下单" in confirmation.text
+
+
 def test_manual_cancel_preserves_history_and_allows_reconfirmation(
     purchase_app: FastAPI,
 ) -> None:
@@ -482,6 +531,7 @@ def test_honeycomb_print_uses_frozen_structured_specification(
     purchase_app: FastAPI,
 ) -> None:
     from app.models.order_external_packaging import SalesOrderItemExternalComponent
+    from app.models.supplier import ExternalPackagingProduct
 
     order_id = purchase_app.state.fixture["order_id"]
     with purchase_app.state.session_factory() as db:
@@ -504,6 +554,12 @@ def test_honeycomb_print_uses_frozen_structured_specification(
             sort_keys=True,
         )
         component.specification_summary = "材质170*110*170，孔径15mm，800×180×60mm"
+        candidate = component.candidates[0]
+        product = db.get(
+            ExternalPackagingProduct, candidate.external_product_id_snapshot
+        )
+        assert product is not None
+        product.category_code = "honeycomb_board"
         db.commit()
 
     with TestClient(purchase_app) as client:

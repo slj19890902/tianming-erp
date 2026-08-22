@@ -4565,6 +4565,12 @@ def _unlink_predelivery_order_bindings(
 
 def _order_flow_dependencies(db: Session, order_ids: list[int]) -> list[str]:
     labels: list[str] = []
+    if db.scalar(
+        select(func.count())
+        .select_from(ExternalPackagingPurchaseItem)
+        .where(ExternalPackagingPurchaseItem.sales_order_id.in_(order_ids))
+    ):
+        labels.append("外购包材采购历史")
     has_posted_incoming = bool(
         db.scalar(
             select(func.count())
@@ -4639,6 +4645,8 @@ def _order_flow_dependencies(db: Session, order_ids: list[int]) -> list[str]:
 
 
 def _flow_delete_message(labels: list[str]) -> str:
+    if "外购包材采购历史" in labels:
+        return "该订单已有外购包材采购历史，不能物理删除；请保留原订单用于追溯，并将订单标记为作废或归档。"
     if "有效来料实收" in labels:
         return "该订单存在有效来料实收记录，不能物理删除。请先撤销来料，再将订单标记为作废或归档。"
     if "已撤销来料审计" in labels:
@@ -5201,7 +5209,6 @@ def _delete_orders_in_transaction(
             },
             batch_id=batch_id,
         )
-        db.delete(order)
     if batch_id is not None:
         first_order = orders[0]
         customer = db.get(Customer, first_order.customer_id)
@@ -5233,6 +5240,8 @@ def _delete_orders_in_transaction(
                 ],
             },
         )
+    for order in orders:
+        db.delete(order)
     try:
         db.commit()
     except IntegrityError as error:

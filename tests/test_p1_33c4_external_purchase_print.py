@@ -30,7 +30,7 @@ def test_order_detail_and_confirmation_open_the_same_existing_purchase() -> None
     assert ":href=\"`/external-purchase-print.html?id=${purchase.id}`\"" in INDEX
     assert "{{ purchase.purchase_number }} · 打印" in INDEX
     assert "打印采购单" in INDEX
-    assert INDEX.count("/external-purchase-print.html?id=${purchase.id}") == 2
+    assert INDEX.count("/external-purchase-print.html?id=${purchase.id}") == 3
 
 
 def test_print_layout_repeats_header_and_avoids_broken_rows() -> None:

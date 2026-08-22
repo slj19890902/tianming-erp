@@ -13,8 +13,10 @@ from app.api.deliveries import (
     _pending_query,
 )
 from app.api.orders import (
+    OrderGroupDeleteRequest,
     OrderStatusRequest,
     WorkflowRollbackRequest,
+    delete_order_group,
     rollback_order_workflow,
     update_order_status,
 )
@@ -933,3 +935,52 @@ def test_cancelled_purchase_history_blocks_single_item_delete_with_409(
             .select_from(ExternalPackagingPurchaseItem)
             .where(ExternalPackagingPurchaseItem.sales_order_item_id == item.id)
         )
+
+
+def test_cancelled_purchase_history_blocks_order_group_delete_without_500(
+    purchase_app,
+) -> None:
+    from app.models.audit import OperationLog
+    from app.models.user import User
+
+    order_id = purchase_app.state.fixture["order_id"]
+    with TestClient(purchase_app) as client:
+        _login(client, "purchase-admin")
+        _confirm(client, order_id)
+
+    with purchase_app.state.session_factory() as db:
+        admin = db.scalar(select(User).where(User.username == "purchase-admin"))
+        rollback_order_workflow(
+            order_id,
+            WorkflowRollbackRequest(reason="P1-64 保留外购采购历史"),
+            db=db,
+            user=admin,
+        )
+        item_ids = list(
+            db.scalars(select(OrderItem.id).where(OrderItem.order_id == order_id))
+        )
+        purchase_count = db.scalar(
+            select(func.count())
+            .select_from(ExternalPackagingPurchaseItem)
+            .where(ExternalPackagingPurchaseItem.sales_order_id == order_id)
+        )
+        audit_count = db.scalar(select(func.count()).select_from(OperationLog))
+
+        with pytest.raises(HTTPException, match="外购包材采购历史") as error:
+            delete_order_group(
+                OrderGroupDeleteRequest(order_ids=[order_id], confirm=True),
+                db=db,
+                user=admin,
+            )
+
+        assert error.value.status_code == 409
+        assert db.get(Order, order_id) is not None
+        assert list(
+            db.scalars(select(OrderItem.id).where(OrderItem.order_id == order_id))
+        ) == item_ids
+        assert db.scalar(
+            select(func.count())
+            .select_from(ExternalPackagingPurchaseItem)
+            .where(ExternalPackagingPurchaseItem.sales_order_id == order_id)
+        ) == purchase_count
+        assert db.scalar(select(func.count()).select_from(OperationLog)) == audit_count

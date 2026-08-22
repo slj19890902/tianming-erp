@@ -104,8 +104,13 @@ def test_incoming_production_card_has_same_origin_root_route() -> None:
 
 
 def test_incoming_received_and_history_expose_read_only_recoverable_entry() -> None:
-    assert INDEX.count("openIncomingProductionCard(row)") >= 2
-    assert "row.receipt_status==='posted' && row.order_item_id" in INDEX
+    incoming = INDEX.split('<template v-else-if="activePage === \'incoming\'">', 1)[1]
+    incoming = incoming.split('<template v-else-if="activePage === \'production\'">', 1)[0]
+    assert "openSelectedIncomingProductionCards" in incoming
+    assert "incomingProductionCardSelections" in INDEX
+    assert "/api/incoming/production-card-batch" in INDEX
+    assert "openIncomingProductionCard(row)" not in incoming
+    assert "row?.receipt_status === \"posted\" && row?.order_item_id" in INDEX
     assert 'v-if="incomingProductionCardRecoveryUrl"' in INDEX
     assert ':href="incomingProductionCardRecoveryUrl"' in INDEX
     assert 'target="_blank"' in INDEX

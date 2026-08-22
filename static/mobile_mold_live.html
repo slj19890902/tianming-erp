@@ -67,7 +67,7 @@
       return [row.printing_situation||"无印刷",colors,plates?`挂板 ${plates}`:""].filter(Boolean).join(" ");
     }
     function taskDetail(row){
-      return `<details class="task-detail"><summary>查看待来料任务单其余信息</summary><div class="grid">${field("存货编码",row.product_code)}${field("产品名称",row.product_name)}${field("成品内尺寸",row.specification)}${field("材质",row.material_specification)}${field("楞型",row.flute_type)}${field("开料/特殊工艺",row.special_process)}${field("生产工艺",row.production_process)}${field("印刷",printingText(row))}${field("生产要求",row.production_notes)}</div></details>`;
+      return `<details class="task-detail"><summary>查看待来料任务单其余信息</summary><div class="grid">${field("存货编码",row.product_code)}${field("产品名称",row.product_name)}${field("成品内尺寸",row.specification)}${field("材质",row.material_specification)}${field("楞型",row.flute_type)}${field("开料/特殊工艺",row.special_process)}${field("生产工艺",row.production_process)}${field("印刷",printingText(row))}${field("生产备注说明",row.production_notes)}</div></details>`;
     }
     function taskProgress(row){
       const status=row.task_status_label||row.order_status_label||"状态待完善";

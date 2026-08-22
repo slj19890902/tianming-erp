@@ -73,6 +73,7 @@ def order_api_app(tmp_path: Path, seed_supplier_master):
                     height_mm=Decimal("300"),
                     box_category="normal",
                     production_process="粘贴",
+                    production_notes="红色标识朝外，模切边缘重点检查",
                 ),
                 Product(
                     customer_id=customer.id,
@@ -146,7 +147,9 @@ def test_create_multi_item_order_is_atomic_and_snapshots_products(
     assert body["items"][0]["snapshot_product_name"] == "五层加强纸箱"
     assert body["items"][0]["snapshot_spec"] == "520×350×300mm"
     assert body["items"][0]["snapshot_material"] == "K=A-BC"
-    assert body["items"][0]["snapshot_production_notes"] == "粘贴"
+    assert body["items"][0]["snapshot_production_notes"] == (
+        "红色标识朝外，模切边缘重点检查"
+    )
     assert body["items"][0]["material_status"] == "pending"
 
     with session_factory() as session:

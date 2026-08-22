@@ -27,6 +27,7 @@ from app.services.production_workflow import (
     create_or_refresh_production_task,
     refresh_order_production_status,
     refresh_production_task,
+    list_production_tasks,
     transfer_direct_completion_to_stock,
     StockTransferCommand,
 )
@@ -265,6 +266,40 @@ def test_composite_tasks_are_component_piece_tasks_and_optional_does_not_block(
     refresh_order_production_status(db, db.get(OrderItem, item_id).order_id)
     assert db.get(OrderItem, item_id).order.status == "pending_delivery"
     assert tasks[2].status == "pending"  # optional component remains informational.
+
+
+def test_component_task_exposes_frozen_production_note_separately_from_process(
+    composite_db,
+) -> None:
+    db, item_id, _products, _location_id = composite_db
+    snapshot = db.scalar(
+        select(SalesOrderItemBomComponent)
+        .where(SalesOrderItemBomComponent.sales_order_item_id == item_id)
+        .order_by(SalesOrderItemBomComponent.id)
+    )
+    assert snapshot is not None
+    snapshot.snapshot_component_production_process = "模切"
+    snapshot.snapshot_component_production_notes = "红色标识朝外，模切边缘重点检查"
+    component_product = db.get(Product, snapshot.component_product_id)
+    assert component_product is not None
+    component_product.production_notes = "常用箱后来改成另一条备注"
+    db.flush()
+    create_or_refresh_production_task(db, item_id)
+
+    row = next(
+        item
+        for item in list_production_tasks(db, allowed_customer_ids=None)
+        if item["bom_component_snapshot_id"] == snapshot.id
+    )
+    assert row["production_process"] == "模切"
+    assert row["production_notes"] == "红色标识朝外，模切边缘重点检查"
+
+    mobile = (Path(__file__).resolve().parents[1] / "static" / "mobile_erp.html").read_text(
+        encoding="utf-8"
+    )
+    assert "生产工艺：${task.production_process}" in mobile
+    assert "生产备注说明：${task.production_notes}" in mobile
+    assert "task.production_process || task.production_notes" not in mobile
 
 
 def test_virtual_composite_component_receipts_do_not_require_parent_board(

@@ -3477,9 +3477,18 @@ def incoming_production_card(
     frozen_process = (
         component_snapshot.snapshot_component_production_process
         if component_snapshot is not None
-        else order_item.snapshot_production_notes
+        else order_item.product.production_process
     )
-    frozen_notes_parts = [str(frozen_process or "").strip()]
+    frozen_notes_parts = [
+        str(
+            (
+                component_snapshot.snapshot_component_production_notes
+                if component_snapshot is not None
+                else order_item.snapshot_production_notes
+            )
+            or ""
+        ).strip()
+    ]
     if component_snapshot is not None:
         frozen_notes_parts.extend(
             [

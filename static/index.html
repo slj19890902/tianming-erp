@@ -1477,6 +1477,8 @@
         flex-wrap: wrap; margin-bottom: 8px;
       }
       .bom-editor-heading h4 { margin: 0; font-size: 14px; color: #075985; }
+      .bom-editor-heading-controls { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+      .bom-editor-heading-controls .select { width:auto; min-width:260px; }
       .bom-editor-note { margin: 0 0 10px; color: var(--muted); font-size: 12px; line-height: 1.55; }
       .bom-component-list { display: grid; gap: 8px; min-width: 0; }
       .bom-component-card {
@@ -5076,14 +5078,6 @@
                     <option v-if="productForm.box_style && !productBoxStyleOptions.includes(productForm.box_style)" :value="productForm.box_style">原记录：{{ productForm.box_style }}</option>
                   </select>
                 </div>
-                <div v-if="bomEditor.enabled" class="field" style="max-width:520px;margin:0 0 10px">
-                  <label>交付、标签和成品存放方式（必选）</label>
-                  <select class="select" v-model="productForm.composite_fulfillment_mode" :disabled="productForm.combination_mode === 'component_priced'">
-                    <option value="component_delivery">子件交付：送货、标签、成品库存按各子件分别处理</option>
-                    <option value="parent_delivery">父件交付：子件同位同栈板存放，按最短件齐套，送货、标签和地图按父件显示</option>
-                  </select>
-                  <div class="muted">订单会冻结本次选择；父件交付缺少任一必需子件时，只能生成实际可齐套的父件数量。</div>
-                </div>
                 <div v-if="productForm.box_style!=='其他'" class="field product-supply-compact"><label>结构</label><select class="select" v-model="productForm.supply_mode"><option value="corrugated_production">纸板生产</option><option value="mixed_bom">纸板＋外购组件</option></select></div>
               </div>
 
@@ -5273,6 +5267,7 @@
                   </div>
                   <div v-else-if="canViewCosts && productBoardCostText" class="muted" style="font-size:12px;color:#0369a1">纸板成本参考：{{ productBoardCostText }}</div>
                 </div>
+                <div class="field wide"><label>生产备注说明</label><textarea class="input" rows="2" maxlength="2000" v-model.trim="productForm.production_notes" placeholder="默认空白；填写后会冻结到生产任务单和手机生产任务"></textarea></div>
                 </div>
 
                 <div class="product-material-details">
@@ -5485,11 +5480,16 @@
               <summary>组合产品 / 内部 BOM（不常用）</summary>
               <fieldset class="bom-editor-panel" :disabled="!!productForm.id && !canEditProducts">
                 <div class="bom-editor-heading">
-                  <div>
-                    <h4>组合产品 / 内部 BOM</h4>
-                    <p class="bom-editor-note">父件按套下单，组件用于内部生产。</p>
+                  <h4>组合产品 / 内部 BOM</h4>
+                  <div class="bom-editor-heading-controls">
+                    <label class="remember-line"><input type="checkbox" v-model="bomEditor.enabled" :disabled="!productForm.id" /> 启用组合产品</label>
+                    <label v-if="bomEditor.enabled" class="remember-line">交付标签和成品方式
+                      <select class="select" v-model="productForm.composite_fulfillment_mode" :disabled="productForm.combination_mode === 'component_priced'">
+                        <option value="component_delivery">子件交付</option>
+                        <option value="parent_delivery">父件交付</option>
+                      </select>
+                    </label>
                   </div>
-                  <label class="remember-line"><input type="checkbox" v-model="bomEditor.enabled" :disabled="!productForm.id" /> 启用组合产品</label>
                 </div>
                 <div class="field" style="max-width:340px;margin:0 0 8px">
                   <label>组合计价方式</label>
@@ -7156,11 +7156,11 @@
               <table>
                 <thead><tr><th>客户 / 存货编码 / 产品</th><th>供应商 / 材质</th><th>需求数量</th><th>库存抵扣</th><th class="purchase-qty-cell">采购总张数</th><th>订单生产用途张</th><th>客户通用片料备库张</th><th>采购长(mm)</th><th>采购宽(mm)</th><th>开料方式</th><th>备注</th></tr></thead>
                 <tbody>
-                  <tr v-for="line in requisitionForm.items" :key="`${line.order_item_id}-${line.bom_snapshot_id || 'parent'}-${line.component_type || 'whole'}`" :class="{'warning-row':(line.cutting_mode || line.special_process)!== '一开一'}">
-                    <td class="requisition-product-cell"><strong>{{ shortCustomerName(line.customer_name) }}｜{{ line.product_code }}</strong><div class="requisition-product-name" :title="line.product_name">{{ line.product_name }}</div><span class="muted">{{ line.specification || "-" }}</span><div v-if="line.is_composite_parent" class="status blue">父件</div><div v-else-if="line.is_composite_component" class="status green">组件{{ line.component_type === 'cover' ? '·盖' : line.component_type === 'base' ? '·底' : '' }}</div></td>
+                  <tr v-for="line in requisitionForm.items" :key="line._line_key || `${line.order_item_id}-${line.bom_snapshot_id || 'parent'}-${line.component_type || 'whole'}`" :class="{'warning-row':(line.cutting_mode || line.special_process)!== '一开一'}">
+                    <td class="requisition-product-cell"><strong>{{ shortCustomerName(line.customer_name) }}｜{{ line.product_code }}</strong><div class="requisition-product-name" :title="line.product_name">{{ line.product_name }}</div><span class="muted">{{ line.specification || "-" }}</span><div v-if="line.is_composite_parent" class="status blue">父件</div><div v-else-if="line.is_composite_component_group" class="status green">已合并 {{ line._merged_component_lines.length }} 个同规格子件</div><div v-else-if="line.is_composite_component" class="status green">组件{{ line.component_type === 'cover' ? '·盖' : line.component_type === 'base' ? '·底' : '' }}</div></td>
                     <td>{{ line.snapshot_supplier_name || '未设供应商' }}<br><span class="muted">{{ line.material_display || '-' }}</span></td>
                     <td><strong>{{ line.required_piece_qty || line.quantity || 0 }}</strong><div class="muted">剩余 {{ line.remaining_required_piece_qty ?? line.required_piece_qty ?? line.quantity ?? 0 }}</div></td>
-                    <td><div>成品：{{ line.finished_inventory_reserved_qty || 0 }}</div><div>半成品：{{ line.semi_finished_reserved_piece_qty || 0 }}</div><button v-if="line.is_composite_component && Number(line.remaining_required_piece_qty || 0)>0" class="btn small success" type="button" :disabled="line._auto_cover_loading" @click="autoCoverCompositeDraftLine(line)">{{ line._auto_cover_loading ? '正在匹配…' : '自动使用匹配库存' }}</button><div v-if="line._auto_cover_error" class="status orange" style="margin-top:4px;white-space:normal">{{ line._auto_cover_error }}</div></td>
+                    <td><div>成品：{{ line.finished_inventory_reserved_qty || 0 }}</div><div>半成品：{{ line.semi_finished_reserved_piece_qty || 0 }}</div><button v-if="line.is_composite_component && !line.is_composite_component_group && Number(line.remaining_required_piece_qty || 0)>0" class="btn small success" type="button" :disabled="line._auto_cover_loading" @click="autoCoverCompositeDraftLine(line)">{{ line._auto_cover_loading ? '正在匹配…' : '自动使用匹配库存' }}</button><div v-if="line._auto_cover_error" class="status orange" style="margin-top:4px;white-space:normal">{{ line._auto_cover_error }}</div></td>
                     <td class="purchase-qty-cell"><input class="input purchase-qty-input" type="number" min="1" step="1" v-model.number="line.purchase_total_sheet_qty" @input="onPurchasePurposeTotalChanged(line)" /><div class="muted">系统最低 {{ line._minimum_requisition_qty ?? line.purchase_total_sheet_qty }} 张</div></td>
                     <td><input class="input purchase-qty-input" type="number" min="0" step="1" v-model.number="line.order_purpose_sheet_qty" @input="onPurchasePurposePartChanged(line)" /><div class="muted">本行订单上限 {{ purchasePurposeAuthoritativeOrderQty(line) }} 张</div></td>
                     <td><input class="input purchase-qty-input" type="number" min="0" step="1" v-model.number="line.stock_purpose_sheet_qty" @input="onPurchasePurposePartChanged(line)" /><div v-if="purchasePurposeValidationError(line)" class="status red" style="white-space:normal;margin-top:4px">{{ purchasePurposeValidationError(line) }}</div><div v-else-if="Number(line.stock_purpose_sheet_qty || 0)>0" class="status blue" style="white-space:normal;margin-top:4px">多订 {{ line.stock_purpose_sheet_qty }} 张，进入该客户通用片料备库</div></td>
@@ -8185,7 +8185,7 @@
         printing_plates: [], plate_alignment_value_mm: null, plate_mount_value_mm: null,
         machine_set_length_mm: null, machine_set_width_mm: null, machine_set_height_mm: null,
         production_label_enabled: false, production_label_units_per_label: null,
-        production_process: "", _production_processes: ["无需结合"], _production_process_legacy: "", unit: "只", sale_unit_price: "0",
+        production_process: "", production_notes: "", _production_processes: ["无需结合"], _production_process_legacy: "", unit: "只", sale_unit_price: "0",
         sale_unit_price_no_tax: null, cost_unit_price: null, board_price: null,
         suggested_price: null, die_cut_path: null, mold_tool_id: null, mold_tool: null, drawings: [],
         remark: "", is_active: true,
@@ -10026,7 +10026,7 @@
                   ["base_crease_type","底压线类型"], ["base_crease_left_mm","底左压线(mm)"],
                   ["base_crease_middle_mm","底中压线(mm)"], ["base_crease_right_mm","底右压线(mm)"],
                   ["base_report_notes","底料备注"], ["_material_supplier","材质供应商"], ["layer_count","层数"],
-                  ["flute_type","楞型"], ["material_id","材质"], ["_production_processes","生产工艺"],
+                  ["flute_type","楞型"], ["material_id","材质"], ["production_notes","生产备注说明"], ["_production_processes","生产工艺"],
                   ["print_content","印刷内容"], ["printing_plate_mode","印刷方式"],
                   ["printing_plate_1_id","第1色挂板"], ["printing_plate_2_id","第2色挂板"], ["printing_plate_3_id","第3色挂板"],
                   ["plate_alignment_value_mm","对版值"], ["plate_mount_value_mm","挂版值"],
@@ -10293,7 +10293,7 @@
               payload.crease_left_mm=null; payload.crease_middle_mm=null; payload.crease_right_mm=null;
               payload.base_report_length_mm=null; payload.base_report_width_mm=null; payload.base_crease_type=null;
               payload.base_crease_left_mm=null; payload.base_crease_middle_mm=null; payload.base_crease_right_mm=null;
-              payload.production_process=""; payload._production_processes=[]; payload.print_content="无印刷"; payload.printing_colors=null;
+              payload.production_process=""; payload.production_notes=""; payload._production_processes=[]; payload.print_content="无印刷"; payload.printing_colors=null;
               payload.production_label_enabled=false; payload.production_label_units_per_label=null; payload.mold_tool_id=null;
             } else {
               payload.external_packaging_category_code=null;
@@ -24507,7 +24507,7 @@
                 layer_count: edit.layer_count ?? null,
                 flute_type: edit.flute_type || null,
                 sale_unit_price: edit.unit_price === "" ? null : edit.unit_price,
-                production_process: String(edit.production_notes || "").trim() || null,
+                production_notes: String(edit.production_notes || "").trim() || null,
                 report_length_mm: edit.report_length_mm ?? null,
                 report_width_mm: edit.report_width_mm ?? null,
                 crease_type: edit.crease_type || null,
@@ -25631,7 +25631,7 @@
                 item.supply_mode = data.supply_mode || "corrugated_production";
                 item.external_packaging_order_quantity_basis = data.external_packaging_default_order_quantity_basis ?? null;
                 item.external_packaging_purchase_quantity_basis = data.external_packaging_default_purchase_quantity_basis ?? null;
-                if (!item.production_notes && data.production_process) item.production_notes = data.production_process;
+                if (!item.production_notes && data.production_notes) item.production_notes = data.production_notes;
                 item.product_default_price = data.sale_unit_price != null ? String(data.sale_unit_price) : null;
                  this.refreshPdfPriceConflict(item);
               } catch(_) {}
@@ -26409,7 +26409,7 @@
               product_code: product.product_code || "", product_name: product.product_name || "",
               material_id: product.material_id || null,
               material: product.material_code || this.materialName(product.material_id, product.legacy_material_text),
-              specification: this.orderSpecificationText(this.spec(product), ""), production_notes: "",
+              specification: this.orderSpecificationText(this.spec(product), ""), production_notes: product.production_notes || "",
               _layer_filter: product.layer_count || null, _flute_filter: product.flute_type || null,
               _material_supplier: "", quantity: sets * perSet, unit_price: this.money(product.sale_unit_price),
               cost_status: "pending", estimated_cost: null, _from_product: true,
@@ -26563,6 +26563,7 @@
             item.material_id = data.material_id || null;
             item.material = data.material_code || this.materialName(data.material_id, data.legacy_material_text);
             item.specification = this.orderSpecificationText(this.spec(data), "");
+            item.production_notes = data.production_notes || "";
             item.unit_price = this.money(data.sale_unit_price);
             // v0.19.2-B: 常用箱自动带出层数/楞型/材质快照，锁定不允许直接修改
             item._from_product = true;
@@ -27215,7 +27216,7 @@
                 snapshot_crease_right_mm:itemSnapshot.snapshot_crease_right_mm ?? product.crease_right_mm ?? null,
                 special_process:this.normalizeCuttingMode(itemSnapshot.special_process || itemSnapshot.cutting_mode || product.default_cutting_mode || "一开一"),
                 snapshot_report_notes:itemSnapshot.snapshot_report_notes || product.report_notes || "",
-                production_process:product.production_process || itemSnapshot.snapshot_production_notes || "",
+                production_process:product.production_process || "",
                 print_content:product.print_content || "无印刷",
                 product_remark:product.remark || "",
                 drawing_file:itemSnapshot.drawing_file || itemSnapshot.product_drawing_file || product.drawings?.[0]?.image_path || null,
@@ -27985,7 +27986,7 @@
             const payload = {
               request_key:state.requestKey,
               supplier_name:this.requisitionForm.supplier_name,
-              items:this.requisitionForm.items.map(line => this.requisitionBatchLinePayload(line)),
+              items:this.requisitionForm.items.flatMap(line => this.requisitionBatchLinePayloads(line)),
             };
             const frozenPayload = JSON.parse(JSON.stringify(payload));
             state.saving = true;
@@ -28283,23 +28284,87 @@
               }
             }
           },
+          compositePhysicalMergeKey(line) {
+            if (!line?.is_composite_component || line.is_die_cut) return null;
+            const customer = Number(line.customer_id || 0) > 0
+              ? `id:${Number(line.customer_id)}`
+              : String(line.customer_name || "").trim();
+            const supplier = String(line.snapshot_supplier_name || "").trim();
+            const material = Number(line.material_id || 0) > 0
+              ? `id:${Number(line.material_id)}`
+              : String(line.material_display || "").trim();
+            const layer = Number(line.layer_count || 0);
+            const flute = String(line.flute_type || "").trim().toUpperCase();
+            const length = Number(line.cardboard_len || 0);
+            const width = Number(line.cardboard_width || 0);
+            const cutting = this.normalizeCuttingMode(line.special_process || line.cutting_mode);
+            const creaseType = String(line.crease_type || "").trim();
+            if (!customer || !supplier || !material || !layer || !flute || length <= 0 || width <= 0 || !cutting || !creaseType) return null;
+            return JSON.stringify({
+              customer, supplier, material, layer, flute,
+              length, width, cutting,
+              remark:String(line.remark || "").trim(),
+              crease_type:creaseType,
+              crease_left_mm:line.crease_left_mm ?? null,
+              crease_middle_mm:line.crease_middle_mm ?? null,
+              crease_right_mm:line.crease_right_mm ?? null,
+            });
+          },
+          groupCompositeRequisitionLines(lines) {
+            const result = [];
+            const groups = new Map();
+            (lines || []).forEach((line,index) => {
+              const key = this.compositePhysicalMergeKey(line);
+              if (!key) {
+                line._line_key = line._line_key || `source:${line.order_item_id}:${line.bom_snapshot_id || 'parent'}:${line.component_type || 'whole'}`;
+                result.push(line);
+                return;
+              }
+              const existing = groups.get(key);
+              if (!existing) {
+                line._physical_merge_key = key;
+                line._line_key = `component-group:${key}`;
+                line._merged_component_lines = [{...line}];
+                line.source_items = line._merged_component_lines;
+                groups.set(key,line);
+                result.push(line);
+                return;
+              }
+              existing._merged_component_lines.push(line);
+              existing.is_composite_component_group = true;
+              existing.bom_snapshot_id = null;
+              existing.product_code = [...new Set(existing._merged_component_lines.map(row=>row.product_code).filter(Boolean))].join(" / ");
+              existing.product_name = [...new Set(existing._merged_component_lines.map(row=>row.product_name).filter(Boolean))].join(" / ");
+              existing.source_items = existing._merged_component_lines;
+              for (const field of ["quantity","production_required_qty","required_piece_qty","remaining_required_piece_qty","requisition_qty","_minimum_requisition_qty","finished_inventory_reserved_qty","semi_finished_reserved_piece_qty","purchase_total_sheet_qty","order_purpose_sheet_qty","stock_purpose_sheet_qty"]) {
+                existing[field] = existing._merged_component_lines.reduce((sum,row)=>sum + Number(row[field] || 0),0);
+              }
+              existing._authoritative_order_purpose_sheet_qty = existing._minimum_requisition_qty;
+              existing.purpose_plan_version = null;
+              existing.purpose_plan_fingerprint = null;
+            });
+            return result;
+          },
           async openCompositeRequisition(rows) {
-            const lines = rows.flatMap(row => this.buildRequisitionFormLines(row));
-            if (!lines.length) { this.showToast("请勾选复合产品父件与待报料组件", true); return; }
-            const suppliers = [...new Set(lines.map(line => line.snapshot_supplier_name).filter(Boolean))];
+            const rawLines = rows.flatMap(row => this.buildRequisitionFormLines(row));
+            if (!rawLines.length) { this.showToast("请勾选复合产品父件与待报料组件", true); return; }
+            const suppliers = [...new Set(rawLines.map(line => line.snapshot_supplier_name).filter(Boolean))];
             if (suppliers.length > 1) { this.showToast("所选组件包含多个供应商，请按供应商分开报料", true); return; }
             if (!suppliers[0]) { this.showToast("所选组件缺少报料供应商，请先维护组件快照", true); return; }
-            lines.forEach(line => {
+            rawLines.forEach(line => {
               line._minimum_requisition_qty = Number(line.requisition_qty || 0);
               line._auto_cover_loading = false;
               line._auto_cover_error = "";
               this.initializePurchasePurposeLine(line, true);
             });
-            const draftSignature = JSON.stringify(lines.map(line => ({
-              order_item_id:Number(line.order_item_id || 0),
-              bom_snapshot_id:Number(line.bom_snapshot_id || 0),
-              component_type:String(line.component_type || "whole"),
-            })).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))));
+            const lines = this.groupCompositeRequisitionLines(rawLines);
+            const draftSignature = JSON.stringify(lines.flatMap(line => (
+              line._merged_component_lines || [line]
+            ).map(source => ({
+              order_item_id:Number(source.order_item_id || 0),
+              bom_snapshot_id:Number(source.bom_snapshot_id || 0),
+              component_type:String(source.component_type || "whole"),
+            }))).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))));
             const previousSaveState = this.compositeRequisitionSaveState || {};
             const requestKey = previousSaveState.uncertain
               && previousSaveState.draftSignature === draftSignature
@@ -28313,6 +28378,28 @@
           recalculateCompositeDraftLine(line) {
             line.special_process = this.normalizeCuttingMode(line.special_process || line.cutting_mode);
             line.cutting_mode = line.special_process;
+            if (line.is_composite_component_group) {
+              line._merged_component_lines.forEach(source => {
+                source.special_process = line.special_process;
+                source.cutting_mode = line.special_process;
+                const remaining = Math.max(Number(source.remaining_required_piece_qty ?? source.required_piece_qty ?? source.quantity ?? 0),0);
+                const yieldPerSheet = Number(source.actual_yield_per_sheet || 0) > 0
+                  ? Number(source.actual_yield_per_sheet)
+                  : this.cuttingModeFactor(line.special_process);
+                source._minimum_requisition_qty = Math.ceil(remaining / Math.max(yieldPerSheet,1));
+                source.requisition_qty = source._minimum_requisition_qty;
+                this.initializePurchasePurposeLine(source, true);
+              });
+              line._minimum_requisition_qty = line._merged_component_lines.reduce((sum,source)=>sum + Number(source._minimum_requisition_qty || 0),0);
+              line.requisition_qty = line._minimum_requisition_qty;
+              line._authoritative_order_purpose_sheet_qty = line._minimum_requisition_qty;
+              line.purchase_total_sheet_qty = line._minimum_requisition_qty;
+              line.order_purpose_sheet_qty = line._minimum_requisition_qty;
+              line.stock_purpose_sheet_qty = 0;
+              line.purpose_plan_version = null;
+              line.purpose_plan_fingerprint = null;
+              return;
+            }
             const remaining = Math.max(Number(
               line.remaining_required_piece_qty ?? line.required_piece_qty ?? line.quantity ?? 0
             ), 0);
@@ -28378,6 +28465,36 @@
               remark:line.remark || null,
             };
           },
+          requisitionBatchLinePayloads(line) {
+            if (!line?.is_composite_component_group) return [this.requisitionBatchLinePayload(line)];
+            const sources = line._merged_component_lines || [];
+            const cutting = this.normalizeCuttingMode(line.special_process || line.cutting_mode);
+            const factor = this.cuttingModeFactor(cutting);
+            const minimums = sources.map(source => Math.ceil(
+              Math.max(Number(source.remaining_required_piece_qty ?? source.required_piece_qty ?? source.quantity ?? 0),0)
+              / Math.max(Number(source.actual_yield_per_sheet || 0) || factor,1)
+            ));
+            const minimumTotal = minimums.reduce((sum,value)=>sum + value,0);
+            const confirmedTotal = Number(line.purchase_total_sheet_qty || 0);
+            if (confirmedTotal < minimumTotal) throw new Error(`合并组件采购张数不能少于系统最低 ${minimumTotal} 张`);
+            let extra = confirmedTotal - minimumTotal;
+            return sources.map((source,index) => {
+              const sourceTotal = minimums[index] + (index === sources.length - 1 ? extra : 0);
+              const payload = this.requisitionBatchLinePayload({
+                ...source,
+                cardboard_len:line.cardboard_len,
+                cardboard_width:line.cardboard_width,
+                special_process:cutting,
+                remark:line.remark || source.remark || "",
+                requisition_qty:sourceTotal,
+                purchase_total_sheet_qty:sourceTotal,
+                order_purpose_sheet_qty:Math.min(sourceTotal, minimums[index]),
+                stock_purpose_sheet_qty:Math.max(sourceTotal - minimums[index], 0),
+              });
+              if (index === sources.length - 1) extra = 0;
+              return payload;
+            });
+          },
           async openRequisition() {
             if (!this.canRequisition) return;
             const rows = this.selectedPendingRows();
@@ -28417,7 +28534,7 @@
           },
           buildRequisitionFormLines(row) {
             const common = {
-              order_item_id:row.item_id, order_number:this.displayOrderNumber(row), customer_name:row.customer_name,
+              order_item_id:row.item_id, order_number:this.displayOrderNumber(row), customer_id:row.customer_id || null, customer_name:row.customer_name,
               product_code:row.product_code, product_name:row.product_name, specification:row.specification || "", quantity:Number(row.quantity || 0),
               material_id:row.material_id || null,
               snapshot_supplier_name:row.snapshot_supplier_name || "",
@@ -28451,7 +28568,9 @@
                   specification:parent.specification || row.specification || "",
                   quantity:Number(parent.required_piece_quantity || row.quantity || 0),
                   production_required_qty:Number(parent.required_piece_quantity || 0),
-                  pieces_per_box:1,
+                  pieces_per_box:Number(parent.pieces_per_box || row.pieces_per_box || row.snapshot_pieces_per_box || 1),
+                  snapshot_splice_mode:parent.splice_mode || row.snapshot_splice_mode || "single",
+                  splice_mode_label:(parent.splice_mode || row.snapshot_splice_mode || "single") === "double" ? "双拼" : "单拼",
                   required_piece_qty:Number(parent.required_piece_quantity || 0),
                   semi_finished_reserved_piece_qty:Number(parent.semi_finished_reserved_piece_qty || 0),
                   remaining_required_piece_qty:Number(parent.remaining_required_piece_qty || 0),
@@ -28478,7 +28597,7 @@
                 production_required_qty:Number(component.required_piece_quantity || 0),
                 finished_inventory_reserved_qty:Number(component.finished_component_reserved_piece_qty || 0),
                 quantity_per_set:Number(component.quantity_per_set || 1),
-                pieces_per_box:1,
+                pieces_per_box:Number(component.physical_pieces_per_component || 1),
                 required_piece_qty:Number(component.required_piece_quantity || 0),
                 semi_finished_reserved_piece_qty:Number(component.semi_finished_reserved_piece_qty || 0),
                 remaining_required_piece_qty:Number(component.remaining_required_piece_qty || 0),
@@ -28488,14 +28607,20 @@
                 snapshot_report_length_mm:Number(component.report_length_mm || 0) || null,
                 snapshot_report_width_mm:Number(component.report_width_mm || 0) || null,
                 snapshot_supplier_name:component.supplier_name || row.snapshot_supplier_name || "",
+                material_id:component.material_id || null,
                 material_display:[component.material, component.flute_type].filter(Boolean).join(" / "),
                 layer_count:component.layer_count || null,
                 flute_type:component.flute_type || null,
                 special_process:this.normalizeCuttingMode(component.cutting_mode),
                 cutting_mode:this.normalizeCuttingMode(component.cutting_mode),
                 is_die_cut:!!component.is_die_cut,
+                mold_tool_id:component.mold_tool_id || null,
                 mold_max_yield_per_sheet:component.mold_max_yield_per_sheet || null,
                 actual_yield_per_sheet:component.actual_yield_per_sheet || null,
+                crease_type:component.crease_type || "",
+                crease_left_mm:component.crease_left_mm ?? null,
+                crease_middle_mm:component.crease_middle_mm ?? null,
+                crease_right_mm:component.crease_right_mm ?? null,
                 remark:component.remark || "",
               })));
               return lines;

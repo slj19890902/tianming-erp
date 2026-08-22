@@ -99,6 +99,7 @@ _PRODUCT_FIELDS = (
     "machine_set_width_mm",
     "machine_set_height_mm",
     "production_process",
+    "production_notes",
     "unit",
     "sale_unit_price",
     "sale_unit_price_no_tax",

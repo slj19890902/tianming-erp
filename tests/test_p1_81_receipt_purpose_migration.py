@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 VERSIONS = ROOT / "alembic" / "versions"
 BASE_REVISION = "ww31v8x9z20"
 P1_81_REVISION = "xx32v8x9z21"
-INTEGRATION_HEAD = "cc37v8x9z26"
+INTEGRATION_HEAD = "dd38v8x9z27"
 P1_81_TABLES = {
     "purchase_receipt_facts",
     "incoming_receipt_purpose_allocations",

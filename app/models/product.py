@@ -199,6 +199,7 @@ class Product(Base):
         Numeric(12, 2), nullable=True
     )
     production_process: Mapped[str | None] = mapped_column(Text, nullable=True)
+    production_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     unit: Mapped[str] = mapped_column(String(20), default="只", nullable=False)
     sale_unit_price: Mapped[Decimal | None] = mapped_column(
         Numeric(12, 4),

@@ -5123,7 +5123,7 @@
                     <div class="field"><label>订单数量基数</label><input class="input" type="number" min="0.000001" step="0.000001" v-model.number="productForm.external_packaging_default_order_quantity_basis" /></div>
                     <div class="field"><label>供应商采购数量基数</label><input class="input" type="number" min="0.000001" step="0.000001" v-model.number="productForm.external_packaging_default_purchase_quantity_basis" /></div>
                   </template>
-                  <div class="field wide muted">新订单会自动带入并冻结本常用箱比例；只有本单比例例外时才在订单明细调整。以后修改常用箱，不会改写历史订单和历史采购。</div>
+                  <div class="field wide muted">新订单只读取并冻结本常用箱比例；订单录入页不能另行修改。以后修改常用箱，不会改写历史订单和历史采购。</div>
                 </div>
                 <div v-if="productExternalSupplyLoading" class="muted" style="margin-top:8px">正在读取候选供应商产品…</div>
                 <div v-else-if="productExternalSupplyError" class="notice danger" style="margin-top:8px">{{ productExternalSupplyError }} <button type="button" class="btn small" @click="loadProductExternalSupplyCandidates({force:true})">重试</button></div>
@@ -6207,11 +6207,9 @@
                   <tr v-if="orderItemIsExternalPurchase(item)" class="external-purchase-ratio-row">
                     <td colspan="8" style="padding:6px 8px;background:#fff7ed;border-top:1px solid #fdba74;border-bottom:1px solid #fdba74">
                       <div class="toolbar-group" style="justify-content:flex-start;flex-wrap:wrap;align-items:flex-end">
-                        <strong>本单外购数量换算</strong>
-                        <label>订单数量基数<input class="input compact-input" style="width:9ch" type="number" min="0.000001" step="0.000001" v-model.number="item.external_packaging_order_quantity_basis" /></label>
-                        <span>→</span>
-                        <label>供应商采购数量基数<input class="input compact-input" style="width:9ch" type="number" min="0.000001" step="0.000001" v-model.number="item.external_packaging_purchase_quantity_basis" /></label>
-                        <span class="muted">已从常用箱自动带入；仅本单比例有例外时才调整。客户数量和客户单价不变，采购数量按本比例计算，采购单价读取供应商有效报价。</span>
+                        <strong>常用箱采购数量换算</strong>
+                        <span class="status orange">订单 {{ item.external_packaging_order_quantity_basis || '-' }} → 采购 {{ item.external_packaging_purchase_quantity_basis || '-' }}</span>
+                        <span class="muted">比例由常用箱统一维护，本订单只读并自动冻结；客户数量和客户单价不变，采购单价读取供应商有效报价。</span>
                         <span v-if="externalPurchaseQuantityPreview(item)" class="status orange">本行 {{ item.quantity || 0 }} 个客户单位，预计采购 {{ externalPurchaseQuantityPreview(item) }} {{ externalPurchaseUnit(item) }}</span>
                       </div>
                     </td>
@@ -25752,7 +25750,7 @@
             if (!orders.length) return;
             const groupName = this.orderEditGroup?.customer_po || this.displayOrderNumber(orders[0]);
             if (!confirm(`确认删除订单组 ${groupName} 吗？删除后不可恢复。`)) return;
-            if (!confirm("请再次确认：已进入报料、送货或对账流程的订单组不能直接删除。订单一旦产生来料记录，即使来料已经撤销，也不能物理删除，请改为作废或归档。")) return;
+            if (!confirm("请再次确认：只有已完整撤回到未报料且从未实收的外购采购记录可以随订单组清理；已有实收、生产、送货或对账事实时仍禁止删除，请改为作废或归档。")) return;
             this.loading = true;
             try {
               const {data} = await axios.post("/api/orders/group-delete", {

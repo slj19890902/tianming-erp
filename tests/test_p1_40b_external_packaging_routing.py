@@ -285,7 +285,7 @@ def test_direct_external_order_freezes_routes_skips_production_and_confirms(
         ).status_code == 403
 
 
-def test_order_override_is_frozen_and_legacy_product_without_default_is_explicit(
+def test_order_uses_common_box_ratio_and_legacy_product_without_default_is_blocked(
     routing_app: FastAPI,
 ) -> None:
     from app.models.order import OrderItem
@@ -311,7 +311,7 @@ def test_order_override_is_frozen_and_legacy_product_without_default_is_explicit
             )
             assert item is not None
             assert Decimal(item.external_packaging_order_quantity_basis_snapshot) == Decimal("1")
-            assert Decimal(item.external_packaging_purchase_quantity_basis_snapshot) == Decimal("3")
+            assert Decimal(item.external_packaging_purchase_quantity_basis_snapshot) == Decimal("2")
 
             product = db.get(Product, product_id)
             assert product is not None
@@ -330,7 +330,8 @@ def test_order_override_is_frozen_and_legacy_product_without_default_is_explicit
         explicit = _order_payload_for(product_id, ids["customer_a"])
         explicit["customer_po"] = "P1-40B-LEGACY-EXPLICIT"
         accepted = client.post("/api/orders", json=explicit)
-        assert accepted.status_code == 201, accepted.text
+        assert accepted.status_code == 422
+        assert "常用箱尚未设置默认采购比例" in accepted.text
 
 
 def test_direct_honeycomb_customer_spec_and_order_ratio_reach_supplier_print(

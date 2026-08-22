@@ -102,6 +102,7 @@ from app.models.external_packaging_purchase import (  # noqa: E402,F401
     ExternalPackagingPurchaseDailySequence,
     ExternalPackagingPurchaseItem,
     ExternalPackagingPurchaseOrder,
+    ExternalPackagingPurchasePurgeAuthorization,
     ExternalPackagingReceipt,
     ExternalPackagingReceiptItem,
 )

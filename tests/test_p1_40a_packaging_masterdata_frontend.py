@@ -96,7 +96,7 @@ def test_supplier_groups_and_external_product_editor_are_explicit() -> None:
     assert "默认采购数量比例" in product_modal
     assert "订单1 → 采购1" in product_modal
     assert "订单1 → 采购2" in product_modal
-    assert "新订单会自动带入并冻结本常用箱比例" in product_modal
+    assert "新订单只读取并冻结本常用箱比例" in product_modal
     assert '<details v-if="productForm.supply_mode!==\'external_purchase\'"' in product_modal
     assert 'supplierPackagingForm.category_code===\'hollow_board\'' in INDEX
     assert "维护正式报价" in INDEX
@@ -118,13 +118,15 @@ def test_supplier_groups_and_external_product_editor_are_explicit() -> None:
 
 
 def test_external_purchase_ratio_defaults_in_common_box_and_allows_order_exception() -> None:
-    assert "本单外购数量换算" in INDEX
+    assert "常用箱采购数量换算" in INDEX
     assert "onProductExternalRatioModeChange" in INDEX
     assert "external_packaging_default_order_quantity_basis" in INDEX
     assert "external_packaging_default_purchase_quantity_basis" in INDEX
     assert "external_packaging_order_quantity_basis" in INDEX
     assert "external_packaging_purchase_quantity_basis" in INDEX
-    assert "仅本单比例有例外时才调整" in INDEX
+    assert "订单录入页不能另行修改" in INDEX
+    assert 'v-model.number="item.external_packaging_order_quantity_basis"' not in INDEX
+    assert 'v-model.number="item.external_packaging_purchase_quantity_basis"' not in INDEX
     assert "采购单价读取供应商有效报价" in INDEX
     assert "每个客户销售单位需采购数量" not in INDEX
 

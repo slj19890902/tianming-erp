@@ -276,6 +276,30 @@ class ExternalPackagingPurchaseCancellation(Base):
     )
 
 
+class ExternalPackagingPurchasePurgeAuthorization(Base):
+    """Short-lived database gate for deleting a fully cancelled purchase batch.
+
+    Normal purchase/cancellation facts remain immutable.  A row can only be
+    inserted when every purchase order in the batch is cancelled and no receipt
+    fact exists; it is removed automatically with the batch in the same
+    transaction.
+    """
+
+    __tablename__ = "external_packaging_purchase_purge_authorizations"
+
+    batch_id: Mapped[int] = mapped_column(
+        ForeignKey("external_packaging_purchase_batches.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    authorized_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    reason: Mapped[str] = mapped_column(String(500), nullable=False)
+    authorized_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.current_timestamp()
+    )
+
+
 class ExternalPackagingReceipt(Base):
     """One append-only external-packaging receiving event."""
 

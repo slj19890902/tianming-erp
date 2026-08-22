@@ -937,7 +937,7 @@ def test_cancelled_purchase_history_blocks_single_item_delete_with_409(
         )
 
 
-def test_cancelled_purchase_history_blocks_order_group_delete_without_500(
+def test_cancelled_unreceived_purchase_history_allows_order_group_delete(
     purchase_app,
 ) -> None:
     from app.models.audit import OperationLog
@@ -956,31 +956,28 @@ def test_cancelled_purchase_history_blocks_order_group_delete_without_500(
             db=db,
             user=admin,
         )
-        item_ids = list(
-            db.scalars(select(OrderItem.id).where(OrderItem.order_id == order_id))
-        )
-        purchase_count = db.scalar(
-            select(func.count())
-            .select_from(ExternalPackagingPurchaseItem)
-            .where(ExternalPackagingPurchaseItem.sales_order_id == order_id)
-        )
         audit_count = db.scalar(select(func.count()).select_from(OperationLog))
+        result = delete_order_group(
+            OrderGroupDeleteRequest(order_ids=[order_id], confirm=True),
+            db=db,
+            user=admin,
+        )
 
-        with pytest.raises(HTTPException, match="外购包材采购历史") as error:
-            delete_order_group(
-                OrderGroupDeleteRequest(order_ids=[order_id], confirm=True),
-                db=db,
-                user=admin,
-            )
-
-        assert error.value.status_code == 409
-        assert db.get(Order, order_id) is not None
-        assert list(
-            db.scalars(select(OrderItem.id).where(OrderItem.order_id == order_id))
-        ) == item_ids
+        assert result["deleted_count"] == 1
+        assert db.get(Order, order_id) is None
         assert db.scalar(
             select(func.count())
             .select_from(ExternalPackagingPurchaseItem)
             .where(ExternalPackagingPurchaseItem.sales_order_id == order_id)
-        ) == purchase_count
-        assert db.scalar(select(func.count()).select_from(OperationLog)) == audit_count
+        ) == 0
+        assert db.scalar(select(func.count()).select_from(OperationLog)) > audit_count
+        purge_log = db.scalar(
+            select(OperationLog)
+            .where(
+                OperationLog.action
+                == "PURGE_CANCELLED_EXT_PURCHASE"
+            )
+            .order_by(OperationLog.id.desc())
+        )
+        assert purge_log is not None
+        assert "purchase_orders" in (purge_log.details or "")

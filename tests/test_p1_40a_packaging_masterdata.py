@@ -462,6 +462,56 @@ def test_other_packaging_customer_supplier_instruction_is_saved_directly(
         )
 
 
+def test_existing_other_packaging_can_be_changed_to_honeycomb_without_reverting(
+    p1_40a_app: FastAPI,
+) -> None:
+    ids = p1_40a_app.state.fixture
+    with TestClient(p1_40a_app) as client:
+        _login(client)
+        created = client.post(
+            "/api/master/products", json=_other_packaging_payload(ids)
+        )
+        assert created.status_code == 201, created.text
+
+        update = _honeycomb_payload(ids)
+        update.update(
+            {
+                "product_code": created.json()["product_code"],
+                "customer_material_code": created.json()["customer_material_code"],
+                "product_name": created.json()["product_name"],
+                "external_packaging_category_code": "honeycomb_board",
+                "expected_version": created.json()["version"],
+            }
+        )
+        saved = client.put(
+            f"/api/master/products/{created.json()['id']}", json=update
+        )
+        assert saved.status_code == 200, saved.text
+        body = saved.json()
+        assert body["external_supply"]["category_code"] == "honeycomb_board"
+        assert body["external_supply"]["specification"]["material"] == "170*110*170"
+        assert body["external_supply"]["specification"]["aperture_mm"] == 15
+        assert body["external_packaging_default_order_quantity_basis"] == "1.000000"
+        assert body["external_packaging_default_purchase_quantity_basis"] == "2.000000"
+
+        reread = client.get(f"/api/master/products/{created.json()['id']}")
+        assert reread.status_code == 200
+        assert reread.json()["external_supply"] == body["external_supply"]
+
+
+def test_external_category_mismatch_is_rejected_instead_of_silently_reverted(
+    p1_40a_app: FastAPI,
+) -> None:
+    ids = p1_40a_app.state.fixture
+    payload = _honeycomb_payload(ids)
+    payload["external_packaging_category_code"] = "other_packaging"
+    with TestClient(p1_40a_app) as client:
+        _login(client)
+        response = client.post("/api/master/products", json=payload)
+    assert response.status_code == 409
+    assert "不会静默还原" in response.text
+
+
 
 def test_hollow_board_specification_is_structured_and_validated() -> None:
     from fastapi import HTTPException

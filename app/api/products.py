@@ -1063,6 +1063,15 @@ def _normalize_product_external_supply(
         if row.customer_scope_id not in (None, payload.customer_id):
             raise HTTPException(status_code=409, detail=f"{row.supplier_product_code}是其他客户专用产品")
     first = rows[0]
+    requested_category = str(payload.external_packaging_category_code or "").strip()
+    if requested_category and requested_category != first.category_code:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "常用箱选择的包材类别与默认供应商产品类别不一致，系统不会静默还原。"
+                "请刷新候选供应商产品后重新选择并保存。"
+            ),
+        )
     customer_specification: dict[str, Any]
     specification_summary: str
     purchase_unit = first.purchase_unit

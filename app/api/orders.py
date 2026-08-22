@@ -48,7 +48,14 @@ from app.core.time_contract import (
 from app.models.audit import OperationLog
 from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryItem
-from app.models.external_packaging_purchase import ExternalPackagingPurchaseItem
+from app.models.external_packaging_purchase import (
+    ExternalPackagingPurchaseBatch,
+    ExternalPackagingPurchaseCancellation,
+    ExternalPackagingPurchaseItem,
+    ExternalPackagingPurchaseOrder,
+    ExternalPackagingPurchasePurgeAuthorization,
+    ExternalPackagingReceipt,
+)
 from app.models.finance import (
     Invoice,
     ReturnReceipt,
@@ -745,26 +752,20 @@ def _validated_external_purchase_ratio(
     product: Product,
     index: int,
 ) -> tuple[Decimal | None, Decimal | None, Decimal | None]:
-    order_basis = item.external_packaging_order_quantity_basis
-    purchase_basis = item.external_packaging_purchase_quantity_basis
+    submitted_order_basis = item.external_packaging_order_quantity_basis
+    submitted_purchase_basis = item.external_packaging_purchase_quantity_basis
     if product.supply_mode != "external_purchase":
-        if order_basis is not None or purchase_basis is not None:
+        if submitted_order_basis is not None or submitted_purchase_basis is not None:
             raise HTTPException(
                 status_code=422,
                 detail=f"第{index}条不是外购包材，不能填写采购数量换算",
             )
         return None, None, None
-    if (order_basis is None) != (purchase_basis is None):
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"第{index}条外购包材数量换算必须同时包含"
-                "订单数量基数和供应商采购数量基数"
-            ),
-        )
-    if order_basis is None and purchase_basis is None:
-        order_basis = product.external_packaging_default_order_quantity_basis
-        purchase_basis = product.external_packaging_default_purchase_quantity_basis
+    # The common-box profile is the only writable source for the conversion
+    # ratio.  Legacy/new clients may still submit the two historical fields,
+    # but an order-level value must never override the current master data.
+    order_basis = product.external_packaging_default_order_quantity_basis
+    purchase_basis = product.external_packaging_default_purchase_quantity_basis
     if order_basis is None or purchase_basis is None:
         raise HTTPException(
             status_code=422,
@@ -4644,6 +4645,168 @@ def _order_flow_dependencies(db: Session, order_ids: list[int]) -> list[str]:
     return labels
 
 
+def _purge_fully_cancelled_external_purchase_history(
+    db: Session,
+    *,
+    orders: list[Order],
+    user: User,
+    request: Request | None,
+    batch_id: str | None,
+) -> list[dict]:
+    """Remove only cancelled, never-received purchase facts before order deletion.
+
+    The database migration adds a short-lived authorization gate.  It rejects
+    authorization unless every supplier purchase in the batch has a
+    cancellation fact and no receipt fact exists.  A durable operation audit is
+    written before the immutable purchase rows are removed.
+    """
+
+    order_ids = [int(order.id) for order in orders]
+    batches = list(
+        db.scalars(
+            select(ExternalPackagingPurchaseBatch)
+            .options(
+                selectinload(
+                    ExternalPackagingPurchaseBatch.purchase_orders
+                ).selectinload(ExternalPackagingPurchaseOrder.items)
+            )
+            .where(ExternalPackagingPurchaseBatch.sales_order_id.in_(order_ids))
+            .order_by(ExternalPackagingPurchaseBatch.id)
+            .with_for_update(of=ExternalPackagingPurchaseBatch)
+        ).unique().all()
+    )
+    if not batches:
+        return []
+    purchase_orders = [
+        purchase for batch in batches for purchase in batch.purchase_orders
+    ]
+    purchase_ids = {int(purchase.id) for purchase in purchase_orders}
+    cancellation_rows = list(
+        db.scalars(
+            select(ExternalPackagingPurchaseCancellation).where(
+                ExternalPackagingPurchaseCancellation.purchase_order_id.in_(
+                    purchase_ids
+                )
+            )
+        ).all()
+    )
+    cancelled_ids = {int(row.purchase_order_id) for row in cancellation_rows}
+    active = [
+        purchase.purchase_number
+        for purchase in purchase_orders
+        if int(purchase.id) not in cancelled_ids
+    ]
+    if active:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "订单组仍有未撤回的外购包材采购单："
+                f"{'、'.join(active)}。请先撤回到未报料后再删除订单组。"
+            ),
+        )
+    received_purchase_ids = {
+        int(value)
+        for value in db.scalars(
+            select(ExternalPackagingReceipt.purchase_order_id).where(
+                ExternalPackagingReceipt.purchase_order_id.in_(purchase_ids)
+            )
+        ).all()
+    }
+    if received_purchase_ids:
+        numbers = [
+            purchase.purchase_number
+            for purchase in purchase_orders
+            if int(purchase.id) in received_purchase_ids
+        ]
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "外购包材采购单已有实收历史，不能删除订单组："
+                f"{'、'.join(numbers)}。请保留订单并改为作废或归档。"
+            ),
+        )
+    cancellations_by_purchase_id = {
+        int(row.purchase_order_id): row for row in cancellation_rows
+    }
+    snapshots: list[dict] = []
+    orders_by_id = {int(order.id): order for order in orders}
+    for purchase_batch in batches:
+        order = orders_by_id[int(purchase_batch.sales_order_id)]
+        purchase_snapshots = []
+        for purchase in purchase_batch.purchase_orders:
+            cancellation = cancellations_by_purchase_id[int(purchase.id)]
+            purchase_snapshots.append(
+                {
+                    "purchase_order_id": int(purchase.id),
+                    "purchase_number": purchase.purchase_number,
+                    "supplier_id": int(purchase.supplier_id),
+                    "supplier_name": purchase.supplier_name_snapshot,
+                    "total_amount": str(purchase.total_amount),
+                    "cancellation_source": cancellation.source,
+                    "cancellation_reason": cancellation.reason,
+                    "items": [
+                        {
+                            "purchase_item_id": int(item.id),
+                            "product_code": item.supplier_product_code_snapshot,
+                            "product_name": item.product_name_snapshot,
+                            "purchase_quantity": str(item.purchase_quantity),
+                            "purchase_unit": item.purchase_unit,
+                        }
+                        for item in purchase.items
+                    ],
+                }
+            )
+        snapshot = {
+            "purchase_batch_id": int(purchase_batch.id),
+            "sales_order_id": int(order.id),
+            "sales_order_number": order.order_number,
+            "purchase_orders": purchase_snapshots,
+        }
+        snapshots.append(snapshot)
+        db.add(
+            ExternalPackagingPurchasePurgeAuthorization(
+                batch_id=purchase_batch.id,
+                authorized_by=user.id,
+                reason="订单已完整撤回到未报料，用户二次确认删除订单组",
+            )
+        )
+        _append_order_audit(
+            db,
+            request=request,
+            user=user,
+            order=order,
+            action_code="order.external_purchase.cancelled_history_purge",
+            legacy_action="PURGE_CANCELLED_EXT_PURCHASE",
+            description="删除订单组前清理已取消且从未实收的外购采购事实",
+            details=snapshot,
+            batch_id=batch_id,
+        )
+    db.flush()
+    db.execute(
+        delete(ExternalPackagingPurchaseCancellation).where(
+            ExternalPackagingPurchaseCancellation.purchase_order_id.in_(purchase_ids)
+        ).execution_options(synchronize_session=False)
+    )
+    batch_ids = {int(row.id) for row in batches}
+    db.execute(
+        delete(ExternalPackagingPurchaseItem).where(
+            ExternalPackagingPurchaseItem.purchase_order_id.in_(purchase_ids)
+        ).execution_options(synchronize_session=False)
+    )
+    db.execute(
+        delete(ExternalPackagingPurchaseOrder).where(
+            ExternalPackagingPurchaseOrder.batch_id.in_(batch_ids)
+        ).execution_options(synchronize_session=False)
+    )
+    db.execute(
+        delete(ExternalPackagingPurchaseBatch).where(
+            ExternalPackagingPurchaseBatch.id.in_(batch_ids)
+        ).execution_options(synchronize_session=False)
+    )
+    db.flush()
+    return snapshots
+
+
 def _flow_delete_message(labels: list[str]) -> str:
     if "外购包材采购历史" in labels:
         return "该订单已有外购包材采购历史，不能物理删除；请保留原订单用于追溯，并将订单标记为作废或归档。"
@@ -5127,6 +5290,13 @@ def _delete_orders_in_transaction(
         raise HTTPException(status_code=409, detail="订单已被删除，请刷新后重试")
     item_ids = [item.id for order in orders for item in order.items]
     _ensure_no_production_completion_facts(db, item_ids)
+    _purge_fully_cancelled_external_purchase_history(
+        db,
+        orders=orders,
+        user=user,
+        request=request,
+        batch_id=batch_id,
+    )
     dependencies = _order_flow_dependencies(db, [order.id for order in orders])
     if dependencies:
         raise HTTPException(status_code=409, detail=_flow_delete_message(dependencies))

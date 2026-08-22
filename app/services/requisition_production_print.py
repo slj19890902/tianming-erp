@@ -24,6 +24,10 @@ from app.models.product_bom import (
 )
 from app.models.product_drawing import ProductDrawing
 from app.models.printing_plate import PrintingPlate
+from app.models.purchase_receipt import (
+    IncomingReceiptPurposeAllocation,
+    PurchaseReceiptFact,
+)
 from app.models.production import ProductionTask
 from app.models.requisition import Requisition
 from app.models.supplier_requisition_order import (
@@ -1484,6 +1488,64 @@ def build_receipt_production_print_package(
         return None
 
     card = deepcopy(source_card)
+    allocation = db.scalar(
+        select(IncomingReceiptPurposeAllocation).where(
+            IncomingReceiptPurposeAllocation.incoming_receipt_item_id
+            == int(receipt_item.id)
+        )
+    )
+    receipt_fact = (
+        db.get(PurchaseReceiptFact, int(allocation.purchase_receipt_fact_id))
+        if allocation is not None
+        and allocation.purchase_receipt_fact_id is not None
+        else None
+    )
+    if receipt_fact is not None:
+        reported_material_code = str(
+            receipt_fact.expected_material_code_snapshot or ""
+        ).strip()
+        actual_material_code = str(
+            receipt_fact.actual_material_code_snapshot or ""
+        ).strip()
+        actual_flute_type = str(
+            receipt_fact.actual_material_flute_type_snapshot or ""
+        ).strip()
+        actual_layer_count = receipt_fact.actual_material_layer_count_snapshot
+        for component in card.get("components") or []:
+            matches_supplier_item = (
+                receipt_fact.supplier_requisition_order_item_id is not None
+                and int(component.get("supplier_order_item_id") or 0)
+                == int(receipt_fact.supplier_requisition_order_item_id)
+            )
+            matches_requisition_item = (
+                receipt_fact.material_requisition_item_id is not None
+                and int(component.get("material_requisition_item_id") or 0)
+                == int(receipt_fact.material_requisition_item_id)
+            )
+            if not (matches_supplier_item or matches_requisition_item):
+                continue
+            component["reported_material_code"] = reported_material_code or None
+            component["reported_flute_type"] = component.get("flute_type")
+            component["material_code"] = actual_material_code or None
+            component["flute_type"] = actual_flute_type or None
+            component["layer_count"] = actual_layer_count
+            component["material_changed"] = bool(
+                actual_material_code
+                and reported_material_code
+                and actual_material_code != reported_material_code
+            )
+        card.update(
+            {
+                "reported_material_code": reported_material_code or None,
+                "actual_material_code": actual_material_code or None,
+                "actual_material_flute_type": actual_flute_type or None,
+                "material_changed": bool(
+                    actual_material_code
+                    and reported_material_code
+                    and actual_material_code != reported_material_code
+                ),
+            }
+        )
     receipt_warning = "已有实收差异或分批版本，计划版不可冒充实收版"
     card["review_messages"] = [
         message
@@ -1491,7 +1553,9 @@ def build_receipt_production_print_package(
         if message != receipt_warning
     ]
     card["review_required"] = bool(card["review_messages"])
-    requires_actual = bool(version.get("requires_actual_card"))
+    requires_actual = bool(
+        version.get("requires_actual_card") or card.get("material_changed")
+    )
     if requires_actual:
         output_factor = max(
             (
@@ -1505,9 +1569,21 @@ def build_receipt_production_print_package(
         card.update(
             {
                 "paper_phase": "actual_receipt",
-                "paper_phase_label": _actual_receipt_label(version),
-                "paper_version_key": version["paper_version_key"],
-                "status_label": _actual_receipt_label(version),
+                "paper_phase_label": (
+                    "材质差异实收版"
+                    if card.get("material_changed")
+                    else _actual_receipt_label(version)
+                ),
+                "paper_version_key": (
+                    f"actual:receipt:{int(receipt_item.id)}"
+                    if card.get("material_changed")
+                    else version["paper_version_key"]
+                ),
+                "status_label": (
+                    "材质差异实收版"
+                    if card.get("material_changed")
+                    else _actual_receipt_label(version)
+                ),
                 "planned_sheet_quantity": int(
                     version["planned_sheet_quantity"]
                 ),
@@ -1562,6 +1638,9 @@ def build_receipt_production_print_package(
         "variance_type": version.get("variance_type"),
         "inventory_lot_number": version.get("inventory_lot_number"),
         "pallet_code": version.get("pallet_code"),
+        "reported_material_code": card.get("reported_material_code"),
+        "actual_material_code": card.get("actual_material_code"),
+        "actual_material_flute_type": card.get("actual_material_flute_type"),
     }
     paper_fingerprint = (
         hashlib.sha256(
@@ -1589,6 +1668,10 @@ def build_receipt_production_print_package(
         "reuses_planned_card": not requires_actual,
         "reprint_required": requires_actual,
         "receipt_item_id": int(receipt_item.id),
+        "reported_material_code": card.get("reported_material_code"),
+        "actual_material_code": card.get("actual_material_code"),
+        "actual_material_flute_type": card.get("actual_material_flute_type"),
+        "material_changed": bool(card.get("material_changed")),
         "card_count": 1,
         "page_count": 1,
         "review_required": bool(card["review_required"]),

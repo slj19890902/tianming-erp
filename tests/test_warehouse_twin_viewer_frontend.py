@@ -264,7 +264,9 @@ def test_operational_twin_uses_cross_floor_search_highlights_and_mapped_location
     assert 'const [searchPanelOpen, setSearchPanelOpen] = useState(true)' in SOURCE
     assert "searchHighlightAreaCodes(searchHighlightItems, floorCode)" in SOURCE
     assert "highlightFeatureIds={searchHighlightFeatureIds}" in SOURCE
-    assert "highlightedPalletIds={searchHighlightPalletIds}" in SOURCE
+    assert "highlightedPalletIds={operationalHighlightPalletIds}" in SOURCE
+    assert "searchHighlightPalletIds" in SOURCE
+    assert "productionSelectionHighlightPalletIds" in SOURCE
     assert "buildMappedLocationPallets(features, visualLocations, floorCode, standardPallet, layout?.id)" in SOURCE
     assert "const mappedLocationPallets = useMemo(" in SOURCE
     assert "const movePreviewPallets = useMemo(() =>" in SOURCE

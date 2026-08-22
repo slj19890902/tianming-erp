@@ -27,6 +27,7 @@ from app.models.product import Product
 from app.models.production import (
     ProductionCompletion,
     ProductionCompletionBatch,
+    ProductionLocationSelectionSession,
     ProductionStockTransfer,
     ProductionTask,
 )
@@ -1708,6 +1709,306 @@ def test_direct_transfer_preserves_completion_and_production_reservation_cannot_
                 allow_downstream=True,
             )
         assert error.value.status_code == 409
+
+
+def test_production_map_selection_is_zero_write_until_original_page_confirms(
+    production_app,
+) -> None:
+    app, factory, ids = production_app
+    with factory() as db:
+        db.add(
+            Floor3LocationLayout(
+                location_id=ids["temp3"],
+                left_pct=10,
+                top_pct=10,
+                width_pct=12,
+                height_pct=10,
+                layout_kind="physical_pallet",
+                source_type="seeded",
+                version=1,
+            )
+        )
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client)
+        completed = _complete(
+            client,
+            ids,
+            "transfer",
+            idempotency_key="p193-map-complete",
+        )
+        assert completed.status_code == 200, completed.text
+        completion = completed.json()["items"][0]
+        completion_id = completion["id"]
+        original_lot_id = completion["inventory_lot_id"]
+
+        created = client.post(
+            f"/api/production/completions/{completion_id}/location-selection-sessions",
+            json={"idempotency_key": "p193-create-selection"},
+        )
+        replayed_create = client.post(
+            f"/api/production/completions/{completion_id}/location-selection-sessions",
+            json={"idempotency_key": "p193-create-selection"},
+        )
+        assert created.status_code == replayed_create.status_code == 200
+        assert replayed_create.json()["token"] == created.json()["token"]
+        assert created.json()["status"] == "open"
+        assert "selection_token=" in created.json()["map_url"]
+        token = created.json()["token"]
+
+        map_state = client.get(
+            f"/api/production/location-selection-sessions/{token}"
+        )
+        assert map_state.status_code == 200, map_state.text
+        assert map_state.json()["status"] == "open"
+        target = next(
+            row
+            for row in map_state.json()["candidate_locations"]
+            if row["id"] == ids["temp3"]
+        )
+        assert target["layout_version"] == 1
+
+        selected = client.post(
+            f"/api/production/location-selection-sessions/{token}/select",
+            json={
+                "location_id": ids["temp3"],
+                "expected_layout_version": 1,
+            },
+        )
+        assert selected.status_code == 200, selected.text
+        assert selected.json()["status"] == "selected"
+        assert selected.json()["writes_inventory"] is False
+        assert selected.json()["selected_location"]["id"] == ids["temp3"]
+
+        with factory() as db:
+            assert db.scalar(
+                select(ProductionStockTransfer.id).where(
+                    ProductionStockTransfer.completion_id == completion_id
+                )
+            ) is None
+            assert db.get(InventoryLot, original_lot_id).warehouse_location_id == ids[
+                "staging"
+            ]
+
+        transferred = client.post(
+            f"/api/production/completions/{completion_id}/stock-transfers/from-selection",
+            json={
+                "selection_token": token,
+                "idempotency_key": "p193-confirm-selection",
+            },
+        )
+        exact_replay = client.post(
+            f"/api/production/completions/{completion_id}/stock-transfers/from-selection",
+            json={
+                "selection_token": token,
+                "idempotency_key": "p193-confirm-selection",
+            },
+        )
+        different_replay = client.post(
+            f"/api/production/completions/{completion_id}/stock-transfers/from-selection",
+            json={
+                "selection_token": token,
+                "idempotency_key": "p193-confirm-selection-different",
+            },
+        )
+
+    assert transferred.status_code == exact_replay.status_code == 200
+    assert transferred.json()["replayed"] is False
+    assert exact_replay.json()["replayed"] is True
+    assert different_replay.status_code == 409
+    with factory() as db:
+        session = db.scalar(
+            select(ProductionLocationSelectionSession).where(
+                ProductionLocationSelectionSession.completion_id == completion_id
+            )
+        )
+        assert session.status == "consumed"
+        assert session.transfer_id is not None
+        assert db.get(InventoryLot, original_lot_id).warehouse_location_id == ids[
+            "temp3"
+        ]
+
+
+def test_production_map_selection_rejects_layout_drift_without_inventory_write(
+    production_app,
+) -> None:
+    app, factory, ids = production_app
+    with factory() as db:
+        layout = Floor3LocationLayout(
+            location_id=ids["temp3"],
+            left_pct=10,
+            top_pct=10,
+            width_pct=12,
+            height_pct=10,
+            layout_kind="physical_pallet",
+            source_type="seeded",
+            version=1,
+        )
+        db.add(layout)
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client)
+        completed = _complete(
+            client,
+            ids,
+            "transfer",
+            idempotency_key="p193-drift-complete",
+        )
+        completion_id = completed.json()["items"][0]["id"]
+        created = client.post(
+            f"/api/production/completions/{completion_id}/location-selection-sessions",
+            json={"idempotency_key": "p193-drift-create"},
+        )
+        token = created.json()["token"]
+        selected = client.post(
+            f"/api/production/location-selection-sessions/{token}/select",
+            json={
+                "location_id": ids["temp3"],
+                "expected_layout_version": 1,
+            },
+        )
+        assert selected.status_code == 200, selected.text
+
+        with factory() as db:
+            layout = db.scalar(
+                select(Floor3LocationLayout).where(
+                    Floor3LocationLayout.location_id == ids["temp3"]
+                )
+            )
+            layout.version = 2
+            db.commit()
+
+        stale = client.post(
+            f"/api/production/completions/{completion_id}/stock-transfers/from-selection",
+            json={
+                "selection_token": token,
+                "idempotency_key": "p193-drift-confirm",
+            },
+        )
+        assert stale.status_code == 409
+        assert "地图状态已变化" in stale.json()["detail"]
+
+    with factory() as db:
+        assert db.scalar(
+            select(ProductionStockTransfer.id).where(
+                ProductionStockTransfer.completion_id == completion_id
+            )
+        ) is None
+        selection = db.scalar(
+            select(ProductionLocationSelectionSession).where(
+                ProductionLocationSelectionSession.completion_id == completion_id
+            )
+        )
+        assert selection.status == "selected"
+
+
+def test_production_map_selection_timeout_is_zero_write(
+    production_app,
+) -> None:
+    app, factory, ids = production_app
+    with factory() as db:
+        db.add(
+            Floor3LocationLayout(
+                location_id=ids["temp3"],
+                left_pct=10,
+                top_pct=10,
+                width_pct=12,
+                height_pct=10,
+                layout_kind="physical_pallet",
+                source_type="seeded",
+                version=1,
+            )
+        )
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client)
+        completed = _complete(
+            client,
+            ids,
+            "transfer",
+            idempotency_key="p193-timeout-complete",
+        )
+        completion_id = completed.json()["items"][0]["id"]
+        created = client.post(
+            f"/api/production/completions/{completion_id}/location-selection-sessions",
+            json={"idempotency_key": "p193-timeout-create"},
+        )
+        token = created.json()["token"]
+        selected = client.post(
+            f"/api/production/location-selection-sessions/{token}/select",
+            json={
+                "location_id": ids["temp3"],
+                "expected_layout_version": 1,
+            },
+        )
+        assert selected.status_code == 200, selected.text
+
+        with factory() as db:
+            selection = db.scalar(
+                select(ProductionLocationSelectionSession).where(
+                    ProductionLocationSelectionSession.token == token
+                )
+            )
+            selection.expires_at = datetime(2000, 1, 1)
+            db.commit()
+
+        expired = client.post(
+            f"/api/production/completions/{completion_id}/stock-transfers/from-selection",
+            json={
+                "selection_token": token,
+                "idempotency_key": "p193-timeout-confirm",
+            },
+        )
+        assert expired.status_code == 410
+
+    with factory() as db:
+        assert db.scalar(
+            select(ProductionStockTransfer.id).where(
+                ProductionStockTransfer.completion_id == completion_id
+            )
+        ) is None
+        selection = db.scalar(
+            select(ProductionLocationSelectionSession).where(
+                ProductionLocationSelectionSession.token == token
+            )
+        )
+        assert selection.status == "selected"
+
+
+def test_production_map_selection_enforces_warehouse_permission_and_owner_scope(
+    production_app,
+) -> None:
+    app, _factory, ids = production_app
+    with TestClient(app) as client:
+        _login(client)
+        completed = _complete(
+            client,
+            ids,
+            "transfer",
+            idempotency_key="p193-permission-complete",
+        )
+        completion_id = completed.json()["items"][0]["id"]
+        created = client.post(
+            f"/api/production/completions/{completion_id}/location-selection-sessions",
+            json={"idempotency_key": "p193-permission-create"},
+        )
+        token = created.json()["token"]
+
+        client.post("/api/auth/logout")
+        _login(client, "n029-direct-only")
+        denied_create = client.post(
+            f"/api/production/completions/{completion_id}/location-selection-sessions",
+            json={"idempotency_key": "p193-denied-create"},
+        )
+        denied_read = client.get(
+            f"/api/production/location-selection-sessions/{token}"
+        )
+
+    assert denied_create.status_code == 403
+    assert denied_read.status_code == 403
 
 
 def test_completion_blocks_late_normal_finished_inventory_reservation(

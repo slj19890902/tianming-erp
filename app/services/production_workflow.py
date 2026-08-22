@@ -41,6 +41,7 @@ from app.models.production import (
 )
 from app.models.user import User
 from app.models.warehouse_inventory import (
+    Floor3LocationLayout,
     InventoryLot,
     InventoryLocationMovement,
     InventoryMovement,
@@ -1217,6 +1218,35 @@ def _production_stock_location(
     elif pallet_id is not None:
         raise ProductionWorkflowError("指定栈板不在所选三楼库位", 409)
     return location
+
+
+def validate_production_stock_destination(
+    db: Session,
+    *,
+    location_id: int,
+    expected_layout_version: int,
+) -> WarehouseLocation:
+    """Read-only validation for a map-picked production stock destination.
+
+    Final transfer still performs the guarded location claim and repeats every
+    inventory rule.  This helper lets the map save a version-bound choice
+    without moving inventory or acquiring a business quantity.
+    """
+
+    layout_version = db.scalar(
+        select(Floor3LocationLayout.version).where(
+            Floor3LocationLayout.location_id == location_id
+        )
+    )
+    if layout_version is None:
+        raise ProductionWorkflowError(
+            "所选位置尚未发布到实测地图，请选择地图中的有效货位", 409
+        )
+    if int(layout_version) != int(expected_layout_version):
+        raise ProductionWorkflowError(
+            "目标库位地图状态已变化，请返回地图重新选择", 409
+        )
+    return _production_stock_location(db, location_id, pallet_id=None)
 
 
 @dataclass(frozen=True)
@@ -4795,6 +4825,7 @@ def _production_completion_dicts(db: Session, rows: Sequence[tuple]) -> list[dic
                 "order_item_id": item.id,
                 "order_id": order.id,
                 "order_number": order.order_number,
+                "customer_po": order.customer_po,
                 "item_order_number": item.item_order_number,
                 "customer_id": order.customer_id,
                 "customer_name": customer.name,
@@ -4835,6 +4866,7 @@ def _production_completion_dicts(db: Session, rows: Sequence[tuple]) -> list[dic
                 "status": completion.status,
                 "initial_disposition": completion.initial_disposition,
                 "warehouse_location_id": effective_location_id,
+                "warehouse_floor": location.warehouse_floor if location else None,
                 "warehouse_location_code": location.location_code if location else None,
                 "warehouse_location_name": employee_location_name(location),
                 "inventory_lot_id": effective_lot_id,

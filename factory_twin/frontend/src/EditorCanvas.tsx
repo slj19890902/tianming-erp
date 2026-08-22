@@ -50,6 +50,7 @@ interface Props {
   productionProjections?: ProductionTaskProjection[];
   highlightFeatureIds?: string[];
   highlightedPalletIds?: string[];
+  selectionPriorityPalletIds?: string[];
   draggablePalletIds?: string[];
   focusTarget?: CanvasFocusTarget | null;
   palletEditingOnly?: boolean;
@@ -359,6 +360,7 @@ export function EditorCanvas({
   productionProjections = [],
   highlightFeatureIds = [],
   highlightedPalletIds = [],
+  selectionPriorityPalletIds = [],
   draggablePalletIds,
   focusTarget = null,
   palletEditingOnly = false,
@@ -1070,6 +1072,7 @@ export function EditorCanvas({
     raycaster.params.Line.threshold = 180;
     const pointer = new THREE.Vector2();
     const ground = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    const selectionPriorityPalletIdSet = new Set(selectionPriorityPalletIds);
     const snapGuideGroup = new THREE.Group();
     scene.add(snapGuideGroup);
     const clearSnapGuides = () => {
@@ -1145,7 +1148,15 @@ export function EditorCanvas({
         };
         return;
       }
-      const root = entityNode(raycaster.intersectObjects(interactive, !warehouseTheme)[0]?.object || null);
+      const intersections = raycaster.intersectObjects(interactive, !warehouseTheme);
+      const priorityRoot = selectionPriorityPalletIdSet.size
+        ? intersections
+          .map((intersection) => entityNode(intersection.object))
+          .find((candidate) => candidate
+            && candidate.userData.entityKind === "pallet"
+            && selectionPriorityPalletIdSet.has(String(candidate.userData.entityId)))
+        : null;
+      const root = priorityRoot || entityNode(intersections[0]?.object || null);
       if (!root) {
         pendingCanvasAction = {
           kind: "clear-selection",
@@ -1435,7 +1446,7 @@ export function EditorCanvas({
       });
       renderer.dispose();
     };
-  }, [layout, assets, viewMode, cameraPreset, viewResetToken, layers, referenceLayout, referenceOverlay, productionProjections, palletEditingOnly, rackEditingEnabled, featureEditingEnabled, allowPalletSelection, draggablePalletIds, palletSnapEnabled, palletSnapThresholdMm, drawMode, drawPoints, measureMode, measurePoints, readOnly, visualTheme, showInternalCodes]);
+  }, [layout, assets, viewMode, cameraPreset, viewResetToken, layers, referenceLayout, referenceOverlay, productionProjections, palletEditingOnly, rackEditingEnabled, featureEditingEnabled, allowPalletSelection, draggablePalletIds, selectionPriorityPalletIds, palletSnapEnabled, palletSnapThresholdMm, drawMode, drawPoints, measureMode, measurePoints, readOnly, visualTheme, showInternalCodes]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;

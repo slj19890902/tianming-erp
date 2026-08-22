@@ -431,3 +431,107 @@ class ProductionStockTransfer(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.current_timestamp(), nullable=False
     )
+
+
+class ProductionLocationSelectionSession(Base):
+    """Short-lived, owner-bound handoff from production history to the twin map.
+
+    The row stores only the chosen authoritative warehouse location and its map
+    version.  It never owns inventory quantity and cannot move stock by itself.
+    """
+
+    __tablename__ = "production_location_selection_sessions"
+    __table_args__ = (
+        UniqueConstraint(
+            "token", name="uq_production_location_selection_sessions_token"
+        ),
+        UniqueConstraint(
+            "create_idempotency_key",
+            name="uq_production_location_selection_sessions_create_idempotency",
+        ),
+        CheckConstraint(
+            "length(create_request_hash) = 64",
+            name="ck_production_location_selection_sessions_create_hash",
+        ),
+        CheckConstraint(
+            "status IN ('open','selected','consumed')",
+            name="ck_production_location_selection_sessions_status",
+        ),
+        CheckConstraint(
+            "version > 0",
+            name="ck_production_location_selection_sessions_version",
+        ),
+        CheckConstraint(
+            "(status = 'open' AND selected_location_id IS NULL "
+            "AND selected_layout_version IS NULL AND selected_at IS NULL "
+            "AND transfer_id IS NULL AND confirm_idempotency_key IS NULL "
+            "AND consumed_at IS NULL) OR "
+            "(status = 'selected' AND selected_location_id IS NOT NULL "
+            "AND selected_layout_version IS NOT NULL AND selected_at IS NOT NULL "
+            "AND transfer_id IS NULL AND confirm_idempotency_key IS NULL "
+            "AND consumed_at IS NULL) OR "
+            "(status = 'consumed' AND selected_location_id IS NOT NULL "
+            "AND selected_layout_version IS NOT NULL AND selected_at IS NOT NULL "
+            "AND transfer_id IS NOT NULL AND confirm_idempotency_key IS NOT NULL "
+            "AND consumed_at IS NOT NULL)",
+            name="ck_production_location_selection_sessions_state",
+        ),
+        Index(
+            "ix_production_location_selection_sessions_completion",
+            "completion_id",
+        ),
+        Index(
+            "ix_production_location_selection_sessions_owner_status",
+            "user_id",
+            "status",
+        ),
+        Index(
+            "ix_production_location_selection_sessions_expires_at",
+            "expires_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    token: Mapped[str] = mapped_column(String(96), nullable=False)
+    completion_id: Mapped[int] = mapped_column(
+        ForeignKey("production_completions.id", ondelete="RESTRICT"), nullable=False
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    customer_id: Mapped[int] = mapped_column(
+        ForeignKey("customers.id", ondelete="RESTRICT"), nullable=False
+    )
+    create_idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    create_request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), default="open", server_default="open", nullable=False
+    )
+    selected_location_id: Mapped[int | None] = mapped_column(
+        ForeignKey("warehouse_locations.id", ondelete="RESTRICT"), nullable=True
+    )
+    selected_layout_version: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    selected_location_name_snapshot: Mapped[str | None] = mapped_column(
+        String(250), nullable=True
+    )
+    transfer_id: Mapped[int | None] = mapped_column(
+        ForeignKey("production_stock_transfers.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    confirm_idempotency_key: Mapped[str | None] = mapped_column(
+        String(120), nullable=True
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    selected_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    version: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1", nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime, onupdate=func.current_timestamp(), nullable=True
+    )

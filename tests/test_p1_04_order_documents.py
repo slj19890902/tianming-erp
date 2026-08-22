@@ -494,6 +494,16 @@ def test_exact_stage_detail_revalidates_order_item_and_source(order_trace_app) -
     }
     assert body["event"]["document_number"] == "REQ-TRACE-A"
     assert body["target"]["module"] == "requisition"
+    assert body["navigation_url"].startswith("/?page=requisition&")
+    assert f"trace_order_id={ids['order_a']}" in body["navigation_url"]
+    assert f"trace_order_item_id={ids['item_a']}" in body["navigation_url"]
+    assert (
+        f"trace_source_type={requisition_event['source_type']}"
+        in body["navigation_url"]
+    )
+    assert f"trace_source_id={requisition_event['source_id']}" in body["navigation_url"]
+    assert body["event"]["navigation_url"] == body["navigation_url"]
+    assert body["target"]["navigation_url"] == body["navigation_url"]
     assert wrong_sibling.status_code == 404
 
 

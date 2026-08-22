@@ -496,6 +496,10 @@
       }
       .main-order-number { color: var(--muted); font-size: 11px; }
       .order-search-highlight { background: #fef08a; border-radius: 2px; color: inherit; }
+      .trace-deep-link-panel{margin:0 0 12px;padding:12px 14px;border:2px solid #2563eb;border-radius:10px;background:#eff6ff;box-shadow:0 0 0 3px #2563eb1f}
+      .trace-deep-link-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+      .trace-deep-link-facts{display:flex;gap:8px 18px;flex-wrap:wrap;margin-top:8px;color:#1e3a8a}
+      .trace-deep-link-facts span{white-space:normal}
       .delivery-batch-picker-toolbar,
       .delivery-batch-picker-tools { justify-content: flex-start; }
       .unordered-finished-picker { padding: 12px; margin-bottom: 12px; }
@@ -2446,6 +2450,27 @@
                 <template v-for="page in (currentNavigationGroup ? currentNavigationGroup.pages : [])" :key="page.key">
                   <button v-if="pageAllowed(page.key)" type="button" :class="['workbench-tab',{active:activePage===page.key}]" @click="go(page.key)">{{ page.label }}</button>
                 </template>
+              </div>
+            </section>
+
+            <section v-if="stageDeepLink.loading || stageDeepLink.error || stageDeepLink.detail" id="orderStageDeepLinkTarget" class="trace-deep-link-panel" aria-live="polite">
+              <div class="trace-deep-link-head">
+                <div>
+                  <strong>订单阶段只读定位</strong>
+                  <div v-if="stageDeepLink.loading" class="muted">正在按订单、明细和真实来源编号重新验权并定位…</div>
+                  <div v-else-if="stageDeepLink.error" class="danger-text">定位失败：{{ stageDeepLink.error }}</div>
+                  <template v-else-if="stageDeepLink.detail">
+                    <div><strong>{{ stageDeepLink.detail.event.stage_label }} · {{ stageDeepLink.detail.event.document_number }}</strong></div>
+                    <div class="trace-deep-link-facts">
+                      <span>产品：{{ stageDeepLink.detail.item.product_code || '-' }} / {{ stageDeepLink.detail.item.product_name || '-' }}</span>
+                      <span>状态：{{ stageDeepLink.detail.event.status_label }}</span>
+                      <span>实体去向：{{ stageDeepLink.detail.event.physical_location_label || '位置待确认' }}</span>
+                      <span>精确身份：{{ stageDeepLink.detail.navigation.source_type }} #{{ stageDeepLink.detail.navigation.source_id }}</span>
+                    </div>
+                    <div v-if="!stageDeepLink.detail.event.is_effective" class="status orange" style="margin-top:8px">历史记录已撤销或冲销；当前页只读展示，不把它当作当前有效事实。</div>
+                  </template>
+                </div>
+                <button class="btn small" type="button" @click="clearOrderStageDeepLink">关闭定位</button>
               </div>
             </section>
 
@@ -6578,7 +6603,7 @@
               </div>
               <div v-if="traceCurrentEvent()" class="notice" style="margin:10px 0;display:flex;align-items:center;justify-content:space-between;gap:10px">
                 <div><strong>当前可定位阶段：{{ traceCurrentEvent().stage_label }} · {{ traceCurrentEvent().status_label }}</strong><div class="muted">{{ traceCurrentEvent().document_number }}</div></div>
-                <button class="btn small primary" type="button" @click="openTraceEventDetail(traceCurrentEvent())">查看当前阶段</button>
+                <button class="btn small primary" type="button" @click="openTraceEventTarget(traceCurrentEvent())">新标签查看当前阶段</button>
               </div>
               <div v-if="traceNextRollbackEvent()" class="status orange" style="display:flex;align-items:center;justify-content:space-between;gap:10px;white-space:normal;margin:10px 0">
                 <div><strong>管理员下一步：{{ traceRollbackKind(traceNextRollbackEvent()).label }}</strong><div>必须逐级回退；如有发货、库存移动或其他后续事实，系统会明确阻止。</div></div>
@@ -6608,7 +6633,7 @@
                 <tbody><tr v-for="lot in orderTrace.current_inventory" :key="lot.lot_id">
                   <td>{{ lot.lot_number }}</td><td>{{ lot.inventory_type === "finished" ? "成品" : "半成品" }}</td>
                   <td>{{ lot.quantity_available }} / {{ lot.quantity_reserved }} {{ lot.unit === "boxes" ? "只" : "张" }}</td>
-                  <td>{{ lot.location_name || "位置名称待完善" }}</td><td>{{ lot.status_label }}</td>
+                  <td><button v-if="lot.navigation_url" class="btn small" type="button" @click="openTraceInventoryTarget(lot)">{{ lot.location_name || "位置名称待完善" }}</button><span v-else>{{ lot.location_name || "位置名称待完善" }}</span></td><td>{{ lot.status_label }}</td>
                 </tr></tbody>
               </table>
               <div class="section-title">真实单据时间线</div>
@@ -6621,7 +6646,7 @@
                   <td>{{ traceQuantityText(event) }}</td>
                   <td>{{ traceLocationText(event) }}</td>
                   <td><span :class="['status', event.is_reversal || !event.is_effective ? 'orange' : 'green']">{{ event.status_label }}</span></td>
-                  <td><button class="btn small" type="button" :disabled="orderTraceEventDetailLoadingKey === event.key" @click="openTraceEventDetail(event)">{{ orderTraceEventDetailLoadingKey === event.key ? "读取中…" : "阶段详情" }}</button></td>
+                  <td><button class="btn small" type="button" :disabled="orderTraceEventDetailLoadingKey === event.key" @click="openTraceEventTarget(event)">{{ orderTraceEventDetailLoadingKey === event.key ? "读取中…" : "新标签定位" }}</button></td>
                 </tr></tbody>
               </table>
               <div v-if="orderTrace.events.length <= 1" class="muted" style="margin-top:10px">该明细目前尚无真实后续单据。</div>
@@ -8656,7 +8681,7 @@
             costPanelTab:"gaps",
             costGapState:{loading:false,error:"",scope_label:"",total_items:0,returned_items:0,truncated:false,categories:[],items:[],filter:"all"},
             costReviewState:{loading:false,loaded:false,error:"",scope_label:"",evaluated_items:0,total_items:0,returned_items:0,truncated:false,summary:[],items:[]},
-            orderDetail:null, orderGroupDetail:null, orderTrace:null, orderTraceEventDetail:null, orderTraceEventDetailLoadingKey:"", orderTraceReturnContext:null, traceRollbackBusy:false, drawingFile:null,
+            orderDetail:null, orderGroupDetail:null, orderTrace:null, orderTraceEventDetail:null, orderTraceEventDetailLoadingKey:"", orderTraceReturnContext:null, traceRollbackBusy:false, stageDeepLink:{loading:false,error:"",detail:null}, drawingFile:null,
             externalPurchase:{loading:false,saving:false,cancelSaving:false,error:"",submitError:"",status:"",orderId:null,orderLabel:"",items:[],confirmation:null,history:[],cancelReason:"采购内容或数量需要重新核对",idempotencyKey:""},
             externalPurchaseView:"pending", externalPurchaseRouting:[], externalPurchaseRoutingLoading:false, externalPurchaseRoutingError:"", externalPurchaseRoutingFilter:"", externalPurchaseRoutingLoaded:false,
             externalPurchaseHistory:[], externalPurchaseHistoryTotal:0, externalPurchaseHistoryLoading:false, externalPurchaseHistoryError:"", externalPurchaseHistoryFilter:"", externalPurchaseHistoryLoaded:false,
@@ -12783,6 +12808,90 @@
             const subpage = new URLSearchParams(window.location.search).get("subpage") || "";
             return subpage === "external-packaging" ? "external-packaging" : "board";
           },
+          orderStageDeepLinkRequest() {
+            const params = new URLSearchParams(window.location.search);
+            const orderId = Number(params.get("trace_order_id") || 0);
+            const itemId = Number(params.get("trace_order_item_id") || 0);
+            const sourceType = String(params.get("trace_source_type") || "").trim();
+            const sourceId = Number(params.get("trace_source_id") || 0);
+            if (!orderId && !itemId && !sourceType && !sourceId) return null;
+            if (!orderId || !itemId || !sourceType || !sourceId) {
+              return {error:"追溯链接缺少订单、明细或真实来源编号"};
+            }
+            return {orderId,itemId,sourceType,sourceId};
+          },
+          async focusOrderStageBusinessList(detail) {
+            const module = String(detail?.target?.module || "");
+            const sourceType = String(detail?.navigation?.source_type || "");
+            const documentNumber = String(detail?.event?.document_number || "").trim();
+            if (module === "requisition") {
+              this.requisitionWorkspace = "board";
+              this.requisitionTab = "submitted";
+              this.reportedFilters = {...this.reportedFilters,document_number:documentNumber};
+              this.pages.requisitionReported = 1;
+              await this.loadReportedDocuments();
+            } else if (module === "incoming") {
+              this.incomingWorkspace = "board";
+              this.incomingTab = "history";
+              this.incomingHistoryFilters = {...this.incomingHistoryFilters,document_keyword:documentNumber};
+              this.pages.incomingHistory = 1;
+              await this.loadIncomingHistory();
+            } else if (module === "production") {
+              this.productionTab = sourceType === "production_task" ? "pending" : "history";
+              if (this.productionTab === "history") {
+                this.productionHistoryFilters = {...this.productionHistoryFilters,order_keyword:String(detail.order?.order_number || "")};
+                this.pages.productionHistory = 1;
+                await this.loadProductionHistory();
+              } else {
+                await this.loadProduction();
+              }
+            } else if (module === "deliveries") {
+              this.deliveryDashboardMode = "";
+              this.deliveryListFilters = {...this.deliveryListFilters,keyword:documentNumber,status:"",return_status:""};
+              this.pages.deliveries = 1;
+              await this.loadDeliveries();
+            } else if (module === "finance") {
+              const statementId = Number(detail?.event?.details?.statement_id || 0);
+              this.financeView = "statements";
+              await this.loadFinance();
+              if (statementId > 0) await this.openStatementDetail({id:statementId});
+            }
+          },
+          async applyOrderStageDeepLink() {
+            const request = this.orderStageDeepLinkRequest();
+            if (!request) return true;
+            this.stageDeepLink = {loading:true,error:"",detail:null};
+            if (request.error) {
+              this.stageDeepLink = {loading:false,error:request.error,detail:null};
+              return false;
+            }
+            try {
+              const sourceType=encodeURIComponent(request.sourceType);
+              const {data}=await axios.get(
+                `/api/orders/${request.orderId}/items/${request.itemId}/documents/${sourceType}/${request.sourceId}`,
+              );
+              if (String(data?.target?.module || "") !== String(this.activePage || "")) {
+                throw new Error("该阶段不属于当前业务页面，请从订单追溯重新打开");
+              }
+              this.stageDeepLink.detail = data;
+              this.stageDeepLink.error = "";
+              await this.focusOrderStageBusinessList(data);
+              this.$nextTick(() => document.getElementById("orderStageDeepLinkTarget")?.scrollIntoView({block:"start"}));
+              return true;
+            } catch (error) {
+              this.stageDeepLink.detail = null;
+              this.stageDeepLink.error = this.errorMessage(error);
+              return false;
+            } finally {
+              this.stageDeepLink.loading = false;
+            }
+          },
+          clearOrderStageDeepLink() {
+            this.stageDeepLink = {loading:false,error:"",detail:null};
+            const url = new URL(window.location.href);
+            ["trace_order_id","trace_order_item_id","trace_source_type","trace_source_id"].forEach(key => url.searchParams.delete(key));
+            window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+          },
           syncDesktopWorkspaceUrl(page, subpage="") {
             const url = new URL(window.location.href);
             url.searchParams.set("page", page);
@@ -12857,6 +12966,7 @@
               this.requisitionWorkspace = this.initialRequisitionWorkspaceFromLocation(this.activePage);
               this.incomingWorkspace = this.initialIncomingWorkspaceFromLocation(this.activePage);
               if (!await this.loadInitialPageResources()) return;
+              await this.applyOrderStageDeepLink();
               if (this.user?.must_change_password) this.openChangePassword(true);
             } catch (error) {
               if (!requestIsCurrent()) return;
@@ -12905,6 +13015,8 @@
               this.incomingWorkspace = this.initialIncomingWorkspaceFromLocation(this.activePage);
               const initialResourcesReady = await this.loadInitialPageResources();
               if (!requestIsCurrent() || !initialResourcesReady) return;
+              await this.applyOrderStageDeepLink();
+              if (!requestIsCurrent()) return;
               if (this.user?.must_change_password) this.openChangePassword(true, currentPassword);
             } catch (error) {
               if (requestIsCurrent()) this.loginError = this.errorMessage(error);
@@ -27712,6 +27824,58 @@
             this.orderTraceEventDetailLoadingKey="";
             this.orderTraceReturnContext=null;
             this.$nextTick(() => window.scrollTo(0,context?.scrollY || 0));
+          },
+          async openTraceEventTarget(event) {
+            const expectedTrace = this.orderTrace;
+            const orderId = Number(expectedTrace?.order?.id || 0);
+            const itemId = Number(expectedTrace?.item?.id || 0);
+            const sourceTypeValue = String(event?.source_type || "");
+            const sourceId = Number(event?.source_id || 0);
+            if (!orderId || !itemId || !sourceTypeValue || !sourceId) {
+              this.showToast("阶段定位信息不完整，请刷新追溯后重试", true);
+              return false;
+            }
+            const opened = window.open("", "_blank");
+            if (!opened) {
+              this.showToast("浏览器阻止了新标签，请允许本站打开新标签后重试", true);
+              return false;
+            }
+            try { opened.opener = null; } catch (_) {}
+            const loadingKey = String(event?.key || `${sourceTypeValue}:${sourceId}`);
+            this.orderTraceEventDetailLoadingKey = loadingKey;
+            try {
+              opened.document.title = "正在验证订单阶段…";
+              opened.document.body.textContent = "正在按真实单据编号验证权限并定位，请稍候…";
+              const sourceType=encodeURIComponent(sourceTypeValue);
+              const {data}=await axios.get(
+                `/api/orders/${orderId}/items/${itemId}/documents/${sourceType}/${sourceId}`,
+              );
+              if (this.orderTrace !== expectedTrace || !data.navigation_url) {
+                throw new Error("订单追溯已变化，请刷新后重新打开");
+              }
+              opened.location.replace(data.navigation_url);
+              return true;
+            } catch (error) {
+              try { opened.close(); } catch (_) {}
+              this.showToast(`阶段定位失败：${this.errorMessage(error)}`, true);
+              return false;
+            } finally {
+              if (this.orderTraceEventDetailLoadingKey === loadingKey) this.orderTraceEventDetailLoadingKey = "";
+            }
+          },
+          openTraceInventoryTarget(lot) {
+            const url = String(lot?.navigation_url || "");
+            if (!url) {
+              this.showToast("该库存没有可重新验权的真实来源，暂不生成定位链接", true);
+              return false;
+            }
+            const opened = window.open(url, "_blank");
+            if (!opened) {
+              this.showToast("浏览器阻止了新标签，请允许本站打开新标签后重试", true);
+              return false;
+            }
+            try { opened.opener = null; } catch (_) {}
+            return true;
           },
           traceEventTime(event) {
             if (event.occurred_at) return this.formatDateTime(event.occurred_at);

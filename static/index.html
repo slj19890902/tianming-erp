@@ -9953,7 +9953,16 @@
                 label:"常用箱", api:"products", formKey:"productForm", collection:"products",
                 fields:[
                   ["customer_id","客户"], ["product_code","存货编码"], ["customer_material_code","客户料号"],
-                  ["product_name","产品名称"], ["box_style","箱型"], ["length_mm","长(mm)"],
+                  ["product_name","产品名称"], ["box_style","箱型"], ["supply_mode","供货方式"],
+                  ["external_packaging_category_code","外购包材类别"],
+                  ["external_packaging_specification_summary","外购客户规格"],
+                  ["external_packaging_purchase_unit","外购采购单位"],
+                  ["external_packaging_default_order_quantity_basis","订单数量基数"],
+                  ["external_packaging_default_purchase_quantity_basis","供应商采购数量基数"],
+                  ["_external_specification","外购结构化规格"],
+                  ["_external_selected_ids","候选供应商产品"],
+                  ["_external_default_product_id","默认供应商产品"],
+                  ["length_mm","长(mm)"],
                   ["width_mm","宽(mm)"], ["height_mm","高(mm)"], ["splice_mode","拼箱方式"],
                   ["pieces_per_box","每箱片数"], ["flap_mm","舌头(mm)"], ["report_length_mm","报料长(mm)"],
                   ["report_width_mm","报料宽(mm)"], ["crease_type","压线类型"], ["crease_left_mm","左压线(mm)"],
@@ -10003,13 +10012,25 @@
             if (Array.isArray(value)) return value.map(item => String(item || "").trim()).filter(Boolean).sort();
             if (value === null || value === undefined || value === "") return "";
             if (typeof value === "boolean") return value;
+            if (typeof value === "object") {
+              const normalizeObject = source => {
+                if (Array.isArray(source)) return source.map(normalizeObject);
+                if (!source || typeof source !== "object") return source;
+                return Object.fromEntries(
+                  Object.keys(source).sort().map(key=>[key,normalizeObject(source[key])])
+                );
+              };
+              return normalizeObject(value);
+            }
             const numericFields = new Set([
               "customer_number","payment_term_days","statement_cycle_start_day","customer_id","length_mm","width_mm",
               "height_mm","pieces_per_box","flap_mm","report_length_mm","report_width_mm","crease_left_mm",
               "crease_middle_mm","crease_right_mm","base_report_length_mm","base_report_width_mm","base_crease_left_mm",
               "base_crease_middle_mm","base_crease_right_mm","layer_count","material_id","sale_unit_price","mold_tool_id","quote_price",
               "printing_plate_1_id","printing_plate_2_id","printing_plate_3_id","plate_alignment_value_mm","plate_mount_value_mm",
-              "machine_set_length_mm","machine_set_width_mm","machine_set_height_mm","production_label_units_per_label"
+              "machine_set_length_mm","machine_set_width_mm","machine_set_height_mm","production_label_units_per_label",
+              "external_packaging_default_order_quantity_basis","external_packaging_default_purchase_quantity_basis",
+              "_external_default_product_id"
             ]);
             if (numericFields.has(field) && Number.isFinite(Number(value))) return Number(value);
             return String(value).trim();
@@ -10017,6 +10038,7 @@
           masterDisplayValue(entity, field, value) {
             if (value === null || value === undefined || value === "") return "（空）";
             if (Array.isArray(value)) return value.length ? value.join("、") : "（空）";
+            if (typeof value === "object") return JSON.stringify(value);
             if (field === "customer_id") return this.customerName(Number(value));
             if (field === "material_id") {
               const rows = this.allMaterials.length ? this.allMaterials : this.materials;

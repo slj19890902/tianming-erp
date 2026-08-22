@@ -147,6 +147,67 @@ if(vm.productForm.external_packaging_default_order_quantity_basis!==3||vm.produc
     _run_node(tmp_path, source)
 
 
+def test_external_only_common_box_edits_are_not_misclassified_as_unchanged(
+    tmp_path: Path,
+) -> None:
+    method_names = (
+        "masterEntityConfig",
+        "masterComparableValue",
+        "masterDisplayValue",
+        "masterLocalChanges",
+    )
+    methods = {name: _method(name) for name in method_names}
+    source = f"""
+const vm={{
+  masterEditBaseline:{{product:{{
+    supply_mode:"external_purchase",
+    external_packaging_category_code:"other_packaging",
+    external_packaging_specification_summary:"旧摘要",
+    external_packaging_purchase_unit:"片",
+    external_packaging_default_order_quantity_basis:null,
+    external_packaging_default_purchase_quantity_basis:null,
+    _external_specification:{{summary:"旧摘要"}},
+    _external_selected_ids:[2],
+    _external_default_product_id:2,
+  }}}},
+  productForm:{{
+    supply_mode:"external_purchase",
+    external_packaging_category_code:"honeycomb_board",
+    external_packaging_specification_summary:"材质170*110*170，孔径15mm，800×180×60mm",
+    external_packaging_purchase_unit:"片",
+    external_packaging_default_order_quantity_basis:1,
+    external_packaging_default_purchase_quantity_basis:2,
+    _external_specification:{{material:"170*110*170",aperture_mm:15,length_mm:800,width_mm:180,thickness_mm:60}},
+    _external_selected_ids:[2],
+    _external_default_product_id:2,
+  }},
+  drawingFile:null,
+  customers:[],allMaterials:[],materials:[],moldTools:[],printingPlates:[],
+  masterCurrentForm(entity){{return entity==="product" ? this.productForm : null;}},
+  customerName(value){{return String(value);}},
+}};
+for (const name of {json.dumps(method_names)}) {{
+  const [params,body]={json.dumps(methods, ensure_ascii=False)}[name];
+  vm[name]=new Function(params,body).bind(vm);
+}}
+const changes=vm.masterLocalChanges("product");
+const fields=new Set(changes.map(change=>change.field));
+for (const required of [
+  "external_packaging_category_code",
+  "external_packaging_specification_summary",
+  "external_packaging_default_order_quantity_basis",
+  "external_packaging_default_purchase_quantity_basis",
+  "_external_specification",
+]) {{
+  if(!fields.has(required)) throw new Error(`external-only edit was ignored: ${{required}}`);
+}}
+vm.masterEditBaseline.product={{...vm.productForm,_external_specification:{{...vm.productForm._external_specification,thickness_mm:40}}}};
+const structureOnly=vm.masterLocalChanges("product");
+if(structureOnly.length!==1||structureOnly[0].field!=="_external_specification") throw new Error("structure-only edit was misclassified as unchanged");
+"""
+    _run_node(tmp_path, source)
+
+
 def test_external_candidate_selection_and_payload_clear_paper_fields(
     tmp_path: Path,
 ) -> None:

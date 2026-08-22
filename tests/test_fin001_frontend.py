@@ -71,3 +71,44 @@ def test_inline_javascript_is_syntax_valid() -> None:
     for script in scripts:
         completed = subprocess.run([node, "--check"], input=script, text=True, encoding="utf-8", capture_output=True, env=os.environ.copy(), check=False)
         assert completed.returncode == 0, completed.stderr
+
+
+def test_p0_16_confirmed_statement_has_reachable_invoice_task_actions() -> None:
+    finance = _block("<template v-else-if=\"activePage === 'finance'\">", "<template v-else-if=\"activePage === 'audit'\">")
+    methods = _block("financeConfirmationText(statement)", "async clearFinanceDashboardFilter()")
+    assert "statement.invoice_task" in finance
+    assert "查看开票任务" in finance
+    assert 'v-else-if="canGenerateInvoiceTask"' in finance
+    assert "row.confirmation_status = data.confirmation_status" in methods
+    assert "row.version = data.version" in methods
+    assert "下一步请点击“生成开票任务”" in methods
+    assert "financeInvoicePrerequisite" in INDEX
+    assert "开票资料尚未完善" in INDEX
+    assert "进入客户税务资料" in INDEX
+    assert "missing_items:[...missing]" in methods
+    assert "await this.openInvoiceTask(task)" in methods
+    assert "detail.missing_items || detail.missing_fields" in INDEX
+
+
+def test_p0_16_customer_selector_is_layered_keyboard_operable_and_last_request_wins() -> None:
+    assert ".search-select:focus-within { z-index: 140; }" in INDEX
+    assert ".search-select-option { width: 100%; min-height: 38px;" in INDEX
+    for marker in (
+        'role="combobox"',
+        'role="listbox"',
+        '@keydown.down.prevent="moveActive(1)"',
+        '@keydown.up.prevent="moveActive(-1)"',
+        '@keydown.enter.prevent="chooseActive"',
+        '@keydown.esc="closeList"',
+        ':aria-activedescendant=',
+    ):
+        assert marker in INDEX
+    statement_customer_loader = _block(
+        "async loadStatementCustomers()",
+        "async loadPendingStatements()",
+    )
+    assert 'const requestKey = "finance:statement-customers"' in statement_customer_loader
+    assert "this.beginLatestRequest(requestKey)" in statement_customer_loader
+    assert "signal:controller.signal" in statement_customer_loader
+    assert "latestRequestControllers.get(requestKey) !== controller" in statement_customer_loader
+    assert "this.finishLatestRequest(requestKey, controller)" in statement_customer_loader

@@ -37,8 +37,9 @@ def fin001_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         admin = User(username="fin001-admin", password_hash=hash_password("RolePass123!"), role="admin", real_name="Admin", must_change_password=False)
         finance = User(username="fin001-finance", password_hash=hash_password("RolePass123!"), role="finance", real_name="Finance", must_change_password=False)
         sales = User(username="fin001-sales", password_hash=hash_password("RolePass123!"), role="sales", real_name="Sales", must_change_password=False)
+        boss = User(username="fin001-boss", password_hash=hash_password("RolePass123!"), role="boss", real_name="Boss", must_change_password=False)
         customer = Customer(name="匿名开票客户", customer_code="FIN001", is_active=True)
-        db.add_all([admin, finance, sales, customer])
+        db.add_all([admin, finance, sales, boss, customer])
         db.flush()
         product = Product(customer_id=customer.id, product_code="FIN-BOX-001", customer_material_code="FIN001-MAT", product_name="匿名纸箱", box_category="normal", cost_unit_price=Decimal("1.00"))
         db.add(product)
@@ -186,3 +187,47 @@ def test_fin001_confirmed_statement_blocks_legacy_invoice_endpoint(fin001_app) -
 
     assert legacy.status_code == 409
     assert "冻结" in str(legacy.json()) or "开票任务" in str(legacy.json())
+
+
+def test_p0_16_finance_workbench_projects_confirmed_version_and_current_task(fin001_app) -> None:
+    app, _ = fin001_app
+    with TestClient(app) as client:
+        _login(client)
+        confirmed = client.post(
+            "/api/finance/statements/1/confirm",
+            json={"expected_version": 1},
+        )
+        assert confirmed.status_code == 200, confirmed.text
+        _complete_invoice_profile(client)
+        created = client.post(
+            "/api/finance/statements/1/invoice-tasks",
+            json={"expected_version": 2, "idempotency_key": "p0-16-task"},
+        )
+        assert created.status_code == 201, created.text
+
+        current = client.get(
+            "/api/finance/current-customer-months",
+            params={"statement_month": "2026-08"},
+        )
+        assert current.status_code == 200, current.text
+        projected = current.json()["items"][0]["statements"][0]
+        assert projected["confirmation_status"] == "confirmed"
+        assert projected["version"] == 2
+        assert projected["invoice_task"]["id"] == created.json()["id"]
+        assert projected["invoice_task"]["task_number"] == created.json()["task_number"]
+
+        statements = client.get(
+            "/api/finance/statements",
+            params={"statement_month": "2026-08"},
+        )
+        assert statements.status_code == 200, statements.text
+        assert statements.json()["items"][0]["invoice_task"]["id"] == created.json()["id"]
+
+    with TestClient(app) as client:
+        _login(client, "fin001-boss")
+        current = client.get(
+            "/api/finance/current-customer-months",
+            params={"statement_month": "2026-08"},
+        )
+        assert current.status_code == 200, current.text
+        assert "invoice_task" not in current.json()["items"][0]["statements"][0]

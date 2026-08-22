@@ -38,6 +38,7 @@ from app.models.finance import (
     Statement,
     StatementItem,
 )
+from app.models.invoice_task import FinanceInvoiceTask
 from app.models.fulfillment_reminder import FulfillmentReminder
 from app.models.order import Order, OrderItem
 from app.models.product import Product
@@ -114,6 +115,46 @@ def _redact_statement_costs(payload: dict, user: User) -> dict:
             for item in redacted["items"]
         ]
     return redacted
+
+
+def _can_view_invoice_task_summary(user: User) -> bool:
+    return has_permission(
+        user, "finance.invoice_task.generate"
+    ) or has_permission(user, "finance.invoice_result.register")
+
+
+def _active_invoice_tasks_by_statement(
+    db: Session,
+    statement_versions: dict[int, int],
+    user: User,
+) -> dict[int, dict]:
+    """Return current task summaries only to users with invoice-task access."""
+
+    if not statement_versions or not _can_view_invoice_task_summary(user):
+        return {}
+    rows = db.scalars(
+        select(FinanceInvoiceTask)
+        .where(
+            FinanceInvoiceTask.statement_id.in_(statement_versions),
+            FinanceInvoiceTask.status != "voided",
+        )
+        .order_by(FinanceInvoiceTask.id.desc())
+    ).all()
+    result: dict[int, dict] = {}
+    for task in rows:
+        statement_id = int(task.statement_id)
+        if statement_id in result:
+            continue
+        if int(task.statement_version) != int(statement_versions[statement_id]):
+            continue
+        result[statement_id] = {
+            "id": int(task.id),
+            "task_number": task.task_number,
+            "status": task.status,
+            "version": int(task.version),
+            "statement_version": int(task.statement_version),
+        }
+    return result
 
 
 def _statement_for_user(
@@ -487,6 +528,11 @@ def list_statements(
     rows = db.execute(
         query.offset((page - 1) * page_size).limit(page_size)
     ).all()
+    invoice_tasks = _active_invoice_tasks_by_statement(
+        db,
+        {int(statement.id): int(statement.version) for statement, _name in rows},
+        user,
+    )
     return {
         "total": total,
         "customer_count": customer_count,
@@ -507,6 +553,11 @@ def list_statements(
                     "status": statement.status,
                     "confirmation_status": statement.confirmation_status,
                     "version": statement.version,
+                    **(
+                        {"invoice_task": invoice_tasks.get(int(statement.id))}
+                        if _can_view_invoice_task_summary(user)
+                        else {}
+                    ),
                     "created_at": statement.created_at,
                 },
                 user,
@@ -2701,6 +2752,8 @@ def current_customer_months(
             Statement.invoiced_amount,
             Statement.settled_amount,
             Statement.status,
+            Statement.confirmation_status,
+            Statement.version,
             Statement.created_at,
         )
         .join(Customer, Customer.id == Statement.customer_id)
@@ -2712,6 +2765,14 @@ def current_customer_months(
             Statement.customer_id.in_(visible_customer_ids)
         )
     statement_rows = db.execute(statement_query).mappings().all()
+    invoice_tasks = _active_invoice_tasks_by_statement(
+        db,
+        {
+            int(statement["id"]): int(statement["version"])
+            for statement in statement_rows
+        },
+        user,
+    )
 
     grouped: dict[int, dict] = {}
     for pending in pending_rows:
@@ -2806,6 +2867,13 @@ def current_customer_months(
                 "pending_invoice_amount": invoice_balance,
                 "pending_payment_amount": payment_balance,
                 "status": statement["status"],
+                "confirmation_status": statement["confirmation_status"],
+                "version": int(statement["version"]),
+                **(
+                    {"invoice_task": invoice_tasks.get(int(statement["id"]))}
+                    if _can_view_invoice_task_summary(user)
+                    else {}
+                ),
                 "created_at": statement["created_at"],
             }
         )

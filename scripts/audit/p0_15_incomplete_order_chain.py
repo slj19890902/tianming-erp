@@ -1,6 +1,7 @@
-"""P0-15 unfinished-order chain audit for an explicit isolated SQLite copy.
+"""P0-17 extension of the P0-15 audit for an explicit isolated SQLite copy.
 
-There is deliberately no apply or repair mode.  The database is opened with
+The extension adds deterministic repair *previews*, never repair execution.
+There is deliberately no apply mode.  The database is opened with
 SQLite ``mode=ro``, ``PRAGMA query_only=ON`` and an authorizer that rejects
 write/schema operations.  Only the three explicitly named report files may be
 created.
@@ -238,7 +239,7 @@ def _render_markdown(report: dict) -> str:
     summary = report["summary"]
     source = report["source"]
     lines = [
-        "# P0-15 未完成订单全链只读扫描报告",
+        "# P0-17 未完成订单全链只读扫描与修复预览报告",
         "",
         f"- 来源标签：`{source['label']}`",
         f"- 数据库 revision：`{source['revision']}`",
@@ -257,12 +258,12 @@ def _render_markdown(report: dict) -> str:
         "",
         "## 能力边界",
         "",
-        "- 本次扫描覆盖 P1-80 采购用途冻结、P1-81 收料用途分流与自动成品；扫描器仍只报告，不自动修复。",
+        "- 本次扫描复用 P0-15，覆盖 P1-80 采购用途冻结、P1-81 收料用途分流与自动成品，并为已收无任务生成 P0-17 dry-run 预览。",
         "- `legacy_unset` 历史正式来源继续按兼容口径读取；只有明确标记为 `frozen` 的来源才强制用途快照与自动分流守恒。",
         "- 片料备库必须进入半成品批次，不得生成当前订单成品；已撤销用途分配不计入当前有效累计。",
         "- P1-84 工位路由按明确任务、产品和组件事实实时评估；不会从名称、编码、备注、图纸或模具推断模切。",
         "- P0-14/P1-85/P1-86/P1-87 的地图、盘点、地址和地面货位由隔离回归契约保护；本扫描器不写位置主数据。",
-        "- `RECEIVED_AWAITING_PRODUCTION_CONFIRMATION` 表示现行人工生产确认流程中的待办，不是库存缺失。",
+        "- 修复预览只根据有效收料、冻结用途和冻结换算分级；不会自动执行，打印与标签快照仍要求人工确认。",
         "- `ORDER_STATUS_SNAPSHOT_DIVERGENCE` 只提示保存状态与事实投影不同，禁止自动改正式状态。",
         "",
         "## 扫描覆盖",
@@ -312,6 +313,34 @@ def _render_markdown(report: dict) -> str:
             )
     lines.extend(
         [
+            "",
+            "## P0-17 修复预览（dry-run）",
+            "",
+            "- 自动 apply：`False`；本节只给工厂备份与授权后的人工处理提供依据。",
+            "",
+            "| 预览号 | 明细匿名标识 | 状态 | 建议动作 | 订单用途张数 | 理论成品/组件片数 | 阻断/确认原因 |",
+            "|---|---|---|---|---:|---:|---|",
+        ]
+    )
+    for preview in report.get("repair_previews") or []:
+        quantity = preview.get("frozen_quantity_facts") or {}
+        preview_output = quantity.get("theoretical_finished_quantity")
+        if preview_output is None:
+            preview_output = sum(
+                int(row.get("required_piece_quantity") or 0)
+                for row in quantity.get("component_targets") or []
+            )
+        lines.append(
+            f"| `{preview['proposal_id']}` | `{preview['order_item_ref']}` | "
+            f"`{preview['status']}` | `{preview['action']}` | "
+            f"{quantity.get('effective_order_purpose_sheet_qty', 0)} | "
+            f"{preview_output} | "
+            f"{' / '.join(preview.get('reason_codes') or []) or '-'} |"
+        )
+    if not report.get("repair_previews"):
+        lines.append("| - | - | `none` | `none` | 0 | 0 | 本次扫描无已收无任务预览 |")
+    lines.extend(
+        [
         "",
         "## 分类统计",
         "",
@@ -344,7 +373,8 @@ def _render_markdown(report: dict) -> str:
             "",
             "## 处置边界",
             "",
-            "- 本报告只读；未修复、未迁移、未刷新 legacy、未写正式业务表。",
+            "- 本报告和修复预览只读；未修复、未迁移、未刷新 legacy、未写正式业务表。",
+            "- `human_confirmation_required` 也不代表已获 apply 授权；必须先核对打印/标签快照、备份和差异清单。",
             "- error 必须逐条追溯并拆分独立修复任务，不能由扫描器自动回写。",
             "- review 必须结合当前正式业务事实人工核对，不能仅凭保存状态批量改数据。",
             "",
@@ -536,6 +566,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "findings": report["summary"]["finding_count"],
                 "focus_findings": report["summary"]["focus_finding_count"],
                 "focus_routes": report["summary"].get("focus_route_count", 0),
+                "repair_previews": len(report.get("repair_previews") or []),
+                "repair_preview_status_counts": report["summary"].get(
+                    "repair_preview_status_counts", {}
+                ),
+                "automatic_apply_allowed": False,
                 "database_unchanged": True,
                 "json_output": str(json_path),
                 "csv_output": str(csv_path),

@@ -95,7 +95,7 @@ def test_readonly_audit_reports_real_station_coverage(tmp_path: Path) -> None:
         serialized_routes = str(report["workstation_routes"])
         assert "ANON-ORDER" not in serialized_routes
         assert "ANON-PRODUCT" not in serialized_routes
-        assert report["summary"]["scan_complete"] is False
+        assert report["summary"]["scan_complete"] is True
 
         report["source"] = {
             "label": "anonymous-test-copy",

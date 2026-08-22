@@ -1216,6 +1216,194 @@ def test_reversed_receipt_purpose_facts_do_not_count_as_current_output(
     }
 
 
+def test_missing_task_repair_preview_uses_frozen_two_up_quantity_and_never_applies(
+    tmp_path: Path,
+):
+    engine = build_p0_15_database(tmp_path / "repair-preview-two-up.sqlite3")
+    with Session(engine) as db:
+        customer, product, order, item = add_order(
+            db,
+            "REPAIR-TWO-UP",
+            quantity=5,
+            material_status="received",
+        )
+        item.snapshot_splice_mode = "double"
+        item.snapshot_pieces_per_box = 2
+        item.special_process = "一开一"
+        facts = add_frozen_purpose_chain(
+            db,
+            "REPAIR-TWO-UP",
+            customer,
+            product,
+            order,
+            item,
+            order_sheet_qty=10,
+            reserve_sheet_qty=0,
+            finished_output_qty=0,
+        )
+        db.delete(facts["task"])
+        db.commit()
+
+        report = run_audit(db)
+
+    previews = [
+        row
+        for row in report["repair_previews"]
+        if row["finding_code"] == "P015_INCOMING_WITHOUT_PRODUCTION_TASK"
+    ]
+    assert len(previews) == 1
+    preview = previews[0]
+    assert preview["status"] == "human_confirmation_required"
+    assert preview["action"] == "rebuild_order_main_task"
+    assert preview["automatic_apply_allowed"] is False
+    assert preview["frozen_quantity_facts"] == {
+        "effective_order_purpose_sheet_qty": 10,
+        "output_factor": 1,
+        "pieces_per_box": 2,
+        "theoretical_finished_quantity": 5,
+    }
+    assert preview["reason_codes"] == [
+        "PRODUCTION_PRINT_AND_LABEL_SNAPSHOT_REQUIRES_HUMAN_CONFIRMATION"
+    ]
+
+
+def test_reserve_only_receipt_does_not_request_order_production_task_rebuild(
+    tmp_path: Path,
+):
+    engine = build_p0_15_database(tmp_path / "repair-preview-reserve.sqlite3")
+    with Session(engine) as db:
+        customer, product, order, item = add_order(
+            db,
+            "REPAIR-RESERVE",
+            quantity=10,
+            material_status="received",
+        )
+        facts = add_frozen_purpose_chain(
+            db,
+            "REPAIR-RESERVE",
+            customer,
+            product,
+            order,
+            item,
+            order_sheet_qty=0,
+            reserve_sheet_qty=10,
+            finished_output_qty=0,
+        )
+        db.delete(facts["task"])
+        db.commit()
+
+        report = run_audit(db)
+
+    assert "P015_INCOMING_WITHOUT_PRODUCTION_TASK" not in finding_codes(report)
+    assert report["repair_previews"] == []
+
+
+def test_legacy_receipt_without_frozen_purpose_is_manual_only_repair_preview(
+    tmp_path: Path,
+):
+    engine = build_p0_15_database(tmp_path / "repair-preview-legacy.sqlite3")
+    with Session(engine) as db:
+        _customer, _product, order, item = add_order(
+            db,
+            "REPAIR-LEGACY",
+            material_status="received",
+        )
+        add_traced_receipt(db, "REPAIR-LEGACY", order, item)
+        db.commit()
+
+        report = run_audit(db)
+
+    preview = next(
+        row
+        for row in report["repair_previews"]
+        if row["finding_code"] == "P015_INCOMING_WITHOUT_PRODUCTION_TASK"
+    )
+    assert preview["status"] == "manual_review"
+    assert preview["action"] == "none"
+    assert preview["automatic_apply_allowed"] is False
+    assert preview["reason_codes"] == ["MISSING_FROZEN_PURPOSE_ALLOCATION"]
+
+
+def test_composite_missing_tasks_preview_rebuilds_components_and_order_main(
+    tmp_path: Path,
+):
+    engine = build_p0_15_database(tmp_path / "repair-preview-composite.sqlite3")
+    with Session(engine) as db:
+        customer, product, order, item = add_order(
+            db,
+            "REPAIR-COMPOSITE",
+            quantity=10,
+            material_status="received",
+        )
+        item.supply_mode_snapshot = "mixed_bom"
+        component_product = Product(
+            customer_id=customer.id,
+            product_code="ANON-COMPONENT-REPAIR",
+            customer_material_code="ANON-COMPONENT-MATERIAL-REPAIR",
+            product_name="匿名修复组件",
+            pieces_per_box=1,
+        )
+        db.add(component_product)
+        db.flush()
+        component = SalesOrderItemBomComponent(
+            sales_order_item_id=item.id,
+            component_product_id=component_product.id,
+            order_set_quantity=item.quantity,
+            quantity_per_set=Decimal("1"),
+            required_piece_quantity=Decimal(item.quantity),
+            display_order=0,
+            internal_component_code="ANON-COMPONENT-REPAIR-01",
+            is_die_cut=False,
+            spare_sheet_quantity=0,
+            display_mode="internal_only",
+            show_on_delivery=False,
+            is_required=True,
+            snapshot_component_product_code=component_product.product_code,
+            snapshot_component_product_name=component_product.product_name,
+            snapshot_component_box_category="common_box",
+            snapshot_component_default_cutting_mode="一开一",
+        )
+        db.add(component)
+        db.flush()
+        component_id = int(component.id)
+        facts = add_frozen_purpose_chain(
+            db,
+            "REPAIR-COMPOSITE",
+            customer,
+            product,
+            order,
+            item,
+            order_sheet_qty=10,
+            reserve_sheet_qty=0,
+            finished_output_qty=0,
+        )
+        db.delete(facts["task"])
+        db.commit()
+
+        report = run_audit(db)
+
+    preview = next(
+        row
+        for row in report["repair_previews"]
+        if row["finding_code"] == "P015_INCOMING_WITHOUT_PRODUCTION_TASK"
+    )
+    assert preview["status"] == "human_confirmation_required"
+    assert preview["action"] == "rebuild_order_main_and_component_tasks"
+    assert preview["missing_task_keys"] == [
+        f"component:{component_id}",
+        "order_main",
+    ]
+    assert preview["automatic_apply_allowed"] is False
+    quantity_facts = preview["frozen_quantity_facts"]
+    assert quantity_facts["effective_order_purpose_sheet_qty"] == 10
+    assert len(quantity_facts["component_targets"]) == 1
+    component_target = quantity_facts["component_targets"][0]
+    assert component_target["component_ref"].startswith("BOM_COMPONENT-")
+    assert component_target["required_piece_quantity"] == 10
+    assert component_target["output_factor"] == 1
+    assert component_target["pieces_per_box"] == 1
+
+
 def test_common_box_contract_and_future_capabilities_are_explicit(tmp_path: Path):
     database = tmp_path / "common-box.sqlite3"
     engine = build_p0_15_database(database)

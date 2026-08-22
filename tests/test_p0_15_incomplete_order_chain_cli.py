@@ -13,6 +13,7 @@ from scripts.audit import p0_15_incomplete_order_chain as cli
 from test_p0_15_incomplete_order_chain import (
     REVISION,
     add_order,
+    add_traced_receipt,
     build_p0_15_database,
 )
 
@@ -126,6 +127,9 @@ def test_cli_writes_three_consistent_anonymous_reports_without_touching_source(
     assert "P1-81" in markdown
     assert "P1-84" in markdown
     assert "## 工位路由统计" in markdown
+    assert "## P0-17 修复预览（dry-run）" in markdown
+    assert stdout["automatic_apply_allowed"] is False
+    assert stdout["repair_previews"] == 0
     for code in json_report["summary"]["code_counts"]:
         assert code in markdown
     combined = outputs[0].read_text(encoding="utf-8") + outputs[1].read_text(
@@ -134,6 +138,47 @@ def test_cli_writes_three_consistent_anonymous_reports_without_touching_source(
     assert "ANON-ORDER-CLI-PRIVATE" not in combined
     assert "ANON-PO-CLI-PRIVATE" not in combined
     assert "ANON-PRODUCT-CLI-PRIVATE" not in combined
+
+
+def test_cli_serializes_manual_repair_preview_without_touching_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    database = tmp_path / "repair-preview.sqlite3"
+    engine = build_p0_15_database(database)
+    with Session(engine) as db:
+        _customer, _product, order, item = add_order(
+            db,
+            "CLI-REPAIR-PRIVATE",
+            material_status="received",
+        )
+        add_traced_receipt(db, "CLI-REPAIR-PRIVATE", order, item)
+        db.commit()
+    engine.dispose()
+    outputs = output_paths(tmp_path, "repair-preview")
+    source_before = cli._source_state(database)
+    monkeypatch.setenv("P0_15_ANONYMIZATION_KEY", "stable-test-key")
+
+    assert cli.main(cli_args(database, outputs)) == 0
+
+    stdout = json.loads(capsys.readouterr().out)
+    report = json.loads(outputs[0].read_text(encoding="utf-8"))
+    markdown = outputs[2].read_text(encoding="utf-8")
+    assert stdout["repair_previews"] == 1
+    assert stdout["automatic_apply_allowed"] is False
+    assert report["coverage"]["repair_preview"] == {
+        "status": "evaluated",
+        "proposal_count": 1,
+        "automatic_apply_allowed": False,
+    }
+    preview = report["repair_previews"][0]
+    assert preview["status"] == "manual_review"
+    assert preview["action"] == "none"
+    assert preview["proposal_id"] in markdown
+    assert "ANON-ORDER-CLI-REPAIR-PRIVATE" not in markdown
+    assert "ANON-PRODUCT-CLI-REPAIR-PRIVATE" not in markdown
+    assert cli._source_state(database) == source_before
 
 
 @pytest.mark.parametrize("sidecar_suffix", ["-journal", "-wal", "-shm"])

@@ -528,7 +528,7 @@ def test_mold_list_supports_server_pagination_and_preserves_search(mold_app) -> 
             for row in located.json()["resources"]
             if row["resource_id"] == f"mold:{target_mold_id}"
         )
-        assert resource["primary_code"] is None
+        assert resource["primary_code"] == "PAGE-017"
         assert resource["feature_codes"] == ["ZONE-1F-MOLD-002"]
         assert resource["map_status"] == "mapped"
 
@@ -2468,10 +2468,14 @@ def test_admin_can_preview_then_once_confirm_floor1_formal_candidates(
         preview = client.get("/api/warehouse/twin-layout/floors/1F/formal-candidates")
         assert preview.status_code == 200, preview.text
         plan = preview.json()
-        assert plan["candidate_count"] == 19
+        assert plan["candidate_count"] == 16
         assert plan["excluded_out_of_bounds_count"] == 3
-        assert plan["long_term_pallet_capacity"] == 70
-        assert plan["formal_location_count"] == 45
+        assert plan["long_term_pallet_capacity"] == 41
+        assert plan["formal_location_count"] == 16
+        assert plan["combined_dispatch_projection"]["location_code"] == (
+            "F1-DISPATCH-01"
+        )
+        assert plan["combined_dispatch_projection"]["creates_formal_locations"] is False
         assert plan["formal_state"]["archivable_legacy_area_count"] == 0
         dispatch_state = next(
             row
@@ -2496,7 +2500,7 @@ def test_admin_can_preview_then_once_confirm_floor1_formal_candidates(
         )
         assert confirmed.status_code == 200, confirmed.text
         assert confirmed.json()["applied"] is True
-        assert confirmed.json()["created_location_count"] == 45
+        assert confirmed.json()["created_location_count"] == 16
         assert confirmed.json()["archived_legacy_area_count"] == 0
         with factory() as db:
             old_location = db.scalar(
@@ -2520,8 +2524,19 @@ def test_admin_can_preview_then_once_confirm_floor1_formal_candidates(
             for row in overlaid.json()["features"]
             if row.get("feature_kind") == "zone"
         }
-        assert by_code["ZONE-1F-FIN-001"]["erp_area_code"] == "FIN-001"
-        assert by_code["ZONE-1F-FIN-001"]["formal_binding_status"] == "published"
+        measured_dispatch = [
+            by_code[f"ZONE-1F-FIN-00{index}"] for index in (1, 2, 3)
+        ]
+        assert all(
+            row.get("formal_binding_status") != "published"
+            for row in measured_dispatch
+        )
+        with factory() as db:
+            assert db.scalar(
+                select(func.count(WarehouseArea.id)).where(
+                    WarehouseArea.area_code.in_(("FIN-001", "FIN-002", "FIN-003"))
+                )
+            ) == 0
 
 
 @pytest.mark.parametrize(

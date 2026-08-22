@@ -371,6 +371,7 @@ def ensure_component_production_tasks(
             _validate_task_status_quantity,
             cutting_output_factor,
         )
+        from app.services.production_task_profile import new_task_profile_snapshot
 
         output_factor = cutting_output_factor(
             snapshot.snapshot_component_default_cutting_mode
@@ -425,6 +426,12 @@ def ensure_component_production_tasks(
                 readiness_basis=None,
                 version=1,
                 **_new_task_printing_snapshot(db, component_product),
+                **new_task_profile_snapshot(
+                    db,
+                    component_product,
+                    item=item,
+                    component_snapshot=snapshot,
+                ),
                 **label_snapshot,
             )
             db.add(task)

@@ -3901,7 +3901,7 @@
 	                  <tbody><tr v-for="row in productionPending" :key="row.id" :class="{'requisition-selected': productionSelected[row.id]}">
 	                    <td v-if="canProductionExecute"><input v-if="productionUsesBatchConfirmation(row)" type="checkbox" :checked="!!productionSelected[row.id]" :disabled="productionBusy || !canConfirmProductionRow(row)" @change="onProductionSelectionChange(row,$event.target.checked)" /><span v-else class="muted">{{ row._direct_submitting ? '处理中' : '-' }}</span></td>
 	                    <td style="white-space:normal"><strong>{{ row.item_order_number || row.order_number || '-' }}</strong><br><span class="muted">{{ row.customer_name || '-' }}</span></td>
-                    <td style="white-space:normal"><div class="production-product-summary" :title="productionProductTitle(row)"><div class="production-product-line"><span v-if="row.is_component_task" class="status blue">组件</span><strong>{{ row.product_code || '-' }}</strong><span>｜{{ row.product_name || '-' }}</span></div><div :class="productionPrintingSetup(row)?'production-printing-setup':'production-product-meta'">{{ productionPrintingSetup(row) || (row.specification || '-') }}<span v-if="!productionPrintingSetup(row) && productionBoardPreparationSummary(row)">｜{{ productionBoardPreparationSummary(row) }}</span></div><div v-if="row.is_component_task && row.composite_parent" class="status blue" style="display:block;margin-top:5px;white-space:normal">组合父件 {{ row.composite_parent.product_code || '-' }}｜{{ row.composite_parent.product_name || '-' }}；同组：{{ (row.composite_siblings || []).filter(item => !item.is_current).map(item => `${item.product_code || '-'} ${item.product_name || '-'}`).join('、') || '无其他子件' }}</div><div :class="productionLabelPlanClass(row)" style="display:block;margin-top:5px">{{ productionLabelPlanText(row) }}</div><div v-if="row.fulfillment_reminders?.length" class="status orange" style="display:block;margin-top:6px;white-space:normal"><strong>客户回单交代</strong><div v-for="reminder in row.fulfillment_reminders" :key="reminder.id" style="overflow-wrap:anywhere">{{ reminder.content }}<span class="muted">｜{{ reminder.scope_type==='product' ? (reminder.product_code || '指定常用箱') : '该客户' }}｜{{ reminder.source_delivery_number || '-' }}</span></div></div></div></td>
+                    <td style="white-space:normal"><div class="production-product-summary" :title="productionProductTitle(row)"><div class="production-product-line"><span v-if="row.is_component_task" class="status blue">组件</span><strong>{{ row.product_code || '-' }}</strong><span>｜{{ row.product_name || '-' }}</span></div><div :class="productionPrintingSetup(row)?'production-printing-setup':'production-product-meta'">{{ productionPrintingSetup(row) || (row.specification || '-') }}<span v-if="!productionPrintingSetup(row) && productionBoardPreparationSummary(row)">｜{{ productionBoardPreparationSummary(row) }}</span></div><div v-if="row.is_component_task && row.composite_parent" class="status blue" style="display:block;margin-top:5px;white-space:normal">组合父件 {{ row.composite_parent.product_code || '-' }}｜{{ row.composite_parent.product_name || '-' }}；同组：{{ (row.composite_siblings || []).filter(item => !item.is_current).map(item => `${item.product_code || '-'} ${item.product_name || '-'}`).join('、') || '无其他子件' }}</div><div :class="productionLabelPlanClass(row)" style="display:block;margin-top:5px">{{ productionLabelPlanText(row) }}</div><div v-if="canAdmin" class="toolbar-group" style="margin-top:5px"><span :class="['status',row.production_profile_schema_version?'green':'orange']">{{ row.production_profile_schema_version ? '任务资料已冻结' : '旧任务资料待核对' }}</span><button class="btn small" :disabled="productionBusy" @click="openProductionProfileRefresh(row)">核对 / 刷新资料</button></div><div v-if="row.fulfillment_reminders?.length" class="status orange" style="display:block;margin-top:6px;white-space:normal"><strong>客户回单交代</strong><div v-for="reminder in row.fulfillment_reminders" :key="reminder.id" style="overflow-wrap:anywhere">{{ reminder.content }}<span class="muted">｜{{ reminder.scope_type==='product' ? (reminder.product_code || '指定常用箱') : '该客户' }}｜{{ reminder.source_delivery_number || '-' }}</span></div></div></div></td>
 	                    <td style="white-space:normal"><div class="production-quantity-summary"><div>订单 <strong>{{ row.order_quantity || 0 }}</strong>{{ productionOutputUnit(row) }}｜已到纸板 <strong>{{ row.material_received_quantity || 0 }}</strong>张</div><div>本次做 <strong>{{ row.planned_output_quantity || row.planned_quantity || 0 }}</strong>{{ productionOutputUnit(row) }}<span v-if="productionCuttingModeLabel(row)" class="muted">｜{{ productionCuttingModeLabel(row) }}</span></div></div></td>
 	                    <td style="white-space:normal"><div class="production-input-line"><label class="muted">用纸板</label><input class="input" type="number" min="1" v-model.number="row.actual_input_quantity" @input="syncProductionQuantities(row)" /><span class="production-input-unit">张</span></div><div class="production-input-line"><label class="muted">做成品</label><input class="input" type="number" min="1" v-model.number="row.actual_output_quantity" @input="syncProductionQuantities(row)" /><span class="production-input-unit">{{ productionOutputUnit(row) }}｜损耗 {{ productionDefectiveQuantity(row) }}</span></div></td>
 	                    <td style="white-space:normal"><div>用于订单 <strong>{{ productionOrderCoverage(row) }}</strong></div><div :class="productionSurplusQuantity(row)>0?'status orange':'muted'" style="margin-top:4px">多出 {{ productionSurplusQuantity(row) }}</div></td>
@@ -7413,6 +7413,17 @@
                 <div class="muted" style="margin-top:6px">24 小时内有效，仅可操作当前天华草稿。</div>
               </div>
             </div>
+            <div v-else-if="modal.type === 'productionProfileRefresh'">
+              <div v-if="productionProfileRefresh.loading" class="empty">正在读取任务与当前常用箱差异…</div>
+              <div v-else-if="productionProfileRefresh.error" class="notice danger">{{ productionProfileRefresh.error }}</div>
+              <template v-else-if="productionProfileRefresh.preview">
+                <div class="notice" style="margin-bottom:10px">只刷新这一款待生产任务的冻结资料，不改变任务编号、订单、报料、收料、生产数量、库存或送货事实。</div>
+                <div v-if="productionProfileRefresh.preview.block_reasons?.length" class="notice danger" style="margin-bottom:10px"><strong>当前不能刷新</strong><div v-for="reason in productionProfileRefresh.preview.block_reasons" :key="reason">{{ reason }}</div></div>
+                <div v-else-if="!productionProfileRefresh.preview.changes?.length" class="notice">任务资料已与当前来源一致，无需刷新。</div>
+                <div v-else class="table-wrap"><table style="table-layout:fixed;width:100%"><thead><tr><th style="width:20%">资料</th><th>任务当前冻结值</th><th>刷新后值</th></tr></thead><tbody><tr v-for="change in productionProfileRefresh.preview.changes" :key="change.field"><td><strong>{{ change.label }}</strong></td><td style="white-space:normal;overflow-wrap:anywhere">{{ productionProfileValue(change.before) }}</td><td style="white-space:normal;overflow-wrap:anywhere">{{ productionProfileValue(change.after) }}</td></tr></tbody></table></div>
+                <div class="toolbar" style="justify-content:flex-end;margin-top:12px"><button class="btn" :disabled="productionProfileRefresh.saving" @click="closeModal">取消</button><button v-if="productionProfileRefresh.preview.eligible" class="btn primary" :disabled="productionProfileRefresh.saving" @click="confirmProductionProfileRefresh">{{ productionProfileRefresh.saving ? '刷新中…' : '确认刷新这一款' }}</button></div>
+              </template>
+            </div>
             <div v-else-if="modal.type === 'productionLabelMaintenance'">
               <div class="status blue" style="display:block;white-space:normal;margin-bottom:10px">这里只维护任务冻结的包装标签计划，不提供完工输入。生产数量、材料状态、库存和送货不会因这里的操作改变。</div>
               <section v-if="productionPendingLabelMaintenanceRows().length" style="margin-bottom:16px">
@@ -8570,7 +8581,7 @@
             incomingWorkspace: "board", incomingTab: "pending", incomingPending: [], incomingPendingTotal: 0, incomingPendingLoading: false, incomingPendingError: "", incomingPendingAppliedPage: 1, incomingPendingRetryPage: 1, incomingReceived: [], incomingReceivedTotal: 0, incomingReceivedLoaded: false, incomingReceivedLoading: false, incomingReceivedError: "", incomingHistory: [], incomingHistoryTotal: 0, incomingLocations: [], incomingLocationsLoading: false, incomingLocationsError: "", incomingProductionCardOpening: false, incomingProductionCardBatchBusy: false, incomingProductionCardSelections: {}, incomingProductionCardAttemptId: "", incomingProductionCardRecoveryUrl: "", incomingProductionCardRecoveryMessage: "", incomingHistoryFilterVisible: false,
             externalIncomingPending: [], externalIncomingLoading: false, externalIncomingError: "", externalIncomingFilter: "", externalIncomingLoaded: false, externalIncomingDrafts: {}, externalIncomingSavingId: null, externalIncomingSavingAttemptId: "",
             incomingHistoryFilters: { customer_id:"", document_keyword:"", product_code:"", product_name:"", supplier_name:"", date_from:"", date_to:"", receipt_status:"" },
-            productionTab: "pending", productionPending: [], productionPendingTotal: 0, productionPendingLoading: false, productionPendingError: "", productionWaitingLabels: [], productionWaitingLabelTotal: 0, productionWaitingLabelLoading: false, productionWaitingLabelError: "", productionLabelMaintenanceScrollY: 0, productionHistory: [], productionHistoryTotal: 0, productionLocations: [], productionLocationsLoading: false, productionLocationsError: "", productionSelected: {}, productionBusy: false,
+            productionTab: "pending", productionPending: [], productionPendingTotal: 0, productionPendingLoading: false, productionPendingError: "", productionWaitingLabels: [], productionWaitingLabelTotal: 0, productionWaitingLabelLoading: false, productionWaitingLabelError: "", productionLabelMaintenanceScrollY: 0, productionProfileRefresh:{loading:false,saving:false,error:"",row:null,preview:null,idempotency_key:""}, productionHistory: [], productionHistoryTotal: 0, productionLocations: [], productionLocationsLoading: false, productionLocationsError: "", productionSelected: {}, productionBusy: false,
             productionHistoryFilters: { customer_id:"", order_keyword:"", product_code:"", product_name:"", completed_date_from:"", completed_date_to:"", status:"" },
             productionCompletionAttempts: {}, productionDirectAttempts: {}, productionTransferAttempts: {}, productionLabelRefreshAttempts: {},
             productFormSnapshot: null, productBomSnapshot: null,
@@ -17113,6 +17124,67 @@
               this.showToast(`标签计划刷新失败：${this.errorMessage(error)}；重试会复用同一幂等键`, true);
             } finally {
               row._label_refreshing = false;
+            }
+          },
+          productionProfileValue(value) {
+            if (value === null || value === undefined || value === "") return "未冻结 / 无";
+            if (value === true) return "是";
+            if (value === false) return "否";
+            if (Array.isArray(value)) {
+              if (!value.length) return "无";
+              return value.map(item => typeof item === "object" ? JSON.stringify(item) : String(item)).join("、");
+            }
+            if (typeof value === "object") return JSON.stringify(value);
+            return String(value);
+          },
+          async openProductionProfileRefresh(row) {
+            if (!this.canAdmin || !row?.id) return false;
+            this.productionProfileRefresh = {
+              loading:true,
+              saving:false,
+              error:"",
+              row,
+              preview:null,
+              idempotency_key:createIdempotencyKey(),
+            };
+            this.modal = {type:"productionProfileRefresh",title:`核对生产任务资料｜${row.product_code || row.product_name || row.id}`};
+            try {
+              const {data} = await axios.get(`/api/production/tasks/${row.id}/profile-refresh-preview`);
+              if (this.modal?.type !== "productionProfileRefresh" || Number(this.productionProfileRefresh.row?.id) !== Number(row.id)) return false;
+              this.productionProfileRefresh.preview = data;
+              return true;
+            } catch (error) {
+              if (this.modal?.type === "productionProfileRefresh") this.productionProfileRefresh.error = this.errorMessage(error);
+              return false;
+            } finally {
+              if (this.modal?.type === "productionProfileRefresh") this.productionProfileRefresh.loading = false;
+            }
+          },
+          async confirmProductionProfileRefresh() {
+            const state = this.productionProfileRefresh;
+            const preview = state?.preview;
+            const row = state?.row;
+            if (!this.canAdmin || !preview?.eligible || !row?.id || state.saving) return false;
+            state.saving = true;
+            try {
+              await axios.post(`/api/production/tasks/${row.id}/profile-refresh`, {
+                idempotency_key:state.idempotency_key,
+                expected_task_version:Number(preview.expected_task_version),
+                expected_source_version:Number(preview.expected_source_version),
+                preview_fingerprint:preview.preview_fingerprint,
+                confirmed:true,
+              });
+              const refreshed = await this.loadProductionPage(this.pages.productionPending || 1);
+              this.closeModal();
+              this.showToast(refreshed === false
+                ? "任务资料已刷新，但列表读取失败；请手动刷新核对"
+                : "这一款待生产任务资料已刷新；订单、数量、库存和送货未改变", refreshed === false);
+              return true;
+            } catch (error) {
+              state.error = `刷新失败：${this.errorMessage(error)}；重试会复用同一幂等键`;
+              return false;
+            } finally {
+              state.saving = false;
             }
           },
           async ensureProductionLocations({force=false} = {}) {

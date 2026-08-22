@@ -189,7 +189,8 @@ def test_mobile_station_ui_is_paged_latest_wins_and_read_only() -> None:
     assert "const parsedPage = Number(page);" in MOBILE_HTML
     assert "page: String(safePage)" in MOBILE_HTML
     assert MOBILE_HTML.count('method: "POST"') == 2
-    assert "/api/mobile/erp/production/tasks/" not in MOBILE_HTML.split("apiPost", 1)[-1]
+    assert "apiPost(`/api/mobile/erp/production/tasks/" not in MOBILE_HTML
+    assert "apiGet(`/api/mobile/erp/production/tasks/${encodeURIComponent(normalizedTaskId)}`" in MOBILE_HTML
     assert 'fetch("/api/auth/logout"' in MOBILE_HTML
     assert 'method: "PUT"' not in MOBILE_HTML
     assert 'method: "DELETE"' not in MOBILE_HTML

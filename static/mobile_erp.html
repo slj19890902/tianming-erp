@@ -20,6 +20,7 @@
       --orange-soft: #fff1dc;
       --red: #b42318;
       --red-soft: #fff0ee;
+      --mobile-nav-height: calc(64px + env(safe-area-inset-bottom));
       font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
     }
     * { box-sizing: border-box; min-width: 0; }
@@ -71,7 +72,8 @@
     .embedded-entry { width: 100%; min-height: calc(100vh - 150px); border: 0; border-radius: 12px; background: #fff; }
     body.incoming-frame-active { height: 100vh; height: 100dvh; overflow: hidden; }
     body.incoming-frame-active .app {
-      height: 100vh; height: 100dvh; min-height: 0; display: grid;
+      height: calc(100vh - var(--mobile-nav-height));
+      height: calc(100dvh - var(--mobile-nav-height)); min-height: 0; display: grid;
       grid-template-rows: auto minmax(0, 1fr);
     }
     body.incoming-frame-active main { min-height: 0; overflow: hidden; }
@@ -158,13 +160,13 @@
     .task-fact span { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; }
     .drawing-btn { display: inline-flex; align-items: center; min-height: 44px; margin-top: 8px; padding: 7px 9px; border: 1px solid var(--blue); border-radius: 8px; background: var(--blue-soft); color: var(--blue); font-weight: 900; }
     .bottom-nav {
-      position: fixed; right: 0; bottom: 0; left: 0; z-index: 12;
+      position: fixed; right: 0; bottom: 0; left: 0; z-index: 60;
       padding: 7px 10px calc(7px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: rgba(255, 255, 255, .98);
     }
     .bottom-inner { display: grid; grid-template-columns: repeat(var(--nav-count, 2), minmax(0, 1fr)); gap: 7px; width: min(100%, 480px); margin: auto; }
     .nav-btn { min-height: 50px; border: 0; border-radius: 10px; background: transparent; color: var(--muted); font-weight: 900; }
     .nav-btn.active { background: var(--green-soft); color: var(--green); }
-    .map-layer { position: fixed; inset: 0; z-index: 50; display: grid; grid-template-rows: auto minmax(0, 1fr); background: #fff; }
+    .map-layer { position: fixed; top: 0; right: 0; bottom: var(--mobile-nav-height); left: 0; z-index: 50; display: grid; grid-template-rows: auto minmax(0, 1fr); background: #fff; }
     .map-layer-head { display: flex; align-items: center; gap: 10px; padding: 9px 11px; border-bottom: 1px solid var(--line); }
     .map-layer-head strong { flex: 1; }
     .map-layer iframe { width: 100%; height: 100%; border: 0; }
@@ -222,27 +224,56 @@
 
       <section id="incomingPage" hidden>
         <h1 class="page-title">收料</h1>
-        <p class="page-help">复用正式收料权限和受控确认动作；页面只在进入后加载。</p>
         <iframe id="incomingFrame" class="embedded-entry" title="手机收料" src="about:blank"></iframe>
       </section>
 
       <section id="lookupPage" hidden>
         <h1 class="page-title">现场查询</h1>
-        <p class="page-help">一次输入订单号、客户、存货编码、模具标签名称或尺寸；只返回当前账号有权限且在客户范围内的资料，不显示价格、成本或毛利。</p>
-        <div class="searchbar">
-          <input id="lookupInput" maxlength="100" autocomplete="off" inputmode="search" placeholder="输入订单、客户、产品、模具或尺寸">
-          <button id="lookupButton" class="search-btn" type="button">查询</button>
+        <button id="openMaterialLookup" class="entry-card" type="button" hidden>
+          <strong>查待收材料</strong>
+          <span>按客户或报料长宽单独查当前未收齐材料，长宽方向不互换。</span>
+        </button>
+        <div id="generalLookupPanel">
+          <p class="page-help">查询订单、客户、存货编码、模具、生产任务或库存；不显示价格、成本或毛利。</p>
+          <div class="searchbar">
+            <input id="lookupInput" maxlength="100" autocomplete="off" inputmode="search" placeholder="输入订单、客户、产品、模具或规格">
+            <button id="lookupButton" class="search-btn" type="button">查询</button>
+          </div>
+          <div class="lookup-filter">
+            <select id="lookupCategory" aria-label="查询类别"></select>
+            <button id="clearLookup" class="small-btn" type="button">清空</button>
+          </div>
+          <div id="lookupState" class="card status empty">进入页面不会读取业务列表，请输入关键词查询。</div>
+          <div id="lookupResults" hidden></div>
+          <div id="lookupPager" class="pager" hidden>
+            <button id="lookupPrev" class="small-btn" type="button">上一页</button>
+            <span id="lookupPageText">第 1 页</span>
+            <button id="lookupNext" class="small-btn" type="button">下一页</button>
+          </div>
         </div>
-        <div class="lookup-filter">
-          <select id="lookupCategory" aria-label="查询类别"></select>
-          <button id="clearLookup" class="small-btn" type="button">清空</button>
-        </div>
-        <div id="lookupState" class="card status empty">进入页面不会读取业务列表，请输入关键词查询。</div>
-        <div id="lookupResults" hidden></div>
-        <div id="lookupPager" class="pager" hidden>
-          <button id="lookupPrev" class="small-btn" type="button">上一页</button>
-          <span id="lookupPageText">第 1 页</span>
-          <button id="lookupNext" class="small-btn" type="button">下一页</button>
+        <div id="materialLookupPanel" hidden>
+          <button id="closeMaterialLookup" class="small-btn" type="button">返回其他查询</button>
+          <h2>查待收材料</h2>
+          <p class="page-help">只查当前未收齐材料；输入部分数字可包含匹配，报料长和报料宽始终按原方向显示。</p>
+          <div class="searchbar">
+            <input id="materialLookupInput" maxlength="100" autocomplete="off" inputmode="search" placeholder="例如：天华、14、1430×516">
+            <button id="materialLookupButton" class="search-btn" type="button">查询</button>
+          </div>
+          <div class="lookup-filter">
+            <select id="materialLookupDimension" aria-label="报料尺寸方向">
+              <option value="any">任意报料边</option>
+              <option value="length">只查报料长</option>
+              <option value="width">只查报料宽</option>
+            </select>
+            <button id="clearMaterialLookup" class="small-btn" type="button">清空</button>
+          </div>
+          <div id="materialLookupState" class="card status empty">请输入客户名称或报料长宽尺寸。</div>
+          <div id="materialLookupResults" hidden></div>
+          <div id="materialLookupPager" class="pager" hidden>
+            <button id="materialLookupPrev" class="small-btn" type="button">上一页</button>
+            <span id="materialLookupPageText">第 1 页</span>
+            <button id="materialLookupNext" class="small-btn" type="button">下一页</button>
+          </div>
         </div>
       </section>
 
@@ -264,6 +295,12 @@
 
       <section id="productionPage" hidden>
         <h1 class="page-title">生产工位</h1>
+        <section id="productionTaskDetail" hidden>
+          <button id="closeProductionTaskDetail" class="small-btn" type="button">返回生产工位</button>
+          <div id="productionTaskDetailState" class="card status">正在读取这一项生产任务…</div>
+          <div id="productionTaskDetailBody" hidden></div>
+        </section>
+        <div id="productionTaskWorkspace">
         <p class="page-help">按当前账号授权显示印刷或模切待生产任务；每页 20 条，只能查看，不能收料或确认完工。</p>
         <div id="productionStationTabs" class="station-tabs" aria-label="生产工位" hidden>
           <button class="station-btn" type="button" data-station="printing">印刷工位</button>
@@ -277,8 +314,8 @@
           <button id="productionStationNext" class="small-btn" type="button">下一页</button>
         </div>
         <div class="searchbar">
-          <input id="productionLookupInput" maxlength="100" autocomplete="off" inputmode="text" placeholder="扫码或输入存货编码、订单号、任务号">
-          <button id="productionLookupButton" class="search-btn" type="button">扫码反查</button>
+          <input id="productionLookupInput" maxlength="100" autocomplete="off" inputmode="text" placeholder="输入存货编码、订单号或任务号">
+          <button id="productionLookupButton" class="search-btn" type="button">查询任务</button>
         </div>
         <div class="lookup-actions"><button id="clearProductionLookup" class="small-btn" type="button" hidden>清空结果，返回近期生产</button></div>
         <div id="productionLookupState" class="card status empty" hidden></div>
@@ -298,6 +335,7 @@
         </div>
         <div id="productionState" class="card status empty">请选择上方日期范围读取近期来料。</div>
         <div id="productionList" hidden></div>
+        </div>
       </section>
 
       <section id="preDeliveryPage" hidden>
@@ -397,6 +435,14 @@
         lookupController: null,
         lookupGeneration: 0,
         lookupUserId: null,
+        lookupMode: "general",
+        materialLookupQuery: "",
+        materialLookupDimension: "any",
+        materialLookupItems: [],
+        materialLookupPage: 1,
+        materialLookupTotal: 0,
+        materialLookupController: null,
+        materialLookupGeneration: 0,
         drawingScale: 1,
         drawingRotation: 0,
         productionItems: [],
@@ -414,6 +460,10 @@
         productionLookupController: null,
         productionLookupGeneration: 0,
         productionLookupQuery: "",
+        productionTaskDetailId: null,
+        productionTaskDetail: null,
+        productionTaskDetailController: null,
+        productionTaskDetailGeneration: 0,
         homeController: null,
         homeGeneration: 0,
         warehouseMapFloors: [],
@@ -467,6 +517,10 @@
             lookup_query: state.lookupQuery,
             lookup_category: state.lookupCategory,
             lookup_page: state.lookupPage,
+            lookup_mode: state.lookupMode,
+            material_lookup_query: state.materialLookupQuery,
+            material_lookup_dimension: state.materialLookupDimension,
+            material_lookup_page: state.materialLookupPage,
             scroll_by_page: Object.fromEntries(state.scrollByPage),
           }));
         } catch (_error) { /* Storage is a convenience, never a business fact. */ }
@@ -483,6 +537,12 @@
         state.lookupQuery = String(saved.lookup_query || "").slice(0, 100);
         state.lookupCategory = String(saved.lookup_category || "all");
         state.lookupPage = Math.max(1, Number(saved.lookup_page) || 1);
+        state.lookupMode = saved.lookup_mode === "materials" ? "materials" : "general";
+        state.materialLookupQuery = String(saved.material_lookup_query || "").slice(0, 100);
+        state.materialLookupDimension = ["any", "length", "width"].includes(saved.material_lookup_dimension)
+          ? saved.material_lookup_dimension
+          : "any";
+        state.materialLookupPage = Math.max(1, Number(saved.material_lookup_page) || 1);
         const savedScroll = saved.scroll_by_page && typeof saved.scroll_by_page === "object" ? saved.scroll_by_page : {};
         Object.entries(savedScroll).forEach(([page, value]) => {
           if (mobilePages.has(page) && Number.isFinite(Number(value))) state.scrollByPage.set(page, Math.max(0, Number(value)));
@@ -492,11 +552,23 @@
 
       function clearMobilePortalState() {
         state.lookupController?.abort();
+        state.materialLookupController?.abort();
+        state.productionTaskDetailController?.abort();
         state.lookupGeneration += 1;
+        state.materialLookupGeneration += 1;
+        state.productionTaskDetailGeneration += 1;
         state.lookupQuery = "";
         state.lookupGroups = [];
         state.lookupPage = 1;
         state.lookupCategory = "all";
+        state.lookupMode = "general";
+        state.materialLookupQuery = "";
+        state.materialLookupDimension = "any";
+        state.materialLookupItems = [];
+        state.materialLookupPage = 1;
+        state.materialLookupTotal = 0;
+        state.productionTaskDetailId = null;
+        state.productionTaskDetail = null;
         state.scrollByPage.clear();
         try { sessionStorage.removeItem(mobilePortalStorageKey); } catch (_error) { /* ignore */ }
       }
@@ -569,6 +641,11 @@
         requests: state.incomingPerformanceRequests.map(item => ({...item})),
       });
 
+      function requestedProductionTaskId() {
+        const raw = new URLSearchParams(window.location.search).get("task") || "";
+        return /^\d+$/.test(raw) && Number(raw) > 0 ? Number(raw) : null;
+      }
+
       async function apiGet(url, options = {}) {
         let response;
         try {
@@ -587,6 +664,11 @@
             redirect: "/mobile/",
             mobile_page: state.activePage || safeRequestedPage() || "home",
           });
+          const mobileTask = requestedProductionTaskId();
+          if (mobileTask) {
+            loginParams.set("mobile_page", "production");
+            loginParams.set("mobile_task", String(mobileTask));
+          }
           window.location.replace(`/?${loginParams.toString()}`);
           throw new Error("登录已失效，正在返回登录页");
         }
@@ -676,6 +758,9 @@
         const isLookup = page === "lookup";
         const isIncoming = page === "incoming";
         const isWarehouse = page === "warehouse";
+        if (page !== "production" && state.productionTaskDetailId) {
+          closeProductionTaskDetail({ updateLocation: false });
+        }
         if (isIncoming && previousPage !== "incoming" && !incomingPerformanceStarted) startIncomingPerformance();
         document.body.classList.toggle("incoming-frame-active", isIncoming);
         if (!isIncoming) state.incomingPerformanceActive = false;
@@ -689,7 +774,10 @@
           button.classList.toggle("active", button.dataset.page === page);
         });
         if (updateLocation && window.location.hash !== `#${page}`) {
-          window.history.replaceState(null, "", `#${page}`);
+          const url = new URL(window.location.href);
+          if (page !== "production") url.searchParams.delete("task");
+          url.hash = page;
+          window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
         }
         if (page === "incoming" && !state.loadedFrames.has(page)) {
           byId("incomingFrame").src = "/incoming.html?embedded=1";
@@ -790,7 +878,6 @@
         const labels = {
           all: "全部可查资料",
           orders: "订单",
-          materials: "待收材料",
           molds: "模具",
           production: "生产任务",
           inventory: "产品与库存",
@@ -986,6 +1073,137 @@
         byId("lookupResults").hidden = true;
         byId("lookupPager").hidden = true;
         showStatus("lookupState", "进入页面不会读取业务列表，请输入关键词查询。", "empty");
+        persistMobilePortalState();
+      }
+
+      function setLookupMode(mode) {
+        state.lookupMode = mode === "materials" ? "materials" : "general";
+        byId("generalLookupPanel").hidden = state.lookupMode === "materials";
+        byId("materialLookupPanel").hidden = state.lookupMode !== "materials";
+        byId("openMaterialLookup").hidden = !state.shell?.pending_material_search_allowed || state.lookupMode === "materials";
+        if (state.lookupMode === "materials") {
+          byId("materialLookupInput").value = state.materialLookupQuery;
+          byId("materialLookupDimension").value = state.materialLookupDimension;
+        }
+        persistMobilePortalState();
+      }
+
+      async function openMaterialProductionDetail(item, card) {
+        const button = card.querySelector("[data-material-production]");
+        if (button) button.disabled = true;
+        try {
+          const data = await apiGet(item.production_detail_url);
+          const tasks = Array.isArray(data.production_tasks) ? data.production_tasks : [];
+          if (tasks.length === 1) {
+            await openProductionTaskDetail(Number(tasks[0].task_id));
+            return;
+          }
+          let chooser = card.querySelector(".material-task-chooser");
+          if (!chooser) {
+            chooser = node("div", "material-task-chooser");
+            card.append(chooser);
+          }
+          chooser.replaceChildren();
+          if (!tasks.length) {
+            chooser.append(node("p", "warning-line", data.message || "这条待收材料尚未生成生产任务。"));
+            return;
+          }
+          chooser.append(node("p", "muted", "这条材料关联多项任务，请选择具体任务："));
+          tasks.forEach(task => {
+            const taskButton = node("button", "small-btn", `任务 ${task.task_id}｜${task.product_code || task.product_name || "生产明细"}`);
+            taskButton.type = "button";
+            taskButton.addEventListener("click", () => openProductionTaskDetail(Number(task.task_id)));
+            chooser.append(taskButton);
+          });
+        } catch (error) {
+          showStatus("materialLookupState", error.message || "生产明细读取失败", "error", () => openMaterialProductionDetail(item, card));
+        } finally {
+          if (button) button.disabled = false;
+        }
+      }
+
+      function renderMaterialLookupResults(data) {
+        state.materialLookupItems = Array.isArray(data.items) ? data.items : [];
+        state.materialLookupPage = Number(data.page || 1);
+        state.materialLookupTotal = Number(data.total || 0);
+        const container = byId("materialLookupResults");
+        container.replaceChildren();
+        state.materialLookupItems.forEach(item => {
+          const card = node("article", "card lookup-result");
+          card.append(node("h3", "", `${item.customer_name || "客户未填写"}｜${item.product_code || item.item_order_number || "待收材料"}`));
+          card.append(node("p", "fact-line", `${item.product_name || "产品未填写"}｜${item.order_number || "订单号未填写"}`));
+          card.append(node("p", "fact-line", `报料 ${item.cardboard_len || "?"}×${item.cardboard_width || "?"}mm｜待收 ${item.remaining_quantity ?? "?"}${item.quantity_unit || "张"}`));
+          const match = item.search_match || {};
+          if (match.label) card.append(node("p", "warning-line", `命中：${match.label}`));
+          const actions = node("div", "lookup-actions");
+          const detail = node("button", "small-btn", "查看生产明细");
+          detail.type = "button";
+          detail.dataset.materialProduction = "1";
+          detail.addEventListener("click", () => openMaterialProductionDetail(item, card));
+          const receive = node("button", "small-btn", "进入收料");
+          receive.type = "button";
+          receive.addEventListener("click", () => setPage("incoming"));
+          actions.append(detail, receive);
+          card.append(actions);
+          container.append(card);
+        });
+        const pageCount = Math.max(1, Math.ceil(state.materialLookupTotal / 20));
+        byId("materialLookupPageText").textContent = `第 ${state.materialLookupPage} / ${pageCount} 页｜共 ${state.materialLookupTotal} 条`;
+        byId("materialLookupPrev").disabled = state.materialLookupPage <= 1;
+        byId("materialLookupNext").disabled = state.materialLookupPage >= pageCount;
+        byId("materialLookupPager").hidden = pageCount <= 1;
+        container.hidden = !state.materialLookupItems.length;
+        if (state.materialLookupItems.length) byId("materialLookupState").hidden = true;
+        else showStatus("materialLookupState", "没有找到当前权限范围内仍待收的材料。", "empty", () => runMaterialLookup(state.materialLookupPage));
+        persistMobilePortalState();
+      }
+
+      async function runMaterialLookup(page = 1) {
+        const query = byId("materialLookupInput").value.trim();
+        if (!query) {
+          showStatus("materialLookupState", "请输入客户名称或报料长宽尺寸。", "empty");
+          return false;
+        }
+        state.materialLookupController?.abort();
+        const controller = new AbortController();
+        state.materialLookupController = controller;
+        const generation = ++state.materialLookupGeneration;
+        state.materialLookupQuery = query;
+        state.materialLookupDimension = byId("materialLookupDimension").value || "any";
+        state.materialLookupPage = Math.max(1, Number(page) || 1);
+        const params = new URLSearchParams({
+          q: state.materialLookupQuery,
+          dimension_mode: state.materialLookupDimension,
+          page: String(state.materialLookupPage),
+          page_size: "20",
+        });
+        showStatus("materialLookupState", "正在查询当前待收材料…", "");
+        try {
+          const endpoint = "/api/mobile/erp/incoming/search";
+          const data = await apiGet(`${endpoint}?${params.toString()}`, { signal: controller.signal });
+          if (generation !== state.materialLookupGeneration || state.activePage !== "lookup" || state.lookupMode !== "materials") return false;
+          renderMaterialLookupResults(data);
+          return true;
+        } catch (error) {
+          if (error.name === "AbortError" || generation !== state.materialLookupGeneration) return false;
+          showStatus("materialLookupState", `${error.message || "待收材料查询失败"}${state.materialLookupItems.length ? "；已保留上次结果。" : ""}`, "error", () => runMaterialLookup(state.materialLookupPage));
+          byId("materialLookupResults").hidden = !state.materialLookupItems.length;
+          return false;
+        }
+      }
+
+      function clearMaterialLookup() {
+        state.materialLookupController?.abort();
+        state.materialLookupGeneration += 1;
+        state.materialLookupQuery = "";
+        state.materialLookupItems = [];
+        state.materialLookupPage = 1;
+        state.materialLookupTotal = 0;
+        byId("materialLookupInput").value = "";
+        byId("materialLookupResults").replaceChildren();
+        byId("materialLookupResults").hidden = true;
+        byId("materialLookupPager").hidden = true;
+        showStatus("materialLookupState", "请输入客户名称或报料长宽尺寸。", "empty");
         persistMobilePortalState();
       }
 
@@ -1584,6 +1802,10 @@
           card.append(tags);
         }
         const actions = node("div", "lookup-actions");
+        const detailButton = node("button", "drawing-btn", "查看任务详情");
+        detailButton.type = "button";
+        detailButton.addEventListener("click", () => openProductionTaskDetail(Number(task.task_id)));
+        actions.append(detailButton);
         if (task.drawing_path) {
           const drawing = node("button", "drawing-btn", "查看图纸");
           drawing.type = "button";
@@ -1656,6 +1878,107 @@
         loadProductionStation(1);
       }
 
+      function renderProductionTaskDetail(task) {
+        const body = byId("productionTaskDetailBody");
+        body.replaceChildren();
+        const card = node("article", "card production-card");
+        const status = node("span", `tag ${task.status === "waiting_material" ? "unplaced" : "mapped"}`, task.status_text || "状态未知");
+        const head = node("div", "production-head");
+        const title = node("div");
+        title.append(
+          node("h2", "", `${task.product_code || "无存货编码"}｜${task.product_name || "产品未填写"}`),
+          node("p", "fact-line", `${task.customer_name || "客户未填写"}｜订单 ${task.order_number || "未填写"}｜任务 ${task.task_id}`),
+        );
+        head.append(title, status);
+        card.append(head);
+        if (task.status === "waiting_material") {
+          card.append(node("p", "warning-line", "当前材料未齐，只能核对冻结生产资料，不能确认完工。"));
+        }
+        card.append(node("p", "fact-line", `所属工位：${task.station_labels?.length ? task.station_labels.join("、") : "不属于印刷或模切工位"}`));
+        card.append(node("p", "fact-line", `产品规格：${task.carton_specification || "未填写"}｜订单数量 ${Number(task.order_quantity || 0)}只`));
+        if (task.report_length_mm || task.report_width_mm) {
+          card.append(node("p", "fact-line", `纸板：${task.report_length_mm || "?"}×${task.report_width_mm || "?"}mm｜${task.flute_type || "楞型未填写"}`));
+        }
+        if (task.crease_type || task.crease_values_mm?.length) {
+          card.append(node("p", "fact-line", `压线：${task.crease_type || "未填写"}${task.crease_values_mm?.length ? `｜${task.crease_values_mm.join(" / ")}mm` : ""}`));
+        }
+        productionPrintingSnapshotLines(task).forEach(line => card.append(node("p", "fact-line", line)));
+        if (task.production_process) card.append(node("p", "fact-line", `结合 / 工艺：${task.production_process}`));
+        if (task.production_notes) card.append(node("p", "fact-line", `生产说明：${task.production_notes}`));
+        if (task.mold_name || task.mold_location) {
+          card.append(node("p", "fact-line", `模具：${task.mold_name || "未命名"}｜位置 ${task.mold_location || "未登记"}`));
+        }
+        if (task.mold_warning) card.append(node("p", "warning-line", task.mold_warning));
+        if (Array.isArray(task.printing_plates) && task.printing_plates.length) {
+          task.printing_plates.forEach(plate => card.append(node("p", "fact-line", `挂板 ${plate.plate_code || "未编号"}｜${plate.color_name || "颜色未填写"}｜位置 ${plate.current_location || "未登记"}`)));
+        }
+        const actions = node("div", "lookup-actions");
+        if (task.drawing_path) {
+          const drawing = node("button", "drawing-btn", "查看图纸");
+          drawing.type = "button";
+          drawing.addEventListener("click", () => openDrawing(task));
+          actions.append(drawing);
+        }
+        if (task.mold_map_url) {
+          const mold = node("button", "drawing-btn", "查看模具位置");
+          mold.type = "button";
+          mold.addEventListener("click", () => openMoldMap(task));
+          actions.append(mold);
+        }
+        if (actions.childElementCount) card.append(actions);
+        body.append(card);
+        byId("productionTaskDetailState").hidden = true;
+        body.hidden = false;
+      }
+
+      async function openProductionTaskDetail(taskId, { updateLocation = true } = {}) {
+        const normalizedTaskId = Number(taskId);
+        if (!Number.isInteger(normalizedTaskId) || normalizedTaskId <= 0) return false;
+        setPage("production", { updateLocation: false });
+        state.productionTaskDetailController?.abort();
+        const controller = new AbortController();
+        state.productionTaskDetailController = controller;
+        const generation = ++state.productionTaskDetailGeneration;
+        state.productionTaskDetailId = normalizedTaskId;
+        byId("productionTaskWorkspace").hidden = true;
+        byId("productionTaskDetail").hidden = false;
+        byId("productionTaskDetailBody").hidden = true;
+        showStatus("productionTaskDetailState", "正在读取这一项生产任务…", "");
+        if (updateLocation) {
+          const url = new URL(window.location.href);
+          url.searchParams.set("task", String(normalizedTaskId));
+          url.hash = "production";
+          window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+        }
+        try {
+          const task = await apiGet(`/api/mobile/erp/production/tasks/${encodeURIComponent(normalizedTaskId)}`, { signal: controller.signal });
+          if (generation !== state.productionTaskDetailGeneration || state.productionTaskDetailId !== normalizedTaskId) return false;
+          state.productionTaskDetail = task;
+          renderProductionTaskDetail(task);
+          return true;
+        } catch (error) {
+          if (error.name === "AbortError" || generation !== state.productionTaskDetailGeneration) return false;
+          showStatus("productionTaskDetailState", error.message || "生产任务读取失败", "error", () => openProductionTaskDetail(normalizedTaskId));
+          return false;
+        }
+      }
+
+      function closeProductionTaskDetail({ updateLocation = true } = {}) {
+        state.productionTaskDetailController?.abort();
+        state.productionTaskDetailGeneration += 1;
+        state.productionTaskDetailId = null;
+        state.productionTaskDetail = null;
+        byId("productionTaskDetail").hidden = true;
+        byId("productionTaskDetailBody").replaceChildren();
+        byId("productionTaskWorkspace").hidden = false;
+        if (updateLocation) {
+          const url = new URL(window.location.href);
+          url.searchParams.delete("task");
+          url.hash = "production";
+          window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+        }
+      }
+
       function productionTaskCard(task) {
         const card = node("div", "task-card");
         const title = `${task.product_code || "无存货编码"}｜${task.product_name || "未填写产品名称"}`;
@@ -1694,6 +2017,10 @@
           drawing.addEventListener("click", () => openDrawing(task));
           card.append(drawing);
         }
+        const detail = node("button", "drawing-btn", "查看任务详情");
+        detail.type = "button";
+        detail.addEventListener("click", () => openProductionTaskDetail(Number(task.task_id)));
+        card.append(detail);
         return card;
       }
 
@@ -1891,6 +2218,9 @@
           if (state.incomingPerformanceActive) markIncomingPerformance("shell-ready");
           const user = state.shell.user || {};
           const restoredPage = restoreMobilePortalState(user.id);
+          if (!state.shell.search_categories?.length && state.shell.pending_material_search_allowed) {
+            state.lookupMode = "materials";
+          }
           const entries = Array.isArray(state.shell.entries) ? state.shell.entries : [];
           const productionEntry = entries.find(entry => entry.id === "production");
           const warehouseEntry = entries.find(entry => entry.id === "warehouse");
@@ -1906,6 +2236,7 @@
           const canOperate = entries.some(entry => entry.can_execute === true);
           byId("userText").textContent = `${user.display_name || user.real_name || user.username || "当前账号"}｜${canOperate ? "现场作业" : "只读"}`;
           renderLookupCategories(state.shell.search_categories);
+          byId("openMaterialLookup").hidden = !state.shell.pending_material_search_allowed;
           const navContainer = document.querySelector(".bottom-inner");
           const allowedEntryIds = new Set(entries.map(entry => entry.id));
           ["home", "lookup", "incoming", "warehouse", "production", "pre_delivery"].forEach(page => {
@@ -1923,7 +2254,15 @@
             ? requestedPage
             : (state.allowedPages.has(restoredPage) ? restoredPage : "home");
           setPage(firstPage, {incomingPerformanceStarted: requestedIncoming});
-          if (firstPage === "lookup" && state.lookupQuery) runUnifiedSearch(state.lookupPage);
+          setLookupMode(state.lookupMode);
+          const requestedTask = requestedProductionTaskId();
+          if (requestedTask && state.allowedPages.has("production")) {
+            await openProductionTaskDetail(requestedTask, { updateLocation: false });
+          } else if (firstPage === "lookup" && state.lookupMode === "materials" && state.materialLookupQuery) {
+            runMaterialLookup(state.materialLookupPage);
+          } else if (firstPage === "lookup" && state.lookupQuery) {
+            runUnifiedSearch(state.lookupPage);
+          }
           if (firstPage !== "incoming") state.incomingPerformanceActive = false;
         } catch (error) {
           byId("bottomNav").hidden = true;
@@ -1956,6 +2295,26 @@
         if (state.lookupPage > 1) runUnifiedSearch(state.lookupPage - 1);
       });
       byId("lookupNext").addEventListener("click", () => runUnifiedSearch(state.lookupPage + 1));
+      byId("openMaterialLookup").addEventListener("click", () => setLookupMode("materials"));
+      byId("closeMaterialLookup").addEventListener("click", () => setLookupMode("general"));
+      byId("materialLookupInput").addEventListener("keydown", event => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          runMaterialLookup(1);
+        }
+      });
+      byId("materialLookupButton").addEventListener("click", () => runMaterialLookup(1));
+      byId("materialLookupDimension").addEventListener("change", () => {
+        state.materialLookupDimension = byId("materialLookupDimension").value || "any";
+        if (byId("materialLookupInput").value.trim()) runMaterialLookup(1);
+        else persistMobilePortalState();
+      });
+      byId("clearMaterialLookup").addEventListener("click", clearMaterialLookup);
+      byId("materialLookupPrev").addEventListener("click", () => {
+        if (state.materialLookupPage > 1) runMaterialLookup(state.materialLookupPage - 1);
+      });
+      byId("materialLookupNext").addEventListener("click", () => runMaterialLookup(state.materialLookupPage + 1));
+      byId("closeProductionTaskDetail").addEventListener("click", () => closeProductionTaskDetail());
       byId("searchInput").addEventListener("input", queueSearch);
       byId("searchInput").addEventListener("keydown", event => {
         if (event.key === "Enter") {

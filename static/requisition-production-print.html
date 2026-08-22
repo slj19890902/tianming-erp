@@ -437,12 +437,12 @@
         return `<div class="process-detail-stack">${moldHtml(card)}${printingHtml(card)}${joiningHtml(card)}</div>`;
       }
 
-      function productQrHtml(card) {
-        const qr = card.product_qr;
-        if (qr && qr.qr_data_url && qr.product_id) {
-          return `<div class="product-qr"><img src="${escapeHtml(qr.qr_data_url)}" alt="扫码查看当前产品资料"></div>`;
+      function productionTaskQrHtml(card) {
+        const qr = card.production_task_qr;
+        if (qr && qr.qr_data_url && qr.production_task_id) {
+          return `<div class="product-qr"><img src="${escapeHtml(qr.qr_data_url)}" alt="扫码查看这一项生产任务"></div>`;
         }
-        return `<div class="product-qr product-qr-missing">${escapeHtml(card.product_qr_unavailable_reason || "无正式产品二维码")}</div>`;
+        return `<div class="product-qr product-qr-missing">${escapeHtml(card.production_task_qr_unavailable_reason || "无具体生产任务二维码")}</div>`;
       }
 
       function headlineValueHtml(value, kind) {
@@ -463,7 +463,7 @@
         const actualClass = actualPhase ? " actual-card" : "";
         const safeNote = '<span class="safe-only">客户随货版 · 已隐藏内部任务及资产定位信息</span>';
         return `<section class="task-card half-card${denseClass}${printingClass}${actualClass}" data-layout="${escapeHtml(card.layout_kind || "carton")}">
-          <header class="card-head"><div><div class="brand">TM 天明包装 · ${escapeHtml(card.paper_phase_label || "待来料计划版")}</div><h1>${escapeHtml(titleFor(card))}</h1></div>${productQrHtml(card)}</header>
+          <header class="card-head"><div><div class="brand">TM 天明包装 · ${escapeHtml(card.paper_phase_label || "待来料计划版")}</div><h1>${escapeHtml(titleFor(card))}</h1></div>${productionTaskQrHtml(card)}</header>
           <div class="headline-metrics">
             <div class="headline-metric customer-metric"><span>客户</span>${headlineValueHtml(card.customer_name, "customer")}</div>
             <div class="headline-metric code-metric"><span>存货编码</span>${headlineValueHtml(card.product_code, "code")}</div>
@@ -518,8 +518,8 @@
           : "按常用箱刷新标签计划";
       }
 
-      async function waitForProductQrImages() {
-        const images = Array.from(pagesHost.querySelectorAll("img[alt='扫码查看当前产品资料']"));
+      async function waitForTaskQrImages() {
+        const images = Array.from(pagesHost.querySelectorAll("img[alt='扫码查看这一项生产任务']"));
         await Promise.all(images.map((image) => image.decode
           ? image.decode()
           : image.complete && image.naturalWidth > 0
@@ -537,7 +537,7 @@
           `<article class="page batch-page" data-page="${index + 1}">${cardHtml(layout.top, packageData)}${cardHtml(layout.bottom, packageData)}</article>`
         ).join("");
         applyProductionLabelActions(packageData);
-        await waitForProductQrImages();
+        await waitForTaskQrImages();
         toolbarNote.textContent = batchMode
           ? `已冻结 ${packageData.card_count || 0} 项人工选择 · 每个生产任务固定半张 A4 · 共 ${layouts.length} 页`
           : receiptMode

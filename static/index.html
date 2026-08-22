@@ -12609,8 +12609,15 @@
             const target = new URLSearchParams(window.location.search).get("redirect") || "";
             if (["/incoming.html", "/warehouse.html"].includes(target)) return target;
             if (["/mobile/", "/mobile/erp.html"].includes(target)) {
-              const mobilePage = new URLSearchParams(window.location.search).get("mobile_page") || "";
+              const loginParams = new URLSearchParams(window.location.search);
+              const mobilePage = loginParams.get("mobile_page") || "";
               const safeMobilePage = mobilePage === "search" ? "warehouse" : mobilePage;
+              const mobileTask = /^\d+$/.test(loginParams.get("mobile_task") || "")
+                ? Number(loginParams.get("mobile_task"))
+                : null;
+              if (safeMobilePage === "production" && mobileTask > 0) {
+                return `${target}?task=${mobileTask}#production`;
+              }
               return ["home", "lookup", "incoming", "warehouse", "production", "pre_delivery"].includes(safeMobilePage)
                 ? `${target}#${safeMobilePage}`
                 : target;

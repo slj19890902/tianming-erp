@@ -54,6 +54,7 @@ from app.services.production_workflow import (
     list_production_task_dashboard_rows,
     list_production_station_task_ids,
 )
+from app.services.production_station_routing import production_station_memberships
 from app.services.printing_colors import parse_printing_colors
 from app.services.product_specification import (
     dimension_specification,
@@ -104,14 +105,12 @@ can_read_incoming = PermissionChecker("incoming.view")
 _BEIJING = ZoneInfo("Asia/Shanghai")
 _MOBILE_SEARCH_CATEGORIES = (
     "orders",
-    "materials",
     "molds",
     "production",
     "inventory",
 )
 _MOBILE_SEARCH_LABELS = {
     "orders": "订单",
-    "materials": "待收材料",
     "molds": "模具",
     "production": "生产任务",
     "inventory": "产品与库存",
@@ -127,8 +126,6 @@ def _mobile_search_categories(user: User) -> list[str]:
     categories: list[str] = []
     if "orders.view" in permissions:
         categories.append("orders")
-    if "incoming.view" in permissions:
-        categories.append("materials")
     if (
         "warehouse.view" in permissions
         or "production.die_cut.view" in permissions
@@ -180,12 +177,16 @@ def mobile_shell(
     entries: list[dict] = []
     search_categories = _mobile_search_categories(user)
 
-    if search_categories:
+    if search_categories or "incoming.view" in permissions:
         entries.append(
             {
                 "id": "lookup",
                 "label": "现场查询",
-                "summary": "订单、材料、模具、生产和库存按权限统一查找",
+                "summary": (
+                    "待收材料独立查询；其他资料按权限查找"
+                    if "incoming.view" in permissions
+                    else "订单、模具、生产和库存按权限统一查找"
+                ),
                 "categories": search_categories,
                 "can_execute": False,
             }
@@ -257,6 +258,7 @@ def mobile_shell(
         },
         "entries": entries,
         "search_categories": search_categories,
+        "pending_material_search_allowed": "incoming.view" in permissions,
         "management_summary_allowed": "dashboard.view" in permissions,
         "layout_version": layout_version,
         "as_of": datetime.now(_BEIJING).isoformat(timespec="seconds"),
@@ -618,6 +620,148 @@ def _production_station_task_payloads(
             )
         payloads.append(common)
     return payloads
+
+
+_MOBILE_TASK_DETAIL_STATUSES = frozenset({"waiting_material", "pending"})
+_MOBILE_STATION_ORDER: tuple[Literal["printing", "die_cut"], ...] = (
+    "printing",
+    "die_cut",
+)
+_MOBILE_TASK_DETAIL_PRIVATE_HEADERS = {
+    "Cache-Control": "private, no-store, max-age=0",
+    "Pragma": "no-cache",
+    "Vary": "Cookie",
+    "X-Robots-Tag": "noindex, nofollow",
+}
+
+
+def _mobile_task_memberships(
+    db: Session,
+    *,
+    task: dict,
+) -> tuple[Literal["printing", "die_cut"], ...]:
+    component = (
+        db.get(
+            SalesOrderItemBomComponent,
+            int(task["bom_component_snapshot_id"]),
+        )
+        if task.get("bom_component_snapshot_id") is not None
+        else None
+    )
+    product = (
+        db.get(Product, int(task["product_id"]))
+        if task.get("product_id") is not None
+        else None
+    )
+    memberships = production_station_memberships(
+        print_content_snapshot=task.get("print_content"),
+        box_style=(
+            component.snapshot_component_box_style
+            if component is not None
+            else product.box_style
+            if product is not None
+            else None
+        ),
+        die_cut_required=(
+            bool(component.is_die_cut)
+            if component is not None
+            else bool(product is not None and product.box_category == "die_cut")
+        ),
+    )
+    return tuple(station for station in _MOBILE_STATION_ORDER if station in memberships)
+
+
+def _mobile_visible_task_detail_source(
+    db: Session,
+    *,
+    task_id: int,
+    user: User,
+) -> tuple[dict, tuple[Literal["printing", "die_cut"], ...]]:
+    task_rows = list_production_tasks(
+        db,
+        allowed_customer_ids=_visible_customer_ids(user, db),
+        task_ids=[task_id],
+    )
+    if len(task_rows) != 1 or str(task_rows[0].get("status") or "") not in _MOBILE_TASK_DETAIL_STATUSES:
+        raise HTTPException(
+            status_code=404,
+            detail="生产任务不存在、已完成或无权查看",
+            headers=_MOBILE_TASK_DETAIL_PRIVATE_HEADERS,
+        )
+    task = task_rows[0]
+    memberships = _mobile_task_memberships(db, task=task)
+    if memberships:
+        allowed = {
+            station
+            for station, permission in (
+                ("printing", "production.printing.view"),
+                ("die_cut", "production.die_cut.view"),
+            )
+            if has_permission(user, permission)
+        }
+        if not allowed.intersection(memberships):
+            raise HTTPException(
+                status_code=403,
+                detail="当前账号没有这一生产任务所属工位的查看权限",
+                headers=_MOBILE_TASK_DETAIL_PRIVATE_HEADERS,
+            )
+    else:
+        _require_mobile_production_station(user)
+    return task, memberships
+
+
+def _mobile_task_detail_payload(
+    db: Session,
+    *,
+    task: dict,
+    memberships: tuple[Literal["printing", "die_cut"], ...],
+    user: User,
+) -> dict:
+    projection_station: Literal["printing", "die_cut"] = (
+        "printing" if "printing" in memberships or not memberships else "die_cut"
+    )
+    projected = _production_station_task_payloads(
+        db,
+        tasks=[task],
+        station=projection_station,
+        mold_map_allowed=has_permission(user, "warehouse.view"),
+    )[0]
+    if "die_cut" in memberships and projection_station != "die_cut":
+        die_cut = _production_station_task_payloads(
+            db,
+            tasks=[task],
+            station="die_cut",
+            mold_map_allowed=has_permission(user, "warehouse.view"),
+        )[0]
+        for key in (
+            "material",
+            "flute_type",
+            "mold_display_name",
+            "mold_name",
+            "mold_location",
+            "mold_is_active",
+            "mold_archive_status",
+            "mold_warning",
+            "mold_map_url",
+        ):
+            projected[key] = die_cut.get(key)
+    projected.update(
+        {
+            "status": task.get("status"),
+            "status_text": _task_status_text(str(task.get("status") or "")),
+            "stations": list(memberships),
+            "station_labels": [
+                "印刷 / 开槽工位" if station == "printing" else "模切工位"
+                for station in memberships
+            ],
+            "production_process": task.get("production_process"),
+            "production_notes": task.get("production_notes"),
+            "can_complete": False,
+            "read_only": True,
+            "as_of": datetime.now(_BEIJING).isoformat(timespec="seconds"),
+        }
+    )
+    return projected
 
 
 def _escaped_like(value: str) -> str:
@@ -1319,24 +1463,42 @@ def mobile_production_station_tasks(
     }
 
 
+@router.get("/production/tasks/{task_id}")
+def mobile_production_task_detail(
+    task_id: int,
+    response: Response,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read_orders),
+) -> dict:
+    """Return one concrete waiting/pending task for a mobile QR, read only."""
+
+    response.headers.update(_MOBILE_TASK_DETAIL_PRIVATE_HEADERS)
+    task, memberships = _mobile_visible_task_detail_source(
+        db,
+        task_id=task_id,
+        user=user,
+    )
+    return _mobile_task_detail_payload(
+        db,
+        task=task,
+        memberships=memberships,
+        user=user,
+    )
+
+
 @router.get("/production/tasks/{task_id}/drawing")
 def mobile_production_task_drawing(
     task_id: int,
     db: Session = Depends(get_db),
     user: User = Depends(can_read_orders),
 ) -> FileResponse:
-    """Serve one still-pending task drawing after station and scope checks."""
+    """Serve one waiting/pending task drawing after task-station scope checks."""
 
-    _require_mobile_production_station(user)
-    visible_rows = list_production_tasks(
+    task_row, _memberships = _mobile_visible_task_detail_source(
         db,
-        allowed_customer_ids=_visible_customer_ids(user, db),
-        status="pending",
-        task_ids=[task_id],
+        task_id=task_id,
+        user=user,
     )
-    if len(visible_rows) != 1:
-        raise HTTPException(status_code=404, detail="生产任务不存在、已完成或无权查看")
-    task_row = visible_rows[0]
     task = db.get(ProductionTask, task_id)
     item = db.get(OrderItem, int(task_row["order_item_id"]))
     component = (
@@ -2327,7 +2489,7 @@ def search_mobile_portal(
     response: Response,
     q: str = Query(min_length=1, max_length=100),
     category: Literal[
-        "all", "orders", "materials", "molds", "production", "inventory"
+        "all", "orders", "molds", "production", "inventory"
     ] = Query(default="all"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=20),
@@ -2354,7 +2516,6 @@ def search_mobile_portal(
     resolved_page_size = min(page_size, 5) if category == "all" else page_size
     builders = {
         "orders": _mobile_order_search_group,
-        "materials": _mobile_material_search_group,
         "molds": _mobile_mold_search_group,
         "production": _mobile_production_search_group,
         "inventory": _mobile_inventory_search_group,

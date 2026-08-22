@@ -146,11 +146,11 @@ def test_shell_and_unified_search_are_permission_derived_and_scope_safe(
         shell_payload = shell.json()
         assert shell_payload["search_categories"] == [
             "orders",
-            "materials",
             "molds",
             "production",
             "inventory",
         ]
+        assert shell_payload["pending_material_search_allowed"] is True
         assert any(entry["id"] == "lookup" for entry in shell_payload["entries"])
 
         result = client.get(
@@ -166,6 +166,7 @@ def test_shell_and_unified_search_are_permission_derived_and_scope_safe(
         assert _group(payload, "inventory")["total"] == 3
         assert _group(payload, "molds")["total"] == 2
         assert _group(payload, "production")["total"] == 2
+        assert all(group["id"] != "materials" for group in payload["groups"])
         _assert_no_financial_projection(payload)
 
     with TestClient(app) as client:

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
-  <title>车间来料入库</title>
+  <title>收料</title>
   <script src="/static/assets/time-utils.js?v=95c91f9ded41"></script>
   <style>
     /* 本地 Tailwind 资产加载失败时仍保留最基础的可操作样式，
@@ -21,6 +21,9 @@
     .card select, .card input { box-sizing: border-box; max-width: 100%; min-width: 0; }
     .btn-primary { background: #1d4ed8; color: #fff; border: none; border-radius: 10px; min-height: 44px; padding: 0 16px; font-weight: 700; }
     .btn-danger { background: #b91c1c; color: #fff; border: none; border-radius: 10px; min-height: 44px; padding: 0 16px; font-weight: 700; }
+    body.embedded > header { display: none; }
+    body.embedded main { padding-top: 8px; }
+    .receipt-tabs { position: sticky; top: 0; z-index: 18; }
   </style>
   <link rel="stylesheet" href="/static/vendor/tailwindcss-3.4.17-incoming.min.css?v=1abd48e53bef">
 </head>
@@ -28,7 +31,7 @@
   <header class="sticky top-0 z-20 border-b border-slate-300 bg-slate-900 px-4 py-3 text-white shadow">
     <div class="mx-auto flex max-w-2xl items-center justify-between gap-3">
       <div>
-        <h1 class="text-xl font-bold">车间来料入库</h1>
+        <h1 class="text-xl font-bold">收料</h1>
         <p id="userLabel" class="mt-0.5 text-sm text-slate-300">正在校验登录状态</p>
       </div>
       <button id="refreshButton" class="min-h-12 rounded-lg bg-blue-600 px-5 text-base font-bold active:bg-blue-700">
@@ -44,12 +47,12 @@
       <a href="/?redirect=/incoming.html" class="mt-3 inline-flex min-h-12 items-center rounded-lg bg-red-700 px-5 font-bold text-white">前往登录</a>
     </div>
 
-    <nav class="mb-3 grid grid-cols-2 gap-2 rounded-xl bg-white p-2 shadow-sm">
+    <nav class="receipt-tabs mb-3 grid grid-cols-2 gap-2 rounded-xl bg-white p-2 shadow-sm">
       <button data-tab="pending" class="tab-button min-h-14 rounded-lg bg-blue-700 px-3 text-lg font-bold text-white">
         待收料 <span id="pendingCount" class="ml-1 rounded-full bg-white/20 px-2 py-0.5 text-sm">0</span>
       </button>
       <button data-tab="received" class="tab-button min-h-14 rounded-lg bg-slate-200 px-3 text-lg font-bold text-slate-700">
-        今日已收 <span id="receivedCount" class="ml-1 rounded-full bg-slate-300 px-2 py-0.5 text-sm">0</span>
+        历史入库 <span id="receivedCount" class="ml-1 rounded-full bg-slate-300 px-2 py-0.5 text-sm">0</span>
       </button>
     </nav>
 
@@ -84,6 +87,11 @@
       <span id="pendingPageInfo" class="text-center text-sm font-semibold text-slate-600">第 1 / 1 页 · 共 0 条</span>
       <button id="pendingNextPage" class="min-h-12 rounded-lg bg-slate-200 px-4 font-bold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50">下一页</button>
     </nav>
+    <nav id="receivedPager" hidden class="mb-3 flex items-center justify-between gap-2 rounded-xl bg-white p-2 shadow-sm">
+      <button id="receivedPreviousPage" class="min-h-12 rounded-lg bg-slate-200 px-4 font-bold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50">上一页</button>
+      <span id="receivedPageInfo" class="text-center text-sm font-semibold text-slate-600">第 1 / 1 页 · 共 0 条</span>
+      <button id="receivedNextPage" class="min-h-12 rounded-lg bg-slate-200 px-4 font-bold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50">下一页</button>
+    </nav>
     <div id="emptyState" hidden class="rounded-xl bg-white p-8 text-center shadow-sm">
       <p class="text-xl font-bold text-slate-700">当前没有记录</p>
       <p class="mt-2 text-slate-500">点击右上角刷新重新检查。</p>
@@ -101,19 +109,19 @@
     </form>
   </div>
 
-  <!-- v0.23.0 P0-3：图纸在页面内查看，不再跳转常用箱弹窗、不再用新窗口丢失来料页面。
-       支持 jpg/png/pdf；"返回来料入库"关闭本层即可回到卡片列表，不影响已输入的入库数量。 -->
+  <!-- v0.23.0 P0-3：图纸在页面内查看，不再跳转常用箱弹窗、不再用新窗口丢失收料页面。
+       支持 jpg/png/pdf；"返回收料"关闭本层即可回到卡片列表，不影响已输入的入库数量。 -->
   <div id="drawingViewer" hidden class="fixed inset-0 z-50 flex flex-col bg-black">
     <div class="flex items-center justify-between bg-slate-900 px-4 py-3 text-white shadow">
       <p class="font-bold">图纸预览</p>
-      <button id="closeDrawingViewer" class="min-h-12 rounded-lg bg-blue-600 px-5 text-base font-bold active:bg-blue-700">返回来料入库</button>
+      <button id="closeDrawingViewer" class="min-h-12 rounded-lg bg-blue-600 px-5 text-base font-bold active:bg-blue-700">返回收料</button>
     </div>
     <div class="flex-1 overflow-auto bg-slate-800 p-2">
       <img id="drawingViewerImage" hidden class="mx-auto max-w-full rounded-lg bg-white">
       <iframe id="drawingViewerFrame" hidden class="h-full w-full rounded-lg border-0 bg-white"></iframe>
     </div>
     <div class="bg-slate-900 px-4 py-3 text-center">
-      <button id="closeDrawingViewerBottom" class="min-h-12 w-full rounded-lg bg-blue-600 px-5 text-base font-bold text-white active:bg-blue-700">返回来料入库</button>
+      <button id="closeDrawingViewerBottom" class="min-h-12 w-full rounded-lg bg-blue-600 px-5 text-base font-bold text-white active:bg-blue-700">返回收料</button>
     </div>
   </div>
 
@@ -131,6 +139,9 @@
   <div id="toast" hidden class="fixed bottom-5 left-1/2 z-50 w-[calc(100%-2rem)] max-w-md -translate-x-1/2 rounded-xl bg-slate-900 px-5 py-4 text-center text-lg font-bold text-white shadow-xl"></div>
 
   <script>
+    if (new URLSearchParams(window.location.search).get("embedded") === "1") {
+      document.body.classList.add("embedded");
+    }
     const state = {
       activeTab: "pending",
       pending: [],
@@ -144,6 +155,9 @@
       pendingAppliedDimensionMode: "any",
       pendingAsOf: "",
       received: [],
+      receivedTotal: 0,
+      receivedPage: 1,
+      receivedPageSize: 20,
       receivedLoaded: false,
       receivedLoading: false,
       receivedError: "",
@@ -228,6 +242,8 @@
       state.pendingAsOf = "";
       state.productionDetailRouteId = null;
       state.received = [];
+      state.receivedTotal = 0;
+      state.receivedPage = 1;
       state.receivedLoaded = false;
       state.receivedLoading = false;
       state.receivedError = "";
@@ -246,6 +262,7 @@
       $("receivedCount").textContent = "0";
       $("cardList").innerHTML = "";
       $("pendingPager").hidden = true;
+      if ($("receivedPager")) $("receivedPager").hidden = true;
       $("emptyState").hidden = true;
       $("loadingState").hidden = true;
       if ($("productionDetailViewer")) $("productionDetailViewer").hidden = true;
@@ -614,16 +631,21 @@
     function render() {
       const items = state[state.activeTab];
       const pendingPageCount = Math.max(1, Math.ceil(Number(state.pendingTotal || 0) / Number(state.pendingPageSize || 20)));
+      const receivedPageCount = Math.max(1, Math.ceil(Number(state.receivedTotal || 0) / Number(state.receivedPageSize || 20)));
       $("pendingSearchPanel").hidden = state.activeTab !== "pending";
       $("pendingSearchStatus").textContent = state.pendingAppliedQuery
         ? `当前条件：${state.pendingAppliedQuery}（${state.pendingAppliedDimensionMode === "length" ? "报料长" : state.pendingAppliedDimensionMode === "width" ? "报料宽" : "任意报料边/客户"}），共 ${state.pendingTotal} 条${state.pendingAsOf ? ` · ${state.pendingAsOf}` : ""}`
         : `当前显示全部待收料，每页 ${state.pendingPageSize} 条。`;
       $("pendingCount").textContent = state.pendingTotal;
-      $("receivedCount").textContent = state.received.length;
+      $("receivedCount").textContent = state.receivedTotal;
       $("pendingPager").hidden = state.activeTab !== "pending";
+      $("receivedPager").hidden = state.activeTab !== "received" || receivedPageCount <= 1;
       $("pendingPageInfo").textContent = `第 ${state.pendingPage} / ${pendingPageCount} 页 · 共 ${state.pendingTotal} 条`;
       $("pendingPreviousPage").disabled = state.pendingLoading || state.pendingPage <= 1;
       $("pendingNextPage").disabled = state.pendingLoading || state.pendingPage >= pendingPageCount;
+      $("receivedPageInfo").textContent = `第 ${state.receivedPage} / ${receivedPageCount} 页 · 共 ${state.receivedTotal} 条`;
+      $("receivedPreviousPage").disabled = state.receivedLoading || state.receivedPage <= 1;
+      $("receivedNextPage").disabled = state.receivedLoading || state.receivedPage >= receivedPageCount;
       if (state.activeTab === "pending") {
         $("loadingState").hidden = !state.pendingLoading || state.pending.length > 0;
         $("errorState").hidden = !state.pendingError;
@@ -638,7 +660,7 @@
       const receivedFailed = state.activeTab === "received" && state.receivedError && !items.length;
       $("emptyState").hidden = items.length !== 0 || pendingBusy || pendingFailed || receivedPending || receivedFailed;
       if (receivedPending) {
-        $("cardList").innerHTML = '<div class="empty">正在读取今日已收记录…</div>';
+        $("cardList").innerHTML = '<div class="empty">正在读取历史入库记录…</div>';
       } else if (receivedFailed) {
         $("cardList").innerHTML = `<div class="empty">${escapeHtml(state.receivedError)}</div>`;
       } else {
@@ -782,22 +804,42 @@
       return loadPending({page: targetPage});
     }
 
-    async function loadReceived({force = false} = {}) {
-      if (!force && state.receivedLoaded) return true;
+    async function loadReceived({page = state.receivedPage || 1, force = false} = {}) {
+      const requestedPage = Math.max(1, Number(page) || 1);
+      if (!force && state.receivedLoaded && requestedPage === state.receivedPage) return true;
       const controller = beginLatestRequest("incoming:received");
       state.receivedLoading = true;
       state.receivedError = "";
       render();
       try {
-        const received = await api("/api/incoming/received", {signal: controller.signal});
+        const params = new URLSearchParams({
+          page: String(requestedPage),
+          page_size: String(state.receivedPageSize),
+        });
+        const received = await api(`/api/incoming/history?${params.toString()}`, {signal: controller.signal});
         if (!isLatestRequest("incoming:received", controller)) return false;
+        const authIdentity = state.sessionIdentity;
+        const receivedIdentity = String(received.session_identity_header || "");
+        const expectedIdentity = `${authIdentity?.user_id ?? ""}:${authIdentity?.auth_version ?? ""}`;
+        if (!authIdentity || !receivedIdentity || receivedIdentity !== expectedIdentity) {
+          resetAuthenticatedIncomingState({abortRequests: true});
+          state.authGeneration += 1;
+          state.user = null;
+          state.permissions = [];
+          state.sessionIdentity = null;
+          $("authNotice").hidden = false;
+          return false;
+        }
         state.received = received.items || [];
+        state.receivedTotal = Number(received.total || 0);
+        state.receivedPage = Math.max(1, Number(received.page) || requestedPage);
+        state.receivedPageSize = Math.max(1, Number(received.page_size) || state.receivedPageSize);
         state.receivedLoaded = true;
         render();
         return true;
       } catch (error) {
         if (error?.name !== "AbortError" && isLatestRequest("incoming:received", controller)) {
-          state.receivedError = `读取今日实收失败：${toChineseMessage(error)}`;
+          state.receivedError = `读取历史入库失败：${toChineseMessage(error)}`;
           render();
           showToast(state.receivedError, true);
         }
@@ -809,6 +851,14 @@
         }
         finishLatestRequest("incoming:received", controller);
       }
+    }
+
+    async function changeReceivedPage(nextPage) {
+      if (state.receivedLoading) return false;
+      const pageCount = Math.max(1, Math.ceil(Number(state.receivedTotal || 0) / Number(state.receivedPageSize || 20)));
+      const targetPage = Math.min(pageCount, Math.max(1, Number(nextPage) || 1));
+      if (targetPage === state.receivedPage) return true;
+      return loadReceived({page: targetPage, force: true});
     }
 
     async function ensureSurplusLocations() {
@@ -828,13 +878,13 @@
     }
 
     async function loadData() {
-      if (state.activeTab === "received") return loadReceived({force: true});
+      if (state.activeTab === "received") return loadReceived({page: state.receivedPage, force: true});
       return loadPending({page: state.pendingPage});
     }
 
     async function refreshAfterIncomingWrite() {
       const tasks = [loadPending({page: state.pendingPage})];
-      if (state.receivedLoaded) tasks.push(loadReceived({force: true}));
+      if (state.receivedLoaded) tasks.push(loadReceived({page: state.receivedPage, force: true}));
       const results = await Promise.all(tasks);
       return results[0] === true;
     }
@@ -866,7 +916,7 @@
     }
 
     function closeDrawing() {
-      // v0.23.0 P0-3："返回来料入库"只关闭预览层，绝不触发 loadData/render，
+      // v0.23.0 P0-3："返回收料"只关闭预览层，绝不触发 loadData/render，
       // 保证卡片列表和用户已输入的入库数量原样保留。
       $("drawingViewer").hidden = true;
       $("drawingViewerFrame").removeAttribute("src");
@@ -1069,7 +1119,7 @@
           item.className = `tab-button min-h-14 rounded-lg px-3 text-lg font-bold ${active ? "bg-blue-700 text-white" : "bg-slate-200 text-slate-700"}`;
         });
         render();
-        if (state.activeTab === "received") await loadReceived();
+        if (state.activeTab === "received") await loadReceived({page: state.receivedPage});
       });
     });
 
@@ -1197,6 +1247,8 @@
     });
     $("pendingPreviousPage").addEventListener("click", () => changePendingPage(state.pendingPage - 1));
     $("pendingNextPage").addEventListener("click", () => changePendingPage(state.pendingPage + 1));
+    $("receivedPreviousPage").addEventListener("click", () => changeReceivedPage(state.receivedPage - 1));
+    $("receivedNextPage").addEventListener("click", () => changeReceivedPage(state.receivedPage + 1));
     $("cancelRevert").addEventListener("click", () => {
       $("revertModal").hidden = true;
       state.revertingItemId = null;

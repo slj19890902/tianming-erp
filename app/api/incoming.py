@@ -3705,6 +3705,7 @@ def recently_received_items(
 
 @router.get("/history")
 def history_received_items(
+    response: Response,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=100),
     customer_id: list[int] | None = Query(default=None),
@@ -3721,6 +3722,8 @@ def history_received_items(
     user: User = Depends(can_read),
 ) -> dict:
     """Return scoped, stable pages of historical incoming receipt facts."""
+    response.headers["Cache-Control"] = "private, no-store"
+    response.headers["X-ERP-Session-Identity"] = f"{user.id}:{user.auth_version}"
     if date_from is not None and date_to is not None and date_from > date_to:
         raise HTTPException(status_code=422, detail="入库开始日期不能晚于结束日期")
     requested_customer_ids = {value for value in (customer_id or []) if value > 0}

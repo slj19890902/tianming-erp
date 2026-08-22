@@ -19,7 +19,7 @@ def _reported_page() -> str:
 def test_reported_page_prioritizes_customer_length_and_width_filters() -> None:
     page = _reported_page()
     first_row = page[
-        page.index('<div v-if="requisitionTab===\'submitted\'" class="list-filterbar">') :
+        page.index('<div v-if="requisitionTab===\'submitted\'" class="list-filterbar reported-filterbar">') :
     ]
     markers = [
         "reportedFilters.customer_id",
@@ -43,10 +43,10 @@ def test_reported_page_uses_one_physical_line_per_compact_row_and_drawer() -> No
     assert 'v-for="row in requisitionItems" :key="row.stable_id"' in page
     assert "已报料明细详情" in page
     assert "openReportedItemDetail(row)" in page
-    assert "reportedItemVoidButtonText(row)" in page
+    assert "reportedItemVoidButtonText(reportedItemDetail)" in page
     assert 'return "撤销本明细";' in INDEX
-    assert "当前条件命中" in page
-    assert "一条物理明细一行" in page
+    assert "当前条件命中" not in page
+    assert "逐明细打印" not in page
 
 
 def test_reported_loader_keeps_server_paging_and_latest_request_guard() -> None:
@@ -54,7 +54,7 @@ def test_reported_loader_keeps_server_paging_and_latest_request_guard() -> None:
     end = INDEX.index("async selectRequisitionTab", start)
     loader = INDEX[start:end]
     assert "page: this.pages.requisitionReported" in loader
-    assert "page_size: this.pageSize" in loader
+    assert "page_size: effectivePageSize" in loader
     assert 'beginLatestRequest("requisition:reported-items")' in loader or 'requestKey = "requisition:reported-items"' in loader
     assert 'axios.get("/api/requisition/reported-items"' in loader
     assert "sort_by" in loader and "sort_direction" in loader
@@ -62,11 +62,10 @@ def test_reported_loader_keeps_server_paging_and_latest_request_guard() -> None:
     assert 'axios.get("/api/requisition/reported-customer-options"' in loader
 
 
-def test_reported_document_table_never_requires_horizontal_scrolling() -> None:
-    assert ".reported-item-table { width: 100%; min-width: 1280px; table-layout: fixed;" in INDEX
+def test_reported_document_table_uses_one_page_scroll_path() -> None:
+    assert ".reported-item-table { width: 100%; min-width: 1110px; table-layout: fixed;" in INDEX
     assert ".reported-item-table .reported-item-select-column { position: sticky; left: 0" in INDEX
-    assert ".reported-item-table .reported-item-action-column { position: sticky; right: 0" in INDEX
-    assert "max-height: calc(100vh - 340px); overflow: auto" in INDEX
+    assert ".reported-item-table-wrap { max-height: none; overflow-x: auto; overflow-y: visible" in INDEX
 
 
 def test_inline_javascript_remains_valid(tmp_path: Path) -> None:

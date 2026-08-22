@@ -587,15 +587,19 @@
       .order-filter-advanced .select,
       .order-filter-advanced .search-select { flex:0 0 150px; width:150px; min-width:150px; }
       .order-filter-footer {
-        display:flex; align-items:center; justify-content:space-between; gap:8px;
-        min-height:30px; margin-top:5px;
+        display:flex; align-items:center; justify-content:flex-end; gap:8px;
+        flex:1 1 auto; min-width:0; min-height:30px; margin-top:0; margin-left:auto;
       }
+      .order-filter-footer > .toolbar-group {
+        min-width:0; flex:1 1 auto; flex-wrap:nowrap; overflow-x:auto; scrollbar-width:none;
+      }
+      .order-filter-footer > .toolbar-group::-webkit-scrollbar { display:none; }
       .order-filter-footer .pager.top {
-        margin-left:auto; padding:3px 0; border:0; background:transparent;
+        flex:0 0 auto; margin-left:auto; padding:3px 0; border:0; background:transparent;
       }
       @media (max-width: 1180px) {
         .order-filter-compact { flex-wrap:wrap; }
-        .order-filter-footer { align-items:flex-start; flex-wrap:wrap; }
+        .order-filter-footer { flex:1 0 100%; align-items:flex-start; flex-wrap:wrap; }
       }
       .sys-num { font-size:11px; color:#b0b0bb; font-weight:400; }
 
@@ -1903,13 +1907,12 @@
       .merge-remark-input { width: 118px !important; min-width: 118px !important; padding-left: 8px; padding-right: 8px; }
       .reported-size-filter { width: 118px !important; min-width: 118px !important; }
       .reported-advanced-filters { margin-top: -4px; padding-top: 0; }
-      .reported-match-summary { margin: 6px 2px; }
       .reported-detail-card { display: grid; grid-template-columns: 1.25fr .9fr 1.25fr .7fr auto; gap: 8px; align-items: center; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; background: #fff; line-height: 1.35; }
       .reported-detail-card > div { min-width: 0; overflow-wrap: anywhere; }
       .reported-item-toolbar { justify-content: space-between; gap: 10px; align-items: center; }
-      .reported-item-toolbar .toolbar-group { flex-wrap: wrap; }
+      .reported-item-toolbar .toolbar-group { flex-wrap: nowrap; }
       .reported-item-selection-summary { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
-      .reported-item-table-wrap { max-height: calc(100vh - 340px); overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+      .reported-item-table-wrap { max-height: none; overflow-x: auto; overflow-y: visible; border: 1px solid var(--line); border-radius: 8px; }
       .reported-item-table { width: 100%; min-width: 1110px; table-layout: fixed; border-collapse: separate; border-spacing: 0; font-size: 15px; }
       .reported-item-table th,
       .reported-item-table td { height: 38px; min-height: 38px; padding: 5px 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; border-bottom: 1px solid #cbd5e1; }
@@ -1917,7 +1920,7 @@
       .reported-item-table thead th { position: sticky; top: 0; z-index: 3; background: #f4f6f8; }
       .reported-item-table .reported-item-select-column { position: sticky; left: 0; z-index: 2; width: 78px; background: #fff; text-align: center; }
       .reported-item-table thead .reported-item-select-column { z-index: 5; background: #f4f6f8; }
-      .reported-item-table .reported-item-dimension { width: 92px; text-align: right; font-variant-numeric: tabular-nums; font-size: 16px; font-weight: 800; }
+      .reported-item-table .reported-item-dimension { width: 92px; text-align: left; font-variant-numeric: tabular-nums; font-size: 16px; font-weight: 800; }
       .reported-item-table .reported-item-supplier { width: 6.5em; max-width: 6.5em; }
       .reported-item-table .reported-item-times { width: 145px; }
       .reported-item-table .reported-item-status { width: 90px; }
@@ -1934,6 +1937,20 @@
       .reported-item-drawer-grid dt { color: var(--muted); }
       .reported-item-drawer-grid dd { margin: 0; overflow-wrap: anywhere; }
       .reported-item-print-errors { margin-top: 8px; white-space: normal; }
+      .requisition-board-head { align-items:center; gap:10px; margin-bottom:6px; }
+      .requisition-board-head h2 { flex:0 0 auto; margin-right:4px; }
+      .requisition-board-head .toolbar-group { flex-wrap:nowrap; }
+      .requisition-board-head .requisition-page-actions { margin-left:auto; flex-wrap:nowrap; }
+      .list-filterbar.reported-filterbar { flex-wrap:nowrap; align-items:center; gap:6px; }
+      .reported-filterbar .reported-filter-fields { display:flex; align-items:center; gap:6px; min-width:0; }
+      .reported-filterbar .reported-item-toolbar { display:flex; align-items:center; gap:6px; margin-left:auto; }
+      .reported-filterbar .pager.top { flex:0 0 auto; }
+      .ui-large .reported-filterbar .btn { padding-left:10px; padding-right:10px; }
+      .ui-large .reported-filterbar .reported-size-filter { width:108px !important; min-width:108px !important; }
+      .ui-large .reported-filter-fields .search-select { width:180px; min-width:180px; }
+      .reported-print-feedback:empty { display:none; }
+      .reported-print-feedback { margin:0; padding:0; }
+      .reported-item-status-action { display:flex; align-items:center; justify-content:space-between; gap:4px; }
       .ui-large .reported-item-table th,
       .ui-large .reported-item-table td { height: 42px; min-height: 42px; padding: 5px 8px; font-size: 16px; line-height: 1.35; }
       .ui-large .reported-item-table { min-width: 1450px; }
@@ -3220,6 +3237,15 @@
                     <button class="btn small muted" @click="showAdvancedFilter=!showAdvancedFilter">
                       {{ showAdvancedFilter ? '收起筛选' : '筛选查找' }} ▾
                     </button>
+                    <div class="order-filter-footer">
+                      <div v-if="orderActiveFilterChips.length" class="toolbar-group">
+                        <span class="muted">当前条件</span>
+                        <button v-for="chip in orderActiveFilterChips" :key="chip.key" class="btn small" @click="removeOrderFilter(chip.key)">{{ chip.label }}：{{ chip.value }} ×</button>
+                        <button class="btn small muted" @click="resetOrderFilters()">一键清空</button>
+                      </div>
+                      <pager v-if="orderWorkspace === 'queue'" :page="pages.orders" :total="ordersTotal" :page-size="orderListPageSize()" :always="true" :compact="true" :filter-count="orderActiveFilterChips.length" :order-layout="true" @change="pages.orders=$event; runExplicitPageListLoad('orders')"></pager>
+                      <pager v-else :page="pages.customerHeat" :total="customerHeatTotal" :page-size="pageSize" :always="true" :compact="true" :filter-count="orderActiveFilterChips.length" @change="pages.customerHeat=$event; runExplicitPageListLoad('orders')"></pager>
+                    </div>
                   </div>
                   <div v-if="showAdvancedFilter" class="order-filter-advanced">
                     <search-select v-model="filters.orderCustomer" :options="orderCustomerOptions" label-key="name" value-key="id" placeholder="客户筛选" :allow-empty="true" @change="applyOrderFilters()"></search-select>
@@ -3238,15 +3264,6 @@
                     <input class="input" style="width:130px" type="date" v-model="filters.orderDeliveryDateFrom" @change="runExplicitPageListLoad('orders',{resetPage:true})" />
                     <span class="muted">至</span>
                     <input class="input" style="width:130px" type="date" v-model="filters.orderDeliveryDateTo" @change="runExplicitPageListLoad('orders',{resetPage:true})" />
-                  </div>
-                  <div class="order-filter-footer">
-                    <div v-if="orderActiveFilterChips.length" class="toolbar-group">
-                      <span class="muted">当前条件</span>
-                      <button v-for="chip in orderActiveFilterChips" :key="chip.key" class="btn small" @click="removeOrderFilter(chip.key)">{{ chip.label }}：{{ chip.value }} ×</button>
-                      <button class="btn small muted" @click="resetOrderFilters()">一键清空</button>
-                    </div>
-                    <pager v-if="orderWorkspace === 'queue'" :page="pages.orders" :total="ordersTotal" :page-size="orderListPageSize()" :always="true" :compact="true" :filter-count="orderActiveFilterChips.length" :order-layout="true" @change="pages.orders=$event; runExplicitPageListLoad('orders')"></pager>
-                    <pager v-else :page="pages.customerHeat" :total="customerHeatTotal" :page-size="pageSize" :always="true" :compact="true" :filter-count="orderActiveFilterChips.length" @change="pages.customerHeat=$event; runExplicitPageListLoad('orders')"></pager>
                   </div>
                 </div>
               </div>
@@ -3536,13 +3553,8 @@
                 <pager v-if="externalPurchaseView==='history'" :page="pages.externalPurchaseHistory" :total="externalPurchaseHistoryTotal" :page-size="pageSize" :always="true" :compact="true" :filter-count="externalPurchaseHistoryFilter ? 1 : 0" @change="pages.externalPurchaseHistory=$event;loadExternalPurchaseHistory()"></pager>
               </template>
               <template v-else>
-              <div class="page-head requisition-page-head">
-                <div>
-                  <h2>纸板报料</h2>
-                  <p>纸板订单报料、库存抵扣和库存补库统一先生成可核对草稿；外购包材请进入独立子页处理。</p>
-                </div>
-              </div>
-              <div class="toolbar requisition-page-actionbar">
+              <div class="page-head requisition-page-head requisition-board-head">
+                <h2>纸板报料</h2>
                 <div class="toolbar-group">
                   <button :class="['btn',{primary:requisitionTab==='pending'}]" :disabled="requisitionInventoryActionBlocked() || requisitionVoidActionBlocked()" @click="selectRequisitionTab('pending')">待报料 {{ requisitionPendingOverallTotal }}</button>
                   <button :class="['btn',{primary:requisitionTab==='submitted'}]" :disabled="requisitionInventoryActionBlocked() || requisitionVoidActionBlocked()" @click="selectRequisitionTab('submitted')">已报料/已入库<span v-if="requisitionReportedLoaded"> {{ requisitionReportedTotal }}</span></button>
@@ -3609,14 +3621,23 @@
                 <button class="btn" @click="pages.requisitionHolds=1; loadRequisitionHolds()">查询</button>
                 <button class="btn" @click="resetRequisitionHoldFilters()">清空</button>
               </div>
-              <div v-if="requisitionTab==='submitted'" class="list-filterbar">
-                <search-select v-model="reportedFilters.customer_id" :options="reportedCustomerOptions" label-key="label" value-key="id" placeholder="客户（名称/编码）" :allow-empty="true"></search-select>
-                <input class="input reported-size-filter" type="number" min="1" v-model="reportedFilters.report_length_mm" placeholder="报料长 mm" @keyup.enter="pages.requisitionReported=1; loadReportedDocuments()" />
-                <input class="input reported-size-filter" type="number" min="1" v-model="reportedFilters.report_width_mm" placeholder="报料宽 mm" @keyup.enter="pages.requisitionReported=1; loadReportedDocuments()" />
-                <button class="btn" @click="pages.requisitionReported=1; loadReportedDocuments()">查询</button>
-                <button class="btn" @click="reportedAdvancedVisible=!reportedAdvancedVisible">{{ reportedAdvancedVisible ? '收起详细查找' : '详细查找' }}</button>
-                <button class="btn" @click="resetReportedFilters()">清空</button>
-                <pager :page="pages.requisitionReported" :total="requisitionReportedTotal" :page-size="pageSize" :always="true" :compact="true" @change="pages.requisitionReported=$event; loadReportedDocuments()"></pager>
+              <div v-if="requisitionTab==='submitted'" class="list-filterbar reported-filterbar">
+                <div class="reported-filter-fields">
+                  <search-select v-model="reportedFilters.customer_id" :options="reportedCustomerOptions" label-key="label" value-key="id" placeholder="客户（名称/编码）" :allow-empty="true"></search-select>
+                  <input class="input reported-size-filter" type="number" min="1" v-model="reportedFilters.report_length_mm" placeholder="报料长" @keyup.enter="pages.requisitionReported=1; loadReportedDocuments()" />
+                  <input class="input reported-size-filter" type="number" min="1" v-model="reportedFilters.report_width_mm" placeholder="报料宽" @keyup.enter="pages.requisitionReported=1; loadReportedDocuments()" />
+                  <button class="btn" @click="pages.requisitionReported=1; loadReportedDocuments()">查询</button>
+                  <button class="btn" @click="reportedAdvancedVisible=!reportedAdvancedVisible">{{ reportedAdvancedVisible ? '收起详细查找' : '详细查找' }}</button>
+                  <button class="btn" @click="resetReportedFilters()">清空</button>
+                </div>
+                <div class="reported-item-toolbar">
+                  <span class="reported-item-selection-summary">已选 <strong>{{ reportedSelectedItems().length }}</strong> 条</span>
+                  <button class="btn small" type="button" :disabled="reportedItemPrintBusy || !reportedSelectedItems().length" @click="clearReportedItemSelections">清空已选</button>
+                  <button class="btn small primary" type="button" :disabled="reportedItemPrintBusy || !reportedSelectedItems().length" @click="prepareReportedItemTaskPrint">{{ reportedItemPrintBusy ? '正在核验…' : '打印待来料任务单' }}</button>
+                  <button class="btn small success" type="button" :disabled="reportedItemPrintBusy || !reportedSelectedItems().length" @click="openReportedItemLabels">打印产品标签</button>
+                  <button class="btn small" type="button" :disabled="reportedItemLoading || reportedItemVoidSaving()" @click="refreshReportedItems">{{ reportedItemLoading ? '刷新中…' : '刷新' }}</button>
+                </div>
+                <pager :page="pages.requisitionReported" :total="requisitionReportedTotal" :page-size="reportedItemPageSize()" :always="true" :compact="true" :order-layout="true" @change="pages.requisitionReported=$event; loadReportedDocuments()"></pager>
               </div>
               <div v-if="requisitionTab==='submitted' && reportedAdvancedVisible" class="list-filterbar reported-advanced-filters">
                 <input class="input" v-model.trim="reportedFilters.material_code" placeholder="材质代码（支持 +）" @keyup.enter="pages.requisitionReported=1; loadReportedDocuments()" />
@@ -3631,17 +3652,7 @@
                 <input class="input" type="date" v-model="reportedFilters.date_from" />
                 <input class="input" type="date" v-model="reportedFilters.date_to" />
               </div>
-              <section v-if="requisitionTab==='submitted'" class="production-print-selection-tray">
-                <div class="toolbar reported-item-toolbar">
-                  <div><strong>逐明细打印</strong><span class="muted" style="margin-left:8px">默认不选；勾选跨筛选、翻页保留。不可打印项会明确阻止整批，不会静默忽略。</span></div>
-                  <div class="toolbar-group">
-                    <span class="reported-item-selection-summary">已选 <strong>{{ reportedSelectedItems().length }}</strong> 条</span>
-                    <button class="btn small" type="button" :disabled="reportedItemPrintBusy || !reportedSelectedItems().length" @click="clearReportedItemSelections">清空已选</button>
-                    <button class="btn small primary" type="button" :disabled="reportedItemPrintBusy || !reportedSelectedItems().length" @click="prepareReportedItemTaskPrint">{{ reportedItemPrintBusy ? '正在核验…' : '打印待来料任务单' }}</button>
-                    <button class="btn small success" type="button" :disabled="reportedItemPrintBusy || !reportedSelectedItems().length" @click="openReportedItemLabels">打印产品标签</button>
-                    <button class="btn small" type="button" :disabled="reportedItemLoading || reportedItemVoidSaving()" @click="refreshReportedItems">{{ reportedItemLoading ? '刷新中…' : '刷新' }}</button>
-                  </div>
-                </div>
+              <section v-if="requisitionTab==='submitted'" class="reported-print-feedback">
                 <div v-if="reportedItemPrintErrors.length" class="status orange reported-item-print-errors"><div v-for="error in reportedItemPrintErrors" :key="error">{{ error }}</div></div>
                 <div v-if="reportedItemVoidBlocked()" class="status orange reported-item-print-errors">逐明细撤销正在处理或结果待核对；系统会复用原幂等键。普通刷新不会生成新撤销请求。 <button class="btn small" type="button" :disabled="reportedItemVoidSaving()" @click="retryReportedItemVoidAttempt">重试核对</button></div>
                 <div v-if="reportedLabelRecoveryUrls.length" class="status green reported-item-print-errors"><div v-for="item in reportedLabelRecoveryUrls" :key="item.url">标签页已核验；若浏览器阻止新窗口，请点击 <a :href="item.url" target="_blank" rel="noopener">{{ item.document_number || '打开标签页' }}</a>。</div></div>
@@ -3668,7 +3679,6 @@
               <div v-if="requisitionTab==='submitted' && reportedItemError" class="status orange" style="display:flex;align-items:center;gap:8px;white-space:normal;margin:8px 0">
                 <span>{{ reportedItemError }}</span><button class="btn small" type="button" :disabled="reportedItemLoading" @click="loadReportedDocuments">重试</button>
               </div>
-              <div v-if="requisitionTab==='submitted' && requisitionReportedLoaded" class="muted reported-match-summary">当前条件命中 {{ requisitionReportedTotal }} 条正式报料明细；一条物理明细一行。</div>
               <div v-if="requisitionTab==='submitted' && requisitionItems.length" class="reported-item-table-wrap">
                 <table class="reported-item-table" aria-label="已报料逐明细紧凑表格">
                   <thead><tr>
@@ -3676,13 +3686,13 @@
                     <th class="reported-item-dimension"><button :class="['reported-item-sort',{active:reportedSort.by==='report_length_mm'}]" @click="setReportedSort('report_length_mm')">报料长 {{ reportedSortArrow('report_length_mm') }}</button></th>
                     <th style="width:28px;text-align:center">×</th>
                     <th class="reported-item-dimension"><button :class="['reported-item-sort',{active:reportedSort.by==='report_width_mm'}]" @click="setReportedSort('report_width_mm')">报料宽 {{ reportedSortArrow('report_width_mm') }}</button></th>
-                    <th style="width:130px">压线尺寸 / 净毛</th>
+                    <th style="width:130px">压线尺寸</th>
                     <th style="width:110px"><button :class="['reported-item-sort',{active:reportedSort.by==='requisition_qty'}]" @click="setReportedSort('requisition_qty')">采购数量 {{ reportedSortArrow('requisition_qty') }}</button></th>
                     <th style="width:135px">材质 / 楞型</th>
+                    <th class="reported-item-supplier">供应商</th>
                     <th style="width:220px">客户简称 / 存货编码</th>
                     <th class="reported-item-times"><button :class="['reported-item-sort',{active:reportedSort.by==='reported_at'}]" @click="setReportedSort('reported_at')">报料日期 {{ reportedSortArrow('reported_at') }}</button></th>
-                    <th class="reported-item-supplier">供应商</th>
-                    <th class="reported-item-status">状态</th>
+                    <th class="reported-item-status">状态 / 操作</th>
                   </tr></thead>
                   <tbody><template v-for="row in requisitionItems" :key="row.stable_id">
                   <tr v-if="row.composite_group_first" class="reported-composite-parent-row">
@@ -3708,15 +3718,14 @@
                     <td :title="row.crease_display || '-'">{{ row.crease_display || '-' }}</td>
                     <td><strong>{{ row.requisition_qty || 0 }}</strong> {{ row.unit || '张' }}</td>
                     <td :title="`${row.material_code || '-'} / ${row.flute_type || '-'}`">{{ row.material_code || '-' }} / {{ row.flute_type || '-' }}</td>
+                    <td class="reported-item-supplier" :title="supplierDisplayName(row.supplier_name || '-')">{{ supplierDisplayName(row.supplier_name || '-') }}</td>
                     <td><button class="reported-item-customer" type="button" @click="openReportedItemDetail(row)" :title="`${row.customer_name || '-'}｜${row.product_code || '-'}`">{{ row.customer_short_name || row.customer_name || '-' }}｜{{ row.product_code || '-' }}</button></td>
                     <td :title="formatDateTime(row.reported_at)">{{ formatDateTime(row.reported_at) }}</td>
-                    <td class="reported-item-supplier" :title="supplierDisplayName(row.supplier_name || '-')">{{ supplierDisplayName(row.supplier_name || '-') }}</td>
-                    <td><span :class="['status',reportedItemStatusClass(row)]">{{ reportedItemStatusText(row) }}</span></td>
+                    <td><div class="reported-item-status-action"><span :class="['status',reportedItemStatusClass(row)]">{{ reportedItemStatusText(row) }}</span><button class="btn small" type="button" @click="openReportedItemDetail(row)">操作</button></div></td>
                   </tr></template></tbody>
                 </table>
               </div>
               <div v-if="requisitionTab==='submitted' && requisitionReportedLoaded && !requisitionItems.length && !reportedItemLoading" class="empty">当前条件下没有已报料明细。</div>
-              <pager v-if="requisitionTab==='submitted'" :page="pages.requisitionReported" :total="requisitionReportedTotal" :page-size="pageSize" :always="true" :compact="true" @change="pages.requisitionReported=$event; loadReportedDocuments()"></pager>
               <div v-if="reportedItemDetail" class="reported-item-drawer-backdrop" @click="closeReportedItemDetail"></div>
               <aside v-if="reportedItemDetail" class="reported-item-drawer" aria-label="已报料明细详情" @click.stop>
                 <div class="toolbar" style="justify-content:space-between"><div><strong>已报料明细详情</strong><div class="muted">{{ reportedItemDetail.document_number || '-' }}｜第 {{ reportedItemDetail.line_order || '-' }} 行</div></div><button class="btn" type="button" @click="closeReportedItemDetail">关闭</button></div>
@@ -8065,6 +8074,8 @@
       const PAGE_CACHE_TTL_MS = 30_000;
       const ORDER_LIST_PAGE_SIZE_STANDARD = 12;
       const ORDER_LIST_PAGE_SIZE_LARGE = 7;
+      const REPORTED_ITEM_PAGE_SIZE_STANDARD = 12;
+      const REPORTED_ITEM_PAGE_SIZE_LARGE = 8;
       const latestRequestControllers = new Map();
       const searchDebounceTimers = new Map();
       const pageSearchGenerations = new Map();
@@ -9926,6 +9937,7 @@
               this.user = {...this.user, ...data.user, ui_mode:data.user.ui_mode || mode};
               await this.loadEffectiveUiLayout();
               await this.reloadOrdersForUiModeChange(previousMode, this.uiMode);
+              await this.reloadReportedItemsForUiModeChange(previousMode, this.uiMode);
               this.showToast(mode === "large" ? "已切换为大字模式" : "已切换为标准模式");
             } catch (error) {
               if (requestGeneration !== this.authGeneration || this.user?.id !== requestUserId) return;
@@ -9938,12 +9950,23 @@
           orderListPageSize(mode=this.uiMode) {
             return mode === "large" ? ORDER_LIST_PAGE_SIZE_LARGE : ORDER_LIST_PAGE_SIZE_STANDARD;
           },
+          reportedItemPageSize(mode=this.uiMode) {
+            return mode === "large" ? REPORTED_ITEM_PAGE_SIZE_LARGE : REPORTED_ITEM_PAGE_SIZE_STANDARD;
+          },
           async reloadOrdersForUiModeChange(previousMode, nextMode) {
             if (previousMode === nextMode) return true;
             this.pages.orders = 1;
             this.invalidatePageCache("orders");
             if (this.activePage === "orders" && this.orderWorkspace === "queue") {
               return this.runExplicitPageListLoad("orders");
+            }
+            return true;
+          },
+          async reloadReportedItemsForUiModeChange(previousMode, nextMode) {
+            if (previousMode === nextMode) return true;
+            if (this.activePage === "requisition" && this.requisitionWorkspace === "board" && this.requisitionTab === "submitted") {
+              this.pages.requisitionReported = 1;
+              return this.loadReportedDocuments();
             }
             return true;
           },
@@ -16070,9 +16093,12 @@
             else await this.loadRequisitionHolds();
           },
           async loadReportedDocuments() {
+            const effectivePageSize = typeof this.reportedItemPageSize === "function"
+              ? this.reportedItemPageSize()
+              : this.pageSize;
             const params = {
               page: this.pages.requisitionReported,
-              page_size: this.pageSize,
+              page_size: effectivePageSize,
               sort_by: this.reportedSort?.by || "reported_at",
               sort_direction: this.reportedSort?.direction || "desc",
             };
@@ -16089,7 +16115,7 @@
               const { data } = await axios.get("/api/requisition/reported-items", { params, signal:controller.signal });
               if (!this.reportedItemsRequestIsCurrent(controller,authGeneration,userId)) return false;
               const total = Number(data.total || 0);
-              const lastPage = Math.max(1, Math.ceil(total / this.pageSize));
+              const lastPage = Math.max(1, Math.ceil(total / effectivePageSize));
               if (this.pages.requisitionReported > lastPage) {
                 this.pages.requisitionReported = lastPage;
                 return await this.loadReportedDocuments();
@@ -32644,7 +32670,6 @@
         },
         template: `<div v-if="always || total > pageSize" :class="['pager',{top:compact}]">
           <template v-if="$attrs['order-layout']">
-            <span>筛选查找｜已筛选 {{ filterCount == null ? 0 : filterCount }} 项｜</span>
             <button class="btn small" :disabled="page <= 1" @click="$emit('change', page - 1)">上一页</button>
             <span>｜第 {{ page }}/{{ pages }} 页｜</span>
             <button class="btn small" :disabled="page >= pages" @click="$emit('change', page + 1)">下一页</button>

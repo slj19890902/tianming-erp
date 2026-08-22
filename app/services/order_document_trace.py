@@ -201,6 +201,50 @@ def trace_navigation_url(
     return f"/?{urlencode(query)}"
 
 
+def trace_physical_location_label(event: dict[str, Any]) -> str:
+    """Describe the real-world place without inventing a warehouse point."""
+
+    stage = str(event.get("stage") or "")
+    source_type = str(event.get("source_type") or "")
+    details = event.get("details") or {}
+    if event.get("location_name"):
+        return str(event["location_name"])
+    if details.get("current_location_name"):
+        return str(details["current_location_name"])
+    if stage == "requisition":
+        if event.get("is_reversal") or not event.get("is_effective", True):
+            return "供应商报料历史 / 已撤销"
+        supplier = str(details.get("supplier_name") or "").strip()
+        return f"{supplier} / 供应商在途" if supplier else "供应商 / 在途"
+    if stage == "incoming":
+        return (
+            "来料历史 / 已撤销"
+            if event.get("is_reversal")
+            else "来料区 / 待生产区"
+        )
+    if stage == "production":
+        if event.get("is_reversal"):
+            return "生产历史 / 已撤销"
+        if source_type == "production_task":
+            return "生产现场 / 待生产"
+        if float(details.get("direct_delivery_quantity") or 0) > 0:
+            return "一楼待送区"
+        return "生产现场 / 待确认去向"
+    if stage == "inventory":
+        return "正式库存 / 位置待确认"
+    if stage == "delivery":
+        if source_type == "delivery_draft":
+            return "一楼待送区 / 待发车"
+        if source_type == "delivery_void":
+            return "送货历史 / 已取消发货"
+        return "送货途中 / 客户现场"
+    if stage == "return_receipt":
+        return "客户回单"
+    if stage in {"statement", "invoice", "settlement"}:
+        return "财务单据"
+    return "订单业务台账"
+
+
 def _api_datetime(value: datetime | None) -> str | None:
     return utc_naive_to_api(value) if value is not None else None
 
@@ -1027,28 +1071,7 @@ def build_order_item_document_trace(
             event["details"]["current_lot_number"] = current_lot["lot_number"]
 
     for event in events:
-        stage = event["stage"]
-        details = event.get("details") or {}
-        if event.get("location_name"):
-            physical_location = event["location_name"]
-        elif details.get("current_location_name"):
-            physical_location = details["current_location_name"]
-        elif stage == "requisition":
-            supplier = str(details.get("supplier_name") or "").strip()
-            physical_location = f"{supplier} / 供应商在途" if supplier else "供应商 / 在途"
-        elif stage == "incoming":
-            physical_location = "来料区 / 待生产区"
-        elif stage == "production":
-            physical_location = "生产现场 / 待确认去向"
-        elif stage == "delivery":
-            physical_location = "送货途中 / 客户现场"
-        elif stage == "return_receipt":
-            physical_location = "客户回单"
-        elif stage in {"statement", "invoice", "settlement"}:
-            physical_location = "财务单据"
-        else:
-            physical_location = "订单业务台账"
-        event["physical_location_label"] = physical_location
+        event["physical_location_label"] = trace_physical_location_label(event)
         event["navigation_url"] = trace_navigation_url(
             order_id=order.id,
             item_id=item.id,

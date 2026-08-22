@@ -97,10 +97,10 @@ def test_cli_writes_three_consistent_anonymous_reports_without_touching_source(
 
     assert exit_code == 0
     stdout = json.loads(capsys.readouterr().out)
-    assert stdout["status"] == "partial"
-    assert stdout["scan_complete"] is False
+    assert stdout["status"] == "ok"
+    assert stdout["scan_complete"] is True
     assert stdout["coverage"]["receipt_auto_finished"]["status"] == (
-        "not_evaluated"
+        "evaluated"
     )
     assert stdout["coverage"]["workstation_membership"]["status"] == "evaluated"
     assert cli._sha256(database) == sha_before
@@ -122,7 +122,7 @@ def test_cli_writes_three_consistent_anonymous_reports_without_touching_source(
     )
     assert f"数据库 revision：`{REVISION}`" in markdown
     assert f"异常/待复核/信息合计：`{len(csv_rows)}`" in markdown
-    assert "扫描覆盖完整：`False`" in markdown
+    assert "扫描覆盖完整：`True`" in markdown
     assert "P1-81" in markdown
     assert "P1-84" in markdown
     assert "## 工位路由统计" in markdown

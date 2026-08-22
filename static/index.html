@@ -23454,11 +23454,7 @@
             }
             const incomplete = [];
             for (const group of groups.values()) {
-              if (group.source_type === "supplier_order") {
-                const required = Number(group.rows[0]?.active_item_count || 0);
-                if (!required || group.rows.length !== required) incomplete.push(`${group.document_number || '-'}：产品标签按采购单冻结，请勾选该采购单全部 ${required || '有效'} 条有效明细`);
-                continue;
-              }
+              if (group.source_type === "supplier_order") continue;
               const parentGroups = new Map();
               for (const row of group.rows) {
                 if (row.composite_fulfillment_mode !== "parent_delivery") continue;
@@ -23484,22 +23480,61 @@
             });
             this.reportedItemPrintBusy = true;
             try {
-              const packages = await Promise.all([...groups.values()].map(async group => {
+              const packageResults = await Promise.all([...groups.values()].map(async group => {
                 const itemIds = group.rows.map(row => Number(row.item_id)).sort((a,b) => a-b);
-                const url = group.source_type === "supplier_order"
-                  ? `/api/requisition/supplier-orders/${group.document_id}/production-packaging-label-package`
-                  : `/api/requisition/batches/${group.document_id}/production-packaging-label-package?item_ids=${encodeURIComponent(itemIds.join(","))}`;
-                const {data}=await axios.get(url);
-                return {group,itemIds,data};
+                try {
+                  let taskIds = [];
+                  let url = `/api/requisition/batches/${group.document_id}/production-packaging-label-package?item_ids=${encodeURIComponent(itemIds.join(","))}`;
+                  if (group.source_type === "supplier_order") {
+                    const {data:productionData}=await axios.get(`/api/requisition/supplier-orders/${group.document_id}/production-print-package`);
+                    const selectedItemIds=new Set(itemIds);
+                    const coveredItemIds=new Set();
+                    const selectedTaskIds=new Set();
+                    for (const candidate of this.reportedProductionCandidates(group.document_id,group.rows[0],productionData)) {
+                      const related=candidate.reported_item_ids.filter(itemId=>selectedItemIds.has(itemId));
+                      if (!related.length) continue;
+                      related.forEach(itemId=>coveredItemIds.add(itemId));
+                      candidate.task_versions.forEach(item=>{ if (Number.isInteger(item.task_id) && item.task_id > 0) selectedTaskIds.add(item.task_id); });
+                    }
+                    const missing=itemIds.filter(itemId=>!coveredItemIds.has(itemId));
+                    if (missing.length) throw new Error(`${group.document_number || group.document_id}：所选明细 #${missing.join('、#')} 没有对应的稳定生产任务`);
+                    taskIds=[...selectedTaskIds].sort((a,b)=>a-b);
+                    if (!taskIds.length) throw new Error(`${group.document_number || group.document_id}：所选产品没有可核验的稳定生产任务`);
+                    url=`/api/requisition/supplier-orders/${group.document_id}/production-packaging-label-package?task_ids=${encodeURIComponent(taskIds.join(","))}`;
+                  }
+                  const {data}=await axios.get(url);
+                  return {group,itemIds,taskIds,data,error:null};
+                } catch(error) {
+                  return {group,itemIds,taskIds:[],data:null,error};
+                }
               }));
               if (this.authGeneration !== authGeneration || (this.user?.id ?? null) !== userId || this.activePage !== "requisition" || this.requisitionTab !== "submitted") {
                 windows.forEach(opened => { try { opened?.close(); } catch(_error) {} });
                 return false;
               }
+              const failures=packageResults.filter(result=>result.error);
+              if (failures.length) {
+                windows.forEach(opened => { try { opened?.close(); } catch(_error) {} });
+                const accessFailure=failures.find(result=>[401,403].includes(Number(result.error?.response?.status || 0)));
+                if (accessFailure) {
+                  this.resetPagePerformanceState();
+                  this.showToast(this.errorMessage(accessFailure.error),true);
+                  return false;
+                }
+                this.reportedItemPrintErrors=failures.flatMap(({group,error})=>{
+                  const detail=error?.response?.data?.detail;
+                  const reasons=Array.isArray(detail?.reasons)
+                    ? detail.reasons
+                    : [typeof detail === "string" ? detail : this.errorMessage(error)];
+                  return reasons.map(reason=>`${group.document_number || group.document_id}：${String(reason)}`);
+                });
+                return false;
+              }
+              const packages=packageResults;
               const recovery = [];
-              packages.forEach(({group,itemIds},index) => {
+              packages.forEach(({group,itemIds,taskIds},index) => {
                 const url=group.source_type === "supplier_order"
-                  ? `/production-packaging-label.html?id=${encodeURIComponent(group.document_id)}`
+                  ? `/production-packaging-label.html?id=${encodeURIComponent(group.document_id)}&task_ids=${encodeURIComponent(taskIds.join(","))}`
                   : `/production-packaging-label.html?batch_id=${encodeURIComponent(group.document_id)}&item_ids=${encodeURIComponent(itemIds.join(","))}`;
                 const opened=windows[index];
                 if (opened) { try { opened.location.href=url; } catch(_error) { recovery.push({url,document_number:group.document_number}); } }

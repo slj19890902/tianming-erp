@@ -250,32 +250,71 @@ const expect=(value,message)=>{{if(!value)throw new Error(message);}};
     _run_node(script, tmp_path, "p1-73d-composite-task-print.js")
 
 
-def test_label_print_requires_every_active_line_of_each_supplier_order(
+def test_label_print_accepts_independent_tasks_within_one_supplier_order(
     tmp_path: Path,
 ) -> None:
     body = _method_body("openReportedItemLabels")
+    candidates = _method_body("reportedProductionCandidates")
     script = f"""
 const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
 global.confirm=()=>true;const gets=[];const opened=[];
 global.window={{open(){{const tab={{location:{{href:'about:blank'}},close(){{this.closed=true;}}}};opened.push(tab);return tab;}}}};
-global.axios={{get:async(url)=>{{gets.push(url);return {{data:{{label_count:2}}}};}}}};
+global.axios={{get:async(url)=>{{gets.push(url);if(url.endsWith('/production-print-package'))return {{data:{{supplier_order_number:'SRO-3',cards:[
+  {{source_identity:'item:31',production_task_versions:[{{task_id:501,version:2}}],components:[{{supplier_order_item_id:31}}],product_code:'P31'}},
+  {{source_identity:'item:32',production_task_versions:[{{task_id:502,version:3}}],components:[{{supplier_order_item_id:32}}],product_code:'P32'}},
+]}}}};return {{data:{{label_count:2}}}};}}}};
 const rows=[31,32].map(item_id=>({{stable_id:`supplier_order:3:${{item_id}}`,source_type:'supplier_order',status:'active',can_print_label:true,active_item_count:2,document_id:3,document_number:'SRO-3',item_id,product_code:`P${{item_id}}`}}));
 const vm={{reportedItemPrintBusy:false,reportedItemPrintErrors:[],reportedLabelRecoveryUrls:[],authGeneration:1,user:{{id:2}},activePage:'requisition',requisitionTab:'submitted',selection:[rows[0]],
   reportedSelectedItems(){{return this.selection;}},showToast(){{}},errorMessage(error){{return error.message;}},resetPagePerformanceState(){{throw new Error('unexpected reset');}},
 }};
+vm.reportedProductionCandidates=new Function('orderId','row','data',{json.dumps(candidates, ensure_ascii=False)}).bind(vm);
 vm.openReportedItemLabels=new AsyncFunction({json.dumps(body, ensure_ascii=False)}).bind(vm);
 const expect=(value,message)=>{{if(!value)throw new Error(message);}};
 (async()=>{{
-  expect(await vm.openReportedItemLabels()===false,'partial supplier order label selection was accepted');
-  expect(gets.length===0&&opened.length===0,'partial label selection reached preview or opened a tab');
-  expect(vm.reportedItemPrintErrors[0].includes('全部 2 条有效明细'),'partial label blocker was not explicit');
+  expect(await vm.openReportedItemLabels()===true,'one selected task was blocked by its supplier order');
+  expect(gets.length===2&&opened.length===1,'one selected task did not run task and label preflight once');
+  expect(gets[1]==='/api/requisition/supplier-orders/3/production-packaging-label-package?task_ids=501','one-task label preflight lost its task identity');
+  expect(opened[0].location.href==='/production-packaging-label.html?id=3&task_ids=501','one-task label page URL is wrong');
   vm.selection=rows;vm.reportedItemPrintErrors=[];
-  expect(await vm.openReportedItemLabels()===true,'complete supplier order label selection failed');
-  expect(gets.length===1&&opened.length===1,'complete label selection did not preflight one order once');
-  expect(opened[0].location.href==='/production-packaging-label.html?id=3','validated label page URL is wrong');
+  expect(await vm.openReportedItemLabels()===true,'two selected tasks failed');
+  expect(gets.length===4&&opened.length===2,'two selected tasks did not preflight one order once');
+  expect(gets[3]==='/api/requisition/supplier-orders/3/production-packaging-label-package?task_ids=501%2C502','two-task preflight URL is wrong');
+  expect(opened[1].location.href==='/production-packaging-label.html?id=3&task_ids=501%2C502','two-task label page URL is wrong');
 }})().catch(error=>{{console.error(error);process.exit(1);}});
 """
     _run_node(script, tmp_path, "p1-73d-label-print-selection.js")
+
+
+def test_label_print_mixed_invalid_products_stop_whole_batch_and_list_each(
+    tmp_path: Path,
+) -> None:
+    body = _method_body("openReportedItemLabels")
+    candidates = _method_body("reportedProductionCandidates")
+    script = f"""
+const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
+global.confirm=()=>true;const opened=[];
+global.window={{open(){{const tab={{location:{{href:'about:blank'}},closed:false,close(){{this.closed=true;}}}};opened.push(tab);return tab;}}}};
+global.axios={{get:async(url)=>{{
+  const documentId=Number(url.split('/supplier-orders/')[1]?.split('/')[0]||0);
+  if(url.endsWith('/production-print-package'))return {{data:{{supplier_order_number:`SRO-${{documentId}}`,cards:[{{source_identity:`item:${{documentId}}`,production_task_versions:[{{task_id:500+documentId,version:1}}],components:[{{supplier_order_item_id:documentId}}],product_code:`P${{documentId}}`}}]}}}};
+  const error=new Error(`label ${{documentId}} blocked`);error.response={{status:409,data:{{detail:{{reasons:[`P${{documentId}}｜产品${{documentId}}｜生产任务 #${{500+documentId}} 的当前产品未启用生产包装标签`]}}}}}};throw error;
+}}}};
+const rows=[3,4].map(document_id=>({{stable_id:`supplier_order:${{document_id}}:${{document_id}}`,source_type:'supplier_order',status:'active',can_print_label:true,document_id,document_number:`SRO-${{document_id}}`,item_id:document_id,product_code:`P${{document_id}}`}}));
+const vm={{reportedItemPrintBusy:false,reportedItemPrintErrors:[],reportedLabelRecoveryUrls:[],authGeneration:1,user:{{id:2}},activePage:'requisition',requisitionTab:'submitted',
+  reportedSelectedItems(){{return rows;}},showToast(){{}},errorMessage(error){{return error.message;}},resetPagePerformanceState(){{throw new Error('unexpected reset');}},
+}};
+vm.reportedProductionCandidates=new Function('orderId','row','data',{json.dumps(candidates, ensure_ascii=False)}).bind(vm);
+vm.openReportedItemLabels=new AsyncFunction({json.dumps(body, ensure_ascii=False)}).bind(vm);
+const expect=(value,message)=>{{if(!value)throw new Error(message);}};
+(async()=>{{
+  expect(await vm.openReportedItemLabels()===false,'mixed invalid products were accepted');
+  expect(opened.length===2&&opened.every(tab=>tab.closed),'failed batch left a label tab open');
+  expect(vm.reportedItemPrintErrors.length===2,'not every invalid product was listed');
+  expect(vm.reportedItemPrintErrors.some(value=>value.includes('P3')),'P3 reason missing');
+  expect(vm.reportedItemPrintErrors.some(value=>value.includes('P4')),'P4 reason missing');
+}})().catch(error=>{{console.error(error);process.exit(1);}});
+"""
+    _run_node(script, tmp_path, "p0-18-label-mixed-failures.js")
 
 
 def test_session_reset_clears_reported_item_selection_detail_and_attempts() -> None:

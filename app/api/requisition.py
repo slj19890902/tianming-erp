@@ -20077,6 +20077,7 @@ def get_production_print_batch(
 @router.get("/supplier-orders/{order_id}/production-packaging-label-package")
 def get_supplier_order_production_packaging_label_package(
     order_id: int,
+    task_ids: str | None = Query(default=None, max_length=3200),
     db: Session = Depends(get_db),
     _user: User = Depends(can_read_production_labels),
 ) -> dict:
@@ -20092,8 +20093,15 @@ def get_supplier_order_production_packaging_label_package(
             status_code=409,
             detail="只有正式有效的报料单可以打印生产包装标签",
         )
+    selected_task_ids = (
+        _production_label_task_ids(task_ids) if task_ids is not None else None
+    )
     try:
-        package = build_supplier_requisition_packaging_label_package(db, order)
+        package = build_supplier_requisition_packaging_label_package(
+            db,
+            order,
+            selected_task_ids=selected_task_ids,
+        )
     except ProductionPackagingLabelLayoutError as error:
         raise HTTPException(
             status_code=409,
@@ -20115,6 +20123,22 @@ def get_supplier_order_production_packaging_label_package(
         )
     package["latest_printed_job"] = latest_printed_job_metadata(db, order.id)
     return package
+
+
+def _production_label_task_ids(raw_value: str) -> set[int]:
+    values: set[int] = set()
+    for token in str(raw_value or "").split(","):
+        normalized = token.strip()
+        if not normalized:
+            continue
+        if not normalized.isdigit() or int(normalized) <= 0:
+            raise HTTPException(status_code=422, detail="生产任务编号无效")
+        values.add(int(normalized))
+    if not values:
+        raise HTTPException(status_code=422, detail="请选择需要打印标签的生产任务")
+    if len(values) > 500:
+        raise HTTPException(status_code=422, detail="单次最多选择 500 个生产任务")
+    return values
 
 
 def _composite_label_item_ids(raw_value: str) -> set[int]:

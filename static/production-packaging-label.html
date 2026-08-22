@@ -256,6 +256,12 @@
       const layoutRollbackButton = document.getElementById("layoutRollbackButton");
       const params = new URLSearchParams(window.location.search);
       const supplierOrderId = Number(params.get("id"));
+      const supplierTaskIds = [...new Set(
+        String(params.get("task_ids") || "")
+          .split(",")
+          .map((value) => Number(value.trim()))
+          .filter((value) => Number.isInteger(value) && value > 0)
+      )].sort((a, b) => a - b);
       const compositeBatchId = Number(params.get("batch_id"));
       const compositeItemIds = [...new Set(
         String(params.get("item_ids") || "")
@@ -910,7 +916,7 @@
             ? `/api/requisition/production-packaging-label-jobs/${requestedJobId}`
             : loadingComposite
               ? `/api/requisition/batches/${compositeBatchId}/production-packaging-label-package?item_ids=${encodeURIComponent(compositeItemIds.join(","))}`
-              : `/api/requisition/supplier-orders/${supplierOrderId}/production-packaging-label-package`;
+              : `/api/requisition/supplier-orders/${supplierOrderId}/production-packaging-label-package${supplierTaskIds.length ? `?task_ids=${encodeURIComponent(supplierTaskIds.join(","))}` : ""}`;
           const payload = await requestJson(url, {method:"GET", signal:activeController.signal});
           if (generation !== loadGeneration) return;
           const normalized = normalizeResponse(payload);
@@ -938,7 +944,7 @@
         if (!items.some((item) => item.print_label_count > 0)) throw new Error("本次未选择需要打印的标签");
         const sourceSignature = Number.isInteger(compositeBatchId) && compositeBatchId > 0
           ? `composite:${compositeBatchId}:${compositeItemIds.join(",")}`
-          : `supplier:${supplierOrderId}`;
+          : `supplier:${supplierOrderId}:${supplierTaskIds.join(",") || "legacy-all"}`;
         const signature = `${sourceSignature}|${loadedPackage.template_version}|${fingerprint}|${JSON.stringify(items)}`;
         if (!prepareAttempt || prepareAttempt.signature !== signature) {
           prepareAttempt = {signature, idempotencyKey:newIdempotencyKey("p150c-label-job")};

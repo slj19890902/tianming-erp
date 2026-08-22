@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 VERSIONS = ROOT / "alembic" / "versions"
 BASE_REVISION = "ww31v8x9z20"
 P1_81_REVISION = "xx32v8x9z21"
+INTEGRATION_HEAD = "cc37v8x9z26"
 P1_81_TABLES = {
     "purchase_receipt_facts",
     "incoming_receipt_purpose_allocations",
@@ -190,7 +191,7 @@ def test_migration_is_linear_and_declares_immutable_conserved_facts() -> None:
     config = Config(str(ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == [P1_81_REVISION]
+    assert script.get_heads() == [INTEGRATION_HEAD]
 
     source = _migration_path().read_text(encoding="utf-8")
     for table in P1_81_TABLES:

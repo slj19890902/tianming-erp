@@ -318,13 +318,15 @@ def _purchase_receipt_fact_error(code: str, message: str) -> HTTPException:
     return HTTPException(status_code=409, detail={"code": code, "message": message})
 
 
-def _material_master_price_unit(material: Material) -> str:
+def _material_master_price_contract(
+    material: Material,
+) -> tuple[Decimal, str, str, bool, Decimal]:
     """Map the material-master display unit to the immutable fact contract."""
 
     unit = str(material.price_unit or "").strip().lower().replace(" ", "")
     if unit in {"per_sheet", "sheet", "元/张", "元/片"}:
-        return "per_sheet"
-    if unit in {
+        normalized_unit = "per_sheet"
+    elif unit in {
         "per_square_meter",
         "sqm",
         "m2",
@@ -332,9 +334,35 @@ def _material_master_price_unit(material: Material) -> str:
         "元/平方米",
         "元/m²",
     }:
-        return "per_square_meter"
-    raise PurchaseReceiptFactValidationError(
-        "Material master must have a supported purchase price unit before receipt."
+        normalized_unit = "per_square_meter"
+    else:
+        raise PurchaseReceiptFactValidationError(
+            "Material master must have a supported purchase price unit before receipt."
+        )
+    if material.quote_price is None or Decimal(material.quote_price) <= 0:
+        raise PurchaseReceiptFactValidationError(
+            "Material master purchase price is required before normal receipt."
+        )
+    currency = str(material.purchase_currency or "").strip().upper()
+    if len(currency) != 3 or not currency.isalpha():
+        raise PurchaseReceiptFactValidationError(
+            "Material master purchase currency is required before normal receipt."
+        )
+    if material.purchase_tax_included is None or material.purchase_tax_rate is None:
+        raise PurchaseReceiptFactValidationError(
+            "Material master tax mode and tax rate are required before normal receipt."
+        )
+    tax_rate = Decimal(material.purchase_tax_rate)
+    if tax_rate < 0 or tax_rate > 1:
+        raise PurchaseReceiptFactValidationError(
+            "Material master tax rate is invalid."
+        )
+    return (
+        Decimal(material.quote_price),
+        currency,
+        normalized_unit,
+        bool(material.purchase_tax_included),
+        tax_rate,
     )
 
 
@@ -363,11 +391,7 @@ def _automatic_receipt_material(
         raise PurchaseReceiptFactValidationError(
             "Material master match is required before normal receipt."
         )
-    if material.quote_price is None or Decimal(material.quote_price) <= 0:
-        raise PurchaseReceiptFactValidationError(
-            "Material master purchase price is required before normal receipt."
-        )
-    _material_master_price_unit(material)
+    _material_master_price_contract(material)
     return material
 
 
@@ -576,6 +600,9 @@ def confirm_automatic_purchase_receipt_fact(
             source=source,
             requested_material_id=payload.actual_material_id,
         )
+        unit_price, currency, price_unit, tax_included, tax_rate = (
+            _material_master_price_contract(actual_material)
+        )
         fact = create_or_replay_purchase_receipt_fact(
             db,
             supplier_requisition_order_item_id=(
@@ -591,11 +618,11 @@ def confirm_automatic_purchase_receipt_fact(
             actual_material_id=actual_material.id,
             material_change_confirmed=payload.material_variance_approval_id is not None,
             material_variance_approval_id=payload.material_variance_approval_id,
-            unit_price=actual_material.quote_price,
-            currency="CNY",
-            price_unit=_material_master_price_unit(actual_material),
-            tax_included=True,
-            tax_rate=Decimal("0.13"),
+            unit_price=unit_price,
+            currency=currency,
+            price_unit=price_unit,
+            tax_included=tax_included,
+            tax_rate=tax_rate,
             idempotency_key=payload.idempotency_key,
             created_by=user.id,
             expected_latest_receipt_fact_version=0,
@@ -615,11 +642,13 @@ def confirm_automatic_purchase_receipt_fact(
                     fact.actual_material_code_snapshot
                     != fact.expected_material_code_snapshot
                 ),
-                "price_source": "materials.quote_price",
+                "price_source": "material_master_purchase_contract",
                 "price_unit": fact.price_unit,
                 "currency": fact.currency,
+                "tax_included": fact.tax_included,
+                "tax_rate": str(fact.tax_rate),
             },
-            description="Auto-freeze normal receipt material and master price.",
+            description="Auto-freeze receipt material and material-master price contract.",
         )
         db.commit()
         db.refresh(fact)

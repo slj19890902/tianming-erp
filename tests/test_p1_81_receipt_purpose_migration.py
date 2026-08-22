@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 VERSIONS = ROOT / "alembic" / "versions"
 BASE_REVISION = "ww31v8x9z20"
 P1_81_REVISION = "xx32v8x9z21"
-INTEGRATION_HEAD = "dd38v8x9z27"
+INTEGRATION_HEAD = "de39v8x9z28"
 P1_81_TABLES = {
     "purchase_receipt_facts",
     "incoming_receipt_purpose_allocations",
@@ -320,6 +320,9 @@ def test_price_fact_is_immutable_and_blocks_destructive_downgrade(
     db_path = tmp_path / "p1_81_fact_guard.sqlite3"
     config = _config(db_path, monkeypatch)
     command.upgrade(config, P1_81_REVISION)
+    # The SQLAlchemy model reflects the current code head; advance the
+    # isolated database before creating fixture rows through that model.
+    command.upgrade(config, INTEGRATION_HEAD)
     engine = create_engine(config.get_main_option("sqlalchemy.url"))
     with Session(engine) as session:
         user = User(

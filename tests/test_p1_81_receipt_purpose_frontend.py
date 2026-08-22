@@ -183,6 +183,8 @@ def test_desktop_normal_receipt_uses_material_cell_and_auto_freezes_master_price
     assert "/receipt-facts/auto" in automatic
     assert "material_variance_approval_id" in automatic
     assert "unit_price" not in automatic
+    assert 'currency: "CNY"' not in automatic
+    assert "tax_rate: 0.13" not in automatic
     assert "row.purpose_status==='frozen'" in _source(
         DESKTOP,
         "canReceiveIncoming(row) {",

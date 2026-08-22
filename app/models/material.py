@@ -53,6 +53,15 @@ class Material(Base):
     )
     price_source: Mapped[str | None] = mapped_column(String(250), nullable=True)
     price_unit: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    purchase_currency: Mapped[str | None] = mapped_column(
+        String(3), nullable=True
+    )
+    purchase_tax_included: Mapped[bool | None] = mapped_column(
+        Boolean, nullable=True
+    )
+    purchase_tax_rate: Mapped[Decimal | None] = mapped_column(
+        Numeric(8, 6), nullable=True
+    )
     supplier_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     quote_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     remarks: Mapped[str | None] = mapped_column(Text, nullable=True)

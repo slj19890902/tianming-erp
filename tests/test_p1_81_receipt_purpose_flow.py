@@ -63,10 +63,13 @@ def _seed_material_and_staging(session_factory) -> int:
             paper_composition="P1-81 匿名正式材质",
             layer_count=5,
             flute_type="AB",
-            # This deliberately differs from the formal purchase price.  A
-            # receipt must never silently use the mutable master quote.
+            # Normal receipt freezes this material-master purchase contract.
+            # Later master edits must not rewrite the frozen receipt fact.
             quote_price=Decimal("99.9900"),
             price_unit="per_sheet",
+            purchase_currency="CNY",
+            purchase_tax_included=True,
+            purchase_tax_rate=Decimal("0.13"),
             supplier_name="苏州纸板供应商",
             is_active=True,
             version=1,
@@ -482,6 +485,9 @@ def _add_changed_material(session_factory) -> int:
             flute_type="AB",
             quote_price=Decimal("88.8800"),
             price_unit="per_sheet",
+            purchase_currency="USD",
+            purchase_tax_included=False,
+            purchase_tax_rate=Decimal("0.06"),
             supplier_name="苏州纸板供应商",
             is_active=True,
             version=1,
@@ -1436,7 +1442,10 @@ def test_normal_receipt_auto_freezes_material_master_price_for_incoming_operator
         fact = frozen.json()
         assert fact["actual_material_id"] == source.material_id
         assert fact["unit_price"] == "99.9900"
+        assert fact["currency"] == "CNY"
         assert fact["price_unit"] == "per_sheet"
+        assert fact["tax_included"] is True
+        assert fact["tax_rate"] == "0.1300"
 
         received = _receive(
             client,
@@ -1923,20 +1932,15 @@ def test_material_change_requires_independent_request_and_confirmed_approval(
         ]
         assert approval["confirmed_by"] != request_fact["requested_by"]
 
-        _login(client, "finance")
+        _login(client, "workshop")
         frozen = client.put(
             "/api/requisition/purchase-sources/"
-            f"{quote(source.source_key, safe='')}/receipt-facts",
+            f"{quote(source.source_key, safe='')}/receipt-facts/auto",
             json={
                 "actual_material_id": changed_material_id,
                 "material_variance_approval_id": approval[
                     "material_variance_approval_id"
                 ],
-                "unit_price": "2.5000",
-                "currency": "CNY",
-                "price_unit": "per_sheet",
-                "tax_included": True,
-                "tax_rate": "0.13",
                 "purchase_purpose_source_snapshot_id": source.purpose_snapshot_id,
                 "purpose_snapshot_version": source.purpose_snapshot_version,
                 "receipt_plan_fingerprint": source.receipt_plan_fingerprint,
@@ -1948,6 +1952,11 @@ def test_material_change_requires_independent_request_and_confirmed_approval(
         assert frozen.status_code == 200, frozen.text
         assert frozen.json()["material_changed"] is True
         assert frozen.json()["actual_material_version"] == changed_version
+        assert frozen.json()["unit_price"] == "88.8800"
+        assert frozen.json()["currency"] == "USD"
+        assert frozen.json()["price_unit"] == "per_sheet"
+        assert frozen.json()["tax_included"] is False
+        assert frozen.json()["tax_rate"] == "0.0600"
 
 
 def test_actual_material_change_cannot_use_legacy_boolean_or_bypass_permission(

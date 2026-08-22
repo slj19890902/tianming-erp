@@ -5617,8 +5617,11 @@
               <div class="field"><label>层数</label><select class="select" v-model.number="materialForm.layer_count" @change="onMaterialLayerChange"><option :value="3">三层（单瓦楞）</option><option :value="5">五层（双瓦楞）</option><option :value="7">七层</option></select></div>
               <div class="field wide"><label>克重组合</label><input class="input" placeholder="170g/130g/80g/170g/150g" v-model.trim="materialForm.basis_weight_description" @change="recommendMaterialCode" /></div>
               <div class="field"><label>配纸</label><input class="input" v-model.trim="materialForm.paper_composition" /></div>
-              <div class="field sensitive-price"><label>平方报价</label><input class="input" type="number" step="0.0001" v-model="materialForm.quote_price" /></div>
+              <div class="field sensitive-price"><label>采购单价</label><input class="input" type="number" step="0.0001" v-model="materialForm.quote_price" /></div>
               <div class="field"><label>计价单位</label><input class="input" v-model.trim="materialForm.price_unit" /></div>
+              <div class="field"><label>币种</label><input class="input" maxlength="3" v-model.trim="materialForm.purchase_currency" /></div>
+              <div class="field"><label>税费口径</label><select class="select" v-model="materialForm.purchase_tax_included"><option :value="true">含税</option><option :value="false">未税</option></select></div>
+              <div class="field"><label>税率</label><input class="input" type="number" min="0" max="1" step="0.01" v-model="materialForm.purchase_tax_rate" /></div>
               <div class="field"><label>供应商</label><input class="input" v-model.trim="materialForm.supplier_name" /></div>
               <div class="field wide"><label>备注</label><input class="input" v-model.trim="materialForm.remarks" /></div>
             </div>
@@ -8237,6 +8240,7 @@
       const blankMaterial = () => ({
         id:null, version:null, code:"", paper_composition:"", layer_count:5,
         basis_weight_description:"", quote_price:"0", price_unit:"元/㎡",
+        purchase_currency:"CNY", purchase_tax_included:true, purchase_tax_rate:"0.13",
         supplier_name:"", quote_date:null, remarks:"", is_active:true
       });
       const blankMaterialCandidate = () => ({

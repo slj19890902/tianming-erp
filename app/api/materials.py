@@ -95,6 +95,9 @@ class MaterialPayload(BaseModel):
     rule_base_price: Decimal | None = Field(default=None, ge=0)
     price_source: str | None = None
     price_unit: str | None = None
+    purchase_currency: str | None = Field(default=None, min_length=3, max_length=3)
+    purchase_tax_included: bool | None = None
+    purchase_tax_rate: Decimal | None = Field(default=None, ge=0, le=1)
     supplier_name: str | None = None
     quote_date: date | None = None
     remarks: str | None = None
@@ -106,6 +109,16 @@ class MaterialPayload(BaseModel):
         if error:
             raise ValueError(error)
         return self
+
+    @field_validator("purchase_currency")
+    @classmethod
+    def normalize_purchase_currency(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().upper()
+        if len(normalized) != 3 or not normalized.isalpha():
+            raise ValueError("Purchase currency must be a three-letter code.")
+        return normalized
 
 
 def normalize_basis_weight(value: str | None) -> str | None:
@@ -342,7 +355,14 @@ def _material_or_404(db: Session, material_id: int) -> Material:
 def _response(material: Material, user: User) -> dict:
     data = MaterialResponse.model_validate(material).model_dump()
     if not has_permission(user, "cost.view"):
-        for field in ("quote_price", "rule_base_price", "price_source"):
+        for field in (
+            "quote_price",
+            "rule_base_price",
+            "price_source",
+            "purchase_currency",
+            "purchase_tax_included",
+            "purchase_tax_rate",
+        ):
             data.pop(field, None)
     if user.role == "workshop":
         return {key: data[key] for key in WORKSHOP_FIELDS}
@@ -367,7 +387,16 @@ def _changed_updates(material: Material, updates: dict) -> dict:
     }
 
 
-_PRICE_HISTORY_FIELDS = frozenset({"quote_price", "quote_date", "price_unit"})
+_PRICE_HISTORY_FIELDS = frozenset(
+    {
+        "quote_price",
+        "quote_date",
+        "price_unit",
+        "purchase_currency",
+        "purchase_tax_included",
+        "purchase_tax_rate",
+    }
+)
 
 
 def _price_decimal(value: object) -> Decimal | None:

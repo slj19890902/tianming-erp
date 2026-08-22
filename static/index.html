@@ -1746,6 +1746,35 @@
       .incoming-decision-cell { width: 13%; }
       .incoming-action-cell { width: 9%; }
       .incoming-location-picker { display: grid; gap: 4px; margin-top: 5px; }
+      .incoming-compact-head { margin:0 0 8px; align-items:center; flex-wrap:nowrap; }
+      .incoming-compact-head-main,.incoming-compact-head-actions { flex-wrap:nowrap; }
+      .incoming-compact-head-actions { margin-left:auto; }
+      .incoming-page-title { font-size:22px; line-height:1; white-space:nowrap; margin-right:4px; }
+      .incoming-compact-head .pager { margin:0; }
+      .incoming-history-filters { margin:0 0 8px; }
+      .incoming-compact-table { font-size:12px; }
+      .table-wrap:has(> .incoming-compact-table) { max-height:none; overflow-x:hidden; overflow-y:visible; }
+      .incoming-compact-table th,.incoming-compact-table td { padding:5px 5px; line-height:1.22; }
+      .incoming-compact-table th:nth-child(1) { width:5.5%; }
+      .incoming-compact-table th:nth-child(2),.incoming-compact-table th:nth-child(4) { width:5.3%; }
+      .incoming-compact-table th:nth-child(3) { width:2%; }
+      .incoming-compact-table th:nth-child(5) { width:9%; }
+      .incoming-compact-table th:nth-child(6) { width:10%; }
+      .incoming-compact-table th:nth-child(7) { width:13%; }
+      .incoming-compact-table th:nth-child(8) { width:9%; }
+      .incoming-compact-table th:nth-child(9) { width:4.5%; }
+      .incoming-compact-table th:nth-child(10) { width:10%; }
+      .incoming-compact-table th:nth-child(11) { width:7%; }
+      .incoming-compact-table th:nth-child(12) { width:16.1%; }
+      .incoming-sequence-cell,.incoming-dimension-cell,.incoming-times-cell,.incoming-date-cell,.incoming-quantity-summary { white-space:nowrap !important; word-break:normal !important; overflow-wrap:normal !important; }
+      .incoming-times-cell { text-align:center; padding-left:1px !important; padding-right:1px !important; }
+      .incoming-material-cell small { display:block; color:var(--muted); font-size:10px; }
+      .incoming-material-button { max-width:100%; padding:0; border:0; background:transparent; color:var(--blue); font:inherit; font-weight:700; cursor:pointer; text-align:left; }
+      .incoming-product-cell { overflow:hidden; }
+      .incoming-action-menu { display:inline-block; margin-left:4px; position:relative; }
+      .incoming-action-menu summary { cursor:pointer; color:var(--blue); font-weight:700; }
+      .incoming-action-menu[open] { display:block; margin:4px 0 0; padding:5px; border:1px solid var(--line); background:var(--surface); border-radius:6px; }
+      .incoming-action-menu .btn,.incoming-action-menu .select { margin-top:4px; }
       @media (max-width: 1400px) {
         .table-wrap:has(> .customer-list-table) {
           width: 100%; max-width: 100%; min-width: 0; overflow-x: hidden;
@@ -3787,18 +3816,35 @@
                 <pager :page="pages.externalIncoming" :total="filteredExternalIncoming.length" :page-size="pageSize" :always="true" :compact="true" :filter-count="externalIncomingFilter ? 1 : 0" @change="pages.externalIncoming=$event"></pager>
               </template>
               <template v-else>
-              <page-head title="纸板收料" desc="老板端与车间共用同一批纸板来料任务，可核对纸板尺寸并调整本次入库数量。"></page-head>
-              <div class="toolbar">
-                <div class="toolbar-group">
+              <div class="toolbar incoming-compact-head">
+                <div class="toolbar-group incoming-compact-head-main">
+                  <strong class="incoming-page-title">纸板收料</strong>
                   <button :class="['btn',{primary:incomingTab==='pending'}]" @click="selectIncomingTab('pending')">待入库 {{ incomingPendingTotal }}</button>
-                  <button :class="['btn',{primary:incomingTab==='received'}]" @click="selectIncomingTab('received')">今日实收<span v-if="incomingReceivedLoaded"> {{ incomingReceived.length }}</span></button>
-                  <button :class="['btn',{primary:incomingTab==='history'}]" @click="selectIncomingTab('history')">历史入库</button>
+                  <button :class="['btn',{primary:incomingTab==='received'}]" @click="selectIncomingTab('received')">今日实收 {{ incomingReceivedTotal }}</button>
+                  <button :class="['btn',{primary:incomingTab==='history'}]" @click="selectIncomingTab('history')">历史入库 {{ incomingHistoryTotal }}</button>
                 </div>
-                <div class="toolbar-group">
+                <div class="toolbar-group incoming-compact-head-actions">
+                  <button v-if="incomingTab==='history'" class="btn" type="button" @click="incomingHistoryFilterVisible=!incomingHistoryFilterVisible">筛选</button>
+                  <button v-if="incomingTab!=='pending'" class="btn primary" type="button" :disabled="incomingProductionCardBatchBusy || !incomingProductionCardSelectedCount" @click="openSelectedIncomingProductionCards"><template v-if="incomingProductionCardBatchBusy">正在核对…</template><template v-else>打印生产卡（{{ incomingProductionCardSelectedCount }}）</template></button>
                   <button v-if="incomingTab==='pending' && hasPermission('incoming.execute')" class="btn success" :disabled="incomingBatchReceiveAttempt?.saving || (!incomingBatchReceiveAttempt && !incomingSelectedCount())" @click="batchReceiveIncoming">{{ incomingBatchReceiveAttempt?.saving ? '正在核对批量实收…' : incomingBatchReceiveAttempt ? '核对上次批量实收' : '批量确认入库（' + incomingSelectedCount() + '）' }}</button>
                   <button class="btn" type="button" @click="openExternalPackagingIncoming">包材收料</button>
+                  <pager v-if="incomingTab==='pending'" :page="pages.incomingPending" :total="incomingPendingTotal" :page-size="incomingListPageSize()" :always="true" :compact="true" @change="changeIncomingPendingPage($event)"></pager>
+                  <pager v-else-if="incomingTab==='received'" :page="pages.incomingReceived" :total="incomingReceivedTotal" :page-size="incomingListPageSize()" :always="true" :compact="true" @change="pages.incomingReceived=$event; loadIncomingReceived({force:true})"></pager>
+                  <pager v-else :page="pages.incomingHistory" :total="incomingHistoryTotal" :page-size="incomingListPageSize()" :always="true" :compact="true" @change="pages.incomingHistory=$event; loadIncomingHistory()"></pager>
                   <button class="btn" :disabled="incomingTab==='pending' && incomingPendingLoading" @click="refreshIncomingTab">{{ incomingTab==='pending' && incomingPendingLoading ? '读取中…' : '刷新' }}</button>
                 </div>
+              </div>
+              <div v-if="incomingTab==='history' && incomingHistoryFilterVisible" class="list-filterbar incoming-history-filters">
+                <search-select v-model="incomingHistoryFilters.customer_id" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="客户" :allow-empty="true"></search-select>
+                <input class="input" v-model.trim="incomingHistoryFilters.document_keyword" placeholder="入库/订单单号" @keyup.enter="pages.incomingHistory=1; loadIncomingHistory()" />
+                <input class="input" v-model.trim="incomingHistoryFilters.product_code" placeholder="存货编码" @keyup.enter="pages.incomingHistory=1; loadIncomingHistory()" />
+                <input class="input" v-model.trim="incomingHistoryFilters.product_name" placeholder="产品名称" @keyup.enter="pages.incomingHistory=1; loadIncomingHistory()" />
+                <input class="input" v-model.trim="incomingHistoryFilters.supplier_name" placeholder="供应商" @keyup.enter="pages.incomingHistory=1; loadIncomingHistory()" />
+                <input class="input" type="date" v-model="incomingHistoryFilters.date_from" />
+                <input class="input" type="date" v-model="incomingHistoryFilters.date_to" />
+                <select class="select" v-model="incomingHistoryFilters.receipt_status"><option value="">全部状态</option><option value="posted">有效实收</option><option value="reversed">已撤销</option></select>
+                <button class="btn primary" @click="pages.incomingHistory=1; loadIncomingHistory()">查询</button>
+                <button class="btn" @click="resetIncomingHistoryFilters()">清空</button>
               </div>
               <div v-if="incomingTab==='received' && incomingReceivedLoading" class="status blue" style="display:block;margin:8px 0">正在读取今日实收，已显示的记录不会被清空。</div>
               <div v-if="incomingTab==='received' && incomingReceivedError" class="status orange" style="display:block;margin:8px 0">{{ incomingReceivedError }} <button class="btn small" @click="loadIncomingReceived({force:true})">重试</button></div>
@@ -3812,59 +3858,23 @@
               <div v-if="incomingTab==='pending' && incomingPending.some(row=>row.source_type==='stock_replenishment')" class="status blue" style="display:block;margin:8px 0">补库片料到厂后由系统自动进入一楼 A1 原料暂存区，无需选择具体库位。</div>
               <div v-if="incomingTab==='pending' && incomingLocationsLoading" class="status blue" style="display:block;margin:8px 0">正在读取余量转半成品所需库位…</div>
               <div v-if="incomingTab==='pending' && incomingLocationsError" class="status orange" style="display:block;margin:8px 0">{{ incomingLocationsError }} <button class="btn small" @click="ensureIncomingLocations()">重试</button></div>
-              <data-panel v-if="incomingTab !== 'history'" :empty="!(incomingTab==='pending' ? incomingPending : incomingReceived).length && !(incomingTab==='pending' && (incomingPendingLoading || incomingPendingError)) && !(incomingTab==='received' && (incomingReceivedLoading || incomingReceivedError))">
-                <table class="incoming-table">
-                  <thead><tr><th v-if="incomingTab==='pending' && hasPermission('incoming.execute')"><input type="checkbox" :checked="allIncomingSelected" @change="toggleAllIncoming($event.target.checked)" /> 全选本页</th><th class="incoming-board-cell">报料尺寸</th><th>客户</th><th>存货编码</th><th>产品</th><th>材质</th><th>计划 / 已收 / 待收</th><th>本次收料</th><th class="incoming-decision-cell">收料结果 / 入库位</th><th>报料日期</th><th>图纸</th><th>生产卡</th><th v-if="hasPermission('incoming.execute') || hasPermission('incoming.material_variance.confirm') || hasPermission('requisition.purchase_price.confirm') || hasPermission('requisition.purchase_price.correct') || canAdmin" class="incoming-action-cell">操作</th></tr></thead>
-                  <tbody><tr v-for="row in (incomingTab==='pending' ? incomingPending : incomingReceived)" :key="row.history_key || row.item_id">
-                    <td v-if="incomingTab==='pending' && hasPermission('incoming.execute')"><input type="checkbox" v-model="incomingSelected[row.item_id]" :disabled="!canReceiveIncoming(row)" /></td>
-                    <td class="incoming-board-cell"><strong>{{ formatBoardSpec(row.cardboard_len,row.cardboard_width) }}</strong></td>
-                    <td class="incoming-customer-cell">{{ row.customer_name }}</td><td>{{ row.product_code || "-" }}</td><td>{{ row.product_name }}</td><td><button v-if="incomingTab==='pending' && row.purpose_status==='frozen' && hasPermission('incoming.execute')" class="btn small" type="button" style="max-width:170px;white-space:normal;text-align:left" @click="openPurchaseReceiptMaterialChange(row)" title="默认按报料材质实收；只有实际到货不同才点击这里变更">{{ row.material_display || "-" }}</button><span v-else>{{ row.material_display || "-" }}</span></td>
-                    <td><div>计划 {{ row.planned_quantity ?? row.requisition_qty ?? row.quantity }}</div><div>已收 {{ row.cumulative_received_quantity || 0 }}</div><strong>待收 {{ row.remaining_quantity ?? row.requisition_qty ?? row.quantity }}</strong></td>
-                    <td><input v-if="incomingTab==='pending' && hasPermission('incoming.execute')" class="input compact-input" type="number" min="1" v-model.number="row.incoming_quantity" /><strong v-else>{{ row.incoming_quantity }}</strong></td>
-                    <td class="incoming-decision-cell"><template v-if="incomingTab==='pending'"><template v-if="row.purpose_status==='legacy_unset'"><div v-if="Number(row.cumulative_received_quantity||0)>0 && Number(row.remaining_quantity||0)>0" class="status orange">已收 {{ row.cumulative_received_quantity }}，待补 {{ row.remaining_quantity }}</div><select v-if="incomingProjectedVariance(row)<0" class="select" v-model="row.resolution_action" :disabled="!hasPermission('incoming.execute')"><option value="">少收怎么处理</option><option value="await_supplier">继续等补货</option><option v-if="row.source_type!=='stock_replenishment'" value="accept_short">按已收数结单</option></select><select v-else-if="incomingProjectedVariance(row)>0" class="select" v-model="row.resolution_action" :disabled="!hasPermission('incoming.execute')"><option value="">多收怎么处理</option><option value="all_to_production">全部用于本单</option><option value="transfer_to_semi_inventory">余量存半成品仓</option></select><span v-else class="status green">数量刚好</span><select v-if="row.resolution_action==='transfer_to_semi_inventory'" class="select" v-model.number="row.surplus_location_id" :disabled="!hasPermission('incoming.execute')"><option :value="null">余量放哪个库位</option><option v-for="location in incomingSemiLocations()" :key="location.id" :value="location.id">{{ location.location_name || '位置名称待完善' }}</option></select><div v-if="row.source_type==='stock_replenishment'" class="incoming-location-picker"><span class="status blue">自动进入一楼 A1 原料暂存区</span></div></template><template v-else><div :class="['status',row.receipt_fact_ready?'green':'orange']">{{ row.receipt_fact_ready ? '用途与正式采购价已冻结' : (row.purpose_issue || '待确认实际材质和正式采购价') }}</div><div>预计订单用途 {{ row.expected_order_purpose_sheet_qty || 0 }} 张</div><div>预计片料备库 {{ row.expected_reserve_purpose_sheet_qty || 0 }} 张</div><div>预计形成成品 {{ row.expected_finished_output_qty || 0 }} 只</div><div v-if="row.finished_location_name" class="muted">成品：{{ row.finished_location_name }}</div><div v-if="row.finished_capacity_warning" class="status orange">容量提醒：{{ row.finished_capacity_warning }}</div><div v-if="row.reserve_location_name" class="muted">片料：{{ row.reserve_location_name }}</div></template></template><template v-else><span :class="['status',row.variance_type==='matched'?'green':'orange']">{{ incomingVarianceLabel(row) }}</span><div v-if="row.resolution_reason" class="muted">{{ row.resolution_reason }}</div><div v-if="row.purpose_allocation" class="muted">订单用途 {{ row.purpose_allocation.order_sheet_delta || 0 }} 张｜片料备库 {{ row.purpose_allocation.reserve_sheet_delta || 0 }} 张｜形成成品 {{ row.purpose_allocation.theoretical_finished_delta || 0 }} 只</div></template></td>
-                    <td>{{ row.requisition_date || "-" }}</td>
-                    <td><a v-if="row.drawing_is_pdf" class="btn small" :href="row.drawing_path" target="_blank">打开PDF</a><span v-else>-</span></td>
-                    <td><button v-if="incomingTab==='received' && row.receipt_item_id && row.receipt_status==='posted' && row.order_item_id" class="btn small primary" :disabled="incomingProductionCardOpening" @click="openIncomingProductionCard(row)">{{ incomingProductionCardOpening ? '正在打开…' : '打印生产卡' }}</button><span v-else class="muted">-</span></td>
-                    <td v-if="hasPermission('incoming.execute') || hasPermission('requisition.purchase_price.correct') || canAdmin" class="incoming-action-cell"><template v-if="incomingTab==='pending'"><button v-if="row.purpose_status==='frozen' && row.receipt_fact_ready && canViewCosts && hasPermission('requisition.purchase_price.correct')" class="btn small" @click="openPurchaseReceiptFact(row)">更正已冻结采购价</button><button v-if="hasPermission('incoming.execute')" class="btn small success" :disabled="incomingReceiveAttempts[row.item_id]?.saving || !canReceiveIncoming(row)" @click="receiveIncoming(row)">{{ incomingReceiveAttempts[row.item_id]?.saving ? '正在实收…' : '确认实收' }}</button><button v-if="hasPermission('incoming.execute') && row.purpose_status==='legacy_unset' && row.pending_receipt_item_id" class="btn small" @click="acceptShortIncoming(row)">不再补货，短收结单</button></template><button v-else-if="canAdmin" class="btn small danger" @click="revertIncoming(row)">撤销收料，回到已报料</button></td>
+              <data-panel :empty="!incomingRowsForTab().length && !(incomingTab==='pending' && (incomingPendingLoading || incomingPendingError)) && !(incomingTab==='received' && (incomingReceivedLoading || incomingReceivedError))">
+                <table class="incoming-table incoming-compact-table">
+                  <thead><tr><th class="incoming-sequence-cell"><input v-if="incomingTab==='pending' && hasPermission('incoming.execute')" type="checkbox" :checked="allIncomingSelected" @change="toggleAllIncoming($event.target.checked)" /><input v-else-if="incomingTab!=='pending'" type="checkbox" :checked="allIncomingProductionCardsSelected" @change="toggleIncomingProductionCardPage($event.target.checked)" /> 序号</th><th>报料长</th><th class="incoming-times-cell">×</th><th>报料宽</th><th>压线尺寸</th><th>材质楞型</th><th>客户简称 / 存货编码</th><th>{{ incomingTab==='pending' ? '报料日期' : '实收时间' }}</th><th>图纸</th><th>计划 / 已收 / 待收</th><th>本次收料</th><th>收料结果 / 操作</th></tr></thead>
+                  <tbody><tr v-for="(row,index) in incomingRowsForTab()" :key="row.history_key || row.receipt_item_id || row.item_id">
+                    <td class="incoming-sequence-cell"><input v-if="incomingTab==='pending' && hasPermission('incoming.execute')" type="checkbox" v-model="incomingSelected[row.item_id]" :disabled="!canReceiveIncoming(row)" /><input v-else-if="incomingTab!=='pending'" type="checkbox" :checked="incomingProductionCardSelected(row)" :disabled="!canPrintIncomingCard(row)" @change="toggleIncomingProductionCard(row,$event.target.checked)" /> {{ (incomingCurrentPage()-1)*incomingListPageSize()+index+1 }}</td>
+                    <td class="incoming-dimension-cell"><strong>{{ row.cardboard_len || '-' }}</strong></td><td class="incoming-times-cell">×</td><td class="incoming-dimension-cell"><strong>{{ row.cardboard_width || '-' }}</strong></td>
+                    <td class="incoming-crease-cell" :title="formatCrease(row)">{{ formatCrease(row) }}</td>
+                    <td class="incoming-material-cell" :title="incomingMaterialTitle(row)"><button v-if="incomingTab==='pending' && row.purpose_status==='frozen' && hasPermission('incoming.execute')" class="incoming-material-button" type="button" @click="openPurchaseReceiptMaterialChange(row)">{{ incomingActualMaterialDisplay(row) }}</button><span v-else>{{ incomingActualMaterialDisplay(row) }}</span><small v-if="row.material_changed">原 {{ row.reported_material_display || '-' }}</small></td>
+                    <td class="incoming-product-cell" :title="`${row.customer_name || '-'}｜${row.product_name || '-'}｜${row.specification || '-'}`"><strong>{{ incomingCustomerLabel(row) }}</strong><br>{{ row.product_code || '-' }}</td>
+                    <td class="incoming-date-cell">{{ incomingTab==='pending' ? (row.requisition_date || '-') : (row.material_received_at ? formatDateTime(row.material_received_at) : '-') }}</td>
+                    <td><a v-if="row.drawing_path" class="btn small" :href="row.drawing_path" target="_blank" rel="noopener">图纸</a><span v-else>-</span></td>
+                    <td class="incoming-quantity-summary">{{ row.planned_quantity ?? row.requisition_qty ?? row.quantity ?? 0 }} / {{ row.cumulative_received_quantity || 0 }} / {{ row.remaining_quantity ?? 0 }}</td>
+                    <td><input v-if="incomingTab==='pending' && hasPermission('incoming.execute')" class="input compact-input" type="number" min="1" v-model.number="row.incoming_quantity" /><strong v-else>{{ row.received_quantity_this_time ?? row.incoming_quantity ?? 0 }}</strong></td>
+                    <td class="incoming-action-cell"><template v-if="incomingTab==='pending'"><span :class="['status',incomingProjectedVariance(row)===0?'green':'orange']">{{ incomingProjectedVariance(row)===0 ? '数量相符' : (incomingProjectedVariance(row)<0 ? '少收' : '多收') }}</span><details class="incoming-action-menu"><summary>操作</summary><div v-if="row.purpose_status==='legacy_unset'"><select v-if="incomingProjectedVariance(row)<0" class="select" v-model="row.resolution_action"><option value="">少收怎么处理</option><option value="await_supplier">继续等补货</option><option v-if="row.source_type!=='stock_replenishment'" value="accept_short">按已收数结单</option></select><select v-else-if="incomingProjectedVariance(row)>0" class="select" v-model="row.resolution_action" @change="onIncomingResolutionAction(row)"><option value="">多收怎么处理</option><option value="all_to_production">全部用于本单</option><option value="transfer_to_semi_inventory">余量存半成品仓</option></select><select v-if="row.resolution_action==='transfer_to_semi_inventory'" class="select" v-model.number="row.surplus_location_id"><option :value="null">选择余量库位</option><option v-for="location in incomingSemiLocations()" :key="location.id" :value="location.id">{{ location.location_name || '位置名称待完善' }}</option></select></div><div v-else class="muted">预计订单用途 {{ row.expected_order_purpose_sheet_qty || 0 }} 张｜预计片料备库 {{ row.expected_reserve_purpose_sheet_qty || 0 }} 张｜预计形成成品 {{ row.expected_finished_output_qty || 0 }} 只<div v-if="row.finished_location_name">成品位置：{{ row.finished_location_name }}</div><div v-if="row.reserve_location_name">片料位置：{{ row.reserve_location_name }}</div></div><button v-if="row.purpose_status==='frozen' && row.receipt_fact_ready && canViewCosts && hasPermission('requisition.purchase_price.correct')" class="btn small" @click="openPurchaseReceiptFact(row)">更正采购价</button><button v-if="hasPermission('incoming.execute')" class="btn small success" :disabled="incomingReceiveAttempts[row.item_id]?.saving || !canReceiveIncoming(row)" @click="receiveIncoming(row)">{{ incomingReceiveAttempts[row.item_id]?.saving ? '实收中…' : '确认实收' }}</button><button v-if="hasPermission('incoming.execute') && row.purpose_status==='legacy_unset' && row.pending_receipt_item_id" class="btn small" @click="acceptShortIncoming(row)">短收结单</button></details></template><template v-else><span :class="['status',row.receipt_status==='reversed'?'muted':row.variance_type==='matched'?'green':'orange']">{{ row.receipt_status==='reversed' ? '已撤销' : incomingVarianceLabel(row) }}</span><button v-if="canAdmin && row.receipt_status==='posted'" class="btn small danger" @click="revertIncoming(row)">撤销</button></template></td>
                   </tr></tbody>
                 </table>
-                <pager v-if="incomingTab==='pending'" :page="pages.incomingPending" :total="incomingPendingTotal" :page-size="pageSize" :always="true" :compact="true" @change="changeIncomingPendingPage($event)"></pager>
               </data-panel>
-              <div v-else>
-                <div class="status orange" style="display:block;margin:8px 0">历史入库按真实收货记录分页显示。拥有“来料入库操作”权限才可撤销（订单已发货则禁止撤销）。</div>
-                <div class="list-filterbar">
-                  <search-select v-model="incomingHistoryFilters.customer_id" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="客户" :allow-empty="true" @change="pages.incomingHistory=1; loadIncomingHistory()"></search-select>
-                  <input class="input" v-model.trim="incomingHistoryFilters.document_keyword" placeholder="入库/订单单号" @keyup.enter="pages.incomingHistory=1; loadIncomingHistory()" />
-                  <input class="input" v-model.trim="incomingHistoryFilters.product_code" placeholder="存货编码" @keyup.enter="pages.incomingHistory=1; loadIncomingHistory()" />
-                  <input class="input" v-model.trim="incomingHistoryFilters.product_name" placeholder="产品名称" @keyup.enter="pages.incomingHistory=1; loadIncomingHistory()" />
-                  <input class="input" v-model.trim="incomingHistoryFilters.supplier_name" placeholder="供应商" @keyup.enter="pages.incomingHistory=1; loadIncomingHistory()" />
-                  <input class="input" type="date" v-model="incomingHistoryFilters.date_from" @change="pages.incomingHistory=1; loadIncomingHistory()" />
-                  <input class="input" type="date" v-model="incomingHistoryFilters.date_to" @change="pages.incomingHistory=1; loadIncomingHistory()" />
-                  <select class="select" v-model="incomingHistoryFilters.receipt_status" @change="pages.incomingHistory=1; loadIncomingHistory()"><option value="">全部状态</option><option value="posted">有效实收</option><option value="reversed">已撤销</option></select>
-                  <button class="btn" @click="pages.incomingHistory=1; loadIncomingHistory()">查询</button>
-                  <button class="btn" @click="resetIncomingHistoryFilters()">清空</button>
-                  <pager :page="pages.incomingHistory" :total="incomingHistoryTotal" :page-size="pageSize" :always="true" :compact="true" @change="pages.incomingHistory=$event; loadIncomingHistory()"></pager>
-                </div>
-                <data-panel :empty="!incomingHistory.length">
-                  <table>
-                    <thead><tr><th>入库时间</th><th>订单号</th><th>客户</th><th>存货编码</th><th>产品名称</th><th>材质</th><th>入库数量</th><th>操作</th></tr></thead>
-                    <tbody><tr v-for="row in incomingHistory" :key="row.history_key || row.receipt_item_id || row.item_id">
-                      <td>{{ row.material_received_at ? formatDateTime(row.material_received_at) : "-" }}</td>
-                      <td>{{ row.display_order_number || row.order_number || "-" }}</td>
-                      <td>{{ row.customer_name }}</td>
-                      <td>{{ row.product_code || "-" }}</td>
-                      <td>{{ row.product_name }}</td>
-                      <td>{{ row.material_display || "-" }}</td>
-                      <td><strong>{{ row.incoming_quantity }}</strong></td>
-                      <td>
-                        <button v-if="row.receipt_item_id && row.receipt_status==='posted' && row.order_item_id" class="btn small primary" :disabled="incomingProductionCardOpening" @click="openIncomingProductionCard(row)">{{ incomingProductionCardOpening ? '正在打开…' : '打印生产卡' }}</button>
-                        <button v-if="canAdmin" class="btn small danger" @click="revertIncoming(row)">撤销收料，回到已报料</button>
-                        <span v-if="!(row.receipt_item_id && row.receipt_status==='posted' && row.order_item_id) && !canAdmin" class="muted">-</span>
-                      </td>
-                    </tr></tbody>
-                  </table>
-                </data-panel>
-              </div>
               </template>
             </template>
 
@@ -8557,7 +8567,7 @@
             reportedItemVoidAttempts: {},
             productionPrintCandidatePanels: {}, productionPrintSelections: {}, productionPrintSelectionSequence: 0, productionPrintBatchBusy: false,
             productionPrintBatchAttempt: null, productionPrintRecoveryUrl: "", productionPrintBatchError: "", productionPrintInvalidItems: [],
-            incomingWorkspace: "board", incomingTab: "pending", incomingPending: [], incomingPendingTotal: 0, incomingPendingLoading: false, incomingPendingError: "", incomingPendingAppliedPage: 1, incomingPendingRetryPage: 1, incomingReceived: [], incomingReceivedLoaded: false, incomingReceivedLoading: false, incomingReceivedError: "", incomingHistory: [], incomingHistoryTotal: 0, incomingLocations: [], incomingLocationsLoading: false, incomingLocationsError: "", incomingProductionCardOpening: false, incomingProductionCardAttemptId: "", incomingProductionCardRecoveryUrl: "", incomingProductionCardRecoveryMessage: "",
+            incomingWorkspace: "board", incomingTab: "pending", incomingPending: [], incomingPendingTotal: 0, incomingPendingLoading: false, incomingPendingError: "", incomingPendingAppliedPage: 1, incomingPendingRetryPage: 1, incomingReceived: [], incomingReceivedTotal: 0, incomingReceivedLoaded: false, incomingReceivedLoading: false, incomingReceivedError: "", incomingHistory: [], incomingHistoryTotal: 0, incomingLocations: [], incomingLocationsLoading: false, incomingLocationsError: "", incomingProductionCardOpening: false, incomingProductionCardBatchBusy: false, incomingProductionCardSelections: {}, incomingProductionCardAttemptId: "", incomingProductionCardRecoveryUrl: "", incomingProductionCardRecoveryMessage: "", incomingHistoryFilterVisible: false,
             externalIncomingPending: [], externalIncomingLoading: false, externalIncomingError: "", externalIncomingFilter: "", externalIncomingLoaded: false, externalIncomingDrafts: {}, externalIncomingSavingId: null, externalIncomingSavingAttemptId: "",
             incomingHistoryFilters: { customer_id:"", document_keyword:"", product_code:"", product_name:"", supplier_name:"", date_from:"", date_to:"", receipt_status:"" },
             productionTab: "pending", productionPending: [], productionPendingTotal: 0, productionPendingLoading: false, productionPendingError: "", productionWaitingLabels: [], productionWaitingLabelTotal: 0, productionWaitingLabelLoading: false, productionWaitingLabelError: "", productionLabelMaintenanceScrollY: 0, productionHistory: [], productionHistoryTotal: 0, productionLocations: [], productionLocationsLoading: false, productionLocationsError: "", productionSelected: {}, productionBusy: false,
@@ -8604,7 +8614,7 @@
             financeReportData: { monthly:[], yearly_summary:{}, selected_month_summary:{}, selected_month_customers:[], customer_balances:[], aging:[], as_of:"", included_through_statement_month:"" },
             financeReportState: { loading:false, error:"", loaded:false },
             statementsTotal: 0, financeCustomersTotal: 0, invoicesTotal: 0, pageSize: 25,
-            pages: { customers: 1, products: 1, orders: 1, customerHeat: 1, requisitionPending: 1, requisitionHolds: 1, requisitionReported: 1, externalPurchaseRouting: 1, externalPurchaseHistory: 1, incomingPending: 1, externalIncoming: 1, incomingHistory: 1, productionPending: 1, productionWaitingLabels: 1, productionHistory: 1, deliveries: 1, statements: 1, invoices: 1, financeCurrent: 1, financeSettled: 1 },
+            pages: { customers: 1, products: 1, orders: 1, customerHeat: 1, requisitionPending: 1, requisitionHolds: 1, requisitionReported: 1, externalPurchaseRouting: 1, externalPurchaseHistory: 1, incomingPending: 1, incomingReceived: 1, externalIncoming: 1, incomingHistory: 1, productionPending: 1, productionWaitingLabels: 1, productionHistory: 1, deliveries: 1, statements: 1, invoices: 1, financeCurrent: 1, financeSettled: 1 },
             productTab: "products", modal: null,
             materialCandidateItems: [], materialCandidateLoading: false,
             materialCandidateFilter: { customer_id:null, q:"", include_inactive:false },
@@ -9735,6 +9745,13 @@
             const rows = this.incomingPending.filter(row => this.canReceiveIncoming(row));
             return rows.length > 0 && rows.every(row => this.incomingSelected[row.item_id]);
           },
+          incomingProductionCardSelectedCount() {
+            return Object.values(this.incomingProductionCardSelections || {}).filter(Boolean).length;
+          },
+          allIncomingProductionCardsSelected() {
+            const rows = this.incomingRowsForTab().filter(row => this.canPrintIncomingCard(row));
+            return rows.length > 0 && rows.every(row => this.incomingProductionCardSelected(row));
+          },
           productionAvailableLocations() {
             return (this.productionLocations || []).filter(location => location.is_empty);
           },
@@ -9959,6 +9976,18 @@
             this.invalidatePageCache("orders");
             if (this.activePage === "orders" && this.orderWorkspace === "queue") {
               return this.runExplicitPageListLoad("orders");
+            }
+            if (this.activePage === "incoming" && this.incomingWorkspace === "board") {
+              if (this.incomingTab === "received") {
+                this.pages.incomingReceived = 1;
+                return this.loadIncomingReceived({force:true});
+              }
+              if (this.incomingTab === "history") {
+                this.pages.incomingHistory = 1;
+                return this.loadIncomingHistory();
+              }
+              this.pages.incomingPending = 1;
+              return this.loadIncomingPendingPage({page:1,clearSelection:false});
             }
             return true;
           },
@@ -12977,13 +13006,18 @@
             this.incomingReceiveAttempts = {};
             this.incomingBatchReceiveAttempt = null;
             this.incomingReceived = [];
+            this.incomingReceivedTotal = 0;
             this.incomingReceivedLoaded = false;
             this.incomingReceivedLoading = false;
             this.incomingReceivedError = "";
             this.incomingProductionCardOpening = false;
+            this.incomingProductionCardBatchBusy = false;
+            this.incomingProductionCardSelections = {};
             this.incomingProductionCardAttemptId = "";
             this.incomingProductionCardRecoveryUrl = "";
             this.incomingProductionCardRecoveryMessage = "";
+            this.incomingHistoryFilterVisible = false;
+            this.pages.incomingReceived = 1;
             this.incomingHistory = [];
             this.incomingHistoryTotal = 0;
             this.incomingLocations = [];
@@ -17626,8 +17660,54 @@
           incomingPendingRequestParams(page) {
             return {
               page:Math.max(1, Number(page || 1)),
-              page_size:this.pageSize,
+              page_size:this.incomingListPageSize(),
             };
+          },
+          incomingListPageSize() {
+            return this.isLargeUi ? 8 : 12;
+          },
+          incomingRowsForTab() {
+            if (this.incomingTab === "received") return this.incomingReceived || [];
+            if (this.incomingTab === "history") return this.incomingHistory || [];
+            return this.incomingPending || [];
+          },
+          incomingCurrentPage() {
+            if (this.incomingTab === "received") return Number(this.pages.incomingReceived || 1);
+            if (this.incomingTab === "history") return Number(this.pages.incomingHistory || 1);
+            return Number(this.pages.incomingPending || 1);
+          },
+          incomingCustomerLabel(row) {
+            return String(row?.customer_short_name || row?.customer_name || "-").trim() || "-";
+          },
+          incomingActualMaterialDisplay(row) {
+            return String(row?.actual_material_display || row?.material_display || [row?.material_code || row?.material,row?.flute_type].filter(Boolean).join(" / ") || "-");
+          },
+          incomingMaterialTitle(row) {
+            const actual=this.incomingActualMaterialDisplay(row);
+            return row?.material_changed ? `本批实收：${actual}｜原报料：${row.reported_material_display || "-"}` : actual;
+          },
+          canPrintIncomingCard(row) {
+            return Boolean(Number(row?.receipt_item_id || 0) && row?.receipt_status === "posted" && row?.order_item_id);
+          },
+          incomingProductionCardSelected(row) {
+            return Boolean(this.incomingProductionCardSelections[String(row?.receipt_item_id || "")]);
+          },
+          toggleIncomingProductionCard(row, checked) {
+            const key=String(row?.receipt_item_id || "");
+            if (!key || !this.canPrintIncomingCard(row)) return;
+            if (checked && this.incomingProductionCardSelectedCount >= 20) {
+              this.showToast("一次最多打印 20 款生产卡", true);
+              return;
+            }
+            this.incomingProductionCardSelections[key]=Boolean(checked);
+          },
+          toggleIncomingProductionCardPage(checked) {
+            const rows=this.incomingRowsForTab().filter(row=>this.canPrintIncomingCard(row));
+            if (checked && this.incomingProductionCardSelectedCount + rows.filter(row=>!this.incomingProductionCardSelected(row)).length > 20) {
+              this.showToast("一次最多打印 20 款生产卡，请分批勾选", true);
+              return;
+            }
+            rows.forEach(row=>{ this.incomingProductionCardSelections[String(row.receipt_item_id)]=Boolean(checked); });
           },
           applyIncomingPendingResponse(data, {requestedPage=1, clearSelection=false}={}) {
             const previousPage = this.incomingPendingAppliedPage;
@@ -17847,8 +17927,13 @@
             this.incomingReceivedLoading = true;
             this.incomingReceivedError = "";
             try {
-              const received = await axios.get("/api/incoming/received", {signal:controller.signal});
+              const received = await axios.get("/api/incoming/received", {
+                params:{page:this.pages.incomingReceived,page_size:this.incomingListPageSize()},
+                signal:controller.signal,
+              });
               this.incomingReceived=(received.data.items || []).map(row=>({...row,incoming_quantity:Number(row.incoming_quantity || row.requisition_qty || row.quantity || 0)}));
+              this.incomingReceivedTotal=Number(received.data.total ?? this.incomingReceived.length);
+              this.pages.incomingReceived=Number(received.data.page || this.pages.incomingReceived || 1);
               this.incomingReceivedLoaded = true;
             } catch (error) {
               if (!this.isCancelledRequest(error)) this.incomingReceivedError = "读取今日实收失败：" + this.errorMessage(error);
@@ -18356,6 +18441,61 @@
               this.showToast("已撤回来料入库");
             } catch(error) { this.showToast(this.errorMessage(error),true); }
           },
+          async openSelectedIncomingProductionCards() {
+            if (this.incomingProductionCardBatchBusy) return false;
+            const receiptIds=Object.entries(this.incomingProductionCardSelections || {})
+              .filter(([,selected])=>selected)
+              .map(([value])=>Number(value))
+              .filter(value=>Number.isInteger(value) && value>0);
+            if (!receiptIds.length) {
+              this.showToast("请先勾选需要打印的来料生产卡", true);
+              return false;
+            }
+            if (receiptIds.length>20) {
+              this.showToast("一次最多打印 20 款生产卡", true);
+              return false;
+            }
+            const token=globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+            const directPath=`/incoming-production-card.html?receipt_item_ids=${encodeURIComponent(receiptIds.join(","))}`;
+            const path=`${directPath}&open_token=${encodeURIComponent(token)}`;
+            let popup=null;
+            try {
+              popup=window.open("about:blank","_blank");
+              if (popup) popup.opener=null;
+            } catch (_) { popup=null; }
+            this.incomingProductionCardBatchBusy=true;
+            this.incomingProductionCardRecoveryUrl="";
+            this.incomingProductionCardRecoveryMessage="";
+            try {
+              const query=new URLSearchParams();
+              receiptIds.forEach(value=>query.append("receipt_item_id",String(value)));
+              const {data}=await axios.get(`/api/incoming/production-card-batch?${query.toString()}`);
+              const warnings=data.planned_print_warnings || [];
+              if (warnings.length) {
+                const warningText=warnings.map(row=>`实收明细 ${row.receipt_item_id}：${row.message}`).join("\n");
+                if (!confirm(`以下产品的计划生产任务单已经生成过：\n${warningText}\n\n是否继续补打实收生产卡？`)) {
+                  popup?.close();
+                  return false;
+                }
+              }
+              if (popup) popup.location.replace(path);
+              else {
+                this.incomingProductionCardRecoveryUrl=directPath;
+                this.incomingProductionCardRecoveryMessage="浏览器阻止了生产卡新页面，请点右侧按钮人工打开。";
+                this.showToast("生产卡新页面被浏览器拦截，已保留人工直达入口", true);
+                return false;
+              }
+              return true;
+            } catch(error) {
+              popup?.close();
+              const invalid=error?.response?.data?.detail?.invalid_items || [];
+              const detail=invalid.length ? invalid.map(row=>`实收明细 ${row.receipt_item_id}：${row.reason}`).join("；") : this.errorMessage(error);
+              this.showToast(`整批未生成：${detail}`, true);
+              return false;
+            } finally {
+              this.incomingProductionCardBatchBusy=false;
+            }
+          },
           async openIncomingProductionCard(row) {
             if (this.incomingProductionCardOpening) return false;
             const receiptItemId = Number(row?.receipt_item_id || 0);
@@ -18431,7 +18571,7 @@
             try {
               const params = {
                 page: this.pages.incomingHistory,
-                page_size: this.pageSize,
+                page_size: this.incomingListPageSize(),
               };
               Object.entries(this.incomingHistoryFilters || {}).forEach(([key,value]) => {
                 if (value !== "" && value !== null && value !== undefined) params[key] = value;

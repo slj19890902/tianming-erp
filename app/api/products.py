@@ -510,6 +510,7 @@ class ProductPayload(BaseModel):
     machine_set_width_mm: Decimal | None = Field(default=None, ge=0)
     machine_set_height_mm: Decimal | None = Field(default=None, ge=0)
     production_process: str | None = None
+    production_notes: str | None = Field(default=None, max_length=2000)
     unit: str = "只"
     sale_unit_price: Decimal | None = Field(default=None, ge=0)
     sale_unit_price_no_tax: Decimal | None = Field(default=None, ge=0)
@@ -556,6 +557,14 @@ class ProductPayload(BaseModel):
         if isinstance(value, bool):
             raise ValueError("每张标签数量必须是正整数")
         return value
+
+    @field_validator("production_notes", mode="before")
+    @classmethod
+    def normalize_production_notes(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        return normalized or None
 
     @model_validator(mode="after")
     def validate_flute_layer_consistency(self) -> "ProductPayload":
@@ -816,7 +825,7 @@ _EXTERNAL_PURCHASE_PAPER_FIELDS = (
     "crease_right_mm", "report_notes", "base_report_length_mm",
     "base_report_width_mm", "base_crease_type", "base_crease_left_mm",
     "base_crease_middle_mm", "base_crease_right_mm", "base_report_notes",
-    "production_process", "printing_colors", "mold_tool_id", "die_cut_path",
+    "production_process", "production_notes", "printing_colors", "mold_tool_id", "die_cut_path",
 )
 _EXTERNAL_PURCHASE_SYNC_BLOCKED_FIELDS = frozenset(
     {*_EXTERNAL_PURCHASE_PAPER_FIELDS, "splice_mode", "pieces_per_box", "flap_mm", "box_style", "print_content"}
@@ -825,7 +834,7 @@ _EXTERNAL_PURCHASE_SYNC_BLOCKED_FIELDS = frozenset(
 _VIRTUAL_COMPOSITE_PARENT_PHYSICAL_FIELDS = (
     "material_id", "mold_tool_id", "legacy_material_text",
     "length_mm", "width_mm", "height_mm", "box_style",
-    "print_content", "printing_colors", "production_process", "die_cut_path",
+    "print_content", "printing_colors", "production_process", "production_notes", "die_cut_path",
     "flute_type", "layer_count", "surface_paper_type",
     "report_length_mm", "report_width_mm", "crease_type",
     "crease_left_mm", "crease_middle_mm", "crease_right_mm", "report_notes",
@@ -1518,6 +1527,7 @@ _PRODUCT_SYNC_TEXT_FIELDS = {
     "remark",
     "report_notes",
     "production_process",
+    "production_notes",
     "product_name",
     "base_crease_type",
     "base_report_notes",
@@ -2611,7 +2621,7 @@ def sync_product_fields(
         # v0.19.2-B: 报料尺寸 + 压线同步
         "report_length_mm", "report_width_mm",
         "crease_type", "crease_left_mm", "crease_middle_mm", "crease_right_mm",
-        "report_notes", "production_process", "product_name", "specification",
+        "report_notes", "production_process", "production_notes", "product_name", "specification",
         "base_report_length_mm", "base_report_width_mm",
         "base_crease_type", "base_crease_left_mm", "base_crease_middle_mm",
         "base_crease_right_mm", "base_report_notes",

@@ -3013,7 +3013,7 @@ def _task_product_snapshot(
             else None
         ),
         "production_notes": (
-            snapshot.snapshot_component_report_notes
+            snapshot.snapshot_component_production_notes
             if snapshot is not None
             else item.snapshot_production_notes
         ),

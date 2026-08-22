@@ -333,6 +333,10 @@ class SalesOrderItemBomComponent(Base):
         Text,
         nullable=True,
     )
+    snapshot_component_production_notes: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
     snapshot_component_report_length_mm: Mapped[int | None] = mapped_column(
         Integer,
         nullable=True,

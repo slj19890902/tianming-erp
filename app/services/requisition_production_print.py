@@ -703,6 +703,9 @@ def build_supplier_requisition_production_package(
         )
         production_notes = _unique_text(
             [
+                component_snapshot.snapshot_component_production_notes
+                if component_snapshot is not None
+                else None,
                 component_snapshot.snapshot_component_production_process
                 if component_snapshot is not None
                 else None,

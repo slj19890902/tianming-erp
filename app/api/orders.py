@@ -5207,6 +5207,7 @@ def _production_meaning_changes(
             "width_mm",
             "height_mm",
             "production_process",
+            "production_notes",
             "print_content",
         ):
             value = getattr(payload, field_name)
@@ -7043,7 +7044,7 @@ def _create_order_impl(
                     if product.supply_mode == "external_purchase"
                     else (
                         (item_payload.production_notes or "").strip()
-                        or (product.production_process or "").strip()
+                        or (product.production_notes or "").strip()
                         or None
                     )
                 ),  # v0.19.2-A: 生产/印刷说明
@@ -8253,6 +8254,7 @@ def update_order_item(
             "width_mm",
             "height_mm",
             "production_process",
+            "production_notes",
             "print_content",
         ):
             value = getattr(payload, field_name)

@@ -1836,7 +1836,6 @@ class _PendingRequisitionReadContext:
             None,
             item,
             cutting_mode=item.special_process,
-            pieces_per_box=1,
             finished_reserved_qty=finished_reserved_qty,
             semi_reserved_piece_qty=self._semi_reserved_by_item_component.get(
                 (item.id, "whole"), 0
@@ -1862,6 +1861,8 @@ class _PendingRequisitionReadContext:
             "flute_type": item.flute_type,
             "report_length_mm": item.snapshot_report_length_mm,
             "report_width_mm": item.snapshot_report_width_mm,
+            "splice_mode": item.snapshot_splice_mode or "single",
+            "pieces_per_box": int(requirements["pieces_per_box"]),
             "required_piece_quantity": int(requirements["required_piece_qty"]),
             "remaining_required_piece_qty": int(
                 requirements["remaining_required_piece_qty"]
@@ -2321,6 +2322,8 @@ def _bom_snapshot_requirements(
         "spare_sheet_quantity": int(snapshot.spare_sheet_quantity or 0),
         "cutting_mode": resolved_cutting_mode,
         "cutting_factor": cutting_factor,
+        "is_die_cut": bool(snapshot.is_die_cut),
+        "mold_tool_id": snapshot.snapshot_mold_tool_id,
         "is_required": bool(snapshot.is_required),
         "display_order": snapshot.display_order,
         "product_code": snapshot.snapshot_component_product_code,
@@ -2551,7 +2554,6 @@ def _bom_pending_parent_requirement(
         db,
         item,
         cutting_mode=item.special_process,
-        pieces_per_box=1,
     )
     already_requisitioned = _bom_parent_has_active_requisition(db, item.id)
     return {
@@ -2568,6 +2570,8 @@ def _bom_pending_parent_requirement(
         "flute_type": item.flute_type,
         "report_length_mm": item.snapshot_report_length_mm,
         "report_width_mm": item.snapshot_report_width_mm,
+        "splice_mode": item.snapshot_splice_mode or "single",
+        "pieces_per_box": int(requirements["pieces_per_box"]),
         "required_piece_quantity": int(requirements["required_piece_qty"]),
         "remaining_required_piece_qty": int(
             requirements["remaining_required_piece_qty"]
@@ -10567,7 +10571,6 @@ def create_batch(
                             db,
                             item,
                             cutting_mode=line.special_process,
-                            pieces_per_box=1,
                         )
                         if int(parent_requirements["remaining_required_piece_qty"]) <= 0:
                             raise HTTPException(
@@ -10590,7 +10593,9 @@ def create_batch(
                             requisition_qty=parent_confirmed_qty,
                             cardboard_len=line.cardboard_len,
                             cardboard_width=line.cardboard_width,
-                            pieces_per_box=1,
+                            pieces_per_box=int(
+                                parent_requirements["pieces_per_box"]
+                            ),
                             required_piece_qty=int(
                                 parent_requirements["required_piece_qty"]
                             ),
@@ -13631,6 +13636,85 @@ def create_supplier_order_from_merge_group(
 
 
 
+def _merge_identical_component_print_items(items: list[dict]) -> list[dict]:
+    """Merge supplier-facing physical rows without collapsing source facts."""
+
+    merged: list[dict] = []
+    by_key: dict[tuple, dict] = {}
+    for source in items:
+        product_codes = list(
+            dict.fromkeys(
+                str(value).strip()
+                for value in source.get("product_codes", [])
+                if str(value or "").strip()
+            )
+        )
+        product_names = list(
+            dict.fromkeys(
+                str(value).strip()
+                for value in source.get("product_names", [])
+                if str(value or "").strip()
+            )
+        )
+        source["product_codes"] = product_codes
+        source["product_names"] = product_names
+        source["source_count"] = int(source.get("source_count") or 1)
+        mergeable = bool(source.pop("_is_bom_component", False)) and not bool(
+            source.pop("_is_die_cut", False)
+        )
+        material_id = source.pop("_material_id", None)
+        layer_count = source.pop("_layer_count", None)
+        key = (
+            material_id,
+            layer_count,
+            source.get("material_code"),
+            source.get("flute_type"),
+            source.get("specification"),
+            source.get("crease_display"),
+            source.get("cutting_mode"),
+            source.get("report_remark"),
+        )
+        mergeable = mergeable and all(
+            value not in (None, "")
+            for value in (
+                layer_count,
+                source.get("material_code"),
+                source.get("flute_type"),
+                source.get("specification"),
+                source.get("crease_display"),
+                source.get("cutting_mode"),
+            )
+        )
+        if not mergeable or key not in by_key:
+            merged.append(source)
+            if mergeable:
+                by_key[key] = source
+            continue
+        target = by_key[key]
+        target["quantity"] = int(target.get("quantity") or 0) + int(
+            source.get("quantity") or 0
+        )
+        target["source_count"] = int(target.get("source_count") or 1) + int(
+            source.get("source_count") or 1
+        )
+        target["product_codes"] = list(
+            dict.fromkeys([*target.get("product_codes", []), *product_codes])
+        )
+        target["product_names"] = list(
+            dict.fromkeys([*target.get("product_names", []), *product_names])
+        )
+        target["product_code"] = " / ".join(target["product_codes"])
+        target["product_name"] = " / ".join(target["product_names"])
+        notes = [target.get("production_notes"), source.get("production_notes")]
+        target["production_notes"] = "；".join(
+            dict.fromkeys(str(note).strip() for note in notes if str(note or "").strip())
+        ) or None
+    for row in merged:
+        row.pop("_material_id", None)
+        row.pop("_layer_count", None)
+    return merged
+
+
 @router.get("/batches/{batch_id}/print")
 def print_batch(
     batch_id: int,
@@ -13739,6 +13823,17 @@ def print_batch(
             {
                 "product_code": row.product_code_snapshot,
                 "product_name": row.product_name_snapshot,
+                "product_codes": [row.product_code_snapshot],
+                "product_names": [row.product_name_snapshot],
+                "source_count": 1,
+                "_is_bom_component": bom_snapshot is not None,
+                "_is_die_cut": bool(bom_snapshot.is_die_cut) if bom_snapshot is not None else False,
+                "_material_id": (
+                    bom_snapshot.snapshot_component_material_id
+                    if bom_snapshot is not None
+                    else order_item.material_id if order_item is not None else None
+                ),
+                "_layer_count": order_layer_count or material_layer_count,
                 "material": _format_supplier_material(
                     material_code or row.material_snapshot,
                     order_layer_count or material_layer_count,
@@ -13765,6 +13860,7 @@ def print_batch(
                 "report_remark": "；".join(dict.fromkeys(filter(None, remarks))),
             }
         )
+    print_items = _merge_identical_component_print_items(print_items)
     return {
         "id": batch.id,
         "requisition_number": batch.requisition_number,

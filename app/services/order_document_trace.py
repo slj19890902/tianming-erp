@@ -4,6 +4,7 @@ from datetime import date, datetime
 import logging
 import re
 from typing import Any
+from urllib.parse import urlencode
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -156,6 +157,48 @@ def trace_event_target(
         "source_type": source_type,
         "source_id": source_id,
     }
+
+
+def trace_navigation_url(
+    *,
+    order_id: int,
+    item_id: int,
+    event: dict[str, Any],
+) -> str:
+    """Build a read-only deep link from stable trace identity only.
+
+    The target page must revalidate this exact identity through the order trace
+    detail endpoint.  Customer names, product codes and document text are never
+    used as authorization or record identity.
+    """
+
+    target = event.get("target") or {}
+    module = str(target.get("module") or "orders")
+    query: dict[str, Any] = {
+        "trace_order_id": int(order_id),
+        "trace_order_item_id": int(item_id),
+        "trace_source_type": str(event["source_type"]),
+        "trace_source_id": int(event["source_id"]),
+    }
+    if module == "warehouse":
+        details = event.get("details") or {}
+        lot_id = int(details.get("inventory_lot_id") or 0)
+        location_id = int(details.get("location_id") or 0)
+        query.update(
+            {
+                "readonly": 1,
+                "tab": "locations",
+                "location_view": "floor3",
+            }
+        )
+        if lot_id > 0:
+            query["lot_id"] = lot_id
+        if location_id > 0:
+            query["location_id"] = location_id
+        return f"/warehouse.html?{urlencode(query)}"
+
+    query = {"page": module, **query}
+    return f"/?{urlencode(query)}"
 
 
 def _api_datetime(value: datetime | None) -> str | None:
@@ -326,6 +369,7 @@ def build_order_item_document_trace(
                 is_effective=effective,
                 details={
                     "supplier_name": requisition.supplier_name,
+                    "requisition_id": requisition.id,
                     "order_item_id": item.id,
                 },
             )
@@ -381,6 +425,10 @@ def build_order_item_document_trace(
                     unit="张",
                     is_effective=False,
                     is_reversal=True,
+                    details={
+                        "supplier_order_id": supplier_order.id,
+                        "order_item_id": item.id,
+                    },
                 )
 
     if "incoming.view" in permissions:
@@ -457,6 +505,8 @@ def build_order_item_document_trace(
                 unit="张",
                 is_effective=effective,
                 details={
+                    "receipt_id": receipt.id,
+                    "order_item_id": item.id,
                     "planned_quantity": receipt_item.planned_quantity,
                     "variance_quantity": receipt_item.variance_quantity,
                     "variance_type": receipt_item.variance_type,
@@ -476,6 +526,10 @@ def build_order_item_document_trace(
                     unit="张",
                     is_effective=False,
                     is_reversal=True,
+                    details={
+                        "receipt_id": receipt.id,
+                        "order_item_id": item.id,
+                    },
                 )
 
     production_tasks = db.scalars(
@@ -496,7 +550,10 @@ def build_order_item_document_trace(
             occurred_at=task.ready_at or task.created_at,
             quantity=task.planned_quantity,
             unit="只",
-            details={"readiness_basis": task.readiness_basis},
+            details={
+                "readiness_basis": task.readiness_basis,
+                "order_item_id": item.id,
+            },
         )
 
     completion_rows = db.scalars(
@@ -553,6 +610,9 @@ def build_order_item_document_trace(
                 "completion_type": completion.completion_type,
                 "direct_delivery_quantity": completion.direct_delivery_quantity,
                 "stock_quantity": completion.stock_quantity,
+                "inventory_lot_id": completion.inventory_lot_id,
+                "location_id": completion.warehouse_location_id,
+                "order_item_id": item.id,
             },
         )
         if completion.reversed_at is not None:
@@ -567,6 +627,11 @@ def build_order_item_document_trace(
                 unit="只",
                 is_effective=False,
                 is_reversal=True,
+                details={
+                    "inventory_lot_id": completion.inventory_lot_id,
+                    "location_id": completion.warehouse_location_id,
+                    "order_item_id": item.id,
+                },
             )
 
     transfer_rows = (
@@ -612,6 +677,12 @@ def build_order_item_document_trace(
             location_code=location.location_code if location else None,
             location_name=employee_location_name(location) if location else None,
             is_effective=effective,
+            details={
+                "completion_id": transfer.completion_id,
+                "inventory_lot_id": transfer.inventory_lot_id,
+                "location_id": transfer.warehouse_location_id,
+                "order_item_id": item.id,
+            },
         )
         if transfer.reversed_at is not None:
             add_event(
@@ -623,6 +694,12 @@ def build_order_item_document_trace(
                 occurred_at=transfer.reversed_at,
                 is_effective=False,
                 is_reversal=True,
+                details={
+                    "completion_id": transfer.completion_id,
+                    "inventory_lot_id": transfer.inventory_lot_id,
+                    "location_id": transfer.warehouse_location_id,
+                    "order_item_id": item.id,
+                },
             )
 
     if "warehouse.view" in permissions:
@@ -643,7 +720,11 @@ def build_order_item_document_trace(
                 quantity=reservation.reserved_stock_quantity,
                 unit="只" if reservation.reservation_type == "finished" else "张",
                 is_effective=reservation.status in {"active", "partial"},
-                details={"reservation_type": reservation.reservation_type},
+                details={
+                    "reservation_type": reservation.reservation_type,
+                    "inventory_lot_id": reservation.inventory_lot_id,
+                    "order_item_id": item.id,
+                },
             )
             if reservation.released_at is not None:
                 add_event(
@@ -657,6 +738,11 @@ def build_order_item_document_trace(
                     unit="只" if reservation.reservation_type == "finished" else "张",
                     is_effective=False,
                     is_reversal=True,
+                    details={
+                        "reservation_type": reservation.reservation_type,
+                        "inventory_lot_id": reservation.inventory_lot_id,
+                        "order_item_id": item.id,
+                    },
                 )
             if reservation.consumed_at is not None:
                 add_event(
@@ -668,6 +754,11 @@ def build_order_item_document_trace(
                     occurred_at=reservation.consumed_at,
                     quantity=reservation.consumed_stock_quantity,
                     unit="只" if reservation.reservation_type == "finished" else "张",
+                    details={
+                        "reservation_type": reservation.reservation_type,
+                        "inventory_lot_id": reservation.inventory_lot_id,
+                        "order_item_id": item.id,
+                    },
                 )
 
         movements = db.scalars(
@@ -693,7 +784,9 @@ def build_order_item_document_trace(
                 details={
                     "movement_label": MOVEMENT_LABELS.get(
                         movement.movement_type, "库存动作待确认"
-                    )
+                    ),
+                    "inventory_lot_id": movement.inventory_lot_id,
+                    "order_item_id": item.id,
                 },
             )
 
@@ -719,6 +812,10 @@ def build_order_item_document_trace(
                     quantity=delivery_item.delivered_quantity,
                     unit="只",
                     is_effective=False,
+                    details={
+                        "delivery_id": delivery.id,
+                        "order_item_id": item.id,
+                    },
                 )
             dispatched_at = delivery.dispatched_at or delivery.ever_dispatched_at
             if dispatched_at is not None:
@@ -733,6 +830,10 @@ def build_order_item_document_trace(
                     quantity=delivery_item.delivered_quantity,
                     unit="只",
                     is_effective=delivery.status == "dispatched",
+                    details={
+                        "delivery_id": delivery.id,
+                        "order_item_id": item.id,
+                    },
                 )
             if delivery.voided_at is not None:
                 add_event(
@@ -746,6 +847,10 @@ def build_order_item_document_trace(
                     unit="只",
                     is_effective=False,
                     is_reversal=True,
+                    details={
+                        "delivery_id": delivery.id,
+                        "order_item_id": item.id,
+                    },
                 )
 
     return_item_ids: list[int] = []
@@ -773,6 +878,11 @@ def build_order_item_document_trace(
                 quantity=return_item.actual_received_quantity,
                 unit="只",
                 is_effective=receipt.status == "confirmed",
+                details={
+                    "return_receipt_id": receipt.id,
+                    "delivery_item_id": return_item.delivery_item_id,
+                    "order_item_id": item.id,
+                },
             )
 
     if "finance.view" in permissions and return_item_ids:
@@ -793,7 +903,12 @@ def build_order_item_document_trace(
                 occurred_at=statement.created_at,
                 quantity=statement_item.actual_received_quantity,
                 unit="只",
-                details={"statement_month": statement.statement_month},
+                details={
+                    "statement_month": statement.statement_month,
+                    "statement_id": statement.id,
+                    "return_receipt_item_id": statement_item.return_receipt_item_id,
+                    "order_item_id": item.id,
+                },
             )
 
         if statement_ids:
@@ -811,6 +926,10 @@ def build_order_item_document_trace(
                     status="confirmed",
                     occurred_at=invoice.created_at,
                     business_date=invoice.invoice_date,
+                    details={
+                        "statement_id": invoice.statement_id,
+                        "order_item_id": item.id,
+                    },
                 )
 
             settlements = db.scalars(
@@ -827,6 +946,10 @@ def build_order_item_document_trace(
                     status="settled",
                     occurred_at=settlement.created_at,
                     business_date=settlement.settlement_date,
+                    details={
+                        "statement_id": settlement.statement_id,
+                        "order_item_id": item.id,
+                    },
                 )
 
     current_inventory: list[dict[str, Any]] = []
@@ -880,12 +1003,74 @@ def build_order_item_document_trace(
                     "quantity_reserved": lot.quantity_reserved,
                     "quantity_consumed": lot.quantity_consumed,
                     "unit": lot.unit,
+                    "location_id": location.id if location else None,
                     "location_code": location.location_code if location else None,
                     "location_name": employee_location_name(location) if location else None,
                     "pallet_code": pallet.pallet_code if pallet else None,
                     "last_movement_at": _api_datetime(lot.last_movement_at),
                 }
             )
+
+        current_lot_by_id = {row["lot_id"]: row for row in current_inventory}
+        for event in events:
+            inventory_lot_id = int(
+                (event.get("details") or {}).get("inventory_lot_id") or 0
+            )
+            current_lot = current_lot_by_id.get(inventory_lot_id)
+            if current_lot is None:
+                continue
+            if not event["details"].get("location_id"):
+                event["details"]["location_id"] = current_lot["location_id"]
+            event["details"]["current_location_name"] = current_lot[
+                "location_name"
+            ]
+            event["details"]["current_lot_number"] = current_lot["lot_number"]
+
+    for event in events:
+        stage = event["stage"]
+        details = event.get("details") or {}
+        if event.get("location_name"):
+            physical_location = event["location_name"]
+        elif details.get("current_location_name"):
+            physical_location = details["current_location_name"]
+        elif stage == "requisition":
+            supplier = str(details.get("supplier_name") or "").strip()
+            physical_location = f"{supplier} / 供应商在途" if supplier else "供应商 / 在途"
+        elif stage == "incoming":
+            physical_location = "来料区 / 待生产区"
+        elif stage == "production":
+            physical_location = "生产现场 / 待确认去向"
+        elif stage == "delivery":
+            physical_location = "送货途中 / 客户现场"
+        elif stage == "return_receipt":
+            physical_location = "客户回单"
+        elif stage in {"statement", "invoice", "settlement"}:
+            physical_location = "财务单据"
+        else:
+            physical_location = "订单业务台账"
+        event["physical_location_label"] = physical_location
+        event["navigation_url"] = trace_navigation_url(
+            order_id=order.id,
+            item_id=item.id,
+            event=event,
+        )
+        event["target"]["navigation_url"] = event["navigation_url"]
+
+    events.sort(key=lambda row: row.pop("_sort"))
+
+    events_by_lot: dict[int, list[dict[str, Any]]] = {}
+    for event in events:
+        inventory_lot_id = int(
+            (event.get("details") or {}).get("inventory_lot_id") or 0
+        )
+        if inventory_lot_id > 0:
+            events_by_lot.setdefault(inventory_lot_id, []).append(event)
+    for lot in current_inventory:
+        linked_events = events_by_lot.get(int(lot["lot_id"]), [])
+        linked_event = linked_events[-1] if linked_events else None
+        lot["navigation_url"] = (
+            linked_event.get("navigation_url") if linked_event else None
+        )
 
     all_stages = {
         "requisition": "requisition.view",
@@ -903,7 +1088,6 @@ def build_order_item_document_trace(
         if permission not in permissions
     ]
 
-    events.sort(key=lambda row: row.pop("_sort"))
     current_event = next(
         (row for row in reversed(events) if row["is_effective"]),
         events[-1] if events else None,

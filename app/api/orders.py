@@ -6086,6 +6086,7 @@ def get_order_item_document_detail(
             "source_type": source_type,
             "source_id": source_id,
         },
+        "navigation_url": event["navigation_url"],
         "target": event["target"],
         "event": event,
     }

@@ -105,3 +105,41 @@ def test_inventory_navigation_uses_exact_lot_and_location() -> None:
     assert query["location_id"] == ["27"]
     assert query["readonly"] == ["1"]
     assert query["trace_order_item_id"] == ["34"]
+
+
+def test_physical_location_labels_follow_real_stage_and_reversal() -> None:
+    from app.services.order_document_trace import trace_physical_location_label
+
+    assert trace_physical_location_label(
+        {
+            "stage": "requisition",
+            "source_type": "material_requisition",
+            "is_effective": True,
+            "details": {"supplier_name": "测试纸板厂"},
+        }
+    ) == "测试纸板厂 / 供应商在途"
+    assert trace_physical_location_label(
+        {
+            "stage": "production",
+            "source_type": "production_completion",
+            "is_effective": True,
+            "details": {"direct_delivery_quantity": 56},
+        }
+    ) == "一楼待送区"
+    assert trace_physical_location_label(
+        {
+            "stage": "delivery",
+            "source_type": "delivery_draft",
+            "is_effective": False,
+            "details": {},
+        }
+    ) == "一楼待送区 / 待发车"
+    assert trace_physical_location_label(
+        {
+            "stage": "incoming",
+            "source_type": "incoming_receipt_reversal",
+            "is_effective": False,
+            "is_reversal": True,
+            "details": {},
+        }
+    ) == "来料历史 / 已撤销"

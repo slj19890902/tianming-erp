@@ -151,6 +151,45 @@ def test_desktop_material_variance_is_requested_and_confirmed_independently() ->
     assert "material_variance_approval_id" in editor
 
 
+def test_desktop_normal_receipt_uses_material_cell_and_auto_freezes_master_price() -> None:
+    table = _source(
+        DESKTOP,
+        '<table class="incoming-table">',
+        "<pager v-if=\"incomingTab==='pending'\"",
+    )
+    assert "openPurchaseReceiptMaterialChange(row)" in table
+    assert "处理材质与采购价" not in table
+
+    material_editor = _source(
+        DESKTOP,
+        "async openPurchaseReceiptMaterialChange(row) {",
+        "async savePurchaseReceiptFact() {",
+    )
+    for field in (
+        "material_search",
+        "purchaseReceiptMaterialCandidates()",
+        "selectPurchaseReceiptMaterial(material)",
+        "/material-variances",
+    ):
+        assert field in material_editor
+    for forbidden in ("unit_price", "currency", "price_unit", "tax_rate"):
+        assert forbidden not in material_editor
+
+    automatic = _source(
+        DESKTOP,
+        "async ensureAutomaticPurchaseReceiptFact(row) {",
+        "incomingPayload(row) {",
+    )
+    assert "/receipt-facts/auto" in automatic
+    assert "material_variance_approval_id" in automatic
+    assert "unit_price" not in automatic
+    assert "row.purpose_status==='frozen'" in _source(
+        DESKTOP,
+        "canReceiveIncoming(row) {",
+        "incomingSelectedCount() {",
+    )
+
+
 def test_mobile_uses_same_server_facts_and_does_not_recalculate_purpose() -> None:
     receive = _source(
         MOBILE,
@@ -185,6 +224,15 @@ def test_mobile_uses_same_server_facts_and_does_not_recalculate_purpose() -> Non
     assert "预计形成成品" in render
     assert "finished_location_name" in render
     assert "reserve_location_name" in render
+
+    automatic = _source(
+        MOBILE,
+        "async function ensureAutomaticReceiptFact(item) {",
+        "async function receive(itemId) {",
+    )
+    assert "/receipt-facts/auto" in automatic
+    assert "unit_price" not in automatic
+    assert "await ensureAutomaticReceiptFact(item);" in receive
 
 
 def test_mobile_success_and_history_render_formal_purpose_facts() -> None:

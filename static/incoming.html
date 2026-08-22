@@ -531,7 +531,7 @@
         .join("");
       const frozenPurpose = item.purpose_status !== "legacy_unset";
       const decisionBlock = !isPending ? "" : frozenPurpose
-        ? `<div class="mt-2 rounded-lg ${item.receipt_fact_ready ? "bg-green-50 text-green-900" : "bg-amber-50 text-amber-900"} p-2 text-sm"><p class="font-bold">${escapeHtml(item.receipt_fact_ready ? "用途与正式采购价已冻结" : (item.purpose_issue || "请先在电脑端确认实际材质和正式采购价"))}</p><p>预计订单用途 ${escapeHtml(item.expected_order_purpose_sheet_qty || 0)} 张</p><p>预计片料备库 ${escapeHtml(item.expected_reserve_purpose_sheet_qty || 0)} 张</p><p>预计形成成品 ${escapeHtml(item.expected_finished_output_qty || 0)} 只</p>${item.finished_location_name ? `<p>成品：${escapeHtml(item.finished_location_name)}</p>` : ""}${item.finished_capacity_warning ? `<p class="mt-1 font-bold text-amber-800">容量提醒：${escapeHtml(item.finished_capacity_warning)}</p>` : ""}${item.reserve_location_name ? `<p>片料：${escapeHtml(item.reserve_location_name)}</p>` : ""}</div>`
+        ? `<div class="mt-2 rounded-lg ${item.receipt_fact_ready ? "bg-green-50 text-green-900" : "bg-amber-50 text-amber-900"} p-2 text-sm"><p class="font-bold">${escapeHtml(item.receipt_fact_ready ? "用途与采购价格已冻结" : "默认按报料材质和已维护价格实收")}</p><p>预计订单用途 ${escapeHtml(item.expected_order_purpose_sheet_qty || 0)} 张</p><p>预计片料备库 ${escapeHtml(item.expected_reserve_purpose_sheet_qty || 0)} 张</p><p>预计形成成品 ${escapeHtml(item.expected_finished_output_qty || 0)} 只</p>${item.finished_location_name ? `<p>成品：${escapeHtml(item.finished_location_name)}</p>` : ""}${item.finished_capacity_warning ? `<p class="mt-1 font-bold text-amber-800">容量提醒：${escapeHtml(item.finished_capacity_warning)}</p>` : ""}${item.reserve_location_name ? `<p>片料：${escapeHtml(item.reserve_location_name)}</p>` : ""}</div>`
         : projected < 0
           ? `<div class="mt-2 rounded-lg bg-amber-50 p-2"><p class="text-sm font-bold text-amber-900">还差 ${Math.abs(projected)} 张</p><select data-resolution="${key}" class="mt-1 w-full rounded-lg border p-2" ${canOperate() && !disabled ? "" : "disabled"}><option value="">少收怎么处理</option><option value="await_supplier" ${item.resolution_action === "await_supplier" ? "selected" : ""}>继续等补货</option>${isStockReplenishment ? "" : `<option value="accept_short" ${item.resolution_action === "accept_short" ? "selected" : ""}>按已收数结单</option>`}</select></div>`
           : projected > 0
@@ -549,7 +549,7 @@
       const primaryAction = !canOperate()
         ? `<div class="rounded-lg bg-slate-100 px-4 py-2 text-center text-sm font-semibold text-slate-500">只读查看</div>`
         : isPending
-          ? `<button data-receive="${key}" ${disabled || (frozenPurpose && !item.receipt_fact_ready) ? "disabled" : ""} class="min-h-12 w-full rounded-xl bg-green-700 px-4 text-base font-bold text-white disabled:bg-slate-400">确认实收</button>${item.purpose_status === "legacy_unset" && item.pending_receipt_item_id && !isStockReplenishment ? `<button data-accept-short="${key}" ${disabled ? "disabled" : ""} class="mt-2 min-h-12 w-full rounded-xl bg-amber-700 px-4 text-base font-bold text-white disabled:bg-slate-400">不再补货，短收结单</button>` : ""}`
+          ? `<button data-receive="${key}" ${disabled ? "disabled" : ""} class="min-h-12 w-full rounded-xl bg-green-700 px-4 text-base font-bold text-white disabled:bg-slate-400">确认实收</button>${item.purpose_status === "legacy_unset" && item.pending_receipt_item_id && !isStockReplenishment ? `<button data-accept-short="${key}" ${disabled ? "disabled" : ""} class="mt-2 min-h-12 w-full rounded-xl bg-amber-700 px-4 text-base font-bold text-white disabled:bg-slate-400">不再补货，短收结单</button>` : ""}`
           : "";
 
       const expandedSection = expanded ? `
@@ -935,6 +935,30 @@
       $("productionDetailBody").innerHTML = "";
     }
 
+    async function ensureAutomaticReceiptFact(item) {
+      if (item?.purpose_status !== "frozen" || item.receipt_fact_ready) return;
+      const payload = {
+        actual_material_id: Number(item.material_variance_actual_material_id || item.actual_material_id || item.formal_material_id) || null,
+        purchase_purpose_source_snapshot_id: Number(item.purchase_purpose_source_snapshot_id || 0),
+        purpose_snapshot_version: Number(item.expected_purpose_snapshot_version || 0),
+        receipt_plan_fingerprint: String(item.receipt_plan_fingerprint || ""),
+        expected_source_version: Number(item.expected_source_version || 0),
+        expected_latest_receipt_fact_version: Number(item.latest_receipt_fact_version ?? item.expected_receipt_fact_version ?? 0),
+        material_variance_approval_id: Number(item.material_variance_approval_id || 0) || null,
+        idempotency_key: item._automatic_receipt_fact_key || createIdempotencyKey(),
+      };
+      item._automatic_receipt_fact_key = payload.idempotency_key;
+      const fact = await api(`/api/requisition/purchase-sources/${encodeURIComponent(item.source_key)}/receipt-facts/auto`, {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      });
+      item.receipt_fact_ready = true;
+      item.expected_receipt_fact_version = Number(fact.receipt_fact_version);
+      item.latest_receipt_fact_version = Number(fact.receipt_fact_version);
+      item.expected_actual_material_version = Number(fact.actual_material_version);
+      item.actual_material_fingerprint = String(fact.actual_material_fingerprint || "");
+    }
+
     async function receive(itemId) {
       const key = String(itemId);
       if (state.busyItemIds.has(key)) return;
@@ -965,15 +989,13 @@
           showToast("余量转半成品库存时必须选择库位", true);
           return;
         }
-      } else if (!item.receipt_fact_ready) {
-        showToast(item.purpose_issue || "请先在电脑端确认实际材质和正式采购价格", true);
-        return;
       }
       const operationKey = state.receiveIdempotencyKeys.get(key) || createIdempotencyKey();
       state.receiveIdempotencyKeys.set(key, operationKey);
       state.busyItemIds.add(key);
       render();
       try {
+        await ensureAutomaticReceiptFact(item);
         const surplusLocation = state.locations.find(location => Number(location.id) === Number(item.surplus_location_id));
         const result = await api(`/api/incoming/receive/${item.item_id}`, {
           method: "PUT",

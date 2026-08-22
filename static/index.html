@@ -3808,14 +3808,14 @@
                   <tbody><tr v-for="row in (incomingTab==='pending' ? incomingPending : incomingReceived)" :key="row.history_key || row.item_id">
                     <td v-if="incomingTab==='pending' && hasPermission('incoming.execute')"><input type="checkbox" v-model="incomingSelected[row.item_id]" :disabled="!canReceiveIncoming(row)" /></td>
                     <td class="incoming-board-cell"><strong>{{ formatBoardSpec(row.cardboard_len,row.cardboard_width) }}</strong></td>
-                    <td class="incoming-customer-cell">{{ row.customer_name }}</td><td>{{ row.product_code || "-" }}</td><td>{{ row.product_name }}</td><td>{{ row.material_display || "-" }}</td>
+                    <td class="incoming-customer-cell">{{ row.customer_name }}</td><td>{{ row.product_code || "-" }}</td><td>{{ row.product_name }}</td><td><button v-if="incomingTab==='pending' && row.purpose_status==='frozen' && hasPermission('incoming.execute')" class="btn small" type="button" style="max-width:170px;white-space:normal;text-align:left" @click="openPurchaseReceiptMaterialChange(row)" title="默认按报料材质实收；只有实际到货不同才点击这里变更">{{ row.material_display || "-" }}</button><span v-else>{{ row.material_display || "-" }}</span></td>
                     <td><div>计划 {{ row.planned_quantity ?? row.requisition_qty ?? row.quantity }}</div><div>已收 {{ row.cumulative_received_quantity || 0 }}</div><strong>待收 {{ row.remaining_quantity ?? row.requisition_qty ?? row.quantity }}</strong></td>
                     <td><input v-if="incomingTab==='pending' && hasPermission('incoming.execute')" class="input compact-input" type="number" min="1" v-model.number="row.incoming_quantity" /><strong v-else>{{ row.incoming_quantity }}</strong></td>
                     <td class="incoming-decision-cell"><template v-if="incomingTab==='pending'"><template v-if="row.purpose_status==='legacy_unset'"><div v-if="Number(row.cumulative_received_quantity||0)>0 && Number(row.remaining_quantity||0)>0" class="status orange">已收 {{ row.cumulative_received_quantity }}，待补 {{ row.remaining_quantity }}</div><select v-if="incomingProjectedVariance(row)<0" class="select" v-model="row.resolution_action" :disabled="!hasPermission('incoming.execute')"><option value="">少收怎么处理</option><option value="await_supplier">继续等补货</option><option v-if="row.source_type!=='stock_replenishment'" value="accept_short">按已收数结单</option></select><select v-else-if="incomingProjectedVariance(row)>0" class="select" v-model="row.resolution_action" :disabled="!hasPermission('incoming.execute')"><option value="">多收怎么处理</option><option value="all_to_production">全部用于本单</option><option value="transfer_to_semi_inventory">余量存半成品仓</option></select><span v-else class="status green">数量刚好</span><select v-if="row.resolution_action==='transfer_to_semi_inventory'" class="select" v-model.number="row.surplus_location_id" :disabled="!hasPermission('incoming.execute')"><option :value="null">余量放哪个库位</option><option v-for="location in incomingSemiLocations()" :key="location.id" :value="location.id">{{ location.location_name || '位置名称待完善' }}</option></select><div v-if="row.source_type==='stock_replenishment'" class="incoming-location-picker"><span class="status blue">自动进入一楼 A1 原料暂存区</span></div></template><template v-else><div :class="['status',row.receipt_fact_ready?'green':'orange']">{{ row.receipt_fact_ready ? '用途与正式采购价已冻结' : (row.purpose_issue || '待确认实际材质和正式采购价') }}</div><div>预计订单用途 {{ row.expected_order_purpose_sheet_qty || 0 }} 张</div><div>预计片料备库 {{ row.expected_reserve_purpose_sheet_qty || 0 }} 张</div><div>预计形成成品 {{ row.expected_finished_output_qty || 0 }} 只</div><div v-if="row.finished_location_name" class="muted">成品：{{ row.finished_location_name }}</div><div v-if="row.finished_capacity_warning" class="status orange">容量提醒：{{ row.finished_capacity_warning }}</div><div v-if="row.reserve_location_name" class="muted">片料：{{ row.reserve_location_name }}</div></template></template><template v-else><span :class="['status',row.variance_type==='matched'?'green':'orange']">{{ incomingVarianceLabel(row) }}</span><div v-if="row.resolution_reason" class="muted">{{ row.resolution_reason }}</div><div v-if="row.purpose_allocation" class="muted">订单用途 {{ row.purpose_allocation.order_sheet_delta || 0 }} 张｜片料备库 {{ row.purpose_allocation.reserve_sheet_delta || 0 }} 张｜形成成品 {{ row.purpose_allocation.theoretical_finished_delta || 0 }} 只</div></template></td>
                     <td>{{ row.requisition_date || "-" }}</td>
                     <td><a v-if="row.drawing_is_pdf" class="btn small" :href="row.drawing_path" target="_blank">打开PDF</a><span v-else>-</span></td>
                     <td><button v-if="incomingTab==='received' && row.receipt_item_id && row.receipt_status==='posted' && row.order_item_id" class="btn small primary" :disabled="incomingProductionCardOpening" @click="openIncomingProductionCard(row)">{{ incomingProductionCardOpening ? '正在打开…' : '打印生产卡' }}</button><span v-else class="muted">-</span></td>
-                    <td v-if="hasPermission('incoming.execute') || hasPermission('incoming.material_variance.confirm') || hasPermission('requisition.purchase_price.confirm') || hasPermission('requisition.purchase_price.correct') || canAdmin" class="incoming-action-cell"><template v-if="incomingTab==='pending'"><button v-if="row.purpose_status==='frozen' && !row.receipt_fact_ready" class="btn small primary" @click="openPurchaseReceiptFact(row)">处理材质与采购价</button><button v-else-if="row.purpose_status==='frozen' && row.receipt_fact_ready && canViewCosts && hasPermission('requisition.purchase_price.correct')" class="btn small" @click="openPurchaseReceiptFact(row)">更正正式采购价</button><button v-if="hasPermission('incoming.execute')" class="btn small success" :disabled="incomingReceiveAttempts[row.item_id]?.saving || !canReceiveIncoming(row)" @click="receiveIncoming(row)">{{ incomingReceiveAttempts[row.item_id]?.saving ? '正在实收…' : '确认实收' }}</button><button v-if="hasPermission('incoming.execute') && row.purpose_status==='legacy_unset' && row.pending_receipt_item_id" class="btn small" @click="acceptShortIncoming(row)">不再补货，短收结单</button></template><button v-else-if="canAdmin" class="btn small danger" @click="revertIncoming(row)">撤销收料，回到已报料</button></td>
+                    <td v-if="hasPermission('incoming.execute') || hasPermission('requisition.purchase_price.correct') || canAdmin" class="incoming-action-cell"><template v-if="incomingTab==='pending'"><button v-if="row.purpose_status==='frozen' && row.receipt_fact_ready && canViewCosts && hasPermission('requisition.purchase_price.correct')" class="btn small" @click="openPurchaseReceiptFact(row)">更正已冻结采购价</button><button v-if="hasPermission('incoming.execute')" class="btn small success" :disabled="incomingReceiveAttempts[row.item_id]?.saving || !canReceiveIncoming(row)" @click="receiveIncoming(row)">{{ incomingReceiveAttempts[row.item_id]?.saving ? '正在实收…' : '确认实收' }}</button><button v-if="hasPermission('incoming.execute') && row.purpose_status==='legacy_unset' && row.pending_receipt_item_id" class="btn small" @click="acceptShortIncoming(row)">不再补货，短收结单</button></template><button v-else-if="canAdmin" class="btn small danger" @click="revertIncoming(row)">撤销收料，回到已报料</button></td>
                   </tr></tbody>
                 </table>
                 <pager v-if="incomingTab==='pending'" :page="pages.incomingPending" :total="incomingPendingTotal" :page-size="pageSize" :always="true" :compact="true" @change="changeIncomingPendingPage($event)"></pager>
@@ -5580,6 +5580,18 @@
               <div class="field"><label>低于多少预警</label><input class="input" type="number" min="0" step="1" v-model.number="quickStockPolicyForm.warning_quantity" @input="syncQuickStockTargetToWarning" /></div>
               <div class="field"><label>建议补到多少</label><input class="input" type="number" min="1" step="1" v-model.number="quickStockPolicyForm.target_quantity" /></div>
               <div class="field wide muted">仓库当前总数按同一客户、同一存货编码汇总可用与已预占的实物，不含冻结、损坏、报废和已消耗；其中净可分配 {{ quickStockPolicyForm.allocatable_available_quantity }}，已预占 {{ quickStockPolicyForm.reserved_quantity }}。两个预警设置都可以高于当前库存；这里只设置提醒，不会自动报料或入库。</div>
+            </div>
+            <div v-else-if="modal.type === 'purchaseReceiptMaterialChange'" class="form-grid">
+              <div class="field wide"><label>报料材质</label><div class="notice">{{ modal.row.material_display || '-' }}。正常情况无需处理，直接点“确认实收”。</div></div>
+              <div class="field wide"><label>实际到货材质</label><input class="input" v-model.trim="modal.form.material_search" placeholder="输入材质代码、供应商或纸质筛选" autofocus /></div>
+              <div class="field wide" style="display:flex;gap:6px;flex-wrap:wrap;max-height:210px;overflow:auto"><button v-for="material in purchaseReceiptMaterialCandidates()" :key="material.id" type="button" :class="['btn','small',Number(modal.form.actual_material_id)===Number(material.id)?'primary':'']" @click="selectPurchaseReceiptMaterial(material)">{{ material.code }}｜{{ material.supplier_name || '未注明供应商' }}</button><span v-if="!purchaseReceiptMaterialCandidates().length" class="muted">没有匹配的启用材质</span></div>
+              <template v-if="purchaseReceiptMaterialChanged()">
+                <div class="field wide"><label>材质差异说明</label><textarea class="textarea" rows="2" maxlength="500" v-model.trim="modal.form.material_variance_reason" placeholder="说明供应商实际送到的材质，供另一位负责人核对"></textarea></div>
+                <div class="field wide" v-if="!modal.form.material_variance_id"><button class="btn primary" :disabled="modal.saving || !hasPermission('incoming.execute')" @click="requestPurchaseMaterialVariance">提交材质差异申请</button></div>
+                <div class="field wide" v-else-if="!modal.form.material_variance_approval_id"><span class="status orange">材质差异申请 #{{ modal.form.material_variance_id }} 待独立确认</span> <button class="btn" :disabled="modal.saving || !hasPermission('incoming.material_variance.confirm')" @click="approvePurchaseMaterialVariance">确认该材质差异</button></div>
+                <div class="field wide" v-else><span class="status green">材质差异已由独立人员确认。关闭后即可确认实收。</span></div>
+              </template>
+              <div class="field wide muted">采购价格不在本页面填写：系统在实收时读取已维护的材质主档价格，并冻结为本次收料快照；后续调价不会改写历史收料。</div>
             </div>
             <div v-else-if="modal.type === 'purchaseReceiptFact'" class="form-grid cost-sensitive">
               <div class="field wide"><label>正式采购来源</label><div class="notice">{{ modal.row.customer_name }}｜{{ modal.row.product_code || modal.row.product_name }}｜{{ modal.row.cardboard_len }}×{{ modal.row.cardboard_width }}mm</div></div>
@@ -17894,8 +17906,60 @@
               },
             };
           },
+          async openPurchaseReceiptMaterialChange(row) {
+            if (!row?.source_key || !this.hasPermission("incoming.execute")) {
+              this.showToast("当前账号不能变更来料材质", true);
+              return;
+            }
+            if (!this.allMaterials.length) await this.loadMaterials();
+            const materialCode=String(row.material_code || row.material || "").trim().toLowerCase();
+            const matchedMaterial=(this.allMaterials || []).find(material =>
+              String(material.code || "").trim().toLowerCase() === materialCode
+            );
+            this.modal={
+              type:"purchaseReceiptMaterialChange",
+              title:"变更来料材质",
+              row,
+              saving:false,
+              form:{
+                formal_material_id:Number(row.formal_material_id || matchedMaterial?.id) || null,
+                actual_material_id:Number(row.material_variance_actual_material_id || row.actual_material_id || row.formal_material_id || matchedMaterial?.id) || null,
+                material_search:"",
+                purchase_purpose_source_snapshot_id:Number(row.purchase_purpose_source_snapshot_id || 0),
+                purpose_snapshot_version:Number(row.expected_purpose_snapshot_version || 0),
+                receipt_plan_fingerprint:String(row.receipt_plan_fingerprint || ""),
+                expected_source_version:Number(row.expected_source_version || 0),
+                material_variance_id:Number(row.material_variance_id || 0) || null,
+                material_variance_approval_id:Number(row.material_variance_approval_id || 0) || null,
+                material_variance_reason:String(row.material_variance_reason || ""),
+                material_variance_request_key:createIdempotencyKey(),
+                material_variance_approval_key:createIdempotencyKey(),
+              },
+            };
+          },
+          purchaseReceiptMaterialCandidates() {
+            const query=String(this.modal?.form?.material_search || "").trim().toLowerCase();
+            return (this.allMaterials || []).filter(material => {
+              if (material.is_active===false) return false;
+              if (!query) return true;
+              return [material.code,material.supplier_name,material.paper_composition,material.flute_type]
+                .some(value => String(value || "").toLowerCase().includes(query));
+            }).slice(0,80);
+          },
+          selectPurchaseReceiptMaterial(material) {
+            if (!this.modal?.form || !material?.id) return;
+            const form=this.modal.form;
+            if (Number(form.actual_material_id) !== Number(material.id)) {
+              form.actual_material_id=Number(material.id);
+              form.material_variance_id=null;
+              form.material_variance_approval_id=null;
+              form.material_variance_reason="";
+              form.material_variance_request_key=createIdempotencyKey();
+              form.material_variance_approval_key=createIdempotencyKey();
+            }
+          },
           purchaseReceiptMaterialChanged() {
-            if (this.modal?.type !== "purchaseReceiptFact") return false;
+            if (!["purchaseReceiptFact","purchaseReceiptMaterialChange"].includes(this.modal?.type)) return false;
             const form=this.modal.form || {};
             return Number(form.actual_material_id || 0) !== Number(form.formal_material_id || 0);
           },
@@ -17908,7 +17972,7 @@
             };
           },
           async requestPurchaseMaterialVariance() {
-            if (this.modal?.type !== "purchaseReceiptFact" || this.modal.saving) return;
+            if (!["purchaseReceiptFact","purchaseReceiptMaterialChange"].includes(this.modal?.type) || this.modal.saving) return;
             const row=this.modal.row;
             const form=this.modal.form;
             if (!this.hasPermission("incoming.execute")) { this.showToast("当前账号不能提交材质差异申请",true); return; }
@@ -17930,7 +17994,7 @@
             finally { this.modal.saving=false; }
           },
           async approvePurchaseMaterialVariance() {
-            if (this.modal?.type !== "purchaseReceiptFact" || this.modal.saving) return;
+            if (!["purchaseReceiptFact","purchaseReceiptMaterialChange"].includes(this.modal?.type) || this.modal.saving) return;
             const form=this.modal.form;
             if (!this.hasPermission("incoming.material_variance.confirm")) { this.showToast("当前账号没有材质差异确认权限",true); return; }
             if (!Number(form.material_variance_id)) { this.showToast("请先提交材质差异申请",true); return; }
@@ -17938,7 +18002,7 @@
             try {
               const {data}=await axios.put(`/api/requisition/purchase-material-variances/${Number(form.material_variance_id)}/confirm`,{idempotency_key:form.material_variance_approval_key});
               form.material_variance_approval_id=Number(data.material_variance_approval_id);
-              this.showToast("材质差异已独立确认，可以由价格人员冻结正式采购价");
+              this.showToast("材质差异已独立确认；关闭后即可确认实收");
             } catch(error) { this.showToast(this.errorMessage(error),true); }
             finally { this.modal.saving=false; }
           },
@@ -17976,6 +18040,38 @@
               this.showToast(committed ? "正式收料事实已保存，但列表刷新失败；请点击刷新，勿重复录入" : this.errorMessage(error),true);
             }
           },
+          async ensureAutomaticPurchaseReceiptFact(row) {
+            if (row?.purpose_status !== "frozen" || row.receipt_fact_ready) return;
+            if (!row?.source_key) throw new Error("缺少正式采购来源，无法按报料材质实收");
+            const materialCode=String(row.material_code || row.material || "").trim().toLowerCase();
+            const matchedMaterial=(this.allMaterials || []).find(material =>
+              material.is_active!==false && String(material.code || "").trim().toLowerCase() === materialCode
+            );
+            const actualMaterialId=Number(
+              row.material_variance_actual_material_id
+              || row.actual_material_id
+              || row.formal_material_id
+              || matchedMaterial?.id
+            ) || null;
+            const payload={
+              actual_material_id:actualMaterialId,
+              purchase_purpose_source_snapshot_id:Number(row.purchase_purpose_source_snapshot_id || 0),
+              purpose_snapshot_version:Number(row.expected_purpose_snapshot_version || 0),
+              receipt_plan_fingerprint:String(row.receipt_plan_fingerprint || ""),
+              expected_source_version:Number(row.expected_source_version || 0),
+              expected_latest_receipt_fact_version:Number(row.latest_receipt_fact_version ?? row.expected_receipt_fact_version ?? 0),
+              material_variance_approval_id:Number(row.material_variance_approval_id || 0) || null,
+              idempotency_key:row._automatic_receipt_fact_key || createIdempotencyKey(),
+            };
+            row._automatic_receipt_fact_key=payload.idempotency_key;
+            const {data}=await axios.put(`/api/requisition/purchase-sources/${encodeURIComponent(row.source_key)}/receipt-facts/auto`,payload);
+            row.receipt_fact_ready=true;
+            row.expected_receipt_fact_version=Number(data.receipt_fact_version);
+            row.latest_receipt_fact_version=Number(data.receipt_fact_version);
+            row.expected_actual_material_version=Number(data.actual_material_version);
+            row.actual_material_fingerprint=String(data.actual_material_fingerprint || "");
+            row.actual_material_id=Number(data.actual_material_id);
+          },
           incomingPayload(row) {
             let action=null;
             if (row.purpose_status==='legacy_unset') {
@@ -17986,14 +18082,12 @@
               if (action==="transfer_to_semi_inventory" && this.incomingLocationsLoading) throw new Error("正在读取半成品库位，请稍候再确认");
               if (action==="transfer_to_semi_inventory" && this.incomingLocationsError) throw new Error(this.incomingLocationsError);
               if (action==="transfer_to_semi_inventory" && !Number(row.surplus_location_id)) throw new Error("余量转半成品库存时必须选择库位");
-            } else if (!row.receipt_fact_ready) {
-              throw new Error(row.purpose_issue || "请先确认实际材质和正式采购价格");
             }
             const surplusLocation=this.incomingLocations.find(location=>Number(location.id)===Number(row.surplus_location_id));
             return {item_id:row.item_id,received_quantity:Number(row.incoming_quantity),resolution_action:action,resolution_reason:row.resolution_reason?.trim()||null,surplus_location_id:Number(row.surplus_location_id)||null,expected_surplus_layout_version:surplusLocation?.layout_version||null,purchase_purpose_source_snapshot_id:row.purchase_purpose_source_snapshot_id ?? null,expected_receipt_fact_version:row.expected_receipt_fact_version ?? null,expected_purpose_snapshot_version:row.expected_purpose_snapshot_version ?? null,receipt_plan_fingerprint:row.receipt_plan_fingerprint || null,expected_actual_material_version:row.expected_actual_material_version ?? null,actual_material_fingerprint:row.actual_material_fingerprint || null};
           },
           canReceiveIncoming(row) {
-            return row?.material_status === "pending" && ["已报料", "供应商已排单"].includes(row?.requisition_status) && (row.purpose_status==='legacy_unset' || row.receipt_fact_ready===true);
+            return row?.material_status === "pending" && ["已报料", "供应商已排单"].includes(row?.requisition_status) && (row.purpose_status==='legacy_unset' || row.purpose_status==='frozen');
           },
           incomingSelectedCount() {
             return this.incomingPending.filter(row => this.canReceiveIncoming(row) && this.incomingSelected[row.item_id]).length;
@@ -18030,6 +18124,7 @@
                   this.showToast(`${row.product_code || row.product_name} 的入库数量必须是大于0的整数`, true);
                   return;
                 }
+                try { await this.ensureAutomaticPurchaseReceiptFact(row); } catch(error) { this.showToast(`${row.product_code || row.product_name}：${this.errorMessage(error)}`,true); return; }
                 try { preparedItems.push(this.incomingPayload(row)); } catch(error) { this.showToast(`${row.product_code || row.product_name}：${error.message}`,true); return; }
               }
               signature=JSON.stringify(preparedItems);
@@ -18116,7 +18211,10 @@
               return;
             }
             let nextPayload;
-            try { nextPayload=this.incomingPayload(row); } catch(error) { this.showToast(error.message,true); return; }
+            try {
+              await this.ensureAutomaticPurchaseReceiptFact(row);
+              nextPayload=this.incomingPayload(row);
+            } catch(error) { this.showToast(error.message || this.errorMessage(error),true); return; }
             const idempotencyKey=previousAttempt?.idempotencyKey || createIdempotencyKey();
             nextPayload.idempotency_key=idempotencyKey;
             const signature=JSON.stringify(nextPayload);

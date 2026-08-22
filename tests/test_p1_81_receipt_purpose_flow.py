@@ -1402,6 +1402,53 @@ def test_composite_reversal_removes_immutable_allocations_from_production_summar
     }
 
 
+def test_normal_receipt_auto_freezes_material_master_price_for_incoming_operator(
+    requisition_app,
+) -> None:
+    app, session_factory = requisition_app
+    _seed_material_and_staging(session_factory)
+    with TestClient(app) as client:
+        _login(client, "admin")
+        source = _create_frozen_sources(
+            client,
+            session_factory,
+            order_quantity=10,
+            purchase_total=10,
+            order_purpose=10,
+            stock_purpose=0,
+        )[0]
+
+        _login(client, "workshop")
+        frozen = client.put(
+            "/api/requisition/purchase-sources/"
+            f"{quote(source.source_key, safe='')}/receipt-facts/auto",
+            json={
+                "actual_material_id": source.material_id,
+                "purchase_purpose_source_snapshot_id": source.purpose_snapshot_id,
+                "purpose_snapshot_version": source.purpose_snapshot_version,
+                "receipt_plan_fingerprint": source.receipt_plan_fingerprint,
+                "expected_source_version": source.source_version,
+                "expected_latest_receipt_fact_version": 0,
+                "idempotency_key": "p181-auto-master-price",
+            },
+        )
+        assert frozen.status_code == 200, frozen.text
+        fact = frozen.json()
+        assert fact["actual_material_id"] == source.material_id
+        assert fact["unit_price"] == "99.9900"
+        assert fact["price_unit"] == "per_sheet"
+
+        received = _receive(
+            client,
+            source,
+            fact,
+            quantity=10,
+            idempotency_key="p181-auto-master-price-receive",
+        )
+        assert received.status_code == 200, received.text
+        assert received.json()["material_status"] == "received"
+
+
 def test_frozen_missing_receipt_fact_or_stale_plan_fails_closed(
     requisition_app,
 ) -> None:

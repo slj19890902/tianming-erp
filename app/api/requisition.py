@@ -277,6 +277,25 @@ class PurchaseReceiptFactRequest(BaseModel):
     idempotency_key: str = Field(min_length=1, max_length=120)
 
 
+class AutoPurchaseReceiptFactRequest(BaseModel):
+    """Freeze the current material-master price for a normal receipt.
+
+    The normal incoming flow deliberately accepts no client-supplied price.
+    A material variance remains an explicit, separately approved exception.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    actual_material_id: int | None = Field(default=None, gt=0)
+    purchase_purpose_source_snapshot_id: int = Field(gt=0)
+    purpose_snapshot_version: int = Field(gt=0)
+    receipt_plan_fingerprint: str = Field(min_length=64, max_length=64)
+    expected_source_version: int = Field(gt=0)
+    expected_latest_receipt_fact_version: int = Field(ge=0)
+    material_variance_approval_id: int | None = Field(default=None, gt=0)
+    idempotency_key: str = Field(min_length=1, max_length=120)
+
+
 class PurchaseMaterialVarianceRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
@@ -297,6 +316,59 @@ class PurchaseMaterialVarianceApprovalRequest(BaseModel):
 
 def _purchase_receipt_fact_error(code: str, message: str) -> HTTPException:
     return HTTPException(status_code=409, detail={"code": code, "message": message})
+
+
+def _material_master_price_unit(material: Material) -> str:
+    """Map the material-master display unit to the immutable fact contract."""
+
+    unit = str(material.price_unit or "").strip().lower().replace(" ", "")
+    if unit in {"per_sheet", "sheet", "元/张", "元/片"}:
+        return "per_sheet"
+    if unit in {
+        "per_square_meter",
+        "sqm",
+        "m2",
+        "元/㎡",
+        "元/平方米",
+        "元/m²",
+    }:
+        return "per_square_meter"
+    raise PurchaseReceiptFactValidationError(
+        "Material master must have a supported purchase price unit before receipt."
+    )
+
+
+def _automatic_receipt_material(
+    db: Session,
+    *,
+    source: SupplierRequisitionOrderItem | RequisitionItem,
+    requested_material_id: int | None,
+) -> Material:
+    if requested_material_id is not None:
+        material = db.get(Material, requested_material_id)
+    elif isinstance(source, SupplierRequisitionOrderItem) and source.material_id:
+        material = db.get(Material, source.material_id)
+    else:
+        expected_code = str(getattr(source, "material_snapshot", "") or "").strip()
+        matches = list(
+            db.scalars(
+                select(Material)
+                .where(Material.is_active.is_(True), Material.code == expected_code)
+                .order_by(Material.id)
+                .limit(2)
+            ).all()
+        )
+        material = matches[0] if len(matches) == 1 else None
+    if material is None or not material.is_active:
+        raise PurchaseReceiptFactValidationError(
+            "Material master match is required before normal receipt."
+        )
+    if material.quote_price is None or Decimal(material.quote_price) <= 0:
+        raise PurchaseReceiptFactValidationError(
+            "Material master purchase price is required before normal receipt."
+        )
+    _material_master_price_unit(material)
+    return material
 
 
 def _current_purchase_purpose_source(
@@ -457,6 +529,127 @@ def confirm_purchase_receipt_fact(
             "ACTUAL_MATERIAL_CONFIRMATION_REQUIRED"
             if "实际材质变化" in message
             else "PURCHASE_RECEIPT_FACT_INVALID"
+        )
+        raise _purchase_receipt_fact_error(code, message) from error
+    except Exception:
+        db.rollback()
+        raise
+    response = serialize_purchase_receipt_fact(fact)
+    response.update(
+        {
+            "receipt_fact_id": fact.id,
+            "formal_material_id": fact.expected_material_id,
+            "material_changed": (
+                fact.actual_material_code_snapshot
+                != fact.expected_material_code_snapshot
+            ),
+        }
+    )
+    return response
+
+
+@router.put("/purchase-sources/{source_key}/receipt-facts/auto")
+def confirm_automatic_purchase_receipt_fact(
+    source_key: str,
+    payload: AutoPurchaseReceiptFactRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_receive_material_variance),
+):
+    """Create the first receipt fact from material-master maintenance."""
+
+    if payload.expected_latest_receipt_fact_version != 0:
+        raise _purchase_receipt_fact_error(
+            "PURCHASE_RECEIPT_FACT_ALREADY_FROZEN",
+            "A frozen purchase receipt fact must use the controlled price correction flow.",
+        )
+    snapshot, source = _current_purchase_purpose_source(
+        db,
+        source_key=source_key,
+        snapshot_id=payload.purchase_purpose_source_snapshot_id,
+        user=user,
+    )
+    actual_material: Material | None = None
+    try:
+        actual_material = _automatic_receipt_material(
+            db,
+            source=source,
+            requested_material_id=payload.actual_material_id,
+        )
+        fact = create_or_replay_purchase_receipt_fact(
+            db,
+            supplier_requisition_order_item_id=(
+                source.id if isinstance(source, SupplierRequisitionOrderItem) else None
+            ),
+            material_requisition_item_id=(
+                source.id if isinstance(source, RequisitionItem) else None
+            ),
+            purchase_purpose_source_snapshot_id=payload.purchase_purpose_source_snapshot_id,
+            expected_source_version=payload.expected_source_version,
+            purpose_snapshot_version=payload.purpose_snapshot_version,
+            receipt_plan_fingerprint=payload.receipt_plan_fingerprint,
+            actual_material_id=actual_material.id,
+            material_change_confirmed=payload.material_variance_approval_id is not None,
+            material_variance_approval_id=payload.material_variance_approval_id,
+            unit_price=actual_material.quote_price,
+            currency="CNY",
+            price_unit=_material_master_price_unit(actual_material),
+            tax_included=True,
+            tax_rate=Decimal("0.13"),
+            idempotency_key=payload.idempotency_key,
+            created_by=user.id,
+            expected_latest_receipt_fact_version=0,
+        )
+        _audit(
+            db,
+            user=user,
+            action="AUTO_CONFIRM_PURCHASE_RECEIPT_FACT_FROM_MATERIAL_MASTER",
+            entity_id=(snapshot.source_order_item_id or source.id),
+            details={
+                "purchase_purpose_source_snapshot_id": snapshot.id,
+                "source_key": snapshot.source_key,
+                "receipt_fact_id": fact.id,
+                "receipt_fact_version": fact.receipt_fact_version,
+                "actual_material_id": fact.actual_material_id,
+                "material_changed": (
+                    fact.actual_material_code_snapshot
+                    != fact.expected_material_code_snapshot
+                ),
+                "price_source": "materials.quote_price",
+                "price_unit": fact.price_unit,
+                "currency": fact.currency,
+            },
+            description="Auto-freeze normal receipt material and master price.",
+        )
+        db.commit()
+        db.refresh(fact)
+    except PurchaseReceiptFactIdempotencyConflict as error:
+        db.rollback()
+        raise _purchase_receipt_fact_error(
+            "PURCHASE_RECEIPT_FACT_IDEMPOTENCY_CONFLICT", str(error)
+        ) from error
+    except PurchaseReceiptFactStaleError as error:
+        db.rollback()
+        raise _purchase_receipt_fact_error("PURCHASE_RECEIPT_FACT_STALE", str(error)) from error
+    except PurchaseReceiptFactValidationError as error:
+        db.rollback()
+        message = str(error)
+        expected_code = str(
+            (
+                source.material_code_snapshot
+                if isinstance(source, SupplierRequisitionOrderItem)
+                else source.material_snapshot
+            )
+            or ""
+        ).strip()
+        code = (
+            "ACTUAL_MATERIAL_CONFIRMATION_REQUIRED"
+            if (
+                actual_material is not None
+                and str(actual_material.code or "").strip() != expected_code
+                and payload.material_variance_approval_id is None
+            )
+            else "MATERIAL_MASTER_PRICE_REQUIRED"
         )
         raise _purchase_receipt_fact_error(code, message) from error
     except Exception:

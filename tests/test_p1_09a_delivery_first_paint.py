@@ -48,7 +48,7 @@ def test_pending_delivery_candidates_are_loaded_only_for_new_or_edit_delivery() 
     pending = _method_body("loadDeliveryPendingItems")
     assert 'axios.get("/api/deliveries/pending_items")' in pending
     customer_options = _method_body("loadDeliveryCustomerOptions")
-    assert 'axios.get("/api/deliveries/pending-customer-options")' in customer_options
+    assert 'axios.get("/api/deliveries/pending-customer-options", { params:' in customer_options
 
     open_body = _method_body("openDelivery")
     edit_body = _method_body("editDelivery")

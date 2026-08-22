@@ -1185,7 +1185,7 @@ def test_print_html_has_required_text_and_no_money_bindings() -> None:
         "<th>序号</th>",
         "款号",
         "<th>产品名称</th>",
-        "<th>规格</th>",
+        "<th>规格mm</th>",
         "<th>单位</th>",
         "备注说明",
         "白联存档",

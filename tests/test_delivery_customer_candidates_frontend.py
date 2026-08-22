@@ -33,11 +33,28 @@ def test_new_delivery_customer_selector_uses_real_candidate_union() -> None:
     assert "当前没有待送订单或可送成品库存" in modal
 
 
+def test_unordered_inventory_customers_require_explicit_opt_in() -> None:
+    modal_start = INDEX.index("modal.type === 'delivery'")
+    modal_end = INDEX.index("modal.type === 'tianhuaPreimport'", modal_start)
+    modal = INDEX[modal_start:modal_end]
+    loader = _method_body("loadDeliveryCustomerOptions")
+    opener = _method_body("openDelivery")
+
+    assert 'v-model="deliveryIncludeUnorderedCustomers"' in modal
+    assert '@change="reloadDeliveryCustomerOptionsForScope($event)"' in modal
+    assert "包含无订单库存客户" in modal
+    assert "include_unordered_finished: this.deliveryIncludeUnorderedCustomers" in loader
+    assert "this.deliveryIncludeUnorderedCustomers = false" in opener
+    assert "this.deliveryIncludeUnorderedCustomers = !!event?.target?.checked" in _method_body("reloadDeliveryCustomerOptionsForScope")
+    assert "editingCustomerId" in _method_body("deliveryCustomerOptions")
+
+
 def test_candidate_loader_opens_first_and_does_not_guess_a_customer() -> None:
     loader = _method_body("loadDeliveryCustomerOptions")
     opener = _method_body("openDelivery")
 
-    assert 'axios.get("/api/deliveries/pending-customer-options")' in loader
+    assert 'axios.get("/api/deliveries/pending-customer-options", { params:' in loader
+    assert "include_unordered_finished: this.deliveryIncludeUnorderedCustomers" in loader
     assert "this.deliveryCustomerCandidates = data.items || []" in loader
     assert 'this.modal = { type:"delivery", title:"新增送货单" }' in opener
     assert opener.index('this.modal = { type:"delivery", title:"新增送货单" }') < opener.index("await this.loadDeliveryCustomerOptions()")

@@ -85,7 +85,7 @@ def test_url_restore_navigation_and_page_cache_keys_are_isolated(
 ) -> None:
     initial = _method_body(
         "initialIncomingWorkspaceFromLocation(page) {",
-        "syncDesktopWorkspaceUrl(page, subpage=\"\") {",
+        "orderStageDeepLinkRequest() {",
     )
     sync_url = _method_body(
         "syncDesktopWorkspaceUrl(page, subpage=\"\") {",

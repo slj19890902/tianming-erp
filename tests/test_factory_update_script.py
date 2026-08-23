@@ -37,7 +37,7 @@ def test_factory_update_reports_current_release_version() -> None:
     )
 
     assert APP_VERSION == "v0.22.164"
-    assert APP_VERSION_NAME == "生产完工地图选位与历史紧凑布局"
+    assert APP_VERSION_NAME == "桌面手机打印追溯与流程修复"
     assert APP_BUILD_DATE == "2026-08-23"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -49,14 +49,15 @@ def test_factory_update_reports_current_release_version() -> None:
     current_release = [
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
-    assert any("本次更新｜" in item and "完工历史" in item and "紧凑展示" in item for item in current_release)
-    assert any("本次更新｜" in item and "新标签页" in item and "货物标签" in item for item in current_release)
-    assert any("本次更新｜" in item and "地图只保存选位" in item and "不直接移动库存" in item for item in current_release)
-    assert any("本次更新｜" in item and "一次性选位会话表" in item and "不回填" in item for item in current_release)
-    assert any("如何验证｜" in item and "1920×1080" in item and "一行显示一条记录" in item for item in current_release)
-    assert any("如何验证｜" in item and "新标签页" in item and "筛选和页码" in item for item in current_release)
-    assert any("如何验证｜" in item and "未回原页确认前" in item and "一次性完成转移" in item for item in current_release)
-    assert any("如何验证｜" in item and "v0.22.164" in item and "dh42v8x9z31" in item for item in current_release)
+    assert any("本次更新｜" in item and "未完成订单" in item and "开票任务" in item for item in current_release)
+    assert any("本次更新｜" in item and "1920×1080" in item and "勾选生产卡" in item for item in current_release)
+    assert any("本次更新｜" in item and "半张A4" in item and "具体生产任务" in item for item in current_release)
+    assert any("本次更新｜" in item and "地图选位" in item and "精确追溯" in item for item in current_release)
+    assert any("本次更新｜" in item and "订单优先" in item and "单一收料入口" in item for item in current_release)
+    assert any("如何验证｜" in item and "P0-17" in item and "对账月份" in item for item in current_release)
+    assert any("如何验证｜" in item and "1920×1080" in item and "不要求整张采购单" in item for item in current_release)
+    assert any("如何验证｜" in item and "EPSON SK820" in item and "242×140" in item for item in current_release)
+    assert any("如何验证｜" in item and "360×640" in item and "dh42v8x9z31" in item for item in current_release)
     assert any(item.startswith("v0.22.162：本次更新｜") and "正常实收" in item and "报料材质" in item for item in APP_CHANGELOG)
     assert any(item.startswith("v0.22.162：如何验证｜") and "de39v8x9z28" in item for item in APP_CHANGELOG)
     assert any(item.startswith("v0.22.160：本次更新｜") and "订单生产用途" in item and "片料备库" in item for item in APP_CHANGELOG)

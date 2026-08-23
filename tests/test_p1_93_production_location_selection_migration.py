@@ -9,7 +9,7 @@ from alembic.config import Config
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-PARENT_REVISION = "de39v8x9z28"
+PARENT_REVISION = "dg41v8x9z30"
 TARGET_REVISION = "dh42v8x9z31"
 TABLE_NAME = "production_location_selection_sessions"
 

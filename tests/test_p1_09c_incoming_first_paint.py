@@ -38,7 +38,9 @@ def test_desktop_incoming_secondary_data_is_tab_or_action_driven() -> None:
     locations = _block(INDEX, "async ensureIncomingLocations", "onIncomingResolutionAction")
     tabs = _block(INDEX, "async selectIncomingTab(tab)", "async refreshIncomingTab()")
 
-    assert 'axios.get("/api/incoming/received", {signal:controller.signal})' in received
+    assert 'axios.get("/api/incoming/received", {' in received
+    assert "params:{page:this.pages.incomingReceived,page_size:this.incomingListPageSize()}" in received
+    assert "signal:controller.signal" in received
     assert 'beginLatestRequest("incoming:received")' in received
     assert 'axios.get("/api/incoming/surplus-locations", {signal:controller.signal})' in locations
     assert 'beginLatestRequest("incoming:surplus-locations")' in locations

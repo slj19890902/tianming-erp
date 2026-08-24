@@ -33,6 +33,29 @@ def test_mold_editor_uses_three_fields_multi_customer_and_stable_save_contract()
     assert '<input id="moldCode" type="hidden">' in source
 
 
+def test_mold_save_returns_to_clean_create_mode_and_keeps_only_location() -> None:
+    source = (ROOT / "static" / "warehouse.html").read_text(encoding="utf-8")
+    assert 'id="moldFormTitle">新增生产模具</h2>' in source
+    assert 'id="moldFormModeHint"' in source
+    assert 'id="moldPrimaryCustomer2Field" class="field hidden"' in source
+    assert 'id="moldCustomerSelectionLabel">正式客户（新增只选一个）' in source
+    assert "function setMoldFormMode(row=null)" in source
+    assert 'classList.toggle("hidden",!editing)' in source
+    assert "function resetMoldForm({preserveLocation=false}={})" in source
+    assert 'const preservedLocation=preserveLocation?$("moldRackLocation").value:""' in source
+    assert "if(preservedLocation)syncMoldLocationBuilder(preservedLocation)" in source
+    assert "function finishMoldSave(message)" in source
+    assert "resetMoldForm({preserveLocation:true})" in source
+    assert "已进入下一件新增状态，仅保留货架层格" in source
+    assert "新增模具只能选择一个正式客户" in source
+
+    save_body = source.split("async function saveMold(event){", 1)[1].split(
+        "async function enableLegacyMold", 1
+    )[0]
+    assert "finishMoldSave(" in save_body
+    assert "editMold(row.id)" not in save_body
+
+
 def test_employee_pages_render_display_name_and_never_render_internal_mold_code() -> None:
     mobile = (ROOT / "static" / "mobile_erp.html").read_text(encoding="utf-8")
     lookup = (ROOT / "static" / "mobile_mold_lookup.html").read_text(

@@ -33,25 +33,17 @@ from app.models.supplier_requisition_order import (
     SupplierRequisitionOrderItem,
 )
 from app.models.warehouse_inventory import InventoryReservation
-from app.services.order_status_policy import MANAGEMENT_ORDER_STATUSES
+from app.services.order_status_policy import (
+    MANAGEMENT_ORDER_STATUSES,
+    PERSISTED_ORDER_STATUS_LABELS,
+)
 
 
 BUSINESS_STATUS_LABELS = {
-    "pending_confirmation": "待确认",
+    **PERSISTED_ORDER_STATUS_LABELS,
     "pending_material": "待报料",
     "pending_incoming": "待收料",
-    "pending_production": "待生产",
-    "pending_delivery": "待送货",
-    "partially_delivered": "部分送完",
     "waiting_receipt": "待回单",
-    "pending_reconciliation": "待对账",
-    "pending_invoice": "待开票",
-    "pending_payment": "待结款",
-    "completed": "订单完成",
-    "archived": "已归档",
-    "closed": "已结档",
-    "dead": "死单",
-    "cancelled": "已作废",
 }
 
 BUSINESS_STATUS_ORDER = (

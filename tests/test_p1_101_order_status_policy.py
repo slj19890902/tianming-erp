@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 import pytest
+from sqlalchemy import create_engine, literal, select
 
 from app.services.order_status_policy import (
     ALL_ORDER_STATUSES,
@@ -12,11 +13,14 @@ from app.services.order_status_policy import (
     MANAGEMENT_TERMINAL_ORDER_STATUSES,
     MATERIAL_RECEIPT_TO_DELIVERY_ORDER_STATUSES,
     ORDER_ITEM_ACTIVE_ORDER_STATUSES,
+    PERSISTED_ORDER_STATUS_LABELS,
     PRODUCTION_STATUS_REFRESH_ORDER_STATUSES,
     material_receipt_recalculated_order_status,
     order_item_allows_forward_fulfillment,
     order_item_forward_block_message,
     order_item_forward_block_reason,
+    order_item_forward_fulfillment_sql_conditions,
+    persisted_order_status_label,
 )
 
 
@@ -73,6 +77,43 @@ def test_model_check_constraint_and_policy_cannot_drift_apart() -> None:
         re.findall(r"'([^']+)'", str(constraint.sqltext))
     )
     assert persisted_statuses == ALL_ORDER_STATUSES
+
+
+def test_persisted_status_labels_are_complete_and_include_partial_delivery() -> None:
+    assert set(PERSISTED_ORDER_STATUS_LABELS) == ALL_ORDER_STATUSES
+    assert persisted_order_status_label("partially_delivered") == "部分送完"
+    assert persisted_order_status_label("future_unclassified_status") == (
+        "future_unclassified_status"
+    )
+
+
+def test_sql_and_scalar_forward_fulfillment_policies_cannot_drift() -> None:
+    engine = create_engine("sqlite://")
+    scenarios = (
+        (100, 0, False),
+        (100, 40, False),
+        (100, 100, False),
+        (100, 0, True),
+    )
+    with engine.connect() as connection:
+        for status in sorted({*EXPECTED_ORDER_STATUSES, "future_unclassified_status"}):
+            for ordered, delivered, force_closed in scenarios:
+                conditions = order_item_forward_fulfillment_sql_conditions(
+                    order_status_column=literal(status),
+                    ordered_quantity_column=literal(ordered),
+                    delivered_quantity_column=literal(delivered),
+                    is_force_closed_column=literal(force_closed),
+                )
+                sql_allows = connection.scalar(
+                    select(literal(1)).where(*conditions)
+                ) is not None
+                scalar_allows = order_item_allows_forward_fulfillment(
+                    order_status=status,
+                    ordered_quantity=ordered,
+                    delivered_quantity=delivered,
+                    is_force_closed=force_closed,
+                )
+                assert sql_allows is scalar_allows
 
 
 def test_aggregate_and_operation_specific_status_sets_stay_distinct() -> None:

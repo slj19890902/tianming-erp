@@ -13,7 +13,7 @@ pre-delivery workflow states, but it must never downgrade an aggregate
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 
 ALL_ORDER_STATUSES = frozenset(
@@ -34,6 +34,23 @@ ALL_ORDER_STATUSES = frozenset(
         "cancelled",
     }
 )
+
+PERSISTED_ORDER_STATUS_LABELS = {
+    "pending_confirmation": "待确认",
+    "pending_production": "待生产",
+    "production": "生产中",
+    "pending_delivery": "待送货",
+    "partially_delivered": "部分送完",
+    "pending_reconciliation": "待对账",
+    "pending_invoice": "待开票",
+    "pending_payment": "待结款",
+    "delivered": "已送完",
+    "completed": "订单完成",
+    "archived": "已归档",
+    "closed": "已结档",
+    "dead": "死单",
+    "cancelled": "已作废",
+}
 
 # Statuses in which an individual, still-open order line may continue normal
 # requisition, receipt, production, inventory, or delivery work.
@@ -98,6 +115,34 @@ def normalized_order_status(status: object) -> str:
 
 def order_status_allows_item_fulfillment(status: object) -> bool:
     return normalized_order_status(status) in ORDER_ITEM_ACTIVE_ORDER_STATUSES
+
+
+def persisted_order_status_label(status: object) -> str:
+    """Return the shared employee-facing label for a persisted status."""
+
+    normalized = normalized_order_status(status)
+    return PERSISTED_ORDER_STATUS_LABELS.get(normalized, normalized or "未知")
+
+
+def order_item_forward_fulfillment_sql_conditions(
+    *,
+    order_status_column: Any,
+    ordered_quantity_column: Any,
+    delivered_quantity_column: Any,
+    is_force_closed_column: Any,
+) -> tuple[Any, Any, Any]:
+    """Return the SQL equivalent of the scalar forward-fulfillment policy.
+
+    Query projections, including the warehouse map, must use the same three
+    facts as execution entrypoints: an active aggregate status, an open target
+    item and remaining quantity on that item.
+    """
+
+    return (
+        order_status_column.in_(ORDER_ITEM_ACTIVE_ORDER_STATUSES),
+        is_force_closed_column.is_(False),
+        delivered_quantity_column < ordered_quantity_column,
+    )
 
 
 def order_item_remaining_quantity(

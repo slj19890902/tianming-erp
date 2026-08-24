@@ -180,8 +180,15 @@ from app.services.asset_time_archive import (
     build_mold_detail_timeline,
     build_printing_plate_time_archives,
 )
-from app.services.production_workflow import PENDING, list_production_tasks
-from app.services.order_status_policy import ORDER_ITEM_ACTIVE_ORDER_STATUSES
+from app.services.production_workflow import (
+    PENDING,
+    list_production_task_dashboard_rows,
+    list_production_tasks,
+)
+from app.services.order_status_policy import (
+    order_item_forward_fulfillment_sql_conditions,
+    persisted_order_status_label,
+)
 from app.services.semi_finished_inventory import (
     SemiFinishedCandidate,
     SemiFinishedLotVersion,
@@ -291,6 +298,7 @@ from app.services.mold_label_template import (
 )
 from app.services.location_candidates import (
     claim_active_placed_location,
+    has_space_ledger,
     list_operational_locations,
     operational_location_issue,
     operational_location_payload,
@@ -7703,6 +7711,7 @@ def move_twin_formal_pallet(
             remarks=payload.remarks,
             operator_id=user.id,
             idempotency_key=payload.idempotency_key,
+            require_published_target=has_space_ledger(db),
             expected_target_layout_version=payload.expected_target_layout_version,
         )
         if not result.replayed:
@@ -8062,6 +8071,7 @@ def move_floor3_pallet(
             remarks=payload.remarks,
             operator_id=user.id,
             idempotency_key=payload.idempotency_key,
+            require_published_target=has_space_ledger(db),
             expected_target_layout_version=payload.expected_target_layout_version,
         )
         if not result.replayed:
@@ -9266,6 +9276,19 @@ def _formal_area_publish_blockers(
     return blockers
 
 
+def _mapped_live_production_task_ids(db: Session) -> set[int]:
+    """Return the exact live pending-task identities used by production UI."""
+
+    return {
+        int(row["id"])
+        for row in list_production_task_dashboard_rows(
+            db,
+            allowed_customer_ids=None,
+            status=PENDING,
+        )
+    }
+
+
 def _zone_asset_and_production_blockers(
     db: Session,
     *,
@@ -9318,11 +9341,7 @@ def _zone_asset_and_production_blockers(
         if fail_closed_on_mapping_error:
             blockers.append("生产任务地图占用状态暂无法核对")
     else:
-        pending_ids = set(
-            db.scalars(
-                select(ProductionTask.id).where(ProductionTask.status == PENDING)
-            ).all()
-        )
+        pending_ids = _mapped_live_production_task_ids(db)
         pallets = {
             str(item.get("id")): item for item in floor_layout.get("pallets") or []
         }
@@ -9880,9 +9899,7 @@ def _update_twin_zone_storage_policy_locked(
             # data exists, pending mapped tasks remain a blocker below.
             pass
         else:
-            pending_ids = set(db.scalars(select(ProductionTask.id).where(
-                ProductionTask.status == PENDING
-            )).all())
+            pending_ids = _mapped_live_production_task_ids(db)
             pallets = {str(item.get('id')): item for item in effective_floor.get('pallets') or []}
             for mapping in mappings:
                 if int(mapping.get('source_task_id') or 0) not in pending_ids:
@@ -14634,12 +14651,6 @@ _MOLD_TASK_STATUS_LABELS = {
     "completed": "已完成",
     "not_required": "无需生产",
 }
-_MOLD_ORDER_STATUS_LABELS = {
-    "pending_confirmation": "待确认",
-    "pending_production": "待生产",
-    "production": "生产中",
-    "pending_delivery": "待送货",
-}
 
 
 def _current_mold_binding_starts(
@@ -14726,9 +14737,12 @@ def _mold_live_task_ids(
                 ProductionTask.sales_order_item_bom_component_id.is_(None),
                 OrderItem.product_id == product.id,
                 ProductionTask.created_at >= binding_start,
-                OrderItem.is_force_closed.is_(False),
-                OrderItem.delivered_quantity < OrderItem.quantity,
-                Order.status.in_(ORDER_ITEM_ACTIVE_ORDER_STATUSES),
+                *order_item_forward_fulfillment_sql_conditions(
+                    order_status_column=Order.status,
+                    ordered_quantity_column=OrderItem.quantity,
+                    delivered_quantity_column=OrderItem.delivered_quantity,
+                    is_force_closed_column=OrderItem.is_force_closed,
+                ),
             )
         )
         if allowed_customer_ids is not None:
@@ -14746,9 +14760,12 @@ def _mold_live_task_ids(
         .join(Order, Order.id == OrderItem.order_id)
         .where(
             SalesOrderItemBomComponent.snapshot_mold_tool_id == mold.id,
-            OrderItem.is_force_closed.is_(False),
-            OrderItem.delivered_quantity < OrderItem.quantity,
-            Order.status.in_(ORDER_ITEM_ACTIVE_ORDER_STATUSES),
+            *order_item_forward_fulfillment_sql_conditions(
+                order_status_column=Order.status,
+                ordered_quantity_column=OrderItem.quantity,
+                delivered_quantity_column=OrderItem.delivered_quantity,
+                is_force_closed_column=OrderItem.is_force_closed,
+            ),
         )
     )
     if allowed_customer_ids is not None:
@@ -15351,9 +15368,7 @@ def _mold_live_tasks(
                 "order_item_id": int(item.id),
                 "order_number": order.order_number,
                 "order_status": order.status,
-                "order_status_label": _MOLD_ORDER_STATUS_LABELS.get(
-                    order.status, order.status
-                ),
+                "order_status_label": persisted_order_status_label(order.status),
                 "delivery_date": order.delivery_date.isoformat()
                 if order.delivery_date
                 else None,
@@ -15504,9 +15519,12 @@ def get_mold_live_status(
             .where(
                 SalesOrderItemBomComponent.snapshot_mold_tool_id == row.id,
                 Order.customer_id.in_(allowed_customer_ids),
-                OrderItem.is_force_closed.is_(False),
-                OrderItem.delivered_quantity < OrderItem.quantity,
-                Order.status.in_(ORDER_ITEM_ACTIVE_ORDER_STATUSES),
+                *order_item_forward_fulfillment_sql_conditions(
+                    order_status_column=Order.status,
+                    ordered_quantity_column=OrderItem.quantity,
+                    delivered_quantity_column=OrderItem.delivered_quantity,
+                    is_force_closed_column=OrderItem.is_force_closed,
+                ),
             )
             .limit(1)
         ) is not None

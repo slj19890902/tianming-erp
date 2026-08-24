@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -10,9 +11,11 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.core.database import create_sqlite_engine
 from app.models import Base
 from app.models.warehouse_inventory import (
+    Floor3LocationLayout,
     InventoryLot,
     InventoryPallet,
     WarehouseArea,
+    WarehouseAreaStoragePolicy,
     WarehouseFloor,
     WarehouseLocation,
 )
@@ -96,34 +99,31 @@ def _seed_space(db: Session) -> dict[str, WarehouseLocation]:
     )
     db.add_all([floor1, floor2, floor3])
     db.flush()
-    db.add_all(
-        [
-            WarehouseArea(
-                floor_id=floor1.id,
-                area_code="A1",
-                area_name="一楼 A1",
-                construction_status="enabled",
-            ),
-            WarehouseArea(
-                floor_id=floor2.id,
-                area_code="B1",
-                area_name="二楼 B1",
-                construction_status="enabled",
-            ),
-            WarehouseArea(
-                floor_id=floor3.id,
-                area_code="C1",
-                area_name="三楼 C1",
-                construction_status="enabled",
-            ),
-            WarehouseArea(
-                floor_id=floor3.id,
-                area_code="C2",
-                area_name="三楼 C2",
-                construction_status="layout_complete",
-            ),
-        ]
+    area_a1 = WarehouseArea(
+        floor_id=floor1.id,
+        area_code="A1",
+        area_name="一楼 A1",
+        construction_status="enabled",
     )
+    area_b1 = WarehouseArea(
+        floor_id=floor2.id,
+        area_code="B1",
+        area_name="二楼 B1",
+        construction_status="enabled",
+    )
+    area_c1 = WarehouseArea(
+        floor_id=floor3.id,
+        area_code="C1",
+        area_name="三楼 C1",
+        construction_status="enabled",
+    )
+    area_c2 = WarehouseArea(
+        floor_id=floor3.id,
+        area_code="C2",
+        area_name="三楼 C2",
+        construction_status="layout_complete",
+    )
+    db.add_all([area_a1, area_b1, area_c1, area_c2])
     db.flush()
     rows = {
         "valid_1f": _location("A1-L01", floor=1, area="A1"),
@@ -153,6 +153,44 @@ def _seed_space(db: Session) -> dict[str, WarehouseLocation]:
         ),
     }
     db.add_all(rows.values())
+    db.flush()
+    for index, location in enumerate(
+        (rows["valid_1f"], rows["valid_3f"], rows["rack"]), start=1
+    ):
+        db.add(
+            Floor3LocationLayout(
+                location_id=location.id,
+                left_pct=Decimal(index),
+                top_pct=Decimal("1"),
+                width_pct=Decimal("4"),
+                height_pct=Decimal("4"),
+                version=1,
+                source_type="seeded",
+                layout_kind="physical_pallet",
+            )
+        )
+    db.add_all(
+        [
+            WarehouseAreaStoragePolicy(
+                area_id=area_a1.id,
+                map_feature_id="zone-1f-a1",
+                allowed_inventory_types_json='["finished"]',
+                storage_layout="pallet_ground",
+                status="published",
+                published_map_revision="p1-101-test-map",
+                version=1,
+            ),
+            WarehouseAreaStoragePolicy(
+                area_id=area_c1.id,
+                map_feature_id="zone-3f-c1",
+                allowed_inventory_types_json='["finished"]',
+                storage_layout="mixed",
+                status="published",
+                published_map_revision="p1-101-test-map",
+                version=1,
+            ),
+        ]
+    )
     db.flush()
     return rows
 
@@ -227,6 +265,7 @@ def test_one_operational_rule_drives_candidates_production_stocktake_and_move(
         remarks="跨楼层三级联动验证",
         operator_id=None,
         idempotency_key="p0-location-cascade-move",
+        expected_target_layout_version=1,
     )
     assert moved.pallet.location_id == rows["valid_1f"].id
     assert moved.pallet.version == 2
@@ -257,6 +296,7 @@ def test_one_operational_rule_drives_candidates_production_stocktake_and_move(
         remarks="把旧错误位置移入正式库位",
         operator_id=None,
         idempotency_key="p0-location-cascade-correct-source",
+        expected_target_layout_version=1,
     )
     assert corrected.pallet.location_id == rows["valid_3f"].id
 
@@ -314,6 +354,95 @@ def test_empty_pallet_candidates_exclude_occupied_and_rack(location_db: Session)
     assert {
         row.location.id for row in occupied if row.occupied
     } == {rows["valid_1f"].id, rows["valid_3f"].id}
+
+
+def test_new_production_and_map_targets_require_publication_but_old_sources_can_leave(
+    location_db: Session,
+) -> None:
+    rows = _seed_space(location_db)
+    floor1 = location_db.scalar(
+        select(WarehouseFloor).where(WarehouseFloor.floor_number == 1)
+    )
+    assert floor1 is not None
+    draft_area = WarehouseArea(
+        floor_id=floor1.id,
+        area_code="DRAFT",
+        area_name="一楼草稿区",
+        construction_status="enabled",
+    )
+    location_db.add(draft_area)
+    location_db.flush()
+    draft_location = _location("DRAFT-L01", floor=1, area="DRAFT")
+    location_db.add(draft_location)
+    location_db.flush()
+    location_db.add_all(
+        [
+            Floor3LocationLayout(
+                location_id=draft_location.id,
+                left_pct=Decimal("10"),
+                top_pct=Decimal("10"),
+                width_pct=Decimal("4"),
+                height_pct=Decimal("4"),
+                version=1,
+                source_type="manual",
+                layout_kind="physical_pallet",
+            ),
+            WarehouseAreaStoragePolicy(
+                area_id=draft_area.id,
+                map_feature_id="zone-1f-draft",
+                allowed_inventory_types_json='["finished"]',
+                storage_layout="pallet_ground",
+                status="draft",
+                draft_map_revision="p1-101-draft-map",
+                version=1,
+            ),
+        ]
+    )
+    source = InventoryPallet(
+        pallet_code="P1-101-PUBLISHED-SOURCE",
+        location_id=rows["valid_3f"].id,
+        status="active",
+        is_current=True,
+        version=1,
+    )
+    old_source = InventoryPallet(
+        pallet_code="P1-101-OLD-DRAFT-SOURCE",
+        location_id=draft_location.id,
+        status="active",
+        is_current=True,
+        version=1,
+    )
+    location_db.add_all([source, old_source])
+    location_db.flush()
+
+    assert draft_location.location_code not in {
+        row["location_code"] for row in list_temporary_locations(location_db)
+    }
+    with pytest.raises(Floor3LocationError, match="所属区域尚未发布"):
+        move_pallet(
+            location_db,
+            pallet_id=source.id,
+            expected_version=1,
+            to_location_id=draft_location.id,
+            remarks="不得移入草稿位置",
+            operator_id=None,
+            idempotency_key="p1-101-reject-draft-target",
+            require_published_target=True,
+            expected_target_layout_version=1,
+        )
+
+    corrected = move_pallet(
+        location_db,
+        pallet_id=old_source.id,
+        expected_version=1,
+        to_location_id=rows["valid_1f"].id,
+        remarks="旧位置库存迁入已发布位置",
+        operator_id=None,
+        idempotency_key="p1-101-leave-old-source",
+        require_published_target=True,
+        expected_target_layout_version=1,
+    )
+    assert corrected.pallet.location_id == rows["valid_1f"].id
 
 
 def test_general_production_excludes_dispatch_but_direct_delivery_keeps_it(

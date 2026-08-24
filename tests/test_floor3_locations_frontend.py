@@ -676,7 +676,7 @@ def test_floor3_move_targets_are_loaded_independently_from_browse_filters() -> N
     loader = WAREHOUSE_HTML.split("async function loadFloor3MoveLocations(){", 1)[1].split(
         "function renderFloor3Locations(){", 1
     )[0]
-    assert 'location-candidates?inventory_type=finished&empty_only=true&pallet_storage_only=true&include_hierarchy=false' in loader
+    assert 'location-candidates?inventory_type=finished&empty_only=true&pallet_storage_only=true&include_hierarchy=false&published_only=true' in loader
     assert '$("floor3AreaFilter")' not in loader
     assert '$("floor3KeywordFilter")' not in loader
     assert '$("floor3OccupancyFilter")' not in loader

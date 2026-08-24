@@ -78,6 +78,7 @@ from app.services.order_status_policy import (
     PRODUCTION_STATUS_REFRESH_ORDER_STATUSES,
     order_item_forward_block_message,
     order_item_forward_block_reason,
+    order_item_forward_fulfillment_sql_conditions,
 )
 from app.services.production_label_strategy import (
     ProductionLabelStrategyError,
@@ -1184,19 +1185,25 @@ def _production_stock_location(
             "该成品库位尚未完成空间放置，不能办理生产完工入库",
             409,
         )
+    if location.location_code == DIRECT_DELIVERY_STAGING_LOCATION_CODE:
+        raise ProductionWorkflowError(
+            "一楼待送区只供直接待送使用，不能作为一般生产入库库位",
+            409,
+        )
+    require_published_location = has_space_ledger(db)
     issue = operational_location_issue(
         db,
         location,
         warehouse_types={"finished", "shared"},
+        require_published=require_published_location,
+        require_map_geometry=require_published_location,
+        required_inventory_type=(
+            "finished" if require_published_location else None
+        ),
     )
     if issue:
         raise ProductionWorkflowError(
             f"{issue}，不能办理生产完工入库",
-            409,
-        )
-    if location.location_code == DIRECT_DELIVERY_STAGING_LOCATION_CODE:
-        raise ProductionWorkflowError(
-            "一楼待送区只供直接待送使用，不能作为一般生产入库库位",
             409,
         )
     if (
@@ -1682,6 +1689,20 @@ def list_temporary_locations(db: Session) -> list[dict]:
         if candidate.location.location_code
         != DIRECT_DELIVERY_STAGING_LOCATION_CODE
     ]
+    if has_space_ledger(db):
+        locations = [
+            candidate
+            for candidate in locations
+            if operational_location_issue(
+                db,
+                candidate.location,
+                warehouse_types={"finished", "shared"},
+                require_published=True,
+                require_map_geometry=True,
+                required_inventory_type="finished",
+            )
+            is None
+        ]
     if not has_space_ledger(db):
         locations = [
             candidate
@@ -3669,9 +3690,12 @@ def _filtered_task_query(
         main_task.task_role == "order_main",
     )
     query = _task_query(db, allowed_customer_ids).where(
-        Order.status.in_(ORDER_ITEM_ACTIVE_ORDER_STATUSES),
-        OrderItem.is_force_closed.is_(False),
-        OrderItem.delivered_quantity < OrderItem.quantity,
+        *order_item_forward_fulfillment_sql_conditions(
+            order_status_column=Order.status,
+            ordered_quantity_column=OrderItem.quantity,
+            delivered_quantity_column=OrderItem.delivered_quantity,
+            is_force_closed_column=OrderItem.is_force_closed,
+        ),
         or_(
             ProductionTask.task_role == "order_main",
             ~main_task_exists,

@@ -2845,7 +2845,7 @@
       await loadFloor3Locations(true);
     }
     async function loadFloor3MoveLocations(){
-      const data=await api("/api/warehouse/location-candidates?inventory_type=finished&empty_only=true&pallet_storage_only=true&include_hierarchy=false");
+      const data=await api("/api/warehouse/location-candidates?inventory_type=finished&empty_only=true&pallet_storage_only=true&include_hierarchy=false&published_only=true");
       state.floor3.moveLocations=(data.items||[]).filter(floor3CanReceivePallet);
     }
     async function loadFloor3MergeLocations(pallet){

@@ -138,6 +138,30 @@ def test_actual_material_projects_to_receipt_history_and_card_without_overwritin
         assert order_item.snapshot_material == "KAKAK"
 
 
+def test_pending_purchase_order_is_projected_as_one_row_per_product_detail(
+    requisition_app,
+) -> None:
+    app, session_factory = requisition_app
+    _seed_material_and_staging(session_factory)
+    with TestClient(app) as client:
+        _login(client, "admin")
+        sources = _create_frozen_source_batch(client, session_factory, count=2)
+        response = client.get("/api/incoming/pending", params={"page": 1, "page_size": 12})
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["total"] == len(sources) == 2
+    rows = payload["items"]
+    assert len(rows) == 2
+    assert len({row["item_id"] for row in rows}) == 2
+    assert {row["supplier_order_item_id"] for row in rows} == {
+        source.supplier_item_id for source in sources
+    }
+    assert all(str(row.get("product_code") or "").strip() for row in rows)
+    assert all(str(row.get("product_name") or "").strip() for row in rows)
+    assert all("requisition_qty" in row for row in rows)
+
+
 def test_selected_receipt_cards_are_one_fail_closed_half_a4_batch_with_plan_warning(
     requisition_app,
 ) -> None:
@@ -256,7 +280,9 @@ def test_compact_incoming_frontend_uses_top_selection_and_no_row_print_buttons()
     assert "打印生产卡（{{ incomingProductionCardSelectedCount }}）" in incoming
     assert '@click="openIncomingProductionCard(row)"' not in incoming
     assert "报料长" in incoming and "报料宽" in incoming and "压线尺寸" in incoming
-    assert "客户简称 / 存货编码" in incoming
+    assert "客户简称 / 存货编码 / 客户产品名称" in incoming
+    assert '<span class="incoming-product-name">{{ row.product_name || \'-\' }}</span>' in incoming
+    assert "incomingTab==='pending' ? '本次实收' : '实收数量'" in incoming
     assert "撤销收料，回到已报料" not in incoming
     assert ".table-wrap:has(> .incoming-compact-table)" in index
     assert "max-height:none; overflow-x:hidden; overflow-y:visible" in index

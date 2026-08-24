@@ -39,7 +39,8 @@ def test_desktop_pending_uses_server_total_pager_and_current_page_selection() ->
 
     assert "待入库 {{ incomingPendingTotal }}" in page
     assert "待入库 {{ incomingPendingTotal + externalIncomingPending.length }}" not in page
-    assert "全选本页" in page
+    assert '@change="toggleAllIncoming($event.target.checked)"' in page
+    assert "序号" in page
     assert ':page="pages.incomingPending"' in page
     assert ':total="incomingPendingTotal"' in page
     assert "incomingPendingLoading" in page
@@ -62,7 +63,11 @@ def test_latest_page_wins_failure_keeps_last_good_and_string_identity(
     )
     params = _method_body(
         "incomingPendingRequestParams(page) {",
-        "applyIncomingPendingResponse(",
+        "incomingListPageSize() {",
+    )
+    list_page_size = _method_body(
+        "incomingListPageSize() {",
+        "incomingRowsForTab() {",
     )
     apply = _method_body(
         "applyIncomingPendingResponse(data, {requestedPage=1, clearSelection=false}={}) {",
@@ -99,6 +104,7 @@ const vm={{
 }};
 vm.pendingIncomingRequestIsCurrent=new FunctionCtor("controller","authGeneration","userId",{json.dumps(current, ensure_ascii=False)}).bind(vm);
 vm.incomingPendingRequestParams=new FunctionCtor("page",{json.dumps(params, ensure_ascii=False)}).bind(vm);
+vm.incomingListPageSize=new FunctionCtor({json.dumps(list_page_size, ensure_ascii=False)}).bind(vm);
 vm.applyIncomingPendingResponse=new FunctionCtor("data",{json.dumps('{requestedPage=1, clearSelection=false}={}', ensure_ascii=False)},{json.dumps(apply, ensure_ascii=False)}).bind(vm);
 vm.loadIncomingPendingPage=new AsyncFunction({json.dumps('{page=null, clearSelection=false, markCache=true}={}', ensure_ascii=False)},{json.dumps(load, ensure_ascii=False)}).bind(vm);
 vm.changeIncomingPendingPage=new AsyncFunction("page",{json.dumps(change, ensure_ascii=False)}).bind(vm);

@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.165"
-    assert APP_VERSION_NAME == "模具连续新增状态重置与客户隔离"
+    assert APP_VERSION == "v0.22.166"
+    assert APP_VERSION_NAME == "收料明细与主流程紧凑单滚动"
     assert APP_BUILD_DATE == "2026-08-24"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -49,14 +49,16 @@ def test_factory_update_reports_current_release_version() -> None:
     current_release = [
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
-    assert any("本次更新｜" in item and "自动退出编辑态" in item and "新的模具档案" in item for item in current_release)
-    assert any("本次更新｜" in item and "一个正式客户" in item and "明确编辑" in item for item in current_release)
-    assert any("本次更新｜" in item and "模具 ID" in item and "只保留" in item for item in current_release)
-    assert any("本次更新｜" in item and "无数据库迁移" in item and "误录" in item for item in current_release)
-    assert any("如何验证｜" in item and "模具 A" in item and "货架、层、格" in item for item in current_release)
-    assert any("如何验证｜" in item and "模具 B" in item and "不会互相串出" in item for item in current_release)
-    assert any("如何验证｜" in item and "共享客户" in item and "保存失败" in item for item in current_release)
-    assert any("如何验证｜" in item and "v0.22.165" in item and "de39v8x9z28" in item for item in current_release)
+    assert any("本次更新｜" in item and "采购明细逐行" in item and "客户产品名称" in item for item in current_release)
+    assert any("本次更新｜" in item and "顶部勾选打印生产卡" in item and "实收材质" in item for item in current_release)
+    assert any("本次更新｜" in item and "纸板报料" in item and "灰色小字" in item for item in current_release)
+    assert any("本次更新｜" in item and "表格内部纵向滚动" in item and "无数据库迁移" in item for item in current_release)
+    assert any("如何验证｜" in item and "待入库" in item and "每条采购明细独占一行" in item for item in current_release)
+    assert any("如何验证｜" in item and "勾选两条" in item and "生产任务卡" in item for item in current_release)
+    assert any("如何验证｜" in item and "1920×1080" in item and "双重纵向滚动" in item for item in current_release)
+    assert any("如何验证｜" in item and "v0.22.166" in item and "de39v8x9z28" in item for item in current_release)
+    assert any(item.startswith("v0.22.165：本次更新｜") and "自动退出编辑态" in item for item in APP_CHANGELOG)
+    assert any(item.startswith("v0.22.165：如何验证｜") and "历史模具" in item for item in APP_CHANGELOG)
     assert any(item.startswith("v0.22.164：本次更新｜") and "Extra inputs are not permitted" in item for item in APP_CHANGELOG)
     assert any(item.startswith("v0.22.164：如何验证｜") and "YSP3944" in item for item in APP_CHANGELOG)
     assert any(item.startswith("v0.22.163：本次更新｜") and "FIN-001～003" in item and "真实空位置" in item for item in APP_CHANGELOG)

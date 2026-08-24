@@ -5,7 +5,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import text
+from sqlalchemy import select, text
 
 from test_p1_33c3_external_packaging_purchase_confirmation import purchase_app
 
@@ -169,6 +169,68 @@ def test_partial_then_complete_receipt_is_idempotent_and_creates_no_inventory(
                 "incoming_receipts",
             )
         )
+
+
+def test_partial_order_receives_open_target_and_later_target_closure_is_precise(
+    purchase_app: FastAPI,
+) -> None:
+    from app.models.order import Order, OrderItem
+
+    order_id = purchase_app.state.fixture["order_id"]
+    with TestClient(purchase_app) as client:
+        _login(client, "purchase-admin")
+        _confirm(client, order_id)
+        purchase, line = _root_line(_pending(client))
+
+        with purchase_app.state.session_factory() as db:
+            order = db.get(Order, order_id)
+            target = db.scalar(
+                select(OrderItem).where(OrderItem.order_id == order_id)
+            )
+            assert order is not None and target is not None
+            order.status = "partially_delivered"
+            db.commit()
+
+        payload = {
+            "idempotency_key": "p1101-partial-external-receipt",
+            "lines": [
+                {
+                    "purchase_item_id": line["purchase_item_id"],
+                    "received_quantity": "1",
+                }
+            ],
+        }
+        first = client.post(
+            f"/api/external-packaging-purchases/{purchase['id']}/receipts",
+            json=payload,
+        )
+        assert first.status_code == 200, first.text
+        assert first.json()["created"] is True
+
+        with purchase_app.state.session_factory() as db:
+            target = db.scalar(
+                select(OrderItem).where(OrderItem.order_id == order_id)
+            )
+            assert target is not None
+            target.delivered_quantity = target.quantity
+            db.commit()
+
+        assert _pending(client)["purchase_orders"] == []
+        replay = client.post(
+            f"/api/external-packaging-purchases/{purchase['id']}/receipts",
+            json=payload,
+        )
+        assert replay.status_code == 200, replay.text
+        assert replay.json()["created"] is False
+
+        blocked_payload = json.loads(json.dumps(payload))
+        blocked_payload["idempotency_key"] = "p1101-closed-target-external-receipt"
+        blocked = client.post(
+            f"/api/external-packaging-purchases/{purchase['id']}/receipts",
+            json=blocked_payload,
+        )
+        assert blocked.status_code == 409, blocked.text
+        assert "订单明细已全部送货" in blocked.text
 
 
 def test_multi_line_receipt_is_atomic_and_original_units_are_separate(

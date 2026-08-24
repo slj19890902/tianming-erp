@@ -1787,7 +1787,8 @@ def test_terminal_or_force_closed_direct_completion_cannot_transfer_to_stock(
         history = client.get("/api/production/completions")
 
     assert blocked.status_code == 409
-    assert "已结案" in blocked.json()["detail"]
+    assert "订单当前状态不允许继续把直接送货完工转入库存" in blocked.json()["detail"]
+    assert "closed" in blocked.json()["detail"]
     history_row = next(
         row for row in history.json()["items"] if row["id"] == completion_id
     )

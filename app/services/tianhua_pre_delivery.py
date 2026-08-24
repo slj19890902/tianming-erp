@@ -27,6 +27,7 @@ from app.services.delivery_snapshots import (
     build_order_delivery_snapshot,
     ensure_order_delivery_snapshot,
 )
+from app.services.order_status_policy import DELIVERY_CANDIDATE_ORDER_STATUSES
 from app.services.production_workflow import production_ready_quantity
 
 STATUS_LABELS = {"ok":"可送货","duplicate_warning":"疑似重复","qty_mismatch":"数量不一致","stock_shortage":"库存不足","not_matched":"未匹配","ocr_failed":"识别失败"}
@@ -98,12 +99,7 @@ def _products(db, code):
     ).order_by(Product.customer_id.desc(),Product.id)).all())
 
 
-VALID_ORDER_STATUSES = {
-    "pending_production",
-    "production",
-    "pending_delivery",
-    "partially_delivered",
-}
+VALID_ORDER_STATUSES = DELIVERY_CANDIDATE_ORDER_STATUSES
 
 
 def _available_delivery_quantity(db: Session, order_item: OrderItem) -> int:
@@ -178,11 +174,10 @@ def preprocess_row(
     if not products: data.update(status="not_matched",warning="未找到该存货编码对应的天华产品。"); return data
     pmap={p.id:p for p in products}
     candidates=[]
-    for oi,o in db.execute(select(OrderItem,Order).join(Order,Order.id==OrderItem.order_id).where(OrderItem.product_id.in_(pmap),OrderItem.delivered_quantity<OrderItem.quantity,OrderItem.is_force_closed.is_(False),Order.status.not_in(("cancelled","dead","closed","archived","completed")))):
+    for oi,o in db.execute(select(OrderItem,Order).join(Order,Order.id==OrderItem.order_id).where(OrderItem.product_id.in_(pmap),OrderItem.delivered_quantity<OrderItem.quantity,OrderItem.is_force_closed.is_(False),Order.status.in_(VALID_ORDER_STATUSES))):
         p=pmap[oi.product_id]
         if (
             o.customer_id != p.customer_id
-            or o.status not in VALID_ORDER_STATUSES
             or "RUIDA" in o.order_number.upper()
         ):
             continue

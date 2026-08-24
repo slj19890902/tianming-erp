@@ -1312,6 +1312,182 @@ def test_a3_cover_and_base_use_min_component_capacity_not_sum(
     assert _posted_finished_quantity(session_factory) == 500
 
 
+def test_a3_remaining_item_can_finish_receipt_after_sibling_was_dispatched(
+    requisition_app,
+) -> None:
+    """An order-level partial delivery must not close untouched sibling lines."""
+
+    from datetime import date
+
+    from app.models.delivery import Delivery, DeliveryItem
+    from app.models.order import Order, OrderItem
+    from app.models.production import ProductionCompletion
+
+    app, session_factory = requisition_app
+    _seed_material_and_staging(session_factory)
+    with TestClient(app) as client:
+        _login(client, "admin")
+        sources = _create_frozen_sources(
+            client,
+            session_factory,
+            order_quantity=100,
+            purchase_total=200,
+            order_purpose=100,
+            stock_purpose=0,
+            composite=True,
+        )
+        by_component = {source.component_type: source for source in sources}
+        facts = {
+            component: _freeze_receipt_fact(
+                client,
+                source,
+                idempotency_key=f"p1101-partial-price-{component}",
+            ).json()
+            for component, source in by_component.items()
+        }
+
+        with session_factory() as session:
+            target = session.get(OrderItem, 1)
+            assert target is not None
+            order = session.get(Order, target.order_id)
+            assert order is not None
+            sibling = OrderItem(
+                order_id=order.id,
+                product_id=target.product_id,
+                quantity=7,
+                unit_price=target.unit_price,
+                subtotal=target.unit_price * 7,
+                material_status="received",
+                requisition_status="已入库",
+                delivered_quantity=7,
+                snapshot_product_name="匿名已送兄弟明细",
+                snapshot_spec=target.snapshot_spec,
+                snapshot_material=target.snapshot_material,
+            )
+            session.add(sibling)
+            session.flush()
+            delivery = Delivery(
+                delivery_number="P1-101-ANON-DISPATCH",
+                customer_id=order.customer_id,
+                delivery_date=date(2026, 8, 24),
+                status="dispatched",
+                total_quantity=7,
+            )
+            session.add(delivery)
+            session.flush()
+            session.add(
+                DeliveryItem(
+                    delivery_id=delivery.id,
+                    order_item_id=sibling.id,
+                    delivered_quantity=7,
+                    ordered_quantity_snapshot=7,
+                    order_remaining_snapshot=7,
+                )
+            )
+            order.status = "partially_delivered"
+            session.commit()
+
+        cover = _receive(
+            client,
+            by_component["cover"],
+            facts["cover"],
+            quantity=100,
+            idempotency_key="p1101-partial-receive-cover",
+        )
+        assert cover.status_code == 200, cover.text
+        assert cover.json()["purpose_allocation"]["theoretical_finished_delta"] == 0
+
+        base = _receive(
+            client,
+            by_component["base"],
+            facts["base"],
+            quantity=100,
+            idempotency_key="p1101-partial-receive-base",
+        )
+        assert base.status_code == 200, base.text
+        assert base.json()["purpose_allocation"]["theoretical_finished_delta"] == 100
+
+    with session_factory() as session:
+        target = session.get(OrderItem, 1)
+        assert target is not None
+        order = session.get(Order, target.order_id)
+        assert order is not None
+        assert order.status == "partially_delivered"
+        assert target.delivered_quantity == 0
+        assert (
+            session.scalar(
+                select(func.sum(ProductionCompletion.actual_output_quantity)).where(
+                    ProductionCompletion.order_item_id == target.id,
+                    ProductionCompletion.status == "posted",
+                )
+            )
+            == 100
+        )
+
+
+@pytest.mark.parametrize(
+    ("order_status", "delivered_quantity", "expected_message"),
+    (
+        ("closed", 0, "订单当前状态不允许继续收料"),
+        ("partially_delivered", 10, "订单明细已全部送货"),
+    ),
+)
+def test_pending_list_and_receipt_execution_share_the_same_item_gate(
+    requisition_app,
+    order_status: str,
+    delivered_quantity: int,
+    expected_message: str,
+) -> None:
+    from app.models.order import Order, OrderItem
+
+    app, session_factory = requisition_app
+    _seed_material_and_staging(session_factory)
+    with TestClient(app) as client:
+        _login(client, "admin")
+        source = _create_frozen_sources(
+            client,
+            session_factory,
+            order_quantity=10,
+            purchase_total=10,
+            order_purpose=10,
+            stock_purpose=0,
+        )[0]
+        frozen = _freeze_receipt_fact(
+            client,
+            source,
+            idempotency_key=f"p1101-blocked-price-{order_status}",
+        )
+        assert frozen.status_code == 200, frozen.text
+
+        with session_factory() as session:
+            item = session.get(OrderItem, 1)
+            assert item is not None
+            order = session.get(Order, item.order_id)
+            assert order is not None
+            order.status = order_status
+            item.delivered_quantity = delivered_quantity
+            item.is_force_closed = False
+            session.commit()
+
+        pending = client.get("/api/incoming/pending")
+        assert pending.status_code == 200, pending.text
+        assert source.route_key not in {
+            str(row["item_id"]) for row in pending.json()["items"]
+        }
+        before = _business_counts(session_factory)
+        blocked = _receive(
+            client,
+            source,
+            frozen.json(),
+            quantity=10,
+            idempotency_key=f"p1101-blocked-receive-{order_status}",
+        )
+        assert blocked.status_code == 409, blocked.text
+        assert _error_code(blocked) == "ORDER_ITEM_RECEIPT_BLOCKED"
+        assert expected_message in blocked.text
+        assert _business_counts(session_factory) == before
+
+
 def test_receipt_auto_composite_finished_stock_can_dispatch_and_cancel(
     requisition_app,
 ) -> None:
@@ -2281,6 +2457,29 @@ def test_receive_idempotency_binds_payload_and_actor_without_double_counting(
         assert replay.json()["purpose_allocation"] == first.json()["purpose_allocation"]
         assert _business_counts(session_factory) == counts
 
+        from app.models.order import Order, OrderItem
+
+        with session_factory() as session:
+            item = session.get(OrderItem, 1)
+            assert item is not None
+            order = session.get(Order, item.order_id)
+            assert order is not None
+            order.status = "closed"
+            item.is_force_closed = True
+            session.commit()
+        terminal_replay = _receive(
+            client,
+            source,
+            fact,
+            quantity=450,
+            idempotency_key="p181-receive-idem",
+        )
+        assert terminal_replay.status_code == 200, terminal_replay.text
+        assert terminal_replay.json()["receipt_item_id"] == first.json()[
+            "receipt_item_id"
+        ]
+        assert _business_counts(session_factory) == counts
+
         changed = _receive(
             client,
             source,
@@ -2749,6 +2948,143 @@ def test_composite_internal_tasks_never_escape_employee_lists_or_search(
                 ]
             }
         )
+
+
+def test_three_line_batch_receipt_continues_after_sibling_dispatch(
+    requisition_app,
+) -> None:
+    """Reproduce the SO369/SO371/SO373 state shape without formal data."""
+
+    from datetime import date
+
+    from app.models.delivery import Delivery, DeliveryItem
+    from app.models.order import Order, OrderItem
+    from app.models.purchase_receipt import IncomingReceiptPurposeAllocation
+    from app.models.supplier_requisition_order import SupplierRequisitionOrderItem
+
+    app, session_factory = requisition_app
+    _seed_material_and_staging(session_factory)
+    with TestClient(app) as client:
+        _login(client, "admin")
+        sources = _create_frozen_source_batch(
+            client,
+            session_factory,
+            count=3,
+        )
+        facts: dict[str, dict] = {}
+        for index, source in enumerate(sources):
+            frozen = _freeze_receipt_fact(
+                client,
+                source,
+                idempotency_key=f"p1101-three-line-price-{index}",
+            )
+            assert frozen.status_code == 200, frozen.text
+            facts[source.route_key] = frozen.json()
+
+        with session_factory() as session:
+            delivery = Delivery(
+                delivery_number="P1-101-ANON-THREE-LINE-DISPATCH",
+                customer_id=1,
+                delivery_date=date(2026, 8, 24),
+                status="dispatched",
+                total_quantity=3,
+            )
+            session.add(delivery)
+            session.flush()
+            affected_order_ids: set[int] = set()
+            for index, source in enumerate(sources, start=1):
+                supplier_item = session.get(
+                    SupplierRequisitionOrderItem,
+                    source.supplier_item_id,
+                )
+                assert supplier_item is not None
+                assert supplier_item.order_item_id is not None
+                target = session.get(OrderItem, supplier_item.order_item_id)
+                assert target is not None
+                order = session.get(Order, target.order_id)
+                assert order is not None
+                sibling = OrderItem(
+                    order_id=order.id,
+                    product_id=target.product_id,
+                    quantity=1,
+                    unit_price=target.unit_price,
+                    subtotal=target.unit_price,
+                    material_status="received",
+                    requisition_status="已入库",
+                    delivered_quantity=1,
+                    snapshot_product_name=f"匿名已送兄弟明细{index}",
+                    snapshot_spec=target.snapshot_spec,
+                    snapshot_material=target.snapshot_material,
+                )
+                session.add(sibling)
+                session.flush()
+                session.add(
+                    DeliveryItem(
+                        delivery_id=delivery.id,
+                        order_item_id=sibling.id,
+                        delivered_quantity=1,
+                        ordered_quantity_snapshot=1,
+                        order_remaining_snapshot=1,
+                    )
+                )
+                order.status = "partially_delivered"
+                affected_order_ids.add(int(order.id))
+            session.commit()
+
+        response = client.put(
+            "/api/incoming/batch-receive",
+            json={
+                "idempotency_key": "p1101-three-line-partial-batch",
+                "items": [
+                    {
+                        "item_id": source.route_key,
+                        "received_quantity": 10,
+                        "idempotency_key": (
+                            f"p1101-three-line-partial-batch:{source.route_key}"
+                        ),
+                        "expected_receipt_fact_version": facts[source.route_key][
+                            "receipt_fact_version"
+                        ],
+                        "purchase_purpose_source_snapshot_id": (
+                            source.purpose_snapshot_id
+                        ),
+                        "expected_purpose_snapshot_version": (
+                            source.purpose_snapshot_version
+                        ),
+                        "receipt_plan_fingerprint": facts[source.route_key][
+                            "receipt_plan_fingerprint"
+                        ],
+                        "expected_actual_material_version": facts[source.route_key][
+                            "actual_material_version"
+                        ],
+                        "actual_material_fingerprint": facts[source.route_key][
+                            "actual_material_fingerprint"
+                        ],
+                    }
+                    for source in sources
+                ],
+            },
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["succeeded"] == 3, body
+        assert body["failed"] == 0, body
+
+    with session_factory() as session:
+        assert set(
+            session.scalars(
+                select(Order.status).where(Order.id.in_(affected_order_ids))
+            ).all()
+        ) == {"partially_delivered"}
+        allocations = list(
+            session.scalars(
+                select(IncomingReceiptPurposeAllocation).order_by(
+                    IncomingReceiptPurposeAllocation.id
+                )
+            ).all()
+        )
+        assert len(allocations) == 3
+        assert sum(int(row.finished_output_qty_delta) for row in allocations) == 30
 
 
 def test_batch_receive_select_queries_are_bounded_between_one_and_six_lines(

@@ -94,6 +94,11 @@ from app.services.product_specification import (
     product_dimension_specification,
     resolved_product_specification,
 )
+from app.services.order_status_policy import (
+    DELIVERY_CANDIDATE_ORDER_STATUSES,
+    order_item_forward_block_message,
+    order_item_forward_block_reason,
+)
 from app.services.production_workflow import (
     ProductionWorkflowError,
     lock_order_rows_for_production_transition,
@@ -1639,7 +1644,8 @@ def _pending_query(
                 ),
             ),
             OrderItem.is_force_closed.is_(False),
-            Order.status.notin_(("cancelled", "dead", "closed", "archived")),
+            OrderItem.delivered_quantity < OrderItem.quantity,
+            Order.status.in_(DELIVERY_CANDIDATE_ORDER_STATUSES),
         )
     )
     if customer_id is not None:
@@ -5448,6 +5454,24 @@ def _collect_delivery_lines(
                 detail=f"第{index}条订单明细不存在",
             )
         order_item, order = row
+        forward_block = order_item_forward_block_reason(
+            order_status=order.status,
+            ordered_quantity=order_item.quantity,
+            delivered_quantity=order_item.delivered_quantity,
+            is_force_closed=order_item.is_force_closed,
+        )
+        if forward_block is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"第{index}条"
+                    + order_item_forward_block_message(
+                        forward_block,
+                        action="发货",
+                        order_status=order.status,
+                    )
+                ),
+            )
         production_managed = _has_production_task(db, order_item.id)
         has_external_components = bool(
             db.scalar(
@@ -7216,11 +7240,14 @@ def dispatch_delivery(
                 ).all()
             )
         )
+        locked_orders: dict[int, Order] = {}
         if order_ids:
             try:
                 # Global transition order: Order -> Delivery -> OrderItem.  Workflow
                 # rollback also starts from Order before touching Delivery rows.
-                lock_order_rows_for_production_transition(db, order_ids)
+                locked_orders = lock_order_rows_for_production_transition(
+                    db, order_ids
+                )
             except ProductionWorkflowError as error:
                 raise HTTPException(
                     status_code=error.status_code,
@@ -7367,6 +7394,27 @@ def dispatch_delivery(
                 raise HTTPException(
                     status_code=409,
                     detail=f"订单明细{line.order_item_id}不存在",
+                )
+            order = locked_orders.get(int(order_item.order_id))
+            if order is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"订单明细{line.order_item_id}关联订单不存在",
+                )
+            forward_block = order_item_forward_block_reason(
+                order_status=order.status,
+                ordered_quantity=order_item.quantity,
+                delivered_quantity=order_item.delivered_quantity,
+                is_force_closed=order_item.is_force_closed,
+            )
+            if forward_block is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=order_item_forward_block_message(
+                        forward_block,
+                        action="发货",
+                        order_status=order.status,
+                    ),
                 )
             production_managed = _has_production_task(db, order_item.id)
             if production_managed:

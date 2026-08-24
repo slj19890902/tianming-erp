@@ -33,6 +33,7 @@ from app.models.supplier_requisition_order import (
     SupplierRequisitionOrderItem,
 )
 from app.models.warehouse_inventory import InventoryReservation
+from app.services.order_status_policy import MANAGEMENT_ORDER_STATUSES
 
 
 BUSINESS_STATUS_LABELS = {
@@ -68,9 +69,6 @@ BUSINESS_STATUS_ORDER = (
 )
 
 DERIVED_BUSINESS_STATUSES = frozenset(BUSINESS_STATUS_ORDER[1:])
-MANAGEMENT_ORDER_STATUSES = frozenset(
-    {"pending_confirmation", "archived", "closed", "dead", "cancelled"}
-)
 EARLY_BLOCKING_STATUSES = frozenset(
     {"pending_material", "pending_incoming", "pending_production"}
 )

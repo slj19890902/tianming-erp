@@ -73,6 +73,12 @@ from app.services.location_candidates import (
     list_operational_locations,
     operational_location_issue,
 )
+from app.services.order_status_policy import (
+    ORDER_ITEM_ACTIVE_ORDER_STATUSES,
+    PRODUCTION_STATUS_REFRESH_ORDER_STATUSES,
+    order_item_forward_block_message,
+    order_item_forward_block_reason,
+)
 from app.services.production_label_strategy import (
     ProductionLabelStrategyError,
     build_new_task_production_label_snapshot,
@@ -101,12 +107,11 @@ COMPLETED = "completed"
 NOT_REQUIRED = "not_required"
 READY_TASK_STATUSES = frozenset({COMPLETED, NOT_REQUIRED})
 PRODUCTION_STATIONS = frozenset({"printing", "die_cut"})
-PRODUCIBLE_ORDER_STATUSES = frozenset(
-    {"pending_confirmation", "pending_production", "production"}
-)
-MUTABLE_ORDER_STATUSES = frozenset(
-    {*PRODUCIBLE_ORDER_STATUSES, "pending_delivery"}
-)
+# Backward-compatible names retained for callers while their semantics are now
+# sourced from the authoritative order-status policy.  ``MUTABLE`` remains the
+# narrower order-level recalculation set; item operations use ``ACTIVE`` below.
+PRODUCIBLE_ORDER_STATUSES = ORDER_ITEM_ACTIVE_ORDER_STATUSES
+MUTABLE_ORDER_STATUSES = PRODUCTION_STATUS_REFRESH_ORDER_STATUSES
 TEMPORARY_LOCATION_CODES = frozenset(
     [*(f"F12-P{number:02d}" for number in range(1, 9))]
     + [*(f"F34-P{number:02d}" for number in range(1, 4))]
@@ -2342,20 +2347,24 @@ def complete_production_batch(
     for command in commands:
         task, item, order = by_task[command.task_id]
         is_component_task = task.sales_order_item_bom_component_id is not None
-        allowed_statuses = (
-            PRODUCIBLE_ORDER_STATUSES
-            if command.completion_type == "primary"
-            else MUTABLE_ORDER_STATUSES
-        )
         expected_task_status = (
             PENDING if command.completion_type == "primary" else COMPLETED
         )
-        if order.status not in allowed_statuses:
+        forward_block = order_item_forward_block_reason(
+            order_status=order.status,
+            ordered_quantity=item.quantity,
+            delivered_quantity=item.delivered_quantity,
+            is_force_closed=item.is_force_closed,
+        )
+        if forward_block is not None:
             raise ProductionWorkflowError(
-                "订单当前状态不允许继续生产完工，请刷新后重试", 409
+                order_item_forward_block_message(
+                    forward_block,
+                    action="生产完工",
+                    order_status=order.status,
+                ),
+                409,
             )
-        if item.is_force_closed:
-            raise ProductionWorkflowError("订单明细已强制关闭，不能继续生产确认", 409)
         if task.status != expected_task_status:
             raise ProductionWorkflowError(
                 "主生产确认仅允许待完工任务；补充确认仅允许已完工任务",
@@ -2813,9 +2822,20 @@ def transfer_direct_completion_to_stock(
     item = db.get(OrderItem, completion.order_item_id)
     if item is None:
         raise ProductionWorkflowError("完工记录关联订单明细不存在", 409)
-    if order.status not in MUTABLE_ORDER_STATUSES or item.is_force_closed:
+    forward_block = order_item_forward_block_reason(
+        order_status=order.status,
+        ordered_quantity=item.quantity,
+        delivered_quantity=item.delivered_quantity,
+        is_force_closed=item.is_force_closed,
+    )
+    if forward_block is not None:
         raise ProductionWorkflowError(
-            "订单或明细已结案，不能再把直接送货完工转入库存", 409
+            order_item_forward_block_message(
+                forward_block,
+                action="把直接送货完工转入库存",
+                order_status=order.status,
+            ),
+            409,
         )
     if has_dispatched_delivery_facts(db, [item.id]):
         raise ProductionWorkflowError("已经发生真实发货，不能整批转库存", 409)
@@ -3174,8 +3194,21 @@ def reverse_production_completion(
     if task is None or item is None:
         raise ProductionWorkflowError("生产完工关联任务或订单明细不存在", 409)
     order = lock_order_rows_for_production_transition(db, [item.order_id])[item.order_id]
-    if order.status not in MUTABLE_ORDER_STATUSES or item.is_force_closed:
-        raise ProductionWorkflowError("订单已经结档、作废或强制关闭，不能撤销生产确认", 409)
+    reverse_block = order_item_forward_block_reason(
+        order_status=order.status,
+        ordered_quantity=item.quantity,
+        delivered_quantity=item.delivered_quantity,
+        is_force_closed=item.is_force_closed,
+    )
+    if reverse_block is not None:
+        raise ProductionWorkflowError(
+            order_item_forward_block_message(
+                reverse_block,
+                action="撤销生产确认",
+                order_status=order.status,
+            ),
+            409,
+        )
     if int(item.delivered_quantity or 0) > 0 or has_dispatched_delivery_facts(db, [item.id]):
         raise ProductionWorkflowError("订单已经发货，请先撤销发货后再回退生产确认", 409)
     if task.status != COMPLETED:
@@ -3357,8 +3390,21 @@ def post_automatic_receipt_completion(
     if item is None:
         raise ProductionWorkflowError("自动完工关联订单明细不存在", 409)
     order = lock_order_rows_for_production_transition(db, [item.order_id])[item.order_id]
-    if order.status not in MUTABLE_ORDER_STATUSES or item.is_force_closed:
-        raise ProductionWorkflowError("订单已结档、作废或强制关闭，不能自动形成成品", 409)
+    forward_block = order_item_forward_block_reason(
+        order_status=order.status,
+        ordered_quantity=item.quantity,
+        delivered_quantity=item.delivered_quantity,
+        is_force_closed=item.is_force_closed,
+    )
+    if forward_block is not None:
+        raise ProductionWorkflowError(
+            order_item_forward_block_message(
+                forward_block,
+                action="自动形成成品",
+                order_status=order.status,
+            ),
+            409,
+        )
     product = db.get(Product, item.product_id)
     if product is None or not product.is_active:
         raise ProductionWorkflowError("订单常用箱不存在或已停用，不能自动形成成品", 409)
@@ -3530,8 +3576,21 @@ def reverse_automatic_receipt_completion(
     if task is None or item is None:
         raise ProductionWorkflowError("自动完工关联任务或订单明细不存在", 409)
     order = lock_order_rows_for_production_transition(db, [item.order_id])[item.order_id]
-    if order.status not in MUTABLE_ORDER_STATUSES or item.is_force_closed:
-        raise ProductionWorkflowError("订单已结档、作废或强制关闭，不能撤销收料自动完工", 409)
+    reverse_block = order_item_forward_block_reason(
+        order_status=order.status,
+        ordered_quantity=item.quantity,
+        delivered_quantity=item.delivered_quantity,
+        is_force_closed=item.is_force_closed,
+    )
+    if reverse_block is not None:
+        raise ProductionWorkflowError(
+            order_item_forward_block_message(
+                reverse_block,
+                action="撤销收料自动完工",
+                order_status=order.status,
+            ),
+            409,
+        )
     if int(item.delivered_quantity or 0) > 0 or has_dispatched_delivery_facts(db, [item.id]):
         raise ProductionWorkflowError("订单已经发货，请先撤销发货后再撤销来料", 409)
     later = db.scalar(
@@ -3610,8 +3669,9 @@ def _filtered_task_query(
         main_task.task_role == "order_main",
     )
     query = _task_query(db, allowed_customer_ids).where(
-        Order.status.in_(MUTABLE_ORDER_STATUSES),
+        Order.status.in_(ORDER_ITEM_ACTIVE_ORDER_STATUSES),
         OrderItem.is_force_closed.is_(False),
+        OrderItem.delivered_quantity < OrderItem.quantity,
         or_(
             ProductionTask.task_role == "order_main",
             ~main_task_exists,
@@ -4829,7 +4889,8 @@ def _production_completion_dicts(db: Session, rows: Sequence[tuple]) -> list[dic
                     completion.status == "posted"
                     and task.status == COMPLETED
                     and available_input > 0
-                    and order.status in MUTABLE_ORDER_STATUSES
+                    and order.status in ORDER_ITEM_ACTIVE_ORDER_STATUSES
+                    and int(item.delivered_quantity or 0) < int(item.quantity or 0)
                     and not item.is_force_closed
                 ),
                 "status": completion.status,
@@ -4867,7 +4928,7 @@ def _production_completion_dicts(db: Session, rows: Sequence[tuple]) -> list[dic
                     and transfer is None
                     and int(item.delivered_quantity or 0) == 0
                     and item.id not in dispatched_item_ids
-                    and order.status in MUTABLE_ORDER_STATUSES
+                    and order.status in ORDER_ITEM_ACTIVE_ORDER_STATUSES
                     and not item.is_force_closed
                 ),
                 "can_revert": (
@@ -4875,7 +4936,7 @@ def _production_completion_dicts(db: Session, rows: Sequence[tuple]) -> list[dic
                     and task.status == COMPLETED
                     and int(item.delivered_quantity or 0) == 0
                     and item.id not in dispatched_item_ids
-                    and order.status in MUTABLE_ORDER_STATUSES
+                    and order.status in ORDER_ITEM_ACTIVE_ORDER_STATUSES
                     and not item.is_force_closed
                 ),
             }

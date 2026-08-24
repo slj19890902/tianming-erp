@@ -147,6 +147,12 @@ from app.services.order_business_status import (
     DERIVED_BUSINESS_STATUSES,
     build_order_business_statuses,
 )
+from app.services.order_status_policy import (
+    ALL_ORDER_STATUSES,
+    FULFILLMENT_TERMINAL_ORDER_STATUSES,
+    MANAGEMENT_TERMINAL_ORDER_STATUSES,
+    ORDER_ITEM_ACTIVE_ORDER_STATUSES,
+)
 from app.services.order_customer_heat import (
     THRESHOLD_STATUS as CUSTOMER_HEAT_THRESHOLD_STATUS,
     THRESHOLD_VERSION as CUSTOMER_HEAT_THRESHOLD_VERSION,
@@ -355,23 +361,8 @@ def _append_order_audit(
 _PRODUCT_DRAWING_SAVE_OPTIONS = frozenset({"save_to_product", "overwrite_product"})
 MONEY_QUANTUM = Decimal("0.00")
 EXTERNAL_QUANTITY_QUANTUM = Decimal("0.000001")
-ORDER_STATUSES = {
-    "pending_confirmation",
-    "pending_production",
-    "production",
-    "pending_delivery",
-    "partially_delivered",
-    "pending_reconciliation",
-    "pending_invoice",
-    "pending_payment",
-    "completed",
-    "archived",
-    "closed",
-    "dead",
-    "cancelled",
-    "delivered",
-}
-FINAL_ORDER_STATUSES = {"completed", "archived", "closed", "dead", "cancelled", "delivered"}
+ORDER_STATUSES = ALL_ORDER_STATUSES
+FINAL_ORDER_STATUSES = FULFILLMENT_TERMINAL_ORDER_STATUSES
 
 _PRODUCTION_FACT_CONFLICT = "订单明细已有生产完工或转库存事实，不能执行该操作。"
 
@@ -410,7 +401,7 @@ def _require_product_drawing_edit(user: User) -> None:
 # excluded below even if an old status snapshot has not been refreshed yet.
 # Do not hide solely on completed/delivered snapshots: quantity is the source
 # of truth for this view, and inconsistent legacy rows must stay discoverable.
-_BUSINESS_EXCLUDED_STATUSES = ("dead", "cancelled", "closed", "archived")
+_BUSINESS_EXCLUDED_STATUSES = MANAGEMENT_TERMINAL_ORDER_STATUSES
 _DERIVED_STATUS_FILTER_GROUPS = {
     "unfinished": {
         "pending_confirmation",
@@ -5630,7 +5621,7 @@ def rollback_order_workflow(
         raise HTTPException(status_code=409, detail="订单已被删除，请刷新后重试")
     if order.order_number.startswith("RUIDA-"):
         raise HTTPException(status_code=409, detail="历史订单禁止执行流程撤回")
-    if order.status in {"cancelled", "dead", "closed", "archived"}:
+    if order.status in MANAGEMENT_TERMINAL_ORDER_STATUSES:
         customer = db.get(Customer, order.customer_id)
         return _order_response(
             order,
@@ -6441,7 +6432,7 @@ def _create_wait_previous_batch_holds(
                 func.trim(OrderItem.snapshot_product_code) == code,
                 OrderItem.delivered_quantity < OrderItem.quantity,
                 OrderItem.is_force_closed.is_(False),
-                Order.status.notin_(["cancelled", "dead", "closed", "archived"]),
+                Order.status.in_(ORDER_ITEM_ACTIVE_ORDER_STATUSES),
             ).order_by(OrderItem.created_at.desc(), OrderItem.id.desc()).limit(20)
         ).all()
         if not candidates:

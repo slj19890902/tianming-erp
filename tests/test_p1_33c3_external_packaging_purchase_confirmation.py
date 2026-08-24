@@ -356,6 +356,69 @@ def test_one_confirmation_groups_three_components_into_two_supplier_orders(
         }
 
 
+def test_partial_sibling_keeps_target_purchase_open_and_retry_is_idempotent(
+    purchase_app: FastAPI,
+) -> None:
+    from app.models.order import Order, OrderItem
+
+    order_id = purchase_app.state.fixture["order_id"]
+    with TestClient(purchase_app) as client:
+        _login(client, "purchase-admin")
+        preview_response = client.get(
+            f"/api/orders/{order_id}/external-packaging-purchase"
+        )
+        assert preview_response.status_code == 200, preview_response.text
+        preview = preview_response.json()
+        payload = _confirmation_payload(preview, key="p1101-partial-purchase")
+
+        with purchase_app.state.session_factory() as db:
+            order = db.get(Order, order_id)
+            target = db.scalar(
+                select(OrderItem).where(OrderItem.order_id == order_id)
+            )
+            assert order is not None and target is not None
+            db.add(
+                OrderItem(
+                    order_id=order.id,
+                    product_id=target.product_id,
+                    item_order_number="TM20260809001-002",
+                    item_sequence=2,
+                    quantity=1,
+                    unit_price=target.unit_price,
+                    subtotal=target.unit_price,
+                    delivered_quantity=1,
+                    snapshot_product_name="匿名已送兄弟明细",
+                    snapshot_product_code=target.snapshot_product_code,
+                )
+            )
+            order.status = "partially_delivered"
+            db.commit()
+
+        confirmed = client.post(
+            f"/api/orders/{order_id}/external-packaging-purchase/confirm",
+            json=payload,
+        )
+        assert confirmed.status_code == 200, confirmed.text
+        assert confirmed.json()["created"] is True
+
+        with purchase_app.state.session_factory() as db:
+            order = db.get(Order, order_id)
+            assert order is not None
+            order.status = "closed"
+            for item in db.scalars(
+                select(OrderItem).where(OrderItem.order_id == order_id)
+            ):
+                item.is_force_closed = True
+            db.commit()
+
+        replay = client.post(
+            f"/api/orders/{order_id}/external-packaging-purchase/confirm",
+            json=payload,
+        )
+        assert replay.status_code == 200, replay.text
+        assert replay.json()["created"] is False
+
+
 def test_supplier_product_category_change_blocks_stale_order_confirmation(
     purchase_app: FastAPI,
 ) -> None:

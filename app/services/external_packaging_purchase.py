@@ -30,6 +30,11 @@ from app.models.order_external_packaging import (
 from app.models.supplier import ExternalPackagingProduct, Supplier
 from app.models.user import User
 from app.services.order_external_packaging import DISCRETE_PURCHASE_UNITS
+from app.services.order_status_policy import (
+    ORDER_ITEM_ACTIVE_ORDER_STATUSES,
+    order_item_forward_block_message,
+    order_item_forward_block_reason,
+)
 from app.services.supplier_master import SUPPLIER_CATEGORY_LABELS
 from app.services.corner_guard_pricing import (
     CATEGORY_CODE as CORNER_GUARD_CATEGORY_CODE,
@@ -118,6 +123,49 @@ def claim_external_purchase_order(db: Session, order_id: int) -> Order | None:
     if order is not None:
         db.refresh(order)
     return order
+
+
+def _external_component_order_items(
+    db: Session,
+    *,
+    order: Order,
+    components: Iterable[SalesOrderItemExternalComponent],
+) -> dict[int, OrderItem]:
+    item_ids = {int(row.sales_order_item_id) for row in components}
+    if not item_ids:
+        return {}
+    order_items = {
+        int(row.id): row
+        for row in db.scalars(
+            select(OrderItem).where(
+                OrderItem.id.in_(item_ids),
+                OrderItem.order_id == order.id,
+            )
+        ).all()
+    }
+    if set(order_items) != item_ids:
+        raise ExternalPurchaseContractError("订单外购组件来源不完整")
+    return order_items
+
+
+def _external_item_forward_block(
+    *,
+    order: Order,
+    order_item: OrderItem,
+) -> str | None:
+    reason = order_item_forward_block_reason(
+        order_status=order.status,
+        ordered_quantity=order_item.quantity,
+        delivered_quantity=order_item.delivered_quantity,
+        is_force_closed=order_item.is_force_closed,
+    )
+    if reason is None:
+        return None
+    return order_item_forward_block_message(
+        reason,
+        action="确认外购包材采购",
+        order_status=order.status,
+    )
 
 
 def _current_price(
@@ -983,7 +1031,9 @@ def list_external_purchase_routing_rows(
         )
         .join(Customer, Customer.id == Order.customer_id)
         .where(
-            Order.status.notin_(("cancelled", "dead", "closed", "archived")),
+            Order.status.in_(ORDER_ITEM_ACTIVE_ORDER_STATUSES),
+            OrderItem.is_force_closed.is_(False),
+            OrderItem.delivered_quantity < OrderItem.quantity,
             ~select(ExternalPackagingPurchaseOrder.id)
             .join(
                 ExternalPackagingPurchaseBatch,
@@ -1109,16 +1159,27 @@ def build_external_purchase_preview(
             "history": history,
             "items": [],
         }
-    if order.status in {"cancelled", "dead", "closed", "archived"}:
+    if order.status not in ORDER_ITEM_ACTIVE_ORDER_STATUSES:
         raise ExternalPurchaseContractError("订单已终止，不能确认外购包材采购")
     as_of = beijing_today()
-    item_ids = {row.sales_order_item_id for row in components}
-    order_items = {
-        row.id: row
-        for row in db.scalars(
-            select(OrderItem).where(OrderItem.id.in_(item_ids))
-        ).all()
-    }
+    order_items = _external_component_order_items(
+        db,
+        order=order,
+        components=components,
+    )
+    components = [
+        component
+        for component in components
+        if _external_item_forward_block(
+            order=order,
+            order_item=order_items[component.sales_order_item_id],
+        )
+        is None
+    ]
+    if not components:
+        raise ExternalPurchaseContractError(
+            "该订单没有仍可继续履约的外购包材明细"
+        )
     items: list[dict[str, Any]] = []
     for component in components:
         order_item = order_items[component.sales_order_item_id]
@@ -1296,8 +1357,6 @@ def confirm_external_purchase(
     order = claim_external_purchase_order(db, order_id)
     if order is None:
         raise ExternalPurchaseContractError("订单不存在", status_code=404)
-    if order.status in {"cancelled", "dead", "closed", "archived"}:
-        raise ExternalPurchaseContractError("订单已终止，不能确认外购包材采购")
     order, components = _order_components(db, order_id, lock_order=True)
 
     keyed = db.scalar(
@@ -1329,6 +1388,9 @@ def confirm_external_purchase(
             )
         return _load_batch(db, keyed.id), False
 
+    if order.status not in ORDER_ITEM_ACTIVE_ORDER_STATUSES:
+        raise ExternalPurchaseContractError("订单已终止，不能确认外购包材采购")
+
     if not components:
         raise ExternalPurchaseContractError(
             "该订单没有冻结的外购包装组件，不能补写或猜测旧订单"
@@ -1354,15 +1416,53 @@ def confirm_external_purchase(
     if existing is not None:
         raise ExternalPurchaseContractError("该订单的外购包装已经确认采购，请勿重复提交")
 
-    component_by_id = {row.id: row for row in components}
+    order_items = _external_component_order_items(
+        db,
+        order=order,
+        components=components,
+    )
+    component_by_id = {
+        row.id: row
+        for row in components
+        if _external_item_forward_block(
+            order=order,
+            order_item=order_items[row.sales_order_item_id],
+        )
+        is None
+    }
+    if not component_by_id:
+        raise ExternalPurchaseContractError(
+            "该订单没有仍可继续履约的外购包材明细"
+        )
     line_by_component: dict[int, dict[str, Any]] = {}
     for raw in lines:
         component_id = int(raw["order_component_id"])
         if component_id in line_by_component:
             raise ExternalPurchaseContractError("同一外购组件不能重复提交", status_code=422)
         line_by_component[component_id] = raw
+    all_component_ids = {row.id for row in components}
+    unknown_submissions = set(line_by_component) - all_component_ids
+    if unknown_submissions:
+        raise ExternalPurchaseContractError(
+            "采购明细不属于当前订单，请刷新后重试",
+            status_code=422,
+        )
+    blocked_submissions = set(line_by_component) - set(component_by_id)
+    if blocked_submissions:
+        component = next(
+            row for row in components if row.id == min(blocked_submissions)
+        )
+        message = _external_item_forward_block(
+            order=order,
+            order_item=order_items[component.sales_order_item_id],
+        )
+        raise ExternalPurchaseContractError(
+            message or "外购组件当前不可采购，请刷新后重试"
+        )
     if set(line_by_component) != set(component_by_id):
-        raise ExternalPurchaseContractError("必须一次核对并提交该订单的全部外购组件")
+        raise ExternalPurchaseContractError(
+            "必须一次核对并提交当前仍需履约的全部外购组件"
+        )
 
     as_of = beijing_today()
     prepared_by_supplier: dict[int, list[dict[str, Any]]] = defaultdict(list)
@@ -1431,9 +1531,7 @@ def confirm_external_purchase(
                 "tax_amount_per_purchase_unit"
             ],
         )
-        order_item = db.get(OrderItem, component.sales_order_item_id)
-        if order_item is None or order_item.order_id != order.id:
-            raise ExternalPurchaseContractError("订单外购组件来源不完整")
+        order_item = order_items[component.sales_order_item_id]
         minimum_quantity = _suggested_quantity(
             component, int(order_item.quantity)
         )

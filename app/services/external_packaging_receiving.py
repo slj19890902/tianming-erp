@@ -17,13 +17,18 @@ from app.models.external_packaging_purchase import (
     ExternalPackagingReceipt,
     ExternalPackagingReceiptItem,
 )
-from app.models.order import Order
+from app.models.order import Order, OrderItem
 from app.models.user import User
 from app.services.external_packaging_purchase import (
     ExternalPurchaseContractError,
     claim_external_purchase_order,
 )
 from app.services.order_external_packaging import DISCRETE_PURCHASE_UNITS
+from app.services.order_status_policy import (
+    ORDER_ITEM_ACTIVE_ORDER_STATUSES,
+    order_item_forward_block_message,
+    order_item_forward_block_reason,
+)
 
 
 SIX_PLACES = Decimal("0.000001")
@@ -171,9 +176,16 @@ def _purchase_payload(
     sales_order: Order,
     customer: Customer | None,
     totals: dict[int, Decimal],
+    eligible_sales_order_item_ids: set[int] | None = None,
 ) -> dict[str, Any]:
+    visible_items = [
+        item
+        for item in purchase.items
+        if eligible_sales_order_item_ids is None
+        or int(item.sales_order_item_id) in eligible_sales_order_item_ids
+    ]
     item_rows = []
-    for item in purchase.items:
+    for item in visible_items:
         ordered = Decimal(item.purchase_quantity)
         received = totals.get(item.id, Decimal("0"))
         remaining = max(ordered - received, Decimal("0"))
@@ -199,7 +211,7 @@ def _purchase_payload(
         "order_number": sales_order.order_number,
         "customer_id": sales_order.customer_id,
         "customer_name": customer.name if customer is not None else "客户待确认",
-        "status": _purchase_status(purchase.items, totals),
+        "status": _purchase_status(visible_items, totals),
         "items": item_rows,
     }
 
@@ -210,6 +222,20 @@ def build_external_receiving_overview(
     visible_customer_ids: set[int] | None,
     include_completed: bool = False,
 ) -> dict[str, Any]:
+    has_forward_eligible_item = (
+        select(ExternalPackagingPurchaseItem.id)
+        .join(
+            OrderItem,
+            OrderItem.id == ExternalPackagingPurchaseItem.sales_order_item_id,
+        )
+        .where(
+            ExternalPackagingPurchaseItem.purchase_order_id
+            == ExternalPackagingPurchaseOrder.id,
+            OrderItem.is_force_closed.is_(False),
+            OrderItem.delivered_quantity < OrderItem.quantity,
+        )
+        .exists()
+    )
     query = (
         select(ExternalPackagingPurchaseOrder)
         .join(
@@ -234,7 +260,8 @@ def build_external_receiving_overview(
         .where(
             ExternalPackagingPurchaseOrder.status == "confirmed",
             ExternalPackagingPurchaseCancellation.id.is_(None),
-            Order.status.notin_(("cancelled", "dead", "closed", "archived")),
+            Order.status.in_(ORDER_ITEM_ACTIVE_ORDER_STATUSES),
+            has_forward_eligible_item,
         )
     )
     if visible_customer_ids is not None:
@@ -280,6 +307,32 @@ def build_external_receiving_overview(
     }
     item_ids = {item.id for purchase in purchases for item in purchase.items}
     totals = _received_totals(db, item_ids)
+    eligible_sales_order_item_ids: set[int] | None = None
+    if not include_completed:
+        sales_order_item_ids = {
+            int(item.sales_order_item_id)
+            for purchase in purchases
+            for item in purchase.items
+        }
+        order_items = list(
+            db.scalars(
+                select(OrderItem).where(OrderItem.id.in_(sales_order_item_ids))
+            ).all()
+        )
+        eligible_sales_order_item_ids = {
+            int(item.id)
+            for item in order_items
+            if (
+                (sales_order := sales_orders.get(int(item.order_id))) is not None
+                and order_item_forward_block_reason(
+                    order_status=sales_order.status,
+                    ordered_quantity=item.quantity,
+                    delivered_quantity=item.delivered_quantity,
+                    is_force_closed=item.is_force_closed,
+                )
+                is None
+            )
+        }
     rows = []
     for purchase in purchases:
         sales_order = sales_orders.get(purchase.batch.sales_order_id)
@@ -290,6 +343,7 @@ def build_external_receiving_overview(
             sales_order=sales_order,
             customer=customers.get(sales_order.customer_id),
             totals=totals,
+            eligible_sales_order_item_ids=eligible_sales_order_item_ids,
         )
         if not include_completed:
             payload["items"] = [
@@ -380,7 +434,7 @@ def record_external_purchase_receipt(
     sales_order = claim_external_purchase_order(db, int(sales_order_id))
     if sales_order is None:
         raise ExternalPurchaseContractError("采购单关联订单不存在")
-    if sales_order.status in {"cancelled", "dead", "closed", "archived"}:
+    if sales_order.status not in ORDER_ITEM_ACTIVE_ORDER_STATUSES:
         raise ExternalPurchaseContractError("关联订单已终止，不能继续收料")
 
     purchase = db.scalar(
@@ -415,10 +469,40 @@ def record_external_purchase_receipt(
         raise ExternalPurchaseContractError("同一采购明细不能重复提交", status_code=422)
     if any(item_id not in purchase_items for item_id in submitted_ids):
         raise ExternalPurchaseContractError("收料明细不属于当前采购单", status_code=422)
+    target_order_item_ids = {
+        int(purchase_items[item_id].sales_order_item_id)
+        for item_id in submitted_ids
+    }
+    target_order_items = {
+        int(row.id): row
+        for row in db.scalars(
+            select(OrderItem).where(
+                OrderItem.id.in_(target_order_item_ids),
+                OrderItem.order_id == sales_order.id,
+            )
+        ).all()
+    }
+    if set(target_order_items) != target_order_item_ids:
+        raise ExternalPurchaseContractError("外购包装收料来源不完整")
     totals = _received_totals(db, set(purchase_items))
     normalized: list[tuple[ExternalPackagingPurchaseItem, Decimal]] = []
     for line in lines:
         item = purchase_items[int(line["purchase_item_id"])]
+        order_item = target_order_items[int(item.sales_order_item_id)]
+        block = order_item_forward_block_reason(
+            order_status=sales_order.status,
+            ordered_quantity=order_item.quantity,
+            delivered_quantity=order_item.delivered_quantity,
+            is_force_closed=order_item.is_force_closed,
+        )
+        if block is not None:
+            raise ExternalPurchaseContractError(
+                order_item_forward_block_message(
+                    block,
+                    action="收取外购包材",
+                    order_status=sales_order.status,
+                )
+            )
         quantity = _decimal(line["received_quantity"])
         if item.purchase_unit in DISCRETE_PURCHASE_UNITS and quantity != quantity.to_integral_value():
             raise ExternalPurchaseContractError(

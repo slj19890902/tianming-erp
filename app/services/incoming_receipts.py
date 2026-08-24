@@ -34,8 +34,14 @@ from app.models.supplier_requisition_order import (
 )
 from app.models.user import User
 from app.models.warehouse_inventory import InventoryLot, InventoryMovement
+from app.services.order_status_policy import (
+    material_receipt_recalculated_order_status,
+    order_item_forward_block_message,
+    order_item_forward_block_reason,
+)
 from app.services.production_workflow import (
     ProductionWorkflowError,
+    has_dispatched_delivery_facts,
     has_production_completion_facts,
     is_production_task_status_quantity_conflict,
     lock_order_rows_for_production_transition,
@@ -1124,10 +1130,10 @@ def _mark_order_progress(db: Session, target: IncomingTarget, *, closed: bool, u
         )
         or 0
     )
-    if remaining_items == 0 and target.order.status in {"pending_production", "production"}:
-        target.order.status = "pending_delivery"
-    elif remaining_items > 0 and target.order.status == "pending_delivery":
-        target.order.status = "pending_production"
+    target.order.status = material_receipt_recalculated_order_status(
+        current_status=target.order.status,
+        remaining_unreceived_items=remaining_items,
+    )
 
 
 def _surplus_dimensions(target: IncomingTarget) -> tuple[int, int]:
@@ -1744,6 +1750,22 @@ def receive_one(
             expected_actual_material_version=expected_actual_material_version,
             actual_material_fingerprint=actual_material_fingerprint,
         )
+    forward_block = order_item_forward_block_reason(
+        order_status=target.order.status,
+        ordered_quantity=target.order_item.quantity,
+        delivered_quantity=target.order_item.delivered_quantity,
+        is_force_closed=target.order_item.is_force_closed,
+    )
+    if forward_block is not None:
+        raise IncomingReceiptError(
+            order_item_forward_block_message(
+                forward_block,
+                action="收料",
+                order_status=target.order.status,
+            ),
+            409,
+            code="ORDER_ITEM_RECEIPT_BLOCKED",
+        )
     try:
         purpose_context = resolve_receipt_purpose_context(
             db,
@@ -2095,8 +2117,6 @@ def revert_receipt_item(
     order = locked_orders.get(receipt_item.order_id)
     if order is None:
         raise IncomingReceiptError("关联订单不存在", 409)
-    if order.status in {"partially_delivered", "delivered"}:
-        raise IncomingReceiptError("订单已发货，禁止撤回来料", 409)
     target = _target(
         db,
         supplier_order_item_key(receipt_item.supplier_order_item_id)
@@ -2106,6 +2126,25 @@ def revert_receipt_item(
         else receipt_item.order_item_id,
         allow_closed=True,
     )
+    reverse_block = order_item_forward_block_reason(
+        order_status=order.status,
+        ordered_quantity=target.order_item.quantity,
+        delivered_quantity=target.order_item.delivered_quantity,
+        is_force_closed=target.order_item.is_force_closed,
+    )
+    if reverse_block is not None:
+        raise IncomingReceiptError(
+            order_item_forward_block_message(
+                reverse_block,
+                action="撤回来料",
+                order_status=order.status,
+            ),
+            409,
+        )
+    if int(target.order_item.delivered_quantity or 0) > 0 or (
+        has_dispatched_delivery_facts(db, [target.order_item.id])
+    ):
+        raise IncomingReceiptError("订单明细已有发货事实，禁止撤回来料", 409)
     purpose_allocation = db.scalar(
         select(IncomingReceiptPurposeAllocation).where(
             IncomingReceiptPurposeAllocation.incoming_receipt_item_id

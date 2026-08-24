@@ -181,7 +181,7 @@ from app.services.asset_time_archive import (
     build_printing_plate_time_archives,
 )
 from app.services.production_workflow import PENDING, list_production_tasks
-from app.services.production_workflow import MUTABLE_ORDER_STATUSES
+from app.services.order_status_policy import ORDER_ITEM_ACTIVE_ORDER_STATUSES
 from app.services.semi_finished_inventory import (
     SemiFinishedCandidate,
     SemiFinishedLotVersion,
@@ -14727,7 +14727,8 @@ def _mold_live_task_ids(
                 OrderItem.product_id == product.id,
                 ProductionTask.created_at >= binding_start,
                 OrderItem.is_force_closed.is_(False),
-                Order.status.in_(MUTABLE_ORDER_STATUSES),
+                OrderItem.delivered_quantity < OrderItem.quantity,
+                Order.status.in_(ORDER_ITEM_ACTIVE_ORDER_STATUSES),
             )
         )
         if allowed_customer_ids is not None:
@@ -14746,7 +14747,8 @@ def _mold_live_task_ids(
         .where(
             SalesOrderItemBomComponent.snapshot_mold_tool_id == mold.id,
             OrderItem.is_force_closed.is_(False),
-            Order.status.in_(MUTABLE_ORDER_STATUSES),
+            OrderItem.delivered_quantity < OrderItem.quantity,
+            Order.status.in_(ORDER_ITEM_ACTIVE_ORDER_STATUSES),
         )
     )
     if allowed_customer_ids is not None:
@@ -15503,7 +15505,8 @@ def get_mold_live_status(
                 SalesOrderItemBomComponent.snapshot_mold_tool_id == row.id,
                 Order.customer_id.in_(allowed_customer_ids),
                 OrderItem.is_force_closed.is_(False),
-                Order.status.in_(MUTABLE_ORDER_STATUSES),
+                OrderItem.delivered_quantity < OrderItem.quantity,
+                Order.status.in_(ORDER_ITEM_ACTIVE_ORDER_STATUSES),
             )
             .limit(1)
         ) is not None

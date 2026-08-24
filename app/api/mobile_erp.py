@@ -54,6 +54,7 @@ from app.services.production_workflow import (
     list_production_task_dashboard_rows,
     list_production_station_task_ids,
 )
+from app.services.order_status_policy import ORDER_ITEM_ACTIVE_ORDER_STATUSES
 from app.services.printing_colors import parse_printing_colors
 from app.services.product_specification import (
     dimension_specification,
@@ -1625,8 +1626,12 @@ def _current_product_task_ids(db: Session, product_id: int) -> list[int]:
         db.scalars(
             select(ProductionTask.id)
             .join(OrderItem, OrderItem.id == ProductionTask.order_item_id)
+            .join(Order, Order.id == OrderItem.order_id)
             .where(
                 ProductionTask.status.in_(tuple(_PRODUCT_TASK_STATUS_LABELS)),
+                Order.status.in_(ORDER_ITEM_ACTIVE_ORDER_STATUSES),
+                OrderItem.is_force_closed.is_(False),
+                OrderItem.delivered_quantity < OrderItem.quantity,
                 or_(ProductionTask.task_role == "order_main", ~main_task_exists),
                 or_(
                     OrderItem.product_id == product_id,

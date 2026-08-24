@@ -92,11 +92,18 @@ from app.services.incoming_receipts import (
 from app.services.production_workflow import (
     ProductionWorkflowError,
     cutting_output_factor,
+    has_dispatched_delivery_facts,
     has_production_completion_facts,
     lock_order_rows_for_production_transition,
     refresh_order_production_status,
     refresh_production_task,
     receipt_auto_finished_location_projection,
+)
+from app.services.order_status_policy import (
+    MATERIAL_RECEIPT_TO_DELIVERY_ORDER_STATUSES,
+    ORDER_ITEM_ACTIVE_ORDER_STATUSES,
+    order_item_forward_block_message,
+    order_item_forward_block_reason,
 )
 from app.services.composite_bom_workflow import is_composite_order_item
 from app.services.audit_log import append_audit_event
@@ -865,11 +872,59 @@ def _refresh_production_after_material_change(
     return True
 
 
-def _lock_order_for_material_revert(db: Session, order_id: int) -> Order:
+def _lock_order_for_material_transition(db: Session, order_id: int) -> Order:
     try:
         return lock_order_rows_for_production_transition(db, [order_id])[order_id]
     except ProductionWorkflowError as error:
         raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+
+
+def _require_material_receive_eligible(*, order: Order, item: OrderItem) -> None:
+    block = order_item_forward_block_reason(
+        order_status=order.status,
+        ordered_quantity=item.quantity,
+        delivered_quantity=item.delivered_quantity,
+        is_force_closed=item.is_force_closed,
+    )
+    if block is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=order_item_forward_block_message(
+                block,
+                action="收料入库",
+                order_status=order.status,
+            ),
+        )
+
+
+def _require_material_revert_eligible(
+    db: Session,
+    *,
+    order: Order,
+    item: OrderItem,
+) -> None:
+    block = order_item_forward_block_reason(
+        order_status=order.status,
+        ordered_quantity=item.quantity,
+        delivered_quantity=item.delivered_quantity,
+        is_force_closed=item.is_force_closed,
+    )
+    if block is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=order_item_forward_block_message(
+                block,
+                action="撤回来料",
+                order_status=order.status,
+            ),
+        )
+    if int(item.delivered_quantity or 0) > 0 or has_dispatched_delivery_facts(
+        db, [item.id]
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="订单明细已有发货事实，禁止撤回来料",
+        )
 
 
 class RevertRequest(BaseModel):
@@ -1243,7 +1298,9 @@ def _pending_order_item_query(query):
         .exists()
     )
     return query.where(
-        Order.status.notin_(["cancelled", "dead"]),
+        Order.status.in_(ORDER_ITEM_ACTIVE_ORDER_STATUSES),
+        OrderItem.is_force_closed.is_(False),
+        OrderItem.delivered_quantity < OrderItem.quantity,
         OrderItem.material_status == "pending",
         or_(
             OrderItem.requisition_status.in_(["已报料", "供应商已排单"]),
@@ -2596,6 +2653,17 @@ def _receive_requisition_component(
         order_item_id=order_item.id,
         user=user,
     )
+    order = _lock_order_for_material_transition(db, order_item.order_id)
+    row = db.execute(
+        select(RequisitionItem, OrderItem)
+        .join(OrderItem, OrderItem.id == RequisitionItem.order_item_id)
+        .where(RequisitionItem.id == requisition_item_id)
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+    if row is None:
+        raise HTTPException(status_code=409, detail="报料明细或关联订单已被删除")
+    requisition_item, order_item = row
+    _require_material_receive_eligible(order=order, item=order_item)
     active_component_ids = {
         item.id
         for item in _active_requisition_components(
@@ -2663,7 +2731,9 @@ def _receive_requisition_component(
                     update(Order)
                     .where(
                         Order.id == order_item.order_id,
-                        Order.status.in_(["pending_production", "production"]),
+                        Order.status.in_(
+                            MATERIAL_RECEIPT_TO_DELIVERY_ORDER_STATUSES
+                        ),
                     )
                     .values(status="pending_delivery")
                 )
@@ -2711,6 +2781,12 @@ def _receive_material(
         order_item_id=current.id,
         user=user,
     )
+    order = _lock_order_for_material_transition(db, current.order_id)
+    db.expire(current)
+    current = db.get(OrderItem, _component_id(item_id))
+    if current is None:
+        raise HTTPException(status_code=409, detail="订单明细已被删除")
+    _require_material_receive_eligible(order=order, item=current)
     final_quantity = (
         received_quantity
         if received_quantity is not None
@@ -2760,7 +2836,9 @@ def _receive_material(
                 update(Order)
                 .where(
                     Order.id == current.order_id,
-                    Order.status.in_(["pending_production", "production"]),
+                    Order.status.in_(
+                        MATERIAL_RECEIPT_TO_DELIVERY_ORDER_STATUSES
+                    ),
                 )
                 .values(status="pending_delivery")
             )
@@ -4741,7 +4819,7 @@ def _revert_requisition_component(
     )
     if replay is not None:
         return replay
-    _lock_order_for_material_revert(db, order.id)
+    _lock_order_for_material_transition(db, order.id)
     row = db.execute(
         select(RequisitionItem, OrderItem, Order)
         .join(OrderItem, OrderItem.id == RequisitionItem.order_item_id)
@@ -4760,8 +4838,7 @@ def _revert_requisition_component(
                 "message": "冻结采购用途必须按具体收料事实撤销，不能走旧撤销入口。",
             },
         )
-    if order.status in {"partially_delivered", "delivered"}:
-        raise HTTPException(status_code=409, detail="订单已发货，禁止撤回来料")
+    _require_material_revert_eligible(db, order=order, item=order_item)
     if requisition_item.status != "已入库":
         raise HTTPException(status_code=409, detail="该报料明细当前不是已入库状态")
     if has_production_completion_facts(db, [order_item.id]):
@@ -4889,7 +4966,7 @@ def revert_item(
     )
     if replay is not None:
         return replay
-    _lock_order_for_material_revert(db, order.id)
+    _lock_order_for_material_transition(db, order.id)
     row = db.execute(
         select(OrderItem, Order)
         .join(Order, Order.id == OrderItem.order_id)
@@ -4931,8 +5008,7 @@ def revert_item(
                 "message": "冻结采购用途必须按具体收料事实撤销，不能走旧撤销入口。",
             },
         )
-    if order.status in {"partially_delivered", "delivered"}:
-        raise HTTPException(status_code=409, detail="订单已发货，禁止撤回来料")
+    _require_material_revert_eligible(db, order=order, item=item)
     if item.material_status != "received":
         raise HTTPException(status_code=409, detail="该明细当前不是已入库状态")
     if has_production_completion_facts(db, [item.id]):

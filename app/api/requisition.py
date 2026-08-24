@@ -122,6 +122,9 @@ from app.services.flute_mapping import (
 )
 from app.services.product_specification import resolved_product_specification
 from app.services.report_crease import crease_width_error
+from app.services.order_status_policy import (
+    ORDER_ITEM_ACTIVE_ORDER_STATUSES,
+)
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     component_inventory_coverage,
@@ -4192,14 +4195,6 @@ def _require_order_item_customer_access(
 _REQUISITION_HOLD_ACTIVE = "active"
 _REQUISITION_HOLD_RELEASED = "released"
 _REQUISITION_HOLD_INVALIDATED = "invalidated"
-_REQUISITION_HOLD_ABNORMAL_ORDER_STATUSES = {
-    "cancelled",
-    "dead",
-    "closed",
-    "archived",
-}
-
-
 def _require_requisition_hold_customer_access(
     db: Session,
     *,
@@ -4368,8 +4363,8 @@ def _ensure_requisition_hold_eligible(
     require_customer_access(order.customer_id, user, db)
     if is_history_order_number(order.order_number):
         raise HTTPException(status_code=409, detail="历史订单不能设置等候报料")
-    if order.status in _REQUISITION_HOLD_ABNORMAL_ORDER_STATUSES:
-        raise HTTPException(status_code=409, detail="已取消、死单、结单或归档订单不能设置等候报料")
+    if order.status not in ORDER_ITEM_ACTIVE_ORDER_STATUSES:
+        raise HTTPException(status_code=409, detail="订单当前状态不能设置等候报料")
     if item.is_force_closed:
         raise HTTPException(status_code=409, detail="强制结档明细不能设置等候报料")
     if item.material_status != "pending":
@@ -4434,7 +4429,7 @@ def _previous_batch_state(
     remaining_quantity = max(ordered_quantity - delivered_quantity, 0)
     abnormal = (
         previous_item.is_force_closed
-        or previous_order.status in _REQUISITION_HOLD_ABNORMAL_ORDER_STATUSES
+        or previous_order.status not in ORDER_ITEM_ACTIVE_ORDER_STATUSES
     )
     if abnormal:
         warning = (
@@ -4491,7 +4486,7 @@ def _previous_batch_candidates(
             ),
             OrderItem.delivered_quantity < OrderItem.quantity,
             OrderItem.is_force_closed.is_(False),
-            Order.status.notin_(_REQUISITION_HOLD_ABNORMAL_ORDER_STATUSES),
+            Order.status.in_(ORDER_ITEM_ACTIVE_ORDER_STATUSES),
         )
         .order_by(OrderItem.created_at.desc(), OrderItem.id.desc())
         .limit(20)
@@ -5806,8 +5801,8 @@ def _validate_merge_member_rows(
     for item, order, *_ in ordered_rows:
         if is_history_order_number(order.order_number):
             raise HTTPException(status_code=409, detail="历史订单不能创建待报料合并组")
-        if order.status in {"cancelled", "dead", "closed", "archived"}:
-            raise HTTPException(status_code=409, detail="已取消、死单、结单或归档订单不能创建待报料合并组")
+        if order.status not in ORDER_ITEM_ACTIVE_ORDER_STATUSES:
+            raise HTTPException(status_code=409, detail="订单当前状态不能创建待报料合并组")
         if item.is_force_closed:
             raise HTTPException(status_code=409, detail="强制结案明细不能创建待报料合并组")
         if item.material_status != "pending":
@@ -6610,8 +6605,8 @@ def _ensure_pending_order_item_for_supplier_order(
     item, order, customer, product = row
     if is_history_order_number(order.order_number):
         raise HTTPException(status_code=409, detail="历史订单不能生成供应商报料单")
-    if order.status in {"cancelled", "dead", "closed", "archived"}:
-        raise HTTPException(status_code=409, detail="已取消、死单、结单或归档订单不能生成供应商报料单")
+    if order.status not in ORDER_ITEM_ACTIVE_ORDER_STATUSES:
+        raise HTTPException(status_code=409, detail="订单当前状态不能生成供应商报料单")
     if item.is_force_closed:
         raise HTTPException(status_code=409, detail="强制结档明细不能生成供应商报料单")
     if item.material_status != "pending":
@@ -8643,7 +8638,7 @@ def preview_order_entry_holds(
             func.trim(OrderItem.snapshot_product_code) == code,
             OrderItem.delivered_quantity < OrderItem.quantity,
             OrderItem.is_force_closed.is_(False),
-            Order.status.notin_(_REQUISITION_HOLD_ABNORMAL_ORDER_STATUSES),
+            Order.status.in_(ORDER_ITEM_ACTIVE_ORDER_STATUSES),
         ).order_by(OrderItem.created_at.desc(), OrderItem.id.desc()).limit(20)).all()
         candidates = [{"order_item_id": item.id, "order_number": order.order_number,
                        "item_order_number": item.item_order_number, "remaining_quantity": max(int(item.quantity)-int(item.delivered_quantity), 0),
@@ -9122,7 +9117,8 @@ def _pending_requisition_candidates(
             OrderItem.requisition_status.in_(["未报料", "已报料"]),
             OrderItem.material_status == "pending",
             OrderItem.supply_mode_snapshot != "external_purchase",
-            Order.status.notin_(["cancelled", "dead", "closed", "archived"]),
+            Order.status.in_(ORDER_ITEM_ACTIVE_ORDER_STATUSES),
+            OrderItem.delivered_quantity < OrderItem.quantity,
             OrderItem.is_force_closed.is_(False),
         )
     )
@@ -15275,7 +15271,8 @@ def merge_suggestions(
         .where(
             OrderItem.requisition_status == "未报料",
             OrderItem.material_status == "pending",
-            Order.status.notin_(["cancelled", "dead", "closed", "archived"]),
+            Order.status.in_(ORDER_ITEM_ACTIVE_ORDER_STATUSES),
+            OrderItem.delivered_quantity < OrderItem.quantity,
             OrderItem.is_force_closed.is_(False),
         )
         .order_by(OrderItem.created_at.desc(), OrderItem.id.desc())

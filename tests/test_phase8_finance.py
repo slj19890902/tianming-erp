@@ -1092,10 +1092,16 @@ def test_pending_statement_and_statement_snapshot_amounts(
     assert Decimal(str(statement.json()["total_receivable"])) == Decimal("280.80")
     assert Decimal(str(statement.json()["total_gross_profit"])) == Decimal("70.20")
     assert pending_after.json()["items"] == []
-    assert duplicate.status_code in {400, 409}
+    assert duplicate.status_code == 201, duplicate.text
+    assert duplicate.json()["id"] == statement.json()["id"]
+    assert duplicate.json()["operation"] == "replayed"
     with session_factory() as session:
         master = session.scalar(select(Statement))
         line = session.scalar(select(StatementItem))
+        statement_count = session.scalar(select(func.count()).select_from(Statement))
+        item_count = session.scalar(select(func.count()).select_from(StatementItem))
+    assert statement_count == 1
+    assert item_count == 1
     assert master.total_receivable == Decimal("280.80")
     assert line.unit_price_snapshot == Decimal("3.6000")
     assert line.unit_cost_snapshot == Decimal("2.7000")
@@ -1193,6 +1199,410 @@ def _create_statement(client: TestClient) -> dict:
     )
     assert statement.status_code == 201, statement.text
     return statement.json()
+
+
+def _append_confirmed_statement_delivery(
+    session_factory,
+    *,
+    suffix: str,
+    quantity: int = 10,
+    delivery_date: date = date(2026, 6, 15),
+) -> int:
+    from app.models.delivery import Delivery, DeliveryItem
+    from app.models.finance import ReturnReceipt, ReturnReceiptItem
+
+    with session_factory() as session:
+        delivery = Delivery(
+            delivery_number=f"DH-202606-{suffix}",
+            customer_id=1,
+            delivery_date=delivery_date,
+            status="dispatched",
+            total_quantity=quantity,
+            dispatched_at=datetime.combine(delivery_date, datetime.min.time()),
+        )
+        session.add(delivery)
+        session.flush()
+        delivery_item = DeliveryItem(
+            delivery_id=delivery.id,
+            order_item_id=1,
+            delivered_quantity=quantity,
+            remarks=f"对账归并测试 {suffix}",
+        )
+        session.add(delivery_item)
+        session.flush()
+        receipt = ReturnReceipt(
+            delivery_id=delivery.id,
+            actual_received_date=delivery_date + timedelta(days=1),
+            status="confirmed",
+            created_by=1,
+        )
+        session.add(receipt)
+        session.flush()
+        session.add(
+            ReturnReceiptItem(
+                return_receipt_id=receipt.id,
+                delivery_item_id=delivery_item.id,
+                actual_received_quantity=quantity,
+            )
+        )
+        session.commit()
+        return delivery.id
+
+
+def test_default_statement_generation_reuses_customer_month_summary(
+    finance_api_app,
+) -> None:
+    from app.models.finance import Statement, StatementItem
+
+    app, session_factory = finance_api_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        first = _create_statement(client)
+        second_delivery_id = _append_confirmed_statement_delivery(
+            session_factory,
+            suffix="SUMMARY-002",
+        )
+        pending = client.get(
+            "/api/finance/pending_statements",
+            params={"customer_id": 1, "statement_month": "2026-06"},
+        )
+        payload = {
+            "customer_id": 1,
+            "statement_month": "2026-06",
+            "delivery_ids": [second_delivery_id],
+        }
+        appended = client.post("/api/finance/statements", json=payload)
+        replayed = client.post("/api/finance/statements", json=payload)
+        detail = client.get(f"/api/finance/statements/{first['id']}")
+
+    assert pending.status_code == 200, pending.text
+    assert pending.json()["monthly_summary_statement"]["id"] == first["id"]
+    assert appended.status_code == 201, appended.text
+    assert appended.json()["id"] == first["id"]
+    assert appended.json()["generation_mode"] == "monthly_summary"
+    assert appended.json()["operation"] == "appended"
+    assert appended.json()["version"] == 2
+    assert replayed.status_code == 201, replayed.text
+    assert replayed.json()["id"] == first["id"]
+    assert replayed.json()["operation"] == "replayed"
+    assert replayed.json()["version"] == 2
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["total_receivable"] == "316.80"
+    assert len(detail.json()["items"]) == 2
+    with session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(Statement)) == 1
+        assert session.scalar(select(func.count()).select_from(StatementItem)) == 2
+
+
+def test_separate_statement_never_becomes_the_default_monthly_summary(
+    finance_api_app,
+) -> None:
+    app, session_factory = finance_api_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        monthly_summary = _create_statement(client)
+        separate_delivery_id = _append_confirmed_statement_delivery(
+            session_factory,
+            suffix="SEPARATE-002",
+            quantity=6,
+        )
+        separate = client.post(
+            "/api/finance/statements",
+            json={
+                "customer_id": 1,
+                "statement_month": "2026-06",
+                "delivery_ids": [separate_delivery_id],
+                "separate_statement": True,
+            },
+        )
+        third_delivery_id = _append_confirmed_statement_delivery(
+            session_factory,
+            suffix="SUMMARY-003",
+            quantity=4,
+        )
+        appended = client.post(
+            "/api/finance/statements",
+            json={
+                "customer_id": 1,
+                "statement_month": "2026-06",
+                "delivery_ids": [third_delivery_id],
+            },
+        )
+
+    assert separate.status_code == 201, separate.text
+    assert separate.json()["id"] != monthly_summary["id"]
+    assert separate.json()["generation_mode"] == "separate"
+    assert appended.status_code == 201, appended.text
+    assert appended.json()["id"] == monthly_summary["id"]
+    assert appended.json()["generation_mode"] == "monthly_summary"
+
+
+def test_confirmed_monthly_summary_blocks_default_append_but_allows_separate(
+    finance_api_app,
+) -> None:
+    from app.models.finance import Statement
+
+    app, session_factory = finance_api_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        monthly_summary = _create_statement(client)
+        with session_factory() as session:
+            statement = session.get(Statement, monthly_summary["id"])
+            statement.confirmation_status = "confirmed"
+            session.commit()
+        delivery_id = _append_confirmed_statement_delivery(
+            session_factory,
+            suffix="FROZEN-002",
+        )
+        payload = {
+            "customer_id": 1,
+            "statement_month": "2026-06",
+            "delivery_ids": [delivery_id],
+        }
+        blocked = client.post("/api/finance/statements", json=payload)
+        separate = client.post(
+            "/api/finance/statements",
+            json={**payload, "separate_statement": True},
+        )
+
+    assert blocked.status_code == 409, blocked.text
+    assert "总对账单已确认" in blocked.json()["detail"]
+    assert separate.status_code == 201, separate.text
+    assert separate.json()["generation_mode"] == "separate"
+
+
+def test_invoiced_monthly_summary_blocks_append_without_changing_frozen_amounts(
+    finance_api_app,
+) -> None:
+    app, session_factory = finance_api_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        monthly_summary = _create_statement(client)
+        invoice = client.post(
+            "/api/finance/invoices",
+            json={
+                "statement_id": monthly_summary["id"],
+                "invoice_number": "INV-P199-FROZEN",
+                "invoice_date": "2026-06-16",
+                "invoice_amount": "10.00",
+            },
+        )
+        delivery_id = _append_confirmed_statement_delivery(
+            session_factory,
+            suffix="INVOICED-002",
+        )
+        blocked = client.post(
+            "/api/finance/statements",
+            json={
+                "customer_id": 1,
+                "statement_month": "2026-06",
+                "delivery_ids": [delivery_id],
+            },
+        )
+        detail = client.get(f"/api/finance/statements/{monthly_summary['id']}")
+
+    assert invoice.status_code == 201, invoice.text
+    assert blocked.status_code == 409, blocked.text
+    assert "已有开票记录" in blocked.json()["detail"]
+    assert detail.json()["total_receivable"] == "280.80"
+    assert len(detail.json()["items"]) == 1
+
+
+def test_partially_settled_monthly_summary_blocks_default_append(
+    finance_api_app,
+) -> None:
+    app, session_factory = finance_api_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        monthly_summary = _create_statement(client)
+        payment = client.put(
+            f"/api/finance/statements/{monthly_summary['id']}/settle",
+            json={
+                "amount": "10.00",
+                "settlement_date": "2026-06-16",
+                "account": "P1-99隔离测试账户",
+            },
+        )
+        delivery_id = _append_confirmed_statement_delivery(
+            session_factory,
+            suffix="SETTLED-002",
+        )
+        pending = client.get(
+            "/api/finance/pending_statements",
+            params={"customer_id": 1, "statement_month": "2026-06"},
+        )
+        blocked = client.post(
+            "/api/finance/statements",
+            json={
+                "customer_id": 1,
+                "statement_month": "2026-06",
+                "delivery_ids": [delivery_id],
+            },
+        )
+
+    assert payment.status_code == 200, payment.text
+    assert pending.status_code == 200, pending.text
+    assert "已有收款记录" in pending.json()["monthly_summary_statement"][
+        "append_block_reason"
+    ]
+    assert blocked.status_code == 409, blocked.text
+    assert "已有收款记录" in blocked.json()["detail"]
+
+
+def test_concurrent_default_creation_never_creates_two_monthly_summaries(
+    finance_api_app,
+) -> None:
+    from app.models.finance import Statement
+
+    app, session_factory = finance_api_app
+    first_delivery_id = _append_confirmed_statement_delivery(
+        session_factory,
+        suffix="RACE-001",
+        quantity=3,
+    )
+    second_delivery_id = _append_confirmed_statement_delivery(
+        session_factory,
+        suffix="RACE-002",
+        quantity=4,
+    )
+
+    def create_for(delivery_id: int):
+        with TestClient(app, raise_server_exceptions=False) as client:
+            _login(client, "finance")
+            return client.post(
+                "/api/finance/statements",
+                json={
+                    "customer_id": 1,
+                    "statement_month": "2026-06",
+                    "delivery_ids": [delivery_id],
+                },
+            )
+
+    responses = _race_requests(
+        lambda: create_for(first_delivery_id),
+        lambda: create_for(second_delivery_id),
+    )
+
+    assert all(response.status_code in {201, 409} for response in responses)
+    assert any(response.status_code == 201 for response in responses)
+    successful_ids = {
+        response.json()["id"] for response in responses if response.status_code == 201
+    }
+    assert len(successful_ids) == 1
+    with session_factory() as session:
+        summaries = session.scalars(
+            select(Statement).where(
+                Statement.customer_id == 1,
+                Statement.statement_month == "2026-06",
+                Statement.generation_mode == "monthly_summary",
+                Statement.confirmation_status != "cancelled",
+            )
+        ).all()
+        assert len(summaries) == 1
+
+
+def test_single_legacy_draft_is_explicitly_adopted_as_the_monthly_summary(
+    finance_api_app,
+) -> None:
+    from app.models.finance import Statement
+
+    app, session_factory = finance_api_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        existing = _create_statement(client)
+        with session_factory() as session:
+            session.get(Statement, existing["id"]).generation_mode = "legacy"
+            session.commit()
+        delivery_id = _append_confirmed_statement_delivery(
+            session_factory,
+            suffix="LEGACY-ADOPT-002",
+            quantity=5,
+        )
+        pending = client.get(
+            "/api/finance/pending_statements",
+            params={"customer_id": 1, "statement_month": "2026-06"},
+        )
+        appended = client.post(
+            "/api/finance/statements",
+            json={
+                "customer_id": 1,
+                "statement_month": "2026-06",
+                "delivery_ids": [delivery_id],
+            },
+        )
+
+    assert pending.status_code == 200, pending.text
+    assert pending.json()["monthly_summary_statement"]["id"] == existing["id"]
+    assert pending.json()["monthly_summary_statement"]["will_promote_legacy"] is True
+    assert appended.status_code == 201, appended.text
+    assert appended.json()["id"] == existing["id"]
+    assert appended.json()["generation_mode"] == "monthly_summary"
+    assert appended.json()["operation"] == "appended"
+
+
+def test_multiple_legacy_statements_are_not_guessed_or_silently_merged(
+    finance_api_app,
+) -> None:
+    from app.models.finance import Statement
+
+    app, session_factory = finance_api_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        existing = _create_statement(client)
+        with session_factory() as session:
+            session.get(Statement, existing["id"]).generation_mode = "legacy"
+            session.add(
+                Statement(
+                    statement_number="ST-202606-P199-LEGACY-2",
+                    customer_id=1,
+                    statement_month="2026-06",
+                    generation_mode="legacy",
+                    total_receivable=Decimal("0"),
+                    total_gross_profit=Decimal("0"),
+                    invoiced_amount=Decimal("0"),
+                    settled_amount=Decimal("0"),
+                    status="unsettled",
+                    confirmation_status="draft",
+                    version=1,
+                    created_by=1,
+                )
+            )
+            session.commit()
+        delivery_id = _append_confirmed_statement_delivery(
+            session_factory,
+            suffix="LEGACY-CONFLICT-003",
+            quantity=5,
+        )
+        pending = client.get(
+            "/api/finance/pending_statements",
+            params={"customer_id": 1, "statement_month": "2026-06"},
+        )
+        blocked = client.post(
+            "/api/finance/statements",
+            json={
+                "customer_id": 1,
+                "statement_month": "2026-06",
+                "delivery_ids": [delivery_id],
+            },
+        )
+        separate = client.post(
+            "/api/finance/statements",
+            json={
+                "customer_id": 1,
+                "statement_month": "2026-06",
+                "delivery_ids": [delivery_id],
+                "separate_statement": True,
+            },
+        )
+
+    assert pending.status_code == 200, pending.text
+    assert "已有 2 张历史对账单" in pending.json()[
+        "monthly_summary_block_reason"
+    ]
+    assert blocked.status_code == 409, blocked.text
+    assert "不能猜测哪张作为总单" in blocked.json()["detail"]
+    assert separate.status_code == 201, separate.text
+    assert separate.json()["generation_mode"] == "separate"
 
 
 def test_invoice_and_partial_settlement_are_cumulative_and_audited(

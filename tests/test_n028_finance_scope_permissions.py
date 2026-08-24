@@ -511,9 +511,11 @@ def test_selected_scope_rejects_customer_b_writes_and_allows_customer_a(
                 "customer_id": ids["customer_a"],
                 "statement_month": "2026-07",
                 "return_receipt_item_ids": [ids["pending_receipt_item_a"]],
+                "separate_statement": True,
             },
         )
         assert created_statement.status_code == 201, created_statement.text
+        assert created_statement.json()["generation_mode"] == "separate"
         assert "total_gross_profit" not in created_statement.json()
 
 

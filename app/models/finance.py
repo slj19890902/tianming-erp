@@ -16,6 +16,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -135,6 +136,10 @@ class Statement(Base):
             "confirmation_status IN ('draft', 'confirmed', 'cancelled')",
             name="ck_finance_statements_confirmation_status",
         ),
+        CheckConstraint(
+            "generation_mode IN ('legacy', 'monthly_summary', 'separate')",
+            name="ck_finance_statements_generation_mode",
+        ),
         CheckConstraint("version >= 1", name="ck_finance_statements_version"),
         UniqueConstraint(
             "statement_number",
@@ -145,6 +150,20 @@ class Statement(Base):
             "customer_id",
             "statement_month",
         ),
+        Index(
+            "uq_finance_statements_active_monthly_summary",
+            "customer_id",
+            "statement_month",
+            unique=True,
+            sqlite_where=text(
+                "generation_mode = 'monthly_summary' "
+                "AND confirmation_status <> 'cancelled'"
+            ),
+            postgresql_where=text(
+                "generation_mode = 'monthly_summary' "
+                "AND confirmation_status <> 'cancelled'"
+            ),
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -154,6 +173,12 @@ class Statement(Base):
         nullable=False,
     )
     statement_month: Mapped[str] = mapped_column(String(7), nullable=False)
+    generation_mode: Mapped[str] = mapped_column(
+        String(20),
+        default="legacy",
+        server_default="legacy",
+        nullable=False,
+    )
     total_receivable: Mapped[Decimal] = mapped_column(
         Numeric(14, 2),
         default=Decimal("0"),

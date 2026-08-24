@@ -84,6 +84,9 @@ MONEY = Decimal("0.00")
 STATEMENT_COST_FIELDS = frozenset(
     {"total_gross_profit", "unit_cost_snapshot", "gross_profit_amount"}
 )
+STATEMENT_MODE_LEGACY = "legacy"
+STATEMENT_MODE_MONTHLY_SUMMARY = "monthly_summary"
+STATEMENT_MODE_SEPARATE = "separate"
 
 _CITY_PREFIXES = ("苏州", "昆山", "常熟", "太仓", "上海", "无锡", "南京", "杭州", "深圳", "广州")
 _COMPANY_SUFFIXES = ("股份有限公司", "有限责任公司", "科技有限公司", "有限公司")
@@ -126,6 +129,89 @@ def _statement_for_user(
         raise HTTPException(status_code=404, detail="对账单不存在")
     require_customer_access(statement.customer_id, user, db)
     return statement
+
+
+def _active_monthly_summary_statement(
+    db: Session,
+    *,
+    customer_id: int,
+    statement_month: str,
+) -> Statement | None:
+    return db.scalar(
+        select(Statement)
+        .where(
+            Statement.customer_id == customer_id,
+            Statement.statement_month == statement_month,
+            Statement.generation_mode == STATEMENT_MODE_MONTHLY_SUMMARY,
+            Statement.confirmation_status != "cancelled",
+        )
+        .order_by(Statement.id)
+    )
+
+
+def _legacy_month_statements(
+    db: Session,
+    *,
+    customer_id: int,
+    statement_month: str,
+) -> list[Statement]:
+    return list(
+        db.scalars(
+            select(Statement)
+            .where(
+                Statement.customer_id == customer_id,
+                Statement.statement_month == statement_month,
+                Statement.generation_mode == STATEMENT_MODE_LEGACY,
+                Statement.confirmation_status != "cancelled",
+            )
+            .order_by(Statement.id)
+        ).all()
+    )
+
+
+def _monthly_summary_append_block_reason(
+    db: Session,
+    statement: Statement,
+) -> str | None:
+    if statement.confirmation_status == "confirmed":
+        return "本月总对账单已确认，不能再追加；如确需补单请勾选“单独生成一份对账单”。"
+    if statement.confirmation_status == "cancelled":
+        return "本月总对账单已取消，请刷新后重新生成。"
+    if db.scalar(
+        select(Invoice.id).where(Invoice.statement_id == statement.id).limit(1)
+    ) is not None:
+        return "本月总对账单已有开票记录，不能再追加；请先按财务流程处理，或勾选“单独生成一份对账单”。"
+    if db.scalar(
+        select(SettlementRecord.id)
+        .where(SettlementRecord.statement_id == statement.id)
+        .limit(1)
+    ) is not None:
+        return "本月总对账单已有收款记录，不能再追加；请先按财务流程处理，或勾选“单独生成一份对账单”。"
+    return None
+
+
+def _statement_generation_response(
+    statement: Statement,
+    user: User,
+    *,
+    operation: str,
+) -> dict:
+    return _redact_statement_costs(
+        {
+            "id": statement.id,
+            "statement_number": statement.statement_number,
+            "customer_id": statement.customer_id,
+            "statement_month": statement.statement_month,
+            "generation_mode": statement.generation_mode,
+            "total_receivable": statement.total_receivable,
+            "total_gross_profit": statement.total_gross_profit,
+            "status": statement.status,
+            "confirmation_status": statement.confirmation_status,
+            "version": statement.version,
+            "operation": operation,
+        },
+        user,
+    )
 
 
 def _delivery_for_user(
@@ -339,6 +425,7 @@ class ReturnReceiptUpdate(BaseModel):
 class StatementCreate(BaseModel):
     customer_id: int
     statement_month: str
+    separate_statement: bool = False
     delivery_ids: list[int] = Field(default_factory=list)
     # 兼容旧客户端；后端仍会校验这些明细是否覆盖完整送货单。
     return_receipt_item_ids: list[int] = Field(default_factory=list)
@@ -500,6 +587,7 @@ def list_statements(
                     "customer_id": statement.customer_id,
                     "customer_name": customer_name,
                     "statement_month": statement.statement_month,
+                    "generation_mode": statement.generation_mode,
                     "total_receivable": statement.total_receivable,
                     "total_gross_profit": statement.total_gross_profit,
                     "invoiced_amount": statement.invoiced_amount,
@@ -710,6 +798,7 @@ def _statement_detail_response(
             "customer_id": statement.customer_id,
             "customer_name": customer_name,
             "statement_month": statement.statement_month,
+            "generation_mode": statement.generation_mode,
             "total_receivable": statement.total_receivable,
             "total_gross_profit": statement.total_gross_profit,
             "invoiced_amount": statement.invoiced_amount,
@@ -3304,6 +3393,50 @@ def pending_statements(
         period_start=period_start,
         period_end=period_end,
     )
+    monthly_summary = (
+        _active_monthly_summary_statement(
+            db,
+            customer_id=customer_id,
+            statement_month=statement_month,
+        )
+        if statement_month
+        else None
+    )
+    will_promote_legacy = False
+    monthly_summary_block_reason = None
+    if monthly_summary is None and statement_month:
+        legacy_candidates = _legacy_month_statements(
+            db,
+            customer_id=customer_id,
+            statement_month=statement_month,
+        )
+        if len(legacy_candidates) == 1:
+            monthly_summary = legacy_candidates[0]
+            will_promote_legacy = True
+        elif len(legacy_candidates) > 1:
+            monthly_summary_block_reason = (
+                f"本客户本月已有 {len(legacy_candidates)} 张历史对账单，"
+                "系统不能猜测哪张作为总单；请先核对处理，或勾选“单独生成一份对账单”。"
+            )
+    monthly_summary_statement = None
+    if monthly_summary is not None:
+        monthly_summary_statement = _redact_statement_costs(
+            {
+                "id": monthly_summary.id,
+                "statement_number": monthly_summary.statement_number,
+                "statement_month": monthly_summary.statement_month,
+                "generation_mode": monthly_summary.generation_mode,
+                "total_receivable": monthly_summary.total_receivable,
+                "confirmation_status": monthly_summary.confirmation_status,
+                "version": monthly_summary.version,
+                "will_promote_legacy": will_promote_legacy,
+                "append_block_reason": _monthly_summary_append_block_reason(
+                    db,
+                    monthly_summary,
+                ),
+            },
+            user,
+        )
     # 保留旧版平铺字段供尚未刷新前端的页面只读使用；只返回可整单选择的明细。
     rows = [
         item
@@ -3317,6 +3450,8 @@ def pending_statements(
         "statement_cycle_start_day": customer.statement_cycle_start_day,
         "period_start": period_start,
         "period_end": period_end,
+        "monthly_summary_statement": monthly_summary_statement,
+        "monthly_summary_block_reason": monthly_summary_block_reason,
     }
 
 
@@ -3335,6 +3470,39 @@ def create_statement(
             payload.statement_month,
             customer.statement_cycle_start_day,
         )
+        generation_mode = (
+            STATEMENT_MODE_SEPARATE
+            if payload.separate_statement
+            else STATEMENT_MODE_MONTHLY_SUMMARY
+        )
+        promoting_legacy_statement = False
+        statement = (
+            None
+            if payload.separate_statement
+            else _active_monthly_summary_statement(
+                db,
+                customer_id=payload.customer_id,
+                statement_month=payload.statement_month,
+            )
+        )
+        if statement is None and not payload.separate_statement:
+            legacy_candidates = _legacy_month_statements(
+                db,
+                customer_id=payload.customer_id,
+                statement_month=payload.statement_month,
+            )
+            if len(legacy_candidates) > 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"本客户本月已有 {len(legacy_candidates)} 张历史对账单，"
+                        "系统不能猜测哪张作为总单；请先核对处理，"
+                        "或勾选“单独生成一份对账单”。"
+                    ),
+                )
+            if legacy_candidates:
+                statement = legacy_candidates[0]
+                promoting_legacy_statement = True
         compatibility_item_ids = set(payload.return_receipt_item_ids)
         selected_delivery_ids = set(payload.delivery_ids)
         if compatibility_item_ids:
@@ -3360,6 +3528,7 @@ def create_statement(
                 OrderItem,
                 Product,
                 StatementItem.id.label("existing_statement_item_id"),
+                StatementItem.statement_id.label("existing_statement_id"),
             )
             .join(
                 ReturnReceipt,
@@ -3395,7 +3564,17 @@ def create_statement(
                 status_code=400,
                 detail="送货单必须整单对账，不能只选择其中部分存货编码。",
             )
-        claimed_receipt_ids: set[int] = set()
+        for selected_delivery_id in selected_delivery_ids:
+            delivery_rows = [
+                row for row in selected_rows if row[2].id == selected_delivery_id
+            ]
+            reconciled_count = sum(row[6] is not None for row in delivery_rows)
+            if 0 < reconciled_count < len(delivery_rows):
+                raise HTTPException(
+                    status_code=409,
+                    detail="该送货单已有部分明细进入对账单，请先处理原对账单。",
+                )
+        new_rows = []
         for row in selected_rows:
             (
                 receipt_item,
@@ -3405,6 +3584,7 @@ def create_statement(
                 _order_item,
                 _product,
                 existing_id,
+                existing_statement_id,
             ) = row
             require_customer_access(delivery.customer_id, user, db)
             if delivery.customer_id != payload.customer_id:
@@ -3412,6 +3592,8 @@ def create_statement(
             if receipt.status != "confirmed":
                 raise HTTPException(status_code=409, detail="已取消回单不能生成对账单")
             if existing_id is not None:
+                if statement is not None and existing_statement_id == statement.id:
+                    continue
                 raise HTTPException(
                     status_code=409,
                     detail="该送货单已有明细进入对账单，请先处理原对账单。",
@@ -3425,6 +3607,112 @@ def create_statement(
                         f"（{period_start} 至 {period_end}）。"
                     ),
                 )
+            new_rows.append(row)
+
+        if statement is not None and not new_rows:
+            if (
+                promoting_legacy_statement
+                and _monthly_summary_append_block_reason(db, statement) is None
+            ):
+                expected_version = int(statement.version)
+                promoted = db.execute(
+                    update(Statement)
+                    .where(
+                        Statement.id == statement.id,
+                        Statement.version == expected_version,
+                        Statement.confirmation_status == "draft",
+                        Statement.generation_mode == STATEMENT_MODE_LEGACY,
+                    )
+                    .values(
+                        version=expected_version + 1,
+                        generation_mode=STATEMENT_MODE_MONTHLY_SUMMARY,
+                    )
+                    .execution_options(synchronize_session="fetch")
+                )
+                if promoted.rowcount != 1:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="现有对账单已被其他操作更新，请刷新后重试。",
+                    )
+                db.refresh(statement)
+                _audit(
+                    db,
+                    user=user,
+                    action="PROMOTE_MONTHLY_SUMMARY_STATEMENT",
+                    resource="Statement",
+                    entity_id=statement.id,
+                    details={
+                        "statement_number": statement.statement_number,
+                        "statement_month": statement.statement_month,
+                        "before_generation_mode": STATEMENT_MODE_LEGACY,
+                        "generation_mode": statement.generation_mode,
+                        "version": statement.version,
+                    },
+                    description="沿用现有对账单作为本月总对账单",
+                )
+                db.commit()
+                return _statement_generation_response(
+                    statement,
+                    user,
+                    operation="promoted",
+                )
+            return _statement_generation_response(
+                statement,
+                user,
+                operation="replayed",
+            )
+
+        created_new_statement = statement is None
+        if statement is None:
+            statement = Statement(
+                statement_number=_next_statement_number(
+                    db,
+                    payload.statement_month,
+                ),
+                customer_id=payload.customer_id,
+                statement_month=payload.statement_month,
+                generation_mode=generation_mode,
+                total_receivable=Decimal("0"),
+                total_gross_profit=Decimal("0"),
+                status="unsettled",
+                created_by=user.id,
+            )
+            db.add(statement)
+            db.flush()
+        else:
+            append_block_reason = _monthly_summary_append_block_reason(db, statement)
+            if append_block_reason:
+                raise HTTPException(status_code=409, detail=append_block_reason)
+            expected_version = int(statement.version)
+            expected_generation_mode = (
+                STATEMENT_MODE_LEGACY
+                if promoting_legacy_statement
+                else STATEMENT_MODE_MONTHLY_SUMMARY
+            )
+            claim_values = {"version": expected_version + 1}
+            if promoting_legacy_statement:
+                claim_values["generation_mode"] = STATEMENT_MODE_MONTHLY_SUMMARY
+            claimed_statement = db.execute(
+                update(Statement)
+                .where(
+                    Statement.id == statement.id,
+                    Statement.version == expected_version,
+                    Statement.confirmation_status == "draft",
+                    Statement.generation_mode == expected_generation_mode,
+                )
+                .values(**claim_values)
+                .execution_options(synchronize_session="fetch")
+            )
+            if claimed_statement.rowcount != 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail="本月总对账单已被其他操作更新，请刷新后重试。",
+                )
+            db.refresh(statement)
+
+        claimed_receipt_ids: set[int] = set()
+        for row in new_rows:
+            receipt = row[1]
             if receipt.id not in claimed_receipt_ids:
                 _claim_return_receipt_status(
                     db,
@@ -3434,23 +3722,9 @@ def create_statement(
                 )
                 claimed_receipt_ids.add(receipt.id)
 
-        statement = Statement(
-            statement_number=_next_statement_number(
-                db,
-                payload.statement_month,
-            ),
-            customer_id=payload.customer_id,
-            statement_month=payload.statement_month,
-            total_receivable=Decimal("0"),
-            total_gross_profit=Decimal("0"),
-            status="unsettled",
-            created_by=user.id,
-        )
-        db.add(statement)
-        db.flush()
-        total_receivable = Decimal("0")
-        total_profit = Decimal("0")
-        for row in selected_rows:
+        total_receivable = Decimal(str(statement.total_receivable or 0))
+        total_profit = Decimal(str(statement.total_gross_profit or 0))
+        for row in new_rows:
             (
                 receipt_item,
                 _receipt,
@@ -3459,6 +3733,7 @@ def create_statement(
                 order_item,
                 product,
                 _existing_id,
+                _existing_statement_id,
             ) = row
             if delivery_item.source_type == "unordered_finished":
                 if delivery_item.unit_price_snapshot is None:
@@ -3507,38 +3782,72 @@ def create_statement(
         _audit(
             db,
             user=user,
-            action="CREATE_STATEMENT",
+            action=(
+                "CREATE_STATEMENT"
+                if created_new_statement
+                else (
+                    "PROMOTE_AND_APPEND_MONTHLY_SUMMARY_STATEMENT"
+                    if promoting_legacy_statement
+                    else "APPEND_MONTHLY_SUMMARY_STATEMENT"
+                )
+            ),
             resource="Statement",
             entity_id=statement.id,
             details={
                 "statement_number": statement.statement_number,
                 "statement_month": statement.statement_month,
+                "generation_mode": statement.generation_mode,
+                "promoted_legacy_statement": promoting_legacy_statement,
                 "delivery_count": len(selected_delivery_ids),
-                "item_count": len(selected_rows),
+                "added_item_count": len(new_rows),
                 "total_receivable": statement.total_receivable,
                 "total_gross_profit": statement.total_gross_profit,
+                "version": statement.version,
             },
-            description="生成客户月结对账单",
+            description=(
+                "生成客户月结对账单"
+                if created_new_statement
+                else (
+                    "沿用现有对账单并追加本月明细"
+                    if promoting_legacy_statement
+                    else "追加客户本月总对账单"
+                )
+            ),
         )
         db.commit()
-        return _redact_statement_costs(
-            {
-                "id": statement.id,
-                "statement_number": statement.statement_number,
-                "customer_id": statement.customer_id,
-                "statement_month": statement.statement_month,
-                "total_receivable": statement.total_receivable,
-                "total_gross_profit": statement.total_gross_profit,
-                "status": statement.status,
-            },
+        return _statement_generation_response(
+            statement,
             user,
+            operation="created" if created_new_statement else "appended",
         )
     except HTTPException:
         db.rollback()
         raise
     except IntegrityError as error:
         db.rollback()
+        if not payload.separate_statement:
+            concurrent_summary = _active_monthly_summary_statement(
+                db,
+                customer_id=payload.customer_id,
+                statement_month=payload.statement_month,
+            )
+            if concurrent_summary is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "本月总对账单刚刚被其他操作创建或更新，请刷新后重试；"
+                        "系统不会另建第二张总单。"
+                    ),
+                ) from error
         raise HTTPException(status_code=409, detail="对账明细已被其他对账单使用") from error
+    except OperationalError as error:
+        db.rollback()
+        if "locked" not in str(error).lower():
+            raise
+        raise HTTPException(
+            status_code=409,
+            detail="本月总对账单正在被其他操作更新，请刷新后重试。",
+        ) from error
     except Exception:
         db.rollback()
         raise
@@ -3887,6 +4196,17 @@ def update_statement(
                     + "、".join(invalid_deliveries)
                 ),
             )
+        if statement.generation_mode == STATEMENT_MODE_MONTHLY_SUMMARY:
+            target_summary = _active_monthly_summary_statement(
+                db,
+                customer_id=statement.customer_id,
+                statement_month=payload.statement_month,
+            )
+            if target_summary is not None and target_summary.id != statement.id:
+                raise HTTPException(
+                    status_code=409,
+                    detail="目标月份已有默认总对账单，不能把两张总单静默合并。",
+                )
         before = _statement_detail_response(db, statement.id, user)
         statement.statement_month = payload.statement_month
         statement.statement_number = _next_statement_number(db, payload.statement_month)
@@ -3904,6 +4224,12 @@ def update_statement(
     except HTTPException:
         db.rollback()
         raise
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="目标月份已有默认总对账单，请刷新后重试。",
+        ) from error
     except Exception:
         db.rollback()
         raise

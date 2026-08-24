@@ -41,6 +41,16 @@ def test_statement_delivery_selection_blocks_exception_groups_and_select_all_ski
     assert "this.statementForm.selected[row.delivery_id]" in INDEX
 
 
+def test_statement_modal_defaults_to_monthly_summary_and_offers_explicit_separate_mode() -> None:
+    assert "单独生成一份对账单" in INDEX
+    assert 'v-model="statementForm.separate_statement"' in INDEX
+    assert "separate_statement:false" in INDEX
+    assert "separate_statement:!!this.statementForm.separate_statement" in INDEX
+    assert "monthly_summary_statement" in INDEX
+    assert "默认建立本客户本月总对账单" in INDEX
+    assert "本次会单独生成一张" in INDEX
+
+
 def test_inline_frontend_script_is_syntactically_valid(tmp_path: Path) -> None:
     node = shutil.which("node")
     assert node, "Node.js is required for frontend syntax validation"

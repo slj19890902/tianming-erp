@@ -7476,8 +7476,14 @@
             <div v-else-if="modal.type === 'statement'">
               <div class="form-grid">
                 <div class="field"><label>客户</label><search-select v-model="statementForm.customer_id" :options="statementCustomerOptions" label-key="name" value-key="id" placeholder="搜索有对账资格的客户" @change="loadPendingStatements"></search-select></div>
-                <div class="field"><label>对账月份</label><input class="input" type="month" v-model="statementForm.statement_month" @change="refreshStatementFilters" /></div>
+                <div class="field"><label>对账月份</label><div class="toolbar-group" style="align-items:center;flex-wrap:nowrap"><input class="input" type="month" v-model="statementForm.statement_month" @change="refreshStatementFilters" /><label style="display:flex;align-items:center;gap:6px;white-space:nowrap;font-weight:600"><input type="checkbox" v-model="statementForm.separate_statement" /> 单独生成一份对账单</label></div></div>
               </div>
+              <div v-if="statementForm.separate_statement" class="status orange" style="margin-bottom:10px">已勾选：本次会单独生成一张对账单，不并入本客户本月总对账单。</div>
+              <div v-else-if="statementMonthlySummaryBlockReason" class="status red" style="margin-bottom:10px">{{ statementMonthlySummaryBlockReason }}</div>
+              <div v-else-if="statementMonthlySummary?.append_block_reason" class="status red" style="margin-bottom:10px">{{ statementMonthlySummary.append_block_reason }}</div>
+              <div v-else-if="statementMonthlySummary?.will_promote_legacy" class="status blue" style="margin-bottom:10px">默认沿用现有对账单 <strong>{{ statementMonthlySummary.statement_number }}</strong> 作为本月总单，并把本次新明细追加进去。</div>
+              <div v-else-if="statementMonthlySummary" class="status blue" style="margin-bottom:10px">默认追加到本月总对账单 <strong>{{ statementMonthlySummary.statement_number }}</strong>；本月以后重复生成仍会汇总到这张单。</div>
+              <div v-else-if="statementForm.customer_id" class="status blue" style="margin-bottom:10px">默认建立本客户本月总对账单；以后重复生成都会追加到同一张单。</div>
               <div v-if="!statementCustomers.length" class="status orange" style="margin-bottom:10px">该月份暂无可对账客户，请切换月份或先完成回单确认。</div>
               <div v-if="statementCyclePeriod" class="status blue" style="margin-bottom:10px">本客户对账周期：{{ statementCyclePeriod }}</div>
               <table class="statement-delivery-table"><thead><tr><th><input type="checkbox" :disabled="!pendingStatements.some(row => !row.selection_blocked)" :checked="allStatementSelected" @change="toggleAllStatement($event.target.checked)" /> 全选</th><th>送货日期</th><th>送货单号</th><th>明细数</th><th>实收总数</th><th class="sensitive-price">应收总额</th><th>状态</th><th>操作</th></tr></thead><tbody>
@@ -8525,7 +8531,7 @@
             customerInvoiceProfile:{invoice_title:"",tax_no:"",invoice_address_phone:"",bank_account:"",default_seller_id:null,confirmation_status:"draft",version:null,error:""},
             customerInvoiceRule:{project_name:"",tax_category_code:"",unit:"",tax_rate:"",confirmation_status:"draft",version:null,error:""},
             customerInvoiceState:{profileLoading:false,profileSaving:false,profileLoadedCustomerId:null,ruleLoading:false,ruleSaving:false,ruleLoadedCustomerId:null},
-            pendingStatements: [], statementCustomers: [], statementDetail: null, statementEditForm: { id: null, statement_month: "" }, backups: [], backupStats: {}, backupCleanupPreview: null, showCleanupPreview: false, backupListLoading: false, backupListError: "", backupAction: "",
+            pendingStatements: [], statementCustomers: [], statementMonthlySummary: null, statementMonthlySummaryBlockReason: "", statementDetail: null, statementEditForm: { id: null, statement_month: "" }, backups: [], backupStats: {}, backupCleanupPreview: null, showCleanupPreview: false, backupListLoading: false, backupListError: "", backupAction: "",
             systemUsers: [], systemSection:"basic",
             systemSectionLoaded:{basic:false,layout:false,print:false,backup:false,pdf:false},
             systemSectionLoading:{basic:false,layout:false,print:false,backup:false,pdf:false},
@@ -8759,7 +8765,7 @@
             deliveryBatchPicker: { visible: false, loading: false, keyword: "", items: [], selected: {}, page:1, page_size:10, total:0, total_pages:1, request_token:0, message: "", error: false },
             unorderedFinishedPicker: { visible: false, loading: false, keyword:"", items: [], selected:{}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message: "", error: false },
             tianhuaPreimport: { files:[], preDeliveryDate:plusDays(1), batchId:null, batchNumber:"", items:[], draft:null, mobileToken:null, remark:"天华邮件截图导入" },
-            statementForm: { customer_id: null, statement_month: month(), selected: {} },
+            statementForm: { customer_id: null, statement_month: month(), separate_statement:false, selected: {} },
             expandedStatementDeliveries: {}, statementCyclePeriod: "",
             passwordForm: { current_password: "", new_password: "", confirm_password: "" },
             resetPasswordForm: { username: "", new_password: "", confirm_password: "" },
@@ -30556,9 +30562,11 @@
           },
           async openStatement(statementMonth = null, preferredCustomerId = null) {
             if (statementMonth && typeof statementMonth !== "string") statementMonth = null;
-            this.statementForm = { customer_id:preferredCustomerId ? Number(preferredCustomerId) : null, statement_month:statementMonth || month(), selected:{} };
+            this.statementForm = { customer_id:preferredCustomerId ? Number(preferredCustomerId) : null, statement_month:statementMonth || month(), separate_statement:false, selected:{} };
             this.expandedStatementDeliveries = {};
             this.statementCyclePeriod = "";
+            this.statementMonthlySummary = null;
+            this.statementMonthlySummaryBlockReason = "";
             this.modal = { type:"statement", title:"生成月结对账单" };
             await this.loadStatementCustomers();
             await this.loadPendingStatements();
@@ -30575,7 +30583,7 @@
             }
           },
           async loadPendingStatements() {
-            if (!this.statementForm.customer_id) { this.pendingStatements=[]; this.statementCyclePeriod = ""; this.expandedStatementDeliveries = {}; return; }
+            if (!this.statementForm.customer_id) { this.pendingStatements=[]; this.statementCyclePeriod = ""; this.statementMonthlySummary = null; this.statementMonthlySummaryBlockReason = ""; this.expandedStatementDeliveries = {}; return; }
             const { data } = await axios.get("/api/finance/pending_statements", {
               params:{ customer_id:this.statementForm.customer_id, statement_month:this.statementForm.statement_month }
             });
@@ -30588,6 +30596,8 @@
             this.statementCyclePeriod = data?.period_start && data?.period_end
               ? `${data.period_start} 至 ${data.period_end}`
               : "";
+            this.statementMonthlySummary = data?.monthly_summary_statement || null;
+            this.statementMonthlySummaryBlockReason = data?.monthly_summary_block_reason || "";
             this.expandedStatementDeliveries = {};
           },
           groupLegacyStatementItems(items) {
@@ -31549,7 +31559,7 @@
                 if (!this.statementForm.customer_id) throw new Error("请先选择客户");
                 const ids = this.pendingStatements.filter(row => !row.selection_blocked && this.statementForm.selected[row.delivery_id]).map(row => row.delivery_id);
                 if (!ids.length) throw new Error("至少选择一张待对账送货单");
-                await axios.post("/api/finance/statements", { customer_id:this.statementForm.customer_id, statement_month:this.statementForm.statement_month, delivery_ids:ids });
+                await axios.post("/api/finance/statements", { customer_id:this.statementForm.customer_id, statement_month:this.statementForm.statement_month, separate_statement:!!this.statementForm.separate_statement, delivery_ids:ids });
                 await this.loadFinance();
               }
               if (this.modal.type === "statementEdit") {

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.164"
-APP_VERSION_NAME = "来料单条实收契约与状态释放"
+APP_VERSION = "v0.22.165"
+APP_VERSION_NAME = "模具连续新增状态重置与客户隔离"
 APP_BUILD_DATE = "2026-08-24"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -541,18 +541,32 @@ _V022163_VERIFICATION_STEPS = [
     "进入系统备份→系统版本，确认版本为v0.22.163、数据库 revision 仍为唯一 head de39v8x9z28；本版没有执行迁移或历史数据修复。",
 ]
 
-APP_CHANGES = [
+_V022164_CHANGES = [
     "修复待来料单条实收误把路径中的 item_id 再次放进请求体，导致后端返回 Extra inputs are not permitted 的问题。",
     "明确的 4xx 校验失败会立即解除“正在实收”并显示原始原因，可修正后重新提交；只有网络中断或 5xx 不确定结果才保留原数量和幂等凭证。",
     "单条与批量实收在准备正式采购价快照前先取得页面级单飞锁，快速重复点击不会重复冻结采购事实或发出并发请求。",
     "YSP3944 的既有报料、采购价和待收状态保持不变；本版无数据库迁移，也不自动创建或修改任何收料、库存、生产事实。",
 ]
 
-APP_VERIFICATION_STEPS = [
+_V022164_VERIFICATION_STEPS = [
     "强制刷新待来料页面，找到 YSP3944，确认不再残留“正在实收”；按实际数量点击单条实收，页面不得再出现 Extra inputs are not permitted。",
     "若输入或业务规则不合格导致 4xx，确认按钮会立即恢复可用并显示具体错误；修正后可再次提交，不需要刷新页面或等待超时。",
     "快速连续点击单条或批量实收，确认同一明细只发送一次正式请求，采购价快照和收料事实均不重复。",
     "进入系统备份→系统版本，确认版本为v0.22.164、数据库 revision 仍为唯一 head de39v8x9z28；发布过程没有替操作员执行 YSP3944 实收。",
+]
+
+APP_CHANGES = [
+    "模具新增或编辑保存成功后自动退出编辑态，下一次保存始终创建新的模具档案，不再反复覆盖上一件模具。",
+    "普通新增一次只选择一个正式客户，并自动作为第一主标签客户；共享模具的多客户和第二主标签能力只在明确编辑既有模具时开放。",
+    "保存成功后清空模具 ID、版本、客户、标签名称、中文简写、备注、绑定和提交上下文，只保留一楼模具货架、层、格以便连续录入。",
+    "本版无数据库迁移，不自动拆分、修正或改写此前误录的模具及任何客户、位置、绑定或历史业务事实。",
+]
+
+APP_VERIFICATION_STEPS = [
+    "选择正式客户甲并保存模具 A，确认页面立即回到“新增生产模具”，客户、名称、简写和备注清空，货架、层、格保持不变。",
+    "不点击“新增模具”，直接选择客户乙并保存模具 B；确认 A、B 生成不同档案，按客户甲或客户乙查询时不会互相串出。",
+    "从列表明确编辑既有模具时，确认共享客户入口可用；保存修改后再次回到新增态，保存失败时当前输入不得被清空。",
+    "进入系统备份→系统版本，确认版本为v0.22.165、数据库 revision 仍为唯一 head de39v8x9z28；历史模具和客户归属未被自动修复。",
 ]
 
 
@@ -646,6 +660,8 @@ def current_release_metadata(
 APP_CHANGELOG = [
     *(f"{APP_VERSION}：本次更新｜{item}" for item in APP_CHANGES),
     *(f"{APP_VERSION}：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.164：本次更新｜{item}" for item in _V022164_CHANGES),
+    *(f"v0.22.164：如何验证｜{item}" for item in _V022164_VERIFICATION_STEPS),
     *(f"v0.22.163：本次更新｜{item}" for item in _V022163_CHANGES),
     *(f"v0.22.163：如何验证｜{item}" for item in _V022163_VERIFICATION_STEPS),
     *(f"v0.22.162：本次更新｜{item}" for item in _V022162_CHANGES),

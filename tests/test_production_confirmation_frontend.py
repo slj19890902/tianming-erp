@@ -9,7 +9,9 @@ INDEX = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
 
 
 def test_direct_destination_posts_one_formal_completion_and_stays_pending() -> None:
-    assert "直接待送：选择后整批进入一楼待送区" in INDEX
+    assert "直接待送：选择后整批进入一楼待送区" not in INDEX
+    assert "订单内直接待送" in INDEX
+    assert 'class="production-compact-command-bar"' in INDEX
     assert 'direct_delivery_quantity: row.completion_mode === "direct" ? Number(row.actual_output_quantity) : 0' in INDEX
     assert '@change="ensureProductionMode(row)"' in INDEX
     ensure_mode = re.search(
@@ -45,7 +47,8 @@ def test_direct_destination_posts_one_formal_completion_and_stays_pending() -> N
 
 
 def test_stock_location_only_selects_locally_then_customer_groups_are_posted() -> None:
-    assert "全部入库：选好库位，再点顶部“批量确认入库”" in INDEX
+    assert "全部入库：选好库位，再点顶部“批量确认入库”" not in INDEX
+    assert "合格品全部入库" in INDEX
     assert "`批量确认入库（${productionSelectedCount()}）`" in INDEX
     assert '@change="onProductionLocationSelection(row)"' in INDEX
     assert "确认入库位置" not in INDEX

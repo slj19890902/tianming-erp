@@ -234,6 +234,7 @@ global.axios={{put:async(url,payload)=>{{
 let keySequence=0;
 const vm={{
   incomingReceiveAttempts:{{}},
+  async ensureAutomaticPurchaseReceiptFact(){{}},
   incomingPayload(row){{return {{item_id:row.item_id,received_quantity:Number(row.incoming_quantity),resolution_action:null,resolution_reason:null,surplus_location_id:null}};}},
   showIncomingNextStepGuide(){{}},
   async refreshIncomingAfterWrite(){{return refreshResults.shift();}},
@@ -246,6 +247,7 @@ const expect=(value,message)=>{{if(!value)throw new Error(message);}};
 (async()=>{{
   await vm.receiveIncoming(row);
   expect(requests.length===1,"first write was not attempted");
+  expect(!("item_id" in requests[0].payload),"path item_id leaked into strict single-receive body");
   const firstKey=requests[0].payload.idempotency_key;
   expect(firstKey==="attempt-1","attempt did not own the idempotency key");
   expect(toasts.at(-1).message.includes("结果暂未确认"),"5xx was not described as uncertain");
@@ -283,6 +285,7 @@ global.axios={{put:(url,payload)=>{{
 }}}};
 const vm={{
   incomingReceiveAttempts:{{}},
+  async ensureAutomaticPurchaseReceiptFact(){{}},
   incomingPayload(row){{return {{item_id:row.item_id,received_quantity:Number(row.incoming_quantity),resolution_action:null,resolution_reason:null,surplus_location_id:null}};}},
   showIncomingNextStepGuide(){{}},
   async refreshIncomingAfterWrite(){{return true;}},
@@ -306,14 +309,15 @@ const expect=(value,message)=>{{if(!value)throw new Error(message);}};
   await vm.receiveIncoming(row);
   expect(requests.length===2,"same uncertain payload was not retried for the 4xx case");
   expect(requests[1].payload.idempotency_key===uncertainKey,"same uncertain payload did not retain its key before 4xx");
-  expect(vm.incomingReceiveAttempts["99"]?.idempotencyKey===uncertainKey,"explicit 4xx discarded the stable attempt key");
+  expect(!vm.incomingReceiveAttempts["99"],"explicit 4xx did not release the rejected attempt");
+  expect(!toasts.at(-1).message.includes("结果暂未确认"),"explicit 4xx was described as an uncertain write");
 
-  // An authoritative refresh/reconciliation is the only point that may clear
-  // an uncertain attempt and accept a new quantity with a new key.
-  vm.incomingReceiveAttempts["99"]=null;
+  // A rejected request never entered the receiving service, so the operator
+  // may correct the payload and submit a new attempt with a new key.
   row.incoming_quantity=21;
   const first=vm.receiveIncoming(row);
   const doubleClick=vm.receiveIncoming(row);
+  await new Promise(resolve=>setImmediate(resolve));
   expect(requests.length===3,"double click submitted more than one in-flight write");
   expect(vm.incomingReceiveAttempts["99"]?.saving===true,"single-flight attempt was not marked saving");
   expect(requests[2].payload.idempotency_key!==uncertainKey,"new payload after reconciliation reused the old key");
@@ -361,6 +365,7 @@ const vm={{
   incomingSelected:{{r1:true,r2:true}},
   incomingBatchReceiveAttempt:null,
   canReceiveIncoming(row){{return row.material_status==="pending";}},
+  async ensureAutomaticPurchaseReceiptFact(){{}},
   incomingPayload(row){{return {{item_id:row.item_id,received_quantity:Number(row.incoming_quantity),resolution_action:null,resolution_reason:null,surplus_location_id:null}};}},
   showIncomingNextStepGuide(){{}},
   async refreshIncomingAfterWrite(){{return refreshResults.shift();}},
@@ -372,6 +377,7 @@ const expect=(value,message)=>{{if(!value)throw new Error(message);}};
 (async()=>{{
   const first=vm.batchReceiveIncoming();
   const doubleClick=vm.batchReceiveIncoming();
+  await new Promise(resolve=>setImmediate(resolve));
   expect(requests.length===1,"batch double click submitted more than one in-flight write");
   expect(vm.incomingBatchReceiveAttempt?.saving===true,"batch attempt was not marked saving");
   rejectFirst(Object.assign(new Error("batch request failed with 500"),{{response:{{status:500}}}}));

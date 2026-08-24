@@ -18116,6 +18116,7 @@
             }
             let rows=[];
             let preparedItems=[];
+            let preparation=previousAttempt;
             let signature=previousAttempt?.signature || "";
             if (previousAttempt) {
               if (!confirm("上次批量实收结果尚未确认。系统将忽略当前勾选和修改，使用上次冻结的原数量与原凭证核对；该操作不会重复记账，是否继续？")) return;
@@ -18128,8 +18129,12 @@
                   this.showToast(`${row.product_code || row.product_name} 的入库数量必须是大于0的整数`, true);
                   return;
                 }
-                try { await this.ensureAutomaticPurchaseReceiptFact(row); } catch(error) { this.showToast(`${row.product_code || row.product_name}：${this.errorMessage(error)}`,true); return; }
-                try { preparedItems.push(this.incomingPayload(row)); } catch(error) { this.showToast(`${row.product_code || row.product_name}：${error.message}`,true); return; }
+              }
+              preparation={saving:true,committed:false,preparing:true};
+              this.incomingBatchReceiveAttempt=preparation;
+              for (const row of rows) {
+                try { await this.ensureAutomaticPurchaseReceiptFact(row); } catch(error) { if (this.incomingBatchReceiveAttempt === preparation) this.incomingBatchReceiveAttempt=null; this.showToast(`${row.product_code || row.product_name}：${this.errorMessage(error)}`,true); return; }
+                try { preparedItems.push(this.incomingPayload(row)); } catch(error) { if (this.incomingBatchReceiveAttempt === preparation) this.incomingBatchReceiveAttempt=null; this.showToast(`${row.product_code || row.product_name}：${error.message}`,true); return; }
               }
               signature=JSON.stringify(preparedItems);
             }
@@ -18137,15 +18142,14 @@
               idempotency_key:createIdempotencyKey(),
               items:preparedItems.map(item => ({...item,idempotency_key:createIdempotencyKey()})),
             };
-            const attempt=previousAttempt || {
+            const attempt=previousAttempt || Object.assign(preparation,{
               signature,
               request_payload:requestPayload,
               page:this.incomingPendingAppliedPage,
               item_ids:preparedItems.map(item => String(item.item_id)),
               order_item_ids:rows.filter(row => row.source_type !== "stock_replenishment").map(row => String(row.item_id)),
-              saving:false,
-              committed:false,
-            };
+              preparing:false,
+            });
             attempt.saving=true;
             this.incomingBatchReceiveAttempt=attempt;
             const authGeneration=this.authGeneration;
@@ -18214,26 +18218,35 @@
               }
               return;
             }
+            const preparation=previousAttempt || {saving:true,committed:false,preparing:true};
+            preparation.saving=true;
+            this.incomingReceiveAttempts[attemptKey]=preparation;
             let nextPayload;
             try {
               await this.ensureAutomaticPurchaseReceiptFact(row);
-              nextPayload=this.incomingPayload(row);
-            } catch(error) { this.showToast(error.message || this.errorMessage(error),true); return; }
+              const {item_id:_itemId,...singleReceivePayload}=this.incomingPayload(row);
+              nextPayload=singleReceivePayload;
+            } catch(error) {
+              preparation.saving=false;
+              if (!previousAttempt && this.incomingReceiveAttempts[attemptKey] === preparation) this.incomingReceiveAttempts[attemptKey]=null;
+              this.showToast(error.message || this.errorMessage(error),true);
+              return;
+            }
             const idempotencyKey=previousAttempt?.idempotencyKey || createIdempotencyKey();
             nextPayload.idempotency_key=idempotencyKey;
             const signature=JSON.stringify(nextPayload);
             if (previousAttempt && previousAttempt.signature !== signature) {
+              preparation.saving=false;
               this.showToast("上次实收结果尚未确认，不能修改数量或处理方式后重新提交；请先刷新核对",true);
               return;
             }
-            const attempt=previousAttempt || {
+            const attempt=previousAttempt || Object.assign(preparation,{
               signature,
               idempotencyKey,
               payload:nextPayload,
               page:this.incomingPendingAppliedPage,
-              saving:false,
-              committed:false,
-            };
+              preparing:false,
+            });
             attempt.saving=true;
             this.incomingReceiveAttempts[attemptKey]=attempt;
             const authGeneration=this.authGeneration;
@@ -18263,12 +18276,18 @@
               }
             } catch(error) {
               attempt.saving=false;
-              this.showToast(
-                committed
-                  ? "实收已成功，但后续页面刷新失败；请点击刷新，勿重复录入"
-                  : `${this.errorMessage(error)}；实收结果暂未确认，重试会复用原数量和原凭证`,
-                true,
-              );
+              const status=Number(error?.response?.status || 0);
+              if (!committed && status > 0 && status < 500) {
+                if (this.incomingReceiveAttempts[attemptKey] === attempt) this.incomingReceiveAttempts[attemptKey]=null;
+                this.showToast(this.errorMessage(error),true);
+              } else {
+                this.showToast(
+                  committed
+                    ? "实收已成功，但后续页面刷新失败；请点击刷新，勿重复录入"
+                    : `${this.errorMessage(error)}；实收结果暂未确认，重试会复用原数量和原凭证`,
+                  true,
+                );
+              }
             } finally {
               attempt.saving=false;
             }

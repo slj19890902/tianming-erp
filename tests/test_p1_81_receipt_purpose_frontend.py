@@ -80,9 +80,18 @@ def test_desktop_receive_payload_carries_versions_not_client_allocations_or_pric
     )
     assert "this.incomingPayload(row)" in batch
     assert "/api/incoming/batch-receive" in batch
+    assert "item_id:row.item_id" in payload
+
+    single = _source(
+        DESKTOP,
+        "async receiveIncoming(row) {",
+        "async acceptShortIncoming(row) {",
+    )
+    assert "{item_id:_itemId,...singleReceivePayload}=this.incomingPayload(row)" in single
+    assert "axios.put(`/api/incoming/receive/${row.item_id}`,payload)" in single
 
 
-def test_desktop_failed_or_uncertain_receive_keeps_input_and_idempotency_key() -> None:
+def test_desktop_receive_distinguishes_rejected_and_uncertain_attempts() -> None:
     receive = _source(
         DESKTOP,
         "async receiveIncoming(row) {",
@@ -91,10 +100,9 @@ def test_desktop_failed_or_uncertain_receive_keeps_input_and_idempotency_key() -
     assert "previousAttempt?.idempotencyKey" in receive
     assert "attempt.payload" in receive
     assert "attempt.committed" in receive
-    # A failure may be reconciled or retried, but must not discard the stable
-    # key merely because the HTTP status is below 500.
-    assert "error?.response?.status < 500" not in receive
-    assert "delete this.incomingReceiveAttempts[attemptKey]" not in receive
+    assert "status > 0 && status < 500" in receive
+    assert "this.incomingReceiveAttempts[attemptKey]=null" in receive
+    assert "实收结果暂未确认，重试会复用原数量和原凭证" in receive
 
 
 def test_desktop_normal_batch_receive_has_no_confirmation_dialog() -> None:

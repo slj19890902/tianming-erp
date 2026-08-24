@@ -280,7 +280,7 @@ def test_factory_update_reports_current_release_version() -> None:
         for item in APP_CHANGELOG
     )
     assert any(
-        "如何验证｜" in item and "v0.22.165" in item and "de39" in item
+        "如何验证｜" in item and "v0.22.166" in item and "de39" in item
         for item in current_release
     )
     assert any(

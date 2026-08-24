@@ -2808,7 +2808,8 @@ def test_mold_frontend_connects_location_common_box_and_order_display() -> None:
     warehouse = Path("static/warehouse.html").read_text(encoding="utf-8")
     index = Path("static/index.html").read_text(encoding="utf-8")
     for marker in (
-        "新增 / 编辑生产模具",
+        "新增生产模具",
+        "编辑生产模具：",
         "搜索正式客户",
         "第一主标签客户",
         "模具标签名称",

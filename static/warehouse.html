@@ -577,13 +577,13 @@
     <section id="moldSection" class="hidden">
       <div class="panel notice info"><b>模具封存待复用：</b>仅无绑定或所有绑定常用箱均已停用/删除的启用模具可人工封存。实物先搬到“三楼 AB2 北侧模具封存区（区域内待定位）”再确认；恢复时必须先搬回一楼已发布正式模具位。系统不会自动封存，也不会虚构 AB2 北侧货架、层、格或地图坐标。</div>
       <form id="moldForm" class="panel admin-only">
-        <h2>新增 / 编辑生产模具</h2><input id="moldId" type="hidden"><input id="moldVersion" type="hidden"><input id="moldCode" type="hidden">
-        <p class="muted">一块实物模具只建一份档案。先选择所有适用客户，再指定最多两个主标签客户；标签显示客户资料中的中文简称，内部关联编号不会向员工显示。</p>
+        <h2 id="moldFormTitle">新增生产模具</h2><input id="moldId" type="hidden"><input id="moldVersion" type="hidden"><input id="moldCode" type="hidden">
+        <p id="moldFormModeHint" class="muted">连续新增时每件模具只选择一个正式客户；保存后自动进入下一件新增，只保留货架、层、格。共享模具请从列表进入编辑后明确增加客户。</p>
         <div class="grid">
           <div class="field"><label>搜索正式客户</label><input id="moldCustomerSearch" autocomplete="off" placeholder="客户中文、简称、编码或拼音"></div>
           <div class="field"><label>第一主标签客户</label><select id="moldPrimaryCustomer1"><option value="">请先选择客户</option></select></div>
-          <div class="field"><label>第二主标签客户（可不选）</label><select id="moldPrimaryCustomer2"><option value="">不显示第二个客户</option></select></div>
-          <div class="field" style="grid-column:span 4"><label>适用客户（可多选）</label><div id="moldCustomerCandidates" class="floor3-candidates"><span class="muted">正在读取客户资料…</span></div></div>
+          <div id="moldPrimaryCustomer2Field" class="field hidden"><label>第二主标签客户（仅共享模具编辑）</label><select id="moldPrimaryCustomer2" disabled><option value="">不显示第二个客户</option></select></div>
+          <div class="field" style="grid-column:span 4"><label id="moldCustomerSelectionLabel">正式客户（新增只选一个）</label><div id="moldCustomerCandidates" class="floor3-candidates"><span class="muted">正在读取客户资料…</span></div></div>
           <div class="field"><label>模具标签名称</label><input id="moldLabelName" required autocomplete="off" placeholder="例如：92.5*36.5*1.8/2"></div>
           <div class="field"><label>中文简写（可不填）</label><input id="moldChineseShortName" autocomplete="off" placeholder="例如：24*36中性内盒"></div>
           <div class="field"><label>一楼模具货架</label><select id="moldRackSelect"><option value="">正在读取已确认货架…</option></select></div>
@@ -591,7 +591,7 @@
           <div id="moldGridField" class="field"><label>格</label><select id="moldGridSelect"><option value="">请先选择层</option></select></div>
           <div class="field"><label>货架位置（系统自动生成）</label><input id="moldRackLocation" required readonly placeholder="例如：1F-M-R01-L2-G01"></div>
           <div class="field"><label>备注（可不填）</label><input id="moldRemarks" placeholder="适用范围或现场说明"></div>
-          <div class="field"><label>&nbsp;</label><button id="moldSaveButton" class="btn primary" type="submit">保存模具</button></div>
+          <div class="field"><label>&nbsp;</label><button id="moldSaveButton" class="btn primary" type="submit">保存为新模具</button></div>
           <div class="field"><label>&nbsp;</label><button id="resetMoldForm" class="btn" type="button">新增模具</button></div>
         </div>
         <div id="moldCodeHint" class="notice info" style="margin-top:10px">员工标签示例会在选择主客户后显示；内部唯一编号由系统生成并保持不变。</div>
@@ -1038,7 +1038,7 @@
       $("refreshInsights").onclick=loadInsights;
       $("refreshMolds").onclick=loadMoldsFirstPage;$("moldKeyword").onkeydown=event=>{if(event.key==="Enter"){event.preventDefault();loadMoldsFirstPage()}};
       $("moldPrevPage").onclick=()=>{if(state.moldPage>1){state.moldPage-=1;loadMolds()}};$("moldNextPage").onclick=()=>{const pages=Math.max(1,Math.ceil(state.moldTotal/state.moldPageSize));if(state.moldPage<pages){state.moldPage+=1;loadMolds()}};
-      $("moldCustomerSearch").oninput=renderMoldCustomerCandidates;$("moldPrimaryCustomer1").onchange=updateMoldIdentityPreview;$("moldPrimaryCustomer2").onchange=updateMoldIdentityPreview;$("moldLabelName").oninput=updateMoldIdentityPreview;$("moldChineseShortName").oninput=updateMoldIdentityPreview;$("moldRackSelect").onchange=()=>{markMoldLocationSelectionChanged();renderMoldLocationLevels()};$("moldLevelSelect").onchange=()=>{markMoldLocationSelectionChanged();renderMoldLocationGrids()};$("moldGridSelect").onchange=()=>{markMoldLocationSelectionChanged();buildMoldRackLocation()};$("resetMoldForm").onclick=resetMoldForm;
+      $("moldCustomerSearch").oninput=renderMoldCustomerCandidates;$("moldPrimaryCustomer1").onchange=updateMoldIdentityPreview;$("moldPrimaryCustomer2").onchange=updateMoldIdentityPreview;$("moldLabelName").oninput=updateMoldIdentityPreview;$("moldChineseShortName").oninput=updateMoldIdentityPreview;$("moldRackSelect").onchange=()=>{markMoldLocationSelectionChanged();renderMoldLocationLevels()};$("moldLevelSelect").onchange=()=>{markMoldLocationSelectionChanged();renderMoldLocationGrids()};$("moldGridSelect").onchange=()=>{markMoldLocationSelectionChanged();buildMoldRackLocation()};$("resetMoldForm").onclick=()=>resetMoldForm();
       $("moldBindingCustomerKeyword").oninput=renderMoldBindingCustomerCandidates;$("moldBindingCustomerKeyword").onkeydown=event=>{if(event.key==="Enter"){event.preventDefault();renderMoldBindingCustomerCandidates()}};$("moldBindingKeyword").onkeydown=event=>{if(event.key==="Enter"){event.preventDefault();searchMoldBindingProducts()}};$("searchMoldBindingProducts").onclick=searchMoldBindingProducts;$("confirmMoldBinding").onclick=()=>saveMoldBinding(false);$("addMoldBinding").onclick=()=>saveMoldBinding(true);$("closeMoldBinding").onclick=closeMoldBinding;
       $("refreshPrintingPlates").onclick=loadPrintingPlates;$("printingPlateKeyword").onkeydown=event=>{if(event.key==="Enter"){event.preventDefault();loadPrintingPlates()}};$("resetPrintingPlateForm").onclick=resetPrintingPlateForm;
       $("printingPlateRackSelect").onchange=$("printingPlateLevelSelect").onchange=$("printingPlatePositionNumber").oninput=buildPrintingPlateLocation;$("printingPlateLocation").onchange=()=>syncPrintingPlateLocationBuilder($("printingPlateLocation").value);
@@ -1932,10 +1932,46 @@
       const matches=state.customers.filter(row=>{if(!keyword)return true;const values=[row.name,row.chinese_short_name,row.customer_code,row.customer_number];if(runtime){try{values.push(runtime.pinyin(row.name,{toneType:"none"}),runtime.pinyin(row.name,{pattern:"first",toneType:"none",type:"array"}).join(""))}catch{}}return values.some(value=>String(value||"").toLocaleLowerCase().replace(/\s+/g,"").includes(keyword))}).slice(0,50);
       $("moldCustomerCandidates").innerHTML=matches.map(row=>`<button class="floor3-candidate ${state.moldCustomerSelection.has(Number(row.id))?"selected":""}" type="button" onclick="toggleMoldCustomer(${row.id})"><b>${state.moldCustomerSelection.has(Number(row.id))?"已选":"选择"}</b> · ${h(moldCustomerLabel(row))}</button>`).join("")||'<span class="muted">没有找到客户，请换中文、简称、编码或拼音</span>';
     }
-    function toggleMoldCustomer(id){const customerId=Number(id);if(state.moldCustomerSelection.has(customerId))state.moldCustomerSelection.delete(customerId);else state.moldCustomerSelection.add(customerId);updateMoldPrimaryCustomerOptions();renderMoldCustomerCandidates()}
-    function moldCustomerAssociations(){const first=Number($("moldPrimaryCustomer1").value),second=Number($("moldPrimaryCustomer2").value);if(!first)throw new Error("请选择第一主标签客户");if(first===second)throw new Error("两个主标签客户不能相同");return [...state.moldCustomerSelection].sort((a,b)=>a-b).map(customerId=>({customer_id:customerId,display_order:customerId===first?1:customerId===second?2:null}))}
-    function resetMoldForm(){
-      if(state.moldMasterAttempt||state.moldEditLocation.attempt&&!state.moldEditLocation.attempt.committed){toast("当前模具的保存结果还未确定，请先原样重试核对",true);return}state.moldCodePreviewRequestId+=1;clearTimeout(state.moldCodePreviewTimer);state.moldEditLocation={moldId:null,originalLocation:"",expectedVersion:null,syncing:false,selectionChanged:false,attempt:null};state.moldCustomerSelection.clear();state.moldMasterAttempt=null;$("moldForm").reset();$("moldId").value="";$("moldVersion").value="";$("moldCode").value="";setMoldLocationBuilderDisabled(false);$("moldEditLocationNotice").classList.add("hidden");$("moldCodeHint").textContent="请选择正式客户、主标签顺序并填写模具标签名称。";closeMoldBinding();updateMoldPrimaryCustomerOptions();renderMoldCustomerCandidates();renderMoldLocationLevels();
+    function setMoldFormMode(row=null){
+      const editing=Boolean(row?.id),displayName=row?.display_name||row?.mold_name||"当前模具";
+      $("moldFormTitle").textContent=editing?`编辑生产模具：${displayName}`:"新增生产模具";
+      $("moldSaveButton").textContent=editing?"保存修改":"保存为新模具";
+      $("moldPrimaryCustomer2").disabled=!editing;
+      $("moldPrimaryCustomer2Field").classList.toggle("hidden",!editing);
+      $("moldCustomerSelectionLabel").textContent=editing?"适用客户（共享模具可多选）":"正式客户（新增只选一个）";
+      $("moldFormModeHint").textContent=editing?"正在编辑既有模具；可明确维护共享客户。保存成功后自动退出编辑并进入下一件新增，只保留货架、层、格。":"连续新增时每件模具只选择一个正式客户；保存后自动进入下一件新增，只保留货架、层、格。共享模具请从列表进入编辑后明确增加客户。";
+    }
+    function toggleMoldCustomer(id){
+      const customerId=Number(id),editing=Boolean($("moldId").value),wasSelected=state.moldCustomerSelection.has(customerId);
+      if(!editing){state.moldCustomerSelection.clear();if(!wasSelected)state.moldCustomerSelection.add(customerId)}
+      else if(wasSelected)state.moldCustomerSelection.delete(customerId);else state.moldCustomerSelection.add(customerId);
+      updateMoldPrimaryCustomerOptions();renderMoldCustomerCandidates();
+    }
+    function moldCustomerAssociations(){
+      const first=Number($("moldPrimaryCustomer1").value),second=Number($("moldPrimaryCustomer2").value);
+      if(!$("moldId").value&&state.moldCustomerSelection.size!==1)throw new Error("新增模具只能选择一个正式客户");
+      if(!first)throw new Error("请选择第一主标签客户");if(first===second)throw new Error("两个主标签客户不能相同");
+      return [...state.moldCustomerSelection].sort((a,b)=>a-b).map(customerId=>({customer_id:customerId,display_order:customerId===first?1:customerId===second?2:null}));
+    }
+    function resetMoldForm({preserveLocation=false}={}){
+      if(state.moldMasterAttempt||state.moldEditLocation.attempt&&!state.moldEditLocation.attempt.committed){toast("当前模具的保存结果还未确定，请先原样重试核对",true);return false}
+      const preservedLocation=preserveLocation?$("moldRackLocation").value:"";
+      state.moldCodePreviewRequestId+=1;clearTimeout(state.moldCodePreviewTimer);
+      state.moldEditLocation={moldId:null,originalLocation:"",expectedVersion:null,syncing:false,selectionChanged:false,attempt:null};
+      state.moldCustomerSelection.clear();state.moldMasterAttempt=null;
+      state.moldBinding={moldId:null,customerId:null,items:[],selected:null,requestId:state.moldBinding.requestId+1,saving:false};
+      $("moldForm").reset();$("moldId").value="";$("moldVersion").value="";$("moldCode").value="";
+      setMoldFormMode();setMoldLocationBuilderDisabled(false);$("moldEditLocationNotice").classList.add("hidden");
+      $("moldCodeHint").textContent="请选择一个正式客户并填写模具标签名称。";
+      closeMoldBinding();updateMoldPrimaryCustomerOptions();renderMoldCustomerCandidates();renderMoldLocationLevels();
+      if(preservedLocation)syncMoldLocationBuilder(preservedLocation);
+      return true;
+    }
+    function finishMoldSave(message){
+      state.moldMasterAttempt=null;state.moldEditLocation.attempt=null;
+      resetMoldForm({preserveLocation:true});
+      toast(`${message}；已进入下一件新增状态，仅保留货架层格`);
+      $("moldForm").scrollIntoView({behavior:"smooth",block:"start"});
     }
     function moldBindingCustomerLabel(row){return row?(row.customer_code?`${row.customer_code} · ${row.name}`:`${row.customer_number||""} · ${row.name}`):""}
     function renderMoldBindingCustomerCandidates(){
@@ -2020,7 +2056,7 @@
     function editMold(id){
       const row=state.molds.find(value=>value.id===id);if(!row)return;
       const pending=state.moldEditLocation.attempt||state.moldMasterAttempt;if(pending){toast(Number(state.moldEditLocation.moldId)===Number(id)?"这件模具的保存结果正在核对，请在当前编辑区再次点击保存":"上一件模具的保存结果还未确定，请先原样重试核对",true);return}
-      state.moldCodePreviewRequestId+=1;state.moldEditLocation={moldId:row.id,originalLocation:row.rack_location,expectedVersion:row.location_version,syncing:false,selectionChanged:false,attempt:null};state.moldCustomerSelection=new Set((row.associated_customers||[]).map(item=>Number(item.customer_id)));$("moldId").value=row.id;$("moldVersion").value=row.version;$("moldCode").value=row.internal_code||row.mold_code||"";$("moldLabelName").value=row.label_name||"";$("moldChineseShortName").value=row.chinese_short_name||"";$("moldCustomerSearch").value="";$("moldRackLocation").value=row.rack_location;$("moldRemarks").value=row.remarks||"";const primary=[...(row.primary_customers||[])].sort((a,b)=>Number(a.display_order)-Number(b.display_order));updateMoldPrimaryCustomerOptions(primary[0]?.customer_id||null,primary[1]?.customer_id||null);renderMoldCustomerCandidates();syncMoldLocationBuilder(row.rack_location);setMoldLocationBuilderDisabled(false);$("moldEditLocationNotice").classList.remove("hidden");openMoldBinding(row);
+      state.moldCodePreviewRequestId+=1;state.moldEditLocation={moldId:row.id,originalLocation:row.rack_location,expectedVersion:row.location_version,syncing:false,selectionChanged:false,attempt:null};state.moldCustomerSelection=new Set((row.associated_customers||[]).map(item=>Number(item.customer_id)));$("moldId").value=row.id;$("moldVersion").value=row.version;$("moldCode").value=row.internal_code||row.mold_code||"";$("moldLabelName").value=row.label_name||"";$("moldChineseShortName").value=row.chinese_short_name||"";$("moldCustomerSearch").value="";$("moldRackLocation").value=row.rack_location;$("moldRemarks").value=row.remarks||"";setMoldFormMode(row);const primary=[...(row.primary_customers||[])].sort((a,b)=>Number(a.display_order)-Number(b.display_order));updateMoldPrimaryCustomerOptions(primary[0]?.customer_id||null,primary[1]?.customer_id||null);renderMoldCustomerCandidates();syncMoldLocationBuilder(row.rack_location);setMoldLocationBuilderDisabled(false);$("moldEditLocationNotice").classList.remove("hidden");openMoldBinding(row);
       void loadMoldLocationOptions(true).then(ok=>{if(ok&&Number(state.moldEditLocation.moldId)===Number(row.id))syncMoldLocationBuilder(row.rack_location)});
       $("moldForm").scrollIntoView({behavior:"smooth",block:"start"});
     }
@@ -2030,7 +2066,7 @@
         const id=$("moldId").value,labelName=$("moldLabelName").value.trim();if(!labelName){toast("请填写模具标签名称",true);return}
         const basePayload={label_name:labelName,chinese_short_name:$("moldChineseShortName").value.trim()||null,customers:moldCustomerAssociations(),rack_location:$("moldRackLocation").value,remarks:$("moldRemarks").value.trim()||null,...(id?{expected_version:Number($("moldVersion").value)}:{})},signature=JSON.stringify({id,...basePayload});
         let attempt=state.moldMasterAttempt;
-        if(attempt?.committed){const refreshed=await loadMolds();if(refreshed===false){toast("模具档案已保存，但列表刷新失败；请勿重复提交，稍后再点保存只会继续刷新",true);return}const current=state.molds.find(value=>Number(value.id)===Number(attempt.savedId));state.moldMasterAttempt=null;state.moldEditLocation.attempt=null;if(current)editMold(current.id);toast("已核对模具档案保存成功");return}
+        if(attempt?.committed){const refreshed=await loadMolds();if(refreshed===false){toast("模具档案已保存，但列表刷新失败；请勿重复提交，稍后再点保存只会继续刷新",true);return}finishMoldSave("已核对模具档案保存成功");return}
         if(attempt&&attempt.signature!==signature){toast("上次保存结果尚未确定，请恢复原资料后重试，不能更换客户、名称或位置",true);return}
         if(!attempt){attempt={signature,key:createIdempotencyKey(),requestPayload:{...basePayload,idempotency_key:null},committed:false,savedId:null};attempt.requestPayload.idempotency_key=attempt.key}
         let payload=attempt.requestPayload;
@@ -2047,9 +2083,8 @@
         try{saved=await api(`/api/warehouse/molds${id?"/"+id:""}`,{method:id?"PUT":"POST",body:JSON.stringify(payload)})}
         catch(error){if(error.status&&error.status<500){state.moldMasterAttempt=null;state.moldEditLocation.attempt=null;const refreshed=await loadMolds();const current=refreshed!==false?state.molds.find(value=>Number(value.id)===Number(id)):null;if(current)editMold(current.id)}toast(!error.status||error.status>=500?"模具资料保存结果暂不确定；再次点击保存会复用同一凭证核对，不会重复建档或移动":error.message,true);return}
         attempt.committed=true;attempt.savedId=saved.id;
-        toast(id&&payload.physical_move_confirmed?"模具新位置已保存，并已记录移位流水":"模具档案已保存，可以继续绑定常用箱");
         const refreshed=await loadMolds();if(refreshed===false){toast("模具档案已保存，但列表刷新失败；请勿重复提交，稍后再点保存只会继续刷新",true);return}
-        const row=state.molds.find(value=>value.id===saved.id)||saved;state.moldMasterAttempt=null;state.moldEditLocation.attempt=null;editMold(row.id);$("moldBindingPanel").scrollIntoView({behavior:"smooth",block:"start"});
+        finishMoldSave(id&&payload.physical_move_confirmed?"模具新位置已保存，并已记录移位流水":"模具档案已保存");
       }catch(err){toast(err.message,true)}finally{state.moldSaving=false;$("moldSaveButton").disabled=false}
     }
     async function enableLegacyMold(id){const row=state.molds.find(item=>item.id===id);if(!row||row.archive_status!=="active"||row.is_active)return;const name=row.display_name||row.mold_name||"当前模具";if(!window.confirm(`确认恢复历史停用模具 ${name}？恢复不会生成搬运事实；如实物已搬到封存区，请不要使用此按钮。`))return;try{await api(`/api/warehouse/molds/${id}/enable`,{method:"PUT"});toast(`${name} 已恢复使用`);await loadMolds()}catch(err){toast(err.message,true)}}

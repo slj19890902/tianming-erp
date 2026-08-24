@@ -114,6 +114,17 @@ def _formal_payload(*, key: str, empty_short: bool = False) -> dict:
     }
 
 
+def _single_customer_payload(*, customer_id: int, key: str, label_name: str) -> dict:
+    return {
+        "label_name": label_name,
+        "chinese_short_name": None,
+        "customers": [{"customer_id": customer_id, "display_order": 1}],
+        "rack_location": "1F-M-R01-L2-G01",
+        "remarks": None,
+        "idempotency_key": key,
+    }
+
+
 def _bind_test_product(factory, mold_id: int, customer_id: int = 1) -> None:
     from app.models.product import Product
 
@@ -217,6 +228,50 @@ def test_formal_multi_customer_identity_replays_and_qr_survives_rename(
         assert live.status_code == 200, live.text
         assert live.json()["mold"]["display_name"] == second["display_name"]
         assert "mold_code" not in live.json()["mold"]
+
+
+def test_sequential_single_customer_creates_never_update_or_cross_link(
+    p182_app,
+) -> None:
+    app, _factory = p182_app
+    with TestClient(app) as client:
+        _login(client, "admin")
+        first = client.post(
+            "/api/warehouse/molds",
+            json=_single_customer_payload(
+                customer_id=1,
+                key="p182r-sequential-create-0001",
+                label_name="连续新增模具 A",
+            ),
+        )
+        second = client.post(
+            "/api/warehouse/molds",
+            json=_single_customer_payload(
+                customer_id=2,
+                key="p182r-sequential-create-0002",
+                label_name="连续新增模具 B",
+            ),
+        )
+        assert first.status_code == 201, first.text
+        assert second.status_code == 201, second.text
+        first_row = first.json()
+        second_row = second.json()
+        assert first_row["id"] != second_row["id"]
+        assert [row["customer_id"] for row in first_row["associated_customers"]] == [
+            1
+        ]
+        assert [row["customer_id"] for row in second_row["associated_customers"]] == [
+            2
+        ]
+
+        first_search = client.get("/api/warehouse/molds", params={"q": "P182-TH"})
+        second_search = client.get("/api/warehouse/molds", params={"q": "P182-MD"})
+        assert first_search.status_code == 200, first_search.text
+        assert second_search.status_code == 200, second_search.text
+        assert [row["id"] for row in first_search.json()["items"]] == [first_row["id"]]
+        assert [row["id"] for row in second_search.json()["items"]] == [
+            second_row["id"]
+        ]
 
 
 def test_third_customer_search_blank_short_and_scoped_projection(p182_app) -> None:

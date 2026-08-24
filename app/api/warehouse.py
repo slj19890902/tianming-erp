@@ -13225,19 +13225,22 @@ def _mold_live_binding_dict(row: MoldTool, product: Product) -> dict:
 
     payload = _mold_binding_dict(row, product)
     return {
-        key: payload[key]
-        for key in (
-            "customer_name",
-            "customer_short_name",
-            "product_code",
-            "product_name",
-            "specification",
-            "report_specification",
-            "material_code",
-            "material_composition",
-            "layer_count",
-            "flute_type",
-        )
+        "product_id": payload["id"],
+        **{
+            key: payload[key]
+            for key in (
+                "customer_name",
+                "customer_short_name",
+                "product_code",
+                "product_name",
+                "specification",
+                "report_specification",
+                "material_code",
+                "material_composition",
+                "layer_count",
+                "flute_type",
+            )
+        },
     }
 
 
@@ -14341,11 +14344,28 @@ def _mold_label_printability_error(
             "请核对客户简称、标签名称和中文简写"
         )
     if template_version == MOLD_LABEL_TEMPLATE_80X40:
-        if len(products) != 1:
-            return (
-                f"模具 {display_name} 当前绑定 {len(products)} 款常用箱；"
-                "40×80 标签尚未确认一模多款版式，拒绝猜测打印"
-            )
+        if len(products) > 1:
+            customer = _label_customer(row, products)[0]
+            mold_number = _label_mold_number(row, products)
+            missing = [
+                label
+                for label, value in (
+                    ("客户中文简称", customer if customer != "待完善" else ""),
+                    ("模具标签名称", mold_number if mold_number != "待完善" else ""),
+                )
+                if not value
+            ]
+            if missing:
+                return (
+                    f"模具 {display_name} 的{'、'.join(missing)}待完善，"
+                    "不能打印 40×80 共用模具标签"
+                )
+            if len(customer) > 12 or len(mold_number) > 34:
+                return (
+                    f"模具 {display_name} 的客户简称或模具标签名称超出已验证版式，"
+                    "请先人工核对，系统不会静默裁切"
+                )
+            return None
         product = products[0]
         customer = _label_customer(row, products)[0]
         inventory_code = str(product.product_code or "").strip()
@@ -14434,19 +14454,40 @@ def _mold_label_dict(
         ),
     }
     if template_version == MOLD_LABEL_TEMPLATE_80X40:
+        shared_mold = len(products) > 1
         result.update(
             {
                 "template_version": template_version,
                 "template_label": mold_label_template_label(template_version),
+                "label_projection_mode": (
+                    "shared_mold" if shared_mold else "single_product"
+                ),
                 "label_cutting_mode": _label_cutting_mode(products),
-                "label_inventory_code": str(
-                    products[0].product_code or ""
-                ).strip(),
-                "label_product_name": str(
-                    products[0].product_name or ""
-                ).strip(),
+                "label_inventory_code": (
+                    "按任务显示"
+                    if shared_mold
+                    else str(products[0].product_code or "").strip()
+                ),
+                "label_product_name": (
+                    f"共用 {len(products)} 款｜扫码按订单存货"
+                    if shared_mold
+                    else str(products[0].product_name or "").strip()
+                ),
+                "label_shared_summary": (
+                    f"共用 {len(products)} 款｜扫码按订单存货"
+                    if shared_mold
+                    else None
+                ),
             }
         )
+        if shared_mold:
+            for field in (
+                "label_product_specification",
+                "label_report_specification",
+                "label_flute_type",
+                "label_cutting_mode",
+            ):
+                result[field] = result.get(field) or "多款见扫码"
     return result
 
 
@@ -15177,6 +15218,7 @@ def _mold_live_tasks(
                 "delivery_date": order.delivery_date.isoformat()
                 if order.delivery_date
                 else None,
+                "product_id": payload.get("product_id"),
                 "product_code": payload.get("product_code"),
                 "product_name": payload.get("product_name"),
                 "customer_id": payload.get("customer_id"),
@@ -15249,8 +15291,13 @@ def _mold_scan_history(
     *,
     mold_id: int,
     allowed_customer_ids: set[int] | None,
+    production_task_id: int | None = None,
 ) -> dict:
     conditions = [MoldScanEvent.mold_tool_id == mold_id]
+    if production_task_id is not None:
+        conditions.append(
+            MoldScanEvent.production_task_id_snapshot == production_task_id
+        )
     if allowed_customer_ids is not None:
         conditions.append(
             MoldScanEvent.customer_id_snapshot.in_(allowed_customer_ids)
@@ -15277,6 +15324,7 @@ def _mold_scan_history(
 def get_mold_live_status(
     mold_id: int,
     response: Response,
+    production_task_id: int | None = Query(default=None, gt=0),
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
@@ -15333,6 +15381,8 @@ def get_mold_live_status(
         has_permission(user, "orders.view")
         and has_permission(user, "production.die_cut.view")
     )
+    if production_task_id is not None and not dynamic_allowed:
+        raise HTTPException(status_code=403, detail="当前账号无模具生产任务查看权限")
     task_ids: list[int] = []
     warnings: list[str] = []
     tasks: list[dict] = []
@@ -15343,28 +15393,56 @@ def get_mold_live_status(
             products=products,
             allowed_customer_ids=allowed_customer_ids,
         )
+        if production_task_id is not None:
+            if production_task_id not in task_ids:
+                raise HTTPException(
+                    status_code=409,
+                    detail="所选生产任务与当前模具不匹配、已结束或已发生变化，请重新扫描",
+                )
+            task_ids = [production_task_id]
         tasks = _mold_live_tasks(
             db,
             task_ids=task_ids,
             allowed_customer_ids=allowed_customer_ids,
             include_incoming=has_permission(user, "incoming.view"),
         )
+    response_products = products
+    task_context = None
+    if production_task_id is not None:
+        if len(tasks) != 1:
+            raise HTTPException(status_code=409, detail="生产任务已变化，请重新扫描")
+        selected_task = tasks[0]
+        selected_product_id = selected_task.get("product_id")
+        response_products = [
+            product
+            for product in products
+            if selected_product_id is not None and product.id == selected_product_id
+        ]
+        task_context = {
+            "production_task_id": int(selected_task["production_task_id"]),
+            "product_id": selected_product_id,
+            "product_code": selected_task.get("product_code"),
+        }
+        warnings = []
     scan_history = (
         _mold_scan_history(
             db,
             mold_id=row.id,
             allowed_customer_ids=allowed_customer_ids,
+            production_task_id=production_task_id,
         )
         if dynamic_allowed
         else {"total": None, "items": []}
     )
     return {
-        "schema_version": "mold-live-v3",
+        "schema_version": "mold-live-v4",
         "as_of": beijing_naive_to_api(beijing_now_naive()),
         "read_only": True,
         "mode": (
             "restricted"
             if not dynamic_allowed
+            else "task_context"
+            if task_context is not None
             else "current_orders"
             if tasks
             else "mold_master"
@@ -15372,6 +15450,7 @@ def get_mold_live_status(
         "task_visibility": (
             "visible" if dynamic_allowed else "hidden_by_permission"
         ),
+        "task_context": task_context,
         "mold": {
             "display_name": _mold_display_name(row, allowed_customer_ids),
             "label_identity": _label_identity(row, products),
@@ -15386,8 +15465,11 @@ def get_mold_live_status(
             "archive_status": row.archive_status,
         },
         "bindings": {
-            "total": len(products),
-            "items": [_mold_live_binding_dict(row, product) for product in products],
+            "total": len(response_products),
+            "items": [
+                _mold_live_binding_dict(row, product)
+                for product in response_products
+            ],
         },
         "current_orders": {
             "total": len(tasks) if dynamic_allowed else None,

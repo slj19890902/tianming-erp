@@ -105,7 +105,7 @@ def test_80x40_projection_and_print_fact_are_explicit_and_idempotent(mold_app) -
         assert job is not None and job.template_version == "mold_80x40_v1"
 
 
-def test_80x40_fails_closed_for_multiple_bindings_without_writing_fact(mold_app) -> None:
+def test_80x40_prints_shared_mold_summary_without_guessing_one_product(mold_app) -> None:
     from app.models.mold_tool import MoldLabelPrintJob
     from app.models.product import Product
 
@@ -137,20 +137,45 @@ def test_80x40_fails_closed_for_multiple_bindings_without_writing_fact(mold_app)
             f"/api/warehouse/molds/{mold_id}/label",
             params={"template_version": "mold_80x40_v1"},
         )
-        assert wide.status_code == 409
-        assert "一模多款" in wide.json()["detail"]
-        rejected = client.post(
+        assert wide.status_code == 200, wide.text
+        body = wide.json()
+        assert body["product_count"] == 2
+        assert body["label_projection_mode"] == "shared_mold"
+        assert body["label_inventory_code"] == "按任务显示"
+        assert body["label_shared_summary"] == "共用 2 款｜扫码按订单存货"
+        assert body["label_product_specification"] == "多款见扫码"
+        assert body["label_report_specification"] == "多款见扫码"
+        assert body["label_flute_type"] == "多款见扫码"
+        assert body["label_cutting_mode"] == "多款见扫码"
+        assert "SME-LONG-CODE-2" not in body["label_shared_summary"]
+        assert "SME-SECOND" not in body["label_shared_summary"]
+
+        batch = client.get(
+            "/api/warehouse/molds/labels",
+            params={
+                "mold_ids": str(mold_id),
+                "template_version": "mold_80x40_v1",
+            },
+        )
+        assert batch.status_code == 200, batch.text
+        assert batch.json()["items"][0]["label_projection_mode"] == "shared_mold"
+        assert batch.json()["items"][0]["label_shared_summary"] == (
+            "共用 2 款｜扫码按订单存货"
+        )
+
+        created = client.post(
             "/api/warehouse/molds/label-prints",
             json={
                 "mold_ids": [mold_id],
                 "source": "single",
                 "template_version": "mold_80x40_v1",
-                "idempotency_key": "p1-62-multi-reject-0001",
+                "idempotency_key": "p1-98-multi-print-0001",
             },
         )
-        assert rejected.status_code == 409
+        assert created.status_code == 200, created.text
+        assert created.json()["template_version"] == "mold_80x40_v1"
     with factory() as db:
-        assert db.scalar(select(func.count(MoldLabelPrintJob.id))) == 0
+        assert db.scalar(select(func.count(MoldLabelPrintJob.id))) == 1
 
 
 def test_rm9_hash_name_uses_verified_short_customer_and_prints_wide_label(mold_app) -> None:
@@ -233,6 +258,8 @@ def test_page_and_warehouse_select_one_frozen_paper_template() -> None:
         ".template-80x40 .wide-customer{font-size:4mm",
         "label_inventory_code",
         "label_product_name",
+        "label_projection_mode",
+        "label_shared_summary",
         "wide-inventory",
         "wide-flute",
         "wide-cutting",
@@ -244,6 +271,7 @@ def test_page_and_warehouse_select_one_frozen_paper_template() -> None:
     assert "40mm 80mm" in LABEL
     assert "rotate(90deg)" in LABEL
     assert "--print-x-compensation:2mm" in LABEL
+    assert 'product=shared?null:products[0]||null' in LABEL
     assert "body,html{width:40mm;height:auto" in LABEL
 
 

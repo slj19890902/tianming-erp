@@ -1755,17 +1755,18 @@
       .incoming-compact-table th:nth-child(3) { width:2%; }
       .incoming-compact-table th:nth-child(5) { width:9%; }
       .incoming-compact-table th:nth-child(6) { width:10%; }
-      .incoming-compact-table th:nth-child(7) { width:13%; }
+      .incoming-compact-table th:nth-child(7) { width:16%; }
       .incoming-compact-table th:nth-child(8) { width:9%; }
       .incoming-compact-table th:nth-child(9) { width:4.5%; }
       .incoming-compact-table th:nth-child(10) { width:10%; }
       .incoming-compact-table th:nth-child(11) { width:7%; }
-      .incoming-compact-table th:nth-child(12) { width:16.1%; }
+      .incoming-compact-table th:nth-child(12) { width:13.1%; }
       .incoming-sequence-cell,.incoming-dimension-cell,.incoming-times-cell,.incoming-date-cell,.incoming-quantity-summary { white-space:nowrap !important; word-break:normal !important; overflow-wrap:normal !important; }
       .incoming-times-cell { text-align:center; padding-left:1px !important; padding-right:1px !important; }
       .incoming-material-cell small { display:block; color:var(--muted); font-size:10px; }
       .incoming-material-button { max-width:100%; padding:0; border:0; background:transparent; color:var(--blue); font:inherit; font-weight:700; cursor:pointer; text-align:left; }
       .incoming-product-cell { overflow:hidden; }
+      .incoming-product-name { display:block; margin-top:2px; color:var(--text); font-size:11px; line-height:1.2; }
       .incoming-action-menu { display:inline-block; margin-left:4px; position:relative; }
       .incoming-action-menu summary { cursor:pointer; color:var(--blue); font-weight:700; }
       .incoming-action-menu[open] { display:block; margin:4px 0 0; padding:5px; border:1px solid var(--line); background:var(--surface); border-radius:6px; }
@@ -3850,13 +3851,13 @@
               <div v-if="incomingTab==='pending' && incomingLocationsError" class="status orange" style="display:block;margin:8px 0">{{ incomingLocationsError }} <button class="btn small" @click="ensureIncomingLocations()">重试</button></div>
               <data-panel :empty="!incomingRowsForTab().length && !(incomingTab==='pending' && (incomingPendingLoading || incomingPendingError)) && !(incomingTab==='received' && (incomingReceivedLoading || incomingReceivedError))">
                 <table class="incoming-table incoming-compact-table">
-                  <thead><tr><th class="incoming-sequence-cell"><input v-if="incomingTab==='pending' && hasPermission('incoming.execute')" type="checkbox" :checked="allIncomingSelected" @change="toggleAllIncoming($event.target.checked)" /><input v-else-if="incomingTab!=='pending'" type="checkbox" :checked="allIncomingProductionCardsSelected" @change="toggleIncomingProductionCardPage($event.target.checked)" /> 序号</th><th>报料长</th><th class="incoming-times-cell">×</th><th>报料宽</th><th>压线尺寸</th><th>材质楞型</th><th>客户简称 / 存货编码</th><th>{{ incomingTab==='pending' ? '报料日期' : '实收时间' }}</th><th>图纸</th><th>计划 / 已收 / 待收</th><th>本次收料</th><th>收料结果 / 操作</th></tr></thead>
+                  <thead><tr><th class="incoming-sequence-cell"><input v-if="incomingTab==='pending' && hasPermission('incoming.execute')" type="checkbox" :checked="allIncomingSelected" @change="toggleAllIncoming($event.target.checked)" /><input v-else-if="incomingTab!=='pending'" type="checkbox" :checked="allIncomingProductionCardsSelected" @change="toggleIncomingProductionCardPage($event.target.checked)" /> 序号</th><th>报料长</th><th class="incoming-times-cell">×</th><th>报料宽</th><th>压线尺寸</th><th>材质楞型</th><th>客户简称 / 存货编码 / 客户产品名称</th><th>{{ incomingTab==='pending' ? '报料日期' : '实收时间' }}</th><th>图纸</th><th>计划 / 已收 / 待收</th><th>{{ incomingTab==='pending' ? '本次实收' : '实收数量' }}</th><th>收料结果 / 操作</th></tr></thead>
                   <tbody><tr v-for="(row,index) in incomingRowsForTab()" :key="row.history_key || row.receipt_item_id || row.item_id">
                     <td class="incoming-sequence-cell"><input v-if="incomingTab==='pending' && hasPermission('incoming.execute')" type="checkbox" v-model="incomingSelected[row.item_id]" :disabled="!canReceiveIncoming(row)" /><input v-else-if="incomingTab!=='pending'" type="checkbox" :checked="incomingProductionCardSelected(row)" :disabled="!canPrintIncomingCard(row)" @change="toggleIncomingProductionCard(row,$event.target.checked)" /> {{ (incomingCurrentPage()-1)*incomingListPageSize()+index+1 }}</td>
                     <td class="incoming-dimension-cell"><strong>{{ row.cardboard_len || '-' }}</strong></td><td class="incoming-times-cell">×</td><td class="incoming-dimension-cell"><strong>{{ row.cardboard_width || '-' }}</strong></td>
                     <td class="incoming-crease-cell" :title="formatCrease(row)">{{ formatCrease(row) }}</td>
                     <td class="incoming-material-cell" :title="incomingMaterialTitle(row)"><button v-if="incomingTab==='pending' && row.purpose_status==='frozen' && hasPermission('incoming.execute')" class="incoming-material-button" type="button" @click="openPurchaseReceiptMaterialChange(row)">{{ incomingActualMaterialDisplay(row) }}</button><span v-else>{{ incomingActualMaterialDisplay(row) }}</span><small v-if="row.material_changed">原 {{ row.reported_material_display || '-' }}</small></td>
-                    <td class="incoming-product-cell" :title="`${row.customer_name || '-'}｜${row.product_name || '-'}｜${row.specification || '-'}`"><strong>{{ incomingCustomerLabel(row) }}</strong><br>{{ row.product_code || '-' }}</td>
+                    <td class="incoming-product-cell" :title="`${row.customer_name || '-'}｜${row.product_name || '-'}｜${row.specification || '-'}`"><strong>{{ incomingCustomerLabel(row) }}</strong><br>{{ row.product_code || '-' }}<span class="incoming-product-name">{{ row.product_name || '-' }}</span></td>
                     <td class="incoming-date-cell">{{ incomingTab==='pending' ? (row.requisition_date || '-') : (row.material_received_at ? formatDateTime(row.material_received_at) : '-') }}</td>
                     <td><a v-if="row.drawing_path" class="btn small" :href="row.drawing_path" target="_blank" rel="noopener">图纸</a><span v-else>-</span></td>
                     <td class="incoming-quantity-summary">{{ row.planned_quantity ?? row.requisition_qty ?? row.quantity ?? 0 }} / {{ row.cumulative_received_quantity || 0 }} / {{ row.remaining_quantity ?? 0 }}</td>
